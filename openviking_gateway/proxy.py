@@ -572,10 +572,12 @@ class ProxyRequest:
         }
 
         async def send(payload, timeout):
+            # Sealed once more on the way out, like every body that goes upstream: whatever
+            # a round added, by whatever path, leaves as references.
             # Without a total tool deadline each continuation gets the usual upstream timeout.
             return await self.app.state.http.post(
                 self.target,
-                data=orjson.dumps(payload),
+                data=orjson.dumps(await self.seal_body(payload)),
                 headers=self.headers,
                 timeout=aiohttp.ClientTimeout(
                     total=timeout or self.config.upstream_timeout_seconds

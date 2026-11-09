@@ -19,6 +19,7 @@ from openviking_gateway.protocols import SSEDecoder, text_content
 from openviking_gateway.secret_guard import STALE_SECONDS, Catalog, Secrets, escape, reference
 from openviking_gateway.storage import digest
 from openviking_gateway.tool_catalog import select_tools
+from openviking_gateway.tool_loop import HiddenToolLoop
 
 TOKEN = "ghp_0123456789abcdefABCDEF"
 # Needs escaping inside JSON text.
@@ -530,10 +531,8 @@ async def test_recall_and_its_summary_are_sealed_on_the_way_out(running_gateway)
     assert logs[0]["secrets_sealed_egress"] >= 1 and logs[0]["compaction_tokens"]
 
 
-@pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
-async def test_recall_and_gateway_tool_results_are_sealed_before_they_are_kept_or_sent(
-    running_gateway, monkeypatch, protocol
-):
+async def gateway_tool_rounds(running_gateway, monkeypatch, protocol):
+    """Two hidden rounds whose recall and tool results hold a value: what was sent and kept."""
     app, client, admin, key, _, _ = running_gateway
     await enable_tools(client, admin, seal_secrets=True, recall=True)
     app.state.test_backend["catalog"] = [
@@ -567,6 +566,15 @@ async def test_recall_and_gateway_tool_results_are_sealed_before_they_are_kept_o
     body = request_body(protocol, True)
     response = await client.post(PATHS[protocol], headers=headers(key), json=body)
     assert response.status_code == 200, response.text
+    return requests, kept
+
+
+@pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
+async def test_recall_and_gateway_tool_results_are_sealed_before_they_are_kept_or_sent(
+    running_gateway, monkeypatch, protocol
+):
+    _, client, admin, *_ = running_gateway
+    requests, kept = await gateway_tool_rounds(running_gateway, monkeypatch, protocol)
     first, *continuations = requests
     names = {
         t.get("name") or t.get("function", {}).get("name") for t in orjson.loads(first)["tools"]
@@ -579,6 +587,22 @@ async def test_recall_and_gateway_tool_results_are_sealed_before_they_are_kept_o
     # Each value the gateway added counts once: the recall and two tool results.
     logs = (await client.get("/admin/logs", headers=admin)).json()
     assert logs[0]["secrets_sealed_egress"] == 3 and logs[0]["hidden_rounds"] == 2
+
+
+@pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
+async def test_a_continuation_is_sealed_again_as_it_is_sent(running_gateway, monkeypatch, protocol):
+    # A tool loop that seals nothing stands in for any path that puts a value into a
+    # continuation: the send itself is the last place it can be caught.
+    build = HiddenToolLoop.__init__
+
+    def unsealing(self, *args, **kwargs):
+        build(self, *args, **kwargs)
+        self.seal = lambda value: value
+
+    monkeypatch.setattr(HiddenToolLoop, "__init__", unsealing)
+    requests, _ = await gateway_tool_rounds(running_gateway, monkeypatch, protocol)
+    assert len(requests) == 3 and TOKEN_REF.encode() in requests[-1]
+    assert not any(leaked(raw) for raw in requests)
 
 
 def client_reply(protocol, response, streaming):
