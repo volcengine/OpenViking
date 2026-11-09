@@ -17,6 +17,7 @@ const require = createRequire(import.meta.url);
 const {
   DAEMON_ENV_FIELDS,
   DAEMON_SECRET_ENV_FIELDS,
+  DAEMON_SHELL_ENV_FIELDS,
 } = require('../../../deployment-config.cjs');
 const DAEMON_ENV_FIELD_SET = new Set(DAEMON_ENV_FIELDS);
 const WEB_FORBIDDEN_ENV_PREFIXES = Object.freeze([
@@ -38,6 +39,7 @@ const PM2_CONTROL_ENV_KEYS = Object.freeze([
   'XDG_RUNTIME_DIR',
   'VIKA_CONFIG',
   ...DAEMON_ENV_FIELDS,
+  ...DAEMON_SHELL_ENV_FIELDS,
   ...DAEMON_SECRET_ENV_FIELDS,
 ]);
 

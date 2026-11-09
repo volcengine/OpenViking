@@ -87,6 +87,12 @@ export async function stopActionApi(server) {
 }
 
 // How an MCP-capable runtime launches the adapter for this daemon's tools.
+//
+// No `--readonly` here: every runtime gets the full surface, and so does a DSH
+// subagent, which shares its parent's mount. The adapter's read-only mode exists
+// (`actions/mcp.mjs`) but is unreachable until a runtime can mount a second,
+// narrower server for a subagent -- DSH cannot, so adding the flag for the whole
+// process would only take `send_message` away from the parent as well.
 export function agentToolServer(config, authority) {
   return {
     command: process.execPath,

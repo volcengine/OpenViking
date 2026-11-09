@@ -259,6 +259,25 @@ export function getConfig() {
       ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     ),
     opencodeModel: process.env.VIKA_OPENCODE_MODEL || '',
+    dshBin: process.env.DSH_BIN || 'dsh',
+    // Model routes are DSH's own settings document, not a daemon setting and not
+    // a manifest field: DSH's own settings service is the only writer, and
+    // `vika dsh model` plus `/model` are the only callers. This is the effort a
+    // fresh instance starts with; the union is what DSH understands for a route
+    // (llm-pi-ai/src/catalog.ts).
+    dshEffort: enumEnv(
+      'VIKA_DSH_EFFORT',
+      'high',
+      ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    ),
+    // How long a start may take, measured from spawn to the end of the
+    // handshake. A dsh launched from source is two `node --import tsx` runs (the
+    // version probe and the process itself), and on a loaded machine that is
+    // seconds of wall time for work that is milliseconds when idle -- measured
+    // here at 0.4 s each on an idle host, and long enough to blow a 30 s bound
+    // while an unpack and a second instance start at the same time. A start that
+    // times out fails the daemon, so the bound is adjustable.
+    dshStartTimeoutMs: intEnv('VIKA_DSH_START_TIMEOUT_MS', 30_000, { min: 1_000 }),
     volcApiKey: process.env.ARK_API_KEY || '',
     volcSessionId: process.env.VIKA_VOLC_SESSION_ID
       || process.env.ARK_SESSION_ID

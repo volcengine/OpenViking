@@ -22,6 +22,7 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'CLAUDE_BIN',
   'PI_BIN',
   'OPENCODE_BIN',
+  'DSH_BIN',
   'VIKA_WEIXIN_LONG_POLL_TIMEOUT_MS',
   'VIKA_LOG_LEVEL',
   'VIKA_TEMP_DIR',
@@ -54,6 +55,15 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'FALLBACK_MODEL',
   'VIKA_HISTORY_LIMIT',
 ]);
+// Read from the operator environment only: forwarded to the daemon and updater
+// processes, but never accepted from the deployment manifest. DSH owns its model
+// configuration (`vika dsh model`, the instance's DSH settings document), so a
+// manifest copy would be a second source that only some callers ever read.
+// The binary path is *not* here: `DSH_BIN` is a deployment fact like every other
+// runtime's `*_BIN`, so it stays in DAEMON_ENV_FIELDS.
+const DAEMON_SHELL_ENV_FIELDS = Object.freeze([
+  'VIKA_DSH_EFFORT',
+]);
 // Secrets may flow from the operator environment into daemon/updater PM2
 // processes, but are deliberately excluded from the deployment manifest.
 const DAEMON_SECRET_ENV_FIELDS = Object.freeze([
@@ -73,6 +83,7 @@ const DAEMON_SECRET_ENV_FIELDS = Object.freeze([
 ]);
 const DAEMON_PROCESS_ENV_FIELDS = Object.freeze([
   ...DAEMON_ENV_FIELDS,
+  ...DAEMON_SHELL_ENV_FIELDS,
   ...DAEMON_SECRET_ENV_FIELDS,
 ]);
 const AGENT_FIELDS = Object.freeze([
@@ -593,6 +604,7 @@ module.exports = {
   CONTROL_ENV_MAX_BYTES,
   DAEMON_ENV_FIELDS,
   DAEMON_SECRET_ENV_FIELDS,
+  DAEMON_SHELL_ENV_FIELDS,
   DEPLOYMENT_MANIFEST_MAX_BYTES,
   TOP_LEVEL_FIELDS,
   applyDeploymentAgentEnv,

@@ -8,7 +8,11 @@
 
 import {
   DEFAULT_RUNTIME_ID,
+  MODEL_ID_MAX_LENGTH,
   getRuntimeDefinition,
+  modelIdPattern,
+  modelIdProblem,
+  modelIdSymbols,
   RUNTIME_ALIASES,
   RUNTIME_IDS,
   currentModelEntry,
@@ -20,8 +24,6 @@ import {
 export const EFFORT_LEVELS = getRuntimeDefinition(DEFAULT_RUNTIME_ID).efforts;
 
 const COMMANDS = ['new', 'help', 'status', 'runtime', 'model', 'effort', 'primary'];
-
-const MODEL_NAME = /^[A-Za-z0-9._:\/\[\]-]{1,256}$/;
 
 function settingsAdjustmentText(result) {
   const lines = [];
@@ -57,11 +59,18 @@ export function commandCandidate(event) {
 
 // null → not a command (does not start with '/'). Otherwise { name, arg } for a
 // unique match, or { name: null, token, matches } for unknown/ambiguous input.
+//
+// `arg` is the text after the command token exactly as typed, minus the
+// whitespace around it. It used to be re-joined with single spaces, which
+// rewrote a real catalogue id (`r1/a  b`) into a different string and then
+// reported the user's own id as a typo. Commands that compare a spelling
+// (/model) need the user's spelling, so nothing downstream may normalise it.
 export function parseCommand(text) {
   const trimmed = String(text ?? '').trim();
   if (!trimmed.startsWith('/')) return null;
-  const [token = '', ...rest] = trimmed.slice(1).split(/\s+/);
-  const arg = rest.join(' ').trim();
+  const body = trimmed.slice(1);
+  const token = /^\S*/.exec(body)[0];
+  const arg = body.slice(token.length).trim();
   const matches = matchPrefix(token.toLowerCase(), COMMANDS);
   if (matches.length === 1) return { name: matches[0], arg };
   return { name: null, arg, token, matches };
@@ -127,6 +136,50 @@ export function statusText(snapshot, nowMs = Date.now()) {
   return lines.join('\n');
 }
 
+// What a catalogue entry looks like in a menu: its id, plus any name and
+// resolved version that add information the id does not already carry.
+function modelEntryLabel(entry) {
+  const details = [entry.displayName, entry.resolvedModel]
+    .filter((value) => value && value !== entry.id);
+  return entry.id + (details.length ? `（${[...new Set(details)].join(' · ')}）` : '');
+}
+
+function displayModelIdChar(char) {
+  return /[\u0000-\u001f\u007f]/.test(char) ? JSON.stringify(char) : char;
+}
+
+// Why the current rule refuses a catalogue id. Derived from the rule itself, so
+// the reason cannot disagree with the check that produced the refusal.
+function modelIdRefusal(id, runtime) {
+  if (id.length > MODEL_ID_MAX_LENGTH) return '太长';
+  const pattern = modelIdPattern(runtime);
+  for (const char of id) {
+    if (char === ' ') return '含空格';
+    if (/\s/.test(char)) return `含空白字符 ${JSON.stringify(char)}`;
+    if (!pattern.test(char)) return `含 ${displayModelIdChar(char)}`;
+  }
+  return '不符合规则';
+}
+
+// The /model menu, split in two blocks: what the current rule accepts (a real
+// choice) and what the catalogue reports while the rule refuses it. A refused
+// id is neither a typo nor a choice, so it is named separately, with the
+// reason, and never offered under 可选.
+function modelMenuLines(models, runtime) {
+  const pattern = modelIdPattern(runtime);
+  const acceptable = models.filter((entry) => pattern.test(entry.id));
+  const refused = models.filter((entry) => !pattern.test(entry.id));
+  const lines = [];
+  if (acceptable.length) lines.push('可选：' + acceptable.map(modelEntryLabel).join('、'));
+  else if (models.length) lines.push('可选：无 — 目录里的 ID 都不符合当前 Runtime 的 /model 规则');
+  else lines.push('模型列表暂不可用');
+  if (refused.length) {
+    lines.push('以下模型在目录里但 Vika 当前规则不接受（配置不会改动）：');
+    for (const entry of refused) lines.push(`  ${entry.id}（${modelIdRefusal(entry.id, runtime)}）`);
+  }
+  return lines;
+}
+
 // Executes a runtime or Core command. Returns { ok, text }; the caller replies
 // on the incoming route and records the outcome. Core controls receive their
 // own event/config context and do not wait for or change the model session.
@@ -179,25 +232,48 @@ export async function executeCommand(command, runtime, { primary } = {}) {
   const models = current.models ?? [];
 
   if (command.name === 'model') {
+    const pattern = modelIdPattern(current.runtime);
     const ids = [...new Set(models.flatMap((model) => [model.id, model.resolvedModel].filter(Boolean)))];
+    const selectable = ids.filter((id) => pattern.test(id));
     if (!command.arg) {
       const selected = currentModelEntry(current);
       const resolved = selected?.resolvedModel || current.resolvedModel;
       const lines = [`Runtime：${current.runtime}`, `当前模型：${current.model || '（默认）'}`];
       if (resolved) lines.push(`实际模型：${resolved}`);
-      if (models.length) {
-        lines.push('可选：' + models.map((entry) => {
-          const details = [entry.displayName, entry.resolvedModel]
-            .filter((value) => value && value !== entry.id);
-          return entry.id + (details.length ? `（${[...new Set(details)].join(' · ')}）` : '');
-        }).join('、'));
-      } else lines.push('模型列表暂不可用');
+      lines.push(...modelMenuLines(models, current.runtime));
       lines.push('用法：/model <名称>（支持前缀匹配）；切换 Runtime 请用 /runtime');
       return { ok: true, text: lines.join('\n') };
     }
     const selector = parseRuntimeModelSelector(command.arg);
     const lookupName = selector.qualified ? selector.model : selector.raw;
-    if (!MODEL_NAME.test(command.arg) || !lookupName) {
+    // The rule of the runtime that will serve the id, applied to the id alone:
+    // the `dsh:`-style qualifier names the runtime, it is not part of the id, so
+    // it must never count against the length bound. Measuring the whole
+    // `command.arg` made a legal id fail only when it was written qualified, and
+    // reported the length problem as a character problem.
+    const problem = lookupName ? modelIdProblem(lookupName, current.runtime) : 'empty';
+    if (problem) {
+      // An id the catalogue reports but this rule refuses is not a typo: it is a
+      // real route the runtime serves and Vika cannot address. Say which of the
+      // two it is, and never touch the configuration over it. `known` compares
+      // the catalogue against the spelling the user typed, so a refusal can
+      // never be blamed on a name that was silently rewritten on the way in.
+      const known = lookupName && ids.some((id) => id === lookupName || id === command.arg
+        || id.endsWith(`/${lookupName}`));
+      if (known) {
+        const reason = problem === 'length'
+          ? `${lookupName} 有 ${lookupName.length} 个字符，上限是 ${MODEL_ID_MAX_LENGTH} 个`
+          : `${modelIdRefusal(lookupName, current.runtime)}，只接受字母、数字和 ${modelIdSymbols(current.runtime).join(' ')}`;
+        return { ok: false, text: [
+          `这个模型 ID 在当前 Runtime 的目录里，但 Vika 的 /model 不接受它：${lookupName}`,
+          `原因：${reason}。配置本身不会被改动。`,
+          '可选的模型：' + (selectable.length ? selectable.join('、') : '（无）'),
+        ].join('\n') };
+      }
+      if (problem === 'length') {
+        return { ok: false, text: `模型名太长：${lookupName.length} 个字符，上限是 ${MODEL_ID_MAX_LENGTH} 个`
+          + '（Runtime 限定符不计入）' };
+      }
       return { ok: false, text: lookupName ? `无效的模型名：${lookupName}` : '无效的模型名' };
     }
     const namedRuntime = getRuntimeDefinition(command.arg);
@@ -205,10 +281,12 @@ export async function executeCommand(command, runtime, { primary } = {}) {
     if (foreignRuntime && foreignRuntime !== current.runtime) {
       return { ok: false, text: `/model 只选择当前 Runtime（${current.runtime}）的模型；请先 /runtime ${foreignRuntime}` };
     }
-    const matches = matchPrefix(lookupName, ids);
+    const matches = matchPrefix(lookupName, selectable);
     if (matches.length > 1) return { ok: false, text: `模型名有歧义：${matches.join('、')}` };
     if (ids.length && !matches.length) {
-      return { ok: false, text: `未找到模型：${lookupName}\n可选：${ids.join('、')}\n切换 Runtime 请用 /runtime` };
+      // Only what the rule accepts is a candidate, so the menu here can never
+      // offer an id the very next command would refuse.
+      return { ok: false, text: `未找到模型：${lookupName}\n可选：${selectable.length ? selectable.join('、') : '（无）'}\n切换 Runtime 请用 /runtime` };
     }
     const target = matches[0] || lookupName;
     const applied = await runtime.transition({ kind: 'select-model', selector: target,

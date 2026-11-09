@@ -8,12 +8,24 @@ import { actionEndpoint, callTool, listTools } from './client.mjs';
 import { parseUniqueJson } from '../unique-json.mjs';
 import { inlineImageBlocks } from '../inline-images.mjs';
 
-// Stdio MCP adapter for local runtimes (Codex, TraeX, Claude, Pi, OpenCode).
+// Stdio MCP adapter for local runtimes (Codex, TraeX, Claude, Pi, DSH, OpenCode).
 // It relays tools/list and tools/call to the Core and renders results; nothing
 // else.
 const MAX_REQUEST_BYTES = 1_000_000;
 
-export function createMcpHandler(endpoint) {
+// Tools a read-only instance withholds. Delivery and decision tools change
+// something outside this process, so a scoped agent (for example a DSH child
+// agent) must not see them at all: absence is a boundary a prompt cannot argue
+// past, while a policy check inside a shared process cannot even tell which
+// agent called.
+const DEFAULT_WRITE_TOOLS = Object.freeze([
+  'send_message', 'notify_owner', 'reply_message', 'react_to_message', 'retract_message',
+  'stay_silent', 'create_timer', 'cancel_timer', 'finish_timer_occurrence', 'read_meeting_inbox',
+]);
+
+export function createMcpHandler(endpoint, { readOnly = false, writeTools = DEFAULT_WRITE_TOOLS } = {}) {
+  const withheld = readOnly ? new Set(writeTools) : null;
+  const isWithheld = (name) => Boolean(withheld && withheld.has(String(name ?? '')));
   return async function handle(message, { signal } = {}) {
     signal?.throwIfAborted();
     const id = message?.id;
@@ -30,9 +42,18 @@ export function createMcpHandler(endpoint) {
     }
     if (message.method === 'ping') return { jsonrpc: '2.0', id, result: {} };
     if (message.method === 'tools/list') {
-      return { jsonrpc: '2.0', id, result: { tools: await listTools(endpoint, { signal }) } };
+      const tools = await listTools(endpoint, { signal });
+      // The list is what the model can call, so withholding here is the whole
+      // feature; tools/call refuses the same names for a client that ignores it.
+      return { jsonrpc: '2.0', id, result: { tools: withheld ? tools.filter(tool => !isWithheld(tool?.name)) : tools } };
     }
     if (message.method === 'tools/call') {
+      if (isWithheld(message.params?.name)) {
+        return { jsonrpc: '2.0', id, result: {
+          content: [{ type: 'text', text: `This agent cannot call ${message.params.name}: the tool is not available to it.` }],
+          isError: true,
+        } };
+      }
       try {
         const result = await callTool(endpoint, message.params?.name, message.params?.arguments ?? {}, { signal });
         signal?.throwIfAborted();
@@ -53,8 +74,16 @@ export function createMcpHandler(endpoint) {
 }
 
 function parseArgs(argv) {
+  // `--name value` pairs, plus bare `--flag` spellings that stand for `--flag 1`
+  // so a boolean option cannot swallow the following option as its value.
   const values = {};
-  for (let index = 0; index < argv.length; index += 2) values[argv[index].replace(/^--/, '')] = argv[index + 1];
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (!token?.startsWith('--')) continue;
+    const next = argv[index + 1];
+    const bare = next === undefined || next.startsWith('--');
+    values[token.replace(/^--/, '')] = bare ? '1' : (index += 1, next);
+  }
   return values;
 }
 
@@ -130,7 +159,10 @@ async function serve() {
   const handle = createMcpHandler(actionEndpoint('mcp', {
     PERSONAL_AGENT_SOCKET: args.socket ?? process.env.PERSONAL_AGENT_SOCKET,
     PERSONAL_AGENT_AUTHORITY: args.authority ?? process.env.PERSONAL_AGENT_AUTHORITY,
-  }));
+  }), {
+    readOnly: args.readonly === '1' || args['read-only'] === '1' || args.readonly === 'true',
+    ...(args['write-tools'] ? { writeTools: String(args['write-tools']).split(',').map(name => name.trim()).filter(Boolean) } : {}),
+  });
   await serveMcp({ input: process.stdin, output: process.stdout, handle });
 }
 
