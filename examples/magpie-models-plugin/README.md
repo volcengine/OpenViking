@@ -68,7 +68,9 @@ The Agent module writes a private selection file; a Bun bridge validates the mod
 
 ### Generation parameters
 
-The page exposes separate OV and Bot parameter editors. Use `vlmParameters` and `botParameters` in Options or `adapter.json`:
+On Magpie versions with Agent panel support, **Agents → OpenViking → Settings** uses Magpie’s native setting rows, menus and switches for separate VLM and VikingBot forms for output tokens, temperature, thinking and timeout (seconds). “Keep existing” leaves a parameter unmanaged; “Model default” writes null. Older versions retain the same form in the OpenViking models sidebar page. The native Agent settings entry currently requires the [Magpie development branch](https://github.com/yufeng201/magpie/tree/feat/agent-settings-panels). Released Magpie versions retain the sidebar form.
+
+Use `vlmParameters` and `botParameters` in Options or `adapter.json`:
 
 ```json
 {
@@ -133,6 +135,8 @@ MAGPIE_BIN=/path/to/magpie node tests/magpie-smoke.mjs
 The opt-in actual-host smoke uses temporary child-process HOME/XDG directories and fake OV/vendor endpoints, with no real accounts or inference requests. `tests/ov-contract.py` accepts a temporary document on stdin to validate the real OV and Bot parsers in a repository Python environment.
 
 No npm publication or marketplace registration has been performed. `marketplace.json` contains a proposed entry.
+
+The optional `npm run test:ui` checks the parameter forms inside a sandbox with Playwright (Chromium and WebKit); no live configuration is changed. Set `NODE_PATH` when Playwright is installed outside this package. Use `BROWSER=chromium PLAYWRIGHT_CHANNEL=chrome` to use installed Chrome.
 
 ## Configuration files and status
 

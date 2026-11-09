@@ -72,7 +72,11 @@ magpie plugin add /absolute/path/to/OpenViking/examples/magpie-models-plugin
 
 ### 输出预算和生成参数
 
-页面提供 OV 与 Bot 各自的参数编辑框；Options / `adapter.json` 中对应 `vlmParameters` 与 `botParameters`，使用统一的 snake_case 字段：
+支持 Agent 面板的 Magpie 在 **Agents → OpenViking → 设置** 中使用 Magpie 原生设置行、菜单和开关，提供 VLM 和 VikingBot 两组表单，可分别配置最大输出、温度、思考模式和超时（秒）。选择“沿用现有配置”不接管该参数；“模型默认”对应空值。旧版 Magpie 仍可从侧栏 OpenViking 模型页面配置。
+
+原生 Agent 设置入口目前依赖 [Magpie 开发分支](https://github.com/yufeng201/magpie/tree/feat/agent-settings-panels)。已发布的 Magpie 继续使用侧栏表单。
+
+Options / `adapter.json` 中对应 `vlmParameters` 与 `botParameters`，使用统一的 snake_case 字段：
 
 ```json
 {
@@ -139,6 +143,8 @@ MAGPIE_BIN=/path/to/magpie node tests/magpie-smoke.mjs
 宿主测试使用临时 HOME/XDG 目录、模拟 OV 与模型供应商，不读取真实账号、不修改实际配置，也不发起模型推理。`tests/ov-contract.py` 可在仓库 Python 环境中读取标准输入的临时配置，检查真实 OV 与 Bot 配置解析。
 
 发布和市场登记尚未执行。市场条目草稿见 `marketplace.json`。
+
+可选的 `npm run test:ui` 使用 Playwright（Chromium、WebKit）在沙箱中检查参数表单，不修改真实配置。Playwright 安装在包外时通过 `NODE_PATH` 指定；使用系统 Chrome 可设置 `BROWSER=chromium PLAYWRIGHT_CHANNEL=chrome`。
 
 ## 配置文件与状态说明
 
