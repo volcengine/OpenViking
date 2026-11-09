@@ -2,6 +2,8 @@
   "name": "@openviking/magpie-models-plugin",
   "version": "0.1.0",
   "description": "Manage OpenViking and VikingBot models from Magpie",
+  "author": "OpenViking",
+  "homepage": "https://github.com/volcengine/OpenViking/tree/main/examples/magpie-models-plugin",
   "type": "module",
   "main": "./index.mjs",
   "magpie": {

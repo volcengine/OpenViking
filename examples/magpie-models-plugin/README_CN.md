@@ -1,8 +1,12 @@
 # OpenViking 模型管理插件（Magpie）
 
+[English](README.md)
+
 在 Magpie 的 **Agents → OpenViking** 中选择模型，让 OpenViking 与 VikingBot 使用 Magpie 的供应商、账号和路由。供应商密钥留在 Magpie，OV 保存网关地址、网关 Key 和完整模型 ID。
 
-与 [`@openviking/magpie-plugin`](../magpie-memory-plugin/README_CN.md) 的用途不同：记忆插件为其他 Agent 召回、保存 OV 记忆；本插件管理 **OV 和 VikingBot 自己使用的模型**。两个插件可以独立安装。
+展示名称为 **OpenViking**，npm 包名为 `@openviking/magpie-models-plugin`。
+
+与 [`@openviking/magpie-plugin`](https://github.com/volcengine/OpenViking/blob/main/examples/magpie-memory-plugin/README_CN.md) 的用途不同：记忆插件为其他 Agent 召回、保存 OV 记忆；本插件管理 **OV 和 VikingBot 自己使用的模型**。两个插件可以独立安装。
 
 ## 本地安装
 
@@ -12,13 +16,13 @@
 magpie plugin add /absolute/path/to/OpenViking/examples/magpie-models-plugin
 ```
 
-也可以在 Magpie 的 Plugins → Add plugin 中选择该目录。需要 Magpie Agent 插件、Bun 插件宿主以及 OV 启动配置文件 API；已通过 macOS Magpie **0.1.2818** 的隔离宿主测试。OV 和 Magpie 都需要保持运行。
+也可以在 Magpie 的 Plugins → Add plugin 中选择该目录。需要 Magpie Agent 插件、Bun 插件宿主以及 OV 启动配置文件 API。已在 macOS Magpie **0.1.2818** 验证隔离宿主流程，并在 Linux Magpie **0.1.3356** 验证安装与重启；Windows 尚未验证。OV 和 Magpie 都需要保持运行。以下 `node cli.mjs ...` 命令均在插件目录执行。
 
 1. 配置 OV 服务地址和 Root 凭据，见下文。
 2. 在插件的 **OpenViking 模型** 页面选择管理范围并保存。
 3. 在 Agents → OpenViking 中选择一个支持所需能力的聊天模型。
-4. 查看 Magpie 插件日志或运行 `node cli.mjs status`，确认 `saved`，没有冲突。
-5. 重启 OV 和 VikingBot，使启动配置生效。使用 `openviking-server --with-bot` 时，由服务重启流程管理 Bot。
+4. 查看 Magpie 插件日志或运行 `node cli.mjs status`：`saved` 表示已保存，`applied` 表示已执行生效检查；确认没有冲突或错误。
+5. 未开启自动重启时，执行 `node cli.mjs apply` 或通过原服务管理方式重启。使用 `openviking-server --with-bot` 时，受管 Bot 随 OV 重启。
 
 默认只保存配置；可在页面开启“保存模型后自动重启并验证”（`restartOnChange: true`），或执行 `node cli.mjs apply`。插件调用现有 Root 重启 API，等待实例 ID 变化、目标文件版本一致且无需再重启，再报告生效；失败或服务回滚会明确报错，不会循环重启。`saved` 表示配置已保存，不能据此认定运行中的进程已经切换。OV VLM 改动需要重启 OV；Bot 自身配置改变或它继承的 VLM 改变，需要重启 Bot。仅管理 Bot 独立配置时，OV 模型不变。状态分别提供 `ovRuntime` 与 `botRuntime`；启动文件匹配不代表独立 Bot 进程已重载，恢复原配置后也保留重启提示。插件不执行付费推理探测，只检查模型目录。使用前验证 VLM 的图片能力，以及 Bot 的流式输出、工具调用和输入预算。
 
@@ -110,6 +114,7 @@ node cli.mjs apply
 ```
 
 - `status`：读取本地最后一次同步结果，不做网络请求，也不输出密钥。
+- `doctor`：检查本机 CLI、Root 配置访问权限、服务重启能力及 Bot 状态。
 - `restore`：恢复仍由插件管理的字段，暂停当前模型选择，防止下一次轮询立即接管。
 - `apply`：对已保存的配置执行现有重启 API；Root 鉴权、配置版本与服务重启能力均会检查。`--with-bot` 的受管 Bot 随 OV 重启并检查健康，独立 Bot 仍需通过自己的进程管理器重启。
 - `sync`：解除暂停并立即同步。CLI 不读取 Magpie 保存的 Options；恢复时使用相同的 `adapter.json` 和后端凭据。
@@ -134,6 +139,41 @@ MAGPIE_BIN=/path/to/magpie node tests/magpie-smoke.mjs
 宿主测试使用临时 HOME/XDG 目录、模拟 OV 与模型供应商，不读取真实账号、不修改实际配置，也不发起模型推理。`tests/ov-contract.py` 可在仓库 Python 环境中读取标准输入的临时配置，检查真实 OV 与 Bot 配置解析。
 
 发布和市场登记尚未执行。市场条目草稿见 `marketplace.json`。
+
+## 配置文件与状态说明
+
+| 文件或状态 | 含义 |
+| --- | --- |
+| `selection.json` | Magpie 写入的模型选择，由插件桥接程序读取；OpenViking 本身不读取它。包含网关 Key，不要公开分享 |
+| `adapter.json` | 插件连接和行为配置；Magpie Options 的同名字段优先 |
+| `state.json` | 原配置与恢复记录，可能包含凭据；恢复完成前不要删除 |
+| `status.json` | 插件最近一次同步或生效检查结果 |
+| `activation.json` | 重启请求与验证记录，用于避免重复重启 |
+| `paused.json` | 手动恢复后的暂停标记，防止立刻再次接管 |
+| `saved` | 实际服务配置已保存，仍需检查重启状态 |
+| `applied` | 插件已完成生效检查；同时核对 `ovRuntime`、`botRuntime`、`restartRequired` |
+| `conflict` / `apply_failed` | 存在手动修改冲突或重启失败，需要处理后再继续 |
+
+以上插件文件默认位于 `~/.config/magpie-openviking-models/`。实际流程为：Magpie 写入 `selection.json`，桥接程序调用 API 更新服务真正使用的 `ov.conf`，再按设置重启并验证。Magpie 行上的“已接入”只表示其接管配置已写入，不代表 OV 已经切换模型。
+
+## 常见问题
+
+| 现象 | 处理方式 |
+| --- | --- |
+| `root_authentication_required` / `root_permission_required` | 核对当前 CLI 配置的 Root Key 或 `rootApiKeyFile`，普通记忆访问 Key 不具备模型管理权限 |
+| `bot_not_enabled_or_detected` | Bot 未启用或未检测到；选择保留 Bot 配置，或先按原部署方式启用 Bot |
+| `runtime_vlm_override` | 存在 Cluster VLM 运行覆盖；先明确实际配置来源，不能仅靠修改启动文件判断生效 |
+| `server_restart_unsupported` | 当前启动方式不支持重启 API，使用原来的 systemd / Docker / 进程管理方式重启 |
+| `saved` 后模型看起来没变化 | 检查 `restartRequired` 并完成重启；确认没有 Account 覆盖，也没有连接到另一台 OV |
+| 界面显示已接入，但仍不确定是否生效 | 查看插件日志，运行 `node cli.mjs doctor` 和 `node cli.mjs status`；不要把 Magpie 的接入标记当作最终状态 |
+
+## 市场信息
+
+[marketplace.json](marketplace.json) 包含 **OpenViking** 的官方图标和中英文简介。`kind: "agent"` 表示它属于模型接入的 Agent 分类，与记忆插件的 `middleware` 分类不同。`package.json` 的 `magpie.icon` 用于 npm 发现和已安装列表。
+
+npm 发布不会自动加入社区推荐列表。完成发布后，需要另行将条目提交到 [Magpie 社区注册表](https://github.com/magpie-community/plugins/blob/main/registry.json)。当前条目不声明由 Magpie 社区维护。
+
+宿主插件接口、安装与加载说明见 [Magpie 官方插件文档](https://usemagpie.ai/docs/plugins)。
 
 ## 无重启接口的范围
 
