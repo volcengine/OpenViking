@@ -209,6 +209,7 @@ export function getConfig() {
     // On by default; agents[].naturalWriting: false turns it off.
     naturalWriting: boolEnv('VIKA_NATURAL_WRITING', true),
     openVikingConfigPath: (process.env.OPENVIKING_CLI_CONFIG_FILE || '').trim(),
+    capabilitiesFile: process.env.VIKA_CAPABILITIES_FILE || null,
     // Opt-in per instance (agents[].ovAutoRecall, config file only): besides
     // the preferences it always shows, the daemon runs one OV search per line
     // someone sends (ov-recall.mjs).

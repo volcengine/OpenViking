@@ -33,7 +33,7 @@ const mcpPath = fileURLToPath(new URL('../src/actions/mcp.mjs', import.meta.url)
 function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, meetingEnabled = false, ovClient = null,
   ovTools = null, openVikingConfigPath = undefined,
   owners = { lark: OWNER }, channel = 'lark', profile = undefined, explicitSilence = false, stagedReplies = false,
-  larkMessageAccess = 'owner', onNoProgress = null, connectors: given = null } = {}) {
+  larkMessageAccess = 'owner', capabilitiesFile = null, onNoProgress = null, connectors: given = null } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'actions-'));
   const workspace = path.join(directory, 'workspace');
   fs.mkdirSync(workspace);
@@ -44,7 +44,7 @@ function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, 
   const record = (level) => (message, fields = {}) => logs.push({ level, message, ...fields });
   const service = new ActionService({
     config: { workspace, tempDir: path.join(directory, 'tmp'), maxReplyChars: 1_000, channel, profile, explicitSilence, stagedReplies,
-      larkMessageAccess, ...(openVikingConfigPath !== undefined ? { openVikingConfigPath } : {}) },
+      larkMessageAccess, capabilitiesFile, ...(openVikingConfigPath !== undefined ? { openVikingConfigPath } : {}) },
     store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, onNoProgress,
     logger: { debug() {}, info: record('info'), warn: record('warn'), error: record('error'), child() { return this; } },
   });
@@ -1779,5 +1779,22 @@ describe('staged replies', () => {
     finish();
     await closing;
     assert.equal(service.reactionRemovals.size, 0);
+  });
+});
+
+
+describe('shared Core capabilities', () => {
+  it('gates discovery and skill reads through normal runtime authority', async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'core-skills-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(root, 'SKILL.md'), 'Read this skill before execution.');
+    const file = path.join(root, 'capabilities.json');
+    fs.writeFileSync(file, JSON.stringify({ skills: { demo: { directory: root, description: 'Demo' } } }));
+    const { service, call } = setup(t, { capabilitiesFile: file });
+    assert.ok(service.tools().some(tool => tool.name === 'read_skill'));
+    await assert.rejects(call('read_skill', { id: 'demo' }, 'stale-token'));
+    assert.equal((await call('read_skill', { id: 'demo' })).data.content, 'Read this skill before execution.');
+    assert.ok(!setup(t).service.tools().some(tool => tool.name === 'read_skill'));
+    await service.close();
   });
 });

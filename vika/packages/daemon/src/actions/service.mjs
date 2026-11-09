@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { CoreCapabilities } from '../core-capabilities.mjs';
+
 import { createHash, randomUUID } from 'node:crypto';
 import { conversationKeyFor, eventIdentity, normalizeEvent } from '../event.mjs';
 import { registerCard } from '../card-messages.mjs';
@@ -52,6 +54,10 @@ const HANDLERS = {
   read_openviking_session_context: 'readOVSession',
   read_meeting_inbox: 'readMeetingInbox',
   get_time: 'getTime',
+  list_capabilities: 'listCapabilities',
+  read_skill: 'readSkill',
+  list_mcp_tools: 'listMcpTools',
+  call_mcp_tool: 'callMcpTool',
   create_timer: 'createTimer',
   list_timers: 'listTimers',
   cancel_timer: 'cancelTimer',
@@ -159,6 +165,20 @@ export class ActionService {
     this.reactionRemovals = new Set();
     // Query context may identify a reply target, but never an input/decision.
     this.queryTargets = new Map();
+    this.capabilities = config.capabilitiesFile ? new CoreCapabilities(config.capabilitiesFile, config.workspace) : null;
+  }
+
+  async capabilityResult(work, caller) {
+    const data = await work();
+    this.assertAuthority(caller.authority);
+    return { text: JSON.stringify(data), data };
+  }
+  listCapabilities(input, caller) { return this.capabilityResult(() => this.capabilities.list(), caller); }
+  readSkill(input, caller) { return this.capabilityResult(() => this.capabilities.readSkill(input.id, input.resource), caller); }
+  listMcpTools(input, caller) { return this.capabilityResult(() => this.capabilities.listMcp(input.server), caller); }
+  callMcpTool(input, caller) {
+    caller.trace.invoked = true;
+    return this.capabilityResult(() => this.capabilities.callMcp(input.server, input.tool, input.arguments ?? {}, () => this.assertAuthority(caller.authority)), caller);
   }
 
   manifest(connector) {
@@ -184,6 +204,7 @@ export class ActionService {
   }
 
   offered(tool) {
+    if (tool.capability) return Boolean(this.capabilities);
     if (tool.action) return this.supporting(tool.action, 'actions').length > 0;
     if (tool.query) return this.supporting(tool.query, 'queries').length > 0;
     if (tool.connector) return this.connectors.manifests().some(([, manifest]) => manifest.name === tool.connector);
@@ -321,6 +342,7 @@ export class ActionService {
   // A removal a turn's end started is forgotten from temporaryReactions at once,
   // so it is waited for here: the Connectors stop right after.
   async close() {
+    await this.capabilities?.close();
     await this.clearTemporaryReactions('shutdown');
     await Promise.allSettled([...this.reactionRemovals]);
   }

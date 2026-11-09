@@ -32,9 +32,8 @@ import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import { durableCodingTools } from './durable-coding-tools.mjs';
 import { availableChatModels, loadDurableModels } from './durable-models.mjs';
-import { actionEndpoint, callTool, listTools } from './actions/client.mjs';
+import { actionEndpoint, callTool, listTools, toolContent } from './actions/client.mjs';
 import { DURABLE_PROTOCOL } from './durable-runtime.mjs';
-import { inlineImageBlocks } from './inline-images.mjs';
 
 const context = BACKGROUND_CONTEXT;
 const EFFORTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -189,11 +188,7 @@ class Host {
         parameters: Type.Unsafe(definition.inputSchema ?? { type: 'object', properties: {} }),
         execute: async (args) => {
           const result = await callTool(endpoint, definition.name, args);
-          const output = [{ type: 'text', text: String(result?.text ?? '') }];
-          // Images travel as content blocks, like the MCP adapter's inline
-          // images, so get_message_media can hand one to a vision model.
-          output.push(...await inlineImageBlocks(result?.media));
-          return { output };
+          return { output: await toolContent(result) };
         },
       }));
     }

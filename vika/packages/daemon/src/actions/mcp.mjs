@@ -4,9 +4,8 @@
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { actionEndpoint, callTool, listTools } from './client.mjs';
+import { actionEndpoint, callTool, listTools, toolContent } from './client.mjs';
 import { parseUniqueJson } from '../unique-json.mjs';
-import { inlineImageBlocks } from '../inline-images.mjs';
 
 // Stdio MCP adapter for local runtimes (Codex, TraeX, Claude, Pi, OpenCode).
 // It relays tools/list and tools/call to the Core and renders results; nothing
@@ -36,10 +35,10 @@ export function createMcpHandler(endpoint) {
       try {
         const result = await callTool(endpoint, message.params?.name, message.params?.arguments ?? {}, { signal });
         signal?.throwIfAborted();
-        const images = await inlineImageBlocks(result.media);
+        const content = await toolContent(result);
         signal?.throwIfAborted();
         return { jsonrpc: '2.0', id, result: {
-          content: [{ type: 'text', text: result.text }, ...images],
+          content,
           structuredContent: result.data,
         } };
       } catch (error) {
