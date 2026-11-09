@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createOvClient, isOvClientError } from '@openviking/react/client';
+import {
+  createOvClient,
+  isOvClientError,
+  OV_PATHS,
+} from '@openviking/react/client';
 
 /** 记录每次调用，并按 handler 返回预设响应。 */
 function fakeFetch(handler) {
@@ -32,7 +36,7 @@ test('joins the gateway prefix with the API path', async () => {
 
   await client.request({
     method: 'GET',
-    path: '/api/v1/fs/ls',
+    path: OV_PATHS.fsLs,
     query: { uri: 'viking://a' },
   });
 

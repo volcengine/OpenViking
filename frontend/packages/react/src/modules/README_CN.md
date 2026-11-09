@@ -85,7 +85,7 @@ import { OpenVikingProvider } from '@openviking/react/client';
 ```ts
 const rows = await client.request<FsEntry[]>({
   method: 'GET',
-  path: '/api/v1/fs/ls',
+  path: OV_PATHS.fsLs,
   query: { uri },
   options: { resourceId: libraryId },
 });
@@ -93,8 +93,8 @@ const rows = await client.request<FsEntry[]>({
 
 该 Hook 不对外导出：宿主不需要知道模块会发什么请求。纯视图组件完全不需要 Provider。当前身份可由 Context 下发，其中 `accountId` 对应数据空间，`userId` 对应该空间内的 User；身份作用域与请求配置分别维护。URI、查询词等模块业务参数仍通过模块 / Hook 入参提供。
 
-- **路径只有一处拼接**：Client 保留 `baseURL` 的路径前缀。例如 `/gateway/openviking` 加 `/api/v1/fs/ls` 得到 `/gateway/openviking/api/v1/fs/ls`，不会因接口路径以 `/` 开头而丢掉网关前缀。模块不拼接域名或服务前缀。
-- **响应只在 Client 解析**：区分 HTTP 失败与原生响应的 `status: 'error'`，保留服务端错误码、状态和请求标识。JSON 响应保留 `result` 及分页等外层元数据；上传、下载和流式响应按接口契约处理，不统一强转 JSON。
+- **路径只有一处拼接**：接口路径由 `@openviking/react/client` 的 `OV_PATHS` / `OV_PATH_BUILDERS` 集中维护，模块不写字面量。Client 保留 `baseURL` 的路径前缀。例如 `/gateway/openviking` 加 `/api/v1/fs/ls` 得到 `/gateway/openviking/api/v1/fs/ls`，不会因接口路径以 `/` 开头而丢掉网关前缀。模块不拼接域名或服务前缀。
+- **响应只在 Client 解析**：区分 HTTP 失败与原生响应的 `status: 'error'`，保留服务端错误码、状态和请求标识。`request` 默认返回 `result`；二进制响应用 `responseType: 'blob'` 取原始字节，事件流用 `stream` 逐个消费，两者都不强转 JSON。`has_more` 这类 `result` 之外的分页元数据目前不返回，需要分页的模块按 `offset` / `node_limit` 自行判断。
 - **配置与身份变化要隔离**：请求、缓存键和订阅以实际生效的服务地址及宿主当前连接 / 身份作用域隔离。切换服务或账号后取消旧请求并忽略过期结果；动态 headers 不代替身份切换信号，也不把 API Key 明文放入缓存键。
 - **适配集中在接入层**：原生接口只需配置地址和 headers；存量网关若有额外封装，由宿主在共享 Client 接入层统一适配，并保留取消信号、响应状态及流。无法等价表达的能力通过显式扩展契约接入，不在每个模块增加宿主分支。
 

@@ -85,7 +85,7 @@ Inside a module, the client comes from an internal hook. A module passes only th
 ```ts
 const rows = await client.request<FsEntry[]>({
   method: 'GET',
-  path: '/api/v1/fs/ls',
+  path: OV_PATHS.fsLs,
   query: { uri },
   options: { resourceId: libraryId },
 });
@@ -93,8 +93,8 @@ const rows = await client.request<FsEntry[]>({
 
 That hook is not exported: a host never needs to know which requests a module sends. Pure view components need no Provider at all. The current identity may be distributed through Context, where `accountId` corresponds to the data space and `userId` to the user within it; identity scope and request configuration are maintained separately. Business parameters such as URI and query text are still passed as module / Hook inputs.
 
-- **Paths are joined in one place only**: the Client keeps the `baseURL` path prefix. For example `/gateway/openviking` plus `/api/v1/fs/ls` yields `/gateway/openviking/api/v1/fs/ls`, and a leading `/` in an API path never drops the gateway prefix. Modules join no domain or service prefix.
-- **Responses are parsed only in the Client**: HTTP failures are distinguished from a native `status: 'error'` response, preserving the server error code, status and request identifier. JSON responses keep `result` and outer metadata such as paging; upload, download and streaming responses follow the API contract and are not coerced to JSON uniformly.
+- **Paths are joined in one place only**: endpoint paths live in `OV_PATHS` / `OV_PATH_BUILDERS` from `@openviking/react/client`, so modules write no literals. The Client keeps the `baseURL` path prefix. For example `/gateway/openviking` plus `/api/v1/fs/ls` yields `/gateway/openviking/api/v1/fs/ls`, and a leading `/` in an API path never drops the gateway prefix. Modules join no domain or service prefix.
+- **Responses are parsed only in the Client**: HTTP failures are distinguished from a native `status: 'error'` response, preserving the server error code, status and request identifier. `request` returns `result` by default; binary responses use `responseType: 'blob'` for the raw bytes and event streams use `stream`, and neither is coerced to JSON. Pagination metadata outside `result`, such as `has_more`, is not returned today, so a module that pages decides through `offset` / `node_limit`.
 - **Configuration and identity changes must be isolated**: requests, cache keys and subscriptions are isolated by the effective service address and the host's current connection / identity scope. Switching service or account cancels old requests and ignores stale results; dynamic headers do not substitute for an identity-switch signal, and an API Key is never put into a cache key in plain text.
 - **Adaptation is centralised at the integration boundary**: native APIs need only an address and headers; any extra wrapping for existing gateways is adapted uniformly by the host at the shared Client boundary, preserving cancellation signals, response status and streams. Capabilities that cannot be expressed equivalently are integrated through an explicit extension of the contract, not a per-module host branch.
 
