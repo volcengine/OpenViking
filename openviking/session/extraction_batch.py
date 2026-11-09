@@ -29,7 +29,7 @@ class ExtractionMessageBatch:
     oversized: bool = False
 
 
-def resolve_extraction_batch_limits(auto_commit_policy: Any) -> ExtractionBatchLimits:
+def _policy_batch_limits(auto_commit_policy: Any) -> ExtractionBatchLimits:
     if not isinstance(auto_commit_policy, dict) or not auto_commit_policy:
         return ExtractionBatchLimits()
     policy = AutoCommitPolicy.from_dict(auto_commit_policy)
@@ -40,6 +40,32 @@ def resolve_extraction_batch_limits(auto_commit_policy: Any) -> ExtractionBatchL
         max_messages=(
             policy.message_count_threshold if policy.message_count_threshold > 0 else None
         ),
+    )
+
+
+def resolve_extraction_batch_limits(
+    auto_commit_policy: Any,
+    prompt_token_limit: Optional[int] = None,
+) -> ExtractionBatchLimits:
+    """Batch limits for one Phase-2 long-term extraction pass.
+
+    ``prompt_token_limit`` is the prompt budget of the model that runs the
+    extraction, derived from its context window by
+    :func:`openviking.models.vlm.context_window.resolve_prompt_token_limit`. It
+    caps the policy threshold in both directions: sessions without an
+    auto-commit policy are batched instead of sent in one unbounded call, and a
+    policy that allows more than the model window cannot force a request the
+    backend will silently truncate (which surfaces as ``parse_error``).
+    """
+    policy_limits = _policy_batch_limits(auto_commit_policy)
+    candidates = [
+        limit
+        for limit in (policy_limits.max_message_tokens, prompt_token_limit)
+        if limit is not None
+    ]
+    return ExtractionBatchLimits(
+        max_message_tokens=min(candidates) if candidates else None,
+        max_messages=policy_limits.max_messages,
     )
 
 

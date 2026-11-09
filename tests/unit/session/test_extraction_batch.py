@@ -385,6 +385,58 @@ def test_auto_commit_policy_resolves_phase2_batch_limits():
     assert resolve_extraction_batch_limits({}).enabled is False
 
 
+def test_model_window_batches_sessions_without_an_auto_commit_policy():
+    limits = resolve_extraction_batch_limits(None, prompt_token_limit=11469)
+
+    assert limits == ExtractionBatchLimits(max_message_tokens=11469, max_messages=None)
+    assert limits.enabled is True
+
+
+def test_model_window_caps_a_policy_that_exceeds_it():
+    limits = resolve_extraction_batch_limits(
+        {"pending_token_threshold": 150000, "message_count_threshold": 100},
+        prompt_token_limit=11469,
+    )
+
+    assert limits == ExtractionBatchLimits(max_message_tokens=11469, max_messages=100)
+
+
+def test_policy_threshold_still_wins_when_it_is_the_smaller_one():
+    limits = resolve_extraction_batch_limits(
+        {"pending_token_threshold": 8000},
+        prompt_token_limit=11469,
+    )
+
+    assert limits.max_message_tokens == 8000
+
+
+def test_unknown_model_window_keeps_the_policy_only_path():
+    limits = resolve_extraction_batch_limits(
+        {"pending_token_threshold": 150000, "message_count_threshold": 100}, None
+    )
+
+    assert limits == ExtractionBatchLimits(max_message_tokens=150000, max_messages=100)
+
+
+def test_a_window_sized_oversized_archive_splits_into_multiple_passes():
+    messages = [_message(f"m{index}", text="word " * 3000) for index in range(3)]
+
+    # One message fits the window on its own; any pair of them does not.
+    window_limit = messages[0].estimated_tokens
+
+    batches = plan_extraction_batches(
+        messages,
+        resolve_extraction_batch_limits(None, prompt_token_limit=window_limit),
+    )
+
+    assert [[message.id for message in batch.messages] for batch in batches] == [
+        ["m0"],
+        ["m1"],
+        ["m2"],
+    ]
+    assert all(batch.estimated_tokens <= window_limit for batch in batches)
+
+
 def test_phase2_batches_split_an_oversized_batch_by_message_count():
     messages = [_message(f"m{index}") for index in range(5)]
 
