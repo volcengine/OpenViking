@@ -5,7 +5,9 @@ import type {
   FileTreeRow,
 } from '../../components/file-tree/index.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
+import { knownDirectories, useKnownFile } from './fs-directories.js';
 import { expandChain } from './fs-path.js';
+import { scopeKeyOf, type RequestScope } from './fs-scope.js';
 import { loadPage } from './fs-page.js';
 import {
   emptyDir,
@@ -25,6 +27,12 @@ export interface FsTreeState {
    * Directory URIs the tree knows about, whether or not they are visible.
    */
   directoryUris: ReadonlySet<string>;
+  /**
+   * 该 URI 是否是树里见过的文件。与 {@link directoryUris} 都不命中即为类型未知。
+   * Whether the URI is a file the tree has seen. Missing from both this and
+   * {@link directoryUris} means the type is unknown.
+   */
+  isKnownFile: (uri: string) => boolean;
   toggleExpand: (row: FileTreeEntryRow) => Promise<void>;
   open: (uri: string) => Promise<void>;
   loadMore: (parentId: string) => Promise<void>;
@@ -163,31 +171,59 @@ export function useFsTree({
     return () => controller.abort();
   }, [client, rootUri, defaultExpandedUri, requestOptions]);
 
-  // 展开与分页的请求属于某个客户端作用域。切到另一个 Provider（另一个账号、
-  // 另一个服务地址）时，上一个作用域里还没回来的请求必须作废：否则 A 的响应
-  // 会在 B 的树上落地，出现一批 B 从未请求过的子节点。
+  // 展开与分页的请求属于某个**有效作用域**：客户端实例加上逐请求覆盖的身份字段。
+  // 换 Provider（另一个账号、另一个服务地址）或在同一 Provider 下换
+  // `requestOptions.accountId`，上一个作用域里还没回来的请求都必须作废，否则 A 的
+  // 响应会在 B 的树上落地，出现一批 B 从未请求过的子节点。
   //
-  // 控制器在客户端身份变化时同步替换：放在渲染里判断而不是 effect 里，是因为
-  // 下面的回调在同一轮渲染中就要读到新作用域的 signal，而 effect 要等提交之后。
+  // 控制器在渲染里随作用域键一起替换，而不是在 effect 里：下面的回调在同一轮渲染
+  // 中就要读到新作用域的 signal，而 effect 要等提交之后。
   //
-  // Expansion and paging requests belong to one client scope. Switching to another
-  // Provider — another account or service address — must invalidate the requests
-  // still in flight: otherwise A's response lands on B's tree and shows children B
-  // never asked for.
+  // Expansion and paging requests belong to one **effective scope**: the client
+  // instance plus the per-request identity overrides. Switching the Provider — another
+  // account or service address — or switching `requestOptions.accountId` under the
+  // same Provider must invalidate the requests still in flight, or A's response lands
+  // on B's tree and shows children B never asked for.
   //
-  // The controller is swapped during render rather than in an effect, because the
-  // callbacks below need the new scope's signal in the same render, while an effect
-  // only runs after commit.
-  const scopeRef = useRef({ client, controller: new AbortController() });
-  if (scopeRef.current.client !== client) {
+  // The controller is swapped alongside the scope key during render rather than in an
+  // effect, because the callbacks below need the new scope's signal in the same
+  // render, while an effect only runs after commit.
+  const scopeKey = scopeKeyOf(client, requestOptions);
+  const scopeRef = useRef<RequestScope>({
+    key: scopeKey,
+    controller: new AbortController(),
+  });
+  if (scopeRef.current.key !== scopeKey) {
     scopeRef.current.controller.abort();
-    scopeRef.current = { client, controller: new AbortController() };
+    scopeRef.current = { key: scopeKey, controller: new AbortController() };
   }
 
   // 卸载时中止当前作用域的请求，避免回调写进已卸载的组件。
+  //
+  // 这里只中止、**不替换**控制器：清理之后若再跑一次 setup（Strict Mode 就会
+  // 这样做），同一个控制器仍处于中止态，后续每次操作都会在入口处直接返回——树
+  // 从此不再发任何请求。重建由上面的作用域判断负责，它在新一次渲染里发现键没变
+  // 就不会换控制器，因此这里必须补一个「已中止就换新」的分支。
+  //
   // Abort the current scope's requests on unmount, so a late callback cannot write
   // into an unmounted component.
-  useEffect(() => () => scopeRef.current.controller.abort(), []);
+  //
+  // This aborts but does **not** replace the controller: if setup runs again after
+  // cleanup — which Strict Mode does — the same controller stays aborted and every
+  // later operation returns at its entry, so the tree never issues another request.
+  // Rebuilding belongs to the scope check above, which sees an unchanged key on the
+  // next render and keeps the controller; so an "already aborted, take a fresh one"
+  // branch is required here.
+  useEffect(
+    () => () => {
+      scopeRef.current.controller.abort();
+      scopeRef.current = {
+        key: scopeRef.current.key,
+        controller: new AbortController(),
+      };
+    },
+    [],
+  );
 
   // 展开与分页操作的引用必须稳定：预览的取数 effect 依赖 `open`，如果它每轮
   // 都变，effect 就会反复重跑并取消上一次请求，预览永远加载不出来。
@@ -196,16 +232,28 @@ export function useFsTree({
   // loading effect depends on `open`, and a fresh one every render would re-run the
   // effect and cancel the previous request, leaving the preview permanently empty.
   const state = useMemo(() => {
+    // 每次请求都取**当时**的作用域，并把它带到请求结束：作用域切换后旧作用域的
+    // 控制器已被中止，因此那次请求既不会写 loading 也不会写结果。refresh 这类跨
+    // 多次请求的操作因此不能只读一次控制器——它的后续迭代必须重新取，否则会用旧
+    // 客户端发新请求。
+    //
+    // Each request captures the scope in force **at its start** and carries it to the
+    // end: after a switch the old scope's controller is aborted, so that request
+    // writes neither the loading flag nor a result. A multi-request operation such as
+    // refresh therefore cannot read the controller once — its later iterations must
+    // re-read it, or they would issue new requests with the old client.
     const fetchPage = async (uri: string, offset: number) => {
       if (!client) return;
-      // 每次请求取当时作用域的 signal：作用域切换后，旧请求的回调读到的是已
-      // 中止的信号，因此既不会写 loading，也不会写结果。
-      //
-      // Each request captures the signal of the scope in force at its start: after a
-      // scope switch an old callback sees an aborted signal, so it writes neither
-      // the loading flag nor a result.
-      const { signal } = scopeRef.current.controller;
+      const scope = scopeRef.current;
+      const { signal } = scope.controller;
       if (signal.aborted) return;
+      // 重新加载根目录就是一次恢复尝试：整树级的错误必须跟着清掉，否则消费
+      // `treeError` 的自定义视图会一直停在失败态，即使数据已经回来了。
+      //
+      // Reloading the root is a recovery attempt, so the tree-level error is cleared
+      // with it; otherwise a custom view reading `treeError` stays in its failure state
+      // even after the data has arrived.
+      if (uri === rootUri) setError(null);
       setDirs((prev) => ({
         ...prev,
         [uri]: { ...(prev[uri] ?? emptyDir()), loading: true, error: null },
@@ -223,7 +271,13 @@ export function useFsTree({
         //
         // Successes are re-checked too: the response may have been in flight when
         // the scope changed, and those children belong to the previous account.
-        if (signal.aborted) return;
+        // 作用域可能已经换过：`signal.aborted` 覆盖不到「控制器换了但旧的那个
+        // 还没来得及中止」这一瞬，因此再比一次键。
+        //
+        // The scope may have moved on: `signal.aborted` does not cover the instant
+        // where the controller was replaced but the old one has not been aborted yet,
+        // so the key is compared as well.
+        if (signal.aborted || scopeRef.current.key !== scope.key) return;
         setDirs((prev) => ({
           ...prev,
           [uri]: mergePage(prev[uri], page, offset),
@@ -261,14 +315,25 @@ export function useFsTree({
       loadMore: (parentId: string) =>
         fetchPage(parentId, dirsRef.current[parentId]?.entries.length ?? 0),
       retry: (parentId: string) => fetchPage(parentId, 0),
+      // 刷新是多次请求的循环，因此每一轮都要确认还在同一个作用域里：中途换了账号
+      // 就该停下，而不是拿着旧客户端的循环继续往新账号的树上写。
+      //
+      // Refresh loops over several requests, so every iteration re-checks that it is
+      // still in the same scope: an account switch mid-loop has to stop it rather than
+      // let it keep writing to the new account's tree with the old client.
       refresh: async () => {
         if (!client) return;
+        const scope = scopeRef.current;
         const open = [...expandedRef.current];
+        setError(null);
         setDirs({});
-        for (const uri of open) await fetchPage(uri, 0);
+        for (const uri of open) {
+          if (scopeRef.current.key !== scope.key) return;
+          await fetchPage(uri, 0);
+        }
       },
     };
-  }, [client, requestOptions]);
+  }, [client, rootUri, requestOptions]);
 
   const rows = useMemo(
     () => flattenTree(rootUri, 0, dirs, expanded),
@@ -283,16 +348,16 @@ export function useFsTree({
   // visible: the root never appears in `rows`, and a descendant disappears when its
   // ancestor collapses, yet neither changes type. The preview decides between a
   // summary and content from this set, so it has to cover every loaded level.
-  const directoryUris = useMemo(() => {
-    const known = new Set<string>([rootUri]);
-    for (const [parent, level] of Object.entries(dirs)) {
-      known.add(parent);
-      for (const entry of level.entries) {
-        if (entry.isDir === true) known.add(entry.uri);
-      }
-    }
-    return known;
-  }, [rootUri, dirs]);
+  const directoryUris = useMemo(
+    () => knownDirectories(rootUri, dirs),
+    [rootUri, dirs],
+  );
+  // 树里出现过的文件 URI。与目录集合一起构成「类型已知」的判定：两者都不包含，
+  // 就说明这个 URI 还没加载过，类型未知。
+  //
+  // The file URIs the tree has seen. Together with the directory set this decides
+  // "type known": in neither means the URI was never loaded, so its type is unknown.
+  const isKnownFile = useKnownFile(dirs);
 
-  return { rows, isReady, error, directoryUris, ...state };
+  return { rows, isReady, error, directoryUris, isKnownFile, ...state };
 }

@@ -148,3 +148,39 @@ test('breaking out of iteration releases the underlying body', async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(cancelled, true);
 });
+
+test('a CR-only event dispatches while the stream stays open', async () => {
+  // 纯 CR 换行时 `data: one\r\r` 本身已经是完整事件。若把 `\r` 留在缓冲区等下一
+  // 个 chunk，流保持打开时这个事件永远发不出去。
+  //
+  // With CR-only endings `data: one\r\r` is already a complete event. Holding the
+  // `\r` for the next chunk means it never dispatches while the stream stays open.
+  const encoder = new TextEncoder();
+  let controller;
+  const body = new ReadableStream({
+    start(c) {
+      controller = c;
+    },
+  });
+  const fetch = fakeFetch(
+    () =>
+      new Response(body, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      }),
+  );
+  const client = createOvClient({ baseURL: 'https://ov.test', fetch });
+  const stream = await client.stream({ method: 'POST', path: '/x' });
+  const iterator = stream[Symbol.asyncIterator]();
+
+  controller.enqueue(encoder.encode('data: one\r\r'));
+  // 不关闭流，直接等第一个事件：它必须已经到达。
+  // Without closing the stream, await the first event: it must already be there.
+  const first = await iterator.next();
+  assert.deepEqual(first.value, { data: 'one' });
+
+  controller.enqueue(encoder.encode('data: two\r\r'));
+  const second = await iterator.next();
+  assert.deepEqual(second.value, { data: 'two' });
+  controller.close();
+});

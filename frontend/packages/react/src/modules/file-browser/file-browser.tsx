@@ -56,7 +56,16 @@ export function FileBrowser({
   const [preferredTreeWidth, setPreferredTreeWidth] =
     useState(TREE_DEFAULT_WIDTH);
   const searchId = useId();
-  const currentUri = uri !== undefined ? (uri ?? null) : internalUri;
+  // `uri !== undefined` 才是受控：显式传 `null` 表示「清空选中」，与非受控时由
+  // 模块自己维护的 `internalUri` 是两回事。用真假值判断会把 `null` 当成没传，
+  // 于是清空之后仍然显示上一个资源。
+  //
+  // `uri !== undefined` is what makes it controlled: an explicit `null` means "clear
+  // the selection", which differs from the module owning `internalUri` while
+  // uncontrolled. A truthiness check would treat `null` as absent and keep showing the
+  // previous resource after the host cleared it.
+  const isControlled = uri !== undefined;
+  const currentUri = isControlled ? uri : internalUri;
   const text = resolveLabels(labels);
   const { ref: layoutRef, width: layoutWidth } =
     useContainerWidth<HTMLDivElement>();
@@ -79,10 +88,10 @@ export function FileBrowser({
   // request, leaving the preview permanently empty.
   const changeUri = useCallback(
     (next: string | null) => {
-      if (uri === undefined) setInternalUri(next);
+      if (!isControlled) setInternalUri(next);
       onUriChange?.(next);
     },
-    [uri, onUriChange],
+    [isControlled, onUriChange],
   );
 
   // 文案对象必须稳定：每次渲染都新建会让取数 effect 反复重跑并取消上一次请求。
@@ -110,6 +119,7 @@ export function FileBrowser({
 
   const browser = useFileBrowser({
     rootUri,
+    controlled: isControlled,
     summaryLabels,
     defaultExpandedUri,
     currentUri,
@@ -142,6 +152,8 @@ export function FileBrowser({
           refreshLabel={text.refresh}
           searchLoading={text.searchLoading}
           searchEmpty={text.searchEmpty}
+          errorLabel={text.error}
+          retryLabel={text.retry}
         />
       </div>
 

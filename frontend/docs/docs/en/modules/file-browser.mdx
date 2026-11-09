@@ -84,6 +84,7 @@ The divider's accessible name comes from `labels.resizeTree`; override it to fol
 - When a listing fails, the tree shows a failure row with a retry instead of "no files". The root is no exception — painting it as empty would make a 403 look like a directory that simply has no content.
 - When the preview fails, the detail pane shows a failure state: `labels.error` as the conclusion, the server's own message as the reason, and `labels.retry` as the retry. A selected resource that cannot be read never falls back to the empty-state artwork.
 - The empty state appears only when nothing is selected.
+- A failed search shows the reason and a retry rather than "no matching resources": the two are different situations, and merging them makes a 403 look like a search that genuinely matched nothing.
 
 A retry reloads the listings, the current preview and an active search together — after an external change, reloading only the tree would leave the detail pane on stale content.
 

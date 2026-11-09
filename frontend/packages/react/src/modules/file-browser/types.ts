@@ -86,11 +86,21 @@ export interface FileBrowserProps extends Omit<
   'onSelect' | 'children'
 > {
   /**
-   * 受控的当前资源 URI。传入时由宿主决定当前资源，模块只上报切换意图。
+   * 受控的当前资源 URI。传入时由宿主决定当前资源，模块只上报切换意图；显式传
+   * `null` 表示清空选中，模块不会回退到内部记下的上一个资源。
+   *
+   * 用 `uri !== undefined` 判断是否受控，而不是真假值：`null` 是一个有效的受控
+   * 值（「什么都没选中」），与「没有传这个属性」（非受控）是两回事。
+   *
    * The controlled current resource URI. When given, the host owns the current
-   * resource and the module only reports switch intent.
+   * resource and the module only reports switch intent; an explicit `null` clears the
+   * selection instead of falling back to the last resource the module remembers.
+   *
+   * Control is detected with `uri !== undefined` rather than truthiness: `null` is a
+   * valid controlled value ("nothing selected") and differs from "the prop is absent"
+   * (uncontrolled).
    */
-  uri?: string;
+  uri?: string | null;
   /**
    * 非受控时的初始资源 URI。省略时不选中任何资源。
    * Initial resource URI when uncontrolled. Nothing is selected when omitted.
@@ -187,6 +197,15 @@ export interface FileBrowserApi {
    * instead of showing a 403 as "no files".
    */
   treeError: Error | null;
+  /**
+   * 搜索请求本身的失败原因。与「搜索成功但没有结果」不同：前者要显示原因与重试，
+   * 后者才是空态文案。
+   *
+   * Why the search request failed. It differs from "the search succeeded but matched
+   * nothing": the former needs the reason and a retry, only the latter is the empty
+   * copy.
+   */
+  searchError: Error | null;
   /**
    * 当前资源预览的失败原因。选中了资源但读不出来时用它区分「读失败」与「什么
    * 都没选」。

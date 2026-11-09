@@ -1,15 +1,16 @@
 import { useEffect, useState } from 'react';
 
 import type {
-  FilePreviewDirectoryTab,
   FilePreviewFileTab,
   FilePreviewTab,
 } from '../../components/file-preview/index.js';
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { isBinaryFile, mimeTypeOf, toBinaryTab } from './fs-file-kind.js';
-import { directoryIcon, fileTypeIcon } from './fs-icon.js';
-import { isAbort, nameFromUri, toDirectoryTab, toFileTab } from './fs-model.js';
+import { fileTypeIcon } from './fs-icon.js';
+import { isAbort, nameFromUri, toFileTab } from './fs-model.js';
+import { readDirectory } from './fs-read-directory.js';
+import { abortError, resolveIsDirectory } from './fs-stat.js';
 
 /** 读取正文的行数上限；读满即按截断处理。 */
 const MAX_LINES = 2000;
@@ -27,11 +28,20 @@ export interface UseFsPreviewOptions {
   client: OvClient | null;
   uri: string | null;
   /**
-   * 当前资源是否是目录。目录读 L0/L1 摘要，文件读正文。
-   * Whether the current resource is a directory. A directory reads its L0/L1
-   * summary; a file reads its content.
+   * 当前资源的类型。目录读 L0/L1 摘要，文件读正文，`unknown` 先查一次 `fs/stat`
+   * 再决定。
+   *
+   * 传三态而不是「目录集合」：集合每次加载都会换新引用，作为 effect 依赖会让预览
+   * 反复重取。三态是稳定的字符串，换引用的问题不存在。
+   *
+   * The type of the current resource. A directory reads its L0/L1 summary, a file reads
+   * its content, and `unknown` resolves with one `fs/stat` call first.
+   *
+   * A three-state value rather than the directory set: the set gets a new identity on
+   * every load, and as an effect dependency it would make the preview reload
+   * repeatedly. The three-state value is a stable string, so that cannot happen.
    */
-  isDirectory?: boolean;
+  resourceType?: 'directory' | 'file' | 'unknown';
   /** 目录两级摘要的标题。Titles of the two summary levels. */
   labels?: { l0: string; l1: string };
   /**
@@ -68,7 +78,7 @@ const DEFAULT_SUMMARY_LABELS = { l0: 'L0 Summary', l1: 'L1 Overview' };
 export function useFsPreview({
   client,
   uri,
-  isDirectory = false,
+  resourceType = 'file',
   labels = DEFAULT_SUMMARY_LABELS,
   openParent,
   generation = 0,
@@ -100,16 +110,33 @@ export function useFsPreview({
     // A tab is present even while loading, so the shell — tab row and path row —
     // stays put and only the body shows the loading state. Setting null would make
     // the whole preview area disappear and reappear, flashing on every switch.
-    setTabs([loadingTab(uri, isDirectory)]);
+    setTabs([loadingTab(uri, resourceType !== 'file')]);
     setActiveKey(uri);
     setActiveKey(null);
     setError(null);
     setFooter(undefined);
     const options = { ...requestOptions, signal: controller.signal };
 
-    const read: Promise<FilePreviewTab> = isDirectory
-      ? readDirectory(client, uri, options, labels, openParent)
-      : readFile(client, uri, options, openParent);
+    // 类型未知时先问一次 `fs/stat`。仅凭「不在已知目录集合里」就按文件处理是错的：
+    // 集合只覆盖已加载的层，宿主直接传一个尚未展开过的目录 URI 时它就是空的，
+    // 于是目录会被读成正文、丢掉 L0/L1 摘要。缺失的是元数据，不是「它是文件」的
+    // 证据，因此先查再决定。
+    //
+    // An unknown type is resolved with one `fs/stat` call first. Treating "not in the
+    // known directory set" as a file is wrong: the set only covers loaded levels, so a
+    // directory URI the host passes directly, before it was ever expanded, is simply
+    // absent — and the directory would be read as content and lose its L0/L1 summary.
+    // What is missing is metadata, not evidence that it is a file.
+    const read: Promise<FilePreviewTab> = (async () => {
+      const isDir =
+        resourceType === 'unknown'
+          ? await resolveIsDirectory(client, uri, options)
+          : resourceType === 'directory';
+      if (controller.signal.aborted) throw abortError();
+      return isDir
+        ? readDirectory(client, uri, options, labels, openParent)
+        : readFile(client, uri, options, openParent);
+    })();
 
     // 成功也要复查是否已被取消：目录的两级摘要里，一级先回来、另一级还在路上
     // 时切换资源，`readDirectory` 会把被中止的那一级当成「没有生成」而正常返回，
@@ -147,7 +174,7 @@ export function useFsPreview({
   }, [
     client,
     uri,
-    isDirectory,
+    resourceType,
     labels,
     openParent,
     generation,
@@ -245,84 +272,5 @@ async function readFile(
     MAX_LINES,
     icon,
     openParent,
-  );
-}
-
-/**
- * 读目录的两级摘要，各自成一个页签：L0 是摘要，L1 是总览。
- *
- * 两个接口分别请求，一个失败不影响另一个；两个都为空时仍给出两个空页签，
- * 让使用者知道目录存在但没有生成内容，而不是看到一片空白。
- *
- * Reads a directory's two summary levels, one tab each: L0 is the abstract and L1
- * the overview.
- *
- * The two endpoints are requested separately so one failing does not hide the
- * other; when both are empty the tabs still appear, so the user sees that the
- * directory exists but has no generated content instead of blank space.
- */
-async function readDirectory(
-  client: OvClient,
-  uri: string,
-  options: OvRequestOptions,
-  labels: { l0: string; l1: string },
-  openParent?: (uri: string) => Promise<void>,
-): Promise<FilePreviewDirectoryTab> {
-  // 失败不吞：两级摘要各自可能为空（目录还没生成），但请求失败是另一回事，
-  // 静默变成空串会让「没生成」和「取不到」看起来一样，用户无从判断。
-  //
-  // Failures are not swallowed: either level may legitimately be empty (a
-  // directory that has not been summarised yet), but a failed request is a
-  // different thing. Turning it into an empty string silently makes "not
-  // generated" and "could not load" look identical, leaving the user unable to
-  // tell which happened.
-  // 单级失败记为空，但两级都失败就当作整体失败抛出去：只失败一级通常意味着
-  // 那一级还没生成，两级都失败则是连接或权限出了问题，必须让用户看到。
-  //
-  // One level failing counts as empty, but both failing is thrown: a single
-  // failure usually means that level is not generated yet, while both mean a
-  // connection or permission problem the user has to see.
-  const read = (path: string) =>
-    client
-      .request<string>({ method: 'GET', path, query: { uri }, options })
-      .then((value) => ({
-        ok: true as const,
-        text: typeof value === 'string' ? value : '',
-      }))
-      .catch((cause: unknown) => ({ ok: false as const, cause }));
-
-  // 两级摘要都读出来，交给目录页签：L0/L1 是它内部的一层同级切换，不是文件
-  // 页签——后者回答「打开了哪些文件」，前者回答「这个目录看哪一级摘要」。
-  //
-  // Both levels are read and handed to the directory tab: L0/L1 is a level of
-  // sibling switching inside it, not file tabs. A file tab answers "which files
-  // are open"; these answer "which summary level of this directory is shown".
-  const [abstractResult, overviewResult] = await Promise.all([
-    read(OV_PATHS.contentAbstract),
-    read(OV_PATHS.contentOverview),
-  ]);
-  // 被取消的那一级不是「没有生成」，而是「这次请求作废了」：把它当作空摘要
-  // 返回，调用方就会拿着一个过期结果当成成功。取消优先于其余失败上报。
-  //
-  // An aborted level is not "not generated" but "this request was cancelled":
-  // returning it as an empty summary would hand the caller a stale success. A
-  // cancellation therefore outranks any other failure.
-  const aborted = [abstractResult, overviewResult].find(
-    (result) => !result.ok && isAbort(result.cause),
-  );
-  if (aborted && !aborted.ok) throw aborted.cause;
-  if (!abstractResult.ok && !overviewResult.ok) {
-    throw abstractResult.cause;
-  }
-
-  return toDirectoryTab(
-    uri,
-    {
-      abstract: abstractResult.ok ? abstractResult.text : '',
-      overview: overviewResult.ok ? overviewResult.text : '',
-    },
-    labels,
-    openParent,
-    directoryIcon(),
   );
 }

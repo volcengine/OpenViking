@@ -30,6 +30,10 @@ export interface FileBrowserTreePaneProps {
   refreshLabel: string;
   searchLoading: string;
   searchEmpty: string;
+  /** 搜索失败时的提示。Message shown when the search request fails. */
+  errorLabel: string;
+  /** 失败态里的重试按钮。Retry button of the failure state. */
+  retryLabel: string;
 }
 
 export function FileBrowserTreePane({
@@ -41,6 +45,8 @@ export function FileBrowserTreePane({
   refreshLabel,
   searchLoading,
   searchEmpty,
+  errorLabel,
+  retryLabel,
 }: FileBrowserTreePaneProps) {
   return (
     <>
@@ -64,11 +70,31 @@ export function FileBrowserTreePane({
           selectedId={browser.selectedId}
           isReady={browser.isReady}
           labels={treeLabels}
+          // 搜索失败要单独显示：`useFsSearch` 失败时把结果置空并给出 error，若这里
+          // 只看 `searching`/`searchLoading`，一次 403 会渲染成「没有匹配结果」，
+          // 用户既看不到原因也没有重试入口。
+          //
+          // A failed search gets its own state: `useFsSearch` clears the results and
+          // reports an error, and reading only `searching`/`searchLoading` would render
+          // a 403 as "no matching resources", with neither the reason nor a retry.
           emptyFallback={
             browser.searching ? (
-              <p className="ov-file-browser__hint">
-                {browser.searchLoading ? searchLoading : searchEmpty}
-              </p>
+              browser.searchError ? (
+                <p className="ov-file-browser__hint ov-file-browser__hint--error">
+                  {errorLabel}
+                  <button
+                    type="button"
+                    className="ov-file-browser__retry"
+                    onClick={() => void browser.actions.refresh()}
+                  >
+                    {retryLabel}
+                  </button>
+                </p>
+              ) : (
+                <p className="ov-file-browser__hint">
+                  {browser.searchLoading ? searchLoading : searchEmpty}
+                </p>
+              )
             ) : undefined
           }
           renderRowIcon={(row: FileTreeEntryRow) => fileTypeIcon(row.name)}

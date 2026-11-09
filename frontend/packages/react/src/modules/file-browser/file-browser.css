@@ -500,3 +500,36 @@
     var(--ov-ui-color-focus, var(--ov-ui-focus-default, #5252ff));
   outline-offset: 1px;
 }
+
+/*
+ * 失败态里重试按钮紧跟提示文字，两者之间留一点间距。
+ * The retry button sits right after the message, with a little space between.
+ */
+.ov-file-browser__hint--error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ov-file-browser__retry {
+  padding: 2px 10px;
+  border: var(--ov-file-browser-stroke) solid
+    var(--ov-ui-color-border-3, var(--ov-ui-border-3-default, #c9cbd4));
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #ffffff));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ov-file-browser__retry:hover {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default, #f1f2f9));
+}
+
+.ov-file-browser__retry:focus-visible {
+  outline: 2px solid
+    var(--ov-ui-color-focus, var(--ov-ui-focus-default, #5252ff));
+  outline-offset: 1px;
+}

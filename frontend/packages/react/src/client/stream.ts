@@ -32,6 +32,7 @@ export interface StreamDeps {
     spec: OvStreamSpec,
     headers?: Record<string, string>,
     signal?: AbortSignal,
+    resolved?: OvResolvedOptions,
   ) => Promise<{ response: Response; effective: OvResolvedOptions }>;
   resolveFor: (
     defaults: OvClientOptions,
@@ -103,11 +104,23 @@ export async function openStream(
     }
   };
 
-  const { response } = await send(
-    spec,
-    { accept: EVENT_STREAM, ...spec.headers },
-    controller.signal,
-  );
+  // 发送本身也要在清理守卫里：网络层拒绝时 `send` 会抛出，那一步早于下面的建立
+  // 阶段检查，监听器就会漏掉一次摘除。
+  //
+  // Sending belongs inside the cleanup guard too: a transport rejection makes `send`
+  // throw, which happens before the setup checks below, and the listeners would leak.
+  let response: Response;
+  try {
+    ({ response } = await send(
+      spec,
+      { accept: EVENT_STREAM, ...spec.headers },
+      controller.signal,
+      resolved,
+    ));
+  } catch (error) {
+    detach();
+    throw error;
+  }
 
   // 建立阶段失败（HTTP 错误、内容类型不对）时也要摘监听：这条流不会再有消费者，
   // 留下的监听只会指向一个已经抛出的调用。
@@ -141,7 +154,46 @@ export async function openStream(
     throw error;
   }
 
-  const reader = decodeEventStream(body)[Symbol.asyncIterator]();
+  // 取消的是解码后这条流的**可读端**：`body` 已经被 `pipeThrough` 锁住，直接
+  // `body.cancel()` 只会抛「流已锁定」，而取消可读端会沿管道向上传播到响应体。
+  //
+  // What gets cancelled is the readable end of the decoded stream: `body` is already
+  // locked by `pipeThrough`, so calling `body.cancel()` only throws "stream is
+  // locked", while cancelling the readable end propagates up the pipe to the
+  // response body.
+  // 用 reader 而不是 `[Symbol.asyncIterator]()`：只有 reader 带 `cancel()`，而
+  // 取消一个已被异步迭代器锁定的流会直接抛「已锁定」。`reader.cancel()` 会立即
+  // 结束 pending 的 `read()` 并沿管道把取消传回响应体。
+  //
+  // A reader rather than `[Symbol.asyncIterator]()`: only a reader has `cancel()`,
+  // and cancelling a stream already locked by an async iterator throws "locked".
+  // `reader.cancel()` ends a pending `read()` immediately and passes the
+  // cancellation back to the response body through the pipe.
+  const reader = decodeEventStream(body).getReader();
+
+  // 释放要**取消流**，而不是调用包装层生成器的 `return()`。
+  //
+  // 生成器的 `return()` 只是给解码器排一次关闭，它排在尚未完成的读取之后；当
+  // `reader.next()` 正卡在一个不再产生数据的流上时，那个 `return()` 永远轮不到，
+  // 底层连接的 `cancel()` 也就不会被调用——连接一直挂着。取消可读端会立即结束
+  // pending 的读取，并把取消传回响应体。
+  //
+  // Release by **cancelling the stream**, not by calling `return()` on the wrapper
+  // generator.
+  //
+  // The generator's `return()` only queues a close on the decoder, behind the read
+  // still in flight; when `reader.next()` is stuck on a stream that stops producing
+  // data, that `return()` never gets its turn and the underlying connection's
+  // `cancel()` is never called — the connection stays open. Cancelling the readable
+  // end ends the pending read immediately and passes the cancellation back to the
+  // response body.
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    detach();
+    void reader.cancel().catch(() => {});
+  };
 
   // 无论正常结束、提前 `break` 还是出错，都要释放底层流并摘掉监听：只结束包装
   // 层的生成器不会取消响应体，长连接的 SSE 因此会在消费者退出后继续占着连接。
@@ -153,7 +205,7 @@ export async function openStream(
   async function* iterate(): AsyncGenerator<OvStreamEvent> {
     try {
       for (;;) {
-        const next = await Promise.race([reader.next(), aborted]);
+        const next = await Promise.race([reader.read(), aborted]);
         if (next === 'aborted') return;
         if (next.done) return;
         yield next.value;
@@ -168,19 +220,14 @@ export async function openStream(
       if (isAbortError(error)) return;
       throw error;
     } finally {
-      detach();
-      // 先让底层读取停下来再返回：`return()` 会关闭解码器并把取消传到响应体。
-      // Stop the underlying read before returning: `return()` closes the decoder and
-      // propagates the cancellation to the response body.
-      void Promise.resolve(reader.return?.(undefined)).catch(() => {});
+      release();
     }
   }
 
   return {
     abort: () => {
       stop();
-      detach();
-      void Promise.resolve(reader.return?.(undefined)).catch(() => {});
+      release();
     },
     [Symbol.asyncIterator]: iterate,
   };

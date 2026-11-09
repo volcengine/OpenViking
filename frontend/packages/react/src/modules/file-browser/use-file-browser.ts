@@ -14,6 +14,15 @@ import type { FileBrowserActions, FileBrowserApi } from './types.js';
 
 export interface UseFileBrowserOptions {
   rootUri: string;
+  /**
+   * 宿主是否受控地持有当前资源。受控时 `currentUri` 就是唯一事实——显式传
+   * `null` 表示清空选中，模块不能回退到内部记下的上一个资源。
+   *
+   * Whether the host owns the current resource. While controlled, `currentUri` is the
+   * single source of truth — an explicit `null` clears the selection, and the module
+   * must not fall back to the resource it remembers internally.
+   */
+  controlled?: boolean;
   /** 目录两级摘要的标题。Titles of the two summary levels. */
   summaryLabels?: { l0: string; l1: string };
   /** 首次加载后自动展开到的路径。Path to expand to after the first load. */
@@ -34,6 +43,7 @@ export interface UseFileBrowserOptions {
  */
 export function useFileBrowser({
   rootUri,
+  controlled = false,
   summaryLabels,
   defaultExpandedUri,
   currentUri,
@@ -80,8 +90,27 @@ export function useFileBrowser({
   // directory under a collapsed ancestor would lose their L0/L1 summary and read
   // content instead. The decision therefore uses the set of directories the tree
   // knows about, which is independent of visibility.
-  const activeUri = currentUri ?? pendingUri;
-  const isDirectory = activeUri !== null && tree.directoryUris.has(activeUri);
+  // 受控时以宿主给的值为准，`null` 就是「没选中」；只有非受控才回落到模块自己
+  // 记下的选中，否则宿主清空选中后仍会显示上一个资源。
+  //
+  // While controlled the host's value wins and `null` means "nothing selected"; only an
+  // uncontrolled module falls back to its own remembered selection, otherwise clearing
+  // the selection would keep showing the previous resource.
+  const activeUri = controlled ? currentUri : (currentUri ?? pendingUri);
+  // 三态而不是布尔：不在已知目录集合里既可能是文件，也可能是还没加载过的目录，
+  // 两者要走的接口不同，不能合并成「不是目录」。
+  //
+  // Three states rather than a boolean: absent from the known directory set may mean a
+  // file or a directory that has not been loaded yet, and the two read different
+  // endpoints, so they cannot collapse into "not a directory".
+  const resourceType: 'directory' | 'file' | 'unknown' =
+    activeUri === null
+      ? 'file'
+      : tree.directoryUris.has(activeUri)
+        ? 'directory'
+        : tree.isKnownFile(activeUri)
+          ? 'file'
+          : 'unknown';
 
   // 面包屑上点某一级祖先，就选中它——和点树上的那一行是同一个动作，因此共用
   // 同一条选中路径，而不是另开一个只改预览的入口。
@@ -122,7 +151,7 @@ export function useFileBrowser({
     // real selection, so the preview follows that instead — otherwise a selection
     // the module owns would never load anything.
     uri: activeUri,
-    isDirectory,
+    resourceType,
     labels: summaryLabels,
     openParent,
     generation: refreshGeneration,
@@ -143,11 +172,10 @@ export function useFileBrowser({
   }, [search.results, tree.rows]);
 
   const selectedId = useMemo(() => {
-    const uri = currentUri ?? pendingUri;
-    if (!uri || search.results === null) return uri;
-    const index = search.results.findIndex((entry) => entry.uri === uri);
-    return index < 0 ? uri : `${uri}#${index}`;
-  }, [currentUri, pendingUri, search.results]);
+    if (!activeUri || search.results === null) return activeUri;
+    const index = search.results.findIndex((entry) => entry.uri === activeUri);
+    return index < 0 ? activeUri : `${activeUri}#${index}`;
+  }, [activeUri, search.results]);
 
   // 解构出具体操作，`select` 里因此不再碰整个 `tree` 对象。
   // Destructure the operations so `select` never touches the whole `tree` object.
@@ -222,6 +250,7 @@ export function useFileBrowser({
     error: tree.error ?? search.error ?? preview.error,
     treeError: tree.error,
     previewError: preview.error,
+    searchError: search.error,
     previewTabs: preview.tabs,
     previewKey: preview.activeKey,
     previewFooter: preview.footer,

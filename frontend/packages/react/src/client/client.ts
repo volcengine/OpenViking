@@ -96,8 +96,19 @@ export function createOvClient(options: OvClientOptions = {}): OvClient {
     spec: OvRequestSpec | OvStreamSpec,
     headers?: Record<string, string>,
     signal?: AbortSignal,
+    /**
+     * 已经解析好的配置。流式请求要先解析一次用于接上调用方 signal，再交给这里发
+     * 送；不复用就会把身份字段求值两遍——函数形式的凭证因此可能被刷新两次，第二
+     * 次甚至可能失败。
+     *
+     * Configuration already resolved. A streaming request resolves it once to link
+     * the caller's signal and then hands it here; without reuse the identity fields
+     * are evaluated twice, so a function-valued credential may refresh twice and the
+     * second evaluation can even fail.
+     */
+    resolved?: OvResolvedOptions,
   ): Promise<{ response: Response; effective: OvResolvedOptions }> {
-    const effective = await resolveFor(defaults, spec.options);
+    const effective = resolved ?? (await resolveFor(defaults, spec.options));
     const { url, init } = buildRequest(effective, spec, {
       ...headers,
       ...effective.headers,

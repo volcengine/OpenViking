@@ -1,60 +1,20 @@
 import type { OvStreamEvent } from './types.js';
 
 /**
- * 事件块的分隔：空行，也就是连续两个行终止符。行终止符可以是 `\r\n`、`\n` 或
- * `\r`，两两组合都合法（`\r\n\r\n`、`\r\n\n`、`\r\r\n`、`\r\r`……），因此这里
- * 按「两个终止符」匹配，而不是只找 `\n\n`——后者会把整个 CRLF 流当成一个事件。
- *
- * `\r` 必须排除后面紧跟 `\n` 的情况：否则 `\r\n` 会被回溯成 `\r` + `\n` 两个
- * 终止符，一个普通的行尾就被误判成空行，事件从中间被切开。
- *
- * `\r` excludes a following `\n`: otherwise `\r\n` backtracks into `\r` + `\n`,
- * counting one ordinary line ending as two terminators and splitting an event in
- * half.
- *
- * 只在**已完整到达**的文本里找分隔：末尾若是孤立的 `\r`，它可能是下一块的
- * `\r\n` 的前半段，先留在缓冲区等下一个 chunk，否则会把一个事件从中间切断。
- *
- * The boundary between event blocks is a blank line, meaning two consecutive line
- * terminators. A terminator may be `\r\n`, `\n` or `\r`, and every pairing is
- * valid (`\r\n\r\n`, `\r\n\n`, `\r\r\n`, `\r\r` …), so this matches "two
- * terminators" rather than looking for `\n\n` alone, which treats a whole CRLF
- * stream as one event.
- *
- * Only text that has fully arrived is searched: a trailing lone `\r` may be the
- * first half of a `\r\n` belonging to the next block, so it stays buffered until
- * the next chunk — otherwise an event would be cut in half.
- */
-const BOUNDARY = /(?:\r\n|\r(?!\n)|\n){2}/;
-
-/** 末尾孤立 `\r` 的位置：它还不能判定是不是分隔的一部分。 */
-/** Position of a trailing lone `\r`, which cannot yet be judged part of a boundary. */
-function trailingCarriageReturn(text: string): number {
-  return text.endsWith('\r') ? text.length - 1 : -1;
-}
-
-/**
  * 按行解析一个事件块。字段名按规范只认 `data` / `event` / `id` / `retry`，
  * 注释行（以 `:` 开头）忽略；`data` 多行用换行拼接，`retry` 只接受整数。
- *
- * 块内换行可能是 `\r\n`、`\n` 或 `\r`，这里统一按三种切行，而不是只去掉行尾
- * 的 `\r`——单独 `\r` 换行的流此前会被当成一整行。
  *
  * Parses one event block line by line. Only `data` / `event` / `id` / `retry` are
  * recognised, comment lines (starting with `:`) are ignored, multi-line `data`
  * joins with newlines, and `retry` accepts integers only.
- *
- * Lines inside a block may end with `\r\n`, `\n` or `\r`; all three split here
- * rather than only stripping a trailing `\r`, which treated a `\r`-only stream as
- * one long line.
  */
-function parseEvent(block: string): OvStreamEvent | undefined {
+function parseEvent(lines: readonly string[]): OvStreamEvent | undefined {
   let data: string | undefined;
   let event: string | undefined;
   let id: string | undefined;
   let retry: number | undefined;
 
-  for (const line of block.split(/\r\n|\r|\n/)) {
+  for (const line of lines) {
     if (!line || line.startsWith(':')) continue;
 
     const colon = line.indexOf(':');
@@ -108,44 +68,86 @@ function createDecoder(): TransformStream<Uint8Array, string> {
 }
 
 /**
- * 把事件流字节解成事件。分帧在这里做：事件以空行结束，块内按行取字段。
- * 流结束时残留的块仍会派发——规范要求丢弃，但服务端漏掉末尾空行时那样会
+ * 把事件流字节解成事件。
+ *
+ * 分帧按规范逐字符进行：`\r`、`\n` 与 `\r\n` 都是行终止符，行终止符之后紧跟的
+ * `\n` 属于同一个 CRLF，跳过即可。一个空行结束事件块，块内按行取字段。
+ *
+ * 关键在于 `\r` 必须**立即**结束当前行，不能留在缓冲区等下一个 chunk：服务端
+ * 用纯 CR 换行时，`data: one\r\r` 本身就已经是完整事件，等更多字节会让一个已经
+ * 到达的事件永远发不出去（流保持打开时就是挂死）。
+ *
+ * 早先的实现在块之间找「两个终止符」的连续片段，那样必须等第二个 `\r` 之后确认
+ * 没有跟 `\n` 才能分帧，因此才会出现上述挂起。
+ *
+ * 流结束时残留的一行与块仍会派发——规范要求丢弃，但服务端漏掉末尾空行时那样会
  * 静默吞掉最后一个事件，代价更大；残缺的 JSON 由调用方解析失败后忽略。
  *
- * Decodes event-stream bytes into events. Framing happens here: an event ends at
- * a blank line and fields are read line by line inside a block. A trailing block
- * is still dispatched on end — the specification says to drop it, but a server
- * that omits the final blank line would then lose its last event silently, which
- * costs more; truncated JSON fails to parse and is ignored by the caller.
+ * Decodes event-stream bytes into events.
+ *
+ * Framing follows the specification character by character: `\r`, `\n` and `\r\n`
+ * all terminate a line, and a `\n` immediately after a `\r` belongs to the same
+ * CRLF, so it is skipped. A blank line ends an event block, and fields are read
+ * line by line inside it.
+ *
+ * The point is that `\r` must end the current line **immediately** rather than
+ * being held until the next chunk: with CR-only line endings, `data: one\r\r` is
+ * already a complete event, and waiting for more bytes means an event that has
+ * arrived never dispatches — which hangs while the stream stays open.
+ *
+ * An earlier implementation searched for a run of two terminators between blocks,
+ * which required seeing past the second `\r` to know no `\n` followed, and that is
+ * exactly what caused the stall.
+ *
+ * A trailing line and block are still dispatched on end — the specification says to
+ * drop them, but a server that omits the final blank line would then lose its last
+ * event silently, which costs more; truncated JSON fails to parse and is ignored by
+ * the caller.
  */
 export function decodeEventStream(
   body: ReadableStream<Uint8Array>,
 ): ReadableStream<OvStreamEvent> {
-  let pending = '';
+  // 当前行、当前块与「上一个字符是 CR」的状态都跨 chunk 累积。
+  // The current line, the current block and "the previous character was CR" all
+  // accumulate across chunks.
+  let line = '';
+  let block: string[] = [];
+  let skipLf = false;
 
   return body.pipeThrough(createDecoder()).pipeThrough(
     new TransformStream<string, OvStreamEvent>({
       transform(chunk, controller) {
-        pending += chunk;
-        // 末尾孤立的 `\r` 先留在缓冲区：它可能是下一个 `\r\n` 的前半段。
-        const holdFrom = trailingCarriageReturn(pending);
-        const searchable = holdFrom < 0 ? pending : pending.slice(0, holdFrom);
-        const blocks: string[] = [];
-        let rest = searchable;
-        for (;;) {
-          const match = BOUNDARY.exec(rest);
-          if (!match) break;
-          blocks.push(rest.slice(0, match.index));
-          rest = rest.slice(match.index + match[0].length);
-        }
-        pending = rest + (holdFrom < 0 ? '' : '\r');
-        for (const block of blocks) {
-          const parsed = parseEvent(block);
-          if (parsed) controller.enqueue(parsed);
+        const finishLine = () => {
+          if (line === '') {
+            const parsed = parseEvent(block);
+            block = [];
+            if (parsed) controller.enqueue(parsed);
+            return;
+          }
+          block.push(line);
+          line = '';
+        };
+
+        for (const char of chunk) {
+          if (char === '\r') {
+            finishLine();
+            skipLf = true;
+          } else if (char === '\n') {
+            // CRLF 里的 `\n` 是同一个终止符的后半段，不能算第二个终止符。
+            // The `\n` of a CRLF is the second half of one terminator, not a second one.
+            if (skipLf) skipLf = false;
+            else finishLine();
+          } else {
+            skipLf = false;
+            line += char;
+          }
         }
       },
       flush(controller) {
-        const parsed = parseEvent(pending);
+        if (line !== '') block.push(line);
+        line = '';
+        const parsed = parseEvent(block);
+        block = [];
         if (parsed) controller.enqueue(parsed);
       },
     }),

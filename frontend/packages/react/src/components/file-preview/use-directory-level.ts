@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { initialLevelKey } from './level-selection.js';
 import type { FilePreviewDirectoryTab, FilePreviewSource } from './types.js';
 
 /**
@@ -38,9 +39,17 @@ export function useDirectoryLevel(
 
   if (!tab) return {};
 
+  // 初始层级由 `initialLevelKey` 决定：它把「受控值 → 记下的选择 → defaultLevelKey
+  // → 第一级」这条优先级单列出来，因为这里算出的 `activeLevelKey` 是受控值，正文
+  // 组件再也没有机会用上自己的初值。
+  //
+  // The initial level comes from `initialLevelKey`, which spells out the precedence
+  // "controlled value → remembered choice → defaultLevelKey → first level", because the
+  // `activeLevelKey` computed here is a controlled value and the body never gets a
+  // chance to apply its own initial one.
   const activeLevel =
     tab.levels.find(
-      (level) => level.key === (tab.activeLevelKey ?? levelKeys[tab.key]),
+      (level) => level.key === initialLevelKey(tab, levelKeys, tab.key),
     ) ?? tab.levels[0];
 
   return {
