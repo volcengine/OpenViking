@@ -155,7 +155,7 @@ claude
 | `OPENVIKING_RECALL_DEDUP_TURNS`        | `5`           | 跨轮冷却：最近 N 轮已注入过的 URI 本轮跳过                           |
 | `OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION` | （关） | 事件记忆在此期限内（`7d`、`12h`）保持原分，之后衰减，较早的事件不再压过新的。以 `events_time_decay_protection` 发送。 |
 | `OPENVIKING_RECALL_QUERY_EXPANSION`    | `auto`        | `auto` 让服务端结合会话上下文扩展短提问；`off` 关闭                   |
-| `OPENVIKING_RECALL_COMPRESS`           | `auto`        | digest 压缩：`off`、`client`（本地宿主 CLI）、`server`、`auto`（本地优先、失败回落服务端） |
+| `OPENVIKING_RECALL_COMPRESS`           | `off`         | digest 压缩：`off`、`client`（本地宿主 CLI）、`server`、`auto`（本地优先、失败回落服务端） |
 | `OPENVIKING_RECALL_COMPRESS_MAX_BULLETS` | `6`         | digest 条数上限                                                     |
 
 召回的不只是记忆，也包括 skill：服务端组装的上下文块可能带有 skill 条目（`type="skills"`），既有你自己的 skill，也有账号内共享的 skill。
@@ -317,7 +317,9 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 
 ### digest 压缩
 
-`recallCompress` 决定 digest 在哪里生成，默认值为 `auto`。`client` 始终通过 `claude -p` 在本地压缩（默认 Haiku + 低推理档），token 成本留在你自己的订阅额度里。`server` 让 OpenViking 生成 digest。`auto` 优先本地，探测不到可用的宿主 CLI 时回落到服务端。压缩器执行失败或输出校验失败时会退回未压缩的上下文块；任一压缩器精确返回 `NO_RELEVANT_MEMORY` 都是成功的空结果，不注入任何内容。压缩子进程运行时所有 OpenViking hook 均被禁用，不会递归。旧的环境变量 `OPENVIKING_RECALL_REWRITE` 和配置键 `recallRewrite` 仍作为低优先级兼容别名保留。
+`recallCompress` 决定 digest 在哪里生成，默认值为 `off`。`client` 始终通过 `claude -p` 在本地压缩（默认 Haiku + 低推理档），token 成本留在你自己的订阅额度里。`server` 让 OpenViking 生成 digest。`auto` 优先本地，探测不到可用的宿主 CLI 时回落到服务端。
+
+Claude Code 上压缩需要显式开启，因为本地子进程必须跑在 `UserPromptSubmit` hook 内，而 Claude Code 给这个 hook 的上限是 60 秒。压缩器自己的预算由 `recallTimeoutMs` 推导（默认 110 秒），且子进程假设网关提供 `haiku`；当网关路由到别的模型时，子进程可能超过 hook 上限，连带丢掉本轮召回的上下文块。确认宿主 CLI 能在这个预算内完成压缩后，再设成 `client` 或 `auto`——如果网关不提供 `haiku`，同时设置 `recallCompressModel`。压缩器执行失败或输出校验失败时会退回未压缩的上下文块；任一压缩器精确返回 `NO_RELEVANT_MEMORY` 都是成功的空结果，不注入任何内容。压缩子进程运行时所有 OpenViking hook 均被禁用，不会递归。旧的环境变量 `OPENVIKING_RECALL_REWRITE` 和配置键 `recallRewrite` 仍作为低优先级兼容别名保留。
 
 ### 遗留 `claude_code` 块（在 `ov.conf` 里）
 

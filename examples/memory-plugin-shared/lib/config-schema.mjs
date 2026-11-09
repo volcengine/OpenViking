@@ -111,7 +111,21 @@ export const KNOBS = [
   // off/client/server/auto through `normalizeRewriteMode`; Codex reads the same
   // key as on/off. Both spellings stay declared so neither harness's users are
   // told their config is a typo.
-  { name: "recallCompress", type: "string", default: "off", harness: { claude_code: "auto", codex: "auto" }, env: "OPENVIKING_RECALL_COMPRESS", aliases: ["recallRewrite"], capability: "recall" },
+  //
+  // A per-harness default is only safe where the host can honour it inside the
+  // hook the digest runs in. Codex keeps `auto`: its compressor has the prompt
+  // hook's budget, a model profile probed against the local catalogue, and a
+  // runtime-failed marker that stops it respawning a model that just failed.
+  // Claude Code has none of that yet — its UserPromptSubmit hook is capped at
+  // 60s (hooks/hooks.json), while `auto` spawns `claude -p --model haiku` with
+  // a budget derived from `recallTimeoutMs` (110s), and both halves of that
+  // assumption (a haiku the endpoint serves, a direct Anthropic endpoint) fail
+  // on a gateway that serves Sonnet only. The spawn then ran past the hook
+  // limit and Claude Code killed the hook, so the turn lost its recall block
+  // and every later prompt repeated the same doomed spawn. Defaulting to `off`
+  // keeps a client-side model spawn out of the prompt path; `client`/`auto`
+  // stay available as explicit opt-ins, paired with `recallCompressModel`.
+  { name: "recallCompress", type: "string", default: "off", harness: { codex: "auto" }, env: "OPENVIKING_RECALL_COMPRESS", aliases: ["recallRewrite"], capability: "recall" },
   { name: "recallCompressModel", type: "string", default: "", env: "OPENVIKING_RECALL_COMPRESS_MODEL", capability: "recall" },
   { name: "recallCompressBaseUrl", type: "string", default: "", env: "OPENVIKING_RECALL_COMPRESS_BASE_URL", capability: "recall" },
   { name: "recallCompressThinking", type: "string", default: "", env: "OPENVIKING_RECALL_COMPRESS_THINKING", aliases: ["recallCompressReasoningEffort"], capability: "recall" },
