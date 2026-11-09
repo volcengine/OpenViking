@@ -10,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from openviking.server.config import ServerConfig
-from openviking.server.runtime import ServerRuntime
+from openviking.server.runtime import ServerRuntime, SharedResources
 from openviking.service.core import OpenVikingService
 from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 
@@ -31,6 +31,42 @@ def test_roles_default_and_validation():
     for roles in ([], ["worker"], ["api", "typo"]):
         with pytest.raises(ValidationError):
             ServerConfig(roles=roles)
+
+
+async def test_read_only_host_skips_system_asset_reconciliation(monkeypatch):
+    manager = SimpleNamespace(
+        get_user_group_ids=AsyncMock(),
+        resolve_identity=AsyncMock(),
+    )
+    plugin = SimpleNamespace(initialize_runtime=AsyncMock(return_value=manager))
+    service = SimpleNamespace(
+        initialize=AsyncMock(),
+        apply_agent_evolution_config=AsyncMock(),
+        compile=SimpleNamespace(lifecycle=SimpleNamespace(resolve_groups=None)),
+        compile_scheduler=None,
+        reconcile_default_system_assets=AsyncMock(),
+        reconcile_system_assets=AsyncMock(),
+        viking_fs=object(),
+    )
+    runtime_config = SimpleNamespace(
+        service_name="reader-test",
+        reconcile_system_assets_on_startup=False,
+    )
+    monkeypatch.setattr("openviking.server.runtime.create_auth_plugin", lambda config: plugin)
+    monkeypatch.setattr("openviking.server.runtime.get_openviking_config", lambda: runtime_config)
+    monkeypatch.setattr("openviking.ttl.wiring.build_ttl_adapter", lambda config: None)
+    monkeypatch.setattr("openviking.ttl.wiring.set_ttl_adapter", lambda adapter: None)
+    monkeypatch.setattr("openviking.service.deletion.setup_deletion", AsyncMock())
+    shared = SharedResources(
+        service,
+        ServerConfig(roles=["queue_worker"], root_api_key="reader-test"),
+    )
+    shared.prepare_cleanup = AsyncMock()
+
+    await shared.prepare()
+
+    service.reconcile_default_system_assets.assert_not_awaited()
+    service.reconcile_system_assets.assert_not_awaited()
 
 
 @pytest.mark.parametrize("roles", ROLE_COMBINATIONS)
