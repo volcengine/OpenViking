@@ -336,14 +336,28 @@
   margin: 0 0 8px;
 }
 
-.ov-tui__markdown ul,
-.ov-tui__markdown ol {
+.ov-tui__markdown ul {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin: 8px 0;
   padding: 0;
   list-style: none;
+}
+
+.ov-tui__markdown ol {
+  display: block;
+  margin: 8px 0;
+  padding-inline-start: 2em;
+  list-style: decimal;
+}
+
+.ov-tui__markdown ol > li {
+  display: list-item;
+}
+
+.ov-tui__markdown ol > li + li {
+  margin-block-start: 8px;
 }
 
 .ov-tui__markdown li {

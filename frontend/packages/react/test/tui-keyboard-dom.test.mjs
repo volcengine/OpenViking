@@ -137,3 +137,32 @@ test('Tab opens an unselected palette, accepts filtered text, and stays in the i
     await view.dispose();
   }
 });
+
+test('slash multiword discovery stays unselected until navigation or a typed child prefix', async () => {
+  const catalogue = ['session', 'session get', 'session list'].map((name) => ({
+    name,
+    inputText: `ov ${name}`,
+    description: name,
+    usage: `ov ${name}`,
+  }));
+  const view = await mount({ value: '/session ', commands: catalogue });
+  try {
+    await act(() => view.input.focus());
+    view.input.setSelectionRange(
+      view.input.value.length,
+      view.input.value.length,
+    );
+    assert.ok(view.container.querySelector('[role="listbox"]'));
+    assert.ok(!view.container.querySelector('[aria-selected="true"]'));
+    await key(view.input, 'Tab');
+    assert.equal(view.input.value, '/session ');
+    await type(view.input, '/session g');
+    await key(view.input, 'Tab');
+    assert.equal(view.input.value, 'ov session get ');
+    await type(view.input, '/session get');
+    await key(view.input, ' ');
+    assert.equal(view.input.value, 'ov session get ');
+  } finally {
+    await view.dispose();
+  }
+});

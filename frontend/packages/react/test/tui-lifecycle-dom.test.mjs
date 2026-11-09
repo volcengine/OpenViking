@@ -101,3 +101,33 @@ test('formatted Markdown link labels contain one anchor and invoke the host once
     await view.dispose();
   }
 });
+
+test('literal resource punctuation survives code, quoted arguments and callback activation', async () => {
+  for (const name of ['a;b.md', 'a,b.md', 'a(b).md', 'a[b].md', 'a.md.']) {
+    const uri = `viking://resources/${name}`;
+    const opened = [];
+    const value = `ov read "${uri}"`;
+    const view = await mount({
+      value,
+      records: [
+        {
+          ...markdown(`\`${uri}\`\n\n\`\`\`json\n{"uri":"${uri}"}\n\`\`\``),
+          command: value,
+        },
+      ],
+      onOpenUri: (target) => opened.push(target),
+    });
+    try {
+      const links = [...view.container.querySelectorAll('a')];
+      assert.equal(links.length, 4);
+      for (const link of links) {
+        assert.equal(link.getAttribute('href'), uri);
+        await click(link);
+      }
+      assert.deepEqual(opened, Array(4).fill(uri));
+      assert.equal(view.input.value, value);
+    } finally {
+      await view.dispose();
+    }
+  }
+});

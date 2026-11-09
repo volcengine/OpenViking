@@ -25,12 +25,12 @@ test('input and command echoes render URI anchors without changing the native va
   assert.doesNotMatch(html, /<label[^>]*class="ov-tui__input-row"/);
 });
 
-test('URI links have native hrefs without a host handler and ignore non-resource text', () => {
+test('literal URI links preserve punctuation and native targets while ignoring non-resource text', () => {
   const text = 'VIKING://resources/a.md, error: denied; javascript:alert(1)';
   const html = renderToStaticMarkup(
     createElement(Tui, { value: text, records: [], onValueChange() {} }),
   );
-  assert.match(html, /href="VIKING:\/\/resources\/a.md"/);
+  assert.match(html, /href="VIKING:\/\/resources\/a.md,"/);
   assert.doesNotMatch(html, /href="(?:javascript|error):/);
   assert.match(html, /error: denied; javascript:alert/);
 });

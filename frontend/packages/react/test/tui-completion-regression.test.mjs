@@ -90,3 +90,50 @@ test('matching accepts repeated whitespace while preserving exact source slices 
     'session',
   );
 });
+
+test('slash discovery keeps multiword candidates, aliases and normalized whitespace until arguments begin', () => {
+  const catalogue = commands.map((command) => ({
+    ...command,
+    aliases: [command.name.replace('session', 'chat')],
+  }));
+  for (const value of ['/session g', '/chat g', '  /SESSION\t g']) {
+    const query = getTuiCommandQuery(value, catalogue);
+    assert.equal(query.scope, '/');
+    assert.equal(query.automatic, true);
+    assert.deepEqual(
+      query.matches.map((command) => command.name),
+      ['session get'],
+    );
+    assert.equal(
+      getTuiInlineCompletion(value, query, query.matches[0], true).suffix,
+      'et',
+    );
+    assert.equal(
+      getTuiInlineCompletion(value, query, query.matches[0], true).value.trim(),
+      'ov session get',
+    );
+  }
+  const discovered = getTuiCommandQuery('/get', catalogue);
+  assert.ok(
+    discovered.matches.some((command) => command.name === 'session get'),
+  );
+  const query = getTuiCommandQuery('/session ', catalogue);
+  assert.deepEqual(
+    query.matches.map((command) => command.name),
+    ['session get', 'session list'],
+  );
+  assert.equal(
+    getTuiInlineCompletion('/session ', query, query.matches[0], true),
+    undefined,
+  );
+  assert.equal(
+    getTuiCommandQuery('/session get', catalogue).matches[0].name,
+    'session get',
+  );
+  for (const value of [
+    '/session get ',
+    '/session get demo',
+    '/session unknown',
+  ])
+    assert.equal(getTuiCommandQuery(value, catalogue).matches.length, 0, value);
+});

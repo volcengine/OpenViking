@@ -1,6 +1,10 @@
 import type { ReactNode } from 'react';
 
-import { getTuiSafeHref, TUI_URI_PATTERN } from './tui-text.js';
+import {
+  getTuiSafeHref,
+  TUI_URI_PATTERN,
+  TUI_PROSE_URI_PATTERN,
+} from './tui-text.js';
 
 export interface TuiUriTextProps {
   text: string;
@@ -55,7 +59,10 @@ export function TuiUriText({
 }: TuiUriTextProps) {
   const parts: ReactNode[] = [];
   let cursor = 0;
-  const pattern = new RegExp(TUI_URI_PATTERN.source, 'gi');
+  const pattern = new RegExp(
+    (prose ? TUI_PROSE_URI_PATTERN : TUI_URI_PATTERN).source,
+    'gi',
+  );
   const plain = (value: string, key: number) =>
     editor ? (
       <span key={key} aria-hidden="true">

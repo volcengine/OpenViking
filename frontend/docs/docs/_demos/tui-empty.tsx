@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
 import { createTuiDemoRecord } from '#tui-demo-result';
 import { ArrowRightIcon } from '@openviking/react/icons';
@@ -118,8 +118,12 @@ function EmptyTuiExample({
   const isChinese = locale === 'zh';
   const [records, setRecords] = useState<readonly TuiRecord[]>([]);
   const [value, setValue] = useState('');
+  const containerRef = useRef<HTMLDivElement>(null);
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 720 }}>
+    <div
+      ref={containerRef}
+      style={{ display: 'flex', flexDirection: 'column', height: 720 }}
+    >
       <style>{emptyStyles}</style>
       <Tui
         records={records}
@@ -145,9 +149,12 @@ function EmptyTuiExample({
                   <button
                     type="button"
                     className="ov-demo-tui-empty__action"
-                    onClick={() =>
-                      setValue(`${command.inputText ?? command.name} `)
-                    }
+                    onClick={() => {
+                      setValue(`${command.inputText ?? command.name} `);
+                      containerRef.current
+                        ?.querySelector('textarea')
+                        ?.focus({ preventScroll: true });
+                    }}
                   >
                     <ArrowRightIcon width={14} height={14} focusable="false" />
                     <span className="ov-demo-tui-empty__name">

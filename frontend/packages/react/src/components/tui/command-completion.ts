@@ -37,25 +37,20 @@ export function getTuiCommandQuery(
 ): TuiCommandQuery {
   if (!commands.length || /[\r\n]/.test(value)) return EMPTY_QUERY;
   const slash = parseTuiCommandInput(value);
-  if (slash)
-    return slash.hasTrailingSpace
-      ? EMPTY_QUERY
-      : {
-          ...EMPTY_QUERY,
-          keyword: slash.name,
-          scope: '/',
-          automatic: true,
-          matches: filterTuiCommands(slash.name, commands),
-        };
-  const content = normalize(value.trimStart());
-  if (!content) return EMPTY_QUERY;
+  const content = normalize(value.trimStart().slice(slash ? 1 : 0));
+  if (!slash && !content) return EMPTY_QUERY;
   const boundary = content.lastIndexOf(' ') + 1;
   const head = content.slice(0, boundary);
   const keyword = content.slice(boundary);
-  const entries = commands.map((command) => ({
-    command,
-    text: normalize(getTuiCommandInputText(command)),
-  }));
+  const entries = commands.flatMap((command) =>
+    (slash
+      ? [command.name, ...(command.aliases ?? [])]
+      : [getTuiCommandInputText(command)]
+    ).map((text) => ({ command, text: normalize(text) })),
+  );
+  const definitions = (items: typeof entries) => [
+    ...new Set(items.map((entry) => entry.command)),
+  ];
   const scoped = entries.filter((entry) =>
     entry.text.toLowerCase().startsWith(head.toLowerCase()),
   );
@@ -63,13 +58,29 @@ export function getTuiCommandQuery(
   const matching = scoped.filter((entry) =>
     entry.text.toLowerCase().startsWith(content.toLowerCase()),
   );
-  // An exact parent command must not hide matching subcommands still being typed.
+  // Command boundaries come from the longest match, including multiword slash names.
+  const input = matchTuiCommandInput(value, commands);
   if (
-    matchTuiCommandInput(value, commands) &&
+    input &&
+    (!slash || input.rest) &&
     !matching.some((entry) => entry.text.length > content.trimEnd().length)
   )
     return EMPTY_QUERY;
-  const base = { ...EMPTY_QUERY, keyword, scope: head.trimEnd() };
+  const base = {
+    ...EMPTY_QUERY,
+    keyword,
+    scope: slash ? '/' : head.trimEnd(),
+    automatic: Boolean(slash),
+  };
+  if (slash)
+    return {
+      ...base,
+      matches: !head
+        ? filterTuiCommands(keyword, commands)
+        : matching.length
+          ? definitions(matching)
+          : filterTuiCommands(keyword, definitions(scoped)),
+    };
   if (!keyword)
     return {
       ...base,
@@ -128,10 +139,11 @@ export function getTuiInlineCompletion(
   if (!selected || (!query.keyword && (!paletteOpen || query.scope === '/')))
     return undefined;
   if (query.scope === '/') {
-    const name = [selected.name, ...(selected.aliases ?? [])].find((name) =>
-      name.toLowerCase().startsWith(query.keyword.toLowerCase()),
-    );
-    const suffix = name?.slice(query.keyword.length);
+    const typed = content.slice(1);
+    const name = [selected.name, ...(selected.aliases ?? [])]
+      .map(normalize)
+      .find((name) => name.toLowerCase().startsWith(typed.toLowerCase()));
+    const suffix = name?.slice(typed.length);
     return suffix
       ? {
           kind: 'command',
