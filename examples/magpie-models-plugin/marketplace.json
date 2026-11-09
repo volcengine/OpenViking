@@ -2,7 +2,8 @@
   "version": 1,
   "plugins": [{
     "package": "@openviking/magpie-models-plugin",
-    "name": "OpenViking models / VikingBot",
+    "name": "OpenViking",
+    "icon": "https://raw.githubusercontent.com/volcengine/OpenViking/main/docs/images/ov-logo-icon.png",
     "kind": "agent",
     "summary": {
       "en": "Manage OpenViking VLM and VikingBot models through Magpie. Keeps embedding bindings and supports configuration recovery. Requires the OpenViking configuration API and restart after saving.",

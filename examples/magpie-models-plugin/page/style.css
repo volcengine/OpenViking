@@ -1,6 +1,6 @@
 body { margin: 0; padding: 24px; }
 main { max-width: 720px; margin: auto; }
-h1 { margin-top: 0; }
+h1 { display: flex; align-items: center; gap: 10px; margin-top: 0; }
 fieldset { margin: 20px 0; padding: 20px; border: 1px solid var(--magpie-border, #8886); border-radius: 8px; }
 label { display: block; margin: 16px 0 6px; }
 input:not([type="checkbox"]), select, textarea { width: 100%; box-sizing: border-box; padding: 8px; }

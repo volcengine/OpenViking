@@ -1,6 +1,6 @@
 # OpenViking models for Magpie
 
-Manage the models **OpenViking and VikingBot themselves use** from Magpie's **Agents → OpenViking / VikingBot** row. Magpie owns vendor credentials and routing; OV keeps the gateway URL, gateway key and full model identifier.
+Manage the models **OpenViking and VikingBot themselves use** from Magpie's **Agents → OpenViking** row. Magpie owns vendor credentials and routing; OV keeps the gateway URL, gateway key and full model identifier.
 
 [中文说明](README_CN.md)
 

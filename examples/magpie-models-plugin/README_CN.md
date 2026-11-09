@@ -1,6 +1,6 @@
 # OpenViking 模型管理插件（Magpie）
 
-在 Magpie 的 **Agents → OpenViking / VikingBot** 中选择模型，让 OpenViking 与 VikingBot 使用 Magpie 的供应商、账号和路由。供应商密钥留在 Magpie，OV 保存网关地址、网关 Key 和完整模型 ID。
+在 Magpie 的 **Agents → OpenViking** 中选择模型，让 OpenViking 与 VikingBot 使用 Magpie 的供应商、账号和路由。供应商密钥留在 Magpie，OV 保存网关地址、网关 Key 和完整模型 ID。
 
 与 [`@openviking/magpie-plugin`](../magpie-memory-plugin/README_CN.md) 的用途不同：记忆插件为其他 Agent 召回、保存 OV 记忆；本插件管理 **OV 和 VikingBot 自己使用的模型**。两个插件可以独立安装。
 
@@ -16,7 +16,7 @@ magpie plugin add /absolute/path/to/OpenViking/examples/magpie-models-plugin
 
 1. 配置 OV 服务地址和 Root 凭据，见下文。
 2. 在插件的 **OpenViking 模型** 页面选择管理范围并保存。
-3. 在 Agents → OpenViking / VikingBot 中选择一个支持所需能力的聊天模型。
+3. 在 Agents → OpenViking 中选择一个支持所需能力的聊天模型。
 4. 查看 Magpie 插件日志或运行 `node cli.mjs status`，确认 `saved`，没有冲突。
 5. 重启 OV 和 VikingBot，使启动配置生效。使用 `openviking-server --with-bot` 时，由服务重启流程管理 Bot。
 

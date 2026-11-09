@@ -5,7 +5,8 @@
   "type": "module",
   "main": "./index.mjs",
   "magpie": {
-    "name": "OpenViking models / VikingBot",
+    "name": "OpenViking",
+    "icon": "https://raw.githubusercontent.com/volcengine/OpenViking/main/docs/images/ov-logo-icon.png",
     "agent": "./openviking.agent.js",
     "page": { "title": "OpenViking models", "titles": { "zh": "OpenViking 模型" }, "file": "page/index.html" },
     "options": { "manageVlm": true, "botMode": "preserve", "pollMs": 2000 }

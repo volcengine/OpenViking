@@ -85,7 +85,7 @@ try {
   let settings = {};
   try { settings = JSON.parse(await fs.readFile(settingsFile, "utf8")); } catch (error) { if (error.code !== "ENOENT") throw error; }
   await fs.writeFile(settingsFile, JSON.stringify({ ...settings, port }));
-  assert.match(await command("agents"), /OpenViking \/ VikingBot/);
+  assert.match(await command("agents"), /OpenViking/);
   service = spawn(bin, ["serve"], { env, stdio: ["ignore", "pipe", "pipe"] });
   service.stdout.on("data", (chunk) => { logs += chunk; });
   service.stderr.on("data", (chunk) => { logs += chunk; });
