@@ -39,14 +39,14 @@ export function desiredSettings(selection, config) {
   const target = {};
   if (!selection) return target;
   if (config.manageVlm) bind(target, "vlm", identity, selection.model, selection.gateway);
-  if (config.botMode === "follow") {
+  if (config.botEnabled !== false && config.botMode === "follow") {
     for (const key of botIdentity) target[`bot.agents.${key}`] = absent();
-  } else if (config.botMode === "independent") {
+  } else if (config.botEnabled !== false && config.botMode === "independent") {
     bind(target, "bot.agents", botIdentity, config.botModel || selection.model, selection.gateway);
   }
   // Keep model-specific context budgets coherent. Unknown metadata does not
   // invent a context size; the status tells users to verify it themselves.
-  if (config.botMode !== "preserve") {
+  if (config.botEnabled !== false && config.botMode !== "preserve") {
     const context = selection.botMetadata ? selection.botMetadata.context : selection.metadata?.context;
     if (Number.isSafeInteger(context) && context > 0) {
       target["bot.agents.contextWindowTokens"] = present(context);

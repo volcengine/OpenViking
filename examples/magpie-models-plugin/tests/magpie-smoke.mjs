@@ -31,6 +31,7 @@ const backend = createServer(async (req, res) => {
   res.setHeader("Content-Type", "application/json");
   let raw = ""; for await (const chunk of req) raw += chunk;
   const body = raw ? JSON.parse(raw) : null;
+  if (req.url === "/bot/v1/health") return res.end(JSON.stringify({ status: "healthy" }));
   if (req.url === "/v1/models") return res.end(JSON.stringify({ data: ["one", "two"].map((id) => ({ id, context_window: 64000 })) }));
   if (!req.url.startsWith("/api/v1/admin/configuration")) {
     inferenceCalls++; res.statusCode = 500; return res.end("{}");

@@ -42,6 +42,8 @@
         <textarea id="botParameters" rows="5" spellcheck="false" placeholder='{"max_tokens":4096,"thinking":true,"timeout":600}'></textarea>
         <p class="hint">JSON 对象；支持 max_tokens、temperature、thinking、timeout。省略字段保留原设置；max_tokens: null 使用模型默认值，Bot 跟随模式则沿用 OV 限制。已知输出上限会限制 max_tokens；未知时请自行核对。Bot 生成参数可覆盖继承值。</p>
       </fieldset>
+      <label class="check"><input id="restartOnChange" type="checkbox">保存模型后自动重启并验证 / Restart and verify after saving</label>
+      <p class="hint">适用于支持重启 API 的 OV；--with-bot 启动的 Bot 会随 OV 一起重启。独立 Bot 仍需单独重启。</p>
       <button type="submit">保存设置 / Save settings</button>
       <p id="message" role="status" aria-live="polite"></p>
     </form>

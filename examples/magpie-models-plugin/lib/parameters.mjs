@@ -71,7 +71,7 @@ export function modelParameters(document, records, desired, selection, config) {
   if (config.manageVlm) role("vlm", validateParameters(config.vlmParameters), selection.vlmMetadata);
   const explicitBot = document.bot?.agents || {};
   const botInherited = !explicitBot.model && !explicitBot.credentials?.length;
-  if (config.botMode !== "preserve" || (config.manageVlm && botInherited)) {
+  if (config.botEnabled !== false && (config.botMode !== "preserve" || (config.manageVlm && botInherited))) {
     const metadata = config.botMode === "independent" ? selection.botMetadata : selection.vlmMetadata;
     role("bot.agents", validateParameters(config.botParameters), metadata);
   }

@@ -2,6 +2,7 @@ const field = (id) => document.getElementById(id);
 await magpie.ready;
 const options = await magpie.options.get();
 field("manageVlm").checked = options.manageVlm ?? true;
+field("restartOnChange").checked = options.restartOnChange ?? false;
 field("botMode").value = options.botMode || "preserve";
 for (const key of ["botModel", "serverUrl", "rootApiKeyFile"]) field(key).value = options[key] || "";
 for (const key of ["vlmParameters", "botParameters"]) field(key).value = JSON.stringify(options[key] || {}, null, 2);
@@ -21,7 +22,7 @@ field("settings").addEventListener("submit", async (event) => {
   button.disabled = true;
   try {
     // Merge with fresh options, preserving fields this form does not expose.
-    const next = { ...await magpie.options.get(), manageVlm: field("manageVlm").checked, botMode: field("botMode").value };
+    const next = { ...await magpie.options.get(), manageVlm: field("manageVlm").checked, botMode: field("botMode").value, restartOnChange: field("restartOnChange").checked };
     for (const key of ["vlmParameters", "botParameters"]) {
       const value = JSON.parse(field(key).value || "{}");
       if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_parameters");

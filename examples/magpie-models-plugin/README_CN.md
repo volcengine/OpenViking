@@ -20,7 +20,7 @@ magpie plugin add /absolute/path/to/OpenViking/examples/magpie-models-plugin
 4. 查看 Magpie 插件日志或运行 `node cli.mjs status`，确认 `saved`，没有冲突。
 5. 重启 OV 和 VikingBot，使启动配置生效。使用 `openviking-server --with-bot` 时，由服务重启流程管理 Bot。
 
-本插件不会自动重启服务；`saved` 表示配置已保存，不能据此认定运行中的进程已经切换。OV VLM 改动需要重启 OV；Bot 自身配置改变或它继承的 VLM 改变，需要重启 Bot。仅管理 Bot 独立配置时，OV 模型不变。状态分别提供 `ovRuntime` 与 `botRuntime`；启动文件匹配不代表独立 Bot 进程已重载，恢复原配置后也保留重启提示。插件不执行付费推理探测，只检查模型目录。使用前验证 VLM 的图片能力，以及 Bot 的流式输出、工具调用和输入预算。
+默认只保存配置；可在页面开启“保存模型后自动重启并验证”（`restartOnChange: true`），或执行 `node cli.mjs apply`。插件调用现有 Root 重启 API，等待实例 ID 变化、目标文件版本一致且无需再重启，再报告生效；失败或服务回滚会明确报错，不会循环重启。`saved` 表示配置已保存，不能据此认定运行中的进程已经切换。OV VLM 改动需要重启 OV；Bot 自身配置改变或它继承的 VLM 改变，需要重启 Bot。仅管理 Bot 独立配置时，OV 模型不变。状态分别提供 `ovRuntime` 与 `botRuntime`；启动文件匹配不代表独立 Bot 进程已重载，恢复原配置后也保留重启提示。插件不执行付费推理探测，只检查模型目录。使用前验证 VLM 的图片能力，以及 Bot 的流式输出、工具调用和输入预算。
 
 ## 连接和管理范围
 
@@ -40,7 +40,7 @@ magpie plugin add /absolute/path/to/OpenViking/examples/magpie-models-plugin
 
 `root.key` 中只放 OV Root API Key，文件权限建议设为 `0600`。这是 **OV 管理凭据**，与 Magpie 网关 Key、普通记忆访问 Key 分开。
 
-未指定地址时，读取 `OPENVIKING_CLI_CONFIG_FILE` 或 `~/.openviking/ovcli.conf` 的 `url`，最后使用 `http://127.0.0.1:1933`。凭据优先读取 `rootApiKeyFile`，其次 `OPENVIKING_ROOT_API_KEY`、`ovcli.conf` 的 `root_api_key`；不会自动把普通 `api_key` 当作 Root。GUI 启动的 Magpie 可能不继承终端环境变量，建议使用本地文件。无认证开发服务可省略 Key。
+插件先执行 `ov config show -o json` 发现当前 CLI 连接。该命令输出脱敏 Key，因此只使用其中的地址；Root Key 仍从同一 CLI 配置文件私下读取，不把掩码当作凭据。CLI 不可用时回退到配置文件。未指定地址时，读取 `OPENVIKING_CLI_CONFIG_FILE` 或 `~/.openviking/ovcli.conf` 的 `url`，最后使用 `http://127.0.0.1:1933`。凭据优先读取 `rootApiKeyFile`，其次 `OPENVIKING_ROOT_API_KEY`、`ovcli.conf` 的 `root_api_key`；不会自动把普通 `api_key` 当作 Root。GUI 启动的 Magpie 可能不继承终端环境变量，建议使用本地文件。无认证开发服务可省略 Key。
 
 | 设置 | 行为 |
 | --- | --- |
@@ -51,6 +51,7 @@ magpie plugin add /absolute/path/to/OpenViking/examples/magpie-models-plugin
 | `botModel` | 独立模式下，可指定另外一个完整的 `provider/model` 或 `group/name` |
 | `manageVlm: false` + 独立模式 | 只管理 VikingBot |
 | `ovcliConfig` | 显式指定用于解析服务地址和 Root 凭据的 `ovcli.conf` |
+| `restartOnChange` | 默认 false；开启后保存或恢复配置会自动调用重启 API，并等待新实例验证 |
 | `pollMs` | 同步间隔，500–60000 毫秒；默认 2000 |
 
 独立 Bot 示例：
@@ -63,7 +64,7 @@ magpie plugin add /absolute/path/to/OpenViking/examples/magpie-models-plugin
 }
 ```
 
-修改角色范围时，会先恢复不再接管的字段。Bot 的上下文窗口会使用所选模型目录中的已知值；未知时保留原值，需要自行核对。
+插件通过 `/bot/v1/health` 检测原本是否启用受管 Bot。未启用或未检测到时不会创建 Bot 配置、修改启动参数或开启 Bot；显式选择 Bot 管理模式会报错。独立 Bot 不在 OV 的重启生命周期中，插件不会为它擅自启动新进程。修改角色范围时，会先恢复不再接管的字段。Bot 的上下文窗口会使用所选模型目录中的已知值；未知时保留原值，需要自行核对。
 
 ### 输出预算和生成参数
 
@@ -101,13 +102,16 @@ magpie openviking-models default
 断开恢复原配置后，同样需要重启 OV 和 Bot。桥接宿主已退出时，自动恢复不能保证完成；可从本目录执行：
 
 ```sh
+node cli.mjs doctor
 node cli.mjs status
 node cli.mjs restore
 node cli.mjs sync
+node cli.mjs apply
 ```
 
 - `status`：读取本地最后一次同步结果，不做网络请求，也不输出密钥。
 - `restore`：恢复仍由插件管理的字段，暂停当前模型选择，防止下一次轮询立即接管。
+- `apply`：对已保存的配置执行现有重启 API；Root 鉴权、配置版本与服务重启能力均会检查。`--with-bot` 的受管 Bot 随 OV 重启并检查健康，独立 Bot 仍需通过自己的进程管理器重启。
 - `sync`：解除暂停并立即同步。CLI 不读取 Magpie 保存的 Options；恢复时使用相同的 `adapter.json` 和后端凭据。
 
 `~/.config/magpie-openviking-models/state.json` 保存字段原值、待写值和恢复目标，可能包含原有凭据。目录权限 `0700`，选择、状态和恢复文件 `0600`。不要分享或提前删除恢复文件。状态中的 `recoveryPending` 表示仍保留配置所有权／恢复记录，并不一定表示同步失败。
@@ -130,3 +134,13 @@ MAGPIE_BIN=/path/to/magpie node tests/magpie-smoke.mjs
 宿主测试使用临时 HOME/XDG 目录、模拟 OV 与模型供应商，不读取真实账号、不修改实际配置，也不发起模型推理。`tests/ov-contract.py` 可在仓库 Python 环境中读取标准输入的临时配置，检查真实 OV 与 Bot 配置解析。
 
 发布和市场登记尚未执行。市场条目草稿见 `marketplace.json`。
+
+## 无重启接口的范围
+
+`PATCH /api/v1/admin/accounts/{account_id}/configuration` 可热更新 Account VLM，后续模型调用使用新实例；这不等于热更新根启动配置，也不会更新已启动 VikingBot 的模型实例。当前插件管理根 `ov.conf`，因此采用保存后重启；不会悄悄给某个 Account 添加覆盖来代替根配置修改。
+
+## 安装与重启能力检测
+
+Agent 行通过 `openviking-server` 命令或 OV 配置目录发现安装。`node cli.mjs doctor` 分别报告 PATH 中是否有服务 CLI、当前连接能否通过 Root 配置鉴权、服务是否支持重启 API，以及 Bot 是否已启用。本机没有服务 CLI 不影响连接远端 OV。
+
+当前 `openviking-server` 提供启动参数，没有 `restart` 子命令；再次执行会尝试启动另一个服务。因此插件优先调用当前实例公开的重启 API，保留原 Python 环境、CLI 参数和 `--with-bot` 状态。实例不支持该 API 时明确报告不支持，交由原来的 systemd / Docker / 进程管理器重启，不猜测进程并杀掉，也不会新增 Bot 启动参数。

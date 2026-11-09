@@ -3,9 +3,10 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { settings } from "./config.mjs";
 import { readJSON, writeJSON, withLock, AdapterError } from "./files.mjs";
-import { createAPI, validateSelection } from "./api.mjs";
+import { createAPI, validateSelection, detectBot } from "./api.mjs";
 import { acknowledge, desiredSettings, equal, plan } from "./plan.mjs";
 import { modelParameters } from "./parameters.mjs";
+import { activate } from "./activation.mjs";
 
 const route = "/api/v1/admin/configuration?source=file";
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -35,7 +36,7 @@ export async function synchronize(config, { restore = false, resume = false, fet
       const last = await readJSON(config.statusFile);
       // Restoration removed the ownership journal, not the running process's
       // old model. Do not erase a pending restart on the next disconnected poll.
-      return publish(config, last?.status === "restored" ? last : { status: "disconnected", restartRequired: false });
+      return publish(config, ["restored", "applied", "apply_failed"].includes(last?.status) ? last : { status: "disconnected", restartRequired: false });
     }
     const api = createAPI(config, fetcher);
     const current = await api(route);
@@ -50,13 +51,16 @@ export async function synchronize(config, { restore = false, resume = false, fet
     if (!document || Array.isArray(document) || typeof document !== "object") throw new AdapterError("invalid_server_config");
     let selection = null;
     if (!restoring) selection = await validateSelection(raw, config, fetcher);
-    const desired = desiredSettings(selection, config);
-    const parameters = selection ? modelParameters(document, state?.records || {}, desired, selection, config) : { adjustments: [], warnings: [] };
+    const bot = await detectBot(config, fetcher);
+    if (!restoring && config.botMode !== "preserve" && !bot.enabled) throw new AdapterError("bot_not_enabled_or_detected");
+    const effectiveConfig = { ...config, botEnabled: bot.enabled };
+    const desired = desiredSettings(selection, effectiveConfig);
+    const parameters = selection ? modelParameters(document, state?.records || {}, desired, selection, effectiveConfig) : { adjustments: [], warnings: [] };
     const oldRecords = state?.records || {};
     const vlmManaged = Object.keys({ ...oldRecords, ...desired }).some((key) => key.startsWith("vlm."));
     const botManaged = Object.keys({ ...oldRecords, ...desired }).some((key) => key.startsWith("bot.agents."));
     const botInherits = !document.bot?.agents?.model && !document.bot?.agents?.credentials?.length;
-    const botAffected = botManaged || (vlmManaged && botInherits);
+    const botAffected = bot.enabled && (botManaged || (vlmManaged && botInherits));
     const result = plan(document, oldRecords, desired);
     if (result.conflicts.length) return publish(config, { status: "conflict", conflicts: result.conflicts });
     // Return exactly the original absence of structural containers. Do this
@@ -72,21 +76,28 @@ export async function synchronize(config, { restore = false, resume = false, fet
       // Persist original values before the potentially ambiguous network write.
       state = { version: 1, serverUrl: config.serverUrl, filePath: current.file_path, structure, records: result.records };
       await writeJSON(config.stateFile, state);
-      await api(route, { content, revision: current.revision });
+      const saved = await api(route, { content, revision: current.revision });
+      current.revision = saved.revision;
     }
     const records = acknowledge(result.records);
     if (Object.keys(records).length) {
       await writeJSON(config.stateFile, { version: 1, serverUrl: config.serverUrl, filePath: current.file_path, structure, records });
     } else await fs.rm(config.stateFile, { force: true });
     if (restoring && paused) await writeJSON(pauseFile, { fingerprint: paused.fingerprint, restorePending: false });
+    const activation = await readJSON(join(config.directory, "activation.json"));
+    const verified = !changed && !current.restart_required && activation?.status === "complete"
+      && activation.serverUrl === config.serverUrl && activation.revision === current.revision
+      && activation.instanceId === current.restart?.instance_id;
     return publish(config, {
-      status: restoring ? "restored" : "saved",
-      restartRequired: changed || current.restart_required === true,
-      ovRuntime: vlmManaged ? (changed || current.restart_required ? "restart_required" : "startup_file_matches") : "not_managed",
-      botRuntime: botAffected ? "restart_or_verify_required" : "not_managed",
+      status: verified ? "applied" : restoring ? "restored" : "saved",
+      revision: current.revision,
+      restartRequired: changed || current.restart_required === true || (verified && botAffected && !activation.botVerified),
+      ovRuntime: vlmManaged ? (verified ? "applied" : changed || current.restart_required ? "restart_required" : "startup_file_matches") : "not_managed",
+      botRuntime: botAffected ? (verified && activation.botVerified ? "managed_restart_verified" : "restart_or_verify_required") : "not_managed",
       ...(restoring ? {} : { botMode: config.botMode }),
       accountOverrides: "not_managed",
       capabilityCheck: "catalog_only",
+      botDetection: bot.state,
       ...parameters,
     });
   });
@@ -116,8 +127,9 @@ export function startAdapter(input, options = {}) {
       // Magpie writes model, URL and key separately. Let one quiet poll elapse.
       if (selection !== lastSelection) lastSelection = selection;
       else {
-        const result = await synchronize(config);
-        log([result.status, result.ovRuntime && `OV:${result.ovRuntime}`, result.botRuntime && `Bot:${result.botRuntime}`,
+        let result = await synchronize(config);
+        if (config.restartOnChange && result.restartRequired && ["saved", "restored"].includes(result.status)) result = await activate(config);
+        log([result.status, result.code, result.ovRuntime && `OV:${result.ovRuntime}`, result.botRuntime && `Bot:${result.botRuntime}`,
           ...(result.adjustments || []).map((entry) => `${entry.field}=${entry.value}`),
           ...(result.warnings || [])].filter(Boolean).join(" · "));
       }

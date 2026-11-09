@@ -25,11 +25,12 @@ async function fixture(t, document = original) {
   const requests = [], config = { directory, selectionFile: join(directory, "selection.json"), stateFile: join(directory, "state.json"), statusFile: join(directory, "status.json"), serverUrl: "http://127.0.0.1:1933", apiKey: "root-secret", manageVlm: true, botMode: "preserve", timeoutMs: 1000 };
   await fs.writeFile(config.selectionFile, JSON.stringify(selection));
   const backend = {
-    overrides: [], failSave: false, lostResponse: false, failDryRun: false, output: undefined,
+    overrides: [], failSave: false, lostResponse: false, failDryRun: false, output: undefined, botStatus: 200,
     get document() { return current; },
     edit(fn) { fn(current); revision++; },
     async fetcher(url, init) {
       requests.push({ url, init });
+      if (url.endsWith("/bot/v1/health")) return Response.json({ status: "healthy" }, { status: backend.botStatus });
       if (url.endsWith("/models")) return Response.json({ data: [{ id: selection.model, context_window: 64000, max_output_tokens: backend.output }, { id: "vendor/bot", context_window: 32000, max_output_tokens: 4096 }] });
       assert.equal(init.headers["X-API-Key"], "root-secret");
       if (init.method === "GET") return Response.json({ status: "ok", result: { content: JSON.stringify(current), revision: String(revision), file_path: "/server/ov.conf", writable: true, restart_required: restart, overrides: { cluster: backend.overrides } } });
@@ -248,4 +249,15 @@ test("following Bot's independent output limit cannot exceed its new inherited m
   await f.run();
   assert.equal(f.backend.document.bot.agents.maxTokens, 4096);
   assert.equal(f.backend.document.bot.agents.model, undefined);
+});
+test("a disabled Bot is neither configured nor enabled while changing OV VLM", async (t) => {
+  const f = await fixture(t, { vlm: original.vlm, embedding: original.embedding });
+  f.backend.botStatus = 503;
+  const saved = await f.run();
+  assert.equal(f.backend.document.bot, undefined);
+  assert.equal(saved.botDetection, "disabled");
+  assert.equal(saved.botRuntime, "not_managed");
+  f.config.botMode = "independent";
+  await assert.rejects(f.run(), /bot_not_enabled_or_detected/);
+  assert.equal(f.backend.document.bot, undefined);
 });

@@ -1,16 +1,33 @@
 import { AdapterError } from "./files.mjs";
 import { normalizeURL } from "./config.mjs";
 
+export async function detectBot(config, fetcher = fetch) {
+  try {
+    const response = await fetcher(`${config.serverUrl}/bot/v1/health`, {
+      redirect: "error", headers: config.apiKey ? { "X-API-Key": config.apiKey } : {},
+      signal: AbortSignal.timeout(config.timeoutMs),
+    });
+    if (response.status === 503) return { enabled: false, healthy: false, state: "disabled" };
+    if (response.status === 404) return { enabled: false, healthy: false, state: "unsupported" };
+    if (response.status === 502) return { enabled: true, healthy: false, state: "unhealthy" };
+    if (!response.ok) return { enabled: false, healthy: false, state: "unknown" };
+    const healthy = (await response.json()).status === "healthy";
+    return { enabled: healthy, healthy, state: healthy ? "running" : "unknown" };
+  } catch { return { enabled: false, healthy: false, state: "unknown" }; }
+}
+
 export function createAPI(config, fetcher = fetch) {
-  return async (route, body) => {
+  return async (route, body, method) => {
     let response;
     try {
       response = await fetcher(`${config.serverUrl}${route}`, {
-        method: body === undefined ? "GET" : "PATCH", redirect: "error",
+        method: method || (body === undefined ? "GET" : "PATCH"), redirect: "error",
         headers: { "Content-Type": "application/json", ...(config.apiKey ? { "X-API-Key": config.apiKey } : {}) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(config.timeoutMs),
       });
     } catch { throw new AdapterError("server_unreachable"); }
+    if (response.status === 401) throw new AdapterError("root_authentication_required");
+    if (response.status === 403) throw new AdapterError("root_permission_required");
     if (!response.ok) throw new AdapterError(`server_http_${response.status}`);
     let data;
     try { data = await response.json(); } catch { throw new AdapterError("invalid_server_response"); }
