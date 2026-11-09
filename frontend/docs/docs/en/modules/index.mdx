@@ -4,10 +4,10 @@ Console provides a working native command panel, alongside the ScopeCascade coor
 
 Placeholder modules do not carry data props. A module loads its own data through a Hook, so the host supplies configuration and the controlled value, and the module reports changes through callbacks.
 
-| Module                           | Component     | Target capability |
-| -------------------------------- | ------------- | ----------------- |
-| [`file-browser`](./file-browser) | `FileBrowser` | File browser.     |
-| [`console`](./console)           | `Console`     | Console.          |
+| Module                           | Component                | Target capability |
+| -------------------------------- | ------------------------ | ----------------- |
+| [`file-browser`](./file-browser) | `FileBrowser`            | File browser.     |
+| [`console`](./console)           | `Console` / `useConsole` | Console.          |
 
 ## Preview
 
@@ -23,7 +23,7 @@ Import a component and its Props / Labels / Slots types from `@openviking/react/
 
 JavaScript does not load CSS. Import `@openviking/react/modules/<module>/style.css` for one module, `@openviking/react/modules/style.css` for all modules, or `@openviking/react/style.css` for the full library. Each stylesheet works independently. There is no aggregate `@openviking/react/modules` JavaScript entry.
 
-The current placeholders accept `className`, `style`, and `labels`. They do not require a Provider. Console requests inherit `OpenVikingProvider` from `@openviking/react/client`; its orchestration Hook remains internal. Mounting does not issue requests.
+The current placeholders accept `className`, `style`, and `labels`. They do not require a Provider. Console requests inherit `OpenVikingProvider` from `@openviking/react/client`; `useConsole` is also available independently. Mounting does not issue requests.
 
 ## Host responsibilities
 

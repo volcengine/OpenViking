@@ -118,7 +118,7 @@ export interface VikingBotProps
   isAvailable?: boolean;
   /** 不可用时的说明。Message shown while the bot is unavailable. */
   unavailableMessage?: string;
-  /** 首条消息之前替代消息列表显示的内容。Shown instead of the list before the first message. */
+  /** 首条消息前的内容；undefined 使用欢迎页，null 隐藏。Empty content: undefined uses welcome; null hides it. */
   emptyState?: ReactNode;
   /** 头部插槽，例如会话标题或历史按钮。Header slot. */
   header?: ReactNode;
@@ -126,7 +126,7 @@ export interface VikingBotProps
   footer?: ReactNode;
   /** 替换整个主体，用于宿主自定义组合。Replaces the whole body. */
   children?: ReactNode;
-  /** 替换消息列表，用于宿主自带渲染底座。Replaces the message list. */
+  /** 替换消息列表，优先于空态；null 隐藏。Replaces the list, including empty state; null hides it. */
   messageList?: ReactNode;
   /** 替换输入区，用于宿主自带输入组件。Replaces the composer. */
   composer?: ReactNode;

@@ -80,7 +80,16 @@ export function groupByActivity(
   for (const part of parts) {
     const groupId = 'groupId' in part ? part.groupId : undefined;
     const previous = blocks.at(-1);
-    if (previous && groupId && previous.groupId === groupId) {
+    const activity = part.type === 'reasoning' || part.type === 'tool';
+    const previousType = previous?.parts[0]?.type;
+    const previousActivity =
+      previousType === 'reasoning' || previousType === 'tool';
+    if (
+      previous &&
+      groupId &&
+      previous.groupId === groupId &&
+      activity === previousActivity
+    ) {
       previous.parts.push(part);
       continue;
     }

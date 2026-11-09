@@ -48,7 +48,9 @@ export async function executeCommand(
   const spec = [...COMMAND_SPECS]
     .sort((a, b) => b.name.length - a.name.length)
     .find((item) =>
-      item.name.split(' ').every((part, index) => tokens[index] === part),
+      item.name
+        .split(' ')
+        .every((part, index) => tokens[index]?.value === part),
     );
   if (!spec)
     throw new Error(

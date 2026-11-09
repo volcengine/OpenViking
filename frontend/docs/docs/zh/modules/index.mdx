@@ -4,10 +4,10 @@ Console 已提供原生命令面板，ScopeCascade 已提供级联选择。FileB
 
 props 里没有数据字段。模块通过 Hook 自己取数，宿主给配置与受控值，模块通过回调上报变化。
 
-| 模块                             | 组件          | 目标能力   |
-| -------------------------------- | ------------- | ---------- |
-| [`file-browser`](./file-browser) | `FileBrowser` | 文件浏览。 |
-| [`console`](./console)           | `Console`     | 交互面板。 |
+| 模块                             | 组件                     | 目标能力   |
+| -------------------------------- | ------------------------ | ---------- |
+| [`file-browser`](./file-browser) | `FileBrowser`            | 文件浏览。 |
+| [`console`](./console)           | `Console` / `useConsole` | 交互面板。 |
 
 ## 预览
 
@@ -23,7 +23,7 @@ props 里没有数据字段。模块通过 Hook 自己取数，宿主给配置�
 
 JavaScript 不加载 CSS。单模块使用 `@openviking/react/modules/<模块>/style.css`，全部模块使用 `@openviking/react/modules/style.css`，整库使用 `@openviking/react/style.css`，每个样式入口均可独立消费。没有 `@openviking/react/modules` 分类聚合 JavaScript 入口。
 
-当前占位组件接受 `className`、`style` 和 `labels`，无需 Provider。Console 的请求继承 `@openviking/react/client` 提供的 `OpenVikingProvider`，编排 Hook 保持内部实现；挂载本身不发请求。
+当前占位组件接受 `className`、`style` 和 `labels`，无需 Provider。Console 的请求继承 `@openviking/react/client` 提供的 `OpenVikingProvider`，同时提供可独立使用的 `useConsole`；挂载本身不发请求。
 
 ## 宿主职责
 

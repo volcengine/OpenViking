@@ -2,7 +2,7 @@ import { useRef } from 'react';
 import { DEFAULT_LABELS } from './labels.js';
 import { VikingBotSessionActions } from './session-actions.js';
 import { VikingBotWelcome } from './welcome.js';
-import { quickInputText } from './capabilities.js';
+import { useQuickInput } from './use-quick-input.js';
 import type { VikingBotQuickInput } from './capabilities.js';
 import type { VikingBotComposerRef } from './types.js';
 import type { VikingBotProps } from './types.js';
@@ -59,13 +59,16 @@ export function VikingBot({
   const hasMessages = messages.length > 0;
   const localComposer = useRef<VikingBotComposerRef>(null);
   const inputRef = composerRef ?? localComposer;
-  const selectQuickInput = (item: VikingBotQuickInput) => {
-    if (onQuickInputSelect) onQuickInputSelect(item);
-    else {
-      const next = quickInputText(draft ?? '', item, quickInputs ?? []);
+  const chooseQuickInput = useQuickInput(
+    draft ?? '',
+    (next) => {
       if (inputRef.current) inputRef.current.setText(next);
       else onDraftChange?.(next);
-    }
+    },
+    onQuickInputSelect,
+  );
+  const selectQuickInput = (item: VikingBotQuickInput) => {
+    chooseQuickInput(item);
     inputRef.current?.focus();
   };
   const renderedHeader =
@@ -105,13 +108,13 @@ export function VikingBot({
         </p>
       ) : null}
       <div className="ov-viking-bot__body">
-        {!hasMessages &&
-        !streaming &&
-        (emptyState !== undefined || !messageList) ? (
+        {messageList !== undefined ? (
+          messageList
+        ) : !hasMessages && !streaming ? (
           <div
-            className={`ov-viking-bot__empty${emptyState == null ? ' ov-viking-bot__empty--welcome' : ''}`}
+            className={`ov-viking-bot__empty${emptyState === undefined ? ' ov-viking-bot__empty--welcome' : ''}`}
           >
-            {emptyState ?? (
+            {emptyState === undefined ? (
               <VikingBotWelcome
                 labels={labels}
                 quickInputs={quickInputs}
@@ -122,21 +125,21 @@ export function VikingBot({
                   (!onDraftChange && !onQuickInputSelect)
                 }
               />
+            ) : (
+              emptyState
             )}
           </div>
         ) : (
-          (messageList ?? (
-            <VikingBotMessageList
-              locale={locale}
-              messages={messages}
-              streaming={streaming}
-              listKey={listKey}
-              onOpenUri={onOpenUri}
-              onCopy={onCopy}
-              onMessageAction={onMessageAction}
-              labels={overrides}
-            />
-          ))
+          <VikingBotMessageList
+            locale={locale}
+            messages={messages}
+            streaming={streaming}
+            listKey={listKey}
+            onOpenUri={onOpenUri}
+            onCopy={onCopy}
+            onMessageAction={onMessageAction}
+            labels={overrides}
+          />
         )}
       </div>
       {footer ? <div className="ov-viking-bot__footer">{footer}</div> : null}
@@ -157,7 +160,7 @@ export function VikingBot({
                   ? quickInputs
                   : undefined
               }
-              onQuickInputSelect={onQuickInputSelect}
+              onQuickInputSelect={selectQuickInput}
               onValueChange={onDraftChange}
               onFilesAdded={onFilesAdded}
               onAttachmentRemove={onAttachmentRemove}

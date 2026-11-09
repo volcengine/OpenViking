@@ -24,6 +24,18 @@ Conversation sessions, prompts and resource candidates use fixed demo data. The 
 
 For a real service, configure `baseURL`, credentials and identity through the host's `OpenVikingProvider`; no per-module adapter is required. Exclude `/api/v1` from `baseURL`; omission targets the same origin. Mounting does not fetch data. Requests start only when a command is explicitly submitted.
 
+## Standalone Hook
+
+`useConsole(options?: ConsoleOptions): ConsoleResult` is exported from `@openviking/react/modules/console`. It shares Provider inheritance, instance isolation and request cleanup with `Console`, without rendering a view or requiring CSS.
+
+`ConsoleOptions` accepts `mode`, `defaultMode`, `locale`, `scopeKey`, `onModeChange` and `requestOptions`. `ConsoleResult` includes `records`, `command`, `conversationDraft`, `mode`, `commands`, `isExecuting`, `error` and `failedCommand`; operations are `setMode`, `setCommand`, `setConversationDraft`, `execute`, `retry`, `cancel` and `clear`. `execute` and `retry` resolve after updating records, including failures; inspect `error` or the record status. `clear` cancels pending work and clears command records, errors and the command draft. Conversation service state remains host-owned.
+
+The example uses the same fixed offline transport and composes `Tui` independently:
+
+```tsx file="../../_demos/console-hook.tsx" preview
+
+```
+
 ## Execution behavior
 
 One command runs per instance; input is disabled while a request is pending. Failures appear in the corresponding command result; submit the command again to retry. Check the server before resubmitting a write that may already have been accepted. New session aborts the HTTP request and ignores late results; it does not guarantee rollback of accepted server operations. Clearing records removes local history and errors without deleting server resources.
@@ -32,7 +44,7 @@ Records and drafts stay in memory. Service/identity configuration or `scopeKey` 
 
 ## Command scope
 
-Use `ov name`, `/name`, or a bare command name. Quote arguments containing spaces with single or double quotes; backslash escapes are supported. Arguments are parsed as data without executing a shell. Unknown or duplicate options, missing arguments and invalid URIs produce error records.
+Use `ov name`, `/name`, or a bare command name. Quote arguments containing spaces with single or double quotes; backslash escapes are supported. Quote option-looking data, such as `ov write viking://resources/a.md "--heading"`, or use `--` to end options: `ov write viking://resources/a.md -- --heading`. String option values may also be quoted, for example `--description "--example"`. Arguments are parsed as data without executing a shell. Unknown or duplicate options, missing arguments and invalid URIs produce error records.
 
 | Capability | Commands                                                                                               |
 | ---------- | ------------------------------------------------------------------------------------------------------ |
@@ -50,7 +62,7 @@ This is a browser-compatible native command subset. Local CLI configuration, log
 
 ## Props
 
-The root exports only `Console` and `ConsoleProps`. Import the mode, copy and slot types from `@openviking/react/modules/console`. The orchestration Hook remains internal. JavaScript does not load CSS; the composite view uses `@openviking/react/modules/console/style.css`, including Tui and VikingBot styles.
+The root exports only `Console` and `ConsoleProps`. Import the mode, copy and slot types from `@openviking/react/modules/console`. The same entry exports `useConsole`, `ConsoleOptions`, `ConsoleState` and `ConsoleResult`. JavaScript does not load CSS; the composite view uses `@openviking/react/modules/console/style.css`, including Tui and VikingBot styles.
 
 | Prop                 | Type                          | Default        | Behavior                                                                                                                       |
 | -------------------- | ----------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------ |

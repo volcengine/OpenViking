@@ -6,7 +6,8 @@ interface MarkdownNode {
 }
 
 const PREFIX = '#viking-uri=';
-const RESOURCE = /viking:\/\/[^\s<>"'`，。；！？)\]]+/gi;
+const RESOURCE = /viking:\/\/[^\s<>"'`]+/gi;
+const PROSE_RESOURCE = /viking:\/\/[^\s<>"'`，。；！？)\]]+/gi;
 const SKIP = new Set(['link', 'linkReference', 'definition', 'code', 'html']);
 
 /** Preserve normal Markdown navigation while rejecting executable URL schemes. */
@@ -37,7 +38,9 @@ export function resourceHref(value?: string): string | undefined {
 
 export function resourceText(value: string, prose = true) {
   const matches: { start: number; end: number; uri: string }[] = [];
-  for (const match of value.matchAll(new RegExp(RESOURCE))) {
+  for (const match of value.matchAll(
+    new RegExp(prose ? PROSE_RESOURCE : RESOURCE),
+  )) {
     const uri = prose ? match[0].replace(/[.!?;:]+$/u, '') : match[0];
     matches.push({ start: match.index, end: match.index + uri.length, uri });
   }

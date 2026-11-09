@@ -30,8 +30,7 @@ export function BotPopover({
     () => true,
     () => false,
   );
-  const native =
-    mounted && typeof HTMLElement.prototype.showPopover === 'function';
+  const native = mounted && 'popover' in HTMLElement.prototype;
   const [open, setOpen] = useState(false);
   const [surface, setSurface] = useState<HTMLDivElement | null>(null);
   const anchor = useRef<HTMLSpanElement>(null);
@@ -42,21 +41,29 @@ export function BotPopover({
     else setOpen(false);
     anchor.current?.querySelector('button')?.focus();
   };
-  // Native light dismiss/Escape happen outside React. Mirror the toggle event and
-  // release the subscription on replacement. The fallback listens only while open.
+  // Effect necessity: native popover toggles, including light dismiss/Escape, are
+  // browser events outside React. Subscribe after the portal DOM commits and
+  // remove the listener when its node or callback changes, or on unmount.
   useEffect(() => {
     if (!surface) return;
-    const toggle = () => setOpen(surface.matches(':popover-open'));
+    const toggle = () => {
+      const expanded = surface.matches(':popover-open');
+      setOpen(expanded);
+      if (expanded) onOpen?.();
+    };
     if (native) surface.addEventListener('toggle', toggle);
     return () => surface.removeEventListener('toggle', toggle);
-  }, [native, surface]);
+  }, [native, surface, onOpen]);
+  // Effect necessity: focus the newly committed popup DOM; the opening event runs
+  // before React mounts its children. This one-time focus owns no subscription or
+  // timer, so closing/unmounting requires no cleanup or focus restoration here.
   useEffect(() => {
     if (!open) return;
-    onOpen?.();
     (surface?.querySelector<HTMLElement>('input, button') ?? surface)?.focus();
-    // onOpen is an event notification; changing its identity must not reopen it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, surface]);
+  // Effect necessity: the fallback synchronizes with global pointer/key events
+  // while open, including events outside this subtree. Register after commit;
+  // remove both document listeners on close, node replacement or unmount.
   useEffect(() => {
     if (native || !open) return;
     const outside = (event: MouseEvent) => {
@@ -84,7 +91,12 @@ export function BotPopover({
         'aria-haspopup': 'dialog',
         'aria-controls': id,
         'aria-expanded': open,
-        onClick: native ? undefined : () => setOpen(!open),
+        onClick: native
+          ? undefined
+          : () => {
+              setOpen(!open);
+              if (!open) onOpen?.();
+            },
       })}
       {mounted
         ? createPortal(

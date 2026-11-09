@@ -14,7 +14,7 @@ import { ComposerAttachments } from './composer-attachments.js';
 import { composerMention, ReferenceTags } from './composer-references.js';
 import { ComposerFooter } from './composer-footer.js';
 import { QuickInputs } from './quick-inputs.js';
-import { quickInputText } from './capabilities.js';
+import { useQuickInput } from './use-quick-input.js';
 import type { VikingBotComposerProps, VikingBotComposerRef } from './types.js';
 
 const HARD_BREAK = 'hardBreak';
@@ -77,6 +77,7 @@ export const VikingBotComposerView = forwardRef<
     },
     [onValueChange],
   );
+  const selectQuickInput = useQuickInput(value, setText, onQuickInputSelect);
 
   // useEffect 必要性：把受控 value 的后续变化同步到 Ark 编辑器。编辑器是外部
   // 非 React 控件，只有它的 setValue 能改写内部文档，渲染计算无法做到。仅当
@@ -155,8 +156,7 @@ export const VikingBotComposerView = forwardRef<
         items={quickInputs}
         disabled={disabled || readOnly || isSending}
         onSelect={(item) => {
-          if (onQuickInputSelect) onQuickInputSelect(item);
-          else setText(quickInputText(value, item, quickInputs ?? []));
+          selectQuickInput(item);
           senderRef.current?.getEditor()?.commands.focus('end');
         }}
       />

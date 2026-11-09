@@ -24,6 +24,18 @@
 
 真实接入时，在宿主通过 `OpenVikingProvider` 配置 `baseURL`、凭证和身份；无需逐模块提供 Adapter。`baseURL` 不包含 `/api/v1`，未配置时使用同源地址。模块挂载不请求，显式提交命令才访问服务。
 
+## 独立 Hook
+
+`@openviking/react/modules/console` 同时导出 `useConsole(options?: ConsoleOptions): ConsoleResult`。它与 `Console` 使用相同的 Provider 继承、实例隔离和请求清理，不渲染视图，也不需要 CSS。
+
+`ConsoleOptions` 接受 `mode`、`defaultMode`、`locale`、`scopeKey`、`onModeChange` 和 `requestOptions`。`ConsoleResult` 提供 `records`、`command`、`conversationDraft`、`mode`、`commands`、`isExecuting`、`error` 和 `failedCommand`；操作包括 `setMode`、`setCommand`、`setConversationDraft`、`execute`、`retry`、`cancel` 和 `clear`。`execute` 与 `retry` 在更新记录后完成，失败也通过 `error` 或记录状态表达，不抛出请求错误。`clear` 中止当前请求，并清空命令记录、错误和命令草稿；对话服务状态仍由宿主管理。
+
+以下示例复用固定离线服务，独立组合 `Tui`：
+
+```tsx file="../../_demos/console-hook.tsx" preview
+
+```
+
 ## 执行行为
 
 同一实例同时执行一条命令，等待请求期间禁用输入。失败信息显示在对应的命令结果中，可重新提交命令；写入失败可能已被服务端接受，重新提交前先核查结果。新建会话会中止 HTTP 请求并忽略迟到结果，不保证撤销服务端已接受的操作。清空记录只移除本地历史和错误，不删除服务端资源。
@@ -32,7 +44,7 @@
 
 ## 命令范围
 
-命令可使用 `ov name`、`/name` 或裸名称。带空格的参数使用单引号或双引号，支持反斜线转义。参数按数据解析，不执行 Shell；未知选项、重复选项、缺失参数和无效 URI 会生成失败记录。
+命令可使用 `ov name`、`/name` 或裸名称。带空格的参数使用单引号或双引号，支持反斜线转义。以 `--` 开头的正文应加引号，如 `ov write viking://resources/a.md "--heading"`；也可通过 `--` 结束选项解析：`ov write viking://resources/a.md -- --heading`。字符串选项值同样支持引号，如 `--description "--example"`。参数按数据解析，不执行 Shell；未知选项、重复选项、缺失参数和无效 URI 会生成失败记录。
 
 | 能力 | 命令                                                                                                   |
 | ---- | ------------------------------------------------------------------------------------------------------ |
@@ -50,7 +62,7 @@
 
 ## 属性
 
-根入口只导出 `Console` 与 `ConsoleProps`。模式、文案和插槽类型从 `@openviking/react/modules/console` 导出，编排 Hook 保持内部实现。JS 不加载 CSS；组合视图使用 `@openviking/react/modules/console/style.css`，已包含 Tui 与 VikingBot 所需样式。
+根入口只导出 `Console` 与 `ConsoleProps`。模式、文案和插槽类型从 `@openviking/react/modules/console` 导出，同一模块入口还导出 `useConsole`、`ConsoleOptions`、`ConsoleState` 与 `ConsoleResult`。JS 不加载 CSS；组合视图使用 `@openviking/react/modules/console/style.css`，已包含 Tui 与 VikingBot 所需样式。
 
 | 属性                 | 类型                          | 默认值         | 说明                                                                                    |
 | -------------------- | ----------------------------- | -------------- | --------------------------------------------------------------------------------------- |

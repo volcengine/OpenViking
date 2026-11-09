@@ -4,7 +4,7 @@ English / [中文](README_CN.md)
 
 `modules/` organises Hooks and composite views around interactions that are completed together, keeping shared state and coordination inside the module. Hooks load requests, adapt data and hold state; composite views wire the data and operations a Hook returns into `components/`. The host assembles full pages.
 
-Console exports a composite command view; its orchestration Hook remains internal. Native requests, cancellation, retry and identity isolation are implemented; conversation services remain pending. FileBrowser remains a placeholder.
+Console exports a composite command view; it also exports standalone `useConsole`. Native requests, cancellation, retry and identity isolation are implemented; conversation services remain pending. FileBrowser remains a placeholder.
 
 ## Available modules
 
@@ -127,15 +127,15 @@ The interactions above and `useFileBrowser` are still planned; only the `FileBro
 
 ### Interaction panel module
 
-`console` covers the whole panel shared by the conversation view and TUI, exposing the `Console` composite view with an internal orchestration Hook:
+`console` covers the whole panel shared by the conversation view and TUI, exposing the `Console` composite view and the standalone `useConsole` Hook:
 
-- The internal Hook manages the current mode, common context, conversation and command data, state and operations; the composite view coordinates mode switching and toolbar actions.
+- The Hook manages the current mode, common context, conversation and command data, state and operations; the composite view coordinates mode switching and toolbar actions.
 - The conversation view and TUI use the same service, identity and host-supplied resource context; each keeps its own message history, command records and running state, preserved when switching modes.
 - Conversation capabilities include sessions, message streams, attachments, memory submission and compile actions; TUI capabilities include command definitions, execution, cancellation and execution records, with available commands following the capabilities the host provides.
 - The composite view owns mode switching, the common toolbar and the content area, dispatching operations by the current mode. `Tui` is consumed as an independently usable pure view component; the conversation view reuses VikingBot, with service integration pending.
 - Opening a resource, locating an artifact or refreshing a directory is handed to the host through events, and coordination with `file-browser` does not depend on the other module's private state; sign-in, identity switching and product onboarding remain with the host.
 
-`Console` implements command execution, cancellation, retry, records and independent drafts. Its orchestration Hook is not a public API. Conversation sessions, streaming, attachments and memory submission remain planned. See the [Console docs](../../../../docs/docs/en/modules/console.mdx) for the supported command subset.
+`Console` implements command execution, cancellation, retry, records and independent drafts. Its standalone `useConsole` Hook and `ConsoleOptions`, `ConsoleState` and `ConsoleResult` types are public APIs from the same module entry. Conversation sessions, streaming, attachments and memory submission remain planned. See the [Console docs](../../../../docs/docs/en/modules/console.mdx) for the supported command subset.
 
 ## Composition and extension boundaries
 
@@ -149,7 +149,7 @@ The interactions above and `useFileBrowser` are still planned; only the `FileBro
 
 ## Current state and development entry
 
-Each module uses its own kebab-case directory with `index.ts` as the single entry, and already ships a placeholder component, base types and an independent build entry. Once real business logic migrates, the Hook, the composite view and public types are exported from the same entry; Console currently exposes its view and request options while keeping the Hook internal; placeholder modules expose no fake Hook.
+Each module uses its own kebab-case directory with `index.ts` as the single entry, and already ships a placeholder component, base types and an independent build entry. Once real business logic migrates, the Hook, the composite view and public types are exported from the same entry; Console exposes its view, standalone Hook and input/return types; placeholder modules expose no fake Hook.
 
 Development commands and build entries are in the [UI workspace README](../../../../README.md), the package structure is in the [package README](../../README.md), and implementation constraints are in this directory's [AGENTS.md](./AGENTS.md).
 

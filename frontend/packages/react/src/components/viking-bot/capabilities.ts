@@ -58,9 +58,17 @@ export interface VikingBotInputFeatures {
 export function quickInputText(
   text: string,
   input: VikingBotQuickInput,
-  inputs: readonly VikingBotQuickInput[],
+  previousPrompt?: string,
 ) {
-  if (!text.trim() || inputs.some((item) => item.prompt === text))
-    return input.prompt;
+  const start = previousPrompt ? text.lastIndexOf(previousPrompt) : -1;
+  if (start >= 0) {
+    const end = start + previousPrompt!.length;
+    if (
+      (start === 0 || text[start - 1] === '\n') &&
+      (end === text.length || text[end] === '\n')
+    )
+      return text.slice(0, start) + input.prompt + text.slice(end);
+  }
+  if (!text.trim()) return input.prompt;
   return `${text}\n${input.prompt}`;
 }

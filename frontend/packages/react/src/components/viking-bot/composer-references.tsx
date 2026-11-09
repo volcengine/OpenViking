@@ -45,17 +45,18 @@ export function composerMention(
       selectReference(config, reference);
       editor.chain().focus().deleteRange(range).run();
     },
-    render: ({ query, command, editor }) => (
-      <ReferencePicker
-        config={config}
-        editor={editor}
-        query={query}
-        labels={labels}
-        onSelect={(item) =>
-          command({ tagType: 'file', label: item.name, value: item.uri })
-        }
-      />
-    ),
+    render: ({ query, command, editor }) =>
+      disabled ? null : (
+        <ReferencePicker
+          config={config}
+          editor={editor}
+          query={query}
+          labels={labels}
+          onSelect={(item) =>
+            command({ tagType: 'file', label: item.name, value: item.uri })
+          }
+        />
+      ),
   };
 }
 
@@ -72,6 +73,7 @@ export function ReferenceButton({
 }) {
   return (
     <BotPopover
+      key={disabled ? 'disabled' : 'enabled'}
       label={labels.reference}
       placement="top"
       trigger={(props) => (
@@ -96,6 +98,7 @@ export function ReferenceButton({
           config={config}
           labels={labels}
           onSelect={(item) => {
+            if (disabled) return;
             selectReference(config, item);
             close();
             senderRef.current?.getEditor()?.commands.focus();

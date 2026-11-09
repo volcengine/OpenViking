@@ -1,6 +1,10 @@
 import type { HTMLAttributes, ReactNode } from 'react';
 import type { OvRequestOptions } from '../../client/types.js';
-import type { TuiLabels, TuiRecord } from '../../components/tui/index.js';
+import type {
+  TuiCommandDefinition,
+  TuiLabels,
+  TuiRecord,
+} from '../../components/tui/index.js';
 import type {
   VikingBotLabels,
   VikingBotProps,
@@ -30,7 +34,7 @@ export interface ConsoleLabels {
   vikingBot?: VikingBotLabels;
 }
 
-/** Options shared by Console and its internal Hook. */
+/** Options shared by Console and useConsole. */
 export interface ConsoleOptions {
   mode?: ConsoleMode;
   /** Initial uncontrolled mode. Defaults to VikingBot ('conversation'). */
@@ -62,4 +66,17 @@ export interface ConsoleState {
   isExecuting: boolean;
   error?: unknown;
   failedCommand?: string;
+}
+
+/** Data and operations available independently of Console's view. */
+export interface ConsoleResult extends ConsoleState {
+  mode: ConsoleMode;
+  commands: readonly TuiCommandDefinition[];
+  setMode: (mode: ConsoleMode) => void;
+  setCommand: (command: string) => void;
+  setConversationDraft: (draft: string) => void;
+  execute: (command?: string) => Promise<void>;
+  retry: () => Promise<void>;
+  cancel: () => void;
+  clear: () => void;
 }

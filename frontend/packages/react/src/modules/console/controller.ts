@@ -26,14 +26,19 @@ export function createConsoleController(
   const cancel = () => cancelRunning?.();
   const clear = () => {
     cancel();
-    update({ records: [], error: undefined, failedCommand: undefined });
+    update({
+      records: [],
+      command: '',
+      error: undefined,
+      failedCommand: undefined,
+    });
   };
   async function execute(input = state.command, locale: 'en' | 'zh' = 'en') {
     const command = input.trim();
     if (!active || running || !command) return;
     try {
       const tokens = tokenize(command);
-      if (tokens[0] === 'clear') {
+      if (tokens[0]?.value === 'clear') {
         parseArguments(tokens.slice(1), []);
         clear();
         update({ command: '' });

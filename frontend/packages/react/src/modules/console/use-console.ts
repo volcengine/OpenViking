@@ -3,9 +3,9 @@ import { createOvClient } from '../../client/client.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
 import { consoleCommands } from './commands.js';
 import { createConsoleController } from './controller.js';
-import type { ConsoleMode, ConsoleOptions } from './types.js';
+import type { ConsoleMode, ConsoleOptions, ConsoleResult } from './types.js';
 
-/** Internal command execution and draft orchestration for Console. */
+/** Native command execution and draft orchestration, with or without Console. */
 export function useConsole({
   mode: controlledMode,
   defaultMode = 'conversation',
@@ -13,7 +13,7 @@ export function useConsole({
   scopeKey,
   onModeChange,
   requestOptions = {},
-}: ConsoleOptions = {}) {
+}: ConsoleOptions = {}): ConsoleResult {
   const inherited = useOvClient();
   const inheritedSignal = useOvSignal();
   const [fallback] = useState(() => createOvClient());
