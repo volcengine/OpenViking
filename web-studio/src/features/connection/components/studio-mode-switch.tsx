@@ -13,7 +13,12 @@ import {
   DialogTitle,
 } from '#/shared/ui/dialog'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { PanelsTopLeftIcon, UserRoundIcon, UsersRoundIcon } from 'lucide-react'
+import {
+  ArrowLeftIcon,
+  PanelsTopLeftIcon,
+  UserRoundIcon,
+  UsersRoundIcon,
+} from 'lucide-react'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -21,10 +26,12 @@ export function StudioModeSwitch({
   managementMode,
   canManage = true,
   compact = false,
+  navigation = false,
 }: {
   managementMode: boolean
   canManage?: boolean
   compact?: boolean
+  navigation?: boolean
 }) {
   const { t } = useTranslation('appShell')
   const { connection, profiles, activeProfileId, serverMode, switchIdentity } =
@@ -53,19 +60,27 @@ export function StudioModeSwitch({
   )
   const content = (
     <>
-      {managementMode ? (
+      {navigation ? (
+        <ArrowLeftIcon className="size-4" />
+      ) : managementMode ? (
         <PanelsTopLeftIcon className="size-4" />
       ) : (
         <UsersRoundIcon className="size-4" />
       )}
-      <span className={compact ? 'sr-only' : 'hidden md:inline'}>{label}</span>
+      <span
+        className={navigation ? '' : compact ? 'sr-only' : 'hidden md:inline'}
+      >
+        {navigation ? t('modes.back') : label}
+      </span>
     </>
   )
-  const buttonClass = compact
-    ? 'size-8 rounded-md border-0 bg-transparent p-0 shadow-none text-muted-foreground'
-    : managementMode
-      ? 'size-9 rounded-md p-0 md:w-auto md:gap-2 md:px-3'
-      : 'h-7 w-7 rounded-full bg-[#5252ff] p-0 text-xs leading-5 tracking-[0.003em] text-white hover:bg-[#4545e8] md:w-auto md:gap-1 md:px-2.5'
+  const buttonClass = navigation
+    ? 'h-8 w-full justify-start gap-2 rounded-lg border-0 bg-transparent px-2.5 text-[13px] font-normal shadow-none hover:bg-accent'
+    : compact
+      ? 'size-8 rounded-md border-0 bg-transparent p-0 shadow-none text-muted-foreground'
+      : managementMode
+        ? 'size-9 rounded-md p-0 md:w-auto md:gap-2 md:px-3'
+        : 'h-7 w-7 rounded-full bg-[#5252ff] p-0 text-xs leading-5 tracking-[0.003em] text-white hover:bg-[#4545e8] md:w-auto md:gap-1 md:px-2.5'
   async function enter(identity: SavedDataIdentity) {
     if (pending) return
     const controller = new AbortController()

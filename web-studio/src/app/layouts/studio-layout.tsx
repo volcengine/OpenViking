@@ -1,4 +1,5 @@
 import { StudioHeaderActionsContext } from './studio-header-actions'
+import { StudioModeSwitch } from '#/features/connection/components/studio-mode-switch'
 import { StudioHeader } from '#/app/layouts/studio-header'
 import { StudioManagementNavigation } from '#/app/navigation/studio-management-navigation'
 import { shouldShowGatewayNavigation } from '#/app/navigation/visibility'
@@ -105,6 +106,11 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
               className="top-14 h-[calc(100svh-3.5rem)]"
             >
               <SidebarContent className="gap-0 py-1">
+                {!isGatewayHost ? (
+                  <div className="px-3 pb-4">
+                    <StudioModeSwitch managementMode navigation />
+                  </div>
+                ) : null}
                 <StudioManagementNavigation
                   pathname={pathname}
                   isRoot={connectionRole === 'root' && !isGatewayHost}

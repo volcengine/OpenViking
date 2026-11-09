@@ -105,14 +105,6 @@ export function StudioHeader({
             )}
           </div>
         ) : null}
-        {managementMode && showManagementEntry ? (
-          <StudioModeSwitch
-            key={`${identityScopeKey}:${managementMode}`}
-            managementMode={managementMode}
-            canManage={canManage}
-            compact
-          />
-        ) : null}
         {workbenchChrome && !managementMode ? (
           <div
             aria-hidden="true"

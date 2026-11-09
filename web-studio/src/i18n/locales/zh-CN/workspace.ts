@@ -107,6 +107,7 @@ const workspace = {
       workbench: '用户工作台',
       managementDescription:
         '管理 Account、User、权限与服务配置。选择 User 后进入对应的用户工作台。',
+      back: '返回',
       enterWorkbench: '进入工作台',
       returnManagement: '管理团队',
       selectUser: '选择 User',

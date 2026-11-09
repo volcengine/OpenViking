@@ -109,6 +109,7 @@ const workspace = {
       workbench: 'Workbench',
       managementDescription:
         'Manage accounts, users, permissions and service configuration. Select a user to open their workbench.',
+      back: 'Back',
       enterWorkbench: 'Open workbench',
       returnManagement: 'Manage team',
       selectUser: 'Select a user',
