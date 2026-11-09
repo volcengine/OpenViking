@@ -2,7 +2,7 @@
 
 English / [中文](README_CN.md)
 
-React foundations for OpenViking AI application interfaces: build tooling, documentation, layered directories, and scoped styles. FileTree, Tui and FilePreview provide working views, alongside five file-type icons. Three business module placeholders support early layout integration; ScopeCascade provides a working cascade Hook and composition.
+React foundations for OpenViking AI application interfaces: build tooling, documentation, layered directories, and scoped styles. FileTree, Tui and FilePreview provide working views, alongside five file-type icons. Two business module placeholders support early layout integration; ScopeCascade provides a working cascade Hook and composition.
 
 This package inherits the repository's AGPL-3.0-only license. The release workflow publishes it to npm when a `react@<version>` tag matches the version in this package's manifest.
 
