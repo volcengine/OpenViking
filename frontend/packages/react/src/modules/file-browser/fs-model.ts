@@ -190,7 +190,7 @@ export interface DirectorySummary {
 export function toDirectoryTab(
   uri: string,
   summary: DirectorySummary,
-  labels: { l0: string; l1: string },
+  labels: { l0: string; l1: string; failure: string },
   openParent?: (uri: string) => Promise<void>,
   icon?: ReactNode,
 ): FilePreviewDirectoryTab {
@@ -199,8 +199,8 @@ export function toDirectoryTab(
   // 摘要各自可能独立失败（后端出错、权限不足），这两种情况处置完全不同。
   //
   // 判据是「有没有这个字段」而不是「它是否为真」：服务端可以返回空字符串作为
-  // 错误消息，用真假值判断会把一次失败重新变成空正文。消息为空时给一句可见的兜底
-  // 文案，同样是为了不让失败看起来像「还没生成」。
+  // 错误消息，用真假值判断会把一次失败重新变成空正文。消息为空时用 `labels.failure`
+  // 兜底——兜底文案同样来自可替换文案，不能在这里写死某一种语言。
   //
   // A level that could not be loaded shows the reason instead of an empty body: an
   // empty body reads as "not generated yet", while the two levels can fail
@@ -209,12 +209,10 @@ export function toDirectoryTab(
   //
   // The test is "the field is present", not "it is truthy": a server may report an
   // empty message, and a truthiness check would turn that failure back into an empty
-  // body. An empty message falls back to a visible line for the same reason — a
-  // failure must not look like "not generated yet".
+  // body. An empty message falls back to `labels.failure` — that fallback is replaceable
+  // copy too, so no single language is hard-coded here.
   const levelBody = (body: string, failure?: string) =>
-    failure === undefined
-      ? body
-      : `> ${failure || 'The summary could not be loaded.'}`;
+    failure === undefined ? body : `> ${failure || labels.failure}`;
   return {
     kind: 'directory',
     key: uri,

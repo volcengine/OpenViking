@@ -59,6 +59,15 @@ export interface FileBrowserLabels {
   l1Overview?: string;
   /** 目录某一级摘要尚未生成时的提示。Message shown when a summary level is empty. */
   summaryEmpty?: string;
+  /**
+   * 目录某一级摘要请求失败、且服务端没给消息时的兜底文案。与 `summaryEmpty` 是两
+   * 件事：前者是「取不到」，后者是「还没生成」，处置完全不同。
+   *
+   * Fallback copy when a summary level's request failed without a server message. It
+   * differs from `summaryEmpty`: the former is "could not load", the latter is "not
+   * generated yet", and the two call for different actions.
+   */
+  summaryFailed?: string;
   /** 目录树文案。Copy of the file tree. */
   tree?: FileTreeLabels;
   /** 预览文案。Copy of the file preview. */

@@ -97,8 +97,12 @@ export function FileBrowser({
   // 文案对象必须稳定：每次渲染都新建会让取数 effect 反复重跑并取消上一次请求。
   // The copy object must be stable, or the loading effect re-runs and cancels itself.
   const summaryLabels = useMemo(
-    () => ({ l0: text.l0Summary, l1: text.l1Overview }),
-    [text.l0Summary, text.l1Overview],
+    () => ({
+      l0: text.l0Summary,
+      l1: text.l1Overview,
+      failure: text.summaryFailed,
+    }),
+    [text.l0Summary, text.l1Overview, text.summaryFailed],
   );
 
   // 依赖 `labels` 而不是解析后的 `text`：后者每次渲染都是新对象，会让这个 memo

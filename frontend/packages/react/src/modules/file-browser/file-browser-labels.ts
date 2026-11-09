@@ -31,6 +31,7 @@ export const DEFAULT_LABELS: Required<ShellLabels> = {
   l0Summary: 'L0 Summary',
   l1Overview: 'L1 Overview',
   summaryEmpty: 'No summary generated yet',
+  summaryFailed: 'The summary could not be loaded.',
 };
 
 /** 解析后的外壳文案，外加透传给两个组件的文案。 */

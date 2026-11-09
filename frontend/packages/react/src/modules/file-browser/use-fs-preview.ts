@@ -43,7 +43,7 @@ export interface UseFsPreviewOptions {
    */
   resourceType?: 'directory' | 'file' | 'unknown';
   /** 目录两级摘要的标题。Titles of the two summary levels. */
-  labels?: { l0: string; l1: string };
+  labels?: { l0: string; l1: string; failure: string };
   /**
    * 打开路径上的某一级祖先。面包屑与目录页签共用它。
    * Opens one ancestor level; the breadcrumb and a directory tab share it.
@@ -73,7 +73,11 @@ export interface UseFsPreviewOptions {
  * A file reads its content and a directory reads its overview, falling back to the
  * abstract; both are Markdown and go through the same preview component.
  */
-const DEFAULT_SUMMARY_LABELS = { l0: 'L0 Summary', l1: 'L1 Overview' };
+const DEFAULT_SUMMARY_LABELS = {
+  l0: 'L0 Summary',
+  l1: 'L1 Overview',
+  failure: 'The summary could not be loaded.',
+};
 
 export function useFsPreview({
   client,

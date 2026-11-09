@@ -30,8 +30,15 @@ export interface UseFileBrowserOptions {
    * cannot tell the two apart and the mode has to be declared.
    */
   controlled?: boolean;
-  /** 目录两级摘要的标题。Titles of the two summary levels. */
-  summaryLabels?: { l0: string; l1: string };
+  /**
+   * 目录两级摘要的标题与失败兜底文案。两级摘要各自可能请求失败，失败且服务端没给
+   * 消息时用 `failure` 显示——它必须可替换，否则宿主无法本地化。
+   *
+   * Titles of the two summary levels and the fallback copy for a failure. Either level
+   * can fail; when it fails without a server message, `failure` is shown — it has to be
+   * replaceable, or a host cannot localise it.
+   */
+  summaryLabels?: { l0: string; l1: string; failure: string };
   /** 首次加载后自动展开到的路径。Path to expand to after the first load. */
   defaultExpandedUri?: string;
   currentUri: string | null;

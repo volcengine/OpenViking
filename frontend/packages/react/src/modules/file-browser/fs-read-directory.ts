@@ -21,7 +21,7 @@ export async function readDirectory(
   client: OvClient,
   uri: string,
   options: OvRequestOptions,
-  labels: { l0: string; l1: string },
+  labels: { l0: string; l1: string; failure: string },
   openParent?: (uri: string) => Promise<void>,
 ): Promise<FilePreviewDirectoryTab> {
   // 失败不吞：两级摘要各自可能为空（目录还没生成），但请求失败是另一回事，
