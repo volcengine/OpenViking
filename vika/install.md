@@ -2,6 +2,12 @@
 
 Install Vika and verify that it can receive and answer messages. See the [README](README.md) for an overview and the [configuration reference](docs/installation-reference.md) for advanced setup. The CLI command is `vika`.
 
+## Native Windows preview
+
+For a fresh Windows installation, the community-maintained [Windows setup wizard](docs/windows-preview.md#community-setup-wizard) combines installation and interactive configuration. It requires PowerShell 7 and a separately downloaded `-winsetup.zip`; the upstream Actions artifact alone does not contain that wizard. The reported tested combination is Durable, the DeepSeek API, and a self-hosted OpenViking service.
+
+The instructions below use the published **macOS / Linux / WSL2** installer. Native Windows users should follow the Windows guide instead, including its startup instructions.
+
 ## Prerequisites
 
 - **System:** macOS or Linux, x64 / arm64. On Windows, use WSL2 for this release, or try the experimental [Windows x64 preview package](docs/windows-preview.md), downloaded as a GitHub Actions artifact (sign-in required, kept for 14 days; not published to the release bucket). musl / Alpine is not supported. You need sh, curl, tar, and sha256sum (or shasum); Node, npm, PM2, and lark-cli need not be installed beforehand.
