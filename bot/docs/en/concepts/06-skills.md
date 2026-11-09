@@ -250,7 +250,7 @@ Subagents use local Workspace Skill summaries and Always content. They currently
 | Main Agent / subagent Skill context | `vikingbot/agent/context.py`, `vikingbot/agent/subagent.py` |
 | Request runtime, activation, policies, resources | `vikingbot/agent/remote_skills.py` |
 | Cache and Workspace initialization | `vikingbot/agent/remote_skill_cache.py`, `vikingbot/sandbox/manager.py` |
-| Tool batches, schemas, and calls | `vikingbot/agent/loop.py`, `vikingbot/agent/tools/registry.py` |
+| Tool batches, schemas, and calls | `vikingbot/agent/loop/loop.py`, `vikingbot/agent/loop/loop_tools.py`, `vikingbot/agent/tools/registry.py` |
 | Remote reads and Experience Hook | `vikingbot/agent/tools/ov_file.py`, `vikingbot/hooks/builtins/openviking_hooks.py` |
 | Configuration defaults | `vikingbot/config/schema.py` |
 | OpenViking frontmatter parsing | `openviking/core/skill_loader.py` at the repository root |

@@ -347,12 +347,25 @@ class SessionManager:
         *,
         skip_heartbeat: bool = False,
     ) -> tuple[Session, T]:
-        """Reload, mutate, and persist a session under a shared lock."""
+        """Reload, mutate, and persist under a shared lock, retaining the cached object."""
         async with self._get_lock(session_key):
-            self._cache.pop(session_key, None)
-            session = self.get_or_create(session_key, skip_heartbeat=skip_heartbeat)
-            result = updater(session)
-            self._save_unlocked(session)
+            cached = self._cache.pop(session_key, None)
+            try:
+                session = self.get_or_create(session_key, skip_heartbeat=skip_heartbeat)
+                result = updater(session)
+                self._save_unlocked(session)
+            except BaseException:
+                self._cache.pop(session_key, None)
+                if cached is not None:
+                    self._cache[session_key] = cached
+                raise
+            if cached is not None:
+                cached.messages = session.messages
+                cached.metadata = session.metadata
+                cached.created_at = session.created_at
+                cached.updated_at = session.updated_at
+                session = cached
+                self._cache[session_key] = cached
             return session, result
 
     @classmethod

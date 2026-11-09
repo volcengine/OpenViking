@@ -250,7 +250,7 @@ metadata: '{"vikingbot":{"requires":{"bins":["python3"]}}}'
 | 主 Agent / 子 Agent 的 Skill 上下文 | `vikingbot/agent/context.py`、`vikingbot/agent/subagent.py` |
 | 请求运行时、激活、策略与资源解析 | `vikingbot/agent/remote_skills.py` |
 | 缓存与工作区初始化 | `vikingbot/agent/remote_skill_cache.py`、`vikingbot/sandbox/manager.py` |
-| 工具批次、Schema 与调用处理 | `vikingbot/agent/loop.py`、`vikingbot/agent/tools/registry.py` |
+| 工具批次、Schema 与调用处理 | `vikingbot/agent/loop/loop.py`、`vikingbot/agent/loop/loop_tools.py`、`vikingbot/agent/tools/registry.py` |
 | 远程读取与 Experience Hook | `vikingbot/agent/tools/ov_file.py`、`vikingbot/hooks/builtins/openviking_hooks.py` |
 | 配置默认值 | `vikingbot/config/schema.py` |
 | OpenViking frontmatter 解析 | 仓库根目录 `openviking/core/skill_loader.py` |

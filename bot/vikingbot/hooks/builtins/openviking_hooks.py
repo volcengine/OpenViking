@@ -262,6 +262,10 @@ class OpenVikingCompactHook(Hook):
                 vikingbot_session.messages,
                 user_id=client.session_owner_user_id(),
             )
+            if hasattr(vikingbot_session, "metadata"):
+                state = get_openviking_state(vikingbot_session)
+                state["last_sync_status"] = "success"
+                state.pop("last_sync_error", None)
             return {
                 "success": True,
                 "admin_result": admin_result,
