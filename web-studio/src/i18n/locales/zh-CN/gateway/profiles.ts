@@ -28,6 +28,8 @@ const profiles = {
     agentWindowsOn: 'Agent 自管窗口',
     toolsEnabled_one: '已启用 {{count}} 个工具',
     toolsEnabled_other: '已启用 {{count}} 个工具',
+    sealOn: '以引用发送',
+    unsealOn: '引用 · 工具调用中填入真值',
   },
   deleteDialog: {
     title: '删除“{{name}}”？',
@@ -229,6 +231,16 @@ const profiles = {
       label: 'Token 预算',
       description:
         '一次请求中，工具调用和结果最多增加的 Token 数（估算值）。用完后，网关拒绝后续的 OpenViking 调用，模型用已有结果和客户端自己的工具继续。留空表示不限。',
+    },
+  },
+  credentials: {
+    title: '封存凭据',
+    description:
+      '发给模型的所有内容里，在 OpenViking Privacy 登记的凭据都换成对应的引用，也不再提供 privacy_resolve 工具。对进行中的对话同样生效。读取不到凭据时，请求会失败。',
+    unseal: {
+      label: '在工具调用中填入真值',
+      description:
+        '在客户端执行的工具调用里把引用换成真实值，模型不必看到凭据也能使用它。真值会因此留在客户端的对话记录中。',
     },
   },
 }

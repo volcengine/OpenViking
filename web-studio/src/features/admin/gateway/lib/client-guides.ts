@@ -424,6 +424,7 @@ export const DOCS_SECTIONS = {
   profiles: { page: 'profiles', id: 'context-profiles' },
   recall: { page: 'profiles', id: 'recall-memory' },
   capture: { page: 'profiles', id: 'save-conversations' },
+  sealCredentials: { page: 'profiles', id: 'seal-credentials' },
   clientOverrides: { page: 'profiles', id: 'client-overrides' },
   // Gateway keys
   keys: { page: 'keys', id: 'gateway-keys' },

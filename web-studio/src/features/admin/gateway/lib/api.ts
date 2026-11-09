@@ -137,6 +137,10 @@ export type ProfileSettings = {
   tool_result_bytes: number
   tool_total_seconds: number | null
   tool_total_tokens: number | null
+  /** Registered credentials go upstream as references; applies to ongoing conversations too. */
+  seal_secrets: boolean
+  /** Client tool calls get the values of their references; needs `seal_secrets`. */
+  unseal_tool_calls: boolean
   /** Clients may override the other settings with `X-OpenViking-Context`. */
   client_overrides: boolean
 }

@@ -33,6 +33,7 @@ from .management import (
 )
 from .protocols import configure_rules
 from .proxy import ProxyRequest, filtered_headers, resolve_binding
+from .secret_guard import Secrets
 from .storage import (
     AsyncCodec,
     CachedManagement,
@@ -149,6 +150,7 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
             ) as http:
                 app.state.http = http
                 app.state.viking = VikingClient(http, openviking_url, config.min_server_version)
+                app.state.secrets = Secrets(app.state.viking)
                 app.state.kernel = MemoryKernel(store, app.state.viking)
                 app.state.worker = CaptureWorker(store, management, app.state.viking)
                 # The first probe runs in the background: an embedded server is not listening yet.

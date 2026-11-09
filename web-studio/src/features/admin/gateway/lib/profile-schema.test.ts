@@ -39,6 +39,8 @@ describe('toProfileSettings', () => {
     const stored = profile({
       quotas: { resources: 200 },
       context_window: 128000,
+      seal_secrets: true,
+      unseal_tool_calls: true,
     })
     expect(toProfileSettings(stored)).toEqual(stored)
   })

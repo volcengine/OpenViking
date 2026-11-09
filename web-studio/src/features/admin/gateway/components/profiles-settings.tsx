@@ -2,6 +2,7 @@ import { useReadOnly } from '#/features/admin/gateway/components/read-only'
 import type { LucideIcon } from 'lucide-react'
 import {
   BrainIcon,
+  LockKeyholeIcon,
   SaveIcon,
   ScrollTextIcon,
   WrenchIcon,
@@ -48,12 +49,13 @@ import type {
   ValidationErrors,
 } from '#/features/admin/gateway/lib/validation'
 
-/** The four groups of a context profile, in page order. */
+/** The groups of a context profile, in page order. */
 export type ProfileSection =
   | 'recall'
   | 'capture'
   | 'longConversations'
   | 'tools'
+  | 'credentials'
 
 export const PROFILE_SECTIONS: Array<{ id: ProfileSection; icon: LucideIcon }> =
   [
@@ -61,6 +63,7 @@ export const PROFILE_SECTIONS: Array<{ id: ProfileSection; icon: LucideIcon }> =
     { id: 'capture', icon: SaveIcon },
     { id: 'longConversations', icon: ScrollTextIcon },
     { id: 'tools', icon: WrenchIcon },
+    { id: 'credentials', icon: LockKeyholeIcon },
   ]
 
 /** Element id of a section card, for the editor's section navigation. */
@@ -80,6 +83,8 @@ export function isSectionOn(
       return settings.compaction || settings.agent_windows
     case 'tools':
       return settings.gateway_tools
+    case 'credentials':
+      return settings.seal_secrets
   }
 }
 
@@ -285,7 +290,7 @@ type ProfileSettingsFormProps = {
 }
 
 /**
- * The four setting sections of a context profile. Settings of a section are
+ * The setting sections of a context profile. Settings of a section are
  * hidden while its switch is off; every other field of `value` is left as is.
  */
 export function ProfileSettingsForm({
@@ -654,6 +659,33 @@ export function ProfileSettingsForm({
           description={t('profiles.tools.showCalls.description')}
           checked={value.show_tool_calls}
           onCheckedChange={(show_tool_calls) => onChange({ show_tool_calls })}
+        />
+      </SettingSection>
+
+      <SettingSection
+        id={sectionAnchor('credentials')}
+        {...validity('credentials')}
+        icon={<LockKeyholeIcon />}
+        title={t('profiles.credentials.title')}
+        description={t('profiles.credentials.description')}
+        docs="sealCredentials"
+        checked={value.seal_secrets}
+        // The gateway accepts unsealing only while credentials are sealed.
+        onCheckedChange={(seal_secrets) =>
+          onChange({
+            seal_secrets,
+            unseal_tool_calls: seal_secrets && value.unseal_tool_calls,
+          })
+        }
+      >
+        <ToggleRow
+          id="profile-unseal_tool_calls"
+          label={t('profiles.credentials.unseal.label')}
+          description={t('profiles.credentials.unseal.description')}
+          checked={value.unseal_tool_calls}
+          onCheckedChange={(unseal_tool_calls) =>
+            onChange({ unseal_tool_calls })
+          }
         />
       </SettingSection>
     </>

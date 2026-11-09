@@ -170,7 +170,7 @@ In `gateway.conf`, `client_rules` sits at the root, without the `gateway` wrappe
 
 ## Context profile settings {#context-profile-settings}
 
-In Studio: **Profiles** → a profile. The tables follow the editor's sections, with the Studio label first and then the name in the management API, which calls context profiles `policies`. **Name** (`name`, default `Default`) is the profile's display name; what each section does is explained in [Context profiles](08-context-profiles.md#context-profiles). **Let clients override settings** (`client_overrides`, default `true`) lets clients change every other setting for a new conversation with the `X-OpenViking-Context` header; see [Let clients override settings](08-context-profiles.md#client-overrides).
+In Studio: **Profiles** → a profile. The tables follow the editor's sections, with the Studio label first and then the name in the management API, which calls context profiles `policies`. **Name** (`name`, default `Default`) is the profile's display name; what each section does is explained in [Context profiles](08-context-profiles.md#context-profiles). **Let clients override settings** (`client_overrides`, default `true`) lets clients change every other setting except the [credential switches](#profile-credentials) for a new conversation with the `X-OpenViking-Context` header; see [Let clients override settings](08-context-profiles.md#client-overrides).
 
 ### Recall memory {#profile-recall}
 
@@ -233,6 +233,15 @@ Explained in [Choose tools](04-openviking-tools.md#choose-tools) and [Limits](04
 | Token budget | `tool_total_tokens` | `null` (no limit) | 1,024 or more | Estimated tokens tool calls and results may add to one request before further OpenViking calls are refused. |
 
 API requests that omit `disabled_tools` get the default list; an empty list with `gateway_tools` on offers every available tool.
+
+### Seal credentials {#profile-credentials}
+
+Explained in [Seal credentials](08-context-profiles.md#seal-credentials). Both apply to ongoing conversations too, and `X-OpenViking-Context` cannot set them.
+
+| Studio label | API name | Default | Range | Meaning |
+| --- | --- | --- | --- | --- |
+| Seal credentials | `seal_secrets` | `false` | | Replace registered credentials with their references in everything sent upstream; `privacy_resolve` is not offered. |
+| Put values in tool calls | `unseal_tool_calls` | `false` | Needs `seal_secrets` | Replace the user's references with their values in the tool calls the client runs. |
 
 ## Upstream settings {#upstream-settings}
 

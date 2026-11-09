@@ -77,6 +77,7 @@ The log holds metadata only, never message content. A record is written when a r
 | `capture_status`, `capture_reason`, `capture_retry_at` | Saving status (`active`, `disabled`, `retrying` or `paused`), its reason, and the next retry in epoch seconds; see [Saving status](../gateway/10-overview-and-requests.md#saving-status) |
 | `tool_skip_reason` | Why the request got no OpenViking tools; see [When tools are not offered](../gateway/04-openviking-tools.md#when-tools-are-not-offered) |
 | `tool_stop_reason` | `token_budget` when the tool token budget refused further calls; see [Limits](../gateway/04-openviking-tools.md#limits) |
+| `secrets_sealed`, `secrets_sealed_egress`, `secrets_unsealed` | Credential values sealed in the client's request, values sealed in what the gateway added before sending (memory, summaries, tool results), and references unsealed in tool calls returned to the client; see [Seal credentials](../gateway/08-context-profiles.md#seal-credentials) |
 | `compaction_failed` | Why compaction failed (with `still_over_threshold` the summary was kept); see [Long conversations hit the context limit](../gateway/12-troubleshooting.md#long-conversations-hit-the-context-limit) |
 | `context_tokens`, `context_window` | Estimated context size, and the window it was compared with |
 | `input_tokens`, `output_tokens`, `cached_tokens`, `cache_write_tokens` | Token usage summed over every provider call of the request, OpenViking tool rounds included. `input_tokens` includes cached and cache-write tokens. |

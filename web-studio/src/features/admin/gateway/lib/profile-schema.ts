@@ -60,6 +60,8 @@ export const PROFILE_DEFAULTS: ProfileSettings = {
   tool_result_bytes: 65536,
   tool_total_seconds: null,
   tool_total_tokens: null,
+  seal_secrets: false,
+  unseal_tool_calls: false,
   client_overrides: true,
 }
 

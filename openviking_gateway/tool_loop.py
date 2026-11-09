@@ -27,8 +27,11 @@ def added_tokens(value):
 
 
 class HiddenToolLoop:
-    def __init__(self, prepared, executor, store, capture):
+    def __init__(self, prepared, executor, store, capture, unseal=None):
         self.prepared, self.executor, self.store, self.capture = prepared, executor, store, capture
+        # Only the client's copy of its calls gets values; visible history, the final and
+        # capture keep references, which the client's next request is matched by.
+        self.unseal = unseal or (lambda value: (value, 0))
         self.protocol = prepared.protocol
         self.adapter = tool_protocol(self.protocol)(prepared.body)
         self.body = {
@@ -43,7 +46,8 @@ class HiddenToolLoop:
         self.deadline = time.monotonic() + seconds if prepared.tools_active and seconds else None
         self.adapter.lead_with(prepared.reply_lead)
         self.transcript, self.usage, self.counted = [], {}, {}
-        self.final, self.hidden, self.window = None, False, None
+        # ``reply`` is the final as the client receives it.
+        self.final, self.reply, self.hidden, self.window = None, None, False, None
         self.rounds, self.token_cost, self.refused = 0, 0, False
         self.round = ToolRound([], [], {}, False)
 
@@ -268,12 +272,16 @@ class HiddenToolLoop:
                             raise ToolLoopError("Gateway tool call has an invalid stop reason")
                         async for event in self.execute(owned):
                             yield event
-                    for event in self.stream(self.adapter.publish_calls(client)):
+                    published, _ = self.unseal(self.adapter.publish_calls(client))
+                    for event in self.stream(published):
                         yield event
                     if client or not owned:
                         await self.persist()
+                        self.reply, unsealed = self.unseal(self.final)
+                        if unsealed:
+                            self.prepared.metrics["secrets_unsealed"] = unsealed
                         if self.body.get("stream"):
-                            for event in self.adapter.terminal(self.final):
+                            for event in self.adapter.terminal(self.reply):
                                 yield self.adapter.encode(event)
                         return
                     remaining = self.deadline and max(0.01, self.deadline - time.monotonic())

@@ -19,9 +19,11 @@ from pydantic import ValidationError
 from starlette.background import BackgroundTask
 
 from .capture import CapturePipeline
+from .client import VikingError
 from .models import KEY_PLACEHOLDER, Policy, validation_detail
 from .protocols import HEARTBEAT_SECONDS, SSEDecoder, heartbeat, parse_body
 from .storage import digest
+from .tool_catalog import reply_block_reason
 from .tool_executor import ToolExecutor
 from .tool_loop import HiddenToolLoop, ToolLoopError
 from .tool_protocols import ResponseCapture, tool_protocol
@@ -133,6 +135,11 @@ def context_error(detail, status=400, reason="context_override_invalid"):
     return HTTPException(status, {"reason": reason, "detail": detail})
 
 
+# Not per-conversation settings: the profile's name, its switch for the header, and
+# sealing, which a client must not turn off.
+FIXED_FIELDS = {"name", "client_overrides", "seal_secrets", "unseal_tool_calls"}
+
+
 def context_override(policy, header):
     """The stored policy with the fields of an ``X-OpenViking-Context`` header applied."""
     if not policy.get("client_overrides", True):
@@ -147,8 +154,7 @@ def context_override(policy, header):
         raise context_error("X-OpenViking-Context is not valid JSON")
     if not isinstance(override, dict):
         raise context_error("X-OpenViking-Context must be a JSON object")
-    # The profile's name and its switch are not per-conversation settings.
-    if blocked := override.keys() & {"name", "client_overrides"}:
+    if blocked := override.keys() & FIXED_FIELDS:
         raise context_error("X-OpenViking-Context cannot set " + ", ".join(sorted(blocked)))
     try:
         merged = Policy.model_validate({**policy, **override}).model_dump()
@@ -250,7 +256,7 @@ class ProxyRequest:
                 self.path = "/v1/" + self.path.removeprefix(prefix)
                 break
         self.protocol = PATH_PROTOCOL.get(self.path)
-        self.prepared = None
+        self.prepared = self.catalog = None
         self.metrics = {"request_id": uuid.uuid4().hex, "kind": "passthrough"}
 
     async def run(self):
@@ -265,7 +271,10 @@ class ProxyRequest:
         self.body = await asyncio.to_thread(parse_body, self.raw) if raw else None
         original = self.body
         await self.route()
+        await self.seal_request()
         await self.prepare()
+        # What the kernel added, such as recall or replayed history, may still hold values.
+        self.body = await self.seal(self.body)
         if self.body != original:
             self.raw = await asyncio.to_thread(orjson.dumps, self.body)
         self.target = self.url(self.upstream)
@@ -286,14 +295,15 @@ class ProxyRequest:
             raise HTTPException(502, "Model upstream is unavailable")
         self.metrics.update(status=self.response.status, upstream_id=self.upstream["id"])
         self.capture = ResponseCapture(self.protocol or self.upstream["protocol"])
-        # Only the tool loop rewrites a reply, so the recall notice goes through it too.
+        unseal = self.unsealer()
+        # Only the tool loop rewrites a reply, so the recall notice and unsealing go through it.
         if (
             self.prepared
-            and (self.prepared.tools_active or self.prepared.reply_lead)
+            and (self.prepared.tools_active or self.prepared.reply_lead or unseal)
             and self.response.status < 300
             and not self.path.endswith("count_tokens")
         ):
-            return await self.tool_response()
+            return await self.tool_response(unseal)
         return await self.observe_response()
 
     async def route(self):
@@ -359,6 +369,37 @@ class ProxyRequest:
         if all(u.get("auth_mode") == "passthrough" for u in candidates):
             upstream_key(self.upstream, self.request.headers)
 
+    async def seal_request(self):
+        """Seal the client's request before anything reads it, or refuse one it cannot."""
+        if not (self.policy and self.policy.get("seal_secrets")):
+            return
+        try:
+            self.catalog = await self.app.state.secrets.catalog(self.credential["openviking_key"])
+        except VikingError:
+            raise HTTPException(
+                503,
+                {
+                    "reason": "secrets_unavailable",
+                    "detail": "OpenViking credentials could not be read to seal this request.",
+                },
+            )
+        if not (self.catalog and self.raw):
+            return
+        if self.request.headers.get("content-encoding", "identity").lower() != "identity":
+            raise HTTPException(415, "Compressed request bodies are not supported")
+        if self.body is None and self.protocol:
+            raise HTTPException(400, "Request body is not a JSON object the gateway can seal")
+        self.body = await self.seal(self.body, "secrets_sealed")
+
+    async def seal(self, body, metric="secrets_sealed_egress"):
+        """``body`` with registered credentials sealed, counting them in ``metric``."""
+        if not (self.catalog and body):
+            return body
+        body, count = await asyncio.to_thread(self.catalog.seal, body)
+        if count:
+            self.metrics[metric] = self.metrics.get(metric, 0) + count
+        return body
+
     async def prepare(self):
         if (
             self.protocol
@@ -416,7 +457,7 @@ class ProxyRequest:
         try:
             async with self.app.state.http.post(
                 target,
-                data=orjson.dumps(body),
+                data=orjson.dumps(await self.seal(body)),
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=self.config.upstream_timeout_seconds),
                 allow_redirects=False,
@@ -486,7 +527,23 @@ class ProxyRequest:
         except Exception:
             logger.exception("OpenViking Gateway response bookkeeping failed")
 
-    async def tool_response(self):
+    def unsealer(self):
+        """The catalog's ``unseal`` when the live profile opens this reply's client calls."""
+        prepared = self.prepared
+        if (
+            self.catalog
+            and self.policy.get("unseal_tool_calls")
+            and prepared
+            # With a plugin, its runner unseals where the command runs.
+            and not prepared.disabled
+            # A request without tools gets no calls, so its reply is relayed as it is.
+            and prepared.original.get("tools")
+            and not reply_block_reason(prepared.original)
+        ):
+            return self.catalog.unseal
+        return None
+
+    async def tool_response(self, unseal=None):
         response, prepared, capture = self.response, self.prepared, self.capture
         executor = ToolExecutor(
             self.app.state.viking,
@@ -497,7 +554,7 @@ class ProxyRequest:
             self.config.max_body_bytes,
             self.config.mcp_file_links,
         )
-        loop = HiddenToolLoop(prepared, executor, self.store, capture)
+        loop = HiddenToolLoop(prepared, executor, self.store, capture, unseal)
         headers = {
             k.lower(): v
             for k, v in filtered_headers(response.headers).items()
@@ -508,7 +565,7 @@ class ProxyRequest:
             # Without a total tool deadline each continuation gets the usual upstream timeout.
             return await self.app.state.http.post(
                 self.target,
-                data=orjson.dumps(payload),
+                data=orjson.dumps(await self.seal(payload)),
                 headers=self.headers,
                 timeout=aiohttp.ClientTimeout(
                     total=timeout or self.config.upstream_timeout_seconds
@@ -569,7 +626,7 @@ class ProxyRequest:
         self.metrics.update(prepared.metrics)
         await self.relay()
         return Response(
-            orjson.dumps(loop.final),
+            orjson.dumps(loop.reply),
             headers=headers,
             media_type="application/json",
             background=BackgroundTask(self.finish),
