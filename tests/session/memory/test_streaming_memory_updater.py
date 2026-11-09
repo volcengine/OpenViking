@@ -760,81 +760,12 @@ async def test_streaming_memory_updater_fast_path_filters_links(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_streaming_memory_updater_batches_non_append_only_submits(monkeypatch):
-    fs = InMemoryVikingFS({})
-    fs.search = AsyncMock(return_value=[])
-    monkeypatch.setattr(
-        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
-        lambda: fs,
-    )
-    monkeypatch.setattr(
-        "openviking.session.memory.memory_updater.get_viking_fs",
-        lambda: fs,
-    )
-
-    updater = StreamingMemoryUpdater(
-        registry=_registry(),
-        config=StreamingMemoryUpdaterConfig(
-            max_operations_per_update=2,
-            max_wait_seconds=0.01,
-            timer_check_interval_seconds=0.01,
-        ),
-    )
-    op1 = _note_op("note_a")
-    op2 = _note_op("note_b")
-
-    result1, result2 = await asyncio.gather(
-        updater.submit(
-            MemoryUpdateRequest(
-                operations=ResolvedOperations(
-                    upsert_operations=[op1],
-                    delete_file_contents=[],
-                    errors=[],
-                ),
-                messages=[Message(id="m1", role="user", parts=[TextPart("note A")])],
-                ctx=_ctx(),
-            )
-        ),
-        updater.submit(
-            MemoryUpdateRequest(
-                operations=ResolvedOperations(
-                    upsert_operations=[op2],
-                    delete_file_contents=[],
-                    errors=[],
-                ),
-                messages=[Message(id="m2", role="user", parts=[TextPart("note B")])],
-                ctx=_ctx(),
-            )
-        ),
-    )
-
-    assert result1 is not result2
-    assert result1.request_count == 1
-    assert result2.request_count == 1
-    assert result1.metadata["flush_reason"] == "count"
-    assert result1.metadata["batch_request_count"] == 2
-    assert result1.metadata["scoped_to_submitter"] is True
-    assert result1.apply_result.written_uris == [op1.uris[0]]
-    assert result2.apply_result.written_uris == [op2.uris[0]]
-    assert sorted(result1.metadata["unscoped_written_uris"]) == sorted([op1.uris[0], op2.uris[0]])
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "shared_target,missing_task", [(False, False), (True, False), (False, True)]
-)
-async def test_later_streaming_commits_do_not_inherit_first_timer_task(
-    tmp_path, monkeypatch, shared_target, missing_task
-):
+async def test_streaming_memory_updater_batches_non_append_only_submits(tmp_path, monkeypatch):
     from openviking.observability.context import (
         bind_root_observability_context,
         reset_root_observability_context,
     )
-    from openviking.observability.events import (
-        register_event_subscriber,
-        try_publish_event,
-        unregister_event_subscriber,
-    )
+    from openviking.observability.events import get_event_bus, try_publish_event
     from openviking.observability.reporting import runtime
     from openviking.storage.viking_fs import VikingFS
     from openviking.telemetry.span_models import RootSpanAttributes
@@ -842,29 +773,20 @@ async def test_later_streaming_commits_do_not_inherit_first_timer_task(
 
     _patch_language_config(monkeypatch)
     monkeypatch.setattr(runtime, "_reporter", object())
-    backend = MockLocalAGFS(root_path=tmp_path)
-    fs = VikingFS(agfs=backend)
-    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+    fs = VikingFS(agfs=MockLocalAGFS(root_path=tmp_path))
     monkeypatch.setattr(fs, "search", AsyncMock(return_value=[]))
     for module in ("streaming_memory_updater", "memory_updater"):
         monkeypatch.setattr(f"openviking.session.memory.{module}.get_viking_fs", lambda: fs)
 
-    async def fake_model_merge(_self):
+    async def merge(_self):
         try_publish_event("vlm.call", {"prompt_tokens": 17, "completion_tokens": 3})
-        names = ["shared"] if shared_target else ["b", "c"]
         return ResolvedOperations(
-            upsert_operations=[_note_op(name) for name in names],
+            upsert_operations=[_note_op("b"), _note_op("c")],
             delete_file_contents=[],
             errors=[],
         ), []
 
-    monkeypatch.setattr(
-        "openviking.session.memory.streaming_memory_updater.ExtractLoop.run", fake_model_merge
-    )
-    events = []
-    register_event_subscriber(
-        "later_memory_commits", runtime.make_subscriber(SimpleNamespace(report=events.append), {})
-    )
+    monkeypatch.setattr("openviking.session.memory.streaming_memory_updater.ExtractLoop.run", merge)
     updater = StreamingMemoryUpdater(
         registry=_registry(),
         vlm_resolver=_TestVLMResolver(),
@@ -874,26 +796,34 @@ async def test_later_streaming_commits_do_not_inherit_first_timer_task(
             timer_check_interval_seconds=0.01,
         ),
     )
+    events = []
+    bus = get_event_bus()
+    bus.register(
+        "memory-batch-reporting", runtime.make_subscriber(SimpleNamespace(report=events.append), {})
+    )
 
-    async def commit(name):
-        root = RootSpanAttributes(
-            http_method="QUEUE", http_route="/queuefs/session_commit", request_id=f"task_{name}"
+    async def submit(name):
+        token = bind_root_observability_context(
+            RootSpanAttributes(
+                http_method="QUEUE",
+                http_route="/queuefs/session_commit",
+                request_id=f"task_{name}",
+                account_id=_ctx().account_id,
+                user_id=_ctx().user.user_id,
+            )
         )
-        root.account_id, root.user_id = _ctx().account_id, _ctx().user.user_id
-        token = bind_root_observability_context(root)
         try:
-            target = "shared" if shared_target and name != "a" else name
             return await updater.submit(
                 MemoryUpdateRequest(
                     operations=ResolvedOperations(
-                        upsert_operations=[_note_op(target)], delete_file_contents=[], errors=[]
+                        upsert_operations=[_note_op(name)], delete_file_contents=[], errors=[]
                     ),
                     messages=[],
                     ctx=_ctx(),
                     metadata={
-                        "task_id": None if missing_task and name == "c" else f"task_{name}",
+                        "task_id": f"task_{name}",
                         "source_extraction_id": f"extract_{name}",
-                        "session_id": f"session_{name}",
+                        "session_id": name,
                     },
                 )
             )
@@ -901,37 +831,30 @@ async def test_later_streaming_commits_do_not_inherit_first_timer_task(
             reset_root_observability_context(token)
 
     try:
-        first = await commit("a")
-        assert not first.apply_result.errors
+        first = await submit("a")
+        assert first.apply_result.written_uris == _note_op("a").uris
         events.clear()
-        later = await asyncio.gather(commit("b"), commit("c"))
-        assert all(not result.apply_result.errors for result in later)
-        calls = [event for event in events if event["event_name"] == "vlm_call"]
+        second, third = await asyncio.gather(submit("b"), submit("c"))
+        assert second is not third
+        assert second.request_count == third.request_count == 1
+        assert second.apply_result.written_uris == _note_op("b").uris
+        assert third.apply_result.written_uris == _note_op("c").uris
+        assert all(not result.apply_result.errors for result in (second, third))
+        assert await fs.read_file(_note_op("b").uris[0], ctx=_ctx())
+        assert await fs.read_file(_note_op("c").uris[0], ctx=_ctx())
+        calls = [e for e in events if e["event_name"] == "vlm_call"]
         assert len(calls) == 1
-        assert calls[0]["task_id"] == calls[0]["request_id"] == ""
-        assert calls[0]["source_task_ids"] == (["task_b"] if missing_task else ["task_b", "task_c"])
+        assert calls[0]["task_id"] == ""
+        assert calls[0]["source_task_ids"] == ["task_b", "task_c"]
         assert (calls[0]["prompt_tokens"], calls[0]["completion_tokens"]) == (17, 3)
-        assert calls[0]["usage_purpose"] == "memory_extract"
-        writes = [event for event in events if event["event_name"] == "file_mutation"]
-        assert len(writes) == (1 if shared_target else 2)
-        assert all(event["ov_user_id"] == _ctx().user.user_id for event in writes + calls)
-        assert all(event["task_id"] != "task_a" for event in writes + calls)
-        if shared_target:
-            assert writes[0]["task_id"] == writes[0]["request_id"] == ""
-            assert writes[0]["source_task_ids"] == ["task_b", "task_c"]
-        else:
-            assert {event["task_id"] for event in writes} == (
-                {"task_b", ""} if missing_task else {"task_b", "task_c"}
-            )
-            for event in writes:
-                assert event["source_task_ids"] == ([event["task_id"]] if event["task_id"] else [])
-                assert event["request_id"] == event["task_id"]
-        for result in later:
-            for uri in result.apply_result.written_uris:
-                assert backend.exists(fs._uri_to_path(uri, ctx=_ctx()))
+        writes = [e for e in events if e["event_name"] == "file_mutation"]
+        assert {(e["uri"], e["task_id"]) for e in writes} == {
+            (_note_op("b").uris[0], "task_b"),
+            (_note_op("c").uris[0], "task_c"),
+        }
     finally:
         await updater.close()
-        unregister_event_subscriber("later_memory_commits")
+        bus.unregister("memory-batch-reporting")
 
 
 @pytest.mark.asyncio

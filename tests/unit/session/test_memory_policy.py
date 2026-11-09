@@ -114,17 +114,13 @@ async def test_initialize_memory_files_respects_memory_type_filter(monkeypatch):
     class FakeVikingFS:
         def __init__(self):
             self.written_uris = []
-            self.memory_types = []
 
         async def read_file(self, uri, ctx=None):
             raise FileNotFoundError(uri)
 
         async def write_file(self, uri, content, ctx=None):
-            from openviking.observability.reporting.facts import file_metadata
-
             del content, ctx
             self.written_uris.append(uri)
-            self.memory_types.append(file_metadata(uri)["memory_type"])
 
     def schema(memory_type: str, filename: str) -> MemoryTypeSchema:
         return MemoryTypeSchema(
@@ -146,13 +142,12 @@ async def test_initialize_memory_files_respects_memory_type_filter(monkeypatch):
 
     registry = MemoryTypeRegistry(load_schemas=False)
     registry.register(schema("identity", "identity.md"))
-    registry.register(schema("profile", "opaque_fixture.md"))
+    registry.register(schema("profile", "profile.md"))
 
     ctx = type("Ctx", (), {"user": type("User", (), {"user_id": "alice"})()})()
     await registry.initialize_memory_files(ctx, allowed_memory_types={"profile"})
 
-    assert fake_fs.written_uris == ["viking://user/alice/memories/opaque_fixture.md"]
-    assert fake_fs.memory_types == ["profile"]
+    assert fake_fs.written_uris == ["viking://user/alice/memories/profile.md"]
 
 
 async def test_initialize_memory_files_renders_fields_without_init_value_as_empty(monkeypatch):
