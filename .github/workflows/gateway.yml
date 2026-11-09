@@ -1,7 +1,7 @@
 name: OpenViking Gateway
 on:
   pull_request:
-    paths: ["openviking_gateway/**", "tests/gateway/**", "scripts/gateway_*", "tests/fixtures/gateway_upstream_urls.json", "openviking_cli/utils/config/openviking_gateway_config.py", "openviking_cli/utils/config/encryption_config.py", "openviking_cli/utils/config/agfs_config.py", "openviking/server/account_stores/redis_client.py", "pyproject.toml", "MANIFEST.in", "openviking_cli/setup_wizard.py", "openviking/crypto/**", ".github/workflows/gateway.yml"]
+    paths: ["openviking_gateway/**", "tests/gateway/**", "scripts/gateway_*", "tests/fixtures/gateway_upstream_urls.json", "openviking_cli/utils/config/openviking_gateway_config.py", "openviking_cli/utils/config/encryption_config.py", "openviking_cli/utils/config/agfs_config.py", "openviking/server/account_stores/redis_client.py", "pyproject.toml", "uv.lock", "MANIFEST.in", "openviking_cli/setup_wizard.py", "openviking/crypto/**", ".github/workflows/gateway.yml"]
   workflow_dispatch:
 jobs:
   test:

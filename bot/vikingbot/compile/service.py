@@ -17,6 +17,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Mapping
 
+from async_timeout import timeout
 from loguru import logger
 from pydantic import TypeAdapter
 
@@ -1162,13 +1163,13 @@ class BotCompileService:
                     rendered = await resume_pipeline(pipeline)
                 else:
                     rendered = await pipeline.run(source_batches())
-            except (CompileFailure, TimeoutError) as exc:
+            except (CompileFailure, TimeoutError, asyncio.TimeoutError) as exc:
                 if not pipeline.artifacts or getattr(exc, "code", None) == "SKILL_REPAIR_FAILED":
                     raise
                 pipeline.warnings.append(
                     f"Partial output; Compile did not finish: {str(exc)[:500]}"
                 )
-                async with asyncio.timeout(self.limits.salvage_grace_seconds):
+                async with timeout(self.limits.salvage_grace_seconds):
                     rendered = await finalize_op.run(
                         pipeline, list(dict.fromkeys(pipeline.artifacts))
                     )

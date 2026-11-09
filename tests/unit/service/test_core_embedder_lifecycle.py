@@ -74,6 +74,7 @@ async def test_service_waits_for_account_embedder_before_closing_storage(monkeyp
     service._watch_runtime = None
     service._watch_manager = None
     service._session_auto_commit_scheduler = None
+    service._session_service = None
     service._queue_manager = _QueueManager()
     service._vikingdb_manager = _VikingDBManager()
     service._agfs_client = None

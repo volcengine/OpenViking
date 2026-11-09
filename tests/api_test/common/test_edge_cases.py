@@ -121,7 +121,18 @@ class TestContentEdgeCases:
             mkdir_resp = api_client.fs_mkdir(test_uri.rsplit("/", 1)[0])
             assert mkdir_resp.status_code == 200
 
-            write_resp = api_client.fs_write(test_uri, "", mode="create", wait=True)
+            for attempt in range(api_client.max_retries):
+                write_resp = api_client.fs_write(test_uri, "", mode="create", wait=True)
+                if write_resp.status_code != 409:
+                    break
+                details = (write_resp.json().get("error") or {}).get("details") or {}
+                if (
+                    details.get("conflict_type") != "path_busy"
+                    or details.get("retryable") is not True
+                    or attempt == api_client.max_retries - 1
+                ):
+                    break
+                time.sleep(api_client.retry_delay * (attempt + 1))
             assert write_resp.status_code == 200, (
                 f"write empty content with create mode should return 200, got {write_resp.status_code}: {write_resp.text[:200]}"
             )

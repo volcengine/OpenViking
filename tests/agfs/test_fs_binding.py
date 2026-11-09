@@ -79,6 +79,7 @@ class TestVikingFSBindingLocal:
                 "plugin",
                 "operation",
                 "status",
+                "error_kind",
                 "kind",
                 "result",
                 "source",
