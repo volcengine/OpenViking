@@ -63,6 +63,7 @@ from openviking.session.checkpoints import (
 )
 from openviking.session.extraction_batch import (
     ExtractionBatchLimits,
+    bound_oversized_extraction_messages,
     estimate_extraction_message_tokens,
     plan_extraction_batches,
     resolve_extraction_batch_limits,
@@ -2547,6 +2548,14 @@ class Session:
             Awaitable[Any],
         ],
     ) -> Any:
+        messages, trimmed = bound_oversized_extraction_messages(messages, limits)
+        if trimmed:
+            logger.warning(
+                "Trimmed %s over-ceiling message(s) to the extraction prompt budget "
+                "(%s estimated tokens) so the model receives a request it can answer",
+                trimmed,
+                limits.max_message_tokens,
+            )
         batches = plan_extraction_batches(messages, limits)
         if not batches:
             return []

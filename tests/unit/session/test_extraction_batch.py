@@ -6,11 +6,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.message import Message, TextPart
+from openviking.message import Message, TextPart, ToolPart
 from openviking.models.vlm.base import ToolCall, VLMResponse
 from openviking.session.checkpoints import CheckpointRequest
 from openviking.session.extraction_batch import (
     ExtractionBatchLimits,
+    bound_oversized_extraction_messages,
+    estimate_extraction_message_tokens,
     plan_extraction_batches,
     resolve_extraction_batch_limits,
 )
@@ -437,6 +439,83 @@ def test_a_window_sized_oversized_archive_splits_into_multiple_passes():
     assert all(batch.estimated_tokens <= window_limit for batch in batches)
 
 
+def test_messages_inside_the_ceiling_are_not_touched():
+    message = _message("m0", text="short")
+    limits = ExtractionBatchLimits(max_message_tokens=1000)
+
+    bounded, trimmed = bound_oversized_extraction_messages([message], limits)
+
+    assert trimmed == 0
+    assert bounded[0] is message
+
+
+def test_without_a_ceiling_nothing_is_trimmed():
+    messages = [_message("m0", text="word " * 4000)]
+
+    bounded, trimmed = bound_oversized_extraction_messages(messages, ExtractionBatchLimits())
+
+    assert trimmed == 0
+    assert bounded == messages
+
+
+def test_a_single_oversized_message_is_trimmed_inside_the_ceiling():
+    message = _message("m0", text="word " * 4000)
+    limits = ExtractionBatchLimits(max_message_tokens=1000)
+    assert message.estimated_tokens > 1000
+
+    bounded, trimmed = bound_oversized_extraction_messages([message], limits)
+
+    assert trimmed == 1
+    assert bounded[0].id == "m0"
+    assert bounded[0].role == "user"
+    assert bounded[0].estimated_tokens <= 1000
+    assert "truncated for extraction" in bounded[0].content
+    # The stored message is untouched; only the extraction copy is trimmed.
+    assert "truncated for extraction" not in message.content
+
+
+def test_a_hydrated_tool_output_is_trimmed_but_keeps_its_identity():
+    message = Message(
+        id="m0",
+        role="assistant",
+        parts=[
+            TextPart("ran a command"),
+            ToolPart(
+                tool_id="call_1",
+                tool_name="terminal",
+                tool_output="x " * 20000,
+                tool_status="completed",
+            ),
+        ],
+    )
+
+    bounded, trimmed = bound_oversized_extraction_messages(
+        [message], ExtractionBatchLimits(max_message_tokens=1500)
+    )
+
+    assert trimmed == 1
+    tool_part = next(part for part in bounded[0].parts if isinstance(part, ToolPart))
+    assert tool_part.tool_id == "call_1"
+    assert tool_part.tool_name == "terminal"
+    assert tool_part.tool_output.endswith("characters kept]")
+    assert bounded[0].estimated_tokens <= 1500
+
+
+def test_every_planned_pass_stays_inside_the_ceiling_with_twelve_thousand_tokens():
+    # Fixture shape reported on #5894: 12 messages that together vastly exceed a
+    # small-window ceiling must never reach the extraction callback in one pass.
+    messages = [_message(f"m{index}", text="word " * 1000) for index in range(12)]
+    limits = resolve_extraction_batch_limits(None, prompt_token_limit=4000)
+    assert estimate_extraction_message_tokens(messages) > limits.max_message_tokens
+
+    bounded, _ = bound_oversized_extraction_messages(messages, limits)
+    batches = plan_extraction_batches(bounded, limits)
+
+    assert len(batches) > 1
+    assert all(batch.estimated_tokens <= limits.max_message_tokens for batch in batches)
+    assert sum(len(batch.messages) for batch in batches) == 12
+
+
 def test_phase2_batches_split_an_oversized_batch_by_message_count():
     messages = [_message(f"m{index}") for index in range(5)]
 
@@ -714,3 +793,29 @@ async def test_long_term_memory_batches_follow_the_planned_limit():
         ["u3"],
     ]
     assert all(step == "long_term" for _, step, _ in recorded_batches)
+
+
+@pytest.mark.asyncio
+async def test_long_term_memory_batches_bound_an_oversized_message_before_extraction():
+    session = Session(viking_fs=None)
+    messages = [_message("u1", text="word " * 4000), _message("u2", text="small")]
+    delivered = []
+
+    async def extract(batch):
+        delivered.append(sum(message.estimated_tokens for message in batch))
+        return []
+
+    async def record(operation_name, step, batch, fn):
+        return await fn()
+
+    await session._extract_long_term_memories_with_batching(
+        messages=messages,
+        limits=ExtractionBatchLimits(max_message_tokens=1000),
+        archive_uri="viking://user/default/sessions/s1/history/archive_001",
+        extract_batch=extract,
+        record_batch=record,
+    )
+
+    # Nothing over the ceiling may ever reach the extraction callback.
+    assert delivered
+    assert max(delivered) <= 1000

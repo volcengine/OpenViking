@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterable, List, Optional
 
 from openviking.message import Message
@@ -71,6 +71,80 @@ def resolve_extraction_batch_limits(
 
 def estimate_extraction_message_tokens(messages: Iterable[Message]) -> int:
     return sum(int(message.estimated_tokens or 0) for message in messages)
+
+
+# A single message can exceed the ceiling on its own (a hydrated tool output is
+# the usual case). Splitting it would break tool call/result pairing, so the
+# extraction copy is trimmed instead: a bounded, explicitly marked prompt beats an
+# over-window request that the backend truncates and the extraction loses whole.
+TRUNCATION_MARKER = "\n\n[truncated for extraction: {kept} of {total} characters kept]"
+MIN_TRIMMED_PART_CHARS = 200
+MAX_TRIM_ROUNDS = 8
+
+
+def _trimmable_text(part: Any) -> Optional[str]:
+    text = getattr(part, "text", None)
+    if isinstance(text, str) and text:
+        return text
+    output = getattr(part, "tool_output", None)
+    if isinstance(output, str) and output:
+        return output
+    return None
+
+
+def _with_trimmed_text(part: Any, text: str) -> Any:
+    if isinstance(getattr(part, "text", None), str):
+        replacement = replace(part, text=text)
+    else:
+        replacement = replace(part, tool_output=text)
+    return replacement
+
+
+def _bound_message(message: Message, ceiling: int) -> Message:
+    """Trim one over-ceiling message until it fits, largest part first."""
+    parts = list(message.parts)
+    for _ in range(MAX_TRIM_ROUNDS):
+        candidate = replace(message, parts=parts)
+        current_tokens = int(candidate.estimated_tokens or 0)
+        if current_tokens <= ceiling:
+            return candidate
+        sizes = [
+            (len(text), index)
+            for index, part in enumerate(parts)
+            if (text := _trimmable_text(part)) is not None
+        ]
+        if not sizes:
+            return candidate
+        _, largest = max(sizes)
+        text = _trimmable_text(parts[largest]) or ""
+        keep_ratio = max(0.1, ceiling / current_tokens * 0.95)
+        kept_chars = max(MIN_TRIMMED_PART_CHARS, min(len(text), int(len(text) * keep_ratio)))
+        trimmed = text[:kept_chars] + TRUNCATION_MARKER.format(kept=kept_chars, total=len(text))
+        parts[largest] = _with_trimmed_text(parts[largest], trimmed)
+    return replace(message, parts=parts)
+
+
+def bound_oversized_extraction_messages(
+    messages: List[Message],
+    limits: ExtractionBatchLimits,
+) -> tuple[List[Message], int]:
+    """Fit every message inside the batch ceiling before planning passes.
+
+    Returns the (possibly trimmed) messages and how many had to be trimmed, so the
+    caller can make the loss visible in logs.
+    """
+    ceiling = limits.max_message_tokens
+    if ceiling is None:
+        return messages, 0
+    bounded: List[Message] = []
+    trimmed_count = 0
+    for message in messages:
+        if int(message.estimated_tokens or 0) <= ceiling:
+            bounded.append(message)
+            continue
+        bounded.append(_bound_message(message, ceiling))
+        trimmed_count += 1
+    return bounded, trimmed_count
 
 
 def _exceeds_limits(
@@ -180,6 +254,7 @@ def plan_extraction_batches(
 
 __all__ = [
     "ExtractionBatchLimits",
+    "bound_oversized_extraction_messages",
     "ExtractionMessageBatch",
     "estimate_extraction_message_tokens",
     "plan_extraction_batches",
