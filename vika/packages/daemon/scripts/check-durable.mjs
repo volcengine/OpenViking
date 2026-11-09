@@ -49,11 +49,16 @@ readline.createInterface({ input: child.stdout }).on('line', (line) => {
       settled = true;
       clearTimeout(timer);
       try { child.stdin.write(`${JSON.stringify({ type: 'stop' })}\n`); } catch {}
-      setTimeout(() => {
-        fs.rmSync(dataDir, { recursive: true, force: true });
+      // Wait for the host to exit (or give up after 3s): on Windows its SQLite
+      // files stay locked until then. Cleanup of the temp directory is best
+      // effort; the check already passed.
+      const finish = () => {
+        try { fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch {}
         process.stdout.write(`Managed durable host ${DURABLE_VERSION} is ready.\n`);
         process.exit(0);
-      }, 200);
+      };
+      const fallback = setTimeout(finish, 3000);
+      child.once('exit', () => { clearTimeout(fallback); finish(); });
     }
     return;
   }

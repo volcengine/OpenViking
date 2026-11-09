@@ -189,7 +189,8 @@ try {
     # the .vika directory it was written into.
     if ($launcherText -match 'USERPROFILE|%HOME%') { throw "the launcher guesses the home directory:`n$launcherText" }
     if ($launcherText -notmatch '%~dp0') { throw "the launcher does not resolve its own location:`n$launcherText" }
-    if ($run.Output -notmatch 'Vika 0\.5\.0-windows-preview-test →') { throw "the install line is missing:`n$($run.Output)" }
+    # Redirected output uses the console code page, which can turn the arrow into ?/^Z.
+    if ($run.Output -notmatch 'Vika 0\.5\.0-windows-preview-test \S+ ') { throw "the install line is missing:`n$($run.Output)" }
     if ($run.Output -notmatch 'next: run vika setup') { throw "no next step is named:`n$($run.Output)" }
     if (Test-Path -LiteralPath (Join-Path $testHome 'deploy.lock')) { throw 'the lock was not released' }
     if (-not (Test-Path -LiteralPath (Join-Path $testHome 'language'))) { throw '-Lang was not saved for later commands' }
@@ -210,9 +211,10 @@ if ((`$env:PATH -split [IO.Path]::PathSeparator) -contains (Join-Path `$env:VIKA
     if ($session -notmatch 'SESSION-PATH-OK') { throw "the current terminal was not given vika:`n$session" }
 
     # A second run of the same package is a no-op that still names the version.
-    $again = Invoke-Installer -Arguments @('-File', $first, '-Lang', 'zh')
+    # English output: redirected streams use the console code page, which turns CJK into ?.
+    $again = Invoke-Installer -Arguments @('-File', $first, '-Lang', 'en')
     if ($again.Code -ne 0) { throw "the repeated install failed:`n$($again.Output)" }
-    if ($again.Output -notmatch '已经是 Vika 0\.5\.0-windows-preview-test') { throw "the repeated install is not idempotent:`n$($again.Output)" }
+    if ($again.Output -notmatch 'Vika 0\.5\.0-windows-preview-test is installed already') { throw "the repeated install is not idempotent:`n$($again.Output)" }
 
     # Same version but different bytes must not overwrite an existing release.
     $conflict = New-Fixture 'same-version-different-content' -Version '0.5.0-windows-preview-test' -Check 'param($Action) # different'
