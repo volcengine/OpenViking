@@ -30,7 +30,6 @@ import type {
 import { setSessionTitle } from '#/features/workbench/sessions/lib/use-session-titles'
 import { ovClient } from '#/shared/api/ov-client/index'
 import { createBrowserId } from '#/shared/lib/browser-crypto'
-import { SseResponseError } from '#/shared/lib/sse'
 
 function createUserMessage(content: string): Message {
   return {
@@ -943,12 +942,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           setStatus('idle')
           await persistTimeline(true)
         } else {
-          const msg =
-            err instanceof SseResponseError
-              ? extractErrorMessage(err.responseBody, err.message)
-              : err instanceof Error
-                ? err.message
-                : String(err)
+          const msg = err instanceof Error ? err.message : String(err)
           setError(msg)
           setStatus('error')
           await persistTimeline(true)
