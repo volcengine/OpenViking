@@ -54,6 +54,7 @@
   --ov-ui-text-1-default: #0b0b0f;
   --ov-ui-text-2-default: #3f3f51;
   --ov-ui-text-3-default: #6e718c;
+  --ov-ui-text-description-default: rgb(0 0 0 / 40%);
   --ov-ui-text-disabled-default: #a5a7bb;
 
   /* 边框：分隔线、控件描边、强调描边。 */
@@ -97,6 +98,7 @@
   --ov-ui-text-1-default: #c7ccd6;
   --ov-ui-text-2-default: #9da3af;
   --ov-ui-text-3-default: #737a87;
+  --ov-ui-text-description-default: rgb(255 255 255 / 40%);
   --ov-ui-text-disabled-default: #42464e;
 
   --ov-ui-border-1-default: #23252a;

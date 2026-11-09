@@ -18,7 +18,7 @@ const emptyStyles = `
   min-inline-size: 0;
   align-self: stretch;
   padding: 32px 4px;
-  color: inherit;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
   text-align: start;
 }
 .ov-demo-tui-empty .ov-demo-tui-empty__title {
@@ -90,12 +90,13 @@ const emptyStyles = `
   outline-offset: 3px;
 }
 .ov-demo-tui-empty__name {
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
   font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
   font-size: 15px;
   overflow-wrap: anywhere;
 }
 .ov-demo-tui-empty__description {
-  color: var(--ov-ui-demo-tui-muted);
+  color: var(--ov-ui-color-text-description, var(--ov-ui-text-description-default));
   overflow-wrap: anywhere;
 }
 @container (max-width: 420px) {
