@@ -10,7 +10,7 @@ The instructions below use the published **macOS / Linux / WSL2** installer. Nat
 
 ## Prerequisites
 
-- **System:** macOS or Linux, x64 / arm64. On Windows, use WSL2 for this release, or try the experimental [Windows x64 preview package](docs/windows-preview.md), downloaded as a GitHub Actions artifact (sign-in required, kept for 14 days; not published to the release bucket). musl / Alpine is not supported. You need sh, curl, tar, and sha256sum (or shasum); Node, npm, PM2, and lark-cli need not be installed beforehand.
+- **System:** macOS or Linux, x64 / arm64. On Windows, use WSL2 for this release, or try the experimental [Windows x64 preview package](docs/windows-preview.md#download-and-install) (download: `https://ovrelease.tos-cn-beijing.volces.com/vika/windows-preview/latest/`; no GitHub account needed). musl / Alpine is not supported. You need sh, curl, tar, and sha256sum (or shasum); Node, npm, PM2, and lark-cli need not be installed beforehand.
 - **OpenViking:** a reachable OV service is required, either local or remote. Have its address and required credentials ready, or import an existing configuration during setup. There is no skip option.
 - **Runtime:** choose one below and prepare its model authentication or API configuration.
 - **Chat account:** Feishu requires a phone-registered or enterprise account; signing in to Feishu through a Doubao account is not supported for this integration. For other channels, prepare the bot or app credentials requested by setup.

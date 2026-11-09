@@ -3,9 +3,11 @@
 The **Windows x64 preview** job in **Vika Release** builds a separate, experimental ZIP.
 It shares the POSIX workflow's pull-request, manual and `openviking-vika@*` tag
 triggers; Windows output is always a preview artifact, including on a release tag.
-Download the artifact from a successful run on the PR's Checks page or the
-repository's Actions page. GitHub sign-in is required; artifacts expire after
-14 days. This is not a public TOS release or an entry in the stable updater feed.
+Manual and tag runs also publish it to the release bucket under
+`vika/windows-preview/` (see [Download and install](#download-and-install));
+PR runs only keep the GitHub Actions artifact (sign-in required, expires after
+14 days). Either way it is not an entry in the stable updater feed: `vika/latest`
+and `vika upgrade` stay macOS/Linux only.
 The package's `release.json` identifies the exact built commit (a PR run normally
 builds GitHub's merge commit), Node version and ZIP SHA-256.
 For a manual Windows-only test run, select the branch under **Vika Release → Run
@@ -19,6 +21,30 @@ It does not install OpenViking, model runtimes or credentials. Pi requires Git
 Bash; Durable uses native PowerShell. Slack still needs an explicit, separately
 validated CLI. The preview does not restore fixes removed from the slim Windows
 branch; pinned lark-cli/preflight compatibility still needs real-account testing.
+
+## Download and install
+
+The newest preview is always at
+`https://ovrelease.tos-cn-beijing.volces.com/vika/windows-preview/latest/`
+(the build's version is in `latest/version`; every build also stays at
+`vika/windows-preview/<version>/`). No GitHub account is needed.
+
+Use a normal, non-administrator Windows 10/11 x64 account. Paste this into
+PowerShell 7 or Windows PowerShell 5.1:
+
+```powershell
+$base = 'https://ovrelease.tos-cn-beijing.volces.com/vika/windows-preview/latest'
+$dir = Join-Path $env:TEMP ('vika-preview-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $dir | Out-Null
+foreach ($f in 'vika-windows-preview-win32-x64.zip', 'vika-windows-preview-win32-x64.zip.sha256', 'install-preview.ps1') {
+    Invoke-WebRequest -UseBasicParsing -Uri "$base/$f" -OutFile (Join-Path $dir $f)
+}
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir 'install-preview.ps1') -File (Join-Path $dir 'vika-windows-preview-win32-x64.zip')
+```
+
+The installer verifies the SHA-256 before installing, then continues as in
+[Install a local artifact](#install-a-local-artifact) below. The execution-policy
+option applies only to that one installer process.
 
 ## Community setup wizard
 
