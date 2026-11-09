@@ -120,3 +120,61 @@ test('fallback session history notifies directly from opening events, not callba
     container.remove();
   }
 });
+
+const quickInputs = [
+  { id: 'a', label: 'Prompt A', prompt: 'PROMPT_A' },
+  { id: 'b', label: 'Prompt B', prompt: 'PROMPT_B' },
+];
+
+// Opaque host replacements must preserve user-authored duplicate text.
+for (const [name, edited, expected] of [
+  ['inline suffix', 'PROMPT_A with my details', 'PROMPT_B with my details'],
+  ['prefix', 'My details\nPROMPT_A', 'My details\nPROMPT_B'],
+  [
+    'later mention',
+    'PROMPT_A\nReference to PROMPT_A here',
+    'PROMPT_B\nReference to PROMPT_A here',
+  ],
+  ['edited owned text', 'PROMXT_A', 'PROMXT_A\nPROMPT_B'],
+  [
+    'ambiguous identical insertion',
+    'PROMPT_A\nPROMPT_A',
+    'PROMPT_A\nPROMPT_A\nPROMPT_B',
+  ],
+]) {
+  test(`external draft changes preserve custom text: ${name}`, async () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    let draft;
+    let setDraft;
+    function Host() {
+      [draft, setDraft] = useState('');
+      return createElement(VikingBot, {
+        messages: [],
+        draft,
+        onDraftChange: setDraft,
+        quickInputs,
+        composer: createElement('div'),
+      });
+    }
+    const select = (label) =>
+      click(
+        [...container.querySelectorAll('button')].find(
+          (button) => button.textContent === label,
+        ),
+      );
+    try {
+      await act(() => root.render(createElement(Host)));
+      await select('Prompt A');
+      await act(() => setDraft(edited));
+      await select('Prompt B');
+      assert.equal(draft, expected);
+      await select('Prompt B');
+      assert.equal(draft, expected, 'reselecting does not accumulate prompts');
+    } finally {
+      await act(() => root.unmount());
+      container.remove();
+    }
+  });
+}

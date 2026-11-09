@@ -2,7 +2,7 @@ import { useRef } from 'react';
 import { DEFAULT_LABELS } from './labels.js';
 import { VikingBotSessionActions } from './session-actions.js';
 import { VikingBotWelcome } from './welcome.js';
-import { useQuickInput } from './use-quick-input.js';
+import { QuickInputScope, useQuickInput } from './use-quick-input.js';
 import type { VikingBotQuickInput } from './capabilities.js';
 import type { VikingBotComposerRef } from './types.js';
 import type { VikingBotProps } from './types.js';
@@ -59,16 +59,17 @@ export function VikingBot({
   const hasMessages = messages.length > 0;
   const localComposer = useRef<VikingBotComposerRef>(null);
   const inputRef = composerRef ?? localComposer;
-  const chooseQuickInput = useQuickInput(
+  const shortcuts = useQuickInput(
     draft ?? '',
     (next) => {
       if (inputRef.current) inputRef.current.setText(next);
       else onDraftChange?.(next);
     },
     onQuickInputSelect,
+    true,
   );
   const selectQuickInput = (item: VikingBotQuickInput) => {
-    chooseQuickInput(item);
+    shortcuts.select(item);
     inputRef.current?.focus();
   };
   const renderedHeader =
@@ -95,80 +96,89 @@ export function VikingBot({
   }
 
   return (
-    <div
-      className={['ov-viking-bot', className].filter(Boolean).join(' ')}
-      {...rest}
-    >
-      {renderedHeader ? (
-        <div className="ov-viking-bot__header">{renderedHeader}</div>
-      ) : null}
-      {!isAvailable ? (
-        <p className="ov-viking-bot__unavailable" role="status">
-          {unavailableMessage ?? labels.unavailable}
-        </p>
-      ) : null}
-      <div className="ov-viking-bot__body">
-        {messageList !== undefined ? (
-          messageList
-        ) : !hasMessages && !streaming ? (
-          <div
-            className={`ov-viking-bot__empty${emptyState === undefined ? ' ov-viking-bot__empty--welcome' : ''}`}
-          >
-            {emptyState === undefined ? (
-              <VikingBotWelcome
-                labels={labels}
-                quickInputs={quickInputs}
-                onSelect={selectQuickInput}
-                disabled={
-                  isSending ||
-                  !isAvailable ||
-                  (!onDraftChange && !onQuickInputSelect)
-                }
-              />
-            ) : (
-              emptyState
-            )}
-          </div>
-        ) : (
-          <VikingBotMessageList
-            locale={locale}
-            messages={messages}
-            streaming={streaming}
-            listKey={listKey}
-            onOpenUri={onOpenUri}
-            onCopy={onCopy}
-            onMessageAction={onMessageAction}
-            labels={overrides}
-          />
-        )}
-      </div>
-      {footer ? <div className="ov-viking-bot__footer">{footer}</div> : null}
-      {interaction
-        ? (interactionSlot ?? <VikingBotInteraction {...interaction} />)
-        : (composer ??
-          // 省略 draft 表示只读会话，此时不渲染默认输入区。
-          (draft !== undefined ? (
-            <VikingBotComposer
-              ref={inputRef}
-              value={draft}
-              attachments={attachments}
-              disabled={!isAvailable}
-              isSending={isSending}
-              references={references}
-              quickInputs={
-                hasMessages || streaming || emptyState !== undefined
-                  ? quickInputs
-                  : undefined
-              }
-              onQuickInputSelect={selectQuickInput}
-              onValueChange={onDraftChange}
-              onFilesAdded={onFilesAdded}
-              onAttachmentRemove={onAttachmentRemove}
-              onSend={onSend}
-              onCancel={onCancel}
+    <QuickInputScope.Provider value={shortcuts.tracker}>
+      <div
+        className={['ov-viking-bot', className].filter(Boolean).join(' ')}
+        {...rest}
+      >
+        {renderedHeader ? (
+          <div className="ov-viking-bot__header">{renderedHeader}</div>
+        ) : null}
+        {!isAvailable ? (
+          <p className="ov-viking-bot__unavailable" role="status">
+            {unavailableMessage ?? labels.unavailable}
+          </p>
+        ) : null}
+        <div className="ov-viking-bot__body">
+          {messageList !== undefined ? (
+            messageList
+          ) : !hasMessages && !streaming ? (
+            <div
+              className={`ov-viking-bot__empty${emptyState === undefined ? ' ov-viking-bot__empty--welcome' : ''}`}
+            >
+              {emptyState === undefined ? (
+                <VikingBotWelcome
+                  labels={labels}
+                  quickInputs={quickInputs}
+                  onSelect={selectQuickInput}
+                  disabled={
+                    isSending ||
+                    !isAvailable ||
+                    (!onDraftChange && !onQuickInputSelect)
+                  }
+                />
+              ) : (
+                emptyState
+              )}
+            </div>
+          ) : (
+            <VikingBotMessageList
+              locale={locale}
+              messages={messages}
+              streaming={streaming}
+              listKey={listKey}
+              onOpenUri={onOpenUri}
+              onCopy={onCopy}
+              onMessageAction={onMessageAction}
               labels={overrides}
             />
-          ) : null))}
-    </div>
+          )}
+        </div>
+        {footer ? <div className="ov-viking-bot__footer">{footer}</div> : null}
+        {interaction
+          ? (interactionSlot ?? <VikingBotInteraction {...interaction} />)
+          : (composer ??
+            // 省略 draft 表示只读会话，此时不渲染默认输入区。
+            (draft !== undefined ? (
+              <VikingBotComposer
+                ref={inputRef}
+                value={draft}
+                attachments={attachments}
+                disabled={!isAvailable}
+                isSending={isSending}
+                references={references}
+                quickInputs={
+                  hasMessages || streaming || emptyState !== undefined
+                    ? quickInputs
+                    : undefined
+                }
+                onQuickInputSelect={selectQuickInput}
+                onValueChange={
+                  onDraftChange
+                    ? (next) => {
+                        shortcuts.tracker.edit(next);
+                        onDraftChange(next);
+                      }
+                    : undefined
+                }
+                onFilesAdded={onFilesAdded}
+                onAttachmentRemove={onAttachmentRemove}
+                onSend={onSend}
+                onCancel={onCancel}
+                labels={overrides}
+              />
+            ) : null))}
+      </div>
+    </QuickInputScope.Provider>
   );
 }

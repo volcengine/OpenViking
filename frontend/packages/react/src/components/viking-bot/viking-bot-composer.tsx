@@ -1,5 +1,5 @@
 import { Sender } from '@ark-design/ui/sender';
-import type { RichTextValue, SenderInstance } from '@ark-design/ui/sender';
+import type { SenderInstance } from '@ark-design/ui/sender';
 import {
   forwardRef,
   useCallback,
@@ -15,23 +15,8 @@ import { composerMention, ReferenceTags } from './composer-references.js';
 import { ComposerFooter } from './composer-footer.js';
 import { QuickInputs } from './quick-inputs.js';
 import { useQuickInput } from './use-quick-input.js';
+import { composerCaret, toPlainText, toRichText } from './composer-text.js';
 import type { VikingBotComposerProps, VikingBotComposerRef } from './types.js';
-
-const HARD_BREAK = 'hardBreak';
-const TEXT = 'text';
-
-/** 从富文本里取纯文本，忽略附件与标签。 */
-const toPlainText = (content: RichTextValue[]): string =>
-  content
-    .map((item) => {
-      if (item.type === HARD_BREAK) return '\n';
-      return item.type === TEXT ? (item.text ?? '') : '';
-    })
-    .join('')
-    .trim();
-
-const toRichText = (text: string): RichTextValue[] =>
-  text ? [{ type: TEXT, text }] : [];
 
 /**
  * 输入区。发送与停止都由宿主决定，组件只上报意图。
@@ -77,7 +62,7 @@ export const VikingBotComposerView = forwardRef<
     },
     [onValueChange],
   );
-  const selectQuickInput = useQuickInput(value, setText, onQuickInputSelect);
+  const shortcuts = useQuickInput(value, setText, onQuickInputSelect);
 
   // useEffect 必要性：把受控 value 的后续变化同步到 Ark 编辑器。编辑器是外部
   // 非 React 控件，只有它的 setValue 能改写内部文档，渲染计算无法做到。仅当
@@ -112,7 +97,7 @@ export const VikingBotComposerView = forwardRef<
     if (!onSend || disabled || isSending) return;
     const text = toPlainText(
       senderRef.current?.getValue() ?? toRichText(value),
-    );
+    ).trim();
     onSend({
       text,
       attachments,
@@ -156,7 +141,7 @@ export const VikingBotComposerView = forwardRef<
         items={quickInputs}
         disabled={disabled || readOnly || isSending}
         onSelect={(item) => {
-          selectQuickInput(item);
+          shortcuts.select(item);
           senderRef.current?.getEditor()?.commands.focus('end');
         }}
       />
@@ -167,7 +152,10 @@ export const VikingBotComposerView = forwardRef<
         sending={isSending}
         sendDisabled={disabled || readOnly || (!isSending && !onSend)}
         onContentChange={(content) => {
-          if (!readOnly) onValueChange?.(toPlainText(content));
+          if (readOnly) return;
+          const next = toPlainText(content);
+          shortcuts.tracker.edit(next, composerCaret(senderRef.current));
+          onValueChange?.(next);
         }}
         onSend={submit}
         onStop={() => onCancel?.()}

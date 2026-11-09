@@ -53,22 +53,3 @@ export interface VikingBotInputFeatures {
   onQuickInputSelect?: (input: VikingBotQuickInput) => void;
   references?: VikingBotReferences;
 }
-
-/** Re-selecting a shortcut replaces a previous shortcut; custom text is kept. */
-export function quickInputText(
-  text: string,
-  input: VikingBotQuickInput,
-  previousPrompt?: string,
-) {
-  const start = previousPrompt ? text.lastIndexOf(previousPrompt) : -1;
-  if (start >= 0) {
-    const end = start + previousPrompt!.length;
-    if (
-      (start === 0 || text[start - 1] === '\n') &&
-      (end === text.length || text[end] === '\n')
-    )
-      return text.slice(0, start) + input.prompt + text.slice(end);
-  }
-  if (!text.trim()) return input.prompt;
-  return `${text}\n${input.prompt}`;
-}
