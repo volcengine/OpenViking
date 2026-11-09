@@ -24,11 +24,14 @@ const updaterDir = path.join(releaseDir, 'packages', 'updater');
 // Put first, they once handed the managed Pi a system Node v10.
 const fallbackPath = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin';
 // An installed release runs on the Node it ships; a source checkout on the
-// Node running pm2.
-const releaseNode = path.join(releaseDir, 'node', 'bin', 'node');
+// Node running pm2. Windows packages keep it in runtime\, POSIX ones in node/bin/.
+const releaseNode = [
+  path.join(releaseDir, 'node', 'bin', 'node'),
+  path.join(releaseDir, 'runtime', 'node.exe'),
+].find(candidate => fs.existsSync(candidate));
 
 const common = Object.freeze({
-  interpreter: fs.existsSync(releaseNode) ? releaseNode : process.execPath,
+  interpreter: releaseNode ?? process.execPath,
   exec_mode: 'fork',
   ...pm2Options(),
   instances: 1,

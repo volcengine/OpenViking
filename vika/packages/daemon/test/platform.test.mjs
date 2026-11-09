@@ -132,3 +132,25 @@ test('npm shim entrypoints remain private while invocation validates standard sh
     assert.throws(() => windows.executableInvocation(shim, args), /Unsupported Windows command shim/);
   }
 });
+
+test('a release bin\\pm2.cmd runs that release\'s pm2 with that release\'s Node', t => {
+  const release = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-release-shim-'));
+  t.after(() => fs.rmSync(release, { recursive: true, force: true }));
+  const shim = path.join(release, 'bin', 'pm2.cmd');
+  const entry = path.join(release, 'node_modules', 'pm2', 'bin', 'pm2');
+  fs.mkdirSync(path.dirname(shim), { recursive: true });
+  fs.mkdirSync(path.dirname(entry), { recursive: true });
+  fs.writeFileSync(entry, '// fixture');
+  // The batch file is not executed: the arguments never pass through cmd.exe.
+  fs.writeFileSync(shim, 'echo arbitrary script');
+  const args = ['start', 'a b', '%PATH%', '& whoami'];
+  assert.deepEqual(windows.executableInvocation(shim, args), { command: process.execPath, args: [entry, ...args] });
+  // A Windows package keeps its Node in runtime/, which is preferred when present.
+  const node = path.join(release, 'runtime', 'node.exe');
+  fs.mkdirSync(path.dirname(node), { recursive: true });
+  fs.writeFileSync(node, '');
+  assert.deepEqual(windows.executableInvocation(shim, args), { command: node, args: [entry, ...args] });
+  // Without the entrypoint it is still refused rather than handed to cmd.exe.
+  fs.rmSync(entry);
+  assert.throws(() => windows.executableInvocation(shim, args), /Unsupported Windows command shim/);
+});

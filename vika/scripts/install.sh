@@ -77,7 +77,7 @@ done
 case "$(uname -s)" in
   Linux) os=linux ;;
   Darwin) os=darwin ;;
-  *) die "$(m "不支持 $(uname -s)；Windows 请在 WSL2 里安装" "$(uname -s) is not supported; on Windows, install inside WSL2")" ;;
+  *) die "$(m "不支持 $(uname -s)；Windows 请用 install-preview.ps1（预览包），或在 WSL2 里安装" "$(uname -s) is not supported; on Windows, use install-preview.ps1 (the preview package), or install inside WSL2")" ;;
 esac
 case "$(uname -m)" in
   x86_64|amd64) arch=x64 ;;

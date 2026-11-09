@@ -6,7 +6,7 @@ Install Vika and verify that it can receive and answer messages. See the [README
 
 For a fresh Windows installation, the community-maintained [Windows setup wizard](docs/windows-preview.md#community-setup-wizard) combines installation and interactive configuration. It requires PowerShell 7 and a separately downloaded `-winsetup.zip`; the upstream Actions artifact alone does not contain that wizard. The reported tested combination is Durable, the DeepSeek API, and a self-hosted OpenViking service.
 
-The instructions below use the published **macOS / Linux / WSL2** installer. Native Windows users should follow the Windows guide instead, including its startup instructions.
+The instructions below use the published **macOS / Linux / WSL2** installer. Native Windows users should follow the Windows guide instead, including its startup instructions: its installer takes the same steps and prints the same words, enters the same `vika setup`, and takes a local artifact instead of a download.
 
 ## Prerequisites
 
@@ -63,7 +63,7 @@ Open `http://127.0.0.1:3737` to view activity. Send a specific task in a direct 
 - Add or edit instances and channels, or remove an instance: `vika setup`.
 - Renew expired authentication: `vika login <channel> [instance]`.
 - Upgrade to a published release: `vika upgrade primary`.
-- Enable startup at login: `vika autostart enable`. On Linux, use `loginctl enable-linger` if the service must continue after logout.
+- Enable startup at login: `vika autostart enable`. On Linux, use `loginctl enable-linger` if the service must continue after logout; on Windows it adds a per-user Startup-folder entry, with no service or administrator.
 - Change the interface language: `vika --lang zh` or `vika --lang en`.
 
 Configuration defaults to `~/.vika/config.json`. For a custom location, set the same absolute `VIKA_CONFIG` path for related commands. Editing a source checkout does not update an installed service.

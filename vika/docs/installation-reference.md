@@ -195,11 +195,11 @@ Vika uses its bundled, pinned PM2 with state under `~/.vika/pm2`, independent of
 ## Autostart
 
 ```bash
-vika autostart enable    # Linux user systemd service; macOS LaunchAgent; no sudo
+vika autostart enable    # Linux user unit; macOS LaunchAgent; Windows Startup folder
 vika autostart disable
 ```
 
-Autostart executes `vika start` and captures the enabling shell's PATH so it can find codex and claude. Linux servers also need `loginctl enable-linger` to continue after logout.
+Autostart executes `vika start` and captures the enabling shell's PATH so it can find codex and claude. Linux servers also need `loginctl enable-linger` to continue after logout. On Windows it is a `.vbs` in the current user's Startup folder: no service, no administrator, hidden at logon, logging to `~/.vika/logs/autostart.log`, and listed in Task Manager's Startup tab.
 
 ## Publishing releases
 

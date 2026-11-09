@@ -73,19 +73,25 @@ apps; it does not update a separate installed release.
   established, and localhost Web access is not per-user authentication.
 - Vika does not provision or verify Windows ACLs. Use private user-owned data,
   workspace and temporary directories. No filesystem sandbox is claimed.
-- Upgrade/updater, autostart and stable Windows release builds are disabled.
+- Upgrade/updater and stable Windows release builds are disabled. Autostart is
+  available at the user level: `vika autostart enable` writes a script into the
+  current user's own Startup folder, which the shell runs at logon. It is not a
+  service, needs no administrator, and shows up in Task Manager's Startup tab.
 - Email is enabled. On Windows the email account file's mode is not checked
   (Windows reports 0666 regardless of ACLs); keep account files in a private,
   user-owned directory.
-  Autostart returns an unsupported-preview error. The separate preview Action
-  provides a ZIP and local installer, but no VBS startup entry or stable release.
+  The separate preview Action provides a ZIP and local installer, but no stable
+  release and no system-wide service.
   Slack has no Windows bundled/default
   executable; it requires an explicit `SLACK_CLI_BIN` and separate validation.
 
 ## Migration and validation
 
-This replaces the full Windows fork's installation approach. Its installer,
-`.vika/bin` launchers and patched `pm2.cmd` are no longer provided. Keep the old
+This replaces the full Windows fork's installation approach. That fork's
+installer, its `.vika/bin` launchers and its patched `pm2.cmd` are no longer
+provided; the preview package's installer adds only a `vika.cmd` shim that runs
+this release's CLI, and the release's own `bin\pm2.cmd`, which runs that release's
+Node on its bundled pm2, so `vika start` uses no system Node or PM2. Keep the old
 checkout/commit and configuration for rollback; do not copy this tree over a
 running installation. The previous logs options and unrelated lock, logging,
 delivery, interruption and PM2 behavior fixes were split out for separate review.

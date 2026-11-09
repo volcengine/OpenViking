@@ -78,5 +78,34 @@ test('PM2 helpers use injected OS primitives while preserving environment whitel
   assert.deepEqual(pm2Options(posix), {});
   assert.deepEqual(pm2Options(windows), { shutdown_with_message: true });
   assert.equal(pm2Bin('/release', posix), path.join('/release', 'bin', 'pm2'));
-  assert.equal(pm2Bin('/release', windows), 'pm2');
+  assert.equal(pm2Bin('/release', windows), path.join('/release', 'bin', 'pm2.cmd'));
+});
+
+test('a Windows release runs its daemon on the Node it ships in runtime/', t => {
+  const source = fileURLToPath(new URL('../../../', import.meta.url));
+  const release = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-release-node-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-release-home-'));
+  t.after(() => {
+    fs.rmSync(release, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  // The Windows package keeps Node in runtime\; junction so an unprivileged
+  // Windows checkout can build the same layout as the real artifact.
+  fs.mkdirSync(path.join(release, 'runtime'));
+  fs.writeFileSync(path.join(release, 'runtime', 'node.exe'), '');
+  fs.symlinkSync(path.join(source, 'packages'), path.join(release, 'packages'), 'junction');
+  for (const file of ['ecosystem.config.cjs', 'deployment-config.cjs']) {
+    fs.copyFileSync(path.join(source, file), path.join(release, file));
+  }
+  const config = path.join(home, 'config.json');
+  fs.writeFileSync(config, JSON.stringify({ version: 1, env: {}, defaultInstance: 'primary', agents: [{
+    id: 'primary', displayName: 'Primary', profile: 'test', port: 3738, dataDir: path.join(home, 'data'),
+    workspace: path.join(home, 'work'), ovConfig: path.join(home, 'ov.json'), model: 'durable',
+  }] }));
+  const output = execFileSync(process.execPath, ['-e', `
+    const {buildEcosystem} = require(${JSON.stringify(path.join(release, 'ecosystem.config.cjs'))});
+    console.log(JSON.stringify(buildEcosystem({HOME: process.env.HOME, VIKA_CONFIG: process.env.VIKA_CONFIG, Path: 'inherited'})));
+  `], { env: { ...process.env, HOME: home, VIKA_CONFIG: config }, encoding: 'utf8' });
+  const expected = path.join(release, 'runtime', 'node.exe');
+  for (const app of JSON.parse(output).apps) assert.equal(app.interpreter, expected, app.name);
 });
