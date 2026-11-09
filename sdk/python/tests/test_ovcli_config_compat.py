@@ -7,7 +7,7 @@ import json
 
 import httpx
 import pytest
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import AsyncHTTPClient, OpenVikingError, use_actor_peer
 
 
 def test_async_http_client_loads_connection_fields_from_ovcli_config(tmp_path, monkeypatch):
@@ -216,3 +216,69 @@ def test_async_http_client_rejects_explicit_actor_peer_id_and_agent_id_together(
             actor_peer_id="actor-a",
             agent_id="legacy-agent",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation,args,verb,suffix,body",
+    [
+        ("create_group", ("team",), "POST", "", {"group_id": "team"}),
+        ("list_groups", (), "GET", "", None),
+        ("delete_group", ("team",), "DELETE", "/team", None),
+        ("list_group_members", ("team",), "GET", "/team/members", None),
+        ("add_group_member", ("team", "alice"), "PUT", "/team/members/alice", None),
+        ("remove_group_member", ("team", "alice"), "DELETE", "/team/members/alice", None),
+    ],
+)
+@pytest.mark.parametrize("mode", ["challenge", "unmarked", "no_token", "explicit"])
+async def test_admin_groups_preserve_gateway_request_contract(
+    tmp_path, monkeypatch, operation, args, verb, suffix, body, mode
+):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "url": "http://gateway.example",
+                "gateway_token": None if mode == "no_token" else "gateway-secret",
+            }
+        )
+    )
+    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.headers.get("X-Gateway-Token") in {"gateway-secret", "manual-token"}:
+            return httpx.Response(200, json={"status": "ok", "result": {"accepted": True}})
+        headers = {} if mode == "unmarked" else {"X-VikingBot-Gateway": "true"}
+        return httpx.Response(401, headers=headers, json={"detail": "Token required"})
+
+    extra = {"x-gateway-token": "manual-token"} if mode == "explicit" else {}
+    client = AsyncHTTPClient(url="http://gateway.example", extra_headers=extra)
+    client._http = httpx.AsyncClient(
+        base_url=client._url, headers=extra, transport=httpx.MockTransport(handler)
+    )
+    try:
+        with use_actor_peer("reviewer"):
+            if mode in {"unmarked", "no_token"}:
+                with pytest.raises(OpenVikingError, match="Token required"):
+                    await getattr(client, f"admin_{operation}")("account", *args)
+            else:
+                assert await getattr(client, f"admin_{operation}")("account", *args) == {
+                    "accepted": True
+                }
+    finally:
+        await client.close()
+
+    assert len(requests) == (2 if mode == "challenge" else 1)
+    for request in requests:
+        assert request.method == verb
+        assert request.url.path == f"/api/v1/admin/accounts/account/groups{suffix}"
+        assert request.headers["X-OpenViking-Actor-Peer"] == "reviewer"
+        assert (json.loads(request.content) if request.content else None) == body
+    if mode == "explicit":
+        assert requests[0].headers["X-Gateway-Token"] == "manual-token"
+    else:
+        assert "X-Gateway-Token" not in requests[0].headers
+    if mode == "challenge":
+        assert requests[1].headers["X-Gateway-Token"] == "gateway-secret"
