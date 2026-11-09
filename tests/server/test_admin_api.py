@@ -2231,6 +2231,18 @@ async def test_create_user_paths_accept_initial_user_config(
     )
     assert bob_settings.add_targets.resource_uri == "viking://user/bob/resources/bob"
 
+    lightweight_admin_app.state.api_key_manager._store._read_only = True
+    locks_before = list(service.account_lock_events)
+    files_before = dict(viking_fs.agfs._files)
+    rejected = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "charlie"},
+        headers=root_headers(),
+    )
+    assert rejected.status_code == 403, rejected.text
+    assert service.account_lock_events == locks_before
+    assert viking_fs.agfs._files == files_before
+
 
 async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updates(
     lightweight_admin_client, lightweight_admin_app, monkeypatch
@@ -2425,9 +2437,10 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
             url, json={"add_targets": {"skill_uri": "viking://~/skills"}}, headers=user_headers
         )
         assert patched.status_code == 200, patched.text
-        assert patched.json()["result"]["add_targets"]["resource_uri"] == stored["add_targets"][
-            "resource_uri"
-        ]
+        assert (
+            patched.json()["result"]["add_targets"]["resource_uri"]
+            == stored["add_targets"]["resource_uri"]
+        )
         assert patched.json()["result"]["memory_policy"]["memory_types"] == ["retired_type"]
         before_rejected = dict(fs.files)
         rejected = await client.patch(
@@ -2447,9 +2460,10 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
             url, json={"memory_policy": {"memory_types": ["events"]}}, headers=user_headers
         )
         assert patched.status_code == 200, patched.text
-        assert patched.json()["result"]["add_targets"]["resource_uri"] == stored["add_targets"][
-            "resource_uri"
-        ]
+        assert (
+            patched.json()["result"]["add_targets"]["resource_uri"]
+            == stored["add_targets"]["resource_uri"]
+        )
         assert json.loads(fs.files[stored_uri])["memory_policy"]["memory_types"] == ["events"]
     finally:
         set_openviking_config(previous_config)

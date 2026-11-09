@@ -32,6 +32,7 @@ from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
     UnauthenticatedError,
 )
 from tests.server.account_store_fakes import InMemoryAGFS
@@ -547,14 +548,17 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
             await engine.dispose()
 
 
-async def test_file_management_user_read_refreshes_only_explicitly():
+async def test_read_only_file_replica_refreshes_identities_without_writes(monkeypatch):
     fs = SimpleNamespace(agfs=InMemoryAGFS())
     writer = build_api_key_manager("root", fs)
-    reader = build_api_key_manager("root", fs)
+    reader = build_api_key_manager("root", fs, account_store_params={"read_only": True})
     await writer.load()
+    forbidden_write = AsyncMock(side_effect=AssertionError("read-only replica attempted a write"))
+    for method in ("write", "ensure_parent_dirs", "pathlock_acquire_exact"):
+        monkeypatch.setattr(reader._store._async_agfs, method, forbidden_write)
     await reader.load()
     try:
-        await writer.create_account("acme", "alice")
+        key = await writer.create_account("acme", "alice")
 
         assert not await reader.has_user("acme", "alice")
         assert await reader.get_user_for_management("acme", "alice") == {
@@ -562,6 +566,17 @@ async def test_file_management_user_read_refreshes_only_explicitly():
             "role": Role.ADMIN,
         }
         assert await reader.has_user("acme", "alice")
+        assert (await reader.resolve_identity(key)).role == Role.ADMIN
+        rotated = await writer.regenerate_key("acme", "alice")
+        await reader.get_user_for_management("acme", "alice")
+        assert (await reader.resolve_identity(rotated)).user_id == "alice"
+        with pytest.raises(UnauthenticatedError):
+            await reader.resolve_identity(key)
+        before = dict(fs.agfs._files)
+        with pytest.raises(PermissionDeniedError, match="read-only"):
+            await reader.register_user("acme", "bob")
+        assert fs.agfs._files == before
+        forbidden_write.assert_not_awaited()
     finally:
         await reader.close()
         await writer.close()

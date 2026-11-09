@@ -17,6 +17,7 @@ from openviking.core.namespace import (
     may_include_hidden_actor_peers,
     uri_parts,
 )
+from openviking.observability.reporting.facts import emit_file_change, file_exists_before
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
@@ -184,7 +185,9 @@ class _OpsMixin:
             data = data.encode("utf-8")
 
         # Encryption (when configured) happens inside the ragfs layer keyed by account_id.
+        existed = await file_exists_before(self, path)
         result = await self._async_agfs.write(path, data)
+        emit_file_change(uri, ctx, "modified" if existed else "added" if existed is False else None)
         await self._notify_post_write(uri, ctx)
         return result
 
@@ -401,6 +404,7 @@ class _OpsMixin:
                     )
                 raise
             # Add estimated_deleted_count to the result
+            emit_file_change(target_uri, ctx, "deleted", is_dir=is_dir)
             if isinstance(result, dict):
                 result["estimated_deleted_count"] = estimated_count
             else:
@@ -932,6 +936,9 @@ class _OpsMixin:
                 operation_id,
                 "directory" if is_dir else "file",
                 is_dir,
+            )
+            emit_file_change(
+                new_uri, ctx, "modified", old_uri=old_uri, is_dir=is_dir, operation="move"
             )
             return result
         finally:
@@ -2068,12 +2075,15 @@ class _OpsMixin:
                 content = result.content
             content = content.encode("utf-8")
 
+        path = self._uri_to_path(uri, ctx=ctx)
+        existed = await file_exists_before(self, path)
         await self._async_agfs.write(
-            self._uri_to_path(uri, ctx=ctx),
+            path,
             content,
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
             auto_pathlock=auto_pathlock,
         )
+        emit_file_change(uri, ctx, "modified" if existed else "added" if existed is False else None)
         await self._notify_post_write(uri, ctx)
 
     async def read_file(
@@ -2208,12 +2218,14 @@ class _OpsMixin:
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
 
+        existed = await file_exists_before(self, path)
         await self._async_agfs.write(
             path,
             content,
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
             auto_pathlock=auto_pathlock,
         )
+        emit_file_change(uri, ctx, "modified" if existed else "added" if existed is False else None)
         await self._notify_post_write(uri, ctx)
 
     async def append_file(
@@ -2253,10 +2265,14 @@ class _OpsMixin:
                 raise
 
             final_content = (existing + content).encode("utf-8")
+            existed = await file_exists_before(self, path)
             await self._async_agfs.write(
                 path,
                 final_content,
                 fs_ctx=fs_ctx,
+            )
+            emit_file_change(
+                uri, ctx, "modified" if existed else "added" if existed is False else None
             )
             if getattr(self, "_post_write_hook", None) is not None:
                 written_at_ms = time.time_ns() // 1_000_000

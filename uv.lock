@@ -2118,6 +2118,15 @@ wheels = [
 ]
 
 [[package]]
+name = "kafka-python"
+version = "3.0.12"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/bb/a9/e8b96f7f71aacd94faf1db0feb9750bf557b17bd22b0595023c88c1f0eb2/kafka_python-3.0.12.tar.gz", hash = "sha256:4ccda3616b9aa5c353d74a97f2770d6cd1b950890d77ab0e8890e09a48eeed65", size = 512543, upload-time = "2026-10-26T18:45:58.883Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/41/ff/7b151e958d98cd6db252b1908f028e049744d26ec9373b1d01959e3bfb47/kafka_python-3.0.12-py3-none-any.whl", hash = "sha256:67add72052e3ad0c37ed9963ebe2b1696adc7f063c64eaf19862c21b69a64a18", size = 614268, upload-time = "2026-10-26T18:46:07.367Z" },
+]
+
+[[package]]
 name = "kubernetes"
 version = "35.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3799,6 +3808,9 @@ redis-mysql = [
     { name = "redis" },
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
+reporting = [
+    { name = "kafka-python" },
+]
 test = [
     { name = "boto3" },
     { name = "datasets" },
@@ -3863,6 +3875,7 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "json-repair", specifier = ">=0.25.0" },
     { name = "jsonschema", specifier = ">=4.23.0" },
+    { name = "kafka-python", marker = "extra == 'reporting'", specifier = ">=3.0.12,<4" },
     { name = "langchain", marker = "extra == 'benchmark'", specifier = ">=1.0.0" },
     { name = "langchain-core", marker = "extra == 'benchmark'", specifier = ">=1.0.0" },
     { name = "langchain-openai", marker = "extra == 'benchmark'", specifier = ">=1.0.0" },
@@ -3970,7 +3983,7 @@ requires-dist = [
     { name = "wheel", marker = "extra == 'build'" },
     { name = "xxhash", specifier = ">=3.0.0" },
 ]
-provides-extras = ["expiry", "gateway-fast", "mysql", "redis-mysql", "test", "auth", "dev", "doc", "eval", "gemini", "gemini-async", "ocr", "build", "bot", "benchmark", "local-embed", "opengauss"]
+provides-extras = ["reporting", "expiry", "gateway-fast", "mysql", "redis-mysql", "test", "auth", "dev", "doc", "eval", "gemini", "gemini-async", "ocr", "build", "bot", "benchmark", "local-embed", "opengauss"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.0.2" }]

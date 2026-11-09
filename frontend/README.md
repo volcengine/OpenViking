@@ -1,6 +1,6 @@
 # OpenViking Frontend
 
-React foundations for building OpenViking AI application interfaces: Rslib builds, bilingual Rspress documentation, layered directory conventions, and scoped styles. FileTree and FilePreview provide placeholder views, alongside five file-type icons. Four business module placeholders let applications integrate their layout before business Hooks and interactions land.
+React foundations for building OpenViking AI application interfaces: Rslib builds, bilingual Rspress documentation, layered directory conventions, and scoped styles. FileTree, Tui and FilePreview provide working views, alongside five file-type icons. Four business module placeholders let applications integrate their layout before business Hooks and interactions land.
 
 Agent-facing development constraints are documented in [AGENTS.md](./AGENTS.md).
 
@@ -30,7 +30,7 @@ npm run preview        # Serve the built documentation at /ui/
 ## Layout
 
 - `packages/react`: `@openviking/react` package, Rslib library build with declaration generation, `ov-` prefixed BEM class names, and React peer dependencies.
-- `packages/react/src/components/{file-tree,file-preview,tui,scope-switcher,agent-connect,viking-bot}`: reusable views with public props types. File-tree and file-preview have their shell and interaction in place, agent-connect has built-in bilingual agent and developer integration content with host-provided credentials and locale, and viking-bot renders a working view pending design review; remaining limits are documented in the [module map](./packages/react/README.md#module-map).
+- `packages/react/src/components/{file-tree,file-preview,tui,scope-switcher,agent-connect,viking-bot}`: reusable views with public props types. FileTree, FilePreview and Tui are implemented against their reviewed contracts; scope-switcher is a stateless layout, agent-connect has built-in bilingual agent and developer integration content with host-provided credentials and locale, and viking-bot provides a working view pending design review. See the [module map](./packages/react/README.md#module-map).
 - `packages/react/src/modules/{file-browser,console,task-center}`: importable placeholder components with settled public Props / Labels / Slots types, and styles. Business Hooks and interactions are planned.
 - `packages/react/src/client`: the framework-neutral request client, exported from `@openviking/react/client` — a `fetch`-based `createOvClient` plus the contract modules depend on (`OvClient`, `OvRequestOptions`, `OvClientError`).
 - `packages/react/src/{hooks,utils}`: reserved internal shared code, without public subpaths. Module-private helpers stay within their module.
