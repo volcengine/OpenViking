@@ -211,9 +211,10 @@ if ((`$env:PATH -split [IO.Path]::PathSeparator) -contains (Join-Path `$env:VIKA
     if ($session -notmatch 'SESSION-PATH-OK') { throw "the current terminal was not given vika:`n$session" }
 
     # A second run of the same package is a no-op that still names the version.
-    $again = Invoke-Installer -Arguments @('-File', $first, '-Lang', 'zh')
+    # English output: redirected streams use the console code page, which turns CJK into ?.
+    $again = Invoke-Installer -Arguments @('-File', $first, '-Lang', 'en')
     if ($again.Code -ne 0) { throw "the repeated install failed:`n$($again.Output)" }
-    if ($again.Output -notmatch '已经是 Vika 0\.5\.0-windows-preview-test') { throw "the repeated install is not idempotent:`n$($again.Output)" }
+    if ($again.Output -notmatch 'Vika 0\.5\.0-windows-preview-test is installed already') { throw "the repeated install is not idempotent:`n$($again.Output)" }
 
     # Same version but different bytes must not overwrite an existing release.
     $conflict = New-Fixture 'same-version-different-content' -Version '0.5.0-windows-preview-test' -Check 'param($Action) # different'
