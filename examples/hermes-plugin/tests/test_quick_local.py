@@ -937,7 +937,8 @@ def test_reuse_authenticates_profile_key(tmp_path, monkeypatch, mode, code, acce
         if request.url.path == "/health":
             assert "X-API-Key" not in request.headers
             return httpx.Response(
-                200, json={"status": "ok", "auth_mode": mode, "root_api_key_required": True}
+                200, json={"status": "ok", "healthy": True, "version": "0.5.0",
+                           "auth_mode": mode, "root_api_key_required": True}
             )
         assert request.url.path == "/api/v1/admin/accounts"
         assert request.headers["X-API-Key"] == "local-test-key"
@@ -949,6 +950,45 @@ def test_reuse_authenticates_profile_key(tmp_path, monkeypatch, mode, code, acce
     )
     assert quick_local.server_belongs_to_profile(paths, "http://127.0.0.1:1938") is accepted
     assert len(requests) == (1 if mode == "dev" else 2)
+
+
+@pytest.mark.parametrize(
+    "health_status,health_fields",
+    [
+        (401, {"status": "ok", "healthy": True, "version": "0.5.0"}),
+        (403, {"status": "ok", "healthy": True, "version": "0.5.0"}),
+        (302, {"status": "ok", "healthy": True, "version": "0.5.0"}),
+        (200, {}),
+        (200, {"status": "ok", "healthy": False, "version": "0.5.0"}),
+        (200, {"status": "ok", "healthy": True, "version": ""}),
+    ],
+)
+def test_ownership_probe_requires_successful_openviking_health(
+    tmp_path, monkeypatch, health_status, health_fields
+):
+    paths, _cfg = _saved_local(tmp_path)
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(
+            health_status,
+            json={
+                "auth_mode": "trusted",
+                "root_api_key_required": True,
+                **health_fields,
+            },
+        )
+
+    client = httpx.Client
+    monkeypatch.setattr(
+        httpx, "Client", lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs)
+    )
+    assert not quick_local.server_belongs_to_profile(paths, "http://127.0.0.1:1938")
+    assert len(requests) == 1
+    assert requests[0].url.path == "/health"
+    assert "X-API-Key" not in requests[0].headers
+
 
 
 def test_wrong_listener_is_not_reused(tmp_path, monkeypatch):

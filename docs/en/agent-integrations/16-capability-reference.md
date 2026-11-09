@@ -39,7 +39,7 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | [DSH](#dsh) | In-process Cordis plugin plus an MCP proxy | Server MCP tools, named `mcp__openviking__<tool>` |
 | [pi](#pi) | Native extension with a built-in MCP client | Server MCP tools, registered as `openviking_<tool>` after the MCP handshake succeeds |
 | [OpenClaw](#openclaw) | Context-engine plugin | 16 native tools, 15 enabled by default |
-| [Hermes](#hermes) | Hermes memory provider | 7 native `viking_*` tools in the updated external plugin; 6 in older bundled providers |
+| [Hermes](#hermes) | Hermes memory provider + MCP adapter | Server MCP tools (plugin 2.2); native tools in older releases |
 | [MCP clients, Agent Plugins](#other-integrations) | MCP only | Server MCP tools |
 | [ov CLI](#ov-cli) | Command-line client | Every operation as an explicit command; no agent involved |
 
@@ -124,7 +124,8 @@ applicable Rule. A failed or unavailable check is not an empty set of Rules.
 | VikingBot through MCP | `mcp_<server_name>_rule_search` |
 | Microsoft Agent Framework through MCP | Dynamically discovered `rule_search`, with an optional configured prefix |
 | OpenClaw, Open WebUI | `ov_rule_search` |
-| Hermes external plugin, LangChain / LangGraph | `viking_rule_search` |
+| Hermes external plugin 2.2 | `mcp__openviking__rule_search` |
+| Hermes external plugin 2.1.4, LangChain / LangGraph | `viking_rule_search` |
 | Magpie | `magpie-plugin_rule_search` (source installs use their folder prefix) |
 
 Upgrade the server to a build that advertises `rule_search`, then reconnect MCP clients.
@@ -152,7 +153,7 @@ OpenClaw registers its own tools instead of passing MCP tools through.
 
 ### Hermes tools
 
-The updated Hermes external plugin has seven tools: `viking_search`, `viking_rule_search`, `viking_read`, `viking_browse`, `viking_remember`, `viking_forget`, and `viking_add_resource`. There is no skill installation tool. `viking_remember` submits a fact through its own session and returns before extraction finishes; extraction may add, merge, or skip the fact. Older bundled providers have the original six tools. See [Hermes](#hermes) for distribution differences.
+The Hermes external plugin 2.2 uses the server MCP tools, including `rule_search` when the server advertises it. Hermes external plugin 2.1.4 has seven native `viking_*` tools; older releases have six. MCP `remember` submits messages for extraction, which may add, merge, or skip memories. See [Hermes](#hermes) for distribution differences.
 
 <a id="_3-5-type-boundaries-for-writes-and-deletes"></a><a id="_3-5-1-write-boundary"></a><a id="_3-5-2-delete-boundary"></a>
 
@@ -746,8 +747,15 @@ The two are separate code bases. Where their behavior differs:
 | Commits during a session | Only at session boundaries | A background commit at 20,000 pending tokens (`commit_token_threshold`) |
 | Recall digests | Not supported | Optional server digest (`recall_compress`) |
 | Mirroring Hermes's built-in memory | Additions only | Additions, replacements, and removals, tracked in a URI registry |
-| `viking_forget` | User memory files with an explicit user ID | Also accepts `viking://~/`, rejects user-ID-less layouts, and checks ownership before deleting |
+| Explicit tools | Six native `viking_*` tools | Server MCP schemas and results; Hermes owns filters and approval |
 | Cron, subagent, and flush contexts | Not documented at that commit | Recall works. Automatic writes and mirroring are skipped |
+
+Plugin 2.2 uses `mcp__openviking__<tool>` and requires Hermes 0.22.7 or newer
+and OpenViking 0.4.23 or newer with `/mcp` enabled.
+New connections use untrusted policy. Read-only tools run without approval;
+other tools require approval. The adapter uses launch-time profile binding and
+uses the profile supplied by Hermes. Restart after upgrading.
+See the [plugin configuration](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/CONFIGURATION.md#mcp-tools).
 
 Behavior of the pinned bundled provider:
 
