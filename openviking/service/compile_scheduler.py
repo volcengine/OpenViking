@@ -113,15 +113,9 @@ class CompileScheduler:
         self._identity_resolver = resolver
         self._group_resolver = group_resolver
 
-    async def save_credential(self, ctx: RequestContext) -> tuple[Dict[str, Any], Dict[str, str]]:
-        """Return the request's execution identity and encrypted API key for scheduled runs."""
-        executor = {
-            "account_id": ctx.account_id,
-            "user_id": ctx.user.user_id,
-            "role": str(ctx.role),
-            "group_ids": list(ctx.group_ids),
-        }
-        return executor, await encrypt_credential(self.credential_encryptor, ctx)
+    async def save_credential(self, ctx: RequestContext) -> Dict[str, str]:
+        """Return the encrypted request key; reject missing keys."""
+        return await encrypt_credential(self.credential_encryptor, ctx)
 
     def install_expiry(self, scheduler: Any) -> None:
         """Register the redis backend handler; call before ExpiryRuntime.start_roles()."""

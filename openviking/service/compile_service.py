@@ -16,7 +16,7 @@ from openviking.core.identifiers import validate_user_id
 from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.service.compile_targets import (
     COMPILE_NAME_PATTERN,
     CompileLifecycle,
@@ -529,8 +529,7 @@ class CompileService:
                 raise InvalidArgumentError("update_schedule is required when auto_update is true")
             if self._scheduler is None or self._scheduler._expiry is None:
                 raise FailedPreconditionError("Scheduled Compile requires a configured scheduler")
-            executor, credential = await self._scheduler.save_credential(ctx)
-            record["execution_context"].update(executor=executor, credential=credential)
+            record["execution_context"]["credential"] = await self._scheduler.save_credential(ctx)
             if changed or record["next_triggered_slot"] is None:
                 record["next_triggered_slot"] = next_slot(schedule, datetime.now(TZ)).isoformat()
                 record["last_triggered_slot"] = None
@@ -543,7 +542,7 @@ class CompileService:
     async def _settings(
         self, request: CompileInputs, ctx: RequestContext, owner_user_id: str, compile_name: str
     ) -> dict[str, Any]:
-        """Build validated settings with encrypted private args before creating any output nodes."""
+        """Save the caller's executor identity independently of scheduling."""
         if request.is_memory_mode:
             raise InvalidArgumentError("Persistent Compile does not support skill=memory")
         normalized = await self._normalize_request(request, ctx)
@@ -556,7 +555,17 @@ class CompileService:
         if schedule is not None:
             schedule = parse_schedule(schedule, (ctx.account_id, owner_user_id, compile_name))
         public["args"] = runtime_args
-        record = new_record(public)
+        record = new_record(
+            public,
+            execution_context={
+                "executor": {
+                    "account_id": ctx.account_id,
+                    "user_id": ctx.user.user_id,
+                    "role": str(ctx.role),
+                    "group_ids": list(ctx.group_ids),
+                }
+            },
+        )
         if private:
             record["execution_context"]["private_args"] = await self._encrypt_private_args(
                 ctx.account_id, private
@@ -990,25 +999,59 @@ class CompileService:
         return self._config_view(body.compile_name, record)
 
     async def list_configs(
-        self, ctx: RequestContext, *, limit: int, cursor: str | None
+        self,
+        ctx: RequestContext,
+        *,
+        limit: int,
+        cursor: str | None,
+        scope: str = "user",
+        compile_name: str | None = None,
     ) -> dict[str, Any]:
-        """Page the caller's readable configurations in stable name order."""
+        """Page readable user or ADMIN account configurations by exact name."""
+        if scope not in {"user", "account"}:
+            raise InvalidArgumentError("scope must be user or account")
+        if scope == "account" and ctx.role != Role.ADMIN:
+            raise PermissionDeniedError("Account Compile listing requires ADMIN")
+        if compile_name is not None:
+            validate_compile_name(compile_name)
+        if cursor is not None:
+            if scope == "user":
+                validate_compile_name(cursor)
+            elif ":" not in cursor:
+                raise InvalidArgumentError("Account Compile cursor must include an owner")
         lifecycle = self._require_lifecycle()
         items = []
-        async for compile_name, record in lifecycle.store.iter_records(
-            ctx.account_id, user_id=ctx.user.user_id, cursor=cursor
+        async for name, record in lifecycle.store.iter_records(
+            ctx.account_id,
+            user_id=ctx.user.user_id if scope == "user" else None,
+            cursor=cursor,
+            compile_name=compile_name,
         ):
             try:
                 await lifecycle._fs._ensure_access(record["to"], ctx)
             except PermissionDeniedError:
                 continue
-            items.append(self._config_view(compile_name, record))
+            context = record["execution_context"]
+            items.append(
+                {
+                    **self._config_view(name, record),
+                    "owner_user_id": context["owner_user_id"],
+                    "executor_user_id": (context.get("executor") or {}).get("user_id"),
+                    "updated_by": record.get("updated_by"),
+                    "conflict_num": record["conflict_num"],
+                }
+            )
             if len(items) > limit:
                 break
         page = items[:limit]
+        next_cursor = None
+        if len(items) > limit:
+            next_cursor = page[-1]["compile_name"]
+            if scope == "account":
+                next_cursor += ":" + page[-1]["owner_user_id"]
         return {
             "configs": page,
-            "next_cursor": page[-1]["compile_name"] if len(items) > limit else None,
+            "next_cursor": next_cursor,
         }
 
     async def list_runs(

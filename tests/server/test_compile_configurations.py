@@ -19,7 +19,7 @@ from openviking.service.compile_service import (
     CompileSessionAccepted,
     CompileSessionStatus,
 )
-from openviking.service.compile_targets import parse_schedule
+from openviking.service.compile_targets import new_record, parse_schedule
 from openviking.service.task_tracker import get_task_tracker
 from openviking.storage.errors import ResourceBusyError
 from openviking.storage.queuefs import get_queue_manager
@@ -174,6 +174,7 @@ async def test_named_configuration_conflicts_and_lookup_permissions(
     name = SAVED_INPUTS["compile_name"]
     store = service.compile.lifecycle.store
     original = await store.get(ctx.account_id, ctx.user.user_id, name)
+    assert original["execution_context"]["executor"]["user_id"] == ctx.user.user_id
     response = await client.post(
         "/api/v1/compile/create", json={**SAVED_INPUTS, "instruction": "overwrite"}
     )
@@ -216,6 +217,7 @@ async def test_same_name_configuration_and_runs_are_user_scoped(service, app, cl
         assert [(c["compile_name"], c["instruction"]) for c in configs] == [
             (name, actor.user.user_id)
         ]
+        assert configs[0]["executor_user_id"] == actor.user.user_id
         accepted = await client.post(
             "/api/v1/compile",
             json={"compile_name": name},
@@ -319,6 +321,58 @@ async def test_case_distinct_names_paginate(service, app, client, monkeypatch):
     ).json()["result"]
     assert [config["compile_name"] for config in second["configs"]] == names[1:]
     assert second["next_cursor"] is None
+
+
+@pytest.mark.parametrize("role", [Role.USER, Role.GLOBAL, Role.ROOT])
+async def test_account_configuration_listing_requires_admin(service, app, client, role):
+    ctx = RequestContext(user=service.user, role=role)
+    app.dependency_overrides[get_request_context] = lambda: ctx
+    response = await client.get("/api/v1/compile/configs", params={"scope": "account"})
+    assert response.status_code == 403, response.text
+
+
+@pytest.mark.parametrize("scope,role", [("user", Role.USER), ("account", Role.ADMIN)])
+async def test_configuration_list_metadata_and_cross_user_paging(
+    service, app, client, monkeypatch, scope, role
+):
+    ctx, _ = await prepare(service, app, monkeypatch)
+    store = service.compile.lifecycle.store
+    for owner in ("alice", "bob"):
+        await store.create(ctx.account_id, owner, new_record(INPUTS), compile_name="team_compile")
+    await store.create("foreign-account", "alice", new_record(INPUTS), compile_name="team_compile")
+    async with store.edit(ctx.account_id, "alice", "team_compile") as record:
+        record["updated_by"] = "editor"
+        record["conflict_num"] = 7
+        record["execution_context"]["executor"] = {"user_id": "global-executor"}
+    actor = RequestContext(user=UserIdentifier(ctx.account_id, "alice"), role=role)
+    app.dependency_overrides[get_request_context] = lambda: actor
+    params = {"scope": scope, "compile_name": "team_compile", "limit": 1}
+    response = await client.get("/api/v1/compile/configs", params=params)
+    assert response.status_code == 200, response.text
+    page = response.json()["result"]
+    assert len(page["configs"]) == 1
+    first = page["configs"][0]
+    assert first["conflict_num"] == 7
+    assert {key: first[key] for key in ("owner_user_id", "executor_user_id", "updated_by")} == {
+        "owner_user_id": "alice",
+        "executor_user_id": "global-executor",
+        "updated_by": "editor",
+    }
+    assert "execution_context" not in first
+    if scope == "user":
+        assert page["next_cursor"] is None
+    else:
+        assert page["next_cursor"] is not None
+        response = await client.get(
+            "/api/v1/compile/configs", params={**params, "cursor": page["next_cursor"]}
+        )
+        assert response.status_code == 200, response.text
+        page = response.json()["result"]
+        assert len(page["configs"]) == 1
+        second = page["configs"][0]
+        assert second["owner_user_id"] == "bob" and second["updated_by"] == "bob"
+        assert second["executor_user_id"] is None
+        assert page["next_cursor"] is None
 
 
 @pytest.mark.parametrize("endpoint", ["/api/v1/compile/create", "/api/v1/compile"])
@@ -486,12 +540,7 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
     store = service.compile.lifecycle.store
     scheduler = CompileScheduler(service.compile, store)
     scheduler._expiry = SimpleNamespace(report=AsyncMock(), unregister=AsyncMock())
-    scheduler.save_credential = AsyncMock(
-        return_value=(
-            {"account_id": ctx.account_id, "user_id": ctx.user.user_id},
-            {"ciphertext": "test"},
-        )
-    )
+    scheduler.save_credential = AsyncMock(return_value={"ciphertext": "test"})
     executor = RequestContext(user=UserIdentifier(ctx.account_id, "executor"), role=Role.USER)
     scheduler._executor = AsyncMock(
         return_value=(executor, {"account_id": ctx.account_id, "user_id": executor.user.user_id})
@@ -504,6 +553,7 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
     )
     compile_name = result["compile_name"]
     before = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
+    assert before["execution_context"]["executor"]["user_id"] == ctx.user.user_id
     due = datetime.fromisoformat(before["next_triggered_slot"])
     assert (
         await scheduler.trigger_if_due(ctx.account_id, ctx.user.user_id, compile_name, due)
@@ -557,6 +607,9 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
     )
     saved = await service.compile.update_config(update, ctx)
     assert saved["update_schedule"] == plan
+    disabled = await store.get(ctx.account_id, other_owner, compile_name)
+    assert disabled["execution_context"]["executor"]["user_id"] == ctx.user.user_id
+    assert disabled["execution_context"]["credential"] is disabled["next_triggered_slot"] is None
 
 
 async def test_configuration_update_preserves_times_and_retry_payload(service, app, monkeypatch):
@@ -576,6 +629,9 @@ async def test_configuration_update_preserves_times_and_retry_payload(service, a
         record["conflict_num"] = 7
     source = SOURCE + "-updated"
     await service.viking_fs.write_file(f"{source}/source.md", "source", ctx=ctx)
+    editor = RequestContext(
+        user=UserIdentifier(ctx.account_id, "editor"), role=Role.USER, api_key="editor-key"
+    )
     await service.compile.update_config(
         CompileConfigUpdate.model_validate(
             {
@@ -585,12 +641,14 @@ async def test_configuration_update_preserves_times_and_retry_payload(service, a
                 "instruction": "changed",
                 "auto_update": False,
                 "updated_by": "bob",
+                "args": {"owner_user_id": ctx.user.user_id},
             }
         ),
-        ctx,
+        editor,
     )
     updated = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
     assert updated["updated_by"] == "bob"
+    assert updated["execution_context"]["executor"]["user_id"] == editor.user.user_id
     assert updated["task_first_create_time"] == updated["last_run_time"] == task.created_at
     assert updated["progress"] == {}
     assert updated["conflict_num"] == 7

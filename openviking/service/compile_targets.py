@@ -348,12 +348,26 @@ class CompileStateStore:
             await self.write_json(path, record, lease)
 
     async def iter_records(
-        self, account_id: str, *, user_id: Optional[str] = None, cursor: Optional[str] = None
+        self,
+        account_id: str,
+        *,
+        user_id: Optional[str] = None,
+        cursor: Optional[str] = None,
+        compile_name: Optional[str] = None,
     ) -> AsyncIterator[tuple[str, dict]]:
-        """List creator-scoped names lexically; account scans include every creator's records."""
+        """Yield matching configs in (name, owner) order; cursors are name or name:owner."""
+        if compile_name is not None:
+            validate_compile_name(compile_name)
+        cursor_name, cursor_owner = None, None
         if cursor is not None:
-            validate_compile_name(cursor)
+            cursor_name, separator, owner = cursor.partition(":")
+            validate_compile_name(cursor_name)
+            if separator:
+                if validate_user_id(owner):
+                    raise InvalidArgumentError("Invalid Compile cursor owner")
+                cursor_owner = owner
         owners = [user_id] if user_id is not None else await self.list_users(account_id)
+        # shortcut: scans user directories; add an account index if listing is slow.
         candidates = []
         for owner_user_id in owners:
             try:
@@ -361,13 +375,22 @@ class CompileStateStore:
             except (AGFSNotFoundError, FileNotFoundError):
                 continue
             for entry in entries:
-                compile_name = self._segment_name(str(entry.get("name") or ""))
-                if compile_name is not None and (cursor is None or compile_name > cursor):
-                    candidates.append((compile_name, owner_user_id))
-        for compile_name, owner_user_id in sorted(candidates):
-            record = await self.get(account_id, owner_user_id, compile_name)
+                name = self._segment_name(str(entry.get("name") or ""))
+                if name is None or (compile_name is not None and name != compile_name):
+                    continue
+                if cursor_name is not None:
+                    if cursor_owner is None and name <= cursor_name:
+                        continue
+                    if cursor_owner is not None and (name, owner_user_id) <= (
+                        cursor_name,
+                        cursor_owner,
+                    ):
+                        continue
+                candidates.append((name, owner_user_id))
+        for name, owner_user_id in sorted(candidates):
+            record = await self.get(account_id, owner_user_id, name)
             if record is not None:
-                yield compile_name, record
+                yield name, record
 
     async def list_users(self, account_id: str) -> list[str]:
         """List safe creator directories for account-wide discovery and scheduling."""

@@ -85,8 +85,8 @@ async def test_scheduled_credential_uses_current_key_identity():
     scheduler = CompileScheduler(None, None)
     scheduler.credential_encryptor = FileEncryptor(LocalFileProvider(root_key="ab" * 32))
     caller = RequestContext(user=UserIdentifier(ACCOUNT, OWNER), role=Role.USER, api_key="test-key")
-    executor, credential = await scheduler.save_credential(caller)
-    assert executor == {
+    credential = await scheduler.save_credential(caller)
+    executor = {
         "account_id": ACCOUNT,
         "user_id": OWNER,
         "role": Role.USER,

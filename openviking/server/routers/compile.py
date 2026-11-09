@@ -4,6 +4,7 @@
 
 import asyncio
 import math
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, Path, Query, status
 from fastapi import Response as FastAPIResponse
@@ -94,11 +95,16 @@ async def update_compile_config(
 async def list_compile_configs(
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None),
+    scope: Literal["user", "account"] = Query("user"),
+    compile_name: str | None = Query(None, pattern=COMPILE_NAME_PATTERN),
     ctx: RequestContext = Depends(get_request_context),
 ):
+    """List readable configurations; account scope requires ADMIN."""
     return Response(
         status="ok",
-        result=await get_service().compile.list_configs(ctx, limit=limit, cursor=cursor),
+        result=await get_service().compile.list_configs(
+            ctx, limit=limit, cursor=cursor, scope=scope, compile_name=compile_name
+        ),
     )
 
 
