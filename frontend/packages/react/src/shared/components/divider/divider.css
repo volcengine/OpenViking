@@ -1,0 +1,12 @@
+/**
+ * 分隔线只提供语义与定位，尺寸和颜色由组件按 props 内联给出——它们随调用方
+ * 的上下文变化，固定成类名只能覆盖少数几种情况。
+ *
+ * The divider carries semantics and positioning only; size and colour come from
+ * the component inline, because they follow the caller's context and a class name
+ * could only cover a few cases.
+ */
+.ov-divider {
+  display: block;
+  align-self: stretch;
+}

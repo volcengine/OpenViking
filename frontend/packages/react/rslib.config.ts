@@ -16,6 +16,8 @@ export default defineConfig({
           'modules/scope-cascade': './src/modules/scope-cascade/index.ts',
           'components/file-tree': './src/components/file-tree/index.ts',
           'components/file-preview': './src/components/file-preview/index.ts',
+          'components/file-browser-entries':
+            './src/components/file-browser-entries/index.ts',
           'components/tui': './src/components/tui/index.ts',
           'components/scope-switcher':
             './src/components/scope-switcher/index.ts',
@@ -42,6 +44,8 @@ export default defineConfig({
       'components/file-tree/style': './src/components/file-tree/style.css',
       'components/file-preview/style':
         './src/components/file-preview/style.css',
+      'components/file-browser-entries/style':
+        './src/components/file-browser-entries/style.css',
       'components/tui/style': './src/components/tui/style.css',
       'components/scope-switcher/style':
         './src/components/scope-switcher/style.css',

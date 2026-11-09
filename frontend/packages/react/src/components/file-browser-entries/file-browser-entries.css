@@ -1,0 +1,94 @@
+/**
+ * 入口条：主色浅底的一行，两个入口等分宽度、居中。
+ *
+ * 底色用 `color-mix` 从主色派生，而不是写死一个浅紫——宿主换主色时它跟着变，
+ * 不必再为每个主题补一条。
+ *
+ * The entry row: one tinted strip with two equal-width, centred entries.
+ *
+ * The tint derives from the primary colour through `color-mix` rather than being a
+ * fixed light purple, so it follows a host that changes the primary colour instead
+ * of needing one more value per theme.
+ */
+.ov-file-browser-entries {
+  --ov-file-browser-entries-height: 32px;
+
+  display: flex;
+  box-sizing: border-box;
+  height: var(--ov-file-browser-entries-height);
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: color-mix(
+    in srgb,
+    var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff)) 6%,
+    #ffffff
+  );
+}
+
+.ov-file-browser-entries__entry {
+  display: inline-flex;
+  flex: 1 0 0;
+  min-width: 1px;
+  height: var(--ov-file-browser-entries-height);
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 22px;
+  letter-spacing: 0.039px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 160ms ease;
+}
+
+.ov-file-browser-entries__entry:hover:not(:disabled) {
+  background: color-mix(
+    in srgb,
+    var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff)) 10%,
+    transparent
+  );
+}
+
+.ov-file-browser-entries__entry:focus-visible {
+  outline: 2px solid
+    var(--ov-ui-color-focus, var(--ov-ui-focus-default, #5252ff));
+  outline-offset: -2px;
+}
+
+.ov-file-browser-entries__entry:disabled {
+  color: var(
+    --ov-ui-color-text-disabled,
+    var(--ov-ui-text-disabled-default, #a5a7bb)
+  );
+  cursor: not-allowed;
+}
+
+.ov-file-browser-entries__icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+
+.ov-file-browser-entries__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 分隔线与入口同为竖线，取主色并压到半透明，避免在浅底上抢过文字。 */
+/* The divider matches the entries: primary colour at half opacity, so it does not
+   out-shout the labels on the light tint. */
+.ov-file-browser-entries__divider {
+  background: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+  opacity: 0.5;
+}
