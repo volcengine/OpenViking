@@ -536,8 +536,10 @@ class OpenVikingBackend:
             async def read_one(uri: str) -> str:
                 async with slots:
                     content = await self._retry("read", lambda: client.read(uri))
-                if not isinstance(content, str) or not content.strip():
+                if not isinstance(content, str):
                     raise OpenVikingBackendError("OpenViking returned an empty memory body")
+                if not content.strip():
+                    audit_event("search_memory_skipped", reason="empty_memory_body", memory_uri=uri)
                 return content
 
             return await asyncio.gather(*(read_one(uri) for uri in uris))
@@ -699,7 +701,11 @@ class AMLAdapter:
                 hits = ranked[:result_limit]
                 uris = [hit["uri"] for hit in hits]
                 bodies = await self.backend.read_memories(user_id=request.user_id, uris=uris)
-                hits = [{**hit, "content": body} for hit, body in zip(hits, bodies, strict=True)]
+                hits = [
+                    {**hit, "content": body}
+                    for hit, body in zip(hits, bodies, strict=True)
+                    if body.strip()
+                ]
                 audit_event(
                     search_event,
                     candidate_count=len(candidates),
