@@ -30,10 +30,12 @@ The Core starts a Connector and calls these operations in order:
    Telegram: the account verified by the one-time Start link, `{ chat_id }`;
    QQ: the account verified by the one-time private-chat code, `{ chat_id }`;
    Slack: the person who sent the one-time code to the bot, `{ chat_id }` of
-   that direct message). A mailbox reports none. It may also name the bot
-   itself: `self: { id }`, where `id` is how the bot appears in an inbound
-   event's `message.mentions` (Lark: the app's bot `open_id` from
-   `/open-apis/bot/v3/info`). The Core then marks each chat input whose
+   that direct message; OneBot: the friend who sent the one-time code to the
+   account in a private message, `{ chat_id: "private:<number>" }`). A
+   mailbox reports none. It may also name the bot itself: `self: { id }`,
+   where `id` is how the bot appears in an inbound event's `message.mentions`
+   (Lark: the app's bot `open_id` from `/open-apis/bot/v3/info`; OneBot: the
+   account's QQ number). The Core then marks each chat input whose
    mentions include anyone with `mention=me|other|mixed` by id, never by display
    name; without `self` the field is left out. A failed lookup reports no
    `self` rather than failing `check`.
@@ -122,7 +124,7 @@ should reuse `spec/check/discover/read` and `RECORD/SCHEMA/STATE` semantics.
 
 `connector` identifies the provider; `instance` identifies a configured source
 instance/account and is unique within a Core. Built-in chat connectors currently
-use `instance=lark`, `instance=weixin`, `instance=telegram`, `instance=slack`, or `instance=qq`. The source process authenticates both
+use `instance=lark`, `instance=weixin`, `instance=telegram`, `instance=slack`, `instance=qq`, or `instance=onebot`. The source process authenticates both
 identities; input cannot select another Connector's identity.
 
 `id` is required and stable across retries. The Core deduplicates on
@@ -174,7 +176,7 @@ Failure-notice muting uses the event scope, and its outbound history keeps the
 source, subject and action without inventing a chat.
 
 Lark's Connector decodes message, card-action, and meeting envelopes. Weixin,
-Telegram, QQ and Slack produce canonical chat events directly. The Core validates and
+Telegram, QQ, Slack and OneBot produce canonical chat events directly. The Core validates and
 consumes only the fields above, plus optional typed extension `data`. Provider
 raw envelopes are not required, forwarded to the runtime, or persisted. A
 `provider_event` diagnostic field is ignored. Protocol 0.1 is rejected.
@@ -359,15 +361,15 @@ Results report the delivered `message_id` and, where known, `chat_id`,
 
 ## Current actions
 
-| Operation | Lark | Weixin | Telegram | Slack | QQ | Email |
-| --- | --- | --- | --- | --- | --- | --- |
-| `message.send` | markdown, file, file key, card; mentions; idempotent; to a chat or the owner | markdown (plain text), file | markdown (plain text), file; verified owner only | markdown (as mrkdwn), file; mentions; to a channel the bot is in, or a DM | plain text, file; verified owner, proactive quota | — |
-| `message.reply` | as `message.send`, plus threads; to a document comment: plain text, not retried | markdown (plain text), file | as `message.send`, with quoted reply | as `message.send`, into the target's thread | plain text, file; passive quota, quote when indexed | markdown (plain text); owner approval on the primary IM |
-| `message.react`, `message.retract` | yes | — | — | yes | — | — |
-| `message.media` (query) | download by image/file key | downloaded inbound media | lazy download by message ID | lazy download by message ID and file ID | lazy download by message ID | — |
-| `chat.list`, `chat.messages`, `thread.messages` (queries) | yes | — | — | bot identity, cursor pagination | — | — |
-| `chat.members.list` (query) | — | — | — | member IDs and optional profiles | — | — |
-| `message.search` (query) | yes | — | — | — | — | — |
+| Operation | Lark | Weixin | Telegram | Slack | QQ | OneBot | Email |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `message.send` | markdown, file, file key, card; mentions; idempotent; to a chat or the owner | markdown (plain text), file | markdown (plain text), file; verified owner only | markdown (as mrkdwn), file; mentions; to a channel the bot is in, or a DM | plain text, file; verified owner, proactive quota | markdown (plain text), file; mentions in groups; to a connected group or private chat | — |
+| `message.reply` | as `message.send`, plus threads; to a document comment: plain text, not retried | markdown (plain text), file | as `message.send`, with quoted reply | as `message.send`, into the target's thread | plain text, file; passive quota, quote when indexed | as `message.send`, with quoted reply | markdown (plain text); owner approval on the primary IM |
+| `message.react`, `message.retract` | yes | — | — | yes | — | group reactions where the implementation has them; retract own messages | — |
+| `message.media` (query) | download by image/file key | downloaded inbound media | lazy download by message ID | lazy download by message ID and file ID | lazy download by message ID | lazy download by message ID; forwarded chats as text | — |
+| `chat.list`, `chat.messages`, `thread.messages` (queries) | yes | — | — | bot identity, cursor pagination | — | connected groups; newest history page; no threads | — |
+| `chat.members.list` (query) | — | — | — | member IDs and optional profiles | — | — | — |
+| `message.search` (query) | yes | — | — | — | — | — | — |
 
 The Email Connector watches one mailbox's `INBOX` over IMAP, opened read-only
 (`EXAMINE`, `BODY.PEEK[]`): it never marks, moves or deletes mail. It starts
@@ -542,3 +544,87 @@ accept only `slack.com` hosts and never follow redirects. Only explicit
 `ratelimited` responses with `Retry-After` are retried, at most twice; Slack has
 no idempotency key, so uncertain sends stay blocked in the outbox. A reaction
 maps the model's Lark emoji names to Slack's (`OnIt` → `eyes`).
+
+## OneBot provider contract
+
+OneBot drives a personal QQ account through a [OneBot v11](https://github.com/botuniverse/onebot-11)
+implementation (NapCat, LLOneBot or Lagrange.OneBot) over a forward WebSocket:
+the Connector is the client of the implementation's WebSocket server, and one
+connection carries events and `echo`-correlated action calls. The token goes in
+an `Authorization: Bearer` header; an address carrying `access_token` is
+refused. A rejected token (retcode 1403, close 1008) fails the worker; other
+disconnects reconnect after 1, 2, 5, 10, then every 30 s, and a connection
+silent for twice the announced heartbeat interval plus 10 s is replaced. The
+socket opens at `check` and stays open until `stop`, so `pause` keeps actions
+available. Setup, the policy file and the implementation differences are in
+[OneBot Connector](onebot-connector.md).
+
+`<dataDir>/onebot/state.sqlite3` (0600, directory 0700) holds the address,
+token, account, owner and binding time, reply routes, the people shown to the
+model per chat, the ids of messages the Connector sent and the lines waiting
+for delivery. Binding a different account clears all but the account row.
+Pairing reads `get_login_info`, then binds whoever sends the one-time code
+`vika-xxxxxxxx` to the account in a private friend message after the login
+started; a failed login keeps the old account. Messages older than the first
+binding are dropped. OneBot implementations give every connection every event
+and split nothing, so there is no receiver lease; another client may share the
+account.
+
+Only connected chats exist: the groups listed in the hand-edited
+`<dataDir>/onebot/config.json` (`ambient` or `mention`), and the owner's private
+chat, or every friend's under `"private": "friends"`. Other messages are
+dropped before anything is looked up or stored, and actions to other chats are
+refused. Each admitted message is classified as `direct`, `ambient`, `context`
+or dropped, and held in the state database. A direct line releases its chat at
+once; an ambient line makes it due after `settleMs` (default 3 s) of quiet,
+held further until 20 s after the previous release unless the agent has sent
+there since, and never more than 45 s after the first waiting ambient line;
+context lines (at most 30 per chat, none older than 6 h) only ride along. A
+release emits all of the chat's lines in order, so the Core's group burst gives
+the model one input per batch, and the freshness fence is crossed once per
+batch rather than once per line. The Connector's own echoes are dropped:
+the echo of a send is recognised by the message id the send returned, once
+the send on the socket is answered, since the echo may arrive first. A message
+sent from the same account by another client is kept as a context line with
+actor type `bot` and the account's name. A private `/` line from anyone but
+the owner, the account itself included, is dropped, because the Core runs a
+leading `/` in any direct chat as a daemon command without an owner check.
+
+Ids are strings: a chat is `group:<number>` or `private:<number>`, a message
+`ob:<chat>:<message_id>` (NapCat's ids are signed 32-bit hashes; the sign is
+kept), an event `<self>:<chat>:<message_id>:<time in seconds>` so that a reused
+hash is a new event, and `conversation.tenant_id` is the account. `time` is
+read as seconds, or as milliseconds above 10^11. Segments are rendered to text:
+@mentions by group card or nickname (`get_group_member_info` for at most 5
+people within 2 s per line, failures remembered for 10 minutes; at most 100
+`mentions`, the account's own kept), a quote as `parent_id`,
+images, files, videos and forwarded chats as attachment references (at most
+10), stickers, faces, voice and share cards as short markers; text is cut at
+16,000 characters, and media addresses, which carry download keys, never appear
+in text, logs or errors.
+
+Outbound Markdown becomes plain text of 1–4000 characters, sent as `text`
+segments that are never parsed as CQ codes, so model text cannot produce
+@全体成员. Mentions are names the Connector resolves against the people it
+showed the model in that chat, as stored or in their `from=` spelling
+(`sanitizeMemberName`), and become `at` segments, in groups only. A reply
+prepends a `reply` segment. Files of at most 20 MiB travel in the message as
+`base64://` `image` (sniffed PNG, JPEG, GIF, WebP) or `file` segments, rather
+than `upload_group_file`, which returns no message id. The manifest declares
+`max_text_chars: 4000`, so the Core refuses longer text before it reserves the
+outbox. Sends are serialized, and each chat's are paced 1.2 s apart without
+delaying other chats. The error of a failed send says whether it was written:
+written but not answered is uncertain, never written says it was not sent.
+The Core cannot tell them apart and records every failed attempt UNCERTAIN;
+OneBot has no idempotency key, so the identical retry stays blocked either
+way. Reactions use `set_msg_emoji_like` on group messages, mapping the model's
+names to QQ face ids (`OnIt` → 128064); the temporary `OnIt` is removed with
+`set: false`. `delete_msg` retracts only the Connector's own messages. Media
+downloads ask `get_image` / `get_file` first, then the segment's `url` (never
+its file name), at most 20 MiB, without redirects, and never from `localhost`
+or a loopback, link-local, private, shared or unspecified address literal; a
+forwarded chat is fetched with `get_forward_msg` and saved as a transcript of
+at most 200 messages and 64 KiB. `chat.list` lists connected groups from `get_group_list`;
+`chat.messages` returns the newest 1–50 messages from
+`get_group_msg_history` / `get_friend_msg_history`, newest first, without a
+cursor, as context only. There is no catch-up read after downtime.

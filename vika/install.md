@@ -57,7 +57,7 @@ Follow the wizard:
 
 For Feishu, scan a QR code to create or select an app, or enter its App ID and App Secret manually. An existing app must use a long connection and must not also be monitored by another bot service. Setup asks whether to allow reading messages as your user; review [message access](docs/usage-reference.md#message-access) before authorizing.
 
-Other channel setup: [WeChat](docs/installation-reference.md#wechat-setup) · [QQ](docs/installation-reference.md#qq-setup) · [Telegram](docs/installation-reference.md#telegram-setup) · [Slack](docs/installation-reference.md#slack-setup).
+Other channel setup: [WeChat](docs/installation-reference.md#wechat-setup) · [QQ](docs/installation-reference.md#qq-setup) · [Telegram](docs/installation-reference.md#telegram-setup) · [Slack](docs/installation-reference.md#slack-setup) · [QQ over OneBot](docs/installation-reference.md#onebot-setup).
 
 ## Verify and manage
 
