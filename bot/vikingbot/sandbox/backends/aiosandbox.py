@@ -10,7 +10,12 @@ from loguru import logger
 
 from vikingbot.config.schema import SandboxConfig, SessionKey
 from vikingbot.sandbox.backends import register_backend
-from vikingbot.sandbox.base import SandboxBackend, SandboxFileInfo, SandboxNotStartedError
+from vikingbot.sandbox.base import (
+    CommandResult,
+    SandboxBackend,
+    SandboxFileInfo,
+    SandboxNotStartedError,
+)
 from vikingbot.utils.session_paths import portable_path_component
 
 
@@ -92,7 +97,8 @@ class AioSandboxBackend(SandboxBackend):
                     + f"\n... (truncated, {len(result_text) - max_len} more chars)"
                 )
 
-            return result_text
+            exit_code = getattr(getattr(result, "data", None), "exit_code", None)
+            return CommandResult(result_text, exit_code if isinstance(exit_code, int) else None)
         except Exception as e:
             logger.error(f"[AioSandbox] Error: {e}")
             import traceback

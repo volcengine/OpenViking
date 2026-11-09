@@ -12,7 +12,7 @@ from loguru import logger
 
 from vikingbot.config.schema import SandboxConfig, SessionKey
 from vikingbot.sandbox.backends import register_backend
-from vikingbot.sandbox.base import SandboxBackend
+from vikingbot.sandbox.base import CommandResult, SandboxBackend
 
 # On Windows the shell path uses COMSPEC (cmd.exe), which cannot parse the POSIX
 # commands Compile runs: `mkdir -m 700 --`, `chmod 600`, and the
@@ -101,7 +101,7 @@ async def _restrict_windows_acl(path: str, *, directory: bool) -> str | None:
     domain = os.environ.get("USERDOMAIN") or ""
     principal = f"{domain}\\{user}" if domain and user else user
     if not principal:
-        return "STDERR:\nUSERNAME is not set\nExit code: 1"
+        return CommandResult("STDERR:\nUSERNAME is not set\nExit code: 1", 1)
     suffix = ":(OI)(CI)F" if directory else ":F"
     grants = [principal + suffix, "*S-1-5-18" + suffix, "*S-1-5-32-544" + suffix]
     arguments = ["icacls", path, "/inheritance:r"]
@@ -116,7 +116,9 @@ async def _restrict_windows_acl(path: str, *, directory: bool) -> str | None:
     _stdout, stderr = await process.communicate()
     if process.returncode != 0:
         detail = stderr.decode("utf-8", errors="replace")
-        return f"STDERR:\n{detail}Exit code: {process.returncode}"
+        return CommandResult(
+            f"STDERR:\n{detail}Exit code: {process.returncode}", process.returncode
+        )
     return None
 
 
@@ -160,9 +162,10 @@ async def _translate_windows_posix(command: str, cwd: str) -> str | None:
                 return None
             target = _resolve_windows_path(tokens[2], cwd)
             if not os.path.isfile(target):
-                return (
+                return CommandResult(
                     f"STDERR:\nchmod: cannot access '{target}': "
-                    "No such file or directory\nExit code: 1"
+                    "No such file or directory\nExit code: 1",
+                    1,
                 )
             error = await _restrict_windows_acl(target, directory=False)
             return error if error else "(no output)"
@@ -180,7 +183,7 @@ async def _translate_windows_posix(command: str, cwd: str) -> str | None:
                         return error
             return "(no output)"
     except OSError as exc:
-        return f"STDERR:\n{exc}\nExit code: 1"
+        return CommandResult(f"STDERR:\n{exc}\nExit code: 1", 1)
     return None
 
 
@@ -217,7 +220,11 @@ class DirectBackend(SandboxBackend):
             translated = await _translate_windows_posix(command, cwd)
             if translated is not None:
                 logger.info("[Direct] Windows POSIX command translated: {}", repr(command))
-                return translated
+                return (
+                    translated
+                    if isinstance(translated, CommandResult)
+                    else CommandResult(translated, 0)
+                )
 
         try:
             process = await asyncio.create_subprocess_shell(
@@ -244,7 +251,9 @@ class DirectBackend(SandboxBackend):
                 await process.wait()
                 if isinstance(exc, asyncio.CancelledError):
                     raise
-                return f"Error: Command timed out after {timeout} seconds"
+                return CommandResult(
+                    f"Error: Command timed out after {timeout} seconds", process.returncode or 1
+                )
 
             output_parts = []
 
@@ -268,7 +277,7 @@ class DirectBackend(SandboxBackend):
             if len(result) > max_len:
                 result = result[:max_len] + f"\n... (truncated, {len(result) - max_len} more chars)"
 
-            return result
+            return CommandResult(result, process.returncode)
 
         except Exception as e:
             logger.error(f"[Direct] Error: {e}")

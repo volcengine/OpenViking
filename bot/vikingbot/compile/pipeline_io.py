@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-import posixpath
-import shlex
 import time
 import uuid
 from collections import Counter
@@ -116,7 +114,7 @@ class TaskFiles:
     """Small independently replaced shards, accessed through the sandbox's file API.
 
     The task owns these paths. Same-directory rename publishes a complete JSON file;
-    host-accessible sandboxes use native replacement, remote ones use exec/mv.
+    backends select native replacement, a file API, or the existing exec fallback.
     A missing or interrupted cache shard is a cache miss, never successful work.
     """
 
@@ -128,18 +126,7 @@ class TaskFiles:
         reference = f"{ROOT}/{path}.json"
         temporary = reference + "." + uuid.uuid4().hex + ".tmp"
         await self.sandbox.write_file(temporary, json.dumps(value, ensure_ascii=False))
-        local_path = self.sandbox.local_file_path(temporary)
-        if local_path is not None:
-            # Both names share the sandbox-validated parent; only the suffix differs.
-            await asyncio.to_thread(
-                local_path.replace, local_path.with_name(posixpath.basename(reference))
-            )
-            return reference
-        paths = [
-            shlex.quote(posixpath.join(self.sandbox.sandbox_cwd, p)) for p in (temporary, reference)
-        ]
-        output = await self.sandbox.execute(f"mv -f -- {paths[0]} {paths[1]}")
-        self.sandbox._ensure_command_succeeded(output, "Compile state publication")
+        await self.sandbox.replace_file(temporary, reference)
         return reference
 
     async def get(self, path: str) -> Any:
