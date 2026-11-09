@@ -815,7 +815,7 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `keepalive_expiry` | float | OpenAI 兼容 VLM 客户端的空闲连接保留秒数。设为 `0` 可禁用空闲连接复用；不设置时使用 OpenAI SDK 默认值。必须 `>= 0` |
 | `extra_headers` | object | 兼容 HTTP provider 的自定义请求头。`kimi` 默认已注入所需订阅请求头，也支持在这里覆盖或扩展 |
 | `extra_request_body` | object | 传给 OpenAI 兼容 completion 请求的额外 JSON body 字段，可用于 Ollama `{"think": false}` 等 provider 专有参数 |
-| `reasoning_effort` | str | `openai`、`azure`、`kimi`、`glm` 和 `openai-codex` 的推理强度，显式配置时发送；可用值由模型决定。不设置时，GPT-5/o 系列名称保留 `low`，其他模型不发送。Chat Completions 请求中，`extra_request_body.reasoning_effort` 优先 |
+| `reasoning_effort` | str | `openai`、`azure`、`kimi`、`glm`、`openai-codex` 和 `litellm` 的推理强度，显式配置时发送；可用值由模型决定。原生后端对 GPT-5/o 系列名称默认使用 `low`，其他模型不发送。`litellm` 默认使用配置值，逐次调用可覆盖；两者均未设置时不发送该字段。原生 Chat Completions 请求中，`extra_request_body.reasoning_effort` 优先 |
 | `media` | object | 音视频运行参数；音视频理解复用该 VLM 的 provider、模型、凭据、client、超时、重试、请求头、输出 token 限制、故障切换和 token 统计 |
 | `media.enabled` | bool | 启用音视频理解（默认：`false`） |
 | `media.max_concurrent` | int | 音视频调用最大并发数（默认：`2`） |
