@@ -2,6 +2,7 @@ name: Rust CLI Build
 
 on:
   workflow_call:
+  workflow_dispatch:
   push:
     branches: [ main, feat/rust-cli ]
     paths:
@@ -35,6 +36,8 @@ jobs:
     timeout-minutes: 15
     steps:
     - uses: actions/checkout@v6
+      with:
+        ref: 9dfa9017a8c61abefcd239fe98fdba094a2de7f3
     - uses: dtolnay/rust-toolchain@v1
       with:
         toolchain: stable
@@ -70,7 +73,7 @@ jobs:
             npm_pkg: cli-darwin-x64
             npm_os: darwin
             npm_cpu: x64
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             artifact_name: ov-macos-aarch64
             npm_pkg: cli-darwin-arm64
@@ -85,6 +88,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        ref: 9dfa9017a8c61abefcd239fe98fdba094a2de7f3
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@v1
@@ -118,15 +123,13 @@ jobs:
       with:
         target: ${{ matrix.target }}
 
-    - name: Inject version from tag
+    - name: Inject locked CLI release version
       shell: bash
       run: |
-        VERSION="${GITHUB_REF#refs/tags/cli@}"
-        if [[ "$VERSION" != "$GITHUB_REF" ]]; then
-          sed -i.bak "s/^version = \"0.0.0\"/version = \"$VERSION\"/" crates/ov_cli/Cargo.toml
-          rm -f crates/ov_cli/Cargo.toml.bak
-          echo "Injected version $VERSION into Cargo.toml"
-        fi
+        VERSION="0.5.2"
+        sed -i.bak "s/^version = \"0.0.0\"/version = \"$VERSION\"/" crates/ov_cli/Cargo.toml
+        rm -f crates/ov_cli/Cargo.toml.bak
+        echo "Injected version $VERSION into Cargo.toml"
 
     - name: Build CLI
       shell: bash
@@ -140,11 +143,7 @@ jobs:
     - name: Package platform npm package
       shell: bash
       run: |
-        VERSION="${GITHUB_REF#refs/tags/cli@}"
-        # For non-tag builds, use 0.0.0-dev
-        if [[ "$VERSION" == "$GITHUB_REF" ]]; then
-          VERSION="0.0.0-dev"
-        fi
+        VERSION="0.5.2"
 
         PKG_DIR="npm-pkg"
         mkdir -p "$PKG_DIR/bin"
@@ -181,7 +180,7 @@ jobs:
     name: Publish to npm
     runs-on: ubuntu-24.04
     needs: [build, test]
-    if: startsWith(github.ref, 'refs/tags/cli@')
+    if: github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
       actions: read
@@ -189,6 +188,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
+      with:
+        ref: 9dfa9017a8c61abefcd239fe98fdba094a2de7f3
 
     - name: Setup Node.js
       uses: actions/setup-node@v6
@@ -196,9 +197,9 @@ jobs:
         node-version: '24'
         registry-url: 'https://registry.npmjs.org'
 
-    - name: Get version from tag
+    - name: Get locked CLI release version
       id: get_version
-      run: echo "version=${GITHUB_REF#refs/tags/cli@}" >> $GITHUB_OUTPUT
+      run: echo "version=0.5.2" >> $GITHUB_OUTPUT
 
     - name: Download all platform artifacts
       uses: actions/download-artifact@v8
