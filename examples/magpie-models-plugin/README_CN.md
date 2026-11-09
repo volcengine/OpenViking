@@ -80,16 +80,18 @@ Options / `adapter.json` 中对应 `vlmParameters` 与 `botParameters`，使用�
 
 ```json
 {
-  "vlmParameters": { "max_tokens": 8192, "temperature": 0.2, "thinking": false, "timeout": 600 },
+  "vlmParameters": { "max_concurrent": 4, "max_tokens": 8192, "temperature": 0.2, "thinking": false, "timeout": 600 },
   "botParameters": { "max_tokens": 4096, "thinking": true, "timeout": 120 }
 }
 ```
 
 省略参数保留原值；`max_tokens: null` 让 OV 使用供应商默认限制。Bot 独立模式下同样使用模型默认值；跟随 OV 时，Bot 的空值继续使用 OV 的输出限制。Bot 的非空输出预算会覆盖继承值，因此两边分别校验。
 
+`vlmParameters.max_concurrent` 可配置 OV 语义处理及 Compile 使用的并发容量，必须为正整数；默认沿用原值，修改后需要重启 OV。它不是网关或 VikingBot 的全局请求并发限制，多条处理路径可能叠加负载。Bot 不支持同名的 `bot.agents.max_concurrent`，插件不会写入这个无效字段。订阅模型可先从 2–4 这样的小并发观察耗时和取消情况，这不是供应商保证的配额。
+
 切换模型时，若目录提供 `max_output_tokens`，插件将请求的 `max_tokens` 限制在其范围内，不会把上下文窗口误当作最大输出。比如原配置 32768、新模型输出上限 8192，会保存为 8192，并在 `adjustments` 列出原因；原主凭据上的输出限制也会保留并校验。换回容量更大的模型时会重新使用原请求预算；断开时恢复原参数。目录缺失上限时不猜测，保留预算并在 `warnings` 提示核对；配置中的环境变量输出预算需要通过参数选项提供明确数值。插件日志也会展示重启要求、预算调整和兼容性提示。
 
-若目录明确标识不支持 temperature，会清除原采样值；用户显式请求不支持的 temperature 则停止同步。`thinking` 保留用户选择并提示验证协议兼容性。超时、并发与重试策略保持原设置，除非通过参数选项显式调整 timeout。配置保存仍需相应进程重启后生效。
+若目录明确标识不支持 temperature，会清除原采样值；用户显式请求不支持的 temperature 则停止同步。`thinking` 保留用户选择并提示验证协议兼容性。重试策略保持原设置；仅在参数选项显式指定时调整 timeout 和 VLM 的 max_concurrent。配置保存仍需相应进程重启后生效。
 
 Embedding、Rerank、显式 Query Planner、Bot 渠道、工具、生图模型等保持原配置。未显式配置的 Query Planner 按 OV 规则跟随 VLM。本版本只管理启动文件；遇到 Cluster VLM 运行覆盖时停止接管，不会声称文件修改已影响实际模型。Account 模型覆盖不在本插件管理范围内。
 

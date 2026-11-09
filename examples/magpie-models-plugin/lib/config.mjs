@@ -54,6 +54,6 @@ export async function settings(options = {}, env = process.env) {
   if (typeof restartOnChange !== "boolean") throw new AdapterError("invalid_restart_policy");
   return { directory, selectionFile: join(directory, "selection.json"), stateFile: join(directory, "state.json"),
     statusFile: join(directory, "status.json"), serverUrl, apiKey, manageVlm, botMode, botModel: config.botModel,
-    vlmParameters: validateParameters(config.vlmParameters), botParameters: validateParameters(config.botParameters),
+    vlmParameters: validateParameters(config.vlmParameters), botParameters: validateParameters(config.botParameters, "bot"),
     restartOnChange, pollMs, timeoutMs: 10000 };
 }

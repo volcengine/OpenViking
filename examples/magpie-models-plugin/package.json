@@ -35,6 +35,26 @@
                   "default": true
                 },
                 {
+                  "key": "vlmParameters.max_concurrent",
+                  "type": "integer",
+                  "title": "Semantic concurrency",
+                  "titles": {
+                    "zh": "语义处理并发"
+                  },
+                  "optional": true,
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "description": "vlm.max_concurrent; applies after restart. Per-processing-path capacity, not a global gateway or Bot request limit.",
+                  "descriptions": {
+                    "zh": "vlm.max_concurrent，重启后生效。控制语义处理等路径的容量，不是网关或 Bot 全局请求并发上限。"
+                  },
+                  "when": {
+                    "manageVlm": [
+                      true
+                    ]
+                  }
+                },
+                {
                   "key": "vlmParameters.max_tokens",
                   "type": "integer",
                   "title": "Max output tokens",

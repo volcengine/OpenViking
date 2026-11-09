@@ -1,4 +1,5 @@
 const definitions = [
+  ["max_concurrent", "语义处理并发", "Semantic concurrency", 1, Number.MAX_SAFE_INTEGER, "1"],
   ["max_tokens", "最大输出", "Max output tokens", 1, Number.MAX_SAFE_INTEGER, "1"],
   ["temperature", "温度", "Temperature", 0, 2, "any"],
   ["thinking", "思考模式", "Thinking"],
@@ -7,6 +8,7 @@ const definitions = [
 export function parameterFields(container, prefix, zh, values = {}) {
   container.replaceChildren();
   for (const [key, chinese, english, min, max, step] of definitions) {
+    if (key === "max_concurrent" && prefix === "botParameters") continue;
     const row = document.createElement("div"); row.className = "parameter";
     const id = `${prefix}-${key}`;
     const label = document.createElement("label"); label.htmlFor = `${id}-mode`; label.textContent = zh ? chinese : english; label.title = key;
@@ -15,7 +17,7 @@ export function parameterFields(container, prefix, zh, values = {}) {
     const choices = [["preserve", zh ? "沿用现有配置" : "Keep existing"]];
     if (key === "thinking") choices.push(["true", zh ? "开启" : "On"], ["false", zh ? "关闭" : "Off"]);
     else {
-      if (key !== "timeout") choices.push(["null", zh ? "模型默认" : "Model default"]);
+      if (!["timeout", "max_concurrent"].includes(key)) choices.push(["null", zh ? "模型默认" : "Model default"]);
       choices.push(["custom", zh ? "自定义" : "Custom"]);
     }
     for (const [value, text] of choices) select.add(new Option(text, value));

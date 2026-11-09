@@ -2,15 +2,16 @@ import { AdapterError } from "./files.mjs";
 import { at } from "./plan.mjs";
 
 const limits = {
+  max_concurrent: (v) => Number.isSafeInteger(v) && v > 0,
   max_tokens: (v) => v === null || (Number.isSafeInteger(v) && v > 0),
   temperature: (v) => v === null || (typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 2),
   thinking: (v) => typeof v === "boolean",
   timeout: (v) => typeof v === "number" && Number.isFinite(v) && v > 0,
 };
-export function validateParameters(value = {}) {
+export function validateParameters(value = {}, role = "vlm") {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new AdapterError("invalid_model_parameters");
   for (const [key, entry] of Object.entries(value)) {
-    if (!Object.hasOwn(limits, key) || !limits[key](entry)) throw new AdapterError("invalid_model_parameters");
+    if (!Object.hasOwn(limits, key) || (role === "bot" && key === "max_concurrent") || !limits[key](entry)) throw new AdapterError("invalid_model_parameters");
   }
   return value;
 }
@@ -73,7 +74,7 @@ export function modelParameters(document, records, desired, selection, config) {
   const botInherited = !explicitBot.model && !explicitBot.credentials?.length;
   if (config.botEnabled !== false && (config.botMode !== "preserve" || (config.manageVlm && botInherited))) {
     const metadata = config.botMode === "independent" ? selection.botMetadata : selection.vlmMetadata;
-    role("bot.agents", validateParameters(config.botParameters), metadata);
+    role("bot.agents", validateParameters(config.botParameters, "bot"), metadata);
   }
   return { adjustments, warnings };
 }

@@ -29,13 +29,16 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const f = page.frameLocator("iframe");
       await f.locator("#saveSettings:enabled").waitFor();
       assert.equal(await f.locator("#vlmParameters-thinking-mode").inputValue(), "false");
+      await f.locator("#vlmParameters-max_concurrent-mode").selectOption("custom");
+      await f.locator("#vlmParameters-max_concurrent").fill("4");
+      assert.equal(await f.locator("#botParameters-max_concurrent-mode").count(), 0);
       await f.locator("#vlmParameters-max_tokens").fill("16384");
       await f.locator("#vlmParameters-temperature-mode").selectOption("null");
       await f.locator("#botParameters-thinking-mode").selectOption("false");
       await f.locator("#saveSettings").click();
       await f.locator("#message").filter({ hasText: lang === "zh" ? "设置已保存" : "Settings saved" }).waitFor();
       const saved = await page.evaluate(() => options);
-      assert.deepEqual(saved.vlmParameters, { max_tokens: 16384, temperature: null, thinking: false, timeout: 600 });
+      assert.deepEqual(saved.vlmParameters, { max_concurrent: 4, max_tokens: 16384, temperature: null, thinking: false, timeout: 600 });
       assert.deepEqual(saved.botParameters, { max_tokens: 4096, thinking: false, timeout: 120 });
       for (const key of ["serverUrl", "rootApiKeyFile", "untouched"]) assert.equal(saved[key], initial[key]);
       const frame = page.frames()[1];

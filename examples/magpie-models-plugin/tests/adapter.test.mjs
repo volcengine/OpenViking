@@ -261,3 +261,23 @@ test("a disabled Bot is neither configured nor enabled while changing OV VLM", a
   await assert.rejects(f.run(), /bot_not_enabled_or_detected/);
   assert.equal(f.backend.document.bot, undefined);
 });
+
+test("VLM concurrency is revision-saved, restart-pending and restored without touching Bot", async (t) => {
+  const doc = structuredClone(original); doc.vlm.max_concurrent = 100;
+  const f = await fixture(t, doc); f.config.vlmParameters = { max_concurrent: 4 };
+  const result = await f.run();
+  assert.equal(f.backend.document.vlm.max_concurrent, 4);
+  assert.equal(result.restartRequired, true);
+  assert.deepEqual(f.backend.document.bot, original.bot);
+  await f.run({ restore: true });
+  assert.equal(f.backend.document.vlm.max_concurrent, 100);
+});
+
+test("concurrency keeps omission distinct and rejects unsupported Bot values", () => {
+  assert.deepEqual(validateParameters({ max_concurrent: 4 }), { max_concurrent: 4 });
+  for (const value of [0, -1, 1.5, null, "4", Number.MAX_SAFE_INTEGER + 1]) assert.throws(() => validateParameters({ max_concurrent: value }), /invalid_model_parameters/);
+  assert.throws(() => validateParameters({ max_concurrent: 4 }, "bot"), /invalid_model_parameters/);
+  const desired = {};
+  modelParameters(original, {}, desired, selection, { manageVlm: true });
+  assert.equal(Object.hasOwn(desired, "vlm.max_concurrent"), false);
+});

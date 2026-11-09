@@ -74,16 +74,18 @@ Use `vlmParameters` and `botParameters` in Options or `adapter.json`:
 
 ```json
 {
-  "vlmParameters": { "max_tokens": 8192, "temperature": 0.2, "thinking": false, "timeout": 600 },
+  "vlmParameters": { "max_concurrent": 4, "max_tokens": 8192, "temperature": 0.2, "thinking": false, "timeout": 600 },
   "botParameters": { "max_tokens": 4096, "thinking": true, "timeout": 120 }
 }
 ```
 
 Omitted fields preserve original values. `max_tokens: null` uses provider defaults in OV and independent Bot mode; a following Bot instead continues to use OV's output limit. A non-null Bot budget overrides the inherited limit and is checked separately.
 
+`vlmParameters.max_concurrent` is a positive integer for OV semantic processing and Compile capacity. It preserves the current value unless explicitly configured and requires an OV restart. It is not a global gateway/VikingBot request limit; concurrent processing paths can add load. VikingBot has no equivalent `bot.agents.max_concurrent` setting. For subscription-backed models, start with a small value such as 2–4 and adjust using observed latency/cancellations, rather than treating this as a provider quota.
+
 Known catalog `max_output_tokens` caps requested output budgets, never using context-window size as an output limit. An original budget of 32768 switches to 8192 for a model with an 8192 output limit, with an `adjustments` entry. Primary-credential output limits are retained and checked too. A larger model can recover the original requested budget; disconnect restores original parameters. Unknown limits produce `warnings` instead of fabricated values. Environment-referenced output budgets require an explicit numeric parameter option. Adapter logs also report restart requirements, budget adjustments and compatibility warnings.
 
-When catalog metadata explicitly disables temperature, inherited sampling values are cleared; an explicit unsupported temperature request blocks synchronization. Thinking settings are preserved with a protocol-compatibility warning. Retry and concurrency settings remain unchanged; timeout changes only when explicitly configured. Parameter changes still require the affected process to restart.
+When catalog metadata explicitly disables temperature, inherited sampling values are cleared; an explicit unsupported temperature request blocks synchronization. Thinking settings are preserved with a protocol-compatibility warning. Retry settings remain unchanged; timeout changes only when explicitly configured. Parameter changes still require the affected process to restart.
 
 Bot management first detects `/bot/v1/health`. A disabled or undetected Bot is never configured, launched or enabled; explicitly requesting Bot management in that state fails. A standalone Bot remains outside OV's restart lifecycle.
 
