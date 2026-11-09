@@ -49,7 +49,7 @@ Provider 挂载本身不发请求，也不读取浏览器中保存的凭证。
 ```ts
 await client.request({
   method: 'GET',
-  path: '/api/v1/fs/ls',
+  path: OV_PATHS.fsLs,
   query: { uri },
   options: { resourceId: otherLibraryId },
 });
@@ -62,7 +62,7 @@ await client.request({
 `createOvClient` 不依赖 React，用于没有 Provider 的宿主：
 
 ```ts
-import { createOvClient } from '@openviking/react/client';
+import { createOvClient, OV_PATHS } from '@openviking/react/client';
 
 const client = createOvClient({
   baseURL: 'https://ov.example.com/gateway/openviking',
@@ -74,12 +74,69 @@ const client = createOvClient({
 
 const rows = await client.request<FsEntry[]>({
   method: 'GET',
-  path: '/api/v1/fs/ls',
+  path: OV_PATHS.fsLs,
   query: { uri, output: 'agent' },
 });
 ```
 
 `request` 返回原生响应的 `result`。`baseURL` 是实际生效的地址，用于隔离缓存与订阅。
+
+## 二进制响应
+
+`responseType: 'blob'` 让 `request` 跳过外壳解析，直接返回原始字节。预览图片、下载文件都走这条路：
+
+```ts
+const blob = await client.request<Blob>({
+  method: 'GET',
+  path: OV_PATHS.contentDownload,
+  query: { uri },
+  responseType: 'blob',
+});
+```
+
+失败响应仍是 JSON 外壳，错误码照常保留在 `OvClientError.code` 上。二进制响应没有 body，因此不会带上 `content-type: application/json`。
+
+## 事件流
+
+`stream` 建立 SSE 连接，返回的事件可以 `for await` 逐个消费：
+
+```ts
+const stream = await client.stream({
+  method: 'POST',
+  path: '/bot/v1/chat/stream',
+  body: { message, session_id },
+});
+
+for await (const event of stream) {
+  // event.data 是原始文本，事件类型在 JSON 里面
+}
+
+stream.abort();
+```
+
+- `accept: text/event-stream` 默认发送，`headers` 可追加或覆盖；身份字段仍由 Client 组装并在同名时胜出。
+- `body` 允许任意字段，服务端约定的开关（例如只订阅已有会话的 `Attach`）原样转发。
+- `data` 保持原文不做 JSON 解析：OpenViking 把事件类型和事件 id 放在 `data` 的 JSON 里，不占 SSE 的 `event` / `id` 字段。
+- 只有注释的心跳块（`: keepalive`）不产生事件；末尾缺空行的块仍会派发。
+- 响应到达即 resolve。HTTP 失败、`content-type` 不是事件流、以及非流响应里的 `status: 'error'` 都在 resolve 之前抛出 `OvClientError`。
+- `abort()` 或调用方 signal 取消后，迭代安静结束而不抛 `AbortError`——取消是调用方的意图，不是失败。
+
+## 接口路径
+
+`OV_PATHS` 集中维护原生接口路径，接口改名时只改一处。带路径参数的接口用 `OV_PATH_BUILDERS`，参数会自动 URL 编码：
+
+```ts
+import { OV_PATHS, OV_PATH_BUILDERS } from '@openviking/react/client';
+
+await client.request({ method: 'GET', path: OV_PATHS.fsLs, query: { uri } });
+await client.request({
+  method: 'POST',
+  path: OV_PATH_BUILDERS.sessionMessages(sessionId),
+  body: { role: 'user', content },
+});
+```
+
+`OV_PATHS` 用 `as const` 而不是 `enum`：字符串 enum 在 `isolatedModules` 下不会内联，产出的对象还会被当成副作用；作为公开导出时它是 ambient const enum，消费者一旦开启 `isolatedModules` 或 `verbatimModuleSyntax` 就会直接编译失败。
 
 ## 失败
 
@@ -115,7 +172,7 @@ class AxiosOvClient implements OvClient {
 }
 ```
 
-不管用哪种传输层，这三件事都由它负责，模块不再重复：拼接服务地址与路径、把身份字段转成请求头、把响应变成结果或 `OvClientError`。
+不管用哪种传输层，这三件事都由它负责，模块不再重复：拼接服务地址与路径、把身份字段转成请求头、把响应变成结果或 `OvClientError`。`OvClient` 还有 `stream`，实现自定义传输层时也要一并提供；事件流的分帧可以直接复用导出的解析器思路，但解析器本身留在包内，不单独开放。
 
 ## 开发
 

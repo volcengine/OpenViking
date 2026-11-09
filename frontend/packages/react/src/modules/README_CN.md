@@ -4,11 +4,11 @@
 
 `modules/` 按共同完成的交互流程组织 Hook 与组合视图，共享状态与联动在模块内维护。Hook 负责加载请求、适配数据与维护状态，组合视图把 Hook 返回的数据和操作接入 `components/`。完整页面由宿主组装。
 
-Console 已导出命令组合视图，同时导出独立 `useConsole` Hook，接通原生请求、取消、重试与身份隔离；对话服务后续接入。FileBrowser 仍为占位。
+Console 已导出命令组合视图，同时导出独立 `useConsole` Hook，接通原生请求、取消、重试与身份隔离；对话服务后续接入。FileBrowser 已通过 `useFileBrowser` 实现目录、搜索与预览联动。
 
 ## 当前可接入的模块
 
-Console 已提供原生命令面板；FileBrowser 仍为布局占位。各模块均有公开类型与独立样式入口，下文区分本期实现与后续目标。
+Console 已提供原生命令面板；FileBrowser 已实现目录、搜索与预览联动。各模块均有公开类型与独立样式入口，下文区分本期实现与后续目标。
 
 模块自己取数，因此 props 里没有数据字段：宿主给配置、受控值与文案，模块通过回调上报变化。
 
@@ -65,7 +65,7 @@ React 接入由 `@openviking/react/client` 的 `OpenVikingProvider` 通过 Conte
 
 模块组件和独立 Hook 使用同一份可选 `requestOptions` 覆盖类型，即 `@openviking/react/client` 的 `OvRequestOptions`。按字段解析：**模块 / Hook 显式配置 → 最近的 Provider 配置 → 库默认值**；嵌套 Provider 在父配置上覆盖。不传字段或传 `undefined` 表示继承，`baseURL: ''` 则明确切回同源；覆盖里省略的身份字段继承 Provider 的值，显式传空字符串则清除它。覆盖不修改父 Provider，不影响其他模块实例。大部分接入只配置一次 Provider。两个模块的 `FileBrowserProps` 与 `ConsoleProps` 均已声明该字段。
 
-Provider 与 Console 命令执行已实现，Console 仅在显式提交命令时请求。宿主在应用根部配置一次：
+Provider、`useFileBrowser` 和 `useConsole` 已实现。FileBrowser 自动加载目录，Console 只在显式提交命令时发请求。宿主在应用根部配置一次：
 
 ```tsx
 import { OpenVikingProvider } from '@openviking/react/client';
@@ -87,7 +87,7 @@ import { OpenVikingProvider } from '@openviking/react/client';
 ```ts
 const rows = await client.request<FsEntry[]>({
   method: 'GET',
-  path: '/api/v1/fs/ls',
+  path: OV_PATHS.fsLs,
   query: { uri },
   options: { resourceId: libraryId },
 });
@@ -95,8 +95,8 @@ const rows = await client.request<FsEntry[]>({
 
 该 Hook 不对外导出：宿主不需要知道模块会发什么请求。纯视图组件完全不需要 Provider。当前身份可由 Context 下发，其中 `accountId` 对应数据空间，`userId` 对应该空间内的 User；身份作用域与请求配置分别维护。URI、查询词等模块业务参数仍通过模块 / Hook 入参提供。
 
-- **路径只有一处拼接**：Client 保留 `baseURL` 的路径前缀。例如 `/gateway/openviking` 加 `/api/v1/fs/ls` 得到 `/gateway/openviking/api/v1/fs/ls`，不会因接口路径以 `/` 开头而丢掉网关前缀。模块不拼接域名或服务前缀。
-- **响应只在 Client 解析**：区分 HTTP 失败与原生响应的 `status: 'error'`，保留服务端错误码、状态和请求标识。JSON 响应保留 `result` 及分页等外层元数据；上传、下载和流式响应按接口契约处理，不统一强转 JSON。
+- **路径只有一处拼接**：接口路径由 `@openviking/react/client` 的 `OV_PATHS` / `OV_PATH_BUILDERS` 集中维护，模块不写字面量。Client 保留 `baseURL` 的路径前缀。例如 `/gateway/openviking` 加 `/api/v1/fs/ls` 得到 `/gateway/openviking/api/v1/fs/ls`，不会因接口路径以 `/` 开头而丢掉网关前缀。模块不拼接域名或服务前缀。
+- **响应只在 Client 解析**：区分 HTTP 失败与原生响应的 `status: 'error'`，保留服务端错误码、状态和请求标识。`request` 默认返回 `result`；二进制响应用 `responseType: 'blob'` 取原始字节，事件流用 `stream` 逐个消费，两者都不强转 JSON。`has_more` 这类 `result` 之外的分页元数据目前不返回，需要分页的模块按 `offset` / `node_limit` 自行判断。
 - **配置与身份变化要隔离**：请求、缓存键和订阅以实际生效的服务地址及宿主当前连接 / 身份作用域隔离。切换服务或账号后取消旧请求并忽略过期结果；动态 headers 不代替身份切换信号，也不把 API Key 明文放入缓存键。
 - **适配集中在接入层**：原生接口只需配置地址和 headers；存量网关若有额外封装，由宿主在共享 Client 接入层统一适配，并保留取消信号、响应状态及流。无法等价表达的能力通过显式扩展契约接入，不在每个模块增加宿主分支。
 
@@ -104,7 +104,7 @@ Provider 的继承遵循 [React Context](https://react.dev/reference/react/useCo
 
 ## 业务模块划分
 
-下表描述目标能力。Console 命令侧已实现，对话服务与其他模块后续迁入。产品引导、资源与 Skill 导入流程及同步配置由宿主负责，不提供对应业务模块。
+下表描述目标能力。FileBrowser 的目录、搜索与预览联动和 Console 命令侧已实现；对话服务由宿主接入。产品引导、资源与 Skill 导入流程及同步配置由宿主负责，不提供对应业务模块。
 
 | 模块           | Hook 与业务职责                                                                                   | 组合视图                                                                    |
 | -------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
@@ -123,7 +123,7 @@ Provider 的继承遵循 [React Context](https://react.dev/reference/react/useCo
 - 组合视图负责区域内的搜索、目录与预览布局。`FileTree`、`FilePreview` 等纯视图组件保持独立，不承担数据加载或跨组件编排。
 - 连接 Agent、导入资源等操作入口通过宿主回调或插槽接入；模块不内置接入弹窗、导入流程或产品引导。配额提示等产品内容也通过宿主插槽接入。
 
-以上交互与 `useFileBrowser` 仍为规划；当前仅导出 `FileBrowser` 占位组件和基础类型。
+以上交互已实现：`useFileBrowser` 取数与协调目录、搜索、预览的联动，`FileBrowser` 组合视图按控制台的上下文面板布局渲染。
 
 ### 交互面板模块
 
@@ -149,7 +149,7 @@ Provider 的继承遵循 [React Context](https://react.dev/reference/react/useCo
 
 ## 当前状态与开发入口
 
-每个模块使用独立的 kebab-case 目录，入口文件与目录同名，已同步提供占位组件、基础类型和独立构建入口。真实业务迁入后，从同一模块入口分别导出 Hook 与组合视图；Console 提供组合视图、独立 Hook 及其输入与返回类型；占位模块不提供虚假的 Hook。
+每个模块使用独立的 kebab-case 目录，入口文件与目录同名。FileBrowser 与 Console 均从模块入口导出组合视图、独立 Hook 及其输入与返回类型，并提供独立样式与构建入口。
 
 开发命令和构建入口见 [前端工作区 README](../../../../README.md)，包结构见[包说明](../../README.md)，实施约束见本目录 [AGENTS.md](./AGENTS.md)。
 

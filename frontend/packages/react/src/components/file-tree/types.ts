@@ -321,6 +321,26 @@ export type FileTreeInfoKey =
    */
   | 'agentRoot'
   /**
+   * Agent 的通信端点配置，`viking://agent/endpoints`。
+   * Agent communication endpoint configuration, `viking://agent/endpoints`.
+   */
+  | 'agentEndpoints'
+  /**
+   * Agent 的支付能力配置，`viking://agent/payments`。
+   * Agent payment capability configuration, `viking://agent/payments`.
+   */
+  | 'agentPayments'
+  /**
+   * Agent 的技能注册表，`viking://agent/skills`。
+   * Agent skill registry, `viking://agent/skills`.
+   */
+  | 'agentSkills'
+  /**
+   * Agent 的工具配置，`viking://agent/tools`。
+   * Agent tool configuration, `viking://agent/tools`.
+   */
+  | 'agentTools'
+  /**
    * 记忆根目录，`viking://memory`。
    * Memory root, `viking://memory`.
    */

@@ -11,6 +11,9 @@
 ## 内容
 
 - `components/tooltip`：渲染到 `document.body` 的定位浮层，被 `file-preview` 用于复制路径提示与折叠层级菜单。它存在的理由是祖先容器的 `overflow: hidden` 会裁掉常规浮层。
+- `components/popover`：白底卡片的浮层，同样 portal 到 `document.body`，被文件树的节点信息与文件预览使用。
+- `components/divider`：一条分隔线，尺寸与颜色由调用方内联给出。
+- `components/resizable`：可拖拽的分隔条 `ResizableHandle`，用指针捕获处理拖动、支持方向键改宽，宽度由调用方受控持有。`file-browser` 用它调整目录树宽度。
 
 ## 边界
 

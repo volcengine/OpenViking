@@ -4,11 +4,11 @@ English / [中文](README_CN.md)
 
 `modules/` organises Hooks and composite views around interactions that are completed together, keeping shared state and coordination inside the module. Hooks load requests, adapt data and hold state; composite views wire the data and operations a Hook returns into `components/`. The host assembles full pages.
 
-Console exports a composite command view; it also exports standalone `useConsole`. Native requests, cancellation, retry and identity isolation are implemented; conversation services remain pending. FileBrowser remains a placeholder.
+Console exports a composite command view; it also exports standalone `useConsole`. Native requests, cancellation, retry and identity isolation are implemented; conversation services remain pending. FileBrowser uses `useFileBrowser` to load and coordinate directories, search and preview.
 
 ## Available modules
 
-Console ships a native command panel; FileBrowser remains a layout placeholder. Each module has public types and independent styles. The sections below distinguish current delivery from target capability.
+Console ships a native command panel; FileBrowser coordinates directory browsing, search and preview. Each module has public types and independent styles. The sections below distinguish current delivery from target capability.
 
 Because a module loads its own data, no prop carries data. A host supplies configuration, the controlled value and the copy; the module reports changes through callbacks.
 
@@ -65,7 +65,7 @@ React integration is provided by `OpenVikingProvider` from `@openviking/react/cl
 
 Module components and standalone Hooks share one optional `requestOptions` override type, `OvRequestOptions` from `@openviking/react/client`, resolved field by field: **explicit module / Hook configuration → nearest Provider configuration → library default**. A nested Provider overrides its parent. An omitted field or `undefined` means inherit, while `baseURL: ''` explicitly returns to same-origin; an identity field omitted in the override inherits the Provider's value, and an explicit empty string clears it. Overrides never modify the parent Provider and do not affect other module instances. Most integrations configure the Provider once. The `FileBrowserProps` and `ConsoleProps` types already declare this field.
 
-The Provider and Console command execution are implemented; Console only requests on explicit command submission. The host configures it once at the application root:
+The Provider, `useFileBrowser` and `useConsole` are implemented. FileBrowser loads directories automatically; Console requests only on explicit command submission. The host configures the Provider once at the application root:
 
 ```tsx
 import { OpenVikingProvider } from '@openviking/react/client';
@@ -87,7 +87,7 @@ Inside a module, the client comes from an internal hook. A module passes only th
 ```ts
 const rows = await client.request<FsEntry[]>({
   method: 'GET',
-  path: '/api/v1/fs/ls',
+  path: OV_PATHS.fsLs,
   query: { uri },
   options: { resourceId: libraryId },
 });
@@ -95,8 +95,8 @@ const rows = await client.request<FsEntry[]>({
 
 That hook is not exported: a host never needs to know which requests a module sends. Pure view components need no Provider at all. The current identity may be distributed through Context, where `accountId` corresponds to the data space and `userId` to the user within it; identity scope and request configuration are maintained separately. Business parameters such as URI and query text are still passed as module / Hook inputs.
 
-- **Paths are joined in one place only**: the Client keeps the `baseURL` path prefix. For example `/gateway/openviking` plus `/api/v1/fs/ls` yields `/gateway/openviking/api/v1/fs/ls`, and a leading `/` in an API path never drops the gateway prefix. Modules join no domain or service prefix.
-- **Responses are parsed only in the Client**: HTTP failures are distinguished from a native `status: 'error'` response, preserving the server error code, status and request identifier. JSON responses keep `result` and outer metadata such as paging; upload, download and streaming responses follow the API contract and are not coerced to JSON uniformly.
+- **Paths are joined in one place only**: endpoint paths live in `OV_PATHS` / `OV_PATH_BUILDERS` from `@openviking/react/client`, so modules write no literals. The Client keeps the `baseURL` path prefix. For example `/gateway/openviking` plus `/api/v1/fs/ls` yields `/gateway/openviking/api/v1/fs/ls`, and a leading `/` in an API path never drops the gateway prefix. Modules join no domain or service prefix.
+- **Responses are parsed only in the Client**: HTTP failures are distinguished from a native `status: 'error'` response, preserving the server error code, status and request identifier. `request` returns `result` by default; binary responses use `responseType: 'blob'` for the raw bytes and event streams use `stream`, and neither is coerced to JSON. Pagination metadata outside `result`, such as `has_more`, is not returned today, so a module that pages decides through `offset` / `node_limit`.
 - **Configuration and identity changes must be isolated**: requests, cache keys and subscriptions are isolated by the effective service address and the host's current connection / identity scope. Switching service or account cancels old requests and ignores stale results; dynamic headers do not substitute for an identity-switch signal, and an API Key is never put into a cache key in plain text.
 - **Adaptation is centralised at the integration boundary**: native APIs need only an address and headers; any extra wrapping for existing gateways is adapted uniformly by the host at the shared Client boundary, preserving cancellation signals, response status and streams. Capabilities that cannot be expressed equivalently are integrated through an explicit extension of the contract, not a per-module host branch.
 
@@ -104,7 +104,7 @@ Provider inheritance follows [React Context](https://react.dev/reference/react/u
 
 ## Business module breakdown
 
-The table below describes target capabilities. Console command execution is implemented; its conversation services and the other modules remain future work. Product onboarding, the resource and Skill import flows and sync configuration belong to the host, with no corresponding business module.
+The table below describes target capabilities. FileBrowser coordinates directories, search and preview, and Console commands are implemented; hosts supply conversation services. Product onboarding, the resource and Skill import flows and sync configuration belong to the host, with no corresponding business module.
 
 | Module         | Hook and business responsibility                                                                                                                                              | Composite view                                                                                                           |
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -123,7 +123,7 @@ History lists and version comparison start as preview capabilities of `file-brow
 - The composite view owns the search, directory and preview layout within the area. Pure view components such as `FileTree` and `FilePreview` stay independent and take on no data loading or cross-component coordination.
 - Entries such as connecting an agent or importing resources come in through host callbacks or slots; the module embeds no connection dialog, import flow or product onboarding. Product content such as quota hints also comes in through host slots.
 
-The interactions above and `useFileBrowser` are still planned; only the `FileBrowser` placeholder component and base types are exported today.
+The interactions above are implemented: `useFileBrowser` loads data and coordinates directory, search and preview, while `FileBrowser` renders the linked context panel.
 
 ### Interaction panel module
 
@@ -149,7 +149,7 @@ The interactions above and `useFileBrowser` are still planned; only the `FileBro
 
 ## Current state and development entry
 
-Each module uses its own kebab-case directory with `index.ts` as the single entry, and already ships a placeholder component, base types and an independent build entry. Once real business logic migrates, the Hook, the composite view and public types are exported from the same entry; Console exposes its view, standalone Hook and input/return types; placeholder modules expose no fake Hook.
+Each module uses its own kebab-case directory. FileBrowser and Console export their composite views, standalone Hooks and input / return types from their module entries, with independent styles and build entries.
 
 Development commands and build entries are in the [UI workspace README](../../../../README.md), the package structure is in the [package README](../../README.md), and implementation constraints are in this directory's [AGENTS.md](./AGENTS.md).
 

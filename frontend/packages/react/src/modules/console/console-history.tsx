@@ -9,7 +9,7 @@ import { createPortal } from 'react-dom';
 import type { TuiRecord } from '../../components/tui/index.js';
 import { ConsoleIcon } from '../../icons/console-icons.js';
 import { Tooltip } from '../../shared/components/tooltip/index.js';
-import { useTooltipPosition } from '../../shared/components/tooltip/use-tooltip-position.js';
+import { useOverlayPosition } from '../../shared/components/overlay/use-overlay-position.js';
 import type { consoleLabels } from './labels.js';
 
 const subscribe = () => () => {};
@@ -60,7 +60,7 @@ export function ConsoleHistory({
   const [surface, setSurface] = useState<HTMLDivElement | null>(null);
   const trigger = useRef<HTMLDivElement>(null);
   const id = useId();
-  const position = useTooltipPosition(open, trigger, surface, 'bottom', 'end');
+  const position = useOverlayPosition(open, trigger, surface, 'bottom', 'end');
   const close = () => {
     if (native) surface?.hidePopover();
     else setOpen(false);

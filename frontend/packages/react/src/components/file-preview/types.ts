@@ -127,7 +127,8 @@ export interface FilePreviewTabBase {
  * 文件预览页签或宿主自定义内容页签。
  * A file-preview tab or a tab with host-provided content.
  */
-export type FilePreviewTab = FilePreviewFileTab | FilePreviewContentTab;
+export type FilePreviewTab =
+  FilePreviewFileTab | FilePreviewContentTab | FilePreviewDirectoryTab;
 
 /**
  * 按文件格式预览 `source` 的页签。
@@ -139,6 +140,18 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    * Tab kind discriminator, always `file`.
    */
   kind: 'file';
+  /**
+   * 正文是否还在读取。为真时组件渲染加载态而不是正文，外壳（页签行、路径行）
+   * 照常显示——宿主切换文件时外壳因此不闪，只有正文区在等。
+   *
+   * `source` 在加载中可以为空；组件不会把它判成「空文件」。
+   *
+   * Whether the body is still being read. When true the component renders its
+   * loading state instead of the body while the shell — tab row, path row — stays
+   * put, so a host switching files does not flash the whole area. `source` may be
+   * empty while loading; it is not treated as an empty file.
+   */
+  loading?: boolean;
   /**
    * 要预览的内容及文件信息。
    * The content and file information to preview.
@@ -219,6 +232,95 @@ export interface FilePreviewContentTab extends FilePreviewTabBase {
    * The tab body, rendered by the host and filling everything below the tab row.
    */
   content: ReactNode;
+}
+
+/**
+ * 目录页签：一个目录的若干级摘要，例如 L0 摘要与 L1 总览。
+ *
+ * 它和文件页签的区别在于**正文的层级**：文件页签只有正文；目录页签在标题行
+ * 之下、正文之上还有一层同级视图切换（下划线页签），每一级各自是一份
+ * Markdown。这一层属于目录这种实体，不属于所有文件页签，因此单独开一类，
+ * 而不是给文件页签加一个通用插槽——那样每个文件页签都会多一个它用不到的
+ * 空位。
+ *
+ * A tab for a directory's summary levels, for example its L0 abstract and L1
+ * overview.
+ *
+ * It differs from a file tab in the layering of the body: a file tab has a body
+ * and nothing else, while a directory tab has one more level between the header
+ * and the body — an underlined switch between sibling views, each holding its own
+ * Markdown. That level belongs to the directory entity rather than to every file
+ * tab, so it gets its own kind instead of a generic slot on file tabs, which would
+ * leave every file tab with an empty space it never uses.
+ */
+export interface FilePreviewDirectoryTab extends FilePreviewTabBase {
+  /**
+   * 页签类型标记，固定为 `directory`。
+   * Tab kind discriminator, always `directory`.
+   */
+  kind: 'directory';
+  /**
+   * 摘要是否还在读取。与文件页签同义：为真时正文区显示加载态，外壳照常。
+   * Whether the summary is still being read. Same as a file tab: the body shows
+   * the loading state while the shell stays put.
+   */
+  loading?: boolean;
+  /**
+   * 可切换的摘要层级，至少一级。每级用 `source` 交给组件按格式渲染，与文件
+   * 页签的正文同一条渲染路径。
+   * The summary levels to switch between, at least one. Each level's `source` goes
+   * through the same rendering path as a file tab's body.
+   */
+  levels: readonly [FilePreviewDirectoryLevel, ...FilePreviewDirectoryLevel[]];
+  /**
+   * 受控的当前层级 key。传入时由宿主决定层级，组件只上报切换意图。
+   * The controlled active level key. When given, the host owns the level and the
+   * component only reports switch intent.
+   */
+  activeLevelKey?: string;
+  /**
+   * 非受控时的初始层级 key，省略时选中第一级。
+   * Initial level key when uncontrolled; the first level is selected when omitted.
+   */
+  defaultLevelKey?: string;
+  /**
+   * 当前层级变化后触发，参数为新的层级 key。
+   * Called after the active level changes, with the new level key.
+   */
+  onActiveLevelChange?: (key: string) => void;
+  /**
+   * 目录操作的执行能力，例如沿路径向上打开。省略对应方法时该操作不可用。
+   * Directory operation capabilities, for example opening an ancestor. Omitting a
+   * method makes its operation unavailable.
+   */
+  operations?: FilePreviewOperations;
+  /**
+   * 目录页签的插槽。标题行动作与状态兜底与文件页签一致。
+   * Slots of a directory tab. Header actions and state fallbacks match a file tab.
+   */
+  slots?: FilePreviewFileTabSlots;
+}
+
+/**
+ * 目录的一级摘要。One summary level of a directory.
+ */
+export interface FilePreviewDirectoryLevel {
+  /**
+   * 层级唯一标识，用于切换与受控状态。
+   * Unique level key, used for switching and controlled state.
+   */
+  key: string;
+  /**
+   * 页签行显示的名称，例如「L0 摘要」。
+   * What the level switch shows, for example "L0 Summary".
+   */
+  label: ReactNode;
+  /**
+   * 该级的正文来源，与文件页签的 `source` 同形，交给组件按格式渲染。
+   * The body source of this level, the same shape as a file tab's `source`, handed
+   * to the component for format rendering.
+   */
+  source: FilePreviewSource;
 }
 
 /**

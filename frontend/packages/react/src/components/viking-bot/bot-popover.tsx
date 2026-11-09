@@ -7,7 +7,7 @@ import {
 } from 'react';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { useTooltipPosition } from '../../shared/components/tooltip/use-tooltip-position.js';
+import { useOverlayPosition } from '../../shared/components/overlay/use-overlay-position.js';
 
 const subscribe = () => () => {};
 
@@ -35,7 +35,7 @@ export function BotPopover({
   const [surface, setSurface] = useState<HTMLDivElement | null>(null);
   const anchor = useRef<HTMLSpanElement>(null);
   const id = useId();
-  const position = useTooltipPosition(open, anchor, surface, placement, 'end');
+  const position = useOverlayPosition(open, anchor, surface, placement, 'end');
   const close = () => {
     if (native) surface?.hidePopover();
     else setOpen(false);

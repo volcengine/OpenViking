@@ -1,3 +1,5 @@
+export { FileBrowserEntries } from './components/file-browser-entries/index.js';
+export type { FileBrowserEntriesProps } from './components/file-browser-entries/index.js';
 export { FileTree } from './components/file-tree/index.js';
 export type { FileTreeProps } from './components/file-tree/index.js';
 export { Tui } from './components/tui/index.js';

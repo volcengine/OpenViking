@@ -1,26 +1,24 @@
 import { useEffect, useLayoutEffect, useState } from 'react';
+import type { OverlayPlacement } from './types.js';
 
-import type { TooltipPlacement } from './types.js';
-import { usePortalTheme } from './use-portal-theme.js';
-
-// Server renderers cannot measure a viewport; retain pre-paint positioning in browsers.
+// Measure before paint in browsers; server renderers have no viewport.
 const usePositionEffect =
   typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 /** 浮层与触发元素之间的间隙。 Gap between the surface and its trigger. */
-export const OFFSET = 6;
+export const OVERLAY_OFFSET = 6;
 /** 浮层与视口边缘的最小留白。 Minimum distance from the viewport edge. */
 const VIEWPORT_MARGIN = 8;
 
-export interface TooltipPosition {
+export interface OverlayPosition {
   top: number;
   left: number;
   /** 实际采用的方位，可能与请求的不同。 The placement actually used. */
-  placement: TooltipPlacement;
+  placement: OverlayPlacement;
 }
 
 /** 方位翻转到对侧。 The opposite side of a placement. */
-const OPPOSITE: Record<TooltipPlacement, TooltipPlacement> = {
+const OPPOSITE: Record<OverlayPlacement, OverlayPlacement> = {
   top: 'bottom',
   bottom: 'top',
   left: 'right',
@@ -38,24 +36,25 @@ const OPPOSITE: Record<TooltipPlacement, TooltipPlacement> = {
 export function resolvePosition(
   trigger: DOMRect,
   surface: { width: number; height: number },
-  placement: TooltipPlacement,
+  placement: OverlayPlacement,
   alignment: 'center' | 'end' = 'center',
-): TooltipPosition {
+): OverlayPosition {
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
 
-  const fits = (side: TooltipPlacement) => {
+  const fits = (side: OverlayPlacement) => {
     if (side === 'top')
-      return trigger.top - surface.height - OFFSET >= VIEWPORT_MARGIN;
+      return trigger.top - surface.height - OVERLAY_OFFSET >= VIEWPORT_MARGIN;
     if (side === 'bottom')
       return (
-        trigger.bottom + surface.height + OFFSET <=
+        trigger.bottom + surface.height + OVERLAY_OFFSET <=
         viewportHeight - VIEWPORT_MARGIN
       );
     if (side === 'left')
-      return trigger.left - surface.width - OFFSET >= VIEWPORT_MARGIN;
+      return trigger.left - surface.width - OVERLAY_OFFSET >= VIEWPORT_MARGIN;
     return (
-      trigger.right + surface.width + OFFSET <= viewportWidth - VIEWPORT_MARGIN
+      trigger.right + surface.width + OVERLAY_OFFSET <=
+      viewportWidth - VIEWPORT_MARGIN
     );
   };
 
@@ -70,8 +69,8 @@ export function resolvePosition(
   if (side === 'top' || side === 'bottom') {
     const top =
       side === 'top'
-        ? trigger.top - surface.height - OFFSET
-        : trigger.bottom + OFFSET;
+        ? trigger.top - surface.height - OVERLAY_OFFSET
+        : trigger.bottom + OVERLAY_OFFSET;
     const left =
       alignment === 'end'
         ? trigger.right - surface.width
@@ -85,8 +84,8 @@ export function resolvePosition(
 
   const left =
     side === 'left'
-      ? trigger.left - surface.width - OFFSET
-      : trigger.right + OFFSET;
+      ? trigger.left - surface.width - OVERLAY_OFFSET
+      : trigger.right + OVERLAY_OFFSET;
   const top = trigger.top + trigger.height / 2 - surface.height / 2;
   return {
     top: clamp(top, surface.height, viewportHeight),
@@ -111,28 +110,82 @@ export function resolvePosition(
  * that is derivable during render. Scroll is captured so inner scroll containers
  * count too; listeners are removed on close or unmount.
  */
-export function useTooltipPosition(
+export function useOverlayPosition(
   open: boolean,
   triggerRef: React.RefObject<HTMLElement | null>,
   surface: HTMLElement | null,
-  placement: TooltipPlacement,
+  placement: OverlayPlacement,
   alignment: 'center' | 'end' = 'center',
 ) {
-  const [position, setPosition] = useState<TooltipPosition>({
+  const [position, setPosition] = useState<OverlayPosition>({
     top: 0,
     left: 0,
     placement,
   });
 
-  usePortalTheme(open, triggerRef, surface);
-
-  // Sync with viewport/element geometry after DOM commit; render and event-only
-  // logic cannot observe scroll, resize or theme changes. Cleanup disconnects
-  // observers and listeners. The server uses an inert effect without layout warnings.
+  // Sync committed geometry; disconnect observers/listeners on close or unmount.
+  // The server uses an inert effect instead of attempting layout measurement.
   usePositionEffect(() => {
     if (!open) return;
     const trigger = triggerRef.current;
     if (!trigger || !surface) return;
+
+    // 浮层渲染到 `body`，拿不到宿主设在组件容器上的主题变量——CSS 变量沿 DOM
+    // 树继承，跨 portal 就断了。把触发元素上的公开变量复制到浮层，宿主的局部
+    // 覆盖才能跟着浮层走。
+    //
+    // 只复制公开的 `--ov-ui-color-*`，不复制组件私有的 `--ov-ui-*-default`：
+    // 后者一旦内联，就不再随 `.dark` 切换变化，等于把浮层的主题锁死在打开那一刻。
+    // 主题变化（`html` 的 class 改动）时重新同步，保证打开期间也跟着变。
+    //
+    // The surface renders into `body` and cannot see theme variables a host sets on
+    // a component container — CSS variables inherit down the tree and the portal
+    // breaks that chain. Copy the trigger's public variables so a local override
+    // follows the surface.
+    //
+    // Only the public `--ov-ui-color-*` are copied, never the component-private
+    // `--ov-ui-*-default`: inlining those would freeze the surface's theme at the
+    // moment it opened instead of following `.dark`. Re-sync when the theme changes
+    // (a class change on `html`) so an open surface follows along.
+    // 记录上一次写进浮层的变量名，重新同步时先把不再出现的清掉——否则宿主
+    // 移除某个覆盖后，浮层还留着旧值。
+    //
+    // Remember which names were written so a re-sync can drop the ones that no
+    // longer apply — otherwise the surface keeps an old value after the host
+    // removes its override.
+    const written = new Set<string>();
+    const syncTheme = () => {
+      const triggerStyle = window.getComputedStyle(trigger);
+      const seen = new Set<string>();
+      for (const name of Array.from(triggerStyle)) {
+        if (!name.startsWith('--ov-ui-color-')) continue;
+        const value = triggerStyle.getPropertyValue(name).trim();
+        if (!value) continue;
+        seen.add(name);
+        surface.style.setProperty(name, value);
+      }
+      for (const name of written) {
+        if (seen.has(name)) continue;
+        surface.style.removeProperty(name);
+      }
+      written.clear();
+      seen.forEach((name) => written.add(name));
+    };
+    syncTheme();
+    // 观察整条祖先链而不只是 `html`：宿主把主题覆盖写在某个容器上时，改的是
+    // 那个元素的 `style`/class，`html` 不变，只盯根节点收不到通知。
+    //
+    // Watch the whole ancestor chain, not just `html`: a host that scopes its theme
+    // override to a container changes that element's `style`/class while `html`
+    // stays put, so observing only the root would miss it.
+    const themeObserver = new MutationObserver(syncTheme);
+    const observerOptions: MutationObserverInit = {
+      attributes: true,
+      attributeFilter: ['class', 'style', 'data-theme'],
+    };
+    for (let node: Element | null = trigger; node; node = node.parentElement) {
+      themeObserver.observe(node, observerOptions);
+    }
 
     const update = () => {
       const triggerRect = trigger.getBoundingClientRect();
@@ -165,6 +218,7 @@ export function useTooltipPosition(
     window.addEventListener('resize', update);
     return () => {
       observer.disconnect();
+      themeObserver.disconnect();
       window.removeEventListener('scroll', update, true);
       window.removeEventListener('resize', update);
     };

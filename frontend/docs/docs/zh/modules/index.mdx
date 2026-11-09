@@ -1,6 +1,6 @@
 # 业务模块
 
-Console 已提供原生命令面板，ScopeCascade 已提供级联选择。FileBrowser 仍为布局占位；对话服务后续接入。
+FileBrowser 已通过 `useFileBrowser` 实现目录、搜索与预览联动；Console 提供原生命令面板及独立 `useConsole`，ScopeCascade 提供级联选择。对话服务由宿主接入。
 
 props 里没有数据字段。模块通过 Hook 自己取数，宿主给配置与受控值，模块通过回调上报变化。
 
@@ -23,7 +23,7 @@ props 里没有数据字段。模块通过 Hook 自己取数，宿主给配置�
 
 JavaScript 不加载 CSS。单模块使用 `@openviking/react/modules/<模块>/style.css`，全部模块使用 `@openviking/react/modules/style.css`，整库使用 `@openviking/react/style.css`，每个样式入口均可独立消费。没有 `@openviking/react/modules` 分类聚合 JavaScript 入口。
 
-当前占位组件接受 `className`、`style` 和 `labels`，无需 Provider。Console 的请求继承 `@openviking/react/client` 提供的 `OpenVikingProvider`，同时提供可独立使用的 `useConsole`；挂载本身不发请求。
+模块请求继承 `@openviking/react/client` 提供的 `OpenVikingProvider`，`useFileBrowser` 和 `useConsole` 均可独立使用。FileBrowser 自动加载目录；Console 挂载本身不发请求，提交命令后才访问服务。
 
 ## 宿主职责
 
