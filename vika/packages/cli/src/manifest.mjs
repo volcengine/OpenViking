@@ -25,6 +25,21 @@ const {
 
 export { ROLE_PRESETS };
 
+/**
+ * The environment runtime detection should look at: the manifest's own `env`
+ * first, overridden by the caller's. A binary path pinned there (`CODEX_BIN`,
+ * `DSH_BIN`, ...) is what the daemon will run, so a probe that only read
+ * `process.env` would call a machine without the CLI on PATH "not installed"
+ * while the daemon starts it every day. The operator's environment wins, which
+ * is the same precedence the daemon applies.
+ * @param {object} env - the caller's environment.
+ * @param {object|null} manifest - the loaded manifest, if any.
+ * @returns {object} the environment to probe with.
+ */
+export function detectionEnv(env, manifest) {
+  return { ...(manifest?.env ?? {}), ...env };
+}
+
 export const WEB_PORT = 3737;
 const FIRST_INSTANCE_PORT = 3738;
 

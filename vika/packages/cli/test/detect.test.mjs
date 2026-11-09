@@ -201,6 +201,7 @@ test('runtimes: installed and logged-in CLIs are offered, the rest say what is m
     { id: 'pi', available: true, model: 'pi' },
     { id: 'durable', available: false, model: 'durable' },
     { id: 'opencode', available: false, model: 'opencode' },
+    { id: 'dsh', available: false, model: 'dsh' },
   ]);
   assert.equal(runtimes[0].bin, path.join(bin, 'codex'));
   assert.match(runtimes[1].note, /claude auth login/);
@@ -241,7 +242,7 @@ test('runtimes: a Pi with no model points the user at vika pi', async () => {
     execFileImpl: async () => ({ stdout: 'No models available.\n' }),
   });
   assert.deepEqual(runtimes.map(({ id, available }) => [id, available]), [
-    ['codex', false], ['claude', false], ['pi', false], ['durable', false], ['opencode', false],
+    ['codex', false], ['claude', false], ['pi', false], ['durable', false], ['opencode', false], ['dsh', false],
   ]);
   assert.match(runtimes[2].note, /vika pi/);
 });

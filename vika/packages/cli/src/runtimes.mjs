@@ -7,8 +7,9 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { managedPiBin } from '../../daemon/src/pi-runtime.mjs';
 import { assertSupportedOpencodeVersion } from '../../daemon/src/opencode-runtime.mjs';
+import { DSH_DEFAULT_MODEL, assertSupportedDshVersion } from '../../daemon/src/dsh-runtime.mjs';
 import { t } from './i18n.mjs';
-import { probeAcp, probeAppServer } from './runtime-probe.mjs';
+import { probeAcp, probeAppServer, probeDsh } from './runtime-probe.mjs';
 
 // Setup only checks the agent runtimes; installing and logging in to them is
 // the user's business. Pi ships with Vika and reuses the user's ~/.pi/agent.
@@ -17,6 +18,17 @@ const execFile = promisify(execFileCallback);
 
 export { findExecutable as which } from '../../daemon/src/platform/index.mjs';
 import { findExecutable as which } from '../../daemon/src/platform/index.mjs';
+
+// A configured `*_BIN` is either an absolute path or a bare command name that
+// the shell would find on PATH. `path.resolve('dsh')` is `$CWD/dsh`: resolving
+// a bare name skipped the PATH search and pinned a path that usually does not
+// exist, so a working install was reported as broken (and pinned into the
+// manifest). A value carrying a separator stays a path, as before.
+function locateBinary(candidate, env) {
+  return path.isAbsolute(candidate) || candidate.includes(path.sep)
+    ? path.resolve(candidate)
+    : which(candidate, env);
+}
 
 async function run(execFileImpl, command, args, env) {
   try {
@@ -35,6 +47,7 @@ export async function detectRuntimes({
   piBin = managedPiBin(),
   probe = probeAppServer,
   acpProbe = probeAcp,
+  dshProbe = probeDsh,
 } = {}) {
   const runtimes = [];
 
@@ -73,6 +86,8 @@ export async function detectRuntimes({
   if (traex) runtimes.push(traex);
   const opencode = await detectOpencode({ env, execFileImpl, probe: acpProbe });
   if (opencode) runtimes.push(opencode);
+  const dsh = await detectDsh({ env, execFileImpl, probe: dshProbe });
+  runtimes.push(dsh);
   return runtimes;
 }
 
@@ -144,7 +159,7 @@ async function detectTraex({ env, execFileImpl, probe }) {
   const seen = new Set();
   let best = null;
   for (const candidate of candidates) {
-    const located = path.isAbsolute(candidate) || candidate.includes(path.sep) ? path.resolve(candidate) : which(candidate, env);
+    const located = locateBinary(candidate, env);
     let bin = located || candidate;
     let installed = false;
     try {
@@ -177,8 +192,8 @@ async function detectTraex({ env, execFileImpl, probe }) {
         const login = await run(execFileImpl, bin, ['login', 'status'], env);
         result.loggedIn = login.ok;
         result.available = login.ok;
-        result.note = login.ok ? t('协议兼容，已登录', 'Protocol compatible, logged in')
-          : t(`协议兼容，但登录检查未通过：运行 ${bin} login`, `Protocol compatible, but login check failed: run ${bin} login`);
+        result.note = login.ok ? t('protocol 兼容，已登录', 'Protocol compatible, logged in')
+          : t(`protocol 兼容，但登录检查未通过：运行 ${bin} login`, `Protocol compatible, but login check failed: run ${bin} login`);
       }
     }
     if (result.available) return result;
@@ -187,16 +202,79 @@ async function detectTraex({ env, execFileImpl, probe }) {
   return best;
 }
 
+// DSH owns model execution; Vika supplies the bridge and personal_agent MCP.
+// Never reuse the daemon's real DSH_HOME here: the probe runs in a private
+// temporary home, and model routes are DSH's own settings document there.
+//
+// `dataDir` probes one instance's own home instead. Setup uses it when the
+// operator edits an instance that already exists: that instance's routes live
+// in its home, and a throwaway home can never see them, so a configured
+// instance would otherwise read as "no route".
+export async function detectDsh({ env = process.env, execFileImpl = execFile, probe = probeDsh, dataDir = '' } = {}) {
+  const explicit = env.DSH_BIN?.trim();
+  const bin = explicit ? locateBinary(explicit, env) : which('dsh', env);
+  const result = {
+    id: 'dsh', label: 'DeepSeek Harness', model: 'dsh', bin, binEnv: 'DSH_BIN',
+    installed: Boolean(bin), available: false, note: '', route: '', fallbackRoute: '',
+  };
+  if (!bin) {
+    result.note = explicit
+      ? t(`找不到可执行文件：${explicit}（既不是绝对路径，也不在 PATH 里）`,
+        `Cannot find the executable ${explicit}: it is neither an absolute path nor on PATH`)
+      : t('未安装：需要 dsh 0.2.x 和 Node 24.9+', 'Not installed: requires dsh 0.2.x and Node 24.9+');
+    return result;
+  }
+  const version = await run(execFileImpl, bin, ['--version'], env);
+  if (!version.ok) {
+    result.note = t(`无法执行：${bin}`, `Cannot execute: ${bin}`);
+    return result;
+  }
+  try { assertSupportedDshVersion(version.stdout); } catch (error) { result.note = error.message; return result; }
+  const secrets = providerSecrets(env);
+  const credential = env.DEEPSEEK_API_KEY || secrets.DEEPSEEK_API_KEY;
+  const probeEnv = { ...env, ...secrets, ...(credential ? { DEEPSEEK_API_KEY: credential } : {}) };
+  // Availability is the protocol: the binary answers, the bridge handshake
+  // succeeds, and DSH can enumerate its own routes. Whether those routes carry
+  // credentials is DSH's configuration (`vika dsh model list`), not something a
+  // keyless probe can decide — so it is reported, never used to hide the runtime.
+  const handshake = await probe(bin, { env: probeEnv, ...(dataDir ? { dataDir } : {}) });
+  result.route = handshake.route ?? '';
+  result.fallbackRoute = handshake.fallbackRoute ?? '';
+  if (!handshake.compatible) {
+    result.note = t(`SDK bridge 握手失败：${handshake.reason}`, `SDK bridge handshake failed: ${handshake.reason}`);
+    return result;
+  }
+  result.available = true;
+  const via = handshake.route || handshake.fallbackRoute || DSH_DEFAULT_MODEL;
+  if (handshake.route) {
+    result.note = t(`SDK bridge 兼容（${version.stdout.trim()}），model route ${via}`,
+      `SDK bridge compatible (${version.stdout.trim()}), model route ${via}`);
+    return result;
+  }
+  // No route served a model. This probe runs in a throwaway DSH home, so it can
+  // never see the routes the model menu wrote into a real instance: say
+  // what was actually verified (the protocol) instead of claiming the instance
+  // has no model.
+  const detail = handshake.note ? `（${handshake.note}）` : '';
+  result.note = t(`SDK bridge 兼容（${version.stdout.trim()}）；model 目录由 DSH 自己管理（vika dsh model list），本机内置 route ${via} 需要 DEEPSEEK_API_KEY${detail}`,
+    `SDK bridge compatible (${version.stdout.trim()}); model routes belong to DSH itself (vika dsh model list), and the built-in route ${via} needs DEEPSEEK_API_KEY${detail}`);
+  return result;
+}
+
 // OpenCode runs over ACP; an explicit OPENCODE_BIN is authoritative. ACP alone
 // does not prove the user has a model credential, so an initialize handshake
 // plus a supported version is what setup verifies (no session, no model call).
 async function detectOpencode({ env, execFileImpl, probe }) {
   const explicit = env.OPENCODE_BIN?.trim();
-  const bin = explicit ? path.resolve(explicit) : which('opencode', env);
+  const bin = explicit ? locateBinary(explicit, env) : which('opencode', env);
   if (!bin) {
     return {
       id: 'opencode', label: 'OpenCode', model: 'opencode', bin: null, binEnv: 'OPENCODE_BIN',
-      installed: false, available: false, note: t('未安装', 'not installed'),
+      installed: false, available: false,
+      note: explicit
+        ? t(`找不到可执行文件：${explicit}（既不是绝对路径，也不在 PATH 里）`,
+          `Cannot find the executable ${explicit}: it is neither an absolute path nor on PATH`)
+        : t('未安装', 'not installed'),
     };
   }
   const result = {
@@ -223,7 +301,7 @@ async function detectOpencode({ env, execFileImpl, probe }) {
   }
   // Models and credentials stay OpenCode's own (`opencode auth login`).
   result.available = true;
-  result.note = t(`协议兼容（${version.raw}），使用 opencode 自己的模型和登录配置`,
+  result.note = t(`protocol 兼容（${version.raw}），使用 opencode 自己的模型和登录配置`,
     `ACP compatible (${version.raw}), uses OpenCode's own model and login`);
   return result;
 }
