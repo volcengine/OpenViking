@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
-import type { TuiResourceTreeContent } from './types.js';
-import { TuiUriText } from './tui-uri-text.js';
+import type { TuiResourceTreeContent, TuiResourceTreeItem } from './types.js';
+import { TuiUriLink, TuiUriText } from './tui-uri-text.js';
 
 const PAGE_SIZE = 20;
 
@@ -10,6 +10,34 @@ export interface TuiResourceTreeProps {
   onOpenUri?: (uri: string) => void;
   loadMoreLabel: string;
   noResultLabel: string;
+  resourceLabel: string;
+}
+
+function TreeIdentity({
+  item,
+  onOpenUri,
+}: {
+  item: TuiResourceTreeItem;
+  onOpenUri?: (uri: string) => void;
+}) {
+  return (
+    <>
+      <span className="ov-tui__tree-title">
+        {item.uri ? (
+          <TuiUriLink uri={item.uri} onOpenUri={onOpenUri}>
+            {item.title}
+          </TuiUriLink>
+        ) : (
+          <TuiUriText text={item.title} onOpenUri={onOpenUri} />
+        )}
+      </span>
+      {item.metaLabel ? (
+        <span className="ov-tui__tree-meta">
+          <TuiUriText text={item.metaLabel} onOpenUri={onOpenUri} />
+        </span>
+      ) : null}
+    </>
+  );
 }
 
 /** 资源树结果：有明细时按列对齐，否则逐行列出。 */
@@ -18,6 +46,7 @@ export function TuiResourceTree({
   onOpenUri,
   loadMoreLabel,
   noResultLabel,
+  resourceLabel,
 }: TuiResourceTreeProps) {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const columns = Array.from(
@@ -45,14 +74,20 @@ export function TuiResourceTree({
           <table className="ov-tui__table">
             <thead>
               <tr>
+                <th scope="col">{resourceLabel}</th>
                 {columns.map((column) => (
-                  <th key={column}>{column}</th>
+                  <th key={column} scope="col">
+                    {column}
+                  </th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {visibleItems.map((item) => (
                 <tr key={item.id}>
+                  <td>
+                    <TreeIdentity item={item} onOpenUri={onOpenUri} />
+                  </td>
                   {columns.map((column) => {
                     const value =
                       item.detailRows?.find((row) => row.label === column)
@@ -70,36 +105,11 @@ export function TuiResourceTree({
         </div>
       ) : (
         <div className="ov-tui__tree-items">
-          {visibleItems.map((item) => {
-            const body = (
-              <>
-                <span className="ov-tui__tree-title">
-                  {item.uri && onOpenUri ? (
-                    <button
-                      type="button"
-                      className="ov-tui__link"
-                      onClick={() => onOpenUri(item.uri ?? '')}
-                    >
-                      {item.title}
-                    </button>
-                  ) : (
-                    <TuiUriText text={item.title} onOpenUri={onOpenUri} />
-                  )}
-                </span>
-                {item.metaLabel ? (
-                  <span className="ov-tui__tree-meta">
-                    <TuiUriText text={item.metaLabel} onOpenUri={onOpenUri} />
-                  </span>
-                ) : null}
-              </>
-            );
-
-            return (
-              <div key={item.id} className="ov-tui__tree-item">
-                {body}
-              </div>
-            );
-          })}
+          {visibleItems.map((item) => (
+            <div key={item.id} className="ov-tui__tree-item">
+              <TreeIdentity item={item} onOpenUri={onOpenUri} />
+            </div>
+          ))}
         </div>
       )}
       {hiddenCount > 0 ? (

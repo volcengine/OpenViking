@@ -32,7 +32,7 @@ export interface TuiRecordProps {
   labels: ResolvedTuiLabels;
   onOpenUri?: (uri: string) => void;
   onCopy?: (text: string) => void;
-  onPickCommand: (command: string) => void;
+  onPickCommand?: (command: string) => void;
 }
 
 function RecordBody({
@@ -86,6 +86,7 @@ function RecordBody({
             title: getVisibleTuiResultTitle(content.title, command),
           }}
           onOpenUri={onOpenUri}
+          resourceLabel={labels.resource}
           loadMoreLabel={labels.loadMore}
           noResultLabel={labels.noResult}
         />
@@ -138,7 +139,7 @@ function RecordBody({
             />
           ) : (
             <pre className="ov-tui__plain">
-              <TuiUriText text={text} onOpenUri={onOpenUri} />
+              <TuiUriText text={text} onOpenUri={onOpenUri} prose />
             </pre>
           )}
         </div>

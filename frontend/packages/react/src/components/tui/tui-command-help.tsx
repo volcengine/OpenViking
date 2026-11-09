@@ -3,7 +3,7 @@ import type { ResolvedTuiLabels } from './tui-labels.js';
 
 export interface TuiCommandHelpProps {
   content: TuiCommandHelpContent;
-  onPick: (command: string) => void;
+  onPick?: (command: string) => void;
   labels: ResolvedTuiLabels;
 }
 
@@ -25,7 +25,8 @@ export function TuiCommandHelp({
                 key={item.key}
                 type="button"
                 className="ov-tui__help-item"
-                onClick={() => onPick(item.name)}
+                disabled={!onPick}
+                onClick={() => onPick?.(item.name)}
               >
                 <span className="ov-tui__help-name">{item.name}</span>
                 {item.description ? (

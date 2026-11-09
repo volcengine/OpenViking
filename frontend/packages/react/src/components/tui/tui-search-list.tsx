@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
 import type { TuiSearchListContent, TuiSearchResultItem } from './types.js';
-import { TuiUriText } from './tui-uri-text.js';
+import { TuiUriLink, TuiUriText } from './tui-uri-text.js';
 
 export interface TuiSearchListProps {
   content: TuiSearchListContent;
@@ -81,20 +81,13 @@ function SearchRow({
         <span className="ov-tui__search-main">
           <span className="ov-tui__search-title" title={item.uri ?? item.title}>
             {item.uri ? (
-              <a
-                href={item.uri}
+              <TuiUriLink
+                uri={item.uri}
+                onOpenUri={onOpenUri}
                 className="ov-tui__link ov-tui__search-open"
-                onClick={
-                  onOpenUri
-                    ? (event) => {
-                        event.preventDefault();
-                        onOpenUri(item.uri ?? '');
-                      }
-                    : undefined
-                }
               >
                 <ResourceUri text={item.uri} />
-              </a>
+              </TuiUriLink>
             ) : (
               <TuiUriText text={item.title} onOpenUri={onOpenUri} />
             )}

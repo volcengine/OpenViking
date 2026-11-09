@@ -24,6 +24,7 @@ export const ZH_TUI_LABELS: ResolvedTuiLabels = {
   examples: '快速体验',
   noParameters: '此命令不需要参数',
   loadMore: '加载更多',
+  resource: '资源',
   parameter: '参数',
   required: '必填',
   description: '说明',

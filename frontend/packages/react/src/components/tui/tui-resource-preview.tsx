@@ -1,5 +1,5 @@
 import type { TuiResourcePreviewContent } from './types.js';
-import { TuiUriText } from './tui-uri-text.js';
+import { TuiUriLink, TuiUriText } from './tui-uri-text.js';
 import { TuiCodeBlock } from './tui-code-block.js';
 import type { ResolvedTuiLabels } from './tui-labels.js';
 import { isTuiJson } from './tui-result-text.js';
@@ -36,20 +36,13 @@ export function TuiResourcePreview({
       ) : null}
       <div className="ov-tui__preview-body">
         {content.uri ? (
-          <a
-            href={target}
+          <TuiUriLink
+            uri={target}
+            onOpenUri={onOpenUri}
             className="ov-tui__link ov-tui__preview-uri"
-            onClick={
-              onOpenUri
-                ? (event) => {
-                    event.preventDefault();
-                    if (target) onOpenUri(target);
-                  }
-                : undefined
-            }
           >
             {content.uri}
-          </a>
+          </TuiUriLink>
         ) : null}
         {isTuiJson(content.content) ? (
           <TuiCodeBlock

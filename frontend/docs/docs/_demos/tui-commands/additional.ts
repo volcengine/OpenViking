@@ -96,8 +96,8 @@ const ENTRIES: readonly Entry[] = [
     'Add session messages',
     '批量添加会话消息',
     'write',
-    ['<session-id>'],
-    ['--messages <json-array>!'],
+    ['<session-id>', '<messages-json>'],
+    [],
   ],
   [
     'session commit',

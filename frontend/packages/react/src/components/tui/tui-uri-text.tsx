@@ -1,12 +1,49 @@
 import type { ReactNode } from 'react';
 
-import { TUI_URI_PATTERN } from './tui-text.js';
+import { getTuiSafeHref, TUI_URI_PATTERN } from './tui-text.js';
 
 export interface TuiUriTextProps {
   text: string;
   onOpenUri?: (uri: string) => void;
   /** 编辑镜像隐藏重复文字，但保留链接语义及输入框焦点。 */
   editor?: boolean;
+  /** Sentence punctuation is excluded only from prose, never editor/echo values. */
+  prose?: boolean;
+}
+
+/** A validated native link; rejected targets remain plain text. */
+export function TuiUriLink({
+  uri,
+  children,
+  onOpenUri,
+  editor = false,
+  className = 'ov-tui__link',
+}: {
+  uri?: string;
+  children: ReactNode;
+  onOpenUri?: (uri: string) => void;
+  editor?: boolean;
+  className?: string;
+}) {
+  const href = getTuiSafeHref(uri);
+  if (!href) return <>{children}</>;
+  return (
+    <a
+      href={href}
+      className={className}
+      onMouseDown={editor ? (event) => event.preventDefault() : undefined}
+      onClick={
+        onOpenUri
+          ? (event) => {
+              event.preventDefault();
+              onOpenUri(href);
+            }
+          : undefined
+      }
+    >
+      {children}
+    </a>
+  );
 }
 
 /** 把纯文本中的 URI 渲染成链接；宿主可通过回调接管打开。 */
@@ -14,6 +51,7 @@ export function TuiUriText({
   text,
   onOpenUri,
   editor = false,
+  prose = false,
 }: TuiUriTextProps) {
   const parts: ReactNode[] = [];
   let cursor = 0;
@@ -29,25 +67,19 @@ export function TuiUriText({
 
   for (const matched of text.matchAll(pattern)) {
     const index = matched.index ?? 0;
-    const uri = matched[0];
+    const uri = prose
+      ? matched[0].replace(/[.!?；;:：！？]+$/u, '')
+      : matched[0];
     if (index > cursor) parts.push(plain(text.slice(cursor, index), cursor));
     parts.push(
-      <a
+      <TuiUriLink
         key={`${index}-${uri}`}
-        href={uri}
-        className="ov-tui__link"
-        onMouseDown={editor ? (event) => event.preventDefault() : undefined}
-        onClick={
-          onOpenUri
-            ? (event) => {
-                event.preventDefault();
-                onOpenUri(uri);
-              }
-            : undefined
-        }
+        uri={uri}
+        onOpenUri={onOpenUri}
+        editor={editor}
       >
         {uri}
-      </a>,
+      </TuiUriLink>,
     );
     cursor = index + uri.length;
   }

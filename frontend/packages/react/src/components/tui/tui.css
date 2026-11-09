@@ -891,8 +891,13 @@
   cursor: pointer;
 }
 
-.ov-tui__help-item:hover {
+.ov-tui__help-item:not(:disabled):hover {
   background: var(--ov-ui-tui-hover);
+}
+
+.ov-tui__help-item:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .ov-tui__help-name {

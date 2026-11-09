@@ -25,6 +25,8 @@ Components receive view data and state through props and express user intent thr
 
 Modules consume the native OpenViking API through a shared Client by default, with the Provider supplying `baseURL`, headers and other configuration, and modules or standalone Hooks overriding individual fields through `requestOptions`. Standard integration needs no per-module Adapter; nonstandard gateways are adapted at the host's request boundary. The request contract — `OvRequestOptions`, `OvClient` and `OvClientError` — comes from the `@openviking/react/client` subpath, which ships a `fetch`-based `createOvClient`; the Provider is exported from the same subpath; these native API module Hooks are not implemented yet. ScopeCascade instead accepts three host API adapters and needs no Provider. See [request conventions](./src/modules/README.md#request-conventions-and-default-configuration).
 
+Tui preserves JSON numeric tokens when indenting output. Structured resource links allow only `viking://`, `https://`, and `http://`; other targets render as text. Resource tables retain entry titles, native links and metadata. Output follows updates only near the bottom or after explicit submission. Read-only and disabled consoles cannot submit or insert help commands. `labels.resource` customizes the resource identity column.
+
 ### Props conventions
 
 The same props are consumed by different hosts. Hosts differ in flows and interfaces while matching in interaction and UI, so:

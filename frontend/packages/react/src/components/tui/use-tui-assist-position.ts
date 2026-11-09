@@ -27,6 +27,7 @@ export function useTuiAssistPosition(
         dismiss();
     };
     const escape = (event: KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229) return;
       if (
         event.key === 'Escape' &&
         (anchor.contains(document.activeElement) ||

@@ -13,12 +13,24 @@ export function createTuiDemoRecord(
 ): TuiRecord {
   const chinese = locale === 'zh';
   const catalogue = createTuiCommands(locale);
-  const input = command.trim().toLowerCase();
+  const input = command
+    .trim()
+    .toLowerCase()
+    .replace(/[ \t]+/g, ' ');
   const definition = [...catalogue]
     .sort((a, b) => b.name.length - a.name.length)
     .find((item) =>
-      [item.inputText ?? item.name, item.name, `/${item.name}`].some(
-        (prefix) => input === prefix || input.startsWith(`${prefix} `),
+      [
+        item.inputText ?? item.name,
+        ...[item.name, ...(item.aliases ?? [])].flatMap((name) => [
+          name,
+          `/${name}`,
+          `ov ${name}`,
+        ]),
+      ].some(
+        (prefix) =>
+          input === prefix.toLowerCase() ||
+          input.startsWith(`${prefix.toLowerCase()} `),
       ),
     );
   const record = { id: 'demo-result', command, status: 'success' as const };

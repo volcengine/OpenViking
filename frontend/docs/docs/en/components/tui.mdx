@@ -62,20 +62,24 @@ import type {
 
 The table describes the implemented behaviour.
 
-| Property      | Type                            | Default      | Description                                                                                                                                         |
-| ------------- | ------------------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| records       | readonly TuiRecord[]            | Required     | Currently displayed execution records in submission order; the host updates them on session or history changes.                                     |
-| value         | string                          | Required     | Controlled input value.                                                                                                                             |
-| disabled      | boolean                         | false        | Disables command input and submission; the message comes from `labels.unavailableMessage`.                                                          |
-| emptyState    | ReactNode                       | labels.empty | Complete empty state when no records are displayed; may include a heading, description and shortcuts. `null` hides it.                              |
-| locale        | `"en" \| "zh"`                  | `"en"`       | Language of built-in interface copy; labels can override individual strings.                                                                        |
-| commands      | readonly TuiCommandDefinition[] | `[]`         | Host command catalogue for completion, help and pending skeletons.                                                                                  |
-| commandGroups | readonly TuiCommandGroup[]      | `[]`         | Host group labels and ordering; undeclared groups are appended.                                                                                     |
-| labels        | TuiLabels                       | —            | Interface copy and guidance.                                                                                                                        |
-| onValueChange | (value: string) => void         | —            | Reports input changes, including accepted commands and examples; inline hints never change the value or submit. Omission makes the input read-only. |
-| onSubmit      | (command: string) => void       | —            | Reports explicit submission intent. The host executes it; omission disables submission.                                                             |
-| onOpenUri     | (uri: string) => void           | —            | Receives the URI on link activation; the host opens the resource.                                                                                   |
-| onCopy        | (text: string) => void          | —            | Called after copying succeeds, with the copied text; not called on failure. Omission does not affect copying.                                       |
+| Property      | Type                            | Default      | Description                                                                                                                                                                                    |
+| ------------- | ------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| records       | readonly TuiRecord[]            | Required     | Currently displayed execution records in submission order; the host updates them on session or history changes.                                                                                |
+| value         | string                          | Required     | Controlled input value.                                                                                                                                                                        |
+| disabled      | boolean                         | false        | Disables command input and submission; the message comes from `labels.unavailableMessage`.                                                                                                     |
+| emptyState    | ReactNode                       | labels.empty | Complete empty state when no records are displayed; may include a heading, description and shortcuts. `null` hides it.                                                                         |
+| locale        | `"en" \| "zh"`                  | `"en"`       | Language of built-in interface copy; labels can override individual strings.                                                                                                                   |
+| commands      | readonly TuiCommandDefinition[] | `[]`         | Host command catalogue for completion, help and pending skeletons.                                                                                                                             |
+| commandGroups | readonly TuiCommandGroup[]      | `[]`         | Host group labels and ordering; undeclared groups are appended.                                                                                                                                |
+| labels        | TuiLabels                       | —            | Interface copy and guidance.                                                                                                                                                                   |
+| onValueChange | (value: string) => void         | —            | Reports input changes, including accepted commands and examples; inline hints never change the value or submit. Omission makes the input read-only and disables submission and help insertion. |
+| onSubmit      | (command: string) => void       | —            | Reports explicit submission intent. The host executes it; omission disables submission.                                                                                                        |
+| onOpenUri     | (uri: string) => void           | —            | Receives the URI on link activation; the host opens the resource.                                                                                                                              |
+| onCopy        | (text: string) => void          | —            | Called after copying succeeds, with the copied text; not called on failure. Omission does not affect copying.                                                                                  |
+
+Record updates follow the output only while the reader is near the bottom. Scrolling up preserves the reading position; an explicit submission resumes following. Resource tables retain each entry’s title, native URI target and metadata, including entries without detail rows.
+
+Structured resource links accept `viking://`, `https://` and `http://`; unsupported targets render as plain text. Sentence punctuation is excluded from prose URI links, while command, editor and code values remain intact.
 
 `onSubmit` reports the submitted text and does not await a result. The host owns sending, permissions and execution, and updates pending, successful or failed records. A pending record does not block later submissions.
 
@@ -107,7 +111,7 @@ Empty result messages use `labels.noResult`; command-help headings and hints use
 
 For `text`, `format` accepts `plain` or `markdown` and defaults to `plain`. Format JSON as a string and display it through `text`. Failures use `TuiRecord.status: 'error'`, with the error body in a text result; there is no separate error content variant.
 
-Each variant has a dedicated view: plain or Markdown text (JSON is pretty-printed), search rows with optional score details, resource preview, an aligned resource table with paging, status rows, write lines and grouped command help. Resource URI links in the input, command bubbles, Markdown and structured result strings share `onOpenUri`. Custom React nodes own their internal links. Clicking an input URI does not change or submit the command; Shift+Tab can focus links for Enter activation. Converting CLI output into these variants stays with the host.
+Each variant has a dedicated view: plain or Markdown text (JSON is indented without changing numeric tokens or other values), search rows with optional score details, resource preview, an aligned resource table with paging, status rows, write lines and grouped command help. Resource URI links in the input, command bubbles, Markdown and structured result strings share `onOpenUri`. Custom React nodes own their internal links. Clicking an input URI does not change or submit the command; Shift+Tab can focus links for Enter activation. Converting CLI output into these variants stays with the host.
 
 ### Copy and guidance
 
@@ -124,7 +128,7 @@ General interface copy follows `locale`, with individual overrides through `labe
 
 `disabled` defaults to `false`. To disable command input and submission, set it to `true`. `labels.unavailableMessage` customizes the resulting message.
 
-Parameter headings, column labels, required values and pagination copy can also be overridden through `labels.parameters`, `examples`, `noParameters`, `parameter`, `required`, `description`, `defaultValue`, `yes`, `no` and `loadMore`.
+Parameter headings, column labels, required values and pagination copy can also be overridden through `labels.parameters`, `examples`, `noParameters`, `parameter`, `required`, `description`, `defaultValue`, `yes`, `no`, `loadMore` and `resource` (the resource-table identity column).
 
 ### Search result details
 

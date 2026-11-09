@@ -104,7 +104,6 @@ export function createTuiRecords(
             title: 'release.md',
             uri: 'viking://resources/acme/release.md',
             detailRows: [
-              { label: t('Name', '名称'), value: 'release.md' },
               { label: t('Type', '类型'), value: t('file', '文件') },
               { label: t('Size', '大小'), value: '2.4 KB' },
             ],
@@ -114,7 +113,6 @@ export function createTuiRecords(
             title: 'onboarding/',
             uri: 'viking://resources/acme/onboarding',
             detailRows: [
-              { label: t('Name', '名称'), value: 'onboarding/' },
               { label: t('Type', '类型'), value: t('directory', '目录') },
               { label: t('Size', '大小'), value: '—' },
             ],

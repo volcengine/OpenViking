@@ -65,6 +65,7 @@ export function Tui({
 }: TuiProps) {
   const text = resolveTuiLabels(labels, locale);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const followOutput = useRef(true);
   const composerRef = useRef<HTMLDivElement>(null);
   const assistId = useId();
   const [dismissedValue, setDismissedValue] = useState<string | null>(null);
@@ -83,8 +84,13 @@ export function Tui({
     onValueChange?.(next);
   };
   const readOnly = !onValueChange;
-  const fillCommand = (next: string) =>
+  const fillCommand = (next: string) => {
+    if (disabled || readOnly) return;
     updateValue(formatTuiCommandInput(next, commands));
+    composerRef.current
+      ?.querySelector('textarea')
+      ?.focus({ preventScroll: true });
+  };
   const completion = useTuiCompletion(
     value,
     !disabled && !readOnly && dismissedValue !== value,
@@ -116,15 +122,23 @@ export function Tui({
   );
 
   // useEffect 必要性：记录提交到浏览器 DOM 后滚动实际容器，渲染时无法获取最终高度。
-  // records 更新决定滚动时机；同步写入 scrollTop，不创建订阅或待清理资源。
+  // 仅在用户接近底部或主动提交时跟随；同步写入，不创建订阅或待清理资源。
   useEffect(() => {
     const body = bodyRef.current;
-    if (body) body.scrollTop = body.scrollHeight;
+    if (body && followOutput.current) body.scrollTop = body.scrollHeight;
   }, [records]);
 
   return (
     <div className={['ov-tui', className].filter(Boolean).join(' ')} {...rest}>
-      <div ref={bodyRef} className="ov-tui__body">
+      <div
+        ref={bodyRef}
+        className="ov-tui__body"
+        onScroll={(event) => {
+          const body = event.currentTarget;
+          followOutput.current =
+            body.scrollHeight - body.scrollTop - body.clientHeight <= 24;
+        }}
+      >
         {records.length ? (
           records.map((record) => (
             <TuiRecordItem
@@ -134,7 +148,11 @@ export function Tui({
               labels={text}
               onOpenUri={onOpenUri}
               onCopy={onCopy}
-              onPickCommand={(command) => fillCommand(`${command} `)}
+              onPickCommand={
+                disabled || readOnly
+                  ? undefined
+                  : (command) => fillCommand(`${command} `)
+              }
             />
           ))
         ) : (
@@ -151,7 +169,7 @@ export function Tui({
         completion={completion}
         activeIndex={activeIndex}
         onActiveIndexChange={setActiveIndexSafely}
-        onPick={updateValue}
+        onPick={fillCommand}
       />
       <TuiComposer
         onDismiss={dismissCompletion}
@@ -171,11 +189,15 @@ export function Tui({
         completion={completion}
         disabled={disabled}
         readOnly={readOnly}
-        canSubmit={Boolean(onSubmit)}
+        canSubmit={Boolean(onSubmit) && !readOnly}
         activeIndex={activeIndex}
         onActiveIndexChange={setActiveIndexSafely}
         onValueChange={onValueChange ? updateValue : undefined}
-        onSubmit={onSubmit}
+        onSubmit={(command) => {
+          if (disabled || readOnly) return;
+          followOutput.current = true;
+          onSubmit?.(command);
+        }}
         onOpenUri={onOpenUri}
       />
     </div>

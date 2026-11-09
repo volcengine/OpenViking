@@ -48,7 +48,7 @@ export function getTuiCommandQuery(
           matches: filterTuiCommands(slash.name, commands),
         };
   const content = normalize(value.trimStart());
-  if (!content || matchTuiCommandInput(value, commands)) return EMPTY_QUERY;
+  if (!content) return EMPTY_QUERY;
   const boundary = content.lastIndexOf(' ') + 1;
   const head = content.slice(0, boundary);
   const keyword = content.slice(boundary);
@@ -63,6 +63,12 @@ export function getTuiCommandQuery(
   const matching = scoped.filter((entry) =>
     entry.text.toLowerCase().startsWith(content.toLowerCase()),
   );
+  // An exact parent command must not hide matching subcommands still being typed.
+  if (
+    matchTuiCommandInput(value, commands) &&
+    !matching.some((entry) => entry.text.length > content.trimEnd().length)
+  )
+    return EMPTY_QUERY;
   const base = { ...EMPTY_QUERY, keyword, scope: head.trimEnd() };
   if (!keyword)
     return {

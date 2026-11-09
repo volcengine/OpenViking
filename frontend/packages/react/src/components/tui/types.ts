@@ -474,6 +474,8 @@ export interface TuiLabels {
   no?: string;
   /** 资源列表分页。Resource list pagination. */
   loadMore?: string;
+  /** 资源表格的名称列。Resource identity column heading. */
+  resource?: string;
   /** 格式化已过去的整分钟。Formats elapsed whole minutes. */
   formatMinutesAgo?: (minutes: number) => string;
   /** 格式化已过去的整小时。Formats elapsed whole hours. */

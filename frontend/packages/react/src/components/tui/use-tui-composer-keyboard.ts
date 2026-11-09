@@ -109,7 +109,7 @@ export function useTuiComposerKeyboard({
           return;
         }
         const spaceCommand =
-          event.key === ' '
+          event.key === ' ' && atEnd
             ? matchTuiCommandInput(value, options)?.command
             : undefined;
         if (
@@ -166,7 +166,8 @@ export function useTuiComposerKeyboard({
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      if (value.trim() && !disabled && canSubmit) onSubmit?.(value.trim());
+      if (value.trim() && !disabled && !readOnly && canSubmit)
+        onSubmit?.(value.trim());
     }
   };
   return { change, handleKeyDown };

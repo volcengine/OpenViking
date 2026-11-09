@@ -18,26 +18,30 @@ export function matchTuiCommandInput(
 ): TuiCommandInputMatch | undefined {
   const content = value.trimStart();
   const leadingWhitespace = value.slice(0, value.length - content.length);
-  const lower = content.toLowerCase();
   const matches = commands.flatMap((command) => {
     const names = [command.name, ...(command.aliases ?? [])];
     return [
       getTuiCommandInputText(command),
       ...names,
       ...names.map((name) => `/${name}`),
-    ]
-      .filter(
-        (prefix) =>
-          prefix &&
-          lower.startsWith(prefix.toLowerCase()) &&
-          (!content[prefix.length] || /\s/.test(content[prefix.length]!)),
-      )
-      .map((prefix) => ({
-        command,
-        leadingWhitespace,
-        prefix: content.slice(0, prefix.length),
-        rest: content.slice(prefix.length),
-      }));
+    ].flatMap((prefix) => {
+      const words = prefix.trim().split(/[ \t]+/);
+      const pattern = words
+        .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('[ \t]+');
+      const match =
+        pattern && new RegExp(`^${pattern}(?=$|\\s)`, 'i').exec(content);
+      return match
+        ? [
+            {
+              command,
+              leadingWhitespace,
+              prefix: match[0],
+              rest: content.slice(match[0].length),
+            },
+          ]
+        : [];
+    });
   });
   return matches.sort(
     (left, right) => right.prefix.length - left.prefix.length,
