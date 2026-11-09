@@ -44,6 +44,14 @@
     --ov-ui-color-bg-4,
     var(--ov-ui-bg-4-default, #f6f7fa)
   );
+  --ov-viking-bot-bg: var(
+    --ov-ui-color-bg-1,
+    var(--ov-ui-bg-1-default, #ffffff)
+  );
+  --ov-viking-bot-primary-light: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default, #f5f7ff)
+  );
   --ov-viking-bot-surface-hover: var(
     --ov-ui-color-bg-5,
     var(--ov-ui-bg-5-default, #f1f2f9)
@@ -65,6 +73,31 @@
   color: var(--ov-viking-bot-text);
   font-family: inherit;
   font-size: 13px;
+}
+
+/* Ark 控件读取 Arco 的 --color-* 与 --primary-* 变量。独立消费本组件的 CSS
+   时宿主可能没有全局 Arco 主题，这里把 Arco 变量接到包级主题基线上，让 Ark
+   控件的文字、底色、边框与主色跟随 --ov-ui-color-* 与暗色切换。只在组件
+   作用域内赋值，不修改宿主全局。 */
+.ov-viking-bot,
+.ov-viking-bot__interaction {
+  --color-text-1: var(--ov-viking-bot-text);
+  --color-text-2: var(--ov-viking-bot-text);
+  --color-text-3: var(--ov-viking-bot-text-muted);
+  --color-text-4: var(--ov-viking-bot-text-muted);
+  --color-bg-1: var(--ov-viking-bot-bg);
+  --color-bg-2: var(--ov-viking-bot-surface);
+  --color-bg-3: var(--ov-viking-bot-surface);
+  --color-bg-4: var(--ov-viking-bot-surface);
+  --color-bg-5: var(--ov-viking-bot-surface-hover);
+  --color-border-1: var(--ov-viking-bot-border);
+  --color-border-2: var(--ov-viking-bot-border);
+  --color-border-3: var(--ov-viking-bot-border-strong);
+  --color-border-4: var(--ov-viking-bot-border-strong);
+  --color-fill-2: var(--ov-viking-bot-surface-hover);
+  --color-primary-light-1: var(--ov-viking-bot-primary-light);
+  --primary-5: var(--ov-viking-bot-accent-hover);
+  --primary-6: var(--ov-viking-bot-accent);
 }
 
 .ov-viking-bot__header,

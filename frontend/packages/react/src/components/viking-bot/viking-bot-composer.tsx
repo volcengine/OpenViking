@@ -1,23 +1,32 @@
 import { Sender } from '@ark-design/ui/sender';
 import type { RichTextValue, SenderInstance } from '@ark-design/ui/sender';
-import { forwardRef, useCallback, useImperativeHandle, useRef } from 'react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+} from 'react';
 
 import { DEFAULT_LABELS } from './labels.js';
 import type { VikingBotDraft } from './model.js';
 import type { VikingBotComposerProps, VikingBotComposerRef } from './types.js';
 
+const HARD_BREAK = 'hardBreak';
+const TEXT = 'text';
+
 /** 从富文本里取纯文本，忽略附件与标签。 */
 const toPlainText = (content: RichTextValue[]): string =>
   content
     .map((item) => {
-      if (item.type === 'hardBreak') return '\n';
-      return item.type === 'text' ? (item.text ?? '') : '';
+      if (item.type === HARD_BREAK) return '\n';
+      return item.type === TEXT ? (item.text ?? '') : '';
     })
     .join('')
     .trim();
 
 const toRichText = (text: string): RichTextValue[] =>
-  text ? [{ type: 'text', text }] : [];
+  text ? [{ type: TEXT, text }] : [];
 
 /**
  * 输入区。发送与停止都由宿主决定，组件只上报意图。
@@ -35,6 +44,8 @@ export const VikingBotComposerView = forwardRef<
     disabledReason,
     isSending,
     variant = 'default',
+    accept,
+    maxAttachments = 10,
     actions,
     onValueChange,
     onFilesAdded,
@@ -49,6 +60,8 @@ export const VikingBotComposerView = forwardRef<
   const senderRef = useRef<SenderInstance>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const readOnly = !onValueChange;
+  const remaining = Math.max(0, maxAttachments - attachments.length);
+  const limitReached = remaining === 0;
 
   const setText = useCallback(
     (text: string) => {
@@ -58,11 +71,31 @@ export const VikingBotComposerView = forwardRef<
     [onValueChange],
   );
 
+  // useEffect 必要性：把受控 value 的后续变化同步到 Ark 编辑器。编辑器是外部
+  // 非 React 控件，只有它的 setValue 能改写内部文档，渲染计算无法做到。仅当
+  // 外部文本与编辑器当前纯文本不一致时才写入，避免覆盖用户正在输入的光标。
+  // 组件卸载或 value 再次变化时由下一次同步覆盖，无需额外清理。
+  useEffect(() => {
+    const current = toPlainText(senderRef.current?.getValue() ?? []);
+    if (current === value) return;
+    senderRef.current?.setValue(toRichText(value));
+  }, [value]);
+
+  /** 按剩余额度截断并上报文件。 */
+  const reportFiles = useCallback(
+    (files: readonly File[]) => {
+      if (!onFilesAdded || files.length === 0 || limitReached) return;
+      const accepted = files.slice(0, remaining);
+      if (accepted.length) onFilesAdded(accepted);
+    },
+    [limitReached, onFilesAdded, remaining],
+  );
+
   useImperativeHandle(ref, () => ({
     setText,
     appendText: (text: string) => setText(`${value}${text}`),
-    addFiles: (files: readonly File[]) => onFilesAdded?.(files),
-    isAttachmentLimitReached: () => false,
+    addFiles: (files: readonly File[]) => reportFiles(files),
+    isAttachmentLimitReached: () => limitReached,
     clear: () => setText(''),
     focus: () => senderRef.current?.getEditor()?.commands.focus('end'),
   }));
@@ -75,7 +108,7 @@ export const VikingBotComposerView = forwardRef<
     onSend({ text, attachments } satisfies VikingBotDraft);
   };
 
-  const acceptDrop = Boolean(onFilesAdded) && !disabled;
+  const acceptDrop = Boolean(onFilesAdded) && !disabled && !limitReached;
 
   return (
     <div
@@ -95,8 +128,7 @@ export const VikingBotComposerView = forwardRef<
       onDrop={(event) => {
         if (!acceptDrop) return;
         event.preventDefault();
-        const files = [...(event.dataTransfer.files ?? [])];
-        if (files.length) onFilesAdded?.(files);
+        reportFiles([...(event.dataTransfer.files ?? [])]);
       }}
     >
       {disabled && disabledReason ? (
@@ -153,17 +185,17 @@ export const VikingBotComposerView = forwardRef<
                 <input
                   ref={fileRef}
                   type="file"
+                  accept={accept}
                   multiple
                   hidden
                   onChange={(event) => {
-                    const files = [...(event.target.files ?? [])];
-                    if (files.length) onFilesAdded(files);
+                    reportFiles([...(event.target.files ?? [])]);
                     event.target.value = '';
                   }}
                 />
                 <button
                   type="button"
-                  disabled={disabled}
+                  disabled={disabled || limitReached}
                   onClick={() => fileRef.current?.click()}
                 >
                   {labels.attach}

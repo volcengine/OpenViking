@@ -103,6 +103,14 @@
     --ov-ui-color-border-3,
     var(--ov-ui-border-3-default, #d7daea)
   );
+  --ov-viking-bot-bg: var(
+    --ov-ui-color-bg-1,
+    var(--ov-ui-bg-1-default, #ffffff)
+  );
+  --ov-viking-bot-primary-light: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default, #f5f7ff)
+  );
   --ov-viking-bot-surface: var(
     --ov-ui-color-bg-4,
     var(--ov-ui-bg-4-default, #f6f7fa)

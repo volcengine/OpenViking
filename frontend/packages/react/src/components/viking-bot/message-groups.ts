@@ -41,9 +41,23 @@ export function groupMessages(
       previous.parts = [...previous.parts, ...message.parts];
       previous.turnId ??= message.turnId;
       previous.streaming = previous.streaming || message.streaming;
+      // 动作与原始消息身份属于各自的消息，不能随合并转移：带动作的后继消息
+      // 若被并进前一条，动作会挂到错误的 messageId 上或直接丢失。
+      if (message.action) {
+        previous.actions = [
+          ...(previous.actions ?? []),
+          { messageId: message.id, action: message.action },
+        ];
+      }
       continue;
     }
-    groups.push({ ...message, parts: [...message.parts] });
+    groups.push({
+      ...message,
+      parts: [...message.parts],
+      actions: message.action
+        ? [{ messageId: message.id, action: message.action }]
+        : undefined,
+    });
   }
   return groups;
 }

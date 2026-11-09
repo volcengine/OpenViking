@@ -101,17 +101,40 @@ export function groupActivityParts(parts: readonly VikingBotMessagePart[]): {
   return { groups, order };
 }
 
-/** 把消息列表展平成 Ark 列表的渲染单元，流式片段作为最后一个单元。 */
+/**
+ * 把消息列表展平成 Ark 列表的渲染单元，流式片段插到 `insertIndex` 指定位置。
+ *
+ * 插入位置在原始消息序列上确定：调用方先按原始下标切分，再分别合并两侧，
+ * 避免先合并再适配导致下标含义改变、把边界两侧的助手消息并到一起。
+ *
+ * Flattens the messages into Ark render items, inserting the streaming unit at
+ * `insertIndex`. The boundary is resolved against the original sequence so
+ * merging on either side cannot shift its meaning.
+ */
 export function toRenderItems(
   messages: readonly VikingBotMessage[],
   streaming?: VikingBotStreamingState,
+  group: (messages: readonly VikingBotMessage[]) => VikingBotMessage[] = (
+    list,
+  ) => [...list],
 ): VikingBotRenderItem[] {
-  const items: VikingBotRenderItem[] = messages.map((message) => ({
+  const insertIndex = streaming
+    ? Math.min(
+        Math.max(streaming.insertIndex ?? messages.length, 0),
+        messages.length,
+      )
+    : messages.length;
+  const before = group(messages.slice(0, insertIndex));
+  const after = streaming ? group(messages.slice(insertIndex)) : [];
+  const items: VikingBotRenderItem[] = before.map((message) => ({
     id: message.id,
     message,
   }));
   if (streaming) {
     items.push({ id: '__streaming__', streaming });
+  }
+  for (const message of after) {
+    items.push({ id: message.id, message });
   }
   return items;
 }

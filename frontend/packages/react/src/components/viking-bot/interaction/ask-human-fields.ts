@@ -69,3 +69,45 @@ export const toAnswer = (
   }
   return { kind: 'custom', value: raw };
 };
+
+/** 按 request 计算 AskHuman 的初始答案，保证预填值与提交值一致。 */
+export const toDefaultValue = (
+  request: VikingBotInteractionRequest,
+): AskHumanValue | undefined => {
+  if (request.kind === 'choice') {
+    return undefined;
+  }
+  if (request.kind === 'repair') {
+    return request.initialValue ? { value: request.initialValue } : undefined;
+  }
+  if (request.kind === 'text') {
+    return { value: request.initialValue ?? '' };
+  }
+  if (request.kind === 'schedule') {
+    return { value: request.initialValue };
+  }
+  return undefined;
+};
+
+/** 选择类问题必须选中有效选项；其他类型按自身初始值即可提交。 */
+export const isValidAnswer = (
+  request: VikingBotInteractionRequest,
+  value: AskHumanValue,
+): boolean => {
+  const raw = value.value;
+  if (request.kind === 'choice') {
+    if (!raw || typeof raw !== 'object') return false;
+    const selected = raw as {
+      type?: string;
+      value?: string;
+      customText?: string;
+    };
+    if (selected.type === 'custom') return Boolean(selected.customText?.trim());
+    return request.options.some((option) => option.value === selected.value);
+  }
+  if (request.kind === 'repair') {
+    if (typeof raw !== 'string') return false;
+    return request.options.some((option) => option.id === raw);
+  }
+  return true;
+};

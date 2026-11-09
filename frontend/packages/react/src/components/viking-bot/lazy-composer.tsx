@@ -1,4 +1,4 @@
-import { lazy, Suspense, type Ref } from 'react';
+import { forwardRef, lazy, Suspense } from 'react';
 
 import type { VikingBotComposerProps, VikingBotComposerRef } from './types.js';
 
@@ -8,10 +8,17 @@ import type { VikingBotComposerProps, VikingBotComposerRef } from './types.js';
  * 静态导入会把 Ark 及其浏览器专用依赖拉进包的顶层导入链，破坏服务端渲染
  * 与无 `window` 环境下的模块解析，因此用动态导入隔开。
  *
+ * 外层必须继续用 forwardRef：包声明支持 React ^18.2.0，React 18 会截走 ref
+ * 而不把它当作普通 prop 传入，改用 ref-as-prop 会让 React 18 下的 ref 丢失。
+ *
  * Lazy composer: Ark's Sender downloads only when the composer actually renders.
  * A static import would pull Ark and its browser-only dependencies into the
  * package's top-level import chain, breaking server rendering and module
  * resolution without `window`.
+ *
+ * The outer component keeps `forwardRef`: the package declares React ^18.2.0, and
+ * React 18 intercepts `ref` instead of passing it as a prop, so the ref-as-prop
+ * form would silently drop the ref there.
  */
 const View = lazy(async () => {
   const { VikingBotComposerView } = await import('./viking-bot-composer.js');
@@ -19,10 +26,10 @@ const View = lazy(async () => {
 });
 
 /** 输入区。The composer. */
-export function VikingBotComposer({
-  ref,
-  ...props
-}: VikingBotComposerProps & { ref?: Ref<VikingBotComposerRef> }) {
+export const VikingBotComposer = forwardRef<
+  VikingBotComposerRef,
+  VikingBotComposerProps
+>(function VikingBotComposer(props, ref) {
   return (
     <Suspense
       fallback={
@@ -32,4 +39,4 @@ export function VikingBotComposer({
       <View {...props} ref={ref} />
     </Suspense>
   );
-}
+});

@@ -1,7 +1,12 @@
 import { AskHuman } from '@ark-design/ui/ask-human';
 import type { AskHumanStep } from '@ark-design/ui/ask-human';
 
-import { toAnswer, toFields } from './ask-human-fields.js';
+import {
+  isValidAnswer,
+  toAnswer,
+  toDefaultValue,
+  toFields,
+} from './ask-human-fields.js';
 import { ScheduleInput } from './schedule-input.js';
 import { DEFAULT_INTERACTION_LABELS } from './labels.js';
 import type {
@@ -109,12 +114,20 @@ export function VikingBotInteractionView({
         key={formKey}
         steps={steps}
         current={0}
+        defaultValue={toDefaultValue(request)}
         showSkip={Boolean(onCancel)}
         skipText={labels.cancel}
         submitText={labels.submit}
-        onSkip={() => onCancel?.()}
-        onSubmit={(value) => {
-          void onSubmit?.(toAnswer(request, value));
+        onSkip={() => {
+          if (blocked) return;
+          onCancel?.();
+        }}
+        onSubmit={async (value) => {
+          if (blocked) return;
+          // 选择类问题必须提交有效选项，否则用户看到的选择与提交内容不一致。
+          if (!isValidAnswer(request, value)) return;
+          // 返回宿主的 Promise，让 Ark 的提交中状态覆盖整个异步请求。
+          await onSubmit?.(toAnswer(request, value));
         }}
         customRenderFields={{
           'viking-bot-text': ({ field, onChange }) => (

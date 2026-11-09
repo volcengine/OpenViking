@@ -163,6 +163,18 @@ export interface VikingBotMessage {
    */
   tone?: 'info' | 'error';
   /**
+   * 合并后的消息携带的原始动作清单；合并时保留每条消息自己的 messageId，
+   * 渲染时按原始消息回传，避免把动作挂到错误的消息上。
+   * Actions carried by the messages this one merged, each keeping its original
+   * message id so the host receives the right one.
+   */
+  actions?: readonly {
+    /** 原始消息标识。Original message key. */
+    messageId: string;
+    /** 该消息声明的动作。Action declared by that message. */
+    action: NonNullable<VikingBotMessage['action']>;
+  }[];
+  /**
    * 消息级动作，由宿主声明。火山版用它在助手消息下挂「提交会话」。
    * Message-level action declared by the host. The managed agent uses it for
    * the memory-commit control under an assistant message.

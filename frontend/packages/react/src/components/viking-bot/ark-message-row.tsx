@@ -21,24 +21,29 @@ function MessageActions({
   onMessageAction?: (messageId: string, actionKey: string) => void;
 }) {
   const text = messageText(message);
-  if (!message.action && !onCopy) return null;
+  // 合并后的消息可能带着多条原始动作，逐条渲染并回传各自的 messageId。
+  const actions =
+    message.actions ??
+    (message.action ? [{ messageId: message.id, action: message.action }] : []);
+  if (actions.length === 0 && !onCopy) return null;
   return (
     <div className="ov-viking-bot__message-actions">
-      {message.action ? (
+      {actions.map(({ messageId, action }) => (
         <button
+          key={`${messageId}:${action.key}`}
           type="button"
           className="ov-viking-bot__message-action"
           disabled={
-            Boolean(message.action.disabledReason) ||
-            message.action.status === 'pending' ||
-            message.action.status === 'success'
+            Boolean(action.disabledReason) ||
+            action.status === 'pending' ||
+            action.status === 'success'
           }
-          title={message.action.disabledReason}
-          onClick={() => onMessageAction?.(message.id, message.action!.key)}
+          title={action.disabledReason}
+          onClick={() => onMessageAction?.(messageId, action.key)}
         >
-          {message.action.label ?? message.action.key}
+          {action.label ?? action.key}
         </button>
-      ) : null}
+      ))}
       {onCopy && text ? (
         <button
           type="button"
