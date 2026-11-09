@@ -198,12 +198,23 @@ export function toDirectoryTab(
   // 取不到的那一级显示失败原因而不是空正文：空正文会被读成「还没生成」，而两级
   // 摘要各自可能独立失败（后端出错、权限不足），这两种情况处置完全不同。
   //
+  // 判据是「有没有这个字段」而不是「它是否为真」：服务端可以返回空字符串作为
+  // 错误消息，用真假值判断会把一次失败重新变成空正文。消息为空时给一句可见的兜底
+  // 文案，同样是为了不让失败看起来像「还没生成」。
+  //
   // A level that could not be loaded shows the reason instead of an empty body: an
   // empty body reads as "not generated yet", while the two levels can fail
   // independently (backend error, missing permission) and the two call for different
   // actions.
+  //
+  // The test is "the field is present", not "it is truthy": a server may report an
+  // empty message, and a truthiness check would turn that failure back into an empty
+  // body. An empty message falls back to a visible line for the same reason — a
+  // failure must not look like "not generated yet".
   const levelBody = (body: string, failure?: string) =>
-    failure ? `> ${failure}` : body;
+    failure === undefined
+      ? body
+      : `> ${failure || 'The summary could not be loaded.'}`;
   return {
     kind: 'directory',
     key: uri,

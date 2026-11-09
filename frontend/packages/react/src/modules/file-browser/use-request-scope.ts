@@ -25,10 +25,18 @@ import { scopeKeyOf, type RequestScope } from './fs-scope.js';
  * only records the *desired* scope key, which a returning request compares against.
  */
 export interface RequestScopeHandle {
-  /** 渲染中记录的作用域键，请求回来时与它比较判断是否过期。 */
-  /** The scope key recorded during render; a returning request compares against it. */
-  desiredKey: () => string;
-  /** 当前已提交作用域的键与控制器。Key and controller of the committed scope. */
+  /**
+   * 当前**已提交**作用域的键与控制器。
+   *
+   * 它是判断过期的唯一依据，因为只有提交才会改它：渲染期不写任何东西，被放弃的
+   * 渲染因此不会让仍在屏幕上的那棵树的结果作废。
+   *
+   * The key and controller of the **committed** scope.
+   *
+   * It is the only basis for staleness because only a commit changes it: render writes
+   * nothing, so an abandoned render cannot invalidate the results of the tree still on
+   * screen.
+   */
   current: () => RequestScope;
 }
 
@@ -38,14 +46,17 @@ export function useRequestScope(
   rootUri: string,
 ): RequestScopeHandle {
   const scopeKey = scopeKeyOf(client, requestOptions, rootUri);
-  const desiredKeyRef = useRef(scopeKey);
-  desiredKeyRef.current = scopeKey;
+  // 渲染期不写任何 ref：作用域身份只在下面的 effect 里发布，也就是提交之后。
+  // `startTransition` + Suspense 放弃的那次渲染因此不会改动它。
+  //
+  // No ref is written during render: the scope identity is published in the effect
+  // below, after commit, so a render abandoned by `startTransition` with Suspense
+  // cannot change it.
   const scopeRef = useRef<RequestScope>({
     key: scopeKey,
     controller: new AbortController(),
   });
   const handleRef = useRef<RequestScopeHandle>({
-    desiredKey: () => desiredKeyRef.current,
     current: () => scopeRef.current,
   });
 

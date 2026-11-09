@@ -261,7 +261,15 @@ export function useFileBrowser({
   return {
     rows,
     selectedId,
-    currentUri,
+    // 上报**实际生效**的资源，而不是宿主传进来的那个 prop：非受控时后者只是初值，
+    // 选中新的文件之后它不再变化，消费 `currentUri` 的自定义视图与操作会指向一个
+    // 与预览不一致的资源。
+    //
+    // Report the **effective** resource rather than the prop the host passed: while
+    // uncontrolled that prop is only the initial value and stops changing after a new
+    // selection, so a custom view or action reading `currentUri` would target a
+    // different resource than the preview shows.
+    currentUri: activeUri,
     isReady: tree.isReady,
     error: tree.error ?? search.error ?? preview.error,
     treeError: tree.error,

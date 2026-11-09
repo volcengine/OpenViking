@@ -84,7 +84,23 @@ export function scopeKeyOf(
   options: OvRequestOptions | undefined,
   rootUri?: string,
 ): string {
-  return [
+  // 用 `JSON.stringify` 编码整个数组，而不是把字段用某个字符拼起来：任何拼接用的
+  // 分隔符都可能出现在字段值里，`accountId: 'A|value:B'` 加 `userId: 'C'` 与
+  // `accountId: 'A'` 加 `userId: 'B|value:C'` 会拼出同一个键，于是切换账号时旧请求
+  // 没有被判成过期。这些值都是宿主可以自由传入的普通字符串。
+  //
+  // 每个字段本身已经带标签（`inherit` / `value:` / `fn#`），因此编码后的各段边界
+  // 是明确的，不需要额外的转义。
+  //
+  // The whole array is encoded with `JSON.stringify` rather than joined with some
+  // character: any joining separator can occur inside a field value, so
+  // `accountId: 'A|value:B'` with `userId: 'C'` and `accountId: 'A'` with
+  // `userId: 'B|value:C'` would produce the same key and a switch would not mark the
+  // old request stale. Those values are ordinary strings a host may pass freely.
+  //
+  // Each field already carries a tag (`inherit` / `value:` / `fn#`), so the encoded
+  // segments have unambiguous boundaries and no extra escaping is needed.
+  return JSON.stringify([
     idOf(client),
     // 根目录也属于作用域：换了根就换了一棵树，旧根在途的展开结果不能落进新树。
     // The root is part of the scope too: a different root is a different tree, and an
@@ -95,7 +111,7 @@ export function scopeKeyOf(
     fieldKey(options?.accountId),
     fieldKey(options?.userId),
     fieldKey(options?.resourceId),
-  ].join('|');
+  ]);
 }
 
 /** 一次请求所属的作用域：键与它的控制器。One request's scope: its key and controller. */

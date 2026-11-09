@@ -227,7 +227,13 @@ export function useFsTree({
         // The scope may have moved on: `signal.aborted` does not cover the instant
         // where the controller was replaced but the old one has not been aborted yet,
         // so the key is compared as well.
-        if (signal.aborted || scope.desiredKey() !== current.key) return;
+        // 过期判据只有「已提交作用域」：渲染期不发布任何身份，因此一次被放弃的
+        // 渲染不会让仍在屏幕上的那棵树的响应作废。
+        //
+        // The only staleness test is the committed scope: nothing is published during
+        // render, so an abandoned render cannot discard the response belonging to the
+        // tree still on screen.
+        if (signal.aborted || scope.current().key !== current.key) return;
         setDirs((prev) => ({
           ...prev,
           [uri]: mergePage(prev[uri], page, offset),
@@ -286,7 +292,7 @@ export function useFsTree({
         setError(null);
         setDirs({});
         for (const uri of open) {
-          if (scope.desiredKey() !== current.key) return;
+          if (scope.current().key !== current.key) return;
           await fetchPage(uri, 0);
         }
       },
