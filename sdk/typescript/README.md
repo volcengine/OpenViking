@@ -129,6 +129,18 @@ await client.importOVPack(packPath, "viking://resources", {
 });
 ```
 
+## Group Membership
+
+With an account administrator or root API key, update an existing group's members in batches of 1–1000 user IDs:
+
+```ts
+await client.adminAddGroupMembers("acme", "engineering", ["alice", "bob"]);
+const result = await client.adminRemoveGroupMembers("acme", "engineering", ["alice", "bob"]);
+console.log(result.removed); // false when none of the users were members
+```
+
+Both operations are atomic. Adding requires existing users in the same account; removing users who are not members is harmless.
+
 ## Release
 
 Pushing a tag such as `typescript-sdk@0.1.0` publishes the matching package version automatically. The same workflow can be started manually from GitHub Actions. The first publish uses the repository `NPM_TOKEN` with `@openviking` scope access; after the package exists, configure npm Trusted Publishing for repository `volcengine/OpenViking` and workflow `typescript-sdk-release.yml` so subsequent publishes use OIDC like `@openviking/cli`.

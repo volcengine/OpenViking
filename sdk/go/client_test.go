@@ -647,6 +647,53 @@ func TestAdminEmptySeedPayloadsAreSent(t *testing.T) {
 	}
 }
 
+func TestAdminGroupMembersUseBatchEndpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		method  string
+		userIDs []any
+		result  map[string]any
+		call    func(*Client) (map[string]any, error)
+	}{
+		{"add batch", http.MethodPut, []any{"alice", "bob", "alice"}, map[string]any{"added": true}, func(c *Client) (map[string]any, error) {
+			return c.AdminAddGroupMembers(context.Background(), "acct", "engineering", []string{"alice", "bob", "alice"})
+		}},
+		{"remove batch", http.MethodDelete, []any{"alice", "bob", "alice"}, map[string]any{"removed": false}, func(c *Client) (map[string]any, error) {
+			return c.AdminRemoveGroupMembers(context.Background(), "acct", "engineering", []string{"alice", "bob", "alice"})
+		}},
+		{"add single", http.MethodPut, []any{"alice"}, map[string]any{"added": true}, func(c *Client) (map[string]any, error) {
+			return c.AdminAddGroupMember(context.Background(), "acct", "engineering", "alice")
+		}},
+		{"remove single", http.MethodDelete, []any{"alice"}, map[string]any{"removed": true}, func(c *Client) (map[string]any, error) {
+			return c.AdminRemoveGroupMember(context.Background(), "acct", "engineering", "alice")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != tc.method || r.URL.Path != "/api/v1/admin/accounts/acct/groups/engineering/members" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+				if got := r.Header.Get("Content-Type"); got != "application/json" {
+					t.Errorf("Content-Type = %q", got)
+				}
+				if body := readJSONBody(t, r); !reflect.DeepEqual(body, map[string]any{"user_ids": tc.userIDs}) {
+					t.Errorf("body = %#v", body)
+				}
+				writeOK(t, w, tc.result)
+			}))
+			defer closeServer()
+
+			result, err := tc.call(client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(result, tc.result) {
+				t.Fatalf("result = %#v, want %#v", result, tc.result)
+			}
+		})
+	}
+}
+
 func TestAdminGetAccount(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

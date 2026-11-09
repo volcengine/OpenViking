@@ -87,6 +87,18 @@ Go SDK v1 的边界是对齐当前 Python HTTP client，不覆盖所有 server �
 | Metrics endpoint | Prometheus 文本抓取端点，不是标准 JSON SDK API。 |
 | Console/debug/backend-sync/session tool-result 等端点 | 属于运维或 server-only 能力，未纳入 Python HTTP client parity。 |
 
+## 用户组成员
+
+使用 `AdminAddGroupMembers` 和 `AdminRemoveGroupMembers`，每次请求传入 1–1000 个用户 ID。
+服务端原子执行整个批次；删除了至少一条成员关系时返回 `removed: true`，否则返回 `removed: false`。
+
+```go
+_, err := client.AdminAddGroupMembers(ctx, "acme", "engineering", []string{"alice", "bob"})
+_, err = client.AdminRemoveGroupMembers(ctx, "acme", "engineering", []string{"alice", "bob"})
+```
+
+单用户方法 `AdminAddGroupMember` 和 `AdminRemoveGroupMember` 仍可使用，内部调用相同的批量接口。
+
 ## 管理用户配置
 
 创建用户时如需写入初始服务端用户配置，使用 options 版本。普通 add 调用不需要 SDK 侧默认值；省略 `To` / `TargetURI`，让服务端解析用户和部署默认值。

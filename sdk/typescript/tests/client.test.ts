@@ -1483,6 +1483,36 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it.each([
+    ["adminAddGroupMembers", "PUT", { added: true }],
+    ["adminRemoveGroupMembers", "DELETE", { removed: true }],
+    ["adminRemoveGroupMembers", "DELETE", { removed: false }],
+  ] as const)(
+    "sends %s as %s and preserves %j",
+    async (method, verb, result) => {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok(result));
+      const client = new OpenVikingClient({
+        baseUrl: "https://example.com",
+        fetch: fetcher,
+      });
+
+      await expect(
+        client[method]("acme", "engineering", ["alice", "bob"]),
+      ).resolves.toEqual(result);
+      const [url, init] = fetcher.mock.calls[0]!;
+      expect(String(url)).toBe(
+        "https://example.com/api/v1/admin/accounts/acme/groups/engineering/members",
+      );
+      expect(init?.method).toBe(verb);
+      expect(new Headers(init?.headers).get("Content-Type")).toBe(
+        "application/json",
+      );
+      expect(JSON.parse(String(init?.body))).toEqual({
+        user_ids: ["alice", "bob"],
+      });
+    },
+  );
+
   it("fetches one account by exact path without leaking credentials", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       ok({

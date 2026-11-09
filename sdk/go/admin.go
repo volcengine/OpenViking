@@ -196,14 +196,25 @@ func (c *Client) AdminListGroupMembers(ctx context.Context, accountID, groupID s
 
 // AdminAddGroupMember adds an existing account user to a group.
 func (c *Client) AdminAddGroupMember(ctx context.Context, accountID, groupID, userID string) (map[string]any, error) {
+	return c.AdminAddGroupMembers(ctx, accountID, groupID, []string{userID})
+}
+
+// AdminAddGroupMembers atomically adds 1–1000 existing account users to a group.
+func (c *Client) AdminAddGroupMembers(ctx context.Context, accountID, groupID string, userIDs []string) (map[string]any, error) {
 	var result map[string]any
-	err := c.doJSON(ctx, http.MethodPut, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID)+"/members/"+url.PathEscape(userID), nil, nil, &result)
+	err := c.doJSON(ctx, http.MethodPut, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID)+"/members", nil, map[string]any{"user_ids": userIDs}, &result)
 	return result, err
 }
 
 // AdminRemoveGroupMember removes a user from a group.
 func (c *Client) AdminRemoveGroupMember(ctx context.Context, accountID, groupID, userID string) (map[string]any, error) {
+	return c.AdminRemoveGroupMembers(ctx, accountID, groupID, []string{userID})
+}
+
+// AdminRemoveGroupMembers atomically removes 1–1000 user IDs from a group.
+// The result's removed field is true if any membership was removed.
+func (c *Client) AdminRemoveGroupMembers(ctx context.Context, accountID, groupID string, userIDs []string) (map[string]any, error) {
 	var result map[string]any
-	err := c.doJSON(ctx, http.MethodDelete, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID)+"/members/"+url.PathEscape(userID), nil, nil, &result)
+	err := c.doJSON(ctx, http.MethodDelete, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID)+"/members", nil, map[string]any{"user_ids": userIDs}, &result)
 	return result, err
 }

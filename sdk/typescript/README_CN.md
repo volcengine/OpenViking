@@ -128,6 +128,18 @@ await client.importOVPack(packPath, "viking://resources", {
 });
 ```
 
+## 用户组成员
+
+使用账号管理员或 root API Key，可以批量更新已有用户组的成员，每次传入 1–1000 个用户 ID：
+
+```ts
+await client.adminAddGroupMembers("acme", "engineering", ["alice", "bob"]);
+const result = await client.adminRemoveGroupMembers("acme", "engineering", ["alice", "bob"]);
+console.log(result.removed); // 如果这些用户都不在组内，则为 false
+```
+
+两种操作均为原子操作。添加时用户必须已存在于同一账号中；移除时会忽略不在组内的用户。
+
 ## 发布
 
 推送 `typescript-sdk@0.1.0` 格式的 tag 会自动发布对应版本，也可以从 GitHub Actions 手动触发同一 workflow。首次发布使用具备 `@openviking` scope 权限的仓库 `NPM_TOKEN`；包创建后，需要在 npm 为仓库 `volcengine/OpenViking` 和 workflow `typescript-sdk-release.yml` 配置 Trusted Publisher，后续发布即可像 `@openviking/cli` 一样使用 OIDC。

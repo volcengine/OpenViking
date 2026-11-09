@@ -186,6 +186,20 @@ Not implemented in Go SDK v1:
 | Metrics endpoint | Prometheus text scrape endpoint, not a JSON SDK API. |
 | Console/debug/backend-sync/session tool-result endpoints | Operational or server-only endpoints outside Python HTTP client parity. |
 
+## Group Members
+
+Use `AdminAddGroupMembers` and `AdminRemoveGroupMembers` with 1–1000 user IDs per
+request. The server applies each batch atomically; removal returns `removed: true`
+if any membership was removed, otherwise `removed: false`.
+
+```go
+_, err := client.AdminAddGroupMembers(ctx, "acme", "engineering", []string{"alice", "bob"})
+_, err = client.AdminRemoveGroupMembers(ctx, "acme", "engineering", []string{"alice", "bob"})
+```
+
+`AdminAddGroupMember` and `AdminRemoveGroupMember` remain available for one user
+and use the same batch endpoints.
+
 ## Admin User Config
 
 Use the options variants when creating users with initial server-side user

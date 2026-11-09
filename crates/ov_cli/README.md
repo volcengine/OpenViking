@@ -245,6 +245,8 @@ Use `--sudo` for commands that require the configured `root_api_key`.
 - `admin delete-account` - Delete an account. ROOT only.
 - `admin register-user` - Register a user.
 - `admin list-users` - List users in an account.
+- `admin add-group-members <account-id> <group-id> <user-id>...` - Add 1–1000 existing users atomically; `add-group-member` remains an alias.
+- `admin remove-group-members <account-id> <group-id> <user-id>...` - Remove 1–1000 users atomically; `remove-group-member` remains an alias.
 - `admin remove-user` - Remove a user.
 - `admin set-role` - Change a user's role. ROOT only.
 - `admin regenerate-key` - Rotate a user's API key.

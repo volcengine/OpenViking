@@ -77,10 +77,10 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 
 ```bash
 ov --sudo admin create-group acme engineering
-ov --sudo admin add-group-member acme engineering alice
+ov --sudo admin add-group-members acme engineering alice bob
 ov acl grant viking://resources/project-a \
   --principal group:engineering --level read
-ov --sudo admin remove-group-member acme engineering alice
+ov --sudo admin remove-group-members acme engineering alice bob
 ov --sudo admin delete-group acme engineering
 ```
 
@@ -95,7 +95,14 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/groups/engineeri
 
 要直接删除仍有成员的组，可调用 `DELETE /api/v1/admin/accounts/acme/groups/engineering`。
 
-Python SDK 提供对应的 `admin_create_group`、`admin_list_groups`、`admin_list_group_members`、`admin_add_group_member`、`admin_remove_group_member` 和 `admin_delete_group`；Go SDK 使用相同名称的 PascalCase 方法。
+Python SDK 提供对应的 `admin_create_group`、`admin_list_groups`、`admin_list_group_members`、`admin_add_group_members`、`admin_remove_group_members` 和 `admin_delete_group`；Go SDK 使用相同名称的 PascalCase 方法。TypeScript 提供 `adminAddGroupMembers` 和 `adminRemoveGroupMembers`。批量方法接收包含 1–1000 个用户 ID 的数组或列表。至少移除一个成员关系时返回 `{"removed": true}`，否则返回 `{"removed": false}`。
+
+Python/Go 的单成员方法以及 CLI 命令别名（`add-group-member`、`remove-group-member`）继续可用，现有单用户调用会转为使用批量 API。
+
+```python
+client.admin_add_group_members("acme", "engineering", ["alice", "bob"])
+client.admin_remove_group_members("acme", "engineering", ["alice", "bob"])
+```
 
 ## API 参考
 

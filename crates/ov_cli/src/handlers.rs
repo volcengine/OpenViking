@@ -690,31 +690,31 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             )
             .await
         }
-        AdminCommands::AddGroupMember {
+        AdminCommands::AddGroupMembers {
             account_id,
             group_id,
-            user_id,
+            user_ids,
         } => {
-            commands::admin::add_group_member(
+            commands::admin::add_group_members(
                 &client,
                 &account_id,
                 &group_id,
-                &user_id,
+                &user_ids,
                 ctx.output_format,
                 ctx.compact,
             )
             .await
         }
-        AdminCommands::RemoveGroupMember {
+        AdminCommands::RemoveGroupMembers {
             account_id,
             group_id,
-            user_id,
+            user_ids,
         } => {
-            commands::admin::remove_group_member(
+            commands::admin::remove_group_members(
                 &client,
                 &account_id,
                 &group_id,
-                &user_id,
+                &user_ids,
                 ctx.output_format,
                 ctx.compact,
             )

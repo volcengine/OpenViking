@@ -1521,6 +1521,30 @@ export class OpenVikingClient {
       { body: seed === undefined ? undefined : { seed } },
     );
   }
+  /** Atomically add 1–1000 existing account users to a group. */
+  adminAddGroupMembers(
+    accountId: string,
+    groupId: string,
+    userIds: string[],
+  ): Promise<JsonObject> {
+    return this.request(
+      "PUT",
+      `/api/v1/admin/accounts/${pathPart(accountId)}/groups/${pathPart(groupId)}/members`,
+      { body: { user_ids: userIds } },
+    );
+  }
+  /** Atomically remove 1–1000 user IDs; report whether any membership was removed. */
+  adminRemoveGroupMembers(
+    accountId: string,
+    groupId: string,
+    userIds: string[],
+  ): Promise<JsonObject> {
+    return this.request(
+      "DELETE",
+      `/api/v1/admin/accounts/${pathPart(accountId)}/groups/${pathPart(groupId)}/members`,
+      { body: { user_ids: userIds } },
+    );
+  }
   /** List trajectories that consumed an Experience. */
   listExperienceTrajectories(
     experienceUri: string,
