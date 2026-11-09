@@ -4,7 +4,7 @@
 
 Set up your machine (local or a cloud VM) with the software, projects, and tools you need. OpenViking SuperAgent (Vika) connects your agent to OpenViking and instant messaging: send a task in chat, let your agent work on your machine, and receive the results in the same conversation. OpenViking provides knowledge, memory, and context across sessions.
 
-Vika supports runtimes such as Codex, Claude Code, and Pi, and connects to Feishu / Lark, WeChat, Telegram, Slack, QQ, and email. The CLI command is `vika`.
+Vika supports runtimes such as Codex, Claude Code, DeepSeek Harness, and Pi, and connects to Feishu / Lark, WeChat, Telegram, Slack, QQ, and email. The CLI command is `vika`.
 
 [Quick start](install.md) · [Windows source preview](docs/windows.md) · [Features and architecture](docs/usage-reference.md) · [Configuration example](config.example.json) · [Contributing](../CONTRIBUTING.md)
 
@@ -25,7 +25,7 @@ curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/releases/0.4.0-24e73
 
 This command installs a pinned release. The unversioned installer and `latest` endpoint are not currently available.
 
-The package includes Node, PM2, chat CLIs, Pi, and Durable. On first installation, `vika setup` connects OV, selects a runtime and workspace, and authorizes your chat channels. You do not need to install lark-cli globally. For Codex or Claude Code, install and sign in to that CLI first.
+The package includes Node, PM2, chat CLIs, Pi, and Durable. On first installation, `vika setup` connects OV, selects a runtime and workspace, and authorizes your chat channels. You do not need to install lark-cli globally. For Codex or Claude Code, install and sign in to that CLI first. DeepSeek Harness is not bundled either: install `dsh` **0.2.x** (0.2.2-rc.1 or later) on Node 24.9+, then manage its model routes with `vika dsh model`.
 
 Once configured, send the bot a task in a direct chat:
 
@@ -60,6 +60,7 @@ The release-process guide is currently in Chinese.
 | Context archival and recovery | [OV session context](docs/ov-session-context.md) |
 | Adding message sources | [Connector protocol](docs/connector-protocol.md) |
 | Durable models and recovery | [Durable runtime](docs/pi-durable-runtime.md) |
+| DSH model routes, credentials, and limits | [DSH runtime](docs/dsh-runtime.md) |
 | Reliability and acceptance checks | [Reliability limits](docs/usage-reference.md#reliability-limits) · [Feishu acceptance](docs/usage-reference.md#feishu-acceptance-checks) |
 
 Features in the source tree may not yet be published. Check your installed release.

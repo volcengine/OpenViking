@@ -22,8 +22,11 @@ The instructions below use the published **macOS / Linux / WSL2** installer. Nat
 | TraeX | Install and sign in to a version supporting `app-server` |
 | Pi / Durable | Bundled; reuses model configuration from `~/.pi/agent`. Without existing configuration, run `vika pi` after installation and use `/login` |
 | OpenCode | Install and sign in to **1.x**, version 1.15.7 or later; this release does not support 2.x |
+| DeepSeek Harness | Install `dsh` **0.2.x**, 0.2.2-rc.1 or later, on Node 24.9+; model routes and credentials are managed with `vika dsh model` |
 
 See [runtime configuration](docs/installation-reference.md#prerequisites) for models, version detection, and environment variables. Do not put API keys in `config.json` or commit them to a repository.
+
+DeepSeek Harness has no separate sign-in. Its model routes and credentials belong to the instance's own DSH settings document, `<dataDir>/dsh/home/profiles/sdk/cordis.patch.yml`, with the key values in `<dataDir>/dsh/home/.credentials.yaml` beside it; `vika dsh model` adds, removes and imports routes, repairs an unreadable settings document, and stores or removes keys, all through DSH's own services, and the isolated DSH home never reads routes or credentials from your `~/.dsh`. Only the built-in `deepseek-official` route needs `DEEPSEEK_API_KEY`. `dsh` is found on PATH or named by `DSH_BIN`: like every other `*_BIN`, a bare command name also goes through PATH and a path is used as-is, and the value may come from the manifest `env` or from the shell (setup reads the manifest copy too). `VIKA_DSH_EFFORT` sets the effort a new instance starts with and is read from the process environment only. See [DSH runtime](docs/dsh-runtime.md).
 
 ## Install
 
@@ -74,6 +77,7 @@ Configuration defaults to `~/.vika/config.json`. For a custom location, set the 
 |---|---|
 | OV validation fails | Address, connectivity, and credentials; private services must be reachable from the machine running Vika |
 | No runtime is available | CLI authentication, or configure the bundled model with `vika pi` |
+| DeepSeek Harness is not offered, or a route is missing from `/model` | `dsh --version` is 0.2.x on Node 24.9+ and `DSH_BIN` points at it; `vika dsh model list` names unready routes and why |
 | Feishu receives no messages | Long connection, message events, app publication / approval, and competing bot services |
 | Messages work but tools fail with permission errors | App permissions and user authorization; see [manual Feishu setup](docs/installation-reference.md#manual-feishu-setup) |
 | Startup or attachment operations fail | `vika logs primary`; see [attachment temporary directories](docs/installation-reference.md#attachment-temporary-directories) |
