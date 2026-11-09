@@ -2,19 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-import time
-import uuid
 from contextlib import aclosing
 from datetime import datetime
 from typing import Any
 
-from loguru import logger
-
-from vikingbot.agent.loop.loop_compaction import (
-    _compact_msg_chars,
-)
 from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMessage
 from vikingbot.config.schema import SessionKey
 from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY
@@ -73,123 +65,54 @@ class LoopEventMixin:
         agent_id: str = "main",
         iteration: int | None = None,
     ) -> tuple[Any, bool, bool]:
-        """Forward provider events and log caller-observed timing for one model call.
-
-        Agent ID and iteration identify concurrent loops without changing their sessions.
-        Return the response and content/reasoning-stream flags; publish_events controls
-        forwarding deltas to the bus independently of timing logs.
-        Millisecond offsets include provider capacity waits and retries. The first event
-        can be a buffered final response, so it is not necessarily a first-token time.
-        Missing delta timings are null. Errors and cancellation propagate after logging;
-        request bodies, reasoning text and tool arguments are excluded from timing logs.
-        """
+        """Forward provider events and return the response and content/reasoning-stream flags."""
         streamed_content = False
         streamed_reasoning = False
         response = None
-        log_context = {
-            "call_id": uuid.uuid4().hex,
-            "session_id": session_key.safe_name(),
-            "agent_id": agent_id,
-            "iteration": iteration,
-            "model": self.model,
-            "message_count": len(messages),
-            "input_chars": _compact_msg_chars(messages),
-        }
-        first_events: dict[str, Any] = {
-            "first_event_ms": None,
-            "first_event_type": None,
-            "first_reasoning_ms": None,
-            "first_content_ms": None,
-        }
-        status, error_type = "ok", None
-        fallback = False
-        logger.info("[LLM_START] {}", json.dumps(log_context, ensure_ascii=False))
-        started = time.perf_counter()
-        try:
-            async with aclosing(
-                self.provider.chat_stream(
-                    messages=messages,
-                    tools=tools,
-                    model=self.model,
-                    temperature=self.temperature,
-                    session_id=session_key.safe_name(),
-                )
-            ) as stream:
-                async for event in stream:
-                    elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
-                    if first_events["first_event_ms"] is None and (
-                        event.type == "response" or event.content
-                    ):
-                        first_events.update(first_event_ms=elapsed_ms, first_event_type=event.type)
-                    if event.type == "content_delta":
-                        if event.content:
-                            if first_events["first_content_ms"] is None:
-                                first_events["first_content_ms"] = elapsed_ms
-                            streamed_content = True
-                            if publish_events:
-                                await self.bus.publish_outbound(
-                                    OutboundMessage(
-                                        session_key=session_key,
-                                        content=event.content,
-                                        event_type=OutboundEventType.CONTENT_DELTA,
-                                    )
-                                )
-                    elif event.type == "reasoning_delta":
-                        if event.content:
-                            if first_events["first_reasoning_ms"] is None:
-                                first_events["first_reasoning_ms"] = elapsed_ms
-                            streamed_reasoning = True
-                            if publish_events:
-                                await self.bus.publish_outbound(
-                                    OutboundMessage(
-                                        session_key=session_key,
-                                        content=event.content,
-                                        event_type=OutboundEventType.REASONING_DELTA,
-                                    )
-                                )
-                    elif event.type == "response":
-                        response = event.response
-
-            if response is None:
-                fallback = True
-                response = await self.provider.chat(
-                    messages=messages,
-                    tools=tools,
-                    model=self.model,
-                    temperature=self.temperature,
-                    session_id=session_key.safe_name(),
-                )
-            if response.finish_reason == "error":
-                status = "error"
-            return response, streamed_content, streamed_reasoning
-        except asyncio.CancelledError:
-            status, error_type = "cancelled", "CancelledError"
-            raise
-        except Exception as exc:
-            status, error_type = "error", type(exc).__name__
-            raise
-        finally:
-            logger.info(
-                "[LLM_END] {}",
-                json.dumps(
-                    {
-                        **log_context,
-                        **first_events,
-                        "duration_ms": round((time.perf_counter() - started) * 1000, 1),
-                        "status": status,
-                        "error_type": error_type,
-                        "fallback": fallback,
-                        "finish_reason": response.finish_reason if response is not None else None,
-                        "usage": response.usage if response is not None else {},
-                        "tool_names": (
-                            [call.name for call in response.tool_calls]
-                            if response is not None
-                            else []
-                        ),
-                    },
-                    ensure_ascii=False,
-                ),
+        async with aclosing(
+            self.provider.chat_stream(
+                messages=messages,
+                tools=tools,
+                model=self.model,
+                temperature=self.temperature,
+                session_id=session_key.safe_name(),
             )
+        ) as stream:
+            async for event in stream:
+                if event.type == "content_delta":
+                    if event.content:
+                        streamed_content = True
+                        if publish_events:
+                            await self.bus.publish_outbound(
+                                OutboundMessage(
+                                    session_key=session_key,
+                                    content=event.content,
+                                    event_type=OutboundEventType.CONTENT_DELTA,
+                                )
+                            )
+                elif event.type == "reasoning_delta":
+                    if event.content:
+                        streamed_reasoning = True
+                        if publish_events:
+                            await self.bus.publish_outbound(
+                                OutboundMessage(
+                                    session_key=session_key,
+                                    content=event.content,
+                                    event_type=OutboundEventType.REASONING_DELTA,
+                                )
+                            )
+                elif event.type == "response":
+                    response = event.response
+
+        if response is None:
+            response = await self.provider.chat(
+                messages=messages,
+                tools=tools,
+                model=self.model,
+                temperature=self.temperature,
+                session_id=session_key.safe_name(),
+            )
+        return response, streamed_content, streamed_reasoning
 
     @staticmethod
     def _build_response_completed_payload(

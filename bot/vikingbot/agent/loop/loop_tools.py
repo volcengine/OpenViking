@@ -385,21 +385,6 @@ class LoopToolMixin:
                 result_text if isinstance(result, MultimodalToolResult) else model_result
             )
             args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-            logger.info(
-                "[TOOL_END] {}",
-                json.dumps(
-                    {
-                        "session_id": session_key.safe_name(),
-                        "agent_id": agent_id,
-                        "iteration": iteration,
-                        "tool_call_id": tool_call.id,
-                        "tool_name": tool_call.name,
-                        "duration_ms": round(tool_execute_duration, 1),
-                        "success": _is_tool_result_success(result),
-                    },
-                    ensure_ascii=False,
-                ),
-            )
             logger.info(f"[RESULT]: {result_text[:200]}")
 
             if publish_events:
