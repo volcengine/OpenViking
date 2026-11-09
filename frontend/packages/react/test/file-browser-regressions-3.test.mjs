@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement } from 'react';
+import { act, createElement, Suspense } from 'react';
 
 import { OpenVikingProvider } from '@openviking/react/client';
 import { useFileBrowser } from '@openviking/react/modules/file-browser';
@@ -81,17 +81,27 @@ test('scope keys stay distinct when a value contains the separator', () => {
   assert.notEqual(first, second);
 });
 
-test('a scope change does not discard the committed tree result', async () => {
-  // 作用域身份只在提交后发布：切换账号的那次渲染若被放弃（`startTransition` +
-  // Suspense 就会），已提交的 A 那棵树在途的响应仍必须被接受，否则目录会一直停在
-  // 加载中。这里用「切到 B 但立刻切回 A」模拟同一个窗口：A 的响应不能被 B 那次
-  // 渲染判成过期。
+test('a suspended render keeps the committed tree working', async () => {
+  // 这是本轮最容易写假的一条，因此写清它真正验证什么：
   //
-  // The scope identity is published only after commit: if the render that switches the
-  // account is abandoned (`startTransition` with Suspense does), the in-flight response
-  // of the committed A tree must still be accepted, or the directory stays loading. A
-  // switch to B followed immediately by a switch back to A stands in for that window:
-  // A's response must not be judged stale by the B render.
+  // `startTransition` 让 B 的渲染挂起并被 React 放弃，已提交的仍是 A。关键是**挂起
+  // 点必须在 Hook 之后**：`useFileBrowser` 先执行，再抛出 promise。挂在 Hook 外层
+  // （例如包一层 Gate）的话 React 根本不会进到 Hook，B 的作用域键从未被计算，这个
+  // 竞态也就不存在——那样的测试会永远通过，证明不了任何事。
+  //
+  // 断言读 `seen.get()` 的最新快照，不能缓存某次渲染的 api 对象：Hook 每次渲染都返回
+  // 新对象，缓存旧的那个会读到过期的 rows。
+  //
+  // This is the easiest test here to write falsely, so it states what it really checks:
+  //
+  // `startTransition` suspends B's render and React abandons it, leaving A committed. The
+  // crucial part is that the **suspension point sits after the Hook**: `useFileBrowser`
+  // runs first, then throws. Suspending outside the Hook (a wrapping Gate, say) means
+  // React never enters the Hook at all, B's scope key is never computed, and the race
+  // does not exist — such a test passes forever and proves nothing.
+  //
+  // Assertions read the latest snapshot from `seen.get()`; caching one render's api
+  // object reports stale rows.
   const slow = deferred();
   const fetch = recordingFetch((call) => {
     if (call.path !== '/api/v1/fs/ls') return ok('');
@@ -99,29 +109,59 @@ test('a scope change does not discard the committed tree result', async () => {
     return slow.promise;
   });
 
-  const api = { current: undefined };
-  const Probe = probe(api);
-  const mountTree = (account) =>
+  const seen = new Map();
+  const never = new Promise(() => {});
+  function SuspendingProbe({ account, suspended }) {
+    const api = useFileBrowser({
+      rootUri: ROOT,
+      currentUri: null,
+      controlled: true,
+      onUriChange() {},
+    });
+    seen.set(account, api);
+    if (suspended) throw never;
+    return createElement('i', null, account);
+  }
+
+  const mountTree = (account, suspended) =>
     createElement(
       OpenVikingProvider,
       { baseURL: 'https://ov.test', fetch, accountId: account },
-      createElement(Probe, { uri: null, controlled: true }),
+      createElement(
+        Suspense,
+        { fallback: createElement('b', null, 'fallback') },
+        createElement(SuspendingProbe, { account, suspended }),
+      ),
     );
 
-  const tree = await mount(mountTree('A'));
-  const expanding = api.current.actions.toggleExpand(
-    api.current.rows.find((row) => row.uri === DIR_A),
-  );
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  const tree = await mount(mountTree('A', false));
+  const expanding = seen
+    .get('A')
+    .actions.toggleExpand(seen.get('A').rows.find((row) => row.uri === DIR_A));
+  await new Promise((resolve) => setTimeout(resolve, 20));
 
-  // A 的响应在切换前后回来，仍属于同一个已提交作用域。
-  // A's response arrives around the switch and still belongs to the committed scope.
+  // 切到 B，那次渲染挂起并被放弃：已提交的仍是 A。
+  // Switch to B; that render suspends and is abandoned, leaving A committed.
+  await tree.renderTransition(mountTree('B', true));
+  // B 的 Hook 确实执行过（否则这条测试不覆盖竞态），但从未提交。
+  // B's Hook really ran — otherwise this test does not cover the race — yet never
+  // committed.
+  assert.ok(seen.has('B'), 'the suspended render must reach the Hook');
+  assert.match(tree.container.innerHTML, /<i>A<\/i>/);
+
+  // A 的响应在这期间回来，它属于仍然可见的 A。
+  // A's response arrives meanwhile and belongs to the still-visible A.
   slow.resolve(ok([{ uri: `${DIR_A}/a.md` }]));
   await expanding;
-  await tree.render(mountTree('A'));
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  });
 
-  const uris = api.current.rows.map((row) => row.uri);
-  assert.ok(uris.includes(`${DIR_A}/a.md`), uris.join(','));
+  const uris = seen.get('A').rows.map((row) => row.uri);
+  assert.ok(
+    uris.includes(`${DIR_A}/a.md`),
+    `A's children must land while B is suspended, got ${uris.join(',')}`,
+  );
   await tree.unmount();
 });
 

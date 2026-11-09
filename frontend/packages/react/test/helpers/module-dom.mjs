@@ -1,6 +1,6 @@
 import { after } from 'node:test';
 import { JSDOM } from 'jsdom';
-import { act, createElement } from 'react';
+import { act, createElement, startTransition } from 'react';
 
 /**
  * 模块层测试的最小 DOM 与渲染环境。模块 Hook 用 effect 取数，静态渲染测不到，
@@ -69,6 +69,16 @@ export async function mount(element) {
         root.render(next);
       });
       await settle();
+    },
+    /**
+     * 在 `startTransition` 里重新渲染，用来制造「这次渲染可能被放弃」的场景。
+     * Re-renders inside `startTransition`, for the "this render may be abandoned" case.
+     */
+    async renderTransition(next) {
+      await act(async () => {
+        startTransition(() => root.render(next));
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      });
     },
     async unmount() {
       await act(async () => {
