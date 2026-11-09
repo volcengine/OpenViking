@@ -15,6 +15,7 @@ OpenViking AI 应用界面的 React 基础：构建工具、文档、分层目�
 | [components/tui](./src/components/tui/README_CN.md)                       | `@openviking/react/components/tui`            | 已确认的命令记录、结果与输入区类型；视图仍为占位实现                |
 | [components/scope-switcher](./src/components/scope-switcher/README_CN.md) | `@openviking/react/components/scope-switcher` | 无状态作用域布局与独立 ScopeSelector，提供选项、面板及搜索交互      |
 | [components/agent-connect](./src/components/agent-connect/README_CN.md)   | `@openviking/react/components/agent-connect`  | Agent 接入视图的页签、列表与详情契约；视图仍为占位实现              |
+| [components/viking-bot](./src/components/viking-bot/README_CN.md)         | `@openviking/react/components/viking-bot`     | 对话视图契约，按契约渲染的视图仍为占位实现                          |
 | [modules](./src/modules/README_CN.md)                                     | `@openviking/react/modules/<模块>`            | ScopeCascade 级联 Hook 与组合视图，以及三个业务模块占位组件         |
 | [client](./src/client/index.ts)                                           | `@openviking/react/client`                    | 框架无关的请求客户端：`createOvClient`、`OvClient`、`OvClientError` |
 | [hooks](./src/hooks/README_CN.md)、[utils](./src/utils/README_CN.md)      | 仅包内使用                                    | 跨模块 Hook 与纯工具                                                |

@@ -70,6 +70,10 @@ export default defineConfig({
                   text: 'AgentConnect Agent 接入',
                   link: '/components/agent-connect',
                 },
+                {
+                  text: 'VikingBot 对话',
+                  link: '/components/viking-bot',
+                },
               ],
             },
           ],
@@ -138,6 +142,7 @@ export default defineConfig({
                   link: '/en/components/scope-switcher',
                 },
                 { text: 'AgentConnect', link: '/en/components/agent-connect' },
+                { text: 'VikingBot', link: '/en/components/viking-bot' },
               ],
             },
           ],
