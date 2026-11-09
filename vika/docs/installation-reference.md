@@ -6,15 +6,35 @@ This reference covers running the daemon. For the product overview, read the [RE
 
 ## One-command installation
 
+Both platforms use the same [installation and setup guide](../install.md).
+
+**macOS / Linux / WSL2:**
+
 ```bash
 curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/install.sh | sh
 ```
 
-This installs the version in `vika/latest` (currently `0.5.0-preview`; until a stable release ships, `latest` follows previews). To pin a version, use `curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/releases/<version>/install.sh | sh -s -- --version <version>`. Native Windows uses `irm https://ovrelease.tos-cn-beijing.volces.com/vika/install.ps1 | iex`; see [Windows preview](windows-preview.md).
+This installs the version in `vika/latest` (currently `0.5.0-preview`; until a stable release ships, `latest` follows previews). To pin a version, use `curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/releases/<version>/install.sh | sh -s -- --version <version>`.
 
-The installer detects Linux or macOS and x64 or arm64 (use WSL2 on Windows), downloads the matching archive, verifies SHA-256, extracts it to `~/.vika/releases/<version>`, adds `~/.vika/bin` to your shell PATH, and enters `vika setup`. Only sh, curl, tar, and sha256sum (or shasum) are required. The package supplies pinned Node, PM2, lark-cli, and Pi without modifying existing Node, npm, PM2, or git installations. Before switching, it runs the new bundled Node; incompatible system libraries or CPU architecture leave the previous installation intact. musl systems such as Alpine are unsupported.
+The installer detects Linux or macOS and x64 or arm64 (including WSL2), downloads the matching archive, verifies SHA-256, extracts it to `~/.vika/releases/<version>`, adds `~/.vika/bin` to your shell PATH, and enters `vika setup`. Only sh, curl, tar, and sha256sum (or shasum) are required. The package supplies pinned Node, PM2, lark-cli, and Pi without modifying existing Node, npm, PM2, or git installations. Before switching, it runs the new bundled Node; incompatible system libraries or CPU architecture leave the previous installation intact. musl systems such as Alpine are unsupported.
 
-Both the installer and CLI support English and Chinese. `vika --lang en` (or `zh`) persists the choice in `~/.vika/language`. To install in English, append `--lang en` after the version argument above. `VIKA_LANG` overrides the language for one invocation only. The default is Chinese when no preference is set.
+**Windows 10/11 x64 (preview), PowerShell 5.1 or 7:**
+
+```powershell
+irm https://ovrelease.tos-cn-beijing.volces.com/vika/install.ps1 | iex
+```
+
+The Windows installer downloads the latest Windows preview, verifies SHA-256, installs bundled Node, PM2 and chat/runtime dependencies, updates PATH, and opens the same `vika setup` on first interactive installation. No separate community wizard is needed. Vika uses `$env:HOME` when set, otherwise `$env:USERPROFILE`. Pi requires Git Bash; Durable uses native PowerShell. Slack requires a separately installed `SLACK_CLI_BIN`.
+
+To pin a Windows preview version or skip setup:
+
+```powershell
+& ([scriptblock]::Create((irm https://ovrelease.tos-cn-beijing.volces.com/vika/install.ps1))) -Version '<version>' -NoSetup -Lang en
+```
+
+The one-line command also accepts `VIKA_VERSION` and `VIKA_DOWNLOAD_BASE`; the latter is the HTTPS Vika root, before `/windows-preview`. For offline artifacts and publishing details, see [Windows package maintenance](windows-preview.md).
+
+Both the installer and CLI support English and Chinese. `vika --lang en` (or `zh`) persists the choice in `~/.vika/language`. To install in English, use `--lang en` on macOS / Linux or `-Lang en` on Windows. `VIKA_LANG` overrides the language for one invocation only. The default is Chinese when no preference is set.
 
 Interactive download progress uses a sailing-boat animation, followed by a checkmark per completed step. Redirected output and `NO_COLOR` use plain text. If `~/.vika/config.json` does not exist, rerunning the installer returns to setup; with existing instances, it installs the release and asks you to run `vika restart`.
 
@@ -28,7 +48,7 @@ Interactive download progress uses a sailing-boat animation, followed by a check
 
 Detection checks the edited instance's `ovConfig`, `OPENVIKING_CLI_CONFIG_FILE`, `~/.vika/ov-connection.json`, `~/.openviking/ovcli.conf`, and `http://127.0.0.1:1933`. It does not scan other ports. Imported files remain unchanged. When saving the instance, manually entered or imported connections are saved under Vika with mode 0600 for future instances; already discoverable configuration files are not copied.
 
-The installer itself never prompts. Except for first interactive installation followed immediately by setup, it validates OV before switching releases. Existing instances use their own `ovConfig`. First installation with `--no-setup` or without a terminal tries the environment-specified file, saved Vika connection, OV CLI configuration, then the local default address. With no configuration, only dev-mode OV at the default local port is accepted. Failed validation prevents the switch. At daemon startup, rejected configuration or credentials cause exit; temporary unavailability records an activity entry and starts without history, with synchronization retried after recovery.
+The macOS / Linux installer itself never prompts. Except for first interactive installation followed immediately by setup, it validates OV before switching releases. Existing instances use their own `ovConfig`. First installation with `--no-setup` or without a terminal tries the environment-specified file, saved Vika connection, OV CLI configuration, then the local default address. With no configuration, only dev-mode OV at the default local port is accepted. Failed validation prevents the switch. At daemon startup, rejected configuration or credentials cause exit; temporary unavailability records an activity entry and starts without history, with synchronization retried after recovery.
 
 Editing an instance's OV connection preserves memory identity and recall settings in a new configuration copy. Saving updates the manifest; discarding removes the copy.
 
@@ -64,6 +84,8 @@ Uploads require `im:resource`, sends require `im:message:send_as_bot`, card read
 `permission.json` lists the full feature set, not minimum privileges. Restrict scopes and visibility for production use.
 
 ## Running from source
+
+For Windows source development, see [Windows source development and validation](windows.md).
 
 Source development requires Node.js 22.19.0 or later.
 
@@ -171,6 +193,10 @@ vika pi                                        # Open bundled Pi, e.g. /login
 `vika login` reauthorizes already connected channels. Feishu first checks scopes, message/comment events, and callbacks, then offers an owner/admin QR scan to repair missing items (`s` skips). If a version is under review, it warns that scanning withdraws it and defaults to skipping. User authorization follows. WeChat rescans; Telegram rebinds token + Start; Slack verifies tokens + passphrase; QQ verifies credentials + direct-chat code; email selects an account and replaces its password. A sole instance need not be named; otherwise choose among instances using the channel. Adding a channel or changing a Feishu app uses setup instead. A newly connected Feishu bot introduces itself; WeChat requires an incoming message after every scan before proactive delivery. Bare `vika` lists instances and channels.
 
 ## Upgrade and rollback
+
+On Windows, `vika upgrade` and the automatic updater are not supported yet. Stop Vika with `vika stop`, rerun the PowerShell installer from [One-command installation](#one-command-installation), then run `vika restart`. The installer retains the previous release for [manual rollback](windows-preview.md#configure-and-test).
+
+On macOS / Linux:
 
 ```bash
 vika upgrade <instance-id>

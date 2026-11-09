@@ -2,15 +2,10 @@
 
 Install Vika and verify that it can receive and answer messages. See the [README](README.md) for an overview and the [configuration reference](docs/installation-reference.md) for advanced setup. The CLI command is `vika`.
 
-## Native Windows preview
-
-For a fresh Windows installation, the community-maintained [Windows setup wizard](docs/windows-preview.md#community-setup-wizard) combines installation and interactive configuration. It requires PowerShell 7 and a separately downloaded `-winsetup.zip`; the upstream Actions artifact alone does not contain that wizard. The reported tested combination is Durable, the DeepSeek API, and a self-hosted OpenViking service.
-
-The instructions below use the published **macOS / Linux / WSL2** installer. Native Windows users should follow the Windows guide instead, including its startup instructions: its installer takes the same steps and prints the same words, enters the same `vika setup`, and takes a local artifact instead of a download.
-
 ## Prerequisites
 
-- **System:** macOS or Linux, x64 / arm64. On Windows, use WSL2, or the experimental native preview: `irm https://ovrelease.tos-cn-beijing.volces.com/vika/install.ps1 | iex` in PowerShell ([details](docs/windows-preview.md)). musl / Alpine is not supported. You need sh, curl, tar, and sha256sum (or shasum); Node, npm, PM2, and lark-cli need not be installed beforehand.
+- **System:** macOS / Linux / WSL2 (x64 or arm64), or Windows 10/11 (x64, preview). macOS / Linux needs sh, curl, tar, and sha256sum (or shasum); musl / Alpine is unsupported. Native Windows needs PowerShell 5.1 or 7 and a normal user account, without administrator rights. Node, npm, PM2, and lark-cli are bundled.
+- **Windows runtimes:** Durable uses native PowerShell; Pi also requires Git Bash. Slack needs a separately installed CLI configured with `SLACK_CLI_BIN`.
 - **OpenViking:** a reachable OV service is required, either local or remote. Have its address and required credentials ready, or import an existing configuration during setup. There is no skip option.
 - **Runtime:** choose one below and prepare its model authentication or API configuration.
 - **Chat account:** Feishu requires a phone-registered or enterprise account; signing in to Feishu through a Doubao account is not supported for this integration. For other channels, prepare the bot or app credentials requested by setup.
@@ -30,13 +25,23 @@ DeepSeek Harness has no separate sign-in. Its model routes and credentials belon
 
 ## Install
 
+**macOS / Linux / WSL2:**
+
 ```bash
 curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/install.sh | sh
 ```
 
 This installs the version in `vika/latest` (currently `0.5.0-preview`). To pin a version, use `curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/releases/<version>/install.sh | sh -s -- --version <version>`.
 
-The installer verifies the downloaded archive and installs it under `~/.vika/releases/`. A first installation in an interactive terminal opens the setup wizard. If your shell cannot find `vika`, reopen the terminal or use `~/.vika/bin/vika`.
+**Windows (PowerShell):**
+
+```powershell
+irm https://ovrelease.tos-cn-beijing.volces.com/vika/install.ps1 | iex
+```
+
+This downloads the latest Windows x64 preview. No separate ZIP or setup wrapper is needed. See [installer options](docs/installation-reference.md#one-command-installation) to pin a Windows version.
+
+Both installers verify the downloaded archive, install it under `~/.vika/releases/`, and open `vika setup` on a first interactive installation. Follow the same setup steps below on either platform. If your shell cannot find `vika`, reopen the terminal. On macOS / Linux you can also use `~/.vika/bin/vika`; on Windows the launcher is `bin\vika.cmd` under the Vika home (`$env:HOME` when set, otherwise `$env:USERPROFILE`).
 
 ```bash
 vika setup
@@ -65,7 +70,7 @@ Open `http://127.0.0.1:3737` to view activity. Send a specific task in a direct 
 
 - Add or edit instances and channels, or remove an instance: `vika setup`.
 - Renew expired authentication: `vika login <channel> [instance]`.
-- Upgrade to a published release: `vika upgrade primary`.
+- Upgrade on macOS / Linux: `vika upgrade primary`. On Windows, stop Vika, rerun the PowerShell installer, then run `vika restart`; automatic upgrades are not supported yet. See [upgrade and rollback](docs/installation-reference.md#upgrade-and-rollback).
 - Enable startup at login: `vika autostart enable`. On Linux, use `loginctl enable-linger` if the service must continue after logout; on Windows it adds a per-user Startup-folder entry, with no service or administrator.
 - Change the interface language: `vika --lang zh` or `vika --lang en`.
 
