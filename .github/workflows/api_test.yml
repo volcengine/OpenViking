@@ -54,6 +54,9 @@ jobs:
     name: API & CLI Integration Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
     if: >-
       needs.prepare.outputs.api_changed == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
@@ -64,7 +67,7 @@ jobs:
       fail-fast: false
       max-parallel: 3
       matrix:
-        os: ['macos-15']
+        os: ['windows-latest']
     
     steps:
       - uses: actions/checkout@v6
