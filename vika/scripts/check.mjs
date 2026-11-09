@@ -24,7 +24,9 @@ if (process.platform === 'win32') {
 
 check(process.execPath, '--check', [
   'scripts/*.mjs', 'scripts/release/*.mjs',
-  'packages/daemon/src/*.mjs', 'packages/daemon/src/platform/*.mjs',
+  'packages/daemon/src/*.mjs',
+  'packages/daemon/src/dsh-bridge/*.mjs',
+  'packages/daemon/src/platform/*.mjs',
   'packages/daemon/src/actions/*.mjs', 'packages/daemon/src/connectors/*.mjs',
   'packages/daemon/src/extensions/*.mjs', 'packages/daemon/src/meeting/*.mjs',
   'packages/daemon/src/qq/*.mjs', 'packages/daemon/src/telegram/*.mjs',

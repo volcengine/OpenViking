@@ -20,7 +20,7 @@
   },
   "scripts": {
     "start": "node src/main.mjs",
-    "check": "for file in src/*.mjs src/actions/*.mjs src/connectors/*.mjs src/qq/*.mjs src/telegram/*.mjs src/weixin/*.mjs scripts/*.mjs; do node --check \"$file\" || exit 1; done",
+    "check": "for file in src/*.mjs src/dsh/*.mjs src/dsh-bridge/*.mjs src/actions/*.mjs src/connectors/*.mjs src/qq/*.mjs src/telegram/*.mjs src/weixin/*.mjs scripts/*.mjs; do node --check \"$file\" || exit 1; done",
     "test": "node --test test/*.test.mjs",
     "health": "node scripts/healthcheck.mjs"
   }
