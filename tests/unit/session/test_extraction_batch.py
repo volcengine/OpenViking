@@ -931,6 +931,27 @@ def test_a_context_abstract_is_trimmed():
             ),
             id="context-abstract",
         ),
+        pytest.param(
+            Message(
+                id="m",
+                role="assistant",
+                parts=[
+                    ToolPart(
+                        tool_id="call_1",
+                        tool_name="write_files",
+                        tool_input={
+                            "files": [
+                                {"path": f"f{index}.txt", "content": "x " * 10000}
+                                for index in range(9)
+                            ]
+                        },
+                        tool_output="saved",
+                        tool_status="completed",
+                    )
+                ],
+            ),
+            id="multi-leaf-tool-input",
+        ),
     ],
 )
 async def test_nothing_above_the_ceiling_reaches_the_extraction_callback(message):
@@ -962,3 +983,67 @@ async def test_nothing_above_the_ceiling_reaches_the_extraction_callback(message
         (type(part).__name__, getattr(part, "text", ""), getattr(part, "tool_output", ""))
         for part in message.parts
     ] == original
+
+
+def test_a_tool_input_with_many_large_leaves_is_trimmed_across_all_leaves():
+    message = Message(
+        id="m",
+        role="assistant",
+        parts=[
+            ToolPart(
+                tool_id="call_1",
+                tool_name="write_files",
+                tool_input={
+                    "files": [
+                        {"path": f"f{index}.txt", "content": "x " * 10000} for index in range(9)
+                    ]
+                },
+                tool_output="saved",
+                tool_status="completed",
+            )
+        ],
+    )
+    assert message.estimated_tokens > 4000
+
+    bounded, trimmed = bound_oversized_extraction_messages(
+        [message], ExtractionBatchLimits(max_message_tokens=4000)
+    )
+
+    assert trimmed == 1
+    assert bounded[0].estimated_tokens <= 4000
+    tool_part = next(part for part in bounded[0].parts if isinstance(part, ToolPart))
+    files = tool_part.tool_input["files"]
+    assert tool_part.tool_id == "call_1"
+    assert tool_part.tool_output == "saved"
+    assert [entry["path"] for entry in files] == [f"f{index}.txt" for index in range(9)]
+    assert all(entry["content"].endswith("characters kept]") for entry in files)
+
+
+def test_an_unfittable_message_returns_the_smallest_achievable_form():
+    message = Message(
+        id="m",
+        role="assistant",
+        parts=[
+            ToolPart(
+                tool_id="call_1",
+                tool_name="write_files",
+                tool_input={
+                    "files": [
+                        {"path": f"f{index}.txt", "content": "x " * 2000} for index in range(400)
+                    ]
+                },
+                tool_output="saved",
+                tool_status="completed",
+            )
+        ],
+    )
+    limits = ExtractionBatchLimits(max_message_tokens=4000)
+
+    bounded, trimmed = bound_oversized_extraction_messages([message], limits)
+
+    assert trimmed == 1
+    # Shortening alone cannot reach the ceiling here: 400 marked leaves still cost
+    # more than the budget. The pass must still shrink to the smallest reachable
+    # form and stay flagged so the caller reports it.
+    assert bounded[0].estimated_tokens < message.estimated_tokens / 10
+    assert plan_extraction_batches(bounded, limits)[0].oversized is True

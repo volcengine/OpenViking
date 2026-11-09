@@ -80,44 +80,57 @@ def estimate_extraction_message_tokens(messages: Iterable[Message]) -> int:
 TRUNCATION_MARKER = "\n\n[truncated for extraction: {kept} of {total} characters kept]"
 MAX_TARGETED_ROUNDS = 12
 MAX_SCALE_STEPS = 24
+# Shorter leaves (paths, statuses, flags) are left alone while anything larger can
+# still be shortened; they carry structure rather than bulk.
+MIN_SCALABLE_CHARS = 64
+
+# One prompt-bearing string inside a message: which part, which field, and for
+# tool arguments the path to the string leaf inside the argument object.
+_PayloadSlot = tuple[int, str, tuple, int]
 
 
-def _longest_payload(part: Any) -> Optional[tuple[str, str]]:
-    """Longest prompt-bearing text of a part, and which field it lives in.
-
-    Mirrors ``Message.estimated_tokens``: text, context abstract, tool input JSON
-    and tool output are the fields that reach the prompt, so they are the only
-    ones whose shortening reduces the request.
-    """
-    best: Optional[tuple[str, str]] = None
-    text = getattr(part, "text", None)
-    if isinstance(text, str) and text:
-        best = ("text", text)
-    abstract = getattr(part, "abstract", None)
-    if isinstance(abstract, str) and abstract and (best is None or len(abstract) > len(best[1])):
-        best = ("abstract", abstract)
-    output = getattr(part, "tool_output", None)
-    if isinstance(output, str) and output and (best is None or len(output) > len(best[1])):
-        best = ("tool_output", output)
-    leaf = _longest_string_leaf(getattr(part, "tool_input", None))
-    if leaf is not None and (best is None or len(leaf[1]) > len(best[1])):
-        best = ("tool_input", leaf[1])
-    return best
-
-
-def _longest_string_leaf(value: Any, path: tuple = ()) -> Optional[tuple[tuple, str]]:
+def _string_leaves(value: Any, path: tuple = ()) -> List[tuple[tuple, str]]:
+    """Every non-empty string leaf under a tool argument object, with its path."""
     if isinstance(value, str):
-        return (path, value) if value else None
+        return [(path, value)] if value else []
     if isinstance(value, dict):
-        candidates = [_longest_string_leaf(item, (*path, key)) for key, item in value.items()]
-    elif isinstance(value, (list, tuple)):
-        candidates = [
-            _longest_string_leaf(item, (*path, index)) for index, item in enumerate(value)
+        return [leaf for key, item in value.items() for leaf in _string_leaves(item, (*path, key))]
+    if isinstance(value, (list, tuple)):
+        return [
+            leaf
+            for index, item in enumerate(value)
+            for leaf in _string_leaves(item, (*path, index))
         ]
-    else:
-        return None
-    found = [candidate for candidate in candidates if candidate is not None]
-    return max(found, key=lambda candidate: len(candidate[1])) if found else None
+    return []
+
+
+def _payload_slots(parts: List[Any]) -> List[_PayloadSlot]:
+    """Every string that reaches the prompt, mirroring ``Message.estimated_tokens``.
+
+    Text, context abstract, tool output and *every* string leaf of the tool
+    arguments count towards the request, so leaving any of them unmanaged keeps a
+    message over budget no matter how much of the rest is shortened.
+    """
+    slots: List[_PayloadSlot] = []
+    for index, part in enumerate(parts):
+        for field in ("text", "abstract", "tool_output"):
+            text = getattr(part, field, None)
+            if isinstance(text, str) and text:
+                slots.append((index, field, (), len(text)))
+        tool_input = getattr(part, "tool_input", None)
+        if tool_input:
+            for path, text in _string_leaves(tool_input):
+                slots.append((index, "tool_input", path, len(text)))
+    return slots
+
+
+def _read_slot(part: Any, field: str, path: tuple) -> str:
+    if field != "tool_input":
+        return getattr(part, field, "") or ""
+    value: Any = getattr(part, "tool_input", None)
+    for key in path:
+        value = value[key]
+    return value if isinstance(value, str) else ""
 
 
 def _replace_leaf(value: Any, path: tuple, replacement: str) -> Any:
@@ -135,73 +148,72 @@ def _replace_leaf(value: Any, path: tuple, replacement: str) -> Any:
     return value
 
 
-def _with_payload(part: Any, field: str, text: str) -> Any:
-    """Return ``part`` with its prompt-bearing field set to ``text``."""
+def _write_slot(part: Any, field: str, path: tuple, text: str) -> Any:
     if field == "tool_input":
-        path, _ = _longest_string_leaf(getattr(part, "tool_input", None)) or ((), "")
         return replace(part, tool_input=_replace_leaf(part.tool_input, path, text))
-    if field == "abstract":
-        return replace(part, abstract=text)
-    if field == "tool_output":
-        return replace(part, tool_output=text)
-    return replace(part, text=text)
+    return replace(part, **{field: text})
 
 
-def _shorten_payload(part: Any, keep_chars: int) -> Any:
-    field, text = _longest_payload(part) or (None, "")
-    if field is None:
-        return part
+def _shorten_slot(part: Any, field: str, path: tuple, keep_chars: int) -> Any:
+    text = _read_slot(part, field, path)
     kept = text[: max(0, min(len(text), keep_chars))]
     marked = kept + TRUNCATION_MARKER.format(kept=len(kept), total=len(text))
-    return _with_payload(part, field, marked)
+    return _write_slot(part, field, path, marked)
+
+
+def _estimated_tokens(message: Message, parts: List[Any]) -> int:
+    return int(replace(message, parts=parts).estimated_tokens or 0)
 
 
 def _bound_message(message: Message, ceiling: int) -> Message:
     """Trim one over-ceiling message until it fits the budget.
 
-    Largest payload first so short texts survive intact; a final uniform pass
-    guarantees the ceiling is met whenever any prompt-bearing text exists, which
-    is the only outcome the caller may rely on.
+    The largest payloads are shortened first so short text survives intact; a
+    final uniform pass over every prompt-bearing string guarantees the ceiling is
+    met whenever there is enough reducible text, which is the only outcome the
+    caller may rely on.
     """
     parts = list(message.parts)
     for _ in range(MAX_TARGETED_ROUNDS):
-        candidate = replace(message, parts=parts)
-        if int(candidate.estimated_tokens or 0) <= ceiling:
-            return candidate
-        payloads = [
-            (len(payload[1]), index)
-            for index, part in enumerate(parts)
-            if (payload := _longest_payload(part)) is not None
-        ]
-        if not payloads:
-            return candidate
-        size, largest = max(payloads)
-        parts[largest] = _shorten_payload(parts[largest], size // 2)
+        if _estimated_tokens(message, parts) <= ceiling:
+            return replace(message, parts=parts)
+        slots = _payload_slots(parts)
+        if not slots:
+            return replace(message, parts=parts)
+        index, field, path, length = max(slots, key=lambda slot: slot[3])
+        parts[index] = _shorten_slot(parts[index], field, path, length // 2)
 
-    best = replace(message, parts=parts)
-    if int(best.estimated_tokens or 0) <= ceiling:
-        return best
-    payload_indexes = [
-        index for index, part in enumerate(parts) if _longest_payload(part) is not None
-    ]
-    if not payload_indexes:
-        return best
+    bounded = replace(message, parts=parts)
+    if _estimated_tokens(message, parts) <= ceiling:
+        return bounded
+    slots = _payload_slots(parts)
+    scalable = [slot for slot in slots if slot[3] >= MIN_SCALABLE_CHARS] or slots
+    if not scalable:
+        return bounded
+    floor_parts = list(parts)
+    for index, field, path, _ in scalable:
+        floor_parts[index] = _shorten_slot(floor_parts[index], field, path, 0)
+    floor_trial = replace(message, parts=floor_parts)
     low, high = 0.0, 1.0
     fitted: Optional[Message] = None
     for _ in range(MAX_SCALE_STEPS):
         factor = (low + high) / 2
         scaled = list(parts)
-        for index in payload_indexes:
-            payload = _longest_payload(scaled[index])
-            if payload is not None:
-                scaled[index] = _shorten_payload(scaled[index], int(len(payload[1]) * factor))
+        for index, field, path, length in scalable:
+            scaled[index] = _shorten_slot(scaled[index], field, path, int(length * factor))
         trial = replace(message, parts=scaled)
         if int(trial.estimated_tokens or 0) <= ceiling:
             fitted = trial
             low = factor
         else:
             high = factor
-    return fitted if fitted is not None else best
+    if fitted is not None:
+        return fitted
+    # Nothing fits: the floor is the smallest form reachable by shortening alone,
+    # and the caller reports the pass as over budget rather than hiding it.
+    if int(floor_trial.estimated_tokens or 0) < _estimated_tokens(message, parts):
+        return floor_trial
+    return bounded
 
 
 def bound_oversized_extraction_messages(

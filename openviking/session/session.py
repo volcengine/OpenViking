@@ -2561,8 +2561,8 @@ class Session:
         if still_oversized:
             logger.warning(
                 "Phase 2 extraction still has %s pass(es) above the prompt budget "
-                "(%s estimated tokens, budget %s): the batch has no text that can be "
-                "shortened",
+                "(%s estimated tokens, budget %s): the reducible text is not enough to "
+                "meet it",
                 len(still_oversized),
                 max(batch.estimated_tokens for batch in still_oversized),
                 limits.max_message_tokens,
