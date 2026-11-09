@@ -69,7 +69,15 @@ try {
   fs.writeFileSync(`${archive}.sha256`, `${sha256}  ${path.basename(archive)}\n`);
   fs.writeFileSync(path.join(out, 'release.json'), `${JSON.stringify({ ...metadata,
     file: path.basename(archive), sha256, size: fs.statSync(archive).size }, null, 2)}\n`);
-  fs.copyFileSync(path.join(root, 'scripts', 'windows', 'install-preview.ps1'), path.join(out, 'install-preview.ps1'));
+  const installer = fs.readFileSync(path.join(root, 'scripts', 'windows', 'install-preview.ps1'), 'utf8');
+  const downloadBase = process.env.VIKA_DOWNLOAD_BASE || 'https://ovrelease.tos-cn-beijing.volces.com/vika';
+  if (!/^https:\/\/[^'\r\n]+$/.test(downloadBase)) throw new Error('Invalid VIKA_DOWNLOAD_BASE');
+  // HTTP declares UTF-8; a BOM passed through irm becomes an iex token.
+  const publishedInstaller = installer.replace(/^\uFEFF/, '').replaceAll('__VIKA_DOWNLOAD_BASE__', downloadBase.replace(/\/$/, ''));
+  for (const file of ['install.ps1', 'install-preview.ps1']) {
+    // Keep a BOM for the offline file: Windows PowerShell 5.1 defaults to ANSI.
+    fs.writeFileSync(path.join(out, file), (file === 'install-preview.ps1' ? '\uFEFF' : '') + publishedInstaller);
+  }
   fs.copyFileSync(path.join(root, 'docs', 'windows-preview.md'), path.join(out, 'README.md'));
   console.log(archive);
 } finally {
