@@ -10,15 +10,19 @@ import { docCommentNotice } from './conversation-policy.mjs';
 import { DOC_COMMENT_CONVERSATION } from './lark-doc-comments.mjs';
 import {
   DEFAULT_RUNTIME_ID,
+  MODEL_ERROR_KINDS,
   RUNTIME_IDS,
+  assertModelId,
+  canonicalRuntimeModel,
+  classifyModelError,
   getRuntimeDefinition,
+  isDirectRuntimeAlias,
   parseRuntimeModelSelector,
   resolveRuntimeModelTarget,
   staticModelEntries,
   supportedModelEfforts,
   compatibleModelEffort,
   currentModelEntry,
-  isModelUnavailableError,
 } from './runtime-catalog.mjs';
 
 // Loop breaker (breakLoop): how long a cancelled turn may take to end before
@@ -33,6 +37,26 @@ function withDocCommentRules(items, config) {
   const last = items.findLastIndex((item) => item?.chatType === DOC_COMMENT_CONVERSATION);
   if (last < 0) return items;
   return items.map((item, index) => (index === last ? { ...item, text: `${item.text}\n${docCommentNotice(config)}` } : item));
+}
+
+// Whether a manifest model selector names an actual model. Setup writes the bare
+// runtime alias (`"model": "dsh"`), which only names the runtime and leaves the
+// route to the runtime's own default; a selector that names a model keeps the
+// caller in charge of which model runs, so nothing may replace it.
+function selectorNamesModel(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return false;
+  const selector = parseRuntimeModelSelector(raw);
+  if (selector.qualified) return Boolean(selector.model);
+  return !isDirectRuntimeAlias(raw);
+}
+
+// The provider route a model id is on. The first slash splits it: a route name
+// cannot contain one while a model id may (dsh's `openrouter/deepseek/deepseek-chat`).
+function routeOf(model) {
+  const id = String(model ?? '');
+  const slash = id.indexOf('/');
+  return slash < 0 ? '' : id.slice(0, slash);
 }
 
 export class AgentRuntime {
@@ -69,7 +93,12 @@ export class AgentRuntime {
   }
 
   get threadId() { return this.backend?.threadId ?? null; }
-  get effort() { return this.backend?.effort ?? 'medium'; }
+  // `null` is a real value now: it means the model has no effort override. Only
+  // an absent one falls back to the transport default.
+  get effort() {
+    const effort = this.backend?.effort;
+    return effort === undefined ? 'medium' : effort;
+  }
   get model() {
     const model = this.backend?.model ?? '';
     return model || getRuntimeDefinition(this.runtime)?.canonicalDefault || '';
@@ -107,7 +136,24 @@ export class AgentRuntime {
   }
 
   _instantiate(runtime, overrides = {}) {
-    return adaptRuntime(runtime, this.factories[runtime](this._backendOptions(overrides)));
+    const implementation = this.factories[runtime](this._backendOptions(overrides));
+    // Whether a route the caller did not name may be adopted is the coordinator's
+    // decision, and a transport is a plain object at this point: publish it before
+    // start so a handshake that cannot start on its configured route knows whether
+    // another one from its live catalogue is allowed. A transport without that
+    // concern simply never reads the field.
+    //
+    // Best effort on purpose: a transport that does not accept the field keeps
+    // starting exactly as it did before (no adoption), which must never become a
+    // startup failure of its own.
+    if (overrides.allowModelFallback !== undefined) {
+      try {
+        implementation.allowModelFallback = overrides.allowModelFallback === true;
+      } catch {
+        this.logger.warn('runtime_fallback_policy_unsettable', { runtime });
+      }
+    }
+    return adaptRuntime(runtime, implementation);
   }
 
   _authorityChanged(cognition) {
@@ -148,7 +194,14 @@ export class AgentRuntime {
       await this._selectRuntime(freshTarget.runtime, undefined, { persistPreference: false });
       return;
     }
-    this.backend = this._instantiate(this.runtime, freshCognition ? { initialModel: freshTarget.model } : {});
+    this.backend = this._instantiate(this.runtime, {
+      // A manifest that names only the runtime (`"model": "dsh"`) leaves the
+      // route to that runtime's own default, so startup may adopt a servable one
+      // when the default serves nothing. A manifest that names a model keeps it:
+      // start then fails loudly instead of running something else.
+      allowModelFallback: !selectorNamesModel(configuredSelector),
+      ...(freshCognition ? { initialModel: freshTarget.model } : {}),
+    });
     await this.backend.start();
     this._authorityChanged(cognition);
   }
@@ -202,6 +255,19 @@ export class AgentRuntime {
     if (this.loopBreak) {
       this._stopEnded(kind, info);
       return;
+    }
+    // A failed turn may have died on the model rather than on the work. Record
+    // which, so whoever reads the failure can tell an unknown model from a
+    // rejected key or a gateway outage instead of parsing prose.
+    if (kind === 'failed' && info?.error) {
+      const classified = classifyModelError(info.error);
+      if (classified.kind) {
+        info.modelError = classified;
+        this.logger.warn('runtime_model_error', {
+          runtime: this.runtime, phase: 'turn', kind: classified.kind,
+          status: classified.status || undefined, code: classified.code || undefined,
+        });
+      }
     }
     const callback = kind === 'failed' ? this.onTurnFailed
       : kind === 'succeeded' ? this.onTurnSucceeded : this.onTurnAbandoned;
@@ -478,6 +544,41 @@ export class AgentRuntime {
     }
   }
 
+  // A bare name two catalogue routes both answer to. Deliberately not a
+  // model-unavailable error: nothing is wrong with the model, the request is
+  // under-specified, and a fallback would pick a route the caller did not name.
+  _ambiguousModelError(model, entries) {
+    const ids = entries.map((entry) => entry.id);
+    const error = new Error(`ambiguous model name ${model}: matches ${ids.join(', ')}; use the full provider/model id`);
+    error.code = 'AMBIGUOUS_MODEL';
+    error.model = model;
+    error.candidates = ids;
+    return error;
+  }
+
+  // The one signal an operator gets when a configured route could not be served
+  // and a different one was committed instead. The startup path has no reply to
+  // carry `modelFallback` (the daemon is only starting up), so it is a warn line
+  // rather than something a command text explains later.
+  _noteModelFallback(runtime, from, to, source) {
+    this.logger.warn('runtime_model_fallback', { runtime, from, to, source });
+  }
+
+  // A model the live catalog does not list. Structured so callers can tell it
+  // from a rejected credential or a gateway outage.
+  //
+  // The runtime is a parameter because during a switch `this.runtime` is still the
+  // PREVIOUS runtime: the failure that ended a startup on dsh was reported as
+  // "durable model is unavailable", which named the runtime that just stopped
+  // instead of the one that could not start.
+  _unknownModelError(model, runtime = this.runtime) {
+    const error = new Error(`${runtime} model is unavailable: ${model}`);
+    error.code = 'MODEL_UNAVAILABLE';
+    error.model = model;
+    error.modelError = { kind: MODEL_ERROR_KINDS.UNKNOWN_MODEL, status: 0, code: error.code, retryable: false };
+    return error;
+  }
+
   async _selectModel(value) {
     if (this.stopping) throw new Error('agent runtime is stopping');
     const selector = parseRuntimeModelSelector(value);
@@ -486,12 +587,43 @@ export class AgentRuntime {
       || (namedRuntime && namedRuntime.id !== this.runtime)) {
       throw new Error('Use /runtime to switch runtimes');
     }
-    const model = selector.qualified ? selector.model : selector.raw;
-    if (!/^[A-Za-z0-9._:\/\[\]-]{1,256}$/.test(model)) throw new Error('Invalid model name');
+    const requested = selector.qualified ? selector.model : selector.raw;
+    // The rule of the runtime that will serve the id, not the base rule: `+` is
+    // open on DSH because a real dsh route id carries it, and stays closed
+    // everywhere else. The id alone is measured, never a `dsh:` qualifier.
+    assertModelId(requested, this.runtime);
     const models = await this._listModels();
     if (this.stopping) throw new Error('agent runtime stopped during model transition');
-    if (models.length && !models.some((entry) => entry.id === model || entry.resolvedModel === model)) {
-      throw new Error(`${this.runtime} model is unavailable: ${model}`);
+    // Match the user's spelling and its canonical form (a bare name gains the
+    // runtime's single catalog route) against the id AND the resolved model of
+    // each entry. Mixing the two and taking the first match let an operator
+    // route shadow the canonical one whenever the catalogue happened to list it
+    // first: the two providers expose the same resolved model name.
+    const canonical = canonicalRuntimeModel(this.runtime, requested);
+    const spellings = new Set([requested, canonical]);
+    const exact = models.filter((entry) => spellings.has(entry.id)
+      || (entry.resolvedModel && spellings.has(entry.resolvedModel)));
+    if (models.length && exact.length === 0) throw this._unknownModelError(requested);
+    // The canonical id is the runtime's own answer for a bare name, so it wins
+    // over a same-named model on an operator route; the user's own spelling is
+    // next. Anything else that is still ambiguous is refused instead of
+    // silently picking whichever the catalogue happened to list first. An empty
+    // catalogue established nothing, so the canonical form is all there is.
+    let model = exact.find((entry) => entry.id === canonical)?.id
+      ?? exact.find((entry) => entry.id === requested)?.id;
+    if (model === undefined) {
+      // A spelling that names an entry's resolved model is a concrete version
+      // (Claude publishes `claude-sonnet-5-5` behind the alias `sonnet`).
+      // Applying the alias would follow whatever the runtime later calls current
+      // — a different model than the one asked for — so an exact version keeps
+      // the spelling it was given. A route-qualified id already names the same
+      // model and is not affected.
+      const pinned = exact.find((entry) => entry.resolvedModel === requested
+        && !entry.id.endsWith(`/${requested}`));
+      if (pinned) model = requested;
+      else if (exact.length === 1) model = exact[0].id;
+      else if (exact.length === 0) model = canonical;
+      else throw this._ambiguousModelError(requested, exact);
     }
     const unchanged = this.backend.model === model;
     const previousEffort = this.effort;
@@ -504,8 +636,16 @@ export class AgentRuntime {
     }
     const effortChanged = effort !== previousEffort;
     if (!unchanged || effortChanged) {
-      this.store.setRuntimeSettings(this.runtime, { model, ...(selectable ? { effort } : {}) });
-      this.backend.applySettings({ model, effort });
+      // `null` means "no effort override". It is stored as '' -- the value every
+      // transport already uses for "no override", and the one a stored record
+      // has to carry so a previous level is cleared. Writing the null itself
+      // would store the string "null", which no runtime accepts.
+      this.store.setRuntimeSettings(this.runtime, {
+        model, ...(effort === undefined ? {} : { effort: effort ?? '' }),
+      });
+      // '' is the transports' own spelling for "no override" on the desired
+      // side (and what the store keeps); dsh normalizes it to null itself.
+      this.backend.applySettings({ model, effort: effort ?? '' });
     }
     return { runtimeChanged: false, runtime: this.runtime, model, threadId: this.threadId,
       unchanged: unchanged && !effortChanged, effort, previousEffort, effortChanged };
@@ -520,9 +660,10 @@ export class AgentRuntime {
       return { runtimeChanged: false, runtime: this.runtime, model: this.model, unchanged: true };
     }
     const initial = resolveRuntimeModelTarget(this.config.initialModel || '');
-    const model = requestedModel ?? this.store.getSetting?.(`${definition.id}_model`)
+    const model = canonicalRuntimeModel(definition.id, requestedModel
+      ?? this.store.getSetting?.(`${definition.id}_model`)
       ?? (this.config[`${definition.id}Model`] || undefined)
-      ?? (initial.runtime === definition.id ? initial.model : definition.defaultModel);
+      ?? (initial.runtime === definition.id ? initial.model : definition.defaultModel));
     return this._hardSwitch({ runtime: definition.id, model, canonical: model || definition.canonicalDefault,
       allowModelFallback: requestedModel === undefined, persistPreference });
   }
@@ -557,49 +698,116 @@ export class AgentRuntime {
         syncedThroughSeq: 0,
         onAvailable: null,
       };
+      const listed = (models, id) => Boolean(id)
+        && models.some((model) => model.id === id || model.resolvedModel === id);
       const fallback = async (models = []) => {
         if (!target.allowModelFallback || modelFallback || !target.model) return false;
-        modelFallback = { from: target.model, to: definition.defaultModel };
-        // Resolve effort against the default before starting its replacement.
-        const entry = models.find((model) => model.isDefault || model.id === definition.defaultModel);
-        effort = compatibleModelEffort(entry, staged.effort);
+        // Which provider route the requested model was on: the route that just
+        // proved it serves nothing. A candidate from ANOTHER route is preferred,
+        // because the failing route is the least likely to answer.
+        const failingRoute = routeOf(target.model);
+        // The runtime's own default, which is now non-empty for dsh (an empty
+        // one was what made /runtime dsh unusable); '' keeps meaning "let the
+        // adapter pick its default" for runtimes that never catalog one. It is
+        // only a candidate when the catalogue did not establish anything, or
+        // when it really lists the default -- otherwise it is the very route
+        // that just failed.
+        const own = canonicalRuntimeModel(definition.id, definition.defaultModel);
+        const catalogue = models.filter((model) => typeof model?.id === 'string' && model.id);
+        const candidates = [];
+        if (own !== target.model && (!own || catalogue.length === 0 || listed(catalogue, own))) {
+          candidates.push(own);
+        }
+        const offRoute = catalogue.filter((model) => routeOf(model.id) !== failingRoute);
+        const onFailingRoute = catalogue.filter((model) => routeOf(model.id) === failingRoute);
+        for (const entry of [...offRoute, ...onFailingRoute]) {
+          if (entry.id !== target.model && !candidates.includes(entry.id)) candidates.push(entry.id);
+        }
+        const to = candidates.find((candidate) => candidate !== target.model);
+        if (to === undefined) return false;
+        const from = target.model;
+        modelFallback = { from, to };
+        // The log is the only signal an operator gets on the startup path.
+        this._noteModelFallback(target.runtime, from, to, catalogue.length ? 'catalogue' : 'default');
+        // Resolve effort against the chosen route before starting its replacement.
+        effort = compatibleModelEffort(models.find((model) => model.id === to || model.isDefault), staged.effort);
         await staged.stop();
-        target = { ...target, model: definition.defaultModel, canonical: definition.canonicalDefault };
+        target = { ...target, model: to, canonical: to };
         return true;
       };
       for (;;) {
         if (this.stopping) throw new Error('agent runtime stopped during runtime switch');
-        staged = this._instantiate(target.runtime, { ...stageOptions, model: target.model,
-          ...(effort === undefined ? {} : { effort }) });
+        // `null` is "no override"; the transports spell that '' on their own
+        // desired side, and dsh normalizes it back to null.
+        staged = this._instantiate(target.runtime, { ...stageOptions,
+          allowModelFallback: target.allowModelFallback === true,
+          model: target.model,
+          ...(effort === undefined ? {} : { effort: effort ?? '' }) });
         previousEffort ??= staged.effort;
         this.stagedBackend = staged;
         try {
           await staged.start();
         } catch (error) {
-          if (!this.stopping && isModelUnavailableError(error) && await fallback()) continue;
+          const classified = classifyModelError(error);
+          if (classified.kind) {
+            error.modelError = classified;
+            this.logger.warn('runtime_model_error', {
+              runtime: target.runtime, kind: classified.kind,
+              status: classified.status || undefined, code: classified.code || undefined,
+            });
+          }
+          if (!this.stopping && classified.kind === MODEL_ERROR_KINDS.UNKNOWN_MODEL && await fallback()) continue;
           throw error;
         }
         if (this.stopping || this.stagedBackend !== staged) {
           throw new Error('agent runtime stopped during runtime switch');
         }
         if (!staged.state?.connected) throw new Error('target runtime exited before switch commit');
-        if (staged.model !== target.model) throw new Error('target runtime did not apply the requested model');
+        // The catalogue and the downgrade decision come before any consistency
+        // rejection: a runtime that could not serve the requested route may have
+        // started on its own default instead (dsh's initialize ladder does), and
+        // that is exactly the allowed fallback. Rejecting it first failed the
+        // whole switch after the previous turn had already been interrupted.
         let available = [];
         try { available = await staged.listModels(); } catch {
           this.logger.info('runtime_model_list_unavailable', { runtime: target.runtime });
         }
         if (this.stopping) throw new Error('agent runtime stopped during runtime switch');
+        if (available.length && target.model && !listed(available, target.model)) {
+          // The target may already run a route it adopted from its own catalogue:
+          // a handshake that could not start the configured route adopts the
+          // first usable one (dsh does, when the coordinator allowed it). That
+          // route is the only candidate already proved to start here, so taking
+          // it is the fallback -- no second process start, and nothing the live
+          // catalogue has not vouched for.
+          const applied = canonicalRuntimeModel(target.runtime, staged.model ?? '');
+          if (target.allowModelFallback && listed(available, applied)) {
+            const from = modelFallback?.from ?? target.model;
+            modelFallback = { from, to: applied };
+            this._noteModelFallback(target.runtime, from, applied, 'applied');
+            target = { ...target, model: applied, canonical: applied };
+          } else if (await fallback(available)) {
+            continue;
+          } else {
+            throw this._unknownModelError(target.model, target.runtime);
+          }
+        }
+        // Compare canonical ids: the adapter reports what it applied (dsh
+        // prefixes a bare alias with its route), the coordinator holds what was
+        // requested. Canonicalizing both keeps a provider-qualified spelling
+        // from failing the switch while still rejecting a different model.
+        if (canonicalRuntimeModel(target.runtime, staged.model)
+          !== canonicalRuntimeModel(target.runtime, target.model)) {
+          if (await fallback(available)) continue;
+          throw new Error('target runtime did not apply the requested model');
+        }
         const entry = currentModelEntry({ runtime: target.runtime, model: target.model,
           resolvedModel: staged.resolvedModel, models: available });
-        if (available.length && target.model && !available.some((model) => model.id === target.model || model.resolvedModel === target.model)) {
-          if (await fallback(available)) continue;
-          throw new Error(`${target.runtime} model is unavailable: ${target.model}`);
-        }
         if (definition.capabilities.effortControl === 'selectable') {
           const compatible = compatibleModelEffort(entry, staged.effort);
           if (compatible !== undefined) {
             effort = compatible;
-            staged.applySettings({ effort });
+            staged.applySettings({ effort: compatible ?? '' });
           }
         }
         if (!staged.state?.connected) throw new Error('target runtime exited before switch commit');
@@ -638,7 +846,9 @@ export class AgentRuntime {
         // in this transaction so the switch cannot leave it in a second store.
         nativeSessionId: session.nativeSessionId ?? null,
         model: target.model,
-        effort,
+        // A runtime with no effort override commits '' (the transports' own
+        // spelling for it); writing the null would store the string "null".
+        effort: effort === undefined ? undefined : (effort ?? ''),
         expectedRuntime: cognition.runtime,
         expectedAuthorityToken: cognition.authorityToken,
       });
