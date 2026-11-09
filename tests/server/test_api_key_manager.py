@@ -928,6 +928,32 @@ async def test_get_registered_user_role_returns_none_when_user_missing(manager: 
 # ---- Read-replica refresh contract ----
 
 
+async def test_watched_reader_initial_load_is_read_only(manager_service, monkeypatch):
+    writer = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await writer.load()
+    key = await writer.create_account("acme", "alice")
+    original = dict(manager_service.viking_fs.agfs._files)
+    reader = build_api_key_manager(
+        root_key=ROOT_KEY,
+        viking_fs=manager_service.viking_fs,
+        account_store_watch_enabled=True,
+        account_store_watch_interval_seconds=300,
+    )
+
+    def fail_write_lock(*args, **kwargs):
+        raise AssertionError("watched reader must not acquire a write lock during initial load")
+
+    monkeypatch.setattr(reader._store._async_agfs, "pathlock_acquire_exact", fail_write_lock)
+    await reader.load()
+    try:
+        assert (await reader.resolve_identity(key)).role == Role.ADMIN
+        assert manager_service.viking_fs.agfs._files == original
+        assert not manager_service.viking_fs.agfs._leases
+    finally:
+        await reader.close()
+        await writer.close()
+
+
 async def test_explicit_fresh_list_bypasses_watcher_interval(manager_service):
     writer = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     reader = build_api_key_manager(
