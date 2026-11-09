@@ -56,14 +56,14 @@ export function FileBrowser({
   const [preferredTreeWidth, setPreferredTreeWidth] =
     useState(TREE_DEFAULT_WIDTH);
   const searchId = useId();
-  // `uri !== undefined` 才是受控：显式传 `null` 表示「清空选中」，与非受控时由
-  // 模块自己维护的 `internalUri` 是两回事。用真假值判断会把 `null` 当成没传，
-  // 于是清空之后仍然显示上一个资源。
+  // `uri !== undefined` 才是受控：传了空字符串也算宿主接管，而不是「没传」。
+  // 模块自身不会主动清空选中——点目录行与点面包屑祖先都带具体 URI，没有「取消
+  // 选中」的交互——因此这里不需要为 `null` 单独留一条分支。
   //
-  // `uri !== undefined` is what makes it controlled: an explicit `null` means "clear
-  // the selection", which differs from the module owning `internalUri` while
-  // uncontrolled. A truthiness check would treat `null` as absent and keep showing the
-  // previous resource after the host cleared it.
+  // `uri !== undefined` is what makes it controlled: even an empty string counts as
+  // the host taking over rather than "absent". The module never clears the selection
+  // on its own — both the row click and the breadcrumb ancestor carry a concrete URI,
+  // and there is no "deselect" interaction — so no separate `null` branch is needed.
   const isControlled = uri !== undefined;
   const currentUri = isControlled ? uri : internalUri;
   const text = resolveLabels(labels);

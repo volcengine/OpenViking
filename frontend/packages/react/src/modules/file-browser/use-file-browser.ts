@@ -15,12 +15,19 @@ import type { FileBrowserActions, FileBrowserApi } from './types.js';
 export interface UseFileBrowserOptions {
   rootUri: string;
   /**
-   * 宿主是否受控地持有当前资源。受控时 `currentUri` 就是唯一事实——显式传
-   * `null` 表示清空选中，模块不能回退到内部记下的上一个资源。
+   * 宿主是否受控地持有当前资源。受控时 `currentUri` 就是唯一事实；非受控时
+   * `currentUri` 只是初始值，之后的选中由模块自己记在 `pendingUri` 里。
+   *
+   * 两者的区别只在「谁拥有选中」：非受控模块在初始没有选中时 `currentUri` 也是
+   * `null`，因此不能靠值来区分，必须显式声明。
    *
    * Whether the host owns the current resource. While controlled, `currentUri` is the
-   * single source of truth — an explicit `null` clears the selection, and the module
-   * must not fall back to the resource it remembers internally.
+   * single source of truth; while uncontrolled it is only the initial value and later
+   * selections live in the module's own `pendingUri`.
+   *
+   * The distinction is only about who owns the selection: an uncontrolled module also
+   * has a `null` `currentUri` when nothing is selected initially, so the value itself
+   * cannot tell the two apart and the mode has to be declared.
    */
   controlled?: boolean;
   /** 目录两级摘要的标题。Titles of the two summary levels. */
@@ -90,12 +97,12 @@ export function useFileBrowser({
   // directory under a collapsed ancestor would lose their L0/L1 summary and read
   // content instead. The decision therefore uses the set of directories the tree
   // knows about, which is independent of visibility.
-  // 受控时以宿主给的值为准，`null` 就是「没选中」；只有非受控才回落到模块自己
-  // 记下的选中，否则宿主清空选中后仍会显示上一个资源。
+  // 受控时以宿主给的值为准；只有非受控才回落到模块自己记下的选中——否则模块自己
+  // 上报的选中永远不会生效，预览也就不会加载。
   //
-  // While controlled the host's value wins and `null` means "nothing selected"; only an
-  // uncontrolled module falls back to its own remembered selection, otherwise clearing
-  // the selection would keep showing the previous resource.
+  // While controlled the host's value wins; only an uncontrolled module falls back to
+  // its own remembered selection — otherwise a selection the module reports would never
+  // take effect and the preview would never load.
   const activeUri = controlled ? currentUri : (currentUri ?? pendingUri);
   // 三态而不是布尔：不在已知目录集合里既可能是文件，也可能是还没加载过的目录，
   // 两者要走的接口不同，不能合并成「不是目录」。

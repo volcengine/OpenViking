@@ -86,21 +86,21 @@ export interface FileBrowserProps extends Omit<
   'onSelect' | 'children'
 > {
   /**
-   * 受控的当前资源 URI。传入时由宿主决定当前资源，模块只上报切换意图；显式传
-   * `null` 表示清空选中，模块不会回退到内部记下的上一个资源。
+   * 受控的当前资源 URI。传入时由宿主决定当前资源，模块只上报切换意图。
    *
-   * 用 `uri !== undefined` 判断是否受控，而不是真假值：`null` 是一个有效的受控
-   * 值（「什么都没选中」），与「没有传这个属性」（非受控）是两回事。
+   * 用 `uri !== undefined` 判断是否受控，而不是真假值：空字符串也算宿主接管。
+   * 模块不会主动清空选中——点目录行与点面包屑祖先都带具体 URI，没有「取消选中」
+   * 的交互——因此这里不接受 `null`。
    *
    * The controlled current resource URI. When given, the host owns the current
-   * resource and the module only reports switch intent; an explicit `null` clears the
-   * selection instead of falling back to the last resource the module remembers.
+   * resource and the module only reports switch intent.
    *
-   * Control is detected with `uri !== undefined` rather than truthiness: `null` is a
-   * valid controlled value ("nothing selected") and differs from "the prop is absent"
-   * (uncontrolled).
+   * Control is detected with `uri !== undefined` rather than truthiness: even an empty
+   * string counts as the host taking over. The module never clears the selection —
+   * both the row click and the breadcrumb ancestor carry a concrete URI, and there is
+   * no "deselect" interaction — so `null` is not accepted here.
    */
-  uri?: string | null;
+  uri?: string;
   /**
    * 非受控时的初始资源 URI。省略时不选中任何资源。
    * Initial resource URI when uncontrolled. Nothing is selected when omitted.
@@ -142,9 +142,17 @@ export interface FileBrowserProps extends Omit<
    */
   toolbarActions?: ReactNode;
   /**
-   * 当前资源变化后触发，参数为新的 URI；清除选中时传入 `null`。
-   * Called after the current resource changes, with the new URI; `null` when
-   * the selection is cleared.
+   * 当前资源变化后触发，参数为新的 URI。
+   *
+   * 签名允许 `null`（上游契约），但本模块目前不会主动上报它：没有「取消选中」的
+   * 交互，模块也不会自己清空选中。宿主不要依赖收到 `null` 来收起详情区。
+   *
+   * Called after the current resource changes, with the new URI.
+   *
+   * The signature allows `null` (the upstream contract), but this module never reports
+   * it today: there is no "deselect" interaction and the module does not clear the
+   * selection itself. A host must not rely on receiving `null` to collapse the detail
+   * pane.
    */
   onUriChange?: (uri: string | null) => void;
   /**

@@ -32,40 +32,40 @@ const fetchBoth = () =>
     return ok('');
   });
 
-test('a controlled null clears the selection', async () => {
-  // 宿主显式传 `null` 表示清空选中；回落到模块记下的上一个资源会让界面继续显示
-  // 一个宿主已经取消的资源。
+test('a controlled uri drives the selection', async () => {
+  // 受控时以宿主给的 URI 为准，模块只上报切换意图。
   //
-  // An explicit `null` from the host clears the selection; falling back to the
-  // resource the module remembers would keep showing one the host already dropped.
+  // While controlled the host's URI wins and the module only reports switch intent.
   const api = { current: undefined };
   const Probe = probe(api);
+  const fetch = fetchBoth();
   const tree = await mount(
     createElement(
       OpenVikingProvider,
-      { baseURL: 'https://ov.test', fetch: fetchBoth() },
+      { baseURL: 'https://ov.test', fetch },
       createElement(Probe, { uri: FILE_A, controlled: true }),
     ),
   );
+  assert.equal(api.current.selectedId, FILE_A);
   assert.equal(api.current.previewTabs?.[0]?.key, FILE_A);
 
   await tree.render(
     createElement(
       OpenVikingProvider,
-      { baseURL: 'https://ov.test', fetch: fetchBoth() },
-      createElement(Probe, { uri: null, controlled: true }),
+      { baseURL: 'https://ov.test', fetch },
+      createElement(Probe, { uri: FILE_B, controlled: true }),
     ),
   );
 
-  assert.equal(api.current.selectedId, null);
-  assert.equal(api.current.previewTabs, null);
+  assert.equal(api.current.selectedId, FILE_B);
+  assert.equal(api.current.previewTabs?.[0]?.key, FILE_B);
   await tree.unmount();
 });
 
 test('an uncontrolled module keeps its own selection', async () => {
-  // 非受控时 `currentUri` 为 null 只是「宿主没给值」，选中仍由模块自己维护。
-  // While uncontrolled a null `currentUri` only means "the host gave none"; the
-  // module still owns the selection.
+  // 非受控时 `currentUri` 为 null 只是「初始没有选中」，之后的选中由模块自己维护。
+  // While uncontrolled a null `currentUri` only means "nothing selected initially";
+  // later selections are owned by the module.
   const api = { current: undefined };
   const Probe = probe(api);
   const tree = await mount(
