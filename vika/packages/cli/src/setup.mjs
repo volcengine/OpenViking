@@ -20,7 +20,7 @@ import {
   scanApp, tenantToken,
 } from './lark-app.mjs';
 import {
-  ROLE_PRESETS, WEB_PORT, allocatePort, availableInstanceOvConfig, instanceIdProblem, readManifest, suggestInstanceId, validateManifest, vikaCommand,
+  ROLE_PRESETS, WEB_PORT, allocatePort, availableInstanceOvConfig, detectionEnv, instanceIdProblem, readManifest, suggestInstanceId, validateManifest, vikaCommand,
   vikaHome, withChangedInstance, withDefaultTempDir, withInstance, writeManifest,
 } from './manifest.mjs';
 import { OVRegistrations, detectOpenViking, instanceOvConfig, writeInstanceOvConfig } from './ov.mjs';
@@ -1475,10 +1475,14 @@ async function setupFlow({
 }) {
   const out = (text) => prompter.write(text);
   const vika = vikaCommand(env);
+  const { path: configPath, value: manifest, env: manifestEnv, ignored } = readManifest(env);
+  // A binary pinned in the manifest is what the daemon runs, so detection must
+  // see it; the caller's environment still wins, as it does in the daemon.
+  const probeEnv = detectionEnv(env, manifestEnv);
   if (!memo.runtimes) {
     if (!prompter.fancy) out(t('Vika setup：添加、修改或删除这台机器上的 agent 实例。\n\n', 'Vika setup: add, change or remove the agent instances on this machine.\n\n'));
     memo.runtimes = await step(prompter, t('看看这台机器上有哪些 agent', 'Looking for agents on this machine'),
-      () => detect.runtimes({ env }), foundLine);
+      () => detect.runtimes({ env: probeEnv }), foundLine);
     memo.mark = prompter.mark();
   } else {
     prompter.rewind(memo.mark);
@@ -1487,7 +1491,6 @@ async function setupFlow({
   // The connection this run chose (a new instance's, or a changed one), kept
   // for the next instance once the manifest is saved.
   let ov = null;
-  const { path: configPath, value: manifest, ignored } = readManifest(env);
   const notice = ignoredFieldsNotice(ignored, configPath);
   if (notice) prompter.warn(notice);
   // Before anything is asked: which Feishu/Lark apps lack what this release
@@ -1505,7 +1508,7 @@ async function setupFlow({
     }
   }
   if (!current) {
-    runtimes = await ensureRuntime({ prompter, env, detect, connect, live }, runtimes);
+    runtimes = await ensureRuntime({ prompter, env: probeEnv, detect, connect, live }, runtimes);
     if (!runtimes) return 1;
     memo.runtimes = runtimes;
   }
