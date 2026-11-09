@@ -17,10 +17,7 @@ from openviking.session.memory.extraction_output_protocol import (
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.page_id_map import PageIdMap
-from openviking.session.memory.schema_model_generator import (
-    SchemaModelGenerator,
-    SchemaPromptGenerator,
-)
+from openviking.session.memory.schema_model_generator import SchemaModelGenerator
 from openviking.session.memory.utils.description_template import (
     MAX_DESCRIPTION_CHARS,
     MAX_DESCRIPTION_OUTPUT_BYTES,
@@ -28,24 +25,6 @@ from openviking.session.memory.utils.description_template import (
     render_description_template,
     validate_description_template,
 )
-
-
-@pytest.mark.parametrize(
-    ("generator_type", "plain_expected", "template_expected"),
-    [
-        (SchemaModelGenerator, "  plain\n", "  EN  "),
-        (SchemaPromptGenerator, "plain", "EN"),
-    ],
-)
-def test_generators_render_description_strings(generator_type, plain_expected, template_expected):
-    generator = generator_type([], template_context={"language": "en"})
-
-    assert generator._render_description("  plain\n") == plain_expected
-    assert generator._render_description("  {{ language.upper() }}  ") == template_expected
-    assert generator._render_description("  {{ language | trim | upper }}  ") == template_expected
-    assert generator._render_description("") == ""
-    with pytest.raises(DescriptionTemplateError):
-        generator._render_description("{{ language | length }}")
 
 
 @pytest.mark.parametrize("memory_type", EDITABLE_MEMORY_TEMPLATE_FIELDS)
@@ -94,9 +73,6 @@ def test_descriptions_render_identically_in_all_schema_prompts(memory_type, orig
     generator = SchemaModelGenerator([schema], template_context={"language": "en"})
     operations = generator.create_structured_operations_model()
     model = generator.create_flat_data_model(schema)
-    prompts = SchemaPromptGenerator([schema], template_context={"language": "en"})
-    type_prompt = prompts.generate_type_descriptions()
-    field_prompt = prompts.generate_field_descriptions(memory_type)
     protocol_context = ExtractionOutputContext(
         operations_model=operations,
         schemas=(schema,),
@@ -107,15 +83,12 @@ def test_descriptions_render_identically_in_all_schema_prompts(memory_type, orig
     )
     python_contract = create_extraction_output_protocol("python").render_contract(protocol_context)
     assert "TYPE: " + expected in operations.model_fields[memory_type].description
-    assert "TYPE: " + expected in type_prompt
     assert "TYPE: " + expected in python_contract
     for field in schema.fields:
         if field.name in editable:
             assert not hasattr(field, "_account_description")
             assert "_account_description" not in field.model_dump()
             assert field.name + ": " + expected in model.model_fields[field.name].description
-            assert field.name + ": " + expected in type_prompt
-            assert field.name + ": " + expected in field_prompt
             assert field.name + ": " + expected in python_contract
 
 
@@ -201,8 +174,6 @@ def test_unsupported_descriptions_rejected_on_publish_load_and_render(text, fiel
     schema = MemoryTypeRegistry(load_schemas=False)._parse_memory_type(data)
     with pytest.raises(DescriptionTemplateError):
         SchemaModelGenerator([schema], {"language": "en"}).create_structured_operations_model()
-    with pytest.raises(DescriptionTemplateError):
-        SchemaPromptGenerator([schema], {"language": "en"}).generate_type_descriptions()
 
 
 def test_deployment_change_does_not_change_old_description_rendering():
@@ -217,10 +188,15 @@ def test_deployment_change_does_not_change_old_description_rendering():
         stored, "profile", deployment_defaults=memory_template_data(deployment)
     )
 
-    old_prompt = SchemaPromptGenerator([old], {"language": "en"}).generate_type_descriptions()
-    new_prompt = SchemaPromptGenerator([new], {"language": "en"}).generate_type_descriptions()
-    assert "TYPE EN" in old_prompt and "FIELD EN" in old_prompt
-    assert old_prompt == new_prompt
+    old_generator = SchemaModelGenerator([old], {"language": "en"})
+    new_generator = SchemaModelGenerator([new], {"language": "en"})
+    old_model = old_generator.create_structured_operations_model()
+    new_model = new_generator.create_structured_operations_model()
+    assert "TYPE EN" in old_model.model_fields["profile"].description
+    assert (
+        "FIELD EN" in old_generator.create_flat_data_model(old).model_fields["content"].description
+    )
+    assert old_model.model_json_schema() == new_model.model_json_schema()
 
 
 def test_missing_context_keeps_existing_undefined_behavior_and_does_not_recurse():
@@ -275,4 +251,3 @@ def test_all_deployment_descriptions_pass_restricted_rendering():
         generator = SchemaModelGenerator(schemas, template_context={"language": language})
         generator.generate_all_models()
         generator.create_structured_operations_model()
-        SchemaPromptGenerator(schemas, {"language": language}).generate_type_descriptions()

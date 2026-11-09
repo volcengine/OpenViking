@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 #include "index/detail/index_manager_impl.h"
 #include <algorithm>
+#include <cmath>
+#include <numeric>
 #include <stdexcept>
 #include <memory>
 #include <chrono>
@@ -507,9 +509,32 @@ int IndexManagerImpl::perform_vector_recall(const SearchRequest& req,
                                             SearchContext& ctx,
                                             const BitmapPtr& bitmap,
                                             SearchResult& result) {
+  JsonDoc decay;
+  const bool apply_decay = !req.time_decay.empty();
+  if (apply_decay) {
+    decay.Parse(req.time_decay.c_str());
+    if (decay.HasParseError() || !decay.IsObject() ||
+        !decay.HasMember("field") || !decay["field"].IsString()) {
+      throw std::invalid_argument("invalid time-decay field");
+    }
+    for (const auto* key : {"origin_ms", "offset_ms", "scale_ms", "decay"}) {
+      if (!decay.HasMember(key) || !decay[key].IsNumber() ||
+          !std::isfinite(decay[key].GetDouble())) {
+        throw std::invalid_argument("invalid time-decay numeric parameter");
+      }
+    }
+    if (decay["offset_ms"].GetDouble() < 0 ||
+        decay["scale_ms"].GetDouble() <= 0 ||
+        decay["decay"].GetDouble() <= 0 || decay["decay"].GetDouble() >= 1 ||
+        req.topk > 100000) {
+      throw std::invalid_argument("invalid time-decay range or topk");
+    }
+  }
+  // The native recall owns candidate amplification; callers receive only topk.
+  const uint32_t recall_topk = apply_decay ? std::min(req.topk * 3u, 100000u) : req.topk;
   VectorRecallRequest recall_request{
       .dense_vector = req.query.data(),
-      .topk = req.topk,
+      .topk = recall_topk,
       .bitmap = bitmap.get(),
       .sparse_terms =
           req.sparse_raw_terms.empty() ? nullptr : &req.sparse_raw_terms,
@@ -523,8 +548,46 @@ int IndexManagerImpl::perform_vector_recall(const SearchRequest& req,
     return ret;
   }
 
-  std::swap(result.labels, recall_result.labels);
-  std::swap(result.scores, recall_result.scores);
+  if (!apply_decay) {
+    std::swap(result.labels, recall_result.labels);
+    std::swap(result.scores, recall_result.scores);
+    return 0;
+  }
+  const auto time_values = scalar_index_->get_field_sets()->get_rangedmap_ptr(
+      decay["field"].GetString());
+  const double origin = decay["origin_ms"].GetDouble();
+  const double protection = decay["offset_ms"].GetDouble();
+  const double rate = std::log(decay["decay"].GetDouble()) / decay["scale_ms"].GetDouble();
+  std::vector<float> fused = recall_result.scores;
+  std::vector<double> time_scores(fused.size(), std::numeric_limits<double>::quiet_NaN());
+  for (size_t i = 0; i < fused.size(); ++i) {
+    const int offset = vector_index_->get_offset_by_label(recall_result.labels[i]);
+    if (!time_values || offset < 0 || static_cast<uint32_t>(offset) >= time_values->size()) continue;
+    const double updated = time_values->get_score_by_offset(offset);
+    if (!std::isfinite(updated)) continue;
+    time_scores[i] = std::exp(rate * std::max(0.0, std::abs(origin - updated) - protection));
+    fused[i] *= time_scores[i];
+  }
+  std::vector<size_t> order(fused.size());
+  std::iota(order.begin(), order.end(), 0);
+  std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+    return fused[a] > fused[b];
+  });
+  order.resize(std::min(order.size(), static_cast<size_t>(req.topk)));
+  JsonDoc details;
+  details.SetObject();
+  auto& allocator = details.GetAllocator();
+  for (const size_t i : order) {
+    result.labels.push_back(recall_result.labels[i]);
+    result.scores.push_back(fused[i]);
+    rapidjson::Value detail(rapidjson::kObjectType);
+    detail.AddMember("origin_score", recall_result.scores[i], allocator);
+    if (std::isfinite(time_scores[i])) detail.AddMember("addition_score", time_scores[i], allocator);
+    const auto label = std::to_string(recall_result.labels[i]);
+    rapidjson::Value key(label.c_str(), allocator);
+    details.AddMember(key, detail, allocator);
+  }
+  result.extra_json = json_stringify(details);
   return 0;
 }
 

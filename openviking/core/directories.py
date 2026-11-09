@@ -9,7 +9,7 @@ This module defines the preset directory structure that is created on initializa
 
 import asyncio
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 from openviking.core.context import Context, Vectorize
 from openviking.core.namespace import (
@@ -26,6 +26,7 @@ from openviking.storage.vector_ids import vector_record_id
 if TYPE_CHECKING:
     from openviking.storage import VikingDBManager
     from openviking.storage.viking_fs import VikingFS
+    from openviking.system_assets.sync import SystemAssetSynchronizer
 
 from openviking_cli.exceptions import NotFoundError
 
@@ -140,6 +141,13 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
                 "should retrieve relevant skills before executing tasks, select most appropriate skill to execute.",
             ),
             DirectoryDefinition(
+                path="tools",
+                abstract="User-private tool configuration for agent capabilities.",
+                overview="Stores tool integration definitions owned by the current User, "
+                "such as MCP server tool catalogs. Shared tools remain under "
+                "viking://agent/tools.",
+            ),
+            DirectoryDefinition(
                 path="sessions",
                 abstract="User session registry. Stores conversation state, live messages, tool outputs, and session history owned by the current User.",
                 overview="Use this directory to inspect or migrate user-owned session records. Session entries are created lazily when sessions are started.",
@@ -195,9 +203,11 @@ class DirectoryInitializer:
         self,
         vikingdb: "VikingDBManager",
         viking_fs: Optional["VikingFS"] = None,
+        system_asset_synchronizer: Optional["SystemAssetSynchronizer"] = None,
     ):
         self.vikingdb = vikingdb
         self._viking_fs = viking_fs
+        self._system_asset_synchronizer = system_asset_synchronizer
 
     def _get_viking_fs(self) -> "VikingFS":
         if self._viking_fs is not None:
@@ -206,12 +216,22 @@ class DirectoryInitializer:
 
         return get_viking_fs()
 
-    async def initialize_account_workspace(self, ctx: RequestContext) -> tuple[int, int]:
+    async def initialize_account_workspace(
+        self,
+        ctx: RequestContext,
+        *,
+        sync_system_assets: bool = True,
+        lease_ref: Any = None,
+    ) -> tuple[int, int]:
         """Initialize account and first-user preset directories as one batch."""
+        if sync_system_assets and self._system_asset_synchronizer is not None:
+            await self._system_asset_synchronizer.sync(ctx, lease_ref=lease_ref)
         account_roots, account_children = self._account_directory_targets(ctx)
         user_root, user_children = self._user_directory_targets(ctx)
         created = await self._initialize_directory_trees(
-            (*account_roots, user_root), (*account_children, *user_children)
+            (*account_roots, user_root),
+            (*account_children, *user_children),
+            lease_ref=lease_ref,
         )
         user_count = sum(target.scope == "user" for target in created)
         return len(created) - user_count, user_count
@@ -223,10 +243,14 @@ class DirectoryInitializer:
         Its concrete metadata belongs to ``viking://user/{user_id}`` and is
         created by ``initialize_user_directories``.
         """
+        if self._system_asset_synchronizer is not None:
+            await self._system_asset_synchronizer.sync(ctx)
         roots, children = self._account_directory_targets(ctx)
         return len(await self._initialize_directory_trees(roots, children))
 
-    async def initialize_user_directories(self, ctx: RequestContext) -> int:
+    async def initialize_user_directories(
+        self, ctx: RequestContext, *, lease_ref: Any = None
+    ) -> int:
         """Initialize the current user's root and first-level entry directories.
 
         Concrete leaf namespaces under entries such as ``memories`` or ``sessions``
@@ -236,20 +260,26 @@ class DirectoryInitializer:
         if "user" not in PRESET_DIRECTORIES:
             return 0
         user_root, user_children = self._user_directory_targets(ctx)
-        return len(await self._initialize_directory_trees((user_root,), user_children))
+        return len(
+            await self._initialize_directory_trees((user_root,), user_children, lease_ref=lease_ref)
+        )
 
     async def _initialize_directory_trees(
-        self, roots: Sequence[_DirectoryTarget], children: Sequence[_DirectoryTarget]
+        self,
+        roots: Sequence[_DirectoryTarget],
+        children: Sequence[_DirectoryTarget],
+        *,
+        lease_ref: Any = None,
     ) -> list[_DirectoryTarget]:
         """Initialize roots before children and index successful writes as one batch."""
         results = await asyncio.gather(
-            *(self._ensure_agfs_directory(target) for target in roots),
+            *(self._ensure_agfs_directory(target, lease_ref=lease_ref) for target in roots),
             return_exceptions=True,
         )
         created, error = self._partition_directory_results(results)
         if error is None:
             results = await asyncio.gather(
-                *(self._ensure_agfs_directory(target) for target in children),
+                *(self._ensure_agfs_directory(target, lease_ref=lease_ref) for target in children),
                 return_exceptions=True,
             )
             created_children, error = self._partition_directory_results(results)
@@ -337,7 +367,9 @@ class DirectoryInitializer:
                 created_targets.append(result)
         return created_targets, first_error
 
-    async def _ensure_agfs_directory(self, target: _DirectoryTarget) -> _DirectoryTarget | None:
+    async def _ensure_agfs_directory(
+        self, target: _DirectoryTarget, *, lease_ref: Any = None
+    ) -> _DirectoryTarget | None:
         """Fill missing L0/L1 files, preserving stored text for vector initialization."""
         from openviking_cli.utils.logger import get_logger
 
@@ -345,16 +377,24 @@ class DirectoryInitializer:
         viking_fs = self._get_viking_fs()
         contents = {}
         missing = {}
+        defaults = (
+            ("abstract", target.definition.abstract),
+            ("overview", target.definition.overview),
+        )
+        results = await asyncio.gather(
+            *(
+                viking_fs.read_file(f"{target.uri}/.{name}.md", ctx=target.ctx)
+                for name, _ in defaults
+            ),
+            return_exceptions=True,
+        )
         try:
-            for name, default in (
-                ("abstract", target.definition.abstract),
-                ("overview", target.definition.overview),
-            ):
-                try:
-                    raw = await viking_fs.read_file(f"{target.uri}/.{name}.md", ctx=target.ctx)
-                except (FileNotFoundError, NotFoundError):
+            for (name, default), raw in zip(defaults, results, strict=True):
+                if isinstance(raw, (FileNotFoundError, NotFoundError)):
                     contents[name] = default
                     missing[name] = contents[name]
+                elif isinstance(raw, BaseException):
+                    raise raw
                 else:
                     contents[name] = body_for_preview(raw)
         except AbstractOverviewFormatError as exc:
@@ -375,6 +415,7 @@ class DirectoryInitializer:
             **missing,
             is_leaf=False,
             ctx=target.ctx,
+            lease_ref=lease_ref,
         )
         return replace(target, definition=replace(target.definition, **contents))
 
@@ -427,3 +468,11 @@ class DirectoryInitializer:
         if scope in {"user", "session"}:
             return user_space_fragment(ctx)
         return ""
+
+
+def preset_directory_uris(ctx: RequestContext) -> frozenset[str]:
+    """URIs of the preset directories whose boilerplate L0/L1 is vectorized for ``ctx``."""
+    account_roots, account_children = DirectoryInitializer._account_directory_targets(ctx)
+    user_root, user_children = DirectoryInitializer._user_directory_targets(ctx)
+    targets = (*account_roots, *account_children, user_root, *user_children)
+    return frozenset(target.uri for target in targets)

@@ -45,14 +45,21 @@ description: 区分托管、自建和私有交付，准备集群、镜像、存�
 | 范围 | 确认内容 |
 | --- | --- |
 | 权限 | 部署 kubeconfig；创建 CRD 和 RBAC 的权限；Operator 管理目标 namespace 的权限；按随包权限表申请 |
+| 集群独占 | 一个 Kubernetes 集群只装一套私有交付，见下文说明 |
 | Namespace | 业务与 Operator 的 namespace，默认示例分别为 `vikingdb`、`viking-system`；Secret 的作用域 |
 | 调度 | `cluster` 默认使用 `nodeLevel=online` / `nodeLevel=offline`；实际节点标签、污点和资源能满足调度 |
-| Registry | 完整仓库前缀、交付镜像 tag、拉取凭据；部署机登录与集群拉取分别验证 |
+| Registry | 完整仓库前缀、交付镜像 tag、拉取凭据；部署机登录与集群拉取分别验证；Registry 不会自动建仓库时（如 Amazon ECR）先建好仓库 |
 | 存储 | 可用 StorageClass；分别配置 VikingDB 数据盘、OpenViking workspace PVC 与外部基础组件存储 |
 | 网络 | Pod / Service DNS、API Server、中间件与模型访问；集群 DNS 后缀；入口域名和 TLS |
-| 授权 | 启用授权时准备当前集群 fingerprint 对应的授权文件；确认有效期、续期与离线遥测安排 |
+| 授权 | 离线授权：准备当前集群 fingerprint 对应的授权文件。在线授权：准备一次性 activation code 和授权服务 HTTPS 地址，部署机和集群都要能访问该地址。确认有效期、续期与遥测安排 |
 
 不要直接沿用生成配置中的 `local-path`、磁盘容量或节点标签。OpenViking workspace 默认 requests / limits 均为 2 CPU / 4 GiB，这是配置默认值，需按负载核对。
+
+`cluster` profile 生成的 VikingDB 默认资源按上文三台大规格机器估算，例如 `viking` 默认 2 副本，每副本 16 CPU / 128 GiB。部署前把 `vdb.yaml` 里所有组件的 `replicas × requests` 加总，与目标节点池的可分配容量对比；`setup apply --dry-run` 不做容量校验，超出时只会在部署后表现为大量 Pod `Pending`。
+
+**集群独占。** VikingDB / OpenViking 的 CRD 是集群级资源，VikingDB Operator 监听所有 namespace，授权 webhook `vikingdb-license-guard.openviking.ai` 名称固定，Operator 读取授权的 system namespace 固定为 `viking-system`。同一集群装第二套，即使业务 namespace 不同，也会覆盖 CRD、出现两个 Operator 同时处理同一资源，并争用 webhook 和授权 Secret。需要多套环境时使用不同的集群。
+
+**共享集群的影响。** 授权 webhook 中的 `managed-workload.openviking.ai` 不限 namespace，校验集群内所有带 `app.kubernetes.io/managed-by=Helm` 标签的 Deployment、StatefulSet、Job 的更新和删除，失败策略为 `Fail`。VikingDB Operator 不可用时，集群里其他 Helm 应用的升级和删除也会被拒绝。与其他业务共用集群前，要评估这一影响，并把 Operator 的可用性纳入运维范围。
 
 `cluster` 交付依赖客户提供或按交付方案准备的基础组件：
 
@@ -66,6 +73,8 @@ description: 区分托管、自建和私有交付，准备集群、镜像、存�
 | HBase | 2.5.x | 依赖 HDFS 和 ZooKeeper |
 
 这张表记录本次交付口径，不代表持续更新的兼容认证。连接可达后，还要按随包《基础组件配置要求》核对数据库、Topic、命名空间、目录、权限和初始化结果。外部依赖升级后需重新验收。
+
+HDFS 模型目录（默认 `/home/vikingdb_data`）要让 VikingDB 的运行身份可写。fermat 等组件在容器内以 `root` 运行，且不设置 `HADOOP_USER_NAME`，在 simple 认证下访问 HDFS 的用户就是 `root`。HDFS 开启权限检查且 `root` 不是超级用户时（如 Amazon EMR 默认配置），需给 `root` 授予该目录的写权限，做法见[企业私有化部署](20-private-deployment.md#_2-生成并编辑配置)。
 
 ## 模型接入检查
 

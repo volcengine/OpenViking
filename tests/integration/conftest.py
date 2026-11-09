@@ -52,7 +52,7 @@ requires_volcengine_kms = pytest.mark.skipif(
 
 # (model_name, default_dimension, token_limit)
 GEMINI_MODELS = [
-    ("gemini-embedding-2-preview", 3072, 8192),
+    ("gemini-embedding-2", 3072, 8192),
 ]
 
 
@@ -84,7 +84,7 @@ def gemini_embedder():
         from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
     except (ImportError, ModuleNotFoundError, AttributeError):
         pytest.skip("google-genai not installed")
-    return GeminiDenseEmbedder("gemini-embedding-2-preview", api_key=GOOGLE_API_KEY, dimension=768)
+    return GeminiDenseEmbedder("gemini-embedding-2", api_key=GOOGLE_API_KEY, dimension=768)
 
 
 def gemini_config_dict(
@@ -156,7 +156,7 @@ def sample_markdown(base_dir: Path, slug: str, content: str) -> Path:
 
 @pytest_asyncio.fixture(scope="function")
 async def gemini_ov_service(tmp_path):
-    model = "gemini-embedding-2-preview"
+    model = "gemini-embedding-2"
     dim = 768
     service, ctx = await make_ov_service(
         gemini_config_dict(model, dim),

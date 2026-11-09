@@ -54,6 +54,9 @@ class EmbeddingCollector(EventMetricCollector):
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_tokens_total
     # e.g.: openviking_embedding_tokens_total
     TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "tokens", unit="total")
+    # rule: <METRICS_NAMESPACE>_<DOMAIN>_ingestion_tokens_total
+    # e.g.: openviking_embedding_ingestion_tokens_total
+    INGESTION_TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "ingestion_tokens", unit="total")
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_requests_total
     # e.g.: openviking_embedding_requests_total
     REQUESTS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "requests", unit="total")
@@ -95,6 +98,7 @@ class EmbeddingCollector(EventMetricCollector):
                 account_id=(
                     None if payload.get("account_id") is None else str(payload.get("account_id"))
                 ),
+                source_type=payload.get("source_type"),
             )
             return
         if event_name == "embedding.success":
@@ -126,6 +130,7 @@ class EmbeddingCollector(EventMetricCollector):
         completion_tokens: int,
         error_code: str = "OK",
         account_id: str | None = None,
+        source_type: str | None = None,
     ) -> None:
         """Record one embedding provider call as calls/tokens counters and a latency sample."""
         labels = {
@@ -169,6 +174,14 @@ class EmbeddingCollector(EventMetricCollector):
                 self.TOKENS_TOTAL,
                 labels=token_labels,
                 label_names=("provider", "model_name"),
+                amount=total_tokens,
+                account_id=account_id,
+            )
+        if labels["error_code"] == "OK" and total_tokens > 0 and source_type:
+            registry.inc_counter(
+                self.INGESTION_TOKENS_TOTAL,
+                labels={"source_type": str(source_type)},
+                label_names=("source_type",),
                 amount=total_tokens,
                 account_id=account_id,
             )

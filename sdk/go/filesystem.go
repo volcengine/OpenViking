@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -9,6 +12,15 @@ import (
 
 // List lists directory contents.
 func (c *Client) List(ctx context.Context, uri string, opts *ListOptions) ([]any, error) {
+	page, err := c.ListPage(ctx, uri, opts)
+	if err != nil {
+		return nil, err
+	}
+	return page.Result, nil
+}
+
+// ListPage lists directory contents with pagination metadata.
+func (c *Client) ListPage(ctx context.Context, uri string, opts *ListOptions) (*ListPage, error) {
 	if opts == nil {
 		opts = &ListOptions{Output: "original", AbsLimit: 256, NodeLimit: 1000}
 	}
@@ -20,6 +32,10 @@ func (c *Client) List(ctx context.Context, uri string, opts *ListOptions) ([]any
 	if absLimit == 0 {
 		absLimit = 256
 	}
+	overviewLimit := opts.OverviewLimit
+	if overviewLimit == 0 {
+		overviewLimit = 4000
+	}
 	nodeLimit := opts.NodeLimit
 	if nodeLimit == 0 {
 		nodeLimit = 1000
@@ -30,6 +46,13 @@ func (c *Client) List(ctx context.Context, uri string, opts *ListOptions) ([]any
 	queryBool(query, "recursive", opts.Recursive)
 	query.Set("output", output)
 	queryInt(query, "abs_limit", absLimit)
+	if opts.IncludeAbstract != nil {
+		queryBool(query, "include_abstract", *opts.IncludeAbstract)
+	}
+	if opts.IncludeOverview != nil {
+		queryBool(query, "include_overview", *opts.IncludeOverview)
+	}
+	queryInt(query, "overview_limit", overviewLimit)
 	queryBool(query, "show_all_hidden", opts.ShowAllHidden)
 	queryInt(query, "node_limit", nodeLimit)
 	if opts.Offset != 0 {
@@ -50,13 +73,28 @@ func (c *Client) List(ctx context.Context, uri string, opts *ListOptions) ([]any
 	if opts.SortOrder != "" {
 		query.Set("sort_order", opts.SortOrder)
 	}
+	if opts.ExtraFields != nil {
+		query["extra_fields"] = opts.ExtraFields
+	}
 	var result []any
-	err := c.doJSON(ctx, http.MethodGet, "/api/v1/fs/ls", query, nil, &result)
-	return result, err
+	env, err := c.doJSONEnvelope(ctx, http.MethodGet, "/api/v1/fs/ls", query, nil, &result)
+	if err != nil {
+		return nil, err
+	}
+	return &ListPage{Result: result, HasMore: env.HasMore}, nil
 }
 
 // Tree returns a directory tree.
 func (c *Client) Tree(ctx context.Context, uri string, opts *TreeOptions) ([]map[string]any, error) {
+	page, err := c.TreePage(ctx, uri, opts)
+	if err != nil {
+		return nil, err
+	}
+	return page.Result, nil
+}
+
+// TreePage returns a directory tree with pagination metadata.
+func (c *Client) TreePage(ctx context.Context, uri string, opts *TreeOptions) (*TreePage, error) {
 	if opts == nil {
 		opts = &TreeOptions{Output: "original", AbsLimit: 128, NodeLimit: 1000}
 	}
@@ -103,6 +141,9 @@ func (c *Client) Tree(ctx context.Context, uri string, opts *TreeOptions) ([]map
 	if opts.Limit != 0 {
 		queryInt(query, "limit", opts.Limit)
 	}
+	if opts.ExtraFields != nil {
+		query["extra_fields"] = opts.ExtraFields
+	}
 	if opts.Tags != nil {
 		query["tags"] = opts.Tags
 	}
@@ -110,8 +151,11 @@ func (c *Client) Tree(ctx context.Context, uri string, opts *TreeOptions) ([]map
 		query.Set("include_tags", "true")
 	}
 	var result []map[string]any
-	err := c.doJSON(ctx, http.MethodGet, "/api/v1/fs/tree", query, nil, &result)
-	return result, err
+	env, err := c.doJSONEnvelope(ctx, http.MethodGet, "/api/v1/fs/tree", query, nil, &result)
+	if err != nil {
+		return nil, err
+	}
+	return &TreePage{Result: result, HasMore: env.HasMore}, nil
 }
 
 // Stat returns metadata for a URI.
@@ -149,9 +193,6 @@ func (c *Client) Remove(ctx context.Context, uri string, opts *RemoveOptions) er
 	query.Set("uri", NormalizeURI(uri))
 	queryBool(query, "recursive", opts.Recursive)
 	queryBool(query, "wait", opts.Wait)
-	if opts.Timeout != nil {
-		queryFloat(query, "timeout", *opts.Timeout)
-	}
 	return c.doJSON(ctx, http.MethodDelete, "/api/v1/fs", query, nil, nil)
 }
 
@@ -238,7 +279,6 @@ func (c *Client) Write(ctx context.Context, uri string, content string, opts *Wr
 		"mode":    mode,
 		"wait":    opts.Wait,
 	}
-	setFloatPtr(payload, "timeout", opts.Timeout)
 	setAny(payload, "telemetry", opts.Telemetry)
 	setString(payload, "processing_mode", opts.ProcessingMode)
 	if opts.ACL != nil {
@@ -279,10 +319,13 @@ func (c *Client) BatchWrite(
 		"operations": normalized,
 	}
 	if opts != nil {
-		setAny(payload, "wait", opts.Wait)
-		setFloatPtr(payload, "timeout", opts.Timeout)
+		if opts.Wait != nil {
+			payload["wait"] = *opts.Wait
+		}
+		setAny(payload, "defer_processing", opts.DeferProcessing)
 		setAny(payload, "telemetry", opts.Telemetry)
-		if err := mergeExtra(payload, opts.Extra); err != nil {
+		setString(payload, "processing_mode", opts.ProcessingMode)
+		if err := mergeExtraProtected(payload, opts.Extra, "wait"); err != nil {
 			return nil, err
 		}
 	}
@@ -291,9 +334,32 @@ func (c *Client) BatchWrite(
 	return result, err
 }
 
+// EnsureDirectoryIndex preserves summaries and uses fallbackAbstract only when both are absent.
+// Return readable levels, or queued task metadata when Wait is false.
+func (c *Client) EnsureDirectoryIndex(
+	ctx context.Context,
+	uri string,
+	fallbackAbstract string,
+	opts *EnsureDirectoryIndexOptions,
+) (map[string]any, error) {
+	payload := map[string]any{
+		"uri":               NormalizeURI(uri),
+		"fallback_abstract": fallbackAbstract,
+		"wait":              true,
+	}
+	if opts != nil {
+		payload["wait"] = boolValue(opts.Wait, true)
+		setAny(payload, "telemetry", opts.Telemetry)
+	}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/content/ensure_directory_index", nil, payload, &result)
+	return result, err
+}
+
 // SetTags sets explicit k=v retrieval tags metadata for a file or directory.
-// Valid modes are "replace" (default) and "append"; Recursive applies the tags
-// to every file under a directory URI.
+// Valid modes are "replace" (default), "append", and "clear". An empty
+// replace request is a no-op; clear removes existing tags. Recursive applies
+// the update to every file under a directory URI.
 func (c *Client) SetTags(ctx context.Context, uri string, tags []string, opts *SetTagsOptions) (map[string]any, error) {
 	if opts == nil {
 		opts = &SetTagsOptions{Mode: "replace"}
@@ -302,9 +368,8 @@ func (c *Client) SetTags(ctx context.Context, uri string, tags []string, opts *S
 	if mode == "" {
 		mode = "replace"
 	}
-	// The server contract is tags:list[str]; a nil slice would marshal to JSON
-	// null and fail validation, so normalize to an empty list. With mode
-	// "replace" an empty list clears all tags.
+	// Normalize nil to an empty list. The server treats replace + [] as a no-op
+	// and clear as the explicit request to remove existing tags.
 	if tags == nil {
 		tags = []string{}
 	}
@@ -336,8 +401,10 @@ func (c *Client) Reindex(ctx context.Context, uri string, opts *ReindexOptions) 
 		"uri":       NormalizeURI(uri),
 		"mode":      mode,
 		"wait":      opts.Wait,
-		"dry_run":   opts.DryRun,
 		"recursive": boolValue(opts.Recursive, true),
+	}
+	if opts.Force {
+		payload["force"] = true
 	}
 	if opts.Tags != nil || opts.TagMode == "clear" {
 		if opts.Tags != nil {
@@ -349,7 +416,7 @@ func (c *Client) Reindex(ctx context.Context, uri string, opts *ReindexOptions) 
 		}
 		payload["tag_mode"] = tagMode
 	}
-	if err := mergeExtraProtected(payload, opts.Extra, "tags", "tag_mode"); err != nil {
+	if err := mergeExtraProtected(payload, opts.Extra, "force", "tags", "tag_mode"); err != nil {
 		return nil, err
 	}
 	var result map[string]any

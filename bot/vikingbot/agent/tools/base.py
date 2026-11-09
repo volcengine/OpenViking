@@ -7,6 +7,9 @@ from typing import Any
 from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox.manager import SandboxManager
 
+# Task-relative storage for complete tool results; these files are not deliverables.
+TOOL_RESULT_DIRECTORY = ".tool-results"
+
 
 @dataclass(frozen=True)
 class MultimodalToolResult:
@@ -161,6 +164,11 @@ class Tool(ABC):
         names or JSON-Pointer-like paths with ``*`` list/dict wildcards.
         """
         return {}
+
+    @property
+    def preserve_complete_result(self) -> bool:
+        """Whether the model must receive this tool's result without preview truncation."""
+        return False
 
     @abstractmethod
     async def execute(self, tool_context: ToolContext, **kwargs: Any) -> str | MultimodalToolResult:

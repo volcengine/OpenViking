@@ -295,6 +295,8 @@ async def _attempt(
         }
         if vlm.max_tokens is not None:
             request["max_output_tokens"] = vlm.max_tokens
+        if vlm.extra_request_body:
+            request["extra_body"] = dict(vlm.extra_request_body)
 
         started = time.monotonic()
         response = await client.responses.create(**request)

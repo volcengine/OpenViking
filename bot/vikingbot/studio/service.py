@@ -50,7 +50,13 @@ class StudioService:
         )
 
     def install(self, record):
-        return get_provider(record).install(self, record)
+        connection = dict(record["identity"])
+        server = self.config.ov_server
+        if server.effective_auth_mode == "trusted":
+            # Credentials belong to the runtime, not the persisted connection.
+            connection["api_key_type"] = "root"
+            connection["api_key"] = server.api_key
+        return get_provider(record).install(self, record, openviking_connection=connection)
 
     async def create(self, account, body, identity):
         provider = get_provider(body)

@@ -156,16 +156,34 @@ class VikingFS(
         self._vector_config_resolver = vector_config_resolver
         self._count_cache: Dict[str, tuple] = {}  # cache_key → (count, timestamp)
         self._count_cache_max_size = 1024
-        self._fulltext_available: Dict[tuple[str, str, str, str], bool] = {}
+        self._fulltext_available: Dict[tuple[str, str, str, str], tuple[bool, Optional[float]]] = {}
         self._bound_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
             "vikingfs_bound_ctx", default=None
         )
         self._background_tasks: set = set()
         self._deletion_guard: Optional[Callable[[str, str], bool]] = None
+        self._privacy_sanitizer: Optional[Any] = None
+        self._global_policy_service: Optional[Any] = None
+        self._post_write_hook: Optional[Callable[[str, Optional[RequestContext], int], Any]] = None
 
     def set_vlm_resolver(self, resolver: "VLMResolver") -> None:
         """Set the VLM resolver supplied by the owning service."""
         self._vlm_resolver = resolver
+
+    def set_privacy_sanitizer(self, sanitizer: Optional[Any]) -> None:
+        """Install the account service's text sanitizer for direct writes."""
+        self._privacy_sanitizer = sanitizer
+
+    def set_global_policy_service(self, service: Any) -> None:
+        """Install the owner policy registry supplied by the account service."""
+        self._global_policy_service = service
+
+    def set_post_write_hook(
+        self,
+        hook: Optional[Callable[[str, Optional[RequestContext], int], Any]],
+    ) -> None:
+        """Install an optional observer called after a file write succeeds."""
+        self._post_write_hook = hook
 
 
 VikingFS.__module__ = __name__

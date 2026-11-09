@@ -74,9 +74,7 @@ def test_explicit_assistant_role_tool_transport_stays_with_previous_step():
 
     turns = build_turns(messages)
 
-    assert [[message.id for message in step.messages] for step in turns[0].steps] == [
-        ["a1", "tr1"]
-    ]
+    assert [[message.id for message in step.messages] for step in turns[0].steps] == [["a1", "tr1"]]
 
 
 def test_message_semantic_fields_round_trip_without_affecting_legacy_rows():
@@ -150,6 +148,30 @@ def test_oversized_latest_turn_keeps_anchor_and_atomic_raw_tail():
     assert ("a4" in archived_ids) == ("tr4" in archived_ids)
     assert ("a4" in retained_ids) == ("tr4" in retained_ids)
     assert plan.checkpoint_source_message_ids == archived_ids[1:]
+
+
+def test_oversized_final_step_archives_full_source_and_retains_preview():
+    final_text = ("HEAD-" * 1000) + ("TAIL-" * 1000)
+    messages = [
+        _message("u1", "user", "investigate"),
+        _message("a1", "assistant", final_text),
+    ]
+
+    plan = plan_retention(
+        messages,
+        keep_recent_turn_count=1,
+        token_budget=120,
+        min_raw_tail_steps=1,
+    )
+
+    assert [message.id for message in plan.archive_messages] == ["u1", "a1"]
+    assert [message.id for message in plan.retained_messages] == ["u1", "a1"]
+    assert plan.checkpoint_source_message_ids == ["a1"]
+    assert plan.archive_messages[-1].content == final_text
+    assert plan.retained_messages[-1].content != final_text
+    assert "HEAD-" in plan.retained_messages[-1].content
+    assert "TAIL-" in plan.retained_messages[-1].content
+    assert plan.estimated_active_tokens <= 120
 
 
 def test_oversized_legacy_assistant_only_turn_archives_without_checkpoint():
@@ -269,3 +291,32 @@ def test_active_budget_never_splits_an_assistant_tool_step():
 
     assert plan.estimated_tokens <= 40
     assert ("a1" in returned_ids) == ("tr1" in returned_ids)
+
+
+@pytest.mark.parametrize("tool_input", [{}, {"query": "x" * 4000}])
+def test_active_budget_distinguishes_removed_inputs_from_zero_arg_calls(tool_input):
+    message = Message(
+        id="a1",
+        role="assistant",
+        parts=[
+            ToolPart(
+                tool_id="t1",
+                tool_name="search",
+                tool_input=tool_input,
+                tool_output="result",
+                tool_status="completed",
+            )
+        ],
+    )
+
+    plan = fit_active_messages_to_budget([message], token_budget=32)
+
+    assert plan.estimated_tokens <= 32
+    assert [returned.id for returned in plan.messages] == ["a1"]
+    part = Message.from_dict(plan.messages[0].to_dict()).parts[0]
+    assert part.tool_input == (None if tool_input else {})
+    assert part.tool_id == "t1"
+    assert part.tool_output == "result"
+    assert ("tool_input" in plan.messages[0].to_dict()["parts"][0]) == (not tool_input)
+    assert plan.truncated_message_ids == (["a1"] if tool_input else [])
+    assert message.parts[0].tool_input == tool_input

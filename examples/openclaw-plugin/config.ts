@@ -42,6 +42,7 @@ export type MemoryOpenVikingConfig = {
   userId?: string;
   targetUri?: string;
   timeoutMs?: number;
+  contextManagementMode?: "native" | "openviking";
   autoCapture?: boolean;
   captureMode?: "semantic" | "keyword";
   captureMaxLength?: number;
@@ -176,6 +177,7 @@ export const OPENVIKING_ADD_RESOURCE_TOOL_NAME = "add_resource" as const;
 export const OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES = [
   "add_skill",
   "ov_search",
+  "ov_rule_search",
   "ov_read",
   "ov_multi_read",
   "ov_list",
@@ -199,6 +201,7 @@ export const OPENVIKING_TOOL_GROUPS: Record<string, readonly OpenVikingToolName[
   default: OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES,
   memory: ["memory_recall", "memory_store", "memory_forget"],
   resource_query: ["ov_search", "ov_read", "ov_multi_read", "ov_list"],
+  rules: ["ov_rule_search"],
   import: ["add_resource", "add_skill"],
   recall_trace: ["ov_recall_trace"],
   archive: ["ov_archive_search", "ov_archive_expand"],
@@ -514,6 +517,9 @@ export const memoryOpenVikingConfigSchema = {
       value = {};
     }
     const cfg = value as Record<string, unknown>;
+    if (cfg.contextManagementMode !== undefined && !["native", "openviking"].includes(String(cfg.contextManagementMode))) {
+      throw new Error("contextManagementMode must be native or openviking");
+    }
     assertAllowedKeys(
       cfg,
       [
@@ -528,6 +534,7 @@ export const memoryOpenVikingConfigSchema = {
         "userId",
         "targetUri",
         "timeoutMs",
+        "contextManagementMode",
         "autoCapture",
         "captureMode",
         "captureMaxLength",
@@ -655,6 +662,7 @@ export const memoryOpenVikingConfigSchema = {
       userId,
       targetUri: typeof cfg.targetUri === "string" ? cfg.targetUri : DEFAULT_TARGET_URI,
       timeoutMs: Math.max(1000, Math.floor(toNumber(cfg.timeoutMs, DEFAULT_TIMEOUT_MS))),
+      contextManagementMode: cfg.contextManagementMode === "openviking" ? "openviking" : "native",
       autoCapture: cfg.autoCapture !== false,
       captureMode: captureMode ?? DEFAULT_CAPTURE_MODE,
       captureMaxLength: Math.max(
@@ -990,7 +998,7 @@ export const memoryOpenVikingConfigSchema = {
     enabledTools: {
       label: "Enabled Tools",
       placeholder: "default",
-      help: "Agent-visible tool allowlist. Accepts tool names or groups: default, all, memory, resource_query, import, recall_trace, archive, tool_result. add_resource also requires enableAddResourceTool=true.",
+      help: "Agent-visible tool allowlist. Accepts tool names or groups: default, all, memory, resource_query, rules, import, recall_trace, archive, tool_result. add_resource also requires enableAddResourceTool=true.",
       advanced: true,
     },
     disabledTools: {

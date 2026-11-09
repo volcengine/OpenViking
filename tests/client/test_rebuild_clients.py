@@ -130,9 +130,9 @@ async def test_async_http_client_reindex_posts_content_reindex():
     ) as mock_handle:
         result = await client.reindex(
             "viking://resources/demo",
-            mode="prune_orphans",
+            mode="vectors_only",
             wait=False,
-            dry_run=True,
+            force=True,
         )
 
     assert result == {"status": "completed"}
@@ -140,9 +140,10 @@ async def test_async_http_client_reindex_posts_content_reindex():
         "/api/v1/content/reindex",
         json={
             "uri": "viking://resources/demo",
-            "mode": "prune_orphans",
+            "mode": "vectors_only",
             "wait": False,
-            "dry_run": True,
+            "force": True,
+            "recursive": True,
         },
     )
     assert mock_handle.called
@@ -161,18 +162,20 @@ def test_sync_http_client_reindex_forwards_to_async_client():
         ) as mock_run:
             result = client.reindex(
                 "viking://resources/demo",
-                mode="prune_orphans",
+                mode="vectors_only",
                 wait=False,
-                dry_run=True,
+                force=True,
             )
 
     assert result == {"status": "accepted"}
     assert mock_run.called
     mock_reindex.assert_called_once_with(
-        uri="viking://resources/demo",
-        mode="prune_orphans",
+        "viking://resources/demo",
+        mode="vectors_only",
         wait=False,
-        dry_run=True,
+        recursive=True,
+        force=True,
+        options=None,
     )
 
 
@@ -193,7 +196,6 @@ async def test_async_http_client_reindex_sends_non_recursive_flag():
             "uri": "viking://resources/demo",
             "mode": "semantic_and_vectors",
             "wait": True,
-            "dry_run": False,
             "recursive": False,
         },
     )
@@ -207,9 +209,7 @@ def test_sync_http_client_reindex_forwards_non_recursive_flag():
         new_callable=Mock,
         return_value={"status": "completed"},
     ) as mock_reindex:
-        with patch(
-            "openviking_sdk.client.run_async", return_value={"status": "completed"}
-        ):
+        with patch("openviking_sdk.client.run_async", return_value={"status": "completed"}):
             client.reindex(
                 "viking://resources/demo",
                 mode="semantic_and_vectors",
@@ -217,11 +217,11 @@ def test_sync_http_client_reindex_forwards_non_recursive_flag():
             )
 
     mock_reindex.assert_called_once_with(
-        uri="viking://resources/demo",
+        "viking://resources/demo",
         mode="semantic_and_vectors",
         wait=True,
-        dry_run=False,
         recursive=False,
+        options=None,
     )
 
 

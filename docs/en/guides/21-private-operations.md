@@ -4,7 +4,7 @@ description: Apply private-delivery configuration changes, prepare upgrades and 
 
 # Enterprise Deployment: Upgrades and Troubleshooting
 
-Use ovadmin and Operators to update configuration, upgrade, and troubleshoot your [Enterprise Deployment](20-private-deployment.md). For open-source container updates, see [server deployment](03-deployment.md); for OpenViking data-model migration, see the [migration guide](../migration/01-user-peer-model.md). Check delivery and runtime versions separately.
+Use ovadmin and Operators to update configuration, upgrade, and troubleshoot your [Enterprise Deployment](20-private-deployment.md). For open-source container updates, see [server deployment](03-deployment.md). Check delivery and runtime versions separately.
 
 ## Applying configuration changes
 
@@ -56,13 +56,18 @@ kubectl -n vikingdb get events --sort-by=.lastTimestamp
 | ImagePullBackOff / failed image check | Full prefix, delivery tag, image synchronization, per-namespace pull Secrets | Fix source configuration or synchronize images, then preview |
 | Pod Pending | Labels, taints, resource requests, PVCs, node affinity | Use Pod / PVC events to distinguish scheduling from storage failures |
 | PVC Pending / no StorageClass reported | Actual classes, kubeconfig context, RBAC for listing classes | Set the appropriate class explicitly; do not delete PVCs as a first response |
-| License not Active | Fingerprint, expiry, system namespace, first CR synchronization | Follow the bundled licensing procedure and check status again |
+| License not Active | Fingerprint, expiry, system namespace, first CR synchronization; for online licensing, network and certificates from the cluster to the license service | Follow the bundled licensing procedure and check status again; for online licensing, `license renew <cluster-name> --yes` renews manually |
 | `license checksum mismatch` | Whether the `.vlic` was issued for this cluster's fingerprint and left unmodified | Do not edit the file; request the original `.vlic` again using this cluster's `fingerprint.json` |
 | API Server fails after resources were submitted | Host-to-API network and API health | After recovery, inspect `cluster get` / `doctor` instead of reinstalling |
 | Workspace Ready but import or retrieval fails | Model credentials, dimensions, API paths, limits, vector service, user key | Run OpenViking P0 and inspect the failed stage |
 | Root Key works for administration but fails on data | Key type used by the application | Use a User / Admin Key |
 | Model configuration did not change | Whether source templates were edited and re-rendered | Run `workspace restart`, then verify model requests |
 | Internal access works but external access fails | Service DNS endpoint, Ingress / LB / TLS | Configure the external entry point and generate matching client configuration |
+| VikingDB Ready, but indexes stay `INIT`; workspace `VectorDBReady` is `False` | `Permission denied: user=root` in `/var/log/tiger/hdfs_upload.log` in the fermat container | Grant `root` write access to the HDFS model directory (see [deployment](20-private-deployment.md#_2-generate-and-edit-configuration)); fermat retries the upload automatically. `slot ... resource not enough` messages in the meta logs are not necessarily the cause |
+| Deployment edit rejected: `direct update is rejected ... managed by VikingDbCluster` | Whether a managed workload was edited directly | Edit `vdb.yaml`, then run `setup apply --module vikingdb` |
+| tbase-api / tbase-scan `Pending` while other components run | Node taints; this release does not render `spec.tbase` `tolerations` | Use `spec.tbase.nodeSelector` to place them on untainted nodes |
+| Apply fails with `namespaces "viking-infra" not found` | `spec.observability.oneAgent.enabled` | Set to `false` if the matching observability stack is not deployed |
+| `open /tmp/openviking-operator-install.yaml: permission denied` | A file with the same name left by another user on the deployment host | Run `setup apply --module openviking` with `TMPDIR=<your-own-directory>` |
 
 ## Evidence for support
 

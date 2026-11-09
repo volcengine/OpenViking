@@ -10,8 +10,8 @@ from openviking.storage.vectordb.collection.result import (
     AggregateResult,
     DataItem,
     FetchDataInCollectionResult,
-    SearchItemResult,
     SearchResult,
+    parse_remote_search_result,
 )
 from openviking.storage.vectordb.collection.volcengine_clients import (
     VIKING_DB_VERSION,
@@ -136,7 +136,13 @@ class VolcengineCollection(ICollection):
         except json.JSONDecodeError:
             return {}
 
-    def _console_get(self, params: Optional[Dict[str, Any]], action: str):
+    def _console_get(
+        self,
+        params: Optional[Dict[str, Any]],
+        action: str,
+        *,
+        raise_on_error: bool = False,
+    ):
         if params is None:
             params = {}
         req_params = {"Action": action, "Version": VIKING_DB_VERSION}
@@ -144,12 +150,16 @@ class VolcengineCollection(ICollection):
         response = self.console_client.do_req("POST", req_params=req_params, req_body=req_body)
 
         if response.status_code != 200:
+            if raise_on_error:
+                raise self._build_response_error(response, action)
             logger.error(str(self._build_response_error(response, action)))
             return {}
         try:
             result = response.json()
             return result.get("Result", {})
         except json.JSONDecodeError:
+            if raise_on_error:
+                raise self._build_response_error(response, action)
             return {}
 
     @staticmethod
@@ -317,12 +327,16 @@ class VolcengineCollection(ICollection):
 
         return self._console_post(data, action="UpdateVikingdbCollection")
 
-    def get_meta_data(self):
+    def get_meta_data(self, *, raise_on_error: bool = False):
         params = {
             "ProjectName": self.project_name,
             "CollectionName": self.collection_name,
         }
-        return self._console_get(params, action="GetVikingdbCollection")
+        return self._console_get(
+            params,
+            action="GetVikingdbCollection",
+            raise_on_error=raise_on_error,
+        )
 
     def close(self):
         pass
@@ -439,7 +453,7 @@ class VolcengineCollection(ICollection):
             "collection_name": self.collection_name,
             "ids": primary_keys,
         }
-        return self._data_post(path, data)
+        return self._data_post(path, data, raise_for_status=True)
 
     def delete_all_data(self):
         path = "/api/vikingdb/data/delete"
@@ -448,7 +462,7 @@ class VolcengineCollection(ICollection):
             "collection_name": self.collection_name,
             "del_all": True,
         }
-        return self._data_post(path, data)
+        return self._data_post(path, data, raise_for_status=True)
 
     def _parse_fetch_result(self, data: Dict[str, Any]) -> FetchDataInCollectionResult:
         result = FetchDataInCollectionResult()
@@ -467,18 +481,7 @@ class VolcengineCollection(ICollection):
         return result
 
     def _parse_search_result(self, data: Dict[str, Any]) -> SearchResult:
-        result = SearchResult()
-        if isinstance(data, dict) and "data" in data:
-            data_list = data.get("data", [])
-            result.data = [
-                SearchItemResult(
-                    id=item.get("id"),
-                    fields=item.get("fields"),
-                    score=item.get("score"),
-                )
-                for item in data_list
-            ]
-        return result
+        return parse_remote_search_result(data)
 
     def search_by_vector(
         self,
@@ -489,6 +492,8 @@ class VolcengineCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
+        return_detail_info: bool = False,
     ) -> SearchResult:
         path = "/api/vikingdb/data/search/vector"
         data = {
@@ -504,6 +509,10 @@ class VolcengineCollection(ICollection):
         }
         if sparse_vector:
             data["sparse_vector"] = sparse_vector
+        if advance is not None:
+            data["advance"] = advance
+        if return_detail_info:
+            data["return_detail_info"] = True
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
 
@@ -593,6 +602,8 @@ class VolcengineCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[List[str]] = None,
     ) -> SearchResult:
         path = "/api/vikingdb/data/search/keywords"
         data = {
@@ -601,6 +612,8 @@ class VolcengineCollection(ICollection):
             "index_name": index_name,
             "keywords": keywords,
             "query": query,
+            "mode": mode,
+            "fields": fields,
             "filter": filters,
             "output_fields": output_fields,
             "limit": limit,
@@ -634,7 +647,7 @@ class VolcengineCollection(ICollection):
             "offset": offset,
             "ignore_unknown_fields": True,
         }
-        resp_data = self._data_post(path, data)
+        resp_data = self._data_post(path, data, raise_for_status=True)
         return self._parse_search_result(resp_data)
 
     def _parse_aggregate_result(

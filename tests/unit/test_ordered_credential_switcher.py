@@ -5,16 +5,8 @@
 
 import pytest
 
-from openviking.utils.model_retry import (
-    ERROR_CLASS_AUTH,
-    ERROR_CLASS_CONTENT_SAFETY,
-    ERROR_CLASS_INPUT_TOO_LARGE,
-    ERROR_CLASS_PERMANENT,
-    ERROR_CLASS_QUOTA_EXCEEDED,
-    ERROR_CLASS_TRANSIENT,
-    ERROR_CLASS_UNKNOWN,
-    OrderedCredentialSwitcher,
-)
+from openviking.models.model_error import ModelErrorKind
+from openviking.utils.model_retry import OrderedCredentialSwitcher
 
 
 class TestOrderedCredentialSwitcher:
@@ -41,14 +33,18 @@ class TestOrderedCredentialSwitcher:
             OrderedCredentialSwitcher(n=-1)
 
     def test_is_fail_fast_classification(self):
-        """Request-level errors are fail-fast; credential/quota/transient are not."""
-        assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_PERMANENT) is True
-        assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_INPUT_TOO_LARGE) is True
-        assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_CONTENT_SAFETY) is True
-        assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_AUTH) is False
-        assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_QUOTA_EXCEEDED) is False
-        assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_TRANSIENT) is False
-        assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_UNKNOWN) is False
+        """Request/unknown errors fail fast; model-routing failures may advance."""
+        assert OrderedCredentialSwitcher.is_fail_fast(ModelErrorKind.INVALID_REQUEST) is True
+        assert OrderedCredentialSwitcher.is_fail_fast(ModelErrorKind.INPUT_TOO_LARGE) is True
+        assert OrderedCredentialSwitcher.is_fail_fast(ModelErrorKind.CONTENT_SAFETY) is True
+        assert OrderedCredentialSwitcher.is_fail_fast(ModelErrorKind.UNKNOWN) is True
+        assert OrderedCredentialSwitcher.is_fail_fast(None) is True
+        assert OrderedCredentialSwitcher.is_fail_fast(ModelErrorKind.AUTHENTICATION_ERROR) is False
+        assert OrderedCredentialSwitcher.is_fail_fast(ModelErrorKind.QUOTA_EXHAUSTED) is False
+        assert (
+            OrderedCredentialSwitcher.is_fail_fast(ModelErrorKind.TRANSIENT_SERVICE_ERROR) is False
+        )
+        assert OrderedCredentialSwitcher.is_fail_fast(ModelErrorKind.MODEL_NOT_FOUND) is False
 
     def test_commit_success_different_index_fast_failover(self):
         """commit_success on a different index commits it as the new active one."""

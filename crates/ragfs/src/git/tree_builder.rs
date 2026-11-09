@@ -469,6 +469,63 @@ pub async fn flatten(
     Ok(result)
 }
 
+/// Compare two trees and return `(path, change)` for every changed blob, where
+/// `change` is `"added"`, `"modified"` or `"deleted"`. Subtrees whose oid is
+/// identical on both sides are skipped without loading them. `None` stands for
+/// an empty tree. Paths are relative to the compared trees, sorted.
+pub async fn diff_trees(
+    store: &dyn ObjectStore,
+    account: &str,
+    base: Option<ObjectId>,
+    head: Option<ObjectId>,
+) -> Result<Vec<(String, &'static str)>, GitError> {
+    let mut out = Vec::new();
+    let mut stack = vec![(String::new(), base, head)];
+    while let Some((prefix, base, head)) = stack.pop() {
+        if base == head {
+            continue;
+        }
+        let mut entries: BTreeMap<BString, (Option<tree::Entry>, Option<tree::Entry>)> =
+            BTreeMap::new();
+        if let Some(oid) = base {
+            for entry in load_tree(store, account, &oid).await?.entries {
+                let name = entry.filename.clone();
+                entries.entry(name).or_default().0 = Some(entry);
+            }
+        }
+        if let Some(oid) = head {
+            for entry in load_tree(store, account, &oid).await?.entries {
+                let name = entry.filename.clone();
+                entries.entry(name).or_default().1 = Some(entry);
+            }
+        }
+        for (name, (old, new)) in entries {
+            let path = if prefix.is_empty() {
+                name.to_string()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            let pick = |e: &Option<tree::Entry>, want_tree: bool| {
+                e.as_ref()
+                    .filter(|e| e.mode.is_tree() == want_tree)
+                    .map(|e| e.oid)
+            };
+            let (old_tree, new_tree) = (pick(&old, true), pick(&new, true));
+            if old_tree.is_some() || new_tree.is_some() {
+                stack.push((path.clone(), old_tree, new_tree));
+            }
+            match (pick(&old, false), pick(&new, false)) {
+                (None, Some(_)) => out.push((path, "added")),
+                (Some(_), None) => out.push((path, "deleted")),
+                (Some(a), Some(b)) if a != b => out.push((path, "modified")),
+                _ => {}
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
 /// Look up a single path in a tree, returning the entry's oid and mode.
 /// Returns `Ok(None)` if the path doesn't exist.
 pub async fn lookup(

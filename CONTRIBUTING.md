@@ -1,6 +1,8 @@
 # Contributing to OpenViking
 
-English / [中文](CONTRIBUTING_CN.md) / [日本語](CONTRIBUTING_JA.md)
+English / [中文](docs/repository/CONTRIBUTING_CN.md) / [日本語](docs/repository/CONTRIBUTING_JA.md)
+
+Maintainer release guides: [English](docs/repository/RELEASE.md) / [中文](docs/repository/RELEASE_CN.md).
 
 Thank you for contributing to OpenViking. This guide exists to help contributors
 submit changes that are clear, focused, and practical to review.
@@ -89,7 +91,7 @@ only the contacts relevant to the change.
 | Storage | RAGFS, PathLock, QueueFS, and encryption | `openviking/storage`, `openviking/pyagfs`, `openviking/crypto`, `crates/ragfs*` | `@baojun-zhang` |
 | Integration | Agent plugins and MCP | `agent-plugins`, memory plugin examples, server MCP | `@t0saki`, `@ZaynJarvis` |
 | Integration | VikingBot and agent compilation | `bot`, `ov compile` | `@yeshion23333`, `@fujiajie666` |
-| Client | SDKs, CLI, and LangChain | `sdk`, `crates/ov_cli`, `examples/langchain` | `@zhoujh01`, `@t0saki`, `@ehz0ah` |
+| Client | SDKs, CLI, and LangChain | `sdk`, `crates/ov_cli`, `integrations/frameworks/langchain` | `@zhoujh01`, `@t0saki`, `@ehz0ah` |
 | Product | Web Studio | `web-studio` | `@yufeng201`, `@ZaynJarvis` |
 | Project | Documentation, CI, and plugin releases | `docs`, `.github/workflows` | `@yufeng201`, `@ZaynJarvis` |
 

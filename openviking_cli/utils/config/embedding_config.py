@@ -454,6 +454,13 @@ class EmbeddingModelConfig(BaseModel):
 
             return get_cohere_model_default_dimension(model)
 
+        if provider == "jina":
+            from openviking.models.embedder.jina_embedders import (
+                get_jina_model_default_dimension,
+            )
+
+            return get_jina_model_default_dimension(model)
+
         if provider == "gemini":
             from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 
@@ -476,7 +483,7 @@ class EmbeddingModelConfig(BaseModel):
             except ImportError:
                 return 1024
 
-        # Providers without a known dimension lookup (volcengine, jina,
+        # Providers without a known dimension lookup (volcengine,
         # vikingdb, ollama for unlisted models, etc.) cannot be cross-checked
         # here without an explicit dimension. Return None so validation skips
         # them; same-provider credentials are typically dimension-compatible
@@ -539,6 +546,13 @@ class EmbeddingModelConfig(BaseModel):
             )
 
             return get_cohere_model_default_dimension(effective_model)
+
+        if provider == "jina":
+            from openviking.models.embedder.jina_embedders import (
+                get_jina_model_default_dimension,
+            )
+
+            return get_jina_model_default_dimension(effective_model)
 
         if provider == "gemini":
             from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
@@ -640,7 +654,7 @@ class EmbeddingConfig(BaseModel):
     max_concurrent: int = Field(
         default=10,
         ge=1,
-        description="Maximum number of concurrent embedding requests",
+        description="Maximum concurrent document embedding requests; retrieval queries bypass this limit",
     )
     max_retries: int = Field(
         default=3,
@@ -730,6 +744,7 @@ class EmbeddingConfig(BaseModel):
             LocalDenseEmbedder,
             MinimaxDenseEmbedder,
             OpenAIDenseEmbedder,
+            RetryEmbedder,
             VikingDBDenseEmbedder,
             VikingDBHybridEmbedder,
             VikingDBSparseEmbedder,
@@ -1007,7 +1022,12 @@ class EmbeddingConfig(BaseModel):
                 "google-genai is not installed. Install it with: pip install openviking[gemini]"
             )
         params = param_builder(config)
-        return embedder_class(**params)
+        embedder = embedder_class(**params)
+        if provider == "local":
+            return embedder
+        if isinstance(embedder, RetryEmbedder):
+            return embedder
+        return RetryEmbedder(embedder)
 
     def get_embedder(self):
         """Get embedder instance based on configuration.

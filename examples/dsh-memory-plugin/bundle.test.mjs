@@ -19,12 +19,17 @@ test("bundle uses neutral DSH naming and bounded peers", async () => {
 
   assert.equal(manifest.name, "@openviking/dsh-memory-plugin");
   assert.equal(manifest.dependencies, undefined);
+  // DSH checks dsh peers at load time with prereleases included in ranges.
+  const dshRange = { includePrerelease: true };
   for (const [name, range] of Object.entries(manifest.peerDependencies)) {
-    for (const version of ["0.1.0-rc.6", "0.1.5-rc.1", "0.1.5-rc.2", "0.1.5"]) {
-      assert.ok(semver.satisfies(version, range), `${name} must accept ${version}`);
+    for (const version of [
+      "0.1.0-rc.6", "0.1.5-rc.1", "0.1.5-rc.2", "0.1.5", "0.1.7-rc.2",
+      "0.2.0-rc.2", "0.2.1-alpha.1", "0.2.1-rc.3", "0.3.0",
+    ]) {
+      assert.ok(semver.satisfies(version, range, dshRange), `${name} must accept ${version}`);
     }
-    for (const version of ["0.0.1-rc.3", "0.1.0-rc.5", "0.1.5-alpha.2", "0.2.0-rc.1", "0.2.0"]) {
-      assert.ok(!semver.satisfies(version, range), `${name} must reject ${version}`);
+    for (const version of ["0.0.1-rc.3", "0.1.0-rc.5", "1.0.0-rc.1", "1.0.0"]) {
+      assert.ok(!semver.satisfies(version, range, dshRange), `${name} must reject ${version}`);
     }
     assert.equal(manifest.devDependencies[name], "0.1.0-rc.6", `${name} must test the minimum`);
   }
@@ -53,6 +58,23 @@ test("the runtime and package lock report the published package version", async 
   assert.equal(PLUGIN_VERSION, manifest.version);
   assert.equal(lock.version, manifest.version);
   assert.equal(lock.packages[""].version, manifest.version);
+  assert.deepEqual(lock.packages[""].peerDependencies, manifest.peerDependencies);
+});
+
+// DSH's Plugins page shows the file locale `meta.detail` names instead of the
+// README. It rejects a root-level document, a path outside the package, and a
+// named file that does not exist, and the npm package only has what `files` lists.
+test("each locale's detail document exists and ships with the package", async () => {
+  const manifest = JSON.parse(await readFile(new URL("./package.json", import.meta.url), "utf8"));
+  for (const language of ["en", "zh"]) {
+    const { meta } = JSON.parse(await readFile(new URL(`./locale/${language}.json`, import.meta.url), "utf8"));
+    const segments = meta.detail.split("/");
+    assert.ok(segments.length > 1, `${language}: ${meta.detail} must sit in a subdirectory`);
+    assert.ok(segments.every(s => s && s !== "." && s !== ".."), `${language}: ${meta.detail}`);
+    assert.match(meta.detail, /\.md$/);
+    await readFile(join(PLUGIN_DIR, meta.detail), "utf8");
+    assert.ok(manifest.files.includes(`${segments[0]}/`), `${segments[0]}/ must be in files`);
+  }
 });
 
 test("plugin source tree contains no product-specific identifier", async () => {

@@ -18,6 +18,7 @@ class FieldType(str, Enum):
     INT64 = "int64"
     FLOAT32 = "float32"
     BOOL = "bool"
+    STRING_LIST = "string_list"
 
 
 # ============================================================================
@@ -29,6 +30,7 @@ _FIELD_TYPE_TO_PYTHON: Dict[FieldType, Type[Any]] = {
     FieldType.INT64: int,
     FieldType.FLOAT32: float,
     FieldType.BOOL: bool,
+    FieldType.STRING_LIST: List[str],
 }
 
 
@@ -40,7 +42,7 @@ def get_python_type_for_field(field_type: FieldType, default: Type[Any] = str) -
         default: Default type if field_type is not recognized
 
     Returns:
-        Corresponding Python type (str, int, float, or bool)
+        Corresponding Python type (str, int, float, bool, or List[str])
     """
     return _FIELD_TYPE_TO_PYTHON.get(field_type, default)
 

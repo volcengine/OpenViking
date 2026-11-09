@@ -479,6 +479,22 @@ pub fn parse_show_max_blob_bytes(kwargs: &Bound<PyDict>) -> PyResult<Option<u64>
     }
 }
 
+pub struct DiffPathsRequest {
+    pub account: String,
+    pub base: Option<String>,
+    pub head: String,
+    pub paths: Vec<String>,
+}
+
+pub fn parse_diff_paths_request(kwargs: &Bound<PyDict>) -> PyResult<DiffPathsRequest> {
+    Ok(DiffPathsRequest {
+        account: require_str(kwargs, "account")?,
+        base: optional_str(kwargs, "base")?,
+        head: require_str(kwargs, "head")?,
+        paths: optional_string_list(kwargs, "paths")?.unwrap_or_default(),
+    })
+}
+
 pub fn parse_log_request(kwargs: &Bound<PyDict>) -> PyResult<LogRequest> {
     Ok(LogRequest {
         account: require_str(kwargs, "account")?,

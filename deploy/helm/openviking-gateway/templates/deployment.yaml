@@ -1,0 +1,129 @@
+{{- $sqlite := include "openviking-gateway.sqlite" . -}}
+{{- if and $sqlite (gt (int .Values.replicaCount) 1) -}}
+{{- fail "SQLite storage requires replicaCount: 1; set both config.storage.kernel and config.storage.management to redis for multiple replicas" -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "openviking-gateway.fullname" . }}
+  labels:
+    {{- include "openviking-gateway.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    {{- if $sqlite }}
+    type: Recreate
+    {{- else }}
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+    {{- end }}
+  selector:
+    matchLabels:
+      {{- include "openviking-gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- mergeOverwrite (deepCopy .Values.podLabels) (include "openviking-gateway.selectorLabels" . | fromYaml) | toYaml | nindent 8 }}
+      annotations:
+        {{- $checksum := include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- mergeOverwrite (deepCopy .Values.podAnnotations) (dict "checksum/config" $checksum) | toYaml | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: {{ include "openviking-gateway.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["openviking-gateway"]
+          ports:
+            - name: http
+              containerPort: 1935
+          env:
+            - name: OPENVIKING_GATEWAY_CONFIG_FILE
+              value: /etc/openviking-gateway/gateway.conf
+            {{- if .Values.existingSecret }}
+            - name: OPENVIKING_GATEWAY_MANAGEMENT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: management-key
+                  optional: true
+            - name: OPENVIKING_GATEWAY_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: redis-password
+                  optional: true
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "15"]
+          startupProbe:
+            {{- toYaml .Values.startupProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/openviking-gateway/gateway.conf
+              subPath: gateway.conf
+              readOnly: true
+            - name: data
+              mountPath: /app/.openviking
+            {{- if include "openviking-gateway.rootKey" . }}
+            - name: root-key
+              mountPath: /etc/openviking-gateway/keys
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "openviking-gateway.fullname" . }}-config
+        - name: data
+          {{- if and $sqlite .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-data" (include "openviking-gateway.fullname" .)) .Values.persistence.existingClaim }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if include "openviking-gateway.rootKey" . }}
+        - name: root-key
+          secret:
+            defaultMode: 0600
+            secretName: {{ required "existingSecret must contain root-key for local/KMS encryption" .Values.existingSecret }}
+            items:
+              - key: root-key
+                path: root-key
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

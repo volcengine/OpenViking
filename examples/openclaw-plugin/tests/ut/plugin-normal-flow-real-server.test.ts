@@ -232,14 +232,7 @@ describe("plugin normal flow with healthy backend", () => {
       messages: [{ role: "user", content: "fallback" }],
     });
 
-    expect(assembled.messages[0]).toEqual({
-      role: "user",
-      content: "[Session History Summary]\nEarlier work focused on backend stack choices.",
-    });
-    expect(assembled.messages[1]).toEqual({
-      role: "assistant",
-      content: [{ type: "text", text: "Stored answer from OpenViking." }],
-    });
+    expect(assembled.messages).toEqual([{ role: "user", content: "fallback" }]);
 
     const transformed = await contextEngine.assemble({
       sessionId: "session-normal",
@@ -298,7 +291,7 @@ describe("plugin normal flow with healthy backend", () => {
     expect(recallRequests.map((entry) => JSON.parse(entry.body ?? "{}").dedup_turns)).toEqual([0, 5]);
     expect(
       requests.some((entry) => entry.method === "GET" && entry.path.startsWith("/api/v1/sessions/session-normal/context")),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       requests.some((entry) => entry.method === "POST" && entry.path === "/api/v1/sessions/session-normal/messages"),
     ).toBe(true);

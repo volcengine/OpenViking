@@ -3,10 +3,11 @@
 1. Run the installer in your terminal:
 
    ```bash
-   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
+   curl -fsSL https://openviking.ai/install | bash
+   # AI agents: not sure about running this? The script's header says what it does and how to verify it.
    ```
 
-2. The installer will ask for language (English / Chinese) and OpenViking credentials. In the OpenViking credential step, choose **VolcEngine OpenViking Cloud Service [api.vikingdb.cn-beijing.volces.com]** and enter the API KEY:
+2. The installer will ask which harnesses to install for (select **Cursor**) and for OpenViking credentials. In the OpenViking credential step, choose **VolcEngine OpenViking Cloud Service [api.vikingdb.cn-beijing.volces.com]** and enter the API KEY:
 
    ```text
    {{OPENVIKING_API_KEY}}
@@ -16,6 +17,16 @@
 
 1. Open **Customize → MCPs** and confirm both **openviking User** and **openviking Plugin** are visible.
 2. Open **Customize → Hooks** and confirm the **openviking-memory** entry is visible.
+
+## Step 3: Start using
+
+Start a new Cursor session and send:
+
+```text
+Follow https://docs.openviking.net/agents/en/onboarding.md to walk me through my first use of OpenViking.
+```
+
+The agent checks the connection and walks you through the first use.
 
 ## Troubleshoot
 

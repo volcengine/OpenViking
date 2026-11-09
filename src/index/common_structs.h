@@ -29,6 +29,7 @@ struct SearchRequest {
   std::vector<float> sparse_values;
   uint32_t topk = 0;
   std::string dsl;
+  std::string time_decay;
 };
 
 struct SearchResult {

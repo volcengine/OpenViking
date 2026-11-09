@@ -12,6 +12,64 @@ When the copies are made follows how the plugin is delivered. Claude Code, Codex
 > caller's own context space through `viking://~/memories` and `viking://~/skills`; the uid-less
 > `viking://user/memories` shorthand is rejected by newer servers.
 
+## Installer
+
+`install.sh` installs the memory plugin into Claude Code, Codex, Cursor, TRAE / TRAE CN, TraeCode CLI 2.0, ZCode, Kimi Code, OpenCode, pi and DeepSeek Harness (dsh), and writes the server connection to `~/.openviking/ovcli.conf`. Its header comment lists the hosts it contacts and the files it writes for each harness; `--help` lists every option and environment variable.
+
+```bash
+curl -fsSL https://openviking.ai/install | bash
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
+
+# Without prompts:
+curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness claude,codex --url <server-url> --api-key <api-key>
+```
+
+`https://openviking.ai/install` and `https://openviking.net/install` serve `bootstrap.sh`, which downloads `install.sh` and runs it with the arguments it was given.
+
+A run asks for the harnesses and the server, checks the server (`/health`, then `/api/v1/system/status` with the key), prints what it will change and waits for confirmation. Nothing is written before that. With `--yes`, or when no terminal is available, it asks nothing and proceeds.
+
+Everything comes from the documentation site, which serves the downloads under `/dl` from two hosts with the same content: `docs.openviking.net` and `docs.openviking.ai` (GitHub Pages). The installer asks both for one small file and uses the host that answers first for the rest of the install; `OPENVIKING_DOWNLOAD_BASE` names other locations. Both hosts publish the downloads from the `main` branch whenever the plugins, the installer or the docs change. The installer never contacts github.com and never runs git.
+
+- Claude Code 2.1.224 and newer registers a URL marketplace and updates the plugin on its own. Older 2.x builds, custom Claude-format CLIs, and a URL marketplace that cannot be registered fall back to a local directory marketplace from the plugin bundle. Claude Code without `claude plugin` (older than 2.0) is skipped with a hint to upgrade.
+- Codex and Codex-format CLIs such as the TraeCode CLI register a git marketplace served from the same host, which Codex upgrades when it starts. When that fails they fall back to the directory marketplace from the bundle.
+- Cursor, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode and pi install files from the plugin bundle `memory-plugin-marketplace.zip`, downloaded at most once per run into `~/.openviking/memory-plugin-marketplace`. They update when the installer runs again.
+- dsh installs `@openviking/dsh-memory-plugin` from npm through `dsh plugin add`.
+
+After the confirmation the installer runs a version check: it asks `https://openviking.ai/install/v1/<harness>.json` which release to install, once per selected harness. `OPENVIKING_SKIP_VERSION_CHECK=1` skips the check and installs the latest release, which is also what happens when the check fails. The answer names one download location, and the installer reads the same paths from the one it is using. When the answer names a checksum, the bundle is verified against it; the docs site holds the latest release only and publishes none, so there the answer names the version that is installed.
+
+Run from a repository checkout, the installer uses that checkout's plugins (`--source dev`) and downloads nothing from the release; `--source archive` or `--dist tos` installs the release instead. `--dist github`, `--source remote` and `OPENVIKING_REPO_URL` / `OPENVIKING_REPO_REF` / `OPENVIKING_REPO_BRANCH` are accepted and ignored with a notice; to install a branch, run `install.sh` from a checkout of it.
+
+`--uninstall --harness <list>` removes the Cursor, TRAE, TRAE CN, ZCode and Kimi Code integrations. Claude Code, Codex, OpenCode, pi and dsh are removed with their own commands, which the installer prints at the end of an install.
+
+Cursor skill upgrades and removal require a matching installer ownership record
+under `$OPENVIKING_HOME/cursor-skill-ownership` (default `~/.openviking`).
+Existing unmanaged skills, symlinks, and skills modified after installation are
+preserved with a warning. Copies installed before ownership tracking are also
+preserved; move them aside yourself if you want the installer to manage a fresh copy.
+
+The install ends with a "Not done" list, when something that was asked for did not happen (a selected harness whose CLI was not found, a server that could not be reached or rejected the key, a CLI that npm could not install), and then a line linking the agent onboarding guide, `https://docs.openviking.<host>/agents/<en|zh>/onboarding.md`, on the docs host the downloads came from and in the installer's language. Run from inside a dsh session (`DSH_SHELL=1`), the dsh plugin goes into that session's profile (`DSH_PROFILE`) unless `--dsh-profile` names another.
+
+## Importing earlier sessions
+
+`import-history.mjs` replays recent Claude Code or Codex sessions from this machine into OpenViking, so work done before the plugin was installed is remembered too. It is one file with no dependencies (Node.js 18+), published next to the installer:
+
+```bash
+curl -fsSLO https://docs.openviking.ai/dl/memory-plugin-shared/import-history.mjs   # or docs.openviking.net
+node import-history.mjs --harness claude            # report what would be imported
+node import-history.mjs --harness claude --yes      # import it
+```
+
+By default it takes the sessions of the current project (the repository the current directory belongs to) active in the last 14 days, at most 20, and skips sessions active in the last 2 hours. To import only some of them, `--list` prints the sessions in scope with their ids and the first and last request of each (up to 200 unless `--max-sessions` is given, with a line naming the option that widens the scope when it left sessions out), and `--session <id>[,<id>...]` imports just those, whatever their project or age. An exact id always wins over a prefix; an id that matches nothing importable, or more than one session, refuses the run. `--help` lists the options. It uses the plugins' connection (`~/.openviking/ovcli.conf`, or `OPENVIKING_URL` / `OPENVIKING_API_KEY`) and writes each session the way the plugins would see it:
+
+- session id `import__<claude_code|codex>__<native id>`, the id `openviking-server ingest` uses, so the two never import a session twice;
+- the peer the plugins derive for the session's working directory (see [Workspace Peers](#workspace-peers)), so imported and live sessions of one repository share their memories;
+- user and assistant text only, with the original timestamps; tool calls and their output are dropped, and API keys, tokens and `--api-key` arguments are redacted;
+- auto-commit off and one commit per session, so each session is extracted once.
+
+A session that was already imported, or that the plugin already captured, is skipped, so a second run imports nothing. A run that stopped half way picks up where it left off.
+
+Other agents (Cursor, TRAE, TRAE CN, TRAE CLI, ZCode, Kimi Code, CodeBuddy Code, OpenCode, pi, dsh, OpenClaw, Hermes) have no built-in reader. A small converter writes their sessions to a JSONL file, one session per line (`{"id", "cwd", "messages": [{"role", "text", "created_at"}], "updated_at", "subagent"}`, documented in `--help`), and `node import-history.mjs --harness opencode --input sessions.jsonl` imports it with everything above: the same filters, redaction and single commit, the ingest source name in the session id where `openviking-server ingest` has one, and the host plugin's own live session id and peer, so nothing is imported twice. A malformed line refuses the whole file, with its line number. OpenClaw and Hermes name their peers after the agent, so no peer is derived for them unless `--peer` gives one.
+
 ## Workspace Peers
 
 `lib/workspace-peer.mjs` decides which peer a workspace writes its memories under; `lib/workspace-identity.mjs` derives the values it substitutes.
@@ -86,7 +144,7 @@ Every harness resolves every knob through that order: claude-code, codex, cursor
 
 The knobs themselves are declared once in `lib/config-schema.mjs`, with each one's type, default, range, `OPENVIKING_*` variable and older spellings. An older spelling keeps working: `syncTurns` sets `autoCapture`, `bypassPatterns` sets `bypassSessionPatterns`, `recallRewrite` sets `recallCompress`, `requestTimeoutMs` sets `timeoutMs`, `recallBudget` sets `recallTokenBudget`, `recallScoreThreshold` sets `scoreThreshold`, `recallMinQueryLength` sets `minQueryLength`, `profileBudget` sets `profileTokenBudget`, `recallCompressReasoningEffort` sets `recallCompressThinking`, `auth_mode` sets `authMode`, and `peer_id` sets `peerId`.
 
-Every file declares `version: 1`; one declaring another version is skipped with a warning. Schema v1 is `peer.source`, `peer.id`, `recall.enabled`, `recall.peer_scope`, `recall.dedup_turns`, `recall.max_items`, `recall.score_threshold`, `capture.enabled`, `capture.commit_token_threshold`, `bypass.session_patterns`, and `labels`. Lists union across layers, and a leading `"!reset"` clears what was inherited. Unknown keys are kept and ignored.
+Every file declares `version: 1`; one declaring another version is skipped with a warning. Schema v1 is `peer.source`, `peer.id`, `recall.enabled`, `recall.peer_scope`, `recall.dedup_turns`, `recall.max_items`, `recall.score_threshold`, `capture.enabled`, `capture.commit_token_threshold`, `bypass.session_patterns`, `usage.view`, `usage.output`, and `labels`. Lists union across layers, and a leading `"!reset"` clears what was inherited. Unknown keys are kept and ignored.
 
 Workspace files are trusted without a prompt: a hook is non-interactive, and an approval gate would degrade into one command per workspace. What is refused instead is structural — connection and credential keys (`url`, `api_key`, `account`, `user`, `extra_headers`, …) are stripped with a warning and `${VAR}` is never expanded in these files. What a committed file switches off is announced in `ov-memory-doctor` rather than blocked.
 

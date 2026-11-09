@@ -35,12 +35,18 @@ pub mod cache;
 pub mod cache_runtime;
 pub mod core;
 pub mod crypto;
+pub mod git;
+pub mod global_policy;
+#[cfg(feature = "cache")]
+pub mod leader;
 pub mod lock;
 pub mod metrics;
 pub mod multibackend;
-pub mod git;
 pub mod plugins;
+pub mod privacy_extractor;
+pub mod privacy_matcher;
 pub mod shape;
+pub mod write_hook;
 
 // Re-export core types for convenience
 pub use core::{

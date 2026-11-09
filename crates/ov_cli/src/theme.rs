@@ -33,15 +33,20 @@ impl ThemeColor {
     }
 }
 
+#[cfg(test)]
+const BRAND_SIGNAL: Rgb = Rgb(79, 214, 240);
+
+/// OpenViking brand deep teal (#0A7C93). Readable on both light and dark
+/// terminals, so it is the accent for borders, commands and headings.
+pub(crate) const BRAND_DEEP_TEAL: Rgb = Rgb(10, 124, 147);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CliTheme {
-    pub(crate) wordmark_start: Rgb,
-    pub(crate) wordmark_mid: Rgb,
-    pub(crate) wordmark_end: Rgb,
-    pub(crate) logo_end: Rgb,
-    pub(crate) tagline_start: Rgb,
-    pub(crate) tagline_mid: Rgb,
-    pub(crate) tagline_end: Rgb,
+    /// Solid ink for the braille mark, readable on both terminal backgrounds.
+    pub(crate) mark: Rgb,
+    /// Block-letter wordmark. The brand wordmark is Paper on dark and Ink on
+    /// light, which is what the terminal default foreground already gives.
+    pub(crate) wordmark: ThemeColor,
     pub(crate) border: ThemeColor,
     pub(crate) version: ThemeColor,
     pub(crate) brand_title: ThemeColor,
@@ -66,20 +71,15 @@ pub(crate) fn active_theme() -> CliTheme {
 
 pub(crate) fn palette() -> CliTheme {
     CliTheme {
-        wordmark_start: Rgb(22, 181, 166),
-        wordmark_mid: Rgb(0, 140, 132),
-        wordmark_end: Rgb(5, 86, 80),
-        logo_end: Rgb(5, 86, 80),
-        tagline_start: Rgb(0, 128, 128),
-        tagline_mid: Rgb(0, 112, 190),
-        tagline_end: Rgb(0, 128, 128),
-        border: ThemeColor::TrueColor(Rgb(0, 128, 128)),
-        version: ThemeColor::TrueColor(Rgb(0, 128, 128)),
-        brand_title: ThemeColor::TrueColor(Rgb(0, 128, 128)),
+        mark: BRAND_DEEP_TEAL,
+        wordmark: ThemeColor::DefaultFg,
+        border: ThemeColor::TrueColor(BRAND_DEEP_TEAL),
+        version: ThemeColor::TrueColor(BRAND_DEEP_TEAL),
+        brand_title: ThemeColor::TrueColor(BRAND_DEEP_TEAL),
         body: ThemeColor::DefaultFg,
         muted: ThemeColor::Dim,
-        command: ThemeColor::TrueColor(Rgb(0, 128, 128)),
-        heading: ThemeColor::TrueColor(Rgb(0, 128, 128)),
+        command: ThemeColor::TrueColor(BRAND_DEEP_TEAL),
+        heading: ThemeColor::TrueColor(BRAND_DEEP_TEAL),
         value: ThemeColor::TrueColor(Rgb(0, 112, 190)),
         sky_value: ThemeColor::TrueColor(Rgb(0, 112, 190)),
         success: ThemeColor::TrueColor(Rgb(0, 133, 90)),
@@ -188,6 +188,23 @@ pub(crate) fn style_rgb_for_level(
             ansi_style(text, &format!("38;5;{}", ansi256_index_for_rgb(rgb)), bold)
         }
         ColorLevel::Ansi16 => ansi_style(text, &ansi16_fg_code_for_rgb(rgb).to_string(), bold),
+    }
+}
+
+/// Styles `text` with a semantic theme color at an explicit color level, so
+/// callers that already resolved the level (banner art) stay deterministic.
+pub(crate) fn style_theme_color_for_level(
+    text: impl AsRef<str>,
+    color: ThemeColor,
+    bold: bool,
+    level: ColorLevel,
+) -> String {
+    let text = text.as_ref();
+    match (color, level) {
+        (_, ColorLevel::NoColor) => text.to_string(),
+        (ThemeColor::TrueColor(rgb), _) => style_rgb_for_level(text, rgb, bold, level),
+        (ThemeColor::DefaultFg, _) => ansi_style(text, "39", bold),
+        (ThemeColor::Dim, _) => ansi_style(text, "2", bold),
     }
 }
 
@@ -363,8 +380,9 @@ fn relative_luminance(color: Rgb) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        CliTheme, ColorLevel, Rgb, ThemeColor, active_theme, ansi256_index_for_rgb, palette,
-        relative_luminance, style_rgb_for_level, terminal_color_level_from_env,
+        BRAND_DEEP_TEAL, BRAND_SIGNAL, CliTheme, ColorLevel, Rgb, ThemeColor, active_theme,
+        ansi256_index_for_rgb, palette, relative_luminance, style_rgb_for_level,
+        style_theme_color_for_level, terminal_color_level_from_env,
     };
 
     const PALE_PEARL: Rgb = Rgb(234, 253, 247);
@@ -455,6 +473,50 @@ mod tests {
             assert_min_contrast(name, color, WHITE, 4.0);
             assert_min_contrast(name, color, BLACK, 4.0);
         }
+    }
+
+    #[test]
+    fn brand_colors_match_the_openviking_brand_manual() {
+        assert_eq!(BRAND_SIGNAL, Rgb(0x4F, 0xD6, 0xF0));
+        assert_eq!(BRAND_DEEP_TEAL, Rgb(0x0A, 0x7C, 0x93));
+    }
+
+    #[test]
+    fn signal_cyan_never_carries_text() {
+        // The brand forbids Signal on light backgrounds, and the CLI cannot
+        // see the terminal background, so the CLI uses solid deep teal for the mark and accents.
+        let palette = palette();
+        for (name, color) in accent_colors(palette) {
+            assert_ne!(
+                color,
+                ThemeColor::TrueColor(BRAND_SIGNAL),
+                "{name} must not be Signal"
+            );
+        }
+        assert!(contrast_ratio(BRAND_SIGNAL, WHITE) < 4.0);
+        assert!(contrast_ratio(BRAND_DEEP_TEAL, WHITE) >= 4.5);
+        assert!(contrast_ratio(BRAND_DEEP_TEAL, BLACK) >= 4.0);
+    }
+
+    #[test]
+    fn theme_color_styling_respects_the_color_level() {
+        assert_eq!(
+            style_theme_color_for_level("OV", ThemeColor::DefaultFg, true, ColorLevel::TrueColor),
+            "\u{1b}[1;39mOV\u{1b}[0m"
+        );
+        assert_eq!(
+            style_theme_color_for_level("OV", ThemeColor::DefaultFg, true, ColorLevel::NoColor),
+            "OV"
+        );
+        assert_eq!(
+            style_theme_color_for_level(
+                "OV",
+                ThemeColor::TrueColor(BRAND_DEEP_TEAL),
+                false,
+                ColorLevel::Ansi256
+            ),
+            "\u{1b}[38;5;30mOV\u{1b}[0m"
+        );
     }
 
     #[test]

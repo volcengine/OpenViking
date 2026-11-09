@@ -316,7 +316,7 @@ class DeleteDataRequest(_RequestBase):
 
 
 class SearchRequest(_RequestBase):
-    __slots__ = ("query", "sparse_raw_terms", "sparse_values", "topk", "dsl")
+    __slots__ = ("query", "sparse_raw_terms", "sparse_values", "topk", "dsl", "time_decay")
 
     def __init__(self):
         self.query = []
@@ -324,6 +324,7 @@ class SearchRequest(_RequestBase):
         self.sparse_values = []
         self.topk = 0
         self.dsl = ""
+        self.time_decay = ""
 
 
 class SearchResult:

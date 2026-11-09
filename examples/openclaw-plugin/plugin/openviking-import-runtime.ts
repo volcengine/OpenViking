@@ -12,14 +12,12 @@ export type OpenVikingImportRuntimeResourceInput = {
   reason?: string;
   instruction?: string;
   wait?: boolean;
-  timeout?: number;
 };
 
 export type OpenVikingImportRuntimeSkillInput = {
   source?: string;
   data?: unknown;
   wait?: boolean;
-  timeout?: number;
 };
 
 export type OpenVikingImportRuntimeToolResult = {
@@ -90,7 +88,6 @@ export function createOpenVikingImportRuntime(deps: OpenVikingImportRuntimeDeps)
       reason: input.reason,
       instruction: input.instruction,
       wait: input.wait,
-      timeout: input.timeout,
     }, agentId);
 
   const addSkillOpenViking = (input: OpenVikingImportRuntimeSkillInput, agentId?: string) =>
@@ -98,7 +95,6 @@ export function createOpenVikingImportRuntime(deps: OpenVikingImportRuntimeDeps)
       path: input.source,
       data: input.data,
       wait: input.wait,
-      timeout: input.timeout,
     }, agentId);
 
   return { addResourceOpenViking, addSkillOpenViking };

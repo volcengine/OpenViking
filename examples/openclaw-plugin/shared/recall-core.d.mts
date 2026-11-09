@@ -85,3 +85,4 @@ export function estimateTokens(text: string): number;
 export function isRecallEnabled(cfg?: Record<string, any>): boolean;
 
 export function selectRecallContent(result?: { rendered?: string; digest?: string; stats?: Record<string, unknown> }): string;
+export const RECALL_CONTEXT_TEMPLATE: string;

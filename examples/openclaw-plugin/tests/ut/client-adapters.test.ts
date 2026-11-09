@@ -132,7 +132,7 @@ describe("OpenVikingClient adapter seams", () => {
       },
     });
 
-    const result = await client.commitSession("session-1", { wait: true, timeoutMs: 2_000, agentId: "runtime-agent" });
+    const result = await client.commitSession("session-1", { wait: true, agentId: "runtime-agent" });
 
     expect(result).toMatchObject({
       status: "completed",
@@ -157,11 +157,11 @@ describe("OpenVikingClient adapter seams", () => {
       transport,
       now: () => now,
       sleep: async (ms) => {
-        now += ms;
+        now += 150_000;
       },
     });
 
-    const result = await client.commitSession("slow-session", { wait: true, timeoutMs: 1_000 });
+    const result = await client.commitSession("slow-session", { wait: true });
 
     expect(result).toMatchObject({ status: "timeout", task_id: "task-timeout" });
     expect(transport.mock.calls.map(([url]) => url)).toEqual([

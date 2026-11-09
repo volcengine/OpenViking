@@ -2,7 +2,7 @@ apiVersion: v2
 name: openviking
 description: OpenViking - The Context Database for AI Agents
 type: application
-version: 0.1.1
+version: 0.2.0
 keywords:
   - openviking
   - ai

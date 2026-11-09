@@ -17,13 +17,25 @@ class ReadFileTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Read the contents of a file at the given path."
+        return "Read a text file, optionally selecting a range of lines with offset and limit."
 
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "The file path to read"}},
+            "properties": {
+                "path": {"type": "string", "description": "The file path to read"},
+                "offset": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Starting line number (1-based, defaults to 1).",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Maximum lines to return; omitted reads to the end of the file.",
+                },
+            },
             "required": ["path"],
         }
 
@@ -31,11 +43,30 @@ class ReadFileTool(Tool):
     def resource_inputs(self) -> dict[str, str]:
         return {"path": "local_file"}
 
-    async def execute(self, tool_context: "ToolContext", path: str, **kwargs: Any) -> str:
+    async def execute(
+        self,
+        tool_context: "ToolContext",
+        path: str,
+        offset: int = 1,
+        limit: int | None = None,
+        **kwargs: Any,
+    ) -> str:
+        """Return the selected lines with original line endings, or an error string.
+
+        Offset is 1-based; a zero limit or an offset past EOF returns an empty string.
+        Omitting both bounds preserves the complete file content on every sandbox backend.
+        """
+        if offset < 1 or (limit is not None and limit < 0):
+            return "Error: offset must be >= 1 and limit must be >= 0"
         try:
             sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
             content = await sandbox.read_file(path)
-            return content
+            if offset == 1 and limit is None:
+                return content
+            start = offset - 1
+            return "".join(
+                content.splitlines(keepends=True)[start : None if limit is None else start + limit]
+            )
         except FileNotFoundError as e:
             return f"Error: {e}"
         except IOError as e:

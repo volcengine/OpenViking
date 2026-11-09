@@ -1,6 +1,6 @@
 # 资源管理
 
-资源是智能体可以引用的外部知识。本模块提供资源的添加、导入/导出、临时文件上传等功能。
+资源是智能体可以引用的外部知识。本页介绍资源导入、定时更新和临时文件上传。目录规划见[数据组织指引](../guides/23-data-organize.md)，数据包导出与导入见 [OVPack](14-ovpack.md)。
 
 ## 核心概念
 
@@ -8,7 +8,8 @@
 
 OpenViking 支持多种资源类型，按照功能分类如下：
 
-文档类
+**文档类**
+
 | 类型 | 扩展名 | 说明 |
 |------|--------|------|
 | PDF | `.pdf` | 支持本地解析和 MinerU API 转换 |
@@ -18,13 +19,15 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 | 纯文本 | `.txt`, `.text` | 直接导入处理 |
 | EPUB | `.epub` | 基于 anydoc 将电子书内容和嵌入图片转换为 Markdown |
 
-表格类
+**表格类**
+
 | 类型 | 扩展名 | 说明 |
 |------|--------|------|
 | Excel | `.xlsx`, `.xls`, `.xlsm`, `.xlsb`, `.ods`, `.csv` | 基于 anydoc 按工作表转换为 Markdown 表格 |
 | PowerPoint | `.pptx`, `.ppt`, `.pptm`, `.pps`, `.ppsx`, `.ppsm`, `.pot`, `.odp` | 基于 anydoc 按幻灯片提取内容和嵌入图片并转换为 Markdown |
 
-代码类
+**代码类**
+
 | 类型 | 资源名 | 说明 |
 |------|--------|------|
 | 代码文件 | `*.py`, `*.js`, ... | 支持常见编程语言（Python, JavaScript, Go, Rust, Java 等） |
@@ -32,7 +35,8 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 | Git 代码托管平台 | `https://github.com/{org}/{repo}` | GitHub, GitLab, Bitbucket 等代码托管平台的 URL |
 | Git 代码托管平台上的 raw 文件 | `https://github.com/{org}/{repo}/raw/{branch}/{path}` | GitHub, GitLab, Bitbucket 等代码托管平台的 raw 文件下载 URL |
 
-媒体类
+**媒体类**
+
 | 类型 | 资源名 | 说明 |
 |------|--------|------|
 | 图片 | `*.jpg`, `*.jpeg`, `*.png`, `*.gif` ... | 多种图片格式，通过 VLM 生成描述（实验特性） |
@@ -41,26 +45,29 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 
 音视频解析器负责校验并保存原文件。内容理解在后续语义处理阶段执行，默认关闭（`vlm.media.enabled=false`），需启用兼容的供应商和模型；理解支持的格式与大小限制和导入格式不同。这不代表内置了 Whisper 转写或本地关键帧提取流程。详见[音视频配置](../guides/01-configuration.md)。
 
-云文档类
+**云文档类**
+
 | 类型 | 说明 |
 |------|------|
 | 飞书/Lark | URL 方式，支持 doc/docx、wiki、sheets、bitable、mindnote/mindnotes、Drive 文件和目录集。Wiki 默认仅导入入口文档，设置 `args.feishu_recursive=true` 可递归导入子节点。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token`，并可选传入 `args.feishu_app_id` / `args.feishu_app_secret`。Mindnote 及 Wiki 中的 Mindnote 要求本次使用的 token 具备 `mindnote:node:read` |
 
-网页类（递归网页爬虫）
+**网页类（递归网页爬虫）**
+
 | 类型 | 资源名 | 说明 |
 |------|--------|------|
 | 单页 / 递归抓取 | `https://host/path` | 默认仅抓入口页；设置 `args.depth > 0` 后，沿同域链接 BFS 递归展开，`args.max_pages` 只限制最多收集的页面数。每页用 trafilatura 抽成 Markdown。可选 `args`：`depth`、`max_pages`、`include_paths`、`exclude_paths`、`allow_external_links`、`skip_download_links`。页面中发现的下载链接默认跳过（`skip_download_links=true`），避免导入 `llms.txt` 等 sidecar 文件造成重复；设为 `false` 时会下载同域文件链接，并计入 `max_pages`。`include_paths`/`exclude_paths` 按**路径前缀**匹配（例如 `/docs/` 仅匹配以 `/docs/` 开头的路径，不会误命中 `/blog/docs-tips`）。|
 
-> 路由说明：`https://host/sitemap.xml`、`https://host/feed.xml`、`*.atom` 等 sitemap-looking URL 和显式 `args.site=true` 让出给下表的整站导入；`https://github.com/{org}/{repo}` 等 Git 托管平台 URL 让出给上文的代码导入。
+> 路由说明：`https://host/sitemap.xml`、`https://host/feed.xml`、`*.atom` 等站点索引 URL，以及显式 `args.site=true`，使用下表的站点导入流程；`https://github.com/{org}/{repo}` 等 Git 托管平台 URL 使用上文的代码导入流程。
 
-网站类（sitemap / RSS / Atom 整站导入）
+**网站类（sitemap / RSS / Atom 整站导入）**
+
 | 类型 | 资源名 | 说明 |
 |------|--------|------|
-| 站点地图 Sitemap | `https://host/sitemap.xml`、`https://host/sitemap-index.xml` | 解析 sitemap，将站点所有页面抓取为**一棵资源树**（每页一个子节点），支持嵌套 `<sitemapindex>` 递归。整站只生成一个资源，落在 `viking://resources/<host>`。 |
+| 站点地图 Sitemap | `https://host/sitemap.xml`、`https://host/sitemap-index.xml` | 解析 sitemap，在配置限制内将列出的页面抓取为一棵资源树（每页一个子节点），支持嵌套 `<sitemapindex>` 递归。整站只生成一个资源，落在 `viking://resources/<host>`。 |
 | RSS / Atom 订阅源 | `https://host/rss.xml`、`https://host/atom.xml`、`https://host/feed` | 解析 RSS 2.0 / Atom，逐条把文章正文抓成树节点（feed 内含全文则直接使用，省一次抓取）。 |
 | 整站自动发现 | `https://host` + `args.site=true` | 对裸域名/普通页面强制整站导入：自动通过 robots.txt、HTML `<link rel="alternate">` autodiscovery、常见路径发现 sitemap/RSS，再整站抓取。 |
 
-抓取**有界、非递归**（不会超出所列页面继续爬），受 `parsers.webfeed` 配置约束（`max_pages`、`max_concurrency`、`politeness_delay`、`same_host_only`、`respect_robots`、`max_depth`），并遵守 robots.txt。对 sitemap/feed URL 设置 `watch_interval` 即可让**整站**周期刷新：每次运行自动纳入新增页面、移除已删除页面。添加单个首页（未带 `args.site`）时，返回信息可能附带一行"整站导入"提示——**只提示，绝不自动爬全站**。
+抓取**有界、非递归**（不会超出所列页面继续爬），受 `parsers.webfeed` 配置约束（`max_pages`、`max_concurrency`、`politeness_delay`、`same_host_only`、`respect_robots`、`max_depth`），默认遵守 robots.txt（`respect_robots=true`）。对 sitemap/feed URL 设置 `watch_interval` 可定时刷新列表中的页面：每次运行自动纳入新增页面、移除已删除页面。添加单个首页（未带 `args.site`）时，响应可能提示可使用站点导入，但不会因此自动抓取全站。
 
 ### 资源处理流程
 
@@ -72,11 +79,17 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 ```
 
+#### 路由与等待
+
+OpenViking 先检查来源和请求参数是否满足 Connector 接入条件。Connector 在标准流水线之外完成导入。其余请求中，[`parser_api`](../guides/01-configuration.md#parser-api) 选中的格式交给外部 Understanding 解析，剩余格式使用内置 Parser。外部解析只替换 Parse 阶段，结果仍进入 TreeBuilder 和后续存储、语义处理。已经由 Accessor 归一化为 Markdown 的飞书文档跳过外部解析。
+
+Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源不能回退到内置 Accessor。Git 未命中 Connector 时可以回退，但携带 Connector 专用凭证时禁止回退。对于支持等待的标准流水线请求，`wait=true` 只等待本次导入的工作，不等待全局队列中的无关任务；HTTP 请求超时不代表导入已取消。
+
 #### 阶段 1：源解析 (Parse)
 - 使用 `UnifiedResourceProcessor` 根据资源类型解析内容
 - 支持多种格式：文档（PDF/Markdown/Word）、表格（Excel/PPT）、代码、媒体文件等
 - 解析结果写入临时 VikingFS 目录
-- 媒体文件通过 VLM（视觉语言模型）生成描述
+- 媒体解析器校验并保存原文件；启用相应配置后，在语义处理阶段调用 VLM 生成描述
 
 #### 阶段 2：资源树构建 (TreeBuilder)
 - `TreeBuilder.finalize_from_temp()` 扫描临时目录结构
@@ -99,7 +112,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - 对 Git 仓库来源使用 `wait=false` 时，OpenViking 会先校验仓库、解析目标 URI、预占最终 `root_uri`，然后在 clone/parse/finalize 完成前返回。
 - 立即响应包含 `status`、`root_uri` 和 `task_id`；抓取、解析、finalize 以及队列等待会在持久化后台任务中继续执行。
 - 可通过 `GET /api/v1/tasks/{task_id}` 查询任务状态。Git 资源导入任务的阶段包括 `queued`、`fetching`、`parsing`、`finalizing`、`processing_queue`。
-- 其他资源来源使用 `wait=false` 时，会在响应前完成抓取/解析/finalize；返回的 `task_id` 只用于跟踪 semantic 和 embedding 队列完成情况。
+- 外部 Understanding 导入也可能在解析完成前返回：飞书直达路径提交 URL；HTTP 文件路径先识别类型并上传文件，再将外部响应交给后台处理。通过返回的 `task_id` 查询进度；飞书直达导入可能要等解析标题确定后才有 `root_uri`。
+- 使用内置 Parser 的普通导入在 `wait=false` 时仍会先完成抓取、解析和 finalize，再返回响应；其 `task_id` 跟踪剩余的语义和 embedding 工作。
 
 ### 资源的增量更新
 
@@ -109,7 +123,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - 调用 `add_resource` 时，为 URL、sitemap、RSS 等可重新读取的来源设置 `watch_interval > 0`（单位：分钟），即可创建监控任务
 - `temp_file_id` 引用的上传内容是一次性快照，不能创建监控任务。Python HTTP SDK 也会将本地文件/目录上传为快照，因此本地路径不能与 `watch_interval > 0` 组合使用；本地来源变化后请重新添加
 - 可指定 `to` 参数确定目标 URI；未指定时，系统会使用本次导入返回的 `root_uri` 作为监控目标
-- 把监控对象设为 sitemap/RSS/Atom URL，即可让**整站**保持同步：每次刷新重新读取 feed 并重建资源树，新发布的页面自动入库、已删除的页面自动移除
+- 把监控对象设为 sitemap/RSS/Atom URL，可定时同步列表中的页面：每次刷新重新读取 feed 并重建资源树，新发布的页面自动入库、已删除的页面自动移除
 - `WatchManager` 负责任务持久化存储
 - 支持多租户权限控制（ROOT/ADMIN/USER 权限分级）
 
@@ -168,17 +182,19 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | to | string | 否 | - | 本次导入的最终保存位置。目标已存在时会覆盖该目标；与 `parent` 互斥 |
 | parent | string | 否 | - | 父级 Viking URI（资源放入此目录下）。与 `to` 互斥 |
 | create_parent | bool | 否 | False | 如果父目录不存在，自动创建父目录（服务端标志） |
+| add_type | string | 否 | None | 显式指定 Connector 类型；要求同时传 `path` 和精确的 `to`，不能与 `parent` 或 `temp_file_id` 组合 |
+| source_name | string | 否 | None | 来源显示名；上传文件省略时使用原始文件名 |
 | reason | string | 否 | "" | 添加资源的原因；非空时会随资源 URI 进入常规 session 记忆抽取链路，并在生成的记忆中记录资源引用 |
 | instruction | string | 否 | "" | 语义提取的处理指令（实验特性） |
 | wait | bool | 否 | False | 是否等待语义处理和向量化完成才返回 |
-| timeout | float | 否 | None | 超时时间（秒），仅 `wait=true` 时生效 |
+| timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | strict | bool | 否 | False | 是否使用严格模式 |
 | ignore_dirs | string | 否 | None | 要忽略的目录名（逗号分隔） |
 | include | string | 否 | None | 包含的文件模式（glob） |
 | exclude | string | 否 | None | 排除的文件模式（glob） |
 | directly_upload_media | bool | 否 | True | 是否直接上传媒体文件 |
 | preserve_structure | bool | 否 | None | 是否保留目录结构 |
-| args | object | 否 | `{}` | 传给特定 parser/accessor 的导入参数。原生 HTTPS Git 导入和 Watch 可通过 `args.auth_config={"username":"oauth2","token":"..."}` 在 TLS 上传递 HTTP Basic 凭据；`username` 默认为 `oauth2`。Git 的 `branch` 或 `commit` 仍放在 `args` 顶层。通过 HTTP(S) URL 导入私有 TOS 对象时，二选一传入非空字符串：`args.tos_signature`（映射为 `X-Tos-Signature`）或 `args.tos_access`（映射为 `X-Tos-Access`）。TOS 凭证只用于当前 HEAD/GET 抓取；资源会先保存为快照，凭证不会写入资源元数据或队列任务。`args.parse_mode` 支持 `default`（保持现有拆分行为）和 `no_split`（正常解析并将每个源文档正文保存为一个 Markdown 文件）。例如 `args.site=true/false` 强制/禁用整站（sitemap/RSS）导入，`args.max_pages` 等可覆盖 `webfeed` 配置；递归网页爬虫支持 `args.depth`、`args.max_pages`、`args.include_paths`、`args.exclude_paths`、`args.allow_external_links`、`args.skip_download_links`；飞书用户 token 导入传 `args.feishu_access_token`。`path`、`to`、`watch_interval`、`include`、`exclude` 等 `add_resource` 核心字段不能放入 `args` |
+| args | object | 否 | `{}` | 传给 Parser/Accessor 的参数，详见下文。核心请求字段不能放入 `args`，下文列出的 Connector 专用选项除外。 |
 | watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 按目标占用规则为可重新读取的来源创建新 Watch；通过 `temp_file_id` 上传的一次性快照不能创建 Watch。≤0 不创建 Watch：原生导入显式指定 `to` 时暂停唯一可访问的任务（存在歧义时返回 409），Connector 导入不影响已有 Watch。显式 `to` 优先，否则绑定本次导入的 `root_uri`。 |
 | is_active | bool | 否 | True | Watch 初始调度状态。设为 `false` 时要求 `watch_interval > 0`，并在 `to`、`parent` 中二选一。`parent` 支持原生飞书 URL 和 Git 导入；Connector 仍要求精确的 `to`。首次导入仍执行一次，随后保持暂停 |
 | processing_mode | string | 否 | `semantic_and_vectors` | 入库后的处理模式。`semantic_and_vectors` 是默认流程：生成语义产物（`.abstract.md`、`.overview.md`）并生成向量。`vectors_only` 跳过语义理解/VLM 总结，只对当前资源文件生成向量 |
@@ -187,10 +203,19 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | acl | object | 否 | None | 设置最终导入根节点的直接 ACL，要求 manage；省略时保留已有权限。见 [ACL API](12-acl.md)。 |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
+**来源专用参数 `args`**
+
+- 原生 HTTPS Git 导入和 Watch 可通过 `args.auth_config={"username":"oauth2","token":"..."}` 在 TLS 上传递 HTTP Basic 凭据；`username` 默认为 `oauth2`。Git 的 `branch` 或 `commit` 仍放在 `args` 顶层。
+- 通过 HTTP(S) URL 导入私有 TOS 对象时，二选一传入非空字符串：`args.tos_signature`（映射为 `X-Tos-Signature`）或 `args.tos_access`（映射为 `X-Tos-Access`）。TOS 凭证只用于当前 HEAD/GET 抓取；资源会先保存为快照，凭证不会写入资源元数据或队列任务。
+- `args.parse_mode` 支持 `default`（保持现有拆分行为）和 `no_split`（正常解析并将每个源文档正文保存为一个 Markdown 文件）。
+- `args.site=true/false` 强制/禁用整站（sitemap/RSS）导入，`args.max_pages` 等可覆盖 `webfeed` 配置；递归网页爬虫支持 `args.depth`、`args.max_pages`、`args.include_paths`、`args.exclude_paths`、`args.allow_external_links`、`args.skip_download_links`。
+- 飞书用户 token 导入传 `args.feishu_access_token`。
+- `path`、`to`、`watch_interval`、`include` 等 `add_resource` 核心字段不能放入 `args`。原生导入也拒绝 `args.exclude`；TOS Connector 导入允许它与 `args.tos_prefix` 一起使用。
+
 **补充说明**：
 - `to` 和 `parent` 不能同时使用。`to` 是最终保存位置：目标不存在就创建，目标已存在就覆盖该目标；如果目标是目录，目录里本次导入没有生成的旧文件或子目录会被删除。`parent` 是保存目录，适合向已有目录追加新资源；父目录不存在时使用 `create_parent=true` 或 CLI 的 `--parent-auto-create`。当导入后的 `root_uri` 与 `to` 相同时，语义与向量处理会复用未变化内容，只处理变化部分。
 - 创建新资源要求目标父目录可写；显式更新已有 `to` 要求该目标可写。权限校验在任务入队前完成。自动命名按实际 URI 占用判断，即使同名资源不可读也会选择 `_1`、`_2` 等后缀，而不会尝试覆盖。
-- `wait=false` 返回的 `status=accepted` 表示任务已通过预检查并入队，不表示资源处理已经完成；最终状态以对应 `task_id` 为准。
+- `wait=false` 时，原生导入入队后返回 `status=success`，Connector 导入返回 `status=accepted`。两者都不表示后台处理已经完成；最终状态以对应 `task_id` 为准。
 - 如果同时省略 `to` 和 `parent`，服务端会先尝试使用当前用户的 `add_targets.resource_uri` 覆盖配置，再使用 `server.user_config_defaults.add_targets.resource_uri`。两者都没有配置时，保持旧的目标解析行为。
 - 资源目标可以使用公共 `viking://resources/...`、家目录别名 `viking://~/resources/...`、显式用户 `viking://user/{user_id}/resources/...`，或 peer 级 `viking://user/{user_id}/peers/{peer_id}/resources/...`。家目录别名会按请求身份展开为 canonical 路径；无 uid 的写法 `viking://user/resources/...` 会被拒绝，并提示改用 `viking://~/resources/...`。
 - `user_id` 和 `peer_id` 路径片段必须是安全的单段标识，例如 `alice` 或 `web-visitor-alice`。包含路径分隔符、`.`、`..`、`:` 或 `+` 的值会被拒绝。
@@ -203,7 +228,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - 删除资源时，系统会在删除前扫描本次上下文对应的 self 或 peer 记忆中的 `resource_refs`，清理对应资源 URI 和由该 `reason` 引入的内容，并重新刷新相关记忆的语义索引。
 - 其他来源在 `wait=false` 时会在响应前完成来源解析、目标解析和 AGFS 写入，仅 semantic 与 embedding 队列继续异步处理。
 - `processing_mode=vectors_only` 不调用 VLM 语义理解阶段，也不会生成或刷新 `.abstract.md` / `.overview.md`。对已存在目标，它会保留旧的语义产物和旧的语义向量；仍会更新资源树，在 `build_index=true` 时向量化当前非隐藏文件，并清理由本次刷新删除的文件 detail 向量。
-- `processing_mode` 只属于 `add_resource`。管理员维护已有数据时，`reindex` API/CLI 仍使用 `mode`（`vectors_only`、`semantic_and_vectors`、`prune_orphans`）。
+- `processing_mode` 只属于 `add_resource`。管理员维护已有数据时，`reindex` API/CLI 仍使用 `mode`（`vectors_only`、`semantic_and_vectors`）。
 - `watch_interval > 0` 时，如果指定了 `to`，监控任务绑定该目标；如果未指定 `to`，监控任务绑定本次导入返回的 `root_uri`。如果无法得到稳定 `root_uri`，请求会报错并要求显式传 `to`。
 - Connector 导入设置 `is_active=false` 时会在提交前创建暂停状态的 Watch；原生飞书和 Git 导入会通过资源队列透传 `is_active`，解析出最终资源 URI 后再创建 Watch。两种情况下首次导入均执行一次，周期调度保持关闭。
 - 飞书/Lark 应用 token 导入不传 `args.feishu_access_token`。OpenViking 保持原有应用凭证流程，由 SDK 使用 `app_id` 和 `app_secret` 自动获取 app/tenant token。该模式支持一次性导入和 `watch_interval > 0`。
@@ -218,7 +243,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - `args.parse_mode=no_split` 仍调用正常的格式 Parser。PDF、Word、PowerPoint、HTML 等受支持文档会转换为 Markdown，但跳过按标题、段落和长度拆分。目录导入会对每个受支持文档分别应用该规则，并继续遵循 `.gitignore`、筛选参数和 `preserve_structure`。该模式下，配置为走 Understanding 的目录文件会回退到对应的原生 Parser；没有原生解析能力的文件会写入 `meta.failed_files`，但不会阻止其他入选文件成功导入。
 - 对单文件输入使用 `no_split` 时，如果解析结果恰好只有一个可见文件且未指定 `to`，该文件会直接放到解析出的父目录下（例如 `guide.md` 写入 `viking://resources/guide.md`），不会创建同名上层目录，也不会生成目录级 `.abstract.md` / `.overview.md`。如果解析结果还包含图片等其他可见文件，则保留上层目录。显式指定的 `to` 始终作为最终 URI 原样保留。
 - `no_split` 只改变 Markdown 正文的存储布局，不改变语义处理、文件向量化和内部 embedding 分块。Markdown 相对链接会按同一个 no-split 输出布局解析，不会再指向仅拆分模式存在的路径。该模式下不会为目录文件调用 Understanding。
-- 如果要直接创建或更新纯文本内容，请使用 [content/write](03-filesystem.md#write)，不要使用 `add_resource`。资源导入和内容写入后都会自动刷新语义与 embedding。
+- 如果要直接创建或更新纯文本内容，请使用 [content/write](12-content.md#write)，不要使用 `add_resource`。资源导入和内容写入后都会自动刷新语义与 embedding。
 
 #### 3. 使用示例
 
@@ -478,6 +503,11 @@ fmt.Println(result["task_id"])
 
 **CLI**
 
+`ov add-resource --wait` 只提交一次，再轮询任务，不设置整体等待期限。
+状态查询超时、网络错误及 HTTP 429/502/503/504 会重试；连续 10 次失败后
+退出并提供任务查询命令。Ctrl+C 仅停止等待，不取消任务，退出码为 130。
+完成后 CLI 结果保留 `task_id`。
+
 ```bash
 # 添加本地文件
 ov add-resource ./documents/guide.md --reason "User guide"
@@ -552,7 +582,7 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 {
   "status": "ok",
   "result": {
-    "status": "accepted",
+    "status": "success",
     "root_uri": "viking://resources/guide",
     "task_id": "uuid-xxx"
   }
@@ -566,7 +596,7 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 ```
 Note: Resource is being processed in the background.
 Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks.
-status       accepted
+status       success
 root_uri     viking://resources/01-overview
 task_id      uuid-xxx
 ```
@@ -575,9 +605,12 @@ task_id      uuid-xxx
 
 ```json
 {
-  "status": "accepted",
-  "root_uri": "viking://resources/01-overview",
-  "task_id": "uuid-xxx"
+  "ok": true,
+  "result": {
+    "status": "success",
+    "root_uri": "viking://resources/01-overview",
+    "task_id": "uuid-xxx"
+  }
 }
 ```
 
@@ -585,16 +618,16 @@ task_id      uuid-xxx
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `status` | string | 处理状态：`accepted` 表示已入队，`success` 表示成功，`error` 表示失败 |
+| `status` | string | 原生导入的入队结果和同步结果都返回 `success`；Connector 提交返回 `accepted`。`wait=false` 时需轮询 `task_id` 确认完成。请求失败通过顶层错误响应返回，后台失败通过任务 API 查询 |
 | `root_uri` | string | 资源在 OpenViking 中的最终 URI |
 | `task_id` | string | （可选，仅当 `wait=false` 时）可轮询 `/api/v1/tasks/{task_id}` 的任务 ID。非 Git 导入用于队列跟踪；Git 仓库导入用于完整后台导入跟踪。 |
 | `temp_uri` | string | 导入过程中生成的临时 URI |
 | `source_path` | string | 原始源文件路径或 URL |
 | `meta` | object | 资源解析过程中的元数据（如文件类型、大小等） |
 | `errors` | array | 处理过程中的错误列表 |
-| `warnings` | array | （可选）处理过程中的警告列表（仅在 `strict=False` 时可能出现） |
-| `queue_status` | object | （可选，仅当 `wait=true` 时）队列处理状态，包含 `pending`、`processing`、`completed` 计数 |
-| `memory_linking` | object | （可选，仅当 `reason` 触发记忆生成时）本次资源 URI 与用户记忆的关联结果 |
+| `warnings` | array | 可选警告，包括部分处理失败或资源记忆关联失败 |
+| `queue_status` | object | 同步等待或已完成任务结果中的队列汇总，按队列返回 `processed`、`requeue_count`、`error_count` 和 `errors` |
+| `memory_linking` | object | （可选，仅当 `reason` 触发记忆生成时）本次资源 URI 与用户记忆的关联结果。`status="accepted"` 表示记忆提交已入队、尚未完成，需轮询 `/api/v1/tasks/{task_id}`（`commit_task_id`）获取结果 |
 
 **完成后的资源添加任务结果**
 

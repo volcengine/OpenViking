@@ -255,10 +255,18 @@ def run_vikingbot_chat(
     env = os.environ.copy()
     if bot_log_file:
         env["VIKINGBOT_LOG_FILE"] = bot_log_file
+    # LoCoMo disables general-purpose tools and OpenViking writes and exports.
+    chat_cmd = ["vikingbot", "chat"]
+    for tool_name in (
+        "web_search", "web_fetch", "exec", "read_file", "write_file", "edit_file",
+        "list_dir", "spawn", "message", "generate_image", "openviking_export",
+        "openviking_memory_commit", "openviking_add_resource",
+    ):
+        chat_cmd.extend(["--disable-tool", tool_name])
 
     # 先执行 /new 命令清除会话
     if sender_peer_id:
-        new_cmd = ["vikingbot", "chat"]
+        new_cmd = chat_cmd.copy()
         if config:
             new_cmd.extend(["--config", config])
         new_cmd.extend(
@@ -288,7 +296,7 @@ def run_vikingbot_chat(
     else:
         input = f"Answer the question directly: {question}"
 
-    cmd = ["vikingbot", "chat"]
+    cmd = chat_cmd.copy()
     if config:
         cmd.extend(["--config", config])
     cmd.extend(["-m", input, "-e"])

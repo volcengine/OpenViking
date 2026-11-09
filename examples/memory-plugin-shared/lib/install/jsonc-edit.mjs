@@ -313,11 +313,24 @@ function appendStringToTopLevelArray(s, name, value) {
   return `${s.slice(0, arrayRange.end)}${insertion}${s.slice(arrayRange.end)}`;
 }
 
-/** The config text with the plugin registered and the MCP fallback pointed at `mcpProxy`. */
+const NPM_PACKAGE_SPEC = /^@openviking\/opencode-plugin(@.*)?$/;
+
+/**
+ * The config text with the plugin registered and the MCP fallback pointed at
+ * `mcpProxy`. Any other registration of the npm package is dropped, because
+ * OpenCode would load it next to the file plugin and run every hook twice.
+ */
 export function updateOpencodeConfig(raw, { pluginSpec = "", mcpProxy = "" } = {}) {
   let data = {};
   try { data = raw.trim() ? JSON.parse(stripJsonc(raw)) : {}; } catch { data = {}; }
   let nextRaw = raw.trim() ? raw : "{\n}\n";
+  if (Array.isArray(data.plugin)) {
+    const kept = data.plugin.filter((item) => item === pluginSpec || !NPM_PACKAGE_SPEC.test(item));
+    if (kept.length !== data.plugin.length) {
+      data.plugin = kept;
+      nextRaw = setTopLevelProperty(nextRaw, "plugin", kept);
+    }
+  }
   if (pluginSpec) {
     const next = Array.isArray(data.plugin) ? data.plugin.slice() : [];
     if (!next.includes(pluginSpec)) {
@@ -344,7 +357,16 @@ export function updateOpencodeConfig(raw, { pluginSpec = "", mcpProxy = "" } = {
 
 export { stripJsonc };
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  }
+}
+
+if (isDirectRun()) {
   const file = process.argv[2];
   let raw = "";
   try { raw = fs.readFileSync(file, "utf8"); } catch {}

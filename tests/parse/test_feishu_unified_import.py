@@ -13,8 +13,10 @@ from openviking.parse.feishu_import import FeishuImportPlan
 from openviking.parse.parser_router import ParserRouter
 from openviking.parse.parsers.directory import DirectoryParser
 from openviking.parse.understanding_api import UnderstandingAPI
+from openviking.service.task_domain import TaskPatch
 from openviking.utils.media_processor import UnifiedResourceProcessor
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.utils.config.open_viking_config import ParserApiConfig
 from openviking_cli.utils.config.parser_config import FeishuConfig
 from tests.parse.test_add_directory import FakeVikingFS
 from tests.parse.test_directory_understanding_routing import _configure_understanding
@@ -116,7 +118,10 @@ async def test_folder_remote_doc_and_empty_directory(monkeypatch):
 async def test_directory_executes_url_with_auth_and_preserves_output_parent(
     monkeypatch, tmp_path, resume
 ):
-    _configure_understanding(monkeypatch, ["pdf"])
+    config = _configure_understanding(monkeypatch, ["pdf"])
+    parser_api_config = ParserApiConfig(**vars(config.parser_api)).model_copy(
+        update={"api_key": "feishu-key"}
+    )
     (tmp_path / "nested").mkdir()
     (tmp_path / "empty").mkdir()
     plan = FeishuImportPlan(tmp_path, use_understanding=True)
@@ -129,6 +134,7 @@ async def test_directory_executes_url_with_auth_and_preserves_output_parent(
     calls = []
 
     async def parse_api(self, source, **options):
+        assert self._api_key == "feishu-key"
         calls.append((source, options))
         await options["_response_checkpoint"]("response-1")
         await fs.mkdir("viking://temp/doc/Cloud", exist_ok=True)
@@ -148,6 +154,7 @@ async def test_directory_executes_url_with_auth_and_preserves_output_parent(
     result = await parser.parse(
         tmp_path,
         source_name="Folder",
+        parser_api_config=parser_api_config,
         _feishu_import_plan=plan,
         feishu_access_token="secret",
         _feishu_checkpoint=(
@@ -254,7 +261,6 @@ async def test_async_source_plan_does_not_submit_collection_or_file_url(
 
     _configure_understanding(monkeypatch, ["pdf"])
     router = ParserRouter(SimpleNamespace())
-    router._understanding_api = UnderstandingAPI.__new__(UnderstandingAPI)
     submit = AsyncMock(side_effect=AssertionError("root URL must not be submitted"))
     service = ResourceService(
         viking_fs=SimpleNamespace(),
@@ -301,6 +307,7 @@ async def test_direct_understanding_receives_effective_account_feishu_config(mon
     from openviking.server.identity import RequestContext, Role
     from openviking.service.resource_service import ResourceService
     from openviking_cli.session.user_id import UserIdentifier
+
     config = FeishuConfig(app_id="account-app", app_secret="account-secret")
     seen = {}
 
@@ -500,7 +507,7 @@ async def test_background_collection_restores_auth_and_child_checkpoint(monkeypa
 
     tracker = SimpleNamespace(
         get=AsyncMock(return_value=SimpleNamespace(meta={"feishu_responses": {"entry": "old"}})),
-        record_feishu_response=AsyncMock(),
+        patch_task=AsyncMock(),
     )
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
     service = ResourceService()
@@ -527,8 +534,11 @@ async def test_background_collection_restores_auth_and_child_checkpoint(monkeypa
     saved, record = options["_feishu_checkpoint"]
     assert saved == {"entry": "old"}
     await record("next", "new")
-    tracker.record_feishu_response.assert_awaited_once_with(
-        "task", "next", "new", "account", "user"
+    tracker.patch_task.assert_awaited_once_with(
+        "task",
+        TaskPatch(meta={"feishu_responses": {"next": "new"}}),
+        account_id="account",
+        user_id="user",
     )
     assert saved["next"] == "new"
 
@@ -912,9 +922,7 @@ async def test_recursive_wiki_processor_routes_each_content_and_keeps_tree(monke
         return result
 
     monkeypatch.setattr(UnderstandingAPI, "parse", parse_api)
-    account_feishu = FeishuConfig(
-        app_id="account-app", app_secret="account-secret"
-    )
+    account_feishu = FeishuConfig(app_id="account-app", app_secret="account-secret")
     try:
         result = await processor.process(
             "https://example.larksuite.com/wiki/root?table=t&view=v",

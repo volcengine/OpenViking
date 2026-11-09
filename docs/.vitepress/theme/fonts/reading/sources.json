@@ -1,0 +1,20 @@
+{
+  "subsets": [
+    {
+      "source_file": "maple-regular.ttf",
+      "family": "OV Code",
+      "slug": "maple-code",
+      "upstream": "Maple Mono NF CN v7.9",
+      "url": "https://github.com/subframe7536/maple-font/releases/download/v7.9/MapleMono-NF-CN.zip",
+      "member": "MapleMono-NF-CN-Regular.ttf",
+      "sha256": "bb8e8e8c263896f42555107202f1847f7a42c340a3e532df9c4d585c9794411c"
+    }
+  ],
+  "unmodified": [
+    {
+      "file": "source-serif-4.woff2",
+      "url": "https://raw.githubusercontent.com/adobe-fonts/source-serif/80d3f8894c09c937bebfa9011247d2e1c79fd6f4/WOFF2/VAR/SourceSerif4Variable-Roman.otf.woff2",
+      "sha256": "f146ee102dddcc5bc7a2cf4af5bcf129832195941b92bd0a512626f390688c1e"
+    }
+  ]
+}

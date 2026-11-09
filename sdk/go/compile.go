@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -5,7 +8,7 @@ import (
 	"net/http"
 )
 
-// Compile starts an asynchronous Compile task.
+// Compile returns a queued task, or saved settings when Args explicitly configure scheduling.
 func (c *Client) Compile(
 	ctx context.Context,
 	fromURIs []string,

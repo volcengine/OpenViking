@@ -3,8 +3,65 @@
 All notable changes to OpenViking will be documented in this file.
 This changelog is automatically generated from [GitHub Releases](https://github.com/volcengine/OpenViking/releases).
 
+> Release entries describe behavior at that version, including commands and defaults that may since have changed. Use the current [deployment guide](../guides/03-deployment.md) for installation. Before any historical upgrade step that clears a workspace, stop writes and make a restorable backup; never apply those cleanup instructions to an unrelated upgrade.
+
 ## Unreleased
 
+- **LangGraph Store discovery errors**: Non-semantic `search()` and
+  `list_namespaces()` now propagate backend listing failures, including permission
+  and availability errors. Explicitly missing namespace roots still return empty results.
+- **Legacy session migration removed (breaking change)**: Removed the legacy
+  implementation, `ov admin migrate` (including `--cleanup`), and the corresponding
+  Python, TypeScript, and Go SDK methods. The ROOT-only `POST /api/v1/admin/migrate`
+  endpoint remains reserved and currently returns `400 / INVALID_ARGUMENT` without
+  creating a task. New releases no longer
+  provide migration or cleanup of legacy 0.3.x sessions; upgrading does not move or
+  delete those old directories. Migrated sessions and normal session operations
+  are unaffected.
+- **Gateway deployment and behavior**:
+  - New standalone Helm chart, `deploy/helm/openviking-gateway`: one SQLite replica with a
+    PVC, or several replicas sharing Redis. Until a release includes these features, set
+    `image.tag` explicitly; see the [operations guide](../guides/22-gateway-operations.md#helm).
+  - New opt-in settings: `storage` (Redis), `management_api`, `openviking_keys`, `tenancy`,
+    `default_upstreams` and `default_profile`, `request_log_sink`, `capture_concurrency` and `keep_alive_seconds`.
+    SQLite remains the default storage.
+  - New `X-OpenViking-Upstream-URL` request header picks one of the allowed upstreams by its
+    Base URL; see [Pick the upstream per request](../gateway/07-upstreams.md#upstream-url-header).
+  - `session_ttl_days` is replaced by `session_ttl_seconds` (at least 3600), so sessions can
+    expire in under a day. The old setting is ignored with a startup warning; set the new one
+    when upgrading.
+  - Behavior changes with no configuration change: standalone keep-alive rises from 5 to 75
+    seconds; a gateway bound to a public address waits and retries at startup while
+    OpenViking is unreachable or returns 5xx; idle SSE streams carry a comment heartbeat every
+    15 seconds; a request whose key OpenViking refuses with 402 or 403 is rejected instead of
+    forwarded; and an OpenViking 401 while saving, once `/health` also returns 401, pauses
+    saving with `gateway_key_revoked`.
+- **Volcengine KMS `key_file` (upgrade action)**: `encryption.volcengine_kms.key_file` now takes
+  effect for the server and the gateway; earlier releases ignored it and kept the root key at
+  `~/.openviking/openviking-volcengine-root-key.enc`. If you set `key_file`, move that file to
+  the configured path before upgrading. While the configured file is missing and the default
+  one exists, startup fails instead of creating a new root key.
+- **LangChain import migration (breaking change)**: The server no longer ships
+  `openviking.integrations.langchain` or its forwarding modules. Old imports fail
+  immediately; there is no deprecation period or compatibility stub. Install
+  `langchain-openviking` (or `pip install "langchain-openviking[langgraph]"` for
+  LangGraph) and replace the `openviking.integrations.langchain` prefix with
+  `langchain_openviking`, including submodule imports. For example, use
+  `from langchain_openviking import OpenVikingRetriever`. The maintained packages
+  and examples now live under `integrations/frameworks/`; package names and
+  canonical imports are unchanged. See the [migration guide](../agent-integrations/07-langchain-langgraph.md).
+- **Working Memory defaults off (behavior change)**: Commits continue to archive raw messages
+  and extract long-term memories, but generate no WM/checkpoint summaries by default.
+  Update installed agent plugins separately: automatic archive injection and takeover now
+  default off, and host history/compaction stays in use. VikingBot retains OV-managed
+  context and compaction and explicitly requests WM on session-context commits.
+  The old serializer omitted WM=true,
+  so previously saved policies without that field now become false even if true was once
+  chosen explicitly. Already-queued legacy tasks retain their submission-time semantics.
+  A new per-commit `enable_working_memory` boolean can opt in without replacing other
+  policy fields. Completed WM-off archives remain readable as raw messages with empty
+  summary fields. See the [upgrade guide](../guides/working-memory-default-off.md), including
+  handoffs for old conversations that no longer have complete host history.
 - **Watch API migration (breaking change)**: Re-importing with `watch_interval > 0`
   no longer updates or reactivates an existing Watch. Native Watches retain exclusive
   ownership while paused, and incompatible target reuse returns `409 Conflict`.
@@ -19,7 +76,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
   extraction correctly. Existing boolean-like values remain temporarily compatible and
   emit deprecation warnings; use JSON booleans for new configurations.
 - **Workspace peer derivation**: The coding-agent plugins now derive a workspace's peer from git instead of from the working directory. The new default, `peer.source: "git"`, uses the repository's normalized `origin` URL (`github.com-volcengine-openviking`), falling back to the repository root path, so every clone, worktree, and subdirectory of one repository shares a single peer while a fork keeps its own. A directory that is not a git repository now gets no peer at all, and what is remembered there goes to the user-level space instead of a fresh namespace per folder. Give such a directory a memory of its own by creating `.openviking/config.json` with `{"version": 1, "peer": {"id": "my-project"}}`. No migration is required: the previous cwd-derived id can always be recomputed locally, and the default `peer_scope: "all"` recall already sweeps every peer, so memories written under it keep coming back (with `peer_scope: "actor"`, the Claude Code, Codex, OpenCode, and DSH plugins query that id as well). Set `peer.source: "cwd"` — or `OPENVIKING_PEER_SOURCE=cwd` — to keep the old behavior.
-- **Pi extension tool surface (breaking change)**: The pi extension 0.4.0 replaces its seven hand-written `viking_*` REST tools with the server's own MCP tools through the official MCP client, so the tool list now follows whatever the server's `tools/list` returns instead of a catalogue shipped with the extension. Every tool is `openviking_` plus the server's name (`viking_search` → `openviking_search`), with no alias period, and pi matches `--tools` and `--exclude-tools` entries by exact name, so an allowlist that still says `viking_search` loses that tool silently and has to be renamed by hand. The tools now behave as they do on every other MCP harness: `remember` commits a session of its own rather than appending to the live pi session, `read` returns full text only (the `level="abstract"` and `level="overview"` tiers are gone — `openviking_search(mode="context", detail="overview")` is the substitute), `forget` deletes the URI it is handed, and `add_resource` answers a local path with a one-time upload URL to POST the file to. A root api key is refused on `/mcp` with 403 and now leaves the session with no tools at all, where before the tools registered and every call came back empty; create a user or admin key for it. The shared `mcpEnabled: false` switch now takes effect for pi as well, and tools turned off that way are not reported as a failure. Recall, session capture, and context takeover keep working in all of these cases, and no other harness is affected. The extension README's [Upgrading from 0.3.x](https://github.com/volcengine/OpenViking/blob/main/examples/pi-coding-agent-extension/README.md#upgrading-from-03x) has the full list.
+- **Pi extension tool surface (breaking change)**: The pi extension 0.4.0 replaces its seven hand-written `viking_*` REST tools with the server's own MCP tools through the official MCP client, so the tool list now follows whatever the server's `tools/list` returns instead of a catalogue shipped with the extension. Every tool is `openviking_` plus the server's name (`viking_search` → `openviking_search`), with no alias period, and pi matches `--tools` and `--exclude-tools` entries by exact name, so an allowlist that still says `viking_search` loses that tool silently and has to be renamed by hand. The tools now behave as they do on every other MCP harness: `remember` commits a session of its own rather than appending to the live pi session, `read` returns text with line-based pagination (the `level="abstract"` and `level="overview"` tiers are gone — `openviking_search(mode="context", detail="overview")` is the substitute), `forget` deletes the URI it is handed, and `add_resource` answers a local path with a one-time upload URL to POST the file to. A root api key is refused on `/mcp` with 403 and now leaves the session with no tools at all, where before the tools registered and every call came back empty; create a user or admin key for it. The shared `mcpEnabled: false` switch now takes effect for pi as well, and tools turned off that way are not reported as a failure. Recall, session capture, and context takeover keep working in all of these cases, and no other harness is affected. The extension README's [Upgrading from 0.3.x](https://github.com/volcengine/OpenViking/blob/main/examples/pi-coding-agent-extension/README.md#upgrading-from-03x) has the full list.
 - **External peer identity migration**: Mixed-script log-ingestion identities now use
   lossless `ext-<base64>` ids. The `ext-` namespace is reserved, so ASCII identities that
   would otherwise enter it are encoded as well. Older lossy peer directories are not read

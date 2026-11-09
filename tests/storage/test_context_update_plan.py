@@ -306,6 +306,25 @@ def test_semantic_plan_validates_ancestors_without_rescanning_entries():
     assert entries.iterations <= 4
 
 
+def test_semantic_plan_serialization_ignores_legacy_parent_propagation():
+    from openviking.storage.context_update_plan import (
+        SemanticPlan,
+        SemanticTreeEntry,
+        SemanticTreeSnapshot,
+    )
+
+    plan = SemanticPlan(
+        "viking://resources/repo",
+        "resource",
+        SemanticTreeSnapshot((SemanticTreeEntry("", "directory", "unchanged", "aggregate"),)),
+    )
+
+    serialized = plan.to_dict()
+
+    assert "propagation" not in serialized
+    assert SemanticPlan.from_dict({**serialized, "propagation": {"enabled": False}}) == plan
+
+
 def test_semantic_plan_rejects_missing_higher_ancestor_independent_of_entry_order():
     from openviking.storage.context_update_plan import (
         IndexSlot,
@@ -971,6 +990,53 @@ def test_healthy_noop_produces_no_actions_or_semantic_plan():
     assert plan.is_noop()
     assert plan.content_tree_actions == ()
     assert plan.semantic_plan is None
+
+
+def test_shared_semantic_closure_generates_complete_file_without_abstract():
+    """RNFV add_resources and RFV reindex share this closure rule."""
+    from openviking.storage.context_update_plan import (
+        ContentState,
+        IndexState,
+        SemanticAction,
+        build_context_update_plan,
+    )
+    from openviking.storage.resource_diff import ResourceDiffEntry, ResourceDiffResult
+    from openviking.storage.resource_rnfv import RequestIntent, VectorRecordSnapshot
+
+    root = "viking://resources/repo"
+    plan = build_context_update_plan(
+        root_uri=root,
+        context_type="resource",
+        request=RequestIntent(root, "semantic_and_vectors"),
+        diff=ResourceDiffResult(
+            {
+                "": ResourceDiffEntry(
+                    "",
+                    ContentState.UNCHANGED,
+                    IndexState.MISSING,
+                    old_kind="directory",
+                    new_kind="directory",
+                ),
+                "a.md": ResourceDiffEntry(
+                    "a.md",
+                    ContentState.UNCHANGED,
+                    IndexState.COMPLETE,
+                    old_kind="file",
+                    new_kind="file",
+                    md5="same",
+                ),
+            }
+        ),
+        new_kinds={"": "directory", "a.md": "file"},
+        artifact_paths={"a.md": "repository/a.md"},
+        records={"a-l2": VectorRecordSnapshot("a-l2", f"{root}/a.md", "a.md", 2, {"md5": "same"})},
+        is_code_repo=False,
+        account_id="acc",
+    )
+
+    entries = {entry.relative_path: entry for entry in plan.semantic_plan.tree.entries}
+    assert entries[""].semantic_action is SemanticAction.AGGREGATE
+    assert entries["a.md"].semantic_action is SemanticAction.GENERATE
     assert plan.direct_index_actions == ()
 
 
@@ -1137,12 +1203,8 @@ def test_healthy_directory_rnfv_clear_updates_all_vector_levels():
         ingest_options=IngestOptions.from_search_tags(None, mode="clear"),
     )
     records = {
-        "root-l0": VectorRecordSnapshot(
-            "root-l0", root, "", 0, {"search_tags": ["scope=old"]}
-        ),
-        "root-l1": VectorRecordSnapshot(
-            "root-l1", root, "", 1, {"search_tags": ["scope=old"]}
-        ),
+        "root-l0": VectorRecordSnapshot("root-l0", root, "", 0, {"search_tags": ["scope=old"]}),
+        "root-l1": VectorRecordSnapshot("root-l1", root, "", 1, {"search_tags": ["scope=old"]}),
         "a-l2": VectorRecordSnapshot(
             "a-l2",
             root + "/a.py",
@@ -1237,11 +1299,7 @@ def test_healthy_rnfv_clear_is_noop_when_vector_has_no_tags(existing_tags):
         ),
         new_kinds={"a.py": "file"},
         artifact_paths={"a.py": "repository/a.py"},
-        records={
-            "a-l2": VectorRecordSnapshot(
-                "a-l2", root + "/a.py", "a.py", 2, fields
-            )
-        },
+        records={"a-l2": VectorRecordSnapshot("a-l2", root + "/a.py", "a.py", 2, fields)},
         is_code_repo=False,
         account_id="acc",
     )
@@ -1297,11 +1355,7 @@ def test_healthy_rnfv_non_empty_replace_compares_against_vector_tags(
         ),
         new_kinds={"a.py": "file"},
         artifact_paths={"a.py": "repository/a.py"},
-        records={
-            "a-l2": VectorRecordSnapshot(
-                "a-l2", root + "/a.py", "a.py", 2, fields
-            )
-        },
+        records={"a-l2": VectorRecordSnapshot("a-l2", root + "/a.py", "a.py", 2, fields)},
         is_code_repo=False,
         account_id="acc",
     )
@@ -2289,6 +2343,54 @@ async def test_file_root_plan_uses_file_refresh_without_directory_semantic_tree(
 
 
 @pytest.mark.asyncio
+async def test_file_root_plan_refreshes_missing_abstract_when_content_is_indexed():
+    """A prior vectors-only write must not suppress a later semantic summary."""
+    from openviking.storage.context_update_plan import build_context_update_plan_from_snapshot
+    from openviking.storage.resource_rnfv import (
+        FormalEntry,
+        FormalTreeSnapshot,
+        NewArtifactSnapshot,
+        NewEntry,
+        RequestIntent,
+        RNFVSnapshot,
+        VectorIndexSnapshot,
+        VectorRecordSnapshot,
+    )
+
+    root = "viking://resources/report.md"
+    snapshot = RNFVSnapshot(
+        RequestIntent(root, "semantic_and_vectors"),
+        NewArtifactSnapshot({"": NewEntry(md5="same")}),
+        FormalTreeSnapshot({"": FormalEntry()}),
+        VectorIndexSnapshot(
+            {"report-l2": VectorRecordSnapshot("report-l2", root, "", 2, {"md5": "same"})},
+            frozenset({"id", "uri", "level", "md5", "abstract"}),
+        ),
+    )
+
+    _, plan = await build_context_update_plan_from_snapshot(
+        snapshot=snapshot,
+        store=AsyncMock(),
+        artifact_ref=object(),
+        target=AsyncMock(),
+        vikingdb=AsyncMock(),
+        context_type="resource",
+        is_code_repo=False,
+        account_id="acc",
+        ctx=object(),
+        root_preexisting=True,
+        artifact_paths={"": "report.md"},
+        root_is_file=True,
+    )
+
+    assert plan.content_tree_actions == ()
+    assert plan.direct_index_actions == ()
+    assert plan.semantic_plan is None
+    assert plan.file_refresh is not None
+    assert plan.file_refresh.md5 == "same"
+
+
+@pytest.mark.asyncio
 async def test_hydration_promotes_a_dependency_when_its_record_disappears():
     from openviking.storage.context_update_plan import (
         ContentState,
@@ -2583,6 +2685,11 @@ async def test_resource_processor_dispatches_direct_index_actions_without_semant
     )
     monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: queue_manager)
     monkeypatch.setattr("openviking.utils.embedding_utils._enqueue_embedding_message", enqueue)
+    vectorize_directory = AsyncMock(return_value={0, 1})
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.vectorize_directory_meta",
+        vectorize_directory,
+    )
     processor = ResourceProcessor(SimpleNamespace(get_embedder=lambda: None))
     processor._vectorize_resource_file = AsyncMock()
     ctx = RequestContext(UserIdentifier("acc", "user"), Role.USER)
@@ -2619,9 +2726,33 @@ async def test_resource_processor_dispatches_direct_index_actions_without_semant
                     {"search_tags": "append"},
                 ),
                 md5="new-md5",
+                summary="existing summary",
+            ),
+            DirectIndexAction(
+                "merge",
+                "viking://resources/repo",
+                0,
+                "repo-l0",
+                field_patch=FieldPatch(
+                    {"search_tags": ["scope=new"]},
+                    {"search_tags": "replace"},
+                ),
+                md5="abstract-md5",
+            ),
+            DirectIndexAction(
+                "upsert",
+                "viking://resources/repo",
+                1,
+                "repo-l1",
+                md5="overview-md5",
             ),
         ),
         ctx=ctx,
+        source_contents={
+            ("viking://resources/repo/c.py", 2): b"print('current')",
+            ("viking://resources/repo", 0): "current abstract",
+            ("viking://resources/repo", 1): "current overview",
+        },
     )
     assert [msg.action.value for msg in enqueued] == [
         "delete",
@@ -2644,7 +2775,328 @@ async def test_resource_processor_dispatches_direct_index_actions_without_semant
             {"search_tags": ["scope=new"]},
             {"search_tags": "append"},
         ),
+        summary="existing summary",
+        file_content=b"print('current')",
     )
+    vectorize_directory.assert_awaited_once_with(
+        "viking://resources/repo",
+        "current abstract",
+        "current overview",
+        context_type="resource",
+        ctx=ctx,
+        include_abstract=True,
+        include_overview=True,
+        content_is_body=True,
+        actions={0: "merge", 1: "upsert"},
+        scalar_overrides={
+            0: {"_record_id": "repo-l0"},
+            1: {"_record_id": "repo-l1"},
+        },
+        field_patches={
+            0: FieldPatch(
+                {"search_tags": ["scope=new"]},
+                {"search_tags": "replace"},
+            )
+        },
+        md5s={0: "abstract-md5", 1: "overview-md5"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_resource_processor_rejects_direct_upsert_without_snapshot_source():
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage.context_update_plan import DirectIndexAction
+    from openviking.utils.resource_processor import ResourceProcessor
+    from openviking_cli.session.user_id import UserIdentifier
+
+    processor = ResourceProcessor(SimpleNamespace(get_embedder=lambda: None))
+    ctx = RequestContext(UserIdentifier("acc", "user"), Role.USER)
+
+    with pytest.raises(ValueError, match="directory L0 vector source is unavailable"):
+        await processor._enqueue_index_actions(
+            (
+                DirectIndexAction(
+                    "upsert",
+                    "viking://resources/repo",
+                    0,
+                    "repo-l0",
+                    md5="abstract-md5",
+                ),
+            ),
+            ctx=ctx,
+            source_contents={},
+        )
+
+
+@pytest.mark.asyncio
+async def test_resource_processor_preserves_skill_metadata_in_direct_directory_merge(monkeypatch):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage.context_update_plan import DirectIndexAction
+    from openviking.utils.resource_processor import ResourceProcessor
+    from openviking_cli.session.user_id import UserIdentifier
+
+    vectorize_directory = AsyncMock(return_value={0})
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.vectorize_directory_meta", vectorize_directory
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(EMBEDDING="embedding", get_queue=lambda *a, **k: object()),
+    )
+    processor = ResourceProcessor(SimpleNamespace(get_embedder=lambda: None))
+    ctx = RequestContext(UserIdentifier("acc", "owner"), Role.USER)
+    uri = "viking://user/owner/skills/demo"
+
+    await processor._enqueue_index_actions(
+        (DirectIndexAction("merge", uri, 0, "skill-l0", md5="new"),),
+        ctx=ctx,
+        source_contents={
+            (uri, 0): "name: demo\ndescription: Demo\ntags: [tool]\nallowed_tools: [Read]",
+        },
+    )
+
+    meta = vectorize_directory.await_args.kwargs["meta"]
+    assert meta == {
+        "name": "demo",
+        "description": "Demo",
+        "tags": ["tool"],
+        "allowed_tools": ["Read"],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scalar_override", "expected_summary"),
+    [
+        # An existing L2 abstract carried by the V snapshot is seeded into
+        # summary_dict so vectorize_file can honor text_source downstream.
+        ({"abstract": "existing summary"}, "existing summary"),
+        # No abstract (new file / empty record) leaves the summary empty, so
+        # vectorize_file falls back to the file body regardless of text_source.
+        ({"abstract": ""}, ""),
+        ({}, ""),
+    ],
+)
+async def test_vectorize_resource_file_seeds_summary_from_existing_abstract(
+    monkeypatch, scalar_override, expected_summary
+):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage import context_update_execution
+    from openviking_cli.session.user_id import UserIdentifier
+
+    captured = {}
+
+    async def _fake_vectorize_file(
+        *,
+        file_path,
+        summary_dict,
+        parent_uri,
+        context_type,
+        ctx,
+        ingest_options,
+        file_md5,
+        scalar_override,
+        field_patch,
+        action,
+    ):
+        captured["summary_dict"] = summary_dict
+        captured["scalar_override"] = scalar_override
+        captured["ingest_options"] = ingest_options
+        return True
+
+    monkeypatch.setattr("openviking.utils.embedding_utils.vectorize_file", _fake_vectorize_file)
+    ctx = RequestContext(UserIdentifier("acc", "user"), Role.USER)
+
+    await context_update_execution.vectorize_resource_file(
+        "viking://resources/repo/a.py",
+        ctx=ctx,
+        scalar_override={"_record_id": "id-a", **scalar_override},
+        action="upsert",
+    )
+
+    # The existing abstract (if any) is seeded into summary_dict; text_source
+    # policy (summary vs body) is applied inside vectorize_file, not here. The
+    # abstract still travels unchanged as a stored scalar.
+    assert captured["summary_dict"]["summary"] == expected_summary
+    assert captured["scalar_override"]["_record_id"] == "id-a"
+    assert captured["ingest_options"].search_tags is None
+    if scalar_override.get("abstract"):
+        assert captured["scalar_override"]["abstract"] == scalar_override["abstract"]
+
+
+@pytest.mark.asyncio
+async def test_vectorize_resource_file_carries_acl_without_reapplying_tags(monkeypatch):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage import context_update_execution
+    from openviking.storage.acl import AclSpec, AclUpdate
+    from openviking_cli.session.user_id import UserIdentifier
+
+    captured = {}
+
+    async def _fake_vectorize_file(**kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr("openviking.utils.embedding_utils.vectorize_file", _fake_vectorize_file)
+    ctx = RequestContext(UserIdentifier("acc", "owner"), Role.USER)
+    acl_update = AclUpdate(
+        uri="viking://resources/private.md",
+        acl=AclSpec(
+            acl_mode="restricted",
+            entries=[{"principal": "user:reader", "level": "read"}],
+        ),
+    )
+
+    await context_update_execution.vectorize_resource_file(
+        "viking://resources/private.md",
+        ctx=ctx,
+        acl_update=acl_update,
+        scalar_override={"_record_id": "private-l2", "search_tags": ["team=search"]},
+        action="upsert",
+    )
+
+    options = captured["ingest_options"]
+    assert options.acl_update == acl_update
+    assert options.search_tags is None
+
+
+@pytest.mark.asyncio
+async def test_commit_and_enqueue_plan_forwards_acl_to_direct_actions(monkeypatch):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage import context_update_execution
+    from openviking.storage.acl import AclSpec, AclUpdate
+    from openviking.storage.context_update_plan import ContextUpdatePlan, DirectIndexAction
+    from openviking.utils.ingest_options import IngestOptions
+    from openviking_cli.session.user_id import UserIdentifier
+
+    uri = "viking://resources/private.md"
+    acl_update = AclUpdate(
+        uri=uri,
+        acl=AclSpec(acl_mode="restricted", entries=[]),
+    )
+    enqueue = AsyncMock(return_value=True)
+    monkeypatch.setattr(context_update_execution, "enqueue_direct_index_actions", enqueue)
+
+    await context_update_execution.commit_and_enqueue_plan(
+        ContextUpdatePlan(
+            uri,
+            "resource",
+            direct_index_actions=(DirectIndexAction("upsert", uri, 2, "private-l2", md5="new"),),
+        ),
+        ctx=RequestContext(UserIdentifier("acc", "owner"), Role.USER),
+        ingest_options=IngestOptions(
+            search_tags=["team=search"],
+            search_tag_mode="append",
+            acl_update=acl_update,
+        ),
+    )
+
+    enqueue.assert_awaited_once()
+    assert enqueue.await_args.kwargs["acl_update"] == acl_update
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("created", "expected_action"), [(True, "upsert"), (False, "")])
+async def test_commit_and_enqueue_plan_limits_created_file_upsert_to_write_adapter(
+    created, expected_action
+):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage import context_update_execution
+    from openviking.storage.context_update_plan import ContextUpdatePlan, FileRefreshIntent
+    from openviking_cli.session.user_id import UserIdentifier
+
+    uri = "viking://resources/new.md"
+    refresh = AsyncMock(
+        return_value={
+            "status": "success",
+            "enqueued_count": 1,
+            "semantic_action": "refresh_now",
+        }
+    )
+    summarizer = SimpleNamespace(refresh_file_parent=refresh)
+
+    await context_update_execution.commit_and_enqueue_plan(
+        ContextUpdatePlan(
+            uri,
+            "resource",
+            file_refresh=FileRefreshIntent(uri, "new-md5"),
+        ),
+        ctx=RequestContext(UserIdentifier("acc", "owner"), Role.USER),
+        file_created=created,
+        summarizer=summarizer,
+    )
+
+    assert refresh.await_args.kwargs["file_vector_action"] == expected_action
+
+
+@pytest.mark.asyncio
+async def test_direct_index_actions_delete_stale_record_when_embed_is_skipped(monkeypatch):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage import context_update_execution
+    from openviking.storage.context_update_plan import DirectIndexAction
+    from openviking_cli.session.user_id import UserIdentifier
+
+    monkeypatch.setattr(
+        context_update_execution,
+        "vectorize_resource_file",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(EMBEDDING="Embedding", get_queue=lambda *args, **kwargs: object()),
+    )
+    enqueue = AsyncMock(return_value=True)
+    monkeypatch.setattr("openviking.utils.embedding_utils._enqueue_embedding_message", enqueue)
+    ctx = RequestContext(UserIdentifier("acc", "user"), Role.USER)
+
+    enqueued = await context_update_execution.enqueue_direct_index_actions(
+        (
+            DirectIndexAction(
+                "upsert",
+                "viking://resources/empty.md",
+                2,
+                "empty-l2",
+                md5="d41d8cd98f00b204e9800998ecf8427e",
+            ),
+        ),
+        ctx=ctx,
+    )
+
+    assert enqueued is True
+    delete_message = enqueue.await_args.args[1]
+    assert delete_message.record_ids == ["empty-l2"]
+
+
+@pytest.mark.asyncio
+async def test_direct_index_action_forwards_existing_summary_to_write_vectorizer(monkeypatch):
+    """vectors_only write must preserve the planner's summary_first input."""
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage import context_update_execution
+    from openviking.storage.context_update_plan import DirectIndexAction
+    from openviking_cli.session.user_id import UserIdentifier
+
+    vectorize = AsyncMock(return_value=True)
+    monkeypatch.setattr(context_update_execution, "vectorize_resource_file", vectorize)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(EMBEDDING="Embedding", get_queue=lambda *args, **kwargs: object()),
+    )
+    action = DirectIndexAction(
+        "upsert",
+        "viking://resources/repo/a.md",
+        2,
+        "a-l2",
+        md5="new-md5",
+        summary="existing L2 abstract",
+    )
+
+    await context_update_execution.enqueue_direct_index_actions(
+        (action,),
+        ctx=RequestContext(UserIdentifier("acc", "user"), Role.USER),
+    )
+
+    assert vectorize.await_args.kwargs["summary"] == "existing L2 abstract"
+    assert vectorize.await_args.kwargs["scalar_override"] == {"_record_id": "a-l2"}
 
 
 def test_semantic_message_roundtrip_uses_explicit_plan():
@@ -2958,6 +3410,7 @@ async def test_directory_output_unchanged_still_applies_planned_scalar_fields(mo
         SemanticTreeSnapshot,
     )
     from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
+    from openviking.storage.queuefs.semantic_processor import SemanticProcessor
     from openviking_cli.session.user_id import UserIdentifier
 
     root = "viking://resources/repo"
@@ -2969,10 +3422,16 @@ async def test_directory_output_unchanged_still_applies_planned_scalar_fields(mo
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
 
-    class Processor:
+    embedding_queue = SimpleNamespace(enqueue=AsyncMock(return_value="embedding-id"))
+    queue_manager = SimpleNamespace(
+        EMBEDDING="Embedding",
+        get_queue=lambda *args, **kwargs: embedding_queue,
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: queue_manager)
+
+    class Processor(SemanticProcessor):
         _generate_overview = AsyncMock(return_value="overview")
         _vectorize_directory = AsyncMock(return_value=set())
-        _update_vector_fields = AsyncMock(return_value=True)
 
         @staticmethod
         def _normalize_overview_generation(overview):
@@ -3029,22 +3488,12 @@ async def test_directory_output_unchanged_still_applies_planned_scalar_fields(mo
     await executor.run(root)
 
     processor._vectorize_directory.assert_not_awaited()
-    processor._update_vector_fields.assert_awaited_once_with(
-        record_id="root-l0",
-        uri=root,
-        level=0,
-        field_patch=FieldPatch(
-            {"search_tags": ["scope=new"]},
-            {"search_tags": "append"},
-            {
-                "abstract": "abstract",
-                "uri": root,
-                "level": 0,
-                "account_id": "acc",
-            },
-        ),
-        ctx=executor._ctx,
-    )
+    embedding_queue.enqueue.assert_awaited_once()
+    message = embedding_queue.enqueue.await_args.args[0]
+    assert message.action.value == "update_fields"
+    assert message.record_ids == ["root-l0"]
+    assert message.update_fields == {"search_tags": ["scope=new"]}
+    assert message.field_modes == {"search_tags": "append"}
 
 
 @pytest.mark.asyncio
@@ -3213,7 +3662,8 @@ async def test_file_repair_passes_partial_update_to_embedding(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_direct_only_plan_skips_semantic_queue(monkeypatch):
+@pytest.mark.parametrize("action_name", ["delete", "update_fields"])
+async def test_direct_only_plan_skips_semantic_queue(monkeypatch, action_name):
     from openviking.server.identity import RequestContext, Role
     from openviking.storage.context_update_plan import DirectIndexAction
     from openviking.utils.resource_processor import ResourceProcessor
@@ -3226,15 +3676,22 @@ async def test_direct_only_plan_skips_semantic_queue(monkeypatch):
     )
     monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
     processor = ResourceProcessor(SimpleNamespace(get_embedder=lambda: None))
-    processor._enqueue_index_actions = AsyncMock()
+    embedding_queue = SimpleNamespace(enqueue=AsyncMock(return_value="embedding-id"))
+    queue_manager = SimpleNamespace(
+        EMBEDDING="Embedding",
+        get_queue=lambda *args, **kwargs: embedding_queue,
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: queue_manager)
     summarizer = SimpleNamespace(summarize=AsyncMock())
     processor._get_summarizer = lambda: summarizer
     action = DirectIndexAction(
-        "update_fields",
+        action_name,
         root + "/a.py",
         2,
         "a-l2",
-        field_patch=FieldPatch({"search_tags": ["scope=new"]}),
+        field_patch=(
+            FieldPatch({"search_tags": ["scope=new"]}) if action_name == "update_fields" else None
+        ),
     )
 
     await processor.finish_prepared_resource(
@@ -3255,7 +3712,7 @@ async def test_direct_only_plan_skips_semantic_queue(monkeypatch):
                         "uri": action.uri,
                         "level": action.level,
                         "record_id": action.record_id,
-                        "field_patch": action.field_patch.to_dict(),
+                        "field_patch": action.field_patch.to_dict() if action.field_patch else None,
                         "md5": action.md5,
                     }
                 ],
@@ -3267,7 +3724,12 @@ async def test_direct_only_plan_skips_semantic_queue(monkeypatch):
         processing_mode="semantic_and_vectors",
     )
 
-    processor._enqueue_index_actions.assert_awaited_once()
+    embedding_queue.enqueue.assert_awaited_once()
+    message = embedding_queue.enqueue.await_args.args[0]
+    assert message.action.value == action_name
+    assert message.record_ids == ["a-l2"]
+    if action_name == "update_fields":
+        assert message.update_fields == {"search_tags": ["scope=new"]}
     summarizer.summarize.assert_not_awaited()
     viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
 
@@ -3377,7 +3839,7 @@ async def test_semantic_processor_runs_only_plan_execution_roots(monkeypatch):
         root_write_result = None
 
         def __init__(self, **kwargs):
-            calls.append(("init", kwargs["semantic_plan"]))
+            calls.append(("init", kwargs))
 
         async def run(self, uri):
             calls.append(("run", uri))
@@ -3464,11 +3926,13 @@ async def test_semantic_processor_runs_only_plan_execution_roots(monkeypatch):
         user_id="user",
         role="user",
         plan=plan,
+        generation_trigger="reindex",
     )
 
     await processor.on_dequeue(msg.to_dict())
 
     assert [value for kind, value in calls if kind == "run"] == [root]
+    assert calls[0][1]["generation_trigger"] == "reindex"
 
 
 @pytest.mark.asyncio

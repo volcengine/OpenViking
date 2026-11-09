@@ -484,7 +484,37 @@ class CollectionAdapter(ABC):
         output_fields: Optional[list[str]] = None,
         order_by: Optional[str] = None,
         order_desc: bool = False,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> list[Dict[str, Any]]:
+        decay_request = (advance or {}).get("time_decay")
+        if decay_request is not None and self.mode != "opengauss":
+            from openviking.utils.time_decay import (
+                build_time_decay_fusion_spec,
+                build_time_decay_post_process_ops,
+            )
+            from openviking.utils.time_utils import parse_iso_datetime
+
+            protection = decay_request["protection"]
+            origin = parse_iso_datetime(decay_request["origin"])
+            if self.mode in {"local", "cuvs", "http"}:
+                spec = build_time_decay_fusion_spec(protection=protection, origin=origin)
+                advance = {
+                    "time_decay": {
+                        "field": spec.field,
+                        "origin_ms": spec.origin_ms,
+                        "offset_ms": spec.offset_ms,
+                        "scale_ms": spec.scale_ms,
+                        "decay": spec.decay,
+                    }
+                }
+            elif self.mode in {"vikingdb", "volcengine"}:
+                advance = {
+                    "post_process_ops": build_time_decay_post_process_ops(
+                        protection=protection, origin=origin
+                    )
+                }
+            else:
+                raise NotImplementedError(f"Time decay is not supported by {self.mode}")
         coll = self.get_collection()
         vectordb_filter = self._compile_filter(filter)
 
@@ -497,6 +527,8 @@ class CollectionAdapter(ABC):
                 offset=offset,
                 filters=vectordb_filter,
                 output_fields=output_fields,
+                advance=advance,
+                return_detail_info=decay_request is not None,
             )
         elif order_by:
             result = coll.search_by_scalar(
@@ -538,6 +570,10 @@ class CollectionAdapter(ABC):
             record = dict(item.fields) if item.fields else {}
             record["id"] = item.id
             record["_score"] = _normalize_result_score(item.score)
+            if item.origin_score is not None:
+                record["_origin_score"] = _normalize_result_score(item.origin_score)
+            if item.addition_score is not None:
+                record["_time_score"] = _normalize_result_score(item.addition_score)
             record = self._normalize_record_for_read(record)
             records.append(record)
         return records
@@ -667,6 +703,8 @@ class CollectionAdapter(ABC):
         offset: int = 0,
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
         output_fields: Optional[list[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[list[str]] = None,
     ) -> list[Dict[str, Any]]:
         coll = self.get_collection()
         compiled_filter = self._compile_filter(filter)
@@ -683,6 +721,8 @@ class CollectionAdapter(ABC):
             index_name=self._index_name,
             keywords=keywords,
             query=query,
+            mode=mode,
+            fields=fields,
             limit=limit,
             offset=offset,
             filters=compiled_filter,

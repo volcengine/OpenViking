@@ -45,6 +45,10 @@ def _bind_token_usage_tracker(instance: Any, tracker: Any) -> None:
         return
     if hasattr(instance, "_token_tracker"):
         instance._token_tracker = tracker
+    inner = getattr(instance, "inner", None)
+    if inner is not None:
+        _bind_token_usage_tracker(inner, tracker)
+        return
     if hasattr(instance, "_vlm_instances"):
         for child in instance._vlm_instances:
             _bind_token_usage_tracker(child, tracker)
@@ -58,7 +62,9 @@ def _bind_token_usage_tracker(instance: Any, tracker: Any) -> None:
 class VLMCredential(BaseModel):
     """Single VLM credential configuration for multi-credential failover."""
 
-    id: Optional[str] = RuntimeField(default=None, description="Unique identifier for this credential")
+    id: Optional[str] = RuntimeField(
+        default=None, description="Unique identifier for this credential"
+    )
     provider: Optional[str] = RuntimeField(default=None, description="Provider type")
     model: Optional[str] = RuntimeField(
         default=None,
@@ -155,7 +161,9 @@ class VLMConfig(BaseModel):
         ),
     )
     api_base: Optional[str] = Field(default=None, description="API base URL")
-    temperature: float = Field(default=0.0, description="Generation temperature")
+    temperature: Optional[float] = Field(
+        default=None, description="Generation temperature; None uses the provider default"
+    )
     max_retries: int = Field(default=3, description="Maximum retry attempts")
     timeout: float = Field(
         default=600.0,
@@ -720,6 +728,10 @@ class VLMConfig(BaseModel):
             self.close()
         except Exception:
             pass
+
+    def build_vlm_config_dict_for_credential(self, credential: VLMCredential) -> Dict[str, Any]:
+        """Return the effective backend settings for one normalized credential."""
+        return self._build_vlm_config_dict_for_credential(credential)
 
     def _build_vlm_config_dict_for_credential(self, credential: VLMCredential) -> Dict[str, Any]:
         """Build VLM instance config dict for a specific credential."""

@@ -31,6 +31,8 @@ export class SyncManager {
   private logger: ReturnType<typeof createLogger>;
   private ovSessionId: string | null = null;
   private syncedEntryCount = 0;
+  /** Entry at the numeric watermark; detects a same-length sibling branch. */
+  private syncedEntryId = "";
   /**
    * Messages this session lost for good: non-retryable (4xx) rejections and
    * queued entries whose retry budget ran out. They are counted as accepted so
@@ -39,6 +41,8 @@ export class SyncManager {
    * signal. Takeover persists the resulting boolean with its own session state.
    */
   private droppedForever = 0;
+  /** Why the last commit request got no result, for `/viking commit` to show. */
+  private lastCommitFailure = "";
 
   constructor(client: OVClient, config: OVConfig) {
     this.client = client;
@@ -53,6 +57,8 @@ export class SyncManager {
   get syncedCount(): number { return this.syncedEntryCount; }
   /** Messages OpenViking will never receive; they are missing from the archive. */
   get droppedCount(): number { return this.droppedForever; }
+  /** `HTTP <status>: <server message>` of the last failed commit; empty after a success. */
+  get lastCommitError(): string { return this.lastCommitFailure; }
 
   /**
    * How many payloads the capture path would actually send for a slice of the
@@ -66,9 +72,9 @@ export class SyncManager {
     return extracted.payloads.length;
   }
 
-  restoreWatermark(n: number): void {
-    const next = Math.max(0, Math.floor(Number(n) || 0));
-    this.syncedEntryCount = next;
+  restoreWatermark(n: number, branch: any[]): void {
+    this.syncedEntryCount = Math.max(0, Math.floor(Number(n) || 0));
+    this.syncedEntryId = branch[this.syncedEntryCount - 1]?.id || "";
   }
 
   async ensureSession(piSessionId: string): Promise<boolean> {
@@ -204,8 +210,16 @@ export class SyncManager {
       return { added: 0, tokens: 0, allDelivered: true, queued: 0, permanentFailures: 0 };
     }
 
-    const extracted = extractBranchCapturePayloads(branch, this.syncedEntryCount, this.config);
-    if (extracted.resetWatermark) this.syncedEntryCount = 0;
+    const extracted = extractBranchCapturePayloads(
+      branch,
+      this.syncedEntryCount,
+      this.config,
+      this.syncedEntryId,
+    );
+    if (extracted.resetWatermark) {
+      this.syncedEntryCount = 0;
+      this.syncedEntryId = "";
+    }
     const sent = await this.sendPayloads(extracted.payloads);
     const added = sent.accepted;
     let tokens = 0;
@@ -215,6 +229,7 @@ export class SyncManager {
     const allDelivered = sent.delivered === added && sent.permanentFailures === 0;
     if (added === extracted.payloads.length) {
       this.syncedEntryCount = extracted.nextEntryCount;
+      this.syncedEntryId = extracted.nextEntryId;
     }
     if (added > 0 && !this.config.takeoverEnabled) {
       await this.commitIfNeeded();
@@ -285,16 +300,21 @@ export class SyncManager {
   }
 
   async commit(
-    opts: { queueOnFailure?: boolean; keepRecentCount?: number; timeoutMs?: number } = {},
+    opts: { queueOnFailure?: boolean; keepRecentCount?: number; timeoutMs?: number; enableWorkingMemory?: boolean } = {},
   ): Promise<any | null> {
-    if (!this.ovSessionId) return null;
+    if (!this.ovSessionId) {
+      this.lastCommitFailure = "no OpenViking session yet";
+      return null;
+    }
     const response = await this.client.commitSessionResponse(
       this.ovSessionId,
       opts.keepRecentCount,
       opts.timeoutMs,
+      opts.enableWorkingMemory,
     );
     const result = response.result;
     if (!result) {
+      this.lastCommitFailure = describeCommitError(response.status, response.error);
       this.logger.log("commit", {
         session: this.ovSessionId,
         ok: false,
@@ -304,11 +324,12 @@ export class SyncManager {
       });
       if (opts.queueOnFailure !== false) {
         await enqueue("commitSession", this.ovSessionId, {
-          keep_recent_count: opts.keepRecentCount ?? this.config.commitKeepRecentCount,
+          keep_recent_count: opts.keepRecentCount ?? 0,
         });
       }
       return null;
     }
+    this.lastCommitFailure = "";
     this.logger.log("commit", {
       session: this.ovSessionId,
       ok: true,
@@ -320,6 +341,14 @@ export class SyncManager {
   async shutdown(): Promise<void> {
     return;
   }
+}
+
+/** One line for a failed commit request: status (0 = no response) and the server's message. */
+export function describeCommitError(status: number | undefined, error: any): string {
+  const code = Number(status) || 0;
+  const raw = String(error?.message || error?.code || "unknown error").replace(/\s+/g, " ").trim();
+  const message = raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
+  return code > 0 ? `HTTP ${code}: ${message}` : `no response: ${message}`;
 }
 
 async function hasProcessingMessage(sessionId: string): Promise<boolean> {

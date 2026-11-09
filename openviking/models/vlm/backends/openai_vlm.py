@@ -4,6 +4,7 @@
 
 import base64
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -11,6 +12,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from openviking.models.model_error import model_error_boundary
 from openviking.models.network import (
     create_optional_async_httpx_client,
     create_optional_sync_httpx_client,
@@ -26,9 +28,7 @@ try:
 except ImportError:
     openai = None
 
-from openviking.utils.model_retry import retry_async, retry_sync
-
-from ..base import ToolCall, VLMBase, VLMResponse
+from ..base import ToolCall, ToolResultMediaMode, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
 
 logger = get_logger(__name__)
@@ -41,7 +41,8 @@ _DASHSCOPE_HOSTS = {
 
 
 # These names select existing OpenAI request defaults, not general reasoning capability.
-_OPENAI_REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+# gpt-5 and later generations (gpt-6, gpt-7, ...) share the o-series request contract.
+_OPENAI_REASONING_MODEL_PATTERN = re.compile(r"(?:gpt-(?:[5-9]|[1-9]\d)|o[134])")
 
 
 def _build_openai_client_kwargs(
@@ -65,7 +66,7 @@ def _build_openai_client_kwargs(
     else:
         kwargs = {"api_key": api_key, "base_url": api_base}
     kwargs["timeout"] = timeout
-    # OpenViking owns provider retry/backoff via retry_sync/retry_async.
+    # RetryVLM owns retry/backoff; the SDK performs exactly one request.
     kwargs["max_retries"] = 0
     if extra_headers:
         kwargs["default_headers"] = extra_headers
@@ -82,6 +83,10 @@ class OpenAIVLM(VLMBase):
         self.api_version = config.get("api_version")
         self.reasoning_effort = config.get("reasoning_effort")
         self.keepalive_expiry = config.get("keepalive_expiry")
+
+    def tool_result_media_mode(self) -> ToolResultMediaMode:
+        """Chat Completions carries tool images in associated user messages."""
+        return "user_message"
 
     def _http_client_kwargs(self) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {"timeout": self.timeout}
@@ -178,21 +183,32 @@ class OpenAIVLM(VLMBase):
         return host.lower() in _DASHSCOPE_HOSTS
 
     def _apply_completion_params(
-        self, kwargs: Dict[str, Any], thinking: bool, max_tokens: Optional[int] = None
+        self,
+        kwargs: Dict[str, Any],
+        thinking: bool,
+        max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> None:
         """Apply model defaults, explicit settings, and provider-specific body fields."""
-        if kwargs["model"].lower().startswith(_OPENAI_REASONING_MODEL_PREFIXES):
+        if _OPENAI_REASONING_MODEL_PATTERN.match(kwargs["model"].lower()):
             max_tokens_param = "max_completion_tokens"
             kwargs["reasoning_effort"] = "low"
         else:
             max_tokens_param = "max_tokens"
-            kwargs["temperature"] = self.temperature
+            if self.temperature is not None:
+                kwargs["temperature"] = self.temperature
 
+        if kwargs.get("tools") and self.provider != "openai-codex":
+            if re.match(r"gpt-(?:5\.[456]|6-(?:sol|luna))(?:-|$)", kwargs["model"].lower()):
+                kwargs["reasoning_effort"] = "none"
         effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
         if effective_max_tokens is not None:
             kwargs[max_tokens_param] = effective_max_tokens
-        if self.reasoning_effort is not None:
-            kwargs["reasoning_effort"] = self.reasoning_effort
+        effective_reasoning_effort = (
+            self.reasoning_effort if reasoning_effort is None else reasoning_effort
+        )
+        if effective_reasoning_effort is not None:
+            kwargs["reasoning_effort"] = effective_reasoning_effort
 
         extra_body = dict(self.extra_request_body)
         if self._supports_enable_thinking():
@@ -256,6 +272,9 @@ class OpenAIVLM(VLMBase):
                     "completion_tokens": response.usage.completion_tokens,
                     "total_tokens": response.usage.total_tokens,
                     "prompt_tokens_details": getattr(response.usage, "prompt_tokens_details", None),
+                    "completion_tokens_details": getattr(
+                        response.usage, "completion_tokens_details", None
+                    ),
                 }
 
             return VLMResponse(
@@ -274,6 +293,7 @@ class OpenAIVLM(VLMBase):
         messages: Optional[List[Dict[str, Any]]] = None,
         thinking: Optional[bool] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         effective_thinking = self.thinking if thinking is None else thinking
         kwargs_messages = sanitize_openai_messages(
@@ -284,10 +304,15 @@ class OpenAIVLM(VLMBase):
             "model": model,
             "messages": kwargs_messages,
         }
-        self._apply_completion_params(kwargs, effective_thinking, max_tokens=max_tokens)
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+        self._apply_completion_params(
+            kwargs,
+            effective_thinking,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+        )
         return kwargs
 
     def _build_vision_kwargs(
@@ -315,10 +340,10 @@ class OpenAIVLM(VLMBase):
             "model": model,
             "messages": kwargs_messages,
         }
-        self._apply_completion_params(kwargs, effective_thinking)
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+        self._apply_completion_params(kwargs, effective_thinking)
         return kwargs
 
     def _extract_completion_content(self, response, elapsed: float) -> str:
@@ -331,6 +356,7 @@ class OpenAIVLM(VLMBase):
         content = self._extract_content_from_response(response)
         return self._clean_response(content)
 
+    @model_error_boundary
     def get_completion(
         self,
         prompt: str = "",
@@ -353,13 +379,9 @@ class OpenAIVLM(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return self._extract_completion_content(response, elapsed)
 
-        return retry_sync(
-            _call,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name="OpenAI VLM completion",
-        )
+        return _call()
 
+    @model_error_boundary
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -368,12 +390,19 @@ class OpenAIVLM(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously"""
         effective_thinking = self.thinking if thinking is None else thinking
         client = self.get_async_client()
         kwargs = self._build_text_kwargs(
-            prompt, tools, tool_choice, messages, effective_thinking, max_tokens=max_tokens
+            prompt,
+            tools,
+            tool_choice,
+            messages,
+            effective_thinking,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
         async def _call() -> Union[str, VLMResponse]:
@@ -382,7 +411,10 @@ class OpenAIVLM(VLMBase):
             elapsed = time.perf_counter() - t0
             if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
-                return self._build_vlm_response(response, has_tools=True)
+                result = self._build_vlm_response(response, has_tools=True)
+                if not tools:
+                    result.content = self._clean_response(result.content or "")
+                return result
             return await self._extract_completion_content_async(response, elapsed)
 
         # 用 tracer.info 打印请求（人类可读格式）
@@ -391,12 +423,7 @@ class OpenAIVLM(VLMBase):
             + format_messages(redact_image_data_urls(kwargs.get("messages", [])))
         )
 
-        return await retry_async(
-            _call,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name="OpenAI VLM async completion",
-        )
+        return await _call()
 
     def _detect_image_format(self, data: bytes) -> str:
         """Detect image format from magic bytes.
@@ -449,6 +476,7 @@ class OpenAIVLM(VLMBase):
             }
         return {"type": "image_url", "image_url": {"url": image}}
 
+    @model_error_boundary
     def get_vision_completion(
         self,
         prompt: str = "",
@@ -474,13 +502,9 @@ class OpenAIVLM(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return self._extract_completion_content(response, elapsed)
 
-        return retry_sync(
-            _call,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name="OpenAI VLM vision completion",
-        )
+        return _call()
 
+    @model_error_boundary
     async def get_vision_completion_async(
         self,
         prompt: str = "",
@@ -506,9 +530,4 @@ class OpenAIVLM(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return await self._extract_completion_content_async(response, elapsed)
 
-        return await retry_async(
-            _call,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name="OpenAI VLM async vision completion",
-        )
+        return await _call()

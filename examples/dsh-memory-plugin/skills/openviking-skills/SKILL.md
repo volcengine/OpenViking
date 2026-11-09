@@ -88,7 +88,7 @@ when the `ov` CLI is installed, otherwise tell the user.
      survive in the frontmatter. Put anything else (version, author, ...)
      under `metadata:` or it is dropped.
 2. Check the name on the target root with
-   `read(uris="<root>/<name>/SKILL.md")`, where `<root>` is
+   `read(uri="<root>/<name>/SKILL.md")`, where `<root>` is
    `viking://~/skills`, or `viking://agent/skills` when sharing. If it
    exists, `add_skill` replaces it without asking: show the user what would
    change and install only after they confirm, or pick another name.
@@ -147,6 +147,8 @@ of that skill.
    - Claude Code: `~/.claude/skills/`, `<repo>/.claude/skills/`
    - Codex: `~/.agents/skills/`, `<repo>/.agents/skills/`
    - Cursor: `~/.cursor/skills/`
+   - pi: `~/.pi/agent/skills/`, `<repo>/.pi/skills/`
+   - OpenCode: `~/.config/opencode/skills/`, `<repo>/.opencode/skills/`
 2. **Classify.** A skill is *environment-bound*, stays local, and is never
    offered for upload when any of these holds:
    - a plugin or marketplace ships it (its real path contains `/plugins/` or

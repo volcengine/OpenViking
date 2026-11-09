@@ -331,6 +331,27 @@ async def test_add_resource_rejects_private_git_ssh_url(client: httpx.AsyncClien
     assert body["error"]["code"] == "PERMISSION_DENIED"
 
 
+async def test_add_resource_rejects_unverifiable_remote_dns(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        "openviking.utils.network_guard._resolve_host_addresses",
+        lambda _host: set(),
+    )
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={"path": "http://new-host.example.com/doc.md", "reason": "ssrf probe"},
+    )
+
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert "could not be resolved" in body["error"]["message"]
+
+
 async def test_url_detector_request_validator_blocks_loopback_head(loopback_http_url: str):
     detector = URLTypeDetector()
 

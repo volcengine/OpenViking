@@ -54,6 +54,7 @@ from openviking_cli.utils.logger import default_logger as logger
 
 # Use imported constants, no longer defined here
 AUTO_ID_KEY = SpecialFields.AUTO_ID.value
+_RECOVERY_BATCH_SIZE = 1024
 
 
 class _MutationMarker:
@@ -507,7 +508,14 @@ class LocalCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
+        return_detail_info: bool = False,
     ) -> SearchResult:
+        time_decay = (advance or {}).get("time_decay")
+        if advance is not None and (
+            set(advance) != {"time_decay"} or not isinstance(time_decay, dict)
+        ):
+            raise NotImplementedError("Local advanced ranking supports time_decay only")
         search_result = SearchResult()
         index = self.indexes.get(index_name)
         if not index:
@@ -521,9 +529,20 @@ class LocalCollection(ICollection):
 
         # Request more results to handle offset
         actual_limit = limit + offset
-        label_list, scores_list = index.search(
-            dense_vector or [], actual_limit, filters, sparse_raw_terms, sparse_values
-        )
+        details = {}
+        if time_decay is not None:
+            label_list, scores_list, details = index.search_with_time_decay(
+                dense_vector or [],
+                actual_limit,
+                filters,
+                sparse_raw_terms,
+                sparse_values,
+                time_decay,
+            )
+        else:
+            label_list, scores_list = index.search(
+                dense_vector or [], actual_limit, filters, sparse_raw_terms, sparse_values
+            )
 
         # Apply offset by slicing the results
         if offset > 0:
@@ -535,6 +554,7 @@ class LocalCollection(ICollection):
             label_list = label_list[:limit]
             scores_list = scores_list[:limit]
 
+        score_details = [details.get(str(label), {}) for label in label_list]
         pk_list = label_list
         fields_list = []
         projected_fields = (
@@ -570,6 +590,7 @@ class LocalCollection(ICollection):
                     cands_vectors = [cands_vectors[i] for i in valid_indices]
                 pk_list = [pk_list[i] for i in valid_indices]
                 scores_list = [scores_list[i] for i in valid_indices]
+                score_details = [score_details[i] for i in valid_indices]
 
             # Parse each candidate's fields defensively: a single corrupted JSON
             # string (e.g. truncated by the storage layer's uint16 length prefix)
@@ -597,6 +618,7 @@ class LocalCollection(ICollection):
                     cands_vectors = [cands_vectors[i] for i in json_valid_indices]
                 pk_list = [pk_list[i] for i in json_valid_indices]
                 scores_list = [scores_list[i] for i in json_valid_indices]
+                score_details = [score_details[i] for i in json_valid_indices]
 
             if self.meta.primary_key:
                 pk_list = [
@@ -611,8 +633,16 @@ class LocalCollection(ICollection):
                     fields_list[i][self.meta.vector_key] = vector
 
         search_result.data = [
-            SearchItemResult(id=pk, fields=fields, score=score)
-            for pk, score, fields in zip_longest(pk_list, scores_list, fields_list)
+            SearchItemResult(
+                id=pk,
+                fields=fields,
+                score=score,
+                origin_score=(detail or {}).get("origin_score"),
+                addition_score=(detail or {}).get("addition_score"),
+            )
+            for pk, score, fields, detail in zip_longest(
+                pk_list, scores_list, fields_list, score_details
+            )
         ]
         return search_result
 
@@ -711,6 +741,8 @@ class LocalCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[List[str]] = None,
     ) -> SearchResult:
         """Local backend does not generate vectors from keywords.
 
@@ -1354,33 +1386,33 @@ class PersistCollection(LocalCollection):
                 "Index '%s': replaying delta records lazily to recover from last persistent snapshot",
                 index_name,
             )
-            upsert_list: List[DeltaRecord] = []
-            delete_list: List[DeltaRecord] = []
+            records: List[DeltaRecord] = []
+            batch_operation = "upsert"
             _processed = 0
             _seen = 0
             _last_log = 0.0
             for data in delta_records:
                 _seen += 1
                 if data.type == OpType.PUT.value:
-                    if delete_list:
-                        _processed += self._replay_recovery_records(
-                            index_name=index_name,
-                            index=index,
-                            records=delete_list,
-                            operation="delete",
-                        )
-                        delete_list = []
-                    upsert_list.append(data)
+                    operation = "upsert"
                 elif data.type == OpType.DEL.value:
-                    if upsert_list:
+                    operation = "delete"
+                else:
+                    operation = None
+                if operation is not None:
+                    # Preserve log order without retaining an entire run of PUTs or DELs.
+                    if records and (
+                        operation != batch_operation or len(records) >= _RECOVERY_BATCH_SIZE
+                    ):
                         _processed += self._replay_recovery_records(
                             index_name=index_name,
                             index=index,
-                            records=upsert_list,
-                            operation="upsert",
+                            records=records,
+                            operation=batch_operation,
                         )
-                        upsert_list = []
-                    delete_list.append(data)
+                        records = []
+                    batch_operation = operation
+                    records.append(data)
                 now = time.time()
                 if now - _last_log >= 5.0 and _seen > 0:
                     logger.info(
@@ -1390,19 +1422,12 @@ class PersistCollection(LocalCollection):
                         index_name,
                     )
                     _last_log = now
-            if upsert_list:
+            if records:
                 _processed += self._replay_recovery_records(
                     index_name=index_name,
                     index=index,
-                    records=upsert_list,
-                    operation="upsert",
-                )
-            if delete_list:
-                _processed += self._replay_recovery_records(
-                    index_name=index_name,
-                    index=index,
-                    records=delete_list,
-                    operation="delete",
+                    records=records,
+                    operation=batch_operation,
                 )
             logger.info("Index '%s': replay complete (%d records)", index_name, _processed)
             index._start_dense_rebuild_worker()
@@ -1483,6 +1508,13 @@ class PersistCollection(LocalCollection):
                     logger.error(f"Failed to flush index {index_name}: {e}")
 
         self.indexes.iterate(persist_index)
+        if persisted_count > 0:
+            # Recovery only replays deltas newer than each index's snapshot, so
+            # anything older than the oldest snapshot is dead weight.
+            try:
+                self._delete_expire_delta_record()
+            except Exception as e:
+                logger.error(f"Failed to prune delta records: {e}")
         return persisted_count
 
     def _new_index(

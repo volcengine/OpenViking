@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 import type { JsonObject } from "./types.js";
 
 /** Typed HTTP, server-contract, timeout and network error from the SDK. */
