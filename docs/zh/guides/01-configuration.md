@@ -53,7 +53,7 @@ openviking-server doctor
 
 ```
 
-如果 `provider` 是 `openai-codex`，并且 Codex OAuth 已经就绪，则 `vlm.api_key` 可以省略。
+如果 `provider` 是 `openai-codex`，并且 Codex OAuth 已经就绪，则 `vlm.api_key` 可以省略。将 `vlm.api_base` 设为 `https://api.openai.com/v1` 时，也支持标准 OpenAI API Key；参见 [VLM 配置](#vlm)。
 
 顶层 `service_name` 默认是 `"openviking-server"`。使用 cache 的模块会把它作为
 Redis 命名空间。OTel 的 `service_name` 显式配置时保持原值，省略时继承该值。
@@ -799,10 +799,10 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `api_key` | str | API Key。`openai-codex` 在 Codex OAuth 可用时可省略；使用 provider 原生凭据的 `litellm` 路由也可省略 |
+| `api_key` | str | API Key。`openai-codex` 在 Codex OAuth 可用时可省略；使用标准 OpenAI API Key 时须同时设置 `api_base: "https://api.openai.com/v1"`。使用 provider 原生凭据的 `litellm` 路由也可省略 |
 | `forward_api_key` | bool | 仅 LiteLLM 使用。覆盖是否把 `api_key` 透传给 LiteLLM。默认情况下，OpenViking 不会把占位 key 透传给 `bedrock/`、`sagemaker/`、`vertex_ai/` 等 AWS/GCP 原生鉴权路由；如果明确使用 LiteLLM 的 Bedrock bearer-token API-key 鉴权，可设为 `true` |
 | `model` | str | 模型名称 |
-| `api_base` | str | API 端点（可选） |
+| `api_base` | str | API 端点（可选）。`openai-codex` 默认使用 ChatGPT Codex 后端；使用标准 OpenAI API Key 时设为 `https://api.openai.com/v1` |
 | `temperature` | float 或 null | 采样温度（默认：`null`）。省略或设为 `null` 时请求不携带该字段，使用服务端默认值 |
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
 | `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`32`） |
@@ -844,12 +844,34 @@ VLM 配置返回 `is_available() == false` 时，通用文件摘要会返回空�
 **支持的 provider：**
 - `volcengine`：火山引擎 VLM API
 - `openai`：OpenAI 兼容 VLM API
-- `openai-codex`：通过 ChatGPT/Codex OAuth 使用 Codex VLM
+- `openai-codex`：通过 ChatGPT/Codex OAuth，或显式 API Key 和端点使用 Responses API
 - `kimi`：Kimi Coding 订阅端点，内置 provider 默认配置
 - `glm`：Z.AI GLM Coding Plan 端点，使用 OpenAI 兼容请求格式
 - `litellm`：LiteLLM VLM API，支持 `bedrock/`、`sagemaker/`、`vertex_ai/`、`azure/` 等显式 LiteLLM 路由
 
-对于 `openai-codex`，请通过 `openviking-server init` 完成鉴权，再使用 `openviking-server doctor` 做校验。
+对于使用 OAuth 的 `openai-codex`，请通过 `openviking-server init` 完成鉴权，再使用 `openviking-server doctor` 做校验。
+
+**使用 API Key 调用 Responses API**
+
+使用标准 OpenAI API Key 调用 Responses API 时，请在 `openai-codex` 配置中同时设置
+`api_key` 和 `api_base`。显式配置 key 后会跳过 Codex OAuth。
+将以下 `vlm` 段合并到 `ov.conf`，替换 key 和 model 占位值：
+
+```json
+{
+  "vlm": {
+    "provider": "openai-codex",
+    "api_key": "YOUR_OPENAI_API_KEY",
+    "api_base": "https://api.openai.com/v1",
+    "model": "YOUR_RESPONSES_MODEL",
+    "reasoning_effort": "medium"
+  }
+}
+```
+
+请选择支持所需工具和推理强度的 Responses 模型。该路径使用 `/v1/responses`；
+`provider: "openai"` 使用 Chat Completions。仅设置 `api_key` 不会切换到 OpenAI API
+端点：省略 `api_base` 时仍默认使用 Codex 后端。
 
 对于 `litellm`，当底层路由使用环境变量或 provider 原生凭据时可以省略
 `api_key`，例如 Bedrock/SageMaker 的 AWS IAM/IRSA，或 Vertex AI 的
