@@ -257,15 +257,15 @@ test('authority and freshness are rechecked after content preparation, before an
   }
 });
 
-test('canonical identity includes template, alias and bytes but excludes source and snapshot paths', (t) => {
+test('canonical identity includes template, alias and bytes but excludes source and snapshot paths', async (t) => {
   const f = fixture(t);
-  const first = resolveContent({ card: card('a', 'b'), card_images: { b: 'b.gif', a: 'a.png' } }, f.config);
-  const second = resolveContent({ card: card('a', 'b'), card_images: { a: 'copy.png', b: 'b.gif' } }, f.config);
+  const first = await resolveContent({ card: card('a', 'b'), card_images: { b: 'b.gif', a: 'a.png' } }, f.config);
+  const second = await resolveContent({ card: card('a', 'b'), card_images: { a: 'copy.png', b: 'b.gif' } }, f.config);
   try {
     assert.deepEqual(first.canonical, second.canonical);
     assert.notEqual(first.payload.card_images[0].path, second.payload.card_images[0].path);
     assert.ok(!JSON.stringify(first.canonical).includes(f.root));
-    const changed = resolveContent({ card: card('a', 'b'), card_images: { a: 'b.gif', b: 'a.png' } }, f.config);
+    const changed = await resolveContent({ card: card('a', 'b'), card_images: { a: 'b.gif', b: 'a.png' } }, f.config);
     try { assert.notDeepEqual(first.canonical, changed.canonical); } finally { changed.cleanup(); }
   } finally { first.cleanup(); second.cleanup(); }
 });

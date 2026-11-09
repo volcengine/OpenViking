@@ -1048,17 +1048,18 @@ describe('global Codex/Claude hard switch', () => {
     }
   });
 
-  for (const connector of ['weixin', 'telegram', 'qq']) it(`serves ${connector} through local agent tools and rejects a switch to Volc`, async () => {
+  for (const connector of ['weixin', 'telegram', 'qq', 'slack']) it(`serves ${connector} through Core tools after a switch to Volc`, async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), `lark-runtime-${connector}-`));
     const store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
     const runtime = new AgentRuntime({ connectors: [connector] }, store, quietLogger, {
       codexFactory: (options) => backend('codex', options),
+      volcFactory: (options) => backend('volc', options),
     });
     try {
       await runtime.start();
       assert.equal(runtime.runtime, 'codex');
-      await assert.rejects(() => runtime.transition({ kind: 'select-runtime', runtime: 'volc' }), /Volc/);
-      assert.equal(runtime.runtime, 'codex');
+      await runtime.transition({ kind: 'select-runtime', runtime: 'volc' });
+      assert.equal(runtime.runtime, 'volc');
     } finally {
       await runtime.stop();
       store.close();

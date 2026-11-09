@@ -4,6 +4,20 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+
+export function processIdentity(pid) {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    return { bootId: fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(),
+      startTicks: stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19],
+      pidNamespace: fs.readlinkSync(`/proc/${pid}/ns/pid`) };
+  } catch { return null; }
+}
+
+export function sameProcess(owner, identity) {
+  return !owner.identity || !identity || ['bootId', 'startTicks', 'pidNamespace'].every((key) => owner.identity[key] === identity[key]);
+}
 
 function pidIsAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -19,6 +33,7 @@ export class InstanceLock {
   constructor(lockPath) {
     this.lockPath = lockPath;
     this.held = false;
+    this.token = randomUUID();
   }
 
   acquire() {
@@ -28,6 +43,8 @@ export class InstanceLock {
         const fd = fs.openSync(this.lockPath, 'wx', 0o600);
         fs.writeFileSync(fd, JSON.stringify({
           pid: process.pid,
+          token: this.token,
+          identity: processIdentity(process.pid),
           hostname: os.hostname(),
           startedAt: new Date().toISOString(),
         }));
@@ -46,7 +63,11 @@ export class InstanceLock {
         }
         let owner = null;
         try { owner = JSON.parse(fs.readFileSync(this.lockPath, 'utf8')); } catch {}
-        if (owner?.hostname === os.hostname() && pidIsAlive(Number(owner.pid))) {
+        if (owner?.hostname && owner.hostname !== os.hostname()) {
+          throw new Error('daemon lock belongs to another host; verify the old pod is stopped before removing its lock');
+        }
+        if (owner?.hostname === os.hostname() && pidIsAlive(Number(owner.pid))
+          && sameProcess(owner, processIdentity(Number(owner.pid)))) {
           throw new Error(`another vika instance is running (pid ${owner.pid})`);
         }
         let after;
@@ -67,7 +88,7 @@ export class InstanceLock {
     if (!this.held) return;
     try {
       const owner = JSON.parse(fs.readFileSync(this.lockPath, 'utf8'));
-      if (Number(owner.pid) === process.pid) fs.unlinkSync(this.lockPath);
+      if (Number(owner.pid) === process.pid && owner.token === this.token) fs.unlinkSync(this.lockPath);
     } catch {}
     this.held = false;
   }

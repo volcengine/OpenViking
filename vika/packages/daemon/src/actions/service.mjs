@@ -210,10 +210,10 @@ export class ActionService {
   // error with a `code`. Each call logs one `agent_tool` line whose seqs and
   // outbox id line up with connector_events/outbox; a blocked delivery is also
   // kept as a delivery.blocked activity.
-  async call(name, input = {}, { authority = null, via = null } = {}) {
+  async call(name, input = {}, { authority = null, via = null, turn = null } = {}) {
     const startedAt = Date.now();
-    const trace = { tool: name, via };
-    const caller = { authority, trace };
+    const trace = { tool: name, via, ...(via === 'ma' ? { maSessionId: turn?.sessionId, toolUseId: turn?.toolUseId } : {}) };
+    const caller = { authority, trace, turn };
     const tool = TOOLS.find((candidate) => candidate.name === name);
     // A refused stay_silent is shown like a blocked delivery, only while the
     // tool is offered (explicitSilence on).
@@ -393,6 +393,15 @@ export class ActionService {
       throw blocked('decision_ambiguous', `${verb}: decision_id is an event on ${rows.length} instances. Pass that line's instance= (or source= when it has none) as decision_instance. ${NO_ACTION}`);
     }
     const [row] = rows;
+    if (caller.trace?.via === 'ma') {
+      const turn = caller.turn;
+      const seqs = turn?.inboundSeqs ?? [];
+      const scopeMatches = this.isTimerReminder(row)
+        ? seqs.includes(row.seq) : row.scope_key === turn?.conversationKey;
+      if (!turn || !scopeMatches || row.seq > Math.max(0, ...seqs)) {
+        throw blocked('decision_out_of_turn', `${verb}: decision_id is outside the authenticated MA turn. ${NO_ACTION}`);
+      }
+    }
     Object.assign(caller.trace, { decisionSeq: row.seq, conversationRef: opaqueRef(row.scope_key) });
     caller.convKey = row.conv_key;
     return row;
@@ -466,7 +475,7 @@ export class ActionService {
     const newerSeq = this.store.newerAcceptedSeq(decision.scope_key, decision.seq);
     if (newerSeq !== null) {
       caller.trace.newerSeq = newerSeq;
-      throw blocked('stale_decision', 'Delivery blocked: a newer authenticated input arrived in the same chat/thread, or about the same subject. Reconsider with the new input, then use its event= as decision_id if the action still fits.');
+      throw blocked('stale_decision', caller.trace?.via === 'ma' ? 'Delivery blocked: newer authenticated input exists. Do not reuse this old decision. Use the newer input only after it appears in your context; otherwise end this turn so pending input can arrive.' : 'Delivery blocked: a newer authenticated input arrived in the same chat/thread, or about the same subject. Reconsider with the new input, then use its event= as decision_id if the action still fits.');
     }
   }
 
@@ -620,6 +629,7 @@ export class ActionService {
         tempDir: this.config.tempDir,
         maxTextChars: Math.min(this.config.maxReplyChars, spec.max_text_chars ?? Infinity),
       });
+      if (content instanceof Promise) content = await content;
     } catch (error) {
       throw blocked('invalid_content', error.message);
     }
@@ -698,6 +708,9 @@ export class ActionService {
       inboundSeq, runtimeToken: caller.authority ?? null, metadata,
     });
     caller.trace.outboxId = reservation.id;
+    if (caller.trace.via === 'ma' && caller.turn?.toolUseId) {
+      this.store.linkMAToolOutbox(caller.turn.sessionId, caller.turn.toolUseId, reservation.id);
+    }
     if (!reservation.claimed) {
       if (reservation.status === 'SENT') {
         this.settleDecision(caller, fence, final);
@@ -715,6 +728,7 @@ export class ActionService {
       result = await this.connectors.invoke(connector, action, { ...input, idempotency_key: key });
     } catch (error) {
       this.store.settleOutbox(reservation.id, 'UNCERTAIN', { error: safeError(error) });
+      if (caller.trace.via === 'ma') throw blocked('uncertain_not_retried', 'Connector execution ended without a confirmed outcome. It may have completed; do not retry through any delivery tool. Reconcile the provider state first.');
       throw error;
     }
     this.store.settleOutbox(reservation.id, 'SENT', { result });
@@ -886,7 +900,7 @@ export class ActionService {
     const responseTo = this.attribution(caller, input.response_to_id, fence, { connector, messageId: input.message_id });
     let draftText;
     try {
-      const content = resolveContent(input, { workspace: this.config.workspace, maxTextChars: this.config.maxReplyChars,
+      const content = await resolveContent(input, { workspace: this.config.workspace, maxTextChars: this.config.maxReplyChars,
         tempDir: this.config.tempDir });
       content.cleanup();
       if (content.type !== 'markdown') throw new Error(`${connector} replies are plain text only; use markdown`);
@@ -1473,6 +1487,14 @@ export class ActionService {
     if (this.timers.needsRefresh) await this.timers.load();
     const check = this.timers.getOccurrenceCheck(input.occurrence_id);
     if (!check) throw blocked('unknown_occurrence', 'This timer occurrence has no completion check.');
+    if (caller.trace?.via === 'ma') {
+      const belongsToTurn = (caller.turn?.inboundSeqs ?? []).some((seq) => {
+        const event = this.store.inboundBySeq(seq);
+        return event?.connectorInstance === 'timer' && event.kind === 'reminder.due'
+          && event.data?.timer?.occurrence_id === input.occurrence_id;
+      });
+      if (!belongsToTurn) throw blocked('decision_out_of_turn', 'Timer completion is outside the authenticated MA turn.');
+    }
     let delivery = null;
     if (input.delivery) {
       const tool = TOOLS.find((candidate) => candidate.name === input.delivery.tool);
@@ -1501,7 +1523,7 @@ export class ActionService {
       delivery = await this.call(input.delivery.tool, {
         ...input.delivery.input,
         decision_instance: 'timer',
-      }, { authority: caller.authority, via: caller.trace.via });
+      }, { authority: caller.authority, via: caller.trace.via, turn: caller.turn });
       if (delivery.data?.dry_run) {
         return {
           text: `Timer occurrence is not complete: delivery was simulated for occurrence_id=${input.occurrence_id}.`,

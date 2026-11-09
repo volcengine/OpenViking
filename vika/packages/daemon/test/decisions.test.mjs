@@ -139,11 +139,12 @@ describe('turn-end decision settlement', () => {
     assert.equal(settlement().nudged, 1);
   });
 
-  it('does nothing for Volc or while the daemon stops', async (t) => {
+  it('settles Volc decisions and does nothing while the daemon stops', async (t) => {
     const volc = setup(t, { runtime: 'volc' });
     const row = volc.ingest({ messageId: 'om_volc12345678' });
     await volc.turn([row.seq]);
-    assert.deepEqual([volc.activities, volc.submitted, volc.logs], [[], [], []]);
+    assert.equal(volc.submitted.length, 1);
+    assert.equal(volc.activities[0].status, 'NUDGED');
 
     const stopping = setup(t);
     stopping.state.stopping = true;
@@ -166,15 +167,6 @@ describe('explicit silence on a runtime without core agent tools', () => {
     return { warnings, logger: { ...quiet, warn: (message, fields) => warnings.push({ message, ...fields }) } };
   };
 
-  it('warns once per call that explicit silence is not applied, naming the runtime', () => {
-    const { warnings, logger } = capture();
-    assert.equal(warnIfSilenceInert({ explicitSilence: true }, 'volc', logger), true);
-    assert.equal(warnings.length, 1);
-    assert.equal(warnings[0].message, 'explicit_silence_not_applied');
-    assert.equal(warnings[0].runtime, 'volc');
-    assert.match(warnings[0].reason, /explicit silence is not applied for this runtime/);
-  });
-
   it('stays quiet on every runtime that has core agent tools', () => {
     const { warnings, logger } = capture();
     for (const id of RUNTIME_IDS.filter((runtime) => getRuntimeDefinition(runtime).capabilities.agentTools === 'core')) {
@@ -185,9 +177,7 @@ describe('explicit silence on a runtime without core agent tools', () => {
 
   it('says the same of staged replies, which only the Core-tool runtimes deliver', () => {
     const { warnings, logger } = capture();
-    assert.equal(warnIfStagedRepliesInert({ stagedReplies: true }, 'volc', logger), true);
-    assert.deepEqual(warnings.map(({ message, runtime }) => [message, runtime]), [['staged_replies_not_applied', 'volc']]);
-    assert.match(warnings[0].reason, /staged replies is not applied for this runtime/);
+    assert.equal(warnIfStagedRepliesInert({ stagedReplies: true }, 'volc', logger), false);
     for (const id of RUNTIME_IDS) {
       const core = getRuntimeDefinition(id).capabilities.agentTools === 'core';
       assert.equal(warnIfStagedRepliesInert({ stagedReplies: true }, id, logger), !core, id);

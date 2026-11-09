@@ -113,7 +113,7 @@ async function handleRequest(message) {
       if (!checked) throw new Error('connector must pass check before start');
       if (started) throw new Error('connector is already started');
       started = true;
-      client.startSubscription((line) => {
+      const subscription = client.startSubscription((line) => {
         try {
           const raw = JSON.parse(line);
           if (connectorId === 'lark' && isDocCommentEvent(raw)) emitDocComment(raw);
@@ -130,6 +130,7 @@ async function handleRequest(message) {
         }));
         setImmediate(() => process.exit(1));
       });
+      if (connectorId === 'lark' && config.larkSubscription === 'sdk') await subscription;
       notes?.start();
       result = { started: true };
     } else if (message.operation === 'action') {

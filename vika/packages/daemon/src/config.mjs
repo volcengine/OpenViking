@@ -258,7 +258,9 @@ export function getConfig() {
       ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     ),
     opencodeModel: process.env.VIKA_OPENCODE_MODEL || '',
-    volcApiKey: process.env.ARK_API_KEY || '',
+    volcApiKey: process.env.ARK_MA_API_KEY || process.env.ARK_API_KEY || '',
+    volcAgentSync: enumEnv('VIKA_VOLC_AGENT_SYNC', 'check', ['check', 'update']),
+    volcFiles: enumEnv('VIKA_VOLC_FILES', 'on', ['on', 'off']),
     volcSessionId: process.env.VIKA_VOLC_SESSION_ID
       || process.env.ARK_SESSION_ID
       || process.env.SESSION_ID
@@ -280,6 +282,8 @@ export function getConfig() {
     httpEnabled: boolEnv('VIKA_HTTP_ENABLED', true),
     logLevel: enumEnv('VIKA_LOG_LEVEL', 'info', ['debug', 'info', 'warn', 'error']),
     profile: daemonProfile || cliProfile,
+    larkSubscription: enumEnv('VIKA_LARK_SUBSCRIPTION', 'cli', ['cli', 'sdk']),
+    larkWsCredentials: (process.env.VIKA_LARK_WS_CREDENTIALS || '').trim(),
     ignoredSenderIds: csvEnv('VIKA_IGNORED_SENDER_IDS'),
     sendTimeoutMs: intEnv('VIKA_SEND_TIMEOUT_MS', 30_000, { min: 1_000 }),
     shutdownTimeoutMs: intEnv('VIKA_SHUTDOWN_TIMEOUT_MS', 20_000, { min: 5_000, max: 25_000 }),

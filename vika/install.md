@@ -81,3 +81,10 @@ Configuration defaults to `~/.vika/config.json`. For a custom location, set the 
 The release-process guide below is currently in Chinese.
 
 [Source development](docs/installation-reference.md#running-from-source) · [Upgrade and rollback](docs/installation-reference.md#upgrade-and-rollback) · [Multiple instances and memory](docs/installation-reference.md#multiple-agents) · [Release process](../docs/repository/RELEASE_CN.md)
+
+## MA Cloud with a local or VKE Channel
+
+MA Cloud runs the agent sandbox remotely and dispatches custom tools to Channel Core.
+Connector credentials, freshness checks, SQLite state and external delivery remain in
+the Channel process. See the [deployment runbook](deploy/vke/README.md) for dedicated
+Agent provisioning, file transfer, optional SDK events and single-replica VKE deployment.

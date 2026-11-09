@@ -234,6 +234,7 @@ export class PersonalAgentDaemon {
       });
 
       this.agentRuntime = new AgentRuntime(this.config, this.store, this.logger.child({ component: 'agent-runtime' }), {
+        actions: this.actions,
         // A turn that ended leaves no OnIt behind, whatever it delivered, and
         // no repeated calls counted toward the loop breaker.
         onTurnFailed: (info) => {

@@ -110,7 +110,7 @@ export const RUNTIME_CATALOG = Object.freeze({
       scopePolicy: 'single-conversation',
       outputOwnership: 'runtime',
       sessionAuthority: 'rotate',
-      agentTools: 'lark-cli',
+      agentTools: 'core',
     },
   }),
   pi: runtimeDefinition({

@@ -1,0 +1,10 @@
+node_modules
+.git
+.env
+.env.*
+**/.runtime
+**/evidence
+**/*.sqlite3
+**/*.sqlite3-*
+**/ma-provision.json
+**/*secret*.json

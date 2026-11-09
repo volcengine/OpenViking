@@ -155,22 +155,7 @@ export class AgentRuntime {
 
   whenIdle() { return this.backend?.whenIdle() ?? Promise.resolve(); }
 
-  // Volc's tool executor is the remote Environment Worker, which only has the
-  // Lark CLI path; it cannot reach the daemon's agent tools.
-  _assertConnectorSupport(runtime) {
-    if (runtime === 'volc' && this.config.connectors.includes('qq')) {
-      throw new Error('QQ is not supported on the Volc runtime');
-    }
-    if (runtime === 'volc' && this.config.connectors.includes('telegram')) {
-      throw new Error('Telegram is not supported on the Volc runtime');
-    }
-    if (runtime === 'volc' && this.config.connectors.includes('slack')) {
-      throw new Error('Slack is not supported on the Volc runtime');
-    }
-    if (runtime === 'volc' && this.config.connectors.includes('weixin')) {
-      throw new Error('Weixin is not supported on the Volc runtime');
-    }
-  }
+  _assertConnectorSupport(_runtime) { /* All connector operations execute in Core. */ }
 
   prepareInputContext() { return this.backend?.prepareInputContext?.(); }
 

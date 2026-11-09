@@ -182,14 +182,67 @@ export class Store {
     this.db.exec('PRAGMA foreign_keys = ON');
     this.db.exec('PRAGMA busy_timeout = 5000');
     this.migrate();
+    if (!this.db.prepare('PRAGMA table_info(ma_tool_calls)').all().some((column) => column.name === 'uncertain')) {
+      this.db.exec('ALTER TABLE ma_tool_calls ADD COLUMN uncertain INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!this.db.prepare('PRAGMA table_info(ma_tool_calls)').all().some((column) => column.name === 'preparing')) {
+      this.db.exec('ALTER TABLE ma_tool_calls ADD COLUMN preparing INTEGER NOT NULL DEFAULT 0');
+    }
     this.prepare();
     this.meetings = new MeetingStore(this.db, (fn) => this.transaction(fn));
+  }
+
+  getMAToolCall(sessionId, toolUseId) {
+    return this.db.prepare('SELECT * FROM ma_tool_calls WHERE session_id=? AND tool_use_id=?').get(sessionId, toolUseId) ?? null;
+  }
+
+  seeMAToolCall({ sessionId, toolUseId, epoch, authorityToken, fenceId, name, inputJson, inputSha }) {
+    this.db.prepare(`INSERT OR IGNORE INTO ma_tool_calls
+      (session_id,tool_use_id,epoch,authority_token,fence_id,name,input_json,input_sha,status,updated_at_ms)
+      VALUES (?,?,?,?,?,?,?,?,'SEEN',?)`).run(sessionId,toolUseId,epoch,authorityToken,fenceId,name,inputJson,inputSha,Date.now());
+    const row = this.getMAToolCall(sessionId, toolUseId);
+    if (row.name !== name || row.input_sha !== inputSha || row.fence_id !== fenceId) {
+      throw new Error('MA tool event identity changed');
+    }
+    return row;
+  }
+
+  prepareMAToolCall(sessionId, toolUseId) {
+    this.db.prepare("UPDATE ma_tool_calls SET preparing=1,updated_at_ms=? WHERE session_id=? AND tool_use_id=? AND status='SEEN'")
+      .run(Date.now(), sessionId, toolUseId);
+  }
+
+  linkMAToolOutbox(sessionId, toolUseId, outboxId) {
+    this.db.prepare('UPDATE ma_tool_calls SET outbox_id=? WHERE session_id=? AND tool_use_id=?')
+      .run(String(outboxId), sessionId, toolUseId);
+  }
+
+  maTurnUncertain(sessionId, fenceId, excludeId) {
+    return Boolean(this.db.prepare(`SELECT 1 FROM ma_tool_calls WHERE session_id=? AND fence_id=?
+      AND tool_use_id<>? AND (uncertain=1 OR status='RUNNING') LIMIT 1`).get(sessionId, fenceId, excludeId));
+  }
+
+  updateMAToolCall(sessionId, toolUseId, status, result = null, { uncertain = false } = {}) {
+    this.db.prepare(`UPDATE ma_tool_calls SET status=?,result_json=COALESCE(?,result_json),
+      is_error=COALESCE(?,is_error),uncertain=MAX(uncertain,?),updated_at_ms=? WHERE session_id=? AND tool_use_id=?`)
+      .run(status, result ? JSON.stringify(result) : null, result ? Number(result.is_error) : null,
+        Number(uncertain), Date.now(), sessionId, toolUseId);
+    return this.getMAToolCall(sessionId, toolUseId);
   }
 
   migrate() {
     migrateCardMessages(this.db);
     migrateApprovals(this.db);
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS ma_tool_calls (
+        session_id TEXT NOT NULL, tool_use_id TEXT NOT NULL,
+        epoch INTEGER NOT NULL, authority_token TEXT NOT NULL, fence_id TEXT NOT NULL,
+        name TEXT NOT NULL, input_json TEXT NOT NULL, input_sha TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('SEEN','RUNNING','DONE','POSTED','ABANDONED')),
+        result_json TEXT, is_error INTEGER, outbox_id TEXT, uncertain INTEGER NOT NULL DEFAULT 0, preparing INTEGER NOT NULL DEFAULT 0,
+        updated_at_ms INTEGER NOT NULL,
+        PRIMARY KEY(session_id, tool_use_id)
+      );
       CREATE TABLE IF NOT EXISTS meta (
         key TEXT PRIMARY KEY,
         value TEXT
@@ -1369,6 +1422,33 @@ export class Store {
         );
       }
       return accepted;
+    });
+  }
+
+  beginManagedSteer(runtime, { sessionId, authorityToken, inboundSeqs, conversationKey, deliveredThroughSeq, id }) {
+    return this.transaction(() => {
+      const turn = this.getManagedTurn(runtime);
+      const cognition = this.getCognitionState();
+      if (!turn || turn.status !== 'ACCEPTED' || turn.sessionId !== sessionId
+        || turn.conversationKey !== conversationKey || cognition.authorityToken !== authorityToken
+        || cognition.epoch !== turn.epoch || cognition.runtime !== runtime) throw new Error('MA steer lost turn ownership');
+      const steer = { id, status: 'POSTING', inboundSeqs, expectedUserEventId: null };
+      const next = { ...turn, authorityToken, inboundSeqs: [...new Set([...turn.inboundSeqs, ...inboundSeqs])],
+        deliveredThroughSeq: Math.max(turn.deliveredThroughSeq, deliveredThroughSeq), steers: [...(turn.steers ?? []), steer] };
+      this.setMetaStatement.run(`managed_turn:${runtime}`, JSON.stringify(next));
+      return steer;
+    });
+  }
+
+  acceptManagedSteer(runtime, sessionId, id, expectedUserEventId) {
+    return this.transaction(() => {
+      const turn = this.getManagedTurn(runtime);
+      const steer = turn?.steers?.find((item) => item.id === id);
+      if (!steer || turn.sessionId !== sessionId || steer.status !== 'POSTING'
+        || turn.authorityToken !== this.getCognitionState().authorityToken) throw new Error('MA steer acceptance lost ownership');
+      Object.assign(steer, { status: 'ACCEPTED', expectedUserEventId });
+      this.setMetaStatement.run(`managed_turn:${runtime}`, JSON.stringify(turn));
+      return steer;
     });
   }
 

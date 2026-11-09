@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "defaultInstance": "vika-cloud",
+  "env": {
+    "VIKA_TIMER_STORAGE": "sqlite",
+    "VIKA_VOLC_AGENT_SYNC": "check",
+    "VIKA_VOLC_FILES": "on",
+    "VIKA_LARK_SUBSCRIPTION": "sdk",
+    "VIKA_LARK_WS_CREDENTIALS": "/data/vika/lark-ws.json",
+    "LARKSUITE_CLI_CONFIG_DIR": "/data/lark-cli"
+  },
+  "agents": [{
+    "id": "vika-cloud",
+    "displayName": "Vika",
+    "channel": "lark",
+    "connectors": ["lark"],
+    "profile": "vika-cloud",
+    "larkMessageAccess": "bot",
+    "port": 3738,
+    "dataDir": "/data/vika",
+    "tempDir": "/data/vika/tmp",
+    "workspace": "/data/workspace",
+    "ovConfig": "/config/ov.json",
+    "model": "ark",
+    "volcSessionId": "REPLACE_TEMPLATE_SESSION_ID",
+    "volcEnvironmentId": "REPLACE_CLOUD_ENVIRONMENT_ID",
+    "explicitSilence": true,
+    "stagedReplies": true
+  }]
+}

@@ -563,9 +563,8 @@ async function askMailboxes(ctx, state) {
 // manifest does not say. OpenViking memory has no switch here: Vika always
 // owns it (agents[].ovAutoRecall stays a config-file-only option).
 const SWITCH_DEFAULTS = Object.freeze({ stagedReplies: false, naturalWriting: true, explicitSilence: true, meetingNotes: false });
-// Explicit silence is on by default except on Ark, which has no Core tools to
-// offer stay_silent through (as the deployment manifest defaults it).
-const switchDefault = (key, model) => (key === 'explicitSilence' && model === 'ark' ? false : SWITCH_DEFAULTS[key]);
+// Explicit silence is on by default for every Core-tool runtime, including Ark.
+const switchDefault = (key, _model) => SWITCH_DEFAULTS[key];
 // Switching one of these changes the model's policy: a new session.
 const POLICY_SWITCHES = new Set(['stagedReplies', 'naturalWriting', 'explicitSilence', 'meetingNotes']);
 

@@ -693,7 +693,7 @@ test('an instance can use its own role file, begun from a shipped role, written 
   assert.equal(fs.existsSync(roleFile(discarded)), false);
 });
 
-test('dropping the primary IM moves the primary to what is left; a change the daemon would reject goes back to the list', async (t) => {
+test('dropping the primary IM moves the primary to what is left; Ark supports additional connectors', async (t) => {
   //                    change  IMs  weixin  save
   const h = harness(t, ['2',    '5', '2',    '11']);
   existing(h, { connectors: ['lark', 'weixin'], channel: 'lark' });
@@ -708,9 +708,8 @@ test('dropping the primary IM moves the primary to what is left; a change the da
   const config = existing(ark, { model: 'ark', volcSessionId: 'sesn-seed12345678', volcEnvironmentId: 'env-12345678' });
   assert.equal(await setupCommand(ark.options), 0);
   assert.match(ark.written(), /4\) Agent 运行时\s+ark\n/);
-  assert.match(ark.written(), /这样改不行：.*cannot use the ark runtime[\s\S]*12\) 放弃修改/);
-  assert.deepEqual(ark.manifest().agents, [config]);
-  assert.deepEqual(ark.calls, []);
+  assert.deepEqual(ark.manifest().agents[0].connectors, ['lark', 'weixin']);
+  assert.ok(ark.calls.some(([operation]) => operation === 'restart'));
 });
 
 test('an instance\'s mailboxes are changed from their own menu until done', async (t) => {

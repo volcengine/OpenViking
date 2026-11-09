@@ -115,7 +115,7 @@ Only the scanning account can chat with the bot; other senders are ignored. One 
 
 In a release with QQ support, select QQ in `vika setup`. Register a developer account at the [QQ platform](https://q.qq.com/#/), create a bot through the [QQ bot entry](https://q.qq.com/qqbot/openclaw/), obtain AppID / AppSecret, enable direct messages, and add it with your QQ account. Setup hides the secret and asks you to send a one-time `vika-bind …` code in a direct chat within three minutes. It saves only after verification. The host needs access to `https://api.bot.qq.com`, Tencent's WebSocket gateway, and attachment CDN; no public listener is required.
 
-Owner direct chats support text, images, files, quoted replies, and slash commands. QQ can be the primary channel for notifications and numbered email approvals, subject to platform permissions and quotas. QQ-only instances omit `profile`; Codex, TraeX, Claude, and Pi are supported, Ark is not. Use a separate bot per instance. Credentials live in `<dataDir>/qq/state.sqlite3`, not `config.json`.
+Owner direct chats support text, images, files, quoted replies, and slash commands. QQ can be the primary channel for notifications and numbered email approvals, subject to platform permissions and quotas. QQ-only instances omit `profile`; Codex, TraeX, Claude, and Pi are supported, MA Cloud/Ark is also supported through Core custom tools (see the [runbook](../deploy/vke/README.md)). Use a separate bot per instance. Credentials live in `<dataDir>/qq/state.sqlite3`, not `config.json`.
 
 To reauthorize, run `vika login qq [instance]`. It stops the instance, verifies credentials and your direct chat, then restarts; cancellation or failure preserves the previous account. See [QQ direct messages](usage-reference.md#qq-direct-messages) for file limits, passive replies, and downtime guarantees. This feature appears only in releases that include it; editing a workspace does not update published `latest`.
 
@@ -129,7 +129,7 @@ Only the bound owner's direct messages are processed. Text, images, files, quote
 vika login telegram [instance]
 ```
 
-Reauthorization stops the instance, validates the new token and Start binding, and restarts it. Failure or cancellation preserves old credentials and attempts to restore the instance. Use a separate bot per instance with no competing poller. Existing webhooks cause refusal; use another bot or remove the webhook in the original service yourself. Codex, TraeX, Claude, and Pi are supported; Ark is not.
+Reauthorization stops the instance, validates the new token and Start binding, and restarts it. Failure or cancellation preserves old credentials and attempts to restore the instance. Use a separate bot per instance with no competing poller. Existing webhooks cause refusal; use another bot or remove the webhook in the original service yourself. Codex, TraeX, Claude, and Pi are supported; MA Cloud/Ark is also supported through Core custom tools (see the [runbook](../deploy/vke/README.md)).
 
 ### Slack setup
 
