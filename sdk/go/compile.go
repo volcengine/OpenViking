@@ -30,9 +30,16 @@ func (c *Client) Compile(ctx context.Context, request CompileRequest) (map[strin
 	if (request.CompileName != "") == (request.Input != nil) {
 		return nil, fmt.Errorf("provide exactly one of CompileName and Input")
 	}
+	if request.Input != nil && request.Args != nil {
+		return nil, fmt.Errorf("full Compile arguments belong in Input.Args")
+	}
 	var payload any = request.Input
 	if request.CompileName != "" {
-		payload = map[string]string{"compile_name": request.CompileName}
+		named := map[string]any{"compile_name": request.CompileName}
+		if request.Args != nil {
+			named["args"] = request.Args
+		}
+		payload = named
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/compile", nil, payload, &result)

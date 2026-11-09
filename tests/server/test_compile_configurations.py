@@ -46,7 +46,7 @@ SAVED_INPUTS = {**INPUTS, "compile_name": "research-summary"}
         {"compile_name": "../state"},
         {"compile_name": "-demo"},
         {"compile_name": "research-summary", "to": TARGET},
-        {"compile_name": "research-summary", "args": None},
+        {"compile_name": "research-summary", "args": []},
         {"compile_id": "research-summary"},
         {**INPUTS, "compile_name": None},
         {**INPUTS, "operation_id": "cmp_example"},
@@ -55,6 +55,7 @@ SAVED_INPUTS = {**INPUTS, "compile_name": "research-summary"}
         {**INPUTS, "args": {"last_compile_time": 1}},
         {**INPUTS, "args": {"auto_update": False}},
         {**INPUTS, "args": {"update_schedule": None}},
+        {**INPUTS, "args": {"owner_user_id": "alice"}},
         {**INPUTS, "reason": "old alias"},
         {**INPUTS, "owner_user_id": "someone-else"},
         {**INPUTS, "user_id": "someone-else"},
@@ -66,8 +67,22 @@ def test_execution_request_rejects_ambiguous_or_legacy_controls(payload):
 
 
 def test_named_execution_guides_mixed_requests_before_validating_inputs():
-    with pytest.raises(ValidationError, match="send only compile_name to POST /api/v1/compile"):
+    with pytest.raises(ValidationError, match="send compile_name and optional args.owner_user_id"):
         CompileRequest.model_validate({"compile_name": "jj", "from": None})
+
+
+@pytest.mark.parametrize("owner", [None, "", "../alice", 1])
+def test_named_execution_rejects_invalid_owner(owner):
+    with pytest.raises(ValidationError, match="args.owner_user_id"):
+        CompileRequest.model_validate({"compile_name": "wiki", "args": {"owner_user_id": owner}})
+
+
+@pytest.mark.parametrize("owner", [{}, {"owner_user_id": "alice"}])
+def test_named_execution_ignores_non_owner_args(owner):
+    request = CompileRequest.model_validate(
+        {"compile_name": "wiki", "args": {**owner, "model_name": "ignored", "mode": "full"}}
+    )
+    assert request.args == owner
 
 
 @pytest.mark.parametrize(
@@ -226,6 +241,64 @@ async def test_same_name_configuration_and_runs_are_user_scoped(service, app, cl
     assert changed.status_code == 200, changed.text
     assert (await service.compile.get_config(name, ctx))["instruction"] == ctx.user.user_id
     assert (await service.compile.get_config(name, other))["instruction"] == "updated"
+
+
+async def test_delegated_execution_owner_actor_and_retries(service, app, client, monkeypatch):
+    ctx, runtime = await prepare(service, app, monkeypatch)
+    actor = RequestContext(
+        user=UserIdentifier(ctx.account_id, "executor"), role=Role.USER, api_key="executor-key"
+    )
+    app.dependency_overrides[get_request_context] = lambda: actor
+    store = service.compile.lifecycle.store
+    name = SAVED_INPUTS["compile_name"]
+    for owner in ("alice", "bob", "executor"):
+        created = await client.post(
+            "/api/v1/compile/create",
+            json={
+                **SAVED_INPUTS,
+                "instruction": owner,
+                "args": {"owner_id": owner, "model_name": "saved"},
+            },
+        )
+        assert created.status_code == 200, created.text
+    payload = {"compile_name": name, "args": {"owner_user_id": "alice"}}
+    headers = {"Idempotency-Key": "compile-delegated-owner"}
+    response = await client.post(
+        "/api/v1/compile",
+        json={**payload, "args": {**payload["args"], "model_name": "ignored", "auto_update": True}},
+        headers=headers,
+    )
+    assert response.status_code == 202, response.text
+    task_id = response.json()["result"]["task_id"]
+    await service.compile._tasks.execute(task_id, account_id=ctx.account_id, user_id="executor")
+    run = await store.get_run(ctx.account_id, "alice", name, task_id)
+    assert run["status"] == "completed", run["error"]
+    assert run["actor"] == "executor" and run["params"]["instruction"] == "alice"
+    assert runtime.calls[0]["args"]["model_name"] == "saved"
+    assert "owner_user_id" not in runtime.calls[0]["args"]
+    repeated = await client.post("/api/v1/compile", json=payload, headers=headers)
+    assert repeated.status_code == 202, repeated.text
+    assert repeated.json()["result"]["task_id"] == task_id
+    conflict = await client.post(
+        "/api/v1/compile",
+        json={"compile_name": name, "args": {"owner_user_id": "bob"}},
+        headers=headers,
+    )
+    assert conflict.status_code == 409, conflict.text
+
+    own_ids = set()
+    for args in ({}, {"owner_user_id": "executor"}):
+        response = await client.post(
+            "/api/v1/compile",
+            json={"compile_name": name, "args": args},
+            headers={"Idempotency-Key": "compile-default-owner"},
+        )
+        assert response.status_code == 202, response.text
+        own_ids.add(response.json()["result"]["task_id"])
+    assert len(own_ids) == 1 and task_id not in own_ids
+    foreign = RequestContext(user=UserIdentifier("another-account", "executor"), role=Role.USER)
+    app.dependency_overrides[get_request_context] = lambda: foreign
+    assert (await client.post("/api/v1/compile", json=payload)).status_code == 404
 
 
 async def test_case_distinct_names_paginate(service, app, client, monkeypatch):

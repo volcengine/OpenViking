@@ -83,7 +83,7 @@ This endpoint accepts exactly one of these request shapes:
 }
 ```
 
-A name-only request loads the current user's saved inputs. It cannot override `from`, `to`, `skill`, `instruction`, or `args`. Its first execution performs a full compile; later executions use the last successful source snapshot, including additions, modifications and deletions. Skill or instruction changes can require full recomputation. Manual and scheduled executions use the same entry point and baseline.
+Passing `compile_name` when executing Compile reuses the configuration's saved `from`, `to`, `skill`, and `instruction`.
 
 Submitting `from`, `to`, and a Skill URI directly is deprecated. Accepted requests include the deprecation date and migration guide in the `Deprecation` and `Link` response headers. Send the inputs and a `compile_name` to `POST /api/v1/compile/create` once, then send only `compile_name` to `POST /api/v1/compile` for each run.
 
@@ -207,9 +207,9 @@ The only Compile business files are:
 
 `configuration_directory` is the lowercase hexadecimal encoding of the name's ASCII bytes (`compile_name.encode("ascii").hex()`), with no prefix. This preserves case-sensitive names even on case-insensitive storage. Public APIs receive and return the original `compile_name`, not its directory encoding.
 
-The path's `user_id` comes from `args.owner_id` in the create request and defaults to the authenticated user's ID when omitted. Configuration ownership stays fixed when settings, manual actors or scheduled executors change. Each user directory directly contains that user's configurations. Shared output directories retain their ACL permissions. Public APIs require only `compile_name` and resolve it within the authenticated user's directory; access to a shared output does not grant access to another user's configuration.
+Configurations are stored in account and user directories. Public APIs locate configurations by their original `compile_name`.
 
-State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_update`, `update_schedule`, `task_first_create_time`, `last_run_time`, `last_triggered_slot`, `next_triggered_slot`, `conflict_num`, `progress`, `updated_by`, and `execution_context`. `progress` stores the successful incremental baseline; `execution_context` stores the configuration owner as `owner_user_id`, necessary private execution identity, encrypted credentials and private arguments.
+State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_update`, `update_schedule`, `task_first_create_time`, `last_run_time`, `last_triggered_slot`, `next_triggered_slot`, `conflict_num`, `progress`, `updated_by`, and `execution_context`. `progress` stores the successful incremental baseline; `execution_context` stores internal execution context and encrypted arguments.
 
 `conflict_num` counts files tagged `has_conflict=true` that the execution identity can retrieve under `to` at finalization, including descendants. It does not count individual conflicts inside those files. One `find` call uses an empty query, the tag filter, `level=2`, and `limit=100`, without pagination. Counts at or above 100 are stored as 100; more conflicting files may exist. Successful runs count after output snapshot finalization without waiting for target tagging; failed or cancelled runs count after rollback completes. The field starts as null. Runs without a start snapshot skip retrieval and record null because another task may be modifying the target. Rollback index rebuilding is awaited for at most 30 seconds. Unavailable indexes or retrieval failures log a warning and record null without rolling back successfully generated output. Configuration updates preserve the count when `to` is unchanged and reset it to null when `to` changes.
 

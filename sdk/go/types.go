@@ -78,6 +78,8 @@ type CompileInput struct {
 type CompileRequest struct {
 	CompileName string
 	Input       *CompileInput
+	// Args uses only owner_user_id for named runs; full runs use Input.Args.
+	Args map[string]any
 }
 
 // AdminCreateAccountOptions controls AdminCreateAccountWithOptions.

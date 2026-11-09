@@ -1117,7 +1117,7 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: Option<CompileCommands>,
         /// Execute this persistent configuration without overriding its inputs
-        #[arg(long, value_name = "name", allow_hyphen_values = true, value_parser = parse_compile_name, conflicts_with_all = ["from_uris", "to", "skill", "instruction", "args"])]
+        #[arg(long, value_name = "name", allow_hyphen_values = true, value_parser = parse_compile_name, conflicts_with_all = ["from_uris", "to", "skill", "instruction"])]
         compile_name: Option<String>,
         /// Source file or directory; repeat the flag or separate entries with commas.
         /// Omitted with `--skill memory`, which consolidates `--to` in place.
@@ -1132,7 +1132,7 @@ pub(crate) enum Commands {
         /// Additional instructions for this Compile task
         #[arg(long, value_name = "text")]
         instruction: Option<String>,
-        /// Provider arguments as JSON
+        /// JSON args; named runs use only owner_user_id
         #[arg(long, value_name = "json")]
         args: Option<String>,
     },

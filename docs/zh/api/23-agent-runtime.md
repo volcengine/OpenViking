@@ -83,7 +83,7 @@ POST /api/v1/compile
 }
 ```
 
-仅传名称时读取当前用户已保存的输入，不允许额外覆盖 `from`、`to`、`skill`、`instruction` 或 `args`。首次执行完整编译；后续执行依据上次成功源快照处理新增、修改和删除。Skill 或指令变化可以触发完整重算。手动与定时执行走同一入口、共享成功基线。
+执行 Compile 时传入 `compile_name`，会复用该配置中已保存的 `from`、`to`、`skill` 和 `instruction`。
 
 直接提交 `from`、`to` 和 Skill URI 的写法已弃用。受理时，`Deprecation` 和 `Link` 响应头提供弃用日期和迁移指南。请先将这些输入连同 `compile_name` 提交到 `POST /api/v1/compile/create`，再向 `POST /api/v1/compile` 仅提交 `compile_name`。
 
@@ -207,9 +207,9 @@ Compile 业务文件仅有：
 
 `configuration_directory` 为名称 ASCII 字节的小写十六进制编码（`compile_name.encode("ascii").hex()`），不添加前缀，保证存储系统不区分大小写时，不同大小写的名称仍相互独立。公开 API 接收和返回原始 `compile_name`，不使用目录编码。
 
-目录中的 `user_id` 取创建请求的 `args.owner_id`，省略时取当前认证用户的 ID。配置归属固定，不随配置更新、手动执行者或定时执行身份变化。每个用户目录直接包含归属于该用户的配置；共享目标目录仍按现有 ACL 授权。公开 API 只需传入 `compile_name`，在当前认证用户目录内定位；拥有共享目标的权限不代表可以访问其他用户的配置。
+配置按账号和用户分目录存储，公开 API 使用原始 `compile_name` 定位配置。
 
-state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`conflict_num`、`progress`、`updated_by`、`execution_context`。`progress` 保存成功增量基线；`execution_context` 保存配置归属用户 `owner_user_id`、必要的私有执行身份、加密凭据和私有参数。
+state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`conflict_num`、`progress`、`updated_by`、`execution_context`。`progress` 保存成功增量基线；`execution_context` 保存内部执行上下文和加密参数。
 
 `conflict_num` 是收尾时 `to` 及其后代中，执行身份可检索的 `has_conflict=true` 文件数量，不是文件内部的冲突条数。统计使用空 query、标签过滤和 `level=2`，单次调用 `find`，固定 `limit=100`，不分页；计数达到或超过 100 时统一保存为 100，可能仍有更多冲突文件。正常完成在产物快照收尾后统计，不等待目标补标；失败或取消在回滚完成后统计。字段初始为 null；尚未取得起始快照的执行不检索并保存 null，避免读取其他任务正在修改的目标。回滚索引最多等待 30 秒；索引未就绪或检索失败时记录 warning 并保存 null，不因此回滚已成功生成的产物。修改配置时，`to` 不变保留已有计数，改变 `to` 则重置为 null。
 

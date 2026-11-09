@@ -1868,12 +1868,16 @@ def test_compile_configuration_and_named_execution():
         "skill": "viking://agent/skills/wiki",
         "args": {"auto_update": False},
     }
-    client.compile(compile_name=saved["compile_name"])
+    args = {"owner_user_id": "alice"}
+    client.compile(compile_name=saved["compile_name"], options={"args": args})
     assert client._async_client._request.await_args.kwargs["json"] == {
-        "compile_name": saved["compile_name"]
+        "compile_name": saved["compile_name"],
+        "args": args,
     }
     with pytest.raises(ValueError, match="cannot be combined"):
         client.compile(compile_name=saved["compile_name"], to="viking://resources/other")
+    with pytest.raises(ValueError, match="cannot be combined"):
+        client.compile(compile_name=saved["compile_name"], options={"instruction": "override"})
     with pytest.raises(ValueError, match="requires"):
         client.compile()
 

@@ -1984,17 +1984,20 @@ class AsyncHTTPClient:
         *,
         compile_name: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Queue an execution using only compile_name or complete full-compile inputs.
+        """Queue saved or full inputs and return a task_id for querying or cancellation.
 
-        Persistent inputs cannot be overridden. The returned task_id identifies
-        this execution and supports the generic task query and cancellation APIs.
+        Named runs use only options.args.owner_user_id; other args are ignored.
         """
         if compile_name is not None:
             if not compile_name:
                 raise ValueError("compile_name must not be empty")
-            if from_uris is not None or to is not None or skill is not None or options is not None:
+            if from_uris is not None or to is not None or skill is not None:
                 raise ValueError("compile_name cannot be combined with Compile inputs")
-            payload = {"compile_name": compile_name}
+            payload = self._build_options_payload(
+                options, CompileOptions, fixed={"compile_name": compile_name}
+            )
+            if set(payload) - {"compile_name", "args"}:
+                raise ValueError("compile_name cannot be combined with Compile inputs")
         else:
             if not skill or not to or (skill != "memory" and not from_uris):
                 raise ValueError("Full Compile requires to, skill and non-memory from_uris")

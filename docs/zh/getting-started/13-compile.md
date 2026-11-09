@@ -41,6 +41,8 @@ ov compile create --compile-name lighthouse-wiki \
 ov compile --compile-name lighthouse-wiki
 ```
 
+执行时会复用配置中已保存的 `from`、`to`、`skill` 和 `instruction`。
+
 记录返回的 `cmp_...` 任务 ID，查询进度：
 
 ```bash

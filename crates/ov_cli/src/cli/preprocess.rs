@@ -46,7 +46,7 @@ pub(crate) fn named_compile_conflict(args: &[OsString]) -> Option<&str> {
     let (input, flag) = flags.enumerate().find(|(_, flag)| {
         matches!(
             *flag,
-            "--from" | "--to" | "--skill" | "--instruction" | "--args"
+            "--from" | "--to" | "--skill" | "--instruction"
         )
     })?;
     let command = command_tokens_for_plain_help(&args[..name.min(input)]);

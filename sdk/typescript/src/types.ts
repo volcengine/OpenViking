@@ -213,7 +213,8 @@ export type CompileRequest =
       to?: never;
       skill?: never;
       instruction?: never;
-      args?: never;
+      /** Only owner_user_id is used; other keys are ignored. */
+      args?: JsonObject & { owner_user_id?: string };
     };
 /** Retrieval tag update options. */
 export interface SetTagsOptions {

@@ -12,6 +12,7 @@ from typing import Any, Mapping
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from openviking.core.identifiers import validate_user_id
 from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
@@ -119,7 +120,7 @@ class CompileCreateRequest(CompileInputs):
 
 
 class CompileRequest(BaseModel):
-    """Execute one saved configuration or complete full inputs, never a mixture of both."""
+    """Execute saved inputs for an optional owner, or full one-off inputs."""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -132,7 +133,10 @@ class CompileRequest(BaseModel):
     to: str | None = None
     skill: str | None = None
     instruction: str | None = None
-    args: dict[str, Any] | None = None
+    args: dict[str, Any] | None = Field(
+        default=None,
+        description="Named runs use only owner_user_id; other args are ignored.",
+    )
 
     @property
     def is_memory_mode(self) -> bool:
@@ -145,16 +149,28 @@ class CompileRequest(BaseModel):
         if not isinstance(data, Mapping):
             return data
         if "compile_name" in data:
-            if len(data) != 1:
+            if set(data) - {"compile_name", "args"}:
                 raise ValueError(
-                    "To run a saved configuration, send only compile_name to POST /api/v1/compile. "
+                    "To run a saved configuration, send compile_name and optional args.owner_user_id "
+                    "to POST /api/v1/compile. "
                     "Save the execution inputs with compile_name using POST /api/v1/compile/create. "
                     "See https://docs.openviking.ai/en/api/23-agent-runtime"
                 )
             if data["compile_name"] is None:
                 raise ValueError("compile_name must not be null")
+            args = data.get("args")
+            if args is not None:
+                if not isinstance(args, Mapping):
+                    raise ValueError("Named Compile args must be a JSON object")
+                if "owner_user_id" in args:
+                    error = validate_user_id(args["owner_user_id"])
+                    if error:
+                        raise ValueError(f"Invalid args.owner_user_id: {error}")
+                data = {**data, "args": {k: args[k] for k in ("owner_user_id",) if k in args}}
             return data
         inputs = CompileInputs.model_validate(data)
+        if "owner_user_id" in (inputs.args or {}):
+            raise ValueError("args.owner_user_id requires compile_name")
         scheduling = {"auto_update", "update_schedule"}.intersection(inputs.args or {})
         if scheduling:
             raise ValueError(
@@ -596,8 +612,11 @@ class CompileService:
                 target=request.to, instruction=request.instruction, ctx=ctx
             )
         compile_name = request.compile_name
+        owner_user_id = (request.args or {}).get("owner_user_id", ctx.user.user_id)
         if compile_name and locked_record is None:
-            configuration = await self._configuration(compile_name, ctx, action=AclAction.WRITE)
+            configuration = await self._configuration(
+                compile_name, ctx, action=AclAction.WRITE, owner_user_id=owner_user_id
+            )
             async with self._require_lifecycle().store.edit(
                 ctx.account_id, configuration["execution_context"]["owner_user_id"], compile_name
             ) as record:
@@ -616,6 +635,9 @@ class CompileService:
                 {key: record[key] for key in ("from", "to", "skill", "instruction", "args")}
             )
             submitted, submitted_private = {"compile_name": compile_name}, {}
+            # Omitted and explicit self owners share a retry identity.
+            if owner_user_id != ctx.user.user_id:
+                submitted["args"] = {"owner_user_id": owner_user_id}
         else:
             record = None
             inputs = self._normalize_request_uris(request, ctx)
@@ -822,12 +844,21 @@ class CompileService:
         return self._lifecycle
 
     async def _configuration(
-        self, compile_name: str, ctx: RequestContext, *, action: AclAction = AclAction.READ
+        self,
+        compile_name: str,
+        ctx: RequestContext,
+        *,
+        action: AclAction = AclAction.READ,
+        owner_user_id: str | None = None,
     ) -> dict[str, Any]:
-        """Resolve the caller's configuration and enforce its current output ACL."""
+        """Load the selected owner's config and check the caller's output ACL."""
         validate_compile_name(compile_name)
         lifecycle = self._require_lifecycle()
-        record = await lifecycle.store.get(ctx.account_id, ctx.user.user_id, compile_name)
+        record = await lifecycle.store.get(
+            ctx.account_id,
+            ctx.user.user_id if owner_user_id is None else owner_user_id,
+            compile_name,
+        )
         if record is None:
             raise NotFoundError(compile_name, "compile configuration")
         await lifecycle._fs._ensure_access(record["to"], ctx, action=action)

@@ -41,6 +41,8 @@ Create the configuration once. Submit each run by name:
 ov compile --compile-name lighthouse-wiki
 ```
 
+Execution reuses the configuration's saved `from`, `to`, `skill`, and `instruction`.
+
 Record the returned `cmp_...` task ID and inspect progress:
 
 ```bash

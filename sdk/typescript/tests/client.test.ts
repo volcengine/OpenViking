@@ -1009,7 +1009,8 @@ describe("OpenVikingClient", () => {
     expect(await client.createCompileTask(namedInput)).toEqual({
       compile_name: compileName,
     });
-    await client.compile({ compile_name: compileName });
+    const args = { owner_user_id: "alice" };
+    await client.compile({ compile_name: compileName, args });
     expect(String(fetcher.mock.calls[0]![0])).toBe(
       "https://example.com/api/v1/compile/create",
     );
@@ -1018,6 +1019,7 @@ describe("OpenVikingClient", () => {
     );
     expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toEqual({
       compile_name: compileName,
+      args,
     });
   });
 

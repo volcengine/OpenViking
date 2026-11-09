@@ -2395,6 +2395,8 @@ func TestSessionAPIsSendEventMemoryTags(t *testing.T) {
 
 func TestPersistentCompileRequests(t *testing.T) {
 	compileName := "research-summary"
+	args := map[string]any{"owner_user_id": "alice", "model_name": "ignored"}
+	namedRequests := 0
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
 		switch r.URL.Path {
@@ -2404,7 +2406,12 @@ func TestPersistentCompileRequests(t *testing.T) {
 			}
 			writeOK(t, w, map[string]any{"compile_name": compileName})
 		case "/api/v1/compile":
-			if !reflect.DeepEqual(body, map[string]any{"compile_name": compileName}) {
+			namedRequests++
+			expected := map[string]any{"compile_name": compileName}
+			if namedRequests == 2 {
+				expected["args"] = args
+			}
+			if !reflect.DeepEqual(body, expected) {
 				t.Fatalf("body = %#v", body)
 			}
 			writeOK(t, w, map[string]any{"task_id": "cmp_1"})
@@ -2424,7 +2431,10 @@ func TestPersistentCompileRequests(t *testing.T) {
 	if _, err := client.Compile(context.Background(), CompileRequest{CompileName: compileName}); err != nil {
 		t.Fatal(err)
 	}
-	for _, request := range []CompileRequest{{}, {CompileName: compileName, Input: &input}} {
+	if _, err := client.Compile(context.Background(), CompileRequest{CompileName: compileName, Args: args}); err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range []CompileRequest{{}, {CompileName: compileName, Input: &input}, {Input: &input, Args: args}} {
 		if _, err := client.Compile(context.Background(), request); err == nil {
 			t.Fatal("expected invalid request error")
 		}

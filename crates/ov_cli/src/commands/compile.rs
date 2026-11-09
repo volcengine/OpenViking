@@ -68,14 +68,16 @@ pub async fn run(
     Ok(())
 }
 
-/// Queue one run of a saved configuration and print its execution identity.
+/// Queue a named run with the client's identity and print its task ID.
 pub async fn run_saved(
     client: &HttpClient,
     compile_name: &str,
+    args: Option<String>,
     format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let accepted = client.run_compile(compile_name).await?;
+    let args = parse_args(args.as_deref())?;
+    let accepted = client.run_compile(compile_name, args.as_ref()).await?;
     render_accepted(&accepted, "", format, compact);
     Ok(())
 }

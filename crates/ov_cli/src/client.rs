@@ -387,13 +387,17 @@ impl HttpClient {
         .await
     }
 
-    /// Execute a saved configuration; no other public input overrides are accepted.
-    pub async fn run_compile(&self, compile_name: &str) -> Result<CompileAccepted> {
-        self.post(
-            "/api/v1/compile",
-            &serde_json::json!({"compile_name": compile_name}),
-        )
-        .await
+    /// Run saved inputs; owner_user_id in args does not change the caller.
+    pub async fn run_compile(
+        &self,
+        compile_name: &str,
+        args: Option<&serde_json::Map<String, Value>>,
+    ) -> Result<CompileAccepted> {
+        let mut body = serde_json::json!({"compile_name": compile_name});
+        if let Some(args) = args {
+            body["args"] = serde_json::json!(args);
+        }
+        self.post("/api/v1/compile", &body).await
     }
 
     pub async fn create_compile(
@@ -3216,7 +3220,7 @@ mod tests {
             .unwrap();
         assert_eq!(config.compile_name, compile_name);
         assert_eq!(
-            client.run_compile(compile_name).await.unwrap().task_id,
+            client.run_compile(compile_name, None).await.unwrap().task_id,
             "cmp_2"
         );
         server.await.unwrap();

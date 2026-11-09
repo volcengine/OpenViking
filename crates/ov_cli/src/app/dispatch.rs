@@ -611,6 +611,7 @@ pub(super) async fn dispatch(
                 return commands::compile::run_saved(
                     &client,
                     &compile_name,
+                    args,
                     ctx.output_format,
                     ctx.compact,
                 )
