@@ -1,3 +1,4 @@
+export function createPendingCommitLookup(): (sessionId: string) => Promise<string[]>;
 export function enqueue(type: string, sessionId: string, payload: Record<string, any>): Promise<{ ok: boolean; path?: string; error?: string }>;
 export function listPending(): Promise<Array<{ filename: string; entry: Record<string, any> }>>;
 export function replayPending(

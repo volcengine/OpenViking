@@ -229,19 +229,61 @@ export async function enqueue(type, sessionId, payload, options = {}) {
   return { ok: false, error: `pending file exists but dedup entry was not readable: ${filename}`, dedupKey };
 }
 
+async function pendingFiles(dir) {
+  try {
+    await recoverStaleProcessing(dir);
+    return await readdir(dir);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Find superseded commit markers without reopening known transcript files.
+ * Queue writers derive the filename from type, session and payload. Only
+ * cache this identity for canonical filenames; discover external writes and
+ * retry renames from disk on every call. Never retain transcript contents.
+ */
+export function createPendingCommitLookup() {
+  let previousDir;
+  let known = new Map();
+  return async function pendingCommits(sessionId) {
+    const dir = getPendingDir();
+    const previous = dir === previousDir ? known : new Map();
+    const current = new Map();
+    const matches = [];
+    for (const name of await pendingFiles(dir)) {
+      if (!name.endsWith(".json")) continue;
+      let owner = previous.get(name);
+      if (owner !== undefined) {
+        current.set(name, owner);
+      } else {
+        try {
+          const entry = await readEntry(dir, name);
+          owner = entry.type === "commitSession" ? entry.sessionId : null;
+          if (/^[a-f0-9]{64}$/.test(entry.dedupKey)
+              && name === pendingFilename(entry.dedupKey, entry.retries)) {
+            current.set(name, owner);
+          }
+        } catch {
+          continue; // A concurrent claim or a partially written file can be retried.
+        }
+      }
+      if (owner === sessionId) matches.push(name);
+    }
+    previousDir = dir;
+    known = current;
+    return matches;
+  };
+}
+
 /**
  * List all pending queue entries.
  * Returns array of { filename, entry } sorted by createdAt ascending.
  */
 export async function listPending() {
   const dir = getPendingDir();
-  let files;
-  try {
-    await recoverStaleProcessing(dir);
-    files = await readdir(dir);
-  } catch {
-    return [];
-  }
+  const files = await pendingFiles(dir);
 
   const entries = [];
   for (const f of files) {

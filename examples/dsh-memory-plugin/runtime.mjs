@@ -2,6 +2,7 @@ import { isCaptureEnabled } from "./shared/capture-utils.mjs";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
 import {
+  createPendingCommitLookup,
   dequeue,
   enqueue,
   listPending,
@@ -24,6 +25,7 @@ export class OpenVikingRuntime {
     this.logger = logger;
     this.resolveSessionPeer = resolveSessionPeer;
     this.states = new Map();
+    this.pendingCommits = createPendingCommitLookup();
     this.drainTimer = null;
     this.drainRunning = false;
     this.drainPromise = Promise.resolve();
@@ -297,14 +299,8 @@ export class OpenVikingRuntime {
   }
 
   async removePendingCommits(state) {
-    const pending = await listPending();
-    for (const item of pending) {
-      if (
-        item.entry?.type === "commitSession"
-        && item.entry.sessionId === state.ovSessionId
-      ) {
-        await dequeue(item.filename);
-      }
+    for (const filename of await this.pendingCommits(state.ovSessionId)) {
+      await dequeue(filename);
     }
   }
 
