@@ -5,3 +5,9 @@
 @import './scope-switcher/style.css';
 @import './agent-connect/style.css';
 @import './viking-bot/style.css';
+@import './email-login-form/style.css';
+@import './api-key-login-form/style.css';
+@import './password-reset-request-form/style.css';
+@import './password-setup-form/style.css';
+@import './login-method-selector/style.css';
+@import './invitation-confirmation/style.css';

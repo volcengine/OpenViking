@@ -35,6 +35,7 @@
  * `var(--ov-ui-color-primary, privateFallback)` — the host's value wins when set,
  * the fallback applies otherwise.
  */
+.ov-auth,
 .ov-agent-connect,
 .ov-file-browser,
 .ov-file-preview,
@@ -45,6 +46,8 @@
 .ov-tui,
 .ov-viking-bot,
 .ov-viking-bot__interaction {
+  --ov-ui-auth-on-primary-default: #ffffff;
+  --ov-ui-auth-backdrop-default: rgb(0 0 0 / 40%);
   /* 主色：面包屑、焦点环、选中态与主要按钮。 */
   --ov-ui-primary-default: #5252ff;
   --ov-ui-primary-hover-default: #7075ff;
@@ -81,6 +84,7 @@
   --ov-ui-tooltip-text-default: #ffffff;
 }
 
+.dark .ov-auth,
 .dark .ov-agent-connect,
 .dark .ov-file-browser,
 .dark .ov-file-preview,

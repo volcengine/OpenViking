@@ -56,6 +56,7 @@ export default defineConfig({
               items: [
                 { text: '概览', link: '/components/' },
                 { text: '图标', link: '/components/icons' },
+                { text: '登录与认证表单', link: '/components/auth-forms' },
                 { text: 'FileTree 文件树', link: '/components/file-tree' },
                 {
                   text: 'FilePreview 文件预览',
@@ -134,6 +135,10 @@ export default defineConfig({
               items: [
                 { text: 'Overview', link: '/en/components/' },
                 { text: 'Icons', link: '/en/components/icons' },
+                {
+                  text: 'Authentication forms',
+                  link: '/en/components/auth-forms',
+                },
                 { text: 'FileTree', link: '/en/components/file-tree' },
                 { text: 'FilePreview', link: '/en/components/file-preview' },
                 { text: 'Tui', link: '/en/components/tui' },

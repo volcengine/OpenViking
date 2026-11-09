@@ -82,3 +82,13 @@ From `frontend/`, run `npm run build:lib` to generate `packages/react/dist/`. Se
 ### ScopeCascade
 
 Pass three stable API adapter functions to `useScopeCascade({ loadLibraries, loadSpaces, loadUsers })`, then render `<ScopeCascade controller={controller} />`. Adapters return `{ id, label }` options and receive an `AbortSignal`. The module handles dependent requests, descendant resets, loading, errors, retries and stale responses. Each selector subscribes independently; the Hook caller does not subscribe to request state. Import the Hook and composition from `@openviking/react/modules/scope-cascade` and its CSS from the corresponding `/style.css` entry.
+
+## Authentication forms
+
+`EmailLoginForm`, `ApiKeyLoginForm`, `PasswordResetRequestForm`, `PasswordSetupForm`,
+`LoginMethodSelector` and `InvitationConfirmation` are request-free React views.
+Import components from the package root or their individual `components/<kebab-case-name>`
+entries and import the matching `style.css`. Optional actions and agreements are configured
+by the host. Password strength, asynchronous loading/errors, mail delivery, session/CSRF,
+invitation routing and persistence are host responsibilities. No internal UI or theme
+packages are required. See the authentication form examples in the UI documentation.
