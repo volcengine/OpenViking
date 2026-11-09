@@ -38,7 +38,10 @@ const RECALL_HOOK_HEADROOM_MS = 2_000;
 export function promptRecallHookGranted(hostConfig: unknown, pluginId: string): boolean {
   const entries = (hostConfig as { plugins?: { entries?: Record<string, unknown> } } | undefined)?.plugins?.entries;
   const hooks = (entries?.[pluginId] as { hooks?: Record<string, unknown> } | undefined)?.hooks;
-  return hooks?.allowConversationAccess === true && hooks.allowPromptInjection !== false;
+  // Newer OpenClaw reads allowPromptModification; older hosts read allowPromptInjection.
+  return hooks?.allowConversationAccess === true
+    && hooks.allowPromptModification !== false
+    && hooks.allowPromptInjection !== false;
 }
 
 /**

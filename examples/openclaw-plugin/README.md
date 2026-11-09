@@ -176,7 +176,7 @@ OpenClaw dispatches `before_prompt_build` to a non-bundled plugin only with an e
 { "plugins": { "entries": { "openviking": { "hooks": { "allowConversationAccess": true } } } } }
 ```
 
-Without the grant (or with `allowPromptInjection: false`), the plugin keeps the previous behavior and recalls inside `assemble()`: recall goes into `systemPromptAddition`, which changes every turn and can invalidate the provider prompt cache for the history that follows it.
+Without the grant (or with `allowPromptModification: false`, `allowPromptInjection: false` on older hosts), the plugin keeps the previous behavior and recalls inside `assemble()`: recall goes into `systemPromptAddition`, which changes every turn and can invalidate the provider prompt cache for the history that follows it.
 
 During recall, the plugin:
 

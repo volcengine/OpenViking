@@ -201,7 +201,7 @@ OpenClaw 只有在显式授权时才会向非内置插件派发 `before_prompt_b
 { "plugins": { "entries": { "openviking": { "hooks": { "allowConversationAccess": true } } } } }
 ```
 
-未授权（或设置了 `allowPromptInjection: false`）时，插件保持原有行为，在 `assemble()` 中召回：召回内容进入 `systemPromptAddition`，每轮都会变化，可能使其后历史的 provider prompt cache 失效。
+未授权（或设置了 `allowPromptModification: false`，旧版本宿主为 `allowPromptInjection: false`）时，插件保持原有行为，在 `assemble()` 中召回：召回内容进入 `systemPromptAddition`，每轮都会变化，可能使其后历史的 provider prompt cache 失效。
 
 召回阶段会：
 

@@ -58,6 +58,7 @@ describe("prompt recall hook grant", () => {
   it.each([
     [{ allowConversationAccess: true }, true],
     [{ allowConversationAccess: true, allowPromptInjection: false }, false],
+    [{ allowConversationAccess: true, allowPromptModification: false }, false],
     [{ allowPromptInjection: true }, false],
     [undefined, false],
   ])("reads plugins.entries.openviking.hooks %j", (hooks, granted) => {
@@ -217,6 +218,12 @@ describe("plugin registration", () => {
     const api = createPluginApi({ allowConversationAccess: true });
     contextEnginePlugin.register(api as never);
     expect(hookNames(api)).toContain("before_prompt_build");
+  });
+
+  it("keeps recall on assemble when prompt modification is denied", async () => {
+    const api = createPluginApi({ allowConversationAccess: true, allowPromptModification: false });
+    contextEnginePlugin.register(api as never);
+    expect(hookNames(api)).not.toContain("before_prompt_build");
   });
 
   it("keeps recall on assemble without the grant", () => {
