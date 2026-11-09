@@ -112,6 +112,13 @@ if ($Fancy) {
 
 # ---- Output ---------------------------------------------------------------
 # Everything goes to stderr, as install.sh does, so stdout stays free.
+# Get-FileHash is missing when Windows PowerShell 5.1 starts from pwsh with
+# PowerShell 7's PSModulePath, so hash through .NET.
+function Get-Sha256([string]$path) {
+    $stream = [IO.File]::OpenRead($path)
+    try { return ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($stream))).Replace('-', '') }
+    finally { $stream.Dispose() }
+}
 function Say([string]$text) { [Console]::Error.WriteLine($text) }
 function Ok([string]$text) { if ($Fancy) { Say "  ${GREEN}$Check${RESET} $text" } else { Say $text } }
 function Note([string]$text) { if ($Fancy) { Say "  ${GRAY}$Arrow${RESET} $text" } else { Say $text } }
@@ -431,7 +438,7 @@ function Assert-SameRelease([string]$stageDir, [string]$existing) {
         $relative = $file.Substring($stageDir.Length).TrimStart([IO.Path]::DirectorySeparatorChar)
         $other = Join-Path $existing $relative
         if (-not (Test-Path -LiteralPath $other -PathType Leaf) -or
-            (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $other -Algorithm SHA256).Hash) {
+            (Get-Sha256 $file) -ne (Get-Sha256 $other)) {
             throw "Release conflict; existing directory retained: $existing"
         }
     }
@@ -565,7 +572,7 @@ if (Test-Path -LiteralPath $checksumFile) {
         if ($named -and ($named -cne $archiveName)) {
             Die (M "校验文件对不上：写的是 $named，不是 $archiveName" "the checksum file names $named, not $archiveName")
         }
-        if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ine $expected) {
+        if ((Get-Sha256 $archive) -ine $expected) {
             Die (M '安装包校验失败（SHA-256 不一致）' 'the package failed verification (SHA-256 mismatch)')
         }
         Ok ("$(M '校验' 'Verify  ')  ${GRAY}$(M 'SHA-256 一致' 'SHA-256 matches')${RESET}")
