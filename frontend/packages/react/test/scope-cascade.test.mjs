@@ -111,13 +111,16 @@ test('failures and retry affect only the requesting channel', async () => {
   library.select(option('a'));
   await tick();
   assert.equal(space.getSnapshot().error.message, 'offline');
-  const before = [library.getSnapshot(), user.getSnapshot()];
+  const before = library.getSnapshot();
   fail = false;
   space.refresh();
   await tick();
   assert.equal(space.getSnapshot().error, null);
-  assert.equal(library.getSnapshot(), before[0]);
-  assert.equal(user.getSnapshot(), before[1]);
+  // The recovered list has no prior selection, so the first option takes over
+  // and enables the user level. That is the cascade working, not a leak: the
+  // library channel, which did not request anything, keeps its snapshot.
+  assert.equal(space.getSnapshot().selected?.id, 'space');
+  assert.equal(library.getSnapshot(), before);
   stop();
 });
 
@@ -142,6 +145,39 @@ test('refresh revoking selection clears all descendants before notification', as
   await tick();
   assert.equal(library.getSnapshot().selected, undefined);
   unsubscribe();
+  stop();
+});
+
+test('a revoked or disabled selection falls back to the first option', async () => {
+  // Normalising the selection lives here, not in the view: it decides the
+  // parameters of downstream requests.
+  let items = [option('a'), option('b')];
+  const instance = createScopeController();
+  const [library] = instance.controller.levels;
+  const stop = instance.start({
+    ...api(),
+    loadLibraries: () => Promise.resolve(items),
+  });
+  await tick();
+  assert.equal(library.getSnapshot().selected?.id, 'a');
+
+  // 'a' disappears from the refreshed list: the first remaining option takes over.
+  items = [option('b')];
+  library.refresh();
+  await tick();
+  assert.equal(library.getSnapshot().selected?.id, 'b');
+
+  // A disabled first option is skipped in favour of the next usable one.
+  items = [{ id: 'x', label: 'x', disabled: true }, option('y')];
+  library.refresh();
+  await tick();
+  assert.equal(library.getSnapshot().selected?.id, 'y');
+
+  // An empty list leaves nothing to select.
+  items = [];
+  library.refresh();
+  await tick();
+  assert.equal(library.getSnapshot().selected, undefined);
   stop();
 });
 

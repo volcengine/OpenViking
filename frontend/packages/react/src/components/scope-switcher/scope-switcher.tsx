@@ -2,16 +2,21 @@ import type { ScopeSwitcherProps } from './types.js';
 export { ScopeSelector } from './scope-selector.js';
 export { SCOPE_SWITCHER_SEARCH_THRESHOLD } from './types.js';
 export type {
-  ScopeSwitcherFixedLevel,
+  ScopeSelectorBaseProps,
+  ScopeSelectorFixedProps,
+  ScopeSelectorProps,
+  ScopeSelectorSelectableProps,
+  ScopeSwitcherActions,
+  ScopeSwitcherData,
+  ScopeSwitcherIdentity,
   ScopeSwitcherLabels,
-  ScopeSwitcherLevel,
-  ScopeSwitcherLevelBase,
   ScopeSwitcherOption,
   ScopeSwitcherPanelContent,
   ScopeSwitcherProps,
-  ScopeSelectorProps,
   ScopeSwitcherScrollMetrics,
-  ScopeSwitcherSelectableLevel,
+  ScopeSwitcherSlots,
+  ScopeSwitcherState,
+  ScopeSwitcherTrigger,
 } from './types.js';
 
 /** No shared state, data aggregation or subscription in the layout root. */

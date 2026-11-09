@@ -14,8 +14,16 @@ import {
 import '@openviking/react/components/scope-switcher/style.css';
 
 const libraries = [
-  { id: 'research', label: '星河电商研发库', icon: <LibraryIcon /> },
-  { id: 'support', label: 'Support library', icon: <LibraryIcon /> },
+  {
+    id: 'research',
+    label: '星河电商研发库',
+    icon: <LibraryIcon name="research" />,
+  },
+  {
+    id: 'support',
+    label: 'Support library',
+    icon: <LibraryIcon name="support" />,
+  },
 ];
 const spaces: Record<string, ScopeSwitcherOption[]> = {
   research: [
@@ -51,17 +59,15 @@ function StaticSelector({
   return (
     <ScopeSelector
       key={JSON.stringify(scope.ancestors.map((item) => item.id))}
-      level={{
-        kind: 'selectable',
-        key: name,
-        ariaLabel: `Switch ${name.toLowerCase()}`,
-        selectedId: scope.selected?.id ?? '',
-        selectedLabel: scope.selected?.label ?? `Select ${name.toLowerCase()}`,
+      kind="selectable"
+      identity={{ key: name, ariaLabel: `Switch ${name.toLowerCase()}` }}
+      trigger={{
+        label: scope.selected?.label ?? `Select ${name.toLowerCase()}`,
         icon: scope.selected?.icon,
-        options,
-        disabled: scope.ancestors.length < index,
-        onSelect: (option) => source.select(index, option),
       }}
+      data={{ selectedId: scope.selected?.id ?? '', options }}
+      state={{ disabled: scope.ancestors.length < index }}
+      actions={{ onSelect: (option) => source.select(index, option) }}
     />
   );
 }

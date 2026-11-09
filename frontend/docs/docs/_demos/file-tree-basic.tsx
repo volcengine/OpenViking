@@ -327,7 +327,8 @@ export default function FileTreeBasic() {
     [MEMORIES]: childrenOf(MEMORIES).slice(0, PAGE),
   }));
   const [loading, setLoading] = useState<ReadonlySet<string>>(new Set());
-  const [selected, setSelected] = useState<string>();
+  // 默认选中一行，进页面就能看到选中态，不必先点一下。
+  const [selected, setSelected] = useState<string>(`${MEMORIES}/profile.md`);
 
   /** Fetches one more page of children, showing the loading row meanwhile. */
   const loadPage = (uri: string) => {

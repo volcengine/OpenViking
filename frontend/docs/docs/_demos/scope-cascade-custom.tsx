@@ -29,17 +29,17 @@ function CustomLevel({
   return (
     <ScopeSelector
       key={state.scopeKey}
-      level={{
-        kind: 'selectable',
-        key: name,
-        ariaLabel: name,
-        selectedId: state.selected?.id ?? '',
-        selectedLabel: state.selected?.label ?? name,
-        options: state.options,
+      kind="selectable"
+      identity={{ key: name, ariaLabel: name }}
+      trigger={{ label: state.selected?.label ?? name }}
+      data={{ selectedId: state.selected?.id ?? '', options: state.options }}
+      state={{
         disabled: !state.enabled,
         loading: state.loading,
         error: !!state.error,
-        onSelect: level.select,
+      }}
+      actions={{ onSelect: level.select }}
+      slots={{
         errorFallback: (
           <button type="button" onClick={level.refresh}>
             Retry
