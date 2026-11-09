@@ -15,6 +15,7 @@ import '@openviking/react/components/agent-connect/style.css';
 
 - 安装器命令显式指定当前 Agent 的 `--harness`，并包含接入引导需要的 `cli`；Claude Code 对应 `claude`、Kimi Code 对应 `kimicode`、DeepSeek Harness 对应 `dsh`，TRAE 对应国际版 `trae`。
 - 安装器命令中的服务地址和密钥使用 Shell 单引号转义，执行后参数保持调用方字面值；不将 Shell 转义应用到 JSON、Python 或纯文本指南。自定义 Hermes 地址使用 **Custom** 连接步骤，并填写该地址。
+- 指南追加 `/mcp` 等子路径时移除服务地址末尾的斜杠；API 示例的 `url` 变量也使用该规范化地址，以便随后拼接 `/api/v1/...`。安装器参数和不拼接路径的独立地址保留调用方原值。
 - 指南、凭据或地址变化会创建新的复制交互实例：清空反馈和 pending 状态，返回旧指南也不会恢复旧反馈。已发起的 Clipboard API 写入无法取消，但过期完成结果不更新界面或调用 `onCopy`。
 - 宿主可提供 `agreementUrl`，协议引用渲染为可用鼠标和键盘访问的链接；未提供时仅显示数据访问提示，不显示无目标的协议引用。
 

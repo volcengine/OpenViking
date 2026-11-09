@@ -15,6 +15,7 @@ import '@openviking/react/components/agent-connect/style.css';
 
 - Installer commands explicitly select the current agent via `--harness` and include `cli` for onboarding. Claude Code maps to `claude`, Kimi Code to `kimicode`, DeepSeek Harness to `dsh`, and TRAE to the international `trae` client.
 - Installer URLs and keys use shell single-quote escaping to preserve literal argument values. Shell escaping is not applied to JSON, Python or plain-text guides. Custom Hermes endpoints use the **Custom** connection steps with the supplied URL.
+- Guides remove trailing slashes from the base URL when appending paths such as `/mcp`. The API example's `url` variable also uses this normalized base before appending `/api/v1/...`. Installer arguments and standalone URLs without appended paths preserve the host's original value.
 - Changing guides, credentials or endpoints creates a fresh clipboard interaction: feedback and pending state reset, including when returning to a previous guide. Clipboard writes already started cannot be cancelled, but stale completions neither update feedback nor invoke `onCopy`.
 - Hosts may provide `agreementUrl` to render a mouse- and keyboard-accessible agreement link. Without it, only the data access notice is shown, with no reference to an unavailable agreement.
 

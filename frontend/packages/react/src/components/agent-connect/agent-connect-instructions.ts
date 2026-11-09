@@ -54,16 +54,20 @@ export function getAgentConnectInstructions(
     template +=
       '\n\nBase URL: {{OPENVIKING_BASE_URL}}\n\nAPI Key:\n\n{{OPENVIKING_API_KEY_BLOCK}}';
   }
+  const pathBaseUrl = baseUrl.replace(/\/+$/, '');
   function hydrate(key: string) {
     return template.replace(
       /\{\{OPENVIKING_BASE_URL\}\}|\{\{OPENVIKING_API_KEY_BLOCK\}\}|\{\{OPENVIKING_API_KEY\}\}|<API_KEY>|https:\/\/api\.vikingdb\.cn-beijing\.volces\.com\/openviking/g,
-      (token) => {
+      (token, offset: number) => {
         if (token === '{{OPENVIKING_API_KEY_BLOCK}}') {
           const value = id === 'deerflow' ? `OPENVIKING_API_KEY=${key}` : key;
           return `\`\`\`text\n${value}\n\`\`\``;
         }
         if (token.includes('API_KEY')) return key;
-        return baseUrl;
+        // API 先赋值 url 再拼接路径；其余指南只在占位符后跟 / 时归一化。
+        return id === 'api' || template[offset + token.length] === '/'
+          ? pathBaseUrl
+          : baseUrl;
       },
     );
   }
