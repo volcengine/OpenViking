@@ -233,6 +233,7 @@ class MemoryCompileRunner:
                     ctx.account_id,
                     ctx.user.user_id,
                     work_id=running_work_id,
+                    task_type="compile",
                 ):
                     await self._snapshot(target, task_id, "start", ctx)
                     result = await self._consolidate(

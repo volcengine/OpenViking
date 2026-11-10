@@ -1,17 +1,33 @@
+import type { ScopeSwitcherProps } from './types.js';
+export { ScopeSelector } from './scope-selector.js';
 export { SCOPE_SWITCHER_SEARCH_THRESHOLD } from './types.js';
 export type {
-  ScopeSwitcherFixedLevel,
+  ScopeSelectorBaseProps,
+  ScopeSelectorFixedProps,
+  ScopeSelectorProps,
+  ScopeSelectorSelectableProps,
+  ScopeSwitcherActions,
+  ScopeSwitcherData,
+  ScopeSwitcherIdentity,
   ScopeSwitcherLabels,
-  ScopeSwitcherLevel,
-  ScopeSwitcherLevelBase,
   ScopeSwitcherOption,
   ScopeSwitcherPanelContent,
   ScopeSwitcherProps,
   ScopeSwitcherScrollMetrics,
-  ScopeSwitcherSelectableLevel,
+  ScopeSwitcherSlots,
+  ScopeSwitcherState,
+  ScopeSwitcherTrigger,
 } from './types.js';
 
-/** 占位组件：仅渲染固定尺寸的空壳，真实实现按 props 契约重写。 */
-export function ScopeSwitcher() {
-  return <div className="ov-scope-switcher">ScopeSwitcher</div>;
+/** No shared state, data aggregation or subscription in the layout root. */
+export function ScopeSwitcher({
+  children,
+  className = '',
+  ...props
+}: ScopeSwitcherProps) {
+  return (
+    <div {...props} className={`ov-scope-switcher ${className}`}>
+      {children}
+    </div>
+  );
 }

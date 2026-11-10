@@ -14,6 +14,12 @@ class TestFsRm:
                 f"Failed to create test directory: {response.status_code}"
             )
 
+            # Directory creation enqueues semantic refresh work. Let the
+            # request-scoped background processing release the tree lock before
+            # deleting the directory, otherwise rm can race with that work.
+            settled = api_client.system_wait()
+            assert settled.status_code == 200, settled.text
+
             response = api_client.fs_rm(test_dir, recursive=True)
             print(f"\nFS rm API status code: {response.status_code}")
 

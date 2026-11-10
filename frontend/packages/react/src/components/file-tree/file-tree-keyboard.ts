@@ -1,69 +1,68 @@
 import type { KeyboardEvent } from 'react';
 
-import { queryRowElements } from './file-tree-dom.js';
+import { FILE_TREE_ROW_ATTRIBUTE } from './types.js';
 import type { FileTreeEntryRow } from './types.js';
 
-export interface FileTreeKeyHandlerOptions {
-  root: HTMLElement | null;
-  row: FileTreeEntryRow;
-  onSelect?: (row: FileTreeEntryRow) => void;
-  onToggleExpand?: (row: FileTreeEntryRow) => void;
+/** 按 DOM 顺序取出当前可见的行元素。Visible row elements, in DOM order. */
+function visibleRows(root: HTMLElement | null) {
+  if (!root) return [];
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(`[${FILE_TREE_ROW_ATTRIBUTE}]`),
+  );
 }
 
-/** 上下方向键在同一层的行元素间移动焦点。 */
-function moveFocus(
-  current: HTMLElement,
-  root: HTMLElement | null,
-  delta: number,
-) {
-  const elements = queryRowElements(root);
-  const index = elements.indexOf(current);
-  if (index === -1) return;
-  elements[index + delta]?.focus();
-}
-
-/** 树行的键盘语义：上下移动焦点，左右展开折叠，回车与空格选中。 */
+/**
+ * 树行的键盘语义：上下移动焦点，左右展开折叠，回车与空格选中。
+ *
+ * Keyboard semantics for a row: up/down move focus, left/right collapse and
+ * expand, Enter and Space select.
+ */
 export function handleRowKeyDown(
   event: KeyboardEvent<HTMLDivElement>,
-  { root, row, onSelect, onToggleExpand }: FileTreeKeyHandlerOptions,
+  {
+    root,
+    row,
+    onSelect,
+    onToggleExpand,
+  }: {
+    root: HTMLElement | null;
+    row: FileTreeEntryRow;
+    onSelect?: (row: FileTreeEntryRow) => void;
+    onToggleExpand?: (row: FileTreeEntryRow) => void;
+  },
 ) {
+  const isDirectory = row.type === 'directory';
+  const expanded = Boolean(row.expanded);
+  const canToggle = isDirectory && !row.disabled;
+
   switch (event.key) {
     case 'ArrowDown':
+    case 'ArrowUp': {
       event.preventDefault();
-      moveFocus(event.currentTarget, root, 1);
-      break;
-    case 'ArrowUp':
-      event.preventDefault();
-      moveFocus(event.currentTarget, root, -1);
-      break;
+      const rows = visibleRows(root);
+      const index = rows.indexOf(event.currentTarget);
+      if (index === -1) return;
+      rows[index + (event.key === 'ArrowDown' ? 1 : -1)]?.focus();
+      return;
+    }
     case 'ArrowRight':
-      if (
-        !row.disabled &&
-        !row.busy &&
-        row.type === 'directory' &&
-        !row.expanded
-      ) {
+      if (canToggle && !expanded) {
         event.preventDefault();
         onToggleExpand?.(row);
       }
-      break;
+      return;
     case 'ArrowLeft':
-      if (
-        !row.disabled &&
-        !row.busy &&
-        row.type === 'directory' &&
-        row.expanded
-      ) {
+      if (canToggle && expanded) {
         event.preventDefault();
         onToggleExpand?.(row);
       }
-      break;
+      return;
     case 'Enter':
     case ' ':
       event.preventDefault();
       if (!row.disabled) onSelect?.(row);
-      break;
+      return;
     default:
-      break;
+      return;
   }
 }

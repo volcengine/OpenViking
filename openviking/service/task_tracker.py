@@ -245,6 +245,8 @@ async def run_tracked_operation(
                 account_id,
                 user_id,
                 enqueued_work=[],
+                task_type=task.task_type,
+                mode=task.meta.get("mode"),
                 work_id=running_work_id,
             ):
                 result = await operation()
@@ -490,6 +492,9 @@ class TaskTracker:
         if task_id is not None:
             existing = await self.get(task_id, account_id=account_id, user_id=user_id)
             if existing is not None:
+                from openviking.observability.reporting.facts import remember_request_task
+
+                remember_request_task(existing)
                 return existing
         admission = _admission.get()
         admitted = admission[1] if admission and admission[0] == task_id else None
@@ -543,6 +548,9 @@ class TaskTracker:
                 except BaseException:
                     logger.exception("[TaskTracker] Failed to withdraw Task %s", task.task_id)
             raise
+        from openviking.observability.reporting.facts import remember_request_task
+
+        remember_request_task(created)
         return created
 
     async def create_if_no_running(
@@ -684,6 +692,28 @@ class TaskTracker:
                 user_id=user_id,
             )
         )
+        await self._emit_terminal(task_id, account_id, user_id)
+
+    async def _emit_terminal(self, task_id, account_id, user_id):
+        from openviking.observability.reporting.runtime import is_reporting_enabled
+
+        if not is_reporting_enabled():
+            return
+        try:
+            from openviking.observability.reporting.facts import emit_terminal
+
+            if account_id and user_id:
+                # Work completion is a hot path. MySQL get_task also reads all
+                # started Work intervals to compute processing_seconds, which
+                # telemetry does not need while the Task is still running.
+                status = await self._store.get_task_status(
+                    task_id, account_id=account_id, user_id=user_id
+                )
+                if status not in TERMINAL_TASK_STATUSES:
+                    return
+            emit_terminal(await self.get(task_id, account_id=account_id, user_id=user_id))
+        except Exception:
+            logger.warning("Task terminal telemetry could not be projected")
 
     async def cancel(
         self,
@@ -733,7 +763,7 @@ class TaskTracker:
         user_id: str,
         allow_terminal: bool,
     ) -> StoreOperationResult:
-        return await run_to_completion(
+        result = await run_to_completion(
             lambda: self._store.request_cancellation(
                 task_id,
                 cancellable_types=_CANCELLABLE_TASK_TYPES,
@@ -742,6 +772,9 @@ class TaskTracker:
                 user_id=user_id,
             )
         )
+        if result.is_applied:
+            await self._emit_terminal(task_id, account_id, user_id)
+        return result
 
     async def register_running_task(
         self,
@@ -890,9 +923,7 @@ class TaskTracker:
                 if remaining is not None and remaining <= 0:
                     raise TimeoutError(f"Timed out waiting for Task {task_id}")
                 await asyncio.sleep(
-                    next_poll_interval
-                    if remaining is None
-                    else min(next_poll_interval, remaining)
+                    next_poll_interval if remaining is None else min(next_poll_interval, remaining)
                 )
                 next_poll_interval = min(_WAIT_MAX_POLL_INTERVAL, next_poll_interval * 2)
 
@@ -1058,6 +1089,7 @@ class TaskTracker:
                 task_id, work_id, account_id=account_id, user_id=user_id
             )
         )
+        await self._emit_terminal(task_id, account_id, user_id)
 
     async def reconcile_delivery(
         self,
@@ -1154,6 +1186,7 @@ class TaskTracker:
             account_id=account_id,
             user_id=user_id,
         )
+        await self._emit_terminal(task_id, account_id, user_id)
 
     async def _finish_work(
         self,
@@ -1179,6 +1212,7 @@ class TaskTracker:
                 user_id=user_id,
             )
         )
+        await self._emit_terminal(task_id, account_id, user_id)
 
     async def record_work_error(
         self,
@@ -1205,6 +1239,7 @@ class TaskTracker:
                 task_id, work_id, account_id=account_id, user_id=user_id
             )
         )
+        await self._emit_terminal(task_id, account_id, user_id)
 
     async def is_cancelling(
         self,
@@ -1259,9 +1294,7 @@ class TaskTracker:
                 if remaining is not None and remaining <= 0:
                     raise TimeoutError(f"Timed out waiting for Work in Task {task_id}")
                 await asyncio.sleep(
-                    next_poll_interval
-                    if remaining is None
-                    else min(next_poll_interval, remaining)
+                    next_poll_interval if remaining is None else min(next_poll_interval, remaining)
                 )
                 next_poll_interval = min(_WAIT_MAX_POLL_INTERVAL, next_poll_interval * 2)
 
@@ -1287,9 +1320,7 @@ class TaskTracker:
                 if remaining is not None and remaining <= 0:
                     raise TimeoutError(f"Timed out waiting for Work in Task {task_id}")
                 await asyncio.sleep(
-                    next_poll_interval
-                    if remaining is None
-                    else min(next_poll_interval, remaining)
+                    next_poll_interval if remaining is None else min(next_poll_interval, remaining)
                 )
                 next_poll_interval = min(_WAIT_MAX_POLL_INTERVAL, next_poll_interval * 2)
 
@@ -1332,8 +1363,7 @@ class TaskTracker:
                 "requeue_count": queue.requeue_count,
                 "error_count": queue.error_count,
                 "errors": [
-                    project_work_error(error)
-                    for error in queue.errors[:MAX_QUEUE_ERROR_DETAILS]
+                    project_work_error(error) for error in queue.errors[:MAX_QUEUE_ERROR_DETAILS]
                 ],
             }
         return result

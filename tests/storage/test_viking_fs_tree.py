@@ -9,6 +9,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import viking_fs as viking_fs_module
+from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
@@ -67,6 +68,82 @@ async def test_stat_queries_lock_status_only_when_requested(monkeypatch, fs):
 
     assert result["isLocked"] is True
     assert lock_queries == [path]
+
+
+@pytest.mark.asyncio
+async def test_stat_returns_l2_vector_count_as_count(monkeypatch, fs):
+    path = "/local/default/resources/docs"
+    vector_store = SimpleNamespace(
+        count=AsyncMock(return_value=4),
+    )
+
+    async def resolve_uri(uri, _ctx):
+        return uri
+
+    async def stat_path(_path):
+        return {"name": "docs", "isDir": True}
+
+    monkeypatch.setattr(fs, "resolve_uri", resolve_uri)
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: path)
+    monkeypatch.setattr(fs._async_agfs, "stat", stat_path)
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
+
+    result = await fs.stat("viking://resources/docs", ctx=_default_ctx())
+
+    assert result["count"] == 4
+    assert "l2_count" not in result
+    vector_store.count.assert_awaited_once_with(
+        filter=And(
+            [
+                PathScope("uri", "viking://resources/docs", depth=-1),
+                Eq("level", 2),
+            ]
+        ),
+        ctx=_default_ctx(),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("extra_fields", "expected", "count_calls"),
+    [
+        (["count"], {"count": 4}, 1),
+        (["l2_count"], {}, 0),
+        (["count", "l2_count"], {"count": 4}, 1),
+    ],
+)
+async def test_directory_count_is_l2_only_and_legacy_l2_count_is_ignored(
+    monkeypatch,
+    fs,
+    extra_fields,
+    expected,
+    count_calls,
+):
+    vector_store = SimpleNamespace(
+        count=AsyncMock(return_value=4),
+    )
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
+    entry = {
+        "name": "docs",
+        "isDir": True,
+        "uri": "viking://resources/docs",
+    }
+
+    await fs._augment_entries_extra_fields([entry], extra_fields, ctx=_default_ctx())
+
+    assert {key: entry[key] for key in expected} == expected
+    assert "l2_count" not in entry
+    assert vector_store.count.await_count == count_calls
+    if count_calls:
+        vector_store.count.assert_awaited_once_with(
+            filter=And(
+                [
+                    PathScope("uri", "viking://resources/docs", depth=-1),
+                    Eq("level", 2),
+                ]
+            ),
+            ctx=_default_ctx(),
+        )
 
 
 def test_viking_fs_no_longer_exposes_python_encryption_api(fs: VikingFS):

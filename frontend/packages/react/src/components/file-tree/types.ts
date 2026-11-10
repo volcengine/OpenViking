@@ -219,6 +219,189 @@ export interface FileTreeEmptyRow extends FileTreeChildRow {
 }
 
 /**
+ * 目录语义键。组件按行 `uri` 的路径结构判定，用它取说明与触发行为文案。
+ *
+ * 判定规则属于组件内部实现，宿主只需按需覆盖文案；键为空表示该路径没有内置说明。
+ *
+ * Semantic key of a directory. The component derives it from the structure of a
+ * row's `uri` and uses it to pick the description and trigger copy.
+ *
+ * The matching rules are internal; a host only overrides copy. An unmatched path
+ * has no built-in description.
+ */
+export type FileTreeInfoKey =
+  /**
+   * 用户根目录，`viking://user/{id}`。
+   * User root, `viking://user/{id}`.
+   */
+  | 'userRoot'
+  /**
+   * 长期记忆，`/memories`。
+   * Long-term memory, `/memories`.
+   */
+  | 'memories'
+  /**
+   * 按应用或工作区隔离的上下文，`/peers`。
+   * Context isolated per application or workspace, `/peers`.
+   */
+  | 'peers'
+  /**
+   * 密钥等敏感配置，`/privacy`。
+   * Keys and other sensitive configuration, `/privacy`.
+   */
+  | 'privacy'
+  /**
+   * 用户私有资料，`/resources`。
+   * Private user knowledge, `/resources`.
+   */
+  | 'userResources'
+  /**
+   * 会话与任务记录，`/sessions`。
+   * Conversation and task records, `/sessions`.
+   */
+  | 'sessions'
+  /**
+   * 个人技能，`/skills`。
+   * Personal skills, `/skills`.
+   */
+  | 'skills'
+  /**
+   * 用户身份与背景，`/memories/profile.md`。
+   * User identity and background, `/memories/profile.md`.
+   */
+  | 'profile'
+  /**
+   * 个性化偏好，`/memories/preferences`。
+   * Personalized preferences, `/memories/preferences`.
+   */
+  | 'preferences'
+  /**
+   * 人物、项目、组织等实体，`/memories/entities`。
+   * People, projects and organizations, `/memories/entities`.
+   */
+  | 'entities'
+  /**
+   * 按日期归档的关键事件，`/memories/events`。
+   * Key events archived by date, `/memories/events`.
+   */
+  | 'events'
+  /**
+   * Agent 名称与人设，`/memories/identity.md`。
+   * Agent name and persona, `/memories/identity.md`.
+   */
+  | 'identity'
+  /**
+   * Agent 行为准则，`/memories/soul.md`。
+   * Agent behaviour guidelines, `/memories/soul.md`.
+   */
+  | 'soul'
+  /**
+   * 用于经验训练的交互案例，`/memories/cases`。
+   * Interaction cases used to train experience, `/memories/cases`.
+   */
+  | 'cases'
+  /**
+   * 可复用的任务执行轨迹，`/memories/trajectories`。
+   * Reusable task trajectories, `/memories/trajectories`.
+   */
+  | 'trajectories'
+  /**
+   * 自动提炼的执行经验，`/memories/experiences`。
+   * Distilled execution experience, `/memories/experiences`.
+   */
+  | 'experiences'
+  /**
+   * 数据库内共享的资料，`viking://resources`。
+   * Knowledge shared across the database, `viking://resources`.
+   */
+  | 'sharedResources'
+  /**
+   * Agent 能力根目录，`viking://agent`。
+   * Agent capability root, `viking://agent`.
+   */
+  | 'agentRoot'
+  /**
+   * Agent 的通信端点配置，`viking://agent/endpoints`。
+   * Agent communication endpoint configuration, `viking://agent/endpoints`.
+   */
+  | 'agentEndpoints'
+  /**
+   * Agent 的支付能力配置，`viking://agent/payments`。
+   * Agent payment capability configuration, `viking://agent/payments`.
+   */
+  | 'agentPayments'
+  /**
+   * Agent 的技能注册表，`viking://agent/skills`。
+   * Agent skill registry, `viking://agent/skills`.
+   */
+  | 'agentSkills'
+  /**
+   * Agent 的工具配置，`viking://agent/tools`。
+   * Agent tool configuration, `viking://agent/tools`.
+   */
+  | 'agentTools'
+  /**
+   * 记忆根目录，`viking://memory`。
+   * Memory root, `viking://memory`.
+   */
+  | 'memoryRoot'
+  /**
+   * 外部知识根目录，`viking://resource`。
+   * External knowledge root, `viking://resource`.
+   */
+  | 'resourceRoot'
+  /**
+   * 会话根目录，`viking://session`。
+   * Session root, `viking://session`.
+   */
+  | 'sessionRoot'
+  /**
+   * 内置资产根目录，`viking://system`。
+   * Built-in asset root, `viking://system`.
+   */
+  | 'systemRoot';
+
+/**
+ * 目录说明文案。未提供的键沿用内置英文；传空字符串表示该键不显示。
+ *
+ * Directory copy. Keys left out keep the built-in English; an empty string
+ * hides that key.
+ */
+export interface FileTreeInfoLabels {
+  /**
+   * 说明，显示在浮层的「说明」一行，部分键也显示在行内。
+   * Description, shown in the tooltip and, for some keys, inline.
+   */
+  description?: Partial<Record<FileTreeInfoKey, string>>;
+  /**
+   * 触发行为，说明该节点在什么条件下被写入或生成，只显示在浮层。
+   * Trigger copy: when this node is written or generated. Tooltip only.
+   */
+  triggerBehavior?: Partial<Record<FileTreeInfoKey, string>>;
+  /**
+   * 浮层里各行的字段名。
+   * Field names used inside the tooltip.
+   */
+  field?: {
+    /**
+     * 「说明」字段名。
+     * Label of the description row.
+     */
+    description?: string;
+    /**
+     * 「触发行为」字段名。
+     * Label of the trigger row.
+     */
+    triggerBehavior?: string;
+    /**
+     * 「路径」字段名。
+     * Label of the path row.
+     */
+    path?: string;
+  };
+}
+
+/**
  * 可替换文案，组件内置英文默认值。
  * Replaceable copy; the component ships English defaults.
  */
@@ -260,6 +443,11 @@ export interface FileTreeLabels {
    * node name.
    */
   collapse?: string;
+  /**
+   * 目录说明与浮层字段名。省略时使用内置文案。
+   * Directory copy and tooltip field names; built-in copy is used when omitted.
+   */
+  info?: FileTreeInfoLabels;
 }
 
 /**
@@ -273,6 +461,14 @@ export interface FileTreeSlots {
    * Toolbar above the tree, for example search, import sources or refresh.
    */
   toolbar?: ReactNode;
+  /**
+   * 替换目录加载子节点时展开箭头位置显示的转圈。省略时用内置的 CSS 圆环，
+   * 传入自己的节点可以换成图标或品牌化的加载态；节点按 12 × 12 显示。
+   * Replaces the spinner shown in the expand chevron slot while a directory
+   * loads its children. Omitted uses the built-in CSS ring; pass a node to swap
+   * in an icon or a branded loader. The node renders at 12 × 12.
+   */
+  spinner?: ReactNode;
 }
 
 /**
@@ -383,6 +579,15 @@ export interface FileTreeProps extends Omit<
    * including the click behaviour and any collapsed-count badge.
    */
   renderDashboard?: (row: FileTreeEntryRow) => ReactNode;
+  /**
+   * 渲染文件行的行首图标，例如按扩展名区分的类型图标。返回 `null` 或省略时用
+   * 内置的通用文件图标；目录行始终用内置的文件夹图标。
+   *
+   * Renders the leading icon of a file row, for example a type icon chosen by
+   * extension. Returning `null` or omitting it uses the built-in generic file
+   * icon; directory rows always use the built-in folder icon.
+   */
+  renderRowIcon?: (row: FileTreeEntryRow) => ReactNode;
   /**
    * 渲染行的悬停浮层内容。返回 `null` 时不展示；延迟、定位与悬停抑制
    * 由组件处理。

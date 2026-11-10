@@ -82,7 +82,7 @@ export function apply(ctx, input = {}) {
     if (decision.kind !== "enter" || signal.aborted) return decision;
     const [profile, recall] = await Promise.all([
       runtime.profileMessage(agent),
-      runtime.recallMessage(agent, decision.messages),
+      runtime.recallMessage(agent, decision.messages, signal),
     ]);
     if (signal.aborted) return decision;
     const additions = [profile, recall].filter(Boolean);
