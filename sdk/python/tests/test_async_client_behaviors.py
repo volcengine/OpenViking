@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import json
+import zipfile
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -17,7 +19,7 @@ from openviking_sdk import (
     ToolPart,
 )
 from openviking_sdk.client import Session, SyncSession
-from openviking_sdk.errors import NotFoundError, UnavailableError
+from openviking_sdk.errors import NotFoundError, OpenVikingError, UnavailableError
 
 
 @pytest.mark.asyncio
@@ -1821,52 +1823,72 @@ async def test_session_wrapper_forwards_commit_context_and_archive_operations():
     client.delete_session.assert_awaited_once_with("thread-1")
 
 
+def _ovpack_zip_bytes(content: str) -> bytes:
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("demo/", "")
+        archive.writestr("demo/content.md", content)
+    return buffer.getvalue()
+
+
 @pytest.mark.asyncio
-async def test_export_and_backup_ovpack_append_default_suffixes(tmp_path):
+@pytest.mark.parametrize("content_type", ["application/zip", "application/json"])
+async def test_export_and_backup_ovpack_append_default_suffixes(tmp_path, content_type):
     client = AsyncHTTPClient(url="http://localhost:1933")
-    export_response = httpx.Response(200, content=b"exported")
-    backup_response = httpx.Response(200, content=b"backup")
+    exported = _ovpack_zip_bytes("exported")
+    backup = _ovpack_zip_bytes("backup")
+    headers = {"Content-Type": content_type}
+    export_response = httpx.Response(200, content=exported, headers=headers)
+    backup_response = httpx.Response(200, content=backup, headers=headers)
     fake_http = SimpleNamespace(post=AsyncMock(side_effect=[export_response, backup_response]))
     client._http = fake_http
     existing_export = tmp_path / "exports" / "demo.ovpack"
     existing_export.parent.mkdir()
-    existing_export.write_bytes(b"old-backup")
+    existing_export.write_bytes(_ovpack_zip_bytes("old export"))
 
     export_path = await client.export_ovpack("/resources/demo/", str(tmp_path / "exports" / "demo"))
     backup_path = await client.backup_ovpack(str(tmp_path / "backup-dir"))
 
     assert export_path.endswith("demo.ovpack")
-    assert Path(export_path).read_bytes() == b"exported"
+    assert Path(export_path).read_bytes() == exported
     assert backup_path.endswith("backup-dir.ovpack")
-    assert Path(backup_path).read_bytes() == b"backup"
+    assert Path(backup_path).read_bytes() == backup
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("operation", "args"), [("export", ("viking://resources/demo",)), ("backup", ())]
 )
-@pytest.mark.parametrize("content_type", ["application/json", "application/octet-stream"])
+@pytest.mark.parametrize(
+    ("content_type", "encoding"),
+    [
+        pytest.param("application/json", "utf-8", id="json"),
+        pytest.param("application/octet-stream", "utf-8", id="mislabeled"),
+        pytest.param("application/octet-stream", "utf-8-sig", id="mislabeled-with-bom"),
+    ],
+)
 async def test_ovpack_preserves_existing_file_on_http_200_json_error(
-    tmp_path, operation, args, content_type
+    tmp_path, operation, args, content_type, encoding
 ):
     output = tmp_path / "existing.ovpack"
-    original = b"existing-ovpack"
+    original = _ovpack_zip_bytes("existing")
     output.write_bytes(original)
 
     def handle(request):
         assert request.method == "POST"
         assert request.url.path == f"/api/v1/pack/{operation}"
+        error = {
+            "status": "error",
+            "error": {
+                "code": "UNAVAILABLE",
+                "message": "Storage unavailable",
+                "details": {"service": "storage", "reason": "fixture outage"},
+            },
+        }
         return httpx.Response(
             200,
             headers={"Content-Type": content_type},
-            json={
-                "status": "error",
-                "error": {
-                    "code": "UNAVAILABLE",
-                    "message": "Storage unavailable",
-                    "details": {"service": "storage", "reason": "fixture outage"},
-                },
-            },
+            content=json.dumps(error).encode(encoding),
         )
 
     url = "http://localhost:1933"
@@ -1880,19 +1902,44 @@ async def test_ovpack_preserves_existing_file_on_http_200_json_error(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(b'[{"message": "storage unavailable"}]', id="json-array"),
+        pytest.param(b"PK\x03\x04", id="truncated-zip"),
+    ],
+)
+async def test_backup_ovpack_rejects_non_zip_response(tmp_path, content):
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    response = httpx.Response(
+        200, content=content, headers={"Content-Type": "application/octet-stream"}
+    )
+    client._http = SimpleNamespace(post=AsyncMock(return_value=response))
+    output = tmp_path / "backup.ovpack"
+    original = _ovpack_zip_bytes("existing backup")
+    output.write_bytes(original)
+
+    with pytest.raises(OpenVikingError, match="Expected an OVPack ZIP download"):
+        await client.backup_ovpack(str(output))
+
+    assert output.read_bytes() == original
+
+
+@pytest.mark.asyncio
 async def test_backup_ovpack_preserves_existing_file_when_replace_fails(tmp_path):
     client = AsyncHTTPClient(url="http://localhost:1933")
     client._http = SimpleNamespace(
-        post=AsyncMock(return_value=httpx.Response(200, content=b"new-backup"))
+        post=AsyncMock(return_value=httpx.Response(200, content=_ovpack_zip_bytes("new backup")))
     )
     output = tmp_path / "backup.ovpack"
-    output.write_bytes(b"known-good-backup")
+    original = _ovpack_zip_bytes("existing backup")
+    output.write_bytes(original)
 
     with patch("openviking_sdk.client.os.replace", side_effect=OSError("replace failed")):
         with pytest.raises(OSError, match="replace failed"):
             await client.backup_ovpack(str(output))
 
-    assert output.read_bytes() == b"known-good-backup"
+    assert output.read_bytes() == original
     assert list(tmp_path.iterdir()) == [output]
 
 

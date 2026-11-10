@@ -8,7 +8,9 @@ import inspect
 import mimetypes
 import os
 import tempfile
+import zipfile
 from enum import Enum
+from io import BytesIO
 from pathlib import Path
 from typing import (
     Any,
@@ -2152,17 +2154,27 @@ class AsyncHTTPClient:
         return self._handle_response_data(response).get("result", {})
 
     def _save_ovpack_response(self, response: httpx.Response, to_path: Path) -> str:
-        content = response.content
-        # A gateway can return an error envelope with a binary content type.
-        looks_like_json_object = content.lstrip().startswith(b"{")
-        if not response.is_success or looks_like_json_object:
+        if not response.is_success:
             self._handle_response(response)
 
-        media_type = response.headers.get("content-type", "").partition(";")[0].strip().lower()
-        if looks_like_json_object or media_type.endswith(("/json", "+json")):
-            raise OpenVikingError(
-                "Expected an OVPack download, received a JSON response", code="INTERNAL"
-            )
+        content = response.content
+        # Legacy OVPack downloads can be ZIP archives without a manifest.
+        try:
+            with zipfile.ZipFile(BytesIO(content)) as archive:
+                has_archive_entries = bool(archive.infolist())
+        except (zipfile.BadZipFile, UnicodeError, NotImplementedError):
+            has_archive_entries = False
+
+        if not has_archive_entries:
+            try:
+                data = response.json()
+            except ValueError:
+                data = None
+            if isinstance(data, dict) and data.get("status") == "error":
+                error = data.get("error")
+                if isinstance(error, dict):
+                    self._raise_exception(error)
+            raise OpenVikingError("Expected an OVPack ZIP download", code="INTERNAL")
 
         _atomic_write_bytes(to_path, content)
         return str(to_path)
