@@ -451,6 +451,11 @@ class SemanticProcessor(DequeueHandlerBase):
             )
             return
 
+        await self._enqueue_directory_refresh(msg, parent_uri, changes={"modified": [uri]})
+
+    async def _enqueue_directory_refresh(
+        self, msg: SemanticMsg, parent_uri: str, *, changes: Dict[str, List[str]]
+    ) -> None:
         from openviking.storage.queuefs import get_queue_manager
 
         queue_manager = get_queue_manager()
@@ -465,14 +470,18 @@ class SemanticProcessor(DequeueHandlerBase):
             peer_id=msg.peer_id,
             role=msg.role,
             skip_vectorization=msg.skip_vectorization,
-            changes={"modified": [uri]},
+            changes=changes,
             generation_trigger="parent_refresh",
-            coalesce_key=build_semantic_coalesce_key(
-                context_type=msg.context_type,
-                uri=parent_uri,
-                account_id=msg.account_id,
-                user_id=msg.user_id,
-                peer_id=msg.peer_id,
+            # Directory refreshes must not supersede pending file indexing.
+            coalesce_key=(
+                "directory|"
+                + build_semantic_coalesce_key(
+                    context_type=msg.context_type,
+                    uri=parent_uri,
+                    account_id=msg.account_id,
+                    user_id=msg.user_id,
+                    peer_id=msg.peer_id,
+                )
             ),
         )
         with detach_task_context():
@@ -749,6 +758,13 @@ class SemanticProcessor(DequeueHandlerBase):
                                     f"Using direct incremental semantic update for: {msg.uri}"
                                 )
 
+                            defer_directory_refresh = (
+                                msg.generation_trigger == "content_write"
+                                and msg.context_type == "resource"
+                                and not msg.recursive
+                                and msg.changes is not None
+                                and msg.aggregate_directory
+                            )
                             executor = SemanticTreeExecutor(
                                 processor=self,
                                 context_type=msg.context_type,
@@ -766,7 +782,9 @@ class SemanticProcessor(DequeueHandlerBase):
                                 coalesce_version=msg.coalesce_version,
                                 source=msg.source,
                                 generation_trigger=msg.generation_trigger,
-                                aggregate_directory=msg.aggregate_directory,
+                                aggregate_directory=(
+                                    msg.aggregate_directory and not defer_directory_refresh
+                                ),
                                 copy_source_uri=msg.copy_source_uri,
                                 file_md5s=msg.file_md5s,
                                 artifact_files=msg.artifact_files,
@@ -782,7 +800,13 @@ class SemanticProcessor(DequeueHandlerBase):
                                 run_uri,
                                 dag_stats,
                             )
-                            if not executor.stale and msg.aggregate_directory:
+                            if not executor.stale and defer_directory_refresh:
+                                # The shared directory task reads committed file abstracts.
+                                await work._wait_for_embedding_work(
+                                    stop_waiting=self._embedding_worker_stopped,
+                                )
+                                await self._enqueue_directory_refresh(msg, run_uri, changes=changes)
+                            elif not executor.stale and msg.aggregate_directory:
                                 write_result = getattr(
                                     executor,
                                     "root_write_result",

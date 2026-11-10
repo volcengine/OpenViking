@@ -983,6 +983,7 @@ async def test_pending_refresh_reuses_summaries_without_reindexing_siblings(monk
         transfer_summaries={
             f"{root_uri}/indexed.txt": "current indexed summary",
             f"{root_uri}/overview.txt": "   ",
+            changed_path: "current changed summary",
         },
     )
     monkeypatch.setattr(processor, "_parse_overview_md", parse_overview_file_summaries)
@@ -1001,25 +1002,21 @@ async def test_pending_refresh_reuses_summaries_without_reindexing_siblings(monk
 
     await executor.run(root_uri)
 
-    assert set(processor.summarized_files) == {missing_path, changed_path}
-    assert fake_fs.read_file_bytes.await_count == 2
-    assert {call.args[0] for call in fake_fs.read_file_bytes.await_args_list} == {
-        missing_path,
-        changed_path,
-    }
+    assert processor.summarized_files == [missing_path]
+    fake_fs.read_file_bytes.assert_awaited_once_with(missing_path, ctx=ctx)
     # Pending snapshot and writeback already read each sidecar four times;
     # reusing the captured overview must not add another storage read.
     assert [call.args[0] for call in fake_fs.read_file.await_args_list].count(
         f"{root_uri}/.overview.md"
     ) == 4
-    assert processor.vectorized_files == [changed_path]
+    assert processor.vectorized_files == []
     overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"])
     assert set(overview.body.splitlines()) == {
         "FILES:",
         "- indexed.txt: current indexed summary",
         "- overview.txt: old overview summary",
         "- missing.txt: summary",
-        "- changed.txt: summary",
+        "- changed.txt: current changed summary",
     }
     assert overview.metadata["freshness"]["pending_child_changes"] == 0
 
