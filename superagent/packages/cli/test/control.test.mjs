@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { appsFor, restartCommand, startCommand, statusCommand, stopCommand } from '../src/control.mjs';
+import { appsFor, pm2StopTimeout, restartCommand, startCommand, statusCommand, stopCommand } from '../src/control.mjs';
 
 const windows = process.platform === 'win32';
 const TARGETS = JSON.stringify({
@@ -27,11 +27,13 @@ function fixture(t, online = []) {
   fs.symlinkSync(release, releaseLink, windows ? 'junction' : 'dir');
   const apps = new Map(online.map((name) => [name, 'online']));
   const commands = [];
-  const execFileImpl = async (bin, args) => {
+  const timeouts = [];
+  const execFileImpl = async (bin, args, execOptions = {}) => {
     commands.push(args.join(' '));
+    timeouts.push([args[0], execOptions.timeout]);
     const [verb] = args;
     if (verb === 'jlist') {
-      return { stdout: JSON.stringify([...apps].map(([name, status]) => ({ name, pm2_env: { status, pm_exec_path: script } }))) };
+      return { stdout: JSON.stringify([...apps].map(([name, status]) => ({ name, pm2_env: { status, pm_exec_path: script, kill_timeout: 30000 } }))) };
     }
     if (verb === 'start') apps.set(args[3], 'online');
     if (verb === 'stop') apps.set(args[1], 'stopped');
@@ -46,7 +48,7 @@ function fixture(t, online = []) {
     pm2Bin: 'pm2', socketPath: path.join(home, '.ovsa', 'updater.sock'), readyOptions: { attempts: 1, intervalMs: 1 },
     stdout: { write: (text) => { output += text; } },
   };
-  return { options, commands, ready, apps, output: () => output };
+  return { options, commands, timeouts, ready, apps, output: () => output };
 }
 
 test('a target names one instance, the Web, the updater, or everything', () => {
@@ -106,6 +108,19 @@ test('restart replaces a running app; stop leaves a stopped app; both save the p
   await stopCommand('alpha', f.options);
   assert.equal(f.apps.get('vika-alpha'), 'stopped');
   assert.equal(f.commands.at(-1), 'save');
+});
+
+test('delete and stop wait longer than the app kill_timeout', async (t) => {
+  assert.equal(pm2StopTimeout({ pm2_env: { kill_timeout: 30000 } }), 60_000);
+  assert.equal(pm2StopTimeout({ pm2_env: { kill_timeout: 5000 } }), 35_000);
+  assert.equal(pm2StopTimeout(undefined), 60_000);
+  const f = fixture(t, ['vika-alpha']);
+  await restartCommand('alpha', f.options);
+  await stopCommand('alpha', f.options);
+  for (const verb of ['delete', 'stop']) {
+    const [, timeout] = f.timeouts.find(([v]) => v === verb);
+    assert.ok(timeout > 30000, `${verb} timeout ${timeout} must exceed kill_timeout`);
+  }
 });
 
 test('start explains when no release is installed', async (t) => {
