@@ -43,6 +43,58 @@ async def test_user_and_public_content_writes_replace_registered_privacy_values(
         assert stored == f"credential={reference}"
 
 
+@pytest.mark.parametrize("method", [None, "vlm"])
+async def test_skill_preserves_metadata_and_protects_body_through_add_update_and_read(
+    service, client, monkeypatch, method
+):
+    from openviking.core.skill_loader import SkillLoader
+    from openviking.storage.abstract_overview import parse_abstract_overview
+
+    if method is None:
+        monkeypatch.delenv("OPENVIKING_SKILL_PRIVACY_EXTRACTION_METHOD", raising=False)
+    else:
+        monkeypatch.setenv("OPENVIKING_SKILL_PRIVACY_EXTRACTION_METHOD", method)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": "auto"}})
+    secret = "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    description = f"metadata managed-secret and {secret}"
+    await service.privacy_configs.upsert(ctx, "credential", "managed", {"key": "managed-secret"})
+
+    async def candidates(**_kwargs):
+        return {"key": secret}
+
+    monkeypatch.setattr("openviking.utils.skill_processor.extract_skill_privacy_values", candidates)
+    for verb, prefix in [("post", "initial"), ("put", "updated")]:
+        response = await getattr(client, verb)(
+            "/api/v1/skills" + ("/metadata-skill" if verb == "put" else ""),
+            json={
+                "data": SkillLoader.to_skill_md(
+                    {
+                        "name": "metadata-skill",
+                        "description": description,
+                        "content": f'{prefix}🙂 managed-secret\napi_key="{secret}"',
+                    }
+                ),
+                "wait": True,
+            },
+        )
+        assert response.status_code == 200, response.text
+        root = f"viking://user/{ctx.user.user_id}/skills/metadata-skill"
+        for raw in [False, True]:
+            shown = await client.get(
+                "/api/v1/content/read", params={"uri": root + "/SKILL.md", "raw": raw}
+            )
+            assert shown.status_code == 200, shown.text
+            skill = SkillLoader.parse(shown.json()["result"])
+            assert skill["description"] == description
+            assert (secret in skill["content"]) == raw
+        stored = SkillLoader.parse(await service.viking_fs.read_file(root + "/SKILL.md", ctx=ctx))
+        assert stored["description"] == description
+        assert "managed-secret" not in stored["content"] and secret not in stored["content"]
+        abstract = parse_abstract_overview(
+            await service.viking_fs.read_file(root + "/.abstract.md", ctx=ctx)
+        )
+        assert description in abstract.body
 
 
 async def test_resource_artifact_sanitizes_user_dotfiles_but_skips_internal_sidecars(

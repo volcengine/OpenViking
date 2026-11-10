@@ -319,3 +319,23 @@ async def test_invalid_candidates_do_not_consume_the_replacement_budget():
     result = await sanitizer.sanitize("managed-secret " + ordinary, ctx=_ctx())
     assert result.content == reference + " " + ordinary
     assert len(result.replacements) == 1
+
+
+async def test_skill_frontmatter_is_preserved_and_spans_address_original_text():
+    catalog = _PrivacyCatalog({"credential": {"managed": {"key": "managed-secret"}}})
+    sanitizer = PrivacySanitizer(catalog)
+    header = '---\nname: demo\ndescription: "标题🙂 managed-secret"\n---\n\n'
+    body = "---\nexample: managed-secret\n---\n正文🙂 managed-secret\n"
+    result = await sanitizer.sanitize(
+        header + body, ctx=_ctx(), uri="viking://user/alice/skills/demo/SKILL.md"
+    )
+    reference = build_privacy_field_reference("alice", "credential", "managed", "key")
+    assert result.content == header + body.replace("managed-secret", reference)
+    assert [(header + body)[m.start : m.end] for m in result.replacements] == [
+        "managed-secret",
+        "managed-secret",
+    ]
+    text = await sanitizer.sanitize(
+        header + body, ctx=_ctx(), uri="viking://user/alice/skills/demo/"
+    )
+    assert text.content == (header + body).replace("managed-secret", reference)

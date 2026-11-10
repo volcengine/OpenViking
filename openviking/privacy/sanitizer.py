@@ -17,6 +17,7 @@ from openviking.core.namespace import (
     is_session_uri,
     resolve_request_uri,
 )
+from openviking.core.skill_loader import SkillLoader
 from openviking.privacy.models import UserPrivacyConfigVersion
 from openviking.privacy.reference import PrivacyFieldReference
 from openviking.pyagfs import get_privacy_matcher_class
@@ -161,6 +162,16 @@ class PrivacySanitizer:
                 },
             )
         scope = self._scope_from_uri(uri, ctx)
+        content_start = 0
+        if uri.lower().endswith((".md", ".markdown")) and (
+            (scope is not None and scope[0] == "skill") or classify_uri(uri).is_skill
+        ):
+            if uri.endswith("/.abstract.md"):
+                # Skill L0 is generated from metadata rather than body content.
+                return PrivacySanitizationResult(content=content)
+            frontmatter = SkillLoader.FRONTMATTER_PATTERN.match(content)
+            if frontmatter is not None:
+                content_start = frontmatter.start(2)
         matcher = await self._matcher(ctx, scope=scope, settings=settings)
         effective_max_replacements = (
             self._max_replacements if max_replacements is None else max_replacements
@@ -172,7 +183,7 @@ class PrivacySanitizer:
             raw_replacements,
             raw_ambiguous,
             match_limit_exceeded,
-        ) = matcher.sanitize_limited(content, effective_max_replacements)
+        ) = matcher.sanitize_limited(content[content_start:], effective_max_replacements)
         if match_limit_exceeded and fail_on_match_limit:
             raise ResourceExhaustedError(
                 "Content exceeds the Privacy sanitizer replacement limit",
@@ -183,12 +194,12 @@ class PrivacySanitizer:
             )
         replacements = tuple(
             PrivacyReplacement(
-                start=start, end=end, reference=reference
+                start=start + content_start, end=end + content_start, reference=reference
             )
             for start, end, reference in raw_replacements
         )
         return PrivacySanitizationResult(
-            content=rewritten,
+            content=content[:content_start] + rewritten,
             replacements=replacements,
             ambiguous_references=tuple(tuple(items) for items in raw_ambiguous),
             match_limit_exceeded=match_limit_exceeded,
