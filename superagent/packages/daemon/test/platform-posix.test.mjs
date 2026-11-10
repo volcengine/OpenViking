@@ -38,7 +38,7 @@ test('POSIX environment and configuration retain upstream semantics', options, (
   }
 });
 test('POSIX executable lookup, private directory and links use native filesystem behavior', options, t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-posix-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-posix-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const executable = path.join(root, 'tool');
   fs.writeFileSync(executable, 'fixture', { mode: 0o600 });

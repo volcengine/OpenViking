@@ -300,7 +300,7 @@ export class OpencodeAgent {
       this._requestOn(child, 'initialize', {
         protocolVersion: 1,
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-        clientInfo: { name: 'vika', version: '1' },
+        clientInfo: { name: 'ov-superagent', version: '1' },
       }, this.startTimeoutMs).then(async (result) => {
         this._assertAgent(result);
         if (this.resumeRequested && this.sessionId) {
@@ -345,7 +345,7 @@ export class OpencodeAgent {
 
   _createRuntimeDir() {
     this._cleanupRuntimeFiles();
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), `vika-${this.runtime}-`));
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), `superagent-${this.runtime}-`));
     try { fs.chmodSync(directory, 0o700); } catch {}
     this.runtimeDir = directory;
     return directory;

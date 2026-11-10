@@ -141,7 +141,7 @@ describe('several mailboxes', () => {
     const registry = new ProcessRegistry(logger);
     const manager = new ConnectorManager({
       connectors: ['lark', 'email'],
-      emailAccounts: [{ id: 'email-gmail', configFile: '/vika/email/gmail.json' }, { id: 'email-qq', configFile: '/vika/email/qq.json' }],
+      emailAccounts: [{ id: 'email-gmail', configFile: '/superagent/email/gmail.json' }, { id: 'email-qq', configFile: '/superagent/email/qq.json' }],
       dataDir, projectDir: process.cwd(), maxEventBytes: 100_000,
       connectorWorkerPath: fixture, connectorRestartDelaysMs: [60_000], connectorStableAfterMs: 100,
     }, registry, logger);
@@ -157,8 +157,8 @@ describe('several mailboxes', () => {
     await manager.startSubscription((event) => events.push(`${event.connector}/${event.instance}`), () => {});
     await waitFor(() => events.length === 2);
     assert.deepEqual(events.sort(), ['email/email-gmail', 'lark/lark']);
-    assert.equal(fs.readFileSync(path.join(dataDir, 'email-gmail.account'), 'utf8'), '/vika/email/gmail.json');
-    assert.equal(fs.readFileSync(path.join(dataDir, 'email-qq.account'), 'utf8'), '/vika/email/qq.json');
+    assert.equal(fs.readFileSync(path.join(dataDir, 'email-gmail.account'), 'utf8'), '/superagent/email/gmail.json');
+    assert.equal(fs.readFileSync(path.join(dataDir, 'email-qq.account'), 'utf8'), '/superagent/email/qq.json');
     assert.deepEqual(Object.fromEntries(Object.entries(manager.snapshot()).map(([id, { state }]) => [id, state])),
       { lark: 'running', 'email-gmail': 'running', 'email-qq': 'restarting' });
     // A mailbox that is down still has its manifest; delivery to it is refused as unavailable.

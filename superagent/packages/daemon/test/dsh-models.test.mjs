@@ -162,7 +162,7 @@ describe('DshAgent credential pre-check', () => {
     const { agent, config } = context;
     // No DEEPSEEK_API_KEY in the child environment at all.
     agent._environment = { PATH: '/usr/bin:/bin' };
-    // The credential is DSH's own: the file `ovsa dsh model key set` writes.
+    // The credential is DSH's own: the file `ov-superagent dsh model key set` writes.
     const home = path.join(config.dataDir, 'dsh', 'home');
     fs.mkdirSync(home, { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(home, '.credentials.yaml'), 'version: 1\nrefs:\n  DEEPSEEK_API_KEY: sk-from-credentials\n');

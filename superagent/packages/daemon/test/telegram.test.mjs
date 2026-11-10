@@ -35,7 +35,7 @@ const pending = (signal) => new Promise((_, reject) => {
   else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
 });
 function fixture(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-telegram-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-telegram-'));
   const state = new TelegramState(dir);
   t.after(() => { state.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   return { dir, state };
@@ -45,7 +45,7 @@ function provider(fn, { webhook = '', botId = Number(account.botId) } = {}) {
     assert.equal(init.redirect, 'error');
     assert.ok(url.startsWith(`https://api.telegram.org/bot${TOKEN}/`));
     const method = url.split('/').at(-1);
-    if (method === 'getMe') return response({ id: botId, is_bot: true, username: 'vika_test_bot' });
+    if (method === 'getMe') return response({ id: botId, is_bot: true, username: 'superagent_test_bot' });
     if (method === 'getWebhookInfo') return response({ url: webhook });
     return fn(method, init.body instanceof FormData ? init.body : JSON.parse(init.body), init);
   };
@@ -318,7 +318,7 @@ test('real connector worker supports check/start/pause/reply/stop and releases i
     let polled = false;
     globalThis.fetch = async (url, init) => {
       const method = url.split('/').at(-1);
-      const result = method === 'getMe' ? { id: 123456, is_bot: true, username: 'vika_test_bot' }
+      const result = method === 'getMe' ? { id: 123456, is_bot: true, username: 'superagent_test_bot' }
         : method === 'getWebhookInfo' ? { url: '' } : method === 'getUpdates' ? null
         : { message_id: 50, chat: { id: ${account.chatId} } };
       if (method !== 'getUpdates') return Response.json({ ok: true, result });

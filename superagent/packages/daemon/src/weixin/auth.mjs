@@ -50,7 +50,7 @@ function sayLine(text) {
   process.stdout.write(`${text}\n`);
 }
 
-// readVerifyCode, showQr and say let `ovsa setup` ask and draw through its
+// readVerifyCode, showQr and say let `ov-superagent setup` ask and draw through its
 // own prompt: showQr(value, { refreshed }) gets each code to scan, say(text,
 // { kind, accountId }) each status line. `kind` (scanned, already-bound,
 // connected) and an error's `code` let the caller say it in its own words.

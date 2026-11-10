@@ -57,12 +57,12 @@ export class WeixinClient {
   async preflight() {
     this.account = this.state.account();
     if (!this.account?.token) {
-      throw new Error('Weixin is not logged in; run ovsa login weixin <instance-id> first');
+      throw new Error('Weixin is not logged in; run ov-superagent login weixin <instance-id> first');
     }
     this.profile = profileId(this.account.accountId);
     // The bot talks only with the account that scanned the login QR code.
     if (!this.account.userId) {
-      throw new Error('Weixin login returned no scanning user id; scan the QR code again (ovsa login weixin)');
+      throw new Error('Weixin login returned no scanning user id; scan the QR code again (ov-superagent login weixin)');
     }
     this.state.pruneMedia(Date.now() - this.config.retentionMs);
     return {

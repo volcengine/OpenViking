@@ -53,7 +53,7 @@ export function describeInstances(deployment) {
 }
 
 export async function chooseInstance({ deployment, requested, prompter, question }) {
-  if (!deployment) throw new Error(t('还没有任何实例：先运行 ovsa setup', 'No instance yet: run ovsa setup first'));
+  if (!deployment) throw new Error(t('还没有任何实例：先运行 ov-superagent setup', 'No instance yet: run ov-superagent setup first'));
   const { agents } = deployment;
   if (requested) {
     const agent = agents.find((candidate) => candidate.id === requested);

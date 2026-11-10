@@ -2,14 +2,15 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import { isLanguage, languageChoice, saveLanguage, setLanguage, t } from '../src/i18n.mjs';
 import { PALETTE, padEnd, styler, width } from '../src/ui.mjs';
 
-// The `ovsa` command. Each subcommand loads only what it needs, so `setup`
+// The `ov-superagent` command. Each subcommand loads only what it needs, so `setup`
 // and `help` work before any manifest exists. --lang zh|en anywhere on the
-// line (but in `ovsa pi`, whose arguments are Pi's) picks the language and
+// line (but in `ov-superagent pi`, whose arguments are Pi's) picks the language and
 // keeps it for later commands; alone, it only does that.
 
 // [command, arguments, what it does], in groups.
@@ -50,12 +51,14 @@ async function usage(stream) {
   const s = styler(stream);
   if (!s.enabled) {
     const rows = groups.flatMap(([, entries]) => entries).map(([name, args, text]) => `  ${padEnd(`${name} ${args}`.trim(), commandWidth)}${text}`);
-    stream.write(`${t('用法：ovsa <命令>', 'Usage: ovsa <command>')}\n\n${rows.join('\n')}\n`);
+    stream.write(`${t('用法：ov-superagent <命令>', 'Usage: ov-superagent <command>')}\n\n${rows.join('\n')}\n`);
     return;
   }
   const { releaseInfo } = await import('../src/version.mjs');
-  const lines = [`\n  ${s.bold(s.gradient('OpenViking SuperAgent', PALETTE.sunset))}  ${s.gray(releaseInfo().version)}\n`,
-    `  ${t('用法', 'Usage')}  ${s.accent('ovsa')} ${s.gray(t('<命令>', '<command>'))}`];
+  const lines = [`
+  ${s.bold(s.gradient('OpenViking SuperAgent', PALETTE.sunset))}  ${s.gray(releaseInfo().version)}
+`,
+    `  ${t('用法', 'Usage')}  ${s.accent('ov-superagent')} ${s.gray(t('<命令>', '<command>'))}`];
   for (const [group, rows] of groups) {
     lines.push('', `  ${s.violet(group)}`);
     for (const [name, args, text] of rows) {
@@ -72,14 +75,14 @@ async function listInstances() {
     const deployment = loadInstances();
     process.stdout.write(deployment
       ? `\n${t('本机的实例（实例名  机器人名字  接入的 IM）：', 'Instances here (name  bot name  IMs):')}\n${describeInstances(deployment)}\n`
-      : t('\n还没有实例：运行 ovsa setup 添加一个。\n', '\nNo instance yet: run ovsa setup to add one.\n'));
+      : t('\n还没有实例：运行 ov-superagent setup 添加一个。\n', '\nNo instance yet: run ov-superagent setup to add one.\n'));
   } catch {}
 }
 
 // Commands that act on instances need the manifest that lists them.
 async function needInstances() {
   const { manifestPath } = await import('../src/manifest.mjs');
-  if (!fs.existsSync(manifestPath())) throw new Error(t('还没有任何实例：先运行 ovsa setup', 'No instance yet: run ovsa setup first'));
+  if (!fs.existsSync(manifestPath())) throw new Error(t('还没有任何实例：先运行 ov-superagent setup', 'No instance yet: run ov-superagent setup first'));
 }
 
 async function main([command, ...args], lang) {
@@ -152,7 +155,7 @@ async function main([command, ...args], lang) {
       return new Promise((resolve) => child.once('exit', (code) => resolve(code ?? 0)));
     }
     case 'dsh': {
-      // `ovsa dsh model ...`: the only dsh subcommand today. A future one is
+      // `ov-superagent dsh model ...`: the only dsh subcommand today. A future one is
       // added here, not as another top-level name.
       if (args[0] !== 'model') break;
       // The model command resolves its own instance (import --dry-run works
@@ -170,7 +173,7 @@ async function main([command, ...args], lang) {
     case 'version': {
       const { releaseInfo } = await import('../src/version.mjs');
       const release = releaseInfo();
-      process.stdout.write(`ovsa ${release.version}${release.platform ? ` (${release.platform})` : ''}\n`);
+      process.stdout.write(`ov-superagent ${release.version}${release.platform ? ` (${release.platform})` : ''}\n`);
       return 0;
     }
     case undefined:
@@ -181,7 +184,7 @@ async function main([command, ...args], lang) {
       await listInstances();
       return 0;
     default:
-      process.stderr.write(t(`ovsa：没有「${command}」这个命令\n\n`, `ovsa: there is no command "${command}"\n\n`));
+      process.stderr.write(t(`ov-superagent：没有「${command}」这个命令\n\n`, `ov-superagent: there is no command "${command}"\n\n`));
       break;
   }
   await usage(process.stderr);

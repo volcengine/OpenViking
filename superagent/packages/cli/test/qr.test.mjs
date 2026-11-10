@@ -12,7 +12,7 @@ import { setLanguage } from '../src/i18n.mjs';
 import { Prompter } from '../src/prompt.mjs';
 import { stripAnsi, width } from '../src/ui.mjs';
 
-const TELEGRAM = 'https://t.me/vika_test_bot?start=abcdefghijklmnopqrstuvwxyz012345';
+const TELEGRAM = 'https://t.me/superagent_test_bot?start=abcdefghijklmnopqrstuvwxyz012345';
 const FEISHU = `https://open.feishu.cn/page/cli?addons=${'x'.repeat(1500)}`;
 
 function screen(columns = 100, rows = 40, interactive = false) {

@@ -16,7 +16,7 @@ const BOT_TOKEN = 'xoxb-1111-2222-abcdefghijklmnop';
 const APP_TOKEN = 'xapp-1-A0APP-3333-abcdefghijklmnop';
 
 function fixture(t, answers) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-slack-ui-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-slack-ui-'));
   const input = new PassThrough(); input.end(answers.join('\n') + '\n');
   const output = new PassThrough();
   let text = ''; output.on('data', (data) => { text += data; });
@@ -31,7 +31,7 @@ function fetchImpl(posts = []) {
     if (method === 'chat.postMessage') posts.push(params);
     const result = {
       'auth.test': { team_id: 'T0TEAM', team: 'Acme', user_id: 'U0BOT', bot_id: 'B0BOT' },
-      'bots.info': { bot: { app_id: 'A0APP', name: 'vika' } },
+      'bots.info': { bot: { app_id: 'A0APP', name: 'superagent' } },
       'apps.connections.open': { url: 'wss://wss-primary.slack.com/link/?ticket=1' },
       'chat.postMessage': { channel: params.channel, ts: '1.000001' },
     }[method];
@@ -50,7 +50,7 @@ function sockets(text, appId = 'A0APP') {
         frame({ type: 'hello', num_connections: 1, connection_info: { app_id: appId } });
         const deadline = Date.now() + 3000;
         let code;
-        while (!this.closed && !(code = text().match(/vika-[a-z2-9]{8}/)?.[0]) && Date.now() < deadline) await delay(5);
+        while (!this.closed && !(code = text().match(/superagent-[a-z2-9]{8}/)?.[0]) && Date.now() < deadline) await delay(5);
         frame({ type: 'events_api', envelope_id: 'e1', payload: { type: 'event_callback', team_id: 'T0TEAM', api_app_id: appId,
           event: { type: 'message', channel: 'D0OWNER', channel_type: 'im', user: 'U0OWNER', text: code,
             ts: `${Math.floor(Date.now() / 1000)}.000001` } } });
@@ -90,7 +90,7 @@ test('tokens are checked, hidden, and saved only after the owner sends the code'
   assert.deepEqual(JSON.parse(fs.readFileSync(manifestFile, 'utf8')), appManifest('OpenViking SuperAgent'));
   assert.equal(fs.statSync(manifestFile).mode & 0o777, 0o600);
   assert.match(f.text(), /https:\/\/api\.slack\.com\/apps\?new_app=1&manifest_json=/);
-  assert.match(f.text(), /以 xoxb- 开头[\s\S]*私聊 vika，发送 vika-[a-z2-9]{8}[\s\S]*Slack 已接好（Acme）/);
+  assert.match(f.text(), /以 xoxb- 开头[\s\S]*私聊 superagent，发送 superagent-[a-z2-9]{8}[\s\S]*Slack 已接好（Acme）/);
   assert.ok(!f.text().includes(BOT_TOKEN) && !f.text().includes(APP_TOKEN));
   assert.equal(posts[0].channel, 'D0OWNER');
 });

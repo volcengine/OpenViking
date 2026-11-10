@@ -35,7 +35,7 @@ const waitAbort = (signal) => new Promise((resolve) => {
   else signal.addEventListener('abort', resolve, { once: true });
 });
 function fixture(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-qq-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-qq-'));
   const state = new QQState(dir);
   t.after(() => { state.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   return { dir, state };
@@ -110,8 +110,8 @@ test('binding accepts only fresh C2C proof; strangers/groups/wrong challenges ca
     onChallenge: (value) => { challenge = value.challenge; },
     gatewayFactory: ({ signal, onReady, onMessage }) => ({ async start() {
       onReady(); await delay(0);
-      assert.match(challenge, /^vika-bind [a-f0-9]{36}$/);
-      for (const bad of [message('wrong', 'vika-bind wrong'), message('group', challenge, { kind: 'group' }),
+      assert.match(challenge, /^superagent-bind [a-f0-9]{36}$/);
+      for (const bad of [message('wrong', 'superagent-bind wrong'), message('group', challenge, { kind: 'group' }),
         message('old', challenge, { timestamp: new Date(0).toISOString() }), message('bot', challenge, { senderIsBot: true })]) onMessage(bad);
       assert.equal(state.account().appSecret, 'previous_private_secret');
       onMessage(message('proof', challenge));
@@ -175,7 +175,7 @@ test('canonical events keep stable IDs, quoted parents and attachments but omit 
   assert.doesNotMatch(JSON.stringify(second.envelope), /SIGNATURE|SUPERSECRET|untrusted quote/);
   assert.equal(normalizeMessage(message(), account, state).envelope.id, first.envelope.id);
   assert.notEqual(normalizeMessage(message('msg-1', 'different', { msgIdx: 'REFIDX_distinct' }), account, state).id, first.id);
-  for (const extra of [{ kind: 'group' }, { senderId: 'STRANGER' }, { timestamp: 'invalid' }, { senderIsBot: true }, { content: 'vika-bind old-secret' }]) {
+  for (const extra of [{ kind: 'group' }, { senderId: 'STRANGER' }, { timestamp: 'invalid' }, { senderIsBot: true }, { content: 'superagent-bind old-secret' }]) {
     assert.equal(normalizeMessage(message('x', 'hello', extra), account, state), null);
   }
   assert.equal(normalizeMessage(message('voice', '/new', {

@@ -15,7 +15,7 @@ import { QQState } from '../../daemon/src/qq/state.mjs';
 
 const SECRET = 'secret_that_must_never_be_logged';
 function fixture(t, answers, { tty = false } = {}) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-qq-ui-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-qq-ui-'));
   const state = new QQState(dataDir);
   state.saveAccount({ appId: '123456', appSecret: 'previous_private_secret', ownerId: 'OLD_OWNER', activatedAt: 0 });
   const input = new PassThrough();
@@ -39,7 +39,7 @@ for (const language of ['zh', 'en']) test(`QQ UI retries invalid credentials, hi
   };
   f.options.gatewayFactory = ({ signal, onReady, onMessage }) => ({ async start() {
     onReady(); await delay(0);
-    const challenge = f.text().match(/vika-bind [a-f0-9]{36}/)[0];
+    const challenge = f.text().match(/superagent-bind [a-f0-9]{36}/)[0];
     onMessage({ kind: 'c2c', rawEventType: 'C2C_MESSAGE_CREATE', senderId: 'NEW_OWNER',
       messageId: 'proof', content: challenge, timestamp: new Date().toISOString() });
     await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));

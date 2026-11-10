@@ -17,7 +17,7 @@ import {
 } from '../src/dsh-runtime.mjs';
 
 function temp(t) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-dsh-runtime-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-dsh-runtime-'));
   fs.chmodSync(directory, 0o700);
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   return directory;
@@ -60,7 +60,7 @@ test('DSH template escape leaves ordinary braces intact', () => {
 });
 
 test('generated patch replaces SDK transport and keeps config/mcp variants', (t) => {
-  const patch = buildDshPatch({ policy: 'use {{this}}', bridgePath: '/vika/bridge.mjs', mcp: { command: '/node', args: ['/mcp.mjs', '--authority', 'private'], toolCallTimeoutMs: 30000 } });
+  const patch = buildDshPatch({ policy: 'use {{this}}', bridgePath: '/superagent/bridge.mjs', mcp: { command: '/node', args: ['/mcp.mjs', '--authority', 'private'], toolCallTimeoutMs: 30000 } });
   assert.deepEqual(patch[0], { id: 'sdk-jsonrpc-server', disabled: true });
   const rows = patch.find(row => row.insert).insert;
   assert.deepEqual(rows[0].inject, ['sdkAppStartup', 'loader']);
@@ -88,7 +88,7 @@ test('generated patch replaces SDK transport and keeps config/mcp variants', (t)
     models: null,
     provider: { test: { api: 'openai-completions', models: [{ id: 'deepseek-chat' }] } },
     modelsFile: '/nowhere/models.json',
-    env: { VIKA_DSH_MODELS_FILE: '/nowhere/models.json' },
+    env: { OV_SUPERAGENT_DSH_MODELS_FILE: '/nowhere/models.json' },
   });
   assert.deepEqual(staleCaller, buildDshPatch({ mcp: null }));
   assert.equal(staleCaller.some(row => row.id === 'llm-pi-ai'), false);
@@ -124,7 +124,7 @@ test('private DSH environment removes inherited DSH settings and pins Node', t =
   const root = temp(t);
   const env = sanitizeDshEnv({
     PATH: '/bin:/usr/bin', DSH_HOME: '/other', DSH_PROFILE: 'web',
-    DEEPSEEK_API_KEY: 'not-printed', VIKA_INSTANCE_ID: 'do-not-inherit',
+    DEEPSEEK_API_KEY: 'not-printed', OV_SUPERAGENT_INSTANCE_ID: 'do-not-inherit',
   }, { dataDir: root, execPath: '/node24/bin/node', actions: { socketPath: '/tmp/actions.sock', authority: 'token' } });
   assert.equal(env.DSH_HOME, path.join(root, 'dsh', 'home'));
   assert.equal(env.DSH_AGENTS_HOME, path.join(root, 'dsh', 'agents'));
@@ -132,7 +132,7 @@ test('private DSH environment removes inherited DSH settings and pins Node', t =
   assert.equal(env.DSH_TELEMETRY_DISABLED, '1');
   assert.equal(env.DSH_PROFILE, undefined);
   assert.equal(env.DEEPSEEK_API_KEY, 'not-printed');
-  assert.equal(env.VIKA_INSTANCE_ID, undefined);
+  assert.equal(env.OV_SUPERAGENT_INSTANCE_ID, undefined);
   assert.equal(env.PATH, '/node24/bin:/bin:/usr/bin');
   for (const directory of Object.values(prepareDshEnvironment(root))) {
     if (typeof directory !== 'string') continue;
@@ -152,7 +152,7 @@ test('patch file is private JSON-compatible YAML with an absolute bridge', t => 
 
 test('bridge handshake requires the id, a v2+ version and every method the caller uses', () => {
   const hello = (overrides = {}) => ({
-    bridge: 'vika-dsh-bridge', version: 2, methods: [...DSH_BRIDGE_CLI_METHODS], ...overrides,
+    bridge: 'superagent-dsh-bridge', version: 2, methods: [...DSH_BRIDGE_CLI_METHODS], ...overrides,
   });
   assert.equal(bridgeHelloSupports(hello(), DSH_BRIDGE_DAEMON_METHODS), true);
   assert.equal(bridgeHelloSupports(hello(), DSH_BRIDGE_CLI_METHODS), true);

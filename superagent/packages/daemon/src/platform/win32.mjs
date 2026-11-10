@@ -109,7 +109,7 @@ const pipeNonce = randomBytes(24).toString('hex');
 export function localSocketPath(directory, name = 'actions') {
   const identity = path.win32.resolve(directory).toLowerCase() + '\0' + os.homedir();
   const digest = createHash('sha256').update(identity).digest('hex').slice(0, 24);
-  return `\\\\.\\pipe\\vika-${name}-${digest}-${pipeNonce}`;
+  return `\\\\.\\pipe\\superagent-${name}-${digest}-${pipeNonce}`;
 }
 
 export function isNamedPipe(value) {
@@ -161,7 +161,7 @@ export const supportsPosixSignals = false;
 export const supportsFileModes = false;
 export const supportsShellScripts = false;
 export const pathDelimiter = ';';
-// No service manager to register with: `ovsa autostart` writes the user's own
+// No service manager to register with: `ov-superagent autostart` writes the user's own
 // Startup folder instead, which needs no elevation.
 export const loginService = 'startupFolder';
 export const systemEnvironmentKeys = Object.freeze(['USERPROFILE', 'SYSTEMROOT', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'COMSPEC', 'PATHEXT', 'HOMEDRIVE', 'HOMEPATH', 'USERNAME']);

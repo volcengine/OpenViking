@@ -39,7 +39,7 @@ function noisePng(width, height) {
 }
 
 function mediaFile(t, name, bytes, mimeType = 'image/png') {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-inline-images-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-inline-images-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const file = path.join(directory, name);
   fs.writeFileSync(file, bytes);

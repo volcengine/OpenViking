@@ -41,7 +41,7 @@ test('widths count CJK as two columns and escape codes as none', () => {
   assert.equal(width('abc'), 3);
   assert.equal(width('飞书 · 微信'), 11);
   assert.equal(width('\x1b[38;2;1;2;3m飞\x1b[0m'), 2);
-  assert.equal(stripAnsi('\x1b[1mVIKA\x1b[22m'), 'VIKA');
+  assert.equal(stripAnsi('\x1b[1mOV\x1b[22m'), 'OV');
 });
 
 test('colours fall back to 256 colours, and nothing without a terminal', () => {

@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
-// The vika/dsh JSON-RPC bridge: LF framing, method dispatch, error classification.
+// The superagent/dsh JSON-RPC bridge: LF framing, method dispatch, error classification.
 
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -85,13 +85,13 @@ function request(method, params, id = randomUUID()) {
 
 test('bridge hello, steer and cancel use native agent operations', () => {
   const { handlers, agent } = fixture();
-  const hello = handlers['vika/hello']();
-  assert.equal(hello.bridge, 'vika-dsh-bridge');
+  const hello = handlers['superagent/hello']();
+  assert.equal(hello.bridge, 'superagent-dsh-bridge');
   assert.equal(hello.version, 2);
   // The advertised list IS the routing surface, so the two can never drift.
   assert.deepEqual(
     [...hello.methods].sort(),
-    Object.keys(handlers).filter(name => name !== 'vika/hello').sort(),
+    Object.keys(handlers).filter(name => name !== 'superagent/hello').sort(),
   );
   assert.ok(hello.methods.includes('session/steer'));
   assert.ok(hello.methods.includes('session/cancel'));
@@ -151,11 +151,11 @@ test('bridge forwards stock frames byte-for-byte and propagates EOF', async t =>
 test('bridge handles its own requests without forwarding them', async t => {
   const { agents, agent } = fixture();
   const h = harness(t, { agents });
-  h.input.write('{"jsonrpc":"2.0","id":"a","method":"vika/hello","params":{}}\n');
+  h.input.write('{"jsonrpc":"2.0","id":"a","method":"superagent/hello","params":{}}\n');
   h.input.write('{"jsonrpc":"2.0","id":"b","method":"session/steer","params":{"sessionId":"session","contentBlocks":[{"type":"text","text":"go"}]}}\n');
   h.input.write('{"jsonrpc":"2.0","id":"c","method":"session/steer","params":{"sessionId":"absent","contentBlocks":[{"type":"text","text":"go"}]}}\n');
   h.input.write('{"jsonrpc":"2.0","id":"d","method":"session/cancel","params":{"sessionId":"session"}}\n');
-  h.input.write('{"method":"vika/hello"}\n');
+  h.input.write('{"method":"superagent/hello"}\n');
   h.input.end();
   await waitUntil(() => h.frames().length === 4, 'four bridge responses');
   const frames = h.frames();
@@ -163,7 +163,7 @@ test('bridge handles its own requests without forwarding them', async t => {
   assert.equal(frames.find(frame => frame.id === 'b').result.messageId, agent.steered[0].id);
   assert.equal(frames.find(frame => frame.id === 'c').error.code, -32602);
   assert.deepEqual(frames.find(frame => frame.id === 'd').result, { cancelled: true });
-  assert.equal(h.forwardedText(), '{"method":"vika/hello"}\n');
+  assert.equal(h.forwardedText(), '{"method":"superagent/hello"}\n');
 });
 
 test('a steer text with U+2028 and U+2029 stays one frame and reaches the agent', async t => {
@@ -220,7 +220,7 @@ test('a whole frame in one oversized line is dropped, warned and survived', asyn
   const h = harness(t, { agents });
   const oversized = `{"jsonrpc":"2.0","id":"big","method":"session/steer","params":${JSON.stringify({ sessionId: 'session', contentBlocks: [{ type: 'text', text: 'x'.repeat(MAX_FRAME_BYTES) }] })}}\n`;
   h.input.write(oversized);
-  h.input.write(request('vika/hello', {}, 'after'));
+  h.input.write(request('superagent/hello', {}, 'after'));
   h.input.end();
   await waitUntil(() => h.frames().length === 1, 'the next frame is answered');
   assert.equal(h.frames()[0].id, 'after', 'the oversized frame produced no response');
@@ -238,7 +238,7 @@ test('a malformed frame is forwarded unchanged', async t => {
   ]);
   h.input.write(malformed);
   h.input.write(Buffer.from('\n', 'utf8'));
-  h.input.write('{"jsonrpc":"2.0","id":"ok","method":"vika/hello","params":{}}\n');
+  h.input.write('{"jsonrpc":"2.0","id":"ok","method":"superagent/hello","params":{}}\n');
   h.input.end();
   await waitUntil(() => h.frames().length === 1, 'hello response');
   assert.equal(h.frames()[0].id, 'ok');
@@ -247,7 +247,7 @@ test('a malformed frame is forwarded unchanged', async t => {
 
 test('a final frame without a trailing newline is delivered at EOF', async t => {
   const h = harness(t);
-  h.input.write('{"jsonrpc":"2.0","id":"tail","method":"vika/hello","params":{}}');
+  h.input.write('{"jsonrpc":"2.0","id":"tail","method":"superagent/hello","params":{}}');
   h.input.end();
   await waitUntil(() => h.frames().length === 1, 'tail frame response');
   assert.equal(h.frames()[0].id, 'tail');
@@ -259,9 +259,9 @@ test('malformed params are -32602 and never reach a handler', async t => {
   const { agents, agent } = fixture();
   const h = harness(t, { agents });
   const cases = [
-    ['hello', 'vika/hello', 'not-an-object'],
-    ['hello-array', 'vika/hello', ['not', 'an', 'object']],
-    ['hello-number', 'vika/hello', 7],
+    ['hello', 'superagent/hello', 'not-an-object'],
+    ['hello-array', 'superagent/hello', ['not', 'an', 'object']],
+    ['hello-number', 'superagent/hello', 7],
     ['cancel-null', 'session/cancel', null],
   ];
   for (const [id, method, params] of cases) h.input.write(request(method, params, id));
@@ -409,7 +409,7 @@ function modelFixture({ llm, settings, credentials, modelsTimeoutMs, modelInfoTi
   };
 }
 
-test('vika/llm/models isolates one route and reports its configured credential', async () => {
+test('superagent/llm/models isolates one route and reports its configured credential', async () => {
   const llm = {
     listProviders: () => [{ id: 'good', name: 'Good' }, { id: 'bad', name: 'Bad' }],
     listModels: async (provider) => {
@@ -423,7 +423,7 @@ test('vika/llm/models isolates one route and reports its configured credential',
   const credentials = { describe: async (ref) => ({ configured: ref === 'GOOD_KEY' }) };
   const { handlers } = modelFixture({ llm, settings, credentials });
 
-  const result = await handlers['vika/llm/models']();
+  const result = await handlers['superagent/llm/models']();
   assert.deepEqual(result.providers.map(provider => provider.provider), ['good', 'bad']);
   assert.deepEqual(result.providers[0], {
     provider: 'good',
@@ -438,7 +438,7 @@ test('vika/llm/models isolates one route and reports its configured credential',
   assert.equal(result.providers[1].credential, null);
 });
 
-test('vika/llm/models distinguishes an unread credential from a missing one', async () => {
+test('superagent/llm/models distinguishes an unread credential from a missing one', async () => {
   const llm = { listProviders: () => [{ id: 'seeded', name: 'Seeded' }], listModels: async () => [] };
   const settings = {
     describe: () => [{ ns: 'llm-pi-ai', value: { providers: { seeded: { apiKeyEnv: 'SEEDED_KEY' } } } }],
@@ -446,21 +446,21 @@ test('vika/llm/models distinguishes an unread credential from a missing one', as
   // credentials is the only service that activates late; the catalogue still
   // answers and says the state is unknown instead of claiming it is absent.
   const unactivated = modelFixture({ llm, settings });
-  const [pending] = (await unactivated.handlers['vika/llm/models']()).providers;
+  const [pending] = (await unactivated.handlers['superagent/llm/models']()).providers;
   assert.deepEqual(pending.credential, { ref: 'SEEDED_KEY', present: null, known: false });
 
   const unreadable = { describe: async () => { throw new Error('credential store is unreadable'); } };
   const { handlers } = modelFixture({ llm, settings, credentials: unreadable });
-  const [failed] = (await handlers['vika/llm/models']()).providers;
+  const [failed] = (await handlers['superagent/llm/models']()).providers;
   assert.deepEqual(failed.credential, { ref: 'SEEDED_KEY', present: null, known: false });
 
   const absent = { describe: async () => ({ configured: false }) };
   const known = modelFixture({ llm, settings, credentials: absent });
-  const [configured] = (await known.handlers['vika/llm/models']()).providers;
+  const [configured] = (await known.handlers['superagent/llm/models']()).providers;
   assert.deepEqual(configured.credential, { ref: 'SEEDED_KEY', present: false, known: true });
 });
 
-test('vika/llm/models keeps the answer when a provider hangs', async () => {
+test('superagent/llm/models keeps the answer when a provider hangs', async () => {
   const llm = {
     listProviders: () => [{ id: 'fast', name: 'Fast' }, { id: 'hung', name: 'Hung' }],
     listModels: (provider) => provider === 'hung'
@@ -468,22 +468,22 @@ test('vika/llm/models keeps the answer when a provider hangs', async () => {
       : Promise.resolve([{ id: 'm', name: 'M' }]),
   };
   const { handlers } = modelFixture({ llm, modelsTimeoutMs: 20 });
-  const result = await handlers['vika/llm/models']();
+  const result = await handlers['superagent/llm/models']();
   assert.deepEqual(result.providers[0].models, [{ id: 'm', name: 'M', inputModalities: null }]);
   assert.equal(result.providers[1].error.code, 'BRIDGE_TIMEOUT');
 });
 
-test('vika/llm/models reports NOT_READY before the llm service activates', async () => {
+test('superagent/llm/models reports NOT_READY before the llm service activates', async () => {
   const { handlers } = modelFixture({});
   await assert.rejects(
-    () => handlers['vika/llm/models'](),
+    () => handlers['superagent/llm/models'](),
     (error) => error.code === -32002
       && error.data?.code === 'NOT_READY'
       && error.data?.service === 'llm',
   );
 });
 
-test('vika/llm/model/info returns DSH model metadata unchanged', async () => {
+test('superagent/llm/model/info returns DSH model metadata unchanged', async () => {
   const info = {
     provider: 'deepseek', id: 'deepseek-chat', name: 'DeepSeek Chat',
     inputModalities: ['text'], context: { contextWindow: 1000 },
@@ -491,27 +491,27 @@ test('vika/llm/model/info returns DSH model metadata unchanged', async () => {
   };
   const llm = { resolveModelInfo: async (provider, model) => ({ ...info, provider, id: model }) };
   const { handlers } = modelFixture({ llm });
-  assert.deepEqual(await handlers['vika/llm/model/info']({ provider: 'deepseek', model: 'deepseek-chat' }), info);
+  assert.deepEqual(await handlers['superagent/llm/model/info']({ provider: 'deepseek', model: 'deepseek-chat' }), info);
   await assert.rejects(
-    () => handlers['vika/llm/model/info']({ provider: '', model: 'x' }),
+    () => handlers['superagent/llm/model/info']({ provider: '', model: 'x' }),
     (error) => error.code === -32602,
   );
 });
 
-test('vika/llm/model/info answers a hung adapter with BRIDGE_TIMEOUT instead of waiting', async () => {
+test('superagent/llm/model/info answers a hung adapter with BRIDGE_TIMEOUT instead of waiting', async () => {
   // B9c: the metadata lookup is local in DSH, but the adapter behind it is not.
   // Unbounded, this handler would hold the request until the caller's own timeout
   // and then write a late response onto the wire.
   const llm = { resolveModelInfo: () => new Promise(() => {}) };
   const { handlers } = modelFixture({ llm, modelInfoTimeoutMs: 20 });
   await assert.rejects(
-    () => handlers['vika/llm/model/info']({ provider: 'deepseek', model: 'deepseek-chat' }),
+    () => handlers['superagent/llm/model/info']({ provider: 'deepseek', model: 'deepseek-chat' }),
     (error) => error.code === 'BRIDGE_TIMEOUT'
       && /resolveModelInfo\(deepseek\/deepseek-chat\) timed out after 20ms/.test(error.message),
   );
 });
 
-test('vika/session/model/select records the request, not the resolved default effort', async () => {
+test('superagent/session/model/select records the request, not the resolved default effort', async () => {
   const calls = [];
   const llm = {
     resolveCallConfig: async (selection) => {
@@ -522,13 +522,13 @@ test('vika/session/model/select records the request, not the resolved default ef
     },
   };
   const { handlers, agent } = modelFixture({ llm });
-  const selected = await handlers['vika/session/model/select']({ sessionId: 'session', provider: 'deepseek', model: 'deepseek-chat' });
+  const selected = await handlers['superagent/session/model/select']({ sessionId: 'session', provider: 'deepseek', model: 'deepseek-chat' });
   assert.deepEqual(calls, [{ provider: 'deepseek', model: 'deepseek-chat' }]);
   assert.deepEqual(selected, { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: null });
   assert.deepEqual(agent.selections, [{ provider: 'deepseek', model: 'deepseek-chat' }]);
 });
 
-test('vika/session/model/select records an explicit effort and returns only the request', async () => {
+test('superagent/session/model/select records an explicit effort and returns only the request', async () => {
   const calls = [];
   const llm = {
     resolveCallConfig: async (selection) => {
@@ -537,7 +537,7 @@ test('vika/session/model/select records an explicit effort and returns only the 
     },
   };
   const { handlers, agent } = modelFixture({ llm });
-  const selected = await handlers['vika/session/model/select']({
+  const selected = await handlers['superagent/session/model/select']({
     sessionId: 'session', provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'low',
   });
   assert.deepEqual(calls, [{ provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'low' }]);
@@ -546,7 +546,7 @@ test('vika/session/model/select records an explicit effort and returns only the 
   assert.equal('maxTokens' in selected, false);
 });
 
-test('vika/session/model/select never selects when validation fails', async () => {
+test('superagent/session/model/select never selects when validation fails', async () => {
   const llm = {
     resolveCallConfig: async () => {
       throw Object.assign(new Error('does not support reasoning effort "xhigh"'), { code: 'UNSUPPORTED_REASONING_EFFORT' });
@@ -554,50 +554,50 @@ test('vika/session/model/select never selects when validation fails', async () =
   };
   const { handlers, agent } = modelFixture({ llm });
   await assert.rejects(
-    () => handlers['vika/session/model/select']({ sessionId: 'session', provider: 'deepseek', model: 'm', reasoningEffort: 'xhigh' }),
+    () => handlers['superagent/session/model/select']({ sessionId: 'session', provider: 'deepseek', model: 'm', reasoningEffort: 'xhigh' }),
     (error) => error.code === 'UNSUPPORTED_REASONING_EFFORT',
   );
   assert.deepEqual(agent.selections, []);
 });
 
-test('vika/session/model/select rejects a subagent session', async () => {
+test('superagent/session/model/select rejects a subagent session', async () => {
   const llm = { resolveCallConfig: async (selection) => selection };
   const { handlers, agents } = modelFixture({ llm });
   agents.get('session').session.header.origin = 'subagent';
   await assert.rejects(
-    () => handlers['vika/session/model/select']({ sessionId: 'session', provider: 'p', model: 'm' }),
+    () => handlers['superagent/session/model/select']({ sessionId: 'session', provider: 'p', model: 'm' }),
     (error) => error.code === -32602 && /subagent/.test(error.message),
   );
 });
 
-test('vika/session/model/select requires a loaded session id', async () => {
+test('superagent/session/model/select requires a loaded session id', async () => {
   const { handlers } = modelFixture({ llm: {} });
   await assert.rejects(
-    () => handlers['vika/session/model/select']({ provider: 'p', model: 'm' }),
+    () => handlers['superagent/session/model/select']({ provider: 'p', model: 'm' }),
     (error) => error.code === -32602 && /sessionId/.test(error.message),
   );
 });
 
-test('vika/settings rejects every namespace but llm-pi-ai', async () => {
+test('superagent/settings rejects every namespace but llm-pi-ai', async () => {
   const settings = {
     describe: () => [{ ns: 'llm-pi-ai', revision: 3, value: { providers: {} } }],
     mutate: async () => {},
   };
   const { handlers } = modelFixture({ settings });
-  assert.deepEqual(handlers['vika/settings/describe']({ ns: 'llm-pi-ai' }), {
+  assert.deepEqual(handlers['superagent/settings/describe']({ ns: 'llm-pi-ai' }), {
     ns: 'llm-pi-ai', descriptor: { ns: 'llm-pi-ai', revision: 3, value: { providers: {} } },
   });
   await assert.rejects(
-    () => handlers['vika/settings/mutate']({ ns: 'llm', ops: [{ op: 'set', path: ['x'], value: 1 }] }),
+    () => handlers['superagent/settings/mutate']({ ns: 'llm', ops: [{ op: 'set', path: ['x'], value: 1 }] }),
     (error) => error.code === -32602 && /namespace/.test(error.message),
   );
   await assert.rejects(
-    () => handlers['vika/settings/mutate']({ ns: 'llm-pi-ai', ops: [] }),
+    () => handlers['superagent/settings/mutate']({ ns: 'llm-pi-ai', ops: [] }),
     (error) => error.code === -32602 && /ops/.test(error.message),
   );
 });
 
-test('vika/credentials validates the reference and never echoes the value', async () => {
+test('superagent/credentials validates the reference and never echoes the value', async () => {
   const stored = [];
   const credentials = {
     set: async (ref, value) => { stored.push([ref, value]); },
@@ -605,14 +605,14 @@ test('vika/credentials validates the reference and never echoes the value', asyn
   };
   const { handlers } = modelFixture({ credentials });
   await assert.rejects(
-    () => handlers['vika/credentials/set']({ ref: 'not a ref', value: 'secret-value' }),
+    () => handlers['superagent/credentials/set']({ ref: 'not a ref', value: 'secret-value' }),
     (error) => error.code === -32602 && !error.message.includes('secret-value'),
   );
   await assert.rejects(
-    () => handlers['vika/credentials/set']({ ref: 'DEEPSEEK_KEY', value: '' }),
+    () => handlers['superagent/credentials/set']({ ref: 'DEEPSEEK_KEY', value: '' }),
     (error) => error.code === -32602,
   );
-  assert.deepEqual(await handlers['vika/credentials/set']({ ref: 'DEEPSEEK_KEY', value: 'k' }), { ok: true });
+  assert.deepEqual(await handlers['superagent/credentials/set']({ ref: 'DEEPSEEK_KEY', value: 'k' }), { ok: true });
   assert.deepEqual(stored, [['DEEPSEEK_KEY', 'k']]);
 });
 
@@ -652,17 +652,17 @@ test('bridge keeps DSH string error codes in data.code and translates settings f
   };
   const h = harness(t, { agents, services });
   const cases = [
-    ['effort', 'vika/session/model/select', {
+    ['effort', 'superagent/session/model/select', {
       sessionId: 'session', provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'xhigh',
     }],
-    ...Object.keys(settingsFailures).map(key => [`settings-${key}`, 'vika/settings/mutate', {
+    ...Object.keys(settingsFailures).map(key => [`settings-${key}`, 'superagent/settings/mutate', {
       ops: [{ op: 'set', path: [key], value: 1 }],
     }]),
-    ['not-ready', 'vika/credentials/set', { ref: 'DEEPSEEK_KEY', value: 'k' }],
-    ['invalid-params', 'vika/session/model/select', { sessionId: 'session', provider: '', model: 'm' }],
+    ['not-ready', 'superagent/credentials/set', { ref: 'DEEPSEEK_KEY', value: 'k' }],
+    ['invalid-params', 'superagent/session/model/select', { sessionId: 'session', provider: '', model: 'm' }],
     // The settings translation is scoped to settings methods: the same message
     // from another surface stays an unclassified internal error.
-    ['scoped', 'vika/llm/model/info', { provider: 'deepseek', model: 'm' }],
+    ['scoped', 'superagent/llm/model/info', { provider: 'deepseek', model: 'm' }],
   ];
   for (const [id, method, params] of cases) h.input.write(request(method, params, id));
   await waitUntil(() => h.frames().length === cases.length, 'one error frame per failing request');
@@ -702,12 +702,12 @@ test('the fake dsh answers settings failures with the same wire taxonomy as the 
   const failures = [
     // The three message classes the bridge maps, one it must not, a non-settings
     // method (which keeps the string code), and a numeric code.
-    [Object.assign(new Error('llm-pi-ai is overridden by a home patch or command-line overlay'), { code: 'X' }), 'vika/settings/mutate'],
-    [Object.assign(new Error('no configurable plugin entry for llm-pi-ai'), { code: 'X' }), 'vika/settings/describe'],
-    [Object.assign(new Error('the document changed since it was read'), { code: 'X' }), 'vika/settings/mutate'],
-    [Object.assign(new Error('something else entirely'), { code: 'SETTINGS_INVALID' }), 'vika/settings/mutate'],
-    [Object.assign(new Error('overridden by a home patch'), { code: 'X' }), 'vika/llm/models'],
-    [{ code: -32602, message: 'bad params' }, 'vika/settings/mutate'],
+    [Object.assign(new Error('llm-pi-ai is overridden by a home patch or command-line overlay'), { code: 'X' }), 'superagent/settings/mutate'],
+    [Object.assign(new Error('no configurable plugin entry for llm-pi-ai'), { code: 'X' }), 'superagent/settings/describe'],
+    [Object.assign(new Error('the document changed since it was read'), { code: 'X' }), 'superagent/settings/mutate'],
+    [Object.assign(new Error('something else entirely'), { code: 'SETTINGS_INVALID' }), 'superagent/settings/mutate'],
+    [Object.assign(new Error('overridden by a home patch'), { code: 'X' }), 'superagent/llm/models'],
+    [{ code: -32602, message: 'bad params' }, 'superagent/settings/mutate'],
   ];
   for (const [error, method] of failures) {
     assert.deepEqual(fake.bridgeErrorFrame(error, method), bridgeErrorFrame(error, method),

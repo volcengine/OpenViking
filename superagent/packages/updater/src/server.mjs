@@ -33,8 +33,8 @@ export { cleanPm2ControlEnv, cleanWebPm2ControlEnv, resolveRelease, verifyPm2App
 
 const execFile = promisify(execFileCallback);
 const MAX_BODY_BYTES = 4096;
-// vika-<instance>; vika-web and vika-updater share the prefix but are never pruned.
-const MANAGED_DAEMON_APP = /^vika-(?!(?:web|updater)$)[a-z][a-z0-9-]{0,31}$/;
+// superagent-<instance>; superagent-web and superagent-updater share the prefix but are never pruned.
+const MANAGED_DAEMON_APP = /^superagent-(?!(?:web|updater)$)[a-z][a-z0-9-]{0,31}$/;
 
 function writeJson(response, statusCode, body) {
   const text = JSON.stringify(body);
@@ -159,11 +159,11 @@ async function upgradeApp(spec, {
 // After an upgrade the updater still runs the old release. It cannot
 // replace itself from inside its own pm2 process (pm2 kills the process tree
 // on delete), so a detached shell outlives it: the inner subshell is orphaned
-// before the delete, then starts vika-updater from the new release.
+// before the delete, then starts superagent-updater from the new release.
 export function scheduleUpdaterRestart({ release, pm2Bin, pm2Env, spawnImpl = spawn }) {
   const releasePm2 = path.join(release, 'bin', 'pm2');
-  const script = '(sleep 2; "$PM2" delete vika-updater >/dev/null 2>&1; '
-    + '"$PM2" start "$CONFIG" --only vika-updater --update-env >/dev/null 2>&1; '
+  const script = '(sleep 2; "$PM2" delete superagent-updater >/dev/null 2>&1; '
+    + '"$PM2" start "$CONFIG" --only superagent-updater --update-env >/dev/null 2>&1; '
     + '"$PM2" save >/dev/null 2>&1) </dev/null >/dev/null 2>&1 &';
   const child = spawnImpl('/bin/sh', ['-c', script], {
     detached: true,
@@ -178,7 +178,7 @@ export function scheduleUpdaterRestart({ release, pm2Bin, pm2Env, spawnImpl = sp
 }
 
 export async function upgradeTarget(target, {
-  releaseLink = process.env.VIKA_UPDATER_RELEASE_LINK || defaultReleaseLink(),
+  releaseLink = process.env.OV_SUPERAGENT_UPDATER_RELEASE_LINK || defaultReleaseLink(),
   pm2Bin = process.env.PM2_BIN || 'pm2',
   execFileImpl = execFile,
   fetchImpl = globalThis.fetch,
@@ -187,7 +187,7 @@ export async function upgradeTarget(target, {
   publishReleaseImpl = publishLatestRelease,
   publishOptions = {},
   // Only the running updater replaces itself (createUpdaterServer turns this
-  // on); a direct call, as in tests, never touches pm2's vika-updater.
+  // on); a direct call, as in tests, never touches pm2's superagent-updater.
   restartSelfImpl = null,
   selfEntry = fileURLToPath(import.meta.url),
 } = {}) {
@@ -198,7 +198,7 @@ export async function upgradeTarget(target, {
   try {
     await mkdir(deployLock, { mode: 0o700 });
   } catch (error) {
-    if (error?.code === 'EEXIST') throw new Error('another ovsa deploy or upgrade is running');
+    if (error?.code === 'EEXIST') throw new Error('another ov-superagent deploy or upgrade is running');
     throw error;
   }
   try {
@@ -312,7 +312,7 @@ async function removeStaleSocket(socketPath) {
 }
 
 export async function createUpdaterServer({
-  socketPath = process.env.VIKA_UPDATER_SOCKET || defaultSocketPath(),
+  socketPath = process.env.OV_SUPERAGENT_UPDATER_SOCKET || defaultSocketPath(),
   upgrade = (target) => upgradeTarget(target, { restartSelfImpl: scheduleUpdaterRestart }),
   requestBodyTimeoutMs = 5000,
 } = {}) {

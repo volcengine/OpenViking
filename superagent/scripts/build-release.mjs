@@ -3,14 +3,14 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 // Builds the release archives the installer and updater download: one
-// vika-<version>-<platform>.tar.gz per platform, each holding the committed
+// superagent-<version>-<platform>.tar.gz per platform, each holding the committed
 // code, its production dependencies, the pinned lark-cli and Slack CLI binaries and the
 // official Node it runs on, plus a release manifest with their SHA-256s.
 //
 //   node scripts/build-release.mjs [--ref HEAD] [--platform linux-x64 ...|--all]
 //                                  [--out dist] [--version X] [--download-base URL]
 //
-// Only committed files go in (git archive). A tag openviking-vika@X on the ref
+// Only committed files go in (git archive). A tag openviking-superagent@X on the ref
 // makes the version X; otherwise it is <package version>-<commit>. The download
 // base is written into each release so its updater knows where newer ones live.
 
@@ -26,10 +26,10 @@ import { installLarkCliBinary } from './release/lark-cli.mjs';
 import { installSlackCliBinary } from './release/slack-cli.mjs';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
-const NODE_MIRROR = (process.env.VIKA_NODE_MIRROR || 'https://nodejs.org/dist').replace(/\/$/, '');
+const NODE_MIRROR = (process.env.OV_SUPERAGENT_NODE_MIRROR || 'https://nodejs.org/dist').replace(/\/$/, '');
 
 function options(argv) {
-  const result = { ref: 'HEAD', platforms: [], out: path.join(REPO, 'dist'), version: null, downloadBase: process.env.VIKA_DOWNLOAD_BASE || '' };
+  const result = { ref: 'HEAD', platforms: [], out: path.join(REPO, 'dist'), version: null, downloadBase: process.env.OV_SUPERAGENT_DOWNLOAD_BASE || '' };
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     const value = () => {
@@ -58,8 +58,8 @@ const say = (line) => process.stderr.write(`${line}\n`);
 
 function releaseVersion(ref, explicit) {
   if (explicit) return assertVersion(explicit);
-  const tag = git('tag', '--points-at', ref).split('\n').find((name) => /^openviking-vika@/.test(name));
-  if (tag) return assertVersion(tag.slice('openviking-vika@'.length));
+  const tag = git('tag', '--points-at', ref).split('\n').find((name) => /^openviking-superagent@/.test(name));
+  if (tag) return assertVersion(tag.slice('openviking-superagent@'.length));
   const { version } = JSON.parse(git('show', `${ref}:./package.json`));
   return assertVersion(`${version}-${git('rev-parse', '--short=12', ref)}`);
 }
@@ -89,7 +89,7 @@ async function nodeBinary(version, platformId, cache) {
 }
 
 async function buildPlatform({ stage, platformId, version, commit, nodeVersion, downloadBase, out, cache }) {
-  const directory = `vika-${version}-${platformId}`;
+  const directory = `superagent-${version}-${platformId}`;
   const root = path.join(out, 'work', directory);
   fs.rmSync(root, { recursive: true, force: true });
   fs.cpSync(stage, root, { recursive: true, verbatimSymlinks: true });
@@ -109,7 +109,7 @@ async function buildPlatform({ stage, platformId, version, commit, nodeVersion, 
   const slack = await installSlackCliBinary({ root, platformId });
 
   const metadata = {
-    name: 'vika', version, commit, platform: platformId, node: nodeVersion, slackCli: slack.version,
+    name: 'superagent', version, commit, platform: platformId, node: nodeVersion, slackCli: slack.version,
     builtAt: new Date().toISOString(), ...(downloadBase ? { downloadBase: downloadBase.replace(/\/+$/, '') } : {}),
   };
   fs.writeFileSync(path.join(root, 'release.json'), `${JSON.stringify(metadata, null, 2)}\n`);
@@ -118,7 +118,7 @@ async function buildPlatform({ stage, platformId, version, commit, nodeVersion, 
     // Only a release for this machine can be started here; CI checks the rest on their own runners.
     const run = (command, args) => execFileSync(command, args, { cwd: root, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' }).trim();
     say(`smoke test: ${run(path.join(root, 'node', 'bin', 'node'), ['--version'])}, `
-      + `${run(path.join(root, 'node', 'bin', 'node'), [path.join(root, 'packages', 'cli', 'bin', 'vika.mjs'), '--version'])}, `
+      + `${run(path.join(root, 'node', 'bin', 'node'), [path.join(root, 'packages', 'cli', 'bin', 'ov-superagent.mjs'), '--version'])}, `
       + `${run(path.join(root, 'node_modules', '@larksuite', 'cli', 'bin', 'lark-cli'), ['--version'])}`);
     run(path.join(root, 'node', 'bin', 'node'), [path.join(root, 'packages', 'daemon', 'scripts', 'check-pi.mjs')]);
     run(path.join(root, 'node', 'bin', 'node'), [path.join(root, 'packages', 'daemon', 'scripts', 'check-durable.mjs')]);
@@ -138,13 +138,13 @@ async function buildPlatform({ stage, platformId, version, commit, nodeVersion, 
 const opts = options(process.argv.slice(2));
 const version = releaseVersion(opts.ref, opts.version);
 const commit = git('rev-parse', opts.ref);
-const nodeVersion = JSON.parse(git('show', `${opts.ref}:./package.json`)).ovsa.node;
+const nodeVersion = JSON.parse(git('show', `${opts.ref}:./package.json`)).superagent.node;
 fs.mkdirSync(opts.out, { recursive: true });
-const cache = path.join(os.homedir(), '.cache', 'vika-build');
+const cache = path.join(os.homedir(), '.cache', 'superagent-build');
 fs.mkdirSync(cache, { recursive: true });
 const stage = path.join(opts.out, 'work', '.stage');
 fs.rmSync(stage, { recursive: true, force: true });
-say(`building vika ${version} (${commit.slice(0, 12)}) for ${opts.platforms.join(', ')}; Node ${nodeVersion}`);
+say(`building ov-superagent ${version} (${commit.slice(0, 12)}) for ${opts.platforms.join(', ')}; Node ${nodeVersion}`);
 stageApp(opts.ref, stage);
 
 const files = {};
@@ -153,6 +153,6 @@ for (const platformId of opts.platforms) {
   say(`${files[platformId].name}  ${(files[platformId].size / 1024 / 1024).toFixed(1)} MB  ${files[platformId].sha256}`);
 }
 fs.rmSync(path.join(opts.out, 'work'), { recursive: true, force: true });
-const manifest = { name: 'vika', version, commit, node: nodeVersion, builtAt: new Date().toISOString(), files };
+const manifest = { name: 'superagent', version, commit, node: nodeVersion, builtAt: new Date().toISOString(), files };
 fs.writeFileSync(path.join(opts.out, 'release.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 process.stdout.write(`${path.join(opts.out, 'release.json')}\n`);

@@ -238,7 +238,7 @@ describe('OpenViking tool client', () => {
     await assert.rejects(() => one.addResource({ url: 'https://a.example', file_path: 'a.md' }), /exactly one of url or file_path/);
     await assert.rejects(() => one.addResource({ url: 'https://a.example', to: 'viking://t/a', parent: 'viking://p' }), /at most one of to or parent/);
     // What the daemon keeps is out of reach, in either spelling of the own root.
-    for (const target of ['viking://~/resources/vika/asd/timers-state.json', 'viking://~/resources/emails', 'viking://user/owner/resources/meetings/1/note.md',
+    for (const target of ['viking://~/resources/superagent/asd/timers-state.json', 'viking://~/resources/emails', 'viking://user/owner/resources/meetings/1/note.md',
       'viking://~/memories/preferences/x', 'viking://user/owner/sessions/s', 'viking://~/peers/p']) {
       await assert.rejects(() => one.addResource({ url: 'https://a.example', to: target }),
         (error) => error.code === 'openviking_reserved_target');
@@ -246,7 +246,7 @@ describe('OpenViking tool client', () => {
         (error) => error.code === 'openviking_reserved_target');
     }
     // The server collapses repeated slashes; `.`, `..` and escapes are refused.
-    for (const target of ['viking://~/resources//emails/replaced', 'viking://~//resources/vika/asd/timers-state.json',
+    for (const target of ['viking://~/resources//emails/replaced', 'viking://~//resources/superagent/asd/timers-state.json',
       'viking://user/owner//memories/preferences/owner/x.md']) {
       await assert.rejects(() => one.addResource({ url: 'https://a.example', to: target }),
         (error) => error.code === 'openviking_reserved_target');

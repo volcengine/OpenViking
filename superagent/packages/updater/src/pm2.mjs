@@ -7,7 +7,7 @@ import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
-// pm2 control shared by the updater (upgrades) and the vika CLI (start,
+// pm2 control shared by the updater (upgrades) and the ov-superagent CLI (start,
 // stop, status). Starting an app from the installed release never fetches or
 // publishes anything; that is the updater's job alone.
 
@@ -23,7 +23,7 @@ const DAEMON_ENV_FIELD_SET = new Set(DAEMON_ENV_FIELDS);
 const WEB_FORBIDDEN_ENV_PREFIXES = Object.freeze([
   'ARK_',
   'VOLCENGINE_',
-  'VIKA_VOLC_',
+  'OV_SUPERAGENT_VOLC_',
   'SESSION_ID',
 ]);
 const PM2_CONTROL_ENV_KEYS = Object.freeze([
@@ -37,7 +37,7 @@ const PM2_CONTROL_ENV_KEYS = Object.freeze([
   'LC_CTYPE',
   'TMPDIR',
   'XDG_RUNTIME_DIR',
-  'VIKA_CONFIG',
+  'OV_SUPERAGENT_CONFIG',
   ...DAEMON_ENV_FIELDS,
   ...DAEMON_SHELL_ENV_FIELDS,
   ...DAEMON_SECRET_ENV_FIELDS,

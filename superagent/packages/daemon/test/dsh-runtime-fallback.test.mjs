@@ -4,7 +4,7 @@
 // Layer: coordinator + DSH handshake -- what the daemon does when the route it
 // was configured to run serves nothing.
 //
-// The failure this file pins down: `ovsa setup` selected DeepSeek Harness and
+// The failure this file pins down: `ov-superagent setup` selected DeepSeek Harness and
 // wrote the bare runtime alias `"model": "dsh"`, which resolves to dsh's own
 // default `deepseek-official/deepseek-flash`. That route is registered in DSH but
 // serves ZERO models without DEEPSEEK_API_KEY -- the owner's credential lives on
@@ -37,7 +37,7 @@ const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { re
 const createdDirs = new Set();
 
 function tempDir() {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-dsh-fallback-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-dsh-fallback-'));
   fs.chmodSync(directory, 0o700);
   createdDirs.add(directory);
   return directory;
@@ -138,7 +138,7 @@ function makeStore({ runtime = null, authorityToken = 'token-before', settings =
 
 const DAEMON_METHODS = Object.freeze([
   'session/steer', 'session/cancel',
-  'vika/llm/models', 'vika/llm/model/info', 'vika/session/model/select',
+  'superagent/llm/models', 'superagent/llm/model/info', 'superagent/session/model/select',
 ]);
 
 // The catalogue of the machine that crash-looped: the built-in route exists but
@@ -223,12 +223,12 @@ class FakeChild extends EventEmitter {
       });
       return;
     }
-    if (method === 'vika/hello') {
-      this._result(frame, { bridge: 'vika-dsh-bridge', version: 2, methods: [...DAEMON_METHODS] });
+    if (method === 'superagent/hello') {
+      this._result(frame, { bridge: 'superagent-dsh-bridge', version: 2, methods: [...DAEMON_METHODS] });
       return;
     }
-    if (method === 'vika/llm/models') { this._result(frame, { providers: this.catalogue }); return; }
-    if (method === 'vika/llm/model/info') {
+    if (method === 'superagent/llm/models') { this._result(frame, { providers: this.catalogue }); return; }
+    if (method === 'superagent/llm/model/info') {
       this._result(frame, {
         provider: frame.params.provider,
         id: frame.params.model,
@@ -241,7 +241,7 @@ class FakeChild extends EventEmitter {
       });
       return;
     }
-    if (method === 'vika/settings/describe') {
+    if (method === 'superagent/settings/describe') {
       this._result(frame, {
         ns: 'llm-pi-ai', descriptor: { ns: 'llm-pi-ai', revision: 1, value: { providers: {} } },
       });
@@ -249,7 +249,7 @@ class FakeChild extends EventEmitter {
     }
     if (method === 'session/working-directory/get') { this._result(frame, { cwd: '/tmp/workspace' }); return; }
     if (method === 'session/resume') { this._result(frame, {}); return; }
-    if (method === 'vika/session/model/select') {
+    if (method === 'superagent/session/model/select') {
       this._result(frame, {
         provider: frame.params.provider,
         model: frame.params.model,
@@ -372,7 +372,7 @@ describe('a fresh instance whose configured route serves nothing', () => {
   // fix got wrong.
   it('starts on the first servable catalogue route when initialize is accepted but serves nothing', async () => {
     const store = makeStore();
-    assert.equal(store.hasCognitionRuntime(), false, 'the state `ovsa setup` leaves behind');
+    assert.equal(store.hasCognitionRuntime(), false, 'the state `ov-superagent setup` leaves behind');
     const context = makeRuntime({
       store, initialModel: 'dsh', catalogue: UNUSABLE_DEFAULT, refuse: ACCEPT_EVERYTHING,
     });

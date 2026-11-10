@@ -267,7 +267,7 @@ export function prepareAgyGeminiDir(target, env = process.env) {
 }
 
 const AGY_DECLARATIVE_CONFIGS = ['plugins.json', 'skills.json', 'rules.json', 'agents.json'];
-const AGY_INHERITED_DIR = 'vika-inherited';
+const AGY_INHERITED_DIR = 'superagent-inherited';
 // `.migrated` and `projects` are agy's own bookkeeping for this home; the
 // marker is written fresh above.
 const AGY_MANAGED_CONFIG = new Set([

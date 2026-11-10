@@ -5,10 +5,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-// The vika command speaks Chinese or English, one language for the whole
+// The ov-superagent command speaks Chinese or English, one language for the whole
 // run; `t` picks between the two texts, written side by side where they are
-// used. The language is --lang or VIKA_LANG when given, else the one setup
-// saved in ~/.ovsa/language, else Chinese. A Chinese locale leaves nothing
+// used. The language is --lang or OV_SUPERAGENT_LANG when given, else the one setup
+// saved in ~/.ov-superagent/language, else Chinese. A Chinese locale leaves nothing
 // to ask; any other (servers often say en_US or C whatever their user
 // reads) has setup ask once on a terminal, Chinese first.
 
@@ -47,7 +47,7 @@ export function localeLanguage(env = process.env) {
 }
 
 function preferenceFile(env) {
-  return path.join(env.HOME || os.homedir(), '.ovsa', 'language');
+  return path.join(env.HOME || os.homedir(), '.ov-superagent', 'language');
 }
 
 export function savedLanguage(env = process.env) {
@@ -69,9 +69,9 @@ export function saveLanguage(value, env = process.env) {
 }
 
 // { language, settled, explicit }: settled when there is nothing to ask,
-// explicit when --lang or VIKA_LANG chose it.
+// explicit when --lang or OV_SUPERAGENT_LANG chose it.
 export function languageChoice({ env = process.env, flag = null } = {}) {
-  const explicit = [flag, env.VIKA_LANG].find(isLanguage);
+  const explicit = [flag, env.OV_SUPERAGENT_LANG].find(isLanguage);
   if (explicit) return { language: explicit, settled: true, explicit: true };
   const saved = savedLanguage(env);
   if (saved) return { language: saved, settled: true, explicit: false };

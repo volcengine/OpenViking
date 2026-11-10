@@ -46,7 +46,7 @@ export function assertPrivateDirectory(directory) {
     throw new Error(`Temporary directory must be a directory owned by the daemon user: ${directory}`);
   }
   if ((info.mode & 0o077) !== 0) {
-    throw new Error(`Temporary directory must have mode 0700; use a private VIKA_TEMP_DIR: ${directory}`);
+    throw new Error(`Temporary directory must have mode 0700; use a private OV_SUPERAGENT_TEMP_DIR: ${directory}`);
   }
 }
 

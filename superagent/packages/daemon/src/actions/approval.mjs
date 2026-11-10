@@ -35,7 +35,7 @@ function header(title, template) {
 function button(label, choice, primary = false) {
   return {
     tag: 'button', name: choice, text: text(label), type: primary ? 'primary' : 'default',
-    behaviors: [{ type: 'callback', value: { vika_choice: choice } }],
+    behaviors: [{ type: 'callback', value: { superagent_choice: choice } }],
   };
 }
 

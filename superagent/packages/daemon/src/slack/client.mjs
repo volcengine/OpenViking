@@ -58,7 +58,7 @@ export class SlackClient {
 
   async preflight() {
     this.account = this.state.account();
-    if (!this.account) throw new Error('Slack is not connected; run ovsa login slack <instance> first');
+    if (!this.account) throw new Error('Slack is not connected; run ov-superagent login slack <instance> first');
     this.state.acquire();
     try {
       this.api = new SlackApi(this.account.botToken, { fetchImpl: this.fetchImpl });
@@ -71,7 +71,7 @@ export class SlackClient {
       return { version: SLACK_VERSION, owner: { id: this.account.ownerId, target: { chat_id: this.account.ownerChannel } } };
     } catch (error) {
       this.state.release();
-      if (error instanceof SlackError && error.auth) throw new Error('Slack authorization failed; run ovsa login slack <instance>');
+      if (error instanceof SlackError && error.auth) throw new Error('Slack authorization failed; run ov-superagent login slack <instance>');
       throw error;
     }
   }
@@ -161,7 +161,7 @@ export class SlackClient {
       page = await this.queryApi.call('conversations.members', { channel, limit, cursor }, signal);
     } catch (error) {
       if (error instanceof SlackError && error.code === 'missing_scope') {
-        error.message += '. Add the Bot Token Scope for this conversation type: channels:read (public channels), groups:read (private channels), mpim:read (group DMs), or im:read (DMs), then reinstall the Slack app to the workspace to grant it. If the bot token changes, update it with ovsa login slack <instance>.';
+        error.message += '. Add the Bot Token Scope for this conversation type: channels:read (public channels), groups:read (private channels), mpim:read (group DMs), or im:read (DMs), then reinstall the Slack app to the workspace to grant it. If the bot token changes, update it with ov-superagent login slack <instance>.';
       }
       throw error;
     }

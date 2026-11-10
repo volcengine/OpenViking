@@ -16,7 +16,7 @@ import { chatEvent, mailEvent } from './event-fixture.mjs';
 const logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 
 function configFile(t) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-recall-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-recall-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const file = path.join(directory, 'ov.json');
   fs.writeFileSync(file, JSON.stringify({ url: 'http://ov.test', account: 'team', user: 'owner.asd' }));
@@ -95,7 +95,7 @@ const withAlias = (files) => Object.fromEntries(Object.entries(files).flatMap(([
 const entries = () => [
   { uri: `${ROOT}/preferences/${personDirectory(chatEvent({ senderId: 'ou_zuwei' }))}/称呼.md`, category: 'preferences', text: '叫他祖尉' },
   { uri: `${ROOT}/preferences/owner/信息披露.md`, category: 'preferences', text: '外部群里不透露' },
-  { uri: `${ROOT}/entities/vika.md`, category: 'entities', text: 'Vika 是 OV 的数字员工' },
+  { uri: `${ROOT}/entities/superagent.md`, category: 'entities', text: 'SuperAgent 是 OV 的数字员工' },
   { uri: `${ROOT}/events/2026/11/03/发布.md`, category: 'events', text: '' },
 ];
 
@@ -118,7 +118,7 @@ test('a line from someone else shows the owner\'s standing preferences and the s
     '<memory who="sender" type="preferences">\n## 回复风格\n- 回复先给结论\n\n## 评审格式\n- 评审建议用表格\n</memory>',
     `<memory who="${zuwei}" type="preferences" uri="${entries()[0].uri}">\n叫他祖尉\n</memory>`,
     `<memory who="owner" type="preferences" uri="${entries()[1].uri}">\n外部群里不透露\n</memory>`,
-    `<memory type="entities" uri="${entries()[2].uri}">\nVika 是 OV 的数字员工\n</memory>`,
+    `<memory type="entities" uri="${entries()[2].uri}">\nSuperAgent 是 OV 的数字员工\n</memory>`,
     `<memory type="events" uri="${entries()[3].uri}" />`,
   ].join('\n'));
   assert.equal(ov.calls.some(({ url }) => url.includes('profile.md')), false, 'profile sections are matched by name, so never shown');
@@ -263,12 +263,12 @@ test('the harness recalls only where the agent is likely to answer, and puts the
     roster: { warm: async () => {} },
     recall: { forEvent: async (event, { owner }) => { asked.push([event.messageId, owner]); return `[daemon recall msg=${event.messageId}: …]`; } },
     isOwner: (event) => event.senderId === 'ou_owner',
-    mentionTarget: (event) => (event.content.includes('@Vika') ? 'me' : null),
+    mentionTarget: (event) => (event.content.includes('@SuperAgent') ? 'me' : null),
   });
   t.after(() => { harness.stop(); store.close(); });
   for (const fields of [
     { messageId: 'om-dm', chatType: 'p2p', senderId: 'ou_owner' },
-    { messageId: 'om-mention', chatType: 'group', content: '@Vika 看下' },
+    { messageId: 'om-mention', chatType: 'group', content: '@SuperAgent 看下' },
     { messageId: 'om-chatter', chatType: 'group', content: '午饭吃啥' },
     { messageId: 'om-bot', chatType: 'p2p', senderType: 'bot', senderId: 'cli_bot' },
   ]) harness.handleConnectorEvent(chatEvent(fields).envelope);

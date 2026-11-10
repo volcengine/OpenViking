@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-// The look of the vika command: colour, gradients, display widths, spinners
+// The look of the ov-superagent command: colour, gradients, display widths, spinners
 // and boxes. Fancy only on an interactive terminal; piped output stays plain
 // text, so scripts and logs read the same words without escape codes.
 

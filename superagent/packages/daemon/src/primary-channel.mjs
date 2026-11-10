@@ -44,7 +44,7 @@ export function executePrimaryCommand(command, { event, config, connectors }) {
   updateManifest(config.manifestPath, (value, deployment) => {
     const instance = deployment.agents.find((agent) => agent.id === config.instanceId);
     if (!instance || instance.dataDir !== config.dataDir || !instance.connectors.includes(target)) {
-      throw new Error('实例配置已变更，主 IM 未切换；请检查 ovsa setup 中的接入配置并重启实例。');
+      throw new Error('实例配置已变更，主 IM 未切换；请检查 ov-superagent setup 中的接入配置并重启实例。');
     }
     if (instance.channel !== previous && instance.channel !== target) {
       throw new Error('配置中的主 IM 已被其他操作修改，未覆盖该设置；请重启实例同步配置。');

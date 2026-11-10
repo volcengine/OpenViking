@@ -11,14 +11,14 @@ import { readManifest, writeManifest } from '../src/manifest.mjs';
 import { removeInstance } from '../src/remove-instance.mjs';
 
 function fixture(t, ids = ['alpha', 'beta']) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-remove-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-remove-'));
   t.after(() => fs.rmSync(home, { force: true, recursive: true }));
   const env = { HOME: home, PATH: '' };
-  const configPath = path.join(home, '.ovsa', 'config.json');
+  const configPath = path.join(home, '.ov-superagent', 'config.json');
   const agents = ids.map((id, index) => ({
     id, displayName: id.toUpperCase(), channel: 'weixin', connectors: ['weixin'], model: 'codex:', port: 3738 + index,
-    dataDir: path.join(home, '.ovsa', 'data', id), workspace: path.join(home, 'workspace', id),
-    ovConfig: path.join(home, '.ovsa', 'ov', `${id}.json`),
+    dataDir: path.join(home, '.ov-superagent', 'data', id), workspace: path.join(home, 'workspace', id),
+    ovConfig: path.join(home, '.ov-superagent', 'ov', `${id}.json`),
   }));
   const manifest = { version: 1, defaultInstance: ids[0], env: { CODEX_BIN: '/opt/codex' }, agents };
   writeManifest(configPath, manifest);
@@ -41,7 +41,7 @@ function fixture(t, ids = ['alpha', 'beta']) {
       restart: async (target) => { calls.push(['restart', target]); },
     },
   };
-  return { home, options, calls, output, keptFiles, lock: path.join(home, '.ovsa', 'deploy.lock') };
+  return { home, options, calls, output, keptFiles, lock: path.join(home, '.ov-superagent', 'deploy.lock') };
 }
 
 test('removing the default selects a remaining instance and preserves all files and shared env', async (t) => {
@@ -111,15 +111,15 @@ test('process/save failures retain the manifest for retry; Web failure reports r
 
 function managedFixture(t) {
   const f = fixture(t, ['alpha']);
-  const releaseLink = path.join(f.home, '.ovsa', 'current');
-  const release = path.join(f.home, '.ovsa', 'releases', 'older');
+  const releaseLink = path.join(f.home, '.ov-superagent', 'current');
+  const release = path.join(f.home, '.ov-superagent', 'releases', 'older');
   const processes = ['alpha', 'web', 'updater'].map((id, pm_id) => {
     const component = id === 'alpha' ? 'daemon' : id;
     const script = path.join(release, 'packages', component, 'src', 'main.mjs');
     fs.mkdirSync(path.dirname(script), { recursive: true });
     fs.writeFileSync(script, '');
-    return { name: `vika-${id}`, pm_id, pm2_env: {
-      status: 'stopped', pm_exec_path: script, VIKA_CONFIG: f.options.configPath, VIKA_INSTANCE_ID: id,
+    return { name: `superagent-${id}`, pm_id, pm2_env: {
+      status: 'stopped', pm_exec_path: script, OV_SUPERAGENT_CONFIG: f.options.configPath, OV_SUPERAGENT_INSTANCE_ID: id,
     } };
   });
   const commands = [];
@@ -151,11 +151,11 @@ test('all processes are checked before removal: duplicates, foreign scripts and 
     if (invalid === 'outside') daemon.pm2_env.pm_exec_path = f.options.configPath;
     if (invalid === 'wrong-script') daemon.pm2_env.pm_exec_path = f.processes[1].pm2_env.pm_exec_path;
     if (invalid === 'other-manifest') {
-      daemon.pm2_env.VIKA_CONFIG = `${f.options.configPath}.other`;
-      fs.writeFileSync(daemon.pm2_env.VIKA_CONFIG, '{}');
+      daemon.pm2_env.OV_SUPERAGENT_CONFIG = `${f.options.configPath}.other`;
+      fs.writeFileSync(daemon.pm2_env.OV_SUPERAGENT_CONFIG, '{}');
     }
     if (invalid === 'no-id') delete daemon.pm_id;
-    if (invalid === 'other-instance') daemon.pm2_env.VIKA_INSTANCE_ID = 'beta';
+    if (invalid === 'other-instance') daemon.pm2_env.OV_SUPERAGENT_INSTANCE_ID = 'beta';
     if (invalid === 'symlink') {
       fs.unlinkSync(daemon.pm2_env.pm_exec_path);
       fs.symlinkSync(f.options.configPath, daemon.pm2_env.pm_exec_path);

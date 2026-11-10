@@ -4,28 +4,28 @@
 # OpenViking SuperAgent installer for Windows x64. The steps and the words are scripts/install.sh's:
 # verify, unpack, self-check, install, then say what comes next.
 #
-#   .\install-preview.ps1 -File vika-<version>-win32-x64.zip
-#   .\install-preview.ps1 -File <zip> -Destination D:\vika-test   # isolated copy
+#   .\install-preview.ps1 -File superagent-<version>-win32-x64.zip
+#   .\install-preview.ps1 -File <zip> -Destination D:\superagent-test   # isolated copy
 #
-# The default install uses the POSIX layout under ~\.ovsa: releases\<version>,
-# the `current` link, the `rollback` link, bin\vika.cmd, and ~\.ovsa\bin on the
+# The default install uses the POSIX layout under ~\.ov-superagent: releases\<version>,
+# the `current` link, the `rollback` link, bin\ov-superagent.cmd, and ~\.ov-superagent\bin on the
 # user PATH. -Destination instead installs exactly into that new directory and
 # changes nothing else, which is what side-by-side testing and CI use.
 #
 # With no -File, download from the Windows preview channel (checksum required).
-#   irm https://ovrelease.tos-cn-beijing.volces.com/vika/install.ps1 | iex
+#   irm https://ovrelease.tos-cn-beijing.volces.com/superagent/install.ps1 | iex
 # Options: -File <zip>, -Version <version>, -DownloadBase <url>,
 # -Destination <dir>, -Lang <zh|en>, -NoSetup.
-# VIKA_VERSION and VIKA_DOWNLOAD_BASE also work with irm | iex.
-# OpenViking SuperAgent's home is HOME when it is set, otherwise the profile, as vika itself
-# resolves it; bin\vika.cmd finds its .ovsa directory instead of guessing one.
-# Environment: VIKA_LANG picks the language, NO_COLOR turns the colours off,
-# VIKA_HOME overrides the installer destination for tests only.
+# OV_SUPERAGENT_VERSION and OV_SUPERAGENT_DOWNLOAD_BASE also work with irm | iex.
+# OpenViking SuperAgent's home is HOME when it is set, otherwise the profile, as ov-superagent itself
+# resolves it; bin\ov-superagent.cmd finds its .ov-superagent directory instead of guessing one.
+# Environment: OV_SUPERAGENT_LANG picks the language, NO_COLOR turns the colours off,
+# OV_SUPERAGENT_HOME overrides the installer destination for tests only.
 [CmdletBinding()]
 param(
     [string]$File,
-    [string]$Version = $env:VIKA_VERSION,
-    [string]$DownloadBase = $env:VIKA_DOWNLOAD_BASE,
+    [string]$Version = $env:OV_SUPERAGENT_VERSION,
+    [string]$DownloadBase = $env:OV_SUPERAGENT_DOWNLOAD_BASE,
     [string]$Destination,
     [ValidateSet('', 'zh', 'en')][string]$Lang,
     [switch]$NoSetup
@@ -40,28 +40,25 @@ $Isolated = [bool]$Destination
 # ---- Home, language, colour ------------------------------------------------
 # Match OpenViking SuperAgent's platform homeDir(): HOME first, then USERPROFILE on Windows.
 # Node's os.homedir() itself uses USERPROFILE on Windows, not HOME.
-# VIKA_HOME is an installer fixture override; it is not a runtime home setting.
+# OV_SUPERAGENT_HOME is an installer fixture override; it is not a runtime home setting.
 $HomeBase = if ($env:HOME) { $env:HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { [Environment]::GetFolderPath('UserProfile') }
 $HomeBase = [IO.Path]::GetFullPath($HomeBase)
-$VikaHome = if ($env:VIKA_HOME) { $env:VIKA_HOME } else { Join-Path $HomeBase '.ovsa' }
-$VikaHome = [IO.Path]::GetFullPath($VikaHome)
-if (-not $Isolated -and -not $env:VIKA_HOME -and -not (Test-Path -LiteralPath $VikaHome) -and (Test-Path -LiteralPath (Join-Path $HomeBase '.vika'))) {
-    throw 'Legacy .vika installation found. Stop the old services, move .vika to .ovsa and keep .vika as a compatibility junction, then rerun this installer. See superagent/docs/migration-to-ovsa.md.'
-}
+$SuperAgentHome = if ($env:OV_SUPERAGENT_HOME) { $env:OV_SUPERAGENT_HOME } else { Join-Path $HomeBase '.ov-superagent' }
+$SuperAgentHome = [IO.Path]::GetFullPath($SuperAgentHome)
 
 # A .ps1 run with & shares this process's environment, so the terminal that runs
-# the installer can use vika as soon as it returns. VIKA_HOME keeps the tests off
+# the installer can use ov-superagent as soon as it returns. OV_SUPERAGENT_HOME keeps the tests off
 # the real profile's PATH; the persistent write is Windows-only.
 $SessionPath = -not $Isolated
-$PersistPath = -not $Isolated -and -not $env:VIKA_HOME -and $env:OS -eq 'Windows_NT'
+$PersistPath = -not $Isolated -and -not $env:OV_SUPERAGENT_HOME -and $env:OS -eq 'Windows_NT'
 
-# Chinese or English, as the vika command picks it (packages/cli/src/i18n.mjs):
-# -Lang or VIKA_LANG, else what setup saved, else Chinese.
+# Chinese or English, as the ov-superagent command picks it (packages/cli/src/i18n.mjs):
+# -Lang or OV_SUPERAGENT_LANG, else what setup saved, else Chinese.
 $UI = $Lang
-if (-not $UI) { $UI = $env:VIKA_LANG }
+if (-not $UI) { $UI = $env:OV_SUPERAGENT_LANG }
 if ($UI -notin @('zh', 'en')) { $UI = '' }
 if (-not $UI) {
-    $saved = Join-Path $VikaHome 'language'
+    $saved = Join-Path $SuperAgentHome 'language'
     if (Test-Path -LiteralPath $saved) {
         $text = Get-Content -LiteralPath $saved -Raw -ErrorAction SilentlyContinue
         if ($text) { $text = $text.Trim() }
@@ -82,8 +79,8 @@ $Bang = [char]0x26A0
 $Fancy = 0
 if (-not $env:NO_COLOR -and -not [Console]::IsOutputRedirected -and -not [Console]::IsErrorRedirected) {
     try {
-        if (-not ('VikaConsole.Api' -as [type])) {
-            Add-Type -Namespace VikaConsole -Name Api -MemberDefinition @'
+        if (-not ('SuperAgentConsole.Api' -as [type])) {
+            Add-Type -Namespace SuperAgentConsole -Name Api -MemberDefinition @'
 [DllImport("kernel32.dll", SetLastError = true)]
 public static extern IntPtr GetStdHandle(int handle);
 [DllImport("kernel32.dll", SetLastError = true)]
@@ -92,12 +89,12 @@ public static extern bool GetConsoleMode(IntPtr handle, out uint mode);
 public static extern bool SetConsoleMode(IntPtr handle, uint mode);
 '@
         }
-        $handle = [VikaConsole.Api]::GetStdHandle(-11)
+        $handle = [SuperAgentConsole.Api]::GetStdHandle(-11)
         $mode = [uint32]0
-        if ([VikaConsole.Api]::GetConsoleMode($handle, [ref]$mode)) {
+        if ([SuperAgentConsole.Api]::GetConsoleMode($handle, [ref]$mode)) {
             # ENABLE_VIRTUAL_TERMINAL_PROCESSING: the colours install.sh uses too.
             $virtual = $mode -bor 0x0004
-            if ([VikaConsole.Api]::SetConsoleMode($handle, $virtual)) { $Fancy = 1 }
+            if ([SuperAgentConsole.Api]::SetConsoleMode($handle, $virtual)) { $Fancy = 1 }
         }
     } catch { $Fancy = 0 }
 }
@@ -144,7 +141,7 @@ function Cleanup {
     if ($InstallerState.Lock -and [IO.Directory]::Exists($InstallerState.Lock)) { try { [IO.Directory]::Delete($InstallerState.Lock) } catch { } }
 }
 function Die([string]$message) {
-    $failed = M 'vika 安装失败：' 'vika install failed: '
+    $failed = M 'OpenViking SuperAgent 安装失败：' 'OpenViking SuperAgent install failed: '
     if ($Fancy) { Say "  ${RED}$Cross${RESET} $failed$message" } else { Say "$failed$message" }
     Cleanup
     throw "$failed$message"
@@ -154,6 +151,46 @@ function Die([string]$message) {
 function Short([string]$path) {
     if ($path -and $path.StartsWith($HomeBase, [StringComparison]::OrdinalIgnoreCase)) { return '~' + $path.Substring($HomeBase.Length) }
     return $path
+}
+
+# Safety net for machines that ran a pre-release build (.vika, .ovsa or
+# .superagent under the home). Nothing is migrated and no legacy data is
+# deleted: this only deletes the old pm2 apps and disables the old Startup
+# entry so they do not run next to the new install. Best effort; it never fails
+# the install, and does nothing when no legacy install is found.
+# OV_SUPERAGENT_LEGACY_ROOT points the search at a test fixture.
+function Stop-LegacyInstances([string]$root, [string]$startupDir) {
+    foreach ($legacyName in @('vika', 'ovsa', 'superagent')) {
+        try {
+            $legacyHome = Join-Path $root ".$legacyName"
+            if (-not (Test-Path -LiteralPath $legacyHome -PathType Container)) { continue }
+            Note (M "发现旧版安装 $(Short $legacyHome)：停止它的进程和开机自启（数据保留，不迁移）" "found a legacy install at $(Short $legacyHome): stopping its processes and autostart (its data is kept, not migrated)")
+            if ($startupDir) {
+                $entry = Join-Path $startupDir "$legacyName-autostart.vbs"
+                if ((Test-Path -LiteralPath $entry) -and ($legacyName -ne 'superagent' -or (Get-Content -LiteralPath $entry -Raw) -match '\\\.superagent\\')) {
+                    Move-Item -LiteralPath $entry -Destination "$entry.disabled" -Force -ErrorAction SilentlyContinue
+                }
+            }
+            $pm2Home = Join-Path $legacyHome 'pm2'
+            if (-not (Test-Path -LiteralPath $pm2Home -PathType Container)) { continue }
+            $pm2 = $null
+            $candidates = @(Join-Path (Join-Path $legacyHome 'current') 'bin\pm2.cmd')
+            $releases = Join-Path $legacyHome 'releases'
+            if (Test-Path -LiteralPath $releases) {
+                $candidates += @(Get-ChildItem -LiteralPath $releases -Directory -ErrorAction SilentlyContinue | ForEach-Object { Join-Path $_.FullName 'bin\pm2.cmd' })
+            }
+            foreach ($candidate in $candidates) { if (Test-Path -LiteralPath $candidate -PathType Leaf) { $pm2 = $candidate; break } }
+            if (-not $pm2) { $found = Get-Command pm2 -ErrorAction SilentlyContinue | Select-Object -First 1; if ($found) { $pm2 = $found.Source } }
+            if (-not $pm2) { continue }
+            $savedPm2Home = $env:PM2_HOME
+            $env:PM2_HOME = $pm2Home
+            try {
+                $listed = (& $pm2 jlist 2>$null) -join ''
+                $apps = @([regex]::Matches([string]$listed, '"name":"((?:vika|ovsa|superagent)-[A-Za-z0-9._-]*)"') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+                foreach ($app in $apps) { & $pm2 delete $app 2>$null | Out-Null }
+            } finally { $env:PM2_HOME = $savedPm2Home }
+        } catch { }
+    }
 }
 
 function Header([string]$what) {
@@ -375,7 +412,7 @@ function Expand-Package([string]$archivePath, [string]$stageDir) {
 # The package's own runtime must start before anything points at it: a CPU or
 # system-library mismatch surfaces here and an existing install is untouched.
 function Test-Release([string]$root) {
-    $preview = Join-Path $root 'vika-preview.ps1'
+    $preview = Join-Path $root 'superagent-preview.ps1'
     if (Test-Path -LiteralPath $preview) {
         $global:LASTEXITCODE = 0
         # irm | iex works under the default Windows execution policy too.
@@ -384,7 +421,7 @@ function Test-Release([string]$root) {
         $hostExe = (Get-Process -Id $PID).Path
         & $hostExe -NoProfile -ExecutionPolicy Bypass -File $preview -Action check
         if ($LASTEXITCODE -ne 0) {
-            throw "vika-preview.ps1 -Action check exited $LASTEXITCODE"
+            throw "superagent-preview.ps1 -Action check exited $LASTEXITCODE"
         }
         return
     }
@@ -392,7 +429,7 @@ function Test-Release([string]$root) {
     if (-not $node) { throw (M '安装包里没有自带的 Node' 'the package has no bundled Node') }
     $ran = Invoke-Native $node @('--version')
     if ($ran.Code -ne 0) { throw ([string]::Join(' ', @($ran.Output))) }
-    $ran = Invoke-Native $node @([IO.Path]::Combine($root, 'packages', 'cli', 'bin', 'vika.mjs'), '--version')
+    $ran = Invoke-Native $node @([IO.Path]::Combine($root, 'packages', 'cli', 'bin', 'ov-superagent.mjs'), '--version')
     if ($ran.Code -ne 0) { throw ([string]::Join(' ', @($ran.Output))) }
 }
 
@@ -402,11 +439,11 @@ function Test-OpenViking([string]$root) {
     $node = Get-BundledNode $root
     $script = [IO.Path]::Combine($root, 'packages', 'cli', 'src', 'check-ov.mjs')
     if (-not $node -or -not (Test-Path -LiteralPath $script)) { return }
-    $previousLang = $env:VIKA_LANG
-    $env:VIKA_LANG = $UI
+    $previousLang = $env:OV_SUPERAGENT_LANG
+    $env:OV_SUPERAGENT_LANG = $UI
     try { $result = Invoke-Native $node @($script) }
     finally {
-        if ($previousLang) { $env:VIKA_LANG = $previousLang } else { Remove-Item Env:\VIKA_LANG -ErrorAction SilentlyContinue }
+        if ($previousLang) { $env:OV_SUPERAGENT_LANG = $previousLang } else { Remove-Item Env:\OV_SUPERAGENT_LANG -ErrorAction SilentlyContinue }
     }
     if ($result.Code -eq 0) {
         Ok (M 'OpenViking 已就绪' 'OpenViking is ready')
@@ -450,10 +487,10 @@ function Assert-SameRelease([string]$stageDir, [string]$existing) {
 
 # ---- Install --------------------------------------------------------------
 function Install-Release([string]$stageDir, [string]$version) {
-    $releasesRoot = Join-Path $VikaHome 'releases'
+    $releasesRoot = Join-Path $SuperAgentHome 'releases'
     [void][IO.Directory]::CreateDirectory($releasesRoot)
     $place = Release-Path $releasesRoot $version
-    $current = Join-Path $VikaHome 'current'
+    $current = Join-Path $SuperAgentHome 'current'
     $previous = Get-Link $current
     if (Test-Path -LiteralPath $place) {
         # Compare complete file contents, not merely an untrusted version string.
@@ -469,33 +506,31 @@ function Install-Release([string]$stageDir, [string]$version) {
         Move-Into $stageDir $place
         $InstallerState.Stage = ''
     }
-    Switch-ReleaseLinks $current (Join-Path $VikaHome 'rollback') $place $previous
+    Switch-ReleaseLinks $current (Join-Path $SuperAgentHome 'rollback') $place $previous
     Ok ("$(M '安装' 'Install ')  ${GRAY}OpenViking SuperAgent $version → $(Short $place)${RESET}")
     return [pscustomobject]@{ Changed = $true; Previous = $previous }
 }
 
-# `current` moves on upgrade; bin\vika.cmd does not. The batch file finds the
-# .ovsa directory from its own location, so no HOME or USERPROFILE is guessed
+# `current` moves on upgrade; bin\ov-superagent.cmd does not. The batch file finds the
+# .ov-superagent directory from its own location, so no HOME or USERPROFILE is guessed
 # (a machine may have HOME pointing somewhere else) and the file stays ASCII
 # whatever the account is called.
 function Write-Launcher([string]$nodeRelative, [string]$mjsRelative) {
-    $binDir = Join-Path $VikaHome 'bin'
+    $binDir = Join-Path $SuperAgentHome 'bin'
     [void][IO.Directory]::CreateDirectory($binDir)
     $text = @(
         '@echo off',
         'rem Always the installed release: `current` moves on upgrade, this file does not.',
         'setlocal',
         'pushd "%~dp0.." || exit /b 1',
-        'set "VIKA_HOME=%CD%"',
+        'set "OV_SUPERAGENT_HOME=%CD%"',
         'popd',
-        'set "RELEASE=%VIKA_HOME%\current"',
-        'if not exist "%RELEASE%\" if exist "%VIKA_HOME%\current" set /p RELEASE=<"%VIKA_HOME%\current"',
+        'set "RELEASE=%OV_SUPERAGENT_HOME%\current"',
+        'if not exist "%RELEASE%\" if exist "%OV_SUPERAGENT_HOME%\current" set /p RELEASE=<"%OV_SUPERAGENT_HOME%\current"',
         '"%RELEASE%\__NODE__" "%RELEASE%\__MJS__" %*'
     ) -join "`r`n"
     $text = $text.Replace('__NODE__', $nodeRelative).Replace('__MJS__', $mjsRelative)
-    [IO.File]::WriteAllText((Join-Path $binDir 'ovsa.cmd'), $text + "`r`n")
-    # Compatibility for existing scripts and startup entries.
-    [IO.File]::WriteAllText((Join-Path $binDir 'vika.cmd'), $text + "`r`n")
+    [IO.File]::WriteAllText((Join-Path $binDir 'ov-superagent.cmd'), $text + "`r`n")
     return $binDir
 }
 
@@ -511,17 +546,17 @@ function Add-ToPath([string]$binDir) {
     if ($persistent -contains $binDir) { return }
     try {
         [Environment]::SetEnvironmentVariable('Path', (@($binDir) + $persistent) -join $separator, 'User')
-        Ok ("$(M '命令' 'Command ')  ${GRAY}$(M "$(Short $binDir) 已加进 PATH：这个终端和新开的终端都能直接用 ovsa" "$(Short $binDir) is on the PATH: this terminal and new ones know ovsa")${RESET}")
+        Ok ("$(M '命令' 'Command ')  ${GRAY}$(M "$(Short $binDir) 已加进 PATH：这个终端和新开的终端都能直接用 ov-superagent" "$(Short $binDir) is on the PATH: this terminal and new ones know ov-superagent")${RESET}")
     } catch {
-        Warn (M "写不了用户 PATH；OpenViking SuperAgent 已安装完成，这个终端里可以直接用 ovsa。新终端要直接用，请手动加入：$binDir" "Could not write the user PATH; OpenViking SuperAgent is installed and this terminal knows ovsa. For new terminals, add this yourself: $binDir")
+        Warn (M "写不了用户 PATH；OpenViking SuperAgent 已安装完成，这个终端里可以直接用 ov-superagent。新终端要直接用，请手动加入：$binDir" "Could not write the user PATH; OpenViking SuperAgent is installed and this terminal knows ov-superagent. For new terminals, add this yourself: $binDir")
     }
 }
 
 # Resolve a version once, then use its versioned objects, never the mutable ZIP
 # alias. A missing checksum is fatal for downloads, optional only for local files.
 function Download-Package {
-    if (-not $DownloadBase) { $DownloadBase = '__VIKA_DOWNLOAD_BASE__' }
-    if ($DownloadBase.StartsWith('__VIKA_')) { $DownloadBase = 'https://ovrelease.tos-cn-beijing.volces.com/vika' }
+    if (-not $DownloadBase) { $DownloadBase = '__OV_SUPERAGENT_DOWNLOAD_BASE__' }
+    if ($DownloadBase.StartsWith('__OV_SUPERAGENT_')) { $DownloadBase = 'https://ovrelease.tos-cn-beijing.volces.com/superagent' }
     $DownloadBase = $DownloadBase.TrimEnd('/')
     $uri = [uri]$DownloadBase
     if (-not $uri.IsAbsoluteUri -or ($uri.Scheme -ne 'https' -and -not ($uri.Scheme -eq 'http' -and $uri.IsLoopback))) {
@@ -531,9 +566,9 @@ function Download-Package {
     if (-not $Version) { $Version = ([string](Invoke-RestMethod -Uri "$DownloadBase/windows-preview/latest/version")).Trim() }
     Assert-Version $Version
     $InstallerState.RequestedVersion = $Version
-    $name = "vika-$Version-win32-x64.zip"
+    $name = "superagent-$Version-win32-x64.zip"
     $base = "$DownloadBase/windows-preview/$Version"
-    $InstallerState.DownloadDir = Join-Path ([IO.Path]::GetTempPath()) ('vika-download-' + [guid]::NewGuid().ToString('N'))
+    $InstallerState.DownloadDir = Join-Path ([IO.Path]::GetTempPath()) ('superagent-download-' + [guid]::NewGuid().ToString('N'))
     [void][IO.Directory]::CreateDirectory($InstallerState.DownloadDir)
     $target = Join-Path $InstallerState.DownloadDir $name
     Note (M "下载 OpenViking SuperAgent $Version" "Downloading OpenViking SuperAgent $Version")
@@ -589,25 +624,33 @@ if (Test-Path -LiteralPath $checksumFile) {
     Note (M "注意：$archiveName 旁边没有 .sha256，跳过校验" "note: there is no .sha256 next to $archiveName, so it is not verified")
 }
 
+# Legacy pre-release installs are stopped, never migrated (see Stop-LegacyInstances).
+# A test home (OV_SUPERAGENT_HOME) never reaches the real profile's processes.
+$legacyRoot = if ($env:OV_SUPERAGENT_LEGACY_ROOT) { $env:OV_SUPERAGENT_LEGACY_ROOT } elseif (-not $env:OV_SUPERAGENT_HOME) { $HomeBase } else { $null }
+if (-not $Isolated -and $legacyRoot) {
+    $startupDir = if ($env:APPDATA) { [IO.Path]::Combine($env:APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup') } else { $null }
+    Stop-LegacyInstances $legacyRoot $startupDir
+}
+
 if ($Isolated) {
     try {
         [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Place))
-        $InstallerState.Stage = Join-Path ([IO.Path]::GetDirectoryName($Place)) ('.ovsa-pending-' + [guid]::NewGuid().ToString('N'))
+        $InstallerState.Stage = Join-Path ([IO.Path]::GetDirectoryName($Place)) ('.ov-superagent-pending-' + [guid]::NewGuid().ToString('N'))
         [void][IO.Directory]::CreateDirectory($InstallerState.Stage)
     } catch { Die (M "写不了 $Place：$($_.Exception.Message)" "cannot write $Place`: $($_.Exception.Message)") }
 } else {
     # The updater takes the same lock while it upgrades.
-    $deadlock = Join-Path $VikaHome 'deploy.lock'
+    $deadlock = Join-Path $SuperAgentHome 'deploy.lock'
     try {
-        [void][IO.Directory]::CreateDirectory($VikaHome)
-        [void][IO.Directory]::CreateDirectory((Join-Path $VikaHome 'releases'))
+        [void][IO.Directory]::CreateDirectory($SuperAgentHome)
+        [void][IO.Directory]::CreateDirectory((Join-Path $SuperAgentHome 'releases'))
         New-Item -ItemType Directory -Path $deadlock -ErrorAction Stop | Out-Null
         $InstallerState.Lock = $deadlock
     } catch { Die (M "另一个安装或升级正在进行（$(Short $deadlock)）" "another install or upgrade is running ($(Short $deadlock))") }
     try {
-        $InstallerState.Stage = Join-Path (Join-Path $VikaHome 'releases') ".pending-$PID"
+        $InstallerState.Stage = Join-Path (Join-Path $SuperAgentHome 'releases') ".pending-$PID"
         [void][IO.Directory]::CreateDirectory($InstallerState.Stage)
-    } catch { Die (M "写不了 $(Short $VikaHome)：$($_.Exception.Message)" "cannot write $(Short $VikaHome)`: $($_.Exception.Message)") }
+    } catch { Die (M "写不了 $(Short $SuperAgentHome)：$($_.Exception.Message)" "cannot write $(Short $SuperAgentHome)`: $($_.Exception.Message)") }
 }
 
 try { Expand-Package $archive $InstallerState.Stage }
@@ -627,7 +670,7 @@ if ($metadata) {
     }
     $version = $metadata.version
 }
-if (-not $version -and ($archiveName -match '^vika-(.+)-win32-x64\.zip$')) { $version = $Matches[1] }
+if (-not $version -and ($archiveName -match '^superagent-(.+)-win32-x64\.zip$')) { $version = $Matches[1] }
 if (-not $version) { Die (M "认不出这个包的版本：$archiveName" "cannot tell which version this package is: $archiveName") }
 try { Assert-Version $version } catch { Die $_.Exception.Message }
 if ($InstallerState.RequestedVersion -and $version -cne $InstallerState.RequestedVersion) { Die "Package version $version does not match requested version $($InstallerState.RequestedVersion)" }
@@ -645,7 +688,7 @@ Ok ("$(M '自检' 'Check   ')  ${GRAY}$(M '自带的 Node 能在这台机器上�
 # it, and it asks for the OpenViking connection itself; otherwise nobody asks, so
 # the check runs here (a failure is reported, not fatal: this package ships no
 # OpenViking and the manifest is written afterwards).
-$configFile = if ($env:VIKA_CONFIG) { $env:VIKA_CONFIG } else { Join-Path $VikaHome 'config.json' }
+$configFile = if ($env:OV_SUPERAGENT_CONFIG) { $env:OV_SUPERAGENT_CONFIG } else { Join-Path $SuperAgentHome 'config.json' }
 $interactive = -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
 $setupNext = -not $Isolated -and -not $NoSetup -and $interactive -and -not (Test-Path -LiteralPath $configFile)
 if (-not $Isolated -and -not $setupNext) { Test-OpenViking $InstallerState.Stage }
@@ -663,35 +706,35 @@ if ($Isolated) {
     $previous = $null
 } else {
     try { $result = Install-Release $InstallerState.Stage $version }
-    catch { $detail = $_.Exception.Message; Die (M "装不到 $(Short $VikaHome)：$detail" "cannot install to $(Short $VikaHome)`: $detail") }
+    catch { $detail = $_.Exception.Message; Die (M "装不到 $(Short $SuperAgentHome)：$detail" "cannot install to $(Short $SuperAgentHome)`: $detail") }
     $changed = $result.Changed
     $previous = $result.Previous
-    # -Lang is kept, as `ovsa --lang` keeps it.
-    if ($Lang) { Set-Content -LiteralPath (Join-Path $VikaHome 'language') -Value $Lang -Encoding ascii }
+    # -Lang is kept, as `ov-superagent --lang` keeps it.
+    if ($Lang) { Set-Content -LiteralPath (Join-Path $SuperAgentHome 'language') -Value $Lang -Encoding ascii }
     if ($nodeRelative) {
-        $binDir = Write-Launcher $nodeRelative ([IO.Path]::Combine('packages', 'cli', 'bin', 'vika.mjs'))
+        $binDir = Write-Launcher $nodeRelative ([IO.Path]::Combine('packages', 'cli', 'bin', 'ov-superagent.mjs'))
         if ($SessionPath) { Add-ToPath $binDir }
     }
 }
 
 Cleanup
 
-$configFile = if ($env:VIKA_CONFIG) { $env:VIKA_CONFIG } else { Join-Path $VikaHome 'config.json' }
+$configFile = if ($env:OV_SUPERAGENT_CONFIG) { $env:OV_SUPERAGENT_CONFIG } else { Join-Path $SuperAgentHome 'config.json' }
 # Only the next step differs from install.sh: this preview has no updater, and an
-# isolated copy is not reachable by `vika`, so it names its own start command.
+# isolated copy is not reachable by `ov-superagent`, so it names its own start command.
 if ($Isolated) {
-    $isolatedStart = Short (Join-Path $Place 'vika-preview.ps1')
+    $isolatedStart = Short (Join-Path $Place 'superagent-preview.ps1')
     Note (M "下一步：按 docs\windows-preview.md 写好 manifest，然后运行 $isolatedStart -Action start" "next: write the manifest as docs\windows-preview.md describes, then run $isolatedStart -Action start")
 } elseif (Test-Path -LiteralPath $configFile) {
     if ($changed -and $previous) {
-        Note (M "运行中的实例还在旧版本上：执行 ovsa restart 换到 $version" "running instances are on the old release: ovsa restart moves them to $version")
+        Note (M "运行中的实例还在旧版本上：执行 ov-superagent restart 换到 $version" "running instances are on the old release: ov-superagent restart moves them to $version")
     }
 } elseif ($setupNext) {
     # As install.sh does: the first install goes straight into setup, in the
-    # terminal that ran the installer, which now knows ovsa.
-    & (Join-Path (Join-Path $VikaHome 'bin') 'ovsa.cmd') setup
-    if ($LASTEXITCODE) { throw "ovsa setup exited $LASTEXITCODE" }
+    # terminal that ran the installer, which now knows ov-superagent.
+    & (Join-Path (Join-Path $SuperAgentHome 'bin') 'ov-superagent.cmd') setup
+    if ($LASTEXITCODE) { throw "ov-superagent setup exited $LASTEXITCODE" }
 } else {
-    Note (M '下一步：运行 ovsa setup' 'next: run ovsa setup')
+    Note (M '下一步：运行 ov-superagent setup' 'next: run ov-superagent setup')
 }
 } finally { Cleanup }

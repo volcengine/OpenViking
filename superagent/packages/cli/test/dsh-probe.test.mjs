@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
-// The DSH side of the keyless runtime probe: initialize, the `vika/hello`
-// bridge handshake, `vika/llm/models`, and `shutdown` -- no session, no turn.
+// The DSH side of the keyless runtime probe: initialize, the `superagent/hello`
+// bridge handshake, `superagent/llm/models`, and `shutdown` -- no session, no turn.
 // The ACP/app-server probes live in runtime-probe.test.mjs; this file only
 // carries the DSH cases so it cannot collide with that upstream file.
 
@@ -15,7 +15,7 @@ import { test } from '../../daemon/test/dsh-node-gate.mjs';
 import { dshCatalogueRoute, probeDsh } from '../src/runtime-probe.mjs';
 
 function fixture(t, script) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-app-server-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-app-server-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const bin = path.join(dir, 'fake-cli');
   fs.writeFileSync(bin, `#!${process.execPath}\n${script}`, { mode: 0o755 });
@@ -40,7 +40,7 @@ test('DSH probe completes initialize, hello and shutdown without a model turn', 
     readline.createInterface({ input: process.stdin }).on('line', line => {
       const request = JSON.parse(line);
       fs.appendFileSync(process.env.HOME + '/requests', request.method + '\\n');
-      if (request.method === 'vika/hello') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { bridge: 'vika-dsh-bridge', version: 2, methods: ['session/steer', 'session/cancel', 'vika/llm/models', 'vika/llm/model/info', 'vika/session/model/select', 'vika/settings/describe', 'vika/settings/mutate', 'vika/credentials/set', 'vika/credentials/unset'] } }) + '\\n');
+      if (request.method === 'superagent/hello') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { bridge: 'superagent-dsh-bridge', version: 2, methods: ['session/steer', 'session/cancel', 'superagent/llm/models', 'superagent/llm/model/info', 'superagent/session/model/select', 'superagent/settings/describe', 'superagent/settings/mutate', 'superagent/credentials/set', 'superagent/credentials/unset'] } }) + '\\n');
       else process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {} }) + '\\n');
     });
   `);
@@ -50,9 +50,9 @@ test('DSH probe completes initialize, hello and shutdown without a model turn', 
   // The catalogue is asked before shutdown: it is what decides the route a
   // probe reports, and it must not need a second DSH process.
   assert.deepEqual(fs.readFileSync(path.join(f.dir, 'requests'), 'utf8').trim().split('\n'),
-    ['initialize', 'vika/hello', 'vika/llm/models', 'shutdown']);
+    ['initialize', 'superagent/hello', 'superagent/llm/models', 'shutdown']);
   const patch = JSON.parse(fs.readFileSync(path.join(f.dir, 'patch.json'), 'utf8'));
-  assert.equal(patch.some(row => row.id === 'vika-personal-agent'), false);
+  assert.equal(patch.some(row => row.id === 'superagent-personal-agent'), false);
   assert.equal(patch.some(row => row.insert?.[0]?.config?.args?.includes('--authority')), false);
   // Routes belong to DSH's settings document; the probe's patch must not
   // override it with a provider section.
@@ -63,7 +63,7 @@ test('DSH probe rejects a missing or incorrect bridge', async t => {
   const f = fixture(t, `
     require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
       const request = JSON.parse(line);
-      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, ...(request.method === 'vika/hello' ? { error: { code: -32601, message: 'method not found' } } : { result: {} }) }) + '\\n');
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, ...(request.method === 'superagent/hello' ? { error: { code: -32601, message: 'method not found' } } : { result: {} }) }) + '\\n');
     });
   `);
   const result = await probeDsh(f.bin, f.options);
@@ -86,12 +86,12 @@ function dshCatalogueFixture(t, { catalogue, hello = true }) {
         DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY || null,
         PI_KEYS: Object.keys(process.env).filter(key => key.startsWith('PI_KEY_')),
       }) + '\\n');
-      if (request.method === 'vika/hello') {
-        const result = ${hello ? "{ bridge: 'vika-dsh-bridge', version: 2, methods: ['session/steer', 'session/cancel', 'vika/llm/models', 'vika/llm/model/info', 'vika/session/model/select', 'vika/settings/describe', 'vika/settings/mutate', 'vika/credentials/set', 'vika/credentials/unset'] }" : '{ error: { code: -32601, message: "method not found" } }'};
+      if (request.method === 'superagent/hello') {
+        const result = ${hello ? "{ bridge: 'superagent-dsh-bridge', version: 2, methods: ['session/steer', 'session/cancel', 'superagent/llm/models', 'superagent/llm/model/info', 'superagent/session/model/select', 'superagent/settings/describe', 'superagent/settings/mutate', 'superagent/credentials/set', 'superagent/credentials/unset'] }" : '{ error: { code: -32601, message: "method not found" } }'};
         process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, ...(result.error ? { error: result.error } : { result }) }) + '\\n');
         return;
       }
-      const result = request.method === 'vika/llm/models' ? ${JSON.stringify(catalogue)} : {};
+      const result = request.method === 'superagent/llm/models' ? ${JSON.stringify(catalogue)} : {};
       process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n');
     });
   `);
@@ -120,7 +120,7 @@ test('DSH probe reports the route the bridge catalogue names', async t => {
   assert.equal(result.note, '');
   await Promise.all(f.closed);
   const requests = fs.readFileSync(path.join(f.dir, 'requests'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.deepEqual(requests.map(request => request.method), ['initialize', 'vika/hello', 'vika/llm/models', 'shutdown']);
+  assert.deepEqual(requests.map(request => request.method), ['initialize', 'superagent/hello', 'superagent/llm/models', 'shutdown']);
   // The probe is keyless: it initializes the built-in route, and no placeholder
   // key is invented (that would make an unconfigured route look servable).
   assert.equal(requests[0].params.provider, 'deepseek-official');
@@ -201,7 +201,7 @@ test('dshCatalogueRoute picks a route that serves a model and never splits the i
 });
 
 // B9a: a read-only setup probe must not require the credential write methods.
-// A bridge that answers the catalogue but exposes no `vika/credentials/*` is
+// A bridge that answers the catalogue but exposes no `superagent/credentials/*` is
 // still a working install; the probe only has to see what the runtime it drives
 // will call, plus the one settings read the models page starts from.
 test('DSH probe accepts a bridge without the credential write methods', async t => {
@@ -209,11 +209,11 @@ test('DSH probe accepts a bridge without the credential write methods', async t 
     const readline = require('node:readline');
     readline.createInterface({ input: process.stdin }).on('line', line => {
       const request = JSON.parse(line);
-      if (request.method === 'vika/hello') {
+      if (request.method === 'superagent/hello') {
         process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
-          bridge: 'vika-dsh-bridge', version: 2,
-          methods: ['session/steer', 'session/cancel', 'vika/llm/models', 'vika/llm/model/info',
-            'vika/session/model/select', 'vika/settings/describe'],
+          bridge: 'superagent-dsh-bridge', version: 2,
+          methods: ['session/steer', 'session/cancel', 'superagent/llm/models', 'superagent/llm/model/info',
+            'superagent/session/model/select', 'superagent/settings/describe'],
         } }) + '\\n');
         return;
       }
@@ -232,10 +232,10 @@ test('DSH probe rejects a bridge that lacks a method the daemon itself calls', a
     const readline = require('node:readline');
     readline.createInterface({ input: process.stdin }).on('line', line => {
       const request = JSON.parse(line);
-      if (request.method === 'vika/hello') {
+      if (request.method === 'superagent/hello') {
         process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
-          bridge: 'vika-dsh-bridge', version: 2,
-          methods: ['session/steer', 'session/cancel', 'vika/llm/models', 'vika/llm/model/info'],
+          bridge: 'superagent-dsh-bridge', version: 2,
+          methods: ['session/steer', 'session/cancel', 'superagent/llm/models', 'superagent/llm/model/info'],
         } }) + '\\n');
         return;
       }

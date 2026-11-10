@@ -9,11 +9,11 @@ dies mid-turn resumes the run from the last checkpoint when it starts again.
 
 The daemon keeps every guarantee it owns for the other runtimes: the inbound
 ledger, outbox idempotency, decisions and the cognition journal stay in
-`vika.sqlite3`. The durable store only holds the conversation.
+`superagent.sqlite3`. The durable store only holds the conversation.
 
 ## Choosing it
 
-- `ovsa setup` lists **Durable (built in)**; it can be chosen once at least one
+- `ov-superagent setup` lists **Durable (built in)**; it can be chosen once at least one
   model has credentials (see below). It ships with the release like Pi; there is
   no CLI to install or log in to.
 - `/runtime durable` (also `pi-durable`, `pidurable`) switches a running
@@ -32,15 +32,15 @@ offline at startup:
   endpoint), credentials saved by `/login` in `auth.json`, and the default model
   in `settings.json`.
 
-A model that works in `ovsa pi` therefore works in durable without a second
-configuration. Run `ovsa pi` and `/login`, or edit `~/.pi/agent/models.json`, to
+A model that works in `ov-superagent pi` therefore works in durable without a second
+configuration. Run `ov-superagent pi` and `/login`, or edit `~/.pi/agent/models.json`, to
 add one.
 
 Provider keys from the environment reach the host only through the daemon's
 secret fields: `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`,
 `GOOGLE_GENERATIVE_AI_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`,
 `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `XAI_API_KEY` and `ARK_API_KEY`. Set them
-in the operator environment or `~/.ovsa/secrets.env`, never in `config.json`.
+in the operator environment or `~/.ov-superagent/secrets.env`, never in `config.json`.
 `ARK_API_KEY` is kept for the same reason as for Pi: a `models.json` provider may
 name it as `"apiKey": "$ARK_API_KEY"`.
 
@@ -48,13 +48,13 @@ The model of a turn is, first match wins:
 
 1. the model saved by `/model` for this runtime;
 2. the `durable:<provider>/<model>` selector in `config.json`, on a fresh session;
-3. `VIKA_DURABLE_MODEL`;
+3. `OV_SUPERAGENT_DURABLE_MODEL`;
 4. Pi's default model, when it has credentials;
 5. the first available chat model.
 
 `/model` lists the available chat models and `/effort` the levels of the current
 model (`off` … `max` for reasoning models, `off` otherwise; default from
-`VIKA_DURABLE_EFFORT`, else `medium`). Both apply from the next turn.
+`OV_SUPERAGENT_DURABLE_EFFORT`, else `medium`). Both apply from the next turn.
 
 ## Tools
 
@@ -73,7 +73,7 @@ model (`off` … `max` for reasoning models, `off` otherwise; default from
   No Bash installation is needed for Windows Durable. Other runtimes are unchanged.
 
 The child environment is sanitized like the other local runtimes: `LARK_*`,
-`FEISHU_*`, `LARKSUITE_*`, `VIKA_*`, `ARK_*` (except `ARK_API_KEY`) and
+`FEISHU_*`, `LARKSUITE_*`, `OV_SUPERAGENT_*`, `ARK_*` (except `ARK_API_KEY`) and
 `VOLCENGINE_*` are removed, a Feishu instance's `LARKSUITE_CLI_PROFILE` is fixed
 to its profile, and the configured `lark-cli` and Slack CLI directories come first on
 `PATH`.
@@ -141,6 +141,6 @@ as a `fatal` event.
 - `packages/daemon/scripts/check-durable.mjs` (`npm run check:durable`) starts
   the host the way the daemon does, with a fake provider and no network, and
   waits for `ready`. The release build runs it.
-- `VIKA_DURABLE_HOST` points the daemon at another host script, for development.
+- `OV_SUPERAGENT_DURABLE_HOST` points the daemon at another host script, for development.
   `DURABLE_FAUX`, `DURABLE_FAUX_RESPONSES` and `DURABLE_FAUX_DELAY_MS` drive a
   scripted fake model in tests.

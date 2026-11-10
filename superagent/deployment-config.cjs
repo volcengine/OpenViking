@@ -8,7 +8,7 @@ const { homeDir } = require('./packages/daemon/src/platform/index.mjs');
 const path = require('node:path');
 
 const INSTANCE_ID = /^[a-z][a-z0-9-]{0,31}$/;
-// `all` is the upgrade target for every instance; vika-web and vika-updater
+// `all` is the upgrade target for every instance; superagent-web and superagent-updater
 // are the shared control-plane pm2 apps, so these ids cannot name an instance.
 const RESERVED_INSTANCE_IDS = Object.freeze(['all', 'web', 'updater']);
 const CONTROL_ENV_MAX_BYTES = 262_144;
@@ -24,54 +24,54 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'OPENCODE_BIN',
   'AGY_BIN',
   'DSH_BIN',
-  'VIKA_WEIXIN_LONG_POLL_TIMEOUT_MS',
-  'VIKA_LOG_LEVEL',
-  'VIKA_TEMP_DIR',
-  'VIKA_DRY_RUN',
-  'VIKA_IGNORED_SENDER_IDS',
-  'VIKA_SEND_TIMEOUT_MS',
-  'VIKA_OV_TOOL_TIMEOUT_MS',
-  'VIKA_SHUTDOWN_TIMEOUT_MS',
-  'VIKA_MAX_REPLY_CHARS',
-  'VIKA_MAX_EVENT_BYTES',
-  'VIKA_MAX_EVENT_AGE_MS',
-  'VIKA_IDLE_REACTION_AFTER_MS',
-  'VIKA_TIMER_OCCURRENCE_CHECK_DELAY_MS',
-  'VIKA_TIMER_STORAGE',
-  'VIKA_RETENTION_MS',
-  'VIKA_CODEX_EFFORT',
-  'VIKA_TRAEX_EFFORT',
-  'VIKA_CLAUDE_EFFORT',
-  'VIKA_CLAUDE_MODEL',
-  'VIKA_PI_EFFORT',
-  'VIKA_PI_MODEL',
-  'VIKA_DURABLE_EFFORT',
-  'VIKA_DURABLE_MODEL',
-  'VIKA_OPENCODE_MODEL',
-  'VIKA_AGY_MODEL',
-  'VIKA_VOLC_SESSION_ID',
-  'VIKA_VOLC_ENVIRONMENT_ID',
-  'VIKA_VOLC_BASE_URL',
-  'VIKA_VOLC_REQUEST_TIMEOUT_MS',
-  'VIKA_VOLC_STREAM_IDLE_TIMEOUT_MS',
+  'OV_SUPERAGENT_WEIXIN_LONG_POLL_TIMEOUT_MS',
+  'OV_SUPERAGENT_LOG_LEVEL',
+  'OV_SUPERAGENT_TEMP_DIR',
+  'OV_SUPERAGENT_DRY_RUN',
+  'OV_SUPERAGENT_IGNORED_SENDER_IDS',
+  'OV_SUPERAGENT_SEND_TIMEOUT_MS',
+  'OV_SUPERAGENT_OV_TOOL_TIMEOUT_MS',
+  'OV_SUPERAGENT_SHUTDOWN_TIMEOUT_MS',
+  'OV_SUPERAGENT_MAX_REPLY_CHARS',
+  'OV_SUPERAGENT_MAX_EVENT_BYTES',
+  'OV_SUPERAGENT_MAX_EVENT_AGE_MS',
+  'OV_SUPERAGENT_IDLE_REACTION_AFTER_MS',
+  'OV_SUPERAGENT_TIMER_OCCURRENCE_CHECK_DELAY_MS',
+  'OV_SUPERAGENT_TIMER_STORAGE',
+  'OV_SUPERAGENT_RETENTION_MS',
+  'OV_SUPERAGENT_CODEX_EFFORT',
+  'OV_SUPERAGENT_TRAEX_EFFORT',
+  'OV_SUPERAGENT_CLAUDE_EFFORT',
+  'OV_SUPERAGENT_CLAUDE_MODEL',
+  'OV_SUPERAGENT_PI_EFFORT',
+  'OV_SUPERAGENT_PI_MODEL',
+  'OV_SUPERAGENT_DURABLE_EFFORT',
+  'OV_SUPERAGENT_DURABLE_MODEL',
+  'OV_SUPERAGENT_OPENCODE_MODEL',
+  'OV_SUPERAGENT_AGY_MODEL',
+  'OV_SUPERAGENT_VOLC_SESSION_ID',
+  'OV_SUPERAGENT_VOLC_ENVIRONMENT_ID',
+  'OV_SUPERAGENT_VOLC_BASE_URL',
+  'OV_SUPERAGENT_VOLC_REQUEST_TIMEOUT_MS',
+  'OV_SUPERAGENT_VOLC_STREAM_IDLE_TIMEOUT_MS',
   'FALLBACK_MODEL',
-  'VIKA_HISTORY_LIMIT',
+  'OV_SUPERAGENT_HISTORY_LIMIT',
 ]);
 // Read from the operator environment only: forwarded to the daemon and updater
 // processes, but never accepted from the deployment manifest. DSH owns its model
-// configuration (`ovsa dsh model`, the instance's DSH settings document), so a
+// configuration (`ov-superagent dsh model`, the instance's DSH settings document), so a
 // manifest copy would be a second source that only some callers ever read.
 // The binary path is *not* here: `DSH_BIN` is a deployment fact like every other
 // runtime's `*_BIN`, so it stays in DAEMON_ENV_FIELDS.
 const DAEMON_SHELL_ENV_FIELDS = Object.freeze([
-  'VIKA_DSH_EFFORT',
+  'OV_SUPERAGENT_DSH_EFFORT',
 ]);
 // Secrets may flow from the operator environment into daemon/updater PM2
 // processes, but are deliberately excluded from the deployment manifest.
 const DAEMON_SECRET_ENV_FIELDS = Object.freeze([
   'ARK_API_KEY',
   // Providers of the durable runtime (pi-ai) read their key from the child
-  // environment. They may come from the operator environment or ~/.ovsa/secrets
+  // environment. They may come from the operator environment or ~/.ov-superagent/secrets
   // but never from the deployment manifest.
   'ANTHROPIC_API_KEY',
   'DEEPSEEK_API_KEY',
@@ -122,40 +122,39 @@ const LARK_MESSAGE_ACCESS = Object.freeze(['owner', 'bot']);
 const EMAIL_INSTANCE_ID = /^email-[a-z0-9][a-z0-9-]{0,39}$/;
 
 function resolveDeploymentManifestPath(env = process.env) {
-  const override = typeof env.VIKA_CONFIG === 'string'
-    ? env.VIKA_CONFIG.trim()
+  env = env ?? process.env;
+  const override = typeof env.OV_SUPERAGENT_CONFIG === 'string'
+    ? env.OV_SUPERAGENT_CONFIG.trim()
     : '';
   if (override) {
     if (!path.isAbsolute(override)) {
-      throw new Error('VIKA_CONFIG must be an absolute path');
+      throw new Error('OV_SUPERAGENT_CONFIG must be an absolute path');
     }
     return path.normalize(override);
   }
   const home = typeof homeDir(env) === 'string' ? homeDir(env).trim() : '';
   if (!home || !path.isAbsolute(home)) throw new Error('HOME must be an absolute path');
-  if (!fs.existsSync(path.join(home, '.ovsa')) && fs.existsSync(path.join(home, '.vika'))) {
-    throw new Error('Legacy ~/.vika installation found. Migrate it to ~/.ovsa before using ovsa; see docs/migration-to-ovsa.md.');
-  }
-  return path.join(path.normalize(home), '.ovsa', 'config.json');
+  return path.join(path.normalize(home), '.ov-superagent', 'config.json');
 }
 
 // Secrets (DAEMON_SECRET_ENV_FIELDS) are deliberately kept out of config.json
 // so they never land in a file meant to be inspected/versioned. This sibling file
-// is the deterministic fallback: whoever runs `pm2 restart`/`ovsa upgrade`
+// is the deterministic fallback: whoever runs `pm2 restart`/`ov-superagent upgrade`
 // no longer needs the secret exported in their own shell for it to take effect.
 function resolveSecretsFilePath(env = process.env) {
-  const override = typeof env.VIKA_SECRETS_FILE === 'string'
-    ? env.VIKA_SECRETS_FILE.trim()
+  env = env ?? process.env;
+  const override = typeof env.OV_SUPERAGENT_SECRETS_FILE === 'string'
+    ? env.OV_SUPERAGENT_SECRETS_FILE.trim()
     : '';
   if (override) {
     if (!path.isAbsolute(override)) {
-      throw new Error('VIKA_SECRETS_FILE must be an absolute path');
+      throw new Error('OV_SUPERAGENT_SECRETS_FILE must be an absolute path');
     }
     return path.normalize(override);
   }
   const home = typeof homeDir(env) === 'string' ? homeDir(env).trim() : '';
   if (!home || !path.isAbsolute(home)) return null;
-  return path.join(path.normalize(home), '.ovsa', 'secrets.env');
+  return path.join(path.normalize(home), '.ov-superagent', 'secrets.env');
 }
 
 function loadSecretsFile(env = process.env) {
@@ -435,6 +434,7 @@ function assertIsolatedAgentStorage(agents) {
 }
 
 function loadDeploymentManifest(env) {
+  env = env ?? process.env;
   const manifestPath = resolveDeploymentManifestPath(env);
   let raw;
   try {
@@ -471,7 +471,7 @@ function loadDeploymentManifest(env) {
     env: daemonEnv,
     agents: Object.freeze(agents),
     manifestPath,
-    // Paths such as `env.VIKA_OLD_SETTING` or `agents[0].oldField`, for a warning.
+    // Paths such as `env.OV_SUPERAGENT_OLD_SETTING` or `agents[0].oldField`, for a warning.
     ignoredFields: Object.freeze(ignored),
   });
   selectDeploymentAgent(deployment);
@@ -543,48 +543,48 @@ function openVikingAgentEnv(agent) {
 }
 
 function applyDeploymentAgentEnv(env, deployment, requestedId) {
-  const id = requestedId || (typeof env.VIKA_INSTANCE_ID === 'string'
-    ? env.VIKA_INSTANCE_ID.trim()
+  const id = requestedId || (typeof env.OV_SUPERAGENT_INSTANCE_ID === 'string'
+    ? env.OV_SUPERAGENT_INSTANCE_ID.trim()
     : '') || deployment.defaultInstance;
   const agent = selectDeploymentAgent(deployment, id);
   Object.assign(env, {
-    VIKA_INSTANCE_ID: agent.id,
-    VIKA_UPGRADE_TARGET: agent.id,
-    VIKA_AGENT_NAME: agent.displayName,
-    VIKA_PORT: String(agent.port),
-    VIKA_DATA_DIR: agent.dataDir,
-    VIKA_WORKSPACE: agent.workspace,
-    VIKA_MODEL: agent.model,
+    OV_SUPERAGENT_INSTANCE_ID: agent.id,
+    OV_SUPERAGENT_UPGRADE_TARGET: agent.id,
+    OV_SUPERAGENT_AGENT_NAME: agent.displayName,
+    OV_SUPERAGENT_PORT: String(agent.port),
+    OV_SUPERAGENT_DATA_DIR: agent.dataDir,
+    OV_SUPERAGENT_WORKSPACE: agent.workspace,
+    OV_SUPERAGENT_MODEL: agent.model,
   });
-  if (agent.tempDir) env.VIKA_TEMP_DIR = agent.tempDir;
+  if (agent.tempDir) env.OV_SUPERAGENT_TEMP_DIR = agent.tempDir;
   if (agent.profile) {
-    env.VIKA_LARK_PROFILE = agent.profile;
+    env.OV_SUPERAGENT_LARK_PROFILE = agent.profile;
     env.LARKSUITE_CLI_PROFILE = agent.profile;
-    env.VIKA_LARK_MESSAGE_ACCESS = agent.larkMessageAccess;
+    env.OV_SUPERAGENT_LARK_MESSAGE_ACCESS = agent.larkMessageAccess;
   } else {
-    delete env.VIKA_LARK_PROFILE;
+    delete env.OV_SUPERAGENT_LARK_PROFILE;
     delete env.LARKSUITE_CLI_PROFILE;
-    delete env.VIKA_LARK_MESSAGE_ACCESS;
+    delete env.OV_SUPERAGENT_LARK_MESSAGE_ACCESS;
   }
   Object.assign(env, openVikingAgentEnv(agent));
   // Always set, so neither the shell nor another instance's value leaks in.
-  env.VIKA_OV_AUTO_RECALL = agent.ovAutoRecall ? 'true' : 'false';
-  env.VIKA_EXPLICIT_SILENCE = agent.explicitSilence ? 'true' : 'false';
-  env.VIKA_NATURAL_WRITING = agent.naturalWriting ? 'true' : 'false';
-  env.VIKA_STAGED_REPLIES = agent.stagedReplies ? 'true' : 'false';
-  env.VIKA_MEETING_NOTES = agent.meetingNotes ? 'true' : 'false';
-  if (agent.role) env.VIKA_ROLE = agent.role;
-  else delete env.VIKA_ROLE;
-  env.VIKA_CHANNEL = agent.channel;
-  env.VIKA_CONNECTORS_JSON = JSON.stringify(agent.connectors);
-  if (agent.emailAccounts.length > 0) env.VIKA_EMAIL_ACCOUNTS_JSON = JSON.stringify(agent.emailAccounts);
-  else delete env.VIKA_EMAIL_ACCOUNTS_JSON;
+  env.OV_SUPERAGENT_OV_AUTO_RECALL = agent.ovAutoRecall ? 'true' : 'false';
+  env.OV_SUPERAGENT_EXPLICIT_SILENCE = agent.explicitSilence ? 'true' : 'false';
+  env.OV_SUPERAGENT_NATURAL_WRITING = agent.naturalWriting ? 'true' : 'false';
+  env.OV_SUPERAGENT_STAGED_REPLIES = agent.stagedReplies ? 'true' : 'false';
+  env.OV_SUPERAGENT_MEETING_NOTES = agent.meetingNotes ? 'true' : 'false';
+  if (agent.role) env.OV_SUPERAGENT_ROLE = agent.role;
+  else delete env.OV_SUPERAGENT_ROLE;
+  env.OV_SUPERAGENT_CHANNEL = agent.channel;
+  env.OV_SUPERAGENT_CONNECTORS_JSON = JSON.stringify(agent.connectors);
+  if (agent.emailAccounts.length > 0) env.OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON = JSON.stringify(agent.emailAccounts);
+  else delete env.OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON;
   if (agent.volcSessionId) {
-    env.VIKA_VOLC_SESSION_ID = agent.volcSessionId;
-    env.VIKA_VOLC_ENVIRONMENT_ID = agent.volcEnvironmentId;
+    env.OV_SUPERAGENT_VOLC_SESSION_ID = agent.volcSessionId;
+    env.OV_SUPERAGENT_VOLC_ENVIRONMENT_ID = agent.volcEnvironmentId;
   } else {
-    delete env.VIKA_VOLC_SESSION_ID;
-    delete env.VIKA_VOLC_ENVIRONMENT_ID;
+    delete env.OV_SUPERAGENT_VOLC_SESSION_ID;
+    delete env.OV_SUPERAGENT_VOLC_ENVIRONMENT_ID;
   }
   return agent;
 }
@@ -594,7 +594,7 @@ function updaterTargetsFor(deployment) {
   return Object.fromEntries(deployment.agents.map((agent) => [
     agent.id,
     {
-      app: `vika-${agent.id}`,
+      app: `superagent-${agent.id}`,
       readyUrl: `http://127.0.0.1:${agent.port}/ready`,
       upgradeSharedWeb,
     },

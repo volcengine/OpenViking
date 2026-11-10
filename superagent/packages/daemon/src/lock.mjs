@@ -47,7 +47,7 @@ export class InstanceLock {
         let owner = null;
         try { owner = JSON.parse(fs.readFileSync(this.lockPath, 'utf8')); } catch {}
         if (owner?.hostname === os.hostname() && pidIsAlive(Number(owner.pid))) {
-          throw new Error(`another vika instance is running (pid ${owner.pid})`);
+          throw new Error(`another ov-superagent instance is running (pid ${owner.pid})`);
         }
         let after;
         try { after = fs.lstatSync(this.lockPath); } catch (statError) {

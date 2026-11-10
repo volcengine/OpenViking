@@ -227,7 +227,7 @@ export default {
     // A route with no models (an account that is not logged in, a route without
     // a credential) is omitted: /model lists what can actually run.
     if (!this.connected) return this.modelCatalog;
-    // A document edited outside this process -- `ovsa dsh model add` writes it
+    // A document edited outside this process -- `ov-superagent dsh model add` writes it
     // from another one -- is only read at start-up. Refresh the process before
     // answering the menu, so a route added a minute ago is not missing from it.
     // Mid-turn the restart is refused and the menu simply shows what is running.
@@ -235,7 +235,7 @@ export default {
     let reply;
     try {
       reply = await retryDshNotReady(() => this._request(
-        'vika/llm/models', {}, MODEL_CATALOG_TIMEOUT_MS,
+        'superagent/llm/models', {}, MODEL_CATALOG_TIMEOUT_MS,
       ));
     } catch (error) {
       this.logger.warn('dsh_model_catalog_failed', { error: safe(error) });
@@ -269,7 +269,7 @@ export default {
   async _describeModel(entry) {
     const { provider, model } = splitModelId(entry.id);
     try {
-      const info = await retryDshNotReady(() => this._request('vika/llm/model/info', {
+      const info = await retryDshNotReady(() => this._request('superagent/llm/model/info', {
         provider, model,
       }, MODEL_INFO_TIMEOUT_MS));
       const efforts = (info?.reasoning?.efforts ?? [])
@@ -308,7 +308,7 @@ export default {
     const sessionId = this.sessionId;
     this.settingsUpdate = (async () => {
       try {
-        const result = await retryDshNotReady(() => this._request('vika/session/model/select', {
+        const result = await retryDshNotReady(() => this._request('superagent/session/model/select', {
           sessionId,
           ...modelSelection(attempted.model, attempted.effort),
         }, this.controlTimeoutMs));

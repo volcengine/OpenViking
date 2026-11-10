@@ -681,7 +681,7 @@ describe('mail in OpenViking', () => {
     return { ov, ...(await setup(t, { archive, attachmentWaitMs })) };
   };
   const reader = (t, { ov, config, event }) => {
-    const store = new Store(path.join(config.dataDir, 'vika.sqlite3'), quiet);
+    const store = new Store(path.join(config.dataDir, 'superagent.sqlite3'), quiet);
     t.after(() => store.close());
     store.initializeCognition('codex', 'token');
     store.ingest(event);

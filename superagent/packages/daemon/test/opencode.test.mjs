@@ -15,15 +15,15 @@ const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { re
 const baseConfig = {
   opencodeBin: 'opencode',
   opencodeModel: 'anthropic/claude-sonnet-5',
-  workspace: '/tmp/vika-workspace',
+  workspace: '/tmp/superagent-workspace',
   projectDir: '/release',
-  dataDir: '/tmp/vika-opencode-data',
-  databasePath: '/tmp/vika-test.sqlite3',
+  dataDir: '/tmp/superagent-opencode-data',
+  databasePath: '/tmp/superagent-test.sqlite3',
   profile: 'test-profile',
   connectors: ['lark'],
   larkCliBin: '/fake/lark-cli',
   slackCliBin: '/fake-slack/slack',
-  actionSocketPath: '/tmp/vika-opencode-data/actions.sock',
+  actionSocketPath: '/tmp/superagent-opencode-data/actions.sock',
   actionMcpPath: '/release/packages/daemon/src/actions/mcp.mjs',
   sendTimeoutMs: 5_000,
   maxReplyChars: 1_000,
@@ -247,14 +247,14 @@ describe('OpencodeAgent ACP backend', () => {
     await startSession(agent, children);
     const call = spawnCalls[0];
     assert.equal(call.bin, 'opencode');
-    assert.deepEqual(call.args, ['acp', '--cwd', '/tmp/vika-workspace']);
+    assert.deepEqual(call.args, ['acp', '--cwd', '/tmp/superagent-workspace']);
     const env = call.options.env;
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'test-profile');
     assert.deepEqual(env.PATH.split(path.delimiter).slice(0, 2), ['/fake', '/fake-slack']);
-    assert.equal(env.PERSONAL_AGENT_SOCKET, '/tmp/vika-opencode-data/actions.sock');
+    assert.equal(env.PERSONAL_AGENT_SOCKET, '/tmp/superagent-opencode-data/actions.sock');
     assert.equal(env.PERSONAL_AGENT_AUTHORITY, 'oc-token');
     const configPath = env.OPENCODE_CONFIG;
-    assert.ok(configPath.startsWith(path.join(os.tmpdir(), 'vika-opencode-')));
+    assert.ok(configPath.startsWith(path.join(os.tmpdir(), 'superagent-opencode-')));
     // The global config folder is an OpenViking SuperAgent-owned copy without OpenViking.
     assert.equal(env.XDG_CONFIG_HOME, path.join(path.dirname(configPath), 'config-home'));
     assert.ok(fs.existsSync(path.join(env.XDG_CONFIG_HOME, 'opencode', 'opencode.json')));
@@ -263,7 +263,7 @@ describe('OpencodeAgent ACP backend', () => {
     assert.deepEqual(config.mcp.personal_agent.command, [
       process.execPath,
       '/release/packages/daemon/src/actions/mcp.mjs',
-      '--socket', '/tmp/vika-opencode-data/actions.sock',
+      '--socket', '/tmp/superagent-opencode-data/actions.sock',
       '--authority', 'oc-token',
     ]);
     assert.equal(config.mcp.personal_agent.args, undefined);

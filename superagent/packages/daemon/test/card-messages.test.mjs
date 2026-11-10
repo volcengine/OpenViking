@@ -60,7 +60,7 @@ function callback(overrides = {}) {
   return { type: 'card.action.trigger', event_id: 'evt-click-1', message_id: remoteId,
     chat_id: chatId, operator_id: userId, timestamp: String(Date.now()),
     token: 'must-never-enter-model-or-db', action_tag: 'button',
-    action_value: JSON.stringify({ vika_choice: 'full' }), ...overrides };
+    action_value: JSON.stringify({ superagent_choice: 'full' }), ...overrides };
 }
 
 it('delivers received cards even when Lark omits or blanks their content', () => {
@@ -135,7 +135,7 @@ it('sends a choice card and feeds a click to the agent with durable routing and 
   const sent = f.calls[0].args;
   assert.equal(sent[sent.indexOf('--msg-type') + 1], 'interactive');
   const card = JSON.parse(sent[sent.indexOf('--content') + 1]);
-  assert.equal(card.elements[1].actions[1].value.vika_choice, 'full');
+  assert.equal(card.elements[1].actions[1].value.superagent_choice, 'full');
   // Reopen the database to prove this is not a process-local callback map.
   const reopened = new Store(f.databasePath, logger);
   t.after(() => reopened.close());
@@ -188,7 +188,7 @@ it('rejects unknown cards, wrong app/chat/user, invalid options, expired questio
   await f.call('send_message', { chat_id: chatId, decision_id: decisionEvent, choices: question });
   for (const changes of [
     { message_id: 'om_unknown123456' }, { chat_id: 'oc_otherchat1234' }, { operator_id: 'ou_otheruser1234' },
-    { action_value: '{"vika_choice":"forged"}' },
+    { action_value: '{"superagent_choice":"forged"}' },
   ]) assert.throws(() => normalizeCardAction(f.store.db, callback(changes), profile));
   assert.throws(() => normalizeCardAction(f.store.db, callback(), 'other-profile'));
   const event = normalizeCardAction(f.store.db, callback(), profile);

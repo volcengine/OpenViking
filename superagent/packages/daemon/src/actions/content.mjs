@@ -72,7 +72,7 @@ export function choiceCard(question, answer = null) {
     for (let index = 0; index < question.options.length; index += 4) {
       elements.push({ tag: 'action', actions: question.options.slice(index, index + 4).map((option) => ({
         tag: 'button', text: { tag: 'plain_text', content: option.label }, type: 'default',
-        value: { vika_choice: option.key },
+        value: { superagent_choice: option.key },
       })) });
     }
   }

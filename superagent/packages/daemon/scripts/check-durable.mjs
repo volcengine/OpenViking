@@ -11,7 +11,7 @@ import { DURABLE_HOST, DURABLE_VERSION } from '../src/durable-runtime.mjs';
 // Start the durable host the way the daemon does, without a model provider:
 // the fake provider path only exercises module loading, the Harness, SQLite
 // storage, and the protocol handshake this release ships.
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-durable-check-'));
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-durable-check-'));
 const workspace = path.join(dataDir, 'workspace');
 fs.mkdirSync(workspace);
 const child = spawn(process.execPath, [DURABLE_HOST], {

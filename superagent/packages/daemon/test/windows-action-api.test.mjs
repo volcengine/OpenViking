@@ -8,7 +8,7 @@ import { startActionApi, stopActionApi } from '../src/actions/api.mjs';
 import { requestAction } from '../src/actions/client.mjs';
 
 test('action API uses native local transport and passes runtime authority', async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-actions-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-actions-'));
   const socketPath = localSocketPath(directory);
   const service = {
     tools: () => [{ name: 'test' }],
@@ -32,7 +32,7 @@ test('action API uses native local transport and passes runtime authority', asyn
 
 test('a pre-bound Windows pipe is refused rather than reusing an unverified server', { skip: process.platform !== 'win32' }, async () => {
   const { createServer } = await import('node:net');
-  const socketPath = localSocketPath(path.join(os.tmpdir(), 'vika-squatting-test'), 'occupied');
+  const socketPath = localSocketPath(path.join(os.tmpdir(), 'superagent-squatting-test'), 'occupied');
   const occupied = createServer();
   await new Promise((resolve, reject) => occupied.once('error', reject).listen(socketPath, resolve));
   try {

@@ -11,8 +11,8 @@ const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { re
 const baseConfig = {
   traexBin: 'traecli',
   traexEffort: 'medium',
-  workspace: '/tmp/vika-workspace',
-  databasePath: '/tmp/vika-test.sqlite3',
+  workspace: '/tmp/superagent-workspace',
+  databasePath: '/tmp/superagent-test.sqlite3',
   profile: 'test-profile',
   historyLimit: 30,
 };

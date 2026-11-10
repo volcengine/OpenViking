@@ -27,7 +27,7 @@ const read = (name) => fs.readFileSync(path.join(DEFAULT_PROMPT_DIR, name), 'utf
 const role = (name) => resolveRolePromptPath(name);
 
 function withRoleFile(body, callback) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-role-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-role-'));
   const filePath = path.join(directory, 'role.md');
   fs.writeFileSync(filePath, body);
   try {
@@ -84,7 +84,7 @@ describe('conversation policy assemble', () => {
   it('fills in the instance name and upgrade target', () => {
     const text = assembleConversationPolicy({ connectors: ['lark'], agentName: '贝塔', upgradeTarget: 'beta' });
     assert.match(text, /directly calls `贝塔`/);
-    assert.match(text, /`ovsa upgrade beta`/);
+    assert.match(text, /`ov-superagent upgrade beta`/);
     assert.doesNotMatch(text, /\{\{[A-Z_]+\}\}/);
   });
 
@@ -186,7 +186,7 @@ describe('conversation policy assemble', () => {
   });
 
   it('renders executable overrides safely in discovery, Lark and meeting prompts even after PATH is reset', (t) => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-cli-prompt-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-cli-prompt-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const workspace = path.join(root, 'workspace');
     fs.mkdirSync(workspace);
@@ -273,7 +273,7 @@ describe('natural writing', () => {
 });
 
 describe('explicit silence is opt-in per instance', () => {
-  const base = { workspace: '/srv/vika/workspace', agentName: 'Tester', rolePromptPath: role('colleague') };
+  const base = { workspace: '/srv/superagent/workspace', agentName: 'Tester', rolePromptPath: role('colleague') };
   const sessions = [['lark'], ['lark', 'weixin', 'telegram', 'qq', 'email'], ['weixin'], ['telegram', 'email']]
     .map((connectors) => ({ ...base, connectors }));
   const quiet = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
@@ -311,7 +311,7 @@ describe('explicit silence is opt-in per instance', () => {
 });
 
 describe('staged replies are opt-in per instance', () => {
-  const base = { workspace: '/srv/vika/workspace', agentName: 'Tester', rolePromptPath: role('colleague') };
+  const base = { workspace: '/srv/superagent/workspace', agentName: 'Tester', rolePromptPath: role('colleague') };
   const single = read('delivery/single.md').trim();
   const staged = read('delivery/staged.md').trim();
   const quiet = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };

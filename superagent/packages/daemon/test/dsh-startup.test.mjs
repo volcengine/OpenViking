@@ -44,8 +44,8 @@ describe('DshAgent startup and SDK transport', () => {
     const patch = JSON.parse(fs.readFileSync(call.args[3], 'utf8'));
     assert.ok(patch.some((entry) => entry.id === 'sdk-jsonrpc-server' && entry.disabled));
     const inserted = patch.find((entry) => entry.insert)?.insert ?? [];
-    const bridge = inserted.find((entry) => entry.id === 'vika-dsh-bridge');
-    const mcp = inserted.find((entry) => entry.id === 'vika-personal-agent');
+    const bridge = inserted.find((entry) => entry.id === 'superagent-dsh-bridge');
+    const mcp = inserted.find((entry) => entry.id === 'superagent-personal-agent');
     assert.equal(bridge.config.maxTokensAsSuccess, true);
     assert.deepEqual(mcp.config.args, [
       context.config.actionMcpPath, '--socket', context.config.actionSocketPath,
@@ -60,9 +60,9 @@ describe('DshAgent startup and SDK transport', () => {
       reasoningEffort: 'high',
       approvalRequests: true,
     });
-    assert.equal(child.requests('vika/hello').length, 1);
+    assert.equal(child.requests('superagent/hello').length, 1);
     // The model-settings document is probed once, after the bridge answered.
-    assert.equal(child.requests('vika/settings/describe').length, 1);
+    assert.equal(child.requests('superagent/settings/describe').length, 1);
     assert.equal(child.requests('session/working-directory/get')[0].params.sessionId, context.agent.threadId);
     assert.equal(context.agent.connected, true);
     assert.equal(context.store.global().sessionReady, true);
@@ -94,7 +94,7 @@ describe('DshAgent startup and SDK transport', () => {
     assert.equal(child.requests('session/resume')[0].params.sessionId, 'saved-session');
     // D4: resume restores the session's own selection, so this process re-asserts
     // the route it initialized with before the first turn.
-    assert.deepEqual(child.requests('vika/session/model/select')[0].params, {
+    assert.deepEqual(child.requests('superagent/session/model/select')[0].params, {
       sessionId: 'saved-session',
       provider: 'deepseek-official',
       model: 'deepseek-flash',
@@ -120,7 +120,7 @@ describe('DshAgent startup and SDK transport', () => {
     assert.equal(child.requests('session/resume').length, 1);
     // A fresh session starts from what initialize set; there is nothing to
     // re-assert on it.
-    assert.equal(child.requests('vika/session/model/select').length, 0);
+    assert.equal(child.requests('superagent/session/model/select').length, 0);
     const created = child.requests('session/working-directory/get')[0];
     assert.ok(created);
     assert.notEqual(created.params.sessionId, 'missing-session');

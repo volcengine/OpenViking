@@ -39,17 +39,17 @@ describe('OV timer storage', () => {
     assert.equal((await new OVTimerRepository(manbo, 'primary').load()).get(input.timerId).title, 'Another user');
     assert.equal((await new OVTimerRepository(asd, 'secondary').load()).get(input.timerId).title, 'Another instance');
     assert.deepEqual([...state.files.keys()].sort(), [
-      'viking://user/owner.asd/resources/vika/primary/timers-state.json',
-      'viking://user/owner.asd/resources/vika/secondary/timers-state.json',
-      'viking://user/owner.manbo/resources/vika/primary/timers-state.json',
+      'viking://user/owner.asd/resources/superagent/primary/timers-state.json',
+      'viking://user/owner.asd/resources/superagent/secondary/timers-state.json',
+      'viking://user/owner.manbo/resources/superagent/primary/timers-state.json',
     ]);
     assert.ok(state.requests.filter(({ body }) => body?.uri).every(({ body }) => body.uri.startsWith('viking://~/')));
   });
 
-  it('loads existing timers from the vika namespace', async (context) => {
+  it('loads existing timers from the superagent namespace', async (context) => {
     const server = await fakeOV(context);
     const client = new OVConnection({ url: server.url, user: 'alice' });
-    server.state.files.set('viking://user/alice/resources/vika/primary/timers-state.json', JSON.stringify({
+    server.state.files.set('viking://user/alice/resources/superagent/primary/timers-state.json', JSON.stringify({
       timers: [{ ...input, runCount: 0, lastRunAtMs: null }], timer_occurrence_checks: [],
     }));
     const repository = await new OVTimerRepository(client, 'primary').load();
@@ -475,7 +475,7 @@ describe('OV timer storage', () => {
     state.down = true;
     await assert.rejects(new OVTimerRepository(client, 'primary').load(), /HTTP 503/);
     state.down = false;
-    state.files.set('viking://user/alice/resources/vika/primary/timers-state.json', '{broken');
+    state.files.set('viking://user/alice/resources/superagent/primary/timers-state.json', '{broken');
     await assert.rejects(new OVTimerRepository(client, 'primary').load(), /malformed/);
   });
 

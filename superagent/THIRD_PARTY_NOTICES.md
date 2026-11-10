@@ -6,7 +6,7 @@ third-party software below. Each part stays under its own license.
 
 | Component | Where | License |
 |---|---|---|
-| Node.js (version in `package.json` `vika.node`) | release: `node/` | MIT, with the licenses of its bundled parts in `node/LICENSE` |
+| Node.js (version in `package.json` `superagent.node`) | release: `node/` | MIT, with the licenses of its bundled parts in `node/LICENSE` |
 | npm production dependencies | release: `node_modules/` | each package's own license, kept in its directory |
 | pm2 and @pm2/agent, run as a separate process manager | release: `node_modules/pm2`, `node_modules/@pm2/agent` | AGPL-3.0 |
 | lark-cli binary ([larksuite/cli](https://github.com/larksuite/cli)) | release: `node_modules/@larksuite/cli/bin/lark-cli` | MIT |
