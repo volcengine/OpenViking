@@ -2504,16 +2504,20 @@ class AsyncHTTPClient:
     async def admin_add_group_member(
         self, account_id: str, group_id: str, user_id: str
     ) -> Dict[str, Any]:
-        response = await self._http.put(
-            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}"
+        response = await self._request(
+            "PUT",
+            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members",
+            json={"user_ids": [user_id]},
         )
         return self._handle_response(response)
 
     async def admin_remove_group_member(
         self, account_id: str, group_id: str, user_id: str
     ) -> Dict[str, Any]:
-        response = await self._http.delete(
-            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}"
+        response = await self._request(
+            "DELETE",
+            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members",
+            json={"user_ids": [user_id]},
         )
         return self._handle_response(response)
 

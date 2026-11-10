@@ -2,6 +2,8 @@
 
 [English](README.md) / 中文
 
+必填 `locale: 'zh-CN' | 'en-US'` 选择内置中英文文案；已有 `labels` 可逐项覆盖，未覆盖项跟随当前语言。业务内容仍由宿主提供。
+
 面向资源浏览的目录树。宿主把树状态展平成有序行列表传进来，通过 `operations` 提供异步执行能力；组件负责渲染、键盘交互，并在操作成功后通知。
 
 组件渲染五种行类型，按 `depth` 缩进并绘制祖先连线，处理键盘导航；选中、展开、分页与重试通过 `operations` 执行。
@@ -11,6 +13,7 @@ import { FileTree } from '@openviking/react/components/file-tree';
 import '@openviking/react/components/file-tree/style.css';
 
 <FileTree
+  locale="zh-CN"
   rows={rows}
   selectedId={selectedId}
   operations={{
@@ -58,7 +61,7 @@ type FileTreeRow =
 - 不请求任何数据，不建连接，不做权限判断。
 - 不维护展开集合与选中项——两者都是受控的。
 - 点击目录与点击文件共用 `operations.select`，由宿主按 `row.type` 分流；选中成功后通过 `onSelect` 通知。
-- 工具栏、搜索、导入来源、权限流程属于页面层，通过 `slots.toolbar` 注入。
+- 搜索弹窗、导入来源与权限流程由宿主实现；`slots.toolbar` 可追加自定义操作。
 
 ## 扩展点
 
@@ -79,3 +82,9 @@ type FileTreeRow =
 - 属性表与可运行示例见[组件文档](../../../../../docs/docs/en/components/file-tree.mdx)（[中文](../../../../../docs/docs/zh/components/file-tree.mdx)）。
 - 开发与构建命令见[前端工作区 README](../../../../../README.md)，模块约定见[包说明](../../../README.md)。
 - 独立样式入口 `@openviking/react/components/file-tree/style.css`，与 JS 入口分离，可按需引入。
+
+## 可选搜索与刷新
+
+`search`、`refresh` 默认隐藏，传 `true` 分别开启。通过 `operations.search` 打开宿主搜索界面，通过 `operations.refresh` 刷新数据；缺少执行方法时禁用按钮。刷新等待时自动禁用并显示旋转图标，失败后恢复且不触发成功通知。
+
+`search={{ disabled: true }}` 控制搜索禁用态；`refresh={{ disabled, loading }}` 控制刷新禁用态与宿主加载态。用 `labels.search`、`labels.refresh` 替换文案，用 `onSearch`、`onRefresh` 接收成功通知。搜索不自行过滤行、不注册全局快捷键。`slots.toolbar` 位于内置控件上方，两个入口都可单独关闭。

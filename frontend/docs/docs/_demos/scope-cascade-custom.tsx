@@ -1,3 +1,4 @@
+import { useLang } from '@rspress/core/runtime';
 import {
   ScopeSwitcher,
   ScopeSelector,
@@ -25,9 +26,11 @@ function CustomLevel({
   level: ScopeCascadeLevel;
   name: string;
 }) {
+  const componentLocale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   const state = useScopeCascadeLevel(level);
   return (
     <ScopeSelector
+      locale={componentLocale}
       key={state.scopeKey}
       kind="selectable"
       identity={{ key: name, ariaLabel: name }}
@@ -59,10 +62,11 @@ function CustomLevel({
   );
 }
 export default function ScopeCascadeCustom() {
+  const componentLocale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   const controller = useScopeCascade(api);
   return (
     <div style={{ minHeight: 320 }}>
-      <ScopeSwitcher>
+      <ScopeSwitcher locale={componentLocale}>
         <CustomLevel level={controller.levels[0]} name="Library" />
         <CustomLevel level={controller.levels[1]} name="Space" />
         <CustomLevel level={controller.levels[2]} name="User" />

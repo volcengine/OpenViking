@@ -29,8 +29,8 @@
     var(--ov-ui-primary-hover-default, #7075ff)
   );
   --ov-viking-bot-on-accent: var(
-    --ov-ui-color-bg-1,
-    var(--ov-ui-bg-1-default, #ffffff)
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default)
   );
   --ov-viking-bot-border: var(
     --ov-ui-color-border-2,
@@ -144,6 +144,8 @@
 }
 
 .ov-viking-bot__body {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -152,6 +154,8 @@
 .ov-viking-bot__list {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
   gap: 12px;
   padding: 12px;
 }
@@ -366,7 +370,38 @@
   font-size: 12px;
 }
 
-.ov-viking-bot__empty,
+.ov-viking-bot__empty {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+  text-align: center;
+}
+.ov-viking-bot__welcome {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.ov-viking-bot__welcome h2 {
+  margin: 0;
+  color: var(--ov-viking-bot-text);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 24px;
+}
+.ov-viking-bot__welcome p {
+  max-width: 360px;
+  margin: 0;
+  color: var(--ov-viking-bot-text-muted);
+  font-size: 13px;
+  line-height: 22px;
+  letter-spacing: 0.04px;
+}
+
 .ov-viking-bot__unavailable {
   display: flex;
   align-items: center;

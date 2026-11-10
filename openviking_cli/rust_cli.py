@@ -57,7 +57,8 @@ def main():
     # 1. 检查开发环境（仅在直接运行脚本时有效）
     try:
         # __file__ is openviking_cli/rust_cli.py, so parent is openviking_cli directory
-        dev_binary = Path(__file__).parent.parent / "target" / "release" / "ov"
+        binary_name = "ov.exe" if sys.platform == "win32" else "ov"
+        dev_binary = Path(__file__).parent.parent / "target" / "release" / binary_name
         if dev_binary.exists() and os.access(dev_binary, os.X_OK):
             _exec_binary(str(dev_binary), sys.argv[1:])
     except Exception:

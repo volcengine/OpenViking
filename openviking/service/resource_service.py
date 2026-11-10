@@ -818,7 +818,13 @@ class ResourceService:
 
             async def dispatch() -> str:
                 nonlocal enqueued
-                with bind_task_context(task.task_id, task_account_id, task_user_id):
+                with bind_task_context(
+                    task.task_id,
+                    task_account_id,
+                    task_user_id,
+                    task_type=task.task_type,
+                    mode=task.meta.get("mode"),
+                ):
                     result = await get_queue_manager().enqueue(queue_name, msg.to_dict())
                 enqueued = True
                 if on_enqueued is not None:
@@ -2767,6 +2773,8 @@ class ResourceService:
                     ctx.account_id,
                     ctx.user.user_id,
                     work_id=running_work_id,
+                    task_type=task.task_type,
+                    mode=task.meta.get("mode"),
                 ):
                     if isinstance(data, SkillProcessingPreparation):
                         result = await self._skill_processor.process_prepared_skill(

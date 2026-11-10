@@ -228,6 +228,62 @@ async def registered(setup):
     return record, compile_name, make_task(setup, compile_name=compile_name, record=record)
 
 
+@pytest.fixture
+def compile_metric_events(monkeypatch):
+    """Capture committed output facts with reporting enabled and no external exporter."""
+    events = []
+    monkeypatch.setattr(
+        "openviking.observability.reporting.runtime.is_reporting_enabled", lambda: True
+    )
+    monkeypatch.setattr(
+        "openviking.observability.reporting.facts.try_publish_event",
+        lambda name, payload: events.append((name, deepcopy(payload))),
+    )
+    return events
+
+
+@pytest.mark.parametrize("configured", [False, True])
+async def test_output_metrics_preserve_identity_and_commit_time_on_recovery(
+    setup, registered, monkeypatch, compile_metric_events, configured
+):
+    """Both execution modes replay durable output facts after interrupted finalization."""
+    task = registered[2] if configured else make_task(setup)
+    await setup.lifecycle.on_start(task)
+    uri = TARGET + "/page.md"
+    setup.fs.output_changes = [{"uri": uri, "change_type": "added"}]
+    save_run = setup.lifecycle._save_run
+
+    async def fail_terminal_save(task, run):
+        """Keep the publication checkpoint durable while simulating a failed terminal write."""
+        if run["finished_at"] is not None:
+            raise OSError("run unavailable")
+        await save_run(task, run)
+
+    monkeypatch.setattr(setup.lifecycle, "_save_run", fail_terminal_save)
+    monkeypatch.setattr("openviking.service.compile_targets.time.time", lambda: 1000)
+    with pytest.raises(OSError, match="run unavailable"):
+        await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
+    ((name, event),) = compile_metric_events
+    assert name == "file_mutation"
+    assert event["operation"] == "compile_commit"
+    assert event["uri"] == uri
+    assert event["task_id"] == task.task_id
+    assert event["account_id"] == task.account_id
+    assert event["user_id"] == task.user_id
+    assert event["updated_at"] == 1000000
+
+    monkeypatch.setattr("openviking.service.compile_targets.time.time", lambda: 2000)
+    resumed = deepcopy(setup.tracker.tasks[task.task_id])
+    resumed.auth = {}
+    lifecycle = CompileLifecycle(setup.store, setup.fs)
+    outcome = await lifecycle.on_finish(resumed, ExternalTaskSnapshot(status="completed"))
+    assert outcome.status == "completed"
+    assert compile_metric_events == [(name, event), (name, event)]
+    assert len(setup.fs.commits) == 2
+    await lifecycle.on_finish(resumed, ExternalTaskSnapshot(status="completed"))
+    assert len(compile_metric_events) == 2
+
+
 @pytest.mark.parametrize(
     "name", ["", " wiki", "wiki ", "wiki\n", "../wiki", "a/b", "a\\b", "文档", "a" * 65, None, 1]
 )
@@ -460,7 +516,9 @@ async def test_changes_new_roots_and_updated_configuration_do_not_rewrite_frozen
 
 
 @pytest.mark.parametrize("status", ["failed", "cancelled"])
-async def test_unsuccessful_runs_preserve_baseline_and_redact_persisted_errors(setup, status):
+async def test_unsuccessful_runs_preserve_baseline_and_redact_persisted_errors(
+    setup, status, compile_metric_events
+):
     record = new_record(PARAMS)
     record["progress"] = {
         "source_commit": "a" * 40,
@@ -487,6 +545,7 @@ async def test_unsuccessful_runs_preserve_baseline_and_redact_persisted_errors(s
     assert "secret_value" not in run["error"] and "bearer-secret" not in run["error"]
     assert "[REDACTED]" in run["error"]
     assert outcome.error_message == run["error"]
+    assert compile_metric_events == []
 
 
 async def test_duplicate_start_reuses_exact_snapshots_and_plan(setup, registered):
@@ -627,7 +686,9 @@ async def test_registration_failure_does_not_publish_configuration(setup):
     assert not setup.files.files
 
 
-async def test_cancel_after_publication_still_restores_the_start_snapshot(setup, registered):
+async def test_cancel_after_publication_still_restores_the_start_snapshot(
+    setup, registered, compile_metric_events
+):
     record, compile_name, task = registered
     await setup.lifecycle.on_start(task)
     original_diff = setup.fs.diff_paths
@@ -647,6 +708,7 @@ async def test_cancel_after_publication_still_restores_the_start_snapshot(setup,
     # A replay sees a completed rollback and cannot create further commits.
     await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="cancelled"))
     assert len(setup.fs.commits) == 4
+    assert compile_metric_events == []
 
 
 async def test_first_acceptance_discovers_a_task_whose_state_publication_was_interrupted(setup):

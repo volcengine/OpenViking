@@ -1,6 +1,8 @@
 # OpenViking Frontend
 
-React foundations for building OpenViking AI application interfaces: Rslib builds, bilingual Rspress documentation, layered directory conventions, and scoped styles. FileTree and FilePreview provide placeholder views, alongside five file-type icons. Four business module placeholders let applications integrate their layout before business Hooks and interactions land.
+All public UI components and composed modules require an explicit `locale: 'zh-CN' | 'en-US'` for built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow the current locale and update when it changes. Hosts still provide business content, slots and callback messages.
+
+React foundations for building OpenViking AI application interfaces: Rslib builds, bilingual Rspress documentation, layered directory conventions, and scoped styles. FileTree, Tui and FilePreview provide working views, alongside five file-type icons. Console provides native command execution and ScopeCascade coordinates identity selection. FileBrowser remains a layout placeholder.
 
 Agent-facing development constraints are documented in [AGENTS.md](./AGENTS.md).
 
@@ -30,8 +32,8 @@ npm run preview        # Serve the built documentation at /ui/
 ## Layout
 
 - `packages/react`: `@openviking/react` package, Rslib library build with declaration generation, `ov-` prefixed BEM class names, and React peer dependencies.
-- `packages/react/src/components/{file-tree,file-preview,tui,scope-switcher,agent-connect,viking-bot}`: reusable views with public props types. All ship placeholder views and will be rewritten against their reviewed contracts; file-tree and file-preview have their shell and interaction in place, viking-bot renders a working view pending design review, while tui, scope-switcher and agent-connect render a fixed-size shell only. See the [module map](./packages/react/README.md#module-map).
-- `packages/react/src/modules/{file-browser,console,task-center}`: importable placeholder components with settled public Props / Labels / Slots types, and styles. Business Hooks and interactions are planned.
+- `packages/react/src/components/{file-tree,file-preview,tui,scope-switcher,agent-connect,viking-bot}`: reusable views with public props types. FileTree, FilePreview and Tui are implemented against their reviewed contracts; scope-switcher is a stateless layout, agent-connect has built-in bilingual agent and developer integration content with host-provided credentials and locale, and viking-bot provides a working view pending design review. See the [module map](./packages/react/README.md#module-map).
+- `packages/react/src/modules/{file-browser,console}`: Console ships a native command panel; FileBrowser remains a placeholder with public types and styles.
 - `packages/react/src/client`: the framework-neutral request client, exported from `@openviking/react/client` — a `fetch`-based `createOvClient` plus the contract modules depend on (`OvClient`, `OvRequestOptions`, `OvClientError`).
 - `packages/react/src/{hooks,utils}`: reserved internal shared code, without public subpaths. Module-private helpers stay within their module.
 - `packages/react/src/shared`: internal shared code used by more than one component, with no public entry — not exported from the root, any subpath, or `package.json`. Currently holds the `tooltip` surface that `file-preview` renders into `document.body`.
@@ -55,7 +57,7 @@ Library output is `packages/react/dist/`; documentation output is `docs/doc_buil
 
 ## Target layout
 
-The workspace currently contains React components, shared SVGs, three business module placeholders, the request client, and documentation. The target also includes framework-neutral libraries, the Client transport, Vue bindings, and deployable micro-apps. Add each planned directory with its first implementation.
+The workspace currently contains React components, shared SVGs, the Console command module and one business module placeholder, the request client, and documentation. The target also includes framework-neutral libraries, the Client transport, Vue bindings, and deployable micro-apps. Add each planned directory with its first implementation.
 
 ```text
 frontend/
@@ -76,7 +78,7 @@ frontend/
 └── docs/                   # Rspress documentation
 ```
 
-Business modules will combine data-loading Hooks with view components around a focused capability. Hooks will expose data, state, and actions separately from the composed view, so hosts can reuse the logic with their own UI. The shared Client lives in the React package and is exported from `@openviking/react/client`; it is a `fetch`-based client over the native OpenViking API with no React dependency. A React Provider will supply request defaults, with optional module / Hook overrides; nonstandard gateways are adapted once at the host request boundary. Hosts retain authentication, account scope, routing, permissions, and product-specific flows. Complete pages belong to hosts, including Web Studio and micro-apps. The [module boundaries and request configuration](./packages/react/src/modules/README.md) focus on the personal terminal; administration is outside the current scope. Each `@openviking/react/modules/<module>` entry currently exports a placeholder component, its settled Props type and its subpath-only Labels and Slots types. Hooks and the Provider are not exported yet. Module CSS must include its component dependencies as implementations land; Hook-only use will need no CSS.
+Business modules will combine data-loading Hooks with view components around a focused capability. Hooks will expose data, state, and actions separately from the composed view, so hosts can reuse the logic with their own UI. The shared Client lives in the React package and is exported from `@openviking/react/client`; it is a `fetch`-based client over the native OpenViking API with no React dependency. A React Provider supplies request defaults, with optional module / Hook overrides; nonstandard gateways are adapted once at the host request boundary. Hosts retain authentication, account scope, routing, permissions, and product-specific flows. Complete pages belong to hosts, including Web Studio and micro-apps. The [module boundaries and request configuration](./packages/react/src/modules/README.md) focus on the personal terminal; administration is outside the current scope. Each `@openviking/react/modules/<module>` entry exports its component, Props and subpath-only supporting types. Console keeps its orchestration Hook internal; `OpenVikingProvider` is available from the client entry. Module CSS must include its component dependencies as implementations land; Hook-only use will need no CSS.
 
 Shared source directories can supply multiple framework builds. The `lib/` directory is a source boundary. React-only consumers receive the shared code through the React package. When standalone consumers need those functions, expose a framework-neutral package and verify installation in a project without React or Vue. React icon components use the shared SVG sources and ship with the React package, including their type declarations. Import icons from `@openviking/react/icons`. Web Studio consumes these assets through package exports from its separate application directory.
 

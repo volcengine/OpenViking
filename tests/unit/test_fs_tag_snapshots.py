@@ -145,12 +145,13 @@ async def test_ensure_compile_target_preserves_existing_directory(snapshot_servi
         vfs.stat.side_effect = FileNotFoundError(uri)
     else:
         vfs.stat.return_value = {"isDir": kind == "directory"}
-    service._existing_tree_lock_request = AsyncMock(return_value={"path": "parent"})
     service._enqueue_compile_target_tag = AsyncMock(return_value={"directory_count": 1})
     service.finalize_compile_directories = AsyncMock(side_effect=AssertionError("inline tagging"))
 
     @asynccontextmanager
-    async def hold_scope(*args):
+    async def hold_scope(requests, uris, request_ctx):
+        assert requests == [{"path": vfs._uri_to_path(uri, ctx=ctx), "kind": "tree"}]
+        assert uris == [uri] and request_ctx is ctx
         yield {"owner": "directory"}
 
     service._hold_watch_scope = hold_scope

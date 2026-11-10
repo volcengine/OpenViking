@@ -32,7 +32,10 @@ export function toFileSource(
   if (file) {
     return {
       kind: 'file',
-      file: file instanceof File ? file : new File([file], fileName),
+      file:
+        typeof File === 'undefined' || file instanceof File
+          ? (file as File)
+          : new File([file], fileName, { type: file.type }),
       name: fileName,
       ...(fileType ? { fileType } : {}),
     };

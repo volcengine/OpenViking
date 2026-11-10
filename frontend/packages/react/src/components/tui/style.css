@@ -1,2 +1,3 @@
 @import '../../theme.css';
+@import '../../shared/components/tooltip/style.css';
 @import './tui.css';

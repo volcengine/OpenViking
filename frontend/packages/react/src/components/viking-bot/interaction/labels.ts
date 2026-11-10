@@ -1,4 +1,9 @@
 import type { VikingBotInteractionLabels } from './types.js';
+import { resolveLocale, type Locale } from '../../../shared/locale.js';
+import enUS from './locales/en-US.js';
+import zhCN from './locales/zh-CN.js';
+
+const LOCALES = { 'en-US': enUS, 'zh-CN': zhCN };
 
 /** 内部完整文案类型，从公开类型派生，保证宿主可覆盖每一处文案。 */
 export type InteractionLabels = Required<
@@ -7,27 +12,11 @@ export type InteractionLabels = Required<
   progress: (index: number, total: number) => string;
 };
 
-/** 内置交互区文案。Built-in interaction copy. */
-export const DEFAULT_INTERACTION_LABELS: InteractionLabels = {
-  title: 'Needs your input',
-  submit: 'Submit',
-  cancel: 'Cancel',
-  other: 'Other',
-  submitted: 'Submitted',
-  cancelled: 'Cancelled',
-  progress: (index, total) => `${index + 1} / ${total}`,
-  scheduleNone: 'Do not schedule',
-  scheduleDaily: 'Every day',
-  scheduleWeekly: 'Every week',
-  scheduleTime: 'Time',
-  scheduleWeekday: 'Weekday',
-  weekdays: [
-    'Monday',
-    'Tuesday',
-    'Wednesday',
-    'Thursday',
-    'Friday',
-    'Saturday',
-    'Sunday',
-  ],
-};
+export const DEFAULT_INTERACTION_LABELS: InteractionLabels = enUS;
+
+export function resolveInteractionLabels(
+  locale: Locale,
+  labels?: VikingBotInteractionLabels,
+): InteractionLabels {
+  return resolveLocale<InteractionLabels>(LOCALES, locale, labels);
+}

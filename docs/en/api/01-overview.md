@@ -522,6 +522,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | `/api/v1/admin/metric-inventory` | Stream a ROOT-only metadata inventory for offline reporting |
 | GET | `/api/v1/admin/configuration` | Get explicit Cluster runtime configuration |
 | PATCH | `/api/v1/admin/configuration` | Update Cluster runtime configuration |
 | POST | `/api/v1/admin/configuration/test-model` | Test a draft model or embedding connection without saving it |

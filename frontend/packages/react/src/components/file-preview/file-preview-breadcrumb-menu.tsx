@@ -2,6 +2,7 @@ import { Tooltip } from '../../shared/components/tooltip/index.js';
 import type { PathSegment } from './file-preview-path.js';
 
 export interface FilePreviewBreadcrumbMenuProps {
+  hiddenPathLabel: string;
   segments: readonly PathSegment[];
   canOpen: boolean;
   disabled: boolean;
@@ -17,6 +18,7 @@ export interface FilePreviewBreadcrumbMenuProps {
  * into `body` the breadcrumb's own layout cannot clip it.
  */
 export function FilePreviewBreadcrumbMenu({
+  hiddenPathLabel,
   segments,
   canOpen,
   disabled,
@@ -47,7 +49,7 @@ export function FilePreviewBreadcrumbMenu({
       <button
         type="button"
         className="ov-file-preview__breadcrumb-more"
-        aria-label="Show hidden path levels"
+        aria-label={hiddenPathLabel}
         aria-haspopup="menu"
       >
         …

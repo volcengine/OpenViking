@@ -8,7 +8,7 @@ import {
   toFields,
 } from './ask-human-fields.js';
 import { ScheduleInput } from './schedule-input.js';
-import { DEFAULT_INTERACTION_LABELS } from './labels.js';
+import { resolveInteractionLabels } from './labels.js';
 import type {
   VikingBotInteractionProps,
   VikingBotInteractionRequest,
@@ -16,10 +16,12 @@ import type {
 
 const TextInput = ({
   request,
+  label,
   disabled,
   onChange,
 }: {
   request: Extract<VikingBotInteractionRequest, { kind: 'text' }>;
+  label: string;
   disabled?: boolean;
   onChange: (value: unknown) => void;
 }) => (
@@ -29,7 +31,7 @@ const TextInput = ({
       className="ov-viking-bot__interaction-input"
       defaultValue={request.initialValue}
       disabled={disabled}
-      aria-label="answer"
+      aria-label={label}
       onChange={(event) => onChange(event.target.value)}
     />
   </>
@@ -53,9 +55,10 @@ export function VikingBotInteractionView({
   error,
   onSubmit,
   onCancel,
+  locale,
   labels: overrides,
 }: VikingBotInteractionProps) {
-  const labels = { ...DEFAULT_INTERACTION_LABELS, ...overrides };
+  const labels = resolveInteractionLabels(locale, overrides);
   const blocked = Boolean(disabled || submitting);
   // 问题身份变化时必须重挂表单，否则字段的实例状态会把上一题答案带到新题。
   const formKey = requestKey ?? `${request.kind}:${index}`;
@@ -89,7 +92,7 @@ export function VikingBotInteractionView({
     {
       key: request.kind,
       title: request.question,
-      fields: toFields(request),
+      fields: toFields(request, labels.other),
       extra: { index, total },
     },
   ];
@@ -132,6 +135,7 @@ export function VikingBotInteractionView({
         customRenderFields={{
           'viking-bot-text': ({ field, onChange }) => (
             <TextInput
+              label={labels.answer}
               request={
                 field.extra?.request as Extract<
                   VikingBotInteractionRequest,

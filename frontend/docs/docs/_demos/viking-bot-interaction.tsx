@@ -1,21 +1,8 @@
+import { useLang } from '@rspress/core/runtime';
 import { useState } from 'react';
 import type { VikingBotInteractionAnswer } from '@openviking/react/components/viking-bot';
 import { VikingBotInteraction } from '@openviking/react/components/viking-bot/interaction';
 import '@openviking/react/components/viking-bot/style.css';
-
-const LABELS = {
-  title: '待确认',
-  submit: '提交',
-  cancel: '取消',
-  other: '其他',
-  scheduleNone: '不启用',
-  scheduleDaily: '每天',
-  scheduleWeekly: '每周',
-  scheduleTime: '时间',
-  scheduleWeekday: '星期',
-  weekdays: ['周一', '周二', '周三', '周四', '周五', '周六', '周日'],
-  progress: (index: number, total: number) => `${index + 1} / ${total}`,
-};
 
 const SCHEDULE = {
   kind: 'schedule' as const,
@@ -25,6 +12,7 @@ const SCHEDULE = {
 };
 
 export default function VikingBotInteractionBasic() {
+  const componentLocale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   const [answer, setAnswer] = useState<VikingBotInteractionAnswer>();
   const [submitting, setSubmitting] = useState(false);
 
@@ -39,6 +27,7 @@ export default function VikingBotInteractionBasic() {
   return (
     <div style={{ display: 'grid', gap: 16, maxWidth: 520 }}>
       <VikingBotInteraction
+        locale={componentLocale}
         request={{
           kind: 'choice',
           question: '把编译结果写到哪个目标？',
@@ -54,29 +43,29 @@ export default function VikingBotInteractionBasic() {
         }}
         index={0}
         total={2}
-        labels={LABELS}
         submitting={submitting}
         onSubmit={submit}
         onCancel={() => setAnswer(undefined)}
       />
       <VikingBotInteraction
+        locale={componentLocale}
         request={{
           kind: 'text',
           question: '给这次编译起个名字',
           initialValue: '每日编译',
           multiline: false,
         }}
-        labels={LABELS}
         submitting={submitting}
         onSubmit={submit}
       />
       <VikingBotInteraction
+        locale={componentLocale}
         request={SCHEDULE}
-        labels={LABELS}
         submitting={submitting}
         onSubmit={submit}
       />
       <VikingBotInteraction
+        locale={componentLocale}
         request={{
           kind: 'repair',
           question: '修复哪一个来源？',
@@ -86,7 +75,6 @@ export default function VikingBotInteractionBasic() {
             { id: 'b', label: '来源 B', description: '推荐' },
           ],
         }}
-        labels={LABELS}
         submitting={submitting}
         onSubmit={submit}
       />

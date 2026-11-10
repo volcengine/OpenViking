@@ -38,6 +38,7 @@ class _DummyQueueManager:
 class _DummyVikingFS:
     def __init__(self, entries_by_uri):
         self.entries_by_uri = entries_by_uri
+        self._async_agfs = SimpleNamespace()
 
     async def ls(self, uri, show_all_hidden=False, ctx=None, **kwargs):
         return self.entries_by_uri.get(uri, [])
@@ -205,6 +206,7 @@ async def test_grouped_file_refresh_coalesces_only_direct_parents():
                 FileRefreshRequest("viking://resources/src/main.py", md5="c"),
             ],
             ctx=ctx,
+            generation_trigger="content_write",
         )
 
     assert result["enqueued_count"] == 2
@@ -214,6 +216,7 @@ async def test_grouped_file_refresh_coalesces_only_direct_parents():
     }
     assert len(queue.msgs) == 2
     messages = {msg.uri: msg for msg in queue.msgs}
+    assert all(msg.coalesce_key == "" for msg in messages.values())
     assert messages["viking://resources/docs"].changes == {
         "added": ["viking://resources/docs/a.md"],
         "modified": ["viking://resources/docs/b.md"],

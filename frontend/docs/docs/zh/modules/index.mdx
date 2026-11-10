@@ -1,14 +1,13 @@
 # 业务模块
 
-三个个人终端模块已提供占位组件，可先接入布局。props 已定型——请求配置、受控状态、回调、插槽与文案——但每个组件仍只展示模块名称与可替换的占位文案；业务 Hook、API 请求和模块内部交互随实际能力迁入后补充。
+FileBrowser 已通过 `useFileBrowser` 实现目录、搜索与预览联动；Console 提供原生命令面板及独立 `useConsole`，ScopeCascade 提供级联选择。对话服务由宿主接入。
 
 props 里没有数据字段。模块通过 Hook 自己取数，宿主给配置与受控值，模块通过回调上报变化。
 
-| 模块                             | 组件          | 目标能力   |
-| -------------------------------- | ------------- | ---------- |
-| [`file-browser`](./file-browser) | `FileBrowser` | 文件浏览。 |
-| [`console`](./console)           | `Console`     | 交互面板。 |
-| [`task-center`](./task-center)   | `TaskCenter`  | 任务中心。 |
+| 模块                             | 组件                     | 目标能力   |
+| -------------------------------- | ------------------------ | ---------- |
+| [`file-browser`](./file-browser) | `FileBrowser`            | 文件浏览。 |
+| [`console`](./console)           | `Console` / `useConsole` | 交互面板。 |
 
 ## 预览
 
@@ -20,11 +19,35 @@ props 里没有数据字段。模块通过 Hook 自己取数，宿主给配置�
 
 ## 导入与样式
 
-从 `@openviking/react/modules/<模块>` 导入组件及其 Props / Labels / Slots 类型。三个组件的本体与主 Props 类型也从根入口 `@openviking/react` 导出；Labels、Slots 与枚举类型只从子路径导入。
+从 `@openviking/react/modules/<模块>` 导入组件及其 Props / Labels / Slots 类型。两个组件的本体与主 Props 类型也从根入口 `@openviking/react` 导出；Labels、Slots 与枚举类型只从子路径导入。
 
 JavaScript 不加载 CSS。单模块使用 `@openviking/react/modules/<模块>/style.css`，全部模块使用 `@openviking/react/modules/style.css`，整库使用 `@openviking/react/style.css`，每个样式入口均可独立消费。没有 `@openviking/react/modules` 分类聚合 JavaScript 入口。
 
-当前占位组件接受 `className`、`style` 和 `labels`，无需 Provider。业务 Hook、共享 Client 与 `OpenVikingProvider` 仍为规划，尚未导出。
+模块请求继承 `@openviking/react/client` 提供的 `OpenVikingProvider`，`useFileBrowser` 和 `useConsole` 均可独立使用。FileBrowser 自动加载目录；Console 挂载本身不发请求，提交命令后才访问服务。
+
+## Provider
+
+模块不通过 props 接收 Client，而是在内部 Hook 中从 Context 取用。所有模块都必须包在 `@openviking/react/client` 的 `OpenVikingProvider` 内，在 Provider 上统一配置服务地址、身份与凭证；没有 Provider，模块拿不到可用的请求配置：FileBrowser 不会发起请求、保持空态，Console 只能退回同源默认 Client 且不带身份配置。
+
+```tsx
+import { OpenVikingProvider } from '@openviking/react/client';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import { Console } from '@openviking/react/modules/console';
+import '@openviking/react/modules/style.css';
+
+<OpenVikingProvider
+  baseURL={endpoint}
+  apiKey={apiKey}
+  accountId={accountId}
+  userId={userId}
+  resourceId={libraryId}
+>
+  <FileBrowser locale="zh-CN" />
+  <Console locale="zh-CN" />
+</OpenVikingProvider>;
+```
+
+Provider 通过 Context 下发配置：模块不接收 `baseURL` 或凭证作为 props；访问其他知识库的模块只用 `requestOptions` 覆盖该字段。嵌套 Provider 时，内层只覆盖自己声明的字段，其余继承外层。
 
 ## 宿主职责
 

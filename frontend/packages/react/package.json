@@ -1,6 +1,6 @@
 {
   "name": "@openviking/react",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "publishConfig": {
     "access": "public"
   },
@@ -14,7 +14,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE.arco-design"
   ],
   "sideEffects": [
     "**/*.css"
@@ -35,6 +36,11 @@
       "import": "./dist/components/file-preview.js"
     },
     "./components/file-preview/style.css": "./dist/components/file-preview/style.css",
+    "./components/file-browser-entries": {
+      "types": "./dist/components/file-browser-entries/index.d.ts",
+      "import": "./dist/components/file-browser-entries.js"
+    },
+    "./components/file-browser-entries/style.css": "./dist/components/file-browser-entries/style.css",
     "./components/tui": {
       "types": "./dist/components/tui/index.d.ts",
       "import": "./dist/components/tui.js"
@@ -71,11 +77,6 @@
       "import": "./dist/modules/console.js"
     },
     "./modules/console/style.css": "./dist/modules/console/style.css",
-    "./modules/task-center": {
-      "types": "./dist/modules/task-center/index.d.ts",
-      "import": "./dist/modules/task-center.js"
-    },
-    "./modules/task-center/style.css": "./dist/modules/task-center/style.css",
     "./modules/style.css": "./dist/modules/style.css",
     "./package.json": "./package.json",
     "./icons": {
@@ -90,7 +91,12 @@
       "types": "./dist/modules/scope-cascade/index.d.ts",
       "import": "./dist/modules/scope-cascade.js"
     },
-    "./modules/scope-cascade/style.css": "./dist/modules/scope-cascade/style.css"
+    "./modules/scope-cascade/style.css": "./dist/modules/scope-cascade/style.css",
+    "./components/directory-tour": {
+      "types": "./dist/components/directory-tour/index.d.ts",
+      "import": "./dist/components/directory-tour.js"
+    },
+    "./components/directory-tour/style.css": "./dist/components/directory-tour/style.css"
   },
   "scripts": {
     "dev": "rslib build --watch",
@@ -110,5 +116,9 @@
     "@ark-design/ui": {
       "optional": true
     }
+  },
+  "dependencies": {
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   }
 }

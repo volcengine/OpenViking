@@ -27,7 +27,6 @@ export interface FileTreeRowContext {
   /** 当前选中的行 id。Currently selected row id. */
   selectedId?: string | null;
   /** 当前展示浮层的行 id。Row whose tooltip is showing. */
-  tooltipRowId: string | null;
   /** 为行追加属性。Extra attributes for a row. */
   getRowAttributes?: (row: FileTreeRow) => HTMLAttributes<HTMLDivElement>;
   /** 行尾指示器。Row-end indicator. */
@@ -54,7 +53,5 @@ export interface FileTreeRowContext {
     row: FileTreeEntryRow,
   ) => void;
   /** 指针进入行。Pointer enters a row. */
-  onRowEnter: (rowId: string) => void;
   /** 指针离开行。Pointer leaves a row. */
-  onRowLeave: () => void;
 }

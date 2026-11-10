@@ -56,7 +56,15 @@ export default defineConfig({
               items: [
                 { text: '概览', link: '/components/' },
                 { text: '图标', link: '/components/icons' },
+                {
+                  text: 'FileBrowserEntries 入口条',
+                  link: '/components/file-browser-entries',
+                },
                 { text: 'FileTree 文件树', link: '/components/file-tree' },
+                {
+                  text: 'DirectoryTour 目录引导',
+                  link: '/components/directory-tour',
+                },
                 {
                   text: 'FilePreview 文件预览',
                   link: '/components/file-preview',
@@ -96,10 +104,6 @@ export default defineConfig({
               text: '辅助能力',
               items: [
                 {
-                  text: 'TaskCenter 任务中心',
-                  link: '/modules/task-center',
-                },
-                {
                   text: 'ScopeCascade 级联选择',
                   link: '/modules/scope-cascade',
                 },
@@ -134,6 +138,10 @@ export default defineConfig({
               items: [
                 { text: 'Overview', link: '/en/components/' },
                 { text: 'Icons', link: '/en/components/icons' },
+                {
+                  text: 'FileBrowserEntries',
+                  link: '/en/components/file-browser-entries',
+                },
                 { text: 'FileTree', link: '/en/components/file-tree' },
                 { text: 'FilePreview', link: '/en/components/file-preview' },
                 { text: 'Tui', link: '/en/components/tui' },
@@ -142,6 +150,10 @@ export default defineConfig({
                   link: '/en/components/scope-switcher',
                 },
                 { text: 'AgentConnect', link: '/en/components/agent-connect' },
+                {
+                  text: 'DirectoryTour',
+                  link: '/en/components/directory-tour',
+                },
                 { text: 'VikingBot', link: '/en/components/viking-bot' },
               ],
             },
@@ -161,7 +173,6 @@ export default defineConfig({
             {
               text: 'Supporting capabilities',
               items: [
-                { text: 'TaskCenter', link: '/en/modules/task-center' },
                 { text: 'ScopeCascade', link: '/en/modules/scope-cascade' },
               ],
             },

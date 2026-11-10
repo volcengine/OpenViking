@@ -8,6 +8,7 @@ import type {
 /** 把请求转成 AskHuman 的字段描述。 */
 export const toFields = (
   request: VikingBotInteractionRequest,
+  other: string,
 ): AskHumanField[] => {
   if (request.kind === 'choice') {
     return [
@@ -19,7 +20,14 @@ export const toFields = (
           label: option.label,
           description: option.description,
         })),
-        allowCustomInput: request.allowCustomInput,
+        allowCustomInput: request.allowCustomInput
+          ? {
+              placeholder:
+                typeof request.allowCustomInput === 'object'
+                  ? (request.allowCustomInput.placeholder ?? other)
+                  : other,
+            }
+          : false,
       },
     ];
   }

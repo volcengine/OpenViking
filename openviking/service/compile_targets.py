@@ -1004,6 +1004,20 @@ class CompileLifecycle:
                         task.task_id, account_id=task.account_id, user_id=task.user_id
                     ):
                         snapshot = ExternalTaskSnapshot(status="cancelled")
+                    else:
+                        from openviking.observability.reporting.facts import emit_compile_outputs
+
+                        # Persist the event time so finalization retries identify the same facts.
+                        if not self._checkpoint(task).get("target_committed_at"):
+                            await self._save_checkpoint(
+                                task, {"target_committed_at": int(time.time() * 1000)}
+                            )
+                        emit_compile_outputs(
+                            task,
+                            changes,
+                            snapshot_id=meta["finish_snapshot"],
+                            committed_at=self._checkpoint(task)["target_committed_at"],
+                        )
             if snapshot.status in {"failed", "cancelled"}:
                 # A publication snapshot is not a completed rollback checkpoint.
                 if (

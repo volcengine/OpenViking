@@ -1,5 +1,7 @@
 # ScopeCascade 级联选择
 
+必填 `locale: 'zh-CN' | 'en-US'` 选择内置中英文文案；已有 `labels` 可逐项覆盖，未覆盖项跟随当前语言。业务内容仍由宿主提供。
+
 只接入三个 API 适配函数，无需在业务侧重写请求状态和级联逻辑。`useScopeCascade` 返回稳定的实例控制器，不订阅三级数据；`ScopeCascade` 的三个叶子选择器分别订阅，保持独立更新，不依赖 `memo`。
 
 ## 基础用法
@@ -32,4 +34,4 @@
 
 ## 视图属性
 
-`ScopeCascade` 必填 `controller`。可选 `levelNames` 按库/空间/用户顺序指定名称，`labels` 设置加载、搜索、空态和错误文案，`retryLabel` 设置重试按钮文案。`className`、`style` 等 HTML 属性透传给布局容器。单独使用 Hook 不需要 CSS；默认视图引入 `@openviking/react/modules/scope-cascade/style.css`。
+`ScopeCascade` 必填 `controller` 与 `locale`。可选 `levelNames` 按库/空间/用户顺序指定名称，`labels` 设置加载、搜索、空态和错误文案，`retryLabel` 设置重试按钮文案。`className`、`style` 等 HTML 属性透传给布局容器。单独使用 Hook 不需要 CSS；默认视图引入 `@openviking/react/modules/scope-cascade/style.css`。

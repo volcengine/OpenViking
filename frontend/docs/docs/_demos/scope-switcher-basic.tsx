@@ -1,3 +1,4 @@
+import { useLang } from '@rspress/core/runtime';
 import { useState } from 'react';
 import {
   createScopeSource,
@@ -48,6 +49,7 @@ function StaticSelector({
   source: ScopeSource;
   index: ScopeIndex;
 }) {
+  const componentLocale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   const scope = useScope(source, index);
   const name = ['Library', 'Space', 'User'][index]!;
   const options =
@@ -58,6 +60,7 @@ function StaticSelector({
         : (users[scope.ancestors[1]?.id ?? ''] ?? []);
   return (
     <ScopeSelector
+      locale={componentLocale}
       key={JSON.stringify(scope.ancestors.map((item) => item.id))}
       kind="selectable"
       identity={{ key: name, ariaLabel: `Switch ${name.toLowerCase()}` }}
@@ -73,12 +76,13 @@ function StaticSelector({
 }
 
 export default function ScopeSwitcherBasic() {
+  const componentLocale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   const [source] = useState(() =>
     createScopeSource([libraries[0]!, spaces.research![0]!, users.papers![0]!]),
   );
   return (
     <div style={{ minHeight: 320 }}>
-      <ScopeSwitcher>
+      <ScopeSwitcher locale={componentLocale}>
         <StaticSelector source={source} index={0} />
         <StaticSelector source={source} index={1} />
         <StaticSelector source={source} index={2} />

@@ -1,5 +1,6 @@
 import type { ComponentPropsWithoutRef, ComponentType } from 'react';
 
+import ArrowRightSvg from '../../../icons/svg/arrow-right.svg?react';
 import AudioSvg from '../../../icons/svg/audio.svg?react';
 import ChevronRightSvg from '../../../icons/svg/chevron-right.svg?react';
 import DocumentSvg from '../../../icons/svg/file.svg?react';
@@ -11,12 +12,13 @@ import VideoSvg from '../../../icons/svg/video.svg?react';
 import WordSvg from '../../../icons/svg/word.svg?react';
 
 /**
- * 图标的属性。渲染为内联 SVG，接收标准 SVG 属性；`width` 与 `height` 默认 16，
+ * 图标的属性。渲染为内联 SVG，接收标准 SVG 属性；`width` 与 `height` 默认 16
+ *（ArrowRightIcon 为 14），
  * 无障碍描述用 `aria-label`（装饰性图标省略，SVG 本身带 `aria-hidden`）。
  *
  * Props of an icon. Icons render as inline SVG and accept standard SVG props;
- * `width` and `height` default to 16. Describe one with `aria-label`; decorative
- * icons omit it and the SVG stays `aria-hidden`.
+ * `width` and `height` default to 16 (14 for ArrowRightIcon). Describe one with
+ * `aria-label`; decorative icons omit it and the SVG stays `aria-hidden`.
  */
 export type IconProps = Omit<ComponentPropsWithoutRef<'svg'>, 'children'>;
 
@@ -56,6 +58,7 @@ function createIcon(Svg: IconComponent, name: string): IconComponent {
   return Icon;
 }
 
+export const ArrowRightIcon = createIcon(ArrowRightSvg, 'ArrowRightIcon');
 export const AudioIcon = createIcon(AudioSvg, 'AudioIcon');
 export const ChevronRightIcon = createIcon(ChevronRightSvg, 'ChevronRightIcon');
 export const DocumentIcon = createIcon(DocumentSvg, 'DocumentIcon');
@@ -72,3 +75,5 @@ export {
   resolveFileTypeIconKey,
 } from './file-type-icon.js';
 export type { FileTypeIconComponent } from './file-type-icon.js';
+export { VikingBotIcon } from './viking-bot-icons.js';
+export type { VikingBotIconName } from './viking-bot-icons.js';

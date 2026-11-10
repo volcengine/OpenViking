@@ -35,27 +35,45 @@
  * `var(--ov-ui-color-primary, privateFallback)` — the host's value wins when set,
  * the fallback applies otherwise.
  */
+.ov-directory-tour,
 .ov-agent-connect,
+.ov-console,
+.ov-divider,
+.ov-file-browser-entries,
 .ov-file-browser,
 .ov-file-preview,
 .ov-file-tree,
 .ov-module-placeholder,
+.ov-popover,
 .ov-scope-switcher,
 .ov-tooltip,
 .ov-tui,
 .ov-viking-bot,
+.ov-viking-bot__popover,
+.ov-viking-bot__reference-picker--mention,
 .ov-viking-bot__interaction {
+  --ov-ui-tour-shadow-default:
+    0 15px 35px rgb(0 0 0 / 5%), 0 5px 15px rgb(0 0 0 / 5%);
+  --ov-ui-tour-highlight-default: rgb(82 82 255 / 8%);
   /* 主色：面包屑、焦点环、选中态与主要按钮。 */
   --ov-ui-primary-default: #5252ff;
   --ov-ui-primary-hover-default: #7075ff;
   --ov-ui-primary-active-default: #3833d2;
+  --ov-ui-primary-disabled-default: #acb4ff;
+  --ov-ui-text-on-primary-default: #ffffff;
   /* 主色的浅色底，用于选中行与轻量高亮。 */
   --ov-ui-primary-light-default: #f5f7ff;
+  /* Agent 接入背景光晕与主色按钮文字。 */
+  --ov-ui-connect-glow-warm-default: rgb(255 149 43 / 4%);
+  --ov-ui-connect-glow-pink-default: rgb(251 79 188 / 6%);
+  --ov-ui-connect-glow-pink-soft-default: rgb(251 79 188 / 4%);
+  --ov-ui-on-primary-default: #ffffff;
 
   /* 文字：正文、次级、弱化、禁用。 */
   --ov-ui-text-1-default: #0b0b0f;
   --ov-ui-text-2-default: #3f3f51;
   --ov-ui-text-3-default: #6e718c;
+  --ov-ui-text-description-default: rgb(0 0 0 / 40%);
   --ov-ui-text-disabled-default: #a5a7bb;
 
   /* 边框：分隔线、控件描边、强调描边。 */
@@ -69,7 +87,13 @@
   --ov-ui-bg-4-default: #f6f7fa;
   --ov-ui-bg-5-default: #f1f2f9;
 
+  /* Code surfaces used by the reference conversation renderer. */
+  --ov-ui-code-bg-default: #fbfbfc;
+
   /* 语义色。 */
+  --ov-ui-status-success-default: #1f9d55;
+  --ov-ui-shadow-default: #0f172a;
+  --ov-ui-shadow-control-default: rgb(0 0 0 / 5%);
   --ov-ui-focus-default: #5252ff;
   --ov-ui-fill-hover-default: #f1f2f9;
   --ov-ui-status-error-default: #c43838;
@@ -81,24 +105,35 @@
   --ov-ui-tooltip-text-default: #ffffff;
 }
 
+.dark .ov-directory-tour,
 .dark .ov-agent-connect,
+.dark .ov-console,
+.dark .ov-divider,
+.dark .ov-file-browser-entries,
 .dark .ov-file-browser,
 .dark .ov-file-preview,
 .dark .ov-file-tree,
 .dark .ov-module-placeholder,
+.dark .ov-popover,
 .dark .ov-scope-switcher,
 .dark .ov-tooltip,
 .dark .ov-tui,
 .dark .ov-viking-bot,
+.dark .ov-viking-bot__popover,
+.dark .ov-viking-bot__reference-picker--mention,
 .dark .ov-viking-bot__interaction {
   --ov-ui-primary-default: #5f5fff;
   --ov-ui-primary-hover-default: #7075ff;
   --ov-ui-primary-active-default: #4242ba;
   --ov-ui-primary-light-default: #1a1632;
+  --ov-ui-connect-glow-warm-default: rgb(255 149 43 / 2%);
+  --ov-ui-connect-glow-pink-default: rgb(251 79 188 / 3%);
+  --ov-ui-connect-glow-pink-soft-default: rgb(251 79 188 / 2%);
 
   --ov-ui-text-1-default: #c7ccd6;
   --ov-ui-text-2-default: #9da3af;
   --ov-ui-text-3-default: #737a87;
+  --ov-ui-text-description-default: rgb(255 255 255 / 40%);
   --ov-ui-text-disabled-default: #42464e;
 
   --ov-ui-border-1-default: #23252a;
@@ -118,4 +153,29 @@
 
   --ov-ui-tooltip-bg-default: #2a2d33;
   --ov-ui-tooltip-text-default: #f0f1f3;
+}
+
+.dark .ov-viking-bot {
+  --ov-ui-code-bg-default: var(--ov-ui-bg-3-default);
+}
+
+/* 接入设计稿的卡片、页签与说明语义；不改变其他组件的通用基线。 */
+.ov-agent-connect {
+  --ov-ui-connect-card-default: #fbfbfc;
+  --ov-ui-connect-tabs-default: #f7f7f9;
+  --ov-ui-connect-selected-default: #f3f4f7;
+  --ov-ui-connect-border-default: #edeef2;
+  --ov-ui-connect-outline-default: #e1e3ea;
+  --ov-ui-connect-muted-default: #787c91;
+  --ov-ui-connect-notice-default: #2e2984;
+}
+
+.dark .ov-agent-connect {
+  --ov-ui-connect-card-default: var(--ov-ui-bg-3-default);
+  --ov-ui-connect-tabs-default: var(--ov-ui-bg-3-default);
+  --ov-ui-connect-selected-default: var(--ov-ui-bg-4-default);
+  --ov-ui-connect-border-default: var(--ov-ui-border-1-default);
+  --ov-ui-connect-outline-default: var(--ov-ui-border-2-default);
+  --ov-ui-connect-muted-default: var(--ov-ui-text-3-default);
+  --ov-ui-connect-notice-default: var(--ov-ui-text-2-default);
 }

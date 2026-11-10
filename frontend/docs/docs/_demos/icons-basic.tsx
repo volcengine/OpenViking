@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import {
+  ArrowRightIcon,
   AudioIcon,
   PdfIcon,
   PptIcon,
@@ -8,6 +9,7 @@ import {
 } from '@openviking/react/icons';
 
 const icons = [
+  { name: 'ArrowRightIcon', Icon: ArrowRightIcon },
   { name: 'AudioIcon', Icon: AudioIcon },
   { name: 'PdfIcon', Icon: PdfIcon },
   { name: 'PptIcon', Icon: PptIcon },
