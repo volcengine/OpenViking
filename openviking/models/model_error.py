@@ -184,6 +184,8 @@ def _kind_from_status(status_code: int | None) -> ModelErrorKind | None:
         return ModelErrorKind.TRANSIENT_NETWORK_ERROR
     if status_code == 401:
         return ModelErrorKind.AUTHENTICATION_ERROR
+    if status_code == 402:
+        return ModelErrorKind.QUOTA_EXHAUSTED
     if status_code == 403:
         return ModelErrorKind.PERMISSION_DENIED
     if status_code == 405 or status_code == 501:
