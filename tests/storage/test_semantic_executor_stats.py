@@ -472,6 +472,7 @@ async def test_content_write_directory_refresh_reuses_summaries_without_file_vec
     processor._load_transfer_file_summaries = AsyncMock(
         return_value={} if missing_summary else {sibling: "current b"}
     )
+    supplied_abstract = "" if missing_summary else "a summary from the file work"
     executor = SemanticTreeExecutor(
         processor=processor,
         context_type="resource",
@@ -482,7 +483,7 @@ async def test_content_write_directory_refresh_reuses_summaries_without_file_vec
         recursive=False,
         changes={"modified": [changed]},
         generation_trigger="content_write_parent_refresh",
-        file_abstracts={changed: "a summary from the file work"},
+        file_abstracts={changed: supplied_abstract},
         skip_vectorization=skip_vectorization,
     )
 
@@ -494,7 +495,9 @@ async def test_content_write_directory_refresh_reuses_summaries_without_file_vec
         [sibling] if missing_summary or skip_vectorization else []
     )
     summaries = {item["name"]: item["summary"] for item in processor.overview_inputs[0][1]}
-    assert summaries["a.md"] == "a summary from the file work"
+    # An intentionally empty result belongs to this write and must not be
+    # replaced by a cached summary or another generation attempt.
+    assert summaries["a.md"] == supplied_abstract
     if skip_vectorization:
         processor._load_transfer_file_summaries.assert_not_awaited()
     else:
