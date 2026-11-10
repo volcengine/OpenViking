@@ -1,5 +1,7 @@
 # FileBrowserEntries 文件浏览入口
 
+必填 `locale: 'zh-CN' | 'en-US'` 选择内置中英文文案；已有 `labels` 可逐项覆盖，未覆盖项跟随当前语言。业务内容仍由宿主提供。
+
 文件浏览区域顶部的入口条：连接 Agent 与导入资源。固定两个入口，宿主只决定显示哪几个、点击后做什么。
 
 ## 三种显示状态
@@ -15,6 +17,7 @@ import { FileBrowserEntries } from '@openviking/react/components/file-browser-en
 import '@openviking/react/components/file-browser-entries/style.css';
 
 <FileBrowserEntries
+  locale="zh-CN"
   onConnectAgent={openConnectDialog}
   onImportResources={openImportFlow}
   labels={{ connectAgent: '连接 Agent', importResources: '导入资源' }}
@@ -28,16 +31,17 @@ import '@openviking/react/components/file-browser-entries/style.css';
 两个都省略时整块不渲染。只显示一个入口时不画分隔线——线分隔的是两个相邻项，只剩一个就无从分隔。
 
 ```tsx
-<FileBrowserEntries onImportResources={openImportFlow} />
+<FileBrowserEntries locale="zh-CN" onImportResources={openImportFlow} />
 ```
 
 ## 属性
 
 | 属性                | 类型                       | 默认值 | 说明                               |
 | ------------------- | -------------------------- | ------ | ---------------------------------- |
+| `locale`            | `'zh-CN' \| 'en-US'`       | 必填   | 内置中英文文案。                   |
 | `onConnectAgent`    | `() => void`               | —      | 连接入口被点击；省略时不显示该入口 |
 | `onImportResources` | `() => void`               | —      | 导入入口被点击；省略时不显示该入口 |
-| `labels`            | `FileBrowserEntriesLabels` | —      | 两项文案，未提供的沿用英文默认值   |
+| `labels`            | `FileBrowserEntriesLabels` | —      | 两项文案，未提供的项跟随 locale    |
 | `className`         | `string`                   | —      | 容器附加类名                       |
 
 ## 与模块的关系

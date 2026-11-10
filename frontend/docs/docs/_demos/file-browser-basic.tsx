@@ -1,3 +1,4 @@
+import { useLang } from '@rspress/core/runtime';
 import { OpenVikingProvider } from '@openviking/react/client';
 import { FileBrowserEntries } from '@openviking/react/components/file-browser-entries';
 import '@openviking/react/components/file-browser-entries/style.css';
@@ -182,49 +183,19 @@ function offlineFetch(
   }
 }
 
-const LABELS = {
-  searchPlaceholder: '搜索文件 ⌘+K...',
-  refresh: '刷新上下文目录',
-  empty: '选择一个文件查看内容',
-  searchEmpty: '没有匹配的资源',
-  searchLoading: '搜索中…',
-  loading: '加载中…',
-  previewMode: '预览',
-  sourceMode: '源码',
-  copyPath: '复制路径',
-  copyContent: '复制正文',
-  viewSwitch: '切换视图',
-  l0Summary: 'L0 摘要',
-  l1Overview: 'L1 总览',
-  summaryEmpty: '暂无生成内容',
-  download: '下载',
-  tree: {
-    empty: '该文件夹为空',
-    error: '加载失败',
-    retry: '重试',
-    loadMore: '加载更多',
-    loading: '加载中…',
-    expand: '展开 {name}',
-    collapse: '折叠 {name}',
-  },
-} as const;
-
 export default function FileBrowserBasic() {
+  const componentLocale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   return (
-    <div lang="zh-CN" style={{ height: 720, minWidth: 720 }}>
+    <div style={{ height: 720, minWidth: 720 }}>
       <OpenVikingProvider fetch={offlineFetch}>
         <FileBrowser
-          locale="zh-CN"
+          locale={componentLocale}
           defaultExpandedUri={MEMORIES}
-          labels={LABELS}
           toolbarActions={
             <FileBrowserEntries
+              locale={componentLocale}
               onConnectAgent={() => {}}
               onImportResources={() => {}}
-              labels={{
-                connectAgent: '连接 Agent',
-                importResources: '导入资源',
-              }}
             />
           }
         />

@@ -16,7 +16,7 @@ import McpIcon from '../../../../icons/svg/agent-connect/mcp.svg?react';
 import CliIcon from '../../../../icons/svg/agent-connect/cli.svg?react';
 import ApiIcon from '../../../../icons/svg/agent-connect/api.svg?react';
 import SdkIcon from '../../../../icons/svg/agent-connect/sdk.svg?react';
-import { AGENT_CONNECT_COPY } from './agent-connect-copy.js';
+import { resolveAgentConnectLabels } from './agent-connect-copy.js';
 import { getAgentConnectContent } from './agent-connect-instructions.js';
 import type { AgentConnectLocale } from './types.js';
 
@@ -56,7 +56,7 @@ const custom = [
 
 export function getAgentConnectDesign(locale: AgentConnectLocale) {
   const content = getAgentConnectContent(locale);
-  const labels = AGENT_CONNECT_COPY[locale];
+  const labels = resolveAgentConnectLabels(locale);
   return {
     tabs: [
       { id: 'mainstream', label: labels.mainstream },

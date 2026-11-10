@@ -7,7 +7,8 @@ import '#file-tree-console.css';
 import { COPY, ENTRIES } from '#file-tree-console-data';
 
 export default function FileTreeConsole() {
-  const text = COPY[useLang() === 'zh' ? 'zh' : 'en'];
+  const zh = useLang() === 'zh';
+  const text = COPY[zh ? 'zh' : 'en'];
   const [open, setOpen] = useState(
     new Set(['user', 'user/alice', 'user/alice/peers']),
   );
@@ -95,6 +96,7 @@ export default function FileTreeConsole() {
       </div>
       <div className="ov-file-tree-demo__panel">
         <FileTree
+          locale={zh ? 'zh-CN' : 'en-US'}
           aria-label={text.tree}
           rows={rows}
           selectedId={selected}

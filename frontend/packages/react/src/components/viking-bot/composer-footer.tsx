@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type { ReactNode, RefObject } from 'react';
 import type { SenderInstance } from '@ark-design/ui/sender';
 import type { VikingBotLabels } from './model.js';
@@ -6,6 +7,7 @@ import { ComposerFileButton } from './composer-attachments.js';
 import { ReferenceButton } from './composer-references.js';
 
 export function ComposerFooter({
+  locale,
   references,
   senderRef,
   labels,
@@ -17,6 +19,7 @@ export function ComposerFooter({
   submit,
 }: {
   senderRef: RefObject<SenderInstance | null>;
+  locale: Locale;
   labels: Required<VikingBotLabels>;
   references?: VikingBotReferences;
   disabled?: boolean;
@@ -39,6 +42,7 @@ export function ComposerFooter({
         ) : null}
         {references ? (
           <ReferenceButton
+            locale={locale}
             config={references}
             labels={labels}
             senderRef={senderRef}

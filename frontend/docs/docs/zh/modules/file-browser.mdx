@@ -1,5 +1,7 @@
 # FileBrowser 文件浏览
 
+必填 `locale: 'zh-CN' | 'en-US'` 选择内置中英文文案；已有 `labels` 可逐项覆盖，未覆盖项跟随当前语言。业务内容仍由宿主提供。
+
 目录导航、搜索与内容预览作为一个模块。模块自己取数，宿主提供配置、受控的当前资源、工具栏入口与文案。
 
 组件已实现目录树、搜索与预览的联动：目录按需展开并分页，点击文件加载预览，搜索结果选中后同样打开预览。`useFileBrowser` 可单独使用，自行组装视图。
@@ -42,8 +44,10 @@ import '@openviking/react/components/file-browser-entries/style.css';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 
 <FileBrowser
+  locale="zh-CN"
   toolbarActions={
     <FileBrowserEntries
+      locale="zh-CN"
       onConnectAgent={connect}
       onImportResources={openImport}
       labels={{ connectAgent: '连接 Agent', importResources: '导入资源' }}
@@ -58,7 +62,7 @@ import { FileBrowser } from '@openviking/react/modules/file-browser';
 
 ```tsx
 <Popover content={<ResourceMenu />} trigger="hover">
-  <FileBrowserEntries onImportResources={openImport} />
+  <FileBrowserEntries locale="zh-CN" onImportResources={openImport} />
 </Popover>
 ```
 
@@ -72,7 +76,7 @@ import { FileBrowser } from '@openviking/react/modules/file-browser';
 
 宽度由模块自己持有，并以 `--ov-file-browser-tree-width` 写在容器上——想改默认值或另做布局联动时读它即可，但覆盖它不会改变实际宽度，因为拖动的结果会立刻写回同一个变量。要固定宽度，请把模块包在定宽容器里，由容器的宽度上限约束。
 
-分隔条的无障碍名称来自 `labels.resizeTree`，需要跟随界面语言时覆盖它。
+分隔条的无障碍名称来自 `labels.resizeTree`，默认跟随 locale，也可单独覆盖。
 
 ## 失败态
 
@@ -99,7 +103,7 @@ import { FileBrowser } from '@openviking/react/modules/file-browser';
 | `onUriChange`        | `(uri: string \| null) => void` | —           | 当前资源变化后触发，参数为新的 URI。签名允许 `null`（上游契约），但模块目前不会主动上报：没有取消选中的交互，宿主不要依赖它来收起详情区。                                                                                                                                                                                     |
 | `rootUri`            | `string`                        | `viking://` | 目录树的根，宿主据此把浏览范围收敛到某个子树。                                                                                                                                                                                                                                                                                |
 | `defaultExpandedUri` | `string`                        | —           | 首次加载后自动展开到的路径，逐级展开并加载。省略时只展开根，其余折叠。                                                                                                                                                                                                                                                        |
-| `locale`             | `'en-US' \| 'zh-CN'`            | —           | 透传给预览底座的文案语言。组件自身文案仍由 `labels` 控制。                                                                                                                                                                                                                                                                    |
+| `locale`             | `'zh-CN' \| 'en-US'`            | 必填        | 选择内置中英文文案。                                                                                                                                                                                                                                                                                                          |
 | `labels`             | `FileBrowserLabels`             | —           | 可替换文案：`searchPlaceholder`、`searchEmpty`、`searchFailed`、`loading`、`refresh`、`empty`、`error`、`retry`、`previewMode`、`sourceMode`、`history`、`copyPath`、`viewSwitch`、`resizeTree`，`summaryEmpty`、`summaryFailed`（某一级摘要请求失败且服务端没给消息时的兜底文案），以及透传给树与预览的 `tree` / `preview`。 |
 | `className`          | `string`                        | —           | 容器附加类名。                                                                                                                                                                                                                                                                                                                |
 | `style`              | `CSSProperties`                 | —           | 容器样式覆盖。                                                                                                                                                                                                                                                                                                                |
@@ -107,3 +111,7 @@ import { FileBrowser } from '@openviking/react/modules/file-browser';
 文案为纯文本，宿主可将自身的翻译结果映射到这些属性。props 里没有数据字段——数据由模块自己加载。
 
 模块通过 `useFileBrowser` 自己取数，宿主无需提供目录或预览数据；`labels.tree` 与 `labels.preview` 分别透传给文件树与文件预览组件。
+
+`labels.formatCharacterCount(count)` 可覆盖预览底部的字符数文案，默认随 `locale` 切换。
+
+`useFileBrowser` 可独立接收可选的 `locale`（默认 `en-US`），使用与组合视图相同的模块语言资源。`summaryLabels` 和 `formatCharacterCount` 可覆盖摘要标题、失败兜底和字符数文案；切换语言或文案只更新展示，不重新加载目录摘要或文件正文。

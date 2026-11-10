@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import {
   useEffect,
   useId,
@@ -16,7 +17,7 @@ const subscribe = () => () => {};
 const clientSnapshot = () => true;
 const serverSnapshot = () => false;
 
-function historyTime(record: TuiRecord, locale: 'en' | 'zh') {
+function historyTime(record: TuiRecord, locale: Locale) {
   const date = new Date(record.createdAtMs ?? NaN);
   if (!Number.isFinite(date.getTime())) return record.createdAt ?? '';
   const parts = Object.fromEntries(
@@ -43,7 +44,7 @@ export function ConsoleHistory({
 }: {
   records: readonly TuiRecord[];
   isExecuting: boolean;
-  locale: 'en' | 'zh';
+  locale: Locale;
   labels: ReturnType<typeof consoleLabels>;
   onRecall: (command: string) => void;
 }) {

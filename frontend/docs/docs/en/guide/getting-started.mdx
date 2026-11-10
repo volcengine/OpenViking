@@ -1,5 +1,7 @@
 # Getting started
 
+All public UI components and composed modules require an explicit `locale: 'zh-CN' | 'en-US'` for built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow the current locale and update when it changes. Hosts still provide business content, slots and callback messages.
+
 OpenViking UI provides React foundations for building AI application interfaces on OpenViking, the context database for AI agents. The workspace includes Rslib builds, bilingual documentation, layered directory conventions, and scoped styles. Applications provide business UI, data, authentication, and workflow orchestration.
 
 The package provides FileTree, FilePreview, Tui, ScopeSwitcher and AgentConnect views, five file-type icons, and two business module placeholders. FileTree, FilePreview and Tui are implemented against their contracts, ScopeSwitcher is a stateless layout, and AgentConnect still renders a fixed-size shell. See the [component overview](../components/) and [module overview](../modules/) for their current scope. Public business Hooks are not implemented yet.
@@ -37,7 +39,7 @@ There are no aggregate `components` or `modules` JavaScript entries. Business pl
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
 
-<FileBrowser />;
+<FileBrowser locale="en-US" />;
 ```
 
 Each module's props are settled — request options, controlled state, callbacks, slots and copy — though the placeholder component itself still consumes only `className`, `style` and one label. None of them requires a Provider yet. See [Modules](../modules/) for runnable examples and the full props tables.
@@ -107,3 +109,9 @@ Pass files or quoted globs after `npm run lint --` to limit formatting and lint 
 ## Deployment
 
 Changes under `frontend/` run the UI checks. On `main`, the existing product documentation deployment includes the UI site under `/ui/` in the same complete site artifact or storage bucket. Package publication uses a separate tag-triggered workflow; local builds and tests do not publish to npm.
+
+## Built-in copy and language changes
+
+Components and modules use local, typed English and Chinese resources with shared lightweight resolution. Translations live with their owners and do not depend on the host’s i18next instance or a translation platform. Undefined entries in existing `labels` inherit the selected language; empty strings remain explicit overrides.
+
+Standalone `useConsole` and `useFileBrowser` accept an optional `locale`, defaulting to `en-US`. Changing it updates library notices, command help and summary titles without restarting requests or clearing sessions and drafts. Server content, original error messages and AI replies keep their original text.

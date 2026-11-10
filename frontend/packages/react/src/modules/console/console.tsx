@@ -13,7 +13,7 @@ import type { ConsoleProps } from './types.js';
 export function Console({
   mode,
   defaultMode,
-  locale = 'en',
+  locale = 'en-US',
   scopeKey,
   requestOptions,
   onModeChange,

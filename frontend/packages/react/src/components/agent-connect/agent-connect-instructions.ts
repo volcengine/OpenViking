@@ -1,3 +1,5 @@
+import { resolveLocale } from '../../shared/locale.js';
+import { resolveAgentConnectLabels } from './agent-connect-copy.js';
 import contentZh from './content-zh.js';
 import contentEn from './content-en.js';
 import type { AgentConnectLocale } from './types.js';
@@ -10,7 +12,10 @@ export const DEFAULT_BASE_URL =
   'https://api.vikingdb.cn-beijing.volces.com/openviking';
 
 export function getAgentConnectContent(locale: AgentConnectLocale) {
-  return locale === 'en' ? contentEn : contentZh;
+  return resolveLocale<typeof contentEn | typeof contentZh>(
+    { 'en-US': contentEn, 'zh-CN': contentZh },
+    locale,
+  );
 }
 
 /** 使用回调替换，密钥中的 $& 等字符也保持原值；不递归替换注入值。 */
@@ -21,6 +26,7 @@ export function getAgentConnectInstructions(
   baseUrl: string,
   guideId?: string,
 ) {
+  const text = resolveAgentConnectLabels(locale);
   const content = getAgentConnectContent(locale)[id];
   const harness = INSTALLER_HARNESSES[id];
   if (harness) {
@@ -36,17 +42,13 @@ export function getAgentConnectInstructions(
   let template = guide?.markdown ?? content.markdown;
   if (id === 'hermes' && baseUrl.replace(/\/+$/, '') !== DEFAULT_BASE_URL) {
     // 自定义连接不要求开通云服务；保留后续 profile 与插件操作步骤。
-    template = template.replace(/^[\s\S]*?(?=^## )/m, () =>
-      locale === 'zh'
-        ? '# 为 Hermes 配置自定义 OpenViking 服务\n\n连接调用方指定的 OpenViking 服务，使用以下步骤填写服务地址和 API Key。\n\n'
-        : '# Custom OpenViking server for Hermes\n\nConnect to the host-provided OpenViking server using the URL and API key in the setup steps below.\n\n',
+    template = template.replace(
+      /^[\s\S]*?(?=^## )/m,
+      () => text.hermesCustomIntro,
     );
     template = template.replace(
       /^3\. (?:选择|Choose) \*\*OpenViking Service \(VolcEngine Cloud\)\*\*[。.][ \t]*$/m,
-      () =>
-        locale === 'zh'
-          ? '3. 选择 **Custom**，服务地址填写 {{OPENVIKING_BASE_URL}}。'
-          : '3. Choose **Custom** and enter {{OPENVIKING_BASE_URL}} as the server URL.',
+      () => text.hermesCustomStep,
     );
   }
   // Hermes/OpenClaw 的向导正文没有密钥占位符，补上当前调用方的凭据。

@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 
 import CopyIcon from '../../../../icons/svg/agent-connect/copy.svg?react';
-import { AGENT_CONNECT_COPY } from './agent-connect-copy.js';
+import { resolveAgentConnectLabels } from './agent-connect-copy.js';
 import { AgentConnectMarkdown } from './agent-connect-markdown.js';
 import type { AgentConnectLocale } from './types.js';
 
@@ -28,7 +28,7 @@ export function AgentConnectInstructionsView({
   const setRoot = useCallback((node: HTMLDivElement | null) => {
     mounted.current = node !== null;
   }, []);
-  const labels = AGENT_CONNECT_COPY[locale];
+  const labels = resolveAgentConnectLabels(locale);
   const message =
     status === 'copied'
       ? labels.copied

@@ -29,7 +29,7 @@ export interface FilePreviewHeaderProps {
   levels?: readonly FilePreviewLevel[];
   levelKey?: string;
   onLevelChange?: (key: string) => void;
-  text: { copyPath: string };
+  text: { copyPath: string; showHiddenPath: string };
   onOpenParent: (uri: string) => void;
 }
 
@@ -71,6 +71,7 @@ export function FilePreviewHeader({
       <div className="ov-file-preview__header">
         <div className="ov-file-preview__path-row">
           <FilePreviewBreadcrumb
+            hiddenPathLabel={text.showHiddenPath}
             segments={segments}
             title={title}
             canOpen={canOpenParent}

@@ -1,5 +1,7 @@
 # FileTree
 
+Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
+
 A flattened file tree. The host owns the tree state and passes the visible rows in order; the component renders them and reports successful operations.
 
 The component renders the host-flattened row list and handles selection, expansion, paging and keyboard interaction. Search and refresh controls are optional; the host supplies search UI, data requests and import flows.
@@ -16,6 +18,7 @@ Enable `search` and `refresh` independently; both are hidden by default. `operat
 
 ```tsx
 <FileTree
+  locale="en-US"
   rows={rows}
   search
   refresh={{ loading: isRefreshing, disabled: !canRefresh }}
@@ -86,6 +89,7 @@ The nine long-term-memory keys describe themselves in the tooltip only: the dire
 
 ```tsx
 <FileTree
+  locale="en-US"
   rows={rows}
   labels={{
     info: {
@@ -138,6 +142,7 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 
 | Property                  | Type                                                   | Default  | Description                                                                    |
 | ------------------------- | ------------------------------------------------------ | -------- | ------------------------------------------------------------------------------ |
+| `locale`                  | `'zh-CN' \| 'en-US'`                                   | Required | Built-in Chinese and English copy.                                             |
 | `rows`                    | `readonly FileTreeRow[]`                               | Required | Visible rows in render order.                                                  |
 | `operations`              | `FileTreeOperations`                                   | —        | Asynchronous operation capabilities; missing methods disable their operations. |
 | `selectedId`              | `string \| null`                                       | —        | Selected row id, owned by the host.                                            |
@@ -146,7 +151,7 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 | `errorFallback`           | `ReactNode`                                            | —        | Shown when a whole-tree error row is present.                                  |
 | `emptyFallback`           | `ReactNode`                                            | —        | Shown when `rows` is empty.                                                    |
 | `slots`                   | `FileTreeSlots`                                        | —        | `toolbar` and `spinner` slots.                                                 |
-| `labels`                  | `FileTreeLabels`                                       | English  | Replaceable copy.                                                              |
+| `labels`                  | `FileTreeLabels`                                       | locale   | Replaceable copy.                                                              |
 | `getRowAttributes`        | `(row) => HTMLAttributes<HTMLDivElement>`              | —        | Extra attributes per row; `className` is merged.                               |
 | `renderDashboard`         | `(row) => ReactNode`                                   | —        | Row-end indicator; `null` hides it.                                            |
 | `renderRowIcon`           | `(row) => ReactNode`                                   | —        | Leading icon of a file row; the generic file icon when omitted.                |

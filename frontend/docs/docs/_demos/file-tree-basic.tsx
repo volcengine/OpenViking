@@ -105,7 +105,7 @@ const INDICATORS: Record<string, Indicator> = {
  * 示例文案。文档站中英文页面共用这份示例，因此文案跟随页面语言。
  */
 const COPY = {
-  en: {
+  'en-US': {
     loading: 'Loading…',
     loadMore: 'Load more',
     empty: 'This folder is empty',
@@ -116,7 +116,7 @@ const COPY = {
     conflict: 'Pending conflicts',
     treeLabel: 'File tree',
   },
-  zh: {
+  'zh-CN': {
     loading: '加载中…',
     loadMore: '加载更多',
     empty: '该文件夹为空',
@@ -128,25 +128,6 @@ const COPY = {
     treeLabel: '文件树',
   },
 };
-
-/** Host copy the built-in directory descriptions are overridden with. */
-const INFO_LABELS = {
-  en: undefined,
-  zh: {
-    description: {
-      userRoot: '当前用户的上下文数据',
-      memories: '跨会话沉淀的长期记忆',
-      peers: '按应用或工作区隔离上下文',
-      privacy: '密钥等敏感配置',
-      userResources: '用户的私有知识资料',
-      sessions: '对话与任务运行记录',
-      skills: 'Agent 可用的技能与工具',
-      sharedResources: '数据库内的共享知识资料',
-      agentRoot: 'Agent 的能力、工具和经验',
-      systemRoot: '当前 Account 的内置技能、官方模板与自定义模板',
-    },
-  },
-} as const;
 
 interface State {
   open: ReadonlySet<string>;
@@ -315,7 +296,7 @@ function ExperienceBoardIcon(props: IconSvgProps) {
 }
 
 export default function FileTreeBasic() {
-  const lang = useLang() === 'zh' ? 'zh' : 'en';
+  const lang = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   const t = COPY[lang];
   // Directories expanded on first paint already carry their first page, so the
   // initial view shows content instead of an empty or loading row.
@@ -362,10 +343,10 @@ export default function FileTreeBasic() {
   return (
     <div style={{ height: 420 }}>
       <FileTree
+        locale={lang}
         rows={rows}
         selectedId={selected}
         aria-label={t.treeLabel}
-        labels={{ info: INFO_LABELS[lang] }}
         operations={{
           select: (row) => {
             setSelected(row.uri);
@@ -399,7 +380,7 @@ function Indicator({
   text,
 }: {
   indicator: Indicator;
-  text: (typeof COPY)['en'];
+  text: (typeof COPY)['en-US'];
 }) {
   const pending = indicator.kind === 'wiki' && indicator.pendingConflicts;
   const label =

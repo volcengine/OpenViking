@@ -2,13 +2,15 @@
 
 [English](README.md) / 中文
 
+必填 `locale: 'zh-CN' | 'en-US'` 选择内置中英文文案；已有 `labels` 可逐项覆盖，未覆盖项跟随当前语言。业务内容仍由宿主提供。
+
 `ScopeSwitcher` 是已实现的无状态面包屑布局。通过 `@openviking/react/components/scope-switcher` 导出的独立 `ScopeSelector` 子组件组合层级，不再支持旧的 `levels` 属性。每个子组件维护自己的展开状态、接收本级数据，布局根组件不汇总状态或订阅请求。
 
 ```tsx
-<ScopeSwitcher>
-  <ScopeSelector kind="selectable" identity={...} data={...} state={...} actions={...} />
-  <ScopeSelector kind="selectable" identity={...} data={...} state={...} actions={...} />
-  <ScopeSelector kind="fixed" identity={...} trigger={{ label: 'default' }} />
+<ScopeSwitcher locale="zh-CN">
+  <ScopeSelector locale="zh-CN" kind="selectable" identity={...} data={...} state={...} actions={...} />
+  <ScopeSelector locale="zh-CN" kind="selectable" identity={...} data={...} state={...} actions={...} />
+  <ScopeSelector locale="zh-CN" kind="fixed" identity={...} trigger={{ label: 'default' }} />
 </ScopeSwitcher>
 ```
 

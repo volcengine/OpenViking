@@ -6,8 +6,8 @@ import { createTuiRecords } from '#tui-records';
 import { createTuiDemoRecord } from '#tui-demo-result';
 import { createTuiCommands, createTuiCommandGroups } from '#tui-commands';
 
-function TuiDemo({ locale }: { locale: 'en' | 'zh' }) {
-  const isChinese = locale === 'zh';
+function TuiDemo({ locale }: { locale: 'en-US' | 'zh-CN' }) {
+  const isChinese = locale === 'zh-CN';
   const [records, setRecords] = useState(() => createTuiRecords(isChinese));
   const [value, setValue] = useState('');
   return (
@@ -51,6 +51,6 @@ function TuiDemo({ locale }: { locale: 'en' | 'zh' }) {
 }
 
 export default function TuiBasic() {
-  const locale = useLang() === 'zh' ? 'zh' : 'en';
+  const locale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   return <TuiDemo key={locale} locale={locale} />;
 }

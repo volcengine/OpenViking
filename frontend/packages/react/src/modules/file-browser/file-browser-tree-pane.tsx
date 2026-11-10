@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type { ReactNode } from 'react';
 
 import { FileTree } from '../../components/file-tree/index.js';
@@ -23,6 +24,7 @@ import type { FileBrowserApi } from './types.js';
  */
 export interface FileBrowserTreePaneProps {
   toolbarActions?: ReactNode;
+  locale: Locale;
   searchId: string;
   browser: FileBrowserApi;
   treeLabels: FileTreeLabels | undefined;
@@ -38,6 +40,7 @@ export interface FileBrowserTreePaneProps {
 
 export function FileBrowserTreePane({
   toolbarActions,
+  locale,
   searchId,
   browser,
   treeLabels,
@@ -66,6 +69,7 @@ export function FileBrowserTreePane({
       />
       <div className="ov-file-browser__tree-scroll">
         <FileTree
+          locale={locale}
           rows={browser.rows}
           selectedId={browser.selectedId}
           isReady={browser.isReady}

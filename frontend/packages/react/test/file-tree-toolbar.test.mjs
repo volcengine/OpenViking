@@ -5,7 +5,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { FileTree } from '@openviking/react/components/file-tree';
 
 const render = (props = {}) =>
-  renderToStaticMarkup(createElement(FileTree, { rows: [], ...props }));
+  renderToStaticMarkup(
+    createElement(FileTree, { rows: [], locale: 'en-US', ...props }),
+  );
 const operations = { search: async () => {}, refresh: async () => {} };
 
 test('toolbar controls are opt-in independently of operation capabilities', () => {
@@ -50,4 +52,27 @@ test('custom toolbar remains available above the built-in controls', () => {
     slots: { toolbar: createElement('button', null, 'Import') },
   });
   assert.ok(html.indexOf('Import') < html.indexOf('ov-file-tree__search'));
+});
+
+test('built-in toolbar copy follows locale and preserves individual host overrides', () => {
+  const chinese = render({
+    locale: 'zh-CN',
+    search: true,
+    refresh: true,
+    operations,
+  });
+  assert.match(chinese, /搜索文件…/);
+  assert.match(chinese, /aria-label="刷新文件树"/);
+  const english = render({ search: true, refresh: true, operations });
+  assert.match(english, /Search files…/);
+  assert.match(english, /aria-label="Refresh file tree"/);
+  const overridden = render({
+    locale: 'zh-CN',
+    search: true,
+    refresh: true,
+    operations,
+    labels: { search: 'Host search' },
+  });
+  assert.match(overridden, /Host search/);
+  assert.match(overridden, /aria-label="刷新文件树"/);
 });

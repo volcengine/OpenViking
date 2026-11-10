@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import {
   FilePreview,
   type FilePreviewActions,
@@ -24,7 +25,7 @@ import { CopyIcon, DownloadIcon } from './file-browser-detail-icons.js';
 export interface FileBrowserDetailProps {
   tabs: readonly FilePreviewTab[];
   activeKey: string | null;
-  locale?: 'en-US' | 'zh-CN';
+  locale: Locale;
   labels?: FileBrowserLabels['preview'];
   footer?: string;
   /** 分段器与图标按钮的文案。Copy for the segmented control and icon buttons. */

@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type {
   ViewerHandle,
   ViewerViewModeOption,
@@ -19,7 +20,7 @@ import type {
 export interface FilePreviewBodyProps {
   fileTab: FilePreviewFileTab;
   text: Required<FilePreviewLabels>;
-  locale?: 'en-US' | 'zh-CN';
+  locale?: Locale;
   viewMode: FilePreviewViewMode;
   editing: ReturnType<typeof useFilePreviewEditing>;
   onViewModeChange: (mode: FilePreviewViewMode) => void;

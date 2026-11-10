@@ -30,7 +30,7 @@ export function createTuiCompileRecord(): TuiRecord {
 }
 
 export function createTuiHelp(isChinese: boolean): TuiRecord {
-  const locale = isChinese ? 'zh' : 'en';
+  const locale = isChinese ? 'zh-CN' : 'en-US';
   const commands = createTuiCommands(locale);
   return {
     id: 'help',

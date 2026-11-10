@@ -2,13 +2,13 @@
 
 English / [中文](README_CN.md)
 
-A connection view matching [Figma node 10468:23946](https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=10468-23946). Two tabs, fourteen agents, four developer methods, icons and localized content are built in. Hosts must supply `apiKey` and `locale: 'zh' | 'en'`; `baseUrl` optionally overrides the default cloud endpoint.
+A connection view matching [Figma node 10468:23946](https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=10468-23946). Two tabs, fourteen agents, four developer methods, icons and localized content are built in. Hosts must supply `apiKey` and `locale: 'zh-CN' | 'en-US'`; `baseUrl` optionally overrides the default cloud endpoint.
 
 ```tsx
 import { AgentConnect } from '@openviking/react/components/agent-connect';
 import '@openviking/react/components/agent-connect/style.css';
 
-<AgentConnect apiKey={apiKey} locale="en" />;
+<AgentConnect apiKey={apiKey} locale="en-US" />;
 ```
 
 ## Design and interaction contract

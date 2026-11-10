@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type {
   ForwardRefExoticComponent,
   HTMLAttributes,
@@ -402,8 +403,8 @@ export interface FileTreeInfoLabels {
 }
 
 /**
- * 可替换文案，组件内置英文默认值。
- * Replaceable copy; the component ships English defaults.
+ * 可替换文案，组件内置中英文文案。
+ * Replaceable copy with built-in Chinese and English defaults.
  */
 export interface FileTreeLabels {
   /** 搜索入口文案。Search trigger label. */
@@ -539,6 +540,8 @@ export interface FileTreeProps extends Omit<
    * Visible rows in render order.
    */
   rows: readonly FileTreeRow[];
+  /** 内置中英文文案的语言。Language of the built-in interface copy. */
+  locale: Locale;
   /**
    * 操作的执行能力；省略对应方法时禁用该操作。
    * Operation capabilities; omitting a method disables its operation.
@@ -647,8 +650,8 @@ export interface FileTreeProps extends Omit<
    */
   slots?: FileTreeSlots;
   /**
-   * 可替换文案，缺省为英文。
-   * Replaceable copy; English by default.
+   * 可替换文案，未提供的项使用当前 locale 的内置文案。
+   * Replaceable copy; omitted fields follow locale.
    */
   labels?: FileTreeLabels;
 }

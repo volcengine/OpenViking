@@ -111,11 +111,11 @@ function EmptyTuiExample({
   commands,
   quickCommands,
 }: {
-  locale: 'en' | 'zh';
+  locale: 'en-US' | 'zh-CN';
   commands: readonly TuiCommandDefinition[];
   quickCommands: readonly TuiCommandDefinition[];
 }) {
-  const isChinese = locale === 'zh';
+  const isChinese = locale === 'zh-CN';
   const [records, setRecords] = useState<readonly TuiRecord[]>([]);
   const [value, setValue] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
@@ -187,7 +187,7 @@ function EmptyTuiExample({
 }
 
 export default function TuiEmpty() {
-  const locale = useLang() === 'zh' ? 'zh' : 'en';
+  const locale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   const commands = createTuiCommands(locale);
   const quickCommands = [
     'add-resource',
