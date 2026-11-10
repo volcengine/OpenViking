@@ -19,11 +19,32 @@ from .tool_protocols.common import PREFIX, ToolLoopError, ToolRound, add_usage
 from .windows import ALONE, NEW_CONTEXT, window_number
 
 REFUSED = "OpenViking tools are unavailable for the rest of this request; continue without them."
+STREAM_ERROR_MESSAGE = "Model stream failed"
 
 
 def added_tokens(value):
     # Client history, schemas and images never consume the continuation budget.
     return (len(orjson.dumps(value)) + 2) // 3
+
+
+def public_stream_error(value):
+    """An upstream error restricted to protocol-level fields."""
+    event: dict[str, object] = {"type": "error"}
+    for key in ("code", "message"):
+        if isinstance(value.get(key), str):
+            event[key] = value[key]
+    detail = value.get("error")
+    if isinstance(detail, dict):
+        safe_detail = {
+            key: detail[key]
+            for key in ("type", "code", "message")
+            if isinstance(detail.get(key), str)
+        }
+        safe_detail.setdefault("message", STREAM_ERROR_MESSAGE)
+        event["error"] = safe_detail
+    elif "message" not in event:
+        event["message"] = STREAM_ERROR_MESSAGE
+    return event
 
 
 class HiddenToolLoop:
@@ -88,8 +109,9 @@ class HiddenToolLoop:
             if value is None:
                 continue
             if "error" in value or value.get("type") == "error":
-                event = value if value.get("type") else {"type": "error", **value}
-                raise ToolLoopError("Model stream failed", event=event)
+                raise ToolLoopError(
+                    STREAM_ERROR_MESSAGE, event=public_stream_error(value)
+                )
             for event in self.adapter.event(value):
                 yield self.adapter.encode(event)
 
@@ -238,7 +260,7 @@ class HiddenToolLoop:
 
     def error(self, error: Exception) -> bytes:
         events = (
-            [error.event]
+            self.adapter.upstream_error(error.event)
             if isinstance(error, ToolLoopError) and error.event is not None
             else self.adapter.error(str(error))
         )
