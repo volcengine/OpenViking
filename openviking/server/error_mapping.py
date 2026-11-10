@@ -360,6 +360,15 @@ def _map_structured_model_error(exc: Exception) -> OpenVikingError | None:
         return None
 
     code = _MODEL_ERROR_KIND_TO_PROTOCOL_CODE.get(error.kind, "INTERNAL")
+    # These kinds do not fully describe the public error. For example, SDKs
+    # group 409 conflicts and 504 timeouts with other transient failures.
+    if error.kind in {
+        ModelErrorKind.UNKNOWN,
+        ModelErrorKind.INVALID_REQUEST,
+        ModelErrorKind.TRANSIENT_SERVICE_ERROR,
+        ModelErrorKind.TRANSIENT_NETWORK_ERROR,
+    } or (error.kind is ModelErrorKind.UNSUPPORTED and error.status_code == 501):
+        code = error_code_from_http_status(error.status_code, default=code)
     if error.kind is ModelErrorKind.TRANSIENT_NETWORK_ERROR:
         chain = tuple(_iter_exception_chain(exc))
         if error.status_code in {408, 504} or any(
@@ -400,8 +409,8 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
             )
 
     # Once a provider boundary has attached a ModelError, it is the fact owner.
-    # UNKNOWN is returned as a redacted INTERNAL error instead of falling back
-    # to message heuristics.
+    # UNKNOWN may still carry an HTTP status; keep its message redacted and
+    # never fall back to message heuristics.
     if any(isinstance(item, ModelError) for item in _iter_exception_chain(exc)):
         return _map_structured_model_error(exc)
 
@@ -531,10 +540,9 @@ def map_exception(
     if isinstance(exc, OpenVikingError):
         return exc
     # A provider boundary that attached ModelError owns the classification.
-    # In particular, UNKNOWN must stop here instead of entering generic text
-    # heuristics that could both misclassify and expose an internal message.
+    # UNKNOWN must stop here instead of entering generic text heuristics.
     if any(isinstance(item, ModelError) for item in _iter_exception_chain(exc)):
-        return _map_structured_model_error(exc)
+        return _map_upstream_api_error(exc)
     if isinstance(exc, ResourceBusyError):
         details: dict[str, Any] = {
             "resource": exc.uri or resource,
