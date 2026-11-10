@@ -9,7 +9,7 @@ import { startAdapter, synchronize } from "../lib/runtime.mjs";
 import { activate } from "../lib/activation.mjs";
 
 for (const failure of ["transport", 503, 403]) {
-  test(`background disconnect retains pending activation after initial GET failure: ${failure}`, async (t) => {
+  test(`background disconnect retains pending activation after initial GET failure: ${failure}`, { timeout: 10000 }, async (t) => {
     const directory = await fs.mkdtemp(join(tmpdir(), "ov-restoration-recovery-"));
     const previous = { ...process.env };
     process.env.OPENVIKING_MAGPIE_MODELS_DIR = directory;
