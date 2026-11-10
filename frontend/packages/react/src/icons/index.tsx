@@ -81,14 +81,26 @@ export const UserIcon = createIcon(UserSvg, 'UserIcon');
  * gradient swatch picked by name — so this renders a colour block rather than an
  * outline. The same name always resolves to the same gradient.
  *
- * 这五个渐变是身份色而不是主题语义色：设计稿规定亮暗两种主题下用同一套渐变，
- * 因此这里写字面值而不取 `--ov-ui-color-*`。语义色仍走主题基线。
+ * 五组渐变的色值放在主题基线的 `--ov-ui-library-swatch-*-default` 上，这里只按
+ * 名字选下标：颜色因此仍可被宿主通过公开的 `--ov-ui-color-library-swatch-*`
+ * 统一覆盖，而不是写死在内联样式里。亮暗主题沿用同一套默认值——这是设计稿的
+ * 身份色，不随主题变化。
  *
- * These five gradients are identity colours rather than theme semantics: the design
- * keeps one set of gradients in both light and dark, so they are written as literals
- * here instead of `--ov-ui-color-*`. Semantic colours still come from the baseline.
+ * The five gradients live in the theme baseline as
+ * `--ov-ui-library-swatch-*-default`; this only picks an index by name, so a host
+ * can still override every swatch through the public
+ * `--ov-ui-color-library-swatch-*` variables instead of being stuck with inline
+ * literals. Both themes share the same defaults — these are the design's identity
+ * colours and do not follow the theme.
  */
-const LIBRARY_GRADIENTS = [
+/**
+ * 兜底色值。主题基线里同名私有变量的最终回落值，与 `theme.css` 的
+ * `--ov-ui-library-swatch-N-default` 保持一致；不加载任何 CSS 时仍能画出图标。
+ *
+ * Last-resort values, matching `--ov-ui-library-swatch-N-default` in
+ * `theme.css`, so the icon still paints when no stylesheet is loaded.
+ */
+const LIBRARY_FALLBACKS = [
   'linear-gradient(145deg, #ffd8ec 8%, #ffabc8 46%, #d8cbff 100%)',
   'linear-gradient(145deg, #d9e8ff 8%, #b8a6ff 52%, #f3d6ff 100%)',
   'linear-gradient(145deg, #ffe6bc 8%, #ffaf96 48%, #ff8bc5 100%)',
@@ -102,7 +114,7 @@ function gradientOf(name: string) {
     (total, character) => total + character.charCodeAt(0),
     0,
   );
-  return LIBRARY_GRADIENTS[hash % LIBRARY_GRADIENTS.length]!;
+  return hash % LIBRARY_FALLBACKS.length;
 }
 
 /**
@@ -117,6 +129,9 @@ function gradientOf(name: string) {
  * first gradient applies when it is omitted.
  */
 export function LibraryIcon({ name = '' }: { name?: string }) {
+  const index = gradientOf(name);
+  // 变量名从 1 开始编号，和 theme.css 里的声明对齐。
+  const swatch = index + 1;
   return (
     <span
       aria-hidden="true"
@@ -125,7 +140,8 @@ export function LibraryIcon({ name = '' }: { name?: string }) {
         width: 14,
         height: 14,
         borderRadius: '50%',
-        background: gradientOf(name),
+        // 公开 token → 基线私有默认值 → 兜底字面值，宿主因此能整组换色。
+        background: `var(--ov-ui-color-library-swatch-${swatch}, var(--ov-ui-library-swatch-${swatch}-default, ${LIBRARY_FALLBACKS[index]}))`,
       }}
     />
   );

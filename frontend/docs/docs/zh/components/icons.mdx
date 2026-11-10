@@ -65,4 +65,14 @@ export default function Example() {
 
 图标以内联 SVG 元素的形式打包进 JavaScript，没有独立资源请求，也不需要为它们导入样式表或配置内容安全策略。
 
-通过 `width`、`height`、`className` 或 `style` 调整尺寸与位置。文件类型图标保留固定配色；`ArrowRightIcon`、`SpaceIcon` 与 `UserIcon` 使用 `currentColor`，随 CSS `color` 改色。`LibraryIcon` 的尺寸与渐变写死在组件内，需要别的尺寸时在外面套一层容器。
+通过 `width`、`height`、`className` 或 `style` 调整尺寸与位置。文件类型图标保留固定配色；`ArrowRightIcon`、`SpaceIcon` 与 `UserIcon` 使用 `currentColor`，随 CSS `color` 改色。`LibraryIcon` 的尺寸写死在组件内，需要别的尺寸时在外面套一层容器。
+
+`LibraryIcon` 的五组渐变来自主题基线，宿主可以用公开变量逐组覆盖，不必改组件：
+
+```css
+:root {
+  --ov-ui-color-library-swatch-1: linear-gradient(145deg, #e0f7fa, #80deea);
+}
+```
+
+基线里的 `--ov-ui-library-swatch-1-default` … `-5-default` 是私有默认值，亮暗主题共用同一套——它们是设计稿的身份色，不随主题变化。宿主未加载库样式表时，组件仍用同值的兜底字面值绘制。

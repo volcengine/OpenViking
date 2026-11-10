@@ -34,6 +34,10 @@ test('the level icons are public and render without a host theme', () => {
     createElement(LibraryIcon, { name: 'a' }),
   );
   assert.match(library, /border-radius:50%/);
+  // Colours come from the theme baseline first, with a literal as the last
+  // resort, so a host can re-swatch the icon without editing the component.
+  assert.match(library, /var\(--ov-ui-color-library-swatch-\d,/);
+  assert.match(library, /var\(--ov-ui-library-swatch-\d-default,/);
   assert.match(library, /linear-gradient/);
   assert.equal(
     library,
@@ -46,6 +50,20 @@ test('the level icons are public and render without a host theme', () => {
     assert.match(html, /currentColor/);
     assert.match(html, /aria-hidden="true"/);
   }
+});
+
+test('every library swatch is reachable and numbered from one', () => {
+  // Different names must be able to select different swatches; the index feeds a
+  // variable name, so it has to stay within the five declared in theme.css.
+  const seen = new Set();
+  for (const name of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) {
+    const html = renderToStaticMarkup(createElement(LibraryIcon, { name }));
+    const swatch = html.match(/--ov-ui-color-library-swatch-(\d),/)?.[1];
+    assert.ok(swatch, `no swatch variable for ${name}`);
+    assert.ok(['1', '2', '3', '4', '5'].includes(swatch));
+    seen.add(swatch);
+  }
+  assert.ok(seen.size > 1, 'different names should reach different swatches');
 });
 
 test('the cascade fills a default icon per level when adapters return none', () => {

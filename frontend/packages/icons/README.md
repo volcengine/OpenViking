@@ -38,8 +38,10 @@ React imports these SVG files directly during its build.
   and `UserIcon`. The library level icon has no glyph — the design draws a round
   gradient swatch picked by name — so `LibraryIcon` is implemented in
   `packages/react/src/icons/index.tsx` as a colour block instead of an SVG source
-  here. A host can still pass its own icons through `icon`; the examples reuse
-  these built-in ones.
+  here. Its five gradients are declared in `packages/react/src/theme.css` as
+  `--ov-ui-library-swatch-1-default` … `-5-default`, so a host can override them
+  through the public `--ov-ui-color-library-swatch-*` variables. A host can still
+  pass its own icons through `icon`; the examples reuse these built-in ones.
 - `svg/file-type/` — the file-type icon set vendored from `@pierre/trees`
   (Apache-2.0, see that directory's `LICENSE.md`). One SVG per icon.
 - `empty-state.png` — the empty-state illustration for the file browser

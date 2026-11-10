@@ -60,4 +60,14 @@ Omit `aria-label` when adjacent text already identifies the file type; the SVG s
 
 Icons ship as inline SVG elements inside the built JavaScript. There is no separate asset request, no stylesheet import, and no Content Security Policy entry to add.
 
-Use `width`, `height`, `className`, or `style` to size and position the icon. File-type icons keep their fixed artwork colors. `ArrowRightIcon`, `SpaceIcon` and `UserIcon` inherit CSS `color` through `currentColor`. `LibraryIcon` has its size and gradient fixed inside the component — wrap it in a container to change the rendered size.
+Use `width`, `height`, `className`, or `style` to size and position the icon. File-type icons keep their fixed artwork colors. `ArrowRightIcon`, `SpaceIcon` and `UserIcon` inherit CSS `color` through `currentColor`. `LibraryIcon` has its size fixed inside the component — wrap it in a container to change the rendered size.
+
+`LibraryIcon`'s five gradients come from the theme baseline, so a host can re-swatch any of them through the public variables instead of editing the component:
+
+```css
+:root {
+  --ov-ui-color-library-swatch-1: linear-gradient(145deg, #e0f7fa, #80deea);
+}
+```
+
+The baseline's `--ov-ui-library-swatch-1-default` … `-5-default` are the private defaults, shared by both themes — they are the design's identity colours and do not follow the theme. When no library stylesheet is loaded the component still paints the same values from its literal fallbacks.
