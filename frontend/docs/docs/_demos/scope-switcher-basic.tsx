@@ -6,7 +6,7 @@ import {
   type ScopeSource,
   type ScopeIndex,
 } from '#scope-switcher-source';
-import { LibraryIcon, SpaceIcon, UserIcon } from '#scope-switcher-icons';
+import { LibraryIcon, SpaceIcon, UserIcon } from '@openviking/react/icons';
 import {
   ScopeSwitcher,
   ScopeSelector,
