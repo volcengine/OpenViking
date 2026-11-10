@@ -647,6 +647,43 @@ func TestAdminEmptySeedPayloadsAreSent(t *testing.T) {
 	}
 }
 
+func TestAdminGroupMembersUseBatchEndpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		method string
+		result map[string]any
+		call   func(*Client, context.Context, string, string, string) (map[string]any, error)
+	}{
+		{"add", http.MethodPut, map[string]any{"added": true}, (*Client).AdminAddGroupMember},
+		{"remove", http.MethodDelete, map[string]any{"removed": true}, (*Client).AdminRemoveGroupMember},
+		{"remove non-member", http.MethodDelete, map[string]any{"removed": false}, (*Client).AdminRemoveGroupMember},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != tc.method || r.URL.Path != "/api/v1/admin/accounts/acct/groups/engineering/members" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+				if got := r.Header.Get("Content-Type"); got != "application/json" {
+					t.Errorf("Content-Type = %q", got)
+				}
+				if body := readJSONBody(t, r); !reflect.DeepEqual(body, map[string]any{"user_ids": []any{"alice"}}) {
+					t.Errorf("body = %#v", body)
+				}
+				writeOK(t, w, tc.result)
+			}))
+			defer closeServer()
+
+			result, err := tc.call(client, context.Background(), "acct", "engineering", "alice")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(result, tc.result) {
+				t.Fatalf("result = %#v, want %#v", result, tc.result)
+			}
+		})
+	}
+}
+
 func TestAdminGetAccount(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

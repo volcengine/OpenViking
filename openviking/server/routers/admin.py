@@ -64,6 +64,7 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
+
 class CreateAccountRequest(BaseModel):
     account_id: str
     admin_user_id: str
@@ -226,9 +227,12 @@ async def set_agent_evolution_status(
     )
 
 
-def _get_api_key_manager(request: Request):
+def _get_api_key_manager(request: Request, *, for_write: bool = False):
     """Return API key management operations for compatibility callers."""
-    return get_api_key_manager_or_raise(request)
+    manager = get_api_key_manager_or_raise(request)
+    if for_write:
+        manager.require_writable()
+    return manager
 
 
 def _get_runtime_config_manager():
@@ -434,9 +438,7 @@ def _user_settings_result(
         memory_policy["memory_types"] = sorted(
             get_default_registry().list_names(include_disabled=False)
         )
-    add_targets = resolve_add_targets(
-        resolve_user_add_targets(user_config, server_config), ctx=ctx
-    )
+    add_targets = resolve_add_targets(resolve_user_add_targets(user_config, server_config), ctx=ctx)
     return {
         "account_id": ctx.account_id,
         "user_id": ctx.user.user_id,
@@ -477,7 +479,7 @@ async def create_account(
         runtime_config.validate_initial_settings(body.account_id, body.settings or {})
     except (ConfigPatchError, ValueError) as exc:
         raise InvalidArgumentError(str(exc)) from exc
-    manager = _get_api_key_manager(request)
+    manager = _get_api_key_manager(request, for_write=True)
     user_key = None
     account_created = False
     try:
@@ -541,6 +543,26 @@ async def list_accounts(
     return Response(status="ok", result=accounts)
 
 
+@router.get("/metric-inventory")
+@require_auth_root
+async def metric_inventory(
+    request: Request,
+    account_id: str | None = None,
+    page_size: int = Query(500, ge=1, le=1000),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Stream metadata only for an offline scan; requires the existing ROOT authentication."""
+    from fastapi.responses import StreamingResponse
+
+    from openviking.observability.reporting.inventory import inventory_lines
+
+    manager = _get_api_key_manager(request)
+    return StreamingResponse(
+        inventory_lines(get_service(), manager, account_id=account_id, page_size=page_size),
+        media_type="application/x-ndjson",
+    )
+
+
 @router.get("/accounts/{account_id}")
 @require_auth_root
 async def get_account(
@@ -573,6 +595,7 @@ async def delete_account(
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Revoke an account and submit durable cleanup of its data."""
+    _get_api_key_manager(request, for_write=True)
     deletion_service = request.app.state.deletion_service
     if deletion_service is None:
         raise FailedPreconditionError("Deletion service is not initialized.")
@@ -999,7 +1022,7 @@ async def register_user(
         role=resolved_role,
     )
     validate_config_input(body.user_config)
-    manager = _get_api_key_manager(request)
+    manager = _get_api_key_manager(request, for_write=True)
     user_key = await manager.register_user(
         account_id,
         body.user_id,
@@ -1180,6 +1203,7 @@ async def remove_user(
     """Revoke a user and start durable cleanup of their owned data."""
     _check_account_access(ctx, account_id)
     await _reject_non_root_global_target(request, ctx, account_id, user_id)
+    _get_api_key_manager(request, for_write=True)
     deletion_service = request.app.state.deletion_service
     if deletion_service is None:
         raise FailedPreconditionError("Deletion service is not initialized.")
@@ -1210,7 +1234,7 @@ async def set_user_role(
     role = body.role.lower()
     if role not in ACCOUNT_USER_ASSIGNABLE_ROLES:
         raise InvalidArgumentError("set_user_role only supports user and admin roles.")
-    await _get_api_key_manager(request).set_role(account_id, user_id, role)
+    await _get_api_key_manager(request, for_write=True).set_role(account_id, user_id, role)
     return Response(
         status="ok",
         result={
@@ -1238,7 +1262,7 @@ async def regenerate_key(
             raise PermissionDeniedError("USER can only regenerate their own API key")
         if not is_personal_api_key_auth(request, ctx):
             raise PermissionDeniedError("Self-service key rotation requires a personal API key")
-    manager = _get_api_key_manager(request)
+    manager = _get_api_key_manager(request, for_write=True)
     new_key = await manager.regenerate_key(
         account_id,
         user_id,
@@ -1260,7 +1284,9 @@ async def create_group(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    result = await _get_api_key_manager(request).create_group(account_id, body.group_id)
+    result = await _get_api_key_manager(request, for_write=True).create_group(
+        account_id, body.group_id
+    )
     return Response(status="ok", result=result)
 
 
@@ -1285,7 +1311,7 @@ async def delete_group(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    manager = _get_api_key_manager(request)
+    manager = _get_api_key_manager(request, for_write=True)
     for member_id in await manager.get_group_members(account_id, group_id):
         await _reject_non_root_global_target(request, ctx, account_id, member_id)
     await manager.delete_group(account_id, group_id)
@@ -1318,7 +1344,7 @@ async def add_group_members(
     _check_account_access(ctx, account_id)
     for member_id in body.user_ids:
         await _reject_non_root_global_target(request, ctx, account_id, member_id)
-    added = await _get_api_key_manager(request).add_group_members(
+    added = await _get_api_key_manager(request, for_write=True).add_group_members(
         account_id, group_id, body.user_ids
     )
     return Response(status="ok", result={"added": added})
@@ -1337,7 +1363,7 @@ async def remove_group_members(
     _check_account_access(ctx, account_id)
     for member_id in body.user_ids:
         await _reject_non_root_global_target(request, ctx, account_id, member_id)
-    removed = await _get_api_key_manager(request).remove_group_members(
+    removed = await _get_api_key_manager(request, for_write=True).remove_group_members(
         account_id, group_id, body.user_ids
     )
     return Response(status="ok", result={"removed": removed})

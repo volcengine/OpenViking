@@ -1878,10 +1878,11 @@ impl HttpClient {
         user_id: &str,
     ) -> Result<Value> {
         let path = format!(
-            "/api/v1/admin/accounts/{}/groups/{}/members/{}",
-            account_id, group_id, user_id
+            "/api/v1/admin/accounts/{}/groups/{}/members",
+            account_id, group_id
         );
-        self.put(&path, &serde_json::json!({})).await
+        self.put(&path, &serde_json::json!({"user_ids": [user_id]}))
+            .await
     }
 
     pub async fn admin_remove_group_member(
@@ -1891,10 +1892,11 @@ impl HttpClient {
         user_id: &str,
     ) -> Result<Value> {
         let path = format!(
-            "/api/v1/admin/accounts/{}/groups/{}/members/{}",
-            account_id, group_id, user_id
+            "/api/v1/admin/accounts/{}/groups/{}/members",
+            account_id, group_id
         );
-        self.delete(&path, &[]).await
+        self.delete_with_body(&path, &serde_json::json!({"user_ids": [user_id]}))
+            .await
     }
 
     // ============ Debug Vector Methods ============
@@ -2351,6 +2353,38 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
+
+    #[tokio::test]
+    async fn admin_group_members_send_singleton_json_to_collection_route() {
+        for method in ["PUT", "DELETE"] {
+            let (base_url, request_rx) = spawn_request_capture_server().await;
+            let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+            if method == "PUT" {
+                client
+                    .admin_add_group_member("acme", "engineering", "alice")
+                    .await
+            } else {
+                client
+                    .admin_remove_group_member("acme", "engineering", "alice")
+                    .await
+            }
+            .expect("membership request should succeed");
+            let request = request_rx.await.expect("request should be captured");
+            assert!(request.starts_with(&format!(
+                "{method} /api/v1/admin/accounts/acme/groups/engineering/members HTTP/1.1\r\n"
+            )));
+            let (headers, body) = request.split_once("\r\n\r\n").expect("request body");
+            assert!(
+                headers
+                    .to_ascii_lowercase()
+                    .contains("content-type: application/json")
+            );
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(body).unwrap(),
+                json!({"user_ids": ["alice"]})
+            );
+        }
+    }
 
     #[test]
     fn compact_request_body_drops_null_and_empty_args() {

@@ -484,6 +484,40 @@ class SemanticProcessor(DequeueHandlerBase):
         work_type = SkillSemanticMessageWork if msg.context_type == "skill" else SemanticMessageWork
         return work_type(self, msg, lock)
 
+    async def _enqueue_content_write_directory_refresh(
+        self, msg: SemanticMsg, file_abstracts: Dict[str, str]
+    ) -> None:
+        """Keep direct-parent aggregation outside the file write's task and lease."""
+        from openviking.storage.queuefs import get_queue_manager
+
+        queue_manager = get_queue_manager()
+        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+        directory_msg = SemanticMsg(
+            uri=msg.uri,
+            context_type=msg.context_type,
+            recursive=False,
+            account_id=msg.account_id,
+            user_id=msg.user_id,
+            group_ids=msg.group_ids,
+            peer_id=msg.peer_id,
+            role=msg.role,
+            skip_vectorization=msg.skip_vectorization,
+            changes=msg.changes,
+            generation_trigger="content_write_parent_refresh",
+            coalesce_key=build_semantic_coalesce_key(
+                context_type=msg.context_type,
+                uri=msg.uri,
+                account_id=msg.account_id,
+                user_id=msg.user_id,
+                peer_id=msg.peer_id,
+            ),
+            file_abstracts=file_abstracts,
+            ingest_options=IngestOptions(acl_update=msg.ingest_options.acl_update),
+            propagate_to_parent=msg.propagate_to_parent,
+        )
+        with detach_task_context():
+            await semantic_queue.enqueue(directory_msg)
+
     async def on_dequeue(
         self,
         data: Optional[Dict[str, Any]],
@@ -748,6 +782,13 @@ class SemanticProcessor(DequeueHandlerBase):
                                     f"Using direct incremental semantic update for: {msg.uri}"
                                 )
 
+                            defer_directory_refresh = (
+                                msg.generation_trigger == "content_write"
+                                and msg.context_type == "resource"
+                                and not msg.recursive
+                                and msg.changes is not None
+                                and msg.aggregate_directory
+                            )
                             executor = SemanticTreeExecutor(
                                 processor=self,
                                 context_type=msg.context_type,
@@ -765,7 +806,9 @@ class SemanticProcessor(DequeueHandlerBase):
                                 coalesce_version=msg.coalesce_version,
                                 source=msg.source,
                                 generation_trigger=msg.generation_trigger,
-                                aggregate_directory=msg.aggregate_directory,
+                                aggregate_directory=(
+                                    msg.aggregate_directory and not defer_directory_refresh
+                                ),
                                 copy_source_uri=msg.copy_source_uri,
                                 file_md5s=msg.file_md5s,
                                 artifact_files=msg.artifact_files,
@@ -781,7 +824,17 @@ class SemanticProcessor(DequeueHandlerBase):
                                 run_uri,
                                 dag_stats,
                             )
-                            if not executor.stale and msg.aggregate_directory:
+                            if not executor.stale and defer_directory_refresh:
+                                # File summaries must be committed to L2 before independent
+                                # directory work reads them. The write still owns these
+                                # embeddings; directory work inherits neither task nor lease.
+                                await work._wait_for_embedding_work(
+                                    stop_waiting=self._embedding_worker_stopped,
+                                )
+                                await self._enqueue_content_write_directory_refresh(
+                                    msg, executor.file_abstracts
+                                )
+                            elif not executor.stale and msg.aggregate_directory:
                                 write_result = getattr(
                                     executor,
                                     "root_write_result",

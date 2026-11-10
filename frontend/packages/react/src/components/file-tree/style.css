@@ -1,1 +1,3 @@
+@import '../../theme.css';
+@import '../../shared/components/popover/popover.css';
 @import './file-tree.css';
