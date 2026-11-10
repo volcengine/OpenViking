@@ -192,6 +192,15 @@ boundary, until a later custom result. There is no verified public priority or
 force-steer switch: immediate in-task responsiveness is a remaining MA platform
 requirement. HTTP acceptance is never reported as proof of model processing. Other event scopes
 remain locally queued so their authority cannot mix with the active task.
+
+While MA waits on Core custom tool results (`requires_action`), it rejects a
+`user.message` with 400 `RequiresActionRejected`. Input arriving from an
+`agent.custom_tool_use` until MA echoes its `user.custom_tool_result` is held in
+the local queue and steered after the echo. A steer that still races into that
+window and gets `RequiresActionRejected` was definitely not accepted: its
+journal entry is dropped, it goes back to the head of the queue and is posted
+again after the results, without quarantining the session. Any other steer POST
+failure is still ambiguous and quarantines it.
 See the official [Send Event API](https://docs.volcengine.com/docs/ark/send-event-api?lang=en)
 and [Session Event Stream](https://docs.volcengine.com/docs/ark/session-event-stream?lang=en).
 

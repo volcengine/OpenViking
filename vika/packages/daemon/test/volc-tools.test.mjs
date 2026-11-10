@@ -351,6 +351,110 @@ test('ambiguous steer HTTP failure quarantines the session and settles both admi
   assert.equal(store.getManagedTurn('volc'), null);
 });
 
+function steeringAgent(t, options = {}) {
+  const ctx = setup(t);
+  const { store, config, actions, inbound, turn } = ctx;
+  store.setGlobalSession(turn.sessionId, 'test-policy', { runtime: 'volc', epoch: turn.epoch });
+  store.beginManagedTurn({ runtime: 'volc', authorityToken: 'token', sessionId: turn.sessionId,
+    epoch: turn.epoch, inboundSeqs: [inbound.seq], conversationKey: turn.conversationKey, deliveredThroughSeq: 3 });
+  store.acceptManagedTurn('volc', turn.sessionId, turn.fenceId);
+  const agent = new VolcAgent(config, store, quiet, { actions, files: noFiles, ...options });
+  Object.assign(agent, { sessionId: turn.sessionId, connected: true, turnActive: true,
+    expectedUserEventId: turn.fenceId, turnFenceSeen: true,
+    activeConversationKey: turn.conversationKey, activeItems: [{ text: 'old', seq: inbound.seq }] });
+  agent._history = async () => [];
+  agent._persistSession = () => {};
+  agent._bodyFor = (items) => ({ body: items.map((item) => item.text).join('\n'), seqs: items.map((item) => item.seq), deliveredThroughSeq: 9 });
+  const newer = store.ingest(chatEvent({ messageId: 'om_steerhold1234', chatId: inbound.chatId })).inbound;
+  const toolUse = { id: 'tool-1', type: 'agent.custom_tool_use', name: 'get_time', input: {} };
+  const echo = { id: 'result-echo', type: 'user.custom_tool_result', custom_tool_use_id: 'tool-1' };
+  return { ...ctx, agent, newer, toolUse, echo };
+}
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+test('input arriving while a custom tool result is pending is steered only after MA echoes the result', async (t) => {
+  const { agent, store, inbound, newer, toolUse, echo } = steeringAgent(t);
+  const posted = [];
+  agent._postEvents = async (events) => { posted.push(...events); return { data: [{ id: 'user-steer', type: 'user.message' }] }; };
+  agent._handleEvent(toolUse);
+  assert.equal(agent.deliver('new input', newer.seq), true);
+  await flush();
+  assert.deepEqual(posted, []);
+  assert.equal(agent.queue.length, 1);
+  assert.equal(store.getManagedTurn('volc').steers, undefined);
+  assert.deepEqual(agent._customTurn().inboundSeqs, [inbound.seq]);
+  agent._handleEvent(echo);
+  await flush(); await agent.steerWork;
+  assert.deepEqual(posted.map((event) => [event.type, event.content[0].text]), [['user.message', 'new input']]);
+  assert.equal(agent.queue.length, 0);
+  assert.equal(store.getManagedTurn('volc').steers[0].status, 'ACCEPTED');
+  // A call already answered (a history replay) does not hold steering.
+  store.updateMAToolCall(agent.sessionId, 'tool-1', 'POSTED');
+  agent._handleEvent({ ...toolUse, id: 'tool-1' });
+  assert.equal(agent.customPending.size, 0);
+});
+
+test('a steer MA rejects with RequiresActionRejected is held, not poisoned, and sent once after the tool result', async (t) => {
+  const responses = [];
+  const requests = [];
+  const fetch = (url, options) => {
+    requests.push(JSON.parse(options.body));
+    return new Promise((resolve) => responses.push(resolve));
+  };
+  const { agent, store, inbound, newer, toolUse, echo } = steeringAgent(t, { fetch });
+  let failed = null;
+  agent.onTurnFailed = (event) => { failed = event; };
+  assert.equal(agent.deliver('new input', newer.seq), true);
+  assert.equal(store.getManagedTurn('volc').steers[0].status, 'POSTING');
+  // The tool call MA emitted just before the steer reached it.
+  agent._handleEvent(toolUse);
+  agent._handleEvent({ id: 'waiting', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['tool-1'] } });
+  const later = store.ingest(chatEvent({ messageId: 'om_steerlater123', chatId: inbound.chatId })).inbound;
+  assert.equal(agent.deliver('later input', later.seq), true);
+  responses.shift()(new Response(JSON.stringify({ error: { code: 'RequiresActionRejected', type: 'Bad Request',
+    message: "Invalid user.message event at events[0]: waiting on responses to events [tool-1]; only 'user.tool_confirmation', 'user.tool_result', 'user.custom_tool_result', or 'user.interrupt' may be sent" } }), { status: 400 }));
+  await agent.steerWork;
+  assert.equal(failed, null);
+  assert.equal(agent.sessionPoisoned, false);
+  assert.equal(agent.turnActive, true);
+  assert.deepEqual(agent.queue.map((batch) => batch.map((item) => item.text)), [['new input'], ['later input']]);
+  const durable = store.getManagedTurn('volc');
+  assert.deepEqual(durable.steers, []);
+  assert.deepEqual(durable.inboundSeqs, [inbound.seq]);
+  assert.equal(durable.deliveredThroughSeq, 3);
+  assert.deepEqual(agent._customTurn().inboundSeqs, [inbound.seq]);
+  // The deferred requires_action was replayed: Core runs the tool and posts its result.
+  await flush();
+  assert.deepEqual(requests.at(-1).events.map((event) => event.type), ['user.custom_tool_result']);
+  responses.shift()(Response.json({ data: [{ id: 'result-echo', type: 'user.custom_tool_result' }] }));
+  await agent.customWork;
+  assert.equal(requests.length, 2, 'nothing is steered before MA echoes the result');
+  agent._handleEvent(echo);
+  await flush();
+  assert.deepEqual(requests.at(-1).events.map((event) => [event.type, event.content[0].text]), [['user.message', 'new input']]);
+  responses.shift()(Response.json({ data: [{ id: 'user-steer', type: 'user.message' }] }));
+  await agent.steerWork; await flush();
+  assert.deepEqual(requests.at(-1).events.map((event) => event.content?.[0].text), ['later input']);
+  responses.shift()(Response.json({ data: [{ id: 'user-steer-2', type: 'user.message' }] }));
+  await agent.steerWork;
+  assert.equal(requests.length, 4);
+  assert.deepEqual(store.getManagedTurn('volc').steers.map((steer) => [steer.status, steer.inboundSeqs]),
+    [['ACCEPTED', [newer.seq]], ['ACCEPTED', [later.seq]]]);
+  assert.equal(agent.queue.length, 0);
+});
+
+test('a steer rejected for another 400 still quarantines the session', async (t) => {
+  const fetch = async () => new Response(JSON.stringify({ error: { code: 'InvalidPayload', message: 'bad' } }), { status: 400 });
+  const { agent, newer } = steeringAgent(t, { fetch });
+  let failed = null;
+  agent.onTurnFailed = (event) => { failed = event; };
+  agent._ensureFreshSession = async () => {};
+  agent.deliver('new input', newer.seq);
+  await agent.steerWork;
+  assert.equal(agent.sessionPoisoned, true);
+  assert.match(failed.error, /steer acceptance uncertain/);
+});
+
 test('download preparation resumes under recovered authority before Core starts, but RUNNING does not', async (t) => {
   const { store, turn, event, executor } = setup(t);
   executor.see(event(), turn); store.prepareMAToolCall(turn.sessionId, 'tool-1');

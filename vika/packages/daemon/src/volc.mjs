@@ -15,13 +15,24 @@ const RECONNECT_BASE_MS = 500;
 const RECONNECT_CAP_MS = 5_000;
 const MAX_EVENT_BYTES = 5_000_000;
 class VolcApiError extends Error {
-  constructor(status, requestId = '') {
-    super(`Volc API request failed (${status})${requestId ? `, request_id=${requestId}` : ''}`);
+  constructor(status, requestId = '', { code = '', waitingOn = [] } = {}) {
+    super(`Volc API request failed (${status})${code ? ` ${code}` : ''}${requestId ? `, request_id=${requestId}` : ''}`);
     this.name = 'VolcApiError';
     this.status = status;
+    this.code = code;
+    // RequiresActionRejected names the events MA still waits on.
+    this.waitingOn = waitingOn;
     this.retryable = status === 429 || status >= 500;
   }
 }
+
+// MA refuses a user.message while the session waits on tool results, and says
+// so before accepting anything: a definite rejection, safe to send again.
+const REQUIRES_ACTION_REJECTED = 'RequiresActionRejected';
+const requiresActionRejected = (error) => error instanceof VolcApiError
+  && error.status === 400 && error.code === REQUIRES_ACTION_REJECTED;
+// Held steers wait on this when MA did not say which events it waits on.
+const UNKNOWN_CUSTOM_TOOL = Symbol('unknown custom tool');
 
 const VOLC_RUNTIME = getRuntimeDefinition('volc');
 
@@ -87,6 +98,9 @@ export class VolcAgent {
     this.steers = [];
     this.steerDeferredEvents = [];
     this.customBatches = new Set();
+    // Custom tool uses of this turn whose result MA has not yet echoed. MA
+    // rejects a user.message while it waits on one, so steering waits too.
+    this.customPending = new Set();
     this.onTurnFailed = options.onTurnFailed ?? null;
     this.onTurnSucceeded = options.onTurnSucceeded ?? null;
     this.environmentId = config.volcEnvironmentId ?? '';
@@ -306,6 +320,7 @@ export class VolcAgent {
     }
     this.activeItems = seqs.map((seq) => ({ text: '', seq }));
     this.steers = (pending.steers ?? []).map((item) => ({ ...item, processed: false }));
+    this.customPending = new Set();
     this.activeConversationKey = conversationKey;
     this.turnActive = true;
     this.turnCompleting = false;
@@ -473,11 +488,18 @@ export class VolcAgent {
         let requestId = response.headers.get('x-request-id')
           ?? response.headers.get('x-tt-logid')
           ?? '';
+        let code = '';
+        let waitingOn = [];
         try {
           const detail = JSON.parse(await response.text());
           requestId ||= String(detail?.request_id ?? detail?.requestId ?? '');
+          code = String(detail?.error?.code ?? '').replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64);
+          const waiting = code === REQUIRES_ACTION_REJECTED
+            ? String(detail?.error?.message ?? '').match(/waiting on responses to events \[([^\]]*)\]/)
+            : null;
+          if (waiting) waitingOn = waiting[1].split(/[\s,]+/).filter((id) => /^[\w-]{1,128}$/.test(id));
         } catch {}
-        throw new VolcApiError(response.status, requestId.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 128));
+        throw new VolcApiError(response.status, requestId.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 128), { code, waitingOn });
       }
       return response;
     } finally {
@@ -553,6 +575,7 @@ export class VolcAgent {
     return typeof this.store.beginManagedSteer === 'function'
       && this.connected && this.turnActive && !this.turnCompleting && !this.stopping
       && !this.steerPosting && !this.sessionPoisoned && !this.rotationPending
+      && this.customPending.size === 0
       && this.expectedUserEventId && this.turnFenceSeen && this.queue.length === 0
       && this._conversationKey(items) === this.activeConversationKey;
   }
@@ -603,13 +626,38 @@ export class VolcAgent {
           }
         }
       } catch (error) {
-        this.steerPosting = false; this.steerDeferredEvents = [];
-        if (sessionId === this.sessionId && this.turnActive && this.expectedUserEventId === rootFence) {
+        this.steerPosting = false;
+        const current = sessionId === this.sessionId && this.turnActive && this.expectedUserEventId === rootFence;
+        if (current && requiresActionRejected(error) && this._holdRejectedSteer(id, items, error)) return;
+        this.steerDeferredEvents = [];
+        if (current) {
           this._poisonSession();
           await this._completeTurn(new Error(`MA steer acceptance uncertain; not resent: ${safe(error)}`));
         }
       } finally { this._maybeSteerQueued(); }
     })();
+  }
+
+  // MA refused the steer before accepting it: the session waits on custom tool
+  // results. Undo its admission, put it back at the head of the queue and
+  // replay what arrived meanwhile; it is steered once MA echoes those results,
+  // or starts the next turn. False when it cannot be undone.
+  _holdRejectedSteer(id, items, error) {
+    try { this.store.rejectManagedSteer(this.runtime, this.sessionId, id); } catch { return false; }
+    this.steers = this.steers.filter((steer) => steer.id !== id);
+    this.activeItems = this.activeItems.filter((item) => !items.includes(item));
+    this.queue.unshift(items);
+    // Until MA echoes each result, even one already posted: MA said it waits.
+    for (const toolId of error.waitingOn) this.customPending.add(toolId);
+    if (!error.waitingOn.length) this.customPending.add(UNKNOWN_CUSTOM_TOOL);
+    this.logger.info('volc_steer_held', { waitingOn: error.waitingOn.length });
+    for (const event of this.steerDeferredEvents.splice(0)) this._handleEvent(event);
+    return true;
+  }
+
+  _customResolved(toolUseId) {
+    const had = [this.customPending.delete(toolUseId), this.customPending.delete(UNKNOWN_CUSTOM_TOOL)].some(Boolean);
+    if (had && this.customPending.size === 0 && this.queue.length > 0) queueMicrotask(() => this._maybeSteerQueued());
   }
 
   tryStartBatch(items) {
@@ -669,6 +717,7 @@ export class VolcAgent {
     this.activeItems = [...items];
     this.steers = [];
     this.steerDeferredEvents = [];
+    this.customPending = new Set();
     this.activeConversationKey = conversationKey;
     this.turnActive = true;
     this.turnCompleting = false;
@@ -958,12 +1007,15 @@ export class VolcAgent {
     }
     const inboundSeq = this.activeItems.map((item) => item.seq).filter((seq) => seq != null).at(-1) ?? null;
     if (event.type === 'agent.custom_tool_use') {
-      try { this.customExecutor.see(event, this._customTurn()); }
-      catch (error) { this._poisonSession(); void this._completeTurn(error); }
+      try {
+        // A history replay of a call already answered does not hold steering.
+        if (this.customExecutor.see(event, this._customTurn())?.status !== 'POSTED') this.customPending.add(event.id);
+      } catch (error) { this._poisonSession(); void this._completeTurn(error); }
       this.modelWorking = false; this.modelStartedAtMs = null;
     } else if (event.type === 'user.custom_tool_result') {
       const row = this.store.getMAToolCall(this.sessionId, event.custom_tool_use_id);
       if (row && row.fence_id === this.expectedUserEventId) this.store.updateMAToolCall(this.sessionId, event.custom_tool_use_id, 'POSTED');
+      this._customResolved(event.custom_tool_use_id);
     } else if (event.type === 'agent.message') {
       const text = textContent(event);
       if (text) {
@@ -1056,6 +1108,7 @@ export class VolcAgent {
     const items = this.activeItems.splice(0);
     const seqs = [...new Set(items.map((item) => item.seq).filter((seq) => seq != null))];
     const receipts = receiptIds(items);
+    this.customPending = new Set();
     this.activeConversationKey = null;
     const turnStartedAtMs = this.turnStartedAtMs;
     this.turnStartedAtMs = null;
@@ -1158,6 +1211,7 @@ export class VolcAgent {
     this.abortController = null;
     this.streamAbortController?.abort();
     this.streamAbortController = null;
+    this.customPending = new Set();
     this.activeConversationKey = null;
     this.turnStartedAtMs = null;
     this.modelWorking = false;
