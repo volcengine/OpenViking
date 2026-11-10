@@ -20,6 +20,11 @@ try {
           dts: false,
           source: {
             entry: {
+              button: './src/shared/components/button/button.tsx',
+              input: './src/shared/components/input/input.tsx',
+              modal: './src/shared/components/modal/modal.tsx',
+              'browser-entries':
+                './src/components/file-browser-entries/index.ts',
               'file-browser': './src/modules/file-browser/use-file-browser.ts',
               console: './src/modules/console/use-console.ts',
               provider: './src/client/provider.tsx',
@@ -42,6 +47,7 @@ try {
         emitCss: false,
         distPath: { root: output },
         dataUriLimit: { image: 64 * 1024 },
+        autoExternal: { exclude: ['react-focus-lock'] },
       },
     },
   });

@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import type { Locale } from '../../shared/locale.js';
 import {
   FilePreview,
@@ -28,6 +29,8 @@ export interface FileBrowserDetailProps {
   locale: Locale;
   labels?: FileBrowserLabels['preview'];
   footer?: string;
+  titleExtra?: ReactNode;
+  extraActions?: ReactNode;
   /** 分段器与图标按钮的文案。Copy for the segmented control and icon buttons. */
   viewLabels: {
     preview: string;
@@ -46,6 +49,8 @@ export function FileBrowserDetail({
   locale,
   labels,
   footer,
+  titleExtra,
+  extraActions,
   viewLabels,
   onActiveKeyChange,
 }: FileBrowserDetailProps) {
@@ -53,7 +58,7 @@ export function FileBrowserDetail({
     <div className="ov-file-browser__detail">
       <FilePreview
         tabs={
-          decorateTabs(tabs, viewLabels, footer) as [
+          decorateTabs(tabs, viewLabels, footer, titleExtra, extraActions) as [
             FilePreviewTab,
             ...FilePreviewTab[],
           ]
@@ -88,6 +93,8 @@ function decorateTabs(
   tabs: readonly FilePreviewTab[],
   viewLabels: FileBrowserDetailProps['viewLabels'],
   footer: ReactNode,
+  titleExtra: ReactNode,
+  extraActions: ReactNode,
 ): readonly FilePreviewTab[] {
   return tabs.map((tab) => {
     if (tab.kind === 'content') return tab;
@@ -104,8 +111,15 @@ function decorateTabs(
         // character count and update time are wanted by every host, and having the
         // module build the string both skips i18n and duplicates the logic per host.
         footer,
+        titleExtra: (
+          <>
+            {tab.slots?.titleExtra}
+            {titleExtra}
+          </>
+        ),
         actions: (actions: FilePreviewActions) => (
           <div className="ov-file-browser__detail-actions">
+            {extraActions}
             {actions.canSwitchView ? (
               <div
                 className="ov-file-browser__segmented"
@@ -137,26 +151,32 @@ function decorateTabs(
               />
             ) : null}
             {actions.canCopyContent ? (
-              <button
-                type="button"
+              <Button
+                size="small"
+                type="text"
+                iconOnly
+                htmlType="button"
                 className="ov-file-browser__detail-icon"
                 aria-label={viewLabels.copyContent}
                 title={viewLabels.copyContent}
                 onClick={() => void actions.copyContent()}
               >
                 <CopyIcon />
-              </button>
+              </Button>
             ) : null}
             {actions.canDownload ? (
-              <button
-                type="button"
+              <Button
+                size="small"
+                type="text"
+                iconOnly
+                htmlType="button"
                 className="ov-file-browser__detail-icon"
                 aria-label={viewLabels.download}
                 title={viewLabels.download}
                 onClick={() => actions.download()}
               >
                 <DownloadIcon />
-              </button>
+              </Button>
             ) : null}
           </div>
         ),

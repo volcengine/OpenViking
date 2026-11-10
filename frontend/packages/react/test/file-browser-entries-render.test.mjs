@@ -114,7 +114,11 @@ test('FileBrowser owns entry visibility and passes localized entry copy', async 
       }),
     );
     assert.equal(entries(), null);
-    assert.ok(host.container.querySelector('input[type="search"]'));
+    assert.ok(
+      host.container.querySelector(
+        '.ov-file-browser__toolbar .ov-file-tree__search',
+      ),
+    );
   } finally {
     await host.unmount();
   }

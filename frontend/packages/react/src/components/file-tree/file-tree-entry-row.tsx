@@ -67,7 +67,7 @@ export function FileTreeRowView({
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
     // 点展开箭头时不再冒泡触发选中。The chevron handles its own click.
     if ((event.target as HTMLElement).closest('[data-role="toggle"]')) return;
-    if (row.disabled) return;
+    if (row.disabled || row.selectable === false) return;
     onSelect?.(row);
   };
 
@@ -81,7 +81,7 @@ export function FileTreeRowView({
       role="treeitem"
       tabIndex={0}
       aria-level={row.depth + 1}
-      aria-selected={isSelected}
+      aria-selected={row.selectable === false ? undefined : isSelected}
       aria-expanded={canExpand ? isExpanded : undefined}
       aria-disabled={row.disabled || undefined}
       {...extraAttributes}
@@ -172,6 +172,15 @@ export function FileTreeRowView({
 
       {row.levelLabel ? (
         <span className="ov-file-tree__level">{row.levelLabel}</span>
+      ) : null}
+      {row.access ? (
+        <span className="ov-file-tree__level">
+          {row.access === 'read-only'
+            ? text.readOnly
+            : row.access === 'denied'
+              ? text.noAccess
+              : text.traverseOnly}
+        </span>
       ) : null}
 
       {dashboard ? (

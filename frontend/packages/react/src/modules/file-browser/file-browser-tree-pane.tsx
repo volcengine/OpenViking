@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import type { Locale } from '../../shared/locale.js';
 import { dashboardLabels as resolveDashboardLabels } from './dashboard-labels.js';
 
@@ -33,7 +34,7 @@ export interface FileBrowserTreePaneProps {
   >;
   locale: Locale;
   dashboardLabels?: FileBrowserDashboardLabels;
-  searchId: string;
+  onSearch?: () => void;
   browser: FileBrowserApi;
   treeLabels: FileTreeLabels | undefined;
   searchPlaceholder: string;
@@ -50,7 +51,7 @@ export function FileBrowserTreePane({
   entries,
   locale,
   dashboardLabels,
-  searchId,
+  onSearch,
   browser,
   treeLabels,
   searchPlaceholder,
@@ -69,13 +70,11 @@ export function FileBrowserTreePane({
       />
 
       <FileBrowserToolbar
-        searchId={searchId}
-        query={browser.query}
+        onSearch={onSearch}
         refreshing={browser.refreshing}
         canRefresh={browser.isReady}
         placeholder={searchPlaceholder}
         refreshLabel={refreshLabel}
-        onQueryChange={browser.actions.setQuery}
         onRefresh={() => void browser.actions.refresh()}
       />
       <div className="ov-file-browser__tree-scroll">
@@ -88,15 +87,19 @@ export function FileBrowserTreePane({
               {resolveDashboardLabels(locale, dashboardLabels).failed}:{' '}
               {browser.dashboardError.message}
             </p>
-            <button
-              type="button"
+            <Button
+              size="small"
+              type="default"
+              htmlType="button"
               onClick={() => void browser.actions.refresh()}
             >
               {retryLabel}
-            </button>
+            </Button>
           </div>
         ) : null}
         <FileTree
+          search={false}
+          refresh={false}
           locale={locale}
           rows={browser.rows}
           selectedId={browser.selectedId}
@@ -127,13 +130,15 @@ export function FileBrowserTreePane({
                   <p className="ov-file-browser__failure-detail">
                     {browser.searchError.message}
                   </p>
-                  <button
-                    type="button"
+                  <Button
+                    size="small"
+                    type="default"
+                    htmlType="button"
                     className="ov-file-browser__retry"
                     onClick={() => void browser.actions.refresh()}
                   >
                     {retryLabel}
-                  </button>
+                  </Button>
                 </div>
               ) : (
                 <p className="ov-file-browser__hint">

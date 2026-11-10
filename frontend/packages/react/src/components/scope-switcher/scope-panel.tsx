@@ -1,3 +1,4 @@
+import { Input } from '../../shared/components/input/input.js';
 import { useCallback, type ReactNode } from 'react';
 import { moveScopeFocus } from './scope-keyboard.js';
 import CheckIcon from '../../../../icons/svg/scope-switcher/check.svg?react';
@@ -79,19 +80,18 @@ export function ScopePanel({
       Math.max(options.length, data.options.length, data.total ?? 0) >
         SCOPE_SWITCHER_SEARCH_THRESHOLD);
   const search = searchVisible ? (
-    <div className="ov-scope-switcher__search-field">
-      <SearchIcon className="ov-scope-switcher__search-icon" />
-      <input
-        type="search"
-        className="ov-scope-switcher__search"
-        value={keyword}
-        aria-label={labels.searchPlaceholder}
-        placeholder={labels.searchPlaceholder}
-        onChange={(event) =>
-          actions?.onSearchKeywordChange?.(event.currentTarget.value)
-        }
-      />
-    </div>
+    <Input
+      size="small"
+      prefix={<SearchIcon className="ov-scope-switcher__search-icon" />}
+      type="search"
+      className="ov-scope-switcher__search-field"
+      value={keyword}
+      aria-label={labels.searchPlaceholder}
+      placeholder={labels.searchPlaceholder}
+      onChange={(event) =>
+        actions?.onSearchKeywordChange?.(event.currentTarget.value)
+      }
+    />
   ) : null;
   let list;
   if (state?.loading) {

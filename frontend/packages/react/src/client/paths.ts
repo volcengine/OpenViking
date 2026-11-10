@@ -16,6 +16,8 @@
  * `verbatimModuleSyntax` cannot use.
  */
 export const OV_PATHS = {
+  /** 资源访问控制。Resource access control. */
+  acl: '/api/v1/acl',
   /** 列出目录内容。List directory contents. */
   fsLs: '/api/v1/fs/ls',
   fsAttrs: '/api/v1/fs/attrs',
@@ -63,6 +65,12 @@ export type OvPath = (typeof OV_PATHS)[keyof typeof OV_PATHS];
  * containing `/` is not read as a path separator.
  */
 export const OV_PATH_BUILDERS = {
+  /** 账号用户目录（可关闭凭证返回）。Account user directory. */
+  accountUsers: (accountId: string) =>
+    `/api/v1/admin/accounts/${encodeURIComponent(accountId)}/users`,
+  /** 账号用户组目录。Account group directory. */
+  accountGroups: (accountId: string) =>
+    `/api/v1/admin/accounts/${encodeURIComponent(accountId)}/groups`,
   /** 单个会话。One session. */
   session: (sessionId: string) =>
     `${OV_PATHS.sessions}/${encodeURIComponent(sessionId)}`,

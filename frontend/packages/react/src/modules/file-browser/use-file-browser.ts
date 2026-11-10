@@ -11,7 +11,7 @@ import { useOvClient } from '../../client/provider.js';
 import { toEntryRow } from './fs-model.js';
 import { useFsPreview } from './use-fs-preview.js';
 import { useFsSearch } from './use-fs-search.js';
-import { dashboardKey } from './dashboard-model.js';
+import { dashboardKey, mergeDashboardTab } from './dashboard-model.js';
 import { useBrowserDashboards } from './use-browser-dashboards.js';
 import { useFsTree } from './use-fs-tree.js';
 import type {
@@ -37,6 +37,7 @@ export function useFileBrowser({
   dashboardLabels,
   controlled = false,
   summaryLabels,
+  accessLabels,
   formatCharacterCount,
   defaultExpandedUri,
   currentUri,
@@ -44,6 +45,7 @@ export function useFileBrowser({
   onUriChange,
 }: UseFileBrowserOptions): FileBrowserApi {
   const locale = useLocale(localeProp);
+  const text = resolveLabels(accessLabels, locale);
   const client = useOvClient();
   const [query, setQuery] = useState('');
   const [pendingUri, setPendingUri] = useState<string | null>(currentUri);
@@ -100,6 +102,9 @@ export function useFileBrowser({
   // preview stuck on the initial resource. `pendingUri` is seeded from `currentUri`
   // anyway, so using it alone is correct.
   const activeUri = controlled ? currentUri : pendingUri;
+  const blocked =
+    tree.accessOf(activeUri) ??
+    search.results?.find((entry) => entry.uri === activeUri)?.access;
   // 三态而不是布尔：不在已知目录集合里既可能是文件，也可能是还没加载过的目录，
   // 两者要走的接口不同，不能合并成「不是目录」。
   //
@@ -153,12 +158,10 @@ export function useFileBrowser({
     // Under the uncontrolled mode `currentUri` is null and `pendingUri` holds the
     // real selection, so the preview follows that instead — otherwise a selection
     // the module owns would never load anything.
-    uri: activeUri,
+    uri: blocked ? null : activeUri,
     resourceType,
     labels: summaryLabels ?? resolveSummaryLabels(locale),
-    formatCharacterCount:
-      formatCharacterCount ??
-      resolveLabels(undefined, locale).formatCharacterCount,
+    formatCharacterCount: formatCharacterCount ?? text.formatCharacterCount,
     openParent,
     generation: refreshGeneration,
     requestOptions,
@@ -170,12 +173,13 @@ export function useFileBrowser({
   // Search rows carry an index in their id because one URI can appear in two
   // categories, so the selection is converted the same way — otherwise no row in
   // the result list matches it.
-  const rows = useMemo<readonly FileTreeRow[]>(() => {
-    if (search.results === null) return tree.rows;
-    return search.results.map((entry, index) =>
-      toEntryRow(entry, 0, false, index),
-    );
-  }, [search.results, tree.rows]);
+  const rows = useMemo<readonly FileTreeRow[]>(
+    () =>
+      search.results?.map((entry, index) =>
+        toEntryRow(entry, 0, false, index),
+      ) ?? tree.rows,
+    [search.results, tree.rows],
+  );
 
   const openPath = tree.openPath;
   const openResource = useMemo(
@@ -193,7 +197,7 @@ export function useFileBrowser({
   const boards = useBrowserDashboards({
     rows,
     metadataRows: tree.metadataRows,
-    uri: activeUri,
+    uri: blocked ? null : activeUri,
     rootUri,
     generation: refreshGeneration,
     locale,
@@ -230,6 +234,7 @@ export function useFileBrowser({
       // resource the user picked in the meantime. The selection belongs to the moment
       // of the click, not to a listing that arrives afterwards.
       select: async (row: FileTreeEntryRow) => {
+        if (row.disabled || row.selectable === false) return;
         closeDashboard();
         setPendingUri(row.uri);
         notifyUriChange.current(row.uri);
@@ -292,6 +297,9 @@ export function useFileBrowser({
     ],
   );
 
+  const previewError = blocked
+    ? new Error(text[blocked === 'denied' ? 'accessDenied' : 'traverseOnly'])
+    : preview.error;
   return {
     rows,
     selectedId,
@@ -305,15 +313,13 @@ export function useFileBrowser({
     // different resource than the preview shows.
     currentUri: activeUri,
     isReady: tree.isReady,
-    error: tree.error ?? search.error ?? preview.error,
+    error: tree.error ?? search.error ?? previewError,
     treeError: tree.error,
-    previewError: preview.error,
+    previewError,
     searchError: search.error,
     dashboards: boards.dashboards,
     dashboardError: boards.error,
-    previewTabs: boards.tab
-      ? [...(preview.tabs ?? []), boards.tab]
-      : preview.tabs,
+    previewTabs: mergeDashboardTab(preview.tabs, boards.tab, Boolean(blocked)),
     previewKey:
       boards.isOpen && activeUri ? dashboardKey(activeUri) : preview.activeKey,
     previewFooter: preview.footer,

@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { DirectoryTourProps, DirectoryTourStep } from './types.js';
@@ -133,14 +134,17 @@ function TourStep({
       )}
       <div className="ov-directory-tour__card">
         {onClose && (
-          <button
+          <Button
+            size="mini"
+            type="text"
+            iconOnly
             className="ov-directory-tour__close"
-            type="button"
+            htmlType="button"
             aria-label={text.close}
             onClick={onClose}
           >
             ×
-          </button>
+          </Button>
         )}
         {!locating && !unavailable && step.illustration && (
           <div className="ov-directory-tour__illustration">
@@ -167,23 +171,35 @@ function TourStep({
           </span>
           {unavailable ? (
             <>
-              <button type="button" onClick={() => retry((value) => value + 1)}>
+              <Button
+                size="small"
+                type="default"
+                htmlType="button"
+                onClick={() => retry((value) => value + 1)}
+              >
                 {text.retry}
-              </button>
-              <button type="button" onClick={() => advance(true)}>
+              </Button>
+              <Button
+                size="small"
+                type="default"
+                htmlType="button"
+                onClick={() => advance(true)}
+              >
                 {text.skip}
-              </button>
+              </Button>
             </>
           ) : (
-            <button
-              type="button"
+            <Button
+              size="small"
+              type="primary"
+              htmlType="button"
               className="ov-directory-tour__primary"
               disabled={locating}
               onClick={() => advance(false)}
             >
               {step.nextLabel ??
                 (index === steps.length - 1 ? text.done : text.next)}
-            </button>
+            </Button>
           )}
         </footer>
       </div>

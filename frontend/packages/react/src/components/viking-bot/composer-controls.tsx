@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import type { SenderProps } from '@ark-design/ui/sender';
 import type { ButtonHTMLAttributes } from 'react';
 import SendSvg from '../../../../icons/svg/viking-bot/send.svg?react';
@@ -17,9 +18,13 @@ export function VikingBotSubmit({
 }: SubmitProps & { label: string }) {
   return (
     <Tooltip content={tip ?? label}>
-      <button
+      <Button
         {...props}
-        type="button"
+        size="default"
+        type="primary"
+        shape="circle"
+        iconOnly
+        htmlType="button"
         className={['ov-viking-bot__submit', className]
           .filter(Boolean)
           .join(' ')}
@@ -33,7 +38,7 @@ export function VikingBotSubmit({
         ) : (
           <SendSvg aria-hidden="true" focusable="false" />
         )}
-      </button>
+      </Button>
     </Tooltip>
   );
 }
@@ -44,14 +49,17 @@ export function VikingBotAttach({
 }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
   return (
     <Tooltip content={label}>
-      <button
+      <Button
         {...props}
-        type="button"
+        size="mini"
+        type="text"
+        iconOnly
+        htmlType="button"
         className="ov-viking-bot__attach"
         aria-label={label}
       >
         <AttachSvg aria-hidden="true" focusable="false" />
-      </button>
+      </Button>
     </Tooltip>
   );
 }

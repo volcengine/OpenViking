@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
 import { CSSTransition } from 'react-transition-group';
 
+import { lockBodyScroll } from '../overlay/lock-body-scroll.js';
 import CloseIcon from '../../../../../icons/svg/viking-bot/remove.svg?react';
 import { usePortalTheme } from '../tooltip/use-portal-theme.js';
 
@@ -23,62 +24,6 @@ export interface DrawerProps {
   className?: string;
   lang?: string;
   onClose: () => void;
-}
-
-interface BodyScrollLock {
-  owners: Set<symbol>;
-  styles: { property: string; value: string; priority: string }[];
-}
-
-// Body is a shared browser resource; each drawer owns a separate release token.
-const scrollLocks = new WeakMap<HTMLElement, BodyScrollLock>();
-
-function lockBodyScroll(body: HTMLElement) {
-  const existing = scrollLocks.get(body);
-  const lock = existing ?? {
-    owners: new Set<symbol>(),
-    styles: ['overflow-x', 'overflow-y', 'padding-right'].map((property) => ({
-      property,
-      value: body.style.getPropertyValue(property),
-      priority: body.style.getPropertyPriority(property),
-    })),
-  };
-  if (!existing) {
-    scrollLocks.set(body, lock);
-    if (body.style.overflowY !== 'hidden' && body.style.overflow !== 'hidden') {
-      const doc = body.ownerDocument;
-      const view = doc.defaultView;
-      const scrollbar =
-        (view?.innerWidth ?? 0) - doc.documentElement.clientWidth;
-      if (view && scrollbar > 0) {
-        const padding =
-          Number.parseFloat(view.getComputedStyle(body).paddingRight) || 0;
-        body.style.setProperty(
-          'padding-right',
-          `${padding + scrollbar}px`,
-          body.style.getPropertyPriority('padding-right'),
-        );
-      }
-    }
-    // A shorthand can serialize as empty when only one axis or priority is set.
-    // Modify and restore longhands independently so host declarations survive.
-    for (const property of ['overflow-x', 'overflow-y']) {
-      body.style.setProperty(
-        property,
-        'hidden',
-        body.style.getPropertyPriority(property),
-      );
-    }
-  }
-  const owner = Symbol();
-  lock.owners.add(owner);
-  return () => {
-    if (!lock.owners.delete(owner) || lock.owners.size > 0) return;
-    scrollLocks.delete(body);
-    for (const { property, value, priority } of lock.styles) {
-      body.style.setProperty(property, value, priority);
-    }
-  };
 }
 
 const ENTER = 'ov-drawer--enter';
