@@ -1,26 +1,18 @@
 import { useEffect, useState } from 'react';
 
-import type {
-  FilePreviewFileTab,
-  FilePreviewTab,
-} from '../../components/file-preview/index.js';
-import { OV_PATHS } from '../../client/paths.js';
+import type { FilePreviewTab } from '../../components/file-preview/index.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { isBinaryFile, mimeTypeOf, toBinaryTab } from './fs-file-kind.js';
-import { fileTypeIcon, directoryIcon } from './fs-icon.js';
+import { directoryIcon } from './fs-icon.js';
 import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
 import {
   isAbort,
   nameFromUri,
-  toFileTab,
   toDirectoryTab,
   type DirectorySummary,
 } from './fs-model.js';
 import { readDirectory } from './fs-read-directory.js';
+import { readFile } from './fs-read-file.js';
 import { abortError, resolveIsDirectory } from './fs-stat.js';
-
-/** 读取正文的行数上限；读满即按截断处理。 */
-const MAX_LINES = 2000;
 
 export interface PreviewState {
   tabs: readonly FilePreviewTab[] | null;
@@ -250,52 +242,4 @@ function loadingTab(uri: string, isDirectory: boolean): FilePreviewTab {
     loading: true,
     source: { fileName: nameFromUri(uri), path: uri, content: '' },
   };
-}
-
-/**
- * 读文件并包装成页签。文本走 `content/read`，二进制走 `content/download` 取原始
- * 字节——前者把内容当文本返回，二进制文件经过它只会得到一串乱码，图片与 PDF
- * 因此永远渲染不出来。
- *
- * Reads a file into a tab. Text goes through `content/read` and binary files
- * through `content/download` for the raw bytes: the former returns content as
- * text, so a binary file only yields mojibake and images or PDFs never render.
- */
-async function readFile(
-  client: OvClient,
-  uri: string,
-  options: OvRequestOptions,
-  openParent?: (uri: string) => Promise<void>,
-): Promise<FilePreviewFileTab> {
-  const name = nameFromUri(uri);
-  const icon = fileTypeIcon(name);
-
-  if (isBinaryFile(name)) {
-    const blob = await client.request<Blob>({
-      method: 'GET',
-      path: OV_PATHS.contentDownload,
-      query: { uri },
-      responseType: 'blob',
-      options,
-    });
-    // 接口返回 octet-stream，这里按扩展名补上真实类型：底座靠它选择 Adapter。
-    // The endpoint answers octet-stream; the real type is restored from the
-    // extension, which is what the base uses to pick an adapter.
-    const typed = new Blob([blob], { type: mimeTypeOf(name) });
-    return toBinaryTab(uri, name, typed, icon, openParent);
-  }
-
-  const content = await client.request<string>({
-    method: 'GET',
-    path: OV_PATHS.contentRead,
-    query: { uri, limit: MAX_LINES },
-    options,
-  });
-  return toFileTab(
-    { uri },
-    typeof content === 'string' ? content : '',
-    MAX_LINES,
-    icon,
-    openParent,
-  );
 }
