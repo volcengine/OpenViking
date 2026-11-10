@@ -56,7 +56,7 @@ def test_system_namespace_is_readable_by_every_account_role(role, uri):
     [
         (Role.USER, {AclAction.READ}),
         (Role.ADMIN, {AclAction.READ, AclAction.WRITE, AclAction.MANAGE}),
-        (Role.ROOT, set()),
+        (Role.ROOT, {AclAction.READ, AclAction.WRITE, AclAction.MANAGE}),
         (Role.GLOBAL, {AclAction.READ}),
     ],
 )
@@ -85,7 +85,7 @@ async def test_global_subtree_role_permissions(role, allowed_actions, action, ur
     [
         (Role.USER, {AclAction.READ}),
         (Role.ADMIN, {AclAction.READ, AclAction.WRITE, AclAction.MANAGE}),
-        (Role.ROOT, set()),
+        (Role.ROOT, {AclAction.READ, AclAction.WRITE, AclAction.MANAGE}),
         (Role.GLOBAL, {AclAction.READ}),
     ],
 )
@@ -132,15 +132,11 @@ async def test_global_subtree_parent_listings_follow_read_permissions(role, acl_
         agfs.write(fs._uri_to_path(uri, ctx=_ctx(Role.GLOBAL)), b"content")
 
     result = await fs.glob("**/*.md", SYSTEM_COMPILE_ROOT, ctx=_ctx(role), force_fs=True)
-    assert set(result["matches"]) == (
-        {global_file, sibling_file} if role != Role.ROOT else {sibling_file}
-    )
-    assert await fs.exists(global_file, _ctx(role)) is (role != Role.ROOT)
+    assert set(result["matches"]) == {global_file, sibling_file}
+    assert await fs.exists(global_file, _ctx(role))
 
     entries = await fs.ls(SYSTEM_COMPILE_ROOT, ctx=_ctx(role), include_abstract=False)
-    assert {entry["name"] for entry in entries} == (
-        {"global", "global-other"} if role != Role.ROOT else {"global-other"}
-    )
+    assert {entry["name"] for entry in entries} == {"global", "global-other"}
     parent_path = fs._uri_to_path(SYSTEM_COMPILE_ROOT, ctx=_ctx(role))
     parent = agfs._resolve(parent_path)
     fs._async_agfs.tree_directory = AsyncMock(
@@ -160,21 +156,18 @@ async def test_global_subtree_parent_listings_follow_read_permissions(role, acl_
         ]
     )
     entries = await fs.tree(SYSTEM_COMPILE_ROOT, ctx=_ctx(role), include_abstract=False)
-    assert {entry["uri"] for entry in entries if not entry["isDir"]} == (
-        {global_file, sibling_file} if role != Role.ROOT else {sibling_file}
-    )
+    assert {entry["uri"] for entry in entries if not entry["isDir"]} == {global_file, sibling_file}
     result = await fs.grep(SYSTEM_COMPILE_ROOT, "content", ctx=_ctx(role), force_fs=True)
-    assert {match["uri"] for match in result["matches"]} == (
-        {global_file, sibling_file} if role != Role.ROOT else {sibling_file}
-    )
+    assert {match["uri"] for match in result["matches"]} == {global_file, sibling_file}
 
 
+@pytest.mark.parametrize("role", [Role.ADMIN, Role.ROOT])
 @pytest.mark.asyncio
-async def test_only_admin_can_manage_root_with_account_isolation(tmp_path):
+async def test_admin_and_root_can_manage_global_directory_with_account_isolation(role, tmp_path):
     fs = VikingFS(agfs=MockLocalAGFS(root_path=tmp_path))
-    ctx = _ctx(Role.ADMIN)
+    ctx = _ctx(role)
     uri = f"{SYSTEM_COMPILE_GLOBAL_ROOT}/file.md"
-    other_account = RequestContext(user=UserIdentifier("other", "alice"), role=Role.ADMIN)
+    other_account = RequestContext(user=UserIdentifier("other", "alice"), role=role)
     assert not await fs.exists(SYSTEM_COMPILE_GLOBAL_ROOT, ctx)
     await fs.mkdir(SYSTEM_COMPILE_GLOBAL_ROOT, ctx=ctx)
     await fs.write(uri, "first", ctx)
@@ -183,9 +176,8 @@ async def test_only_admin_can_manage_root_with_account_isolation(tmp_path):
     assert not await fs.exists(uri, other_account)
     assert await fs.read_file(uri, ctx=_ctx(Role.USER)) == "updated"
     assert await fs.read_file(uri, ctx=_ctx(Role.GLOBAL)) == "updated"
-    with pytest.raises(PermissionDeniedError):
-        await fs.read_file(uri, ctx=_ctx(Role.ROOT))
-    for denied_role in (Role.USER, Role.GLOBAL, Role.ROOT):
+    assert await fs.read_file(uri, ctx=_ctx(Role.ROOT)) == "updated"
+    for denied_role in (Role.USER, Role.GLOBAL):
         with pytest.raises(PermissionDeniedError):
             await fs.mkdir(f"{SYSTEM_COMPILE_GLOBAL_ROOT}/denied", ctx=_ctx(denied_role))
         with pytest.raises(PermissionDeniedError):
@@ -201,7 +193,7 @@ async def test_only_admin_can_manage_root_with_account_isolation(tmp_path):
 @pytest.mark.parametrize("action", [AclAction.WRITE, AclAction.MANAGE])
 @pytest.mark.parametrize("role", [Role.ROOT, Role.ADMIN])
 @pytest.mark.asyncio
-async def test_system_writes_are_limited_to_custom_assets_for_privileged_roles(action, role):
+async def test_system_writes_allow_root_and_limit_admin_to_custom_assets(action, role):
     fs = _fs()
     ctx = _ctx(role, bypass_acl=True)
     for uri in (
@@ -214,8 +206,11 @@ async def test_system_writes_are_limited_to_custom_assets_for_privileged_roles(a
         f"{SYSTEM_EXAMPLE_SKILLS_ROOT}/daily-report/SKILL.md",
         SYSTEM_MEMORY_CUSTOM_ROOT,
     ):
-        with pytest.raises(PermissionDeniedError):
+        if role == Role.ROOT:
             await fs._ensure_access(uri, ctx, action=action)
+        else:
+            with pytest.raises(PermissionDeniedError):
+                await fs._ensure_access(uri, ctx, action=action)
         await fs._ensure_access(uri, ctx, action=AclAction.READ)
     await fs._ensure_access(CUSTOM_ASSET_URI, ctx, action=action)
 

@@ -291,6 +291,8 @@ class _AccessMixin:
         action: AclAction,
     ) -> bool:
         """Apply the fixed role and path policy for the account system namespace."""
+        if ctx.role == Role.ROOT:
+            return True
         if is_system_compile_global_uri(uri):
             return ctx.role == Role.ADMIN or (
                 ctx.role in {Role.USER, Role.GLOBAL} and action is AclAction.READ
@@ -298,7 +300,7 @@ class _AccessMixin:
         if action is AclAction.READ:
             return True
         return (
-            ctx.role in {Role.ADMIN, Role.ROOT}
+            ctx.role == Role.ADMIN
             and action in {AclAction.WRITE, AclAction.MANAGE}
             and is_system_custom_asset_uri(uri)
         )
