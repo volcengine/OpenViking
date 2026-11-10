@@ -1,0 +1,496 @@
+name: OpenViking SuperAgent Release
+
+# Tests, builds and publishes SuperAgent (superagent/) to the TOS release bucket, laid out
+# the way its installer and updater read it:
+#   <prefix>/releases/<version>/  vika-<version>-<platform>.tar.gz (+ .sha256),
+#                                 install.sh, and release.json, uploaded last
+#   <prefix>/install.sh, <prefix>/latest  written last, only for an
+#                                         openviking-vika@ tag newer than
+#                                         latest (pre-releases until a stable one)
+# A pull request that touches superagent/ tests and builds linux-x64 and publishes
+# nothing. A manual run publishes the chosen branch as <version>-<commit>, a
+# preview that `latest` never points to.
+#
+# The tag must not start with v: v*.*.* pushes and releases of v* tags run the
+# main package workflows (docker image, PyPI, TOS release assets).
+
+on:
+  push:
+    tags: ["openviking-vika@*"]
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: "POSIX platforms to build (Windows preview is also built)"
+        type: choice
+        options: [all, linux-x64]
+        default: all
+      windows_preview_only:
+        description: "Build and publish only the Windows preview"
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - "superagent/**"
+      - ".github/workflows/superagent-release.yml"
+
+permissions:
+  contents: read
+
+# Only pull request runs replace each other; a publishing run is never cancelled.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('vika-release-{0}', github.ref) || format('vika-release-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Public address of the published tree: release.json and the installer carry
+  # it, and the updater reads <base>/latest from it.
+  VIKA_DOWNLOAD_BASE: ${{ vars.VIKA_DOWNLOAD_BASE || 'https://ovrelease.tos-cn-beijing.volces.com/vika' }}
+  # Key prefix of the same tree in the bucket.
+  VIKA_TOS_PREFIX: ${{ vars.VIKA_TOS_PREFIX || 'vika' }}
+
+jobs:
+  build:
+    name: Test and build
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_preview_only) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: superagent
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: superagent/package-lock.json
+
+      - name: Validate release tag
+        if: github.event_name == 'push'
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          test "$RELEASE_TAG" = "openviking-vika@$PACKAGE_VERSION"
+
+      - run: npm ci --no-audit --no-fund
+      - run: npm run check
+      - run: npm test
+
+      - name: Build release archives
+        env:
+          PLATFORMS: ${{ github.event_name == 'pull_request' && 'linux-x64' || inputs.platforms || 'all' }}
+          DIST: ${{ runner.temp }}/vika-dist
+          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
+        run: |
+          if [ "$PLATFORMS" = all ]; then set -- --all; else set -- --platform "$PLATFORMS"; fi
+          # A tag names the version; any other run builds <package version>-<commit>.
+          if [ -n "$RELEASE_TAG" ]; then set -- "$@" --version "${RELEASE_TAG#openviking-vika@}"; fi
+          node scripts/build-release.mjs "$@" --download-base "$VIKA_DOWNLOAD_BASE" --out "$DIST"
+          sed "s|__VIKA_DOWNLOAD_BASE__|$VIKA_DOWNLOAD_BASE|" scripts/install.sh > "$DIST/install.sh"
+
+      # What the updater checks before it switches a machine to a release: the
+      # bundled Node starts here and the bundled Pi is the pinned version.
+      - name: Smoke-test the linux-x64 archive
+        env:
+          DIST: ${{ runner.temp }}/vika-dist
+        run: |
+          VERSION="$(jq -r .version "$DIST/release.json")"
+          NAME="vika-$VERSION-linux-x64"
+          (cd "$DIST" && sha256sum -c "$NAME.tar.gz.sha256")
+          mkdir -p "$RUNNER_TEMP/smoke"
+          tar -xzf "$DIST/$NAME.tar.gz" -C "$RUNNER_TEMP/smoke"
+          cd "$RUNNER_TEMP/smoke/$NAME"
+          node/bin/node packages/daemon/scripts/check-pi.mjs
+          node/bin/node packages/cli/bin/vika.mjs --version
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vika-dist
+          path: ${{ runner.temp }}/vika-dist
+          retention-days: 7
+          compression-level: 0
+
+  publish:
+    name: Publish to TOS
+    needs: build
+    if: github.event_name != 'pull_request' && !inputs.windows_preview_only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: vika-release
+    permissions:
+      contents: write
+    # Publishing runs one at a time, in order, and none is dropped: two runs of
+    # one version would otherwise both find it unpublished and mix their files.
+    concurrency:
+      group: vika-publish
+      queue: max
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vika-dist
+          path: dist
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Install AWS CLI
+        run: |
+          python -m pip install --upgrade awscli
+          aws configure set default.s3.addressing_style virtual
+
+      - name: Upload to TOS
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TOS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TOS_SECRET_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.TOS_REGION }}
+          TOS_BUCKET: ${{ secrets.TOS_RELEASE_BUCKET }}
+          TOS_ENDPOINT: ${{ secrets.TOS_ENDPOINT }}
+          IS_RELEASE: ${{ github.event_name == 'push' }}
+        run: |
+          set -euo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION TOS_BUCKET TOS_ENDPOINT; do
+            if [ -z "${!name}" ]; then
+              echo "::error::TOS is not configured: ${name} is empty"
+              exit 1
+            fi
+          done
+          TOS_ENDPOINT="${TOS_ENDPOINT#https://}"
+          TOS_ENDPOINT="${TOS_ENDPOINT#http://}"
+          case "${TOS_ENDPOINT}" in
+            tos-s3-*) TOS_S3_ENDPOINT="${TOS_ENDPOINT}" ;;
+            tos-*) TOS_S3_ENDPOINT="tos-s3-${TOS_ENDPOINT#tos-}" ;;
+            *) TOS_S3_ENDPOINT="${TOS_ENDPOINT}" ;;
+          esac
+          IMMUTABLE="public, max-age=31536000, immutable"
+          NO_CACHE="no-store, no-cache, must-revalidate, max-age=0"
+          TEXT="text/plain; charset=utf-8"
+
+          upload() {
+            disposition=()
+            case "$3" in text/*) disposition=(--content-disposition inline) ;; esac
+            aws s3 cp "$1" "s3://${TOS_BUCKET}/$2" \
+              --endpoint-url "https://${TOS_S3_ENDPOINT}" \
+              --content-type "$3" \
+              --cache-control "$4" \
+              ${disposition[@]+"${disposition[@]}"} \
+              --only-show-errors
+            echo "Uploaded $2"
+          }
+
+          # fetch <key> <file> succeeds when it downloads the key and fails when
+          # the key does not exist. Any other error stops the run, so a failed
+          # read never passes for a missing object.
+          fetch() {
+            local output
+            if output="$(aws s3 cp "s3://${TOS_BUCKET}/$1" "$2" \
+              --endpoint-url "https://${TOS_S3_ENDPOINT}" --only-show-errors 2>&1)"; then
+              return 0
+            fi
+            if grep -q '(404)' <<<"${output}"; then
+              return 1
+            fi
+            echo "::error::Cannot read $1: ${output}"
+            exit 1
+          }
+
+          VERSION="$(jq -r .version dist/release.json)"
+          DIR="${VIKA_TOS_PREFIX}/releases/${VERSION}"
+          # A version is published once, and its release.json goes up last.
+          # Finding this run's own release.json means the job is re-run after a
+          # later step failed: the files are in place and the rest goes on. Any
+          # other release.json belongs to a different build of the version.
+          UPLOADED=false
+          if fetch "${DIR}/release.json" published-release.json; then
+            if ! cmp -s published-release.json dist/release.json; then
+              echo "::error::OpenViking SuperAgent ${VERSION} is published already"
+              exit 1
+            fi
+            UPLOADED=true
+            echo "OpenViking SuperAgent ${VERSION} is uploaded already; finishing its release"
+          fi
+
+          # `latest` only moves forward. Until OpenViking SuperAgent has a stable release a
+          # pre-release (a version with a "-") moves it too; once `latest`
+          # holds a stable version, pre-releases of the same line leave it.
+          # Versions compare by their base, and a stable version wins a tie.
+          # Writing the version `latest` holds already is a re-run's no-op.
+          MOVE_LATEST=false
+          CURRENT=""
+          if [ "${IS_RELEASE}" = true ]; then
+            if fetch "${VIKA_TOS_PREFIX}/latest" current-latest; then
+              CURRENT="$(tr -d ' \r\n' < current-latest)"
+            fi
+            BASE="${VERSION%%-*}"
+            CURRENT_BASE="${CURRENT%%-*}"
+            NEWEST="$(printf '%s\n%s\n' "${CURRENT_BASE}" "${BASE}" | sort -V | tail -n 1)"
+            if [ -z "${CURRENT}" ] || [ "${CURRENT}" = "${VERSION}" ]; then
+              MOVE_LATEST=true
+            elif [ "${BASE}" != "${CURRENT_BASE}" ]; then
+              [ "${NEWEST}" = "${BASE}" ] && MOVE_LATEST=true
+            else
+              case "${VERSION}" in
+                *-*) case "${CURRENT}" in *-*) [ "$(printf '%s\n%s\n' "${CURRENT}" "${VERSION}" | sort -V | tail -n 1)" = "${VERSION}" ] && MOVE_LATEST=true ;; esac ;;
+                *) MOVE_LATEST=true ;;
+              esac
+            fi
+          fi
+
+          if [ "${UPLOADED}" = false ]; then
+            for archive in dist/*.tar.gz; do
+              upload "${archive}" "${DIR}/$(basename "${archive}")" application/gzip "${IMMUTABLE}"
+              upload "${archive}.sha256" "${DIR}/$(basename "${archive}").sha256" "${TEXT}" "${IMMUTABLE}"
+            done
+            upload dist/install.sh "${DIR}/install.sh" "${TEXT}" "${IMMUTABLE}"
+            upload dist/release.json "${DIR}/release.json" application/json "${IMMUTABLE}"
+          fi
+          if [ "${MOVE_LATEST}" = true ]; then
+            printf '%s\n' "${VERSION}" > latest
+            upload dist/install.sh "${VIKA_TOS_PREFIX}/install.sh" "${TEXT}" "${NO_CACHE}"
+            upload latest "${VIKA_TOS_PREFIX}/latest" "${TEXT}" "${NO_CACHE}"
+          fi
+
+          {
+            echo "## OpenViking SuperAgent ${VERSION}"
+            if [ "${MOVE_LATEST}" = true ]; then
+              echo '```sh'
+              echo "curl -fsSL ${VIKA_DOWNLOAD_BASE}/install.sh | sh"
+              echo '```'
+            else
+              if [ "${IS_RELEASE}" = true ]; then
+                echo "\`latest\` stays at ${CURRENT}: ${VERSION} is a pre-release or older. Install it with"
+              else
+                echo "Preview: \`latest\` is unchanged. Install it with"
+              fi
+              echo '```sh'
+              echo "curl -fsSL ${VIKA_DOWNLOAD_BASE}/releases/${VERSION}/install.sh | sh -s -- --version ${VERSION}"
+              echo '```'
+              echo "then \`ovsa restart\` on a machine that already runs OpenViking SuperAgent; \`ovsa upgrade all\` returns it to the latest release."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Not marked as the repository's latest release, which stays OpenViking's.
+      # A re-run completes the assets of a release an earlier attempt created.
+      - name: Create GitHub Release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" dist/*.tar.gz dist/*.sha256 dist/release.json \
+              --repo "${GITHUB_REPOSITORY}" --clobber
+            exit 0
+          fi
+          VERSION="$(jq -r .version dist/release.json)"
+          PRERELEASE=()
+          case "${VERSION}" in *-*) PRERELEASE=(--prerelease) ;; esac
+          {
+            echo '## Install'
+            echo
+            echo 'macOS / Linux / WSL2 (this version):'
+            echo
+            echo '```sh'
+            echo "curl -fsSL ${VIKA_DOWNLOAD_BASE}/releases/${VERSION}/install.sh | sh -s -- --version ${VERSION}"
+            echo '```'
+            echo
+            echo 'Windows users: use the PowerShell one-line installer in the shared guide below. Windows previews are published separately; this command and these release assets are for macOS / Linux.'
+            echo
+            echo "[Installation and setup guide](https://github.com/${GITHUB_REPOSITORY}/blob/feat/vika/superagent/install.md)"
+          } > "${RUNNER_TEMP}/vika-release-notes.md"
+          gh release create "${TAG}" dist/*.tar.gz dist/*.sha256 dist/release.json \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --latest=false \
+            ${PRERELEASE[@]+"${PRERELEASE[@]}"} \
+            --title "OpenViking SuperAgent ${VERSION}" \
+            --notes-file "${RUNNER_TEMP}/vika-release-notes.md"
+
+  windows-preview:
+    name: Windows x64 preview
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: superagent
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Test installer failure handling (PowerShell 7 and 5.1)
+        run: |
+          & ./scripts/windows/test-install-preview.ps1
+          powershell.exe -NoProfile -File ./scripts/windows/test-install-preview.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell installer tests failed' }
+          & ./scripts/windows/test-install-transactions.ps1
+          powershell.exe -NoProfile -File ./scripts/windows/test-install-transactions.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell transaction tests failed' }
+      - name: Test online installer (PowerShell 7 and 5.1)
+        run: |
+          node scripts/windows/test-install-online.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 7 online installer tests failed' }
+          $env:POWERSHELL_EXE = 'powershell.exe'
+          node scripts/windows/test-install-online.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 5.1 online installer tests failed' }
+      - name: Build committed Windows preview
+        run: |
+          node scripts/build-windows-preview.mjs "$env:RUNNER_TEMP/vika-windows-dist"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
+      - name: Install and check relocated package without global Node or PM2
+        run: |
+          $dist = Join-Path $env:RUNNER_TEMP 'vika-windows-dist'
+          $archive = (Get-ChildItem $dist -Filter '*.zip').FullName
+          $destination = Join-Path $env:RUNNER_TEMP 'OpenViking SuperAgent 测试 package'
+          $originalPath = $env:PATH
+          try {
+            $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
+            & "$dist/install-preview.ps1" -File $archive -Destination $destination
+            & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -File "$dist/install-preview.ps1" -File $archive -Destination "$destination PS51"
+            if ($LASTEXITCODE -ne 0) { throw 'PowerShell 5.1 package installation failed' }
+          } finally { $env:PATH = $originalPath }
+          $node = Join-Path $destination 'runtime/node.exe'
+          Push-Location $destination
+          try {
+            & $node --test packages/daemon/test/durable-coding-tools.test.mjs packages/daemon/test/windows-process.test.mjs packages/daemon/test/windows-action-api.test.mjs packages/updater/test/windows-artifacts.test.mjs
+            if ($LASTEXITCODE -ne 0) { throw 'Windows regression tests failed' }
+          } finally { Pop-Location }
+      - uses: actions/upload-artifact@v7
+        id: upload
+        with:
+          name: vika-windows-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vika-windows-dist/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Download instructions
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          @"
+          ## Windows x64 preview
+          [Download ZIP + SHA-256 + installer + instructions]($env:ARTIFACT_URL)
+
+          Extract the Actions artifact first, then follow README.md.
+          This package passed offline runtime checks, not real connector/account acceptance.
+          No TOS upload, stable latest update, autostart or automatic upgrade is performed.
+          "@ >> $env:GITHUB_STEP_SUMMARY
+
+  windows-preview-publish:
+    name: Publish Windows preview to TOS
+    needs: windows-preview
+    # Same triggers as the POSIX publisher, but never touches the stable
+    # `latest` pointer: Windows stays a preview channel under its own prefix.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    # The ~100 MB ZIP goes up twice (versioned and latest) and a
+    # GitHub runner reaches the Beijing bucket at roughly 1 Mbps.
+    timeout-minutes: 60
+    environment: vika-release
+    concurrency:
+      group: vika-windows-preview-publish
+      queue: max
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vika-windows-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Install AWS CLI
+        run: |
+          python -m pip install --upgrade awscli
+          aws configure set default.s3.addressing_style virtual
+
+      - name: Upload Windows preview
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TOS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TOS_SECRET_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.TOS_REGION }}
+          TOS_BUCKET: ${{ secrets.TOS_RELEASE_BUCKET }}
+          TOS_ENDPOINT: ${{ secrets.TOS_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION TOS_BUCKET TOS_ENDPOINT; do
+            if [ -z "${!name}" ]; then
+              echo "::error::TOS is not configured: ${name} is empty"
+              exit 1
+            fi
+          done
+          TOS_ENDPOINT="${TOS_ENDPOINT#https://}"
+          TOS_ENDPOINT="${TOS_ENDPOINT#http://}"
+          case "${TOS_ENDPOINT}" in
+            tos-s3-*) TOS_S3_ENDPOINT="${TOS_ENDPOINT}" ;;
+            tos-*) TOS_S3_ENDPOINT="tos-s3-${TOS_ENDPOINT#tos-}" ;;
+            *) TOS_S3_ENDPOINT="${TOS_ENDPOINT}" ;;
+          esac
+          IMMUTABLE="public, max-age=31536000, immutable"
+          NO_CACHE="no-store, no-cache, must-revalidate, max-age=0"
+          TEXT="text/plain; charset=utf-8"
+
+          upload() {
+            disposition=()
+            case "$3" in text/*) disposition=(--content-disposition inline) ;; esac
+            aws s3 cp "$1" "s3://${TOS_BUCKET}/$2" \
+              --endpoint-url "https://${TOS_S3_ENDPOINT}" \
+              --content-type "$3" \
+              --cache-control "$4" \
+              ${disposition[@]+"${disposition[@]}"} \
+              --only-show-errors
+            echo "Uploaded $2"
+          }
+
+          cd dist
+          shopt -s nullglob
+          zips=(vika-*-win32-x64.zip)
+          if [ "${#zips[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one Windows preview ZIP, found ${#zips[@]}"
+            exit 1
+          fi
+          ZIP="${zips[0]}"
+          VERSION="${ZIP#vika-}"
+          VERSION="${VERSION%-win32-x64.zip}"
+          PREFIX="${VIKA_TOS_PREFIX}/windows-preview"
+          DIR="${PREFIX}/${VERSION}"
+
+          # Versioned copy: immutable, exactly what the Actions artifact holds.
+          upload "${ZIP}" "${DIR}/${ZIP}" application/zip "${IMMUTABLE}"
+          upload "${ZIP}.sha256" "${DIR}/${ZIP}.sha256" "${TEXT}" "${IMMUTABLE}"
+          upload install.ps1 "${DIR}/install.ps1" "${TEXT}" "${IMMUTABLE}"
+          upload install-preview.ps1 "${DIR}/install-preview.ps1" "${TEXT}" "${IMMUTABLE}"
+          upload README.md "${DIR}/README.md" "text/markdown; charset=utf-8" "${IMMUTABLE}"
+          upload release.json "${DIR}/release.json" application/json "${IMMUTABLE}"
+
+          # Stable alias for documentation links. The installer requires the
+          # checksum file to name the ZIP it sits next to, so it is rewritten
+          # for the fixed name rather than copied.
+          ALIAS="vika-windows-preview-win32-x64.zip"
+          cp "${ZIP}" "${ALIAS}"
+          printf '%s  %s\n' "$(cut -d' ' -f1 "${ZIP}.sha256")" "${ALIAS}" > "${ALIAS}.sha256"
+          printf '%s\n' "${VERSION}" > latest
+          upload "${ALIAS}" "${PREFIX}/latest/${ALIAS}" application/zip "${NO_CACHE}"
+          upload "${ALIAS}.sha256" "${PREFIX}/latest/${ALIAS}.sha256" "${TEXT}" "${NO_CACHE}"
+          upload install-preview.ps1 "${PREFIX}/latest/install-preview.ps1" "${TEXT}" "${NO_CACHE}"
+          upload README.md "${PREFIX}/latest/README.md" "text/markdown; charset=utf-8" "${NO_CACHE}"
+          upload install.ps1 "${PREFIX}/latest/install.ps1" "${TEXT}" "${NO_CACHE}"
+          upload install.ps1 "${VIKA_TOS_PREFIX}/install.ps1" "${TEXT}" "${NO_CACHE}"
+          upload latest "${PREFIX}/latest/version" "${TEXT}" "${NO_CACHE}"
+
+          {
+            echo "## Windows x64 preview on TOS"
+            echo "Version: \`${VERSION}\`"
+            echo '```powershell'
+            echo "irm ${VIKA_DOWNLOAD_BASE}/install.ps1 | iex"
+            echo '```'
+            echo "- Latest ZIP: ${VIKA_DOWNLOAD_BASE}/windows-preview/latest/${ALIAS}"
+            echo "- This build: ${VIKA_DOWNLOAD_BASE}/windows-preview/${VERSION}/${ZIP}"
+            echo "Stable \`latest\` for macOS/Linux is unchanged."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,39 @@
+{
+  "name": "vika",
+  "version": "0.5.0-preview",
+  "license": "AGPL-3.0",
+  "private": true,
+  "description": "A local personal agent core with connector processes and an activity web module.",
+  "type": "module",
+  "bin": {
+    "ovsa": "packages/cli/bin/vika.mjs",
+    "vika": "packages/cli/bin/vika.mjs"
+  },
+  "workspaces": [
+    "packages/daemon",
+    "packages/web",
+    "packages/updater",
+    "packages/cli"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "setup": "npm ci --no-audit --no-fund && node scripts/install-lark-cli.mjs && node scripts/install-slack-cli.mjs && npm run check:pi && npm run check:durable",
+    "pi": "pi",
+    "check:pi": "node packages/daemon/scripts/check-pi.mjs",
+    "check:durable": "node packages/daemon/scripts/check-durable.mjs",
+    "check:dsh": "node packages/daemon/scripts/check-dsh.mjs",
+    "release:build": "node scripts/build-release.mjs",
+    "start": "node packages/daemon/src/main.mjs",
+    "start:daemon": "node packages/daemon/src/main.mjs",
+    "start:web": "node packages/web/src/main.mjs",
+    "check": "node scripts/check.mjs",
+    "test": "node --test packages/daemon/test/*.test.mjs packages/web/test/*.test.mjs packages/updater/test/*.test.mjs packages/cli/test/*.test.mjs",
+    "simulator:claude-runtime": "node packages/daemon/simulator/claude-runtime-simulator.mjs",
+    "health": "node packages/web/scripts/healthcheck.mjs"
+  },
+  "vika": {
+    "node": "24.21.0"
+  }
+}
