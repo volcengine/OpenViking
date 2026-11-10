@@ -5,6 +5,7 @@ import { useTourAnchor } from './use-tour-anchor.js';
 import { useTourPosition } from './use-tour-position.js';
 import { useTourTheme } from './use-tour-theme.js';
 import { TourCard } from './tour-card.js';
+import { viewportMaximum } from './viewport-maximum.js';
 
 /** Data-free directory guidance. Unmounting a closed session resets its steps. */
 export function DirectoryTour(props: DirectoryTourProps) {
@@ -117,8 +118,8 @@ function TourStep({
         style={{
           width: step.cardWidth ?? 270,
           ...style,
-          maxWidth: position?.maxWidth,
-          maxHeight: position?.maxHeight,
+          maxWidth: viewportMaximum(style?.maxWidth, position?.maxWidth),
+          maxHeight: viewportMaximum(style?.maxHeight, position?.maxHeight),
           top: position?.top ?? 0,
           left: position?.left ?? 0,
           visibility: position?.visible ? 'visible' : 'hidden',

@@ -31,9 +31,14 @@ export function useTourTheme(
     for (let node: HTMLElement | null = anchor; node; node = node.parentElement)
       observer.observe(node, {
         attributes: true,
-        attributeFilter: ['class', 'style'],
+        attributeFilter: ['class', 'style', 'data-theme'],
       });
+    // Media queries can change computed tokens without a DOM mutation.
+    window.addEventListener('resize', update);
+    window.visualViewport?.addEventListener('resize', update);
     return () => {
+      window.removeEventListener('resize', update);
+      window.visualViewport?.removeEventListener('resize', update);
       observer.disconnect();
       for (const name of copied) host.style.removeProperty(name);
     };

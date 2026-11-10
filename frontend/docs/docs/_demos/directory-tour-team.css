@@ -19,7 +19,10 @@
   vertical-align: -1px;
 }
 .ov-directory-tour-team__term {
-  color: var(--ov-ui-directory-tour-secondary);
+  color: var(
+    --ov-ui-directory-tour-secondary,
+    var(--ov-ui-color-text-2, var(--ov-ui-text-2-default))
+  );
 }
 .ov-directory-tour .ov-directory-tour-team__edit {
   display: inline-flex;
@@ -28,7 +31,10 @@
   border: 0;
   padding: 0;
   background: transparent;
-  color: var(--ov-ui-directory-tour-primary);
+  color: var(
+    --ov-ui-directory-tour-primary,
+    var(--ov-ui-color-primary, var(--ov-ui-primary-default))
+  );
   font-size: 12px;
   line-height: 20px;
   text-decoration: underline dotted;
