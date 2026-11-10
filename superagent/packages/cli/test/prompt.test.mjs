@@ -65,6 +65,15 @@ test('terminal: arrows skip disabled rows and wrap; raw mode ends with the quest
   assert.equal(await prompter.select('运行时', choices, { initial: 2 }), 'claude');
 });
 
+test('close gives back raw mode a setup left behind', () => {
+  // A setup that returns while a key watcher still holds raw mode leaves the
+  // shell without echo, line editing or paste; close() is the last stop.
+  const { prompter, input } = terminal();
+  input.setRawMode(true);
+  prompter.close();
+  assert.equal(input.raw, false);
+});
+
 test('terminal: a multiselect needs at least one tick before enter is accepted', async () => {
   const { prompter, type } = terminal();
   type(' ', '\r', DOWN, ' ', UP, ' ', '\r');

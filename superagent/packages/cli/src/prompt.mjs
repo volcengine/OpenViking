@@ -488,5 +488,12 @@ export class Prompter {
 
   close() {
     this.lines?.return?.();
+    // Setup can return while a key watcher still holds raw mode; a terminal left
+    // raw has no echo, no line editing and no paste, which reads as a frozen
+    // shell. Give it back on the way out.
+    if (this.tty) {
+      try { this.input.setRawMode(false); } catch { /* the terminal is gone */ }
+    }
+    this.input.pause?.();
   }
 }
