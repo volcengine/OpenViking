@@ -2181,6 +2181,18 @@ async def test_create_account_rolls_back_when_runtime_config_write_fails(
     assert not await _agfs_exists(admin_service, f"/local/{acct}")
 
 
+async def test_team_compile_status(lightweight_admin_client, template_account):
+    client = lightweight_admin_client
+    account, headers = template_account
+    url = f"/api/v1/admin/accounts/{account}/users/alice/settings"
+    field = "team_compile_status"
+    for status in ("closed", "open", "suspend", "closed"):
+        updated = await client.patch(url, headers=headers, json={field: status})
+        assert updated.json()["result"][field] == status
+        loaded = await client.get(url, headers=headers)
+        assert loaded.json()["result"][field] == status
+
+
 async def test_create_user_paths_accept_initial_user_config(
     lightweight_admin_client: httpx.AsyncClient,
     lightweight_admin_app: FastAPI,

@@ -151,6 +151,8 @@ async def patch_user_config(
         if "memory_policy" in changes:
             # Memory policy remains a whole-policy replacement.
             payload["memory_policy"] = changes["memory_policy"]
+        if "team_compile_status" in changes:
+            payload["team_compile_status"] = changes["team_compile_status"]
         updated = UserConfig.from_stored(payload)
         if updated.model_dump(by_alias=True) != before:
             await _prepare_ttl_change(ctx, current, updated)
