@@ -1,3 +1,4 @@
+import { useLocale } from '../../shared/locale-context.js';
 import { forwardRef, useCallback, useImperativeHandle, useState } from 'react';
 
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
@@ -48,7 +49,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
     tabs,
     activeKey,
     defaultActiveKey,
-    locale,
+    locale: localeProp,
     labels,
     onActiveKeyChange,
     className,
@@ -56,6 +57,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   },
   ref,
 ) {
+  const locale = useLocale(localeProp);
   const text = resolveFilePreviewLabels(locale, labels);
   const [internalKey, setInternalKey] = useState(
     () => defaultActiveKey ?? tabs[0].key,

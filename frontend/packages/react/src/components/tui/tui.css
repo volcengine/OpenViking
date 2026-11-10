@@ -1524,21 +1524,3 @@
     animation: none;
   }
 }
-
-@container (max-width: 480px) {
-  .ov-tui__search-item,
-  .ov-tui__tree-item {
-    flex-direction: column;
-  }
-
-  .ov-tui__search-metrics {
-    width: auto;
-    flex-direction: row;
-    align-items: center;
-  }
-
-  .ov-tui__help-item {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 2px;
-  }
-}

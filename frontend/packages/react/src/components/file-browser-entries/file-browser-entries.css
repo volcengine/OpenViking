@@ -54,6 +54,22 @@
   transition: background-color 160ms ease;
 }
 
+.ov-file-browser-entries__import-slot {
+  display: flex;
+  flex: 1 0 0;
+  min-width: 0;
+  height: 100%;
+}
+
+.ov-file-browser-entries__import-slot > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.ov-file-browser-entries__import-slot .ov-file-browser-entries__entry {
+  width: 100%;
+}
+
 .ov-file-browser-entries__entry:hover:not(:disabled) {
   background: color-mix(
     in srgb,
@@ -85,4 +101,18 @@
 .ov-file-browser-entries__label {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.ov-file-browser-entries__drawer {
+  --ov-ui-drawer-width: 1000px;
+}
+
+.ov-file-browser-entries__drawer .ov-agent-connect {
+  height: 100%;
+}
+
+.ov-file-browser-entries__drawer .ov-agent-connect__canvas {
+  width: 100%;
+  min-width: 720px;
+  min-height: 100%;
+  box-shadow: none;
 }

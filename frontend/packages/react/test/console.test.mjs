@@ -127,7 +127,7 @@ test('Console reports controlled mode intent and supports quick actions, keyboar
     assert.deepEqual(changes, ['conversation']);
     assert.equal(host.button('Terminal').getAttribute('aria-pressed'), 'true');
     assert.equal(host.input.value, 'ov health');
-    await click(host.container.querySelector('.ov-console__quick-action'));
+    await click(host.container.querySelector('.ov-tui__empty-action'));
     assert.equal(host.input.value, 'ov help ');
     assert.equal(document.activeElement, host.input);
     await host.execute('ov health');
@@ -154,5 +154,51 @@ test('Console reports controlled mode intent and supports quick actions, keyboar
     assert.equal(document.activeElement, host.input);
   } finally {
     await host.dispose();
+  }
+});
+
+test('Console exposes the terminal empty state and lets the host replace its quick commands', async () => {
+  const host = await mount(async () => ok({ state: 'ready' }));
+  try {
+    const names = () =>
+      [...host.container.querySelectorAll('.ov-tui__empty-name')].map(
+        (element) => element.textContent,
+      );
+    assert.deepEqual(names(), ['help', 'ls', 'find', 'read', 'status']);
+    assert.equal(
+      host.container.querySelector('.ov-tui__empty-title').textContent,
+      'OpenViking CLI',
+    );
+
+    await host.render({ quickCommands: ['status', 'missing', 'help'] });
+    assert.deepEqual(names(), ['status', 'help']);
+
+    await host.render({ quickCommands: [] });
+    assert.deepEqual(names(), []);
+    assert.equal(host.container.querySelector('.ov-tui__empty'), null);
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('Console forwards only explicit terminal copy overrides to Tui', async () => {
+  const title = () =>
+    host0.container.querySelector('.ov-tui__empty-title').textContent;
+  const host0 = await mount(async () => ok({ state: 'ready' }));
+  try {
+    assert.equal(title(), 'OpenViking CLI');
+
+    await host0.render({ labels: { commandTitle: 'Custom CLI' } });
+    assert.equal(title(), 'Custom CLI');
+
+    await host0.render({
+      labels: { commandTitle: 'Legacy', tui: { emptyTitle: 'Tui wins' } },
+    });
+    assert.equal(title(), 'Tui wins');
+
+    await host0.render({ labels: { commandTitle: '' } });
+    assert.equal(title(), '');
+  } finally {
+    await host0.dispose();
   }
 });

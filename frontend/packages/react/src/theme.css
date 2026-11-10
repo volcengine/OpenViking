@@ -36,10 +36,13 @@
  * the fallback applies otherwise.
  */
 .ov-directory-tour,
+.ov-wiki-dashboard,
+.ov-experience-dashboard,
 .ov-agent-connect,
 .ov-console,
 .ov-divider,
 .ov-file-browser-entries,
+.ov-drawer,
 .ov-file-browser,
 .ov-file-preview,
 .ov-file-tree,
@@ -101,15 +104,68 @@
   --ov-ui-warning-light-default: #fff0b3;
 
   /* 浮层。 */
+  --ov-ui-overlay-default: rgb(0 0 0 / 40%);
   --ov-ui-tooltip-bg-default: #1f2329;
   --ov-ui-tooltip-text-default: #ffffff;
+
+  /*
+   * 库图标的五组身份色。设计稿规定亮暗主题用同一套，所以暗色块里不重复声明；
+   * 宿主可用公开的 `--ov-ui-color-library-swatch-*` 逐组覆盖。
+   *
+   * 这段由 `scripts/sync-library-swatches.mjs` 从
+   * `packages/icons/library-swatches.json` 生成，也是 React 侧兜底值的数据源；
+   * 改颜色请改那份 JSON 再跑脚本，不要手工编辑这里。
+   *
+   * The five identity gradients of the library icon. The design keeps one set in
+   * both themes, so the dark block does not repeat them; a host overrides any
+   * single one through the public `--ov-ui-color-library-swatch-*` variables.
+   *
+   * This block is generated from `packages/icons/library-swatches.json` by
+   * `scripts/sync-library-swatches.mjs`, which is also the data source for the
+   * React fallbacks. Edit that JSON and rerun the script; do not edit this by hand.
+   */
+  /* @generated library-swatches:begin */
+  --ov-ui-library-swatch-1-default: linear-gradient(
+    145deg,
+    #ffd8ec 8%,
+    #ffabc8 46%,
+    #d8cbff 100%
+  );
+  --ov-ui-library-swatch-2-default: linear-gradient(
+    145deg,
+    #d9e8ff 8%,
+    #b8a6ff 52%,
+    #f3d6ff 100%
+  );
+  --ov-ui-library-swatch-3-default: linear-gradient(
+    145deg,
+    #ffe6bc 8%,
+    #ffaf96 48%,
+    #ff8bc5 100%
+  );
+  --ov-ui-library-swatch-4-default: linear-gradient(
+    145deg,
+    #eaf7ba 8%,
+    #b5efb8 52%,
+    #73d9c6 100%
+  );
+  --ov-ui-library-swatch-5-default: linear-gradient(
+    145deg,
+    #fff1ba 8%,
+    #ffc776 52%,
+    #bd9cff 100%
+  );
+  /* @generated library-swatches:end */
 }
 
 .dark .ov-directory-tour,
+html.dark .ov-wiki-dashboard,
+html.dark .ov-experience-dashboard,
 .dark .ov-agent-connect,
 .dark .ov-console,
 .dark .ov-divider,
 .dark .ov-file-browser-entries,
+.dark .ov-drawer,
 .dark .ov-file-browser,
 .dark .ov-file-preview,
 .dark .ov-file-tree,
@@ -152,6 +208,7 @@
   --ov-ui-warning-light-default: #3a2f14;
 
   --ov-ui-tooltip-bg-default: #2a2d33;
+  --ov-ui-overlay-default: rgb(0 0 0 / 64%);
   --ov-ui-tooltip-text-default: #f0f1f3;
 }
 
@@ -178,4 +235,32 @@
   --ov-ui-connect-outline-default: var(--ov-ui-border-2-default);
   --ov-ui-connect-muted-default: var(--ov-ui-text-3-default);
   --ov-ui-connect-notice-default: var(--ov-ui-text-2-default);
+}
+
+/* Shared dashboards: mapped from the 2026-11-12 console release, with host-overridable semantics. */
+.ov-wiki-dashboard,
+.ov-experience-dashboard,
+.ov-file-browser {
+  --ov-ui-dashboard-surface-default: #f8f8f8;
+  --ov-ui-dashboard-card-default: #fafafa;
+  --ov-ui-dashboard-muted-default: #787c91;
+  --ov-ui-dashboard-border-default: #edeef2;
+  --ov-ui-dashboard-warning-default: #eb7d00;
+  --ov-ui-dashboard-warning-light-default: #fff0e5;
+  --ov-ui-dashboard-danger-default: #d92d54;
+  --ov-ui-dashboard-danger-light-default: #ffecee;
+  --ov-ui-dashboard-success-default: #4f9c70;
+}
+html.dark .ov-wiki-dashboard,
+html.dark .ov-experience-dashboard,
+html.dark .ov-file-browser {
+  --ov-ui-dashboard-surface-default: var(--ov-ui-bg-3-default);
+  --ov-ui-dashboard-card-default: var(--ov-ui-bg-3-default);
+  --ov-ui-dashboard-muted-default: var(--ov-ui-text-3-default);
+  --ov-ui-dashboard-border-default: var(--ov-ui-border-1-default);
+  --ov-ui-dashboard-warning-default: var(--ov-ui-warning-default);
+  --ov-ui-dashboard-warning-light-default: var(--ov-ui-warning-light-default);
+  --ov-ui-dashboard-danger-default: var(--ov-ui-status-error-default);
+  --ov-ui-dashboard-danger-light-default: var(--ov-ui-bg-5-default);
+  --ov-ui-dashboard-success-default: var(--ov-ui-status-success-default);
 }

@@ -20,6 +20,7 @@ export interface FsEntry {
   size?: number;
   modTime?: string;
   abstract?: string;
+  tags?: readonly string[];
 }
 
 /** 一个目录已加载的子节点与分页状态。 */
@@ -94,9 +95,10 @@ export function toEntryRow(
   expanded: boolean,
   index?: number,
   busy?: boolean,
-): FileTreeEntryRow {
+): FileTreeEntryRow & { tags?: readonly string[] } {
   const isDir = entry.isDir === true;
   return {
+    tags: entry.tags,
     kind: 'entry',
     id: index === undefined ? entry.uri : `${entry.uri}#${index}`,
     depth,
@@ -124,9 +126,16 @@ export function toEntryRow(
  * 一个文件的预览页签。行数达到上限时按截断处理——接口不返回总行数，只能由
  * 「读满了」推断出「可能还有」。
  *
+ * 调用方自己切过行时用 `truncated` 说明结果，因为「正文行数等于上限」既可能是
+ * 正好读完，也可能是切掉了一部分，只有切的人知道是哪一种。
+ *
  * A preview tab for one file. Reaching the line cap is reported as truncation:
  * the API returns no total, so "the cap was filled" is the only signal that more
  * content may exist.
+ *
+ * A caller that sliced the lines itself states the outcome through `truncated`:
+ * "the body has exactly the cap" can mean the file ended there or that the rest was
+ * cut, and only the caller knows which.
  */
 export function toFileTab(
   entry: FsEntry,
@@ -134,6 +143,7 @@ export function toFileTab(
   maxLines: number,
   icon?: ReactNode,
   openParent?: (uri: string) => Promise<void>,
+  truncated = content.split('\n').length >= maxLines,
 ): FilePreviewFileTab {
   const name = nameFromUri(entry.uri);
   return {
@@ -152,7 +162,7 @@ export function toFileTab(
       content,
       fileName: name,
       path: entry.uri,
-      truncated: content.split('\n').length >= maxLines,
+      truncated,
     },
   };
 }

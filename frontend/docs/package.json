@@ -9,7 +9,7 @@
     "preview": "rspress preview --host 0.0.0.0"
   },
   "dependencies": {
-    "@openviking/react": "0.1.3",
+    "@openviking/react": "0.1.6",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
@@ -21,7 +21,6 @@
   "imports": {
     "#console-conversation": "./docs/_demos/use-console-conversation.tsx",
     "#console-transport": "./docs/_demos/console-transport.ts",
-    "#scope-switcher-icons": "./docs/_demos/scope-switcher-icons.tsx",
     "#scope-switcher-source": "./docs/_demos/scope-switcher-source.ts",
     "#scope-switcher-requests": "./docs/_demos/scope-switcher-requests.ts",
     "#tui-records": "./docs/_demos/tui-records.tsx",
@@ -30,6 +29,7 @@
     "#file-tree-console-data": "./docs/_demos/file-tree-console-data.ts",
     "#file-tree-console.css": "./docs/_demos/file-tree-console.css",
     "#file-preview-console-data": "./docs/_demos/file-preview-console-data.ts",
-    "#directory-tour-basic.css": "./docs/_demos/directory-tour-basic.css"
+    "#directory-tour-basic.css": "./docs/_demos/directory-tour-basic.css",
+    "#dashboard-demo-data": "./docs/_demos/dashboard-demo-data.ts"
   }
 }

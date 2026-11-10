@@ -18,6 +18,19 @@ function shellArgument(value: string) {
   return `'${value.replace(/'/g, "'\"'\"'")}'`;
 }
 
+export function getInstallerCommand(
+  harness: string,
+  locale: AgentConnectLocale,
+  apiKey: string,
+  baseUrl: string,
+) {
+  return (
+    'curl -fsSL https://openviking.ai/install | bash -s -- --yes' +
+    ` --lang ${locale === 'zh-CN' ? 'zh' : 'en'} --harness ${harness},cli` +
+    ` --url ${shellArgument(baseUrl)} --api-key ${shellArgument(apiKey)}`
+  );
+}
+
 export function getInstallerInstructions(
   name: string,
   harness: string,
@@ -25,9 +38,6 @@ export function getInstallerInstructions(
   apiKey: string,
   baseUrl: string,
 ) {
-  const command =
-    'curl -fsSL https://openviking.ai/install | bash -s -- --yes' +
-    ` --lang ${locale === 'zh-CN' ? 'zh' : 'en'} --harness ${harness},cli` +
-    ` --url ${shellArgument(baseUrl)} --api-key ${shellArgument(apiKey)}`;
+  const command = getInstallerCommand(harness, locale, apiKey, baseUrl);
   return resolveAgentConnectLabels(locale).installerInstructions(name, command);
 }

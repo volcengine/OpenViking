@@ -2,7 +2,7 @@
 
 English / [中文](README_CN.md)
 
-Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
 
 The conversation view: message list, composer and the pending-interaction area. It renders with **Ark Design** (`@ark-design/ui`) — the same library the commercial console uses — and takes an already normalized message model so neither host's protocol leaks in.
 

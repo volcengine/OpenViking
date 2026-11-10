@@ -26,6 +26,7 @@ from openviking_cli.exceptions import (
     ConflictError,
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
     ResourceExhaustedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -177,6 +178,71 @@ async def test_stat_forwards_optional_fields_without_changing_defaults(request_c
         "skip_count": False,
         "include_lock_status": False,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resolved_uri",
+    [
+        "viking://user/default/memories/notes.md",
+        "viking://system/memory/memory_templates/custom/demo.md",
+    ],
+)
+async def test_stat_resolves_record_id_before_namespace_policy(request_context, resolved_uri):
+    record_id = "0123456789abcdef0123456789abcdef"
+    metadata = {"uri": resolved_uri, "isDir": False}
+    viking_fs = SimpleNamespace(
+        resolve_uri=AsyncMock(return_value=resolved_uri),
+        stat=AsyncMock(return_value=metadata),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    result = await service.stat(record_id, request_context, include_lock_status=True)
+
+    assert result == metadata
+    viking_fs.resolve_uri.assert_awaited_once_with(record_id, ctx=request_context)
+    kwargs = {"ctx": request_context, "skip_count": False, "include_lock_status": True}
+    if resolved_uri.startswith("viking://system/"):
+        kwargs.update(skip_count=True, include_vector_fields=False)
+    viking_fs.stat.assert_awaited_once_with(resolved_uri, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_stat_missing_record_id_preserves_not_found(request_context):
+    record_id = "0123456789abcdef0123456789abcdef"
+    error = NotFoundError(record_id, "file")
+    viking_fs = SimpleNamespace(
+        resolve_uri=AsyncMock(side_effect=error),
+        stat=AsyncMock(),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(NotFoundError) as exc_info:
+        await service.stat(record_id, request_context)
+
+    assert exc_info.value is error
+    viking_fs.resolve_uri.assert_awaited_once_with(record_id, ctx=request_context)
+    viking_fs.stat.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stat_by_record_id_preserves_access_denial(request_context):
+    record_id = "0123456789abcdef0123456789abcdef"
+    resolved_uri = "viking://user/other/memories/private.md"
+    error = PermissionDeniedError("Access denied")
+    viking_fs = SimpleNamespace(
+        resolve_uri=AsyncMock(return_value=resolved_uri),
+        stat=AsyncMock(side_effect=error),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(PermissionDeniedError) as exc_info:
+        await service.stat(record_id, request_context)
+
+    assert exc_info.value is error
+    viking_fs.stat.assert_awaited_once_with(
+        resolved_uri, ctx=request_context, skip_count=False, include_lock_status=False
+    )
 
 
 class _MkdirPathlockAGFS:
@@ -360,7 +426,9 @@ def request_context():
 @pytest.mark.asyncio
 async def test_read_visible_strips_memory_metadata_before_slicing(request_context):
     raw = 'line one\nline two\n\n<!-- MEMORY_FIELDS\n{"secret":"hidden"}\n-->'
-    viking_fs = SimpleNamespace(read_file=AsyncMock(return_value=raw))
+    viking_fs = SimpleNamespace(
+        read_file=AsyncMock(return_value=raw), authorize_read=lambda ctx, targets: ctx
+    )
     service = FSService(viking_fs=viking_fs)
     uri = "viking://user/ryoma/memories/notes/private.md"
 
@@ -383,7 +451,9 @@ async def test_read_visible_strips_supported_memory_metadata_trailers(
 ):
     uri = "viking://user/ryoma/memories/notes/private.md"
     service = FSService(
-        viking_fs=SimpleNamespace(read_file=AsyncMock(return_value=raw)),
+        viking_fs=SimpleNamespace(
+            read_file=AsyncMock(return_value=raw), authorize_read=lambda ctx, targets: ctx
+        ),
     )
 
     assert await service.read_visible(uri, ctx=request_context) == "visible"
@@ -1843,7 +1913,6 @@ async def test_indexed_move_preserves_native_vector_transfer(request_context):
     )
     _with_pathlock(viking_fs)
     service = FSService(viking_fs=viking_fs)
-    service.compile_lifecycle = SimpleNamespace(move_target=AsyncMock())
     service._refresh_move_parents = AsyncMock()
 
     await service.mv(source, target, ctx=request_context)
@@ -1855,7 +1924,6 @@ async def test_indexed_move_preserves_native_vector_transfer(request_context):
     viking_fs.mv.assert_awaited_once_with(
         source, target, ctx=replace(request_context, bypass_acl=True), lease_ref=ANY
     )
-    service.compile_lifecycle.move_target.assert_awaited_once_with(source, target, request_context)
     service._refresh_move_parents.assert_awaited_once_with(
         from_uri=source,
         to_uri=target,

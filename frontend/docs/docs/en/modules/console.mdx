@@ -1,6 +1,6 @@
 # Console
 
-Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
 
 `Console` combines `Tui` and `VikingBot`, managing native API commands, execution records and separate drafts. Switching modes preserves records and drafts.
 
@@ -25,18 +25,6 @@ Conversation sessions, prompts and resource candidates use fixed demo data. The 
 ```
 
 For a real service, configure `baseURL`, credentials and identity through the host's `OpenVikingProvider`; no per-module adapter is required. Exclude `/api/v1` from `baseURL`; omission targets the same origin. Mounting does not fetch data. Requests start only when a command is explicitly submitted.
-
-## Standalone Hook
-
-`useConsole(options?: ConsoleOptions): ConsoleResult` is exported from `@openviking/react/modules/console`. It shares Provider inheritance, instance isolation and request cleanup with `Console`, without rendering a view or requiring CSS.
-
-`ConsoleOptions` accepts `mode`, `defaultMode`, `locale`, `scopeKey`, `onModeChange` and `requestOptions`. `ConsoleResult` includes `records`, `command`, `conversationDraft`, `mode`, `commands`, `isExecuting`, `error` and `failedCommand`; operations are `setMode`, `setCommand`, `setConversationDraft`, `execute`, `retry`, `cancel` and `clear`. `execute` and `retry` resolve after updating records, including failures; inspect `error` or the record status. `clear` cancels pending work and clears command records, errors and the command draft. Conversation service state remains host-owned.
-
-The example uses the same fixed offline transport and composes `Tui` independently:
-
-```tsx file="../../_demos/console-hook.tsx" preview
-
-```
 
 ## Execution behavior
 
@@ -64,22 +52,23 @@ This is a browser-compatible native command subset. Local CLI configuration, log
 
 ## Props
 
-The root exports only `Console` and `ConsoleProps`. Import the mode, copy and slot types from `@openviking/react/modules/console`. The same entry exports `useConsole`, `ConsoleOptions`, `ConsoleState` and `ConsoleResult`. JavaScript does not load CSS; the composite view uses `@openviking/react/modules/console/style.css`, including Tui and VikingBot styles.
+The root exports only `Console` and `ConsoleProps`. Import the mode, copy and slot types from `@openviking/react/modules/console`. Data and state Hooks remain internal. JavaScript does not load CSS; the composite view uses `@openviking/react/modules/console/style.css`, including Tui and VikingBot styles.
 
-| Prop                 | Type                          | Default        | Behavior                                                                                                                       |
-| -------------------- | ----------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `mode`               | `ConsoleMode`                 | —              | Controlled mode; switching reports intent                                                                                      |
-| `defaultMode`        | `ConsoleMode`                 | `conversation` | Initial uncontrolled mode                                                                                                      |
-| `locale`             | `'zh-CN' \| 'en-US'`          | Required       | Built-in Chinese and English copy.                                                                                             |
-| `scopeKey`           | `string`                      | —              | Explicit isolation key for dynamic identity                                                                                    |
-| `onModeChange`       | `(mode: ConsoleMode) => void` | —              | Reports a request for a different mode; the host updates a controlled value                                                    |
-| `onOpenUri`          | `(uri: string) => void`       | —              | Reports resource-link activation; the host performs navigation                                                                 |
-| `conversation`       | `Partial<VikingBotProps>`     | —              | Conversation data, session controls, quick inputs, references and file callbacks; omitted draft props use Console local state. |
-| `slots`              | `ConsoleSlots`                | —              | `toolbar`, `conversationContext`, `commandHelp`                                                                                |
-| `labels`             | `ConsoleLabels`               | —              | Panel copy, plus `tui` and `vikingBot` view copy                                                                               |
-| `requestOptions`     | `OvRequestOptions`            | —              | Field-by-field address, identity and signal overrides over the nearest Provider                                                |
-| `className`, `style` | Standard HTML props           | —              | Root styling; other HTML attributes are forwarded too                                                                          |
+| Prop                 | Type                          | Default           | Behavior                                                                                                                                                                                                           |
+| -------------------- | ----------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mode`               | `ConsoleMode`                 | —                 | Controlled mode; switching reports intent                                                                                                                                                                          |
+| `defaultMode`        | `ConsoleMode`                 | `conversation`    | Initial uncontrolled mode                                                                                                                                                                                          |
+| `locale`             | `'zh-CN' \| 'en-US'`          | Inherited / en-US | Built-in Chinese and English copy.                                                                                                                                                                                 |
+| `quickCommands`      | `readonly string[]`           | Five defaults     | Quick command names in the terminal empty state, resolved in order from the command catalogue with unknown names skipped and repeats keeping their first occurrence; an empty array shows no built-in empty state. |
+| `scopeKey`           | `string`                      | —                 | Explicit isolation key for dynamic identity                                                                                                                                                                        |
+| `onModeChange`       | `(mode: ConsoleMode) => void` | —                 | Reports a request for a different mode; the host updates a controlled value                                                                                                                                        |
+| `onOpenUri`          | `(uri: string) => void`       | —                 | Reports resource-link activation; the host performs navigation                                                                                                                                                     |
+| `conversation`       | `Partial<VikingBotProps>`     | —                 | Conversation data, session controls, quick inputs, references and file callbacks; omitted draft props use Console local state.                                                                                     |
+| `slots`              | `ConsoleSlots`                | —                 | `toolbar`, `conversationContext`, `commandHelp`                                                                                                                                                                    |
+| `labels`             | `ConsoleLabels`               | —                 | Panel copy, plus `tui` and `vikingBot` view copy                                                                                                                                                                   |
+| `requestOptions`     | `OvRequestOptions`            | —                 | Field-by-field address, identity and signal overrides over the nearest Provider                                                                                                                                    |
+| `className`, `style` | Standard HTML props           | —                 | Root styling; other HTML attributes are forwarded too                                                                                                                                                              |
 
 Hosts own authentication, permissions, account switching, page layout and resource navigation across modules.
 
-The standalone Hook defaults `locale` to `en-US`. Changing it updates existing command help, argument errors and cancellation notices while preserving requests, record IDs and drafts. Server content and original error messages keep their original text.
+Console inherits the nearest language scope, with `en-US` as the fallback. Changing language updates existing command help, argument errors and cancellation notices while preserving requests, record IDs and drafts. Server content and original error messages keep their original text.

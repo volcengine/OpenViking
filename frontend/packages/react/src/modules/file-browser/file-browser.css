@@ -533,3 +533,31 @@
     var(--ov-ui-color-focus, var(--ov-ui-focus-default, #5252ff));
   outline-offset: 1px;
 }
+.ov-file-browser__dashboard {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin-inline-start: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(
+    --ov-ui-color-dashboard-success,
+    var(--ov-ui-dashboard-success-default)
+  );
+  cursor: pointer;
+}
+.ov-file-browser__dashboard--pending {
+  color: var(
+    --ov-ui-color-dashboard-warning,
+    var(--ov-ui-dashboard-warning-default)
+  );
+}
+.ov-file-browser__dashboard:focus-visible {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: 1px;
+}

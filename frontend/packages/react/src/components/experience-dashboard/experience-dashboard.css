@@ -1,0 +1,449 @@
+.ov-experience-dashboard {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  background: var(
+    --ov-ui-color-dashboard-surface,
+    var(--ov-ui-dashboard-surface-default)
+  );
+}
+.ov-experience-dashboard__body {
+  min-width: 0;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+.ov-experience-dashboard__heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 32px;
+  gap: 12px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.ov-experience-dashboard__heading > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.ov-experience-dashboard :is(h2, h3) {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 22px;
+}
+.ov-experience-dashboard__heading span {
+  font-size: 12px;
+  color: var(
+    --ov-ui-color-dashboard-muted,
+    var(--ov-ui-dashboard-muted-default)
+  );
+}
+.ov-experience-dashboard select {
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  background: transparent;
+  border: 0;
+  padding: 4px;
+  max-width: 100%;
+}
+.ov-experience-dashboard__metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  min-height: 104px;
+  margin: 0 0 12px;
+  padding: 16px;
+  border: 1px solid
+    var(--ov-ui-color-dashboard-border, var(--ov-ui-dashboard-border-default));
+  border-radius: 12px;
+  background: var(
+    --ov-ui-color-dashboard-card,
+    var(--ov-ui-dashboard-card-default)
+  );
+}
+.ov-experience-dashboard__metrics > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ov-experience-dashboard__metrics > div + div {
+  padding-inline-start: 16px;
+  border-inline-start: 1px solid
+    var(--ov-ui-color-dashboard-border, var(--ov-ui-dashboard-border-default));
+}
+.ov-experience-dashboard__metrics svg {
+  color: var(
+    --ov-ui-color-dashboard-muted,
+    var(--ov-ui-dashboard-muted-default)
+  );
+  margin-bottom: 10px;
+}
+.ov-experience-dashboard__metrics dd {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 24px;
+}
+.ov-experience-dashboard__metrics > div:first-child dd {
+  font-size: 24px;
+}
+.ov-experience-dashboard__metrics dt {
+  font-size: 12px;
+  color: var(
+    --ov-ui-color-dashboard-muted,
+    var(--ov-ui-dashboard-muted-default)
+  );
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.ov-experience-dashboard__distribution {
+  padding: 16px;
+  background: var(
+    --ov-ui-color-dashboard-card,
+    var(--ov-ui-dashboard-card-default)
+  );
+  border: 1px solid
+    var(--ov-ui-color-dashboard-border, var(--ov-ui-dashboard-border-default));
+  border-radius: 12px;
+}
+.ov-experience-dashboard__distribution:has(.ov-dashboard-state) {
+  display: flex;
+  min-height: 266px;
+  align-items: center;
+  justify-content: center;
+}
+.ov-experience-dashboard__outcome + .ov-experience-dashboard__outcome {
+  padding-top: 16px;
+}
+.ov-experience-dashboard__outcome > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  color: var(
+    --ov-ui-color-dashboard-muted,
+    var(--ov-ui-dashboard-muted-default)
+  );
+}
+.ov-experience-dashboard__outcome strong {
+  font-weight: 400;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+}
+.ov-experience-dashboard__outcome-track {
+  height: 10px;
+  margin-top: 4px;
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+}
+.ov-experience-dashboard__outcome-track span {
+  display: block;
+  height: 100%;
+  background: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+.ov-experience-dashboard__trajectories {
+  margin-top: 32px;
+}
+.ov-experience-dashboard__timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0;
+  margin: 8px 0 0;
+  list-style: none;
+}
+.ov-experience-dashboard__timeline li {
+  position: relative;
+  min-width: 0;
+  padding: 12px 12px 12px 32px;
+}
+.ov-experience-dashboard__timeline li::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 10px;
+  top: 20px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+}
+.ov-experience-dashboard__timeline time,
+.ov-experience-dashboard__timeline code {
+  display: block;
+  font-size: 12px;
+  color: var(
+    --ov-ui-color-dashboard-muted,
+    var(--ov-ui-dashboard-muted-default)
+  );
+  overflow-wrap: anywhere;
+}
+.ov-experience-dashboard__timeline button {
+  display: block;
+  max-width: 100%;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-weight: 500;
+  color: inherit;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+.ov-experience-dashboard__timeline p {
+  margin: 4px 0 0;
+}
+.ov-experience-dashboard__pagination {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 0;
+}
+.ov-experience-dashboard__pagination button {
+  border: 1px solid
+    var(--ov-ui-color-dashboard-border, var(--ov-ui-dashboard-border-default));
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  padding: 4px 8px;
+  color: inherit;
+  font: inherit;
+}
+.ov-experience-dashboard button {
+  cursor: pointer;
+}
+.ov-experience-dashboard button:disabled {
+  cursor: default;
+}
+.ov-experience-dashboard__pagination button:disabled {
+  color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
+}
+.ov-experience-dashboard :is(button, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: 2px;
+}
+.ov-experience-dashboard__list-title {
+  margin-bottom: 8px !important;
+}
+.ov-experience-dashboard__table-scroll {
+  overflow: auto;
+  max-width: 100%;
+  container-type: inline-size;
+}
+.ov-experience-dashboard__table {
+  width: 100%;
+  min-width: 560px;
+  border-spacing: 0;
+  text-align: start;
+  font-size: 12px;
+}
+.ov-experience-dashboard__table caption {
+  text-align: start;
+  position: absolute;
+  clip-path: inset(50%);
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+.ov-experience-dashboard__table thead {
+  position: sticky;
+  top: 0;
+  background: var(
+    --ov-ui-color-dashboard-surface,
+    var(--ov-ui-dashboard-surface-default)
+  );
+}
+.ov-experience-dashboard__table th,
+.ov-experience-dashboard__table td {
+  padding: 12px;
+  border-bottom: 1px solid
+    var(--ov-ui-color-dashboard-border, var(--ov-ui-dashboard-border-default));
+  text-align: start;
+  font-weight: 400;
+}
+.ov-experience-dashboard__table th {
+  min-width: 120px;
+}
+.ov-experience-dashboard__table tbody th {
+  min-width: 180px;
+}
+.ov-experience-dashboard__table button {
+  display: block;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  text-align: start;
+  color: inherit;
+  font: inherit;
+}
+.ov-experience-dashboard__table th span {
+  display: block;
+  color: var(
+    --ov-ui-color-dashboard-muted,
+    var(--ov-ui-dashboard-muted-default)
+  );
+  font-size: 12px;
+  max-width: 300px;
+  overflow-wrap: anywhere;
+}
+
+.ov-experience-dashboard,
+.ov-experience-dashboard *,
+.ov-experience-dashboard *::before,
+.ov-experience-dashboard *::after {
+  box-sizing: border-box;
+}
+.ov-experience-dashboard__table thead th {
+  height: 32px;
+  padding-block: 4px;
+}
+.ov-experience-dashboard__table tbody tr {
+  height: 82px;
+}
+.ov-experience-dashboard__table td:first-child,
+.ov-experience-dashboard__table th:first-child {
+  width: 60px;
+  min-width: 60px;
+}
+.ov-experience-dashboard__table tbody th {
+  font-size: 13px;
+  font-weight: 500;
+}
+.ov-experience-dashboard__table tbody th button:hover {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
+.ov-experience-dashboard__table th span {
+  font-weight: 400;
+}
+
+.ov-experience-dashboard__source-group {
+  padding: 12px 0;
+}
+.ov-experience-dashboard__source-group summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  cursor: pointer;
+  list-style: none;
+}
+.ov-experience-dashboard__source-group summary strong {
+  font-weight: 500;
+}
+.ov-experience-dashboard__source-group summary span {
+  color: var(
+    --ov-ui-color-dashboard-muted,
+    var(--ov-ui-dashboard-muted-default)
+  );
+  font-size: 12px;
+}
+.ov-experience-dashboard__tests {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 8px;
+}
+.ov-experience-dashboard__tests article {
+  display: flex;
+  flex-direction: column;
+  max-height: min(560px, calc(100vh - 220px));
+  min-height: 180px;
+  overflow: hidden;
+  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  border-radius: 8px;
+  background: var(--ov-ui-color-bg-2, var(--ov-ui-bg-2-default));
+}
+.ov-experience-dashboard__tests header {
+  display: flex;
+  flex: none;
+  align-items: start;
+  gap: 8px;
+  min-height: 92px;
+  padding: 12px;
+  border-bottom: 1px solid
+    var(--ov-ui-color-dashboard-border, var(--ov-ui-dashboard-border-default));
+}
+.ov-experience-dashboard__test-heading {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+}
+.ov-experience-dashboard__test-heading > strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+.ov-experience-dashboard__test-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: var(
+    --ov-ui-color-dashboard-muted,
+    var(--ov-ui-dashboard-muted-default)
+  );
+  font-size: 12px;
+}
+.ov-experience-dashboard__test-meta span {
+  flex: none;
+}
+.ov-experience-dashboard__test-meta code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: inherit;
+}
+.ov-experience-dashboard__test-meta p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.ov-experience-dashboard__tests button {
+  flex: none;
+  border: 1px solid
+    var(--ov-ui-color-dashboard-border, var(--ov-ui-dashboard-border-default));
+  border-radius: 6px;
+  padding: 4px 8px;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.ov-experience-dashboard__test-meta button {
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  font-size: 12px;
+}
+.ov-experience-dashboard__test-content {
+  overflow: auto;
+  min-height: 0;
+  padding: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ov-experience-dashboard__test-content strong {
+  font-weight: 500;
+}
+
+.ov-experience-dashboard__table th span {
+  display: flex;
+  gap: 4px;
+  white-space: nowrap;
+}
+.ov-experience-dashboard__table th code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: inherit;
+  background: transparent;
+  padding: 0;
+}
+.ov-experience-dashboard__table th time {
+  flex: none;
+}

@@ -1,7 +1,11 @@
 import { useLang } from '@rspress/core/runtime';
+import { useState } from 'react';
+import {
+  dashboardDemoResponse,
+  DEMO_WIKI,
+  DEMO_WIKI_FILE,
+} from '#dashboard-demo-data';
 import { OpenVikingProvider } from '@openviking/react/client';
-import { FileBrowserEntries } from '@openviking/react/components/file-browser-entries';
-import '@openviking/react/components/file-browser-entries/style.css';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
 
@@ -25,6 +29,7 @@ import '@openviking/react/modules/file-browser/style.css';
 interface Entry {
   uri: string;
   isDir?: boolean;
+  tags?: string[];
 }
 
 const USER = 'viking://user/alice';
@@ -68,6 +73,7 @@ const DIRS: Record<string, Entry[]> = {
   ],
   [ENTITIES]: [{ uri: `${ENTITIES}/openviking.md` }],
   [RESOURCES]: [
+    { uri: DEMO_WIKI, isDir: true, tags: ['compile_target=true'] },
     { uri: NOTES, isDir: true },
     { uri: `${RESOURCES}/2026-Q4-context-management-retrospective.md` },
     { uri: `${RESOURCES}/design-system-alignment-notes.md` },
@@ -153,8 +159,15 @@ function offlineFetch(
         ? input.href
         : input.url;
   const url = new URL(raw, 'https://offline.demo');
-  const uri = url.searchParams.get('uri') ?? '';
+  const uri = (url.searchParams.get('uri') ?? '').replace(
+    /^viking:\/\/~(?=\/|$)/,
+    USER,
+  );
+  if (url.searchParams.has('uri')) url.searchParams.set('uri', uri);
   const body = typeof init?.body === 'string' ? init.body : '';
+
+  const board = dashboardDemoResponse(url);
+  if (board) return Promise.resolve(board);
 
   switch (url.pathname) {
     case '/api/v1/fs/ls':
@@ -185,21 +198,49 @@ function offlineFetch(
 
 export default function FileBrowserBasic() {
   const componentLocale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
+  const text =
+    componentLocale === 'zh-CN'
+      ? { canonical: 'Wiki：规范 URI', alias: 'Wiki：~ 别名' }
+      : { canonical: 'Wiki: canonical URI', alias: 'Wiki: ~ alias' };
+  const [uri, setUri] = useState<string | null>(null);
+  const [notice, setNotice] = useState('点击导入资源，验证宿主自定义交互');
   return (
-    <div style={{ height: 720, minWidth: 720 }}>
+    <div
+      lang={componentLocale}
+      style={{
+        height: 720,
+        minWidth: 720,
+        display: 'grid',
+        gridTemplateRows: 'minmax(0, 1fr) auto',
+        gap: 8,
+      }}
+    >
       <OpenVikingProvider fetch={offlineFetch}>
         <FileBrowser
           locale={componentLocale}
+          uri={uri ?? ''}
+          onUriChange={setUri}
           defaultExpandedUri={MEMORIES}
-          toolbarActions={
-            <FileBrowserEntries
-              locale={componentLocale}
-              onConnectAgent={() => {}}
-              onImportResources={() => {}}
-            />
-          }
+          agentConnect={{ apiKey: 'demo-api-key', locale: componentLocale }}
+          onImportResources={() => setNotice('宿主已收到导入事件')}
+          renderImportResources={(trigger) => (
+            <span data-file-browser-import-trigger>{trigger}</span>
+          )}
         />
       </OpenVikingProvider>
+      <div className="ov-demo-controls">
+        <button type="button" onClick={() => setUri(DEMO_WIKI_FILE)}>
+          {text.canonical}
+        </button>{' '}
+        <button
+          type="button"
+          onClick={() => setUri('viking://~/resources/handbook/release.md')}
+        >
+          {text.alias}
+        </button>
+        <code>{uri}</code>
+        <span role="status">{notice}</span>
+      </div>
     </div>
   );
 }

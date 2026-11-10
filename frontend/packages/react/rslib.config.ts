@@ -28,6 +28,10 @@ export default defineConfig({
           'components/viking-bot/interaction':
             './src/components/viking-bot/interaction/index.ts',
           'modules/file-browser': './src/modules/file-browser/index.ts',
+          'components/wiki-dashboard':
+            './src/components/wiki-dashboard/index.ts',
+          'components/experience-dashboard':
+            './src/components/experience-dashboard/index.ts',
           'modules/console': './src/modules/console/index.ts',
         },
       },
@@ -37,7 +41,13 @@ export default defineConfig({
       // Inline bitmaps as data URIs instead of emitting separate asset files: the
       // package's JS entries must stay importable without a bundler (Node, SSR),
       // where an external .png cannot be resolved.
-      output: { emitCss: false, dataUriLimit: { image: 64 * 1024 } },
+      output: {
+        emitCss: false,
+        dataUriLimit: { image: 64 * 1024 },
+        // Normalize this CommonJS default during bundling for direct Node/SSR use.
+        // React and ReactDOM remain external peer dependencies.
+        autoExternal: { exclude: ['react-focus-lock'] },
+      },
       tools: {
         rspack: {
           optimization: { splitChunks: { chunks: 'all', minSize: 0 } },
@@ -66,6 +76,10 @@ export default defineConfig({
         './src/components/viking-bot/viking-bot-interaction.css',
       'modules/style': './src/modules/style.css',
       'modules/file-browser/style': './src/modules/file-browser/style.css',
+      'components/wiki-dashboard/style':
+        './src/components/wiki-dashboard/style.css',
+      'components/experience-dashboard/style':
+        './src/components/experience-dashboard/style.css',
       'modules/console/style': './src/modules/console/style.css',
     }).map(([name, entry]) => ({
       id: name.replaceAll('/', '-'),
