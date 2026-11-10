@@ -1722,14 +1722,14 @@ class MemoryUpdater:
                         continue
                     metadata[field.name] = new_value
 
-            # Preserve system-managed metadata from the old file that is not
-            # covered by the schema. These fields are written by the system,
-            # never by the LLM, so they would be silently dropped on every
-            # Update without this copy.
+            # Preserve fields omitted by the update, including system-managed metadata.
             if old_content and old_content.extra_fields:
-                schema_field_names = {f.name for f in schema.fields} | {"content", "memory_type"}
                 for key, val in old_content.extra_fields.items():
-                    if key not in schema_field_names and key not in metadata and val is not None:
+                    if (
+                        key not in {"content", "memory_type"}
+                        and key not in metadata
+                        and val is not None
+                    ):
                         metadata[key] = val
 
             metadata["version"] = next_memory_version(old_content)
