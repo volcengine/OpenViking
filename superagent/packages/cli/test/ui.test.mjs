@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
-import { bannerLines, miniLines, openingBanner, playBanner, sceneFrame } from '../src/banner.mjs';
+import { BANNER_WIDTH, bannerLines, openingBanner, playBanner } from '../src/banner.mjs';
 import { Prompter } from '../src/prompt.mjs';
 import { urlOpenCommand, qrLines, showScan } from '../src/qr.mjs';
 import { ansi256, box, colorDepth, mix, stripAnsi, width } from '../src/ui.mjs';
@@ -12,7 +12,7 @@ import { ansi256, box, colorDepth, mix, stripAnsi, width } from '../src/ui.mjs';
 // A colour terminal of a given size, recording what is written.
 function screen({ columns = 100, rows = 40, depth = 24 } = {}) {
   const output = new PassThrough();
-  Object.assign(output, { isTTY: true, columns, rows, getColorDepth: () => depth });
+  Object.assign(output, { isTTY: true, columns, rows, getColorDepth: (env = {}) => (env.NO_COLOR ? 1 : depth) });
   let written = '';
   output.on('data', (chunk) => { written += chunk; });
   return { output, written: () => written };
@@ -58,99 +58,48 @@ test('a box lines up its borders whatever the text is', () => {
   assert.equal(new Set(lines.map(width)).size, 1, lines.join('\n'));
 });
 
-test('every banner frame fits the terminal; a narrow one drops the wordmark', () => {
-  for (const t of [0, 0.37, 1.2, 2.9, 7.5]) {
-    const wide = bannerLines(t, { depth: 24, version: '0.4.0-cdb22789fc75', columns: 100 });
-    assert.equal(wide.length, 16);
-    assert.ok(wide.every((line) => width(line) < 100), `t=${t}`);
-    assert.ok(wide.some((line) => stripAnsi(line).includes('OpenViking SuperAgent')));
-    const narrow = bannerLines(t, { depth: 8, columns: 60 });
-    assert.ok(narrow.every((line) => width(line) < 60) && !narrow.some((line) => line.includes('██╗')));
-    for (const columns of [46, 47, 60, 72, 73, 80, 100]) {
-      const mini = miniLines(t, { depth: 24, columns });
-      assert.ok(mini.every((line) => width(line) < columns), `t=${t}, columns=${columns}`);
-    }
+test('the banner fits 80 columns and spells OpenViking SuperAgent, never VIKA', () => {
+  const lines = bannerLines({ depth: 24, version: '0.4.0-cdb22789fc75' });
+  assert.equal(lines.length, 6);
+  assert.ok(lines.every((line) => width(line) <= Math.min(80, BANNER_WIDTH)), lines.map(stripAnsi).join('\n'));
+  assert.equal(stripAnsi(lines[0]).trim(), 'O P E N V I K I N G');
+  assert.match(stripAnsi(lines.at(-1)), /v0\.4\.0-cdb22789fc75$/);
+  assert.doesNotMatch(lines.join('\n'), /VIKA/);
+  // No indigo / violet / blue: every colour leans red.
+  for (const line of lines) for (const cell of rgbCells(line)) for (const rgb of [cell.fg, cell.bg]) {
+    if (rgb && Math.max(...rgb) - Math.min(...rgb) > 40) assert.ok(rgb[0] > rgb[2], `${rgb}`);
   }
 });
 
-test('the banner is one plain title line on a terminal that is too small or has no colour', async () => {
-  const small = screen({ columns: 40 });
-  await playBanner({ output: small.output, input: new PassThrough(), env: {} });
-  assert.equal(stripAnsi(small.written()).trim(), 'OpenViking SuperAgent  把本机的 coding agent 带上船');
-  const edge = screen({ columns: 46 });
-  const edgeBanner = await openingBanner({ output: edge.output, input: new PassThrough(), env: {} });
-  assert.equal(edgeBanner.top(), null);
-  assert.equal(stripAnsi(edge.written()).trim(), 'OpenViking SuperAgent  把本机的 coding agent 带上船');
-  const still = screen();
-  await playBanner({ output: still.output, input: new PassThrough(), env: { VIKA_NO_ANIMATION: '1' } });
-  assert.equal(stripAnsi(still.written()).split('\n').filter((line) => line.includes('OpenViking SuperAgent')).length, 1, 'one frame, drawn once');
-});
-
-const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-test('the truecolor banner preserves subtle shading while bounding glyph variants over time', () => {
-  const variants = new Set();
-  // Sample across ten minutes, including fractional times between animation ticks.
-  for (let frame = 0; frame < 180; frame += 1) {
-    const t = frame * 3.337;
-    for (const line of [...bannerLines(t, { depth: 24, columns: 100 }), ...miniLines(t, { depth: 24, columns: 60 })]) {
-      for (const cell of rgbCells(line)) if (cell.ch !== ' ') variants.add(JSON.stringify(cell));
-    }
-  }
-  assert.ok(variants.size < 3000, `${variants.size} distinct glyph/color combinations`);
-  for (const t of [0, 0.37, 1.2, 2.9, 7.5]) {
-    const original = sceneFrame(t);
-    const rendered = bannerLines(t, { depth: 24, columns: 60 }).map(rgbCells);
-    original.forEach((row, y) => row.forEach((cell, x) => {
-      if (cell.ch === ' ') return;
-      assert.equal(rendered[y][x].ch, cell.ch);
-      for (const [source, actual] of [[cell.rgb, rendered[y][x].fg], [cell.bg, rendered[y][x].bg]]) {
-        if (!source) { assert.equal(actual, null); continue; }
-        assert.equal(actual.length, 3);
-        source.forEach((value, channel) => assert.ok(Math.abs(value - actual[channel]) <= 12,
-          `t=${t}, cell=${x},${y}, channel=${channel}: ${value} -> ${actual[channel]}`));
-      }
-    }));
-  }
-});
-
-test('playback and both live headers preserve truecolor, with a 256-color fallback', async () => {
-  for (const depth of [8, 24]) {
-    for (const rows of [26, 40]) {
-      const { output, written } = screen({ depth, rows });
-      const banner = await openingBanner({ output, input: new PassThrough(), env: {}, durationMs: 0 });
-      banner.release();
-      assert.match(written(), depth === 24 ? /\x1b\[38;2;/ : /\x1b\[38;5;/);
-      assert.doesNotMatch(written(), depth === 24 ? /\x1b\[(?:38|48);5;/ : /\x1b\[(?:38|48);2;/);
-    }
-  }
-});
-
-test('on a tall window the boat stays at the top and keeps sailing until released', async () => {
-  const { output, written } = screen({ columns: 100, rows: 40 });
+test('the full banner is drawn once at 80 columns; its tagline uses the default foreground', async () => {
+  const { output, written } = screen({ columns: 80, rows: 30 });
   const banner = await openingBanner({ output, input: new PassThrough(), env: {}, version: '1.0.0' });
-  assert.match(written(), /\x1b\[18;40r\x1b\[18;1H/, 'questions scroll below the 16-row scene');
-  await pause(200);
-  const frames = written().split('\x1b7').length - 1;
-  assert.ok(frames >= 2, `redrawn while waiting (${frames} frames)`);
-  banner.release();
-  assert.ok(written().endsWith('\x1b7\x1b[r\x1b8'), 'the whole screen is the terminal\'s again');
-  const after = written().length;
-  await pause(150);
-  assert.equal(written().length, after, 'no frames after release');
-  banner.resume();
-  assert.match(written().slice(after), /\x1b\[18;40r/);
-  banner.release();
-  banner.release();
-  assert.equal(process.listenerCount('SIGINT'), 0);
+  assert.equal(banner.top(), null);
+  const plain = stripAnsi(written());
+  assert.match(plain, /O P E N V I K I N G/);
+  assert.ok(plain.split('\n').every((line) => width(line) <= 80));
+  assert.match(written(), /\x1b\[38;2;/);
+  const footer = written().split('\n').find((line) => line.includes('aboard') || line.includes('带上船'));
+  assert.ok(footer.startsWith(' ') && !footer.slice(0, 3).includes('\x1b'), JSON.stringify(footer));
+  assert.doesNotMatch(written(), /VIKA/);
 });
 
-test('on a short window the scene plays, then a small boat stays at the top', async () => {
-  const { output, written } = screen({ columns: 100, rows: 26 });
-  const banner = await openingBanner({ output, input: new PassThrough(), env: {}, durationMs: 50 });
-  assert.match(stripAnsi(written()), /OpenViking SuperAgent/, 'the full scene first');
-  assert.match(written(), /\x1b\[4;26r/, 'then a two-row header');
-  banner.release();
+test('narrow, colourless, CI and short terminals get one title line', async () => {
+  const expected = (tag) => `▲ OpenViking SuperAgent  v1.0.0${tag ? '  把本机的 coding agent 带上船' : ''}`;
+  for (const [size, env, tag] of [
+    [{ columns: 40 }, {}, false],
+    [{ columns: 64 }, {}, false],
+    [{ columns: 100 }, { NO_COLOR: '1' }, true],
+    [{ columns: 100 }, { CI: '1' }, true],
+    [{ columns: 100, rows: 6 }, {}, true],
+    [{ columns: 100, depth: 1 }, {}, true],
+  ]) {
+    const { output, written } = screen(size);
+    await playBanner({ output, input: new PassThrough(), env, version: '1.0.0' });
+    assert.equal(stripAnsi(written()).trim(), expected(tag), JSON.stringify([size, env]));
+    assert.ok(stripAnsi(written()).split('\n').every((line) => width(line) <= size.columns));
+    if (env.NO_COLOR || size.depth === 1) assert.doesNotMatch(written(), /\x1b\[/);
+  }
 });
 
 test('on a colour terminal an answered question folds into one line', async () => {
