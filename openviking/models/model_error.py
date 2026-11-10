@@ -424,12 +424,10 @@ def _sdk_kind(
         return kind, provider, evidence
 
     if module.startswith("google.genai"):
-        status_code = _status_code(error)
-        # RESOURCE_EXHAUSTED is ambiguous unless Google supplies a reason.
-        kind, evidence = _best_kind(
-            error,
-            include_status=status_code != 429 or _kind_from_code(error) is not None,
-        )
+        # A structured reason can distinguish quota exhaustion from request
+        # throttling. When Gemini omits that reason, keep the HTTP 429 fallback
+        # so the public response does not regress to INTERNAL/500.
+        kind, evidence = _best_kind(error)
         return kind, "gemini", evidence
 
     if module.startswith("httpx"):
@@ -517,14 +515,7 @@ def model_error_from_exception(error: BaseException) -> ModelError | None:
                 item,
             )
         elif isinstance(item, ModelError):
-            kind, evidence = _best_kind(
-                item,
-                include_status=(
-                    item.provider != "gemini"
-                    or item.status_code != 429
-                    or _kind_from_code(item) is not None
-                ),
-            )
+            kind, evidence = _best_kind(item)
             candidate = (evidence, kind, item.provider, item)
         elif isinstance(carried_kind, ModelErrorKind):
             candidate = (_EvidenceRank.FALLBACK, carried_kind, None, item)

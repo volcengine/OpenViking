@@ -351,6 +351,22 @@ def test_structured_model_error_maps_without_message_guessing():
     assert "internal timeout detail" not in unknown.message
 
 
+def test_gemini_429_without_reason_preserves_public_status():
+    model_error = ModelError(
+        ModelErrorKind.UNKNOWN,
+        "Gemini embedding failed (HTTP 429)",
+        provider="gemini",
+        status_code=429,
+    )
+
+    mapped = map_exception(model_error)
+
+    assert mapped is not None
+    assert mapped.code == "RESOURCE_EXHAUSTED"
+    assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == 429
+    assert mapped.details["model_error_kind"] == "rate_limit_error"
+
+
 def test_bare_model_api_key_required_maps_to_failed_precondition():
     mapped = map_exception(ValueError("api_key is required"))
 
