@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { wireDshBridge } from './dsh-bridge/protocol.mjs';
+import { importableModuleUrl } from './dsh-bridge/specifier.mjs';
 
 const { realpathSync } = fs;
 
@@ -40,9 +41,12 @@ export async function loadDshBridgeDependencies({ loader, serverPath = '@deepsee
     } catch (error) {
       throw new Error(`${BRIDGE_ID} could not locate DSH's SDK bundle: ${error.message}`);
     }
+    // `require.resolve` answers a host path, and on Windows `import()` reads its
+    // leading drive letter as a URL scheme (`c:`), so the bridge never activated
+    // and the SDK handshake timed out. The file: URL is what both platforms take.
     modules = await Promise.all([
-      import(bundleRequire.resolve(serverPath)),
-      import(bundleRequire.resolve('@deepseek-ai/dsh-llm')),
+      import(importableModuleUrl(bundleRequire.resolve(serverPath))),
+      import(importableModuleUrl(bundleRequire.resolve('@deepseek-ai/dsh-llm'))),
     ]);
   }
   const [stock, llm] = modules;
