@@ -38,6 +38,7 @@ class AddResourceMsg:
     build_index: bool = True
     summarize: bool = False
     strict: bool = False
+    import_policy: str = "require_complete"
     ignore_dirs: Optional[str] = None
     include: Optional[str] = None
     exclude: Optional[str] = None
@@ -189,6 +190,7 @@ class AddResourceMsg:
             build_index=bool(data.get("build_index", True)),
             summarize=bool(data.get("summarize", False)),
             strict=bool(data.get("strict", False)),
+            import_policy=str(data.get("import_policy", "require_complete")),
             ignore_dirs=data.get("ignore_dirs"),
             include=data.get("include"),
             exclude=data.get("exclude"),

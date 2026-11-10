@@ -233,7 +233,7 @@ async def resolve_resource_diff(
     """Resolve R/N/F/V into final states, including bounded body fallbacks."""
     snapshot.validate_for_planning()
     if (
-        not snapshot.new.complete
+        (not snapshot.new.complete and not snapshot.new.allow_partial)
         or not snapshot.formal.complete
         or (snapshot.request.vectorize and not snapshot.vectors.complete)
     ):
@@ -280,6 +280,8 @@ async def resolve_resource_diff(
             states[rel_path] = (state, new_entry.md5 or None)
             if not new_entry.is_dir and not new_entry.md5:
                 hash_paths.append(rel_path)
+        elif old_entry is not None and not snapshot.new.complete:
+            states[rel_path] = (ContentState.UNCHANGED, None)
         elif old_entry is not None:
             states[rel_path] = (ContentState.DELETED, None)
         else:
@@ -328,6 +330,8 @@ async def resolve_resource_diff(
         old_entry = formal.get(rel_path)
         new_kind = ("directory" if new_entry.is_dir else "file") if new_entry is not None else None
         old_kind = ("directory" if old_entry.is_dir else "file") if old_entry is not None else None
+        if new_entry is None and old_entry is not None and not snapshot.new.complete:
+            new_kind = old_kind
         current_kind = (
             new_kind if state not in {ContentState.DELETED, ContentState.ABSENT} else None
         )

@@ -92,6 +92,7 @@ async fn submit(
         "",
         wait,
         false,
+        "require_complete".to_string(),
         None,
         None,
         None,

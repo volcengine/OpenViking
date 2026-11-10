@@ -70,6 +70,7 @@ class AddResourceOptions(_ExtraOptions, total=False):
     instruction: str
     create_parent: bool
     strict: bool
+    import_policy: Literal["require_complete", "best_effort"]
     ignore_dirs: str
     include: str
     exclude: str

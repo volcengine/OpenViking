@@ -895,6 +895,7 @@ impl HttpClient {
         instruction: &str,
         wait: bool,
         strict: bool,
+        import_policy: String,
         ignore_dirs: Option<String>,
         include: Option<String>,
         exclude: Option<String>,
@@ -908,6 +909,13 @@ impl HttpClient {
         show_progress: bool,
         verbose: bool,
     ) -> Result<serde_json::Value> {
+        if !matches!(import_policy.as_str(), "require_complete" | "best_effort")
+            || (strict && import_policy == "best_effort")
+        {
+            return Err(Error::Client(
+                "Invalid strict/import_policy combination".to_string(),
+            ));
+        }
         let path_obj = Path::new(path);
         let args = Value::Object(resource_args.unwrap_or_default());
 
@@ -966,6 +974,7 @@ impl HttpClient {
                     "instruction": instruction,
                     "wait": false,
                     "strict": strict,
+                    "import_policy": import_policy,
                     "ignore_dirs": ignore_dirs,
                     "include": include,
                     "exclude": exclude,
@@ -1001,6 +1010,7 @@ impl HttpClient {
                     "instruction": instruction,
                     "wait": false,
                     "strict": strict,
+                    "import_policy": import_policy,
                     "ignore_dirs": ignore_dirs,
                     "include": include,
                     "exclude": exclude,
@@ -1024,6 +1034,7 @@ impl HttpClient {
                     "instruction": instruction,
                     "wait": false,
                     "strict": strict,
+                    "import_policy": import_policy,
                     "ignore_dirs": ignore_dirs,
                     "include": include,
                     "exclude": exclude,
@@ -1045,6 +1056,7 @@ impl HttpClient {
                 "instruction": instruction,
                 "wait": false,
                 "strict": strict,
+                "import_policy": import_policy,
                 "ignore_dirs": ignore_dirs,
                 "include": include,
                 "exclude": exclude,
@@ -2432,6 +2444,7 @@ mod tests {
                 "",
                 false,
                 false,
+                "require_complete".to_string(),
                 None,
                 None,
                 None,
@@ -2468,6 +2481,7 @@ mod tests {
                 "",
                 false,
                 false,
+                "require_complete".to_string(),
                 None,
                 None,
                 None,

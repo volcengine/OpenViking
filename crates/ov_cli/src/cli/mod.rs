@@ -159,7 +159,7 @@ pub(crate) enum Commands {
             help_heading = "Common options",
             conflicts_with_all = [
                 "add_type", "to", "parent", "parent_auto_create",
-                "strict_mode", "ignore_dirs", "include", "exclude",
+                "strict_mode", "import_policy", "ignore_dirs", "include", "exclude",
                 "no_directly_upload_media", "tags", "tag_mode", "acl",
                 "reason", "instruction"
             ]
@@ -218,6 +218,9 @@ pub(crate) enum Commands {
             help_heading = "Advanced options"
         )]
         strict_mode: bool,
+        /// Commit completeness; independent of --strict scanner/parser checks
+        #[arg(long, default_value = "require_complete", value_parser = ["require_complete", "best_effort"], help_heading = "Advanced options")]
+        import_policy: String,
         /// Ignore directories, e.g. --ignore-dirs "node_modules,dist"
         #[arg(long, value_name = "dirs", help_heading = "Advanced options")]
         ignore_dirs: Option<String>,

@@ -208,8 +208,10 @@ async def test_resource_processor_rejects_directory_when_every_file_failed(monke
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("build_index", [True, False])
-async def test_resource_processor_rejects_partial_directory_before_semantic_plan_diff(
-    monkeypatch, build_index
+@pytest.mark.parametrize("import_policy", ["require_complete", "best_effort"])
+@pytest.mark.parametrize("error_code", [None, "PERMISSION_DENIED", "UNAUTHENTICATED"])
+async def test_resource_processor_partial_directory_commit_policy(
+    monkeypatch, build_index, import_policy, error_code
 ):
     from openviking.parse.output import ParseArtifactRef
     from openviking.utils.resource_processor import ResourceProcessor
@@ -235,6 +237,7 @@ async def test_resource_processor_rejects_partial_directory_before_semantic_plan
                     "path": "missing.py",
                     "parser": "native",
                     "error": "parser failed",
+                    **({"error_code": error_code} if error_code else {}),
                 }
             ],
         },
@@ -246,13 +249,45 @@ async def test_resource_processor_rejects_partial_directory_before_semantic_plan
     rp._get_media_processor = MagicMock()
     rp._get_media_processor.return_value.process = AsyncMock(return_value=parse_result)
     rp.tree_builder.finalize_from_temp = AsyncMock(
-        side_effect=AssertionError("partial artifact must not reach finalize/diff")
+        return_value=SimpleNamespace(
+            root=SimpleNamespace(uri="viking://resources/root", temp_uri=ref.root)
+        )
     )
     rp._commit_directory_artifact_with_plan = AsyncMock(
         return_value=_directory_plan("viking://resources/root")
     )
+    rp._quarantine_revoked_snapshot = AsyncMock()
 
-    result = await rp.process_resource(path="repo", ctx=object(), build_index=build_index)
+    rp.finish_prepared_resource = AsyncMock(return_value={"status": "success"})
+    result = await rp.process_resource(
+        path="repo", ctx=object(), build_index=build_index, import_policy=import_policy
+    )
+
+    if import_policy == "best_effort":
+        if error_code == "UNAUTHENTICATED":
+            assert result["status"] == "error"
+            assert result["errors"] == ["Source authentication failed; partial commit refused"]
+            assert fake_fs.delete_temp_calls == [(ref.root, None)]
+            rp.tree_builder.finalize_from_temp.assert_not_awaited()
+            rp._commit_directory_artifact_with_plan.assert_not_awaited()
+            rp._quarantine_revoked_snapshot.assert_not_awaited()
+            return
+        assert result["status"] == "partial"
+        assert result["failed_files"] == parse_result.meta["failed_files"]
+        assert result["import_complete"] is False
+        rp.tree_builder.finalize_from_temp.assert_awaited_once()
+        assert rp._commit_directory_artifact_with_plan.await_args.kwargs["source_complete"] is False
+        if error_code == "PERMISSION_DENIED":
+            rp._quarantine_revoked_snapshot.assert_awaited_once()
+            assert rp._quarantine_revoked_snapshot.await_args.args[0] == "viking://resources/root"
+            assert result["quarantined_previous_snapshot"] is True
+            assert (
+                rp._commit_directory_artifact_with_plan.await_args.kwargs["target_preexisting"]
+                is False
+            )
+        else:
+            rp._quarantine_revoked_snapshot.assert_not_awaited()
+        return
 
     assert result["status"] == "error"
     assert result["errors"] == [
@@ -261,6 +296,7 @@ async def test_resource_processor_rejects_partial_directory_before_semantic_plan
     ]
     assert fake_fs.delete_temp_calls == [(ref.root, None)]
     rp.tree_builder.finalize_from_temp.assert_not_awaited()
+    rp._quarantine_revoked_snapshot.assert_not_awaited()
 
 
 @pytest.mark.asyncio

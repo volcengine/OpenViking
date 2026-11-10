@@ -53,6 +53,7 @@ from openviking.resource.git_watch_auth import (
     git_http_auth_config_from_state,
     is_git_http_auth_state,
 )
+from openviking.resource.import_policy import DEFAULT_IMPORT_POLICY, validate_import_policy
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
     ProcessingMode,
@@ -135,6 +136,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "stage_callback",
         "args",
         "strict",
+        "import_policy",
         "source_name",
         "ignore_dirs",
         "include",
@@ -881,6 +883,7 @@ class ResourceService:
                 watch_interval=msg.watch_interval,
             )
             internal_kwargs.update(normalized_args.processor_kwargs)
+            internal_kwargs["import_policy"] = msg.import_policy
             if msg.strict:
                 internal_kwargs["strict"] = True
             if msg.ignore_dirs is not None:
@@ -1459,6 +1462,7 @@ class ResourceService:
                     and plan.shared_source is None
                 ),
                 strict=bool(processor_kwargs.get("strict", False)),
+                import_policy=processor_kwargs.get("import_policy", DEFAULT_IMPORT_POLICY),
                 ignore_dirs=processor_kwargs.get("ignore_dirs"),
                 include=processor_kwargs.get("include"),
                 exclude=processor_kwargs.get("exclude"),
@@ -1945,6 +1949,13 @@ class ResourceService:
         """
         self._ensure_initialized()
         has_target = bool((to or "").strip() or (parent or "").strip())
+        validate_import_policy(
+            kwargs.get("import_policy", DEFAULT_IMPORT_POLICY), strict=kwargs.get("strict", False)
+        )
+        if isinstance(args, dict) and "import_policy" in args:
+            raise InvalidArgumentError(
+                "import_policy must be a top-level field, not args.import_policy"
+            )
         if is_active is False and (watch_interval <= 0 or not has_target):
             raise InvalidArgumentError(
                 "is_active=false requires watch_interval > 0 and either 'to' or 'parent'."
@@ -2048,6 +2059,10 @@ class ResourceService:
             connector_args=normalized_args.processor_kwargs,
             kwargs=kwargs,
         )
+        if delegate_to_connector and kwargs.get("import_policy") == "best_effort":
+            raise InvalidArgumentError(
+                "best_effort is not supported by delegated Connectors; use the native import pipeline"
+            )
         if not delegate_to_connector and connector_auth_config:
             # A managed credential reference only resolves inside Connector
             # delegation; never drop it and silently degrade to an unauthorized
@@ -2190,15 +2205,24 @@ class ResourceService:
             )
             source_plan = None
             if not resolve_watch_target_now:
-                source_plan = await self._prepare_standard_source_plan(
-                    path=path,
-                    ctx=ctx,
-                    mode=mode,
-                    allow_local_path_resolution=allow_local_path_resolution,
-                    processor_kwargs=kwargs,
-                    watch_auth_state=normalized_args.watch_auth_state,
-                    shared_source=shared_source,
-                )
+                try:
+                    source_plan = await self._prepare_standard_source_plan(
+                        path=path,
+                        ctx=ctx,
+                        mode=mode,
+                        allow_local_path_resolution=allow_local_path_resolution,
+                        processor_kwargs=kwargs,
+                        watch_auth_state=normalized_args.watch_auth_state,
+                        shared_source=shared_source,
+                    )
+                except OpenVikingError as exc:
+                    if (
+                        kwargs.get("import_policy") == "best_effort"
+                        and to
+                        and exc.code == "PERMISSION_DENIED"
+                    ):
+                        await self._resource_processor._quarantine_revoked_snapshot(to, ctx)
+                    raise
         if source_plan is not None:
             result = await self._enqueue_source_plan(
                 source_plan,
@@ -2480,6 +2504,7 @@ class ResourceService:
                     summarize=summarize,
                     processing_mode=processing_mode,
                     strict=bool(kwargs.get("strict", False)),
+                    import_policy=kwargs.get("import_policy", DEFAULT_IMPORT_POLICY),
                     ignore_dirs=kwargs.get("ignore_dirs"),
                     include=kwargs.get("include"),
                     exclude=kwargs.get("exclude"),

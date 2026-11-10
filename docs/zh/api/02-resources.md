@@ -188,7 +188,8 @@ Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源�
 | instruction | string | 否 | "" | 语义提取的处理指令（实验特性） |
 | wait | bool | 否 | False | 是否等待语义处理和向量化完成才返回 |
 | timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
-| strict | bool | 否 | False | 是否使用严格模式 |
+| strict | bool | 否 | False | 扫描/解析严格性（包含不支持格式检查），与提交完整性分工独立 |
+| import_policy | string | 否 | require_complete | require_complete 或 best_effort；strict=true 与 best_effort 在导入前报冲突 |
 | ignore_dirs | string | 否 | None | 要忽略的目录名（逗号分隔） |
 | include | string | 否 | None | 包含的文件模式（glob） |
 | exclude | string | 否 | None | 排除的文件模式（glob） |
@@ -246,6 +247,48 @@ Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源�
 - 如果要直接创建或更新纯文本内容，请使用 [content/write](12-content.md#write)，不要使用 `add_resource`。资源导入和内容写入后都会自动刷新语义与 embedding。
 
 #### 3. 使用示例
+
+##### strict 与 import_policy 的组合语义
+
+`strict` 控制扫描/解析严格性，`import_policy` 控制提交完整性。
+默认仍为 `strict=false, import_policy="require_complete"`：尽量扫描/解析并汇总失败，
+但目录存在实际读取/解析失败时不提交。不支持格式、主动过滤的既有非严格行为不变，
+不会因新增策略被重新算作完整性失败。
+
+- `false + require_complete`：合法，保持原开源默认行为。
+- `true + require_complete`：合法，严格扫描/解析，不接受残缺提交。
+- `false + best_effort`：合法，可提交成功文档，明确报告缺项。
+- `true + best_effort`：配置冲突，在读取、上传、入队或写入前拒绝；不静默覆盖参数。
+
+部分结果返回 `status="partial"`、`import_complete=false` 和 `failed_files`。
+异步受理不等于导入完成，需要查询 Task 的结果；Task 执行完成也可能携带部分导入结果。
+Watch 记录本轮为 `partial`，保留原策略，且不推进本轮源 checkpoint，后续可继续补齐。
+字段或枚举拼写错误独立校验，不提供 `strict`、`best_effor` 等别名。
+
+不完整快照不能证明缺项已在源端删除：未观察到的旧文件、未知子树及其索引保持不变。
+目录摘要复用保留的兄弟节点；缺少可复用摘要时在内容写入前失败，避免生成误导性的残缺摘要。
+会清除未知孩子的文件/目录类型替换也会被拒绝。后续完整刷新恢复正常的源删除推断。
+
+`best_effort` 不是认证/权限绕过：根节点不可访问、认证失败、没有成功文档仍整体失败。
+源返回结构化 `PERMISSION_DENIED` 时保守隔离旧内容：由于标题及拆分模式变化导致缺少稳定的
+源文档到产物路径映射，先把整个旧目标快照移到用户临时空间、移除其检索索引，并失效祖先目录
+派生摘要，再导入可读取文档。隔离失败会继续报错，不承诺跨内容/向量存储的原子事务或回滚。
+临时读取/解析失败不触发权限隔离；只有明确的源权限拒绝证据才触发。源列表静默隐藏的节点
+无法据此区分删除与撤权。当前委托 Connector 路径明确拒绝 `best_effort`，不会静默忽略策略，
+使用该模式请走原生导入链路。
+
+```python
+await client.add_resource(
+    "https://example.feishu.cn/wiki/your_node",
+    to="viking://resources/docs",
+    wait=True,
+    options={"strict": False, "import_policy": "best_effort",
+             "args": {"feishu_recursive": True}, "watch_interval": 60},
+)
+```
+
+CLI：`ov add-resource <source> --import-policy best_effort`。
+REST 和 MCP 使用顶层 `import_policy`，不能放到 `args.import_policy` 中。
 
 以下示例使用默认异步模式，不设置等待参数。提交后保存 `task_id`，通过 [任务 API](17-tasks.md) 查询状态；只有任务为 `completed` 时，才读取摘要或检索本次导入的内容。
 

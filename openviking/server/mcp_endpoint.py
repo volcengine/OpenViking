@@ -1758,6 +1758,8 @@ async def add_resource(
     watch_interval: float = 0,
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     to: str = "",
+    strict: bool = False,
+    import_policy: Literal["require_complete", "best_effort"] = "require_complete",
     parent: str = "",
     tags: Optional[list[str]] = None,
     tag_mode: str = "replace",
@@ -1765,6 +1767,10 @@ async def add_resource(
     acl: Optional[AclSpec] = None,
 ) -> str:
     """Add a resource to OpenViking. Asynchronous — processing happens in the background.
+
+    strict controls scanner/parser validation. import_policy defaults to require_complete
+    (reject incomplete directories); best_effort permits partial commits without inferring
+    missing-source deletions. strict=True + best_effort is a configuration error.
 
     For an agent skill, use add_skill instead: a skill added here is stored as an ordinary
     resource and never becomes an installed skill. Copying a source's text into a file with
@@ -1898,6 +1904,8 @@ async def add_resource(
                 tags=tags,
                 tag_mode=tag_mode,
                 acl=acl,
+                strict=strict,
+                import_policy=import_policy,
             )
         except OpenVikingError as exc:
             return _mcp_failure(exc)
@@ -1907,6 +1915,8 @@ async def add_resource(
         if error is not None:
             return error
         root_uri = result.get("root_uri", "") if isinstance(result, dict) else ""
+        if result.get("status") == "partial":
+            return f"Resource partially imported: {root_uri}; failed_files={result.get('failed_files', [])}"
         return (
             f"Resource added: {root_uri}"
             if root_uri
@@ -1944,6 +1954,8 @@ async def add_resource(
                 wait=False,
                 watch_interval=watch_interval,
                 processing_mode=processing_mode,
+                strict=strict,
+                import_policy=import_policy,
                 enforce_public_remote_targets=True,
                 args=args,
                 tags=tags,
@@ -1963,7 +1975,12 @@ async def add_resource(
             watch_suffix = f" (watch enabled, refresh every {watch_interval:g} minute(s))"
         else:
             watch_suffix = ""
-        if root_uri:
+        if result.get("status") == "partial":
+            message = (
+                f"Resource partially imported: {root_uri}{watch_suffix}; "
+                f"failed_files={result.get('failed_files', [])}"
+            )
+        elif root_uri:
             message = f"Resource added: {root_uri}{watch_suffix}"
         elif task_id:
             message = (

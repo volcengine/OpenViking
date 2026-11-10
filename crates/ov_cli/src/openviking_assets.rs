@@ -865,6 +865,7 @@ impl Submitter for HttpSubmitter {
                 "",
                 self.wait,
                 false,
+                "require_complete".to_string(),
                 None,
                 None,
                 None,

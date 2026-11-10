@@ -24,6 +24,7 @@ pub async fn handle_add_resource(
     instruction: String,
     wait: bool,
     strict_mode: bool,
+    import_policy: String,
     ignore_dirs: Option<String>,
     include: Option<String>,
     exclude: Option<String>,
@@ -36,6 +37,11 @@ pub async fn handle_add_resource(
     acl: Option<Value>,
     ctx: CliContext,
 ) -> Result<()> {
+    if strict_mode && import_policy == "best_effort" {
+        return Err(Error::Client(
+            "--strict cannot be combined with --import-policy best_effort".to_string(),
+        ));
+    }
     let is_url =
         path.starts_with("http://") || path.starts_with("https://") || path.starts_with("git@");
     validate_watch_source(is_url, watch_interval)?;
@@ -109,6 +115,7 @@ pub async fn handle_add_resource(
         instruction,
         wait,
         strict,
+        import_policy,
         effective_ignore_dirs,
         effective_include,
         effective_exclude,

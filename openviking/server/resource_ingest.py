@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -64,6 +64,7 @@ class AddResourceRequest(BaseModel):
         description="Deprecated compatibility parameter; accepted and ignored.",
     )
     strict: bool = False
+    import_policy: Literal["require_complete", "best_effort"] = "require_complete"
     internal_task: bool = False
     source_name: Optional[str] = None
     ignore_dirs: Optional[str] = None
@@ -83,6 +84,9 @@ class AddResourceRequest(BaseModel):
 
     @model_validator(mode="after")
     def check_path_or_temp_file_id(self):
+        from openviking.resource.import_policy import validate_import_policy
+
+        validate_import_policy(self.import_policy, strict=self.strict)
         if not self.path and not self.temp_file_id:
             raise ValueError("Either 'path' or 'temp_file_id' must be provided")
         return self
@@ -184,6 +188,7 @@ async def ingest_resource_request(
         "exclude": request.exclude,
         "directly_upload_media": request.directly_upload_media,
         "watch_interval": request.watch_interval,
+        "import_policy": request.import_policy,
         "processing_mode": request.processing_mode,
     }
     # Connector routing distinguishes an omitted create_parent from explicit false.
@@ -231,6 +236,8 @@ async def ingest_temp_upload(
     reason: str = "",
     args: Optional[dict[str, Any]] = None,
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+    strict: bool = False,
+    import_policy: Literal["require_complete", "best_effort"] = "require_complete",
     tags: Optional[list[str]] = None,
     tag_mode: str = "replace",
     parse_mode: ParseMode | str = ParseMode.DEFAULT,
@@ -246,6 +253,9 @@ async def ingest_temp_upload(
     raise (PermissionDenied / InvalidArgument) before anything is resolved — the caller
     surfaces that.
     """
+    from openviking.resource.import_policy import validate_import_policy
+
+    validate_import_policy(import_policy, strict=strict)
     resolved = await store.resolve_for_consume(temp_file_id, ctx)
     try:
         try:
@@ -264,6 +274,8 @@ async def ingest_temp_upload(
                 reason=reason,
                 source_name=resolved.original_filename,
                 wait=False,
+                strict=strict,
+                import_policy=import_policy,
                 processing_mode=processing_mode,
                 allow_local_path_resolution=True,
                 enforce_public_remote_targets=True,

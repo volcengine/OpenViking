@@ -188,7 +188,8 @@ This endpoint is the core entry point for resource management. It supports vario
 | instruction | string | No | "" | Processing instructions for semantic extraction (experimental feature) |
 | wait | bool | No | False | Whether to wait for semantic processing and vectorization to complete before returning |
 | timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
-| strict | bool | No | False | Whether to use strict mode |
+| strict | bool | No | False | Scanner/parser strictness (including unsupported-file checks); independent from commit completeness |
+| import_policy | string | No | require_complete | require_complete or best_effort; reject strict=true with best_effort before ingestion |
 | ignore_dirs | string | No | None | Directory names to ignore (comma-separated) |
 | include | string | No | None | File patterns to include (glob) |
 | exclude | string | No | None | File patterns to exclude (glob) |
@@ -246,6 +247,54 @@ This endpoint is the core entry point for resource management. It supports vario
 - To create or update plain text directly, use [content/write](12-content.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
 
 #### 3. Usage Examples
+
+##### Scanner strictness and commit completeness
+
+`import_policy` is independent from `strict`. The default remains
+`strict=false, import_policy="require_complete"`: scan/parse can collect failures,
+but a directory containing actual read/parse failures is not committed. Unsupported
+formats and intentionally filtered files retain the existing non-strict behavior;
+they are not newly treated as completeness failures. `strict=true` with
+`require_complete` is legal. `strict=true` with `best_effort` is rejected before
+source work or upload; misspelled fields/values are rejected, not aliases.
+
+Use `strict=false, import_policy="best_effort"` to commit successful documents.
+Partial results carry `status="partial"`, `import_complete=false`, and `failed_files`.
+Async acceptance is not completion: inspect the Task result. A completed Task can
+contain a partial import result; Watch records its round as `partial`, retains the
+policy, and does not advance the source checkpoint for that round.
+
+An incomplete snapshot never proves that a missing path was deleted: existing
+unobserved files, unknown subtrees, and their index records are retained. Directory
+summaries reuse retained siblings; if a reusable abstract is unavailable, the import
+fails before content writes rather than generating a misleading incomplete summary.
+Ambiguous file/directory replacements that would erase unobserved children are refused.
+After a complete refresh, normal inferred deletion resumes.
+
+Best effort is not an authentication bypass. Root access failures, authentication
+failures, and zero successful documents still fail. A structured `PERMISSION_DENIED`
+from the source is handled conservatively: without a stable source-to-output identity
+across title/split changes, the entire previous target snapshot is moved to user-scoped
+temporary storage, its search records are removed, and ancestor derived views are
+invalidated before readable documents are imported again. Quarantine failure propagates;
+this is not a cross-store atomic transaction or rollback guarantee. Transient read/
+parse failures do not trigger quarantine. Only explicit source permission-denial
+evidence does; items silently hidden by an upstream listing cannot be classified as
+revoked. Delegated Connectors currently reject `best_effort` rather than silently
+ignore it; use the native import pipeline.
+
+```python
+await client.add_resource(
+    "https://example.feishu.cn/wiki/your_node",
+    to="viking://resources/docs",
+    wait=True,
+    options={"strict": False, "import_policy": "best_effort",
+             "args": {"feishu_recursive": True}, "watch_interval": 60},
+)
+```
+
+CLI: `ov add-resource <source> --import-policy best_effort`.
+REST and MCP use the top-level `import_policy` field, never `args.import_policy`.
 
 These examples use the default asynchronous mode without waiting parameters. Save the returned `task_id` and query the [Task API](17-tasks.md). Read summaries or search the imported content only after the task reaches `completed`.
 

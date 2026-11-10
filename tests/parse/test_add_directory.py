@@ -272,8 +272,12 @@ class TestEmptyDirectory:
     """Empty directories should be handled gracefully."""
 
     @pytest.mark.asyncio
-    async def test_empty_dir_returns_zero_files(self, tmp_empty: Path, parser, fake_fs) -> None:
+    @pytest.mark.parametrize("error_code", [None, "PERMISSION_DENIED", "UNAUTHENTICATED"])
+    async def test_empty_dir_returns_zero_files(
+        self, tmp_empty: Path, parser, fake_fs, error_code
+    ) -> None:
         blocked_path = tmp_empty / "blocked.pdf"
+        error_fields = {"error_code": error_code} if error_code else {}
         result = await parser.parse(
             str(tmp_empty),
             _source_meta={
@@ -284,6 +288,7 @@ class TestEmptyDirectory:
                         "type": "file",
                         "token": "file-token",
                         "reason": "HTTP 403",
+                        **error_fields,
                     }
                 ]
             },
@@ -302,6 +307,7 @@ class TestEmptyDirectory:
                 "type": "file",
                 "token": "file-token",
                 "reason": "HTTP 403",
+                **error_fields,
             }
         ]
         assert any("Skipped Feishu Drive item blocked.pdf: HTTP 403" in w for w in result.warnings)

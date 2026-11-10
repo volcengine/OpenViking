@@ -747,6 +747,11 @@ class AsyncHTTPClient:
         options: Optional[AddResourceOptions] = None,
     ) -> Dict[str, Any]:
         option_values = dict(_normalize_timeout_options(timeout, options) or {})
+        policy = option_values.get("import_policy", "require_complete")
+        if policy not in ("require_complete", "best_effort"):
+            raise ValueError("import_policy must be 'require_complete' or 'best_effort'")
+        if policy == "best_effort" and option_values.get("strict", False):
+            raise ValueError("strict=True cannot be combined with import_policy='best_effort'")
         add_type = option_values.get("add_type")
         if add_type is not None:
             add_type = add_type.strip() or None
