@@ -43,3 +43,5 @@ import '@openviking/react/components/experience-dashboard/style.css';
 | `className`、`style` | HTML 属性                                                 | 布局与样式，其余 HTML 属性透传                                                                   |
 
 受控 `tab` 和 `days` 由调用方在回调后更新；组件不修改它们。各分区的错误和重试互相独立。UI 内置页签键盘交互、轨迹展示、测试材料复制和窄容器滚动，业务 Hook 不作为公开 API。
+
+文案覆盖为 `undefined` 时继承默认值，空字符串保留为显式覆盖。测试材料更新保留当前页签与时间范围；移除测试材料时，仅失效的测试页签回退到应用效果。

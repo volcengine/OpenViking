@@ -1,3 +1,4 @@
+import { useLang } from '@rspress/core/runtime';
 import { useState } from 'react';
 import { ExperienceDashboard } from '@openviking/react/components/experience-dashboard';
 import '@openviking/react/components/experience-dashboard/style.css';
@@ -9,15 +10,42 @@ import {
 } from '#dashboard-demo-data';
 
 export default function ExperienceDashboardBasic() {
+  const zh = useLang() === 'zh';
+  const locale = zh ? 'zh-CN' : 'en-US';
+  const text = zh
+    ? {
+        description:
+          '纯 UI 示例，固定数据由调用方传入；未提供的指标显示“—”，组件不发送请求。',
+        directory: '经验目录',
+        file: '经验文件',
+        host: '宿主数据',
+        failure: '失败状态',
+        error: '示例加载失败',
+        opened: '打开意图',
+        testTitle: '测试 Message 1',
+        testContent:
+          '# 发布检查\nUser: 验证审批规则和回滚条件。\nAssistant: 检查通过，已保存验证证据。',
+      }
+    : {
+        description:
+          'Pure UI example with fixed host data. Missing metrics display “—”; the component makes no requests.',
+        directory: 'Experience directory',
+        file: 'Experience file',
+        host: 'Host data',
+        failure: 'Error state',
+        error: 'Example load failed',
+        opened: 'Open intent',
+        testTitle: 'Test Message 1',
+        testContent:
+          '# Release checks\nUser: Verify approval rules and rollback conditions.\nAssistant: Checks passed; verification evidence saved.',
+      };
   const [uri, setUri] = useState(DEMO_EXPERIENCE);
   const [gateway, setGateway] = useState(false);
   const [failure, setFailure] = useState(false);
   const [opened, setOpened] = useState('');
   return (
-    <div lang="zh-CN">
-      <p>
-        纯 UI 示例，固定数据由调用方传入；未提供的指标显示“—”，组件不发送请求。
-      </p>
+    <div lang={locale}>
+      <p>{text.description}</p>
       <p className="ov-demo-controls">
         <button
           type="button"
@@ -26,10 +54,10 @@ export default function ExperienceDashboardBasic() {
             setGateway(false);
           }}
         >
-          经验目录
+          {text.directory}
         </button>{' '}
         <button type="button" onClick={() => setUri(DEMO_EXPERIENCE)}>
-          经验文件
+          {text.file}
         </button>{' '}
         <button
           type="button"
@@ -40,7 +68,7 @@ export default function ExperienceDashboardBasic() {
             setUri(DEMO_EXPERIENCE);
           }}
         >
-          宿主数据
+          {text.host}
         </button>{' '}
         <button
           type="button"
@@ -50,28 +78,27 @@ export default function ExperienceDashboardBasic() {
             setGateway(false);
           }}
         >
-          失败状态
+          {text.failure}
         </button>
       </p>
       <ExperienceDashboard
-        key={`${gateway}:${failure}`}
         uri={uri}
         kind={uri === DEMO_EXPERIENCES ? 'directory' : 'file'}
         states={
           failure
             ? {
                 outcomes: {
-                  error: new Error('示例加载失败'),
+                  error: new Error(text.error),
                   onRetry: () => setFailure(false),
                 },
                 trajectories: {
-                  error: new Error('示例加载失败'),
+                  error: new Error(text.error),
                   onRetry: () => setFailure(false),
                 },
               }
             : undefined
         }
-        locale="zh-CN"
+        locale={locale}
         onOpenUri={(value) =>
           value === DEMO_EXPERIENCE ? setUri(value) : setOpened(value)
         }
@@ -103,17 +130,20 @@ export default function ExperienceDashboardBasic() {
                   testMaterials: [
                     {
                       id: 'test-1',
-                      title: '测试 Message 1',
+                      title: text.testTitle,
                       uri: DEMO_TRAJECTORY,
-                      content:
-                        '# 发布检查\nUser: 验证审批规则和回滚条件。\nAssistant: 检查通过，已保存验证证据。',
+                      content: text.testContent,
                     },
                   ],
                 }
               : experienceViewData
         }
       />
-      {opened ? <p role="status">打开意图：{opened}</p> : null}
+      {opened ? (
+        <p role="status">
+          {text.opened}: {opened}
+        </p>
+      ) : null}
     </div>
   );
 }

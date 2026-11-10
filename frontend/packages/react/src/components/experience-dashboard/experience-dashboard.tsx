@@ -14,12 +14,7 @@ import type {
 } from './types.js';
 
 export function ExperienceDashboard(props: ExperienceDashboardProps) {
-  return (
-    <ExperienceDashboardContent
-      key={`${props.uri}:${props.data?.testMaterials !== undefined}`}
-      {...props}
-    />
-  );
+  return <ExperienceDashboardContent key={props.uri} {...props} />;
 }
 
 function ExperienceDashboardContent({
@@ -44,7 +39,11 @@ function ExperienceDashboardContent({
   const locale = useLocale(localeProp);
   const [localTab, setLocalTab] = useState<ExperienceDashboardTab>('impact');
   const [localDays, setLocalDays] = useState(7);
-  const tab = controlledTab ?? localTab;
+  const selectedTab = controlledTab ?? localTab;
+  const missingTest = data.testMaterials === undefined;
+  const tab = selectedTab === 'test' && missingTest ? 'impact' : selectedTab;
+  // Only an unavailable Test selection expires; material updates keep other state.
+  if (localTab === 'test' && missingTest) setLocalTab('impact');
   const days = controlledDays ?? localDays;
   const setTab = (value: ExperienceDashboardTab) => {
     setLocalTab(value);

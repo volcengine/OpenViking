@@ -49,9 +49,6 @@ export const parseWikiFileConflicts = (content: string): WikiFileConflicts => {
   }
   const document = content.slice(0, start);
   const source = footer.slice(prefix.length, -3).trim();
-  if (source.includes('--')) {
-    return { status: 'invalid' };
-  }
   let parsed: unknown;
   try {
     parsed = source ? JSON.parse(`[${source}]`) : [];

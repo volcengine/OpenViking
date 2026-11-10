@@ -1,4 +1,5 @@
 import { OV_PATHS } from '../../client/paths.js';
+import { resolveDashboardUri } from './dashboard-resource.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type {
   ExperienceTrajectory,
@@ -29,6 +30,7 @@ export async function readExperiences(
   page: number,
   options: OvRequestOptions,
 ) {
+  uri = await resolveDashboardUri(client, uri, options);
   const result = await client.requestEnvelope<
     (ExperienceItem & { isDir?: boolean })[]
   >({
@@ -63,6 +65,7 @@ export async function readExperienceSources(
   uri: string,
   options: OvRequestOptions,
 ) {
+  uri = await resolveDashboardUri(client, uri, options);
   const result = await client.request<{
     attrs?: {
       memory?: {

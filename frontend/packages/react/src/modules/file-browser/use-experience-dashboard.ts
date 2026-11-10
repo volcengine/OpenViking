@@ -19,10 +19,12 @@ export function useExperienceDashboard({
   uri,
   requestOptions,
   enabled = true,
+  refreshGeneration = 0,
 }: {
   uri: string;
   requestOptions?: OvRequestOptions;
   enabled?: boolean;
+  refreshGeneration?: number;
 }) {
   const client = useOvClient();
   const signal = useOvSignal();
@@ -135,21 +137,25 @@ export function useExperienceDashboard({
     loadList,
     requestOptions,
     enabled && directory,
+    refreshGeneration,
   );
   const sources = useDashboardQuery(
     loadSources,
     requestOptions,
     enabled && !directory && tab === 'source',
+    refreshGeneration,
   );
   const trajectories = useDashboardQuery(
     loadTrajectories,
     requestOptions,
     enabled && !directory && tab === 'impact',
+    refreshGeneration,
   );
   const outcomes = useDashboardQuery(
     loadOutcomes,
     requestOptions,
     enabled && !directory && tab === 'impact',
+    refreshGeneration,
   );
   return {
     list,

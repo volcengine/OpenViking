@@ -46,3 +46,88 @@ test('dashboard views render supplied states without a Provider or requests', as
     globalThis.fetch = original;
   }
 });
+
+test('dashboard labels inherit undefined defaults and preserve explicit empty strings', async () => {
+  const view = await mount(
+    h(ExperienceDashboard, {
+      uri: 'id',
+      kind: 'file',
+      tab: 'source',
+      data: { sources: [{ uri: 'source', name: 'source' }] },
+      labels: { sourceCount: undefined, latest: '' },
+    }),
+  );
+  try {
+    assert.match(view.container.textContent, /Generated from 1 trajectories/);
+    assert.equal(
+      view.container.querySelector('summary strong').textContent,
+      '',
+    );
+    await view.render(
+      h(WikiDashboard, {
+        kind: 'file',
+        data: { conflicts: [] },
+        labels: { title: undefined, severity: undefined, conflicts: '' },
+      }),
+    );
+    assert.equal(
+      view.container.querySelector('h2').textContent,
+      'Generation results',
+    );
+    assert.equal(view.container.querySelector('h3').textContent, '');
+    assert.match(
+      view.container
+        .querySelector('[aria-haspopup="listbox"]')
+        .getAttribute('aria-label'),
+      /Severity/,
+    );
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('asynchronous test materials preserve valid experience selections and date range', async () => {
+  const { act } = await import('react');
+  const events = [];
+  const render = (data = {}) =>
+    h(ExperienceDashboard, {
+      uri: 'same-resource',
+      kind: 'file',
+      data,
+      onTabChange: (value) => events.push(value),
+    });
+  const view = await mount(render());
+  const selectTab = (name) =>
+    act(async () =>
+      [...view.container.querySelectorAll('[role="tab"]')]
+        .find((el) => el.textContent === name)
+        .click(),
+    );
+  const active = () =>
+    view.container.querySelector('[role="tab"][aria-selected="true"]')
+      .textContent;
+  try {
+    const range = view.container.querySelector('select');
+    await act(async () => {
+      range.value = '30';
+      range.dispatchEvent(new window.Event('change', { bubbles: true }));
+    });
+    await selectTab('Source trace');
+    await view.render(render({ testMaterials: [] }));
+    assert.equal(active(), 'Source trace');
+    await view.render(render());
+    assert.equal(active(), 'Source trace');
+    assert.deepEqual(events, ['source']);
+    await selectTab('Application impact');
+    assert.equal(view.container.querySelector('select').value, '30');
+    await view.render(render({ testMaterials: [] }));
+    await selectTab('Test');
+    await view.render(render());
+    assert.equal(active(), 'Application impact');
+    assert.equal(view.container.querySelector('select').value, '30');
+    await view.render(render({ testMaterials: [] }));
+    assert.equal(active(), 'Application impact');
+  } finally {
+    await view.unmount();
+  }
+});

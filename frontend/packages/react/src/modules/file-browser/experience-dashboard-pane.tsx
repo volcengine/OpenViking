@@ -11,14 +11,20 @@ import {
 
 type Props = Pick<ExperienceDashboardProps, 'uri' | 'locale' | 'onOpenUri'> & {
   requestOptions?: OvRequestOptions;
+  refreshGeneration?: number;
 };
 export function ExperienceDashboardPane({
   uri,
   locale,
   requestOptions,
+  refreshGeneration,
   onOpenUri,
 }: Props) {
-  const browser = useExperienceDashboard({ uri, requestOptions });
+  const browser = useExperienceDashboard({
+    uri,
+    requestOptions,
+    refreshGeneration,
+  });
   const directory = isExperienceDirectory(uri);
   const status = (query: {
     loading: boolean;

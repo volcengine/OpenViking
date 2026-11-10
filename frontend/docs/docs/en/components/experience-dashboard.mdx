@@ -43,3 +43,5 @@ The view reports interaction intent without making requests. URI changes reset l
 | `className`, `style` | HTML attributes                         | Layout and appearance; other HTML attributes pass through                                                       |
 
 Callers update controlled `tab` and `days` after callbacks; the view does not change them. Section errors and retries remain independent. Keyboard tabs, trajectory display, test-material copy and narrow-container scrolling are local UI behavior. Business Hooks are not public APIs.
+
+Missing (`undefined`) label overrides inherit defaults; empty strings remain explicit. Updating test materials preserves the selected tab and period. Removing test materials falls back from Test to Application impact.

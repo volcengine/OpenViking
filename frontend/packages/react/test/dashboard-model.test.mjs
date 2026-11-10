@@ -52,3 +52,17 @@ test('native Wiki footer preserves unresolved/fixed state and rejects malformed 
     'ambiguous',
   );
 });
+
+test('native conflict strings may contain CLI flags and Markdown separators', () => {
+  const value = {
+    ...record,
+    match_text: 'Run --force',
+    reason: 'A --- separator is ordinary JSON text',
+  };
+  const parsed = parseWikiFileConflicts(
+    `Run --force\n<!-- CONFLICTS_CONTENT\n${JSON.stringify(value)}\n-->`,
+  );
+  assert.equal(parsed.status, 'available');
+  assert.equal(parsed.records[0].location.status, 'unique');
+  assert.equal(parsed.records[0].reason, value.reason);
+});

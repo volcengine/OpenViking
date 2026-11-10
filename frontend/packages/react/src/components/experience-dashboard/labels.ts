@@ -1,4 +1,5 @@
 import type { ExperienceDashboardLabels } from './types.js';
+import { mergeLabels } from '../../shared/locale.js';
 const en: ExperienceDashboardLabels = {
   latest: 'Latest experience',
   sourceCount: 'Generated from {count} trajectories',
@@ -92,7 +93,5 @@ const zh: ExperienceDashboardLabels = {
 export const experienceLabels = (
   locale?: string,
   labels?: Partial<ExperienceDashboardLabels>,
-): ExperienceDashboardLabels => ({
-  ...(locale === 'zh-CN' ? zh : en),
-  ...labels,
-});
+): ExperienceDashboardLabels =>
+  mergeLabels(locale === 'zh-CN' ? zh : en, labels);

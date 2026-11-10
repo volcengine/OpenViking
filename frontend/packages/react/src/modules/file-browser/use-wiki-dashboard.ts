@@ -3,6 +3,7 @@ import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
 import { parseWikiFileConflicts } from './wiki-conflicts.js';
+import { readDashboardStat } from './dashboard-resource.js';
 import type {
   WikiDirectoryData,
   WikiFileData,
@@ -17,12 +18,8 @@ export async function readWikiDashboard(
   uri: string,
   options: OvRequestOptions,
 ): Promise<WikiDashboardResult> {
-  const stat = await client.request<{ isDir: boolean }>({
-    method: 'GET',
-    path: OV_PATHS.fsStat,
-    query: { uri },
-    options,
-  });
+  const stat = await readDashboardStat(client, uri, options);
+  uri = stat.uri;
   if (!stat.isDir) {
     const result = await client.request<string>({
       method: 'GET',
@@ -79,15 +76,17 @@ export function useWikiDashboard({
   uri,
   requestOptions,
   enabled = true,
+  refreshGeneration = 0,
 }: {
   uri: string;
   requestOptions?: OvRequestOptions;
   enabled?: boolean;
+  refreshGeneration?: number;
 }) {
   const load = useCallback(
     (client: OvClient, options: OvRequestOptions) =>
       readWikiDashboard(client, uri, options),
     [uri],
   );
-  return useDashboardQuery(load, requestOptions, enabled);
+  return useDashboardQuery(load, requestOptions, enabled, refreshGeneration);
 }

@@ -17,18 +17,20 @@ type Props = Pick<
   onEdit?: (uri: string, conflict?: WikiConflict) => void;
   onDiscuss?: (uri: string, conflict: WikiConflict) => void;
   requestOptions?: OvRequestOptions;
+  refreshGeneration?: number;
 };
 export function WikiDashboardPane({
   uri,
   kind,
   requestOptions,
+  refreshGeneration,
   onOpenUri,
   onOpenDashboard,
   onEdit,
   onDiscuss,
   ...props
 }: Props) {
-  const query = useWikiDashboard({ uri, requestOptions });
+  const query = useWikiDashboard({ uri, requestOptions, refreshGeneration });
   const common = {
     ...props,
     loading: query.loading,

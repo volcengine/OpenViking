@@ -139,6 +139,7 @@ export function useBrowserDashboards({
                   uri,
                   locale,
                   requestOptions,
+                  refreshGeneration: generation,
                   onOpenUri: (target: string) => {
                     setOpened(null);
                     void onOpenUri(target);
@@ -156,6 +157,7 @@ export function useBrowserDashboards({
                     : 'directory',
                   locale,
                   requestOptions,
+                  refreshGeneration: generation,
                   onOpenUri: (target: string) => {
                     setOpened(null);
                     void onOpenUri(target);

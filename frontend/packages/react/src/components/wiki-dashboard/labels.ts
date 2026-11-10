@@ -1,4 +1,5 @@
 import type { WikiDashboardLabels } from './types.js';
+import { mergeLabels } from '../../shared/locale.js';
 const en: WikiDashboardLabels = {
   title: 'Generation results',
   pendingLabel: 'Pending',
@@ -62,7 +63,4 @@ const zh: WikiDashboardLabels = {
 export const wikiLabels = (
   locale?: string,
   labels?: Partial<WikiDashboardLabels>,
-): WikiDashboardLabels => ({
-  ...(locale === 'zh-CN' ? zh : en),
-  ...labels,
-});
+): WikiDashboardLabels => mergeLabels(locale === 'zh-CN' ? zh : en, labels);
