@@ -200,9 +200,7 @@ class Summarizer:
                         user_id=ctx.user.user_id,
                         peer_id=ctx.user.user_id,
                     )
-                    if aggregate_directory
-                    and lock_handoff is None
-                    and not (generation_trigger == "content_write" and context_type == "resource")
+                    if aggregate_directory and lock_handoff is None
                     else ""
                 ),
                 generation_trigger=generation_trigger,
