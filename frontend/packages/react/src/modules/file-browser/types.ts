@@ -167,8 +167,6 @@ export interface FileBrowserProps extends Omit<
    */
   onUriChange?: (uri: string | null) => void;
   /**
-   * 可替换文案，未提供的项使用当前 locale 的内置文案。
-   * Replaceable copy; omitted fields follow locale.
    * 默认导入按钮的点击回调，单独传入即可显示导入入口。
    * Click handler of the default import button; enables its entry on its own.
    */
@@ -185,8 +183,8 @@ export interface FileBrowserProps extends Omit<
     trigger: ReactElement<ComponentPropsWithRef<'button'>>,
   ) => ReactNode;
   /**
-   * 可替换文案，缺省为英文。
-   * Replaceable copy; English by default.
+   * 可替换文案，未提供的项使用当前 locale 的内置文案。
+   * Replaceable copy; omitted fields follow locale.
    */
   labels?: FileBrowserLabels;
   /**

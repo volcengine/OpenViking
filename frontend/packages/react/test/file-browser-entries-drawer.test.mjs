@@ -26,28 +26,21 @@ const assertScrollLocked = () => {
 };
 const entry = (props = {}) =>
   createElement(FileBrowserEntries, {
-    agentConnect: { apiKey: 'drawer-demo-key', locale: 'en', ...props },
+    locale: 'en-US',
+    agentConnect: { apiKey: 'drawer-demo-key', locale: 'en-US', ...props },
   });
 const moduleEntry = () =>
   createElement(
     OpenVikingProvider,
     { fetch: () => ok([]) },
     createElement(FileBrowser, {
-      agentConnect: { apiKey: 'drawer-demo-key', locale: 'en' },
+      locale: 'en-US',
+      agentConnect: { apiKey: 'drawer-demo-key', locale: 'en-US' },
     }),
   );
 
 test('the connection drawer exits before releasing scroll and follows scoped host themes', async () => {
-  const host = await mount(
-    createElement(
-      StrictMode,
-      null,
-      createElement(FileBrowserEntries, {
-        agentConnect: { apiKey: 'drawer-demo-key', locale: 'en' },
-        labels: { close: 'Close connection' },
-      }),
-    ),
-  );
+  const host = await mount(createElement(StrictMode, null, entry()));
   const trigger = host.container.querySelector('button');
   const initialOverflow = document.body.style.overflow;
   try {

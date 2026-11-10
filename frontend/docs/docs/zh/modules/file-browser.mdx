@@ -41,7 +41,8 @@
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
 
-<FileBrowser locale="zh-CN"
+<FileBrowser
+  locale="zh-CN"
   agentConnect={{ apiKey: 'demo-api-key', locale: 'zh-CN' }}
   renderImportResources={(trigger) => (
     <Popover content={<ResourceMenu />} trigger="click">
@@ -104,7 +105,7 @@ import '@openviking/react/modules/file-browser/style.css';
 | `onImportResources`     | `() => void`                           | —           | 默认导入按钮的点击回调；单独传入即可显示入口。                                                                                                                                                                                                                                                                                                  |
 | `rootUri`               | `string`                               | `viking://` | 目录树的根，宿主据此把浏览范围收敛到某个子树。                                                                                                                                                                                                                                                                                                  |
 | `defaultExpandedUri`    | `string`                               | —           | 首次加载后自动展开到的路径，逐级展开并加载。省略时只展开根，其余折叠。                                                                                                                                                                                                                                                                          |
-| `locale` | `'zh-CN' \| 'en-US'` | 必填 | 内置中英文文案。 |
+| `locale`                | `'zh-CN' \| 'en-US'`                   | 必填        | 内置中英文文案。                                                                                                                                                                                                                                                                                                                                |
 | `renderImportResources` | `(trigger: ReactElement) => ReactNode` | —           | 可选，包装或替换默认导入按钮；省略时使用默认按钮，返回 `null` 隐藏入口。                                                                                                                                                                                                                                                                        |
 | `labels`                | `FileBrowserLabels`                    | —           | 可替换文案：`searchPlaceholder`、`searchEmpty`、`searchFailed`、`loading`、`refresh`、`empty`、`error`、`retry`、`previewMode`、`sourceMode`、`history`、`copyPath`、`viewSwitch`、`resizeTree`，`summaryEmpty`、`summaryFailed`（某一级摘要请求失败且服务端没给消息时的兜底文案），以及透传给入口、树与预览的 `entries` / `tree` / `preview`。 |
 | `className`             | `string`                               | —           | 容器附加类名。                                                                                                                                                                                                                                                                                                                                  |
@@ -113,3 +114,7 @@ import '@openviking/react/modules/file-browser/style.css';
 文案为纯文本，宿主可将自身的翻译结果映射到这些属性。props 里没有数据字段——数据由模块自己加载。
 
 模块通过 `useFileBrowser` 自己取数，宿主无需提供目录或预览数据；`labels.entries`、`labels.tree` 与 `labels.preview` 分别透传给入口条、文件树与文件预览组件。
+
+`labels.formatCharacterCount(count)` 可覆盖预览底部的字符数文案，默认随 `locale` 切换。
+
+`useFileBrowser` 可独立接收可选的 `locale`（默认 `en-US`），使用与组合视图相同的模块语言资源。`summaryLabels` 和 `formatCharacterCount` 可覆盖摘要标题、失败兜底和字符数文案；切换语言或文案只更新展示，不重新加载目录摘要或文件正文。

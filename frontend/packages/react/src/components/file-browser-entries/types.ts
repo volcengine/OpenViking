@@ -8,9 +8,8 @@ import type {
 import type { AgentConnectProps } from '../agent-connect/index.js';
 
 /**
- * 文件浏览入口条的文案。两项的文案都可替换，缺省为英文。
- * Copy of the file browser entry row. Both labels are replaceable, English by
- * default.
+ * 文件浏览入口条与抽屉的文案。未覆盖项跟随 locale。
+ * Copy of the file browser entries and drawer. Omitted fields follow locale.
  */
 export interface FileBrowserEntriesLabels {
   /** 连接 Agent 的文案。Label of the connect-agent entry. */

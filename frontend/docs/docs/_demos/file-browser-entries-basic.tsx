@@ -15,7 +15,10 @@ export default function FileBrowserEntriesBasic() {
         locale={componentLocale}
         onImportResources={() => {}}
       />
-      <FileBrowserEntries locale={componentLocale} agentConnect={{ apiKey: 'demo-api-key', locale: componentLocale }} />
+      <FileBrowserEntries
+        locale={componentLocale}
+        agentConnect={{ apiKey: 'demo-api-key', locale: componentLocale }}
+      />
     </div>
   );
 }

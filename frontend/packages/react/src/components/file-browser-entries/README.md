@@ -12,7 +12,8 @@ It has two fixed entries. Pass `agentConnect` for the built-in connection drawer
 import { FileBrowserEntries } from '@openviking/react/components/file-browser-entries';
 import '@openviking/react/components/file-browser-entries/style.css';
 
-<FileBrowserEntries locale="en-US"
+<FileBrowserEntries
+  locale="en-US"
   agentConnect={{ apiKey: 'demo-api-key', locale: 'en-US' }}
   onImportResources={openImportFlow}
 />;
@@ -35,10 +36,11 @@ With a single entry **no divider is drawn**: a divider separates two neighbours,
 
 ## Copy
 
-Both labels are replaceable and default to English:
+Entry and drawer labels are replaceable; omitted fields follow `locale`:
 
 ```tsx
-<FileBrowserEntries locale="en-US"
+<FileBrowserEntries
+  locale="en-US"
   agentConnect={{ apiKey: 'demo-api-key', locale: 'en-US' }}
   onImportResources={openImportFlow}
   labels={{
@@ -59,7 +61,8 @@ Both labels are replaceable and default to English:
 The host supplies `Popover` and `ImportMenu` below. The default button is the popover's direct child, allowing it to attach its ref and event handlers for positioning. Reusing the button preserves its click handler; a replacement node owns its interactions.
 
 ```tsx
-<FileBrowserEntries locale="en-US"
+<FileBrowserEntries
+  locale="en-US"
   renderImportResources={(trigger) => (
     <Popover trigger="click" content={<ImportMenu />}>
       {trigger}
@@ -71,15 +74,15 @@ The host supplies `Popover` and `ImportMenu` below. The default button is the po
 
 ## Props
 
-| Property                | Type                                   | Default | Description                                               |
-| ----------------------- | -------------------------------------- | ------- | --------------------------------------------------------- |
-| `locale` | `'zh-CN' \| 'en-US'` | Required | Built-in Chinese and English copy. |
-| `agentConnect`          | `AgentConnectProps`                    | —       | Enables the built-in connection drawer                    |
-| `onConnectAgent`        | `() => void`                           | —       | Click notification; use alone for a host-owned flow       |
-| `onImportResources`     | `() => void`                           | —       | Click handler of the default import button                |
-| `renderImportResources` | `(trigger: ReactElement) => ReactNode` | —       | Wrap or replace the default button; return `null` to hide |
-| `labels`                | `FileBrowserEntriesLabels`             | —       | Entry labels and drawer `close` label; omitted fields follow locale |
-| `className`             | `string`                               | —       | Additional container class                                |
+| Property                | Type                                   | Default  | Description                                                         |
+| ----------------------- | -------------------------------------- | -------- | ------------------------------------------------------------------- |
+| `locale`                | `'zh-CN' \| 'en-US'`                   | Required | Built-in Chinese and English copy.                                  |
+| `agentConnect`          | `AgentConnectProps`                    | —        | Enables the built-in connection drawer                              |
+| `onConnectAgent`        | `() => void`                           | —        | Click notification; use alone for a host-owned flow                 |
+| `onImportResources`     | `() => void`                           | —        | Click handler of the default import button                          |
+| `renderImportResources` | `(trigger: ReactElement) => ReactNode` | —        | Wrap or replace the default button; return `null` to hide           |
+| `labels`                | `FileBrowserEntriesLabels`             | —        | Entry labels and drawer `close` label; omitted fields follow locale |
+| `className`             | `string`                               | —        | Additional container class                                          |
 
 ## Theme
 

@@ -19,7 +19,7 @@ const renderModule = (props) =>
   createElement(
     OpenVikingProvider,
     { baseURL: 'https://ov.test', fetch: emptyFetch },
-    createElement(FileBrowser, props),
+    createElement(FileBrowser, { locale: 'en-US', ...props }),
   );
 
 for (const module of [false, true]) {
@@ -48,6 +48,7 @@ for (const module of [false, true]) {
       );
     }
     const props = {
+      locale: 'en-US',
       onImportResources: () => clicks.entry++,
       renderImportResources: (trigger) =>
         createElement(HostPopover, null, trigger),
@@ -95,7 +96,7 @@ test('FileBrowser owns entry visibility and passes localized entry copy', async 
     assert.equal(imports, 1);
     await host.render(
       renderModule({
-        agentConnect: { apiKey: 'demo-api-key', locale: 'en' },
+        agentConnect: { apiKey: 'demo-api-key', locale: 'en-US' },
         renderImportResources: () => null,
         labels: { entries: { connectAgent: '连接我的 Agent' } },
       }),
@@ -123,13 +124,17 @@ test('renderer-only imports are visible, and null removes the entry and divider'
   const wrapped = (trigger) =>
     createElement('span', { 'data-host-wrapper': '' }, trigger);
   const host = await mount(
-    createElement(FileBrowserEntries, { renderImportResources: wrapped }),
+    createElement(FileBrowserEntries, {
+      locale: 'en-US',
+      renderImportResources: wrapped,
+    }),
   );
   try {
     assert.ok(host.container.querySelector('[data-host-wrapper] > button'));
     assert.equal(host.container.querySelector('.ov-divider'), null);
     await host.render(
       createElement(FileBrowserEntries, {
+        locale: 'en-US',
         onConnectAgent() {},
         onImportResources() {},
         renderImportResources: () => null,
@@ -142,10 +147,13 @@ test('renderer-only imports are visible, and null removes the entry and divider'
       null,
     );
     await host.render(
-      createElement(FileBrowserEntries, { renderImportResources: () => null }),
+      createElement(FileBrowserEntries, {
+        locale: 'en-US',
+        renderImportResources: () => null,
+      }),
     );
     assert.equal(host.container.childElementCount, 0);
-    await host.render(createElement(FileBrowserEntries, {}));
+    await host.render(createElement(FileBrowserEntries, { locale: 'en-US' }));
     assert.equal(host.container.childElementCount, 0);
   } finally {
     await host.unmount();
@@ -157,6 +165,7 @@ test('a replacement entry owns its interaction', async () => {
   let hostClicks = 0;
   const host = await mount(
     createElement(FileBrowserEntries, {
+      locale: 'en-US',
       onImportResources: () => defaultClicks++,
       renderImportResources: () =>
         createElement(

@@ -66,7 +66,8 @@ function Regression() {
             flushSync(() =>
               root.render(
                 <FileBrowserEntries
-                  agentConnect={{ apiKey: 'demo-key', locale: 'en' }}
+                  locale="en-US"
+                  agentConnect={{ apiKey: 'demo-key', locale: 'en-US' }}
                 />,
               ),
             );

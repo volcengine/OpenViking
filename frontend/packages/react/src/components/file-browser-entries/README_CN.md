@@ -12,7 +12,8 @@
 import { FileBrowserEntries } from '@openviking/react/components/file-browser-entries';
 import '@openviking/react/components/file-browser-entries/style.css';
 
-<FileBrowserEntries locale="zh-CN"
+<FileBrowserEntries
+  locale="zh-CN"
   agentConnect={{ apiKey: 'demo-api-key', locale: 'zh-CN' }}
   onImportResources={openImportFlow}
 />;
@@ -38,7 +39,8 @@ import '@openviking/react/components/file-browser-entries/style.css';
 入口文案及抽屉 `close` 文案均可替换，未覆盖项跟随 locale：
 
 ```tsx
-<FileBrowserEntries locale="zh-CN"
+<FileBrowserEntries
+  locale="zh-CN"
   agentConnect={{ apiKey: 'demo-api-key', locale: 'zh-CN' }}
   onImportResources={openImportFlow}
   labels={{
@@ -60,7 +62,8 @@ import '@openviking/react/components/file-browser-entries/style.css';
 下面的 `Popover` 与 `ImportMenu` 由宿主提供。默认按钮直接作为 `Popover` 的 `children`，供其接管 ref、事件与定位。保留默认按钮时会保留点击回调；完全替换节点时，由宿主绑定交互。
 
 ```tsx
-<FileBrowserEntries locale="zh-CN"
+<FileBrowserEntries
+  locale="zh-CN"
   renderImportResources={(trigger) => (
     <Popover trigger="click" content={<ImportMenu />}>
       {trigger}
@@ -72,15 +75,15 @@ import '@openviking/react/components/file-browser-entries/style.css';
 
 ## 属性
 
-| 属性                    | 类型                                   | 默认值 | 说明                                     |
-| ----------------------- | -------------------------------------- | ------ | ---------------------------------------- |
-| `locale` | `'zh-CN' \| 'en-US'` | 必填 | 内置中英文文案。 |
-| `agentConnect`          | `AgentConnectProps`                    | —      | 启用内置右侧接入抽屉                     |
-| `onConnectAgent`        | `() => void`                           | —      | 点击通知；单独使用时接入宿主自定义流程   |
-| `onImportResources`     | `() => void`                           | —      | 默认导入按钮的点击回调                   |
-| `renderImportResources` | `(trigger: ReactElement) => ReactNode` | —      | 包装或替换默认导入按钮；返回 `null` 隐藏 |
-| `labels`                | `FileBrowserEntriesLabels`             | —      | 入口及抽屉 `close` 文案，未覆盖项跟随 locale      |
-| `className`             | `string`                               | —      | 容器附加类名                             |
+| 属性                    | 类型                                   | 默认值 | 说明                                         |
+| ----------------------- | -------------------------------------- | ------ | -------------------------------------------- |
+| `locale`                | `'zh-CN' \| 'en-US'`                   | 必填   | 内置中英文文案。                             |
+| `agentConnect`          | `AgentConnectProps`                    | —      | 启用内置右侧接入抽屉                         |
+| `onConnectAgent`        | `() => void`                           | —      | 点击通知；单独使用时接入宿主自定义流程       |
+| `onImportResources`     | `() => void`                           | —      | 默认导入按钮的点击回调                       |
+| `renderImportResources` | `(trigger: ReactElement) => ReactNode` | —      | 包装或替换默认导入按钮；返回 `null` 隐藏     |
+| `labels`                | `FileBrowserEntriesLabels`             | —      | 入口及抽屉 `close` 文案，未覆盖项跟随 locale |
+| `className`             | `string`                               | —      | 容器附加类名                                 |
 
 ## 主题
 

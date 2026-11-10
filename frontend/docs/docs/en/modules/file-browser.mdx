@@ -41,7 +41,8 @@ The module includes connection and import entries above search and refresh. The 
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
 
-<FileBrowser locale="en-US"
+<FileBrowser
+  locale="en-US"
   agentConnect={{ apiKey: 'demo-api-key', locale: 'en-US' }}
   renderImportResources={(trigger) => (
     <Popover content={<ResourceMenu />} trigger="click">
@@ -97,7 +98,7 @@ The module exports `FileBrowserProps` from the subpath and the root entry; `File
 | `onImportResources`     | `() => void`                           | —           | Click handler of the default import button; enables its entry on its own.                                                                                                                                                                                                                                                                                                                          |
 | `rootUri`               | `string`                               | `viking://` | Root of the tree, narrowing the browsed scope to a subtree.                                                                                                                                                                                                                                                                                                                                        |
 | `defaultExpandedUri`    | `string`                               | —           | Path to expand to after the first load, opening and loading each level. When omitted only the root is expanded.                                                                                                                                                                                                                                                                                    |
-| `locale` | `'zh-CN' \| 'en-US'` | Required | Built-in Chinese and English copy. |
+| `locale`                | `'zh-CN' \| 'en-US'`                   | Required    | Built-in Chinese and English copy.                                                                                                                                                                                                                                                                                                                                                                 |
 | `renderImportResources` | `(trigger: ReactElement) => ReactNode` | —           | Optional wrapper or replacement for the default import button; return `null` to hide it.                                                                                                                                                                                                                                                                                                           |
 | `labels`                | `FileBrowserLabels`                    | —           | Replaceable copy: `searchPlaceholder`, `searchEmpty`, `searchFailed`, `loading`, `refresh`, `empty`, `error`, `retry`, `previewMode`, `sourceMode`, `history`, `copyPath`, `viewSwitch`, `resizeTree`, `summaryEmpty`, `summaryFailed` (the fallback when a summary level failed without a server message), plus `entries` / `tree` / `preview` passed through to the entry row, tree and preview. |
 | `className`             | `string`                               | —           | Additional container class.                                                                                                                                                                                                                                                                                                                                                                        |
@@ -106,3 +107,7 @@ The module exports `FileBrowserProps` from the subpath and the root entry; `File
 Labels are plain text; the host maps its own translation system into these props. No prop carries data — the module loads it.
 
 The module loads its own data through `useFileBrowser`, so the host supplies no directory or preview data; `labels.entries`, `labels.tree` and `labels.preview` are passed through to the entry row, file tree and file preview.
+
+`labels.formatCharacterCount(count)` overrides the preview footer’s character count. It follows `locale` by default.
+
+Standalone `useFileBrowser` accepts an optional `locale` (default `en-US`) and uses the same module resources as the composed view. `summaryLabels` and `formatCharacterCount` override summary titles, failure fallback and character counts. Changing language or copy updates presentation without reloading directory summaries or file content.

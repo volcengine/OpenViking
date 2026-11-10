@@ -57,7 +57,11 @@ export function FileBrowserTreePane({
 }: FileBrowserTreePaneProps) {
   return (
     <>
-      <FileBrowserEntries {...entries} className="ov-file-browser__entries" />
+      <FileBrowserEntries
+        {...entries}
+        locale={locale}
+        className="ov-file-browser__entries"
+      />
 
       <FileBrowserToolbar
         searchId={searchId}
