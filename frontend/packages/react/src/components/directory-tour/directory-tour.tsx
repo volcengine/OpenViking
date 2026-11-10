@@ -3,13 +3,18 @@ import { createPortal } from 'react-dom';
 import type { DirectoryTourProps, DirectoryTourStep } from './types.js';
 import { useTourAnchor } from './use-tour-anchor.js';
 import { useTourPosition } from './use-tour-position.js';
+import { useTourTheme } from './use-tour-theme.js';
 import { resolveLocale } from '../../shared/locale.js';
 import enUS from './locales/en-US.js';
 import zhCN from './locales/zh-CN.js';
 
 /** Data-free directory guidance. Unmounting a closed session resets its steps. */
 export function DirectoryTour(props: DirectoryTourProps) {
-  if (!props.open || props.steps.length === 0) return null;
+  const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
+  // Resolve the external portal container after hydration, so the server and
+  // first client render agree. The body is document-owned and needs no cleanup.
+  useEffect(() => setPortalRoot(document.body), []);
+  if (!portalRoot || !props.open || props.steps.length === 0) return null;
   return <TourSession {...props} />;
 }
 
@@ -67,13 +72,14 @@ function TourStep({
     attempt,
   );
   const position = useTourPosition(anchor, surface, placement);
+  useTourTheme(anchor, surface);
   const titleId = useId();
   const bodyId = useId();
   // Escape is a document event, so subscribe after commit and remove the current
   // handler on callback changes/unmount instead of keeping a stale host callback.
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && !event.defaultPrevented && onClose) {
         event.preventDefault();
         onClose?.();
       }
@@ -96,94 +102,100 @@ function TourStep({
   useEffect(() => {
     if (surface && visible) surface.focus({ preventScroll: true });
   }, [surface, visible]);
-  if (typeof document === 'undefined') return null;
   const unavailable = failed || position?.missing;
   const locating = !anchor && !failed;
   return createPortal(
-    <div
-      ref={setSurface}
-      popover="manual"
-      role="dialog"
-      aria-modal="false"
-      aria-labelledby={titleId}
-      aria-describedby={bodyId}
-      aria-busy={locating}
-      tabIndex={-1}
-      className={['ov-directory-tour', className].filter(Boolean).join(' ')}
-      style={{
-        ...style,
-        top: position?.top ?? 0,
-        left: position?.left ?? 0,
-        visibility: position?.visible ? 'visible' : 'hidden',
-      }}
-    >
-      {anchor && !unavailable && position?.visible && (
-        <div
-          className="ov-directory-tour__highlight"
-          aria-hidden="true"
-          style={{
-            top: position.targetTop,
-            left: position.targetLeft,
-            width: position.targetWidth,
-            height: position.targetHeight,
-          }}
-        />
-      )}
-      <div className="ov-directory-tour__card">
-        {onClose && (
-          <button
-            className="ov-directory-tour__close"
-            type="button"
-            aria-label={text.close}
-            onClick={onClose}
-          >
-            ×
-          </button>
+    <div className="ov-directory-tour-host">
+      <div
+        ref={setSurface}
+        popover="manual"
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby={titleId}
+        aria-describedby={bodyId}
+        aria-busy={locating}
+        tabIndex={-1}
+        className={['ov-directory-tour', className].filter(Boolean).join(' ')}
+        style={{
+          ...style,
+          maxWidth: position?.maxWidth,
+          maxHeight: position?.maxHeight,
+          top: position?.top ?? 0,
+          left: position?.left ?? 0,
+          visibility: position?.visible ? 'visible' : 'hidden',
+        }}
+      >
+        {anchor && !unavailable && position?.visible && (
+          <div
+            className="ov-directory-tour__highlight"
+            aria-hidden="true"
+            style={{
+              top: position.targetTop,
+              left: position.targetLeft,
+              width: position.targetWidth,
+              height: position.targetHeight,
+            }}
+          />
         )}
-        {!locating && !unavailable && step.illustration && (
-          <div className="ov-directory-tour__illustration">
-            {step.illustration}
-          </div>
-        )}
-        <h2 id={titleId} className="ov-directory-tour__title">
-          {step.title}
-        </h2>
-        <div
-          id={bodyId}
-          className="ov-directory-tour__description"
-          role={unavailable ? 'alert' : undefined}
-        >
-          {unavailable
-            ? text.unavailable
-            : locating
-              ? text.locating
-              : step.description}
-        </div>
-        <footer className="ov-directory-tour__actions">
-          <span className="ov-directory-tour__progress" aria-live="polite">
-            {text.progress(index + 1, steps.length)}
-          </span>
-          {unavailable ? (
-            <>
-              <button type="button" onClick={() => retry((value) => value + 1)}>
-                {text.retry}
-              </button>
-              <button type="button" onClick={() => advance(true)}>
-                {text.skip}
-              </button>
-            </>
-          ) : (
+        <div className="ov-directory-tour__card">
+          {onClose && (
             <button
+              className="ov-directory-tour__close"
               type="button"
-              className="ov-directory-tour__primary"
-              disabled={locating}
-              onClick={() => advance(false)}
+              aria-label={text.close}
+              onClick={onClose}
             >
-              {step.nextLabel ??
-                (index === steps.length - 1 ? text.done : text.next)}
+              ×
             </button>
           )}
-        </footer>
+          {!locating && !unavailable && step.illustration && (
+            <div className="ov-directory-tour__illustration">
+              {step.illustration}
+            </div>
+          )}
+          <h2 id={titleId} className="ov-directory-tour__title">
+            {step.title}
+          </h2>
+          <div
+            id={bodyId}
+            className="ov-directory-tour__description"
+            role={unavailable ? 'alert' : undefined}
+          >
+            {unavailable
+              ? text.unavailable
+              : locating
+                ? text.locating
+                : step.description}
+          </div>
+          <footer className="ov-directory-tour__actions">
+            <span className="ov-directory-tour__progress" aria-live="polite">
+              {text.progress(index + 1, steps.length)}
+            </span>
+            {unavailable ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => retry((value) => value + 1)}
+                >
+                  {text.retry}
+                </button>
+                <button type="button" onClick={() => advance(true)}>
+                  {text.skip}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="ov-directory-tour__primary"
+                disabled={locating}
+                onClick={() => advance(false)}
+              >
+                {step.nextLabel ??
+                  (index === steps.length - 1 ? text.done : text.next)}
+              </button>
+            )}
+          </footer>
+        </div>
       </div>
     </div>,
     document.body,

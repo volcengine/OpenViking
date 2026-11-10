@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
-import { useLang } from '@rspress/core/runtime';
+import { useLang, withBase } from '@rspress/core/runtime';
 import { FileTree } from '@openviking/react/components/file-tree';
 import type {
   FileTreeHandle,
@@ -91,7 +91,7 @@ export default function DirectoryTourBasic() {
     description: zh ? DESCRIPTIONS[index] : step.description,
     illustration: (
       <img
-        src={`/ui/directory-tour/step-${index + 1}.png`}
+        src={withBase(`/directory-tour/step-${index + 1}.png`)}
         alt=""
         width={212}
         height={70}

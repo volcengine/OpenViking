@@ -1,3 +1,6 @@
+.ov-directory-tour-host {
+  display: contents;
+}
 .ov-directory-tour {
   --ov-ui-directory-tour-primary: var(
     --ov-ui-color-primary,
@@ -52,7 +55,7 @@
   border-radius: 8px;
   background: var(--ov-ui-directory-tour-background);
   box-shadow: var(--ov-ui-color-tour-shadow, var(--ov-ui-tour-shadow-default));
-  max-height: calc(100dvh - 16px);
+  max-height: inherit;
   overflow: auto;
 }
 .ov-directory-tour__title {
