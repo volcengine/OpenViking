@@ -518,6 +518,174 @@ async def test_set_tags_batch_http_persists_actual_values(client, service, endpo
         assert await service.viking_fs.read_file(uri, ctx=ctx) == "original content"
 
 
+@pytest.mark.parametrize("batch", [False, True], ids=["single-uri", "batch-uris"])
+async def test_usage_reset_http_round_trip_for_file_and_directory(client, service, batch):
+    from openviking.storage.vector_ids import vector_record_id
+    from openviking.utils.time_utils import get_current_timestamp
+
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    root = "viking://resources/usage-reset"
+    file_uri = f"{root}/a.md"
+    targets = [file_uri, root]
+    contents = {
+        file_uri: "original content",
+        f"{root}/.abstract.md": "original abstract",
+        f"{root}/.overview.md": "original overview",
+        f"{root}/child/b.md": "untouched child",
+    }
+    for uri, content in contents.items():
+        await service.viking_fs.write_file(uri, content, ctx=ctx)
+    timestamp = get_current_timestamp()
+    record_ids = []
+    for uri, level in [(file_uri, 2), (root, 0), (root, 1), (f"{root}/child/b.md", 2)]:
+        record_id = vector_record_id(ctx.account_id, uri, level)
+        record_ids.append(record_id)
+        await service.vikingdb_manager.upsert(
+            {
+                "id": record_id,
+                "uri": uri,
+                "context_type": "resource",
+                "level": level,
+                "abstract": "original summary",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "vector": [0.1] * service.vikingdb_manager.vector_dim,
+                "search_tags": ["team=search", "used_count=5", "last_used_at=123"],
+            },
+            ctx=ctx,
+        )
+    original = await service.vikingdb_manager.get_strict(record_ids, ctx=ctx)
+
+    async def write(tags, mode):
+        requests = [{"uris": targets}] if batch else [{"uri": uri} for uri in targets]
+        for request in requests:
+            response = await client.post(
+                "/api/v1/fs/attrs/set_tags", json={**request, "tags": tags, "mode": mode}
+            )
+            assert response.status_code == 200, response.text
+            result = response.json()["result"]
+            if batch:
+                assert result["failed"] == []
+                assert [item["uri"] for item in result["items"]] == targets
+                assert [item["success_count"] for item in result["items"]] == [1, 2]
+            else:
+                assert result["tags_updated"] is True
+                assert result["success_count"] == (2 if request["uri"] == root else 1)
+
+    async def verify(count):
+        before_read = await service.vikingdb_manager.get_strict(record_ids, ctx=ctx)
+        response = await client.request("GET", "/api/v1/fs/attrs", json={"uris": targets})
+        assert response.status_code == 200, response.text
+        result = response.json()["result"]
+        assert result["failed"] == []
+        assert [item["uri"] for item in result["items"]] == targets
+        for item in result["items"]:
+            tags = item["attrs"]["tags"]
+            assert "team=search" in tags
+            assert f"used_count={count}" in tags
+            times = [int(tag.split("=", 1)[1]) for tag in tags if tag.startswith("last_used_at=")]
+            assert times
+            if count == 0:
+                assert all(value == 0 for value in times)
+            else:
+                assert all(value > 0 for value in times)
+            single = await client.get("/api/v1/fs/attrs", params={"uri": item["uri"]})
+            assert single.status_code == 200, single.text
+            assert single.json()["result"] == item
+        after_read = await service.vikingdb_manager.get_strict(record_ids, ctx=ctx)
+        assert after_read == before_read
+        for record, baseline in zip(after_read, original, strict=True):
+            if record["uri"] == f"{root}/child/b.md":
+                assert record == baseline
+            else:
+                values = dict(tag.split("=", 1) for tag in record["search_tags"])
+                assert values["used_count"] == str(count)
+                if count == 0:
+                    assert values["last_used_at"] == "0"
+                else:
+                    assert int(values["last_used_at"]) > 0
+                assert {key: value for key, value in record.items() if key != "search_tags"} == {
+                    key: value for key, value in baseline.items() if key != "search_tags"
+                }
+        for uri, content in contents.items():
+            assert await service.viking_fs.read_file(uri, ctx=ctx) == content
+
+    await write(["used_count=1"], "increase")
+    await verify(6)
+    for _ in range(2):
+        await write(["used_count=0", "last_used_at=0"], "append")
+        await verify(0)
+    await write(["used_count=1"], "increase")
+    await verify(1)
+
+
+async def test_usage_reset_http_batch_reports_failures_without_touching_foreign_file(
+    client, service, app
+):
+    from openviking.server.auth import get_request_context
+    from openviking.storage.vector_ids import vector_record_id
+    from openviking.utils.time_utils import get_current_timestamp
+
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    foreign_ctx = RequestContext(user=UserIdentifier(ctx.account_id, "other_user"), role=Role.USER)
+    own = f"viking://user/{ctx.user.user_id}/resources/usage-reset/a.md"
+    foreign = "viking://user/other_user/resources/usage-reset/private.md"
+    missing = own.replace("a.md", "missing.md")
+    unindexed = own.replace("a.md", "unindexed.md")
+    timestamp = get_current_timestamp()
+    record_ids = []
+    for uri, owner in [(own, ctx), (foreign, foreign_ctx)]:
+        await service.viking_fs.write_file(uri, "original content", ctx=owner)
+        record_id = vector_record_id(ctx.account_id, uri, 2)
+        record_ids.append(record_id)
+        await service.vikingdb_manager.upsert(
+            {
+                "id": record_id,
+                "uri": uri,
+                "context_type": "resource",
+                "level": 2,
+                "abstract": "original content",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "vector": [0.1] * service.vikingdb_manager.vector_dim,
+                "search_tags": ["team=search", "used_count=5", "last_used_at=123"],
+            },
+            ctx=owner,
+        )
+    await service.viking_fs.write_file(unindexed, "no index", ctx=ctx)
+    root_ctx = RequestContext(user=service.user, role=Role.ROOT)
+    foreign_before = (await service.vikingdb_manager.get_strict([record_ids[1]], ctx=root_ctx))[0]
+    app.dependency_overrides[get_request_context] = lambda: ctx
+    try:
+        response = await client.post(
+            "/api/v1/fs/attrs/set_tags",
+            json={
+                "uris": [own, missing, foreign, unindexed],
+                "tags": ["used_count=0", "last_used_at=0"],
+                "mode": "append",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_request_context, None)
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert [item["uri"] for item in result["items"]] == [own]
+    assert set(result["items"][0]["updated_tags"][0]["tags"]) == {
+        "team=search",
+        "used_count=0",
+        "last_used_at=0",
+    }
+    assert [item["uri"] for item in result["failed"]] == [missing, foreign, unindexed]
+    assert [item["error"]["code"] for item in result["failed"]] == [
+        "NOT_FOUND",
+        "PERMISSION_DENIED",
+        "FAILED_PRECONDITION",
+    ]
+    foreign_after = (await service.vikingdb_manager.get_strict([record_ids[1]], ctx=root_ctx))[0]
+    assert foreign_after == foreign_before
+    assert await service.viking_fs.read_file(foreign, ctx=foreign_ctx) == "original content"
+
+
 async def test_overview_missing_uri_returns_not_found(client):
     resp = await client.get(
         "/api/v1/content/overview",
