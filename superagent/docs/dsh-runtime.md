@@ -10,9 +10,9 @@ DSH runtime 用 OpenViking SuperAgent 的常驻会话、历史同步、Agent 工
 - DSH 不随 OpenViking SuperAgent 打包。默认在 PATH 中查找 `dsh`，也可以用 `DSH_BIN` 指定可执行文件——和其他 runtime 的 `*_BIN` 一样，既可以写在 manifest 的 `env` 里，也可以从 shell 导出（shell 优先）。`ov-superagent setup` 探测时也读 manifest 里的值。`DSH_BIN` 有两种合法写法：裸命令名（如 `DSH_BIN=dsh`，同样走 PATH 查找）或路径（按路径使用）；裸名字不会被当成当前目录下的文件。
 - **DSH 的模型设置不写在 manifest 里。** `OV_SUPERAGENT_DSH_EFFORT` 只从启动 OpenViking SuperAgent 的进程环境读取；模型和路由只属于 DSH 自己的设置文档，密钥值只属于 DSH 的 credential 库（见下节）。写进 `config.json` 的这类字段会被当作未知项忽略并告警。
 - 一次启动（从 spawn 到握手结束）默认最多 30 秒。DSH 从源码树跑时是两次 `node --import tsx`（版本探测一次、进程一次），机器空闲时各约 0.4 秒，机器忙时可能是几十秒；超时会让 daemon 启动失败。机器负载高或同时起多个实例时用 `OV_SUPERAGENT_DSH_START_TIMEOUT_MS` 放宽（同样只从进程环境读取）。
-- 默认模型是内置的 `deepseek-official/deepseek-flash`，它要的 `DEEPSEEK_API_KEY` 从进程环境（`~/.superagent/secrets.env` 里的值也会被载入 daemon 进程环境）或实例的 credential 库来：`ov-superagent dsh model key set DEEPSEEK_API_KEY` 存的值同样能让这条内置 route 列出 model（实测）。操作方自己的路由来自 DSH 的设置文档，用 `ov-superagent dsh model` 配置；配好凭据后不依赖环境里的 `DEEPSEEK_API_KEY`。`OV_SUPERAGENT_DSH_EFFORT` 只设置新实例的初始 effort，取值为 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，默认 `high`；之后由 `/effort` 与持久化设置决定。
+- 默认模型是内置的 `deepseek-official/deepseek-flash`，它要的 `DEEPSEEK_API_KEY` 从进程环境（`~/.ov-superagent/secrets.env` 里的值也会被载入 daemon 进程环境）或实例的 credential 库来：`ov-superagent dsh model key set DEEPSEEK_API_KEY` 存的值同样能让这条内置 route 列出 model（实测）。操作方自己的路由来自 DSH 的设置文档，用 `ov-superagent dsh model` 配置；配好凭据后不依赖环境里的 `DEEPSEEK_API_KEY`。`OV_SUPERAGENT_DSH_EFFORT` 只设置新实例的初始 effort，取值为 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，默认 `high`；之后由 `/effort` 与持久化设置决定。
 - 隔离的 DSH_HOME 不读用户自己 `~/.dsh` 保存的凭据或路由。`DEEPSEEK_BASE_URL` 不会被 OpenViking SuperAgent 删掉，daemon 环境里已经有它时会原样传给 DSH 子进程（OpenViking SuperAgent 不为它做转发，写进 manifest 的 `env` 会被当成未知项忽略）。工作区 `.env` 仍可能被 DSH 读取，但进程环境优先；`DSH_*`、`DEEPSEEK_BASE_URL`、`PATH` 这类启动变量不能由 `.env` 提供。
-- `/runtime dsh` 直接选择。`ov-superagent setup` 的检查是 `dsh --version` 加一次 `initialize → vika/hello → vika/llm/models → shutdown` 探测，不创建会话，也不调用模型。探测默认使用临时 DSH_HOME，因此看不到实例自己的路由；编辑已有实例时，setup 会用该实例自己的 DSH_HOME 再跑一次同样的握手（启动补丁换成 `ov-superagent dsh model` 用的控制补丁），所以已配置的实例不会被显示成「没有路由」，见「setup 里没有可用 model 时怎么办」。
+- `/runtime dsh` 直接选择。`ov-superagent setup` 的检查是 `dsh --version` 加一次 `initialize → superagent/hello → superagent/llm/models → shutdown` 探测，不创建会话，也不调用模型。探测默认使用临时 DSH_HOME，因此看不到实例自己的路由；编辑已有实例时，setup 会用该实例自己的 DSH_HOME 再跑一次同样的握手（启动补丁换成 `ov-superagent dsh model` 用的控制补丁），所以已配置的实例不会被显示成「没有路由」，见「setup 里没有可用 model 时怎么办」。
 
 ## 模型路由存在哪里、字段怎么填
 
@@ -43,7 +43,7 @@ DSH runtime 用 OpenViking SuperAgent 的常驻会话、历史同步、Agent 工
 - `api` 只能是 `openai-completions`、`openai-responses`、`anthropic-messages`；一条路由只服务一种协议、一个 `baseURL`（http 或 https）。
 - `apiKeyEnv` 是凭据**引用名**（`^[A-Za-z_][A-Za-z0-9_]*$`），不是密钥本身。值按顺序解析：`<DSH_HOME>/.credentials.yaml`（`ov-superagent dsh model key set` 写入）→ DSH 子进程环境里**同名**的变量 → DSH 启动时读到的 `.env` 层。三处都没有时 DSH 在请求时报 `MISSING_CREDENTIAL`，这条 route 在目录里也就没有 model（`list` 会显示 `credential 未配置`）；它**不会**退回 pi-ai 自己的 provider 发现（那是另一套按 provider 固定命名的环境变量，比如 `OPENAI_API_KEY`）；要按 provider 自己的发现解析，就不要写 `apiKeyEnv`。
 - `input` 只有 `text` 和 `image` 两种。不写时按路由的 `defaultInput`（DSH 默认只有 `text`）；内置 `deepseek-official` 的模态由 DSH 自己的模型目录决定。工具结果里的图片只有当前模型声明了 `image` 才会交给模型，见「图片什么时候能到模型」。
-- `reasoningEfforts` 是模型是否支持推理的声明，`false` 表示非推理模型；不写表示沿用 DSH 内置目录里同名模型的能力（内置目录没有这个模型时即不支持推理）。写字典时键只有 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，值是该档位发给 provider 的线值字符串。**只有 `off` 允许空值（null）**，其余档位写 null 会被拒绝；某个档位不提供时，正确写法是省略这个键；线值不能是空字符串。空字典 `{}`、无值的 `reasoningEfforts:`，以及只声明了 `off` 的字典都会被拒绝（最后一种应写 `false`）。字段名是 `reasoningEfforts`，不是数组；模型条目里没有 `reasoning` 字段（bridge `vika/llm/model/info` 的返回里另有一个 `reasoning` 对象，描述该模型实际提供的档位）。
+- `reasoningEfforts` 是模型是否支持推理的声明，`false` 表示非推理模型；不写表示沿用 DSH 内置目录里同名模型的能力（内置目录没有这个模型时即不支持推理）。写字典时键只有 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，值是该档位发给 provider 的线值字符串。**只有 `off` 允许空值（null）**，其余档位写 null 会被拒绝；某个档位不提供时，正确写法是省略这个键；线值不能是空字符串。空字典 `{}`、无值的 `reasoningEfforts:`，以及只声明了 `off` 的字典都会被拒绝（最后一种应写 `false`）。字段名是 `reasoningEfforts`，不是数组；模型条目里没有 `reasoning` 字段（bridge `superagent/llm/model/info` 的返回里另有一个 `reasoning` 对象，描述该模型实际提供的档位）。
 - 不要在 home patch（`<DSH_HOME>/cordis.patch.yml`）或启动 overlay（`--patch` 文件）里写 `llm-pi-ai`：DSH 会报 `overridden by a home patch or command-line overlay`，`ov-superagent dsh model` 的写入会被拒绝（错误码 `SETTINGS_OVERRIDDEN`）。OpenViking SuperAgent 自己生成的 `<dataDir>/dsh/run/patch.yml` 已不含任何 provider 段。
 - 文档被手工改坏后 DSH 不会自愈：`llm-pi-ai` 不再激活，`describe` 拿不到可写的配置项。daemon 在握手时记一条 `dsh_model_settings_invalid` 告警，内置路由照常可用，不阻塞启动；修复用 `ov-superagent dsh model repair`（它只在文档确实读不了时才改写，语义见「其它子命令各做什么」里的 `repair`）。
 
@@ -145,11 +145,11 @@ DSH runtime 用 OpenViking SuperAgent 的常驻会话、历史同步、Agent 工
 
 ## setup 里没有可用 model 时怎么办
 
-`ov-superagent setup` 选中 DeepSeek Harness 后，会看 DSH 的 `vika/llm/models` 里有没有能服务 model 的 route。一个都没有时（新实例的临时 DSH_HOME 就是这样；内置 `deepseek-official` 没有 `DEEPSEEK_API_KEY` 时也是零 model），setup 不会默默接受：
+`ov-superagent setup` 选中 DeepSeek Harness 后，会看 DSH 的 `superagent/llm/models` 里有没有能服务 model 的 route。一个都没有时（新实例的临时 DSH_HOME 就是这样；内置 `deepseek-official` 没有 `DEEPSEEK_API_KEY` 时也是零 model），setup 不会默默接受：
 
 1. **说明缺什么。** 打印目录里每条 route 各有几个 model（例如 `deepseek-official: 0 models; deepseek-account: 0 models`），并指出这样保存的实例启动后会反复重启（原因见「模型路由存在哪里、字段怎么填」结尾的「一条 route 都没有时」）。
 2. **问是否现在添加一个 model route**，字段依次是：网关地址（http/https，含 `/v1`）、protocol（`openai-completions`、`openai-responses`、`anthropic-messages` 三选一，默认按地址推断）、model id（可以带 `/`），最后是 credential——现在粘贴密钥，或者只写 reference（默认由 route id 派生，稍后用 `ov-superagent dsh model key set` 存值）。route id 不单独问，从网关主机推导（主机是 IP 时用 `gateway`），显示名默认等于 route id。
-3. **校验草稿。** 把草稿写进一个一次性 DSH_HOME，重跑同一个握手（`initialize → vika/hello → vika/llm/models → shutdown`）。通过说明「DSH 接受了这个 route，并给出 model <id>」；不通过会说明临时 DSH 的返回，并可以仍然保留或跳过。**校验只覆盖 DSH 这一侧**：它证明配置能被 DSH 解析、credential 能解析，不会真的向网关发一次请求，所以密钥对不对只有第一轮对话才知道。
+3. **校验草稿。** 把草稿写进一个一次性 DSH_HOME，重跑同一个握手（`initialize → superagent/hello → superagent/llm/models → shutdown`）。通过说明「DSH 接受了这个 route，并给出 model <id>」；不通过会说明临时 DSH 的返回，并可以仍然保留或跳过。**校验只覆盖 DSH 这一侧**：它证明配置能被 DSH 解析、credential 能解析，不会真的向网关发一次请求，所以密钥对不对只有第一轮对话才知道。
 4. **保存时才写盘。** 草稿只在内存里；选「保存」时（和写 manifest 同一处）才写进 `<dataDir>/dsh/home/profiles/sdk/cordis.patch.yml`（粘贴了密钥时还会写 `<DSH_HOME>/.credentials.yaml`，0600）。取消 setup 不会留下半个实例目录。实例的 DSH home 里**既没有设置文档也没有 credential 库**时（DSH 还没启动过），setup 直接写第一份文档（JSON 也是 YAML，和 `repair` 的最小文档同一写法；实测 DSH 能读、credential 能解析）；两者任何一个已存在就改走 DSH 自己的 settings 服务，按菜单向导的 upsert 语义合并 `providers`，不会覆盖别的 route。写失败会放弃这条草稿、用原来的 `dsh` 保存并打印下面这条命令。
 
 写进 manifest 的 model 是**完整限定**的 `dsh:<route>/<model>`。不写前缀会落到两个不同的坑：裸 `dsh` 解析成内置 `deepseek-official/deepseek-flash`（没有 `DEEPSEEK_API_KEY` 时零 model），裸 `<route>/<model>` 不属于任何 runtime，`resolveRuntimeModelTarget` 会按默认 runtime（`codex`）处理。
@@ -164,9 +164,9 @@ ov-superagent dsh model --instance <实例>    # 菜单里选「添加 model」
 
 ## 什么时候生效、要不要重启
 
-`/model` 的菜单来自 DSH 自己的模型目录（bridge `vika/llm/models`），只列**能真正运行**的模型：没有凭据的路由、未登录的 `deepseek-account`、目录查询失败的路由都不会出现（它们通常一个模型也返回不了）。`ov-superagent dsh model list` 会把这些路由和原因显式列出来。
+`/model` 的菜单来自 DSH 自己的模型目录（bridge `superagent/llm/models`），只列**能真正运行**的模型：没有凭据的路由、未登录的 `deepseek-account`、目录查询失败的路由都不会出现（它们通常一个模型也返回不了）。`ov-superagent dsh model list` 会把这些路由和原因显式列出来。
 
-切换在**下一轮开始前**的空闲边界生效：daemon 发一次 bridge `vika/session/model/select {sessionId, provider, model, reasoningEffort}`，把请求的选择记录到运行中的会话；**不重启 DSH 进程，也不打断在途轮次**。没有显式选 effort 时不传 `reasoningEffort`（DSH 记录的是请求值，不会把默认档位钉成用户选择）；**保存为「无覆盖」的模型重启用同样语义**——initialize 不带 `reasoningEffort`，由 DSH 用模型自己的默认档位，不会被补成配置默认值再被 DSH 拒绝（那会给模型注入一条「请修复模型配置」的提示）。`OV_SUPERAGENT_DSH_EFFORT` 只对「从未选择过」的实例生效。`/effort` 的候选来自 `vika/llm/model/info`，查不到时按 DSH 认识的七档展示，最终由 DSH 校验：不支持的档位以 `UNSUPPORTED_REASONING_EFFORT` 被拒，此时进程继续跑它实际在用的路由与档位，排队输入收到失败通知。**被拒的选择已经写进持久化设置**（`/model`、`/effort` 都在命令返回前就落了记录），所以下次启动会再试一次；为了避免每轮重发，daemon 也记住这个组合：**在用户重新 `/model`、`/effort`、`/new` 或进程重启之前，不会自动再次提交它**（否则每次可用性回调都会把同一个被拒请求重发一遍）。进程重启后新进程会再试一次——恢复会话时的重新选择若仍被拒，下一次轮次边界再试一次，之后重新记为被拒，因为文档可能已经补上了这条路由。
+切换在**下一轮开始前**的空闲边界生效：daemon 发一次 bridge `superagent/session/model/select {sessionId, provider, model, reasoningEffort}`，把请求的选择记录到运行中的会话；**不重启 DSH 进程，也不打断在途轮次**。没有显式选 effort 时不传 `reasoningEffort`（DSH 记录的是请求值，不会把默认档位钉成用户选择）；**保存为「无覆盖」的模型重启用同样语义**——initialize 不带 `reasoningEffort`，由 DSH 用模型自己的默认档位，不会被补成配置默认值再被 DSH 拒绝（那会给模型注入一条「请修复模型配置」的提示）。`OV_SUPERAGENT_DSH_EFFORT` 只对「从未选择过」的实例生效。`/effort` 的候选来自 `superagent/llm/model/info`，查不到时按 DSH 认识的七档展示，最终由 DSH 校验：不支持的档位以 `UNSUPPORTED_REASONING_EFFORT` 被拒，此时进程继续跑它实际在用的路由与档位，排队输入收到失败通知。**被拒的选择已经写进持久化设置**（`/model`、`/effort` 都在命令返回前就落了记录），所以下次启动会再试一次；为了避免每轮重发，daemon 也记住这个组合：**在用户重新 `/model`、`/effort`、`/new` 或进程重启之前，不会自动再次提交它**（否则每次可用性回调都会把同一个被拒请求重发一遍）。进程重启后新进程会再试一次——恢复会话时的重新选择若仍被拒，下一次轮次边界再试一次，之后重新记为被拒，因为文档可能已经补上了这条路由。
 
 配置文档的内容变化（比较的是设置文档的**内容 hash**，不是 mtime；基线在拉起 DSH 子进程**之前**采样，握手完成时不重采，所以握手期间落盘的写入仍算变化）会在轮次边界或 `/model` 刷新时被发现：空闲时 daemon 重启一次 DSH 进程（`model-settings-changed`），因为 DSH 只在启动时读 profile 文档。`/model` 在给出菜单前会先做这个比较，所以在菜单里加完 model 马上看 `/model` 就能看到新路由；轮次进行中则拒绝重启，菜单先显示正在运行的进程实际可用的模型。凭据文件由 DSH 自己的 watcher 热加载，**不需要重启**。
 
@@ -182,7 +182,7 @@ ov-superagent dsh model --instance <实例>    # 菜单里选「添加 model」
 <dataDir>/dsh/run/      daemon 每次启动生成的 patch.yml；ov-superagent dsh model 用的 control-patch.yml（0600）
 ```
 
-启动命令是 `dsh --profile sdk --patch <dataDir>/dsh/run/patch.yml`。patch 是 JSON 写出的 YAML 兼容配置：禁用原版 `sdk-jsonrpc-server` 行，换入 OpenViking SuperAgent bridge，挂载 `personal_agent` stdio MCP，并禁用无人值守不需要的行。bridge 通过 DSH CLI 的包依赖解析 SDK server 与消息 API，不依赖 OpenViking SuperAgent 安装额外 DSH 包。除 OpenViking SuperAgent 自有的 `vika/hello`、`session/steer`、`session/cancel` 和 bridge v2 的模型/设置/凭据方法外，请求原样交给原版 SDK transport。
+启动命令是 `dsh --profile sdk --patch <dataDir>/dsh/run/patch.yml`。patch 是 JSON 写出的 YAML 兼容配置：禁用原版 `sdk-jsonrpc-server` 行，换入 OpenViking SuperAgent bridge，挂载 `personal_agent` stdio MCP，并禁用无人值守不需要的行。bridge 通过 DSH CLI 的包依赖解析 SDK server 与消息 API，不依赖 OpenViking SuperAgent 安装额外 DSH 包。除 OpenViking SuperAgent 自有的 `superagent/hello`、`session/steer`、`session/cancel` 和 bridge v2 的模型/设置/凭据方法外，请求原样交给原版 SDK transport。
 
 帧格式是 LF 定界的字节流，不是 `readline`：U+2028、U+2029 是合法的 JSON 字符串内容，`readline` 会把一行切成两段而让这一帧解析失败。桥按 0x0A 切帧、逐行 UTF-8 解码（跨 chunk 的多字节字符不会截断）、剥掉行尾 CR、EOF 时补发最后一帧，单帧上限 16 MB（与 daemon 自己的行读取上限同一个数；超限丢该帧并告警，不退出进程）。回归用例 `packages/daemon/test/dsh-bridge.test.mjs` 覆盖 U+2028、U+2029、UTF-8 切分、CRLF、超长行和畸形行。
 
@@ -218,7 +218,7 @@ patch 的分层顺序是 bundle → profile（`<DSH_HOME>/profiles/sdk/cordis.pa
 `input` 由谁决定，分两种情况：
 
 - 操作方路由：`input` 就在设置文档里，写什么就是什么。在菜单里添加 model 时向导不问模态，写入的条目不带 `input`，按路由的 `defaultInput`（默认只有 `text`），此时工具图片不会交给模型；需要 `image` 时手工在设置文档的模型条目里加 `input: [text, image]`。
-- 内置 `deepseek-official` 条目：`input` 由 DSH 自己的模型目录决定。用 `vika/llm/model/info` 实测（`dsh 0.2.2-rc.1`）：`deepseek-official/deepseek-flash` 声明 `inputModalities: ['text','image']`，**会**收到工具图片；`deepseek-official/deepseek-v4-pro` 只声明 `text`，图片走上面的诊断文本。
+- 内置 `deepseek-official` 条目：`input` 由 DSH 自己的模型目录决定。用 `superagent/llm/model/info` 实测（`dsh 0.2.2-rc.1`）：`deepseek-official/deepseek-flash` 声明 `inputModalities: ['text','image']`，**会**收到工具图片；`deepseek-official/deepseek-v4-pro` 只声明 `text`，图片走上面的诊断文本。
 
 需要确定的图片行为时，配一条显式声明 `input` 的路由：内置条目的模态跟随 DSH 版本，可能随升级变化。
 
@@ -230,7 +230,7 @@ OpenViking SuperAgent session id 就是 DSH session id。`session/working-direct
 
 每批输入都有显式终态，不会「接受了就当成功」：已 ack 且被模型看见才算完成；ack 了但始终没被看见的输入以 `DSH_INPUT_UNOBSERVED` 判失败并通知，不推进 journal；cancel 主动清掉的那部分单独记 `dropped`，不算一次失败；进程崩溃时，**未 ack** 的输入放回队列并强制新会话与历史前缀（重放不会重复作用于旧会话）；**已 ack** 的输入（无论模型是否看见）一律判失败并通知、永不重放——DSH 已经把它收进自己的会话，重放可能重复工具调用与回复；是否被看见只决定 journal 游标停在什么位置。`session/wait` 有 600 秒的空闲上限，到期只是重新发一次 wait，不会把长的正常轮次判超时。
 
-模型或 effort 在轮次之间变更时，daemon 在下一个轮次边界用 `vika/session/model/select` 应用到运行中的会话，不重启进程；配置文档本身变化（新增路由、改端点）才在空闲时重启一次，见「什么时候生效、要不要重启」。选择被 DSH 拒绝时保留进程实际在用的路由，排队输入收到失败通知。
+模型或 effort 在轮次之间变更时，daemon 在下一个轮次边界用 `superagent/session/model/select` 应用到运行中的会话，不重启进程；配置文档本身变化（新增路由、改端点）才在空闲时重启一次，见「什么时候生效、要不要重启」。选择被 DSH 拒绝时保留进程实际在用的路由，排队输入收到失败通知。
 
 崩溃后进程按 1 秒起步、30 秒上限退避重连；连续 3 次重连都失败且队列里还有输入时，先按这次的真实错误把这些输入判失败通知出去（不让它们无限等待）；连续 20 次仍没起来就停止自动重连（日志 `dsh_reconnect_exhausted`，队列里剩下的以「dsh reconnect attempts exhausted」判失败）。原会话可恢复时继续 resume；失败则记日志后开新会话。SDK 没有 `session/close`，`/new` 后旧会话在进程存续期间保留。
 
@@ -245,7 +245,7 @@ assistant 文本、reasoning、工具调用、usage 和结束原因写入 OpenVi
 DSH_BIN=/path/to/dsh npm run check:dsh
 ```
 
-`check:dsh` 用不应答的本地 HTTP 端点代替真实模型，覆盖 `vika/hello`（bridge v2 的全部方法）、`settings/describe`、`settings/mutate`、`credentials/set`（含晚就绪的 `NOT_READY` 重试）、`credentials/unset`、`llm/models`（有/无凭据两种）、`llm/model/info`、`session/model/select`（含被拒档位）、initialize、两个 steer、第三个含 U+2028/U+2029 的 steer（S0-1 回归）、运行中 cancel、`turn/end aborted` 与 shutdown，不需要真实 API key。启动预算是 120 秒（`DSH_CHECK_STARTUP_MS` 可调），因为源码树的 tsx 启动器抖动很大：本机同一份代码实测 startup 在 3.7 秒和 20.8 秒都出现过。不要用耗时判断它有没有卡住，看它打印的那行 startup 毫秒数。
+`check:dsh` 用不应答的本地 HTTP 端点代替真实模型，覆盖 `superagent/hello`（bridge v2 的全部方法）、`settings/describe`、`settings/mutate`、`credentials/set`（含晚就绪的 `NOT_READY` 重试）、`credentials/unset`、`llm/models`（有/无凭据两种）、`llm/model/info`、`session/model/select`（含被拒档位）、initialize、两个 steer、第三个含 U+2028/U+2029 的 steer（S0-1 回归）、运行中 cancel、`turn/end aborted` 与 shutdown，不需要真实 API key。启动预算是 120 秒（`DSH_CHECK_STARTUP_MS` 可调），因为源码树的 tsx 启动器抖动很大：本机同一份代码实测 startup 在 3.7 秒和 20.8 秒都出现过。不要用耗时判断它有没有卡住，看它打印的那行 startup 毫秒数。
 
 DSH 的回归用例是新增的扁平文件，不重组上游既有测试：`packages/daemon/test/dsh-{runtime,runtime-fallback,session,turn,models,events,startup,bridge,control,model-selection,model-command,mcp-readonly,config}.test.mjs` 与 `packages/cli/test/dsh-{model,model-import,model-interactive,probe,detect,setup,setup-model,manifest}.test.mjs`；夹具都在 `packages/daemon/test/` 下：`dsh-agent-fixture.mjs`、`dsh-model-selection-fixture.mjs`、`fake-dsh.mjs`、`fake-provider.mjs`、`real-dsh.mjs`、`cli-fixture.mjs`。真实进程用例 `dsh-live.test.mjs`、`dsh-turn.e2e.test.mjs`、`dsh-model-cli.e2e.test.mjs` 在找不到 `dsh` 时整体跳过。
 

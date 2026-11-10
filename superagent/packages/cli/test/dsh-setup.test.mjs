@@ -22,7 +22,7 @@ const RUNTIMES = [
 ];
 
 function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1933', usable: true }, runtimes = RUNTIMES, failStart = false } = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-setup-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-setup-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const input = new PassThrough();
   input.end(answers.map((line) => `${line}\n`).join(''));
@@ -62,7 +62,7 @@ function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1
     listen: async ({ port }) => { calls.push(['listen', port]); return { wait: async () => true }; },
     allocate: async () => 3738,
   };
-  return { home, options, calls, written: () => written, manifest: () => JSON.parse(fs.readFileSync(path.join(home, '.superagent', 'config.json'), 'utf8')) };
+  return { home, options, calls, written: () => written, manifest: () => JSON.parse(fs.readFileSync(path.join(home, '.ov-superagent', 'config.json'), 'utf8')) };
 }
 test('DSH pins its binary like every other runtime and probes with the manifest env', async (t) => {
   // DSH_BIN is a deployment fact, not a DSH setting: the chosen binary is pinned

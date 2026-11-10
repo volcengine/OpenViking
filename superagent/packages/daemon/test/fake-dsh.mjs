@@ -4,15 +4,15 @@
 
 // A fake `dsh` executable for tests. It speaks the same LF-framed JSON-RPC
 // stdio contract as the real process and answers the bridge v2 methods a
-// control client uses (`vika/hello`, `vika/settings/*`, `vika/credentials/*`,
-// `vika/llm/models`, `vika/llm/model/info`), persisting state into the same
+// control client uses (`superagent/hello`, `superagent/settings/*`, `superagent/credentials/*`,
+// `superagent/llm/models`, `superagent/llm/model/info`), persisting state into the same
 // two files the real settings and credentials services write:
 //
 //   <DSH_HOME>/profiles/sdk/cordis.patch.yml   the llm-pi-ai providers
 //   <DSH_HOME>/.credentials.yaml               the stored references
 //
 // The patch document is JSON: JSON is a YAML subset, which is the same
-// convention `buildDshPatch` already uses for vika's own patch files. The
+// convention `buildDshPatch` already uses for superagent's own patch files. The
 // credentials document is written in the real service's shape so a test reads
 // the same `version`/`refs` layout the product produces.
 //
@@ -24,7 +24,7 @@
 //   FAKE_DSH_DEBUG           print diagnostics to stderr
 //
 // This is a fixture, not a DSH substitute: it does not run a model turn and it
-// implements exactly the methods vika's control client depends on.
+// implements exactly the methods superagent's control client depends on.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -34,17 +34,17 @@ const CREDENTIAL_REF = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const NOT_READY_CODE = -32002;
 const METHODS = Object.freeze([
   'session/steer', 'session/cancel',
-  'vika/llm/models', 'vika/llm/model/info', 'vika/session/model/select',
-  'vika/settings/describe', 'vika/settings/mutate',
-  'vika/credentials/set', 'vika/credentials/unset',
+  'superagent/llm/models', 'superagent/llm/model/info', 'superagent/session/model/select',
+  'superagent/settings/describe', 'superagent/settings/mutate',
+  'superagent/credentials/set', 'superagent/credentials/unset',
 ]);
 const SETTINGS_NS = 'llm-pi-ai';
 // Methods that resolve a DSH service, so they can be refused before the boot
 // completes exactly like the real bridge's NOT_READY answer.
 const SERVICE_METHODS = new Set([
-  'vika/llm/models', 'vika/llm/model/info', 'vika/session/model/select',
-  'vika/settings/describe', 'vika/settings/mutate',
-  'vika/credentials/set', 'vika/credentials/unset',
+  'superagent/llm/models', 'superagent/llm/model/info', 'superagent/session/model/select',
+  'superagent/settings/describe', 'superagent/settings/mutate',
+  'superagent/credentials/set', 'superagent/credentials/unset',
 ]);
 const PROVIDER_ENTRY_ID = 'llm-pi-ai';
 const PROVIDER_ENTRY_NAME = '@deepseek-ai/dsh-llm-pi-ai';
@@ -180,7 +180,7 @@ export function bridgeErrorFrame(error, method) {
     return { code: error.code, message, ...(error?.data === undefined ? {} : { data: error.data }) };
   }
   const stringCode = typeof error?.code === 'string' && error.code ? error.code : undefined;
-  const mapped = method.startsWith('vika/settings/') ? settingsErrorCode(error, message) : stringCode;
+  const mapped = method.startsWith('superagent/settings/') ? settingsErrorCode(error, message) : stringCode;
   const detail = error?.data;
   const data = detail !== null && typeof detail === 'object' && !Array.isArray(detail) ? { ...detail } : {};
   if (mapped !== undefined) data.code = mapped;
@@ -352,14 +352,14 @@ function main() {
 
   const handlers = {
     initialize: () => ({ serverInfo: { name: 'fake-dsh', version: VERSION } }),
-    'vika/hello': () => ({ bridge: 'vika-dsh-bridge', version: 2, methods: [...METHODS] }),
-    'vika/settings/describe': (params) => {
+    'superagent/hello': () => ({ bridge: 'superagent-dsh-bridge', version: 2, methods: [...METHODS] }),
+    'superagent/settings/describe': (params) => {
       const ns = typeof params.ns === 'string' && params.ns.trim() ? params.ns.trim() : SETTINGS_NS;
       if (ns !== SETTINGS_NS) throw invalid(`unsupported settings namespace: ${ns}`);
       assertDocumentReadable();
       return { ns, descriptor: descriptor() };
     },
-    'vika/settings/mutate': (params) => {
+    'superagent/settings/mutate': (params) => {
       const ns = typeof params.ns === 'string' && params.ns.trim() ? params.ns.trim() : SETTINGS_NS;
       if (ns !== SETTINGS_NS) throw invalid(`unsupported settings namespace: ${ns}`);
       if (!Array.isArray(params.ops) || params.ops.length === 0) throw invalid('ops must be a non-empty array');
@@ -388,7 +388,7 @@ function main() {
       writeProviders();
       return { ok: true };
     },
-    'vika/credentials/set': (params) => {
+    'superagent/credentials/set': (params) => {
       const ref = typeof params.ref === 'string' ? params.ref.trim() : '';
       if (!CREDENTIAL_REF.test(ref)) throw invalid('ref must be a POSIX shell identifier');
       if (typeof params.value !== 'string' || params.value.length === 0) {
@@ -398,14 +398,14 @@ function main() {
       writeCredentials();
       return { ok: true };
     },
-    'vika/credentials/unset': (params) => {
+    'superagent/credentials/unset': (params) => {
       const ref = typeof params.ref === 'string' ? params.ref.trim() : '';
       if (!CREDENTIAL_REF.test(ref)) throw invalid('ref must be a POSIX shell identifier');
       refs.delete(ref);
       writeCredentials();
       return { ok: true };
     },
-    'vika/llm/models': () => ({
+    'superagent/llm/models': () => ({
       providers: [
         { provider: 'deepseek-official', name: 'DeepSeek', models: builtInModels('deepseek-official'), error: null, credential: null },
         { provider: 'deepseek-account', name: 'DeepSeek Account', models: [], error: null, credential: null },
@@ -422,7 +422,7 @@ function main() {
         })),
       ],
     }),
-    'vika/llm/model/info': (params) => {
+    'superagent/llm/model/info': (params) => {
       const provider = typeof params.provider === 'string' ? params.provider.trim() : '';
       const model = typeof params.model === 'string' ? params.model.trim() : '';
       if (!provider || !model) throw invalid('provider and model must be non-empty strings');
@@ -430,7 +430,7 @@ function main() {
       if (result.error) throw result.error;
       return result;
     },
-    'vika/session/model/select': (params) => {
+    'superagent/session/model/select': (params) => {
       if (typeof params.sessionId !== 'string' || !params.sessionId) throw invalid('sessionId must be a non-empty string');
       const provider = typeof params.provider === 'string' ? params.provider.trim() : '';
       const model = typeof params.model === 'string' ? params.model.trim() : '';
@@ -446,7 +446,7 @@ function main() {
   }
 
   function redact(method, params) {
-    if (method === 'vika/credentials/set') {
+    if (method === 'superagent/credentials/set') {
       return { ref: params.ref, valueLength: typeof params.value === 'string' ? params.value.length : 0 };
     }
     return params;

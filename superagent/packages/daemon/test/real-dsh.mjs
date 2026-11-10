@@ -18,7 +18,7 @@ import { terminateProcessTree } from '../src/process-utils.mjs';
 // Helpers for tests that drive a real `dsh` process over the bridge.
 //
 // Three separate concerns, each reusable on its own:
-//   - `realDshAvailability()`: is this machine's `dsh` the version vika drives?
+//   - `realDshAvailability()`: is this machine's `dsh` the version superagent drives?
 //     Tests pass its `reason` to node:test's `skip`, so a machine without dsh
 //     reports skipped tests instead of failures.
 //
@@ -78,7 +78,7 @@ function versionProbe(bin, timeoutMs) {
 const availabilityCache = new Map();
 
 /**
- * Whether this machine has a `dsh` vika can drive.
+ * Whether this machine has a `dsh` superagent can drive.
  * @param options.bin - executable name or absolute path; defaults to DSH_BIN.
  * @param options.timeoutMs - bound on the version probe.
  * @returns `{ ok: true, bin, version }`, or `{ ok: false, bin, reason }` where
@@ -130,7 +130,7 @@ async function probeDsh(bin, timeoutMs) {
  * @returns `{ root, dataDir, workspace, home }`; `root` is removed by
  *   `cleanupLiveDshRoot`.
  */
-export function prepareLiveDshRoot({ prefix = 'vika-dsh-live-' } = {}) {
+export function prepareLiveDshRoot({ prefix = 'superagent-dsh-live-' } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   fs.chmodSync(root, 0o700);
   const workspace = path.join(root, 'workspace');
@@ -183,7 +183,7 @@ export function cleanupLiveDshRoot(root) {
 }
 
 /**
- * Start a real dsh process wired with the vika bridge.
+ * Start a real dsh process wired with the superagent bridge.
  * @param options.root - a `prepareLiveDshRoot()` result (its `workspace` is cwd).
  * @param options.env - the environment; pass `hermeticDshEnv(...)`.
  * @param options.policy - the patch's persona prefix, for identifiable stderr.
@@ -200,7 +200,7 @@ export async function startLiveDsh({
   if (!root) throw new Error('startLiveDsh requires a prepared root');
   // The run patch names no provider: the DSH settings service refuses to write a
   // namespace an overlay already defines, and the fixture owns that document
-  // through `vika/settings/mutate`.
+  // through `superagent/settings/mutate`.
   const dataDir = root.dataDir ?? root;
   const workspace = root.workspace ?? path.join(dataDir, 'workspace');
   const patchPath = writeDshPatch({
@@ -401,7 +401,7 @@ export async function startLiveDsh({
     stdoutRest: () => stdoutRest,
     exitInfo: () => exitInfo,
     elapsed: () => Date.now() - startedAt,
-    /** Whether `vika/hello` advertises this bridge. */
-    async hello() { return rpc('vika/hello'); },
+    /** Whether `superagent/hello` advertises this bridge. */
+    async hello() { return rpc('superagent/hello'); },
   };
 }

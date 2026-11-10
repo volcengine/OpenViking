@@ -54,9 +54,9 @@ function validManifest() {
         displayName: 'Alpha',
         profile: 'cli_alpha',
         port: 3738,
-        dataDir: '/srv/vika/data/alpha',
-        workspace: '/srv/vika/workspaces/alpha',
-        ovConfig: '/srv/vika/ov/alpha.json',
+        dataDir: '/srv/superagent/data/alpha',
+        workspace: '/srv/superagent/workspaces/alpha',
+        ovConfig: '/srv/superagent/ov/alpha.json',
         model: 'gpt-5.6-sol',
       },
       {
@@ -64,9 +64,9 @@ function validManifest() {
         displayName: 'Beta',
         profile: 'cli_beta',
         port: 3740,
-        dataDir: '/srv/vika/data/beta',
-        workspace: '/srv/vika/workspaces/beta',
-        ovConfig: '/srv/vika/ov/beta.json',
+        dataDir: '/srv/superagent/data/beta',
+        workspace: '/srv/superagent/workspaces/beta',
+        ovConfig: '/srv/superagent/ov/beta.json',
         model: 'gpt-5.6-sol',
       },
     ],
@@ -74,7 +74,7 @@ function validManifest() {
 }
 
 function withManifest(value, callback) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-dsh-config-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-dsh-config-'));
   const manifestPath = path.join(directory, 'config.json');
   fs.writeFileSync(manifestPath, `${JSON.stringify(value, null, 2)}\n`);
   try {
@@ -178,7 +178,7 @@ describe('how the DSH variables travel through deployment', () => {
 
   it('drops a retired DSH models file instead of passing it on', () => {
     const manifest = validManifest();
-    manifest.env.OV_SUPERAGENT_DSH_MODELS_FILE = '/srv/vika/models.json';
+    manifest.env.OV_SUPERAGENT_DSH_MODELS_FILE = '/srv/superagent/models.json';
     withManifest(manifest, (manifestPath) => {
       const deployment = loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath });
       const env = {};

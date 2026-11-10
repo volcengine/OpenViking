@@ -419,7 +419,7 @@ test('the credential action stores the pasted value through the credential servi
   });
   assert.equal(result.code, 0, result.err);
   assert.equal(f.credentials('qa').refs.get('DEEPSEEK_API_KEY'), 'sk-stored-by-menu');
-  assert.ok(f.requests('vika/credentials/set').length > 0, 'the value went through the bridge');
+  assert.ok(f.requests('superagent/credentials/set').length > 0, 'the value went through the bridge');
   assert.match(result.out, /Stored credential DEEPSEEK_API_KEY/);
 });
 
@@ -434,7 +434,7 @@ test('the credential action removes a value it no longer needs', async (t) => {
     ],
   });
   assert.equal(result.code, 0, result.err);
-  assert.ok(f.requests('vika/credentials/unset').length > 0);
+  assert.ok(f.requests('superagent/credentials/unset').length > 0);
   assert.equal(f.credentials('qa').refs.has('DEEPSEEK_API_KEY'), false);
 });
 

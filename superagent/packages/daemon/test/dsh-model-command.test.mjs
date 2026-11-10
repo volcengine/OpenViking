@@ -56,9 +56,9 @@ describe('the /model command', () => {
 
     // And the daemon really asks DSH for it at the next boundary.
     context.agent.deliver('after the switch', 7);
-    await waitFor(() => child.requests('vika/session/model/select').length === 1,
+    await waitFor(() => child.requests('superagent/session/model/select').length === 1,
       'the selection to reach DSH');
-    assert.deepEqual(child.requests('vika/session/model/select')[0].params, {
+    assert.deepEqual(child.requests('superagent/session/model/select')[0].params, {
       sessionId: context.agent.threadId,
       provider: 'deepseek',
       model: 'deepseek-chat@v2',

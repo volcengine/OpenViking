@@ -36,7 +36,7 @@ export const CONTROL_PATCH_FILE = 'control-patch.yml';
 // not: a stuck process is killed rather than waited on.
 export const CONTROL_HELLO_TIMEOUT_MS = 60_000;
 export const CONTROL_REQUEST_TIMEOUT_MS = 30_000;
-// `vika/llm/models` interrogates every route, each with its own 10s bound in
+// `superagent/llm/models` interrogates every route, each with its own 10s bound in
 // the bridge, so the answer may legitimately take a multiple of that.
 export const CONTROL_MODELS_TIMEOUT_MS = 90_000;
 export const CONTROL_SHUTDOWN_TIMEOUT_MS = 5_000;
@@ -205,13 +205,13 @@ export class DshControlClient {
 
   /**
    * Verify the process runs the bridge surface this release edits through.
-   * @returns {Promise<object>} the `vika/hello` result.
+   * @returns {Promise<object>} the `superagent/hello` result.
    */
   async hello() {
-    const hello = await this._bridge('vika/hello', {}, { timeoutMs: this.timeouts.helloTimeoutMs });
+    const hello = await this._bridge('superagent/hello', {}, { timeoutMs: this.timeouts.helloTimeoutMs });
     if (!bridgeHelloSupports(hello, DSH_BRIDGE_CLI_METHODS)) {
       throw new DshControlError(
-        `this DSH does not expose the vika bridge v2 configuration methods (${DSH_BRIDGE_CLI_METHODS.join(', ')}); `
+        `this DSH does not expose the superagent bridge v2 configuration methods (${DSH_BRIDGE_CLI_METHODS.join(', ')}); `
         + 'upgrade DSH or check that the bridge module loads',
         { stderr: this.stderr },
       );
@@ -224,7 +224,7 @@ export class DshControlClient {
    * @returns {Promise<{ns: string, descriptor: object|null}>} namespace and view.
    */
   async describeSettings() {
-    return this._bridge('vika/settings/describe', { ns: 'llm-pi-ai' });
+    return this._bridge('superagent/settings/describe', { ns: 'llm-pi-ai' });
   }
 
   /**
@@ -234,7 +234,7 @@ export class DshControlClient {
    */
   async mutateSettings(ops, expectedRevision) {
     if (!Array.isArray(ops) || ops.length === 0) throw new DshControlError('no settings operations were generated');
-    return this._bridge('vika/settings/mutate', {
+    return this._bridge('superagent/settings/mutate', {
       ns: 'llm-pi-ai',
       ops,
       ...(expectedRevision === undefined ? {} : { expectedRevision }),
@@ -247,7 +247,7 @@ export class DshControlClient {
    * @param {string} value - the literal; never echoed.
    */
   async setCredential(ref, value) {
-    return this._bridge('vika/credentials/set', { ref, value });
+    return this._bridge('superagent/credentials/set', { ref, value });
   }
 
   /**
@@ -255,7 +255,7 @@ export class DshControlClient {
    * @param {string} ref - credential reference name.
    */
   async unsetCredential(ref) {
-    return this._bridge('vika/credentials/unset', { ref });
+    return this._bridge('superagent/credentials/unset', { ref });
   }
 
   /**
@@ -263,7 +263,7 @@ export class DshControlClient {
    * @returns {Promise<{providers: Array<object>}>} the catalogue.
    */
   async listModels() {
-    return this._bridge('vika/llm/models', {}, { timeoutMs: this.timeouts.modelsTimeoutMs });
+    return this._bridge('superagent/llm/models', {}, { timeoutMs: this.timeouts.modelsTimeoutMs });
   }
 
   /**
@@ -318,7 +318,7 @@ export class DshControlClient {
         `the DSH control process exited before ${method} was sent`, { stderr: this.stderr },
       ));
     }
-    const id = `vika-control-${this.nextId += 1}`;
+    const id = `superagent-control-${this.nextId += 1}`;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);

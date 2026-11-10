@@ -46,7 +46,7 @@ import { deriveKeyRef, importPlan } from '../src/dsh-model.mjs';
 import * as dshModelModule from '../src/dsh-model.mjs';
 import { setLanguage } from '../src/i18n.mjs';
 
-const BIN = fileURLToPath(new URL('../bin/vika.mjs', import.meta.url));
+const BIN = fileURLToPath(new URL('../bin/ov-superagent.mjs', import.meta.url));
 
 // English diagnostics, so an assertion names the sentence it means.
 setLanguage('en');
@@ -693,12 +693,12 @@ function handle(frame) {
   const state = load();
   record({ method: frame.method, params: frame.params ?? null });
   if (frame.method === 'shutdown') { send({ jsonrpc: '2.0', id: frame.id, result: {} }); process.exit(0); }
-  if (frame.method === 'vika/settings/mutate' && mode === 'mutate-refused') {
+  if (frame.method === 'superagent/settings/mutate' && mode === 'mutate-refused') {
     send({ jsonrpc: '2.0', id: frame.id, error: { code: -32603, message: 'the llm-pi-ai entry is not configurable',
       data: { code: 'SETTINGS_NOT_CONFIGURABLE' } } });
     return;
   }
-  if (frame.method === 'vika/settings/mutate' && mode === 'mutate-uncertain') {
+  if (frame.method === 'superagent/settings/mutate' && mode === 'mutate-uncertain') {
     // The frame reached the service and was applied, but the answer never
     // arrives: from the CLI's side the commit is unknowable.
     for (const op of (frame.params && frame.params.ops) || []) {
@@ -709,13 +709,13 @@ function handle(frame) {
     save(state);
     process.exit(0);
   }
-  if (frame.method === 'vika/settings/mutate' && mode === 'conflict-always') {
+  if (frame.method === 'superagent/settings/mutate' && mode === 'conflict-always') {
     send({ jsonrpc: '2.0', id: frame.id, error: { code: -32603,
       message: 'Configuration entry is no longer available',
       data: { code: 'SETTINGS_CONFLICT' } } });
     return;
   }
-  if (frame.method === 'vika/settings/mutate' && mode === 'conflict-after-competitor') {
+  if (frame.method === 'superagent/settings/mutate' && mode === 'conflict-after-competitor') {
     // The competitor writes exactly once, so the retry faces a clean service:
     // what it does with the new state is the behaviour under test.
     if (runCompetitor() !== null) {
@@ -726,19 +726,19 @@ function handle(frame) {
     }
   }
   switch (frame.method) {
-    case 'vika/hello':
-      send({ jsonrpc: '2.0', id: frame.id, result: { bridge: 'vika-dsh-bridge', version: 2,
-        methods: ['session/steer', 'session/cancel', 'vika/llm/models', 'vika/llm/model/info',
-          'vika/session/model/select', 'vika/settings/describe', 'vika/settings/mutate',
-          'vika/credentials/set', 'vika/credentials/unset'] } });
+    case 'superagent/hello':
+      send({ jsonrpc: '2.0', id: frame.id, result: { bridge: 'superagent-dsh-bridge', version: 2,
+        methods: ['session/steer', 'session/cancel', 'superagent/llm/models', 'superagent/llm/model/info',
+          'superagent/session/model/select', 'superagent/settings/describe', 'superagent/settings/mutate',
+          'superagent/credentials/set', 'superagent/credentials/unset'] } });
       return;
-    case 'vika/settings/describe':
+    case 'superagent/settings/describe':
       send({ jsonrpc: '2.0', id: frame.id, result: { ns: 'llm-pi-ai', descriptor: {
         ns: 'llm-pi-ai', autoGenerate: false, applies: 'live', schema: {}, revision: state.revision,
         value: { providers: state.providers || {} }, user: { providers: {} }, secrets: [],
       } } });
       return;
-    case 'vika/settings/mutate': {
+    case 'superagent/settings/mutate': {
       // A stale plan is detectable: the revision it was built from is fenced
       // here, exactly as the real settings service does.
       const expected = frame.params ? frame.params.expectedRevision : undefined;
@@ -758,7 +758,7 @@ function handle(frame) {
       send({ jsonrpc: '2.0', id: frame.id, result: { ok: true } });
       return;
     }
-    case 'vika/credentials/set':
+    case 'superagent/credentials/set':
       // Matched as a prefix: the import allocates suffixed references, and a
       // service refusing a value refuses it under whatever name it is written.
       if (mode === 'credential-refused' && frame.params.ref.startsWith(process.env.FAKE_DSH_REFUSE_REF)) {
@@ -771,7 +771,7 @@ function handle(frame) {
       writeCredentialDocument(state);
       send({ jsonrpc: '2.0', id: frame.id, result: { ok: true } });
       return;
-    case 'vika/credentials/unset':
+    case 'superagent/credentials/unset':
       delete state.credentials[frame.params.ref];
       save(state);
       writeCredentialDocument(state);
@@ -806,9 +806,9 @@ function readJsonLines(file) {
 }
 
 function fixture(t, { state = null } = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-dsh-migrate-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-dsh-migrate-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const config = path.join(home, '.superagent', 'config.json');
+  const config = path.join(home, '.ov-superagent', 'config.json');
   fs.mkdirSync(path.dirname(config), { recursive: true, mode: 0o700 });
   fs.writeFileSync(config, `${JSON.stringify({
     version: 1,
@@ -1056,7 +1056,7 @@ test('end to end: an import never removes a reference it did not create', (t) =>
     'a reference the import did not create survives byte for byte');
   assert.equal(state.credentials.FOO_BAR_API_KEY, 'sk-OPERATOR-1');
   assert.equal(state.credentials.FOO_BAR_API_KEY_2, 'sk-OPERATOR-3');
-  const unsets = f.calls().filter((call) => call.method === 'vika/credentials/unset');
+  const unsets = f.calls().filter((call) => call.method === 'superagent/credentials/unset');
   assert.deepEqual(unsets, [], 'a successful import removes no credential at all');
   // A value nobody resolves is still somebody's secret: it is skipped, not
   // adopted and not overwritten.
@@ -1074,12 +1074,12 @@ test('end to end: values reach their reference before the routes that name it', 
   const result = run(f, ['import', models]);
   assert.equal(result.status, 0, output(result));
   const methods = f.calls().filter((call) => call.method).map((call) => call.method);
-  const credentialAt = methods.indexOf('vika/credentials/set');
-  const mutateAt = methods.indexOf('vika/settings/mutate');
+  const credentialAt = methods.indexOf('superagent/credentials/set');
+  const mutateAt = methods.indexOf('superagent/settings/mutate');
   assert.ok(credentialAt >= 0 && mutateAt > credentialAt,
     `the value must exist before the route names it: ${methods.join(', ')}`);
   // And the route names exactly the reference that was written.
-  const stored = f.calls().find((call) => call.method === 'vika/credentials/set');
+  const stored = f.calls().find((call) => call.method === 'superagent/credentials/set');
   assert.equal(f.state().providers.gateway.apiKeyEnv, stored.params.ref);
 });
 
@@ -1218,7 +1218,7 @@ test('end to end: an import keeps the reference of a route it gives no credentia
   assert.equal(state.providers.gateway.apiKeyEnv, 'R_API_KEY', 'the route keeps authenticating with its stored key');
   assert.equal(state.providers.gateway.baseURL, 'http://new.test/v1', 'and the document still updates the endpoint');
   assert.equal(state.credentials.R_API_KEY, 'sk-STORED', 'the value is not rewritten');
-  assert.deepEqual(f.calls().filter((call) => call.method === 'vika/credentials/set'), [],
+  assert.deepEqual(f.calls().filter((call) => call.method === 'superagent/credentials/set'), [],
     'nothing is written to the kept reference');
   assert.match(result.stdout, /declares no credential/, 'the report says which case this is');
   assert.match(result.stdout, /R_API_KEY/, 'the report names the reference it kept');

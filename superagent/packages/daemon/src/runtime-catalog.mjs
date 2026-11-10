@@ -248,7 +248,7 @@ export const RUNTIME_CATALOG = Object.freeze({
     canonicalDefault: 'dsh',
     // The static list is what attributes a bare model to this runtime and what
     // supplies the built-in production default. The live catalog comes from DSH
-    // itself (bridge v2 `vika/llm/models`) and also serves the operator's own
+    // itself (bridge v2 `superagent/llm/models`) and also serves the operator's own
     // routes (deepseek-chat and the like), so model selection is dynamic
     // rather than limited to this list. Efforts are the union DSH understands;
     // which of them a model offers is answered per model.

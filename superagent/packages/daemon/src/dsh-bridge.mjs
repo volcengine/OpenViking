@@ -10,7 +10,7 @@ const { realpathSync } = fs;
 // This module is loaded by DSH, not by OpenViking SuperAgent. Dependencies supplied by the SDK
 // server are loaded through DSH's own resolver; OpenViking SuperAgent's node_modules must not be
 // a runtime dependency of the published DSH installation.
-const BRIDGE_ID = 'vika-dsh-bridge';
+const BRIDGE_ID = 'superagent-dsh-bridge';
 
 export async function loadDshBridgeDependencies({ loader, serverPath = '@deepseek-ai/dsh-sdk-jsonrpc-server' } = {}) {
   let modules;

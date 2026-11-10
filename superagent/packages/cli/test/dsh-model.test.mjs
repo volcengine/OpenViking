@@ -15,7 +15,7 @@ import { setLanguage } from '../src/i18n.mjs';
 // below read the messages directly, so the test process speaks English too.
 setLanguage('en');
 
-const BIN = fileURLToPath(new URL('../bin/vika.mjs', import.meta.url));
+const BIN = fileURLToPath(new URL('../bin/ov-superagent.mjs', import.meta.url));
 
 // A stand-in for `dsh`, the same protocol-speaking fixture the control client
 // tests use. Every invocation is a new process, so the state it edits lives in
@@ -35,9 +35,9 @@ const mode = process.env.FAKE_DSH_MODE || 'normal';
 
 const METHODS = [
   'session/steer', 'session/cancel',
-  'vika/llm/models', 'vika/llm/model/info', 'vika/session/model/select',
-  'vika/settings/describe', 'vika/settings/mutate',
-  'vika/credentials/set', 'vika/credentials/unset',
+  'superagent/llm/models', 'superagent/llm/model/info', 'superagent/session/model/select',
+  'superagent/settings/describe', 'superagent/settings/mutate',
+  'superagent/credentials/set', 'superagent/credentials/unset',
 ];
 
 function load() {
@@ -85,19 +85,19 @@ function handle(frame) {
   const state = load();
   if (mode === 'silent') return;
   if (frame.method === 'shutdown') { respond(frame.id, {}); process.exit(0); }
-  if (state.notReady > 0 && frame.method !== 'vika/hello') {
+  if (state.notReady > 0 && frame.method !== 'superagent/hello') {
     state.notReady -= 1;
     save(state);
     fail(frame.id, -32002, 'settings is not ready');
     return;
   }
   switch (frame.method) {
-    case 'vika/hello':
+    case 'superagent/hello':
       respond(frame.id, mode === 'old-bridge'
-        ? { bridge: 'vika-dsh-bridge', version: 1, methods: ['vika/llm/models'] }
-        : { bridge: 'vika-dsh-bridge', version: 2, methods: METHODS });
+        ? { bridge: 'superagent-dsh-bridge', version: 1, methods: ['superagent/llm/models'] }
+        : { bridge: 'superagent-dsh-bridge', version: 2, methods: METHODS });
       return;
-    case 'vika/settings/describe': {
+    case 'superagent/settings/describe': {
       // A malformed document: the settings service cannot read it and says so
       // through its closed wire taxonomy instead of answering with a descriptor.
       if (mode === 'unreadable' && !documentUsable()) {
@@ -127,7 +127,7 @@ function handle(frame) {
       } });
       return;
     }
-    case 'vika/settings/mutate': {
+    case 'superagent/settings/mutate': {
       if (mode === 'overridden') {
         fail(frame.id, -32603, 'Configuration for "llm-pi-ai" is overridden by a home patch or command-line overlay');
         return;
@@ -177,7 +177,7 @@ function handle(frame) {
       respond(frame.id, { ok: true });
       return;
     }
-    case 'vika/credentials/set':
+    case 'superagent/credentials/set':
       // A credential the service refuses, to prove a failure names what did
       // and did not land instead of aborting on an unnamed half-write.
       // Matched as a prefix: the migration stages every value under a
@@ -191,12 +191,12 @@ function handle(frame) {
       save(state);
       respond(frame.id, { ok: true });
       return;
-    case 'vika/credentials/unset':
+    case 'superagent/credentials/unset':
       delete state.credentials[frame.params.ref];
       save(state);
       respond(frame.id, { ok: true });
       return;
-    case 'vika/llm/models': {
+    case 'superagent/llm/models': {
       const providers = Object.entries(state.providers || {}).map(([route, profile]) => {
         const ref = profile && typeof profile.apiKeyEnv === 'string' ? profile.apiKeyEnv : null;
         const present = ref ? Object.hasOwn(state.credentials, ref) : null;
@@ -245,9 +245,9 @@ function readJsonLines(file) {
 }
 
 function fixture(t, { agents = ['primary'], state = null } = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-dsh-model-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-dsh-model-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const config = path.join(home, '.superagent', 'config.json');
+  const config = path.join(home, '.ov-superagent', 'config.json');
   fs.mkdirSync(path.dirname(config), { recursive: true, mode: 0o700 });
   fs.writeFileSync(config, `${JSON.stringify({
     version: 1,
@@ -365,7 +365,7 @@ test('the command group has help text, and the top-level usage names it', (t) =>
 
 test('without a manifest the command says how to create an instance', (t) => {
   const f = fixture(t);
-  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-empty-'));
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-empty-'));
   t.after(() => fs.rmSync(empty, { recursive: true, force: true }));
   const result = run(f, ['list'], { env: { HOME: empty, OV_SUPERAGENT_CONFIG: path.join(empty, 'config.json') } });
   assert.equal(result.status, 1);
@@ -785,9 +785,9 @@ test('a settings refusal becomes an instruction, and a concurrent write is retri
   assert.equal(conflicted.status, 0, output(conflicted));
   assert.equal(f.state().providers.deepseek, undefined, 'the retry removed the route\'s only model');
   const attempt = f.calls().slice(before);
-  const mutates = attempt.filter((call) => call.method === 'vika/settings/mutate');
+  const mutates = attempt.filter((call) => call.method === 'superagent/settings/mutate');
   assert.equal(mutates.length, 2, 'the conflict is retried once and the retry wins');
-  const describes = attempt.filter((call) => call.method === 'vika/settings/describe');
+  const describes = attempt.filter((call) => call.method === 'superagent/settings/describe');
   assert.equal(describes.length, 2, 'the retry re-reads the document before writing');
 });
 
@@ -882,11 +882,11 @@ test('repair changes nothing when the probe cannot answer', (t) => {
   fs.writeFileSync(document, HEALTHY_DOCUMENT);
   const original = fs.readFileSync(document);
 
-  // A control process that answers `vika/hello` but only speaks bridge v1.
+  // A control process that answers `superagent/hello` but only speaks bridge v1.
   const oldBridge = run(f, ['repair'], { env: { FAKE_DSH_MODE: 'old-bridge' } });
   assert.notEqual(oldBridge.status, 0, output(oldBridge));
   assert.match(output(oldBridge), /nothing was changed/);
-  assert.match(output(oldBridge), /does not expose the vika bridge v2/);
+  assert.match(output(oldBridge), /does not expose the superagent bridge v2/);
   assert.match(output(oldBridge), /cordis\.patch\.yml/);
   assert.ok(fs.readFileSync(document).equals(original), 'the document bytes must be identical');
   assert.deepEqual(backupsIn(path.dirname(document)), []);
@@ -899,7 +899,7 @@ test('repair changes nothing when the probe cannot answer', (t) => {
   const crashed = run(f, ['repair'], { env: { DSH_BIN: exiting } });
   assert.notEqual(crashed.status, 0, output(crashed));
   assert.match(output(crashed), /nothing was changed/);
-  assert.match(output(crashed), /before answering|before vika\/hello|EPIPE/);
+  assert.match(output(crashed), /before answering|before superagent\/hello|EPIPE/);
   assert.ok(fs.readFileSync(document).equals(original), 'the document bytes must be identical');
   assert.deepEqual(backupsIn(path.dirname(document)), []);
   assert.equal(f.calls().length, before, 'the crashed probe never reaches the settings call');
@@ -1051,7 +1051,7 @@ test('a "no longer configurable" text frame is not retried as a concurrent write
   assert.equal(result.status, 1, output(result));
   assert.match(result.stderr, /ov-superagent dsh model repair/, 'the actionable instruction, not a concurrency notice');
   assert.doesNotMatch(result.stderr, /changed after it was read/);
-  const mutates = f.calls().slice(before).filter((call) => call.method === 'vika/settings/mutate');
+  const mutates = f.calls().slice(before).filter((call) => call.method === 'superagent/settings/mutate');
   assert.equal(mutates.length, 1, 'no retry is spent on a state that cannot change by retrying');
 });
 
@@ -1062,7 +1062,7 @@ test('a concurrent write is still retried once and still reports the conflict', 
   const result = run(f, write, { env: { FAKE_DSH_MODE: 'conflict-always' } });
   assert.equal(result.status, 1, output(result));
   assert.match(result.stderr, /changed after it was read and still conflicted on retry/);
-  const mutates = f.calls().slice(before).filter((call) => call.method === 'vika/settings/mutate');
+  const mutates = f.calls().slice(before).filter((call) => call.method === 'superagent/settings/mutate');
   assert.equal(mutates.length, 2, 'the conflict is retried exactly once');
 });
 
@@ -1370,8 +1370,8 @@ test('writeModelDraft stores the value before it writes the route', async (t) =>
   // The order is observable in the request log, not only in the outcome: the
   // value was attempted and the route write never was.
   const methods = f.calls().map((entry) => entry.method).filter(Boolean);
-  assert.ok(methods.includes('vika/credentials/set'), `the value is attempted: ${methods.join(', ')}`);
-  assert.ok(!methods.includes('vika/settings/mutate'),
+  assert.ok(methods.includes('superagent/credentials/set'), `the value is attempted: ${methods.join(', ')}`);
+  assert.ok(!methods.includes('superagent/settings/mutate'),
     `the route write never happens after a refused value: ${methods.join(', ')}`);
 });
 

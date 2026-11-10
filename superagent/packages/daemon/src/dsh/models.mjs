@@ -235,7 +235,7 @@ export default {
     let reply;
     try {
       reply = await retryDshNotReady(() => this._request(
-        'vika/llm/models', {}, MODEL_CATALOG_TIMEOUT_MS,
+        'superagent/llm/models', {}, MODEL_CATALOG_TIMEOUT_MS,
       ));
     } catch (error) {
       this.logger.warn('dsh_model_catalog_failed', { error: safe(error) });
@@ -269,7 +269,7 @@ export default {
   async _describeModel(entry) {
     const { provider, model } = splitModelId(entry.id);
     try {
-      const info = await retryDshNotReady(() => this._request('vika/llm/model/info', {
+      const info = await retryDshNotReady(() => this._request('superagent/llm/model/info', {
         provider, model,
       }, MODEL_INFO_TIMEOUT_MS));
       const efforts = (info?.reasoning?.efforts ?? [])
@@ -308,7 +308,7 @@ export default {
     const sessionId = this.sessionId;
     this.settingsUpdate = (async () => {
       try {
-        const result = await retryDshNotReady(() => this._request('vika/session/model/select', {
+        const result = await retryDshNotReady(() => this._request('superagent/session/model/select', {
           sessionId,
           ...modelSelection(attempted.model, attempted.effort),
         }, this.controlTimeoutMs));

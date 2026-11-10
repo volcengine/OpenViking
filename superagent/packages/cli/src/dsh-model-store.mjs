@@ -544,7 +544,7 @@ export function unreadableDocumentAnswer(error) {
   // answered.
   if (!Number.isSafeInteger(error.code)) return null;
   if (error.data?.code !== 'SETTINGS_INVALID') return null;
-  return text(error.message).replace(/^vika\/settings\/describe:\s*/, '');
+  return text(error.message).replace(/^superagent\/settings\/describe:\s*/, '');
 }
 
 // Whether a layer ABOVE the profile document owns llm-pi-ai. The settings service

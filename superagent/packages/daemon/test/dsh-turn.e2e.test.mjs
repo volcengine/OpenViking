@@ -23,7 +23,7 @@ import { startFakeProvider } from './fake-provider.mjs';
 // (Anthropic-shaped) at `${DEEPSEEK_BASE_URL}/v1/messages`. DEEPSEEK_BASE_URL is
 // the documented override for a built-in route's endpoint, so the fixture points
 // it at the fake provider and passes a placeholder key — the only credential the
-// route ever sees. Nothing here reaches the network, ~/.dsh, or ~/.superagent: the
+// route ever sees. Nothing here reaches the network, ~/.dsh, or ~/.ov-superagent: the
 // temp root owns HOME and DSH_HOME, and `hermeticDshEnv` strips operator values.
 //
 // The suite is a scenario, not independent cases: each test starts the next
@@ -32,7 +32,7 @@ import { startFakeProvider } from './fake-provider.mjs';
 const availability = await realDshAvailability();
 const liveSkip = availability.ok ? false : availability.reason;
 
-const API_KEY = 'vika-dsh-turn-placeholder-key';
+const API_KEY = 'superagent-dsh-turn-placeholder-key';
 const INITIAL_MODEL = 'deepseek-flash';
 const SWITCHED_MODEL = 'deepseek-v4-pro';
 
@@ -87,7 +87,7 @@ describe('live dsh applies a model switch on the next turn without restarting', 
 
   before(async () => {
     provider = await startFakeProvider({ reply: 'turn reply from the fake provider' });
-    root = prepareLiveDshRoot({ prefix: 'vika-dsh-turn-' });
+    root = prepareLiveDshRoot({ prefix: 'superagent-dsh-turn-' });
     dsh = await startLiveDsh({
       root,
       env: hermeticDshEnv({ root, apiKey: API_KEY, baseURL: provider.baseURL }),
@@ -140,7 +140,7 @@ describe('live dsh applies a model switch on the next turn without restarting', 
     // No `reasoningEffort`: the bridge records the request as made (null), it
     // does not materialize the adapter default into the user's selection.
     assert.deepEqual(
-      await dsh.rpc('vika/session/model/select', { sessionId, provider: 'deepseek-official', model: SWITCHED_MODEL }),
+      await dsh.rpc('superagent/session/model/select', { sessionId, provider: 'deepseek-official', model: SWITCHED_MODEL }),
       { provider: 'deepseek-official', model: SWITCHED_MODEL, reasoningEffort: null },
     );
 
@@ -157,7 +157,7 @@ describe('live dsh applies a model switch on the next turn without restarting', 
 
   test('an explicit effort governs the next turn and clearing it restores the default', async () => {
     assert.deepEqual(
-      await dsh.rpc('vika/session/model/select', {
+      await dsh.rpc('superagent/session/model/select', {
         sessionId, provider: 'deepseek-official', model: SWITCHED_MODEL, reasoningEffort: 'low',
       }),
       { provider: 'deepseek-official', model: SWITCHED_MODEL, reasoningEffort: 'low' },
@@ -168,7 +168,7 @@ describe('live dsh applies a model switch on the next turn without restarting', 
       'an explicit effort must reach the provider as the request effort');
 
     assert.deepEqual(
-      await dsh.rpc('vika/session/model/select', { sessionId, provider: 'deepseek-official', model: SWITCHED_MODEL }),
+      await dsh.rpc('superagent/session/model/select', { sessionId, provider: 'deepseek-official', model: SWITCHED_MODEL }),
       { provider: 'deepseek-official', model: SWITCHED_MODEL, reasoningEffort: null },
     );
     const cleared = await turn('cleared effort turn');
@@ -179,7 +179,7 @@ describe('live dsh applies a model switch on the next turn without restarting', 
 
   test('an off effort disables thinking on the wire', async () => {
     assert.deepEqual(
-      await dsh.rpc('vika/session/model/select', {
+      await dsh.rpc('superagent/session/model/select', {
         sessionId, provider: 'deepseek-official', model: SWITCHED_MODEL, reasoningEffort: 'off',
       }),
       { provider: 'deepseek-official', model: SWITCHED_MODEL, reasoningEffort: 'off' },
@@ -192,7 +192,7 @@ describe('live dsh applies a model switch on the next turn without restarting', 
 
   test('a rejected effort leaves the running selection untouched', async () => {
     const pid = dsh.pid;
-    const rejected = await dsh.rpcRaw('vika/session/model/select', {
+    const rejected = await dsh.rpcRaw('superagent/session/model/select', {
       sessionId, provider: 'deepseek-official', model: INITIAL_MODEL, reasoningEffort: 'xhigh',
     });
     // The transport keeps JSON-RPC -32603; the failure class rides in data.code

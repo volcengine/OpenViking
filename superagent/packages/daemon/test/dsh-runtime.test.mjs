@@ -17,7 +17,7 @@ import {
 } from '../src/dsh-runtime.mjs';
 
 function temp(t) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-dsh-runtime-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-dsh-runtime-'));
   fs.chmodSync(directory, 0o700);
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   return directory;
@@ -60,7 +60,7 @@ test('DSH template escape leaves ordinary braces intact', () => {
 });
 
 test('generated patch replaces SDK transport and keeps config/mcp variants', (t) => {
-  const patch = buildDshPatch({ policy: 'use {{this}}', bridgePath: '/vika/bridge.mjs', mcp: { command: '/node', args: ['/mcp.mjs', '--authority', 'private'], toolCallTimeoutMs: 30000 } });
+  const patch = buildDshPatch({ policy: 'use {{this}}', bridgePath: '/superagent/bridge.mjs', mcp: { command: '/node', args: ['/mcp.mjs', '--authority', 'private'], toolCallTimeoutMs: 30000 } });
   assert.deepEqual(patch[0], { id: 'sdk-jsonrpc-server', disabled: true });
   const rows = patch.find(row => row.insert).insert;
   assert.deepEqual(rows[0].inject, ['sdkAppStartup', 'loader']);
@@ -152,7 +152,7 @@ test('patch file is private JSON-compatible YAML with an absolute bridge', t => 
 
 test('bridge handshake requires the id, a v2+ version and every method the caller uses', () => {
   const hello = (overrides = {}) => ({
-    bridge: 'vika-dsh-bridge', version: 2, methods: [...DSH_BRIDGE_CLI_METHODS], ...overrides,
+    bridge: 'superagent-dsh-bridge', version: 2, methods: [...DSH_BRIDGE_CLI_METHODS], ...overrides,
   });
   assert.equal(bridgeHelloSupports(hello(), DSH_BRIDGE_DAEMON_METHODS), true);
   assert.equal(bridgeHelloSupports(hello(), DSH_BRIDGE_CLI_METHODS), true);

@@ -84,7 +84,7 @@ class ScriptedPrompter extends Prompter {
 }
 
 function harness(t, { runtimes, detectDsh, script = [], answers = [], onAsk = () => {} } = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-setup-dsh-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-setup-dsh-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const input = new PassThrough();
   const output = new PassThrough();
@@ -136,8 +136,8 @@ function harness(t, { runtimes, detectDsh, script = [], answers = [], onAsk = ()
   };
   return {
     home, options, prompter, calls, written: () => written,
-    dataDir: path.join(home, '.superagent', 'data', 'primary'),
-    manifest: () => JSON.parse(fs.readFileSync(path.join(home, '.superagent', 'config.json'), 'utf8')),
+    dataDir: path.join(home, '.ov-superagent', 'data', 'primary'),
+    manifest: () => JSON.parse(fs.readFileSync(path.join(home, '.ov-superagent', 'config.json'), 'utf8')),
   };
 }
 
@@ -374,7 +374,7 @@ test('the draft check reports a route DSH did not offer', async () => {
 });
 
 test('a fresh DSH home is seeded with both documents, and only the route it was given', async (t) => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-setup-dsh-write-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-setup-dsh-write-'));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   const written = await writeDshModelDraft({
     dataDir,
@@ -393,7 +393,7 @@ test('an instance home that already has a settings document keeps every other ro
   // it. It goes through the settings service, the same upsert the model menu
   // performs, so an existing route and its key survive.
   const { FAKE_DSH } = await import('../../daemon/test/cli-fixture.mjs');
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-setup-dsh-merge-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-setup-dsh-merge-'));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   const document = path.join(dataDir, 'dsh', 'home', 'profiles', 'sdk', 'cordis.patch.yml');
   fs.mkdirSync(path.dirname(document), { recursive: true, mode: 0o700 });

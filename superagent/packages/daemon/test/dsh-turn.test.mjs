@@ -209,7 +209,7 @@ describe('DshAgent turn and wait state machine', () => {
     const answer = child._answer.bind(child);
     let releaseSelect = null;
     child._answer = (frame) => {
-      if (frame.method !== 'vika/session/model/select' || releaseSelect) { answer(frame); return; }
+      if (frame.method !== 'superagent/session/model/select' || releaseSelect) { answer(frame); return; }
       releaseSelect = () => answer(frame);
     };
     agent.deliver('switch first', 7);

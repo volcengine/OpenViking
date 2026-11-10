@@ -267,10 +267,10 @@ export default {
         // downgrades below are the only exceptions, and neither rewrites the
         // persisted choice.
         const attempt = await this._initializeChild(child, settings);
-        const hello = await this._requestOn(child, 'vika/hello', {}, this.controlTimeoutMs);
+        const hello = await this._requestOn(child, 'superagent/hello', {}, this.controlTimeoutMs);
         if (!bridgeHelloSupports(hello, DSH_BRIDGE_DAEMON_METHODS)) {
           throw new Error(
-            `dsh vika/hello did not expose bridge v${DSH_BRIDGE_VERSION}`
+            `dsh superagent/hello did not expose bridge v${DSH_BRIDGE_VERSION}`
             + ` (${DSH_BRIDGE_DAEMON_METHODS.join(', ')})`,
           );
         }
@@ -368,7 +368,7 @@ export default {
     let descriptor;
     try {
       const reply = await retryDshNotReady(
-        () => this._requestOn(child, 'vika/settings/describe', {}, this.controlTimeoutMs),
+        () => this._requestOn(child, 'superagent/settings/describe', {}, this.controlTimeoutMs),
       );
       descriptor = reply?.descriptor ?? null;
     } catch (error) {
@@ -392,7 +392,7 @@ export default {
   // a built-in provider unconditionally and answers initialize from the adapter,
   // while the route serves ZERO models until its credential exists. Measured on
   // dsh 0.2.2-rc.1: `initialize deepseek-official/deepseek-flash` succeeds with no
-  // DEEPSEEK_API_KEY while `vika/llm/models` lists that route with no models. So
+  // DEEPSEEK_API_KEY while `superagent/llm/models` lists that route with no models. So
   // after a route starts, the live catalogue is what decides whether it is
   // servable, and a route it cannot serve is replaced -- when the coordinator
   // allows a substitution (the caller named no model) -- with one it can. Both
@@ -491,7 +491,7 @@ export default {
   // before initialize) leaves the caller with the error it already has, so this
   // probe never becomes a new failure mode of its own.
   //
-  // Deliberately no `vika/hello` here: the handshake sends it once, right after
+  // Deliberately no `superagent/hello` here: the handshake sends it once, right after
   // initialize, and a second one would be a second probe of the same surface.
   // The same per-request bound as every other handshake RPC: measured at ~20ms
   // on a real dsh 0.2.2-rc.1, since a route's model list is catalog-driven and
@@ -499,7 +499,7 @@ export default {
   async _catalogueRoutes(child) {
     try {
       const reply = await retryDshNotReady(
-        () => this._requestOn(child, 'vika/llm/models', {}, this.controlTimeoutMs),
+        () => this._requestOn(child, 'superagent/llm/models', {}, this.controlTimeoutMs),
       );
       const routes = [];
       for (const provider of Array.isArray(reply?.providers) ? reply.providers : []) {
@@ -592,7 +592,7 @@ export default {
   async _reselectSession(child, attempt) {
     const model = `${attempt.provider}/${attempt.model}`;
     try {
-      const result = await retryDshNotReady(() => this._requestOn(child, 'vika/session/model/select', {
+      const result = await retryDshNotReady(() => this._requestOn(child, 'superagent/session/model/select', {
         sessionId: this.sessionId,
         ...modelSelection(model, attempt.effort),
       }, this.controlTimeoutMs));

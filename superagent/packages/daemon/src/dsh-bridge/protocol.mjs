@@ -28,7 +28,7 @@ function requestParams(params) {
  * own are answered here; everything else is forwarded byte-for-byte.
  *
  * A v2 bridge additionally exposes the model catalogue and selection, the
- * `llm-pi-ai` settings document, and credential writes under the `vika/`
+ * `llm-pi-ai` settings document, and credential writes under the `superagent/`
  * namespace. Those method names deliberately do not shadow DSH's own SDK
  * methods, so a future upstream implementation cannot be intercepted by
  * accident.

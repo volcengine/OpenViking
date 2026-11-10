@@ -136,11 +136,11 @@ describe('ov-superagent dsh model through the real CLI entry point', { skip }, (
     // The bridge path comes from the checkout the CLI itself runs, which is not
     // necessarily this one (OV_SUPERAGENT_E2E_PROJECT_ROOT); the last segments are the
     // contract.
-    const bridgeEntry = inserted.find((entry) => entry.id === 'vika-dsh-bridge');
-    assert.ok(bridgeEntry, 'the control patch must insert the vika bridge');
+    const bridgeEntry = inserted.find((entry) => entry.id === 'superagent-dsh-bridge');
+    assert.ok(bridgeEntry, 'the control patch must insert the superagent bridge');
     assert.equal(path.isAbsolute(bridgeEntry.name), true);
     assert.equal(path.basename(bridgeEntry.name), path.basename(DSH_BRIDGE_PATH));
-    assert.equal(inserted.some((entry) => entry.id === 'vika-personal-agent'), false,
+    assert.equal(inserted.some((entry) => entry.id === 'superagent-personal-agent'), false,
       'a control subprocess needs no MCP client');
     assert.equal(controlPatch.some((entry) => entry.id === 'llm-pi-ai'), false,
       'the control patch must not overlay the namespace it edits');
@@ -160,7 +160,7 @@ describe('ov-superagent dsh model through the real CLI entry point', { skip }, (
 
     // A credential reference is a name, never a value: nothing may leak one.
     const requests = fixture.requests();
-    assert.equal(requests.filter((entry) => entry.method === 'vika/credentials/set').length, 0,
+    assert.equal(requests.filter((entry) => entry.method === 'superagent/credentials/set').length, 0,
       'a removal stores no credential');
     assert.equal(fs.existsSync(fixture.credentialsFile('qa')), false);
 
@@ -182,8 +182,8 @@ describe('ov-superagent dsh model through the real CLI entry point', { skip }, (
     assert.equal(credentials.refs.get('DEEPSEEK_API_KEY'), 'super-secret-value');
     assert.equal(credentials.mode, 0o600, 'a credentials document is owner-only');
     // Written through the bridge, never by the CLI directly.
-    assert.ok(fixture.requests('vika/credentials/set').length >= 1);
-    const set = fixture.requests('vika/credentials/set').at(-1);
+    assert.ok(fixture.requests('superagent/credentials/set').length >= 1);
+    const set = fixture.requests('superagent/credentials/set').at(-1);
     assert.equal(set.params.ref, 'DEEPSEEK_API_KEY');
     // The fake dsh redacts the value in its own log, so the log proves the
     // reference and the length; the value itself is asserted on disk only.
@@ -234,7 +234,7 @@ describe('ov-superagent dsh model through the real CLI entry point', { skip }, (
     assert.equal(result.code, 0, output(result));
     const credentials = fixture.credentials('qa');
     assert.equal(credentials.refs.has('DEEPSEEK_API_KEY'), false);
-    assert.ok(fixture.requests('vika/credentials/unset').length >= 1);
+    assert.ok(fixture.requests('superagent/credentials/unset').length >= 1);
   });
 
   test('import migrates a legacy models.json, and --dry-run writes nothing', async () => {

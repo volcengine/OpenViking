@@ -124,7 +124,7 @@ export async function writeDshModelDraft({ dataDir, draft, bin = 'dsh', env = pr
  * @returns {Promise<{ok: boolean, route: string, reason: string, note: string}>}
  */
 export async function validateDshModelDraft({ bin, env = process.env, draft, probe = probeDsh }) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-dsh-model-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-dsh-model-'));
   fs.chmodSync(dataDir, 0o700);
   try {
     const documents = freshDshModelDocuments(draft);

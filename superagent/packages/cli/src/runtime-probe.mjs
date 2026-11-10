@@ -18,22 +18,22 @@ import {
 
 // What a read-only probe needs the bridge to expose. The daemon method set is
 // what `ov-superagent setup` is verifying -- the runtime this install will drive -- plus
-// `vika/settings/describe`, the one read that `ov-superagent dsh model list` and the
+// `superagent/settings/describe`, the one read that `ov-superagent dsh model list` and the
 // models page both start from. It is checked on the handshake rather than
 // exercised here, because this probe must not need a configured route.
-// The credential write methods (`vika/credentials/*`) and `vika/settings/mutate`
+// The credential write methods (`superagent/credentials/*`) and `superagent/settings/mutate`
 // are deliberately NOT required: a bridge that can read the catalogue but not
 // write a credential is still a working setup, and failing it there would report
 // a broken install for a missing write feature.
 const DSH_PROBE_METHODS = Object.freeze([
-  ...DSH_BRIDGE_DAEMON_METHODS, 'vika/settings/describe',
+  ...DSH_BRIDGE_DAEMON_METHODS, 'superagent/settings/describe',
 ]);
 
 // Spawn `bin args`, send initialize (id 1), then either stop immediately or
 // complete a short protocol-specific handshake. No session or model turn.
 //
 // `bridge` opts a probe into the DSH handshake: after initialize DSH must answer
-// `vika/hello` (the bridge this release drives) and `vika/llm/models` (the model
+// `superagent/hello` (the bridge this release drives) and `superagent/llm/models` (the model
 // routes DSH itself can serve), then `shutdown`. A catalogue that answers an
 // error is reported to `onModels` as `null`, never treated as a failed probe:
 // the routes are DSH's own configuration, and this probe runs keyless.
@@ -87,7 +87,7 @@ function probeInitialize(bin, {
             finish(false, `${label} bridge handshake failed (requires v${DSH_BRIDGE_VERSION})`);
           } else {
             bridge.stage = 'models';
-            child.stdin.write('{"jsonrpc":"2.0","id":4,"method":"vika/llm/models","params":{}}\n');
+            child.stdin.write('{"jsonrpc":"2.0","id":4,"method":"superagent/llm/models","params":{}}\n');
           }
           continue;
         }
@@ -111,7 +111,7 @@ function probeInitialize(bin, {
           onAccepted(child);
           if (bridge) {
             bridge.stage = 'hello';
-            child.stdin.write('{"jsonrpc":"2.0","id":2,"method":"vika/hello","params":{}}\n');
+            child.stdin.write('{"jsonrpc":"2.0","id":2,"method":"superagent/hello","params":{}}\n');
           } else finish(true);
         }
       }
@@ -126,7 +126,7 @@ export function probeAppServer(bin, { env = process.env, spawnImpl = spawn, time
   return probeInitialize(bin, {
     args: ['app-server', '--listen', 'stdio://'],
     label: 'app-server',
-    request: { params: { clientInfo: { name: 'vika-setup', version: '1' }, capabilities: { experimentalApi: true } } },
+    request: { params: { clientInfo: { name: 'superagent-setup', version: '1' }, capabilities: { experimentalApi: true } } },
     onAccepted: (child) => child.stdin.write(`${JSON.stringify({ method: 'initialized', params: {} })}\n`),
     env, spawnImpl, timeoutMs,
   });
@@ -137,7 +137,7 @@ export function probeAppServer(bin, { env = process.env, spawnImpl = spawn, time
 // Model ids may themselves contain slashes, so provider and model stay separate.
 export const DSH_PROBE_ROUTE = Object.freeze({ provider: 'deepseek-official', model: 'deepseek-flash' });
 
-// One provider entry of `vika/llm/models`, reduced to what a probe reports.
+// One provider entry of `superagent/llm/models`, reduced to what a probe reports.
 function catalogueRoute(route) {
   if (!route || typeof route !== 'object' || typeof route.provider !== 'string' || !route.provider) return null;
   return {
@@ -151,10 +151,10 @@ function catalogueRoute(route) {
 }
 
 /**
- * Every route a `vika/llm/models` reply reported, reduced to what a caller can
+ * Every route a `superagent/llm/models` reply reported, reduced to what a caller can
  * check without the raw reply: the provider, its model ids, whether a
  * credential resolved, and how the catalogue lookup failed.
- * @param {object|null} reply - the `vika/llm/models` result.
+ * @param {object|null} reply - the `superagent/llm/models` result.
  * @returns {Array<{provider: string, models: string[], credential: boolean, error: string}>}
  */
 export function dshCatalogueRoutes(reply) {
@@ -167,7 +167,7 @@ export function dshCatalogueRoutes(reply) {
  * The catalogue is the only source: `models.json` is gone, and a route that
  * serves no model cannot run a turn. A route whose credential is present wins
  * over one that only answers because DSH discovered a key elsewhere.
- * @param {object|null} reply - the `vika/llm/models` result.
+ * @param {object|null} reply - the `superagent/llm/models` result.
  * @returns {{provider: string, model: string, id: string}|null}
  */
 export function dshCatalogueRoute(reply) {
@@ -200,7 +200,7 @@ function catalogueNote(reply) {
 // and without any provider section: routes live in DSH's own settings document
 // (`<DSH_HOME>/profiles/sdk/cordis.patch.yml`), which a fresh temporary home
 // does not have. Nothing here needs a real credential: initialize answers
-// without one, and `vika/llm/models` then says which routes this DSH can serve.
+// without one, and `superagent/llm/models` then says which routes this DSH can serve.
 // A key the caller does have is passed through, so a built-in route that really
 // resolves models is reported as such; no placeholder is invented, because that
 // would make the built-in route look servable on an unconfigured machine.
@@ -219,7 +219,7 @@ export async function probeDsh(bin, { env = process.env, spawnImpl = spawn, time
   try {
     assertDshNodeVersion();
     if (ownHome) {
-      directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-dsh-probe-'));
+      directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-dsh-probe-'));
       fs.chmodSync(directory, 0o700);
     }
     const patchPath = ownHome
@@ -260,7 +260,7 @@ export async function probeDsh(bin, { env = process.env, spawnImpl = spawn, time
 const ACP_INITIALIZE = Object.freeze({ jsonrpc: '2.0', params: {
   protocolVersion: 1,
   clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-  clientInfo: { name: 'vika-setup', version: '1' },
+  clientInfo: { name: 'superagent-setup', version: '1' },
 } });
 
 // OpenCode ACP. OpenCode 1 and 2 both answer, so version gating happens
