@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional
 import httpx
 from loguru import logger
 
-from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
+from openviking.utils.image_input import compress_image_input
+from openviking.utils.media_limits import MAX_MEDIA_FILE_BYTES
 from vikingbot.agent.tools.base import MultimodalToolResult, Tool, ToolContext
 from vikingbot.openviking_mount.ov_server import VikingClient
 from vikingbot.utils.image_format import sniff_image_format
@@ -1051,8 +1052,6 @@ class VikingMultiReadTool(OVFileTool):
     """Tool to read content from multiple Viking resources concurrently."""
 
     _FULL_READ_WARN_BYTES = 512 * 1024
-    _MAX_INLINE_IMAGES = 4
-    _MAX_INLINE_MEDIA_BYTES = MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
     _INLINE_IMAGE_EXTENSIONS = frozenset({".gif", ".jpeg", ".jpg", ".png", ".webp"})
     _INLINE_IMAGE_MIME_TYPES = frozenset({"image/gif", "image/jpeg", "image/png", "image/webp"})
     _AUDIO_EXTENSIONS = frozenset(
@@ -1115,7 +1114,7 @@ class VikingMultiReadTool(OVFileTool):
 
     @classmethod
     async def _read_image(cls, client, uri):
-        """Load one native image for multi-read and Compile using the same checks."""
+        """Load an original and attach its smaller model rendition with the original hash."""
         stat = await client.stat(uri)
         size = stat.get("size") if isinstance(stat, dict) else None
         if isinstance(size, bool) or not isinstance(size, int) or size < 0:
@@ -1125,12 +1124,12 @@ class VikingMultiReadTool(OVFileTool):
                 "success": False,
                 "media_kind": "image",
             }
-        if size > cls._MAX_INLINE_MEDIA_BYTES:
+        if size > MAX_MEDIA_FILE_BYTES:
             return {
                 "uri": uri,
                 "content": (
-                    f"Image is {size} bytes; the inline limit is "
-                    f"{cls._MAX_INLINE_MEDIA_BYTES} bytes."
+                    f"Image is {size} bytes; the resource file limit is "
+                    f"{MAX_MEDIA_FILE_BYTES} bytes."
                 ),
                 "success": False,
                 "media_kind": "image",
@@ -1151,15 +1150,21 @@ class VikingMultiReadTool(OVFileTool):
                 "success": False,
                 "media_kind": "image",
             }
-        encoded = base64.b64encode(data).decode("ascii")
+        model_data, mime_type = await asyncio.to_thread(
+            compress_image_input, data, image_format.mime_type
+        )
+        encoded = base64.b64encode(model_data).decode("ascii")
         return {
             "uri": uri,
-            "content": (f"Image resource ({image_format.mime_type}, {len(data)} bytes)."),
+            "content": (
+                f"Image resource ({image_format.mime_type}, {len(data)} bytes); "
+                f"model input ({mime_type}, {len(model_data)} bytes)."
+            ),
             "image": {
                 "type": "image_url",
-                "image_url": {"url": f"data:{image_format.mime_type};base64,{encoded}"},
+                "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
             },
-            "media_bytes": len(data),
+            "media_bytes": len(model_data),
             "sha256": hashlib.sha256(data).hexdigest(),
             "success": True,
             "media_kind": "image",
@@ -1185,12 +1190,7 @@ class VikingMultiReadTool(OVFileTool):
             max_concurrent = 10
             semaphore = asyncio.Semaphore(max_concurrent)
 
-            image_indexes = [
-                index for index, uri in enumerate(uris) if self._media_kind(uri) == "image"
-            ]
-            inline_image_indexes = set(image_indexes[: self._MAX_INLINE_IMAGES])
-
-            async def read_single_uri(index: int, uri: str) -> dict[str, Any]:
+            async def read_single_uri(uri: str) -> dict[str, Any]:
                 async with semaphore:
                     try:
                         media_kind = self._media_kind(uri)
@@ -1201,17 +1201,6 @@ class VikingMultiReadTool(OVFileTool):
                                 "Revision reads require text files and valid line ranges"
                             )
                         if media_kind == "image":
-                            if index not in inline_image_indexes:
-                                return {
-                                    "uri": uri,
-                                    "content": (
-                                        "Image was not attached because one tool result supports "
-                                        f"at most {self._MAX_INLINE_IMAGES} images. Read fewer "
-                                        "images at once."
-                                    ),
-                                    "success": False,
-                                    "media_kind": media_kind,
-                                }
                             return await self._read_image(client, uri)
 
                         if media_kind in {"audio", "video"}:
@@ -1288,26 +1277,10 @@ class VikingMultiReadTool(OVFileTool):
                         }
 
             # 并发读取所有URI
-            read_tasks = [read_single_uri(index, uri) for index, uri in enumerate(uris)]
+            read_tasks = [read_single_uri(uri) for uri in uris]
             results = await asyncio.gather(*read_tasks)
             if with_revision:
                 return json.dumps(results, ensure_ascii=False)
-
-            inline_media_bytes = 0
-            for result in results:
-                if result.get("image") is None:
-                    continue
-                media_bytes = result.get("media_bytes", 0)
-                if inline_media_bytes + media_bytes > self._MAX_INLINE_MEDIA_BYTES:
-                    result.pop("image", None)
-                    result["media_bytes"] = 0
-                    result["content"] = (
-                        "Image was not attached because the combined inline media size would "
-                        f"exceed {self._MAX_INLINE_MEDIA_BYTES} bytes. Read fewer images at once."
-                    )
-                    result["success"] = False
-                    continue
-                inline_media_bytes += media_bytes
 
             # 构建结果
             range_note = (

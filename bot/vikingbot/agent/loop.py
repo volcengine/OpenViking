@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 from openviking.utils.rule_delivery import MAX_RULE_RESULT_CHARS, bound_rule_text
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.memory import MemoryStore
@@ -61,7 +60,7 @@ def _is_tool_result_success(result: Any) -> bool:
 
 
 def _compact_msg_chars(messages: list[dict]) -> int:
-    """Count text and message structure; inline image bytes have a separate limit."""
+    """Count text and message structure without charging inline image payloads as text."""
     total = 0
     for message in messages:
         content = message.get("content")
@@ -126,42 +125,6 @@ def _inline_media_bytes(messages: list[dict]) -> int:
             if isinstance(url, str):
                 total += _base64_data_url_bytes(url)
     return total
-
-
-def _demote_historical_tool_media(
-    messages: list[dict], *, history_end: int, bytes_needed: int
-) -> int:
-    candidates: list[tuple[dict, int]] = []
-    reclaimable_bytes = 0
-    for message in messages[:history_end]:
-        if message.get("role") != "tool" or not isinstance(message.get("content"), list):
-            continue
-        media_bytes = _inline_media_bytes([message])
-        if media_bytes <= 0:
-            continue
-        candidates.append((message, media_bytes))
-        reclaimable_bytes += media_bytes
-        if reclaimable_bytes >= bytes_needed:
-            break
-
-    if reclaimable_bytes < bytes_needed:
-        return 0
-
-    for message, _media_bytes in candidates:
-        text_parts = [
-            part["text"]
-            for part in message["content"]
-            if isinstance(part, dict)
-            and part.get("type") in {"text", "input_text"}
-            and isinstance(part.get("text"), str)
-        ]
-        text = "\n".join(text_parts)
-        omission_note = (
-            "Media content from this earlier tool result was omitted from subsequent "
-            "requests to keep the inline media budget."
-        )
-        message["content"] = f"{text}\n\n{omission_note}" if text else omission_note
-    return reclaimable_bytes
 
 
 def _compact_render_message(message: dict) -> str:
@@ -1896,6 +1859,7 @@ class AgentLoop:
         allow_final_fallback: bool = True,
         inject_write_experience: bool = True,
         context_compact_budget: int | None = None,
+        automatic_compaction: bool = True,
         pre_compact_prompt: str | None = None,
         status_note_provider: Any | None = None,
         should_stop: Callable[[], bool] | None = None,
@@ -1919,6 +1883,8 @@ class AgentLoop:
                 trusted-mode owner-user memory lookup
             disabled_tools: Tool names to hide from the model for this request
             openviking_connection: Request-scoped OpenViking identity for tools
+            automatic_compaction: Apply the default chat context budget when no explicit
+                budget is set. Explicit positive context_compact_budget always applies.
             stop_tool_names: Tool names that terminate the loop immediately after execution
             on_plain_text: Optional async callback invoked when the model returns a non-empty
                 plain-text reply (no tool calls). It receives (messages, text, iteration) and
@@ -1977,6 +1943,9 @@ class AgentLoop:
         write_exp_injected = False
         stop_tools = set(stop_tool_names or [])
         compact_pending = False
+        effective_context_budget = context_compact_budget or (
+            240_000 if automatic_compaction else None
+        )
         compact_threshold_chars = (context_compact_budget or 0) * 0.85
         compact_trigger_chars = compact_threshold_chars
         steer_memory_events: list[_PreparedSteer] = []
@@ -2004,12 +1973,11 @@ class AgentLoop:
                 active_turn.history_items.extend(accepted_steers)
             steer_memory_events.extend(accepted_steers)
 
-            if context_compact_budget is not None or _compact_msg_chars(messages) > 240_000:
-                budget = context_compact_budget or 240_000
+            if effective_context_budget is not None:
                 current_chars = _compact_msg_chars(messages)
-                if compact_pending or current_chars > budget:
+                if compact_pending or current_chars > effective_context_budget:
                     messages = await self._compact_tool_loop(
-                        messages, session_key, budget_chars=budget
+                        messages, session_key, budget_chars=effective_context_budget
                     )
                     compact_pending = False
                     # Fixed task content can exceed the save threshold; wait for new content.
@@ -2017,7 +1985,8 @@ class AgentLoop:
                         compact_threshold_chars, _compact_msg_chars(messages)
                     )
                 elif (
-                    pre_compact_prompt
+                    context_compact_budget is not None
+                    and pre_compact_prompt
                     and 1 < iteration < iteration_limit
                     and current_chars > compact_trigger_chars
                 ):
@@ -2051,9 +2020,13 @@ class AgentLoop:
                 disabled_tools=disabled_tools,
                 skill_runtime=skill_runtime,
             )
-            budget = context_compact_budget or 240_000
-            if _compact_msg_chars(messages) > budget:
-                messages = await self._compact_tool_loop(messages, session_key, budget_chars=budget)
+            if (
+                effective_context_budget is not None
+                and _compact_msg_chars(messages) > effective_context_budget
+            ):
+                messages = await self._compact_tool_loop(
+                    messages, session_key, budget_chars=effective_context_budget
+                )
             visible_tool_names = {
                 str(definition.get("function", {}).get("name") or "")
                 for definition in tool_definitions
@@ -2276,8 +2249,6 @@ class AgentLoop:
 
                 # Stage 3: Process results sequentially in original order
                 turn_tools: list[dict[str, Any]] = []
-                history_end = len(messages)
-                request_media_bytes = _inline_media_bytes(messages)
                 for _idx, tool_call, outcome, tool_execute_duration in results:
                     result = outcome.result
                     result_text = str(result)
@@ -2316,36 +2287,11 @@ class AgentLoop:
                             )
                         )
                     if isinstance(result, MultimodalToolResult):
-                        result_media_bytes = _inline_media_bytes([{"content": result.content}])
                         if not self.provider.should_inline_tool_result_media(self.model):
                             model_result = (
                                 f"{result_text}\n\nMedia content was omitted by the configured "
                                 "tool-result media policy."
                             )
-                        else:
-                            overflow = (
-                                request_media_bytes
-                                + result_media_bytes
-                                - MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
-                            )
-                            if overflow > 0:
-                                reclaimed = _demote_historical_tool_media(
-                                    messages,
-                                    history_end=history_end,
-                                    bytes_needed=overflow,
-                                )
-                                request_media_bytes -= reclaimed
-                            if (
-                                request_media_bytes + result_media_bytes
-                                > MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
-                            ):
-                                model_result = (
-                                    f"{result_text}\n\nMedia content was omitted because adding it would "
-                                    "make this model request exceed the inline media "
-                                    f"limit of {MAX_INLINE_TOOL_RESULT_MEDIA_BYTES} bytes."
-                                )
-                            else:
-                                request_media_bytes += result_media_bytes
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, model_result
                     )
@@ -2497,10 +2443,12 @@ class AgentLoop:
                         ),
                     }
                 )
-                budget = context_compact_budget or 240_000
-                if _compact_msg_chars(messages) > budget:
+                if (
+                    effective_context_budget is not None
+                    and _compact_msg_chars(messages) > effective_context_budget
+                ):
                     messages = await self._compact_tool_loop(
-                        messages, session_key, budget_chars=budget
+                        messages, session_key, budget_chars=effective_context_budget
                     )
                 (
                     response,
@@ -2549,6 +2497,7 @@ class AgentLoop:
         stop_tool_names: list[str],
         openviking_connection: dict[str, Any] | None,
         context_compact_budget: int | None = None,
+        automatic_compaction: bool = True,
         pre_compact_prompt: str | None = None,
         budget_reminder_thresholds: tuple[int, int, int] | None = None,
     ) -> tuple[Any, list[dict], dict[str, int], int]:
@@ -2557,6 +2506,8 @@ class AgentLoop:
         ``budget_reminder_thresholds`` optionally adds an iteration countdown before
         model calls near the execution limit. ``pre_compact_prompt`` enables a bounded
         save turn before context compaction, using the task's existing file tools.
+        Set ``automatic_compaction=False`` when the caller owns context capacity;
+        an explicit positive ``context_compact_budget`` still takes precedence.
         """
 
         max_iterations = getattr(self, "max_iterations", 0)
@@ -2597,6 +2548,7 @@ class AgentLoop:
             allow_final_fallback=False,
             inject_write_experience=False,
             context_compact_budget=context_compact_budget,
+            automatic_compaction=automatic_compaction,
             pre_compact_prompt=pre_compact_prompt,
             status_note_provider=status_note_provider,
         )

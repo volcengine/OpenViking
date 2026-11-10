@@ -338,6 +338,7 @@ def agent_runner(loop, session_key, connection, limits):
             inject_write_experience=False,
             agent_id=child_id,
             context_compact_budget=None,
+            automatic_compaction=False,
             max_iterations=limits.subagent_iterations,
             should_stop=lambda: not submit.can_retry,
         )
