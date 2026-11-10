@@ -60,6 +60,8 @@ function levelToFileTab(
     kind: 'file',
     key: `${tab.key}::${level.key}`,
     source: level.source,
+    resources: level.resources ?? tab.resources,
+    resolveImage: tab.resolveImage,
     operations: tab.operations,
     slots: tab.slots,
   };
@@ -228,6 +230,7 @@ export function FilePreviewDirectoryBody({
       <div className="ov-file-preview__body">
         {
           <FilePreviewBody
+            key={fileTab.key}
             fileTab={fileTab}
             text={text}
             locale={locale}

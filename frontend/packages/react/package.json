@@ -91,7 +91,12 @@
       "types": "./dist/modules/scope-cascade/index.d.ts",
       "import": "./dist/modules/scope-cascade.js"
     },
-    "./modules/scope-cascade/style.css": "./dist/modules/scope-cascade/style.css"
+    "./modules/scope-cascade/style.css": "./dist/modules/scope-cascade/style.css",
+    "./components/directory-tour": {
+      "types": "./dist/components/directory-tour/index.d.ts",
+      "import": "./dist/components/directory-tour.js"
+    },
+    "./components/directory-tour/style.css": "./dist/components/directory-tour/style.css"
   },
   "scripts": {
     "dev": "rslib build --watch",

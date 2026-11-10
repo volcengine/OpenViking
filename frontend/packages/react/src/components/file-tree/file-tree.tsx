@@ -4,6 +4,7 @@ import { resolveFileTreeLabels } from './file-tree-labels.js';
 import { FileTreeBody } from './file-tree-body.js';
 import { handleRowKeyDown } from './file-tree-keyboard.js';
 import type { FileTreeRowContext } from './file-tree-row-context.js';
+import { FileTreeToolbar } from './file-tree-toolbar.js';
 import type {
   FileTreeComponent,
   FileTreeHandle,
@@ -68,6 +69,8 @@ export const FileTree: FileTreeComponent = forwardRef<
     locale,
     operations,
     selectedId,
+    search,
+    refresh,
     isReady = true,
     loadingFallback,
     errorFallback,
@@ -83,6 +86,8 @@ export const FileTree: FileTreeComponent = forwardRef<
     onLoadMore,
     onRetry,
     onOpenRetentionSettings,
+    onSearch,
+    onRefresh,
     className,
     ...rest
   },
@@ -97,6 +102,8 @@ export const FileTree: FileTreeComponent = forwardRef<
     onLoadMore,
     onRetry,
     onOpenRetentionSettings,
+    onSearch,
+    onRefresh,
   });
 
   useImperativeHandle(
@@ -141,6 +148,14 @@ export const FileTree: FileTreeComponent = forwardRef<
       {slots?.toolbar ? (
         <div className="ov-file-tree__toolbar">{slots.toolbar}</div>
       ) : null}
+      <FileTreeToolbar
+        search={search}
+        refresh={refresh}
+        text={text}
+        refreshing={actions.refreshing}
+        onSearch={actions.onSearch}
+        onRefresh={actions.onRefresh}
+      />
       <div
         role="tree"
         aria-label={rest['aria-label']}

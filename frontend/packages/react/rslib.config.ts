@@ -11,6 +11,8 @@ export default defineConfig({
       source: {
         entry: {
           index: './src/index.ts',
+          'components/directory-tour':
+            './src/components/directory-tour/index.ts',
           icons: './src/icons/index.tsx',
           client: './src/client/index.ts',
           'modules/scope-cascade': './src/modules/scope-cascade/index.ts',
@@ -45,6 +47,8 @@ export default defineConfig({
     // Build each stylesheet independently so every public CSS entry is complete.
     ...Object.entries({
       style: './src/style.css',
+      'components/directory-tour/style':
+        './src/components/directory-tour/style.css',
       'modules/scope-cascade/style': './src/modules/scope-cascade/style.css',
       'components/style': './src/components/style.css',
       'components/file-tree/style': './src/components/file-tree/style.css',

@@ -41,6 +41,8 @@ export interface FilePreviewPanelsProps {
   contentTab?: FilePreviewContentTab;
   directoryTab?: FilePreviewDirectoryTab;
   fileTab?: FilePreviewFileTab;
+  levelKey?: string;
+  onLevelChange: (key: string) => void;
   panelProps: HTMLAttributes<HTMLDivElement>;
   panelClass: string;
   text: Required<FilePreviewLabels>;
@@ -57,6 +59,8 @@ export interface FilePreviewPanelsProps {
 }
 
 export function FilePreviewPanels({
+  levelKey,
+  onLevelChange,
   contentTab,
   directoryTab,
   fileTab,
@@ -112,6 +116,9 @@ export function FilePreviewPanels({
   return (
     <div {...panelProps} className={panelClass}>
       <FilePreviewHeader
+        levels={fileTab.levels}
+        levelKey={levelKey}
+        onLevelChange={onLevelChange}
         path={fileTab.source.path}
         fileName={fileTab.source.fileName}
         canOpenParent={Boolean(fileTab.operations?.openParent)}
@@ -123,6 +130,7 @@ export function FilePreviewPanels({
       />
       <div className="ov-file-preview__body">
         <FilePreviewBody
+          key={JSON.stringify([fileTab.key, levelKey])}
           fileTab={fileTab}
           text={text}
           locale={locale}

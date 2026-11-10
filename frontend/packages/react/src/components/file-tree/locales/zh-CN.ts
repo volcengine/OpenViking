@@ -1,6 +1,8 @@
 import type { ResolvedLabels } from '../file-tree-row-context.js';
 
 const messages = {
+  search: '搜索文件…',
+  refresh: '刷新文件树',
   empty: '暂无文件',
   error: '加载失败',
   retry: '重试',
