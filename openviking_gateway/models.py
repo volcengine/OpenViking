@@ -55,6 +55,9 @@ class Policy(BaseModel):
     show_recall: bool = False
     commit_tokens: int = Field(default=20000, ge=1, le=JSON_INT_MAX)
     keep_recent_messages: int = Field(default=10, ge=0, le=1000)
+    # Memory types OpenViking extracts from saved conversations: None means every enabled
+    # type, an empty list none.
+    capture_memory_types: list[str] | None = None
     idle_seconds: float = Field(default=600, ge=1)
     compaction: bool = True
     compaction_threshold: float = Field(default=0.9, ge=0.5, le=0.98)

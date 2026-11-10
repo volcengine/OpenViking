@@ -121,6 +121,8 @@ export type ProfileSettings = {
   show_recall: boolean
   commit_tokens: number
   keep_recent_messages: number
+  /** Memory types OpenViking extracts; `null` means every enabled type. */
+  capture_memory_types: string[] | null
   idle_seconds: number
   compaction: boolean
   compaction_threshold: number

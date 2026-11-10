@@ -44,6 +44,7 @@ export const PROFILE_DEFAULTS: ProfileSettings = {
   show_recall: false,
   commit_tokens: 20000,
   keep_recent_messages: 10,
+  capture_memory_types: null,
   idle_seconds: 600,
   compaction: true,
   compaction_threshold: 0.9,

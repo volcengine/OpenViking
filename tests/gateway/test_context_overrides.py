@@ -4,6 +4,8 @@ import json
 
 import orjson
 import pytest
+from aiohttp import web
+from conftest import make_due
 
 CHAT = "/v1/chat/completions"
 
@@ -81,6 +83,7 @@ async def test_empty_disabled_tools_offers_write_tools(running_gateway):
         '{"session_max_tokens": NaN}',
         {"commit_tokens": 10**30},
         {"quotas": {"events": -1}},
+        {"capture_memory_types": "events"},
     ],
 )
 async def test_invalid_override_is_rejected(running_gateway, context):
@@ -90,6 +93,59 @@ async def test_invalid_override_is_rejected(running_gateway, context):
     assert response.status_code == 400
     assert response.json()["reason"] == "context_override_invalid"
     assert not seen and not calls
+
+
+async def capture_sessions(app, client, key, session, context, status=200):
+    """Save one finished turn and return the bodies of the OpenViking sessions it creates."""
+    created = []
+
+    async def handler(request):
+        if request.path == "/api/v1/sessions":
+            created.append(await request.json())
+            if status != 200:
+                return web.json_response({"status": "error"}, status=status)
+        return None
+
+    app.state.test_backend["handler"] = handler
+    body = message("Remember the blue cluster")
+    response = await client.post(CHAT, headers=headers(key, session, context), json=body)
+    assert response.status_code == 200, response.text
+    body["messages"] += [
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "And the red one"},
+    ]
+    response = await client.post(CHAT, headers=headers(key, session, context), json=body)
+    assert response.status_code == 200, response.text
+    await make_due(app.state.store)
+    for _ in range(3):
+        await app.state.worker.once()
+    return created
+
+
+async def test_capture_memory_types_reach_the_openviking_session(running_gateway):
+    app, client, _, key, _, writes = running_gateway
+    created = await capture_sessions(app, client, key, "default-types", None)
+    assert created and all("memory_types" not in body["memory_policy"] for body in created)
+    first = {body["session_id"] for body in created}
+    writes.clear()
+    created = await capture_sessions(
+        app, client, key, "events-only", {"capture_memory_types": ["events"]}
+    )
+    policies = [body["memory_policy"] for body in created if body["session_id"] not in first]
+    assert policies and all(policy["memory_types"] == ["events"] for policy in policies)
+    assert writes
+
+
+async def test_rejected_capture_memory_types_stop_delivery(running_gateway):
+    app, client, admin, key, _, writes = running_gateway
+    created = await capture_sessions(
+        app, client, key, "unknown-type", {"capture_memory_types": ["bogus"]}, status=400
+    )
+    assert created and not writes
+    logs = (await client.get("/admin/logs", headers=admin)).json()
+    capture = [log for log in logs if log["kind"] == "capture"]
+    assert capture[0]["capture_status"] == "retrying"
+    assert capture[0]["capture_reason"] == "openviking_http_400"
 
 
 async def test_override_needs_the_profile_switch(running_gateway):

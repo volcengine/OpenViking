@@ -93,6 +93,7 @@ The **Save conversations** section (on by default) controls [saving](../guides/1
 - A turn is saved when the next user message arrives. **Save the latest reply after** covers the last turn, so short conversations get committed too.
 - The session is committed whenever **Commit after** tokens are waiting. After each commit, OpenViking extracts memories in the background.
 - After a commit, the session keeps the newest whole turns, at least **Keep recent messages** messages.
+- OpenViking extracts every [memory type](../api/16-memory.md) it has enabled. To extract only some, set `capture_memory_types` to their names, for example `["preferences","events"]`, with the management API or the `X-OpenViking-Context` header; an empty list saves conversations without extracting memories. Studio has no control for this setting and keeps its value when you save the profile. A name OpenViking does not know stops saving; see [Configuration reference](13-configuration.md#profile-saving).
 
 ## Long conversations and OpenViking tools {#long-conversations-and-tools}
 
