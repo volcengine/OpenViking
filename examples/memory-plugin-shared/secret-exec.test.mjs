@@ -42,6 +42,8 @@ const HOSTILE = [
 ];
 
 const SHELLS = ["sh", "bash"].filter((shell) => spawnSync(shell, ["-c", "true"]).status === 0);
+// `|&`, `&>` and `<<<` are not POSIX, and bash before 4 (the one macOS ships) has no `|&`.
+const BASHISM_SHELLS = SHELLS.filter((shell) => spawnSync(shell, ["-c", "true |& cat <<<x &> /dev/null"]).status === 0);
 
 function run(shell, script, env = {}) {
   const result = spawnSync(shell, ["-c", script], { env: { PATH: process.env.PATH, ...env }, encoding: "utf8" });
@@ -248,8 +250,7 @@ test("guard lines carry the command to a permission check and never run any of i
   for (const command of commands) {
     const guard = guardCommand(command, { node: "printf", runner: "REACHED" });
     assert.ok(guard, command);
-    // `|&`, `&>` and `<<<` are not POSIX, and Claude Code's Bash tool does not run sh.
-    for (const shell of SHELLS.filter((name) => name !== "sh" || !/\|&|&>|<<</.test(command))) {
+    for (const shell of /\|&|&>|<<</.test(command) ? BASHISM_SHELLS : SHELLS) {
       const cwd = mkdtempSync(join(tmpdir(), "ov-guard-"));
       try {
         const result = spawnSync(shell, ["-c", guard], { cwd, env: { PATH: process.env.PATH, HOME: cwd }, encoding: "utf8" });
