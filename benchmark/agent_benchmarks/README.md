@@ -4,20 +4,25 @@
 
 `baseline eval → train（执行任务并 session.commit 学习）→ epoch/final eval`
 
-benchmark 服务负责原生任务环境、agent 执行与原生判分。训练和评测均使用独立
-OpenSpace 进程；OpenSpace 自身的学习、技能发布和自动记忆关闭。OV 在训练阶段
+benchmark 服务负责原生任务环境、agent 执行与原生判分。训练和评测均在独立 worker 中复用本仓库的
+`bot/vikingbot/agent/loop.py:AgentLoop` 和 `VLMProviderAdapter`。OV 在训练阶段
 提交真实轨迹，评测阶段只读已学经验。经验召回目前发生在**任务入口一次**，不会在
 每次工具调用前重新检索。baseline 完全不调用经验检索。
 
+任务执行循环、模型调用和工具注册复用仓库已有实现；SkillFlow 使用 Harbor 容器
+工具桥接，Evo 的代码/知识工作使用 VikingBot 的文件与 shell 工具，检索使用本地
+corpus search 工具。所有任务只暴露所选 benchmark 工具，不加载个人 bot 配置、
+本地技能、后台子 agent 或 bot 自动经验写入。学习统一由 train 的 session.commit 执行。
+
 ## 准备运行环境和清单
 
-OV 服务使用本分支的 Python 环境。另准备各 benchmark 的 Python 环境：安装兼容的
-OpenSpace、MCP，以及 SkillFlow 所需 Harbor/Docker 或 EvoAgentBench 官方 harness
-依赖。代码和数据下载、OV 模型及 embedding 配置仍按各项目正常方式准备。本适配器
+OV 服务使用本分支的 Python 环境。另准备各 benchmark 的 Python 环境：安装本仓库 VikingBot（`pip install -e ".[bot]"`）及其依赖，
+以及 SkillFlow 所需 Harbor/Docker 或 EvoAgentBench 官方 harness 依赖。代码和数据下载、OV 模型及 embedding 配置仍按各项目正常方式准备。本适配器
 不自动下载全部数据，也不修改模型权重。
 
 复制 `skillflow-runtime.example.json` / `evoagentbench-runtime.example.json`，填写实际
-路径和模型；API key 通过 `api_key_env` 对应的环境变量提供，可用 `env_file` 加载本地
+路径和模型；`agent_runtime` 固定为 `vikingbot`，无需外部 agent 源码目录。`provider` 使用 OV 的
+模型 provider 名称（默认 `volcengine`）；API key 通过 `api_key_env` 对应的环境变量提供，可用 `env_file` 加载本地
 环境文件。运行配置不应包含明文 API key。每个服务对应一个冻结 manifest。
 
 SkillFlow 可提供多个 `test_tasks` 根目录，优先使用排在前面的修复副本。每个 family
@@ -75,8 +80,10 @@ IR judge 降级为 exact-match 时也拒绝当作有效判分。worker 超时会
 
 ## 统一 train 命令
 
-先以本分支代码启动一个已配置好模型和 embedding 的 OV 服务，明确开启
-`agent_evolution.enabled: true`，并确认账号没有关闭这一能力。默认开关关闭时，归档
+先以本分支代码启动一个已配置好模型和 embedding 的 OV 服务，通过服务的运行时配置或账号配置明确开启
+`agent_evolution.enabled: true`，并确认账号的有效状态。该字段属于运行时配置，不能仅凭
+`ov.conf` 中写了 true 就认为已开启；可通过 `GET /api/v1/admin/agent-evolution` 确认。
+默认开关关闭时，归档
 成功不等于经验学习成功；train 会在可查询时提前检查，并把提交结果中的学习跳过
 标记当作训练错误。使用独立实验 user，
 避免复用已有经验影响比较；SkillFlow 和 EvoAgentBench 应分别使用不同 user。

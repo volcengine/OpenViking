@@ -1,13 +1,10 @@
-"""Read-only, full-corpus BM25 search exposed through standard MCP stdio."""
+"""Read-only, full-corpus BM25 search for benchmark tools."""
 
 from __future__ import annotations
 
-import argparse
 import re
 import sqlite3
 from pathlib import Path
-
-from mcp.server.fastmcp import FastMCP
 
 STOPWORDS = set(
     "a an and are as at be by do for from had has have how i in is it of on or "
@@ -30,7 +27,7 @@ def excerpt(text: str, tokens: list[str], budget: int = 512, char_budget: int = 
         )
         snippet = ("… " if start else "") + " ".join(words[start : start + budget]) + " …"
     # A comma-separated word list can be 800 KB but count as a single word.
-    # Keep such a result inline: this MCP-only agent cannot read host overflow files.
+    # Keep such a result inline: the retrieval agent receives results inline.
     if len(snippet) > char_budget:
         width = char_budget - 4
         lowered = snippet.lower()
@@ -72,28 +69,3 @@ def search_corpus(corpus: Path, query: str, k: int = 5) -> dict:
             for docid, url, text, score in rows
         ],
     }
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--corpus", type=Path, required=True)
-    args = parser.parse_args()
-    corpus = args.corpus.resolve()
-    if not corpus.is_file():
-        raise FileNotFoundError(corpus)
-    server = FastMCP("bcp-search")
-
-    @server.tool()
-    def search(query: str, k: int = 5) -> dict:
-        """Search the full local knowledge corpus; return ranked cited snippets.
-
-        Use specific names, dates and constraints. Rephrase queries as needed.
-        Each result includes a docid for citation and a keyword-centered excerpt.
-        """
-        return search_corpus(corpus, query, k)
-
-    server.run(transport="stdio")
-
-
-if __name__ == "__main__":
-    main()

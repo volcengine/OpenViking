@@ -36,6 +36,8 @@ class Catalog:
         if self.data.get("version") != 1:
             raise ValueError("Unsupported adapter manifest version")
         self.runtime = self.data["runtime"]
+        if self.runtime.get("agent_runtime", "vikingbot") != "vikingbot":
+            raise ValueError("Benchmark adapters use the repository VikingBot runtime")
         self.entries: dict[tuple[str, str, str], dict[str, Any]] = {}
         identities: set[tuple[str, str]] = set()
         self.splits = {name: list(self.data["splits"][name]) for name in ("train", "test")}
@@ -94,6 +96,11 @@ class Catalog:
             for file in sorted(directory.glob("*.py")):
                 digest.update(file.name.encode())
                 digest.update(file.read_bytes())
+        repo = Path(__file__).resolve().parents[2]
+        for directory in (repo / "bot/vikingbot", repo / "openviking/models/vlm"):
+            for file in sorted(directory.rglob("*.py")):
+                digest.update(str(file.relative_to(repo)).encode())
+                digest.update(file.read_bytes())
         for name in ("benchmark_config", "corpus_manifest"):
             if self.runtime.get(name):
                 digest.update(Path(self.runtime[name]).read_bytes())
@@ -104,7 +111,6 @@ class Catalog:
             "meta_prompts_dir",
             "code_cache",
             "cache",
-            "openspace_repo",
         ):
             value = self.runtime.get(key)
             if not value:
@@ -112,10 +118,6 @@ class Catalog:
             path = Path(value)
             if path.is_file():
                 files = [path]
-            elif key == "openspace_repo":
-                files = sorted((path / "openspace/openspace").rglob("*.py")) + sorted(
-                    (path / "openspace/openspace/config").glob("*.json")
-                )
             elif key == "cache":
                 files = [path / "corpus.sqlite"] if (path / "corpus.sqlite").exists() else []
             else:

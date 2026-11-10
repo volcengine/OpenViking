@@ -57,7 +57,7 @@ class AdapterExecutor:
                 else {**policy_set.metadata, "root_uri": policy_set.root_uri},
             }
             repo = Path(__file__).resolve().parents[2]
-            roots = [str(repo), str(Path(runtime["openspace_repo"]) / "openspace")]
+            roots = [str(repo), str(repo / "bot")]
             env = {
                 **os.environ,
                 "PYTHONPATH": os.pathsep.join(roots),

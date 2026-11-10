@@ -8,9 +8,9 @@ import httpx
 import pytest
 
 from benchmark.agent_benchmarks.catalog import Catalog
+from benchmark.agent_benchmarks.memory import recall
 from benchmark.agent_benchmarks.prepare import skillflow_splits
 from benchmark.agent_benchmarks.service import create_app
-from benchmark.agent_benchmarks.worker import recall
 
 
 def task(root, domain, name):
@@ -211,7 +211,6 @@ async def test_subprocess_bridge_preserves_epoch_and_trial_identity_without_writ
     data = json.loads(path.read_text())
     data["runtime"] = {
         "python": sys.executable,
-        "openspace_repo": str(tmp_path),
         "timeout_seconds": 10,
     }
     path.write_text(json.dumps(data))
@@ -264,26 +263,3 @@ r={'case':p['case'],'messages':[],'policy_snapshot_id':p['snapshot_id'],'evaluat
     for f in executor.output.rglob("*"):
         if f.is_file():
             assert "private" not in f.read_text()
-
-
-@pytest.mark.asyncio
-async def test_memory_adapter_accepts_immutable_agent_instances(tmp_path):
-    from dataclasses import dataclass
-
-    from benchmark.agent_benchmarks.worker import MemoryAwareApp
-
-    @dataclass(slots=True, frozen=True)
-    class Request:
-        prompt: str
-
-    @dataclass(slots=True, frozen=True)
-    class Agent:
-        name: str = "native"
-
-        async def execute(self, request):
-            return request.prompt
-
-    app = MemoryAwareApp(Agent(), {}, tmp_path)
-    assert await app.execute(Request("original task")) == "original task"
-    assert app.name == "native"
-    assert (tmp_path / "ov-prompt.md").read_text() == "original task"
