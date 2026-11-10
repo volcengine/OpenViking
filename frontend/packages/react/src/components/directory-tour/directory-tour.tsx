@@ -3,17 +3,9 @@ import { createPortal } from 'react-dom';
 import type { DirectoryTourProps, DirectoryTourStep } from './types.js';
 import { useTourAnchor } from './use-tour-anchor.js';
 import { useTourPosition } from './use-tour-position.js';
-
-const DEFAULT_LABELS = {
-  close: 'Close guide',
-  next: 'Next',
-  done: 'Got it',
-  locating: 'Locating directory…',
-  unavailable: 'This directory is unavailable. Retry or skip this step.',
-  retry: 'Retry',
-  skip: 'Skip',
-  progress: (current: number, total: number) => `${current}/${total}`,
-};
+import { resolveLocale } from '../../shared/locale.js';
+import enUS from './locales/en-US.js';
+import zhCN from './locales/zh-CN.js';
 
 /** Data-free directory guidance. Unmounting a closed session resets its steps. */
 export function DirectoryTour(props: DirectoryTourProps) {
@@ -57,6 +49,7 @@ function TourStep({
   placement = 'right',
   onClose,
   labels,
+  locale,
   className,
   style,
 }: DirectoryTourProps & {
@@ -64,7 +57,7 @@ function TourStep({
   index: number;
   advance: (skip: boolean) => void;
 }) {
-  const text = { ...DEFAULT_LABELS, ...labels };
+  const text = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale, labels);
   const [attempt, retry] = useState(0);
   const [surface, setSurface] = useState<HTMLDivElement | null>(null);
   const { anchor, failed } = useTourAnchor(

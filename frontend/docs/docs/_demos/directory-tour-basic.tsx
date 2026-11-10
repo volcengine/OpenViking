@@ -144,6 +144,7 @@ export default function DirectoryTourBasic() {
       </div>
       <div className="ov-directory-tour-demo__layout">
         <FileTree
+          locale={zh ? 'zh-CN' : 'en-US'}
           ref={tree}
           rows={rows}
           selectedId={selectedId}
@@ -173,6 +174,7 @@ export default function DirectoryTourBasic() {
         </p>
       </div>
       <DirectoryTour
+        locale={zh ? 'zh-CN' : 'en-US'}
         open={open}
         steps={steps}
         locateTarget={locateTarget}

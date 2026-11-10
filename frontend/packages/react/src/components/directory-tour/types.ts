@@ -1,4 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react';
+import type { Locale } from '../../shared/locale.js';
 
 export type DirectoryTourTarget =
   | 'userMemories'
@@ -33,6 +34,7 @@ export interface DirectoryTourLabels {
 }
 
 export interface DirectoryTourProps {
+  locale: Locale;
   open: boolean;
   steps: readonly DirectoryTourStep[];
   currentStep?: number;

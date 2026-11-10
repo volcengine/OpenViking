@@ -17,6 +17,7 @@ test('root and subpath share one implementation and SSR never resolves browser a
     assert.equal(
       renderToStaticMarkup(
         createElement(DirectoryTour, {
+          locale: 'en-US',
           open,
           steps: openVikingDirectoryTourSteps,
           locateTarget,
@@ -57,7 +58,7 @@ test('empty and out-of-range controlled tours render no browser surface', () => 
   ]) {
     assert.equal(
       renderToStaticMarkup(
-        createElement(DirectoryTour, { open: true, ...props }),
+        createElement(DirectoryTour, { locale: 'en-US', open: true, ...props }),
       ),
       '',
     );
