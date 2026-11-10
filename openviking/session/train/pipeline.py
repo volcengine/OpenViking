@@ -515,6 +515,7 @@ def _epoch_eval_context(ctx: PipelineContext, *, epoch: int) -> PipelineContext:
         execution_metadata=execution_metadata,
         max_epochs=1,
         eval_trials=ctx.eval_trials,
+        serial_eval_trials=ctx.serial_eval_trials,
         train_trials=ctx.train_trials,
         trial_index_key=ctx.trial_index_key,
         report_builder=ctx.report_builder,
@@ -541,6 +542,7 @@ def _eval_case_loader(case_loader: CaseLoader, ctx: PipelineContext) -> CaseLoad
         case_loader,
         eval_trials,
         trial_input_key=ctx.trial_index_key,
+        serial_trials=ctx.serial_eval_trials,
     )
 
 

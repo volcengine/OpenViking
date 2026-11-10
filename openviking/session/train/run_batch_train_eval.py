@@ -17,6 +17,40 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run remote benchmark batch policy train/eval")
     parser.add_argument("--dataset", required=True, help="Remote benchmark dataset")
     parser.add_argument("--domain", required=True, help="Benchmark domain")
+    parser.add_argument(
+        "--train-cases",
+        "--train-limit",
+        dest="train_limit",
+        type=int,
+        default=None,
+        help="Maximum distinct training cases per epoch (before --train-trials).",
+    )
+    parser.add_argument(
+        "--eval-cases",
+        "--eval-limit",
+        dest="eval_limit",
+        type=int,
+        default=None,
+        help="Maximum distinct evaluation cases per trial.",
+    )
+    parser.add_argument(
+        "--sample-seed",
+        type=int,
+        default=None,
+        help="Deterministically shuffle then select cases; omitted keeps dataset order.",
+    )
+    parser.add_argument(
+        "--serial-eval-trials",
+        action="store_true",
+        help="Wait for all cases in one eval repeat before starting the next repeat.",
+    )
+    parser.add_argument("--model", default=None, help="Override the benchmark adapter model.")
+    parser.add_argument("--api-base", default=None, help="Override the model API base.")
+    parser.add_argument(
+        "--reasoning-effort", choices=("auto", "low", "medium", "high"), default=None
+    )
+    parser.add_argument("--temperature", type=float, default=None)
+    parser.add_argument("--max-tokens", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=1, help="Training epochs (default: 1)")
     parser.add_argument(
         "--batch-size",
@@ -43,10 +77,18 @@ def parse_args() -> argparse.Namespace:
         help="Max seconds to wait for each OpenViking session.commit task. Default waits indefinitely.",
     )
     parser.add_argument("--config", default=None, help="ov.conf path (optional)")
-    parser.add_argument("--server-url", default=None, help="OpenViking server URL. Defaults to ov.conf/ovcli.conf")
-    parser.add_argument("--api-key", default=None, help="OpenViking API key. Defaults to ov.conf/ovcli.conf")
-    parser.add_argument("--account-id", default="default", help="OpenViking trusted account id. Default: default")
-    parser.add_argument("--user-id", default="default", help="OpenViking trusted user id. Default: default")
+    parser.add_argument(
+        "--server-url", default=None, help="OpenViking server URL. Defaults to ov.conf/ovcli.conf"
+    )
+    parser.add_argument(
+        "--api-key", default=None, help="OpenViking API key. Defaults to ov.conf/ovcli.conf"
+    )
+    parser.add_argument(
+        "--account-id", default="default", help="OpenViking trusted account id. Default: default"
+    )
+    parser.add_argument(
+        "--user-id", default="default", help="OpenViking trusted user id. Default: default"
+    )
     parser.add_argument("--output", default=None, help="JSON report output path")
     parser.add_argument(
         "--events-output",
@@ -89,8 +131,7 @@ def parse_args() -> argparse.Namespace:
         "--force-baseline-recompute",
         action="store_true",
         help=(
-            "Recompute the cached pre-training baseline instead of reusing an "
-            "existing cache file."
+            "Recompute the cached pre-training baseline instead of reusing an existing cache file."
         ),
     )
     parser.add_argument(
@@ -191,6 +232,20 @@ async def main_async() -> int:
             dataset=args.dataset,
             domain=args.domain,
             epochs=args.epochs,
+            train_limit=args.train_limit,
+            eval_limit=args.eval_limit,
+            sample_seed=args.sample_seed,
+            rollout_options={
+                k: v
+                for k, v in {
+                    "model": args.model,
+                    "api_base": args.api_base,
+                    "reasoning_effort": args.reasoning_effort,
+                    "temperature": args.temperature,
+                    "max_tokens": args.max_tokens,
+                }.items()
+                if v is not None
+            },
             batch_size=args.batch_size,
             concurrency=args.concurrency,
             commit_concurrency=args.commit_concurrency,
@@ -214,6 +269,7 @@ async def main_async() -> int:
             skip_baseline_eval=args.skip_baseline_eval,
             eval_split=args.eval_split,
             trials=args.trials,
+            serial_eval_trials=args.serial_eval_trials,
             train_trials=args.train_trials,
             reuse_train_rollout_cache=args.reuse_train_rollout_cache,
             clean_result=args.clean_result,

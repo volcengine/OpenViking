@@ -368,6 +368,13 @@ def _rollout_score(rollout: Rollout) -> float:
 def _task_error(task: dict[str, Any] | None) -> str | None:
     if task is None:
         return None
+    result = task.get("result") or {}
+    if isinstance(result, dict):
+        if result.get("agent_evolution_enabled") is False:
+            return "Agent Evolution is disabled; session was archived without experience learning"
+        reason = result.get("agent_memory_skip_reason")
+        if reason:
+            return f"Experience learning was skipped: {reason}"
     if task.get("status") == "failed":
         return str(task.get("error") or "task failed")
     if task.get("status") == "cancelled":
@@ -397,7 +404,8 @@ def _session_id_for_rollout(rollout: Rollout, *, run_id: str) -> str:
     epoch = execution_metadata.get("epoch", "0")
     task_no = metadata.get("task_no", "0")
     split = metadata.get("data_split", "tau2")
-    return f"tau2_train_{run_id}_{split}_e{epoch}_t{task_no}_{safe_name}"
+    dataset = _safe_session_fragment(str(metadata.get("dataset") or "tau2"))
+    return f"{dataset}_train_{run_id}_{split}_e{epoch}_t{task_no}_{safe_name}"
 
 
 def _safe_session_fragment(value: str) -> str:

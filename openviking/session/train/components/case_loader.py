@@ -42,11 +42,18 @@ class TrialCaseLoader:
     extra_input: dict[str, Any] = field(default_factory=dict)
     extra_metadata: dict[str, Any] = field(default_factory=dict)
 
+    serial_trials: bool = False
+
     def __post_init__(self) -> None:
         if self.trial_count <= 0:
             raise ValueError("trial_count must be > 0")
 
     async def batches(self, context: Any) -> AsyncIterator[list[Case]]:
+        if self.serial_trials:
+            for trial_index in range(self.trial_count):
+                async for cases in self.base_loader.batches(context):
+                    yield [self._trial_case(case, trial_index) for case in cases]
+            return
         async for cases in self.base_loader.batches(context):
             expanded: list[Case] = []
             for trial_index in range(self.trial_count):
@@ -93,12 +100,14 @@ def make_trial_case_loader(
     trial_count: int,
     *,
     trial_input_key: str = "trial",
+    serial_trials: bool = False,
     trial_count_input_key: str | None = None,
     original_case_name_input_key: str = "original_case_name",
 ) -> TrialCaseLoader:
     return TrialCaseLoader(
         base_loader=base_loader,
         trial_count=trial_count,
+        serial_trials=serial_trials,
         trial_input_key=trial_input_key,
         trial_count_input_key=trial_count_input_key or f"{trial_input_key}_count",
         original_case_name_input_key=original_case_name_input_key,

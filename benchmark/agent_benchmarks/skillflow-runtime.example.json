@@ -1,0 +1,13 @@
+{
+  "python": "/absolute/path/skillflow-venv/bin/python",
+  "openspace_repo": "/absolute/path/OpenSpace",
+  "env_file": "/absolute/path/private.env",
+  "api_key_env": "ARK_API_KEY",
+  "model": "YOUR_MODEL_ID",
+  "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+  "reasoning_effort": "low",
+  "temperature": 0.7,
+  "max_iterations": 30,
+  "max_tokens": 16384,
+  "timeout_seconds": 2400
+}

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import random
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -39,6 +40,7 @@ class RemoteCaseLoader:
     limit: int | None = None
     filters: dict[str, Any] = field(default_factory=dict)
     timeout_seconds: float = 60.0
+    sample_seed: int | None = None
 
     async def batches(self, context: Any = None) -> AsyncIterator[list[Case]]:
         del context
@@ -47,9 +49,25 @@ class RemoteCaseLoader:
         if self.limit is not None and self.limit <= 0:
             raise ValueError("limit must be > 0")
 
-        remaining = self.limit
+        if self.sample_seed is not None:
+            pool = []
+            async for batch in self._remote_batches(limit=None):
+                pool.extend(batch)
+            random.Random(self.sample_seed).shuffle(pool)
+            selected = pool if self.limit is None else pool[: self.limit]
+            size = self.batch_size or len(selected) or 1
+            for offset in range(0, len(selected), size):
+                yield selected[offset : offset + size]
+            return
+        async for batch in self._remote_batches(limit=self.limit):
+            yield batch
+
+    async def _remote_batches(self, *, limit: int | None) -> AsyncIterator[list[Case]]:
+        remaining = limit
         cursor: str | None = None
-        async with httpx.AsyncClient(base_url=self.service_url.rstrip("/"), timeout=self.timeout_seconds) as client:
+        async with httpx.AsyncClient(
+            base_url=self.service_url.rstrip("/"), timeout=self.timeout_seconds
+        ) as client:
             while True:
                 request_limit = self.batch_size or remaining
                 if request_limit is None:
@@ -84,7 +102,9 @@ class RemoteCaseLoader:
                     return
 
     async def split_exists(self) -> bool:
-        async with httpx.AsyncClient(base_url=self.service_url.rstrip("/"), timeout=self.timeout_seconds) as client:
+        async with httpx.AsyncClient(
+            base_url=self.service_url.rstrip("/"), timeout=self.timeout_seconds
+        ) as client:
             response = await client.post(
                 "/v1/cases/query",
                 json={
@@ -139,7 +159,9 @@ class RemoteRolloutExecutor:
             default=self.progress_label,
         )
         timeout = httpx.Timeout(self.request_timeout_seconds)
-        async with httpx.AsyncClient(base_url=self.service_url.rstrip("/"), timeout=timeout) as client:
+        async with httpx.AsyncClient(
+            base_url=self.service_url.rstrip("/"), timeout=timeout
+        ) as client:
 
             async def _execute(case: Case, index: int) -> Rollout:
                 rollout = await self._execute_one(client, case, policy_set, context)
@@ -218,7 +240,12 @@ class RemoteRolloutExecutor:
             try:
                 response = await client.get(f"/v1/rollouts/executions/{execution_id}")
                 transient_errors = 0
-            except (httpx.ReadError, httpx.ConnectError, httpx.RemoteProtocolError, httpx.TimeoutException) as exc:
+            except (
+                httpx.ReadError,
+                httpx.ConnectError,
+                httpx.RemoteProtocolError,
+                httpx.TimeoutException,
+            ) as exc:
                 transient_errors += 1
                 last_transient_error = exc
                 if asyncio.get_running_loop().time() >= deadline:
@@ -231,10 +258,7 @@ class RemoteRolloutExecutor:
                 continue
             if response.status_code == 404:
                 missing_execution_errors += 1
-                if (
-                    loop.time() >= deadline
-                    or loop.time() >= missing_execution_deadline
-                ):
+                if loop.time() >= deadline or loop.time() >= missing_execution_deadline:
                     raise RuntimeError(
                         f"rollout execution {execution_id} was not found while polling "
                         f"case {case.name}; observed {missing_execution_errors} 404 response(s) "
@@ -262,7 +286,9 @@ class RemoteRolloutExecutor:
             if status == "completed":
                 rollout_data = data.get("rollout")
                 if not isinstance(rollout_data, dict):
-                    raise RuntimeError(f"rollout execution {execution_id} completed without rollout")
+                    raise RuntimeError(
+                        f"rollout execution {execution_id} completed without rollout"
+                    )
                 return rollout_from_dict(rollout_data)
             if status == "failed":
                 raise RuntimeError(

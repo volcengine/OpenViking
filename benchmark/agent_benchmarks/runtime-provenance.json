@@ -1,0 +1,50 @@
+[
+  {
+    "source": "benchmark/evoagentbench/openspace_run.py",
+    "source_sha256": "dc9698190470e300c24f4598cb9fdc69a0f03eb2489807ac4344560a52b80759",
+    "target": "benchmark/evoagentbench/openspace_run.py",
+    "adaptation": "Retain execution helpers only; remove unrelated legacy CLI/orchestration imports and functions."
+  },
+  {
+    "source": "benchmark/evoagentbench/openspace_multidomain_run.py",
+    "source_sha256": "7824706d8529454210174a989711cb200ea9ace381b2db56a00c8df99f439894",
+    "target": "benchmark/evoagentbench/openspace_multidomain_run.py",
+    "adaptation": "Retain execution helpers only; remove unrelated legacy CLI/orchestration imports and functions."
+  },
+  {
+    "source": "benchmark/evoagentbench/corpus_search_mcp.py",
+    "source_sha256": "661cb8185bb3bc016acfc8505e8e25c54e79631892e5ec96ff704bdedb1ead46",
+    "target": "benchmark/evoagentbench/corpus_search_mcp.py",
+    "adaptation": "Retain execution helpers only; remove unrelated legacy CLI/orchestration imports and functions."
+  },
+  {
+    "source": "benchmark/skillflow/openspace_run.py",
+    "source_sha256": "f0789ab81599d9e2175e28178ea19b1d18a1769bdcb943c4b8a54e372d9121c1",
+    "target": "benchmark/skillflow/openspace_run.py",
+    "adaptation": "Retain execution helpers only; remove unrelated legacy CLI/orchestration imports and functions."
+  },
+  {
+    "source": "benchmark/skillflow/container_tools_mcp.py",
+    "source_sha256": "51407080fa4094af252c4c7e94307f8f2d3c3d911e262c2ea82c7249097301e6",
+    "target": "benchmark/skillflow/container_tools_mcp.py",
+    "adaptation": "Retain execution helpers only; remove unrelated legacy CLI/orchestration imports and functions."
+  },
+  {
+    "source": "benchmark/skillflow/verifier_health.py",
+    "source_sha256": "1fd835c8d445f39c6564704f253b5e483f4a47ddeae43ca0e9fe14bbdcb18111",
+    "target": "benchmark/skillflow/verifier_health.py",
+    "adaptation": "Retain execution helpers only; remove unrelated legacy CLI/orchestration imports and functions."
+  },
+  {
+    "source": "benchmark/repeatability/health.py",
+    "source_sha256": "e17ba5b53b518ae21da09b0551d380fc0b7431dcf859b34a49408880624b3941",
+    "target": "benchmark/agent_benchmarks/health.py",
+    "adaptation": "Retain execution helpers only; remove unrelated legacy CLI/orchestration imports and functions."
+  },
+  {
+    "source": "benchmark/repeatability/quota.py",
+    "source_sha256": "683c02313badad031f791faf608bc78efce435c68fd79472ba0304938add0ab1",
+    "target": "benchmark/agent_benchmarks/quota.py",
+    "adaptation": "Retain execution helpers only; remove unrelated legacy CLI/orchestration imports and functions."
+  }
+]

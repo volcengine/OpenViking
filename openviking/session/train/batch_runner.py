@@ -71,6 +71,11 @@ class BatchTrainEvalConfig:
     commit_poll_interval_seconds: float = 2.0
     commit_timeout_seconds: float | None = None
     commit_concurrency: int = 200
+    train_limit: int | None = None
+    eval_limit: int | None = None
+    sample_seed: int | None = None
+    rollout_options: dict[str, Any] = field(default_factory=dict)
+    benchmark_revision: str | None = None
     train_index: int | str | list[int] | tuple[int, ...] | None = None
     eval_index: int | str | list[int] | tuple[int, ...] | None = None
     benchmark_service_url: str | None = None
@@ -80,6 +85,7 @@ class BatchTrainEvalConfig:
     eval_split: str | None = "test"
     skip_final_eval: bool = False
     trials: int = 8
+    serial_eval_trials: bool = False
     train_trials: int = 1
     reuse_train_rollout_cache: bool = False
     clean_result: bool = True
@@ -107,6 +113,43 @@ class BatchTrainEvalConfig:
             raise ValueError("commit_timeout_seconds must be > 0")
         if self.commit_concurrency <= 0:
             raise ValueError("commit_concurrency must be > 0")
+        for name in ("train_limit", "eval_limit"):
+            value = getattr(self, name)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            ):
+                raise ValueError(f"{name} must be a positive integer")
+        if self.sample_seed is not None and (
+            isinstance(self.sample_seed, bool) or not isinstance(self.sample_seed, int)
+        ):
+            raise ValueError("sample_seed must be an integer")
+        allowed_options = {"model", "api_base", "reasoning_effort", "temperature", "max_tokens"}
+        if set(self.rollout_options) - allowed_options:
+            raise ValueError(
+                "Unsupported rollout_options: "
+                + str(sorted(set(self.rollout_options) - allowed_options))
+            )
+        import math
+
+        if "temperature" in self.rollout_options:
+            temperature = self.rollout_options["temperature"]
+            if (
+                not isinstance(temperature, (int, float))
+                or not math.isfinite(temperature)
+                or not 0 <= temperature <= 2
+            ):
+                raise ValueError("temperature must be finite and between 0 and 2")
+        if "max_tokens" in self.rollout_options:
+            tokens = self.rollout_options["max_tokens"]
+            if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens <= 0:
+                raise ValueError("max_tokens must be a positive integer")
+        if self.rollout_options.get("reasoning_effort", "auto") not in {
+            "auto",
+            "low",
+            "medium",
+            "high",
+        }:
+            raise ValueError("Unsupported reasoning_effort")
         self.train_index = _normalize_index_filter(self.train_index, label="train_index")
         self.eval_index = _normalize_index_filter(self.eval_index, label="eval_index")
         if self.eval_split is not None:
@@ -127,6 +170,54 @@ class BatchTrainEvalConfig:
             raise ValueError("keep_recent_results must be >= 0")
         if not str(self.result_dir_name or "").strip():
             raise ValueError("result_dir_name must not be empty")
+
+
+def _effective_eval_index(config: BatchTrainEvalConfig) -> list[int] | None:
+    if config.eval_index is not None:
+        return config.eval_index
+    return config.train_index if config.eval_split == "train" else None
+
+
+def _effective_eval_limit(config: BatchTrainEvalConfig) -> int | None:
+    if config.eval_limit is not None:
+        return config.eval_limit
+    return (
+        config.train_limit if config.eval_split == "train" and config.eval_index is None else None
+    )
+
+
+async def _resolve_benchmark_revision(config: BatchTrainEvalConfig) -> None:
+    if config.dataset not in {"skillflow", "evoagentbench"}:
+        return
+    import httpx
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(_require_benchmark_service_url(config).rstrip("/") + "/health")
+        response.raise_for_status()
+        actual = response.json().get("runtime_fingerprint")
+    if not isinstance(actual, str) or not actual:
+        raise ValueError("Benchmark adapter must advertise runtime_fingerprint before caching")
+    if config.benchmark_revision is not None and config.benchmark_revision != actual:
+        raise ValueError("Benchmark runtime differs from the requested benchmark_revision")
+    config.benchmark_revision = actual
+
+
+async def _check_agent_learning_enabled(
+    config: BatchTrainEvalConfig, client: AsyncHTTPClient
+) -> None:
+    if config.epochs == 0 or config.dataset not in {"skillflow", "evoagentbench"}:
+        return
+    response = await client._request("GET", "/api/v1/admin/agent-evolution")
+    if response.status_code == 403:
+        # Ordinary users need not have account-admin permission. The commit
+        # result is still checked by SessionCommitPolicyTrainer for skipped learning.
+        return
+    response.raise_for_status()
+    enabled = response.json().get("result", {}).get("enabled")
+    if enabled is not True:
+        raise ValueError(
+            "OV Agent Evolution is disabled or unavailable; enable agent_evolution.enabled on the server/account before training"
+        )
 
 
 def _normalize_index_filter(value: Any, *, label: str) -> list[int] | None:
@@ -190,6 +281,7 @@ class BatchTrainEvalReport:
     eval_split: str | None = "test"
     skip_baseline_eval: bool = False
     trials: int = 8
+    serial_eval_trials: bool = False
     train_trials: int = 1
     reuse_train_rollout_cache: bool = False
     rollouts_root: str | None = None
@@ -199,6 +291,11 @@ class BatchTrainEvalReport:
     keep_recent_results: int = 5
     events_path: str | None = None
     result_dir_name: str = "train"
+    train_limit: int | None = None
+    eval_limit: int | None = None
+    sample_seed: int | None = None
+    rollout_options: dict[str, Any] = field(default_factory=dict)
+    benchmark_revision: str | None = None
     baseline_cache_path: str | None = None
     baseline_cache_hit: bool = False
     baseline_force_recompute: bool = False
@@ -209,6 +306,11 @@ class BatchTrainEvalReport:
         return {
             "dataset": self.dataset,
             "domain": self.domain,
+            "train_limit": self.train_limit,
+            "eval_limit": self.eval_limit,
+            "sample_seed": self.sample_seed,
+            "rollout_options": dict(self.rollout_options),
+            "benchmark_revision": self.benchmark_revision,
             "epochs": self.epochs,
             "batch_size": self.batch_size,
             "concurrency": self.concurrency,
@@ -230,6 +332,7 @@ class BatchTrainEvalReport:
             "eval_split": self.eval_split,
             "skip_baseline_eval": self.skip_baseline_eval,
             "trials": self.trials,
+            "serial_eval_trials": self.serial_eval_trials,
             "train_trials": self.train_trials,
             "reuse_train_rollout_cache": self.reuse_train_rollout_cache,
             "rollouts_root": self.rollouts_root,
@@ -251,11 +354,13 @@ class BatchTrainEvalReport:
 async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalReport:
     """Run baseline eval, commit-based train epochs, and final eval for one dataset/domain."""
 
+    await _resolve_benchmark_revision(config)
     _configure_openviking_config(config.config_path)
     _clean_result_dir(config)
     client = _build_http_client(config)
     await client.initialize()
     try:
+        await _check_agent_learning_enabled(config, client)
         policy_root_uri = f"viking://user/{config.user_id}/memories/experiences"
         policy_set = ExperienceSet(
             root_uri=policy_root_uri,
@@ -277,9 +382,15 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             epochs=config.epochs,
             concurrency=config.concurrency,
             commit_concurrency=config.commit_concurrency,
+            train_limit=config.train_limit,
+            eval_limit=_effective_eval_limit(config),
+            sample_seed=config.sample_seed,
+            benchmark_revision=config.benchmark_revision,
+            rollout_options=dict(config.rollout_options),
             train_index=_index_payload(config.train_index),
-            eval_index=_index_payload(config.eval_index),
+            eval_index=_index_payload(_effective_eval_index(config)),
             trials=config.trials,
+            serial_eval_trials=config.serial_eval_trials,
             train_trials=config.train_trials,
             reuse_train_rollout_cache=config.reuse_train_rollout_cache,
             clean_result=config.clean_result,
@@ -312,7 +423,9 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             latest_pointer_path=_latest_rollouts_path(config),
         )
         remote_executor = getattr(pipeline, "rollout_executor", None)
-        if isinstance(remote_executor, (RemoteRolloutExecutor, CachedEpochZeroTrainRolloutExecutor)):
+        if isinstance(
+            remote_executor, (RemoteRolloutExecutor, CachedEpochZeroTrainRolloutExecutor)
+        ):
             remote_executor.on_rollout_complete = (
                 rollout_artifact_recorder.record_rollout_completion
             )
@@ -320,6 +433,13 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             (event_recorder, RolloutArtifactEventRecorder(rollout_artifact_recorder))
         )
 
+        train_loader = _case_loader(
+            config, split="train", sample_index=config.train_index, training=True
+        )
+        if config.epochs > 0 and not await train_loader.split_exists():
+            raise ValueError(
+                "No training cases selected; select an available training domain/subset or set --epochs 0 for eval-only"
+            )
         baseline_eval: dict[str, Any] | None = None
         baseline_cache_hit = False
         baseline_cache_path = (
@@ -336,7 +456,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             else _case_loader(
                 config,
                 split=config.eval_split,
-                sample_index=config.eval_index,
+                sample_index=_effective_eval_index(config),
             )
         )
         if (
@@ -365,12 +485,6 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 if baseline_eval is not None:
                     _print_baseline_cache_hit(baseline_eval, baseline_cache_path)
 
-        train_loader = _case_loader(
-            config,
-            split="train",
-            sample_index=config.train_index,
-        )
-
         train_context = _pipeline_context(
             epoch=0,
             training=True,
@@ -391,6 +505,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             ),
             eval_split=config.eval_split,
             eval_trials=config.trials,
+            serial_eval_trials=config.serial_eval_trials,
             train_trials=config.train_trials,
             trial_index_key="eval_trial",
             report_builder=report_builder,
@@ -428,6 +543,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                     rollout_stage=_eval_rollout_stage("final", config.eval_split),
                     eval_split=config.eval_split,
                     eval_trials=config.trials,
+                    serial_eval_trials=config.serial_eval_trials,
                     trial_index_key="eval_trial",
                     report_builder=report_builder,
                     event_recorder=event_recorder,
@@ -451,7 +567,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             concurrency=config.concurrency,
             commit_concurrency=config.commit_concurrency,
             train_index=_index_payload(config.train_index),
-            eval_index=_index_payload(config.eval_index),
+            eval_index=_index_payload(_effective_eval_index(config)),
             policy_root_uri=policy_root_uri,
             baseline_eval=baseline_eval,
             train_epochs=list(train_result.metadata.get("train_reports", [])),
@@ -467,6 +583,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             eval_split=config.eval_split,
             skip_baseline_eval=config.skip_baseline_eval,
             trials=config.trials,
+            serial_eval_trials=config.serial_eval_trials,
             train_trials=config.train_trials,
             reuse_train_rollout_cache=config.reuse_train_rollout_cache,
             rollouts_root=rollout_artifact_index.rollouts_root,
@@ -479,6 +596,11 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             baseline_cache_path=(
                 str(baseline_cache_path) if baseline_cache_path is not None else None
             ),
+            train_limit=config.train_limit,
+            eval_limit=_effective_eval_limit(config),
+            sample_seed=config.sample_seed,
+            rollout_options=dict(config.rollout_options),
+            benchmark_revision=config.benchmark_revision,
             baseline_cache_hit=baseline_cache_hit,
             baseline_force_recompute=config.baseline_force_recompute,
             skip_final_eval=config.skip_final_eval,
@@ -505,6 +627,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 "domain": config.domain,
                 "epochs": config.epochs,
                 "trials": config.trials,
+                "serial_eval_trials": config.serial_eval_trials,
                 "train_trials": config.train_trials,
                 "reuse_train_rollout_cache": config.reuse_train_rollout_cache,
                 "run_id": policy_trainer.run_id,
@@ -621,6 +744,7 @@ async def _load_or_run_baseline_eval(
             rollout_stage=_eval_rollout_stage("baseline", config.eval_split),
             eval_split=config.eval_split,
             eval_trials=config.trials,
+            serial_eval_trials=config.serial_eval_trials,
             trial_index_key="eval_trial",
             report_builder=report_builder,
             event_recorder=event_recorder,
@@ -647,9 +771,17 @@ def _write_baseline_cache(
         "cache_key": _baseline_cache_key(config),
         "dataset": config.dataset,
         "domain": config.domain,
+        "benchmark_revision": config.benchmark_revision,
+        "benchmark_service_url": config.benchmark_service_url,
+        "concurrency": config.concurrency,
+        "batch_size": config.batch_size,
+        "rollout_options": config.rollout_options,
+        "eval_limit": _effective_eval_limit(config),
+        "sample_seed": config.sample_seed,
         "split": config.eval_split,
-        "eval_index": _index_payload(config.eval_index),
+        "eval_index": _index_payload(_effective_eval_index(config)),
         "trials": config.trials,
+        "serial_eval_trials": config.serial_eval_trials,
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
         "created_at": datetime.now().isoformat(),
@@ -724,6 +856,7 @@ def _build_pipeline(
             "config_path": config.config_path,
             "keep_default_tools": config.keep_default_tools,
             "max_iterations": config.max_iterations,
+            **config.rollout_options,
         },
     )
     if config.reuse_train_rollout_cache:
@@ -752,6 +885,7 @@ def _pipeline_context(
     eval_split: str | None = None,
     eval_each_epoch_case_loader: Any = None,
     eval_trials: int = 1,
+    serial_eval_trials: bool = False,
     train_trials: int = 1,
     trial_index_key: str = "trial",
     report_builder: Any = None,
@@ -778,6 +912,7 @@ def _pipeline_context(
         max_epochs=max_epochs,
         eval_each_epoch_case_loader=eval_each_epoch_case_loader,
         eval_trials=eval_trials,
+        serial_eval_trials=serial_eval_trials,
         train_trials=train_trials,
         trial_index_key=trial_index_key,
         report_builder=report_builder,
@@ -790,6 +925,7 @@ def _case_loader(
     *,
     split: str,
     sample_index: list[int] | None,
+    training: bool = False,
 ) -> RemoteCaseLoader:
     filters: dict[str, Any] = {}
     if sample_index is not None:
@@ -800,6 +936,8 @@ def _case_loader(
         domain=config.domain,
         split=split,
         batch_size=config.batch_size,
+        limit=config.train_limit if training else _effective_eval_limit(config),
+        sample_seed=config.sample_seed,
         filters=filters,
     )
 
@@ -1000,6 +1138,13 @@ def _train_rollout_cache_key_prefix(config: BatchTrainEvalConfig) -> str:
     payload = {
         "dataset": config.dataset,
         "domain": config.domain,
+        "benchmark_revision": config.benchmark_revision,
+        "benchmark_service_url": config.benchmark_service_url,
+        "concurrency": config.concurrency,
+        "batch_size": config.batch_size,
+        "rollout_options": config.rollout_options,
+        "train_limit": config.train_limit,
+        "sample_seed": config.sample_seed,
         "split": "train",
         "train_index": _index_payload(config.train_index),
         "train_trials": config.train_trials,
@@ -1016,9 +1161,17 @@ def _baseline_cache_key(config: BatchTrainEvalConfig) -> str:
     payload = {
         "dataset": config.dataset,
         "domain": config.domain,
+        "benchmark_revision": config.benchmark_revision,
+        "benchmark_service_url": config.benchmark_service_url,
+        "concurrency": config.concurrency,
+        "batch_size": config.batch_size,
+        "rollout_options": config.rollout_options,
+        "eval_limit": _effective_eval_limit(config),
+        "sample_seed": config.sample_seed,
         "split": config.eval_split,
-        "eval_index": _index_payload(config.eval_index),
+        "eval_index": _index_payload(_effective_eval_index(config)),
         "trials": config.trials,
+        "serial_eval_trials": config.serial_eval_trials,
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
     }

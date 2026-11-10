@@ -1,0 +1,22 @@
+{
+  "python": "/absolute/path/evoagentbench-venv/bin/python",
+  "openspace_repo": "/absolute/path/OpenSpace",
+  "repo": "/absolute/path/EvoAgentBench",
+  "benchmark_config": "/absolute/path/evoagentbench-code_implementation.yaml",
+  "cache": "/absolute/path/retrieval-cache",
+  "corpus_manifest": "/absolute/path/retrieval-cache/corpus_manifest.json",
+  "code_cache": "/absolute/path/code-cache",
+  "retrieval_queries": "/absolute/path/retrieval-cache/browsecomp_queries.jsonl",
+  "knowledge_dataset": "/absolute/path/retrieval-cache/gdpval.json",
+  "reference_dir": "/absolute/path/reference_files",
+  "meta_prompts_dir": "/absolute/path/meta_prompts",
+  "env_file": "/absolute/path/private.env",
+  "api_key_env": "ARK_API_KEY",
+  "model": "YOUR_MODEL_ID",
+  "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+  "reasoning_effort": "low",
+  "temperature": 0.7,
+  "max_iterations": 30,
+  "max_tokens": 16384,
+  "timeout_seconds": 2400
+}
