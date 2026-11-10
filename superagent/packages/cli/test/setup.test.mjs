@@ -778,6 +778,20 @@ test('with no runtime on a terminal, setup offers to log the built-in Pi in to a
   assert.equal(fs.existsSync(path.join(h.home, '.ov-superagent', 'config.json')), false);
 });
 
+test('quitting to log in to Codex or Claude Code is not a failure', async (t) => {
+  const none = RUNTIMES.map((runtime) => ({ ...runtime, available: false }));
+  const h = terminalHarness(t, { runtimes: none });
+  // Pi can still be offered, so the question is reached before the answer matters.
+  h.options.connect.pi = async () => {};
+  const driving = h.drive([['现在怎么办', DOWN, '\r']]);
+  // The installer chains this exit code into its own: a deliberate pause must
+  // not make the install look like it failed.
+  assert.equal(await setupCommand(h.options), 0);
+  await driving;
+  assert.match(h.screen(), /登录好其中一个后，重新运行 .*setup/);
+  assert.equal(fs.existsSync(path.join(h.home, '.ov-superagent', 'config.json')), false);
+});
+
 // A terminal for setup: keys are typed one at a time, each once the screen
 // shows what it answers.
 function terminalHarness(t, options) {
