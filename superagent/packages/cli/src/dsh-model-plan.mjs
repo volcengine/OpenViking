@@ -78,7 +78,7 @@ const CHAT_TEMPLATE_VARS = Object.freeze(['thinking.enabled', 'thinking.effort',
 // `SESSION_ID` is stripped by exact name, not by prefix (`sanitizeNonArkChildEnv`
 // in process-utils.mjs), so it needs its own alternative: a prefix rule alone
 // silently claimed the child would resolve it.
-const WITHHELD_ENV = /^(?:(?:ARK|VOLCENGINE|LARK|FEISHU|LARKSUITE|OV_SUPERAGENT|OVSA|VIKA|DSH)_|SESSION_ID$)/i;
+const WITHHELD_ENV = /^(?:(?:ARK|VOLCENGINE|LARK|FEISHU|LARKSUITE|OV_SUPERAGENT|DSH)_|SESSION_ID$)/i;
 
 export class UsageError extends Error {}
 

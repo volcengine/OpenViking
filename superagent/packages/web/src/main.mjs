@@ -2,7 +2,6 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import '../../../env-compat.cjs';
 
 import { onShutdown } from '../../daemon/src/platform/index.mjs';
 
@@ -42,7 +41,7 @@ try {
   process.exit(1);
 }
 
-const logger = createLogger(config.logLevel, { service: 'vika-web' });
+const logger = createLogger(config.logLevel, { service: 'superagent-web' });
 const server = new ActivityWebServer(config, logger);
 let stopping = false;
 

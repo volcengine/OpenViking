@@ -6,9 +6,7 @@
   "description": "A local personal agent core with connector processes and an activity web module.",
   "type": "module",
   "bin": {
-    "ov-superagent": "packages/cli/bin/vika.mjs",
-    "ovsa": "packages/cli/bin/vika.mjs",
-    "vika": "packages/cli/bin/vika.mjs"
+    "ov-superagent": "packages/cli/bin/ov-superagent.mjs"
   },
   "workspaces": [
     "packages/daemon",
@@ -34,7 +32,7 @@
     "simulator:claude-runtime": "node packages/daemon/simulator/claude-runtime-simulator.mjs",
     "health": "node packages/web/scripts/healthcheck.mjs"
   },
-  "vika": {
+  "superagent": {
     "node": "24.21.0"
   }
 }

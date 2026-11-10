@@ -2,7 +2,6 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import '../../../env-compat.cjs';
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';

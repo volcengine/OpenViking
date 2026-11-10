@@ -12,7 +12,7 @@ import * as windows from '../../daemon/src/platform/win32.mjs';
 import { autostartCommand, autostartEnabled, startupEntry } from '../src/autostart.mjs';
 
 function home(t) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-autostart-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-autostart-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   return directory;
 }
@@ -32,9 +32,9 @@ test('Linux: a systemd user unit that runs ov-superagent start with the enabling
   const enabled = await run(directory, { ...posix, loginService: 'systemd' }, 'enable');
   assert.equal(enabled.code, 0);
   const unit = fs.readFileSync(path.join(directory, '.config', 'systemd', 'user', 'superagent.service'), 'utf8');
-  assert.match(unit, new RegExp(`ExecStart=${directory}/\\.superagent/bin/ov-superagent start`));
+  assert.match(unit, new RegExp(`ExecStart=${directory}/\\.ov-superagent/bin/ov-superagent start`));
   assert.match(unit, /Environment=PATH=\/opt\/agents\/bin:\/usr\/bin/);
-  assert.match(unit, new RegExp(`PIDFile=${directory}/\\.superagent/pm2/pm2\\.pid`));
+  assert.match(unit, new RegExp(`PIDFile=${directory}/\\.ov-superagent/pm2/pm2\\.pid`));
   assert.deepEqual(enabled.calls, [['systemctl', '--user', 'daemon-reload'], ['systemctl', '--user', 'enable', 'superagent.service']]);
   assert.match(enabled.output, /enable-linger/);
 
@@ -53,9 +53,9 @@ test('macOS: a LaunchAgent bootstrapped into the user GUI domain', async (t) => 
   assert.equal((await run(directory, { ...posix, loginService: 'launchd' }, 'bogus')).code, 2);
 });
 
-test('Windows: a Startup-folder script that starts vika hidden, with no service and no elevation', async (t) => {
+test('Windows: a Startup-folder script that starts superagent hidden, with no service and no elevation', async (t) => {
   const directory = home(t);
-  const launcher = path.join(directory, '.superagent', 'bin', 'ov-superagent.cmd');
+  const launcher = path.join(directory, '.ov-superagent', 'bin', 'ov-superagent.cmd');
   fs.mkdirSync(path.dirname(launcher), { recursive: true });
   fs.writeFileSync(launcher, '@echo off\r\n');
   const entry = path.join(directory, 'AppData', 'Roaming', 'Microsoft', 'Windows',
@@ -74,11 +74,11 @@ test('Windows: a Startup-folder script that starts vika hidden, with no service 
   const text = bytes.subarray(2).toString('utf16le');
   assert.equal(text, startupEntry(directory, '/opt/agents/bin:/usr/bin'));
   assert.ok(text.includes(launcher), 'it runs the installed launcher');
-  assert.ok(text.includes(path.join(directory, '.superagent', 'logs', 'autostart.log')), 'output goes to the autostart log');
+  assert.ok(text.includes(path.join(directory, '.ov-superagent', 'logs', 'autostart.log')), 'output goes to the autostart log');
   assert.ok(text.includes('shell.Run command, 0, False'), 'the window is hidden and the script does not block');
   assert.ok(text.includes('mkdir'), 'the log directory is recreated before the redirect');
   // The redirect needs the directory to exist before the first logon.
-  assert.equal(fs.existsSync(path.join(directory, '.superagent', 'logs')), true);
+  assert.equal(fs.existsSync(path.join(directory, '.ov-superagent', 'logs')), true);
 
   const disabled = await run(directory, windows, 'disable');
   assert.equal(disabled.code, 0);
@@ -110,7 +110,7 @@ test('Windows: HOME override selects launcher, USERPROFILE/APPDATA selects Start
   const custom = path.join(directory, 'custom home');
   const profile = path.join(directory, 'windows-profile');
   const roaming = path.join(profile, 'AppData', 'Roaming');
-  const launcher = path.join(custom, '.superagent', 'bin', 'ov-superagent.cmd');
+  const launcher = path.join(custom, '.ov-superagent', 'bin', 'ov-superagent.cmd');
   fs.mkdirSync(path.dirname(launcher), { recursive: true });
   fs.writeFileSync(launcher, '@echo off\r\n');
   const env = { HOME: custom, USERPROFILE: profile, APPDATA: roaming, PATH: 'C:\\tools;C:\\Windows' };
@@ -122,7 +122,7 @@ test('Windows: HOME override selects launcher, USERPROFILE/APPDATA selects Start
   assert.ok(text.includes(`shell.Environment("PROCESS")("HOME") = "${custom}"`));
   assert.ok(text.includes(env.PATH));
   assert.equal(autostartEnabled({ env, platform: windows }), true);
-  assert.equal(fs.existsSync(path.join(profile, '.superagent')), false);
+  assert.equal(fs.existsSync(path.join(profile, '.ov-superagent')), false);
   assert.equal(await autostartCommand(['disable'], { env, platform: windows, output: { write() {} } }), 0);
   assert.equal(fs.existsSync(entry), false);
 });
@@ -130,10 +130,10 @@ test('Windows: HOME override selects launcher, USERPROFILE/APPDATA selects Start
 // Execute the generated VBScript, including cmd parsing, without starting OpenViking SuperAgent.
 test('Windows: Startup executes the launcher with existing or missing logs', { skip: process.platform !== 'win32' }, t => {
   const directory = path.join(home(t), '中文 home');
-  const bin = path.join(directory, '.superagent', 'bin');
-  const logs = path.join(directory, '.superagent', 'logs');
+  const bin = path.join(directory, '.ov-superagent', 'bin');
+  const logs = path.join(directory, '.ov-superagent', 'logs');
   fs.mkdirSync(bin, { recursive: true });
-  fs.writeFileSync(path.join(bin, 'ov-superagent.cmd'), '@echo off\r\necho VIKA-START-%1\r\n');
+  fs.writeFileSync(path.join(bin, 'ov-superagent.cmd'), '@echo off\r\necho SUPERAGENT-START-%1\r\n');
   const script = path.join(directory, 'startup-test.vbs');
   // Wait only in the test so completion is deterministic; production is hidden/async.
   const content = startupEntry(directory, process.env.PATH).replace('shell.Run command, 0, False', 'WScript.Quit shell.Run(command, 0, True)');
@@ -143,21 +143,7 @@ test('Windows: Startup executes the launcher with existing or missing logs', { s
     if (exists) fs.mkdirSync(logs, { recursive: true });
     const result = spawnSync(path.join(process.env.SystemRoot, 'System32', 'cscript.exe'), ['//nologo', script], { encoding: 'utf8', timeout: 15000 });
     assert.equal(result.status, 0, result.stderr || result.error?.message);
-    assert.match(fs.readFileSync(path.join(logs, 'autostart.log'), 'utf8'), /VIKA-START-start/);
+    assert.match(fs.readFileSync(path.join(logs, 'autostart.log'), 'utf8'), /SUPERAGENT-START-start/);
   }
 });
 
-test('legacy service files block a second registration and disable cleans both historical names', async (t) => {
-  const directory = home(t);
-  const units = path.join(directory, '.config', 'systemd', 'user');
-  fs.mkdirSync(units, { recursive: true });
-  for (const old of ['vika', 'ovsa']) fs.writeFileSync(path.join(units, `${old}.service`), 'legacy');
-  const platform = { ...posix, loginService: 'systemd' };
-  await assert.rejects(run(directory, platform, 'enable'), /Legacy autostart/);
-  assert.equal(fs.existsSync(path.join(units, 'superagent.service')), false);
-  const result = await run(directory, platform, 'disable');
-  for (const old of ['vika', 'ovsa']) {
-    assert.equal(fs.existsSync(path.join(units, `${old}.service`)), false);
-    assert.ok(result.calls.some(call => call.includes(`${old}.service`)));
-  }
-});

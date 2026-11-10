@@ -14,16 +14,16 @@ const TARGETS = JSON.stringify({
   beta: { app: 'superagent-beta', readyUrl: 'http://127.0.0.1:3739/ready', upgradeSharedWeb: false },
 });
 
-// ~/.superagent with one installed release and a fake pm2 that tracks app state.
+// ~/.ov-superagent with one installed release and a fake pm2 that tracks app state.
 function fixture(t, online = []) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-control-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-control-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const release = path.join(home, '.superagent', 'releases', '0.4.0-test');
+  const release = path.join(home, '.ov-superagent', 'releases', '0.4.0-test');
   fs.mkdirSync(path.join(release, 'packages', 'daemon', 'src'), { recursive: true });
   fs.writeFileSync(path.join(release, 'ecosystem.config.cjs'), 'module.exports = {};\n');
   const script = path.join(release, 'packages', 'daemon', 'src', 'main.mjs');
   fs.writeFileSync(script, '');
-  const releaseLink = path.join(home, '.superagent', 'current');
+  const releaseLink = path.join(home, '.ov-superagent', 'current');
   fs.symlinkSync(release, releaseLink, windows ? 'junction' : 'dir');
   const apps = new Map(online.map((name) => [name, 'online']));
   const commands = [];
@@ -43,7 +43,7 @@ function fixture(t, online = []) {
   let output = '';
   const options = {
     env: { OV_SUPERAGENT_UPDATER_TARGETS_JSON: TARGETS, HOME: home, USERPROFILE: home }, releaseLink, execFileImpl, fetchImpl,
-    pm2Bin: 'pm2', socketPath: path.join(home, '.superagent', 'updater.sock'), readyOptions: { attempts: 1, intervalMs: 1 },
+    pm2Bin: 'pm2', socketPath: path.join(home, '.ov-superagent', 'updater.sock'), readyOptions: { attempts: 1, intervalMs: 1 },
     stdout: { write: (text) => { output += text; } },
   };
   return { options, commands, ready, apps, output: () => output };
@@ -188,7 +188,7 @@ test('status lists every app with its pm2 state and readiness', async (t) => {
 test('status names the manifest settings this version ignores', async (t) => {
   const f = fixture(t);
   const home = f.options.env.HOME;
-  fs.writeFileSync(path.join(home, '.superagent', 'config.json'), JSON.stringify({
+  fs.writeFileSync(path.join(home, '.ov-superagent', 'config.json'), JSON.stringify({
     version: 1,
     defaultInstance: 'alpha',
     env: { OV_SUPERAGENT_COGNITION_MAX_CHARS: '120000' },
@@ -202,13 +202,3 @@ test('status names the manifest settings this version ignores', async (t) => {
   assert.match(f.output(), /已忽略.*config\.json 删掉：env\.OV_SUPERAGENT_COGNITION_MAX_CHARS/);
 });
 
-test('start and restart refuse old managed names before creating duplicate processes', async (t) => {
-  for (const legacy of ['vika-alpha', 'ovsa-alpha']) {
-    for (const command of [startCommand, restartCommand]) {
-      const f = fixture(t, [legacy]);
-      await assert.rejects(command('alpha', f.options), /Legacy PM2 processes remain/);
-      assert.deepEqual(f.commands, ['jlist']);
-      assert.equal(f.apps.get(legacy), 'online');
-    }
-  }
-});

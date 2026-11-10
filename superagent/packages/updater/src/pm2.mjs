@@ -7,7 +7,7 @@ import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
-// pm2 control shared by the updater (upgrades) and the vika CLI (start,
+// pm2 control shared by the updater (upgrades) and the ov-superagent CLI (start,
 // stop, status). Starting an app from the installed release never fetches or
 // publishes anything; that is the updater's job alone.
 
@@ -24,8 +24,6 @@ const WEB_FORBIDDEN_ENV_PREFIXES = Object.freeze([
   'ARK_',
   'VOLCENGINE_',
   'OV_SUPERAGENT_VOLC_',
-  'OVSA_VOLC_',
-  'VIKA_VOLC_',
   'SESSION_ID',
 ]);
 const PM2_CONTROL_ENV_KEYS = Object.freeze([

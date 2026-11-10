@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 const ecosystem = fileURLToPath(new URL('../../../ecosystem.config.cjs', import.meta.url));
 
 test('ecosystem excludes updater only on Windows and preserves mixed-case Path', (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-ecosystem-review-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-ecosystem-review-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const config = path.join(home, 'config.json');
   fs.writeFileSync(config, JSON.stringify({ version: 1, env: {}, defaultInstance: 'primary', agents: [{
@@ -33,7 +33,7 @@ test('ecosystem excludes updater only on Windows and preserves mixed-case Path',
 });
 
 test('Linux and macOS config selection match the full upstream POSIX snapshot (host OS is not simulated execution)', { skip: process.platform === 'win32' }, t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-posix-snapshot-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-posix-snapshot-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const config = path.join(home, 'config.json');
   fs.writeFileSync(config, JSON.stringify({ version: 1, env: {}, defaultInstance: 'primary', agents: [{
@@ -44,7 +44,7 @@ test('Linux and macOS config selection match the full upstream POSIX snapshot (h
     TEMP: '/ignored', TMP: '/ignored', SYSTEMROOT: '/ignored', APPDATA: '/ignored', LOCALAPPDATA: '/ignored',
     COMSPEC: '/ignored', PATHEXT: '/ignored', HOMEDRIVE: '/ignored', HOMEPATH: '/ignored', USERNAME: '/ignored',
     UNRELATED_SECRET: 'must-not-propagate' };
-  // Captured from origin/feat/vika a6c43c131047, not from the adapter under test.
+  // Captured from origin/feat/superagent a6c43c131047, not from the adapter under test.
   const expected = JSON.parse(fs.readFileSync(new URL('./fixtures/ecosystem-posix.json', import.meta.url), 'utf8'));
   const pm2 = fileURLToPath(new URL('../src/pm2.mjs', import.meta.url));
   for (const platform of ['linux', 'darwin']) {
@@ -83,8 +83,8 @@ test('PM2 helpers use injected OS primitives while preserving environment whitel
 
 test('a Windows release runs its daemon on the Node it ships in runtime/', t => {
   const source = fileURLToPath(new URL('../../../', import.meta.url));
-  const release = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-release-node-'));
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-release-home-'));
+  const release = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-release-node-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-release-home-'));
   t.after(() => {
     fs.rmSync(release, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
@@ -94,7 +94,7 @@ test('a Windows release runs its daemon on the Node it ships in runtime/', t => 
   fs.mkdirSync(path.join(release, 'runtime'));
   fs.writeFileSync(path.join(release, 'runtime', 'node.exe'), '');
   fs.symlinkSync(path.join(source, 'packages'), path.join(release, 'packages'), 'junction');
-  for (const file of ['ecosystem.config.cjs', 'deployment-config.cjs', 'env-compat.cjs']) {
+  for (const file of ['ecosystem.config.cjs', 'deployment-config.cjs']) {
     fs.copyFileSync(path.join(source, file), path.join(release, file));
   }
   const config = path.join(home, 'config.json');

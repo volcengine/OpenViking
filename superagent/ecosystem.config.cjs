@@ -3,7 +3,6 @@
 
 'use strict';
 
-const { normalizeEnv } = require('./env-compat.cjs');
 const fs = require('node:fs');
 const { homeDir: platformHomeDir } = require('./packages/daemon/src/platform/index.mjs');
 const { capabilities } = require('./packages/daemon/src/capabilities.mjs');
@@ -48,10 +47,9 @@ function defined(values) {
 }
 
 function buildEcosystem(sourceEnv = process.env) {
-  sourceEnv = normalizeEnv(sourceEnv);
   const homeDir = platformHomeDir(sourceEnv);
   if (!homeDir || !path.isAbsolute(homeDir)) throw new Error('HOME must be an absolute path');
-  const baseDir = path.join(homeDir, '.superagent');
+  const baseDir = path.join(homeDir, '.ov-superagent');
   const deployment = loadDeploymentManifest(sourceEnv);
   if (deployment.agents.some((agent) => agent.port === 3737)) {
     throw new Error('agent port 3737 conflicts with the shared Web port');
@@ -159,7 +157,7 @@ function buildEcosystem(sourceEnv = process.env) {
           OV_SUPERAGENT_CONFIG: deployment.manifestPath,
           OV_SUPERAGENT_UPDATER_RELEASE_LINK: path.join(baseDir, 'current'),
           OV_SUPERAGENT_UPDATER_SOCKET: path.join(baseDir, 'updater.sock'),
-          // The updater drives the same pm2 daemon the vika command uses.
+          // The updater drives the same pm2 daemon the ov-superagent command uses.
           PM2_HOME: sourceEnv.PM2_HOME || path.join(baseDir, 'pm2'),
           PM2_BIN: path.join(releaseDir, 'bin', 'pm2'),
           PATH: ecosystemSearchPath(sourceEnv, fallbackPath),

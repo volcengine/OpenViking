@@ -3,7 +3,6 @@
 
 'use strict';
 
-const { normalizeEnv } = require('./env-compat.cjs');
 const fs = require('node:fs');
 const { homeDir } = require('./packages/daemon/src/platform/index.mjs');
 const path = require('node:path');
@@ -72,7 +71,7 @@ const DAEMON_SHELL_ENV_FIELDS = Object.freeze([
 const DAEMON_SECRET_ENV_FIELDS = Object.freeze([
   'ARK_API_KEY',
   // Providers of the durable runtime (pi-ai) read their key from the child
-  // environment. They may come from the operator environment or ~/.superagent/secrets
+  // environment. They may come from the operator environment or ~/.ov-superagent/secrets
   // but never from the deployment manifest.
   'ANTHROPIC_API_KEY',
   'DEEPSEEK_API_KEY',
@@ -123,7 +122,7 @@ const LARK_MESSAGE_ACCESS = Object.freeze(['owner', 'bot']);
 const EMAIL_INSTANCE_ID = /^email-[a-z0-9][a-z0-9-]{0,39}$/;
 
 function resolveDeploymentManifestPath(env = process.env) {
-  env = normalizeEnv(env ?? process.env);
+  env = env ?? process.env;
   const override = typeof env.OV_SUPERAGENT_CONFIG === 'string'
     ? env.OV_SUPERAGENT_CONFIG.trim()
     : '';
@@ -135,10 +134,7 @@ function resolveDeploymentManifestPath(env = process.env) {
   }
   const home = typeof homeDir(env) === 'string' ? homeDir(env).trim() : '';
   if (!home || !path.isAbsolute(home)) throw new Error('HOME must be an absolute path');
-  if (!fs.existsSync(path.join(home, '.superagent', 'config.json')) && ['.vika', '.ovsa'].some(name => fs.existsSync(path.join(home, name, 'config.json')))) {
-    throw new Error('Legacy ~/.vika or ~/.ovsa installation found. Migrate it to ~/.superagent before using ov-superagent; see docs/migration-to-superagent.md.');
-  }
-  return path.join(path.normalize(home), '.superagent', 'config.json');
+  return path.join(path.normalize(home), '.ov-superagent', 'config.json');
 }
 
 // Secrets (DAEMON_SECRET_ENV_FIELDS) are deliberately kept out of config.json
@@ -146,7 +142,7 @@ function resolveDeploymentManifestPath(env = process.env) {
 // is the deterministic fallback: whoever runs `pm2 restart`/`ov-superagent upgrade`
 // no longer needs the secret exported in their own shell for it to take effect.
 function resolveSecretsFilePath(env = process.env) {
-  env = normalizeEnv(env ?? process.env);
+  env = env ?? process.env;
   const override = typeof env.OV_SUPERAGENT_SECRETS_FILE === 'string'
     ? env.OV_SUPERAGENT_SECRETS_FILE.trim()
     : '';
@@ -158,7 +154,7 @@ function resolveSecretsFilePath(env = process.env) {
   }
   const home = typeof homeDir(env) === 'string' ? homeDir(env).trim() : '';
   if (!home || !path.isAbsolute(home)) return null;
-  return path.join(path.normalize(home), '.superagent', 'secrets.env');
+  return path.join(path.normalize(home), '.ov-superagent', 'secrets.env');
 }
 
 function loadSecretsFile(env = process.env) {
@@ -174,10 +170,10 @@ function loadSecretsFile(env = process.env) {
     const eq = trimmed.indexOf('=');
     if (eq <= 0) continue;
     const key = trimmed.slice(0, eq).trim();
-    if (!allowed.has(key.replace(/^(?:VIKA_|OVSA_)/, 'OV_SUPERAGENT_'))) continue;
+    if (!allowed.has(key)) continue;
     result[key] = trimmed.slice(eq + 1).trim();
   }
-  return normalizeEnv(result);
+  return result;
 }
 
 // A field this release does not know is skipped and reported, never fatal: a
@@ -216,7 +212,6 @@ function parseDaemonEnv(value, ignored) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('deployment manifest env must be an object');
   }
-  value = normalizeEnv(value);
   const allowed = new Set(DAEMON_ENV_FIELDS);
   const result = {};
   for (const [key, envValue] of Object.entries(value)) {
@@ -439,7 +434,7 @@ function assertIsolatedAgentStorage(agents) {
 }
 
 function loadDeploymentManifest(env) {
-  env = normalizeEnv(env ?? process.env);
+  env = env ?? process.env;
   const manifestPath = resolveDeploymentManifestPath(env);
   let raw;
   try {
@@ -484,7 +479,6 @@ function loadDeploymentManifest(env) {
 }
 
 function resolvedDeploymentDaemonEnv(deployment, sourceEnv = process.env) {
-  sourceEnv = normalizeEnv(sourceEnv);
   const secrets = loadSecretsFile(sourceEnv);
   return Object.freeze(Object.fromEntries(DAEMON_PROCESS_ENV_FIELDS.flatMap((key) => {
     if (typeof sourceEnv[key] === 'string') return [[key, sourceEnv[key]]];
@@ -495,7 +489,6 @@ function resolvedDeploymentDaemonEnv(deployment, sourceEnv = process.env) {
 }
 
 function deploymentDaemonEnvOverrides(sourceEnv = process.env) {
-  sourceEnv = normalizeEnv(sourceEnv);
   const secrets = loadSecretsFile(sourceEnv);
   return Object.freeze(Object.fromEntries(DAEMON_PROCESS_ENV_FIELDS.flatMap((key) => {
     if (typeof sourceEnv[key] === 'string') return [[key, sourceEnv[key]]];
@@ -505,7 +498,6 @@ function deploymentDaemonEnvOverrides(sourceEnv = process.env) {
 }
 
 function applyDeploymentDaemonEnv(env, deployment, sourceEnv = env) {
-  sourceEnv = normalizeEnv(sourceEnv);
   Object.assign(env, resolvedDeploymentDaemonEnv(deployment, sourceEnv));
   return env;
 }
