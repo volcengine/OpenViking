@@ -27,7 +27,7 @@
    Slack 真正要做的是**别让噪声事件进入 scope**：机器人自己消息的回显、编辑、链接预览（unfurl）、入群退群等。这些一旦作为 `DONE` 事件落库，会让同一 scope 里正在进行的决定变成 `stale_decision`。最典型的情况是：一个 decision 允许连发最多 3 条短消息，第 1 条的回显会挡住第 2 条（详见 §3）。
 3. 每个用户在**自己的 workspace 建一个内部 App**，和飞书「每个实例一个自建应用」一样。内部 App 不受 2025-05 起对非 Marketplace 分发应用的 `conversations.history/replies` 限流（1 次/分钟、每次 15 条）影响。
 4. Slack 没法像飞书 `registerApp` 那样扫码建应用。setup 的做法是：用预填 manifest 的链接建 App，然后粘贴两个 token（`xoxb-` Bot token + `xapp-` App-level token），最后仿照 Telegram 发随机口令绑定 owner。
-5. **分期**：第一期做文本、文件、线程、reaction、撤回、媒体下载和 owner 通知，审批用编号文字（`发送 N`）。第二期做读历史、搜索、Block Kit 按钮（`choices`/审批卡片）和 `/vika` 斜杠命令。
+5. **分期**：第一期做文本、文件、线程、reaction、撤回、媒体下载和 owner 通知，审批用编号文字（`发送 N`）。第二期做读历史、搜索、Block Kit 按钮（`choices`/审批卡片）和 `/superagent` 斜杠命令。
 
 ## 2. 接入方式选型
 
@@ -220,7 +220,7 @@ slack: connectorManifest({
 **斜杠命令**：在 Slack 里输入 `/new` 会被客户端当作 Slack 命令拦下，提示「not a valid command」，消息到不了 bot。
 
 - 第一期：在 prompt/README 里说明「前面加一个空格」，即发 ` /new`。Core 的 `commandCandidate` 会 `trim()`，私聊（`p2p`）照常识别，不需要改 Core。
-- 第二期：在 App manifest 里注册 `/vika`，Socket Mode `slash_commands` envelope 进来后转成私聊里的标准文本事件（`/vika new` → `/new`），`reply_route` 用 `message.send {chat_id}`。需要给这个事件合成一个 message id，并只接受在 bot 私聊里调用的命令。
+- 第二期：在 App manifest 里注册 `/superagent`，Socket Mode `slash_commands` envelope 进来后转成私聊里的标准文本事件（`/superagent new` → `/new`），`reply_route` 用 `message.send {chat_id}`。需要给这个事件合成一个 message id，并只接受在 bot 私聊里调用的命令。
 
 ## 9. 需要产品决定的问题
 
@@ -240,9 +240,9 @@ slack: connectorManifest({
 | --- | --- | --- |
 | P1 Connector 核心 | `src/slack/{api,socket,events,client,state,media}.mjs`；Socket Mode 收发、事件过滤与映射、send/reply/react/retract/media、PID lease、连接轮换 | 新增 + `catalog.mjs`、`worker.mjs` |
 | P1 Core | §7 的 C1–C6 | `config.mjs`、`tools.mjs`、`runtime-input.mjs`、`event.mjs`、`conversation-policy.mjs` |
-| P1 CLI | setup / login / 主渠道选择 / 多实例 | `cli/src/{slack,setup,login,instances}.mjs`、`bin/vika.mjs` |
+| P1 CLI | setup / login / 主渠道选择 / 多实例 | `cli/src/{slack,setup,login,instances}.mjs`、`bin/ov-superagent.mjs` |
 | P1 测试 | 仿照 `telegram.test.mjs`：假 `fetch` + 假 WebSocket 服务端（`node:http` upgrade）跑 hello/envelope/ack/disconnect/refresh、回显过滤、subtype 白名单、线程 scope、去重、429 | `test/slack.test.mjs`、CLI 测试 |
-| P2 | 补拉、`chat.list`/`chat.messages`/`thread.messages`/`message.search`、Block Kit 交互、`/vika`、编辑事件 | — |
+| P2 | 补拉、`chat.list`/`chat.messages`/`thread.messages`/`message.search`、Block Kit 交互、`/superagent`、编辑事件 | — |
 
 真机验证清单：bot 自身消息是否回推及其字段；`markdown_text` 渲染与提及；Socket Mode 在没有连接时的重投/丢弃行为；`url_private_download` 是否会重定向；文件分享拿到 ts 的延迟；连接刷新的频率。
 

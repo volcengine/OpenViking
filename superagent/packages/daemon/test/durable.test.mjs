@@ -17,7 +17,7 @@ import { RuntimeAdapter } from '../src/runtime-adapter.mjs';
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 
 function tempDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'vika-durable-test-'));
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-durable-test-'));
 }
 
 function baseConfig(overrides = {}) {

@@ -18,7 +18,7 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
   it('loads OV timer state using the configured instance and persists MCP changes', async (context) => {
     const server = await fakeOV(context);
     const client = new OVConnection({ url: server.url, user: 'alice' });
-    const uri = 'viking://user/alice/resources/vika/work/timers-state.json';
+    const uri = 'viking://user/alice/resources/superagent/work/timers-state.json';
     server.state.files.set(uri, JSON.stringify({
       timers: [{
         timerId: 'tm_restored', title: 'Restored', text: 'Check PR', timezone: 'UTC',
@@ -70,7 +70,7 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
   it('keeps messaging during an OV timer outage and restores timers before accepting operations', async (context) => {
     const server = await fakeOV(context);
     const client = new OVConnection({ url: server.url, user: 'alice' });
-    const uri = 'viking://user/alice/resources/vika/work/timers-state.json';
+    const uri = 'viking://user/alice/resources/superagent/work/timers-state.json';
     const saved = JSON.stringify({
       timers: [{
         timerId: 'tm_restored', title: 'Restored', text: 'Check PR', timezone: 'UTC',
@@ -512,7 +512,7 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
   });
 
   it('gives codex the instance role after the Core', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-e2e-role-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-e2e-role-'));
     const rolePromptPath = path.join(dir, 'role.md');
     fs.writeFileSync(rolePromptPath, '<!-- editor note -->\nYou are {{AGENT_NAME}}. Role fixture marker: zircon-e2e-7742\n');
     const env = await startMockEnv({ config: { rolePromptPath, agentName: 'Alpha' } });
@@ -550,7 +550,7 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
 describe('ingress barrier', () => {
   it('answers /help immediately while a model turn is active', async () => {
     const daemon = new PersonalAgentDaemon(
-      { dataDir: os.tmpdir(), lockPath: path.join(os.tmpdir(), 'unused-vika-test.lock') },
+      { dataDir: os.tmpdir(), lockPath: path.join(os.tmpdir(), 'unused-superagent-test.lock') },
       createLogger('error', { test: 'command-idle-barrier' }),
     );
     const order = [];
@@ -610,7 +610,7 @@ describe('ingress barrier', () => {
 describe('/model immediate switch', () => {
   it('executes /model without waiting for the stuck active turn', async () => {
     const daemon = new PersonalAgentDaemon(
-      { dataDir: os.tmpdir(), lockPath: path.join(os.tmpdir(), 'unused-vika-model.lock') },
+      { dataDir: os.tmpdir(), lockPath: path.join(os.tmpdir(), 'unused-superagent-model.lock') },
       createLogger('error', { test: 'model-no-wait' }),
     );
     const order = [];

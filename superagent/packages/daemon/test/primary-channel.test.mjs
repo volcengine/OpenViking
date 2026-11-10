@@ -23,7 +23,7 @@ const logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return 
 const ids = ['lark', 'weixin', 'telegram', 'slack', 'qq'];
 
 function fixture(t) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-primary-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-primary-'));
   const manifestPath = path.join(directory, 'custom-config.json');
   const agent = (id, port) => ({ id, displayName: id, channel: 'lark', connectors: ids,
     profile: `profile-${id}`, port, model: 'codex:', dataDir: path.join(directory, id, 'data'),

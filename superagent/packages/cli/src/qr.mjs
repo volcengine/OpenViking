@@ -74,7 +74,7 @@ export function showScan(prompter, {
     try { if (imageDirectory) fs.rmSync(imageDirectory, { recursive: true, force: true }); } catch { /* Best effort on exit. */ }
   };
   try {
-    imageDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-qr-'));
+    imageDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-qr-'));
     imagePath = path.join(imageDirectory, 'scan.png');
     fs.writeFileSync(imagePath, qrPng(matrix), { mode: 0o600, flag: 'wx' });
     process.on('exit', cleanupImage);

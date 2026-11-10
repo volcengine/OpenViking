@@ -62,7 +62,7 @@ test('timeout and missing shells fail without pretending success', async () => {
 });
 
 test('Windows native PowerShell runs with an unusable Bash shellPath', { skip: process.platform !== 'win32' }, async () => {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'vika 中文 shell-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent 中文 shell-'));
   try {
     const env = new NodeExecutionEnv({ cwd, shellPath: path.join(cwd, 'no-bash.exe') });
     const api = apiFor(env.exec.bind(env), cwd);
@@ -77,7 +77,7 @@ test('Windows native PowerShell runs with an unusable Bash shellPath', { skip: p
 // Force the legacy executable as well: a machine with pwsh installed must not
 // accidentally certify only PowerShell 7 when validating the 5.1 fallback.
 test('Windows 5.1 fallback executes directly without Bash', { skip: process.platform !== 'win32' }, async () => {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-legacy-shell-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-legacy-shell-'));
   try {
     const env = new NodeExecutionEnv({ cwd, shellPath: path.join(cwd, 'no-bash.exe') });
     const legacy = createPowerShellTool({ programs: [path.join(cwd, 'missing-pwsh.exe'), 'powershell'] });

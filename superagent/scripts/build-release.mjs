@@ -118,7 +118,7 @@ async function buildPlatform({ stage, platformId, version, commit, nodeVersion, 
     // Only a release for this machine can be started here; CI checks the rest on their own runners.
     const run = (command, args) => execFileSync(command, args, { cwd: root, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' }).trim();
     say(`smoke test: ${run(path.join(root, 'node', 'bin', 'node'), ['--version'])}, `
-      + `${run(path.join(root, 'node', 'bin', 'node'), [path.join(root, 'packages', 'cli', 'bin', 'vika.mjs'), '--version'])}, `
+      + `${run(path.join(root, 'node', 'bin', 'node'), [path.join(root, 'packages', 'cli', 'bin', 'ov-superagent.mjs'), '--version'])}, `
       + `${run(path.join(root, 'node_modules', '@larksuite', 'cli', 'bin', 'lark-cli'), ['--version'])}`);
     run(path.join(root, 'node', 'bin', 'node'), [path.join(root, 'packages', 'daemon', 'scripts', 'check-pi.mjs')]);
     run(path.join(root, 'node', 'bin', 'node'), [path.join(root, 'packages', 'daemon', 'scripts', 'check-durable.mjs')]);
@@ -144,7 +144,7 @@ const cache = path.join(os.homedir(), '.cache', 'superagent-build');
 fs.mkdirSync(cache, { recursive: true });
 const stage = path.join(opts.out, 'work', '.stage');
 fs.rmSync(stage, { recursive: true, force: true });
-say(`building vika ${version} (${commit.slice(0, 12)}) for ${opts.platforms.join(', ')}; Node ${nodeVersion}`);
+say(`building ov-superagent ${version} (${commit.slice(0, 12)}) for ${opts.platforms.join(', ')}; Node ${nodeVersion}`);
 stageApp(opts.ref, stage);
 
 const files = {};

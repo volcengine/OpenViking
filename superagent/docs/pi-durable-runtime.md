@@ -9,7 +9,7 @@ dies mid-turn resumes the run from the last checkpoint when it starts again.
 
 The daemon keeps every guarantee it owns for the other runtimes: the inbound
 ledger, outbox idempotency, decisions and the cognition journal stay in
-`vika.sqlite3`. The durable store only holds the conversation.
+`superagent.sqlite3`. The durable store only holds the conversation.
 
 ## Choosing it
 
@@ -40,7 +40,7 @@ Provider keys from the environment reach the host only through the daemon's
 secret fields: `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`,
 `GOOGLE_GENERATIVE_AI_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`,
 `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `XAI_API_KEY` and `ARK_API_KEY`. Set them
-in the operator environment or `~/.superagent/secrets.env`, never in `config.json`.
+in the operator environment or `~/.ov-superagent/secrets.env`, never in `config.json`.
 `ARK_API_KEY` is kept for the same reason as for Pi: a `models.json` provider may
 name it as `"apiKey": "$ARK_API_KEY"`.
 

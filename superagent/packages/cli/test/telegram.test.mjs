@@ -13,7 +13,7 @@ import { TelegramState } from '../../daemon/src/telegram/state.mjs';
 
 const TOKEN = '123456:abcdefghijklmnopqrstuvwxyz_TEST';
 function fixture(t, answers) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-telegram-ui-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-telegram-ui-'));
   const state = new TelegramState(dataDir);
   state.saveAccount({ botId: '123456', ownerId: '99', chatId: '99', token: 'old-key', offset: 13, activatedAt: 0 });
   const input = new PassThrough(); input.end(answers.join('\n') + '\n');
@@ -28,9 +28,9 @@ test('invalid token can be retried, hides credentials, and commits only after pr
   f.options.fetchImpl = async (url, init) => {
     assert.equal(f.state.account().token, 'old-key');
     if (url.includes('_INVALID/')) return Response.json({ ok: false, error_code: 401, description: TOKEN }, { status: 401 });
-    if (url.endsWith('/getMe')) return Response.json({ ok: true, result: { id: 123456, is_bot: true, username: 'vika_test_bot' } });
+    if (url.endsWith('/getMe')) return Response.json({ ok: true, result: { id: 123456, is_bot: true, username: 'superagent_test_bot' } });
     if (url.endsWith('/getWebhookInfo')) return Response.json({ ok: true, result: { url: '' } });
-    const nonce = f.text().match(/https:\/\/t\.me\/vika_test_bot\?start=([A-Za-z0-9_-]+)/)[1];
+    const nonce = f.text().match(/https:\/\/t\.me\/superagent_test_bot\?start=([A-Za-z0-9_-]+)/)[1];
     assert.equal(JSON.parse(init.body).offset, 13);
     return Response.json({ ok: true, result: [{ update_id: 13, message: { message_id: 13, date: Math.floor(Date.now() / 1000),
       from: { id: 99, is_bot: false }, chat: { id: 99, type: 'private' }, text: `/start ${nonce}` } }] });
@@ -45,7 +45,7 @@ test('invalid token can be retried, hides credentials, and commits only after pr
 for (const canGoBack of [true, false]) test(`webhook conflict leaves existing credentials intact (back=${canGoBack})`, async (t) => {
   const f = fixture(t, [TOKEN, '2']);
   f.options.fetchImpl = async (url) => Response.json({ ok: true, result: url.endsWith('/getMe')
-    ? { id: 123456, is_bot: true, username: 'vika_test_bot' } : { url: 'https://old-service.example' } });
+    ? { id: 123456, is_bot: true, username: 'superagent_test_bot' } : { url: 'https://old-service.example' } });
   await assert.rejects(connectTelegram({ ...f.options, canGoBack }), { name: canGoBack ? 'GoBack' : 'PromptAborted' });
   assert.equal(f.state.account().token, 'old-key');
   f.state.acquire(); f.state.release();

@@ -20,8 +20,8 @@ import {
   scanApp, tenantToken,
 } from './lark-app.mjs';
 import {
-  ROLE_PRESETS, WEB_PORT, allocatePort, availableInstanceOvConfig, detectionEnv, instanceIdProblem, readManifest, suggestInstanceId, validateManifest, vikaCommand,
-  vikaHome, withChangedInstance, withDefaultTempDir, withInstance, writeManifest,
+  ROLE_PRESETS, WEB_PORT, allocatePort, availableInstanceOvConfig, detectionEnv, instanceIdProblem, readManifest, suggestInstanceId, validateManifest, superagentCommand,
+  superagentHome, withChangedInstance, withDefaultTempDir, withInstance, writeManifest,
 } from './manifest.mjs';
 import { OVRegistrations, detectOpenViking, instanceOvConfig, writeInstanceOvConfig } from './ov.mjs';
 import { configureOpenViking, prepareInstanceOpenViking, saveOVConnection, takenIdentities } from './ov-setup.mjs';
@@ -265,7 +265,7 @@ function initialState({ id, env, homeDir, current, runtimes, kept }) {
   const connectors = current ? [...connectorsOf(current)] : ['lark'];
   return {
     id,
-    dataDir: current?.dataDir ?? path.join(vikaHome(env), 'data', id),
+    dataDir: current?.dataDir ?? path.join(superagentHome(env), 'data', id),
     displayName: current?.displayName ?? 'OpenViking SuperAgent',
     // A shipped role by name, or the absolute path of the owner's own file;
     // roleSeed is the role a new file of theirs starts from (written on save).
@@ -319,7 +319,7 @@ async function askWorkspace({ prompter, env, homeDir }, state) {
     validate: (value) => {
       const resolved = path.resolve(expandHome(value, homeDir));
       if (resolved === homeDir) return t('不要直接用 home 目录，换一个子目录', 'Not the home directory itself; use a folder inside it');
-      if (resolved.startsWith(`${vikaHome(env)}${path.sep}`)) return t('不能放在 ~/.superagent 里', 'Not inside ~/.superagent');
+      if (resolved.startsWith(`${superagentHome(env)}${path.sep}`)) return t('不能放在 ~/.ov-superagent 里', 'Not inside ~/.ov-superagent');
       return null;
     },
   }), homeDir));
@@ -361,7 +361,7 @@ async function askRole({ prompter, env, homeDir }, state) {
     state.roleSeed = null;
     return;
   }
-  const initial = customRole(state.role) ? state.role : path.join(vikaHome(env), 'roles', `${state.id}.md`);
+  const initial = customRole(state.role) ? state.role : path.join(superagentHome(env), 'roles', `${state.id}.md`);
   const file = path.resolve(expandHome(await prompter.text(t('角色 prompt 文件（Markdown）', 'Role prompt file (Markdown)'), {
     label: t('角色文件', 'Role file'),
     initial: shortenHome(initial, homeDir),
@@ -1290,17 +1290,17 @@ export async function larkMessageListener({ port, fetchImpl = globalThis.fetch, 
   };
 }
 
-const receivingChecklist = (id, vika) => [
+const receivingChecklist = (id, cli) => [
   t('开放平台「事件与回调」里，事件订阅方式是长连接，并订阅了接收消息（im.message.receive_v1）',
     'Under Events & Callbacks in the developer console, events come over the long connection and the message event (im.message.receive_v1) is subscribed'),
   t('改过配置后创建了版本并发布（企业可能在等管理员审核）', 'After a change, a version was created and published (an organization may be awaiting admin approval)'),
   t('这个应用没有同时被别的程序（OpenClaw、botmux、另一台机器上的 OpenViking SuperAgent）用长连接收消息', 'No other program (OpenClaw, botmux, OpenViking SuperAgent on another machine) receives with this app over the long connection'),
-  t(`运行 ${vika} logs ${id} 看飞书连接有没有报错`, `Run ${vika} logs ${id} for errors in the Feishu/Lark connection`),
+  t(`运行 ${cli} logs ${id} 看飞书连接有没有报错`, `Run ${cli} logs ${id} for errors in the Feishu/Lark connection`),
 ];
 
 // The owner replies on Feishu/Lark and setup waits to see it arrive, a few
 // minutes at most; s skips. Resolves true when it arrived.
-async function confirmReceiving({ prompter, listener, greeted, name, id, vika, timeoutMs = 180_000 }) {
+async function confirmReceiving({ prompter, listener, greeted, name, id, cli, timeoutMs = 180_000 }) {
   prompter.info(greeted
     ? t('在飞书里回它一句（说什么都行），确认它收得到你的消息', 'Reply to it on Feishu/Lark (anything will do) to check it gets your messages')
     : t(`在飞书里搜「${name}」给它发一句，确认它收得到你的消息`, `Search for "${name}" on Feishu/Lark and message it, to check it gets your messages`));
@@ -1324,7 +1324,7 @@ async function confirmReceiving({ prompter, listener, greeted, name, id, vika, t
   spinning.stop();
   if (skipped) prompter.info(t('跳过了；之后它要是收不到你的消息，按下面查：', 'Skipped; if it does not get your messages later, check:'));
   else prompter.warn(t(`${Math.round(timeoutMs / 60_000)} 分钟没等到你的消息。它发得出、收不到，按下面查：`, `No message in ${Math.round(timeoutMs / 60_000)} minutes. It can send but not receive; check:`));
-  receivingChecklist(id, vika).forEach((line, index) => prompter.write(`    ${index + 1}. ${line}\n`));
+  receivingChecklist(id, cli).forEach((line, index) => prompter.write(`    ${index + 1}. ${line}\n`));
   prompter.write(t('    修好后不用重新 setup，直接给它发消息就行。\n', '    Once fixed, no need to run setup again: just message it.\n'));
   return false;
 }
@@ -1358,7 +1358,7 @@ async function ensureRuntime({ prompter, env, detect, connect, live }, runtimes)
     prompter.warn(t('没有可用的 agent 运行时：', 'No agent runtime can run yet:'));
     const labelWidth = Math.max(...detected.map((runtime) => width(runtime.label)));
     for (const runtime of detected) prompter.write(`      ${padEnd(runtime.label, labelWidth)}  ${runtime.note}\n`);
-    const later = t(`登录好其中一个后，重新运行 ${vikaCommand(env)} setup。`, `Log in to one of them, then run ${vikaCommand(env)} setup again.`);
+    const later = t(`登录好其中一个后，重新运行 ${superagentCommand(env)} setup。`, `Log in to one of them, then run ${superagentCommand(env)} setup again.`);
     if (!prompter.tty || !connect.pi) {
       prompter.info(later);
       return null;
@@ -1432,13 +1432,13 @@ function manifestModel(state, current) {
 // draft in hand; the hint no longer prints field values, because the wizard
 // will ask for them.
 function dshModelHint({ env, state }) {
-  const vika = vikaCommand(env);
+  const cli = superagentCommand(env);
   const instance = state.id ? ` --instance ${state.id}` : '';
   return t(
-    `补一个 model route：${vika} dsh model${instance}\n`
+    `补一个 model route：${cli} dsh model${instance}\n`
     + `  在菜单里选「添加 model」，按提示填网关地址、protocol、model id 和 credential`
     + `（和 ov-superagent setup 一样，写入前先用临时 DSH 验证）`,
-    `Add a model route: ${vika} dsh model${instance}\n`
+    `Add a model route: ${cli} dsh model${instance}\n`
     + `  pick "Add a model" in the menu and answer the same questions ov-superagent setup asks`
     + ` (gateway URL, protocol, model id, credential; checked against a temporary DSH first)`);
 }
@@ -1651,7 +1651,7 @@ async function setupFlow({
   registrations,
 }) {
   const out = (text) => prompter.write(text);
-  const vika = vikaCommand(env);
+  const cli = superagentCommand(env);
   // The manifest is read before detection: a binary path pinned there is what the
   // daemon runs, so the probe has to see it too.
   const { path: configPath, value: manifest, ignored } = readManifest(env);
@@ -1779,7 +1779,7 @@ async function setupFlow({
     };
     if (state.role) agent.role = state.role;
     else delete agent.role;
-    if (state.connectors.includes('lark')) agent.profile = current?.profile ?? `vika-${state.id}`;
+    if (state.connectors.includes('lark')) agent.profile = current?.profile ?? `superagent-${state.id}`;
     else delete agent.profile;
     // A new app reads as chosen for it; the app kept reads as it did.
     const access = state.larkApp ? state.larkApp.access : current?.larkMessageAccess;
@@ -1816,7 +1816,7 @@ async function setupFlow({
     state.id = await prompter.text(t('实例名称（用在命令和目录里）', 'Instance name (used in commands and folders)'), {
       label: t('实例名称', 'Instance name'), initial: state.id, validate: (value) => instanceIdProblem(value, manifest),
     });
-    state.dataDir = path.join(vikaHome(env), 'data', state.id);
+    state.dataDir = path.join(superagentHome(env), 'data', state.id);
     if (state.workspace === path.join(homeDir, 'superagent-workspace', before)) state.workspace = path.join(homeDir, 'superagent-workspace', state.id);
   };
   // The mailboxes once the rest is known: checked first with a stand-in,
@@ -1851,7 +1851,7 @@ async function setupFlow({
     const go = ims(state).some((im) => TOKEN_IMS.includes(im)) ? t('开始接入？', 'Start connecting?')
       : ims(state).length ? t('开始扫码？', 'Start scanning?') : t('保存并启动？', 'Save and start?');
     if (await prompter.confirm(go)) return null;
-    prompter.info(t(`什么都没保存；准备好了再运行 ${vika} setup。`, `Nothing was saved; run ${vika} setup when you are ready.`));
+    prompter.info(t(`什么都没保存；准备好了再运行 ${cli} setup。`, `Nothing was saved; run ${cli} setup when you are ready.`));
     return DECLINED;
   };
 
@@ -1972,8 +1972,8 @@ async function setupFlow({
           `The model route is in ${shortenHome(result.settings, homeDir)}`));
       for (const line of written.notes ?? []) prompter.info(line);
       if (!state.dshModel.keyValue) {
-        prompter.info(t(`credential ${written.keyRef} 还没有值：DSH 要能解析它，这个 route 才能服务 model。运行 ${vika} dsh model key set ${written.keyRef}`,
-          `The credential ${written.keyRef} has no value yet: DSH can serve this route only once it resolves it. Run ${vika} dsh model key set ${written.keyRef}`));
+        prompter.info(t(`credential ${written.keyRef} 还没有值：DSH 要能解析它，这个 route 才能服务 model。运行 ${cli} dsh model key set ${written.keyRef}`,
+          `The credential ${written.keyRef} has no value yet: DSH can serve this route only once it resolves it. Run ${cli} dsh model key set ${written.keyRef}`));
       }
     } catch (error) {
       // Saving the qualified model without the route would be exactly the
@@ -2002,8 +2002,8 @@ async function setupFlow({
       () => control[command](id, { env, stdout: quiet }),
       t(`${state.displayName}（${id}）在后台跑起来了`, `${state.displayName} (${id}) is running in the background`));
   } catch (error) {
-    out(t(`\n配置已保存，但${current ? '重启' : '启动'}没有完成：${error.message}\n运行 ${vika} logs ${id} 查看具体错误；修好后运行 ${vika} ${command} ${id}\n`,
-      `\nSaved, but the ${command} did not finish: ${error.message}\nRun ${vika} logs ${id} for the exact error; once fixed, run ${vika} ${command} ${id}\n`));
+    out(t(`\n配置已保存，但${current ? '重启' : '启动'}没有完成：${error.message}\n运行 ${cli} logs ${id} 查看具体错误；修好后运行 ${cli} ${command} ${id}\n`,
+      `\nSaved, but the ${command} did not finish: ${error.message}\nRun ${cli} logs ${id} for the exact error; once fixed, run ${cli} ${command} ${id}\n`));
     return 1;
   }
   if (!current) {
@@ -2016,8 +2016,8 @@ async function setupFlow({
       const spinning = prompter.spin(t(`启动${label}`, `Starting the ${label.toLowerCase()}`));
       await control[action](target, { env, stdout: quiet }).then(
         () => spinning.succeed(label),
-        (error) => spinning.warn(t(`superagent-${target} 没有起来：${error.message}；之后运行 ${vika} ${action} ${target}`,
-          `superagent-${target} did not start: ${error.message}; later, run ${vika} ${action} ${target}`)),
+        (error) => spinning.warn(t(`superagent-${target} 没有起来：${error.message}；之后运行 ${cli} ${action} ${target}`,
+          `superagent-${target} did not start: ${error.message}; later, run ${cli} ${action} ${target}`)),
       );
     }
   }
@@ -2034,10 +2034,10 @@ async function setupFlow({
     );
   }
   const received = listener
-    ? await confirmReceiving({ prompter, listener, greeted, name: state.displayName, id, vika })
+    ? await confirmReceiving({ prompter, listener, greeted, name: state.displayName, id, cli })
     : false;
   // Only offer mechanisms implemented by this platform (including Windows logon).
-  if (!current && prompter.tty && capabilities.autostart && control.autostart && !autostartEnabled({ homeDir, env })) await offerAutostart({ prompter, env, homeDir, control, vika });
+  if (!current && prompter.tty && capabilities.autostart && control.autostart && !autostartEnabled({ homeDir, env })) await offerAutostart({ prompter, env, homeDir, control, cli });
 
   // What to do next, one line per thing; on Weixin the owner has to write first.
   const next = [];
@@ -2068,18 +2068,18 @@ async function setupFlow({
   } else {
     out(`\n${title}${t('。', '.')}\n${next.map(([key, value]) => `  ${key ? `${key}${t('：', ': ')}` : ''}${value}\n`).join('')}`);
   }
-  if (vika !== 'ov-superagent' && !current) {
-    prompter.info(t(`这个终端还找不到 ov-superagent：新开一个终端就行（安装时已加进 shell 配置），或先用 ${vika}`,
-      `This terminal does not know ov-superagent yet: open a new one (the installer added it to your shell setup), or use ${vika} for now`));
+  if (cli !== 'ov-superagent' && !current) {
+    prompter.info(t(`这个终端还找不到 ov-superagent：新开一个终端就行（安装时已加进 shell 配置），或先用 ${cli}`,
+      `This terminal does not know ov-superagent yet: open a new one (the installer added it to your shell setup), or use ${cli} for now`));
   }
   return 0;
 }
 
 // Starting at login is one question at the end of a first setup. A machine
 // without a user service manager says so, and setup still succeeds.
-async function offerAutostart({ prompter, env, homeDir, control, vika }) {
+async function offerAutostart({ prompter, env, homeDir, control, cli }) {
   if (!await prompter.confirm(t('开机后自动启动 OpenViking SuperAgent？', 'Start OpenViking SuperAgent when this computer starts?'), true)) {
-    prompter.info(t(`之后想开：${vika} autostart enable`, `To turn it on later: ${vika} autostart enable`));
+    prompter.info(t(`之后想开：${cli} autostart enable`, `To turn it on later: ${cli} autostart enable`));
     return;
   }
   let said = '';

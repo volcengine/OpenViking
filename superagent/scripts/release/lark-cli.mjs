@@ -21,7 +21,7 @@ export async function installLarkCliBinary({ packageDir, platformId, fetchImpl =
   const executable = windows ? 'lark-cli.exe' : 'lark-cli';
   const archive = `lark-cli-${version}-${target.larkCli}.${windows ? 'zip' : 'tar.gz'}`;
   const expected = checksumFor(fs.readFileSync(path.join(packageDir, 'checksums.txt'), 'utf8'), archive);
-  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-lark-cli-'));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-lark-cli-'));
   try {
     const file = path.join(work, archive);
     const urls = [

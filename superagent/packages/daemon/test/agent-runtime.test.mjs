@@ -1061,7 +1061,7 @@ describe('global Codex/Claude hard switch', () => {
   });
 
   for (const id of ['codex', 'traex', 'claude', 'pi']) it(`${id} effort preserves an active turn, session, epoch and authority`, async () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-effort-'));
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-effort-'));
     const store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
     try {
       store.initializeCognition(id, 'token');

@@ -29,7 +29,7 @@ function healthServer(responses) {
 }
 
 test('OpenViking: the user config wins, its credentials prove who the user is', async (t) => {
-  const home = tempDir(t, 'vika-ov-');
+  const home = tempDir(t, 'superagent-ov-');
   fs.mkdirSync(path.join(home, '.openviking'));
   fs.writeFileSync(path.join(home, '.openviking', 'ovcli.conf'), JSON.stringify({
     url: 'https://ov.example', api_key: 'key-1', account: 'acme', plugin: { recall: true }, agent_id: 'legacy', actor_peer_id: 'source-actor',
@@ -46,7 +46,7 @@ test('OpenViking: the user config wins, its credentials prove who the user is', 
   assert.equal(calls[0].headers['X-OpenViking-Account'], 'acme');
 
   // Under an API key the key is the identity; the copy names no peer.
-  const target = path.join(home, '.superagent', 'ov', 'primary.json');
+  const target = path.join(home, '.ov-superagent', 'ov', 'primary.json');
   writeInstanceOvConfig({ config: await instanceOvConfig({ detected, instanceId: 'primary' }), target });
   assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf8')), {
     url: 'https://ov.example', api_key: 'key-1', account: 'acme', plugin: { recall: true },
@@ -56,7 +56,7 @@ test('OpenViking: the user config wins, its credentials prove who the user is', 
 });
 
 test('OpenViking: where requests name the user, each instance is a user of its own', async (t) => {
-  const home = tempDir(t, 'vika-ov-');
+  const home = tempDir(t, 'superagent-ov-');
   const trusted = { configPath: null, url: LOCAL_OV_URL, usable: true, authMode: 'trusted',
     config: { url: LOCAL_OV_URL, api_key: 'root-key', account: 'team', user: 'owner', actor_peer_id: 'old' } };
   assert.deepEqual(await instanceOvConfig({ detected: trusted, instanceId: 'asd' }),
@@ -93,7 +93,7 @@ test('OpenViking: an administrator key creates the instance its own user, and th
 });
 
 test('OpenViking: a config whose server is down is reported, not offered', async (t) => {
-  const home = tempDir(t, 'vika-ov-');
+  const home = tempDir(t, 'superagent-ov-');
   const config = path.join(home, 'custom.conf');
   fs.writeFileSync(config, JSON.stringify({ url: 'https://down.example' }));
   const detected = await detectOpenViking({ env: { OPENVIKING_CLI_CONFIG_FILE: config }, homeDir: home, fetchImpl: healthServer({}).fetchImpl });
@@ -102,7 +102,7 @@ test('OpenViking: a config whose server is down is reported, not offered', async
 });
 
 test('OpenViking: without a config only a dev-mode local server is usable', async (t) => {
-  const home = tempDir(t, 'vika-ov-');
+  const home = tempDir(t, 'superagent-ov-');
   const dev = await detectOpenViking({ env: {}, homeDir: home, fetchImpl: healthServer({
     [`${LOCAL_OV_URL}/health`]: { status: 'ok', auth_mode: 'dev' },
   }).fetchImpl });
@@ -120,7 +120,7 @@ test('OpenViking: without a config only a dev-mode local server is usable', asyn
 });
 
 test('OpenViking: public health never substitutes for a protected credential check', async (t) => {
-  const home = tempDir(t, 'vika-ov-auth-');
+  const home = tempDir(t, 'superagent-ov-auth-');
   const configPath = path.join(home, 'instance.json');
   fs.writeFileSync(configPath, JSON.stringify({ url: 'https://ov.example', api_key: 'secret' }));
   const calls = [];
@@ -138,7 +138,7 @@ test('OpenViking: public health never substitutes for a protected credential che
 });
 
 test('OpenViking: the identity check costs one status call, names the user, and waits out a server still starting', async (t) => {
-  const home = tempDir(t, 'vika-ov-status-');
+  const home = tempDir(t, 'superagent-ov-status-');
   const config = { url: 'https://ov.example', api_key: 'secret' };
   for (const [initialized, usable] of [[true, true], [false, false]]) {
     const calls = [];
@@ -156,7 +156,7 @@ test('OpenViking: the identity check costs one status call, names the user, and 
 });
 
 test('OpenViking: a running Trusted server without Account or User requires configuration', async (t) => {
-  const home = tempDir(t, 'vika-ov-trusted-');
+  const home = tempDir(t, 'superagent-ov-trusted-');
   for (const identity of [{}, { account: 'team' }, { user: 'owner' }]) {
     const result = await detectOpenViking({ env: {}, homeDir: home, config: { url: LOCAL_OV_URL, ...identity },
       fetchImpl: async (url) => url.endsWith('/health')
@@ -171,7 +171,7 @@ test('OpenViking: a running Trusted server without Account or User requires conf
 });
 
 test('OpenViking: a missing explicit config never falls back to the default identity', async (t) => {
-  const home = tempDir(t, 'vika-ov-missing-');
+  const home = tempDir(t, 'superagent-ov-missing-');
   let calls = 0;
   const detected = await detectOpenViking({ env: {}, homeDir: home, configPath: path.join(home, 'missing'),
     fetchImpl: async () => { calls++; return Response.json({ status: 'ok' }); } });
@@ -180,7 +180,7 @@ test('OpenViking: a missing explicit config never falls back to the default iden
 });
 
 test('runtimes: installed and logged-in CLIs are offered, the rest say what is missing', async (t) => {
-  const bin = tempDir(t, 'vika-bin-');
+  const bin = tempDir(t, 'superagent-bin-');
   for (const name of ['codex', 'claude']) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\n', { mode: 0o755 });
   assert.equal(which('codex', { PATH: bin }), path.join(bin, 'codex'));
   assert.equal(which('traecli', { PATH: bin }), null);
@@ -221,10 +221,10 @@ test('runtimes: durable is offered when a provider has credentials', async () =>
   assert.match(durable.note, /openai\/gpt-4o/);
 });
 
-test('runtimes: the durable probe sees provider keys from ~/.superagent/secrets.env', async (t) => {
-  const home = tempDir(t, 'vika-home-');
-  fs.mkdirSync(path.join(home, '.superagent'));
-  fs.writeFileSync(path.join(home, '.superagent', 'secrets.env'), '# comment\nOPENAI_API_KEY=sk-test\nOTHER=ignored\n');
+test('runtimes: the durable probe sees provider keys from ~/.ov-superagent/secrets.env', async (t) => {
+  const home = tempDir(t, 'superagent-home-');
+  fs.mkdirSync(path.join(home, '.ov-superagent'));
+  fs.writeFileSync(path.join(home, '.ov-superagent', 'secrets.env'), '# comment\nOPENAI_API_KEY=sk-test\nOTHER=ignored\n');
   let probeEnv = null;
   const execFileImpl = async (command, args, options) => {
     if (args.includes('-e')) { probeEnv = options.env; return { stdout: '["openai/gpt-4o"]' }; }
@@ -249,7 +249,7 @@ test('runtimes: a Pi with no model points the user at ov-superagent pi', async (
 });
 
 function traexFixture(t, names) {
-  const bin = tempDir(t, 'vika-traex-');
+  const bin = tempDir(t, 'superagent-traex-');
   for (const name of names) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
   const probed = [];
   const logins = [];
@@ -336,7 +336,7 @@ test('TraeX: resolves and deduplicates aliases before probing or pinning a binar
 });
 
 test('OpenCode: an installed supported 1.x CLI is offered after an ACP handshake', async (t) => {
-  const bin = tempDir(t, 'vika-opencode-');
+  const bin = tempDir(t, 'superagent-opencode-');
   fs.writeFileSync(path.join(bin, 'opencode'), '#!/bin/sh\n', { mode: 0o755 });
   const options = {
     env: { PATH: bin }, piBin: '/managed/pi.js',
@@ -355,7 +355,7 @@ test('OpenCode: an installed supported 1.x CLI is offered after an ACP handshake
 });
 
 function agyFixture(t, name = 'agy') {
-  const bin = tempDir(t, 'vika-agy-');
+  const bin = tempDir(t, 'superagent-agy-');
   fs.writeFileSync(path.join(bin, name), '#!/bin/sh\n', { mode: 0o755 });
   return bin;
 }
@@ -415,7 +415,7 @@ test('Antigravity: a model listing that fails for another reason is not reported
 
 test('Antigravity: the login check runs agy models with OpenViking filtered out', async (t) => {
   const bin = agyFixture(t);
-  const home = tempDir(t, 'vika-agy-home-');
+  const home = tempDir(t, 'superagent-agy-home-');
   const gemini = path.join(home, '.gemini');
   fs.mkdirSync(path.join(gemini, 'config'), { recursive: true });
   fs.mkdirSync(path.join(gemini, 'antigravity-cli'), { recursive: true });
@@ -479,7 +479,7 @@ test('Antigravity: AGY_BIN is authoritative, and a bare name is a PATH lookup', 
 });
 
 test('OpenCode: an unsupported 2.x CLI is reported and not offered', async (t) => {
-  const bin = tempDir(t, 'vika-opencode2-');
+  const bin = tempDir(t, 'superagent-opencode2-');
   fs.writeFileSync(path.join(bin, 'opencode'), '#!/bin/sh\n', { mode: 0o755 });
   const acpProbes = [];
   const runtime = (await detectRuntimes({
@@ -547,7 +547,7 @@ test('OpenViking: setup deletes the users it created and did not keep, and waits
   const make = (instanceId) => instanceOvConfig({ detected: adminOf('team'), instanceId, fetchImpl, registrations });
   const kept = await make('alpha');
   for (const name of ['asd', 'gone', 'broken', 'slow']) await make(name);
-  const saved = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'vika-ov-')), 'alpha.json');
+  const saved = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-ov-')), 'alpha.json');
   writeInstanceOvConfig({ config: kept, target: saved });
   registrations.keep(saved);
   const { failed, pending } = await registrations.discard({ fetchImpl });

@@ -43,7 +43,7 @@ async function fixtureTempRoot(prefix) {
 
 async function fixtureRelease() {
   const root = await fixtureTempRoot('superagent-updater-test-');
-  const base = path.join(root, 'vika');
+  const base = path.join(root, 'superagent');
   const release = path.join(base, 'releases', '0.4.0-test');
   await mkdir(release, { recursive: true });
   await writeFile(path.join(release, 'ecosystem.config.cjs'), 'module.exports = {};\n');
@@ -311,7 +311,7 @@ test('PM2 control commands discard metadata inherited from a managed caller', ()
     PATH: '/safe-bin',
     PM2_HOME: '/safe-pm2',
     LANG: 'C.UTF-8',
-    name: 'vika',
+    name: 'ov-superagent',
     pm_id: '28',
     pm_exec_path: '/old/release/main.mjs',
     cwd: '/old/release',
@@ -612,7 +612,7 @@ test('the replacement shell outlives the updater and starts it from the new rele
   scheduleUpdaterRestart({
     release: '/superagent/releases/0.5.0',
     pm2Bin: '/superagent/releases/0.4.0/bin/pm2',
-    pm2Env: { HOME: '/home/u', PM2_HOME: '/home/u/.superagent/pm2' },
+    pm2Env: { HOME: '/home/u', PM2_HOME: '/home/u/.ov-superagent/pm2' },
     spawnImpl: (command, args, options) => { calls.push({ command, args, options }); return { unref() {} }; },
   });
   const [{ command, args, options }] = calls;
@@ -623,7 +623,7 @@ test('the replacement shell outlives the updater and starts it from the new rele
   assert.equal(options.detached, true);
   assert.equal(options.env.CONFIG, '/superagent/releases/0.5.0/ecosystem.config.cjs');
   assert.equal(options.env.PM2, '/superagent/releases/0.4.0/bin/pm2', 'falls back to the running pm2 when the release has none');
-  assert.equal(options.env.PM2_HOME, '/home/u/.superagent/pm2');
+  assert.equal(options.env.PM2_HOME, '/home/u/.ov-superagent/pm2');
 });
 
 test('server accepts one allowlisted upgrade over its private socket', async (t) => {
@@ -726,7 +726,7 @@ test('server serializes upgrade requests', async (t) => {
     socketPath,
     upgrade: async (target) => {
       await firstGate;
-      return { target, app: 'vika', release: '/release', status: 'ready' };
+      return { target, app: 'superagent', release: '/release', status: 'ready' };
     },
   });
   t.after(() => updater.close());
@@ -770,7 +770,7 @@ test('CLI upgrade command reaches the updater over the Unix socket', async (t) =
   });
   t.after(() => updater.close());
 
-  const bin = fileURLToPath(new URL('../../cli/bin/vika.mjs', import.meta.url));
+  const bin = fileURLToPath(new URL('../../cli/bin/ov-superagent.mjs', import.meta.url));
   const child = spawn(process.execPath, [bin, 'upgrade', 'beta'], {
     env: {
       ...process.env,

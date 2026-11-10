@@ -10,7 +10,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { publishLatestRelease } from '../src/publisher.mjs';
 
-const BASE = 'https://releases.example/vika';
+const BASE = 'https://releases.example/superagent';
 
 // A bucket with real archives built the way build-release.mjs lays them out.
 function bucket(t) {
@@ -39,7 +39,7 @@ function bucket(t) {
     const body = objects.get(url);
     return body ? new Response(body) : new Response('missing', { status: 404 });
   };
-  const baseDir = path.join(root, 'home', '.superagent');
+  const baseDir = path.join(root, 'home', '.ov-superagent');
   fs.mkdirSync(baseDir, { recursive: true });
   const smoked = [];
   const options = {

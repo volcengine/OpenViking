@@ -17,7 +17,7 @@ test('only a Chinese locale settles the language; a locale naming no language sa
 });
 
 test('--lang beats OV_SUPERAGENT_LANG, which beats the saved language, which beats Chinese; the locale only settles asking', (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-lang-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-lang-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const env = { HOME: home, LANG: 'en_US.UTF-8' };
   // A server's en_US says little about who reads it: Chinese, but asked.
@@ -25,7 +25,7 @@ test('--lang beats OV_SUPERAGENT_LANG, which beats the saved language, which bea
   assert.deepEqual(languageChoice({ env: { HOME: home } }), { language: 'zh', settled: false, explicit: false });
   assert.deepEqual(languageChoice({ env: { HOME: home, LANG: 'zh_CN.UTF-8' } }), { language: 'zh', settled: true, explicit: false });
   saveLanguage('zh', env);
-  assert.equal(fs.readFileSync(path.join(home, '.superagent', 'language'), 'utf8'), 'zh\n');
+  assert.equal(fs.readFileSync(path.join(home, '.ov-superagent', 'language'), 'utf8'), 'zh\n');
   assert.equal(savedLanguage(env), 'zh');
   assert.deepEqual(languageChoice({ env }), { language: 'zh', settled: true, explicit: false });
   assert.deepEqual(languageChoice({ env: { ...env, OV_SUPERAGENT_LANG: 'en' } }), { language: 'en', settled: true, explicit: true });

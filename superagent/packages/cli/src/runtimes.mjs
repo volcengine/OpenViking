@@ -107,7 +107,7 @@ const chat = await availableChatModels(models);
 process.stdout.write(JSON.stringify(chat.map((model) => \`\${model.provider}/\${model.id}\`)));
 `;
 
-// The daemon may get provider keys from ~/.superagent/secrets.env (see
+// The daemon may get provider keys from ~/.ov-superagent/secrets.env (see
 // deployment-config.cjs); the setup probe must see the same credentials or it
 // would offer a runtime that only looks unusable here.
 const DURABLE_PROVIDER_KEYS = [
@@ -117,7 +117,7 @@ const DURABLE_PROVIDER_KEYS = [
 
 function providerSecrets(env) {
   const file = String(env.OV_SUPERAGENT_SECRETS_FILE || '').trim()
-    || (env.HOME ? path.join(env.HOME, '.superagent', 'secrets.env') : '');
+    || (env.HOME ? path.join(env.HOME, '.ov-superagent', 'secrets.env') : '');
   if (!file) return {};
   let raw = '';
   try { raw = fs.readFileSync(file, 'utf8'); } catch { return {}; }
@@ -317,7 +317,7 @@ async function detectOpencode({ env, execFileImpl, probe }) {
 async function agyLoginCheck(execFileImpl, bin, env) {
   let isolated;
   try {
-    isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-agy-detect-'));
+    isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-agy-detect-'));
     prepareAgyGeminiDir(path.join(isolated, '.gemini'), env);
     return await run(execFileImpl, bin, ['models'], { ...env, HOME: isolated, USERPROFILE: isolated });
   } catch (error) {

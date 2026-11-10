@@ -82,7 +82,7 @@ test('a new password keeps the saved servers; an address already watched is refu
 });
 
 test('the account file is private', (t) => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-email-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-email-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const file = path.join(directory, 'email', 'primary', 'email-qq.json');
   writeEmailAccount(file, { address: 'a@qq.com', password: 'p' });

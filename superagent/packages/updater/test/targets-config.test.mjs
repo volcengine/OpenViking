@@ -20,9 +20,9 @@ fs.writeFileSync(manifestPath, `${JSON.stringify({
     displayName: id.toUpperCase(),
     profile: `cli_${id}`,
     port: 3738 + index,
-    dataDir: `/srv/vika/data/${id}`,
-    workspace: `/srv/vika/workspaces/${id}`,
-    ovConfig: `/srv/vika/ov/${id}.json`,
+    dataDir: `/srv/superagent/data/${id}`,
+    workspace: `/srv/superagent/workspaces/${id}`,
+    ovConfig: `/srv/superagent/ov/${id}.json`,
     model: 'gpt-5.6-sol',
   })),
 }, null, 2)}\n`);
@@ -54,7 +54,7 @@ test('updater derives every allowlisted target from the deployment manifest', ()
 test('an instance added to the manifest is a target without restarting the updater', () => {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   manifest.agents.push({ ...manifest.agents[0], id: 'delta', profile: 'cli_delta', port: 3750,
-    dataDir: '/srv/vika/data/delta', workspace: '/srv/vika/workspaces/delta', ovConfig: '/srv/vika/ov/delta.json' });
+    dataDir: '/srv/superagent/data/delta', workspace: '/srv/superagent/workspaces/delta', ovConfig: '/srv/superagent/ov/delta.json' });
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   assert.equal(assertUpgradeTarget('delta'), 'delta');
   assert.equal(loadTargets().delta.app, 'superagent-delta');

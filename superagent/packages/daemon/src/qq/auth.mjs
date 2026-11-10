@@ -20,7 +20,7 @@ export async function loginQQ({ state, appId, appSecret, fetchImpl = globalThis.
     await api.gateway(receiveSignal);
     const existing = state.account();
     const sameBot = existing?.appId === appId;
-    const challenge = `vika-bind ${randomBytes(18).toString('hex')}`;
+    const challenge = `superagent-bind ${randomBytes(18).toString('hex')}`;
     const startedAt = Math.floor(Date.now() / 1000) * 1000;
     const matched = Promise.withResolvers();
     let shown = false;

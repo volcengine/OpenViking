@@ -390,7 +390,7 @@ gateway transport (Identify/heartbeat/Resume/reconnect, intent `1 << 25`). HTTP
 requests use bounded, cancellable fetches with no raw provider diagnostics.
 Only `C2C_MESSAGE_CREATE` from the verified owner's OpenID is admitted; group,
 guild and stranger messages are ignored. The independent QR credential SDK is
-not bundled. Setup takes AppID/AppSecret, then a fresh random `vika-bind` C2C
+not bundled. Setup takes AppID/AppSecret, then a fresh random `superagent-bind` C2C
 proof within three minutes. Reauthorization keeps old credentials until proof,
 stages the old owner's events during the handshake, and holds a local PID lease.
 

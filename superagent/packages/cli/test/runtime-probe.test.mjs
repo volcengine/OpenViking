@@ -11,7 +11,7 @@ import test from 'node:test';
 import { probeAcp, probeAgyAcp, probeAppServer } from '../src/runtime-probe.mjs';
 
 function fixture(t, script) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-app-server-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-app-server-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const bin = path.join(dir, 'fake-cli');
   fs.writeFileSync(bin, `#!${process.execPath}\n${script}`, { mode: 0o755 });

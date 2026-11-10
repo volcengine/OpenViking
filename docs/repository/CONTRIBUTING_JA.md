@@ -85,7 +85,7 @@ OpenVikingでは、焦点が絞られ、十分に理解された変更を重視�
 | Integration | VikingBotとAgentコンパイル | `bot`、`ov compile` | `@yeshion23333`、`@fujiajie666` |
 | Client | SDK、CLI、LangChain | `sdk`、`crates/ov_cli`、`integrations/frameworks/langchain` | `@zhoujh01`、`@t0saki`、`@ehz0ah` |
 | Product | Web Studio | `web-studio` | `@yufeng201`、`@ZaynJarvis` |
-| Product | OpenViking SuperAgent personal agent | `vika` | `@krsish` |
+| Product | OpenViking SuperAgent personal agent | `superagent` | `@krsish` |
 | Project | ドキュメント、CI、Pluginリリース | `docs`、`.github/workflows` | `@yufeng201`、`@ZaynJarvis` |
 
 複数領域にまたがる変更や担当が不明な場合は、主な影響領域を特定したうえで、

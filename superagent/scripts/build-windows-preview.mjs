@@ -31,9 +31,9 @@ try {
   run('git', ['archive', '--format=tar', `--output=${sourceArchive}`, 'HEAD']);
   run('tar', ['-xf', sourceArchive, '-C', root]);
   // Install using the same official Node/npm that will be shipped.
-  const nodeName = `node-v${pkg.vika.node}-win-x64`;
+  const nodeName = `node-v${pkg.superagent.node}-win-x64`;
   const nodeZip = `${nodeName}.zip`;
-  const nodeBase = `https://nodejs.org/dist/v${pkg.vika.node}`;
+  const nodeBase = `https://nodejs.org/dist/v${pkg.superagent.node}`;
   const nodeFile = path.join(work, nodeZip);
   await download(`${nodeBase}/${nodeZip}`, nodeFile);
   assertSha256(nodeFile, checksumFor(await fetchText(`${nodeBase}/SHASUMS256.txt`), nodeZip));
@@ -55,7 +55,7 @@ try {
   }
   fs.copyFileSync(path.join(root, 'scripts', 'windows', 'superagent-preview.ps1'), path.join(root, 'superagent-preview.ps1'));
   const metadata = { name: 'superagent', version, commit, platform: 'win32-x64', channel: 'windows-preview',
-    node: pkg.vika.node, builtAt: new Date().toISOString() };
+    node: pkg.superagent.node, builtAt: new Date().toISOString() };
   fs.writeFileSync(path.join(root, 'windows-preview.json'), `${JSON.stringify(metadata, null, 2)}\n`);
   // Ship the repository license alongside this source-containing preview.
   fs.writeFileSync(path.join(root, 'LICENSE'), git('show', 'HEAD:LICENSE'));

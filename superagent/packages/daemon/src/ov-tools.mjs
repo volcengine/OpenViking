@@ -28,7 +28,7 @@ export { OV_PREFERENCES } from './ov-person.mjs';
 // (mail, meeting notes, timer state) and the memory, session and skill trees,
 // which only the daemon's sync and extraction write. A path under the user's
 // own root is checked in both spellings (~ and user/<id>).
-const RESERVED = ['resources/vika', 'resources/emails', 'resources/meetings', 'memories', 'sessions', 'peers', 'skills'];
+const RESERVED = ['resources/superagent', 'resources/emails', 'resources/meetings', 'memories', 'sessions', 'peers', 'skills'];
 
 const ABSTRACT_MAX_CHARS = 500;
 const FIND_TEXT_MAX_CHARS = 20_000;

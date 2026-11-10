@@ -254,7 +254,7 @@ describe('OpencodeAgent ACP backend', () => {
     assert.equal(env.PERSONAL_AGENT_SOCKET, '/tmp/superagent-opencode-data/actions.sock');
     assert.equal(env.PERSONAL_AGENT_AUTHORITY, 'oc-token');
     const configPath = env.OPENCODE_CONFIG;
-    assert.ok(configPath.startsWith(path.join(os.tmpdir(), 'vika-opencode-')));
+    assert.ok(configPath.startsWith(path.join(os.tmpdir(), 'superagent-opencode-')));
     // The global config folder is an OpenViking SuperAgent-owned copy without OpenViking.
     assert.equal(env.XDG_CONFIG_HOME, path.join(path.dirname(configPath), 'config-home'));
     assert.ok(fs.existsSync(path.join(env.XDG_CONFIG_HOME, 'opencode', 'opencode.json')));

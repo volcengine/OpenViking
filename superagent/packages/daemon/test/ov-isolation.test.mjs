@@ -13,7 +13,7 @@ import {
 import { OV_ISOLATION, RUNTIME_CATALOG } from '../src/runtime-catalog.mjs';
 
 function home(t) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-ov-isolation-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-ov-isolation-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const write = (relative, text) => {
     const file = path.join(directory, relative);
@@ -107,7 +107,7 @@ test('OpenCode reads an OpenViking SuperAgent-owned config home: the owner\'s co
   write('.config/git/config', '[user]');
   write('.config/tool.conf', 'keep top-level file');
   const before = fs.readFileSync(path.join(directory, '.config/opencode/opencode.jsonc'), 'utf8');
-  const target = prepareOpencodeConfigHome(path.join(directory, 'vika-home'), env);
+  const target = prepareOpencodeConfigHome(path.join(directory, 'superagent-home'), env);
   const config = JSON.parse(fs.readFileSync(path.join(target, 'opencode', 'opencode.json'), 'utf8'));
   assert.deepEqual(config.plugin, ['opencode-wakatime']);
   assert.deepEqual(Object.keys(config.mcp), ['github']);
@@ -160,7 +160,7 @@ test('Antigravity gets an OpenViking SuperAgent-owned gemini dir: the owner\'s l
   const { directory, env } = agyHome(t);
   const owner = path.join(directory, '.gemini');
   const before = fs.readFileSync(path.join(owner, 'config/hooks.json'), 'utf8');
-  const target = prepareAgyGeminiDir(path.join(directory, 'vika-home'), env);
+  const target = prepareAgyGeminiDir(path.join(directory, 'superagent-home'), env);
   const config = path.join(target, 'config');
   // Linked whole, so the OAuth token and sessions stay where agy keeps them.
   assert.equal(fs.lstatSync(path.join(target, 'antigravity-cli')).isSymbolicLink(), true);
@@ -184,7 +184,7 @@ test('Antigravity gets an OpenViking SuperAgent-owned gemini dir: the owner\'s l
   assert.equal(fs.existsSync(path.join(config, 'openviking-note.md')), false);
   assert.equal(fs.readFileSync(path.join(owner, 'config/hooks.json'), 'utf8'), before, 'the owner\'s file is untouched');
   // Rebuilt each launch; the link removal must not reach through to the owner.
-  prepareAgyGeminiDir(path.join(directory, 'vika-home'), env);
+  prepareAgyGeminiDir(path.join(directory, 'superagent-home'), env);
   assert.equal(fs.readFileSync(path.join(owner, 'antigravity-cli', 'antigravity-oauth-token'), 'utf8'), 'token');
 });
 
@@ -193,7 +193,7 @@ test('Antigravity\'s legacy antigravity-cli files are left to agy: the migration
   const legacyMcp = write('.gemini/antigravity-cli/mcp_config.json', { mcpServers: { openviking: { command: 'ov' } } });
   const legacyHooks = write('.gemini/antigravity-cli/hooks.json', { openviking: { Stop: [] } });
   const before = [legacyMcp, legacyHooks].map((file) => fs.readFileSync(file, 'utf8'));
-  const target = prepareAgyGeminiDir(path.join(directory, 'vika-home'), env);
+  const target = prepareAgyGeminiDir(path.join(directory, 'superagent-home'), env);
   assert.equal(fs.statSync(path.join(target, 'config', '.migrated')).size, 0);
   assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(target, 'config', 'mcp_config.json'), 'utf8')).mcpServers), ['personal']);
   assert.deepEqual([legacyMcp, legacyHooks].map((file) => fs.readFileSync(file, 'utf8')), before);
@@ -202,7 +202,7 @@ test('Antigravity\'s legacy antigravity-cli files are left to agy: the migration
 
 test('Antigravity with no ~/.gemini yet still gets a usable, empty gemini dir', (t) => {
   const { directory, env } = home(t);
-  const target = prepareAgyGeminiDir(path.join(directory, 'vika-home'), env);
+  const target = prepareAgyGeminiDir(path.join(directory, 'superagent-home'), env);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(target, 'config', 'mcp_config.json'), 'utf8')), {});
   assert.equal(fs.existsSync(path.join(target, 'config', 'plugins.json')), false);
 });
@@ -228,7 +228,7 @@ test('Antigravity declarative configs lose OpenViking\'s entries and keep everyt
   write('shared/skills/openviking-skill/SKILL.md', '#');
   write('shared/skills/control-skill/SKILL.md', '#');
   write('.gemini/config/skills.json', { entries: [{ path: path.join(external, 'skills') }] });
-  const target = prepareAgyGeminiDir(path.join(directory, 'vika-home'), env);
+  const target = prepareAgyGeminiDir(path.join(directory, 'superagent-home'), env);
   const plugins = JSON.parse(fs.readFileSync(path.join(target, 'config', 'plugins.json'), 'utf8'));
   assert.deepEqual(plugins.entries, [
     { path: path.join(external, 'ext'), exclude: ['legacy-.*', 'neutral-ov', 'openviking-plugin'] },
@@ -253,7 +253,7 @@ test('Antigravity inherits: OpenViking arriving through an inherited file\'s ent
   write('.gemini/config/plugins.json', { inherits: [
     { path: path.join(external, 'plugins.json') }, { path: path.join(external, 'clean.json') }, { path: path.join(external, 'middle.json') },
   ] });
-  const target = prepareAgyGeminiDir(path.join(directory, 'vika-home'), env);
+  const target = prepareAgyGeminiDir(path.join(directory, 'superagent-home'), env);
   const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
   const top = read(path.join(target, 'config', 'plugins.json'));
   assert.equal(top.inherits[1].path, path.join(external, 'clean.json'), 'a clean inherit is not copied');
@@ -342,5 +342,5 @@ test('Windows config projection reports copy failures instead of dropping plugin
   const { write, env, directory } = home(t);
   write('.config/opencode/plugins/keep.js', 'export {}');
   t.mock.method(fs, 'copyFileSync', () => { throw Object.assign(new Error('fixture access denied'), { code: 'EACCES' }); });
-  assert.throws(() => prepareOpencodeConfigHome(path.join(directory, 'vika-home'), env), { code: 'EACCES' });
+  assert.throws(() => prepareOpencodeConfigHome(path.join(directory, 'superagent-home'), env), { code: 'EACCES' });
 });

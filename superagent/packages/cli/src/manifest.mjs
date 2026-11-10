@@ -11,7 +11,7 @@ import { list, t } from './i18n.mjs';
 import { writeManifest as saveManifest } from '../../daemon/src/deployment-manifest.mjs';
 export { validateManifest } from '../../daemon/src/deployment-manifest.mjs';
 
-// Setup edits ~/.superagent/config.json as plain JSON, and only ever saves a file
+// Setup edits ~/.ov-superagent/config.json as plain JSON, and only ever saves a file
 // that the daemon's own loader accepts.
 
 const require = createRequire(import.meta.url);
@@ -43,8 +43,8 @@ export function detectionEnv(env, manifest) {
 export const WEB_PORT = 3737;
 const FIRST_INSTANCE_PORT = 3738;
 
-export function vikaHome(env = process.env) {
-  return path.join(platform.homeDir(env) || os.homedir(), '.superagent');
+export function superagentHome(env = process.env) {
+  return path.join(platform.homeDir(env) || os.homedir(), '.ov-superagent');
 }
 
 // setup persists the default so users can inspect/change it. A global or
@@ -56,17 +56,17 @@ export function withDefaultTempDir(agent, env = {}) {
   return { ...agent, tempDir: `/tmp/superagent-${agent.id}` };
 }
 
-// How to call the vika command from here: by name once ~/.superagent/bin is on
+// How to call the ov-superagent command from here: by name once ~/.ov-superagent/bin is on
 // PATH, by its full path in the shell the installer ran from. Where the platform
 // runs no shell scripts, that path is the batch launcher, not a ~ prefix.
-export function vikaCommand(env = process.env, implementation = platform) {
-  const bin = path.join(vikaHome(env), 'bin');
+export function superagentCommand(env = process.env, implementation = platform) {
+  const bin = path.join(superagentHome(env), 'bin');
   const entries = String(env.PATH || '').split(implementation.pathDelimiter);
   const same = (entry) => implementation.environmentCaseSensitive
     ? entry === bin
     : entry.toLowerCase() === bin.toLowerCase();
   if (entries.some(same)) return 'ov-superagent';
-  return implementation.supportsShellScripts ? '~/.superagent/bin/ov-superagent' : path.join(bin, 'ov-superagent.cmd');
+  return implementation.supportsShellScripts ? '~/.ov-superagent/bin/ov-superagent' : path.join(bin, 'ov-superagent.cmd');
 }
 
 export function manifestPath(env = process.env) {
@@ -83,7 +83,7 @@ export function readManifest(env = process.env) {
 }
 
 export function availableInstanceOvConfig(env, id, reserved = new Set()) {
-  const base = path.join(vikaHome(env), 'ov', id);
+  const base = path.join(superagentHome(env), 'ov', id);
   let target = `${base}.json`;
   for (let suffix = 2; reserved.has(target) || fs.existsSync(target); suffix += 1) {
     target = `${base}-${suffix}.json`;

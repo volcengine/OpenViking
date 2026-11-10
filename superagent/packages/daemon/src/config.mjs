@@ -149,7 +149,7 @@ function pathsOverlap(left, right) {
 
 export function getConfig() {
   const dataDir = path.resolve(
-    process.env.OV_SUPERAGENT_DATA_DIR || path.join(os.homedir(), '.superagent', 'data'),
+    process.env.OV_SUPERAGENT_DATA_DIR || path.join(os.homedir(), '.ov-superagent', 'data'),
   );
   const configuredTempDir = (process.env.OV_SUPERAGENT_TEMP_DIR ?? '').trim();
   if (configuredTempDir && !path.isAbsolute(configuredTempDir)) {
@@ -157,7 +157,7 @@ export function getConfig() {
   }
   const workspace = path.resolve(
     process.env.OV_SUPERAGENT_WORKSPACE
-      || path.join(os.homedir(), 'Documents', 'work', 'vika-workspace'),
+      || path.join(os.homedir(), 'Documents', 'work', 'superagent-workspace'),
   );
   const host = process.env.OV_SUPERAGENT_HOST || '127.0.0.1';
   assertLoopbackHost(host);
@@ -201,7 +201,7 @@ export function getConfig() {
   return {
     projectDir,
     dataDir,
-    databasePath: path.join(dataDir, 'vika.sqlite3'),
+    databasePath: path.join(dataDir, 'superagent.sqlite3'),
     lockPath: path.join(dataDir, 'daemon.lock'),
     tempDir: configuredTempDir ? path.normalize(configuredTempDir) : path.join(dataDir, 'tmp'),
     workspace,

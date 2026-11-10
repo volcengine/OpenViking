@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { verifyAccount } from '../../daemon/src/email/client.mjs';
 import { t } from './i18n.mjs';
-import { vikaHome } from './manifest.mjs';
+import { superagentHome } from './manifest.mjs';
 import { PromptAborted } from './prompt.mjs';
 
 // The mailbox steps of `ov-superagent setup` and `ov-superagent login email`: an address and the
@@ -40,7 +40,7 @@ export class EmailCancelled extends PromptAborted {}
 const OAUTH_ONLY = ['outlook.com', 'hotmail.com', 'live.com', 'msn.com'];
 
 export function emailAccountPath(env, agentId, mailboxId) {
-  return path.join(vikaHome(env), 'email', agentId, `${mailboxId}.json`);
+  return path.join(superagentHome(env), 'email', agentId, `${mailboxId}.json`);
 }
 
 function slug(value) {

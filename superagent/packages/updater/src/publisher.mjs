@@ -68,7 +68,7 @@ export async function defaultSmokeTest(release, { execFileImpl = execFile } = {}
   await execFileImpl(node, [path.join(release, 'packages', 'daemon', 'scripts', 'check-pi.mjs')], {
     cwd: release, timeout: 60_000,
   });
-  await execFileImpl(node, [path.join(release, 'packages', 'cli', 'bin', 'vika.mjs'), '--version'], {
+  await execFileImpl(node, [path.join(release, 'packages', 'cli', 'bin', 'ov-superagent.mjs'), '--version'], {
     cwd: release, timeout: 30_000,
   });
 }
@@ -107,7 +107,7 @@ export async function activateRelease(baseDir, release, previousRelease) {
 }
 
 export async function publishLatestRelease({
-  baseDir = path.join(os.homedir(), '.superagent'),
+  baseDir = path.join(os.homedir(), '.ov-superagent'),
   env = process.env,
   platformId = hostPlatform(),
   fetchImpl = globalThis.fetch,

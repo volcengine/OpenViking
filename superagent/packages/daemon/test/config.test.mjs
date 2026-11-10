@@ -62,12 +62,12 @@ describe('configuration safety', { concurrency: false }, () => {
   });
 
   it('moves temporary files independently of persistent data and ignores TMPDIR', () => {
-    setEnv('OV_SUPERAGENT_DATA_DIR', '/root/.local/share/vika-primary');
-    setEnv('OV_SUPERAGENT_WORKSPACE', '/work/vika-primary');
+    setEnv('OV_SUPERAGENT_DATA_DIR', '/root/.local/share/superagent-primary');
+    setEnv('OV_SUPERAGENT_WORKSPACE', '/work/superagent-primary');
     setEnv('OV_SUPERAGENT_TEMP_DIR', undefined);
     setEnv('TMPDIR', '/tmp/system-temp');
     const original = getConfig();
-    assert.equal(original.tempDir, '/root/.local/share/vika-primary/tmp');
+    assert.equal(original.tempDir, '/root/.local/share/superagent-primary/tmp');
     setEnv('OV_SUPERAGENT_TEMP_DIR', '/tmp/superagent-primary/');
     const configured = getConfig();
     assert.equal(path.resolve(configured.tempDir), '/tmp/superagent-primary');
@@ -243,7 +243,7 @@ describe('configuration safety', { concurrency: false }, () => {
 
     // Unset, the first TraeX command name on PATH wins.
     setEnv('TRAECLI_BIN', undefined);
-    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-traex-path-'));
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-traex-path-'));
     const savedPath = process.env.PATH;
     try {
       fs.writeFileSync(path.join(bin, 'trae-cli'), '#!/bin/sh\n', { mode: 0o755 });
@@ -321,7 +321,7 @@ describe('release-owned prompts and the instance role', () => {
     setEnv('OV_SUPERAGENT_ROLE', 'assistant');
     assert.equal(getConfig().rolePromptPath, path.join(projectDir, 'packages', 'daemon', 'agent', 'roles', 'assistant.md'));
 
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-role-'));
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-role-'));
     const own = path.join(directory, 'role.md');
     fs.writeFileSync(own, 'You answer questions about the garden.\n');
     try {

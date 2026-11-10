@@ -7,18 +7,18 @@ import path from 'node:path';
 import test from 'node:test';
 
 test('manifest and release helpers use the same explicit HOME override', () => {
-  const home = path.join(os.tmpdir(), 'vika-custom-home');
-  const profile = path.join(os.tmpdir(), 'vika-other-profile');
+  const home = path.join(os.tmpdir(), 'superagent-custom-home');
+  const profile = path.join(os.tmpdir(), 'superagent-other-profile');
   const manifest = new URL('../src/manifest.mjs', import.meta.url).href;
   const targets = new URL('../../updater/src/targets.mjs', import.meta.url).href;
   const script = `
-    import { vikaHome, manifestPath } from ${JSON.stringify(manifest)};
+    import { superagentHome, manifestPath } from ${JSON.stringify(manifest)};
     import { defaultReleaseLink, defaultSocketPath } from ${JSON.stringify(targets)};
-    console.log(JSON.stringify([vikaHome(), manifestPath(), defaultReleaseLink(), defaultSocketPath()]));
+    console.log(JSON.stringify([superagentHome(), manifestPath(), defaultReleaseLink(), defaultSocketPath()]));
   `;
   const env = { ...process.env, HOME: home, USERPROFILE: profile };
   delete env.OV_SUPERAGENT_CONFIG;
   const actual = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' }));
-  assert.deepEqual(actual, [path.join(home, '.superagent'), path.join(home, '.superagent', 'config.json'),
-    path.join(home, '.superagent', 'current'), path.join(home, '.superagent', 'updater.sock')]);
+  assert.deepEqual(actual, [path.join(home, '.ov-superagent'), path.join(home, '.ov-superagent', 'config.json'),
+    path.join(home, '.ov-superagent', 'current'), path.join(home, '.ov-superagent', 'updater.sock')]);
 });

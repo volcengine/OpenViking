@@ -41,7 +41,7 @@ describe('module boundaries', () => {
           displayName: 'Alpha',
           profile: 'cli_alpha',
           port: 3738,
-          dataDir: '/Users/test/.superagent/data/alpha',
+          dataDir: '/Users/test/.ov-superagent/data/alpha',
           tempDir: '/tmp/superagent-alpha',
           workspace: '/Users/test/Documents/work/alpha-workspace',
           ovConfig: '/Users/test/.openviking/ovcli.conf.alpha',
@@ -52,7 +52,7 @@ describe('module boundaries', () => {
           displayName: 'Beta',
           profile: 'cli_beta',
           port: 3740,
-          dataDir: '/Users/test/.superagent/data/beta',
+          dataDir: '/Users/test/.ov-superagent/data/beta',
           workspace: '/Users/test/Documents/work/beta-workspace',
           ovConfig: '/Users/test/.openviking/ovcli.conf.beta',
           ovAutoRecall: true,
@@ -115,7 +115,7 @@ describe('module boundaries', () => {
     assert.equal(beta.env.OPENVIKING_AUTO_RECALL, '0');
     assert.equal(beta.env.OPENVIKING_RECALL_PEER_SCOPE, 'all');
     assert.equal(alpha.env.OPENVIKING_AUTO_CAPTURE, '0');
-    assert.equal(alpha.env.OPENVIKING_PENDING_DIR, '/Users/test/.superagent/data/alpha/openviking/pending');
+    assert.equal(alpha.env.OPENVIKING_PENDING_DIR, '/Users/test/.ov-superagent/data/alpha/openviking/pending');
     assert.equal(alpha.env.OV_SUPERAGENT_CODEX_MODEL, undefined);
     assert.equal(alpha.env.OV_SUPERAGENT_MODEL, 'gpt-5.6-sol');
     assert.equal(alpha.env.OV_SUPERAGENT_LOG_LEVEL, 'debug');

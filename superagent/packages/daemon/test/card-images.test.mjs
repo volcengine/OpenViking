@@ -29,7 +29,7 @@ const card = (...aliases) => ({ elements: aliases.map(image) });
 const ok = (data) => ({ code: 0, stdout: JSON.stringify({ ok: true, data }), stderr: '' });
 
 function fixture(t, options = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-card-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-card-'));
   const config = { dataDir: path.join(root, 'data'), workspace: path.join(root, 'workspace'),
     tempDir: path.join(root, 'temp'), profile: PROFILE, channel: 'lark', instance: 'lark',
     maxReplyChars: 1000, sendTimeoutMs: 1000, larkCliBin: '/fake/lark-cli' };
@@ -40,7 +40,7 @@ function fixture(t, options = {}) {
   fs.writeFileSync(path.join(config.workspace, 'b.gif'), GIF);
   const f = { root, config, options, calls: [], uploads: [], cards: [], uploadAttempts: 0, sendAttempts: 0 };
   const open = () => {
-    f.store = new Store(path.join(config.dataDir, 'vika.sqlite3'), logger);
+    f.store = new Store(path.join(config.dataDir, 'superagent.sqlite3'), logger);
     f.store.initializeCognition('codex', TOKEN);
     f.lark = new LarkClient(config, { async run(_bin, args, cliOptions) {
       f.calls.push({ args, options: cliOptions });

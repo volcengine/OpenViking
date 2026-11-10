@@ -110,9 +110,9 @@
       "env": {
         "NODE_ENV": "production",
         "OV_SUPERAGENT_CONFIG": "<HOME>/config.json",
-        "OV_SUPERAGENT_UPDATER_RELEASE_LINK": "<HOME>/.superagent/current",
-        "OV_SUPERAGENT_UPDATER_SOCKET": "<HOME>/.superagent/updater.sock",
-        "PM2_HOME": "<HOME>/.superagent/pm2",
+        "OV_SUPERAGENT_UPDATER_RELEASE_LINK": "<HOME>/.ov-superagent/current",
+        "OV_SUPERAGENT_UPDATER_SOCKET": "<HOME>/.ov-superagent/updater.sock",
+        "PM2_HOME": "<HOME>/.ov-superagent/pm2",
         "PM2_BIN": "<RELEASE>/bin/pm2",
         "PATH": "/fixture/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
       }

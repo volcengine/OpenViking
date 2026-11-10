@@ -109,7 +109,7 @@ const pipeNonce = randomBytes(24).toString('hex');
 export function localSocketPath(directory, name = 'actions') {
   const identity = path.win32.resolve(directory).toLowerCase() + '\0' + os.homedir();
   const digest = createHash('sha256').update(identity).digest('hex').slice(0, 24);
-  return `\\\\.\\pipe\\vika-${name}-${digest}-${pipeNonce}`;
+  return `\\\\.\\pipe\\superagent-${name}-${digest}-${pipeNonce}`;
 }
 
 export function isNamedPipe(value) {

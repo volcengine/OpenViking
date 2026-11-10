@@ -8,7 +8,7 @@ export class OVTimerRepository {
     this.client = client;
     // OV resolves ~ using the authenticated identity, including API keys.
     // Keep the instance directory even when two instances choose to share a user.
-    this.uri = `viking://~/resources/vika/${instanceId}/timers-state.json`;
+    this.uri = `viking://~/resources/superagent/${instanceId}/timers-state.json`;
     this.state = { timers: [], timer_occurrence_checks: [] };
     this.needsRefresh = false;
     this.barrier = Promise.resolve();

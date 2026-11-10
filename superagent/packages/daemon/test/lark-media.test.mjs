@@ -14,7 +14,7 @@ import { PersonalAgentDaemon } from '../src/daemon.mjs';
 const logger = { debug() {}, info() {}, warn() {}, error() {} };
 
 function temporaryRoot(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-lark-media-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-lark-media-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
@@ -28,7 +28,7 @@ test('downloads and reads images outside /root, retaining them until maintenance
     if (previous === undefined) delete process.env.OV_SUPERAGENT_TEMP_DIR;
     else process.env.OV_SUPERAGENT_TEMP_DIR = previous;
   });
-  const config = { ...getConfig(), dataDir: '/root/.superagent/data', retentionMs: 86_400_000 };
+  const config = { ...getConfig(), dataDir: '/root/.ov-superagent/data', retentionMs: 86_400_000 };
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aol8AAAAASUVORK5CYII=', 'base64');
   const lark = new LarkClient(config, {
     async run(command, args, { cwd }) {

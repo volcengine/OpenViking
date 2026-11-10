@@ -14,7 +14,7 @@ const require = createRequire(import.meta.url);
 const { applyDeploymentAgentEnv, loadDeploymentManifest } = require('../../../deployment-config.cjs');
 
 function fixture(t) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-runtime-preference-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-runtime-preference-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const manifestPath = path.join(directory, 'config.json');
   const agent = (id, port) => ({

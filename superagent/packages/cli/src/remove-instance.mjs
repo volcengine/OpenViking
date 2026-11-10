@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { removeManagedApps, restartCommand } from './control.mjs';
-import { readManifest, validateManifest, vikaCommand, vikaHome, writeManifest } from './manifest.mjs';
+import { readManifest, validateManifest, superagentCommand, superagentHome, writeManifest } from './manifest.mjs';
 import { t } from './i18n.mjs';
 
 // No data or credentials are deleted. The last instance returns the machine
@@ -36,7 +36,7 @@ export async function removeInstance({ prompter, manifest, configPath, env, cont
     return 0;
   }
   prompter.navigable = false;
-  const releaseLink = env.OV_SUPERAGENT_UPDATER_RELEASE_LINK || path.join(vikaHome(env), 'current');
+  const releaseLink = env.OV_SUPERAGENT_UPDATER_RELEASE_LINK || path.join(superagentHome(env), 'current');
   const lock = path.join(path.dirname(releaseLink), 'deploy.lock');
   fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
   try {
@@ -46,7 +46,7 @@ export async function removeInstance({ prompter, manifest, configPath, env, cont
     throw error;
   }
   let saved = false;
-  const vika = vikaCommand(env);
+  const cli = superagentCommand(env);
   const unchanged = () => {
     if (JSON.stringify(readManifest(env).value) !== JSON.stringify(manifest)) {
       throw new Error(t('实例配置已被其他操作修改，请重新运行 setup。', 'The instance configuration changed elsewhere; run setup again.'));
@@ -73,10 +73,10 @@ export async function removeInstance({ prompter, manifest, configPath, env, cont
     return 0;
   } catch (error) {
     prompter.info(saved
-      ? t(`实例已删除，但控制台更新失败：${error.message}\n修好后运行 ${vika} restart web。`,
-        `The instance was removed, but the console update failed: ${error.message}\nOnce fixed, run ${vika} restart web.`)
-      : t(`删除未完成，实例配置保留；部分进程可能已停止：${error.message}\n修好后重新运行 ${vika} setup 删除，或运行 ${vika} start 恢复。`,
-        `Removal did not finish; the instance configuration is kept, but some processes may have stopped: ${error.message}\nOnce fixed, retry removal with ${vika} setup, or run ${vika} start to restore them.`));
+      ? t(`实例已删除，但控制台更新失败：${error.message}\n修好后运行 ${cli} restart web。`,
+        `The instance was removed, but the console update failed: ${error.message}\nOnce fixed, run ${cli} restart web.`)
+      : t(`删除未完成，实例配置保留；部分进程可能已停止：${error.message}\n修好后重新运行 ${cli} setup 删除，或运行 ${cli} start 恢复。`,
+        `Removal did not finish; the instance configuration is kept, but some processes may have stopped: ${error.message}\nOnce fixed, retry removal with ${cli} setup, or run ${cli} start to restore them.`));
     return 1;
   } finally {
     fs.rmdirSync(lock);

@@ -344,7 +344,7 @@ class Host {
     const tools = await this.buildTools();
     const registry = createRegistry();
     registry.install(defineExtension({
-      name: 'vika',
+      name: 'ov-superagent',
       sections: [section('policy', () => this.policy, { tag: false })],
       tools,
     }));

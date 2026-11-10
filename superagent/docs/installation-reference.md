@@ -16,7 +16,7 @@ curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/superagent/install.sh | s
 
 This installs the version in `superagent/latest` (currently `0.5.0-preview`; until a stable release ships, `latest` follows previews). To pin a version, use `curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/superagent/releases/<version>/install.sh | sh -s -- --version <version>`.
 
-The installer detects Linux or macOS and x64 or arm64 (including WSL2), downloads the matching archive, verifies SHA-256, extracts it to `~/.superagent/releases/<version>`, adds `~/.superagent/bin` to your shell PATH, and enters `ov-superagent setup`. Only sh, curl, tar, and sha256sum (or shasum) are required. The package supplies pinned Node, PM2, lark-cli, and Pi without modifying existing Node, npm, PM2, or git installations. Before switching, it runs the new bundled Node; incompatible system libraries or CPU architecture leave the previous installation intact. musl systems such as Alpine are unsupported.
+The installer detects Linux or macOS and x64 or arm64 (including WSL2), downloads the matching archive, verifies SHA-256, extracts it to `~/.ov-superagent/releases/<version>`, adds `~/.ov-superagent/bin` to your shell PATH, and enters `ov-superagent setup`. Only sh, curl, tar, and sha256sum (or shasum) are required. The package supplies pinned Node, PM2, lark-cli, and Pi without modifying existing Node, npm, PM2, or git installations. Before switching, it runs the new bundled Node; incompatible system libraries or CPU architecture leave the previous installation intact. musl systems such as Alpine are unsupported.
 
 **Windows 10/11 x64 (preview), PowerShell 5.1 or 7:**
 
@@ -34,9 +34,9 @@ To pin a Windows preview version or skip setup:
 
 The one-line command also accepts `OV_SUPERAGENT_VERSION` and `OV_SUPERAGENT_DOWNLOAD_BASE`; the latter is the HTTPS OpenViking SuperAgent root, before `/windows-preview`. For offline artifacts and publishing details, see [Windows package maintenance](windows-preview.md).
 
-Both the installer and CLI support English and Chinese. `ov-superagent --lang en` (or `zh`) persists the choice in `~/.superagent/language`. To install in English, use `--lang en` on macOS / Linux or `-Lang en` on Windows. `OV_SUPERAGENT_LANG` overrides the language for one invocation only. The default is Chinese when no preference is set.
+Both the installer and CLI support English and Chinese. `ov-superagent --lang en` (or `zh`) persists the choice in `~/.ov-superagent/language`. To install in English, use `--lang en` on macOS / Linux or `-Lang en` on Windows. `OV_SUPERAGENT_LANG` overrides the language for one invocation only. The default is Chinese when no preference is set.
 
-Interactive download progress uses a sailing-boat animation, followed by a checkmark per completed step. Redirected output and `NO_COLOR` use plain text. If `~/.superagent/config.json` does not exist, rerunning the installer returns to setup; with existing instances, it installs the release and asks you to run `ov-superagent restart`.
+Interactive download progress uses a sailing-boat animation, followed by a checkmark per completed step. Redirected output and `NO_COLOR` use plain text. If `~/.ov-superagent/config.json` does not exist, rerunning the installer returns to setup; with existing instances, it installs the release and asks you to run `ov-superagent restart`.
 
 ## Prerequisites
 
@@ -47,7 +47,7 @@ Interactive download progress uses a sailing-boat animation, followed by a check
 - **OpenViking is required** for cross-session context. Setup lists detected connections, their sources, and check results, and always offers manual address/credential entry, a configuration-file path, redetection, and exit. Local or remote URLs, custom ports, hidden API key input, and optional Account / User / Agent fields are supported. Validation failures stay in the configuration screen; IM setup starts only after validation succeeds. First interactive installation enters this wizard directly.
 - Feishu requires a phone-registered or enterprise account. Phone registration creates a free enterprise with you as administrator. **Feishu accounts signed in through Doubao are unsupported:** they can create and publish apps, but the platform refuses `tenant_access_token` with `code=21001`. Setup explains the failure and returns to the previous step; use another account or connect another channel first.
 
-Detection checks the edited instance's `ovConfig`, `OPENVIKING_CLI_CONFIG_FILE`, `~/.superagent/ov-connection.json`, `~/.openviking/ovcli.conf`, and `http://127.0.0.1:1933`. It does not scan other ports. Imported files remain unchanged. When saving the instance, manually entered or imported connections are saved under OpenViking SuperAgent with mode 0600 for future instances; already discoverable configuration files are not copied.
+Detection checks the edited instance's `ovConfig`, `OPENVIKING_CLI_CONFIG_FILE`, `~/.ov-superagent/ov-connection.json`, `~/.openviking/ovcli.conf`, and `http://127.0.0.1:1933`. It does not scan other ports. Imported files remain unchanged. When saving the instance, manually entered or imported connections are saved under OpenViking SuperAgent with mode 0600 for future instances; already discoverable configuration files are not copied.
 
 The macOS / Linux installer itself never prompts. Except for first interactive installation followed immediately by setup, it validates OV before switching releases. Existing instances use their own `ovConfig`. First installation with `--no-setup` or without a terminal tries the environment-specified file, saved OpenViking SuperAgent connection, OV CLI configuration, then the local default address. With no configuration, only dev-mode OV at the default local port is accepted. Failed validation prevents the switch. At daemon startup, rejected configuration or credentials cause exit; temporary unavailability records an activity entry and starts without history, with synchronization retried after recovery.
 
@@ -61,7 +61,7 @@ Antigravity setup checks `--version`, an ACP `initialize` handshake that must id
 
 TraeX executables may be named `traex`, `traecli`, or `trae-cli`. OpenViking SuperAgent requires `app-server`; older versions offering only `acp serve` are unsupported. Setup checks those names in order, resolves and deduplicates symlinks, and requires both stdio `initialize` and `login status` to succeed. Probing creates no sessions or model calls. An explicit `TRAECLI_BIN` (or the legacy, higher-priority `TRAEX_BIN`) limits detection to that executable; failure does not silently select another. Setup saves the verified real path without modifying shell aliases.
 
-For startup errors, run `ov-superagent logs <instance>`. Failed app-server handshakes include bounded, redacted stderr. Even for an online PM2 process, `ov-superagent start <instance>` verifies release ownership and readiness; failure does not restart or overwrite the process. If `ov-superagent` is not found, use `~/.superagent/bin/ov-superagent`. The installer updates `.bash_profile` for macOS bash, `.bashrc` for Linux bash, and `.zshrc` for zsh; reload that file or reopen your terminal.
+For startup errors, run `ov-superagent logs <instance>`. Failed app-server handshakes include bounded, redacted stderr. Even for an online PM2 process, `ov-superagent start <instance>` verifies release ownership and readiness; failure does not restart or overwrite the process. If `ov-superagent` is not found, use `~/.ov-superagent/bin/ov-superagent`. The installer updates `.bash_profile` for macOS bash, `.bashrc` for Linux bash, and `.zshrc` for zsh; reload that file or reopen your terminal.
 
 Claude Code requires 2.1.259 or later and `--permission-prompts none`, checked during preflight. Daemon sessions are unattended: Pi extension dialogs and Codex/TraeX approval or input requests are explicitly cancelled or denied. Claude uses its official unattended settings and rejects unexpected control requests. To ask a person, the model should send a message or supported choice card, end its turn, and await a later answer. User extensions, providers, and other session configuration remain enabled.
 
@@ -71,7 +71,7 @@ Pi's exact version is pinned in `packages/daemon/package.json` and the lockfile 
 
 The daemon registers `personal_agent` MCP only for its Pi session, with `direct` exposure so the model sees each tool and parameter. It does not edit `~/.pi/agent/mcp.json` or workspace `.pi/mcp.json`, or add the server to other sessions. A conflicting server name, disabled built-in MCP, or unloaded tools makes startup fail; there is no Bash/CLI fallback. Pi still loads other user MCP servers normally.
 
-Durable is bundled from [pi-durable](https://github.com/earendil-works/pi), without a separate CLI installation. It records conversations, model turns, and tool calls in `<dataDir>/durable/session.sqlite` before displaying them, and resumes an interrupted turn from the last checkpoint after restart. It shares Pi's built-in providers and `~/.pi/agent/models.json` (custom providers, including OpenAI-compatible Ark endpoints), `auth.json` (keys saved through `/login`), and the default model in `settings.json`. Built-in providers can also use `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, etc. in `~/.superagent/secrets.env`, never in `config.json`. With no override, Pi's default model is used. Change it through `/model` and `/effort`, or manifest `env` keys `OV_SUPERAGENT_DURABLE_MODEL` and `OV_SUPERAGENT_DURABLE_EFFORT`. Like other runtimes, Durable sends messages through Agent tools; it also provides pi-durable's `bash`, `read`, `write`, and `edit` in the instance workspace. See [Durable runtime](pi-durable-runtime.md).
+Durable is bundled from [pi-durable](https://github.com/earendil-works/pi), without a separate CLI installation. It records conversations, model turns, and tool calls in `<dataDir>/durable/session.sqlite` before displaying them, and resumes an interrupted turn from the last checkpoint after restart. It shares Pi's built-in providers and `~/.pi/agent/models.json` (custom providers, including OpenAI-compatible Ark endpoints), `auth.json` (keys saved through `/login`), and the default model in `settings.json`. Built-in providers can also use `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, etc. in `~/.ov-superagent/secrets.env`, never in `config.json`. With no override, Pi's default model is used. Change it through `/model` and `/effort`, or manifest `env` keys `OV_SUPERAGENT_DURABLE_MODEL` and `OV_SUPERAGENT_DURABLE_EFFORT`. Like other runtimes, Durable sends messages through Agent tools; it also provides pi-durable's `bash`, `read`, `write`, and `edit` in the instance workspace. See [Durable runtime](pi-durable-runtime.md).
 
 ## Manual Feishu setup
 
@@ -97,7 +97,7 @@ git clone https://github.com/volcengine/OpenViking.git
 cd OpenViking/superagent
 npm run setup          # Install locked dependencies, pinned lark-cli and Slack CLI, and check managed Pi
 npm test && npm run check
-mkdir -p ~/.superagent && cp config.example.json ~/.superagent/config.json
+mkdir -p ~/.ov-superagent && cp config.example.json ~/.ov-superagent/config.json
 # Edit config.json: profile (Feishu), dataDir, workspace, model, ovConfig; ovAutoRecall defaults to false
 npm run start:daemon
 ```
@@ -110,7 +110,7 @@ sh scripts/install.sh --file dist/superagent-<version>-<platform>.tar.gz
 ov-superagent restart
 ```
 
-Configuration defaults to `~/.superagent/config.json`. For a custom location, use the same absolute `OV_SUPERAGENT_CONFIG` for every startup, deployment, and upgrade command.
+Configuration defaults to `~/.ov-superagent/config.json`. For a custom location, use the same absolute `OV_SUPERAGENT_CONFIG` for every startup, deployment, and upgrade command.
 
 ### Attachment temporary directories
 
@@ -139,7 +139,7 @@ Only the scanning account can chat with the bot; other senders are ignored. One 
 
 ### QQ setup
 
-In a release with QQ support, select QQ in `ov-superagent setup`. Register a developer account at the [QQ platform](https://q.qq.com/#/), create a bot through the [QQ bot entry](https://q.qq.com/qqbot/openclaw/), obtain AppID / AppSecret, enable direct messages, and add it with your QQ account. Setup hides the secret and asks you to send a one-time `vika-bind …` code in a direct chat within three minutes. It saves only after verification. The host needs access to `https://api.bot.qq.com`, Tencent's WebSocket gateway, and attachment CDN; no public listener is required.
+In a release with QQ support, select QQ in `ov-superagent setup`. Register a developer account at the [QQ platform](https://q.qq.com/#/), create a bot through the [QQ bot entry](https://q.qq.com/qqbot/openclaw/), obtain AppID / AppSecret, enable direct messages, and add it with your QQ account. Setup hides the secret and asks you to send a one-time `superagent-bind …` code in a direct chat within three minutes. It saves only after verification. The host needs access to `https://api.bot.qq.com`, Tencent's WebSocket gateway, and attachment CDN; no public listener is required.
 
 Owner direct chats support text, images, files, quoted replies, and slash commands. QQ can be the primary channel for notifications and numbered email approvals, subject to platform permissions and quotas. QQ-only instances omit `profile`; Codex, TraeX, Claude, and Pi are supported, Ark is not. Use a separate bot per instance. Credentials live in `<dataDir>/qq/state.sqlite3`, not `config.json`.
 
@@ -177,13 +177,13 @@ Once the relevant code is published, `ov-superagent setup` replaces manual confi
 
 To remove an instance, choose deletion and confirm (cancel is the default). Configuration and managed processes are removed, while workspace, history, credentials, and OV memory remain. Configuration is backed up with `.bak`. Deleting the default requires selecting another, automatically if only one remains. Removing the last instance also stops the console and updater and removes the active configuration, allowing fresh setup later.
 
-The setup animation stays above the questions and yields the screen to QR codes. Terminals shorter than 30 lines show one full animation followed by a small banner. `OV_SUPERAGENT_NO_ANIMATION=1` draws one frame. Language is selected first: Chinese locales skip the question; other locales such as `en_US` or `C` ask once, with Chinese preselected. The answer persists in `~/.superagent/language` for setup, login, and status; change it with `ov-superagent --lang zh|en`.
+The setup animation stays above the questions and yields the screen to QR codes. Terminals shorter than 30 lines show one full animation followed by a small banner. `OV_SUPERAGENT_NO_ANIMATION=1` draws one frame. Language is selected first: Chinese locales skip the question; other locales such as `en_US` or `C` ask once, with Chinese preselected. The answer persists in `~/.ov-superagent/language` for setup, login, and status; change it with `ov-superagent --lang zh|en`.
 
 During questions, Left or Esc returns to the previous step with prior answers as defaults. Right accepts the current value (in text fields, only before typing). Backtracked steps disappear from the screen. When editing a field, Left returns without changing it; from the field list, Left returns to the action menu. While waiting for a QR scan, Left returns to confirmation or the field list; temporary OV configuration for a new instance is cleaned up on cancellation. Once a scan has actually created or bound an app/account, going back is disabled. If no runtime is ready, open bundled Pi, use `/login`, then `/quit` to resume, or exit and authenticate another CLI.
 
 1. The first instance is `primary`; later instances ask for an ID. Select and validate OV, then set display name, workspace, and an available authenticated runtime. Setup creates and validates instance-specific OV configuration before asking about channels; write or validation failure stops there. Choose Feishu, WeChat, Telegram, Slack, QQ, and/or email; email cannot stand alone. With several chat channels, choose where proactive notifications and email approvals go. For Feishu, create an app by QR (default), select an app you own/administer, or manually enter and validate App ID / Secret. Choose whether to allow owner-identity message reads (default yes; see [message access](usage-reference.md#message-access)). Existing apps must already use long connections for events and callbacks; OpenViking SuperAgent does not switch them from webhooks. A competing receiver can steal randomly distributed long-connection messages. Existing-app QR confirmation lists missing scopes/events/callbacks, publishes a version, and withdraws any version already under review. OV cannot be skipped and is rechecked before scans or credential entry. Uncommitted OV configuration is cleaned up on cancellation/failure. Email setup validates IMAP and SMTP immediately and can add several accounts; Gmail, QQ, and 163/126/yeah.net have server presets.
 2. Feishu uses two scans: app creation/selection with `permission.json` permissions and long-connection subscriptions, then owner user authorization for enabled user scopes. Publication may require administrator approval. Manual app credentials require only the second scan; OpenViking SuperAgent lists missing scopes, `im.message.receive_v1`, `drive.notice.comment_add_v1`, and `card.action.trigger`, but cannot read the message-event transport setting, which you must check yourself. Webhook card callbacks are rejected: immediately for manual credentials, or after confirmation for QR selection. `code=21001` similarly prevents configuration writes and returns to the previous screen with answers preserved; an app already created by QR remains in the platform and can be deleted there. Reusing a local instance's app prompts a warning. If app and entered bot names differ, setup offers the Feishu name by default, without renaming the platform app. WeChat uses one scan; Telegram uses token + Start; Slack uses two tokens + direct-chat passphrase; QQ uses AppID/Secret + direct-chat code. Authorization starts after questions, and the manifest is written only after every channel succeeds. QR screens include backup links; Feishu's first link exceeds 1,000 characters and is shown with `l`. Oversized codes show a required terminal size and an image path, redraw after resizing, and delete the image after scanning. Use `i` in VS Code to open the image or `o` on a desktop to open the link. Colored terminals render black blocks with backgrounds and full quiet zones to avoid character gaps.
-3. Setup writes `~/.superagent/config.json`, starts the instance, restarts shared Web, ensures the updater is running, and sends a Feishu greeting. In a terminal, it waits up to three minutes for your reply (`s` skips). Failure shows a checklist covering long connections, events, publication, competing receivers, and logs. It then offers autostart and displays chat, console, and command instructions.
+3. Setup writes `~/.ov-superagent/config.json`, starts the instance, restarts shared Web, ensures the updater is running, and sends a Feishu greeting. In a terminal, it waits up to three minutes for your reply (`s` skips). Failure shows a checklist covering long connections, events, publication, competing receivers, and logs. It then offers autostart and displays chat, console, and command instructions.
 
 ```bash
 ov-superagent start|stop|restart [instance|web|updater]   # Uses installed release; does not fetch source
@@ -206,11 +206,11 @@ ov-superagent upgrade <instance-id>
 ov-superagent upgrade all        # Also rolls shared Web and removes instances deleted from the manifest
 ```
 
-The command asks `superagent-updater` to read the release host's `latest`, download the platform archive, verify manifest SHA-256 and size, and smoke-test bundled Node, managed Pi, and `ov-superagent --version`. Only then does it switch `~/.superagent/current`, retaining the previous version as `~/.superagent/rollback`. It restarts target instances one at a time and waits for `/ready`; failed instances revert to their previous release. The updater restarts itself last. User machines do not run `npm ci` or tests and need no git; packaging already ran tests. Repeating an upgrade to the same version reuses it. This flow requires a published `latest` endpoint; the pinned preview above does not make that endpoint available.
+The command asks `superagent-updater` to read the release host's `latest`, download the platform archive, verify manifest SHA-256 and size, and smoke-test bundled Node, managed Pi, and `ov-superagent --version`. Only then does it switch `~/.ov-superagent/current`, retaining the previous version as `~/.ov-superagent/rollback`. It restarts target instances one at a time and waits for `/ready`; failed instances revert to their previous release. The updater restarts itself last. User machines do not run `npm ci` or tests and need no git; packaging already ran tests. Repeating an upgrade to the same version reuses it. This flow requires a published `latest` endpoint; the pinned preview above does not make that endpoint available.
 
 The updater is a separate process, so it can finish even when the bot's own process restarts.
 
-Rollback: `ln -sfn "$(readlink ~/.superagent/rollback)" ~/.superagent/current && ov-superagent restart`.
+Rollback: `ln -sfn "$(readlink ~/.ov-superagent/rollback)" ~/.ov-superagent/current && ov-superagent restart`.
 
 ```bash
 ov-superagent status
@@ -220,7 +220,7 @@ curl http://127.0.0.1:3737/ready
 
 `/ready` returns 200 while at least one Connector is running. If others are unavailable, the body reports `status: degraded` with `connectors.<id>.error` and `retryAt`.
 
-OpenViking SuperAgent uses its bundled, pinned PM2 with state under `~/.superagent/pm2`, independent of your own PM2.
+OpenViking SuperAgent uses its bundled, pinned PM2 with state under `~/.ov-superagent/pm2`, independent of your own PM2.
 
 ## Autostart
 
@@ -229,7 +229,7 @@ ov-superagent autostart enable    # Linux user unit; macOS LaunchAgent; Windows 
 ov-superagent autostart disable
 ```
 
-Autostart executes `ov-superagent start` and captures the enabling shell's PATH so it can find codex and claude. Linux servers also need `loginctl enable-linger` to continue after logout. On Windows it is a `.vbs` in the current user's Startup folder: no service, no administrator, hidden at logon, logging to `~/.superagent/logs/autostart.log`, and listed in Task Manager's Startup tab.
+Autostart executes `ov-superagent start` and captures the enabling shell's PATH so it can find codex and claude. Linux servers also need `loginctl enable-linger` to continue after logout. On Windows it is a `.vbs` in the current user's Startup folder: no service, no administrator, hidden at logon, logging to `~/.ov-superagent/logs/autostart.log`, and listed in Task Manager's Startup tab.
 
 ## Publishing releases
 

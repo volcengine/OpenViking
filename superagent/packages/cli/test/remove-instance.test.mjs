@@ -11,14 +11,14 @@ import { readManifest, writeManifest } from '../src/manifest.mjs';
 import { removeInstance } from '../src/remove-instance.mjs';
 
 function fixture(t, ids = ['alpha', 'beta']) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-remove-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-remove-'));
   t.after(() => fs.rmSync(home, { force: true, recursive: true }));
   const env = { HOME: home, PATH: '' };
-  const configPath = path.join(home, '.superagent', 'config.json');
+  const configPath = path.join(home, '.ov-superagent', 'config.json');
   const agents = ids.map((id, index) => ({
     id, displayName: id.toUpperCase(), channel: 'weixin', connectors: ['weixin'], model: 'codex:', port: 3738 + index,
-    dataDir: path.join(home, '.superagent', 'data', id), workspace: path.join(home, 'workspace', id),
-    ovConfig: path.join(home, '.superagent', 'ov', `${id}.json`),
+    dataDir: path.join(home, '.ov-superagent', 'data', id), workspace: path.join(home, 'workspace', id),
+    ovConfig: path.join(home, '.ov-superagent', 'ov', `${id}.json`),
   }));
   const manifest = { version: 1, defaultInstance: ids[0], env: { CODEX_BIN: '/opt/codex' }, agents };
   writeManifest(configPath, manifest);
@@ -41,7 +41,7 @@ function fixture(t, ids = ['alpha', 'beta']) {
       restart: async (target) => { calls.push(['restart', target]); },
     },
   };
-  return { home, options, calls, output, keptFiles, lock: path.join(home, '.superagent', 'deploy.lock') };
+  return { home, options, calls, output, keptFiles, lock: path.join(home, '.ov-superagent', 'deploy.lock') };
 }
 
 test('removing the default selects a remaining instance and preserves all files and shared env', async (t) => {
@@ -111,8 +111,8 @@ test('process/save failures retain the manifest for retry; Web failure reports r
 
 function managedFixture(t) {
   const f = fixture(t, ['alpha']);
-  const releaseLink = path.join(f.home, '.superagent', 'current');
-  const release = path.join(f.home, '.superagent', 'releases', 'older');
+  const releaseLink = path.join(f.home, '.ov-superagent', 'current');
+  const release = path.join(f.home, '.ov-superagent', 'releases', 'older');
   const processes = ['alpha', 'web', 'updater'].map((id, pm_id) => {
     const component = id === 'alpha' ? 'daemon' : id;
     const script = path.join(release, 'packages', component, 'src', 'main.mjs');

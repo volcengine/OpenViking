@@ -88,9 +88,9 @@ export function shouldUpgradeSharedWeb(target, targets = loadTargets()) {
 }
 
 export function defaultSocketPath(homeDir = platformHomeDir() || os.homedir()) {
-  return path.join(homeDir, '.superagent', 'updater.sock');
+  return path.join(homeDir, '.ov-superagent', 'updater.sock');
 }
 
 export function defaultReleaseLink(homeDir = platformHomeDir() || os.homedir()) {
-  return path.join(homeDir, '.superagent', 'current');
+  return path.join(homeDir, '.ov-superagent', 'current');
 }

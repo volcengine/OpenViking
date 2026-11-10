@@ -307,7 +307,7 @@ export async function startMockEnv({
   config: configOverrides = {},
   prepare = null,
 } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-mock-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-mock-'));
   const binDir = path.join(dir, 'bin');
   fs.mkdirSync(binDir);
   const fakeLark = path.join(binDir, 'fake-lark-cli.mjs');

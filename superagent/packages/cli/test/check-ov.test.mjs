@@ -9,7 +9,7 @@ import test from 'node:test';
 import { checkInstallationOV } from '../src/check-ov.mjs';
 
 test('installation requires OV before the first setup', async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-ov-install-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-ov-install-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const env = { HOME: home };
   await assert.rejects(checkInstallationOV({ env, detect: async () => ({ usable: false, reason: 'offline' }) }), /OpenViking/);
@@ -17,7 +17,7 @@ test('installation requires OV before the first setup', async (t) => {
 });
 
 test('installation checks each existing instance with its pinned OV config', async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-ov-install-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-ov-install-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const manifest = path.join(home, 'config.json');
   fs.writeFileSync(manifest, JSON.stringify({ version: 1, env: {}, defaultInstance: 'a', agents: ['a', 'b'].map((id, i) => ({

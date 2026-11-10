@@ -357,7 +357,7 @@ export class VolcAgent {
         ? { type: 'agent', id: this.template.agent.id, version: this.template.agent.version }
         : this.template.agent.id,
       environment_id: this.template.environment_id,
-      title: `vika ${new Date().toISOString()}`,
+      title: `ov-superagent ${new Date().toISOString()}`,
     };
     if (Array.isArray(this.template.vault_ids) && this.template.vault_ids.length > 0) {
       body.vault_ids = this.template.vault_ids;

@@ -103,7 +103,7 @@ jobs:
           tar -xzf "$DIST/$NAME.tar.gz" -C "$RUNNER_TEMP/smoke"
           cd "$RUNNER_TEMP/smoke/$NAME"
           node/bin/node packages/daemon/scripts/check-pi.mjs
-          node/bin/node packages/cli/bin/vika.mjs --version
+          node/bin/node packages/cli/bin/ov-superagent.mjs --version
 
       - uses: actions/upload-artifact@v7
         with:
@@ -118,7 +118,7 @@ jobs:
     if: github.event_name != 'pull_request' && !inputs.windows_preview_only
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    environment: vika-release
+    environment: superagent-release
     permissions:
       contents: write
     # Publishing runs one at a time, in order, and none is dropped: two runs of
@@ -391,7 +391,7 @@ jobs:
     # The ~100 MB ZIP goes up twice (versioned and latest) and a
     # GitHub runner reaches the Beijing bucket at roughly 1 Mbps.
     timeout-minutes: 60
-    environment: vika-release
+    environment: superagent-release
     concurrency:
       group: superagent-windows-preview-publish
       queue: max

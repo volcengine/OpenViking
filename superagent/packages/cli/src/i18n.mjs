@@ -5,10 +5,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-// The vika command speaks Chinese or English, one language for the whole
+// The ov-superagent command speaks Chinese or English, one language for the whole
 // run; `t` picks between the two texts, written side by side where they are
 // used. The language is --lang or OV_SUPERAGENT_LANG when given, else the one setup
-// saved in ~/.superagent/language, else Chinese. A Chinese locale leaves nothing
+// saved in ~/.ov-superagent/language, else Chinese. A Chinese locale leaves nothing
 // to ask; any other (servers often say en_US or C whatever their user
 // reads) has setup ask once on a terminal, Chinese first.
 
@@ -47,7 +47,7 @@ export function localeLanguage(env = process.env) {
 }
 
 function preferenceFile(env) {
-  return path.join(env.HOME || os.homedir(), '.superagent', 'language');
+  return path.join(env.HOME || os.homedir(), '.ov-superagent', 'language');
 }
 
 export function savedLanguage(env = process.env) {

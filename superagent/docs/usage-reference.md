@@ -50,7 +50,7 @@ Add a WeChat instance to `config.json`. `channel` is the compatibility field; `c
   "channel": "weixin",
   "connectors": ["weixin"],
   "port": 3741,
-  "dataDir": "/Users/you/.superagent/data/weixin",
+  "dataDir": "/Users/you/.ov-superagent/data/weixin",
   "workspace": "/Users/you/Documents/work/weixin-workspace",
   "ovConfig": "/Users/you/.openviking/ovcli.conf.weixin",
   "model": "pi"
@@ -87,7 +87,7 @@ QQ uses official Bot API v2 and WebSocket, not a personal-account protocol, and 
 
 1. Register at the [QQ developer platform](https://q.qq.com/#/) if needed, then create a separate bot at the [QQ bot entry](https://q.qq.com/qqbot/openclaw/), obtain AppID / AppSecret, and add it with your QQ account. These credentials work with OpenViking SuperAgent; OpenClaw need not be running.
 2. Select QQ in setup, enter credentials (secret input is hidden), and ensure the bot is online with direct-message permission.
-3. Send the complete `vika-bind …` code shown in the terminal to the bot within three minutes. Only the matching direct message saves the account; another early sender does not become owner.
+3. Send the complete `superagent-bind …` code shown in the terminal to the bot within three minutes. Only the matching direct message saves the account; another early sender does not become owner.
 4. Send tasks after startup. Use `ov-superagent login qq [instance]` to rebind or change keys; the instance pauses during verification, resumes afterward, and retains old credentials on failure.
 
 Only the bound owner's direct chats are processed. Text, images, files, quoted replies, and slash commands are supported. Text is plain, up to 4,000 characters. Files/downloads are limited to 20 MiB, with multipart upload from 5 MB; sending generic files depends on bot permissions. Groups, personal-account interception, audio, video, interactive buttons, and history search are unsupported. Only Tencent's MIT Node SDK is used for WebSocket, not a separate QR credential SDK.
@@ -120,7 +120,7 @@ Use an internal app in your workspace with [Socket Mode](https://docs.slack.dev/
 1. Select Slack in setup.
 2. Open the terminal link and create an app with its prefilled configuration. Alternatively use **Create New App → From a manifest** at [api.slack.com/apps](https://api.slack.com/apps) with `<dataDir>/slack/app-manifest.json`. Workspace approval may be required. For an existing app, enable Socket Mode and App Home messaging, add manifest subscriptions/scopes, and reinstall. Token Rotation is unsupported; stop any previous receiver.
 3. **Install to Workspace** and copy the Bot User OAuth Token (`xoxb-`) from OAuth & Permissions. Create an App-Level Token (`xapp-`) with `connections:write` under Basic Information. Paste both into hidden terminal input.
-4. Send the one-time `vika-xxxxxxxx` passphrase to the bot in a direct chat within five minutes; its sender becomes owner. `ov-superagent login slack [instance]` rebinds tokens or owner, pausing the instance during validation; messages received during this pause are replayed afterward.
+4. Send the one-time `superagent-xxxxxxxx` passphrase to the bot in a direct chat within five minutes; its sender becomes owner. `ov-superagent login slack [instance]` rebinds tokens or owner, pausing the instance during validation; messages received during this pause are replayed afterward.
 
 Anyone in the workspace can directly message the bot. Invite it to channels with `/invite @bot`; mentioning it is not required, and the agent decides whether to answer. Slack Connect inputs carry `external=true` and follow external-group privacy boundaries. Other apps' messages carry `sender=bot` and `bots_since_human=N`. The agent decides whether another response helps. A fuse blocks further replies after 20 bot-message responses in a channel/thread with no intervening human message, notifying the owner once. Human input resets it. Set `OV_SUPERAGENT_BOT_REPLY_FUSE` to change the threshold, or `0` to disable it. Feishu uses the same mechanism.
 
@@ -147,7 +147,7 @@ Only the owner can approve, once, within three days. Initial startup watches onl
 
 Select email in setup for new or existing instances and add one or more accounts. Gmail, QQ, and 163/126/yeah.net have presets; other servers are manual. IMAP and SMTP are tested before saving. The edit menu adds accounts, changes passwords, or removes accounts; `ov-superagent login email` is quicker for password changes. Replies use the receiving mailbox, shown on the draft.
 
-Account files are `~/.superagent/email/<instance>/<account>.json` (0600), referenced by the instance:
+Account files are `~/.ov-superagent/email/<instance>/<account>.json` (0600), referenced by the instance:
 
 ```json
 {
@@ -155,8 +155,8 @@ Account files are `~/.superagent/email/<instance>/<account>.json` (0600), refere
   "channel": "lark",
   "connectors": ["lark", "email"],
   "emailAccounts": [
-    { "id": "email-gmail", "config": "/Users/you/.superagent/email/primary/email-gmail.json" },
-    { "id": "email-qq", "config": "/Users/you/.superagent/email/primary/email-qq.json" }
+    { "id": "email-gmail", "config": "/Users/you/.ov-superagent/email/primary/email-gmail.json" },
+    { "id": "email-qq", "config": "/Users/you/.ov-superagent/email/primary/email-qq.json" }
   ]
 }
 ```
@@ -267,15 +267,15 @@ The selected local lark-cli profile must exist with bot identity `ready`; user O
 
 ```bash
 cd superagent
-mkdir -p ~/.superagent
-cp config.example.json ~/.superagent/config.json
+mkdir -p ~/.ov-superagent
+cp config.example.json ~/.ov-superagent/config.json
 npm test
 npm run check
 npm run start:daemon   # 127.0.0.1:3738
 npm run start:web      # 127.0.0.1:3737
 ```
 
-Use a small, separate agent workspace so test coding agents cannot modify the daemon itself. Installed releases live under `~/.superagent/releases/`, managed by OpenViking SuperAgent's PM2. Persistent manifests outside releases independently configure each workspace.
+Use a small, separate agent workspace so test coding agents cannot modify the daemon itself. Installed releases live under `~/.ov-superagent/releases/`, managed by OpenViking SuperAgent's PM2. Persistent manifests outside releases independently configure each workspace.
 
 ## Operations
 
@@ -317,7 +317,7 @@ Maintainers must publish code before `ov-superagent upgrade <instance-id>`. The 
 
 Timers complete through `finish_timer_occurrence` with `occurrence_id` and optional `delivery: { tool, input }`, reusing `send_message`, `reply_message`, or `notify_owner`. Core marks completion only after confirmed sending. If no message is needed, omit delivery and provide `reason`. Ordinary messages can ask the owner or report progress without completing the occurrence. Failed/uncertain/dry-run sends do not complete it. Completion ends this occurrence's checks, not future timer triggers, and the activity ledger retains results/reasons.
 
-Timers and occurrence checks default to the instance's OV at `viking://~/resources/vika/<agents[].id>/timers-state.json`. OV expands `~` using authenticated identity; separate OV users isolate instances, while intentional user sharing still separates IDs. State loads on startup and writes only on changes, awaiting background processing before the next queued mutation. `OV_SUPERAGENT_TIMER_STORAGE=sqlite`, also available in manifest `env`, selects legacy local storage. Other data stays local; no automatic migration occurs. During OV outages, messaging continues while timer loading retries; timer operations report unavailability and never overwrite remote state with an empty snapshot or silently fall back.
+Timers and occurrence checks default to the instance's OV at `viking://~/resources/superagent/<agents[].id>/timers-state.json`. OV expands `~` using authenticated identity; separate OV users isolate instances, while intentional user sharing still separates IDs. State loads on startup and writes only on changes, awaiting background processing before the next queued mutation. `OV_SUPERAGENT_TIMER_STORAGE=sqlite`, also available in manifest `env`, selects legacy local storage. Other data stays local; no automatic migration occurs. During OV outages, messaging continues while timer loading retries; timer operations report unavailability and never overwrite remote state with an empty snapshot or silently fall back.
 
 Exhausted occurrence checks expire seven days after their last saved check time in either backend, even without active timers. Removed occurrences reject completion calls. OV still indexes the state file; `vectors_only` does not disable indexing.
 
@@ -359,7 +359,7 @@ Agent tools have one definition/implementation in Core `ActionService`. Codex/Tr
 
 - Messages first enter SQLite as DONE, then the resident runtime. Codex/TraeX use `turn/start` / `turn/steer`; Claude uses persistent stream-json input; Durable journals before model invocation; Ark uses session events/SSE and event-history/event-ID gap recovery. Ark persists its `user.message` fence and restores accepted remote turns without duplicate POST after daemon restart. If acceptance is uncertain, the old session is quarantined, a new one cloned, and epoch/authority atomically rotated before the queue resumes, preventing late output from crossing turns.
 - The 400 ms group window batches transport only; it creates no chat-specific native session/history/memory. A crash in the window can leave persisted messages undelivered to the runtime. This version adds no durable replay/delivery ledger for that gap.
-- Slash commands and subsequent input share an ingress barrier, but commands do not wait for the model. Read-only commands reply concurrently; session changes interrupt the old turn, prepare a new session, atomically CAS epoch/session/authority/model in SQLite, then perform non-failing local activation. Failed preparation/CAS preserves cognition. Cross-runtime switches preflight the destination before handoff. Model/effort changes save settings without interrupting or replacing sessions, applying next turn: Codex/TraeX per-turn parameters, Pi `set_model` / `set_thinking_level` RPC, Claude process replacement resuming the same session, DSH `vika/session/model/select` against the running session. Input is delivered only after successful application. Repeating current settings is a no-op.
+- Slash commands and subsequent input share an ingress barrier, but commands do not wait for the model. Read-only commands reply concurrently; session changes interrupt the old turn, prepare a new session, atomically CAS epoch/session/authority/model in SQLite, then perform non-failing local activation. Failed preparation/CAS preserves cognition. Cross-runtime switches preflight the destination before handoff. Model/effort changes save settings without interrupting or replacing sessions, applying next turn: Codex/TraeX per-turn parameters, Pi `set_model` / `set_thinking_level` RPC, Claude process replacement resuming the same session, DSH `superagent/session/model/select` against the running session. Input is delivered only after successful application. Repeating current settings is a no-op.
 - SQLite retains active runtime/session, idempotency ledger, and OV sync outbox. Cross-runtime context comes only from recent raw OV session messages, with older raw archives queried on demand. Older OV services, including managed services, may generate Working Memory summaries; OpenViking SuperAgent neither changes that setting nor uses those summaries. Native sessions retain native compaction. OV failures allow new sessions without history, never replaying the local journal. See [OV session context](ov-session-context.md).
 - Input is one line, `[chat=… msg=… event=… time=… from=…] body`. Full chat/message/event IDs serve as tool arguments; display-name/thread representations may be shortened. `msg=` identifies the reply target and `event=` the decision. Non-chat inputs may lack `msg=` and still use `event=` for notifications. New sessions receive prior cross-chat history separated by `--- history above, new messages below ---`.
 - Local runtimes use Core Agent tools for messaging.

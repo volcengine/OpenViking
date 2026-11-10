@@ -10,11 +10,11 @@ import { promisify } from 'node:util';
 import { findExecutable, executableInvocation, normalizeEnvironment, execFile, localSocketPath, isNamedPipe } from '../src/platform/index.mjs';
 
 test('pipe identity is stable, case insensitive and scoped to the instance directory', () => {
-  const one = windows.localSocketPath('C:\\Users\\Alice\\.superagent\\primary', 'actions');
+  const one = windows.localSocketPath('C:\\Users\\Alice\\.ov-superagent\\primary', 'actions');
   assert.ok(windows.isNamedPipe(one));
-  assert.equal(one, windows.localSocketPath('c:\\users\\alice\\.superagent\\primary', 'actions'));
-  assert.notEqual(one, windows.localSocketPath('C:\\Users\\Alice\\.superagent\\other', 'actions'));
-  assert.equal(posix.localSocketPath('/tmp/vika', 'actions'), '/tmp/vika/actions.sock');
+  assert.equal(one, windows.localSocketPath('c:\\users\\alice\\.ov-superagent\\primary', 'actions'));
+  assert.notEqual(one, windows.localSocketPath('C:\\Users\\Alice\\.ov-superagent\\other', 'actions'));
+  assert.equal(posix.localSocketPath('/tmp/superagent', 'actions'), '/tmp/superagent/actions.sock');
 });
 
 test('POSIX invocation preserves argv and executable', () => {
@@ -30,7 +30,7 @@ test('execFile promisify preserves stdout/stderr object and does not evaluate ar
 });
 
 test('Windows npm shims run Node without a command shell', { skip: process.platform !== 'win32' }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika shim '));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent shim '));
   try {
     fs.mkdirSync(path.join(dir, 'node_modules', 'fixture'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'node_modules', 'fixture', 'cli.js'), 'process.stdout.write(JSON.stringify(process.argv.slice(2)))');
@@ -66,7 +66,7 @@ test('Windows environment normalization makes lookup and child overrides consist
 });
 
 test('POSIX process wrappers preserve native overloads and Promise child handle', { skip: process.platform === 'win32' }, async (t) => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-overloads-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-overloads-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const command = path.join(directory, 'fixture');
   fs.writeFileSync(command, `#!${process.execPath}\nprocess.stdout.write('ok');`, { mode: 0o700 });
@@ -97,7 +97,7 @@ test('POSIX process wrappers preserve native overloads and Promise child handle'
 });
 
 test('Windows wrappers support omitted args, options-only and inherited null env', async t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-win-overloads-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-win-overloads-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const fixture = path.join(dir, 'fixture.mjs');
   fs.writeFileSync(fixture, 'process.stdout.write("ok");');
@@ -109,7 +109,7 @@ test('Windows wrappers support omitted args, options-only and inherited null env
 });
 test('pipe names differ across daemon processes, not only instance directories', () => {
   const module = new URL('../src/platform/win32.mjs', import.meta.url).href;
-  const script = `import {localSocketPath} from ${JSON.stringify(module)}; console.log(localSocketPath('C:/Users/test/.superagent/data'));`;
+  const script = `import {localSocketPath} from ${JSON.stringify(module)}; console.log(localSocketPath('C:/Users/test/.ov-superagent/data'));`;
   const { execFileSync } = requireNative;
   const first = execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
   const second = execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
@@ -117,7 +117,7 @@ test('pipe names differ across daemon processes, not only instance directories',
 });
 
 test('npm shim entrypoints remain private while invocation validates standard shims', t => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-shim-parse-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-shim-parse-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const entry = path.join(directory, 'node_modules', 'tool', 'bin', 'tool');
   fs.mkdirSync(path.dirname(entry), { recursive: true });
@@ -134,7 +134,7 @@ test('npm shim entrypoints remain private while invocation validates standard sh
 });
 
 test('a release bin\\pm2.cmd runs that release\'s pm2 with that release\'s Node', t => {
-  const release = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-release-shim-'));
+  const release = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-release-shim-'));
   t.after(() => fs.rmSync(release, { recursive: true, force: true }));
   const shim = path.join(release, 'bin', 'pm2.cmd');
   const entry = path.join(release, 'node_modules', 'pm2', 'bin', 'pm2');

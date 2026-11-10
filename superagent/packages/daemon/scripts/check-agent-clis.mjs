@@ -11,7 +11,7 @@ import { agentCliCommands } from '../src/agent-clis.mjs';
 import { sanitizeAgentChildEnv } from '../src/process-utils.mjs';
 
 // Release smoke: no global CLI, user profile, npm PATH, or package-root cwd.
-const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-cli-smoke-'));
+const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-cli-smoke-'));
 try {
   const workspace = path.join(home, 'workspace');
   fs.mkdirSync(workspace);
@@ -19,7 +19,7 @@ try {
   for (const shell of ['/bin/sh', '/bin/bash']) {
     for (const { name, bin, versionArgs } of agentCliCommands()) {
       assert.ok(path.isAbsolute(bin), `${name} must be bundled`);
-      const output = execFileSync(shell, ['-c', 'command -v "$1" && "$@"', 'vika-cli-smoke', name, ...versionArgs], {
+      const output = execFileSync(shell, ['-c', 'command -v "$1" && "$@"', 'superagent-cli-smoke', name, ...versionArgs], {
         cwd: workspace, env, encoding: 'utf8', timeout: 15_000,
       }).trim();
       const [resolved, ...version] = output.split('\n');
