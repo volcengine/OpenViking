@@ -11,6 +11,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import (
     freshness_metadata,
     parse_abstract_overview,
+    parse_overview_file_summaries,
     render_abstract_overview,
 )
 from openviking.storage.errors import LockAcquisitionError
@@ -935,13 +936,19 @@ async def test_semantic_generate_hashes_read_content_when_manifest_md5_is_missin
 
 
 @pytest.mark.asyncio
-async def test_pending_refresh_rebuilds_every_file_summary(monkeypatch):
+async def test_pending_refresh_reuses_summaries_without_reindexing_siblings(monkeypatch):
     root_uri = "viking://resources/wide"
-    file_names = [f"file-{idx:03}.txt" for idx in range(40)]
+    file_names = ["indexed.txt", "overview.txt", "missing.txt", "changed.txt"]
     file_paths = [f"{root_uri}/{name}" for name in file_names]
-    changed_path = f"{root_uri}/file-020.txt"
-    old_overview = "FILES:\n" + "\n".join(f"- {name}: old-summary" for name in file_names)
-    metadata = {"freshness": freshness_metadata(40, 4, pending=4)}
+    changed_path = f"{root_uri}/changed.txt"
+    missing_path = f"{root_uri}/missing.txt"
+    old_overview = (
+        "### indexed.txt\nold indexed summary\n"
+        "### overview.txt\nold overview summary\n"
+        "### missing.txt\n\n"
+        "### changed.txt\nold changed summary\n"
+    )
+    metadata = {"freshness": freshness_metadata(4, 4, pending=4)}
     fake_fs = _FakeVikingFS(
         tree={
             root_uri: [{"name": name, "isDir": False} for name in file_names],
@@ -959,8 +966,17 @@ async def test_pending_refresh_rebuilds_every_file_summary(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
+    fake_fs.read_file = AsyncMock(wraps=fake_fs.read_file)
+    fake_fs.read_file_bytes = AsyncMock(wraps=fake_fs.read_file_bytes)
 
-    processor = _FakeProcessor(fake_fs)
+    processor = _FakeProcessor(
+        fake_fs,
+        transfer_summaries={
+            f"{root_uri}/indexed.txt": "current indexed summary",
+            f"{root_uri}/overview.txt": "   ",
+        },
+    )
+    monkeypatch.setattr(processor, "_parse_overview_md", parse_overview_file_summaries)
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticTreeExecutor(
         processor=processor,
@@ -971,14 +987,31 @@ async def test_pending_refresh_rebuilds_every_file_summary(monkeypatch):
         target_uri=root_uri,
         recursive=False,
         changes={"modified": [changed_path]},
-        file_abstracts={changed_path: "summary"},
+        generation_trigger="parent_refresh",
     )
 
     await executor.run(root_uri)
 
-    assert set(processor.summarized_files) == set(file_paths)
+    assert set(processor.summarized_files) == {missing_path, changed_path}
+    assert fake_fs.read_file_bytes.await_count == 2
+    assert {call.args[0] for call in fake_fs.read_file_bytes.await_args_list} == {
+        missing_path,
+        changed_path,
+    }
+    # Pending snapshot and writeback already read each sidecar four times;
+    # reusing the captured overview must not add another storage read.
+    assert [call.args[0] for call in fake_fs.read_file.await_args_list].count(
+        f"{root_uri}/.overview.md"
+    ) == 4
     assert processor.vectorized_files == [changed_path]
     overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"])
+    assert set(overview.body.splitlines()) == {
+        "FILES:",
+        "- indexed.txt: current indexed summary",
+        "- overview.txt: old overview summary",
+        "- missing.txt: summary",
+        "- changed.txt: summary",
+    }
     assert overview.metadata["freshness"]["pending_child_changes"] == 0
 
 
