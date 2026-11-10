@@ -133,9 +133,11 @@ export default function DirectoryTourBasic() {
               setMissing(event.target.checked);
             }}
           />
-          {zh ? '模拟 sessions 不存在' : 'Simulate missing sessions'}
+          <span>
+            {zh ? '模拟 sessions 不存在' : 'Simulate missing sessions'}
+          </span>
         </label>
-        <output>
+        <output aria-live="polite">
           {complete ? (zh ? '引导已完成' : 'Guide completed') : ''}
           {skipped ? ` (${skipped} ${zh ? '步已跳过' : 'skipped'})` : ''}
         </output>
