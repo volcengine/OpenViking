@@ -19,7 +19,13 @@ from typing import Any, Dict, List, Optional
 
 from openviking.core.context import ContextType, ResourceContentType
 from openviking.models.embedder.base import embed_compat
-from openviking.models.model_error import UNKNOWN_BRIEF, ModelErrorKind, brief_for, model_error_kind
+from openviking.models.model_error import (
+    UNKNOWN_BRIEF,
+    ModelErrorKind,
+    brief_for,
+    is_terminal_billing_error,
+    model_error_kind,
+)
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_domain import make_work_error
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -54,6 +60,12 @@ from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 logger = get_logger(__name__)
 EMBEDDING_META_MARKER = "\n\n[openviking.embedding]\n"
+
+# How many times a transient provider throttle (RPM/TPM or window quota) may be
+# re-enqueued before the work is failed terminally. Without a bound, a provider
+# that throttles indefinitely would pin the resource's tree lock and keep
+# add-resource --wait open forever.
+_EMBEDDING_TRANSIENT_REQUEUE_LIMIT = 8
 
 _EMBEDDING_COMPATIBILITY_KEYS = ("provider", "model", "dimension", "model_identity")
 
@@ -856,29 +868,52 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             ModelErrorKind.RATE_LIMIT_ERROR,
                             ModelErrorKind.QUOTA_EXHAUSTED,
                         }:
-                            # Transient provider throttling (RPM/TPM quota): the same
-                            # request can succeed once the quota window rolls over.
-                            # Drop-to-failed would permanently acknowledge the
-                            # message as terminal, losing embedding work that the
-                            # breaker path would otherwise retry. Requeue through
-                            # the same path so a burst that slips between breaker
-                            # states is not silently discarded.
-                            execute_status = "requeued"
-                            self._log_embedding_error(
-                                logging.WARNING, error_msg, embedding_msg
-                            )
-                            self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
-                            if self._vikingdb.has_queue_manager:
-                                wait = getattr(embed_err, "retry_after", 0)
-                                if wait > 0:
-                                    await asyncio.sleep(min(wait, 30))
-                                await self._reenqueue_embedding_msg(embedding_msg)
-                                self._merge_request_stats(
-                                    embedding_msg.telemetry_id, requeue_count=1
-                                )
-                                return ProcessResult.requeued()
-                            request_failed_message = error_msg
-                            return self._embedding_failed(embedding_msg, error_msg, kind=kind)
+                            # RPM/TPM throttling and provider window quota heal on
+                            # their own: the same request succeeds once the window
+                            # rolls over. A burst that lands while the breaker is
+                            # still CLOSED would otherwise be ACKed as terminal,
+                            # losing embedding work the breaker path retries.
+                            #
+                            # Billing exhaustion does NOT heal on a window roll:
+                            # an unfunded account, a hard spend cap or an overdue
+                            # account needs an operator recharge. Re-enqueueing
+                            # those would cycle forever and keep this resource's
+                            # tree lock and add-resource --wait open (see #2916),
+                            # so they keep the existing terminal failure.
+                            if not is_terminal_billing_error(embed_err):
+                                if embedding_msg.failure_requeue_count >= (
+                                    _EMBEDDING_TRANSIENT_REQUEUE_LIMIT
+                                ):
+                                    # Bounded retries: a provider that keeps
+                                    # throttling must not pin the resource forever.
+                                    execute_status = "error"
+                                    self._log_embedding_error(
+                                        logging.ERROR, error_msg, embedding_msg
+                                    )
+                                    self._merge_request_stats(
+                                        embedding_msg.telemetry_id, error_count=1
+                                    )
+                                    request_failed_message = error_msg
+                                    return self._embedding_failed(
+                                        embedding_msg, error_msg, kind=kind
+                                    )
+
+                                execute_status = "requeued"
+                                self._log_embedding_error(logging.WARNING, error_msg, embedding_msg)
+                                self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+                                if self._vikingdb.has_queue_manager:
+                                    wait = getattr(embed_err, "retry_after", 0)
+                                    if wait > 0:
+                                        await asyncio.sleep(min(wait, 30))
+                                    await self._reenqueue_embedding_msg(
+                                        embedding_msg, increment_failure_requeue=True
+                                    )
+                                    self._merge_request_stats(
+                                        embedding_msg.telemetry_id, requeue_count=1
+                                    )
+                                    return ProcessResult.requeued()
+                                request_failed_message = error_msg
+                                return self._embedding_failed(embedding_msg, error_msg, kind=kind)
 
                         self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                         execute_status = "error"
@@ -1079,7 +1114,16 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
         return ProcessResult.cancelled()
 
-    async def _reenqueue_embedding_msg(self, msg: EmbeddingMsg) -> None:
+    async def _reenqueue_embedding_msg(
+        self,
+        msg: EmbeddingMsg,
+        *,
+        increment_failure_requeue: bool = False,
+    ) -> None:
+        if increment_failure_requeue:
+            # Persist the retry counter in the replacement message so a bounded
+            # transient-requeue policy survives across deliveries.
+            msg.failure_requeue_count += 1
         if msg.context_data.get("context_type") == ContextType.SKILL.value:
             await run_to_completion(lambda: self._vikingdb.enqueue_embedding_msg(msg))
         else:
