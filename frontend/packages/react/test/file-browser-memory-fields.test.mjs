@@ -31,6 +31,37 @@ function probe(api) {
 }
 
 /**
+ * 按服务端的方式切行：Python 的 `splitlines(keepends=True)`，每行保留自己的换行
+ * 符，`\r\n` 算一个分隔符。用 `split('\n')` 做桩会掩盖行边界不一致的缺陷。
+ *
+ * Splits lines the way the server does — Python's `splitlines(keepends=True)`, each
+ * line keeping its own terminator with `\r\n` counting as one. Stubbing it with
+ * `split('\n')` would hide a disagreement over line boundaries.
+ */
+function serverSplitLines(text) {
+  // 独立于被测实现再写一遍，避免两边共用同一个错误。
+  // Written independently of the implementation under test so the two cannot share a
+  // mistake.
+  const breaks = new Set([
+    0x0a, 0x0b, 0x0c, 0x0d, 0x1c, 0x1d, 0x1e, 0x85, 0x2028, 0x2029,
+  ]);
+  if (!text) return [];
+  const lines = [];
+  let begin = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (!breaks.has(text.charCodeAt(i))) continue;
+    const paired =
+      text.charCodeAt(i) === 0x0d && text.charCodeAt(i + 1) === 0x0a;
+    const stop = i + (paired ? 2 : 1);
+    lines.push(text.slice(begin, stop));
+    begin = stop;
+    i = stop - 1;
+  }
+  if (begin < text.length) lines.push(text.slice(begin));
+  return lines;
+}
+
+/**
  * 用一份完整的文件内容挂载预览。`content/read` 按 `limit` 切片，与服务端一致——
  * 只回整份内容会让「读满上限」这条分支测不到。
  *
@@ -43,8 +74,8 @@ async function previewOf(uri, body) {
     if (call.path === '/api/v1/fs/ls') return ok([{ uri }]);
     if (call.path === '/api/v1/content/read') {
       const limit = Number(call.query?.limit ?? -1);
-      const lines = body.split('\n');
-      return ok(limit < 0 ? body : lines.slice(0, limit).join('\n'));
+      const lines = serverSplitLines(body);
+      return ok(limit < 0 ? body : lines.slice(0, limit).join(''));
     }
     if (call.path === '/api/v1/fs/stat') return ok({ isDir: false });
     return ok('');
@@ -126,7 +157,7 @@ test('a comment that only ends the first page is not a trailer', async () => {
   );
   const { content, truncated } = await previewOf(MEMORY, lines.join('\n'));
 
-  assert.equal(content.split('\n').length, 2000);
+  assert.equal(serverSplitLines(content).length, 2000);
   assert.match(content, /<!-- MEMORY_FIELDS/);
   assert.equal(truncated, true);
 });
@@ -149,7 +180,44 @@ test('a trailer cut off by the cap is still recognised', async () => {
   assert.ok(lines.length > 2000, 'the trailer must straddle the cap');
 
   const { content, truncated } = await previewOf(MEMORY, lines.join('\n'));
-  assert.equal(content.split('\n').length, 1998);
+  assert.equal(serverSplitLines(content).length, 1998);
   assert.doesNotMatch(content, /MEMORY_FIELDS/);
+  assert.equal(truncated, false);
+});
+
+test('lone CR line breaks count as lines, as they do on the server', async () => {
+  // 服务端按 `splitlines(keepends=True)` 数行，单独一个 `\r` 也是一行结束。用
+  // `split('\n')` 数会把整个文件当成 1 行，于是跳过全文读取，第 1998–2000 行的
+  // 正文示例被当成尾注删掉，截断还报成 false。
+  //
+  // The server counts lines the way `splitlines(keepends=True)` does, where a lone
+  // `\r` also ends a line. Counting with `split('\n')` reads the whole file as 1 line,
+  // skips the full read, strips the body example at lines 1998–2000 and reports the
+  // read as complete.
+  const lines = Array.from({ length: 1997 }, (_, i) => `line ${i + 1}`);
+  lines.push(
+    '<!-- MEMORY_FIELDS',
+    '{"example": true}',
+    '-->',
+    'after the example',
+  );
+  const { content, truncated } = await previewOf(MEMORY, lines.join('\r'));
+
+  assert.equal(serverSplitLines(content).length, 2000);
+  assert.match(content, /<!-- MEMORY_FIELDS/);
+  assert.equal(truncated, true);
+});
+
+test('a file of exactly the cap keeps its last newline', async () => {
+  // 2000 行、每行以 `\n` 结尾的文件在 `split('\n')` 下会多出一个末尾空串，被当成
+  // 第 2001 行——于是报成截断，还丢掉最后的换行符。
+  //
+  // A file of 2000 lines each ending in `\n` gains a trailing empty element under
+  // `split('\n')`, which looks like a 2001st line — so the read reports truncation and
+  // drops the final newline.
+  const body = `${'line\n'.repeat(1999)}line\n`;
+  const { content, truncated } = await previewOf(MEMORY, body);
+
+  assert.equal(content, body);
   assert.equal(truncated, false);
 });

@@ -3,6 +3,7 @@ import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type { FilePreviewFileTab } from '../../components/file-preview/index.js';
 import { isBinaryFile, mimeTypeOf, toBinaryTab } from './fs-file-kind.js';
 import { fileTypeIcon } from './fs-icon.js';
+import { joinLines, splitLines } from './fs-lines.js';
 import { isMemoryUri, stripMemoryFieldsTrailer } from './fs-memory-fields.js';
 import { nameFromUri, toFileTab } from './fs-model.js';
 
@@ -54,7 +55,14 @@ export async function readFile(
 
   const first = await read(MAX_LINES);
   if (!isMemoryUri(uri)) {
-    return toFileTab({ uri }, first, MAX_LINES, icon, openParent);
+    return toFileTab(
+      { uri },
+      first,
+      MAX_LINES,
+      icon,
+      openParent,
+      splitLines(first).length >= MAX_LINES,
+    );
   }
 
   // 记忆文件末尾的元数据尾注不属于正文：默认读取已由服务端剥掉，宿主把请求变成
@@ -76,11 +84,17 @@ export async function readFile(
   // in a document) — stripping it would delete real content and report the truncation
   // as false. That case reads the whole file, strips, then applies the cap itself,
   // which also lets a trailer cut off before its closing marker be recognised.
-  const full = first.split('\n').length < MAX_LINES ? first : await read(-1);
-  const lines = stripMemoryFieldsTrailer(full).split('\n');
+  // 行边界按服务端的分隔符算：`limit` 是服务端按 `splitlines(keepends=True)` 数
+  // 的行，用 `split('\n')` 数会让两边对不上——单独 `\r` 换行的文件读满 2000 行却
+  // 只数到 1 行，而每行以 `\n` 结尾的文件又会多出一个末尾空行。
+  //
+  // Line boundaries follow the server's separators: `limit` counts lines the way
+  // `splitlines(keepends=True)` does, and `split('\n')` disagrees with it — a file
+  // with lone `\r` line breaks reads 2000 lines but counts as 1, while one whose lines
+  // each end in `\n` gains a trailing empty line.
+  const full = splitLines(first).length < MAX_LINES ? first : await read(-1);
+  const lines = splitLines(stripMemoryFieldsTrailer(full));
   const truncated = lines.length > MAX_LINES;
-  const visible = truncated
-    ? lines.slice(0, MAX_LINES).join('\n')
-    : lines.join('\n');
+  const visible = joinLines(truncated ? lines.slice(0, MAX_LINES) : lines);
   return toFileTab({ uri }, visible, MAX_LINES, icon, openParent, truncated);
 }
