@@ -38,6 +38,7 @@ import type { SchemaFormObject } from '../-lib/schema'
 type SchemaArgumentsFormProps = {
   errors: RJSFValidationError[]
   onChange: (value: SchemaFormObject) => void
+  onValidityChange?: (valid: boolean) => void
   schema: JsonSchema
   values: SchemaFormObject
 }
@@ -455,6 +456,7 @@ const widgets = {
 export function SchemaArgumentsForm({
   errors,
   onChange,
+  onValidityChange,
   schema,
   values,
 }: SchemaArgumentsFormProps) {
@@ -495,6 +497,7 @@ export function SchemaArgumentsForm({
           onCheckedChange={(checked) => {
             setEditAsJson(checked)
             setJsonError('')
+            onValidityChange?.(true)
             if (checked) {
               setJsonDraft(
                 JSON.stringify(cleanSchemaArguments(schema, values), null, 2),
@@ -521,7 +524,9 @@ export function SchemaArgumentsForm({
                 }
                 onChange(parsed as SchemaFormObject)
                 setJsonError('')
+                onValidityChange?.(true)
               } catch (error) {
+                onValidityChange?.(false)
                 setJsonError(
                   error instanceof Error ? error.message : String(error),
                 )

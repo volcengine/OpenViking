@@ -12,7 +12,12 @@ import {
   useBlocker,
   useNavigate,
 } from '@tanstack/react-router'
-import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { useTheme } from 'next-themes'
 import { useTranslation } from 'react-i18next'
 import type { RJSFValidationError } from '@rjsf/utils'
@@ -25,11 +30,10 @@ import {
   FileTextIcon,
   FolderIcon,
   FolderPlusIcon,
-  GitBranchIcon,
-  ListIcon,
   Loader2Icon,
   Maximize2Icon,
   PencilIcon,
+  PlayIcon,
   PlusIcon,
   RefreshCwIcon,
   SaveIcon,
@@ -85,6 +89,7 @@ import {
   createText,
   hashText,
   isLiveContextDocument,
+  invokeMcpTool,
   listDirectory,
   loadMcpCatalog,
   loadLiveMounts,
@@ -96,8 +101,8 @@ import {
   statResource,
   unmountLiveContext,
 } from './-lib/api'
+import { formatLiveContextResult } from './-lib/live-result'
 import type {
-  ArrangerView,
   LiveContextMount,
   LiveMountIndex,
   McpCatalog,
@@ -123,7 +128,6 @@ const ContextGraph = lazy(() =>
 type ArrangerSearch = {
   selected?: string
   uri?: string
-  view?: ArrangerView
 }
 
 type ActionKind = 'copy' | 'file' | 'mkdir' | 'mount'
@@ -138,10 +142,6 @@ export const Route = createFileRoute('/arranger')({
   validateSearch: (search: Record<string, unknown>): ArrangerSearch => ({
     selected: typeof search.selected === 'string' ? search.selected : undefined,
     uri: typeof search.uri === 'string' ? search.uri : undefined,
-    view:
-      search.view === 'graph' || search.view === 'list'
-        ? search.view
-        : undefined,
   }),
   component: ArrangerRoute,
 })
@@ -180,7 +180,6 @@ function ArrangerWorkbench() {
   const [action, setAction] = useState<ActionState>(null)
   const [addResourceOpen, setAddResourceOpen] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
-  const view = search.view || 'graph'
 
   const rootQuery = useQuery({
     enabled: Boolean(rootUri),
@@ -288,13 +287,6 @@ function ArrangerWorkbench() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
     }
-  }
-
-  const setView = (next: ArrangerView) => {
-    void navigate({
-      search: (previous) => ({ ...previous, view: next }),
-      replace: true,
-    })
   }
 
   const filteredEntries = useMemo(() => {
@@ -505,24 +497,6 @@ function ArrangerWorkbench() {
                 className="pl-8"
               />
             </div>
-            <div className="flex rounded-md border p-0.5">
-              <Button
-                variant={view === 'graph' ? 'secondary' : 'ghost'}
-                size="icon-sm"
-                title={t('views.graph')}
-                onClick={() => setView('graph')}
-              >
-                <GitBranchIcon />
-              </Button>
-              <Button
-                variant={view === 'list' ? 'secondary' : 'ghost'}
-                size="icon-sm"
-                title={t('views.list')}
-                onClick={() => setView('list')}
-              >
-                <ListIcon />
-              </Button>
-            </div>
           </div>
           {!liveIndex.complete && (
             <Alert className="m-2 shrink-0 rounded-md">
@@ -560,34 +534,25 @@ function ArrangerWorkbench() {
               />
             </ScrollArea>
             <section className="min-h-0 overflow-hidden border-r">
-              {view === 'graph' ? (
-                <Suspense
-                  fallback={
-                    <CenteredStatus
-                      icon={Loader2Icon}
-                      label={t('loading')}
-                      spin
-                    />
-                  }
-                >
-                  <ContextGraph
-                    root={rootEntry}
-                    entries={filteredEntries}
-                    expanded={expanded}
-                    selectedUri={selected?.uri}
-                    isLive={(uri) => liveIndex.mounts.has(uri)}
-                    onSelect={choose}
-                    onToggle={toggleExpanded}
+              <Suspense
+                fallback={
+                  <CenteredStatus
+                    icon={Loader2Icon}
+                    label={t('loading')}
+                    spin
                   />
-                </Suspense>
-              ) : (
-                <ContextList
+                }
+              >
+                <ContextGraph
+                  root={rootEntry}
                   entries={filteredEntries}
-                  liveIndex={liveIndex}
+                  expanded={expanded}
                   selectedUri={selected?.uri}
+                  isLive={(uri) => liveIndex.mounts.has(uri)}
                   onSelect={choose}
+                  onToggle={toggleExpanded}
                 />
-              )}
+              </Suspense>
             </section>
             <ResourceInspector
               catalog={catalogQuery.data}
@@ -765,38 +730,53 @@ function ContextTree({
 
   const renderEntry = (entry: VikingFsEntry, depth: number) => (
     <div key={entry.uri}>
-      <button
-        type="button"
+      <div
         className={cn(
           'flex h-8 w-full items-center gap-1.5 pr-2 text-left text-xs hover:bg-muted',
           selectedUri === entry.uri && 'bg-muted font-medium',
         )}
         style={{ paddingLeft: `${8 + depth * 14}px` }}
-        onClick={() => {
-          onSelect(entry)
-          if (entry.isDir) onToggle(entry.uri)
-        }}
       >
         {entry.isDir ? (
-          <span aria-hidden="true">
+          <button
+            type="button"
+            className="flex h-8 w-5 shrink-0 items-center justify-center rounded-sm hover:bg-muted-foreground/10"
+            aria-label={t(
+              expanded.has(entry.uri)
+                ? 'actions.collapseDirectory'
+                : 'actions.expandDirectory',
+              { name: entry.name },
+            )}
+            aria-expanded={expanded.has(entry.uri)}
+            onClick={() => onToggle(entry.uri)}
+          >
             {expanded.has(entry.uri) ? (
               <ChevronDownIcon className="size-3.5" />
             ) : (
               <ChevronRightIcon className="size-3.5" />
             )}
-          </span>
+          </button>
         ) : (
-          <span className="w-3.5" />
+          <span className="w-5 shrink-0" />
         )}
-        {liveIndex.mounts.has(entry.uri) ? (
-          <CableIcon className="size-4 text-emerald-600" />
-        ) : entry.isDir ? (
-          <FolderIcon className="size-4 text-amber-600" />
-        ) : (
-          <FileTextIcon className="size-4 text-muted-foreground" />
-        )}
-        <span className="truncate">{entry.name}</span>
-      </button>
+        <button
+          type="button"
+          className="flex h-8 min-w-0 flex-1 items-center gap-1.5 text-left"
+          onClick={() => onSelect(entry)}
+          onDoubleClick={() => {
+            if (entry.isDir) onToggle(entry.uri)
+          }}
+        >
+          {liveIndex.mounts.has(entry.uri) ? (
+            <CableIcon className="size-4 shrink-0 text-emerald-600" />
+          ) : entry.isDir ? (
+            <FolderIcon className="size-4 shrink-0 text-amber-600" />
+          ) : (
+            <FileTextIcon className="size-4 shrink-0 text-muted-foreground" />
+          )}
+          <span className="truncate">{entry.name}</span>
+        </button>
+      </div>
       {entry.isDir && expanded.has(entry.uri) && (
         <>
           {(children.get(normalizeVikingUri(entry.uri)) || []).map((child) =>
@@ -818,51 +798,6 @@ function ContextTree({
   )
 
   return <div className="py-2">{renderEntry(root, 0)}</div>
-}
-
-function ContextList({
-  entries,
-  liveIndex,
-  onSelect,
-  selectedUri,
-}: {
-  entries: VikingFsEntry[]
-  liveIndex: LiveMountIndex
-  onSelect: (entry: VikingFsEntry) => void
-  selectedUri?: string
-}) {
-  return (
-    <ScrollArea className="h-full">
-      <div className="divide-y">
-        {entries.map((entry) => {
-          const Icon = liveIndex.mounts.has(entry.uri)
-            ? CableIcon
-            : entry.isDir
-              ? FolderIcon
-              : FileTextIcon
-          return (
-            <button
-              key={entry.uri}
-              type="button"
-              className={cn(
-                'flex h-11 w-full items-center gap-3 px-4 text-left hover:bg-muted/60',
-                selectedUri === entry.uri && 'bg-muted',
-              )}
-              onClick={() => onSelect(entry)}
-            >
-              <Icon className="size-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate text-sm">
-                {entry.name}
-              </span>
-              <span className="hidden max-w-1/2 truncate font-mono text-[11px] text-muted-foreground sm:block">
-                {entry.uri}
-              </span>
-            </button>
-          )
-        })}
-      </div>
-    </ScrollArea>
-  )
 }
 
 function ResourceInspector({
@@ -1274,6 +1209,7 @@ function ActionDialog({
   const [timeout, setTimeoutValue] = useState('60')
   const [tags, setTags] = useState('')
   const [argumentValues, setArgumentValues] = useState<SchemaFormObject>({})
+  const [argumentsValid, setArgumentsValid] = useState(true)
   const [argumentErrors, setArgumentErrors] = useState<RJSFValidationError[]>(
     [],
   )
@@ -1281,11 +1217,66 @@ function ActionDialog({
   const [error, setError] = useState('')
   const initializedMountRef = useRef<string | null>(null)
   const initializedArgumentsRef = useRef<string | null>(null)
+  const previewResultRef = useRef<HTMLElement | null>(null)
   const selectedTool = catalog?.tools.find((tool) => tool.uri === toolUri)
   const selectedServer = catalog?.servers.find(
     (server) => `${server.root_uri}/${server.name}` === serverUri,
   )
   const serverTools = selectedServer?.tools || []
+  const previewKey = JSON.stringify([toolUri, argumentValues])
+  const previewMutation = useMutation({
+    mutationFn: ({
+      uri,
+      arguments: args,
+    }: {
+      uri: string
+      arguments: SchemaFormObject
+      snapshot: string
+    }) => invokeMcpTool(uri, args),
+    retry: false,
+  })
+  const previewResult =
+    previewMutation.data === undefined
+      ? null
+      : formatLiveContextResult(previewMutation.data)
+  const previewStale =
+    Boolean(previewMutation.variables) &&
+    (!argumentsValid || previewMutation.variables?.snapshot !== previewKey)
+
+  useEffect(() => {
+    if (previewMutation.isPending) {
+      previewResultRef.current?.scrollIntoView({ block: 'nearest' })
+    }
+  }, [previewMutation.isPending])
+
+  const validatedToolArguments = () => {
+    if (!selectedTool) throw new Error(t('validation.selectTool'))
+    if (!argumentsValid) throw new Error(t('validation.invalidArguments'))
+    const validated = validateSchemaArguments(
+      selectedTool.tool.inputSchema,
+      argumentValues,
+    )
+    setArgumentErrors(validated.errors)
+    if (validated.errors.length) {
+      throw new Error(t('validation.invalidArguments'))
+    }
+    return validated.arguments
+  }
+
+  const preview = () => {
+    if (previewMutation.isPending || submitting) return
+    setError('')
+    try {
+      const args = validatedToolArguments()
+      previewMutation.mutate({
+        uri: toolUri,
+        arguments: args,
+        snapshot: previewKey,
+      })
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught))
+    }
+  }
 
   useEffect(() => {
     const source = action.source
@@ -1349,17 +1340,8 @@ function ActionDialog({
         if (!name.trim() || !toolUri || !title.trim()) {
           throw new Error(t('validation.mountRequired'))
         }
-        if (!selectedTool) throw new Error(t('validation.selectTool'))
-        const validated = validateSchemaArguments(
-          selectedTool.tool.inputSchema,
-          argumentValues,
-        )
-        setArgumentErrors(validated.errors)
-        if (validated.errors.length) {
-          throw new Error(t('validation.invalidArguments'))
-        }
         const input: MountInput = {
-          arguments: validated.arguments,
+          arguments: validatedToolArguments(),
           description: description || undefined,
           node_uri: resolveMountNodeUri(
             defaultParent,
@@ -1476,6 +1458,7 @@ function ActionDialog({
                       setToolUri('')
                       setArgumentValues({})
                       setArgumentErrors([])
+                      setArgumentsValid(true)
                     }}
                   >
                     <SelectTrigger className="w-full">
@@ -1517,6 +1500,7 @@ function ActionDialog({
                       )
                       setToolUri(uri)
                       setArgumentErrors([])
+                      setArgumentsValid(true)
                       if (!tool) return
                       const defaults = initialSchemaArguments(
                         tool.tool.inputSchema,
@@ -1598,9 +1582,11 @@ function ActionDialog({
                 </div>
                 {selectedTool ? (
                   <SchemaArgumentsForm
+                    key={selectedTool.uri}
                     schema={selectedTool.tool.inputSchema}
                     values={argumentValues}
                     errors={argumentErrors}
+                    onValidityChange={setArgumentsValid}
                     onChange={(value) => {
                       setArgumentValues(value)
                       setArgumentErrors([])
@@ -1612,6 +1598,45 @@ function ActionDialog({
                   </div>
                 )}
               </div>
+
+              {(previewMutation.isPending ||
+                previewMutation.isError ||
+                previewResult) && (
+                <section
+                  ref={previewResultRef}
+                  className="space-y-3 rounded-md border p-3"
+                  aria-live="polite"
+                  aria-busy={previewMutation.isPending}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-sm font-semibold">
+                      {t('mount.previewResult')}
+                    </h3>
+                    {previewStale && (
+                      <Badge variant="outline">{t('mount.previewStale')}</Badge>
+                    )}
+                  </div>
+                  {previewMutation.isPending ? (
+                    <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2Icon className="size-4 animate-spin" />
+                      {t('mount.previewRunning')}
+                    </p>
+                  ) : previewMutation.isError ? (
+                    <p className="whitespace-pre-wrap break-words text-sm text-destructive">
+                      {previewMutation.error.message}
+                    </p>
+                  ) : previewResult ? (
+                    <pre
+                      className={cn(
+                        'max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5',
+                        previewResult.isError && 'text-destructive',
+                      )}
+                    >
+                      {previewResult.text}
+                    </pre>
+                  ) : null}
+                </section>
+              )}
 
               <div className="grid gap-4 border-t pt-4 sm:grid-cols-2">
                 <div className="sm:col-span-2">
@@ -1642,10 +1667,41 @@ function ActionDialog({
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
         <DialogFooter className={cn(action.kind === 'mount' && 'px-6 py-4')}>
+          {action.kind === 'mount' && (
+            <div className="mr-auto flex items-center gap-3">
+              <Button
+                variant="outline"
+                disabled={
+                  !selectedTool ||
+                  !argumentsValid ||
+                  previewMutation.isPending ||
+                  submitting
+                }
+                onClick={preview}
+              >
+                {previewMutation.isPending ? (
+                  <Loader2Icon className="animate-spin" />
+                ) : (
+                  <PlayIcon />
+                )}
+                {t('mount.preview')}
+              </Button>
+              <span className="hidden text-xs text-muted-foreground sm:inline">
+                {t('mount.previewDescription')}
+              </span>
+            </div>
+          )}
           <Button variant="outline" onClick={onClose}>
             {t('actions.cancel')}
           </Button>
-          <Button disabled={submitting} onClick={() => void submit()}>
+          <Button
+            disabled={
+              submitting ||
+              previewMutation.isPending ||
+              (action.kind === 'mount' && !argumentsValid)
+            }
+            onClick={() => void submit()}
+          >
             {submitting && <Loader2Icon className="animate-spin" />}
             {t('actions.confirm')}
           </Button>

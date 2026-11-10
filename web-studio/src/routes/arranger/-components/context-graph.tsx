@@ -140,9 +140,13 @@ export function ContextGraph({
       minZoom={0.35}
       maxZoom={1.6}
       nodesDraggable={false}
+      zoomOnDoubleClick={false}
       onNodeClick={(_, node) => {
         const entry = (node.data as GraphData).entry
         onSelect(entry)
+      }}
+      onNodeDoubleClick={(_, node) => {
+        const entry = (node.data as GraphData).entry
         if (entry.isDir) onToggle(entry.uri)
       }}
       proOptions={{ hideAttribution: true }}

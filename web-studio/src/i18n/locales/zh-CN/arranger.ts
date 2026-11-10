@@ -19,6 +19,7 @@ const arranger = {
   },
   actions: {
     cancel: '取消',
+    collapseDirectory: '收起“{{name}}”',
     confirm: '确认',
     connectionSettings: '连接设置',
     addResource: '添加资源',
@@ -26,6 +27,7 @@ const arranger = {
     createRoot: '创建此目录',
     delete: '删除',
     editMount: '编辑挂载',
+    expandDirectory: '展开“{{name}}”',
     fullscreen: '切换全屏',
     load: '加载',
     loadMore: '加载更多',
@@ -34,10 +36,6 @@ const arranger = {
     newFile: '新建文档',
     refresh: '刷新',
     save: '立即保存',
-  },
-  views: {
-    graph: '结构图',
-    list: '列表',
   },
   fields: {
     arguments: '预置参数',
@@ -90,6 +88,11 @@ const arranger = {
     loadingTools: '正在加载服务',
     noArguments: '此工具不需要预置参数。',
     notSet: '不设置',
+    preview: '试运行',
+    previewDescription: '使用当前参数调用工具。',
+    previewResult: '查询结果',
+    previewRunning: '正在查询…',
+    previewStale: '参数已修改，请重新查询',
     removeItem: '删除条目',
     selectServer: '选择 MCP 服务',
     selectTool: '选择工具',

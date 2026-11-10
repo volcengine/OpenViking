@@ -20,6 +20,7 @@ const arranger = {
   },
   actions: {
     cancel: 'Cancel',
+    collapseDirectory: 'Collapse “{{name}}”',
     confirm: 'Confirm',
     connectionSettings: 'Connection settings',
     addResource: 'Add resource',
@@ -27,6 +28,7 @@ const arranger = {
     createRoot: 'Create this directory',
     delete: 'Delete',
     editMount: 'Edit mount',
+    expandDirectory: 'Expand “{{name}}”',
     fullscreen: 'Toggle fullscreen',
     load: 'Load',
     loadMore: 'Load more',
@@ -35,10 +37,6 @@ const arranger = {
     newFile: 'New document',
     refresh: 'Refresh',
     save: 'Save now',
-  },
-  views: {
-    graph: 'Graph view',
-    list: 'List view',
   },
   fields: {
     arguments: 'Preset arguments',
@@ -93,6 +91,11 @@ const arranger = {
     loadingTools: 'Loading servers',
     noArguments: 'This tool does not require preset arguments.',
     notSet: 'Not set',
+    preview: 'Run query',
+    previewDescription: 'Call the tool with the current arguments.',
+    previewResult: 'Query result',
+    previewRunning: 'Running query…',
+    previewStale: 'Arguments changed; run the query again',
     removeItem: 'Remove item',
     selectServer: 'Select an MCP server',
     selectTool: 'Select a tool',

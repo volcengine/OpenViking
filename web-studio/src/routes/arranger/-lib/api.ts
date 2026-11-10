@@ -308,6 +308,19 @@ export async function readLiveContext(uri: string): Promise<unknown> {
   )
 }
 
+export async function invokeMcpTool(
+  uri: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  return getOvResult<unknown>(
+    getOvClient().instance.post(
+      '/api/v1/mcps/invoke',
+      { uri: normalizeVikingUri(uri), arguments: args },
+      { baseURL: apiBaseUrl() },
+    ),
+  )
+}
+
 export function hashText(content: string): string {
   return bytesToHex(sha256(new TextEncoder().encode(content)))
 }

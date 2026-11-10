@@ -84,6 +84,19 @@ class ContextPlan:
     changes: Tuple[ContextChange, ...]
 
     @property
+    def total(self) -> int:
+        """Total number of nodes evaluated, including unchanged nodes."""
+        return len(self.changes)
+
+    @property
+    def counts(self) -> Dict[str, int]:
+        """Node counts by action, including actions with no nodes."""
+        counts = {action.value: 0 for action in ContextChangeAction}
+        for change in self.changes:
+            counts[change.action.value] += 1
+        return counts
+
+    @property
     def has_changes(self) -> bool:
         return any(
             change.action
@@ -100,15 +113,13 @@ class ContextPlan:
         return any(change.action == ContextChangeAction.CONFLICT for change in self.changes)
 
     def to_dict(self) -> Dict[str, Any]:
-        counts = {action.value: 0 for action in ContextChangeAction}
-        for change in self.changes:
-            counts[change.action.value] += 1
         return {
             "project": self.project,
             "root_uri": self.root_uri,
             "has_changes": self.has_changes,
             "has_conflicts": self.has_conflicts,
-            "counts": counts,
+            "total": self.total,
+            "counts": self.counts,
             "changes": [change.to_dict() for change in self.changes],
         }
 
@@ -240,9 +251,9 @@ class _ContextArrangerBase:
 
     async def _managed_entries(self) -> Dict[str, Dict[str, Any]]:
         try:
-            entries = await self._client.ls(
+            entries = await self._client.tree(
                 self.root_uri,
-                recursive=True,
+                level_limit=20,
                 include_tags=True,
                 tags=[self.owner_tag],
                 node_limit=self.max_managed_resources,
@@ -288,6 +299,7 @@ class _ContextArrangerBase:
             result = await self._client.list_mcp_mounts(
                 match.group("server"),
                 tool=match.group("tool"),
+                target_uri=resource.tool_uri.rsplit("/", 2)[0],
             )
         except NotFoundError:
             return False
@@ -571,12 +583,17 @@ class ContextArranger(_ContextArrangerBase):
         if args.output == "json":
             output = json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
         else:
-            output = _format_result_table(result)
+            output = _format_result_table(result, show_unchanged=args.show_unchanged)
         print(output)
         return 0
 
 
 def _add_output_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--show-unchanged",
+        action="store_true",
+        help="Include unchanged nodes in table output (JSON always includes all nodes).",
+    )
     parser.add_argument(
         "--output",
         choices=("table", "json"),
@@ -585,7 +602,11 @@ def _add_output_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _format_result_table(result: Union[ContextPlan, ContextApplyResult]) -> str:
+def _format_result_table(
+    result: Union[ContextPlan, ContextApplyResult],
+    *,
+    show_unchanged: bool = False,
+) -> str:
     if isinstance(result, ContextApplyResult):
         plan = result.plan
         title = (
@@ -597,14 +618,13 @@ def _format_result_table(result: Union[ContextPlan, ContextApplyResult]) -> str:
         plan = result
         title = "OpenViking Context Plan"
 
-    counts = {action.value: 0 for action in ContextChangeAction}
-    for change in plan.changes:
-        counts[change.action.value] += 1
+    counts = plan.counts
 
     lines = [
         title,
         f"Arrangement: {plan.project}",
         f"Root:        {plan.root_uri}",
+        f"Total:       {plan.total} nodes",
     ]
     if isinstance(result, ContextApplyResult):
         lines.extend(
@@ -637,15 +657,26 @@ def _format_result_table(result: Union[ContextPlan, ContextApplyResult]) -> str:
             f"{counts['conflict']} conflict"
         )
     lines.append("")
-    if not plan.changes:
+    visible_changes = tuple(
+        change
+        for change in plan.changes
+        if show_unchanged or change.action != ContextChangeAction.UNCHANGED
+    )
+    if not plan.total:
         lines.append("No resources declared.")
+    elif not visible_changes:
+        lines.append("No changes. All nodes match the declaration.")
     else:
         lines.extend(
             _format_change_rows(
-                plan.changes,
+                visible_changes,
                 applied=isinstance(result, ContextApplyResult) and not result.dry_run,
                 prune=result.prune if isinstance(result, ContextApplyResult) else False,
             )
+        )
+    if counts["unchanged"] and not show_unchanged:
+        lines.append(
+            f"\n{counts['unchanged']} unchanged nodes hidden; use --show-unchanged to include them."
         )
     return "\n".join(lines)
 
