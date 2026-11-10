@@ -2,8 +2,11 @@ import { useState } from 'react';
 import {
   ArrowRightIcon,
   AudioIcon,
+  LibraryIcon,
   PdfIcon,
   PptIcon,
+  SpaceIcon,
+  UserIcon,
   VideoIcon,
   WordIcon,
 } from '@openviking/react/icons';
@@ -15,6 +18,11 @@ const icons = [
   { name: 'PptIcon', Icon: PptIcon },
   { name: 'VideoIcon', Icon: VideoIcon },
   { name: 'WordIcon', Icon: WordIcon },
+];
+const scopeIcons = [
+  { name: 'LibraryIcon', Icon: () => <LibraryIcon name="research" /> },
+  { name: 'SpaceIcon', Icon: SpaceIcon },
+  { name: 'UserIcon', Icon: UserIcon },
 ];
 const sizes = [16, 24, 32];
 
@@ -41,6 +49,14 @@ export default function IconsExample() {
           >
             {value}px
           </button>
+        ))}
+      </div>
+      <div className="ov-demo-row">
+        {scopeIcons.map(({ name, Icon }) => (
+          <span key={name} className="ov-demo-row">
+            <Icon />
+            <code>{name}</code>
+          </span>
         ))}
       </div>
       <p className="ov-demo-row">

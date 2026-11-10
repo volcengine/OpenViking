@@ -12,6 +12,8 @@
 
 必填项只有三个接口，返回 `Promise<readonly ScopeSwitcherOption[]>`，即 `{ id, label, icon?, description?, disabled? }`。鉴权、接口地址、响应映射和权限仍由适配函数负责。保持函数引用稳定；任一适配函数变化都会取消请求并重置全部选择。不同账号使用独立实例或 React `key` 隔离。
 
+默认视图内置三个层级图标：库用 `LibraryIcon`（按 id 取色的圆形渐变块），空间与用户用 `SpaceIcon`、`UserIcon`。适配函数返回的选项没有 `icon` 时自动补上本级默认图标，返回了 `icon` 就照用宿主的。
+
 | 接口            | 参数                                                      |
 | --------------- | --------------------------------------------------------- |
 | `loadLibraries` | `signal: AbortSignal`                                     |

@@ -95,6 +95,8 @@ Validity is decided from `options` alone: a value merely filtered out of `visibl
 
 Options require `id`, `label`; optional fields are `icon`, `description`, `disabled`. Labels include `loading`, `searchPlaceholder`, `empty`, `noMatch`, `error`, following locale. Pass optional overrides to each selector.
 
+Icons come from the host; the component ships none. For defaults, take `LibraryIcon`, `SpaceIcon` and `UserIcon` from `@openviking/react/icons`. With [ScopeCascade](../modules/scope-cascade), the default view fills those three in when an adapter returns no `icon`.
+
 Arrow keys and Home/End navigate; Enter/Space select; Escape closes and returns focus. Outside clicks and focus leaving dismiss the panel.
 
 ## Appearance

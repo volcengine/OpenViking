@@ -12,6 +12,8 @@ Connect three API adapters without writing request state or cascading logic. `us
 
 Only the three adapters are required. They return `Promise<readonly ScopeSwitcherOption[]>` (`{ id, label, icon?, description?, disabled? }`). Authentication, endpoint URLs, response mapping and permissions belong in those adapters. Supply stable function references; changing any adapter cancels requests and resets all selections. Use separate mounted instances (or a React `key`) for different accounts.
 
+The default view ships three level icons: `LibraryIcon` for libraries (a round gradient swatch picked by id), and `SpaceIcon` / `UserIcon` for spaces and users. When an adapter returns an option without `icon`, the level's default is filled in; a host-supplied `icon` always wins.
+
 | Adapter         | Arguments                                                 |
 | --------------- | --------------------------------------------------------- |
 | `loadLibraries` | `signal: AbortSignal`                                     |

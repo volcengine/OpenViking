@@ -94,6 +94,8 @@
 
 选项必填 `id`、`label`，可选 `icon`、`description`、`disabled`。文案包含 `loading`、`searchPlaceholder`、`empty`、`noMatch`、`error`，默认跟随 locale，本地化覆盖传给各级选择器。
 
+图标由宿主传入，组件不内置。需要默认图标时从 `@openviking/react/icons` 取 `LibraryIcon`、`SpaceIcon`、`UserIcon`；使用 [ScopeCascade](../modules/scope-cascade) 时默认视图会在适配函数没给 `icon` 时自动补上这三个。
+
 方向键及 Home/End 移动焦点，Enter/空格选择，Escape 关闭并返回触发器。点击外部或焦点离开时关闭面板。
 
 ## 外观

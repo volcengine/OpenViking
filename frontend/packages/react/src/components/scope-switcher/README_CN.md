@@ -48,6 +48,8 @@
 
 选项行首图标装在一个 24px 的底槽里：纯白底、0.5px `#edeef2` 描边、12px 圆角，图形本身保持 14px。宿主渲染圆形头像时把 `--ov-ui-scope-switcher-option-icon-radius` 设为 `50%`。
 
+图标由宿主通过 `trigger.icon` 与 `option.icon` 传入，组件本身不内置任何层级图标，也不按层级语义推断。需要默认图标时从 `@openviking/react/icons` 取 `LibraryIcon`、`SpaceIcon`、`UserIcon`；`ScopeCascade` 的默认视图已经在适配函数没给 `icon` 时自动补上这三个，宿主给了就照用宿主的。
+
 主题变量声明在 `.ov-scope-switcher` 上，宿主可只覆盖其中一条：`--ov-ui-scope-switcher-divider`、`-icon`、`-option-icon`、`-option-icon-size`、`-option-icon-radius`、`-row-hover`、`-tag-background`、`-tag-text`、`-panel-width`、`-option-height`、`-option-gap`、`-list-max-height`、`-panel-max-height`。
 
 共用颜色走包级主题基线，写法为 `var(--ov-ui-color-<token>, var(--ov-ui-<token>-default, 兜底))`：宿主在祖先上设置了 `--ov-ui-color-*` 就用宿主的，否则用基线默认值。组件不在自己根节点上声明公开的 `--ov-ui-color-*`，否则会阻断宿主的值向下继承。这里用到的 token：`text-1`、`text-3`、`text-disabled`、`border-1`、`border-2`、`border-3`、`bg-1`、`primary`、`primary-light`。
