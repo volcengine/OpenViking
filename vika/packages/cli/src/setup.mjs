@@ -560,8 +560,8 @@ async function askMailboxes(ctx, state) {
 }
 
 // The instance's on/off settings, under 其他设置, and what each is when the
-// manifest does not say. OpenViking memory has no switch here: Vika always
-// owns it (agents[].ovAutoRecall stays a config-file-only option).
+// manifest does not say. OpenViking memory has no switch here
+// (agents[].ovAutoRecall and ovViaGateway stay config-file-only options).
 const SWITCH_DEFAULTS = Object.freeze({ stagedReplies: false, naturalWriting: true, explicitSilence: true, meetingNotes: false });
 // Explicit silence is on by default for every Core-tool runtime, including Ark.
 const switchDefault = (key, _model) => SWITCH_DEFAULTS[key];

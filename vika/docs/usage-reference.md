@@ -313,6 +313,16 @@ Setup deletion defaults to cancellation. It removes the instance configuration a
 
 Maintainers must publish code before `vika upgrade <instance-id>`. The updater can finish a self-upgrade after its caller exits, but the current CLI/model connection may be lost. Verify through `/status` or local health afterward.
 
+### OpenViking through the gateway (MA Cloud/Ark)
+
+Boolean `agents[].ovViaGateway` (default `false`, config file only) is for an MA Cloud/Ark instance whose model calls go through the OpenViking gateway. MA owns the model endpoint, so the deployment owner configures MA to send them there; the gateway must reach the same OpenViking user as the instance's `ovConfig`. With the switch on, the gateway recalls on every turn, offers its own `openviking_find`, `openviking_search`, `openviking_read` and `openviking_list` (the MA agent no longer gets Vika's), and captures and extracts the conversation. Vika keeps the owner's and the sender's preferences after a line, `openviking_remember`, `openviking_add_resource`, `read_openviking_session_context` and the history a fresh session starts with. Its session sync still writes the conversation but extracts nothing, so nothing is extracted twice, and `ovAutoRecall` runs no search.
+
+What Vika adds to a message, the policy, the history and whatever follows an incoming line (the recall block, notices), is wrapped in `<system-reminder>`, so the gateway's recall query and capture see only the incoming lines. In incoming text, recalled memories and history, the `<` of `system-reminder`, `openviking-context`, `relevant-memories`, `relevant-memory` and `memory-context` tags becomes `&lt;`: a message can neither switch the gateway off nor fake or end Vika's wrapper.
+
+The gateway profile for the instance: recall on; capture on, with `capture_memory_types` set to `["profile", "entities", "events"]`; gateway tools on, with the write tools left disabled (the default `disabled_tools`).
+
+Changing the switch changes the MA tool set: run `scripts/volc-sync-agent.mjs` again (or set `VIKA_VOLC_AGENT_SYNC=update`) and restart; the instance starts a new MA session. The current epoch's OpenViking session keeps the memory policy it was created with until `/new`. Under another runtime the switch only turns off the per-line search and the session's extraction.
+
 ## Activity page
 
 Timers complete through `finish_timer_occurrence` with `occurrence_id` and optional `delivery: { tool, input }`, reusing `send_message`, `reply_message`, or `notify_owner`. Core marks completion only after confirmed sending. If no message is needed, omit delivery and provide `reason`. Ordinary messages can ask the owner or report progress without completing the occurrence. Failed/uncertain/dry-run sends do not complete it. Completion ends this occurrence's checks, not future timer triggers, and the activity ledger retains results/reasons.

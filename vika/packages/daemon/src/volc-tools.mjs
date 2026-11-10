@@ -20,10 +20,14 @@ export function maInputSchema(inputSchema) {
   if (!schema.required?.length) delete schema.required;
   return schema;
 }
-export function maTools(actions) {
-  return actions.tools().map(({ name, description, inputSchema }) => ({
-    type: 'custom', name, description, input_schema: maInputSchema(inputSchema),
-  }));
+// The OpenViking gateway offers these itself, under the same names; a client
+// tool of the same name would turn its tools off (ovViaGateway).
+const GATEWAY_TOOLS = new Set(['openviking_find', 'openviking_search', 'openviking_read', 'openviking_list']);
+export function maTools(actions, { viaGateway = false } = {}) {
+  return actions.tools().filter(({ name }) => !(viaGateway && GATEWAY_TOOLS.has(name)))
+    .map(({ name, description, inputSchema }) => ({
+      type: 'custom', name, description, input_schema: maInputSchema(inputSchema),
+    }));
 }
 export function maToolsHash(tools) {
   return createHash('sha256').update(canonicalJson(tools.filter((tool) => tool.type === 'custom')

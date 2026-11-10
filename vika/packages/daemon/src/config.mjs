@@ -213,6 +213,15 @@ export function getConfig() {
     // the preferences it always shows, the daemon runs one OV search per line
     // someone sends (ov-recall.mjs).
     ovAutoRecall: boolEnv('VIKA_OV_AUTO_RECALL', false),
+    // Opt-in per instance (agents[].ovViaGateway, config file only), for an
+    // instance on the MA (ark) runtime whose model calls the deployment owner
+    // sends through the OpenViking gateway, which then recalls, offers the OV
+    // read tools and extracts memory. Under MA the daemon drops its own
+    // find/search/read/list tools and marks the text it adds as
+    // <system-reminder> (volc.mjs). For the whole instance, whatever the
+    // runtime, it wins over ovAutoRecall and the journal session extracts
+    // nothing (ov-session-context.mjs).
+    ovViaGateway: boolEnv('VIKA_OV_VIA_GATEWAY', false),
     // One OpenViking tool request, bounded for the model-facing tools (the
     // faster read/list paths get half of it).
     openVikingToolTimeoutMs: intEnv('VIKA_OV_TOOL_TIMEOUT_MS', 20_000, { min: 1_000, max: 120_000 }),

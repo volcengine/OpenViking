@@ -38,7 +38,7 @@ if (process.argv.includes('--socket')) {
     meetingEnabled: config.connectors.includes('lark'), timers: {},
   });
 }
-const custom = maTools(actions);
+const custom = maTools(actions, { viaGateway: config.ovViaGateway });
 async function api(resource, body) {
   const response = await fetch(`${config.volcBaseUrl}${resource}`, { method: body ? 'POST' : 'GET',
     headers: { Authorization: `Bearer ${config.volcApiKey}`, 'Content-Type': 'application/json' },
