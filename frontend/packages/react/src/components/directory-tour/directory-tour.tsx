@@ -89,10 +89,10 @@ function TourStep({
   // Capture browser focus before this step takes it. Restore only on unmount,
   // not when a host passes a fresh onClose callback during an unrelated render.
   useEffect(() => {
-    const previous = document.activeElement;
+    const previous: (Element & { focus?: HTMLElement['focus'] }) | null =
+      document.activeElement;
     return () => {
-      if (previous instanceof HTMLElement && previous.isConnected)
-        previous.focus({ preventScroll: true });
+      if (previous?.isConnected) previous.focus?.({ preventScroll: true });
     };
   }, []);
   const visible = position?.visible;

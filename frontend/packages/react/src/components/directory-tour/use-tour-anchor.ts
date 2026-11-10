@@ -1,6 +1,14 @@
 import { useEffect, useState } from 'react';
 import type { DirectoryTourAnchor, DirectoryTourProps } from './types.js';
 
+// Array.isArray is realm-independent; the explicit predicate also narrows the
+// readonly array branch of the public anchor union.
+function isAnchorGroup(
+  target: DirectoryTourAnchor,
+): target is readonly HTMLElement[] {
+  return Array.isArray(target);
+}
+
 export function useTourAnchor(
   target: string,
   locateTarget: DirectoryTourProps['locateTarget'],
@@ -28,8 +36,11 @@ export function useTourAnchor(
         (target: DirectoryTourAnchor | null) => {
           if (controller.signal.aborted) return;
           window.clearTimeout(timer);
-          const elements =
-            target instanceof HTMLElement ? [target] : (target ?? []);
+          const elements = target
+            ? isAnchorGroup(target)
+              ? target
+              : [target]
+            : [];
           const anchor = elements[0];
           if (anchor?.isConnected) {
             anchor.scrollIntoView({ block: 'nearest', inline: 'nearest' });

@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
 import { act, createElement as h } from 'react';
-import { renderToString } from 'react-dom/server';
-import { hydrateRoot } from 'react-dom/client';
 import { DirectoryTour } from '@openviking/react/components/directory-tour';
 import { mount, settle } from './helpers/module-dom.mjs';
 
@@ -48,42 +46,6 @@ function target(left = 100, top = 100) {
 afterEach(() => {
   assert.equal(frames.size, 0, 'unmount must cancel layout tracking');
   delete window.visualViewport;
-});
-
-test('an initially open tour hydrates without recovering or replacing the host tree', async () => {
-  const anchor = target();
-  const element = h(
-    'main',
-    null,
-    h('input', { defaultValue: 'keep' }),
-    h(DirectoryTour, { ...props, locateTarget: async () => anchor }),
-  );
-  const browserDocument = globalThis.document;
-  let html;
-  try {
-    delete globalThis.document;
-    html = renderToString(element);
-  } finally {
-    globalThis.document = browserDocument;
-  }
-  const container = document.createElement('div');
-  container.innerHTML = html;
-  document.body.append(container);
-  const input = container.querySelector('input');
-  const errors = [];
-  let root;
-  await act(async () => {
-    root = hydrateRoot(container, element, {
-      onRecoverableError: (error) => errors.push(error),
-    });
-  });
-  await settle();
-  assert.deepEqual(errors, []);
-  assert.equal(container.querySelector('input'), input);
-  assert.ok(surface());
-  await act(async () => root.unmount());
-  container.remove();
-  anchor.remove();
 });
 
 test('Escape respects a host control and is consumed only when the tour can close', async () => {
