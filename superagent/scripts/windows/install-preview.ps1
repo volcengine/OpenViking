@@ -733,7 +733,12 @@ if ($Isolated) {
     # As install.sh does: the first install goes straight into setup, in the
     # terminal that ran the installer, which now knows ov-superagent.
     & (Join-Path (Join-Path $SuperAgentHome 'bin') 'ov-superagent.cmd') setup
-    if ($LASTEXITCODE) { throw "ov-superagent setup exited $LASTEXITCODE" }
+    # The release is installed by now. A setup the owner cancelled, or one that
+    # did not get through, is not an install failure: name what is left to do
+    # instead of throwing a stack trace over the advice.
+    if ($LASTEXITCODE) {
+        Note (M "安装已完成，setup 没有跑完（退出码 $LASTEXITCODE）：之后运行 ov-superagent setup 继续" "Installed; setup did not finish (exit $LASTEXITCODE). Run ov-superagent setup later to continue")
+    }
 } else {
     Note (M '下一步：运行 ov-superagent setup' 'next: run ov-superagent setup')
 }
