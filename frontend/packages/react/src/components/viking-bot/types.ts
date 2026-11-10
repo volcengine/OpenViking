@@ -2,6 +2,10 @@ import type { HTMLAttributes, ReactNode, RefObject } from 'react';
 
 import type { VikingBotInteractionProps } from './interaction/types.js';
 import type {
+  VikingBotInputFeatures,
+  VikingBotSessions,
+} from './capabilities.js';
+import type {
   VikingBotAttachment,
   VikingBotDraft,
   VikingBotLabels,
@@ -13,6 +17,8 @@ import type {
 export interface VikingBotMessageListProps {
   /** 当前会话的消息。Messages in the current session. */
   messages: readonly VikingBotMessage[];
+  /** Locale used to format message timestamps. */
+  locale?: string;
   /** 附加到根元素的类名。Class name applied to the root element. */
   className?: string;
   /** 助手仍在生成时追加的片段。Parts appended while the assistant is still streaming. */
@@ -43,14 +49,14 @@ export interface VikingBotComposerRef {
   addFiles: (files: readonly File[]) => void;
   /** 是否已达到附件数量上限。Whether the attachment limit has been reached. */
   isAttachmentLimitReached: () => boolean;
-  /** 清空输入框与待发送附件。Clears the input and pending attachments. */
+  /** 清空输入文本；附件与引用由宿主重置。Clears text; the host resets attachments and references. */
   clear: () => void;
   /** 聚焦输入框。Focuses the input. */
   focus: () => void;
 }
 
 /** 输入区的公开接口。Public interface of the composer. */
-export interface VikingBotComposerProps {
+export interface VikingBotComposerProps extends VikingBotInputFeatures {
   /** 受控的草稿文本。Controlled draft text. */
   value: string;
   /** 附加到根元素的类名。Class name applied to the root element. */
@@ -86,12 +92,18 @@ export interface VikingBotComposerProps {
 }
 
 /** 完整对话区的公开接口。Public interface of the whole conversation view. */
-export interface VikingBotProps extends Omit<
-  HTMLAttributes<HTMLDivElement>,
-  'onCopy' | 'onSubmit'
-> {
+export interface VikingBotProps
+  extends
+    VikingBotInputFeatures,
+    Omit<HTMLAttributes<HTMLDivElement>, 'onCopy' | 'onSubmit'> {
   /** 当前会话的消息。Messages in the current session. */
   messages: readonly VikingBotMessage[];
+  /** Host-owned session history and actions. */
+  sessions?: VikingBotSessions;
+  /** Optional extension controls, such as a host-provided More menu. */
+  headerActions?: ReactNode;
+  /** Locale used to format server-provided session dates. */
+  locale?: string;
   /** 附加到根元素的类名。Class name applied to the root element. */
   className?: string;
   /** 助手仍在生成时追加的片段。Parts appended while the assistant is still streaming. */
@@ -106,7 +118,7 @@ export interface VikingBotProps extends Omit<
   isAvailable?: boolean;
   /** 不可用时的说明。Message shown while the bot is unavailable. */
   unavailableMessage?: string;
-  /** 首条消息之前替代消息列表显示的内容。Shown instead of the list before the first message. */
+  /** 首条消息前的内容；undefined 使用欢迎页，null 隐藏。Empty content: undefined uses welcome; null hides it. */
   emptyState?: ReactNode;
   /** 头部插槽，例如会话标题或历史按钮。Header slot. */
   header?: ReactNode;
@@ -114,7 +126,7 @@ export interface VikingBotProps extends Omit<
   footer?: ReactNode;
   /** 替换整个主体，用于宿主自定义组合。Replaces the whole body. */
   children?: ReactNode;
-  /** 替换消息列表，用于宿主自带渲染底座。Replaces the message list. */
+  /** 替换消息列表，优先于空态；null 隐藏。Replaces the list, including empty state; null hides it. */
   messageList?: ReactNode;
   /** 替换输入区，用于宿主自带输入组件。Replaces the composer. */
   composer?: ReactNode;

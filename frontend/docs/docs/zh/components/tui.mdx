@@ -95,6 +95,8 @@ import type {
 
 所有结果共用命令标题与带无障碍名称的成功、失败或加载图标。匹配到宿主命令时，标题使用其 `inputText`，不包含参数；正文中的同名命令标题不会重复显示。写入结果逐行使用独立底色，状态结果显示带底色的键值行，资源预览有独立的正文容器；JSON 与 Markdown 代码块共用可复制的代码视图。Markdown 有序列表保留可见的原生编号，包含非默认起始序号。命令执行成功与返回任务中的 `pending` 状态分别表达。
 
+代码块使用纯图标复制按钮，悬停或键盘聚焦时提示“复制”，成功后图标短暂变为勾选，提示切换为“复制成功”；可用 `labels.copy`、`labels.copied` 替换文案。复制失败不显示成功反馈，也不触发 `onCopy`。
+
 空结果文案由 `labels.noResult` 配置；帮助标题和引导由 `labels.availableCommands`、`labels.helpHint` 配置。
 
 `TuiRecordContent` 包含一种通用文本与六种结构化结果：

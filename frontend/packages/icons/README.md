@@ -2,8 +2,22 @@
 
 React imports these SVG files directly during its build.
 
+- `svg/tui/copy.svg` — an original 16 × 16 outlined copy glyph drawn for this
+  workspace. It inherits `currentColor`, follows the repository license and is
+  bundled inline by Tui. The success state reuses `svg/scope-switcher/check.svg`.
+
 - `svg/` — icons drawn for this workspace, following the repository license. The
   five full-colour file-type icons come from the design files.
+- `svg/console/conversation.svg` and `terminal.svg` — the exact artwork of
+  `IconTwoBubblesChat` and `IconTerminalCode` used by the Volcengine console.
+  Extracted from `@arco-design/iconbox-react-viking` 0.0.121 (ISC metadata).
+  SVG paths, viewBox and strokes are unchanged; the React wrapper is removed.
+- `svg/viking-bot/send.svg` and `attach.svg` — the exact `IconArrowDown` and
+  `IconPlus2` artwork used by the Volcengine VikingBot composer, from the same
+  0.0.121 package (ISC metadata). They retain their original paths and viewBox.
+- `svg/console/history-empty.svg` is an original geometric tray illustration
+  based on the supplied console screenshot. It follows this repository's license;
+  its outline and background follow theme colors.
 - `svg/arrow-right.svg` — the static artwork of `IconRightArrow` used by the
   Volcengine OpenViking console's `TerminalBody` quick commands. Extracted from
   `@arco-design/iconbox-react-viking` 0.0.121, whose package metadata declares
@@ -34,3 +48,14 @@ React imports these SVG files directly during its build.
 - `file-type-rules.json` — data rather than artwork: the file-name and extension
   rules that pick an icon, plus each icon's brand colour for light and dark
   backgrounds.
+
+- The VikingBot welcome (lightbulb/book/video), report and session controls are
+  original SVG artwork from `@arco-design/iconbox-react-viking` 0.0.134 (ISC),
+  used by `release/openviking/2026-11-12` at `3dbb7543f`. Paths remain unchanged;
+  React wrappers are removed. The new-session viewBox is cropped to match the
+  history icon's visual size. Both Console modes share these session-control
+  assets. No IconBox runtime is required.
+
+`viking-bot/remove.svg` is an OpenViking-authored close glyph under the repository license.
+
+- `svg/viking-bot/tool.svg` — unchanged `IconTool` artwork from the public MIT-licensed `@arco-design/web-react` 2.66.18, matching the tool row in `vikingdb-fe` release/openviking/2026-11-12.

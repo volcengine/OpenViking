@@ -1,13 +1,13 @@
 # Modules
 
-`file-browser` is implemented and wires the directory tree, the search and the preview together; `console` is still a placeholder that renders only a module name and a replaceable message.
+FileBrowser coordinates directory browsing, search and preview through `useFileBrowser`. Console provides a native command panel and standalone `useConsole`, alongside the ScopeCascade coordinator. Conversation services remain host-owned.
 
-Placeholder modules do not carry data props. A module loads its own data through a Hook, so the host supplies configuration and the controlled value, and the module reports changes through callbacks.
+Modules load native API data through their Hooks. Hosts supply configuration and controlled values; modules report changes through callbacks.
 
-| Module                           | Component     | Target capability |
-| -------------------------------- | ------------- | ----------------- |
-| [`file-browser`](./file-browser) | `FileBrowser` | File browser.     |
-| [`console`](./console)           | `Console`     | Console.          |
+| Module                           | Component                | Target capability |
+| -------------------------------- | ------------------------ | ----------------- |
+| [`file-browser`](./file-browser) | `FileBrowser`            | File browser.     |
+| [`console`](./console)           | `Console` / `useConsole` | Console.          |
 
 ## Preview
 
@@ -23,7 +23,7 @@ Import a component and its Props / Labels / Slots types from `@openviking/react/
 
 JavaScript does not load CSS. Import `@openviking/react/modules/<module>/style.css` for one module, `@openviking/react/modules/style.css` for all modules, or `@openviking/react/style.css` for the full library. Each stylesheet works independently. There is no aggregate `@openviking/react/modules` JavaScript entry.
 
-The current placeholders accept `className`, `style`, and `labels`. They do not require a Provider. Business Hooks, the shared Client, and `OpenVikingProvider` are planned and are not exported yet.
+Requests inherit `OpenVikingProvider` from `@openviking/react/client`; `useFileBrowser` and `useConsole` are also available independently. FileBrowser loads directories automatically; Console issues requests only when a command is submitted.
 
 ## Host responsibilities
 

@@ -19,6 +19,8 @@
     "rsbuild-plugin-workspace-dev": "^1.0.0"
   },
   "imports": {
+    "#console-conversation": "./docs/_demos/use-console-conversation.tsx",
+    "#console-transport": "./docs/_demos/console-transport.ts",
     "#scope-switcher-icons": "./docs/_demos/scope-switcher-icons.tsx",
     "#scope-switcher-source": "./docs/_demos/scope-switcher-source.ts",
     "#scope-switcher-requests": "./docs/_demos/scope-switcher-requests.ts",

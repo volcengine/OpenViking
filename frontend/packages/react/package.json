@@ -14,7 +14,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE.arco-design"
   ],
   "sideEffects": [
     "**/*.css"

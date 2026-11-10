@@ -4,9 +4,11 @@ English / [中文](README_CN.md)
 
 `modules/` organises Hooks and composite views around interactions that are completed together, keeping shared state and coordination inside the module. Hooks load requests, adapt data and hold state; composite views wire the data and operations a Hook returns into `components/`. The host assembles full pages.
 
-## Placeholder components available today
+Console exports a composite command view; it also exports standalone `useConsole`. Native requests, cancellation, retry and identity isolation are implemented; conversation services remain pending. FileBrowser uses `useFileBrowser` to load and coordinate directories, search and preview.
 
-`file-browser` is implemented: `useFileBrowser` loads the data and coordinates the directory, the search and the preview, and the `FileBrowser` composite view renders the tree and the preview. `console` is still a placeholder that renders only a module name and placeholder copy; its business Hook and interactions are still to come.
+## Available modules
+
+Console ships a native command panel; FileBrowser coordinates directory browsing, search and preview. Each module has public types and independent styles. The sections below distinguish current delivery from target capability.
 
 Because a module loads its own data, no prop carries data. A host supplies configuration, the controlled value and the copy; the module reports changes through callbacks.
 
@@ -59,11 +61,11 @@ React integration is provided by `OpenVikingProvider` from `@openviking/react/cl
 | `accountId`   | OpenViking account, which corresponds to the data space                                                                                                                                                        |
 | `userId`      | User within the account                                                                                                                                                                                        |
 | `resourceId`  | Current library; data-plane requests need it                                                                                                                                                                   |
-| `credentials` | `RequestCredentials` for `fetch`. Defaults to `same-origin`; the commercial edition sets `include` for cross-origin calls                                                                                      |
+| `credentials` | `RequestCredentials` for `fetch`. Defaults to `include`; override with `same-origin` or `omit` as needed                                                                                                       |
 
 Module components and standalone Hooks share one optional `requestOptions` override type, `OvRequestOptions` from `@openviking/react/client`, resolved field by field: **explicit module / Hook configuration → nearest Provider configuration → library default**. A nested Provider overrides its parent. An omitted field or `undefined` means inherit, while `baseURL: ''` explicitly returns to same-origin; an identity field omitted in the override inherits the Provider's value, and an explicit empty string clears it. Overrides never modify the parent Provider and do not affect other module instances. Most integrations configure the Provider once. The `FileBrowserProps` and `ConsoleProps` types already declare this field.
 
-The Provider is implemented; the business Hooks are not, so a module does not request anything yet. The host configures it once at the application root:
+The Provider, `useFileBrowser` and `useConsole` are implemented. FileBrowser loads directories automatically; Console requests only on explicit command submission. The host configures the Provider once at the application root:
 
 ```tsx
 import { OpenVikingProvider } from '@openviking/react/client';
@@ -102,7 +104,7 @@ Provider inheritance follows [React Context](https://react.dev/reference/react/u
 
 ## Business module breakdown
 
-The two module directories and their placeholder components exist; below are the target capabilities each will take on, none implemented yet. The components these composite views build on are also placeholders today, so a module's real implementation depends on those views landing first. Product onboarding, the resource and Skill import flows and sync configuration belong to the host, with no corresponding business module.
+The table below describes target capabilities. FileBrowser coordinates directories, search and preview, and Console commands are implemented; hosts supply conversation services. Product onboarding, the resource and Skill import flows and sync configuration belong to the host, with no corresponding business module.
 
 | Module         | Hook and business responsibility                                                                                                                                              | Composite view                                                                                                           |
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -121,19 +123,19 @@ History lists and version comparison start as preview capabilities of `file-brow
 - The composite view owns the search, directory and preview layout within the area. Pure view components such as `FileTree` and `FilePreview` stay independent and take on no data loading or cross-component coordination.
 - Entries such as connecting an agent or importing resources come in through host callbacks or slots; the module embeds no connection dialog, import flow or product onboarding. Product content such as quota hints also comes in through host slots.
 
-The interactions above are implemented: `useFileBrowser` loads the data and coordinates the directory, the search and the preview, and the `FileBrowser` composite view lays them out as the console's context panel does.
+The interactions above are implemented: `useFileBrowser` loads data and coordinates directory, search and preview, while `FileBrowser` renders the linked context panel.
 
 ### Interaction panel module
 
-`console` is planned to cover the whole panel shared by the conversation view and TUI, providing a unified `useConsole` Hook and a `Console` composite view:
+`console` covers the whole panel shared by the conversation view and TUI, exposing the `Console` composite view and the standalone `useConsole` Hook:
 
-- The Hook returns the current mode, common context, conversation and command data, state and operations together; mode switching and toolbar actions are coordinated inside the module, and a host may also use only the Hook and assemble the view.
+- The Hook manages the current mode, common context, conversation and command data, state and operations; the composite view coordinates mode switching and toolbar actions.
 - The conversation view and TUI use the same service, identity and host-supplied resource context; each keeps its own message history, command records and running state, preserved when switching modes.
 - Conversation capabilities include sessions, message streams, attachments, memory submission and compile actions; TUI capabilities include command definitions, execution, cancellation and execution records, with available commands following the capabilities the host provides.
-- The composite view owns mode switching, the common toolbar and the content area, dispatching operations by the current mode. `Tui` is consumed as an independently usable pure view component; the conversation view has no shared component yet and is implemented inside the module.
+- The composite view owns mode switching, the common toolbar and the content area, dispatching operations by the current mode. `Tui` is consumed as an independently usable pure view component; the conversation view reuses VikingBot, with service integration pending.
 - Opening a resource, locating an artifact or refreshing a directory is handed to the host through events, and coordination with `file-browser` does not depend on the other module's private state; sign-in, identity switching and product onboarding remain with the host.
 
-The interactions above and `useConsole` are still planned; only the `Console` placeholder component and base types are exported today.
+`Console` implements command execution, cancellation, retry, records and independent drafts. Its standalone `useConsole` Hook and `ConsoleOptions`, `ConsoleState` and `ConsoleResult` types are public APIs from the same module entry. Conversation sessions, streaming, attachments and memory submission remain planned. See the [Console docs](../../../../docs/docs/en/modules/console.mdx) for the supported command subset.
 
 ## Composition and extension boundaries
 
@@ -147,8 +149,8 @@ The interactions above and `useConsole` are still planned; only the `Console` pl
 
 ## Current state and development entry
 
-Each module uses its own kebab-case directory with `index.ts` as the single entry, and already ships a placeholder component, base types and an independent build entry. Once real business logic migrates, the Hook, the composite view and public types are exported from the same entry; no placeholder Hook or request-configuration API is provided today.
+Each module uses its own kebab-case directory. FileBrowser and Console export their composite views, standalone Hooks and input / return types from their module entries, with independent styles and build entries.
 
 Development commands and build entries are in the [UI workspace README](../../../../README.md), the package structure is in the [package README](../../README.md), and implementation constraints are in this directory's [AGENTS.md](./AGENTS.md).
 
-`@openviking/react/modules/<module>` is open, with no category-level aggregate JS entry. Module CSS provides both `@openviking/react/modules/style.css` and `@openviking/react/modules/<module>/style.css`, and the whole-package `@openviking/react/style.css` includes module styles too. Single-module CSS currently contains the placeholder view styles and must include the component styles it needs once the composite view migrates; using a Hook alone needs no CSS.
+`@openviking/react/modules/<module>` is open, with no category-level aggregate JS entry. Module CSS provides both `@openviking/react/modules/style.css` and `@openviking/react/modules/<module>/style.css`, and the whole-package `@openviking/react/style.css` includes module styles too. Console CSS includes Tui and VikingBot styles; other module CSS includes their current views; using a Hook alone needs no CSS.
