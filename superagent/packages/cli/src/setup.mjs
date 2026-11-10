@@ -1351,7 +1351,9 @@ function foundLine(runtimes) {
 }
 
 // Until some runtime can run: say why each cannot, and offer to log the
-// built-in Pi in to a model here. Resolves with the runtimes, or null to stop.
+// built-in Pi in to a model here. Resolves with the runtimes, or with the reason
+// it stopped: `quit` is the owner's own choice to log in elsewhere and run setup
+// again, which is not a failure; a machine setup cannot ask configured nothing.
 async function ensureRuntime({ prompter, env, detect, connect, live }, runtimes) {
   let detected = runtimes;
   while (!detected.some((runtime) => runtime.available)) {
@@ -1361,7 +1363,7 @@ async function ensureRuntime({ prompter, env, detect, connect, live }, runtimes)
     const later = t(`登录好其中一个后，重新运行 ${superagentCommand(env)} setup。`, `Log in to one of them, then run ${superagentCommand(env)} setup again.`);
     if (!prompter.tty || !connect.pi) {
       prompter.info(later);
-      return null;
+      return { stopped: 'unavailable' };
     }
     const next = await prompter.select(t('现在怎么办', 'What now'), [
       { label: t('用内置的 Pi，现在登录一个模型', 'Use the built-in Pi and log in to a model now'), value: 'pi',
@@ -1370,7 +1372,7 @@ async function ensureRuntime({ prompter, env, detect, connect, live }, runtimes)
     ], { back: false });
     if (next === 'quit') {
       prompter.info(later);
-      return null;
+      return { stopped: 'quit' };
     }
     // Pi takes the whole screen while it runs.
     live?.release();
@@ -1381,7 +1383,7 @@ async function ensureRuntime({ prompter, env, detect, connect, live }, runtimes)
       (again) => (again.some((runtime) => runtime.available)
         ? found(again.filter((runtime) => runtime.available).map((runtime) => runtime.label)) : t('还是没有能用的 agent', 'Still no usable agent')));
   }
-  return detected;
+  return { runtimes: detected };
 }
 
 // ---------------------------------------------------------------------------
@@ -1685,8 +1687,13 @@ async function setupFlow({
     }
   }
   if (!current) {
-    runtimes = await ensureRuntime({ prompter, env: probeEnv, detect, connect, live }, runtimes);
-    if (!runtimes) return 1;
+    const ensured = await ensureRuntime({ prompter, env: probeEnv, detect, connect, live }, runtimes);
+    // Logging in elsewhere and running setup again is the owner's own plan, so
+    // the installer must not call the release a failure over it; a machine that
+    // could not be asked configured nothing, which stays an error.
+    if (ensured.stopped === 'quit') return 0;
+    if (ensured.stopped) return 1;
+    runtimes = ensured.runtimes;
     memo.runtimes = runtimes;
   } else {
     // An instance that already runs keeps its model routes in its own DSH home;
