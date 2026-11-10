@@ -14,11 +14,12 @@ PEER = "X-OpenViking-Actor-Peer"
 
 def observe(app):
     """Record the headers of the gateway's OpenViking calls, keyed by path kind."""
-    calls = {"search": [], "write": [], "mcp": []}
+    calls = {"search": [], "search_body": [], "write": [], "mcp": []}
 
     async def handler(request):
         if request.path == "/api/v1/search/search":
             calls["search"].append(dict(request.headers))
+            calls["search_body"].append(await request.json())
         elif request.path.endswith("/messages/batch"):
             calls["write"].append(dict(request.headers))
         return None
@@ -74,11 +75,14 @@ def header(headers):
     return {k.lower(): v for k, v in headers.items()}.get(PEER.lower())
 
 
-async def test_header_scopes_recall_and_names_the_captured_user(running_gateway):
+async def test_header_reaches_recall_and_names_the_captured_user(running_gateway):
     app, client, admin, key, seen, writes = running_gateway
     calls = observe(app)
     await two_turns(client, key["key"], {PEER: " review-agent "})
     assert calls["search"] and all(header(h) == "review-agent" for h in calls["search"])
+    # Like the memory plugins by default, the peer goes only in the header, so the
+    # server's default peer_scope "all" still returns other peers' memories, with a penalty.
+    assert all("peer_scope" not in body for body in calls["search_body"])
     # The model upstream never sees the header.
     assert seen and all(header(h) is None for _, _, h in seen)
     messages = await delivered(app, writes)
@@ -313,7 +317,7 @@ async def test_anonymous_history_continues_across_peers(setup_kernel, credential
     assert alice.anonymous and bob.session == alice.session
 
 
-async def test_gateway_tool_calls_carry_the_peer(setup_kernel, credential, policy):
+async def test_gateway_tool_calls_do_not_carry_the_peer(setup_kernel, credential, policy):
     kernel, store, viking, _ = setup_kernel
     policy.update(gateway_tools=True)
     calls = []
@@ -336,5 +340,6 @@ async def test_gateway_tool_calls_carry_the_peer(setup_kernel, credential, polic
         result = await ToolExecutor(viking, store, prepared, credential, "", 1024).execute(call)
         assert not result["failed"]
         calls.append(viking.mcp.call_args.kwargs)
-    assert calls == [{"peer": "review-agent"}, {}]
+    # Like the memory plugins' MCP proxy by default, tools are not narrowed to the peer.
+    assert calls == [{}, {}]
     assert viking.recall_peers == ["review-agent", None]

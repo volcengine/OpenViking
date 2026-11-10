@@ -82,7 +82,7 @@ description: 签发把客户端接入 OpenViking 网关的网关密钥，并在�
 
 ### 每人一把密钥 {#one-key-per-person}
 
-记忆属于[网关密钥](#gateway-keys)背后的 OpenViking 用户，所以共用一把密钥的人也共用这位用户的记忆。请给每人签发一把密钥。想让不同客户端使用不同的上下文配置，或者想单独吊销某个客户端，再按客户端分开签发。[Peer](03-connect-clients.md#peer) 能在同一位用户的记忆里区分不同的交互对象，但持有密钥的人可以自己选 Peer，所以它代替不了分开签发密钥。
+记忆属于[网关密钥](#gateway-keys)背后的 OpenViking 用户，所以共用一把密钥的人也共用这位用户的记忆。请给每人签发一把密钥。想让不同客户端使用不同的上下文配置，或者想单独吊销某个客户端，再按客户端分开签发。[Peer](03-connect-clients.md#peer) 能在同一位用户的记忆里区分不同的交互对象，但其他 Peer 的记忆仍可能被召回，持有密钥的人也可以自己选 Peer，所以它代替不了分开签发密钥。
 
 ### 用户的 OpenViking API 密钥变了 {#when-the-openviking-key-changes}
 

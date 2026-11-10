@@ -11,7 +11,8 @@ from packaging.version import InvalidVersion, Version
 
 from .cache import TTLCache
 
-# OpenViking's actor peer view: retrieval adds this peer's memories and hides other peers'.
+# Sent on recall only, as the memory plugins do by default: recall adds this peer's memories,
+# and without a peer_scope other peers' memories still come back with a small score penalty.
 PEER_HEADER = "X-OpenViking-Actor-Peer"
 
 
@@ -39,7 +40,7 @@ class VikingClient:
         self.tools_cache, self.last_tools = TTLCache(ttl=300, capacity=1), None
 
     async def request(self, method, path, key, body=None, timeout=30, peer=None):
-        """``peer`` scopes retrieval to that peer; OpenViking's session routes ignore it."""
+        """``peer`` is the actor peer for recall; OpenViking's session routes ignore it."""
         try:
             async with self.http.request(
                 method,
@@ -195,7 +196,7 @@ class VikingClient:
 
         return await self.tools_cache.get("tools/list", load)
 
-    async def mcp(self, method, key, params=None, timeout=120, peer=None):
+    async def mcp(self, method, key, params=None, timeout=120):
         """Stateless Streamable HTTP MCP; accept both JSON and SSE responses."""
         from .protocols import SSEDecoder
 
@@ -207,7 +208,6 @@ class VikingClient:
                     "Accept": "application/json, text/event-stream",
                     "MCP-Protocol-Version": "2025-06-18",
                     "Accept-Encoding": "identity",
-                    **peer_header(peer),
                 },
                 json={
                     "jsonrpc": "2.0",

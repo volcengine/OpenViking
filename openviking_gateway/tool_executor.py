@@ -16,7 +16,7 @@ import async_timeout
 import orjson
 
 from .capture_store import Document
-from .client import VikingError, peer_argument
+from .client import VikingError
 from .config import MOUNT_PATH
 from .protocols import string_type
 from .state_store import get_state
@@ -277,12 +277,7 @@ class ToolExecutor:
                 raise ValueError("A local path requires a client shell or attachment")
         elif name == "download" and not has_shell(self.request.original):
             return error_result("download requires a client shell tool to fetch the file")
-        value = await self.viking.mcp(
-            "tools/call",
-            self.key,
-            {"name": name, "arguments": args},
-            **peer_argument(self.request.peer),
-        )
+        value = await self.viking.mcp("tools/call", self.key, {"name": name, "arguments": args})
         if upload:
             pattern, route = UPLOAD_URL, "/uploads"
         elif name == "download":

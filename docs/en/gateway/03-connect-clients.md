@@ -40,14 +40,14 @@ A client can change the settings of its key's context profile for a new conversa
 
 A conversation keeps the settings it started with, so a changed header takes effect in the next new conversation, for example with a new `X-OpenViking-Session` value. Like every `X-OpenViking-*` header, it is not forwarded to the provider.
 
-## Scope memory to a peer {#peer}
+## Tell memory apart by peer {#peer}
 
 When one key serves several counterparts, such as a bot that talks to many people as one OpenViking user, the client can name the counterpart of each request with an `X-OpenViking-Actor-Peer` header, for example `X-OpenViking-Actor-Peer: review-agent`. The value is an OpenViking [Peer](../getting-started/20-peers.md) ID, and the header has the same name as in OpenViking's own API and SDKs. With a peer, the gateway:
 
-- searches with that peer's view: recall and OpenViking tools see the user's own memories and that peer's, but not other peers' memories;
+- recalls with that peer: recall adds that peer's memories to the user's own. Other peers' memories can still be recalled, with a small score penalty, because the gateway keeps OpenViking's default `peer_scope` of `all`. OpenViking tools are not narrowed by the peer;
 - saves the request's user message with that `peer_id`, so OpenViking can extract memories about the peer when it commits the session. Assistant replies are saved without a peer.
 
-The peer belongs to each request, not to the conversation, and conversations are [recognized](#how-conversations-are-recognized) the same way with or without one. One conversation, such as a group chat a bot takes part in, can hold user messages from several peers: each message keeps the peer of the request that first sent it to the gateway, even after the client edits or drops earlier messages, and each request searches with its own peer.
+The peer belongs to each request, not to the conversation, and conversations are [recognized](#how-conversations-are-recognized) the same way with or without one. One conversation, such as a group chat a bot takes part in, can hold user messages from several peers: each message keeps the peer of the request that first sent it to the gateway, even after the client edits or drops earlier messages, and each request recalls with its own peer.
 
 A request without the header uses the key's [default peer](09-gateway-keys.md#default-peer), if the key has one; with neither, nothing changes. A blank header also falls back to the default. The value must be one path segment of letters, digits, `_`, `.` and `-`, with at most one `@`. Any other value gets 400 `peer_invalid` before the request reaches the provider. Like every `X-OpenViking-*` header, it is not forwarded to the provider.
 
