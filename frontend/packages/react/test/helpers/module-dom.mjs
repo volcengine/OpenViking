@@ -107,6 +107,10 @@ export function recordingFetch(handler) {
     const call = {
       path: parsed.pathname,
       uri: parsed.searchParams.get('uri') ?? '',
+      // 其余查询参数原样留着：有的用例要按 `limit` 之类的入参区分应答。
+      // The remaining query parameters stay available: some cases answer differently
+      // depending on an argument such as `limit`.
+      query: Object.fromEntries(parsed.searchParams),
       body: init?.body ? JSON.parse(String(init.body)) : undefined,
       init,
     };
