@@ -1,5 +1,5 @@
 import { Button } from '../../shared/components/button/button.js';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   useOvClient,
   useOvIdentity,
@@ -48,27 +48,31 @@ export function useFileBrowserAcl({
   const [opened, setOpened] = useState<string>();
   const [generation, setGeneration] = useState(0);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const latest = useRef({ client, requestOptions, options, refresh });
-  useEffect(() => {
-    latest.current = { client, requestOptions, options, refresh };
-  });
+  const context = useMemo(
+    () =>
+      client
+        ? { client, requestOptions: { ...requestOptions, signal } }
+        : undefined,
+    [client, requestOptions, signal],
+  );
   const enabled = Boolean(acl) && Boolean(client) && isAclTarget(uri);
   const resolver = options?.resolvePermission;
+  // Sync the active resource with the permission service, including navigation
+  // and account changes that do not originate in a click. Abort on scope change
+  // or unmount; aborted responses never publish a permission for the next scope.
   useEffect(() => {
-    if (!enabled || !uri) return;
+    if (!enabled || !uri || !context) return;
     const controller = new AbortController();
-    const current = latest.current;
-    if (!current.client) return;
     const composed = signal
       ? AbortSignal.any([controller.signal, signal])
       : controller.signal;
-    const context = {
-      client: current.client,
-      requestOptions: { ...current.requestOptions, signal: composed },
+    const request = {
+      ...context,
+      requestOptions: { ...context.requestOptions, signal: composed },
     };
     const load = resolver
-      ? resolver(uri, context)
-      : readPermission(context.client, uri, context.requestOptions);
+      ? resolver(uri, request)
+      : readPermission(request.client, uri, request.requestOptions);
     void load.then(
       (level) => {
         if (!composed.aborted) setPermission({ key, level });
@@ -78,7 +82,7 @@ export function useFileBrowserAcl({
       },
     );
     return () => controller.abort();
-  }, [enabled, key, uri, resolver, signal, generation]);
+  }, [enabled, key, uri, resolver, signal, generation, context]);
   const level =
     enabled && permission?.key === key ? permission.level : undefined;
   const text = aclLabels(locale, labels);
@@ -113,7 +117,7 @@ export function useFileBrowserAcl({
         </Button>
       ) : null,
     drawer:
-      enabled && uri && client && level === 'manage' ? (
+      enabled && uri && context && level === 'manage' ? (
         <AclModal
           key={key}
           uri={uri}
@@ -121,7 +125,7 @@ export function useFileBrowserAcl({
           text={text}
           locale={locale}
           triggerRef={triggerRef}
-          context={{ client, requestOptions: { ...requestOptions, signal } }}
+          context={context}
           accountId={identity.accountId}
           options={options}
           onClose={() => setOpened(undefined)}
@@ -129,9 +133,9 @@ export function useFileBrowserAcl({
             // Keep the Modal mounted while the manager probe refreshes; a downgrade
             // will remove the panel as soon as the authoritative check returns.
             setGeneration((value) => value + 1);
-            void latest.current.refresh();
+            void refresh();
             try {
-              latest.current.options?.onChange?.(report);
+              options?.onChange?.(report);
             } catch {
               // A host notification cannot undo a successful server mutation.
               return;

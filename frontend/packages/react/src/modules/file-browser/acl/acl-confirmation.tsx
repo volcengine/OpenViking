@@ -16,6 +16,9 @@ export function AclConfirmation({
   const descriptionId = useId();
   const restore = model.confirmation?.kind === 'restore';
   const removed = restore && model.report ? restoreDiff(model.report) : [];
+  // Focus the safe action in the committed confirmation DOM; the click that
+  // requests it runs before the Cancel button exists. No listener needs cleanup;
+  // AclModal restores focus to its heading after confirmation removal.
   useEffect(() => {
     cancel.current?.focus();
   }, []);

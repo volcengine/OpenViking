@@ -31,11 +31,9 @@ export function useAclReport({
   const [generation, setGeneration] = useState(0);
   const pending = useRef(false);
   const lifetime = useRef<AbortController | null>(null);
-  const latest = useRef({ context, onUpdated, readOnly });
-  useEffect(() => {
-    latest.current = { context, onUpdated, readOnly };
-  });
-
+  // The open panel synchronizes its resource ACL with the native service; URI,
+  // scope and retry can change independently of save events. Cleanup aborts reads
+  // and writes from this panel lifetime and discards their late responses.
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
@@ -46,7 +44,7 @@ export function useAclReport({
     setError(undefined);
     setConfirmation(undefined);
     setSaved(false);
-    const { client, requestOptions } = latest.current.context;
+    const { client, requestOptions } = context;
     const signal = requestOptions.signal
       ? AbortSignal.any([controller.signal, requestOptions.signal])
       : controller.signal;
@@ -65,7 +63,7 @@ export function useAclReport({
       },
     );
     return () => controller.abort();
-  }, [uri, open, generation]);
+  }, [uri, open, generation, context]);
 
   async function save(change?: {
     entries: FileBrowserAclEntry[];
@@ -74,7 +72,7 @@ export function useAclReport({
     const controller = lifetime.current;
     if (
       pending.current ||
-      latest.current.readOnly ||
+      readOnly ||
       !report ||
       !controller ||
       controller.signal.aborted
@@ -84,7 +82,7 @@ export function useAclReport({
     setPhase('saving');
     setError(undefined);
     setSaved(false);
-    const { client, requestOptions } = latest.current.context;
+    const { client, requestOptions } = context;
     const signal = requestOptions.signal
       ? AbortSignal.any([controller.signal, requestOptions.signal])
       : controller.signal;
@@ -99,7 +97,7 @@ export function useAclReport({
       setReport(value);
       setConfirmation(undefined);
       setSaved(true);
-      latest.current.onUpdated(value);
+      onUpdated(value);
     } catch (cause) {
       if (!signal.aborted) setError(toError(cause));
     } finally {
@@ -111,7 +109,7 @@ export function useAclReport({
   }
 
   function change(entries: FileBrowserAclEntry[]) {
-    if (!report || pending.current || latest.current.readOnly) return;
+    if (!report || pending.current || readOnly) return;
     const plan = planChange(report, normalizeEntries(entries));
     setSaved(false);
     setError(undefined);
@@ -129,8 +127,7 @@ export function useAclReport({
     retry: () => setGeneration((value) => value + 1),
     change,
     restore: () => {
-      if (!pending.current && !latest.current.readOnly)
-        setConfirmation({ kind: 'restore' });
+      if (!pending.current && !readOnly) setConfirmation({ kind: 'restore' });
     },
     cancel: () => {
       if (!pending.current) {

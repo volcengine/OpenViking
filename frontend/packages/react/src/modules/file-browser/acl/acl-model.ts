@@ -87,12 +87,19 @@ export function planChange(report: Report, next: Entry[]) {
 }
 
 export function restoreDiff(report: Report): Entry[] {
-  const inherited = new Set(
-    report.inherited_entries.map((entry) => entry.principal),
+  const inherited = new Map(
+    report.inherited_entries.map((entry) => [
+      entry.principal,
+      RANK[entry.level],
+    ]),
   );
   return report.direct_entries.filter(
     (entry) =>
-      !inherited.has(entry.principal) &&
-      !(entry.principal.startsWith('user:') && inherited.has('user:*')),
+      Math.max(
+        inherited.get(entry.principal) ?? 0,
+        entry.principal.startsWith('user:')
+          ? (inherited.get('user:*') ?? 0)
+          : 0,
+      ) < RANK[entry.level],
   );
 }

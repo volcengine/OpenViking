@@ -178,9 +178,6 @@ export function FileBrowser({
             dashboardLabels={labels?.dashboard}
             searchPlaceholder={text.searchPlaceholder}
             refreshLabel={text.refresh}
-            searchLoading={text.searchLoading}
-            searchEmpty={text.searchEmpty}
-            searchErrorLabel={text.searchFailed}
             retryLabel={text.retry}
           />
         </div>

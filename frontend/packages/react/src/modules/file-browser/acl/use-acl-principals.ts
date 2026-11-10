@@ -1,5 +1,5 @@
 import { toError } from '../fs-model.js';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { OvIdentityValue } from '../../../client/types.js';
 import type {
   FileBrowserAclContext,
@@ -22,7 +22,12 @@ export function useAclPrincipals({
   accountId?: OvIdentityValue;
   options?: FileBrowserAclOptions;
 }) {
-  const [page, setPage] = useState(1);
+  const key = JSON.stringify([type, keyword, open]);
+  const [paging, setPaging] = useState({ key, page: 1 });
+  const page = paging.key === key ? paging.page : 1;
+  // Page selection belongs to one query and picker lifetime. Adjust it before
+  // commit so A → B → A queries and reopening both start from page one.
+  if (paging.key !== key) setPaging({ key, page: 1 });
   const [generation, setGeneration] = useState(0);
   const [state, setState] = useState({
     key: '',
@@ -31,36 +36,27 @@ export function useAclPrincipals({
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error>();
-  const key = JSON.stringify([type, keyword]);
-  const live = useRef({ context, options, accountId });
-  useEffect(() => {
-    live.current = { context, options, accountId };
-  });
-
-  useEffect(() => {
-    setPage(1);
-  }, [key, open]);
+  const load = options?.listPrincipals;
+  // Synchronize the debounced query and page with the principal directory;
+  // typing, tab changes and reopening can all change the request. Clear its timer
+  // and abort on query/scope change or unmount; late responses are ignored.
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
     setLoading(true);
     setError(undefined);
     const timer = setTimeout(() => {
-      const current = live.current;
-      const inherited = current.context.requestOptions.signal;
+      const inherited = context.requestOptions.signal;
       const signal = inherited
         ? AbortSignal.any([controller.signal, inherited])
         : controller.signal;
       const request = {
-        ...current.context,
-        requestOptions: { ...current.context.requestOptions, signal },
+        ...context,
+        requestOptions: { ...context.requestOptions, signal },
       };
       const query = { type, keyword, page };
-      const load = current.options?.listPrincipals;
       void (
-        load
-          ? load(query, request)
-          : listPrincipals(query, request, current.accountId)
+        load ? load(query, request) : listPrincipals(query, request, accountId)
       ).then(
         (result) => {
           if (signal.aborted) return;
@@ -88,7 +84,7 @@ export function useAclPrincipals({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [open, type, keyword, key, page, generation]);
+  }, [open, type, keyword, key, page, generation, context, accountId, load]);
 
   return {
     items: state.key === key ? state.items : [],
@@ -96,7 +92,7 @@ export function useAclPrincipals({
     error,
     hasMore: state.key === key && state.hasMore,
     more: () => {
-      if (!loading) setPage((value) => value + 1);
+      if (!loading) setPaging({ key, page: page + 1 });
     },
     retry: () => setGeneration((value) => value + 1),
   };

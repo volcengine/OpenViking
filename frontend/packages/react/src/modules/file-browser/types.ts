@@ -245,12 +245,6 @@ export interface FileBrowserApi {
   selectedId: string | null;
   /** 当前资源 URI。Current resource URI. */
   currentUri: string | null;
-  /** 当前查询词。The current query. */
-  query: string;
-  /** 是否正在展示搜索结果。Whether search results are showing. */
-  searching: boolean;
-  /** 搜索是否进行中。Whether a search is running. */
-  searchLoading: boolean;
   /** 刷新是否进行中。Whether a refresh is running. */
   refreshing: boolean;
   /** 预览底部元信息，例如字符数与更新时间；没有时为 `undefined`。 */
@@ -268,15 +262,6 @@ export interface FileBrowserApi {
    * instead of showing a 403 as "no files".
    */
   treeError: Error | null;
-  /**
-   * 搜索请求本身的失败原因。与「搜索成功但没有结果」不同：前者要显示原因与重试，
-   * 后者才是空态文案。
-   *
-   * Why the search request failed. It differs from "the search succeeded but matched
-   * nothing": the former needs the reason and a retry, only the latter is the empty
-   * copy.
-   */
-  searchError: Error | null;
   /**
    * 当前资源预览的失败原因。选中了资源但读不出来时用它区分「读失败」与「什么
    * 都没选」。
@@ -308,8 +293,6 @@ export interface FileBrowserActions {
   refresh: () => Promise<void>;
   /** 切换预览页签。Switches the preview tab. */
   setPreviewKey: (key: string) => void;
-  /** 更新查询词；空串回到目录树。Updates the query; an empty string returns to the tree. */
-  setQuery: (query: string) => void;
 }
 
 /** Internal options for the composed FileBrowser loader. */

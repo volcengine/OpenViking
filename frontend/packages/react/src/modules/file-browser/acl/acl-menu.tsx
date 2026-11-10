@@ -29,6 +29,9 @@ export function AclMenu({
     setOpen(false);
     trigger.current?.focus();
   };
+  // Menu focus and outside-pointer detection require the committed DOM. Move
+  // focus only after its buttons exist; remove the document listener on close
+  // and unmount so a closed menu no longer handles unrelated pointer events.
   useEffect(() => {
     if (!open) return;
     menu.current?.querySelector<HTMLButtonElement>('button')?.focus();
