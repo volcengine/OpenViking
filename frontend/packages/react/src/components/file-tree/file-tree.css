@@ -16,11 +16,11 @@
   --ov-ui-file-tree-indent: 20px;
   --ov-ui-file-tree-text: var(
     --ov-ui-color-text-1,
-    var(--ov-ui-text-1-default, #0b0b0f)
+    var(--ov-ui-text-1-default)
   );
   --ov-ui-file-tree-text-muted: var(
     --ov-ui-color-text-3,
-    var(--ov-ui-text-3-default, #6e718c)
+    var(--ov-ui-text-3-default)
   );
   /* 图标比名称浅一档：名称是正文，图标只是辅助识别，与设计稿的 fill-3 一致。 */
   /* Icons sit one step lighter than names: the name is the content, the icon only
@@ -37,36 +37,36 @@
    */
   --ov-ui-file-tree-icon: var(
     --ov-ui-color-text-3,
-    var(--ov-ui-text-3-default, #6e718c)
+    var(--ov-ui-text-3-default)
   );
   --ov-ui-file-tree-row-hover: var(
     --ov-ui-color-bg-5,
-    var(--ov-ui-bg-5-default, #f1f2f9)
+    var(--ov-ui-bg-5-default)
   );
   /* Match the console's pale selected surface rather than a dark neutral fill. */
   --ov-ui-file-tree-row-selected: var(
     --ov-ui-color-primary-light,
-    var(--ov-ui-primary-light-default, #f5f7ff)
+    var(--ov-ui-primary-light-default)
   );
   --ov-ui-file-tree-guide: var(
     --ov-ui-color-border-1,
-    var(--ov-ui-border-1-default, #f0f2fa)
+    var(--ov-ui-border-1-default)
   );
   --ov-ui-file-tree-spinner-track: var(
     --ov-ui-color-border-3,
-    var(--ov-ui-border-3-default, #d7daea)
+    var(--ov-ui-border-3-default)
   );
   --ov-ui-file-tree-spinner: var(
     --ov-ui-color-primary,
-    var(--ov-ui-primary-default, #5252ff)
+    var(--ov-ui-primary-default)
   );
   --ov-ui-file-tree-action: var(
     --ov-ui-color-primary,
-    var(--ov-ui-primary-default, #5252ff)
+    var(--ov-ui-primary-default)
   );
   --ov-ui-file-tree-warning: var(
     --ov-ui-color-warning,
-    var(--ov-ui-warning-default, #b26a00)
+    var(--ov-ui-warning-default)
   );
 
   display: flex;
@@ -367,10 +367,7 @@
 }
 
 .ov-file-tree__state-row[data-tone='error'] {
-  color: var(
-    --ov-ui-color-status-error,
-    var(--ov-ui-status-error-default, #c43838)
-  );
+  color: var(--ov-ui-color-status-error, var(--ov-ui-status-error-default));
 }
 
 .ov-file-tree__state {

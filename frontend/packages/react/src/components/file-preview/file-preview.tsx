@@ -227,8 +227,9 @@ export const FilePreview: FilePreviewComponent = forwardRef<
         panelClass="ov-file-preview__panel"
         levelKey={levelKey}
         onLevelChange={(key) => {
-          if (editing.saving || editing.loadingEdit) return;
-          editing.discard(activeTab);
+          if (editing.saving || editing.loadingEdit || key === levelKey) return;
+          // Controlled requests may be declined; reset only when the rendered level changes.
+          if (fileTab?.activeLevelKey === undefined) editing.discard(activeTab);
           selectLevel(key);
         }}
         text={tabText}

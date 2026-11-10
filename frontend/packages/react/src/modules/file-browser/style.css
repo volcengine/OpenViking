@@ -2,8 +2,6 @@
 @import '../../shared/components/popover/popover.css';
 @import '../../shared/components/tooltip/tooltip.css';
 @import '../../shared/components/resizable/resizable-handle.css';
-@import '../../components/file-tree/file-tree.css';
-@import '../../components/file-preview/file-preview.css';
-@import '@ark-design/ui/file-viewer/style/index.css';
-@import '@ark-design/ui/markdown-renderer/style/index.css';
+@import '../../components/file-tree/style.css';
+@import '../../components/file-preview/style.css';
 @import './file-browser.css';

@@ -89,6 +89,7 @@
   /* 语义色。 */
   --ov-ui-status-success-default: #1f9d55;
   --ov-ui-shadow-default: #0f172a;
+  --ov-ui-shadow-control-default: rgb(0 0 0 / 5%);
   --ov-ui-focus-default: #5252ff;
   --ov-ui-fill-hover-default: #f1f2f9;
   --ov-ui-status-error-default: #c43838;

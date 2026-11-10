@@ -25,7 +25,8 @@
   font-size: 12px;
   font-weight: 400;
   line-height: 22px;
-  box-shadow: 0 1px 1px rgb(0 0 0 / 5%);
+  box-shadow: 0 1px 1px
+    var(--ov-ui-color-shadow-control, var(--ov-ui-shadow-control-default));
   cursor: pointer;
   transition:
     border-color 160ms ease,
