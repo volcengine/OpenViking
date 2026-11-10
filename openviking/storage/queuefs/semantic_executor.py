@@ -270,7 +270,6 @@ class SemanticTreeExecutor:
         self._file_md5s = dict(file_md5s or {})
         self._artifact_files = [path.strip("/") for path in (artifact_files or []) if path]
         self._file_abstracts = dict(file_abstracts or {})
-        self.file_abstracts: Dict[str, str] = {}
         self._file_vector_actions = dict(file_vector_actions or {})
         self._file_ingest_options = {
             uri.rstrip("/"): IngestOptions.from_value(options)
@@ -779,18 +778,12 @@ class SemanticTreeExecutor:
             )
             if reuse_pending:
                 self._pending_abstract_dirs.add(dir_uri)
-            directory_only = self._generation_trigger == "content_write_parent_refresh"
-            if (directory_only or reuse_pending) and not self._skip_vectorization:
-                # Refresh only directory records. Read current L2 summaries in
-                # one batch for other files, including coalesced earlier writes.
-                # Keep the triggering write's summaries, also when it deliberately
-                # left existing file vectors unchanged.
-                missing_abstracts = required_file_paths - self._file_abstracts.keys()
-                if not directory_only:
-                    missing_abstracts = required_file_paths - {
-                        uri for uri, abstract in self._file_abstracts.items() if abstract.strip()
-                    }
-                    missing_abstracts -= self._changed_paths
+            if reuse_pending and not self._skip_vectorization:
+                # Reuse existing sibling summaries without replacing changed file work.
+                missing_abstracts = required_file_paths - {
+                    uri for uri, abstract in self._file_abstracts.items() if abstract.strip()
+                }
+                missing_abstracts -= self._changed_paths
                 if missing_abstracts:
                     try:
                         abstracts = await self._processor._load_transfer_file_summaries(
@@ -1239,25 +1232,7 @@ class SemanticTreeExecutor:
         file_content = None
         try:
             summary_dict = None
-            directory_only = self._generation_trigger == "content_write_parent_refresh"
-            if directory_only:
-                need_vectorize = False
-                self._file_change_status[file_path] = file_path in self._changed_paths
-                if file_path in self._file_abstracts and (
-                    file_path in self._changed_paths or self._file_abstracts[file_path].strip()
-                ):
-                    summary_dict = {
-                        "name": file_name,
-                        "summary": self._file_abstracts[file_path],
-                    }
-                    self._record_summary_source(parent_uri, file_path, "abstract")
-                else:
-                    summary_dict = await self._read_existing_summary(
-                        file_path, require_nonempty=True
-                    )
-                    if summary_dict is not None:
-                        self._record_summary_source(parent_uri, file_path, "overview")
-            elif self._incremental_update:
+            if self._incremental_update:
                 content_changed = await self._check_file_content_changed(file_path)
                 self._file_change_status[file_path] = content_changed
                 node = self._nodes.get(parent_uri)
@@ -1334,8 +1309,6 @@ class SemanticTreeExecutor:
 
         if self._closed:
             return
-        if file_path in self._changed_paths:
-            self.file_abstracts[file_path] = str(summary_dict.get("summary") or "")
         from openviking.storage.context_update_plan import (
             IndexAction,
             SemanticTreeEntry,
@@ -1531,15 +1504,6 @@ class SemanticTreeExecutor:
         consume_pending: int,
         missing_summary_entries: Optional[int] = None,
     ) -> AbstractOverviewWriteResult:
-        if (
-            self._generation_trigger == "content_write_parent_refresh"
-            and not await self._viking_fs.exists(dir_uri, ctx=self._ctx)
-        ):
-            # Best-effort guard before sidecar lock acquisition can create its
-            # parent directory. A concurrent delete after this check may still race.
-            logger.info("Skipping semantic write for deleted directory: %s", dir_uri)
-            self._stale = True
-            return AbstractOverviewWriteResult(wrote=False)
         metadata: Dict[str, Any] = {
             "generated_by": {
                 "component": "SemanticProcessor",
