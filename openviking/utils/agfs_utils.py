@@ -416,6 +416,7 @@ def _serialize_s3_plugin_params(s3_config: Any) -> Dict[str, Any]:
     """Serialize user-facing S3 config into Rust s3fs plugin parameters."""
     directory_marker_mode = _get_config_value(s3_config, "directory_marker_mode")
     return {
+        "cache_enabled": _get_config_value(s3_config, "cache_enabled", True),
         "bucket": _get_config_value(s3_config, "bucket"),
         "region": _get_config_value(s3_config, "region"),
         "access_key_id": _get_config_value(s3_config, "access_key"),

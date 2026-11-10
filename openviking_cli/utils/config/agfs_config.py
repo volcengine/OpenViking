@@ -26,6 +26,12 @@ class DirectoryMarkerMode(str, Enum):
 class S3Config(BaseModel):
     """Configuration for S3 backend."""
 
+    # 原生S3缓存不跨进程失效；共享写入方需显式关闭，单进程默认行为保持不变。
+    cache_enabled: bool = Field(
+        default=True,
+        description="Enable process-local S3 metadata caches; disable for concurrent writers in different processes.",
+    )
+
     bucket: Optional[str] = Field(default=None, description="S3 bucket name")
 
     region: Optional[str] = Field(

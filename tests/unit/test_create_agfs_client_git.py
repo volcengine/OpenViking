@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from openviking_cli.utils.config import GitConfig, GitLocalConfig
+from openviking_cli.utils.config.agfs_config import AGFSPathLockConfig
 from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
 
 
@@ -20,6 +21,7 @@ class _FakeAgfsConfig:
         self.path = str(path)
         self.backend = "local"
         self.s3 = None
+        self.pathlock = AGFSPathLockConfig()
         # cache section consumed by RagfsBindingConfig.to_binding_dict()
         self.cache = SimpleNamespace(model_dump=lambda **kwargs: {})
         # queuefs default

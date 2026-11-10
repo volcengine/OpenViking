@@ -411,6 +411,10 @@ def create_app(
         if gateway is not None:
             await stack.enter_async_context(gateway.router.lifespan_context(gateway))
         await _initialize_runtime_state(app, service, config, owns_service=owns_service)
+        # HTTP与headless角色使用相同provider就绪接缝，避免Core已启动却未发布运行时心跳。
+        ready_hook = getattr(getattr(service, "_agfs_client", None), "mark_runtime_ready", None)
+        if ready_hook is not None:
+            ready_hook()
         stack.push_async_callback(app.state.server_runtime.stop)
         if gateway is not None and config.get_effective_auth_mode() == "dev":
             from openviking_gateway.app import seed_defaults

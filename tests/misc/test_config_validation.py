@@ -655,6 +655,7 @@ def test_generate_plugin_config_strips_legacy_multiwrite_fields(tmp_path):
 
     assert s3_backup["backend"] == "s3fs"
     assert s3_backup["params"] == {
+        "cache_enabled": True,
         "bucket": "backup-bucket",
         "region": "cn-beijing",
         "access_key_id": "test-access-key",
@@ -1332,3 +1333,22 @@ def test_watch_leader_provider_config():
     assert OpenVikingConfig.from_dict({"watch_leader_provider": "local"}).watch_leader_provider == "local"
     with pytest.raises(ValueError, match="watch_leader_provider"):
         OpenVikingConfig.from_dict({"watch_leader_provider": "redis"})
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_s3_metadata_cache_flag_reaches_native_plugin(enabled):
+    """共享写入场景的缓存开关必须穿过schema与原生参数装配，不能被静默丢弃。"""
+    from openviking.utils.agfs_utils import _serialize_s3_plugin_params
+
+    config = S3Config(cache_enabled=enabled)
+    decoded = S3Config.model_validate_json(config.model_dump_json())
+    assert _serialize_s3_plugin_params(decoded)["cache_enabled"] is enabled
+    assert (
+        _serialize_s3_plugin_params({"cache_enabled": enabled})["cache_enabled"]
+        is enabled
+    )
+
+
+def test_s3_metadata_cache_default_preserves_single_writer_behavior():
+    from openviking.utils.agfs_utils import _serialize_s3_plugin_params
+
+    assert _serialize_s3_plugin_params(S3Config())["cache_enabled"] is True
