@@ -383,6 +383,17 @@ class EmbeddingMsg:
                     f"{payload_type} payload contains unsupported fields: {sorted(unknown_fields)}"
                 )
             context_data = dict(payload_data.get("context_data") or {})
+            # TaskWorkQueueMiddleware stores the authoritative owner on the
+            # envelope, but older queued payloads may not repeat it inside
+            # payload.context_data. Backfill the envelope identity so the
+            # account validation below cannot drop otherwise valid work.
+            # Envelope fields win only when the payload context is absent.
+            envelope_account_id = data.get("_task_account_id") or data.get("account_id")
+            envelope_user_id = data.get("_task_user_id") or data.get("user_id")
+            if envelope_account_id:
+                context_data.setdefault("account_id", envelope_account_id)
+            if envelope_user_id:
+                context_data.setdefault("owner_user_id", envelope_user_id)
             if payload_type == "embed":
                 raw_patch = payload_data.get("field_patch")
                 payload: EmbeddingPayload = EmbedPayload(
