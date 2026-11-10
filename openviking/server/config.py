@@ -175,6 +175,7 @@ class UserConfig(BaseModel):
     memory_policy: Optional[UserMemoryPolicy] = None
     ttl: Optional[TTLConfig] = None
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
+    team_compile_status: Literal["open", "closed", "suspend"] = "closed"
     agent_evolution: DeprecatedUserAgentEvolutionConfig = Field(
         default_factory=DeprecatedUserAgentEvolutionConfig,
         exclude=True,
@@ -204,6 +205,7 @@ class UserSettingsPatch(BaseModel):
     memory_policy: Optional[UserMemoryPolicy] = None
     ttl: Optional[TTLConfig] = None
     privacy: Optional[PrivacyConfig] = None
+    team_compile_status: Literal["open", "closed", "suspend"] = "closed"
 
 
 def validate_config_input(
