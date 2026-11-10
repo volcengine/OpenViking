@@ -34,4 +34,4 @@ To consume the complete identity in a separate content component, subscribe to t
 
 ## View props
 
-`ScopeCascade` requires `controller` and `locale`. Optional `levelNames` is a library/space/user tuple, `labels` customizes loading/search/empty/error copy, and `retryLabel` changes the retry button. HTML attributes such as `className` and `style` are forwarded to the layout. Hooks need no CSS; the default view uses `@openviking/react/modules/scope-cascade/style.css`.
+`ScopeCascade` requires `controller`. Explicit `locale` overrides the nearest module or Provider; omission inherits that scope and ultimately defaults to `en-US`. Optional `levelNames` is a library/space/user tuple, `labels` customizes loading/search/empty/error copy, and `retryLabel` changes the retry button. HTML attributes such as `className` and `style` are forwarded to the layout. Hooks need no CSS; the default view uses `@openviking/react/modules/scope-cascade/style.css`.

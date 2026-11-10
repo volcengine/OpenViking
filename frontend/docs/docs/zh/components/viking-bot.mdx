@@ -45,40 +45,40 @@
 
 ### VikingBotProps
 
-| 属性                 | 类型                                             | 默认值           | 说明                                                |
-| -------------------- | ------------------------------------------------ | ---------------- | --------------------------------------------------- |
-| `messages`           | `readonly VikingBotMessage[]`                    | 必填             | 当前会话的消息。                                    |
-| `className`          | `string`                                         | —                | 附加到根元素的类名。                                |
-| `locale`             | `'zh-CN' \| 'en-US'`                             | 继承上层 / en-US | 选择内置中英文文案。                                |
-| `streaming`          | `VikingBotStreamingState`                        | —                | 助手仍在生成时追加的片段。                          |
-| `draft`              | `string`                                         | —                | 受控草稿；不传时不展示输入区。                      |
-| `attachments`        | `readonly VikingBotAttachment[]`                 | —                | 宿主已选中的附件。                                  |
-| `isSending`          | `boolean`                                        | —                | 是否正在回复；为真时停止动作替代发送。              |
-| `isAvailable`        | `boolean`                                        | `true`           | 是否可接受输入。                                    |
-| `unavailableMessage` | `string`                                         | —                | 不可用时的说明。                                    |
-| `emptyState`         | `ReactNode`                                      | —                | 首条消息之前替代消息列表显示的内容。                |
-| `header`             | `ReactNode`                                      | —                | 头部插槽。                                          |
-| `footer`             | `ReactNode`                                      | —                | 输入区上方的插槽。                                  |
-| `children`           | `ReactNode`                                      | —                | 替换整个主体。                                      |
-| `messageList`        | `ReactNode`                                      | —                | 替换消息列表，用于宿主自带渲染底座。                |
-| `composer`           | `ReactNode`                                      | —                | 替换输入区。                                        |
-| `interaction`        | `Omit<VikingBotInteractionProps, 'locale'>`      | —                | 待确认交互；存在时替代输入区。                      |
-| `listKey`            | `string`                                         | —                | 身份作用域标识；值变化时重置展示状态。              |
-| `composerRef`        | `RefObject<VikingBotComposerRef \| null>`        | —                | 输入区的命令式入口。                                |
-| `onDraftChange`      | `(value: string) => void`                        | —                | 草稿变化时触发。                                    |
-| `onFilesAdded`       | `(files: readonly File[]) => void`               | —                | 上报用户选择或拖入的文件。                          |
-| `onAttachmentRemove` | `(attachment: VikingBotAttachment) => void`      | —                | 移除一个附件。                                      |
-| `onSend`             | `(draft: VikingBotDraft) => void`                | —                | 上报发送意图；不传时不能发送。                      |
-| `onCancel`           | `() => void`                                     | —                | 停止正在进行的回复。                                |
-| `onOpenUri`          | `(uri: string) => void`                          | —                | 打开消息中引用的资源。                              |
-| `onCopy`             | `(text: string) => void`                         | —                | 接管消息文本复制；省略时用户消息使用 Ark 内置复制。 |
-| `onMessageAction`    | `(messageId: string, actionKey: string) => void` | —                | 触发一条消息声明的动作。                            |
-| `labels`             | `VikingBotLabels`                                | locale           | 可替换文案。                                        |
-| `sessions`           | `VikingBotSessions`                              | —                | 宿主提供的会话数据与操作                            |
-| `headerActions`      | `ReactNode`                                      | —                | 可选顶栏扩展控件                                    |
-| `quickInputs`        | `readonly VikingBotQuickInput[]`                 | —                | 宿主提供的快捷输入                                  |
-| `onQuickInputSelect` | `(input: VikingBotQuickInput) => void`           | —                | 接管默认草稿填入行为                                |
-| `references`         | `VikingBotReferences`                            | —                | 受控引用选择与资源候选                              |
+| 属性                 | 类型                                             | 默认值           | 说明                                                                  |
+| -------------------- | ------------------------------------------------ | ---------------- | --------------------------------------------------------------------- |
+| `messages`           | `readonly VikingBotMessage[]`                    | 必填             | 当前会话的消息。                                                      |
+| `className`          | `string`                                         | —                | 附加到根元素的类名。                                                  |
+| `locale`             | `'zh-CN' \| 'en-US'`                             | 继承上层 / en-US | 选择内置中英文文案。                                                  |
+| `streaming`          | `VikingBotStreamingState`                        | —                | 助手仍在生成时追加的片段。                                            |
+| `draft`              | `string`                                         | —                | 受控草稿；不传时不展示输入区。                                        |
+| `attachments`        | `readonly VikingBotAttachment[]`                 | —                | 宿主已选中的附件。                                                    |
+| `isSending`          | `boolean`                                        | —                | 是否正在回复；为真时停止动作替代发送。                                |
+| `isAvailable`        | `boolean`                                        | `true`           | 是否可接受输入。                                                      |
+| `unavailableMessage` | `string`                                         | —                | 不可用时的说明。                                                      |
+| `emptyState`         | `ReactNode`                                      | —                | 首条消息之前替代消息列表显示的内容。                                  |
+| `header`             | `ReactNode`                                      | —                | 头部插槽。                                                            |
+| `footer`             | `ReactNode`                                      | —                | 输入区上方的插槽。                                                    |
+| `children`           | `ReactNode`                                      | —                | 替换整个主体。                                                        |
+| `messageList`        | `ReactNode`                                      | —                | 替换消息列表，用于宿主自带渲染底座。                                  |
+| `composer`           | `ReactNode`                                      | —                | 替换输入区。                                                          |
+| `interaction`        | `VikingBotInteractionProps`                      | —                | 待确认交互；存在时替代输入区；可通过 `locale` 覆盖 VikingBot 的语言。 |
+| `listKey`            | `string`                                         | —                | 身份作用域标识；值变化时重置展示状态。                                |
+| `composerRef`        | `RefObject<VikingBotComposerRef \| null>`        | —                | 输入区的命令式入口。                                                  |
+| `onDraftChange`      | `(value: string) => void`                        | —                | 草稿变化时触发。                                                      |
+| `onFilesAdded`       | `(files: readonly File[]) => void`               | —                | 上报用户选择或拖入的文件。                                            |
+| `onAttachmentRemove` | `(attachment: VikingBotAttachment) => void`      | —                | 移除一个附件。                                                        |
+| `onSend`             | `(draft: VikingBotDraft) => void`                | —                | 上报发送意图；不传时不能发送。                                        |
+| `onCancel`           | `() => void`                                     | —                | 停止正在进行的回复。                                                  |
+| `onOpenUri`          | `(uri: string) => void`                          | —                | 打开消息中引用的资源。                                                |
+| `onCopy`             | `(text: string) => void`                         | —                | 接管消息文本复制；省略时用户消息使用 Ark 内置复制。                   |
+| `onMessageAction`    | `(messageId: string, actionKey: string) => void` | —                | 触发一条消息声明的动作。                                              |
+| `labels`             | `VikingBotLabels`                                | locale           | 可替换文案。                                                          |
+| `sessions`           | `VikingBotSessions`                              | —                | 宿主提供的会话数据与操作                                              |
+| `headerActions`      | `ReactNode`                                      | —                | 可选顶栏扩展控件                                                      |
+| `quickInputs`        | `readonly VikingBotQuickInput[]`                 | —                | 宿主提供的快捷输入                                                    |
+| `onQuickInputSelect` | `(input: VikingBotQuickInput) => void`           | —                | 接管默认草稿填入行为                                                  |
+| `references`         | `VikingBotReferences`                            | —                | 受控引用选择与资源候选                                                |
 
 ## 待确认交互
 
@@ -108,4 +108,4 @@
 
 独立样式入口为 `@openviking/react/components/viking-bot/style.css`，已包含主题基线，可独立消费。
 
-交互区的 `labels.answer` 设置文本答案的无障碍名称，`labels.other` 设置默认自定义输入提示；请求自带的 `allowCustomInput.placeholder` 优先。内嵌交互区继承 VikingBot 的 `locale`。
+交互区的 `labels.answer` 设置文本答案的无障碍名称，`labels.other` 设置默认自定义输入提示；请求自带的 `allowCustomInput.placeholder` 优先。内嵌交互区继承 VikingBot 的 `locale`，也可通过 `interaction.locale` 局部覆盖。

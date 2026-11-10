@@ -34,4 +34,4 @@
 
 ## 视图属性
 
-`ScopeCascade` 必填 `controller`，`locale` 可选并继承上层语言。可选 `levelNames` 按库/空间/用户顺序指定名称，`labels` 设置加载、搜索、空态和错误文案，`retryLabel` 设置重试按钮文案。`className`、`style` 等 HTML 属性透传给布局容器。单独使用 Hook 不需要 CSS；默认视图引入 `@openviking/react/modules/scope-cascade/style.css`。
+`ScopeCascade` 必填 `controller`，`locale` 可选并覆盖最近的模块或 Provider；省略时继承该作用域，最终默认 `en-US`。可选 `levelNames` 按库/空间/用户顺序指定名称，`labels` 设置加载、搜索、空态和错误文案，`retryLabel` 设置重试按钮文案。`className`、`style` 等 HTML 属性透传给布局容器。单独使用 Hook 不需要 CSS；默认视图引入 `@openviking/react/modules/scope-cascade/style.css`。

@@ -8,7 +8,10 @@ import {
   ScopeSelector,
   ScopeSwitcher,
 } from '@openviking/react/components/scope-switcher';
-import { VikingBot } from '@openviking/react/components/viking-bot';
+import {
+  VikingBot,
+  VikingBotSessionActions,
+} from '@openviking/react/components/viking-bot';
 import { Console } from '@openviking/react/modules/console';
 import { ScopeCascade } from '@openviking/react/modules/scope-cascade';
 
@@ -48,16 +51,42 @@ test('module locale scopes host slots and allows component Props to override it'
   assert.match(html, /CLI 直接操作上下文/);
 });
 
-test('a conversation locale can override its containing Console', () => {
+test('a conversation locale scopes its header and footer while preserving child overrides', () => {
   const html = render(
     h(
       OpenVikingProvider,
       { locale: 'zh-CN' },
-      h(Console, { conversation: { locale: 'en-US' } }),
+      h(Console, {
+        locale: 'zh-CN',
+        conversation: {
+          locale: 'en-US',
+          headerActions: h('div', null, tree(), tree('zh-CN')),
+          footer: tree(),
+        },
+        slots: { toolbar: tree() },
+      }),
     ),
   );
   assert.match(html, /Welcome to VikingBot/);
   assert.doesNotMatch(html, /欢迎使用 VikingBot/);
+  assert.equal(html.match(/No files yet/g)?.length, 2);
+  assert.equal(html.match(/暂无文件/g)?.length, 2);
+});
+
+test('standalone session actions scope their extra slot and isolate sibling content', () => {
+  const html = render(
+    h(
+      OpenVikingProvider,
+      { locale: 'zh-CN' },
+      h(VikingBotSessionActions, {
+        locale: 'en-US',
+        extra: h('div', null, tree(), tree('zh-CN')),
+      }),
+      tree(),
+    ),
+  );
+  assert.equal(html.match(/No files yet/g)?.length, 1);
+  assert.equal(html.match(/暂无文件/g)?.length, 2);
 });
 
 test('VikingBot custom children inherit its local language scope', () => {
