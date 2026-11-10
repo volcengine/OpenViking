@@ -19,7 +19,7 @@ import {
 describe('runtime catalog', () => {
   it('owns runtime ids, aliases, static models, efforts, and capabilities', () => {
     assert.equal(DEFAULT_RUNTIME_ID, 'codex');
-    assert.deepEqual(RUNTIME_IDS, ['codex', 'traex', 'claude', 'volc', 'pi', 'durable', 'dsh', 'opencode']);
+    assert.deepEqual(RUNTIME_IDS, ['codex', 'traex', 'claude', 'volc', 'pi', 'durable', 'dsh', 'opencode', 'agy']);
     assert.deepEqual(RUNTIME_ALIASES, {
       codex: 'codex',
       traex: 'traex',
@@ -37,6 +37,8 @@ describe('runtime catalog', () => {
       dsh: 'dsh',
       'deepseek-harness': 'dsh',
       opencode: 'opencode',
+      agy: 'agy',
+      antigravity: 'agy',
     });
     assert.deepEqual(getRuntimeDefinition('claude').models, ['sonnet', 'opus', 'haiku', 'fable']);
     assert.deepEqual(getRuntimeDefinition('claude').efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
@@ -103,11 +105,16 @@ describe('runtime catalog', () => {
       sessionAuthority: 'preserve-process',
       agentTools: 'core',
     });
+    assert.deepEqual(getRuntimeDefinition('agy').directAliases, ['agy', 'antigravity']);
+    assert.deepEqual(getRuntimeDefinition('agy').models, []);
+    assert.equal(getRuntimeDefinition('agy').ovIsolation, 'config-home');
+    assert.deepEqual(getRuntimeDefinition('agy').capabilities, getRuntimeDefinition('opencode').capabilities);
     assert.deepEqual(RUNTIME_IDS.map((id) => [id, getRuntimeDefinition(id).capabilities.agentTools]), [
       ['codex', 'core'], ['traex', 'core'], ['claude', 'core'], ['volc', 'lark-cli'], ['pi', 'core'],
       ['durable', 'core'],
       ['dsh', 'core'],
       ['opencode', 'core'],
+      ['agy', 'core'],
     ]);
     assert.equal(Object.isFrozen(RUNTIME_CATALOG), true);
     assert.equal(Object.isFrozen(getRuntimeDefinition('codex').capabilities), true);
@@ -164,6 +171,10 @@ describe('runtime catalog', () => {
       ['opencode:anthropic/claude-sonnet-5', {
         runtime: 'opencode', model: 'anthropic/claude-sonnet-5', canonical: 'anthropic/claude-sonnet-5',
       }],
+      ['agy', { runtime: 'agy', model: '', canonical: 'agy' }],
+      ['antigravity', { runtime: 'agy', model: '', canonical: 'agy' }],
+      ['agy:', { runtime: 'agy', model: '', canonical: 'agy' }],
+      ['agy:gemini-3.8-flash-low', { runtime: 'agy', model: 'gemini-3.8-flash-low', canonical: 'gemini-3.8-flash-low' }],
       ['foo:bar', { runtime: 'codex', model: 'foo:bar', canonical: 'foo:bar' }],
       ['Sonnet', { runtime: 'codex', model: 'Sonnet', canonical: 'Sonnet' }],
       ['ARK', { runtime: 'codex', model: 'ARK', canonical: 'ARK' }],
@@ -275,14 +286,14 @@ describe('runtime catalog dependency direction', () => {
     const coordinator = source('agent-runtime.mjs');
     const compositionRoot = source('runtime-factory.mjs');
     assert.match(commands, /from ['"]\.\/runtime-catalog\.mjs['"]/);
-    assert.doesNotMatch(commands, /from ['"]\.\/(?:traex|claude|volc|pi|opencode)\.mjs['"]/);
+    assert.doesNotMatch(commands, /from ['"]\.\/(?:traex|claude|volc|pi|opencode|agy)\.mjs['"]/);
     assert.doesNotMatch(commands, /\.(?:setModel|setEffort|rotateSession|interruptTurn|deliverBatch)\s*\(/);
-    assert.doesNotMatch(coordinator, /\b(?:TRAE?X|CLAUDE|VOLC|PI|DURABLE|OPENCODE)_(?:MODELS|EFFORTS)\b/);
-    assert.doesNotMatch(coordinator, /from ['"]\.\/(?:codex|traex|claude|volc|pi|durable|opencode)\.mjs['"]/);
-    for (const adapter of ['codex', 'traex', 'claude', 'volc', 'pi', 'durable', 'opencode']) {
+    assert.doesNotMatch(coordinator, /\b(?:TRAE?X|CLAUDE|VOLC|PI|DURABLE|OPENCODE|AGY)_(?:MODELS|EFFORTS)\b/);
+    assert.doesNotMatch(coordinator, /from ['"]\.\/(?:codex|traex|claude|volc|pi|durable|opencode|agy)\.mjs['"]/);
+    for (const adapter of ['codex', 'traex', 'claude', 'volc', 'pi', 'durable', 'opencode', 'agy']) {
       assert.match(compositionRoot, new RegExp(`from ['"]\\./${adapter}\\.mjs['"]`));
     }
-    for (const adapter of ['codex.mjs', 'traex.mjs', 'claude.mjs', 'volc.mjs', 'pi.mjs', 'durable.mjs', 'opencode.mjs']) {
+    for (const adapter of ['codex.mjs', 'traex.mjs', 'claude.mjs', 'volc.mjs', 'pi.mjs', 'durable.mjs', 'opencode.mjs', 'agy.mjs']) {
       assert.match(source(adapter), /from ['"]\.\/runtime-catalog\.mjs['"]/, adapter);
     }
   });

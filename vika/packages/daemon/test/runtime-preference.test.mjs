@@ -52,6 +52,7 @@ test('uses the same stable runtime selectors as setup', () => {
   assert.equal(runtimeManifestSelector('claude'), 'claude:');
   assert.equal(runtimeManifestSelector('pi'), 'pi');
   assert.equal(runtimeManifestSelector('traex'), 'traex');
+  assert.equal(runtimeManifestSelector('agy'), 'agy');
   assert.equal(runtimeManifestSelector('volc'), 'ark');
   assert.throws(() => runtimeManifestSelector('missing'), /Unknown runtime/);
 });

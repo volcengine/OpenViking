@@ -149,7 +149,7 @@ function bundledCliSection(config) {
   ].join('\n');
 }
 
-// Codex, TraeX, Claude, Pi, Durable and OpenCode: the whole policy, delivered
+// Codex, TraeX, Claude, Pi, Durable, OpenCode and Antigravity: the whole policy, delivered
 // through the Core tools.
 export function assembleConversationPolicy(config = {}) {
   return joinSections([

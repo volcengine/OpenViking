@@ -8,6 +8,7 @@
     "CLAUDE_BIN": "claude",
     "PI_BIN": "",
     "OPENCODE_BIN": "",
+    "AGY_BIN": "",
     "DSH_BIN": "dsh",
     "VIKA_WEIXIN_LONG_POLL_TIMEOUT_MS": "35000",
     "VIKA_LOG_LEVEL": "info",
@@ -31,6 +32,7 @@
     "VIKA_DURABLE_EFFORT": "medium",
     "VIKA_DURABLE_MODEL": "",
     "VIKA_OPENCODE_MODEL": "",
+    "VIKA_AGY_MODEL": "",
     "FALLBACK_MODEL": "gpt-5.6-sol",
     "VIKA_HISTORY_LIMIT": "30"
   },

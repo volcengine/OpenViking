@@ -238,6 +238,7 @@ export function getConfig() {
     claudeBin: process.env.CLAUDE_BIN || 'claude',
     piBin: process.env.PI_BIN || managedPiBin(),
     opencodeBin: process.env.OPENCODE_BIN || 'opencode',
+    agyBin: process.env.AGY_BIN || 'agy',
     initialModel: process.env.VIKA_MODEL || '',
     codexEffort: enumEnv('VIKA_CODEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']),
     traexEffort: enumEnv('VIKA_TRAEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
@@ -259,6 +260,7 @@ export function getConfig() {
       ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     ),
     opencodeModel: process.env.VIKA_OPENCODE_MODEL || '',
+    agyModel: process.env.VIKA_AGY_MODEL || '',
     dshBin: process.env.DSH_BIN || 'dsh',
     // Model routes are DSH's own settings document, not a daemon setting and not
     // a manifest field: DSH's own settings service is the only writer, and

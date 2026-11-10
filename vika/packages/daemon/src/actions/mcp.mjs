@@ -8,7 +8,7 @@ import { actionEndpoint, callTool, listTools } from './client.mjs';
 import { parseUniqueJson } from '../unique-json.mjs';
 import { inlineImageBlocks } from '../inline-images.mjs';
 
-// Stdio MCP adapter for local runtimes (Codex, TraeX, Claude, Pi, DSH, OpenCode).
+// Stdio MCP adapter for local runtimes (Codex, TraeX, Claude, Pi, DSH, OpenCode, Antigravity).
 // It relays tools/list and tools/call to the Core and renders results; nothing
 // else.
 const MAX_REQUEST_BYTES = 1_000_000;

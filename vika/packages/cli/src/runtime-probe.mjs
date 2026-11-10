@@ -9,6 +9,7 @@ import { spawn, spawnDetached } from '../../daemon/src/platform/index.mjs';
 import { sanitizeAgentChildEnv, terminateProcessTree } from '../../daemon/src/process-utils.mjs';
 import { captureStartupStderr } from '../../daemon/src/runtime-diagnostics.mjs';
 import { safeError } from '../../daemon/src/logger.mjs';
+import { agyHandshakeProblem } from '../../daemon/src/agy-runtime.mjs';
 import { writeControlPatch } from '../../daemon/src/dsh-control.mjs';
 import {
   DSH_BRIDGE_DAEMON_METHODS, DSH_BRIDGE_VERSION,
@@ -37,7 +38,7 @@ const DSH_PROBE_METHODS = Object.freeze([
 // error is reported to `onModels` as `null`, never treated as a failed probe:
 // the routes are DSH's own configuration, and this probe runs keyless.
 function probeInitialize(bin, {
-  args, label, request, onAccepted = () => {}, bridge = null, env, spawnImpl, timeoutMs,
+  args, label, request, onAccepted = () => {}, bridge = null, validate = () => '', env, spawnImpl, timeoutMs,
 }) {
   return new Promise((resolve) => {
     let child;
@@ -101,8 +102,11 @@ function probeInitialize(bin, {
           continue;
         }
         if (message?.id !== 1) continue;
-        if (message.error || !message.result || typeof message.result !== 'object' || Array.isArray(message.result)) {
-          finish(false, `${label} rejected initialize`);
+        const problem = message.error || !message.result || typeof message.result !== 'object' || Array.isArray(message.result)
+          ? `${label} rejected initialize`
+          : validate(message.result);
+        if (problem) {
+          finish(false, problem);
         } else {
           onAccepted(child);
           if (bridge) {
@@ -253,17 +257,23 @@ export async function probeDsh(bin, { env = process.env, spawnImpl = spawn, time
   }
 }
 
+const ACP_INITIALIZE = Object.freeze({ jsonrpc: '2.0', params: {
+  protocolVersion: 1,
+  clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+  clientInfo: { name: 'vika-setup', version: '1' },
+} });
+
 // OpenCode ACP. OpenCode 1 and 2 both answer, so version gating happens
 // separately.
 export function probeAcp(bin, { env = process.env, spawnImpl = spawn, timeoutMs = 8000 } = {}) {
+  return probeInitialize(bin, { args: ['acp'], label: 'ACP', request: ACP_INITIALIZE, env, spawnImpl, timeoutMs });
+}
+
+// Antigravity ACP. The handshake needs no login; `agy models` proves that.
+export function probeAgyAcp(bin, { env = process.env, spawnImpl = spawn, timeoutMs = 8000 } = {}) {
   return probeInitialize(bin, {
-    args: ['acp'],
-    label: 'ACP',
-    request: { jsonrpc: '2.0', params: {
-      protocolVersion: 1,
-      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-      clientInfo: { name: 'vika-setup', version: '1' },
-    } },
+    args: ['acp'], label: 'ACP', request: ACP_INITIALIZE,
+    validate: agyHandshakeProblem,
     env, spawnImpl, timeoutMs,
   });
 }

@@ -201,6 +201,7 @@ test('runtimes: installed and logged-in CLIs are offered, the rest say what is m
     { id: 'pi', available: true, model: 'pi' },
     { id: 'durable', available: false, model: 'durable' },
     { id: 'opencode', available: false, model: 'opencode' },
+    { id: 'agy', available: false, model: 'agy' },
     { id: 'dsh', available: false, model: 'dsh' },
   ]);
   assert.equal(runtimes[0].bin, path.join(bin, 'codex'));
@@ -242,7 +243,7 @@ test('runtimes: a Pi with no model points the user at vika pi', async () => {
     execFileImpl: async () => ({ stdout: 'No models available.\n' }),
   });
   assert.deepEqual(runtimes.map(({ id, available }) => [id, available]), [
-    ['codex', false], ['claude', false], ['pi', false], ['durable', false], ['opencode', false], ['dsh', false],
+    ['codex', false], ['claude', false], ['pi', false], ['durable', false], ['opencode', false], ['agy', false], ['dsh', false],
   ]);
   assert.match(runtimes[2].note, /vika pi/);
 });
@@ -351,6 +352,130 @@ test('OpenCode: an installed supported 1.x CLI is offered after an ACP handshake
   assert.equal(runtime.bin, path.join(bin, 'opencode'));
   assert.equal(runtime.binEnv, 'OPENCODE_BIN');
   assert.match(runtime.note, /1\.19\.5/);
+});
+
+function agyFixture(t, name = 'agy') {
+  const bin = tempDir(t, 'vika-agy-');
+  fs.writeFileSync(path.join(bin, name), '#!/bin/sh\n', { mode: 0o755 });
+  return bin;
+}
+
+test('Antigravity: an installed, compatible and logged-in CLI is offered', async (t) => {
+  const bin = agyFixture(t);
+  const probes = [];
+  const seen = [];
+  const runtime = (await detectRuntimes({
+    env: { PATH: bin }, piBin: '/managed/pi.js',
+    agyProbe: async (command) => { probes.push(command); return { compatible: true }; },
+    execFileImpl: async (command, args) => {
+      if (command.endsWith('agy')) seen.push(args);
+      return { stdout: args[0] === '--version' ? '1.5.3\n' : '' };
+    },
+  })).find(({ id }) => id === 'agy');
+  assert.equal(runtime.installed, true);
+  assert.equal(runtime.available, true);
+  assert.equal(runtime.bin, path.join(bin, 'agy'));
+  assert.equal(runtime.binEnv, 'AGY_BIN');
+  assert.equal(runtime.label, 'Antigravity');
+  assert.match(runtime.note, /1\.5\.3/);
+  assert.deepEqual(probes, [path.join(bin, 'agy')]);
+  assert.deepEqual(seen, [['--version'], ['models']]);
+});
+
+test('Antigravity: not logged in is reported and not offered', async (t) => {
+  const bin = agyFixture(t);
+  const runtime = (await detectRuntimes({
+    env: { PATH: bin }, piBin: '/managed/pi.js',
+    agyProbe: async () => ({ compatible: true }),
+    execFileImpl: async (command, args) => {
+      if (command.endsWith('agy') && args[0] === 'models') throw Object.assign(new Error('exit 1'), { stdout: '', stderr: 'Error: Please sign in to view available models.\n' });
+      return { stdout: '1.5.3\n' };
+    },
+  })).find(({ id }) => id === 'agy');
+  assert.equal(runtime.installed, true);
+  assert.equal(runtime.available, false);
+  assert.match(runtime.note, /agy/);
+  assert.match(runtime.note, /(?:未登录|not logged in)/);
+});
+
+test('Antigravity: a model listing that fails for another reason is not reported as a login problem', async (t) => {
+  const bin = agyFixture(t);
+  const runtime = (await detectRuntimes({
+    env: { PATH: bin }, piBin: '/managed/pi.js',
+    agyProbe: async () => ({ compatible: true }),
+    execFileImpl: async (command, args) => {
+      if (command.endsWith('agy') && args[0] === 'models') throw Object.assign(new Error('exit 1'), { stdout: '', stderr: 'starting\nError: timed out waiting for available models\n' });
+      return { stdout: '1.5.3\n' };
+    },
+  })).find(({ id }) => id === 'agy');
+  assert.equal(runtime.available, false);
+  assert.doesNotMatch(runtime.note, /未登录|not logged in/);
+  assert.match(runtime.note, /timed out waiting for available models/);
+});
+
+test('Antigravity: the login check runs agy models with OpenViking filtered out', async (t) => {
+  const bin = agyFixture(t);
+  const home = tempDir(t, 'vika-agy-home-');
+  const gemini = path.join(home, '.gemini');
+  fs.mkdirSync(path.join(gemini, 'config'), { recursive: true });
+  fs.mkdirSync(path.join(gemini, 'antigravity-cli'), { recursive: true });
+  fs.writeFileSync(path.join(gemini, 'antigravity-cli', 'antigravity-oauth-token'), 'token');
+  const owner = JSON.stringify({ mcpServers: { openviking: { command: 'ov' }, control: { command: 'control' } } });
+  fs.writeFileSync(path.join(gemini, 'config', 'mcp_config.json'), owner);
+  let seen = null;
+  const runtime = (await detectRuntimes({
+    env: { PATH: bin, HOME: home }, piBin: '/managed/pi.js',
+    agyProbe: async () => ({ compatible: true }),
+    execFileImpl: async (command, args, options) => {
+      if (command.endsWith('agy') && args[0] === 'models') {
+        const dir = path.join(options.env.HOME, '.gemini');
+        seen = {
+          home: options.env.HOME,
+          servers: Object.keys(JSON.parse(fs.readFileSync(path.join(dir, 'config', 'mcp_config.json'), 'utf8')).mcpServers),
+          token: fs.readFileSync(path.join(dir, 'antigravity-cli', 'antigravity-oauth-token'), 'utf8'),
+        };
+      }
+      return { stdout: args[0] === '--version' ? '1.5.3\n' : '' };
+    },
+  })).find(({ id }) => id === 'agy');
+  assert.equal(runtime.available, true);
+  assert.notEqual(seen.home, home);
+  assert.deepEqual(seen.servers, ['control']);
+  assert.equal(seen.token, 'token');
+  assert.equal(fs.existsSync(seen.home), false);
+  assert.equal(fs.readFileSync(path.join(gemini, 'config', 'mcp_config.json'), 'utf8'), owner);
+});
+
+test('Antigravity: another ACP agent behind agy is reported and not offered', async (t) => {
+  const bin = agyFixture(t);
+  const runtime = (await detectRuntimes({
+    env: { PATH: bin }, piBin: '/managed/pi.js',
+    agyProbe: async () => ({ compatible: false, reason: 'ACP unrecognised ACP agent' }),
+    execFileImpl: async (command, args) => {
+      if (args[0] === 'models') assert.fail('login is checked only after the handshake');
+      return { stdout: '1.5.3\n' };
+    },
+  })).find(({ id }) => id === 'agy');
+  assert.equal(runtime.available, false);
+  assert.match(runtime.note, /unrecognised ACP agent/);
+});
+
+test('Antigravity: AGY_BIN is authoritative, and a bare name is a PATH lookup', async (t) => {
+  const bin = agyFixture(t, 'agy-custom');
+  const located = (await detectRuntimes({
+    env: { PATH: bin, AGY_BIN: 'agy-custom' }, piBin: '/managed/pi.js',
+    agyProbe: async () => ({ compatible: true }),
+    execFileImpl: async () => ({ stdout: '1.5.3\n' }),
+  })).find(({ id }) => id === 'agy');
+  assert.equal(located.bin, path.join(bin, 'agy-custom'));
+  assert.equal(located.available, true);
+  const missing = (await detectRuntimes({
+    env: { PATH: bin, AGY_BIN: 'agy-absent' }, piBin: '/managed/pi.js',
+    execFileImpl: async () => ({ stdout: '' }),
+  })).find(({ id }) => id === 'agy');
+  assert.equal(missing.bin, null);
+  assert.equal(missing.available, false);
+  assert.match(missing.note, /agy-absent/);
 });
 
 test('OpenCode: an unsupported 2.x CLI is reported and not offered', async (t) => {

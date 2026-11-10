@@ -279,6 +279,25 @@ export const RUNTIME_CATALOG = Object.freeze({
       agentTools: 'core',
     },
   }),
+  agy: runtimeDefinition({
+    id: 'agy',
+    ovIsolation: 'config-home',
+    aliases: ['agy', 'antigravity'],
+    directAliases: ['agy', 'antigravity'],
+    canonicalDefault: 'agy',
+    // Antigravity encodes the effort in the model id suffix (see `agy models`),
+    // so there is no separate effort control. A session/prompt sent during a
+    // live turn ends that turn early, so input arriving mid-turn must wait.
+    capabilities: {
+      modelCatalog: 'dynamic',
+      effortControl: 'unsupported',
+      activeInput: 'queue-next-turn',
+      scopePolicy: 'any',
+      outputOwnership: 'runtime',
+      sessionAuthority: 'preserve-process',
+      agentTools: 'core',
+    },
+  }),
 });
 
 export const RUNTIME_IDS = frozenStrings(Object.keys(RUNTIME_CATALOG));

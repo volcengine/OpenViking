@@ -19,13 +19,22 @@ import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runt
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { prepareOpencodeConfigHome } from './ov-isolation.mjs';
 
-const OPENCODE_RUNTIME = getRuntimeDefinition('opencode');
 const MAX_LINE_BYTES = 5_000_000;
 const START_TIMEOUT_MS = 30_000;
 const START_STABILITY_MS = 250;
 const CONTROL_TIMEOUT_MS = 15_000;
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_CAP_MS = 30_000;
+// JSON-RPC parse/request/method/params errors, and ACP's auth-required and
+// resource-not-found: answered without running the prompt. -32603 is not here:
+// OpenCode 1.19.5 answers it for a provider failure, after the user message
+// is already in the transcript.
+const PROMPT_REFUSED_CODES = new Set([-32700, -32600, -32601, -32602, -32000, -32002]);
+// Updates that prove a turn ran. Others (available_commands_update,
+// config_option_update) arrive on their own after session/new.
+const TURN_UPDATE_KINDS = new Set([
+  'user_message_chunk', 'agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update',
+]);
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -38,7 +47,7 @@ function hasToolInput(rawInput) {
 function appendBounded(current, chunk, label) {
   const next = current + chunk;
   if (Buffer.byteLength(next, 'utf8') > MAX_LINE_BYTES) {
-    throw new Error(`opencode ${label} exceeded local limit`);
+    throw new Error(`${label} exceeded local limit`);
   }
   return next;
 }
@@ -53,9 +62,24 @@ export function sanitizeOpencodeEnv(environment, profile = '', actions = null, c
 // turn/steer, a prompt sent during a live turn runs only after it, so this
 // adapter is queue-next-turn. The Core's agent tools load as a per-instance
 // stdio MCP server; the conversation policy is an instruction file pinned via
-// a daemon-owned OPENCODE_CONFIG.
+// a daemon-owned OPENCODE_CONFIG. Other ACP runtimes extend this class and
+// override the hooks below (the runtime id, the launch line, the session
+// parameters, the model calls, the tool frames); Antigravity is agy.mjs.
 export class OpencodeAgent {
   constructor(config, store, logger, options = {}) {
+    const runtime = getRuntimeDefinition(options.runtimeId ?? 'opencode');
+    this.runtimeLabel = options.runtimeLabel ?? runtime.id;
+    this.logPrefix = options.logPrefix ?? runtime.id;
+    this.binConfigKey = options.binConfigKey ?? `${runtime.id}Bin`;
+    this.modelConfigKey = options.modelConfigKey ?? `${runtime.id}Model`;
+    this.modelSettingKey = options.modelSettingKey ?? `${runtime.id}_model`;
+    this.policyVersion = options.policyVersion ?? 'opencode-acp-v1';
+    // Session ids survive restarts; the activity counter does not.
+    this.instanceId = randomUUID();
+    // The session/load in progress, tied to its process so that a dead
+    // process's cleanup cannot end a newer load's replay.
+    this.replay = null;
+    this.replayedChunks = null;
     this.config = config;
     this.store = store;
     this.logger = logger;
@@ -72,9 +96,9 @@ export class OpencodeAgent {
     this.reconnectCapMs = options.reconnectCapMs ?? RECONNECT_CAP_MS;
 
     const cognition = store.getCognitionState?.()
-      ?? { runtime: OPENCODE_RUNTIME.id, epoch: 1, authorityToken: null };
-    this.runtime = OPENCODE_RUNTIME.id;
-    this.capabilities = OPENCODE_RUNTIME.capabilities;
+      ?? { runtime: runtime.id, epoch: 1, authorityToken: null };
+    this.runtime = runtime.id;
+    this.capabilities = runtime.capabilities;
     this.cognitionEpoch = options.cognitionEpoch ?? cognition.epoch;
     this.authorityToken = options.authorityToken ?? cognition.authorityToken ?? '';
     this.sessionPersistence = options.sessionPersistence !== false;
@@ -85,9 +109,9 @@ export class OpencodeAgent {
 
     this.systemPrompt = assembleConversationPolicy(config);
     this.model = options.model
-      ?? store.getSetting?.('opencode_model')
+      ?? store.getSetting?.(this.modelSettingKey)
       ?? options.initialModel
-      ?? config.opencodeModel
+      ?? config[this.modelConfigKey]
       ?? '';
 
     this.sessionId = null;
@@ -101,6 +125,8 @@ export class OpencodeAgent {
     this.modelWorking = false;
     this.modelStartedAtMs = null;
     this.turnError = null;
+    this.turnAcknowledged = false;
+    this.cancelledOwner = null;
     this.activeItems = [];
     this.activeOwner = null;
     this.queue = [];
@@ -136,7 +162,7 @@ export class OpencodeAgent {
     return createHash('sha256')
       .update(this.systemPrompt).update('\0')
       .update(this.config.workspace).update('\0')
-      .update('opencode-acp-v1').digest('hex');
+      .update(this.policyVersion).digest('hex');
   }
 
   get state() {
@@ -204,20 +230,11 @@ export class OpencodeAgent {
     const model = this.model;
     const configPath = this._writeRuntimeFiles();
     return new Promise((resolve, reject) => {
-      const args = ['acp', '--cwd', this.config.workspace];
-      const env = {
-        ...sanitizeOpencodeEnv(process.env, this._larkProfile(),
-          agentToolEnv(this.config, this.authorityToken), this.config),
-        // Pins the conversation policy instruction and the personal_agent MCP
-        // server without editing the user's own opencode.json.
-        OPENCODE_CONFIG: configPath,
-        // OpenCode's own OpenViking plugin stays off: its global config folder
-        // is a Vika-owned copy without it (ov-isolation.mjs).
-        XDG_CONFIG_HOME: prepareOpencodeConfigHome(path.join(this.runtimeDir, 'config-home'), process.env),
-      };
+      const args = this._spawnArgs();
+      const env = this._spawnEnv(configPath);
       let child;
       try {
-        child = this._spawn(this.config.opencodeBin, args, {
+        child = this._spawn(this.config[this.binConfigKey], args, {
           cwd: this.config.workspace,
           env,
           shell: false,
@@ -246,15 +263,16 @@ export class OpencodeAgent {
           this.child = null;
           this.connected = false;
         }
+        this._rejectRpcsOf(child, new Error(`${this.runtimeLabel} connection lost`));
         this._terminateProcessTree(child, 'SIGKILL');
         this._cleanupRuntimeFiles();
         reject(error);
       };
-      const timer = setTimeout(() => failStart(new Error('opencode ACP start timed out')), this.startTimeoutMs);
+      const timer = setTimeout(() => failStart(new Error(`${this.runtimeLabel} ACP start timed out`)), this.startTimeoutMs);
       timer.unref?.();
 
       child.stdin?.on('error', (error) => {
-        if (this.child === child) this.logger.warn('opencode_stdin_error', { error: safe(error) });
+        if (this.child === child) this.logger.warn(`${this.logPrefix}_stdin_error`, { error: safe(error) });
       });
       child.stdout?.setEncoding('utf8');
       child.stderr?.setEncoding('utf8');
@@ -271,7 +289,7 @@ export class OpencodeAgent {
       });
       child.once('exit', (code, signal) => {
         if (!ready) {
-          const error = new Error(`opencode exited during startup (code ${code}, signal ${signal})`);
+          const error = new Error(`${this.runtimeLabel} exited during startup (code ${code}, signal ${signal})`);
           if (startupError) error.message += `; stderr: ${startupError.slice(-3000)}`;
           failStart(error);
           return;
@@ -284,22 +302,20 @@ export class OpencodeAgent {
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
         clientInfo: { name: 'vika', version: '1' },
       }, this.startTimeoutMs).then(async (result) => {
-        if (!/opencode/i.test(result?.agentInfo?.name ?? '')) {
-          throw new Error('unrecognised ACP agent');
-        }
+        this._assertAgent(result);
         if (this.resumeRequested && this.sessionId) {
           try {
-            const loaded = await this._requestOn(child, 'session/load', {
-              sessionId: this.sessionId,
-              cwd: this.config.workspace,
-              mcpServers: [],
-            });
-            this._captureModelOptions(loaded?.configOptions ?? []);
+            const loaded = await this._loadSession(child);
+            this._captureModelOptions(loaded);
             this.sessionInitialized = true;
-            this.needsHistoryPrefix = false;
+            this.needsHistoryPrefix = await this._loadNeedsHistory();
           } catch (error) {
+            // This process is finished; its load says nothing about the
+            // session a later process has resumed by now.
+            if (settled || this.child !== child) throw error;
+            if (this._isLoadFatal(error)) throw error;
             // The stored transcript is gone; start fresh with journal catch-up.
-            this.logger.warn('opencode_session_load_failed_fresh_start', { error: safe(error) });
+            this.logger.warn(`${this.logPrefix}_session_load_failed_fresh_start`, { error: safe(error) });
             this.sessionId = null;
             this.sessionInitialized = false;
             await this.store.prepareOVContext?.(this.cognitionEpoch);
@@ -327,11 +343,16 @@ export class OpencodeAgent {
     });
   }
 
-  _writeRuntimeFiles() {
+  _createRuntimeDir() {
     this._cleanupRuntimeFiles();
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-opencode-'));
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), `vika-${this.runtime}-`));
     try { fs.chmodSync(directory, 0o700); } catch {}
     this.runtimeDir = directory;
+    return directory;
+  }
+
+  _writeRuntimeFiles() {
+    const directory = this._createRuntimeDir();
     this.promptPath = path.join(directory, 'instructions.md');
     fs.writeFileSync(this.promptPath, this.systemPrompt, { encoding: 'utf8', mode: 0o600 });
     const tools = agentToolServer(this.config, this.authorityToken);
@@ -353,6 +374,69 @@ export class OpencodeAgent {
     return this.configPath;
   }
 
+  _spawnArgs() {
+    return ['acp', '--cwd', this.config.workspace];
+  }
+
+  _spawnEnv(configPath) {
+    return {
+      ...sanitizeOpencodeEnv(process.env, this._larkProfile(),
+        agentToolEnv(this.config, this.authorityToken), this.config),
+      // Pins the conversation policy instruction and the personal_agent MCP
+      // server without editing the user's own opencode.json.
+      OPENCODE_CONFIG: configPath,
+      // OpenCode's own OpenViking plugin stays off: its global config folder
+      // is a Vika-owned copy without it (ov-isolation.mjs).
+      XDG_CONFIG_HOME: prepareOpencodeConfigHome(path.join(this.runtimeDir, 'config-home'), process.env),
+    };
+  }
+
+  _assertAgent(result) {
+    if (!/opencode/i.test(result?.agentInfo?.name ?? '')) {
+      throw new Error('unrecognised ACP agent');
+    }
+  }
+
+  // Fields session/new and session/load share. OpenCode takes its MCP servers
+  // and instructions from OPENCODE_CONFIG instead.
+  _sessionParams() {
+    return { mcpServers: [] };
+  }
+
+  // ACP streams the transcript as updates before session/load answers. They
+  // are history, not this turn, so _handleSessionUpdate only counts them.
+  async _loadSession(child) {
+    const replay = { child, chunks: 0 };
+    this.replay = replay;
+    try {
+      const loaded = await this._requestOn(child, 'session/load', {
+        sessionId: this.sessionId,
+        cwd: this.config.workspace,
+        ...this._sessionParams(),
+      });
+      this.replayedChunks = replay.chunks;
+      return loaded;
+    } finally {
+      if (this.replay === replay) this.replay = null;
+    }
+  }
+
+  // Whether a failed session/load must fail the start instead of opening a
+  // fresh session. OpenCode has no such case.
+  _isLoadFatal() {
+    return false;
+  }
+
+  // Whether a session that loaded still needs the journal catch-up. A
+  // transcript with content keeps whatever catch-up is still owed. An empty one
+  // never received a prompt: a session can be published before its first one
+  // (a reconnect, a runtime switch), so the catch-up goes to the first inbound.
+  async _loadNeedsHistory() {
+    if (this.replayedChunks !== 0) return this.needsHistoryPrefix;
+    await this.store.prepareOVContext?.(this.cognitionEpoch);
+    return true;
+  }
+
   _cleanupRuntimeFiles() {
     const directory = this.runtimeDir;
     this.runtimeDir = null;
@@ -369,17 +453,19 @@ export class OpencodeAgent {
   async _openSession(child) {
     const created = await this._requestOn(child, 'session/new', {
       cwd: this.config.workspace,
-      mcpServers: [],
+      ...this._sessionParams(),
     });
-    if (!created?.sessionId) throw new Error('opencode session/new returned no session id');
+    if (!created?.sessionId) throw new Error(`${this.runtimeLabel} session/new returned no session id`);
     this.sessionId = created.sessionId;
     this.sessionInitialized = true;
     this.resumeRequested = false;
     this.needsHistoryPrefix = true;
-    this._captureModelOptions(created.configOptions ?? []);
+    this._captureModelOptions(created);
   }
 
-  _captureModelOptions(configOptions) {
+  // Reads the session/new or session/load result.
+  _captureModelOptions(result) {
+    const configOptions = result?.configOptions ?? [];
     const modelOption = configOptions.find((option) => option?.id === 'model');
     const options = Array.isArray(modelOption?.options) ? modelOption.options : [];
     const current = typeof modelOption?.currentValue === 'string' ? modelOption.currentValue : '';
@@ -416,11 +502,11 @@ export class OpencodeAgent {
       const timer = (Number.isFinite(timeoutMs) && timeoutMs > 0)
         ? setTimeout(() => {
           this.pendingRpc.delete(id);
-          reject(new Error(`opencode rpc timed out: ${method}`));
+          reject(new Error(`${this.runtimeLabel} rpc timed out: ${method}`));
         }, timeoutMs)
         : null;
       timer?.unref?.();
-      this.pendingRpc.set(id, { resolve, reject, timer });
+      this.pendingRpc.set(id, { resolve, reject, timer, child });
       try {
         child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
       } catch (error) {
@@ -431,6 +517,15 @@ export class OpencodeAgent {
     });
   }
 
+  _rejectRpcsOf(child, error) {
+    for (const [id, pending] of this.pendingRpc) {
+      if (pending.child !== child) continue;
+      this.pendingRpc.delete(id);
+      if (pending.timer) clearTimeout(pending.timer);
+      try { pending.reject(error); } catch {}
+    }
+  }
+
   // Notifications and answers to agent requests: best effort, no reply.
   _send(frame) {
     try {
@@ -439,7 +534,7 @@ export class OpencodeAgent {
   }
 
   _request(method, params, timeoutMs) {
-    if (!this.child?.stdin?.writable) return Promise.reject(new Error('opencode is disconnected'));
+    if (!this.child?.stdin?.writable) return Promise.reject(new Error(`${this.runtimeLabel} is disconnected`));
     return this._requestOn(this.child, method, params, timeoutMs);
   }
 
@@ -449,12 +544,17 @@ export class OpencodeAgent {
     return this.deliverBatch([deliveryItem({ text, seq, receiptId })]);
   }
 
+  // Whether a new session/prompt has to wait.
+  _promptBusy() {
+    return this.turnActive;
+  }
+
   // OpenCode serializes prompts on one session: anything arriving during a
   // live turn is held here and submitted as the next prompt when it ends.
   deliverBatch(items) {
     if (this.stopping || !Array.isArray(items) || items.length === 0) return false;
     const batch = items.map(deliveryItem);
-    if (this.settingsUpdate || !this.connected || !this.child?.stdin?.writable || this.turnActive) {
+    if (this.settingsUpdate || !this.connected || !this.child?.stdin?.writable || this._promptBusy()) {
       this.queue.push(batch);
       return true;
     }
@@ -463,7 +563,7 @@ export class OpencodeAgent {
   }
 
   tryStartBatch(items) {
-    if (this.stopping || this.settingsUpdate || !this.connected || this.turnInProgress
+    if (this.stopping || this.settingsUpdate || !this.connected || this.turnInProgress || this._promptBusy()
       || this.queue.length > 0 || !Array.isArray(items) || items.length === 0) return false;
     this._writeBatch(items.map(deliveryItem));
     return true;
@@ -506,7 +606,7 @@ export class OpencodeAgent {
   }
 
   _writeBatch(items) {
-    if (this.settingsUpdate || (!this.turnActive && this._settingsPending())) {
+    if (this.settingsUpdate || (!this._promptBusy() && this._settingsPending())) {
       this.queue.push(items);
       this._applySettings();
       return;
@@ -515,7 +615,7 @@ export class OpencodeAgent {
     // calls do not steer the live turn, they only queue server-side. The state
     // machine routes mid-turn inputs into this.queue, so reaching here while a
     // turn is active is a bug: park the items and let the turn end drain them.
-    if (this.turnActive) {
+    if (this._promptBusy()) {
       this.queue.push(items);
       return;
     }
@@ -539,13 +639,15 @@ export class OpencodeAgent {
     this.modelWorking = true;
     this.modelStartedAtMs = this.turnStartedAtMs;
     this.turnError = null;
+    this.turnAcknowledged = false;
+    const hadPrefix = this.needsHistoryPrefix;
     this.needsHistoryPrefix = false;
     this.deliveredThroughSeq = Math.max(this.deliveredThroughSeq, prepared.deliveredThroughSeq);
     const input = items.map((item) => item.text).join('\n');
     this._recordActivity('agent.turn_started', {
       inboundSeq: prepared.seqs.at(-1) ?? null,
       metadata: {
-        runtime: OPENCODE_RUNTIME.id,
+        runtime: this.runtime,
         model: this.resolvedModel || undefined,
         input,
         historyChars: Math.max(0, prepared.body.length - input.length),
@@ -563,17 +665,37 @@ export class OpencodeAgent {
       (result) => {
         if (this.activeOwner !== owner) return;
         // ACP stop reasons: end_turn, max_tokens, max_turn_requests, refusal,
-        // cancelled. Only end_turn is a normal finish.
-        const failed = result?.stopReason && result.stopReason !== 'end_turn'
-          ? new Error(`opencode turn ended: ${result.stopReason}`)
-          : null;
+        // cancelled. Only end_turn is a normal finish. OpenCode answers end_turn
+        // to a cancel that lands while it is retrying a provider error.
+        const stopReason = this.cancelledOwner === owner ? 'cancelled' : result?.stopReason;
+        const failed = stopReason && stopReason !== 'end_turn'
+          ? new Error(`${this.runtimeLabel} turn ended: ${stopReason}`)
+          : this._turnEndError();
         this._completeTurn(failed);
       },
       (error) => {
         if (this.activeOwner !== owner) return;
+        // Only a prompt the agent turned away left the transcript untouched:
+        // keep its catch-up and do not advance the watermark. Any other error
+        // came after the input was accepted, and the catch-up is already there.
+        if (!this.turnAcknowledged && this._promptRefused(error)) {
+          if (hadPrefix) this.needsHistoryPrefix = true;
+          this.deliveredThroughSeq = this.syncedThroughSeq;
+        }
         this._completeTurn(error);
       },
     );
+  }
+
+  // A failure the runtime reports under a normal end_turn. OpenCode has none.
+  _turnEndError() {
+    return null;
+  }
+
+  // An error without a numeric code never came back from the agent: the prompt
+  // could not be written, or the adapter already mapped it (agy's not logged in).
+  _promptRefused(error) {
+    return !Number.isInteger(error?.code) || PROMPT_REFUSED_CODES.has(error.code);
   }
 
   _applySettings() {
@@ -586,7 +708,7 @@ export class OpencodeAgent {
           this.appliedModel = model;
         }
       } catch (error) {
-        this.logger.warn('opencode_settings_update_failed', { error: safe(error) });
+        this.logger.warn(`${this.logPrefix}_settings_update_failed`, { error: safe(error) });
         this._failItems(this.queue.splice(0).flat(), error);
       } finally {
         this.settingsUpdate = null;
@@ -598,7 +720,7 @@ export class OpencodeAgent {
 
   _onStdout(chunk, child) {
     try {
-      this.stdoutBuffer = appendBounded(this.stdoutBuffer, chunk, 'stdout line');
+      this.stdoutBuffer = appendBounded(this.stdoutBuffer, chunk, `${this.runtimeLabel} stdout line`);
     } catch (error) {
       this.turnError = error;
       this._terminateProcessTree(child, 'SIGKILL');
@@ -610,14 +732,14 @@ export class OpencodeAgent {
       this.stdoutBuffer = this.stdoutBuffer.slice(index + 1);
       if (!line.trim()) continue;
       try { this._handleLine(line); } catch (error) {
-        this.logger.warn('opencode_line_error', { error: safe(error) });
+        this.logger.warn(`${this.logPrefix}_line_error`, { error: safe(error) });
       }
     }
   }
 
   _onStderr(chunk) {
     try {
-      this.stderrBuffer = appendBounded(this.stderrBuffer, chunk, 'stderr line');
+      this.stderrBuffer = appendBounded(this.stderrBuffer, chunk, `${this.runtimeLabel} stderr line`);
     } catch {
       this.stderrBuffer = this.stderrBuffer.slice(-4_000);
     }
@@ -625,7 +747,7 @@ export class OpencodeAgent {
     while ((index = this.stderrBuffer.indexOf('\n')) >= 0) {
       const line = this.stderrBuffer.slice(0, index);
       this.stderrBuffer = this.stderrBuffer.slice(index + 1);
-      if (line.trim()) this.logger.debug('opencode_stderr', { detail: safe(line.slice(0, 500)) });
+      if (line.trim()) this.logger.debug(`${this.logPrefix}_stderr`, { detail: safe(line.slice(0, 500)) });
     }
   }
 
@@ -640,7 +762,8 @@ export class OpencodeAgent {
       this.pendingRpc.delete(message.id);
       if (pending.timer) clearTimeout(pending.timer);
       if (message.error) {
-        const error = new Error(message.error.message || 'opencode rpc error');
+        const error = new Error(message.error.message || `${this.runtimeLabel} rpc error`);
+        error.code = message.error.code;
         error.data = message.error.data;
         pending.reject(error);
       } else {
@@ -655,7 +778,7 @@ export class OpencodeAgent {
   _handleAgentMessage(message) {
     const { method, params } = message;
     if (message.id !== undefined && method === 'session/request_permission') {
-      this.logger.warn('opencode_interaction_declined', { reason: 'unattended' });
+      this.logger.warn(`${this.logPrefix}_interaction_declined`, { reason: 'unattended' });
       this._recordActivity('agent.interaction_declined', {
         summary: 'session/request_permission',
         metadata: { runtime: this.runtime, method: 'session/request_permission' },
@@ -686,6 +809,11 @@ export class OpencodeAgent {
 
   _handleSessionUpdate(update) {
     const kind = update.sessionUpdate;
+    if (this.replay) {
+      if (kind === 'user_message_chunk' || kind === 'agent_message_chunk') this.replay.chunks += 1;
+      return;
+    }
+    if (this.turnActive && TURN_UPDATE_KINDS.has(kind)) this.turnAcknowledged = true;
     if (kind === 'agent_thought_chunk') {
       if (!this.modelWorking && this.turnActive) {
         this.modelWorking = true;
@@ -709,37 +837,38 @@ export class OpencodeAgent {
       this.modelStartedAtMs = null;
       const toolCallId = String(update.toolCallId ?? randomUUID());
       const started = {
-        name: String(update.title ?? 'unknown tool'),
+        name: this._toolName(update),
         atMs: Date.now(),
         recorded: false,
       };
       this.toolStarts.set(toolCallId, started);
-      // OpenCode announces a call as pending with an empty rawInput and sends
-      // the arguments in the in_progress update: record it once, with them.
-      if (hasToolInput(update.rawInput)) this._recordToolCalled(toolCallId, started, update);
+      // OpenCode announces a call as pending with partial rawInput (bash: only
+      // its cwd) and sends the arguments in in_progress: record it once, with them.
+      if (update.status !== 'pending' && hasToolInput(update.rawInput)) this._recordToolCalled(toolCallId, started, update);
       return;
     }
     if (kind === 'tool_call_update') {
       const toolCallId = String(update.toolCallId ?? '');
       const started = this.toolStarts.get(toolCallId);
-      if (started && !started.recorded && (update.status !== 'pending' || hasToolInput(update.rawInput))) {
+      if (started && !started.recorded && update.status !== 'pending') {
         this._recordToolCalled(toolCallId, started, update);
       }
-      if (started && (update.status === 'completed' || update.status === 'error' || update.error)) {
+      const outcome = started ? this._toolOutcome(update) : null;
+      if (outcome) {
         this.toolStarts.delete(toolCallId);
-        const failed = update.status === 'error' || Boolean(update.error);
+        const failed = outcome === 'failed';
         this._recordActivity('agent.tool_completed', {
           inboundSeq: this._activeSeqs().at(-1) ?? null,
           status: failed ? 'FAILED' : 'COMPLETED',
           summary: started.name,
           metadata: {
-            runtime: OPENCODE_RUNTIME.id,
+            runtime: this.runtime,
             toolId: toolCallId,
             toolName: started.name,
             durationMs: Date.now() - started.atMs,
             ...(failed
-              ? { error: activityPayload(update.error ?? update.content) }
-              : { output: activityPayload(update.content) }),
+              ? { error: activityPayload(update.error ?? this._toolOutput(update)) }
+              : { output: activityPayload(this._toolOutput(update)) }),
           },
         });
         this.modelWorking = true;
@@ -748,6 +877,22 @@ export class OpencodeAgent {
       return;
     }
     // usage_update, available_commands_update, plan_update: nothing to mirror.
+  }
+
+  // A runtime that sends `name` means the tool's id by it; title then only
+  // summarises this one call.
+  _toolName(update) {
+    return String(update.name ?? update.title ?? 'unknown tool');
+  }
+
+  // 'completed', 'failed', or null while the call is still running.
+  _toolOutcome(update) {
+    if (update.status === 'failed' || update.status === 'error' || update.error) return 'failed';
+    return update.status === 'completed' ? 'completed' : null;
+  }
+
+  _toolOutput(update) {
+    return Array.isArray(update.content) && update.content.length > 0 ? update.content : update.rawOutput ?? update.content;
   }
 
   _activeSeqs() {
@@ -763,7 +908,7 @@ export class OpencodeAgent {
       summary: String(update.title ?? started.name),
       status: 'RUNNING',
       metadata: {
-        runtime: OPENCODE_RUNTIME.id,
+        runtime: this.runtime,
         toolId: toolCallId,
         toolName: started.name,
         input: activityPayload(update.rawInput),
@@ -779,7 +924,7 @@ export class OpencodeAgent {
     this._recordActivity('agent.note', {
       inboundSeq: this._activeSeqs().at(-1) ?? null,
       summary: text,
-      metadata: { runtime: OPENCODE_RUNTIME.id, delivery: 'telemetry_only' },
+      metadata: { runtime: this.runtime, delivery: 'telemetry_only' },
     });
   }
 
@@ -804,7 +949,7 @@ export class OpencodeAgent {
       status: error ? 'failed' : 'completed',
       summary: error ? safe(error) : undefined,
       metadata: {
-        runtime: OPENCODE_RUNTIME.id,
+        runtime: this.runtime,
         inboundSeqs: seqs,
         ...(turnStartedAtMs ? { durationMs: Date.now() - turnStartedAtMs } : {}),
       },
@@ -834,7 +979,7 @@ export class OpencodeAgent {
       && owner.sessionId === this.sessionId
       && owner.epoch === this.cognitionEpoch;
     if (!accepted || !stillCurrent) {
-      this.logger.info('opencode_session_acceptance_stale', { acceptedThroughSeq });
+      this.logger.info(`${this.logPrefix}_session_acceptance_stale`, { acceptedThroughSeq });
       return false;
     }
     this.syncedThroughSeq = Math.max(this.syncedThroughSeq, acceptedThroughSeq);
@@ -849,7 +994,7 @@ export class OpencodeAgent {
       status: 'failed',
       summary: safe(error),
       metadata: {
-        runtime: OPENCODE_RUNTIME.id,
+        runtime: this.runtime,
         inboundSeqs: seqs,
         terminal: error instanceof CognitionLimitError,
       },
@@ -864,7 +1009,7 @@ export class OpencodeAgent {
 
   _drain() {
     if (this.stopping || this.settingsUpdate || !this.connected || !this.child?.stdin?.writable) return;
-    if (this.turnActive) return;
+    if (this._promptBusy()) return;
     const merged = this.queue.splice(0).flat();
     if (merged.length > 0) this._writeBatch(merged);
   }
@@ -878,9 +1023,9 @@ export class OpencodeAgent {
         sessionId: this.sessionId,
         epoch: this.cognitionEpoch,
       });
-      if (marked === false) this.logger.info('opencode_session_unresumable_stale');
+      if (marked === false) this.logger.info(`${this.logPrefix}_session_unresumable_stale`);
     } catch (error) {
-      this.logger.warn('opencode_session_unresumable_failed', { error: safe(error) });
+      this.logger.warn(`${this.logPrefix}_session_unresumable_failed`, { error: safe(error) });
     }
   }
 
@@ -897,7 +1042,7 @@ export class OpencodeAgent {
           acceptedThroughSeq: this.syncedThroughSeq,
           sessionReady: this.sessionInitialized,
         });
-        if (!published) this.logger.info('opencode_session_publish_stale');
+        if (!published) this.logger.info(`${this.logPrefix}_session_publish_stale`);
         return;
       }
       this.store.setGlobalSession?.(this.sessionId, this.policyHash, {
@@ -907,7 +1052,7 @@ export class OpencodeAgent {
         sessionReady: this.sessionInitialized,
       });
     } catch (error) {
-      this.logger.warn('opencode_session_persist_failed', { error: safe(error) });
+      this.logger.warn(`${this.logPrefix}_session_persist_failed`, { error: safe(error) });
     }
   }
 
@@ -917,7 +1062,7 @@ export class OpencodeAgent {
     this.connected = false;
     for (const pending of this.pendingRpc.values()) {
       if (pending.timer) clearTimeout(pending.timer);
-      try { pending.reject(new Error('opencode connection lost')); } catch {}
+      try { pending.reject(new Error(`${this.runtimeLabel} connection lost`)); } catch {}
     }
     this.pendingRpc.clear();
     if (!this.stopping) this._terminateProcessTree(child, 'SIGKILL');
@@ -945,14 +1090,14 @@ export class OpencodeAgent {
     }
     if (wasActive) {
       this._failItems(items, processError ?? this.turnError
-        ?? new Error(`opencode connection lost (code ${code}, signal ${signal})`));
+        ?? new Error(`${this.runtimeLabel} connection lost (code ${code}, signal ${signal})`));
     }
     this.turnError = null;
     if (this.stopping || !this.startedOk || !this.autoReconnect) {
       this._resolveIdleWaiters();
       return;
     }
-    this.logger.warn('opencode_disconnected', { code, signal, error: processError ? safe(processError) : undefined });
+    this.logger.warn(`${this.logPrefix}_disconnected`, { code, signal, error: processError ? safe(processError) : undefined });
     void this._reconnectLoop();
   }
 
@@ -966,11 +1111,13 @@ export class OpencodeAgent {
       try {
         await this._spawnPersistent();
         this.backoffMs = this.reconnectBaseMs;
+        // A rotation in progress publishes when the coordinator commits it.
+        if (!this.sessionRotation) this._persistSession();
         this._drain();
         this._notifyAvailable();
         break;
       } catch (error) {
-        this.logger.warn('opencode_reconnect_failed', { error: safe(error), backoffMs: this.backoffMs });
+        this.logger.warn(`${this.logPrefix}_reconnect_failed`, { error: safe(error), backoffMs: this.backoffMs });
         this.backoffMs = Math.min(this.backoffMs * 2, this.reconnectCapMs);
       }
     }
@@ -985,7 +1132,7 @@ export class OpencodeAgent {
     this.connected = false;
     for (const pending of this.pendingRpc.values()) {
       if (pending.timer) clearTimeout(pending.timer);
-      try { pending.reject(new Error('opencode process replaced')); } catch {}
+      try { pending.reject(new Error(`${this.runtimeLabel} process replaced`)); } catch {}
     }
     this.pendingRpc.clear();
     if (!child?.pid) {
@@ -1025,12 +1172,14 @@ export class OpencodeAgent {
     await this._terminateCurrent();
     this.sessionId = previous.sessionId;
     this.sessionInitialized = previous.sessionInitialized;
-    this.resumeRequested = previous.resumeRequested;
+    this.resumeRequested = Boolean(previous.sessionId && previous.sessionInitialized);
     this.needsHistoryPrefix = previous.needsHistoryPrefix;
     this.syncedThroughSeq = previous.syncedThroughSeq;
     this.deliveredThroughSeq = previous.deliveredThroughSeq;
     this.model = previous.model;
     if (previous.sessionId) await this._spawnPersistent();
+    // A load that had to fall back opened a session nobody has published.
+    if (previous.sessionId && this.sessionId !== previous.sessionId) this._persistSession();
     this._drain();
     this._notifyAvailable();
   }
@@ -1040,8 +1189,8 @@ export class OpencodeAgent {
   // On CAS failure cancelSessionRotation reopens the prior session.
   async prepareSessionRotation({ rollback = {} } = {}) {
     while (this.settingsUpdate) await this.settingsUpdate;
-    if (this.turnActive) throw new Error('opencode session rotation requires an idle runtime');
-    if (this.sessionRotation) throw new Error('opencode session rotation is already prepared');
+    if (this.turnActive) throw new Error(`${this.runtimeLabel} session rotation requires an idle runtime`);
+    if (this.sessionRotation) throw new Error(`${this.runtimeLabel} session rotation is already prepared`);
     const previous = Object.freeze({
       sessionId: this.sessionId,
       sessionInitialized: this.sessionInitialized,
@@ -1058,7 +1207,7 @@ export class OpencodeAgent {
       return Object.freeze({ id: this.sessionId, sessionReady: this.sessionInitialized });
     } catch (error) {
       try { await this._restorePreparedSession(previous); } catch (restoreError) {
-        this.logger.warn('opencode_session_prepare_restore_failed', { error: safe(restoreError) });
+        this.logger.warn(`${this.logPrefix}_session_prepare_restore_failed`, { error: safe(restoreError) });
       }
       this.sessionRotation = null;
       throw error;
@@ -1067,7 +1216,7 @@ export class OpencodeAgent {
 
   commitSessionRotation(prepared, { persist = true, preserveContext = false } = {}) {
     if (!prepared?.id || this.sessionRotation?.id !== prepared.id || this.sessionId !== prepared.id) {
-      throw new Error('prepared opencode session is no longer current');
+      throw new Error(`prepared ${this.runtimeLabel} session is no longer current`);
     }
     this.needsHistoryPrefix = preserveContext;
     this.sessionRotation = null;
@@ -1090,6 +1239,7 @@ export class OpencodeAgent {
   // into the same session.
   cancelTurn() {
     if (!this.turnActive || !this.sessionId || !this.child?.stdin?.writable) return false;
+    this.cancelledOwner = this.activeOwner;
     this._send({ method: 'session/cancel', params: { sessionId: this.sessionId } });
     return true;
   }
@@ -1123,7 +1273,7 @@ export class OpencodeAgent {
 
   async rotateSession({ resume = false } = {}) {
     while (this.settingsUpdate) await this.settingsUpdate;
-    if (this.turnActive) throw new Error('opencode session rotation requires an idle runtime');
+    if (this.turnActive) throw new Error(`${this.runtimeLabel} session rotation requires an idle runtime`);
     if (!resume) {
       this.syncedThroughSeq = 0;
       this.deliveredThroughSeq = 0;
@@ -1139,12 +1289,12 @@ export class OpencodeAgent {
 
   // Takes effect before the next prompt (see _settingsPending).
   setModel(model, { persist = true } = {}) {
-    if (persist) this.store.setSetting?.('opencode_model', model);
+    if (persist) this.store.setSetting?.(this.modelSettingKey, model);
     this.model = model;
   }
 
   setEffort() {
-    throw new Error('opencode does not support daemon-side effort control');
+    throw new Error(`${this.runtimeLabel} does not support daemon-side effort control`);
   }
 
   // Selectable models come from session/new's model config option.
@@ -1161,7 +1311,7 @@ export class OpencodeAgent {
     if (this.turnInProgress || this.queue.length > 0 || !this.connected) return;
     this._resolveIdleWaiters();
     try { this.onAvailable?.(); } catch (error) {
-      this.logger.warn('opencode_available_callback_failed', { error: safe(error) });
+      this.logger.warn(`${this.logPrefix}_available_callback_failed`, { error: safe(error) });
     }
   }
 
@@ -1169,7 +1319,7 @@ export class OpencodeAgent {
     try {
       this.activitySeq += 1;
       this.store.recordActivity?.({
-        eventKey: `opencode:${this.sessionId ?? 'na'}:${kind}:${this.activitySeq}`,
+        eventKey: `${this.runtime}:${this.sessionId ?? 'na'}:${this.instanceId}:${kind}:${this.activitySeq}`,
         kind,
         summary: fields.summary,
         status: fields.status,
@@ -1188,13 +1338,13 @@ export class OpencodeAgent {
     const queued = this.queue.flat();
     this.queue = [];
     if (receiptIds(queued).length > 0) {
-      this._failItems(queued, new Error('opencode stopped before queued work started'));
+      this._failItems(queued, new Error(`${this.runtimeLabel} stopped before queued work started`));
     }
     const items = this.activeItems.splice(0);
     this.activeOwner = null;
     const midTurn = this.turnActive;
     this.turnActive = false;
-    if (items.length > 0) this._failItems(items, new Error('opencode stopped during an active turn'));
+    if (items.length > 0) this._failItems(items, new Error(`${this.runtimeLabel} stopped during an active turn`));
     if (midTurn) this._markSessionUnresumable();
     this._resolveIdleWaiters();
     await this._terminateCurrent();

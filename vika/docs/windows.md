@@ -60,14 +60,16 @@ apps; it does not update a separate installed release.
 ## Supported scope and limits
 
 - The adapter handles npm Node shims, environment key casing, process-tree
-  termination, action named pipes and OpenCode directory junctions/file copies.
+  termination, action named pipes and OpenCode/Antigravity directory junctions/file copies.
   File copies refresh when the runtime starts. Runtime and connector parity
   still requires real-machine testing.
 - Codex sends developer instructions through `thread/start` and `thread/resume`
   RPC. Claude uses its documented `--append-system-prompt-file` option; install
-  a Claude version supporting that option. Pi/OpenCode already use files or RPC.
+  a Claude version supporting that option. Pi/OpenCode/Antigravity already use files or RPC.
   TraeX's corresponding RPC support is unverified, so its instructions still
-  use argv and remain subject to the Windows command-line limit.
+  use argv and remain subject to the Windows command-line limit. Antigravity
+  has not been run on a real Windows machine; its token and sessions are
+  reached through a directory junction.
 - Pipe names contain a random per-process component and a user/instance digest.
   An occupied pipe must fail startup; authority tokens guard action calls.
   This is **not pipe-owner SID verification**. Multi-user/RDP isolation is not

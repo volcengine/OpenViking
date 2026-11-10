@@ -71,8 +71,8 @@ plugin and denies those servers; Pi resolves enabled user/project extensions
 with its own package manager, then runs with discovery off and every non-OV
 extension loaded by path, including configured paths and packages. Its built-in
 coding tools, codemode, tool search and other MCP servers remain available;
-OpenCode reads a
-Vika-owned config home with the plugin and servers left out. The OPENVIKING_*
+OpenCode and Antigravity read a
+Vika-owned config home with OpenViking's plugins, servers and the like left out. The OPENVIKING_*
 process variables of the instance (`openVikingAgentEnv` in
 `deployment-config.cjs`) are the second line: a plugin that loads anyway is
 inert, and its state lives under `<dataDir>/openviking/`. The owner's own

@@ -17,6 +17,7 @@ Install Vika and verify that it can receive and answer messages. See the [README
 | TraeX | Install and sign in to a version supporting `app-server` |
 | Pi / Durable | Bundled; reuses model configuration from `~/.pi/agent`. Without existing configuration, run `vika pi` after installation and use `/login` |
 | OpenCode | Install and sign in to **1.x**, version 1.15.7 or later; this release does not support 2.x |
+| Antigravity | Install the `agy` CLI and sign in; tested with 1.5.3 |
 | DeepSeek Harness | Install `dsh` **0.2.x**, 0.2.2-rc.1 or later, on Node 24.9+; model routes and credentials are managed with `vika dsh model` |
 
 See [runtime configuration](docs/installation-reference.md#prerequisites) for models, version detection, and environment variables. Do not put API keys in `config.json` or commit them to a repository.
@@ -82,6 +83,7 @@ Configuration defaults to `~/.vika/config.json`. For a custom location, set the 
 |---|---|
 | OV validation fails | Address, connectivity, and credentials; private services must be reachable from the machine running Vika |
 | No runtime is available | CLI authentication, or configure the bundled model with `vika pi` |
+| Antigravity is not offered | `agy models` works for this user, and `AGY_BIN` points at the Antigravity CLI |
 | DeepSeek Harness is not offered, or a route is missing from `/model` | `dsh --version` is 0.2.x on Node 24.9+ and `DSH_BIN` points at it; `vika dsh model list` names unready routes and why |
 | Feishu receives no messages | Long connection, message events, app publication / approval, and competing bot services |
 | Messages work but tools fail with permission errors | App permissions and user authorization; see [manual Feishu setup](docs/installation-reference.md#manual-feishu-setup) |
