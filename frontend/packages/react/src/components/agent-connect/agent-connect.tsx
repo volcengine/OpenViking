@@ -24,6 +24,7 @@ export function AgentConnect({
   locale: localeProp,
   baseUrl = DEFAULT_BASE_URL,
   agreementUrl,
+  showOverseasTag = false,
   activeTabId: controlledTabId,
   selectedId: controlledSelectedId,
   onTabChange,
@@ -41,7 +42,7 @@ export function AgentConnect({
   });
   const activeTabId = controlledTabId ?? localTabId;
   const selectedId = controlledSelectedId ?? localSelection[activeTabId];
-  const design = getAgentConnectDesign(locale);
+  const design = getAgentConnectDesign(locale, showOverseasTag);
   const labels = resolveAgentConnectLabels(locale);
   const tabs = design.tabs;
   const items = design[activeTabId];

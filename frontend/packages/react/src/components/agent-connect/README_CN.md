@@ -13,6 +13,9 @@ import '@openviking/react/components/agent-connect/style.css';
 
 ## 设计与交互约定
 
+- 每个代码块提供独立复制按钮；显示、隐藏和复制使用图标按钮，提供本地化悬浮提示与无障碍标签，复制成功切换为勾选图标并播报反馈。含 API Key 的代码块默认脱敏，可显示或隐藏原值，同一指南最多显示一个代码块中的密钥。安装器命令也采用该交互。独立复制始终使用原始密钥，整篇复制保留现有正文格式；成功后的 `onCopy` 返回实际复制的代码块或完整正文。切换指南或凭据后恢复脱敏并重置复制反馈。
+
+- 指南使用 `react-markdown`、`remark-gfm`、`rehype-raw` 和 `rehype-sanitize` 渲染 Markdown 与白名单 HTML，支持加粗、换行、折叠说明、列表和表格；过滤脚本、事件属性及不安全的链接协议。代码中的标签保持字面文本，指南图片不加载，复制仍使用原始 Markdown。
 - 安装器命令显式指定当前 Agent 的 `--harness`，并包含接入引导需要的 `cli`；Claude Code 对应 `claude`、Kimi Code 对应 `kimicode`、DeepSeek Harness 对应 `dsh`，TRAE 对应国际版 `trae`。
 - 安装器命令中的服务地址和密钥使用 Shell 单引号转义，执行后参数保持调用方字面值；不将 Shell 转义应用到 JSON、Python 或纯文本指南。自定义 Hermes 地址使用 **Custom** 连接步骤，并填写该地址。
 - 指南追加 `/mcp` 等子路径时移除服务地址末尾的斜杠；API 示例的 `url` 变量也使用该规范化地址，以便随后拼接 `/api/v1/...`。安装器参数和不拼接路径的独立地址保留调用方原值。
@@ -23,11 +26,11 @@ import '@openviking/react/components/agent-connect/style.css';
 - 默认 1000px 宽、949px 最小高度，左侧列表 200px，列间距 40px，详情宽 660px；标题、胶囊页签、行高、图标尺寸、指令排版和光晕以设计截图为准。
 - 默认选中「接入主流 Agent」与 Codex。页签和条目使用实例内状态，也可通过 `activeTabId`、`selectedId` 控制，并通过可选回调通知宿主。页签支持方向键、Home、End。
 - 主流页签展示完整本地目录：Codex、Claude Code、豆包工作、WorkBuddy、TRAE、Cursor、OpenClaw、Hermes Agent、OpenCode、DeepSeek Harness、DeerFlow、pi、ZCode、Kimi Code；移除接入应用和 vscode。开发页签展示 MCP、CLI、API、SDK，使用相同列表与详情布局。选择不属于当前分组时显示该分组第一项；各分组记住实例内选择。
-- Codex、Claude Code、Cursor、OpenClaw、Hermes Agent、OpenCode、pi 的详情增加「境外」标签（英文为 Overseas），原接入方式标签保留。标签按 Agent 产品归属维护，不根据其使用的模型推断部署地区。
+- `showOverseasTag` 默认 `false`，不显示「境外」标签。设为 `true` 时，Codex、Claude Code、Cursor、OpenClaw、Hermes Agent、OpenCode、pi 的详情增加「境外」标签（英文为 Overseas），原接入方式标签保留。标签按 Agent 产品归属维护，不根据其使用的模型推断部署地区。
 - DeerFlow 详情内置 MemoryManager、MCP 两种接入说明，可独立切换与复制；默认 MemoryManager，切换说明后复制反馈重置。新增图标使用本地目录中的原始 Logo，以透明度蒙版保留轮廓并跟随主题文字色，保证暗色可见。
 - CLI 详情合并本地 `cli.md` 与 `agent-cli.md`，提供「手动终端安装」「通过 AI Agent 安装」两个内部页签，默认手动安装。页签沿用参考组件的底部边线、24px 间距与主色选中下划线，颜色跟随主题；复制仅包含当前页签正文，切换后反馈重置。
 - 元数据与正文从仓库 [本地目录](../../../../../../docs/images/agents) 生成组件内置快照，不在运行时加载远端 JSON 或 Markdown。Codex、Claude Code、TRAE、Cursor、OpenCode、DeepSeek Harness、pi、ZCode、Kimi Code 沿用参考组件的官方安装器完整指令，其他条目使用对应本地文档。更新文档后运行 `node packages/react/src/components/agent-connect/generate-content.mjs`。
-- 页面展示脱敏密钥，复制正文使用调用方的原始密钥；替换服务地址与文档中的密钥占位符。密钥不写入 DOM 属性或本地持久化。语言、密钥、地址、分组或条目变化后，复制反馈重置。
+- 页面默认展示脱敏密钥，代码块可主动显示原值，复制正文使用调用方的原始密钥；替换服务地址与文档中的密钥占位符。密钥不写入 DOM 属性或本地持久化。语言、密钥、地址、分组或条目变化后，复制反馈重置。
 - 复制按钮使用 Clipboard API，成功后显示「已复制」并通知 `onCopy`；失败显示「复制失败，请重试」，可再次操作。指令只作为设计展示文本，不执行其中的安装命令。
 - 图标来自设计稿导出的 SVG，位于 [图标目录](../../../../icons/svg/agent-connect/README.md)，JS 构建包含图标，无需宿主提供 URL。
 - 颜色使用主题基线；暗色跟随宿主 `.dark`。窄容器可横向浏览原始布局，保持设计比例，不改成另一套布局。

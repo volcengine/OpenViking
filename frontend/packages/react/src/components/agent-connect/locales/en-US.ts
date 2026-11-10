@@ -6,6 +6,9 @@ const messages = {
   instructions: 'Full instructions',
   copy: 'Copy and send to Agent',
   copyMarkdown: 'Copy as Markdown',
+  copyCode: 'Copy code',
+  showApiKey: 'Show API Key',
+  hideApiKey: 'Hide API Key',
   copied: 'Copied',
   failed: 'Copy failed. Please retry.',
   notice:
