@@ -440,6 +440,8 @@ When `seed` is set, the returned API key is derived from
 
 ## Error Handling
 
+OVPack exports and backups reject JSON responses before replacing the local file. API errors retain their typed exceptions, and a failed download preserves an existing backup.
+
 The SDK maps server-side error codes to Python exceptions.
 
 ```python

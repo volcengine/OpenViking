@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import json
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -17,7 +16,7 @@ from openviking_sdk import (
     ToolPart,
 )
 from openviking_sdk.client import Session, SyncSession
-from openviking_sdk.errors import NotFoundError
+from openviking_sdk.errors import NotFoundError, OpenVikingError, UnavailableError
 
 
 @pytest.mark.asyncio
@@ -1822,30 +1821,79 @@ async def test_session_wrapper_forwards_commit_context_and_archive_operations():
 
 
 @pytest.mark.asyncio
-async def test_export_and_backup_ovpack_append_default_suffixes(tmp_path):
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    export_response = SimpleNamespace(is_success=True, content=b"exported")
-    backup_response = SimpleNamespace(is_success=True, content=b"backup")
-    fake_http = SimpleNamespace(post=AsyncMock(side_effect=[export_response, backup_response]))
-    client._http = fake_http
-    existing_export = tmp_path / "exports" / "demo.ovpack"
-    existing_export.parent.mkdir()
-    existing_export.write_bytes(b"old-backup")
+@pytest.mark.parametrize("client_type", [AsyncHTTPClient, SyncHTTPClient])
+@pytest.mark.parametrize("kind", ["binary", "api_error", "json_success", "invalid_json"])
+async def test_export_and_backup_ovpack_response_contract(tmp_path, client_type, kind):
+    def handle(request):
+        if kind == "api_error":
+            return httpx.Response(
+                200,
+                json={
+                    "status": "error",
+                    "error": {
+                        "code": "UNAVAILABLE",
+                        "message": "storage unavailable",
+                        "details": {"service": "storage", "reason": "fixture outage"},
+                    },
+                },
+            )
+        if kind == "json_success":
+            return httpx.Response(200, json={"status": "ok", "result": {}})
+        if kind == "invalid_json":
+            return httpx.Response(200, content=b"{", headers={"Content-Type": "application/json"})
+        return httpx.Response(
+            200, content=b"OVPACK", headers={"Content-Type": "application/octet-stream"}
+        )
 
-    export_path = await client.export_ovpack("/resources/demo/", str(tmp_path / "exports" / "demo"))
-    backup_path = await client.backup_ovpack(str(tmp_path / "backup-dir"))
+    client = client_type(url="http://localhost:1933")
+    async_client = client if client_type is AsyncHTTPClient else client._async_client
+    async_client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933", transport=httpx.MockTransport(handle)
+    )
+    export_output = tmp_path / "exports" / "demo.ovpack"
+    export_output.parent.mkdir()
+    backup_output = tmp_path / "backup-dir.ovpack"
 
-    assert export_path.endswith("demo.ovpack")
-    assert Path(export_path).read_bytes() == b"exported"
-    assert backup_path.endswith("backup-dir.ovpack")
-    assert Path(backup_path).read_bytes() == b"backup"
+    async def invoke(method, args):
+        result = getattr(client, method)(*args)
+        return await result if client_type is AsyncHTTPClient else result
+
+    try:
+        for method, output, args in [
+            (
+                "export_ovpack",
+                export_output,
+                ("/resources/demo/", str(export_output.with_suffix(""))),
+            ),
+            ("backup_ovpack", backup_output, (str(tmp_path / "backup-dir"),)),
+        ]:
+            output.write_bytes(b"known-good-backup")
+
+            if kind == "binary":
+                assert await invoke(method, args) == str(output)
+                assert output.read_bytes() == b"OVPACK"
+            else:
+                with pytest.raises(OpenVikingError) as raised:
+                    await invoke(method, args)
+                if kind == "api_error":
+                    assert isinstance(raised.value, UnavailableError)
+                    assert raised.value.details == {
+                        "service": "storage",
+                        "reason": "fixture outage",
+                    }
+                else:
+                    assert raised.value.code == "INTERNAL"
+                assert output.read_bytes() == b"known-good-backup"
+            assert list(output.parent.glob(f".{output.name}-*.tmp")) == []
+    finally:
+        await async_client.close()
 
 
 @pytest.mark.asyncio
 async def test_backup_ovpack_preserves_existing_file_when_replace_fails(tmp_path):
     client = AsyncHTTPClient(url="http://localhost:1933")
     client._http = SimpleNamespace(
-        post=AsyncMock(return_value=SimpleNamespace(is_success=True, content=b"new-backup"))
+        post=AsyncMock(return_value=httpx.Response(200, content=b"new-backup"))
     )
     output = tmp_path / "backup.ovpack"
     output.write_bytes(b"known-good-backup")

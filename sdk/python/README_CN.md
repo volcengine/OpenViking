@@ -420,6 +420,8 @@ root_client.admin_regenerate_key(
 
 ## 错误处理
 
+OVPack 导出和备份会在替换本地文件前拒绝 JSON 响应。API 错误保留原有异常类型，下载失败时保留已有备份。
+
 SDK 会把服务端错误码映射为 Python 异常。
 
 ```python

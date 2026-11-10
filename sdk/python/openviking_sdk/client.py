@@ -2170,8 +2170,11 @@ class AsyncHTTPClient:
             "/api/v1/pack/export",
             json={"uri": uri, "include_vectors": include_vectors},
         )
-        if not response.is_success:
+        if not response.is_success or "json" in response.headers.get("content-type", "").lower():
             self._handle_response(response)
+            raise OpenVikingError(
+                "Expected an OVPack download, received a JSON response", code="INTERNAL"
+            )
         _atomic_write_bytes(to_path, response.content)
         return str(to_path)
 
@@ -2185,8 +2188,11 @@ class AsyncHTTPClient:
         response = await self._request(
             "POST", "/api/v1/pack/backup", json={"include_vectors": include_vectors}
         )
-        if not response.is_success:
+        if not response.is_success or "json" in response.headers.get("content-type", "").lower():
             self._handle_response(response)
+            raise OpenVikingError(
+                "Expected an OVPack download, received a JSON response", code="INTERNAL"
+            )
         _atomic_write_bytes(to_path, response.content)
         return str(to_path)
 
