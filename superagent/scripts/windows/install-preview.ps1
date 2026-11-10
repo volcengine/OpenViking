@@ -196,7 +196,7 @@ function Stop-LegacyInstances([string]$root, [string]$startupDir) {
 function Header([string]$what) {
     if ($Fancy) {
         Say ''
-        Say "  ${BOLD}${PINK}V${VIOLET}I${LILAC}K${SKY}A${RESET}  ${GRAY}$(M '安装' 'Installing') $what · $Platform${RESET}"
+        Say "  ${BOLD}${PINK}Open${VIOLET}Viking ${LILAC}Super${SKY}Agent${RESET}  ${GRAY}$(M '安装' 'Installing') $what · $Platform${RESET}"
         Say ''
     } else {
         Say (M "安装 OpenViking SuperAgent $what（$Platform）" "Installing OpenViking SuperAgent $what ($Platform)")
