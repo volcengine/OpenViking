@@ -17,9 +17,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { DshBridgeFramer } from './dsh-bridge/framer.mjs';
-import { spawnDetached } from './platform/index.mjs';
+import { spawn, spawnDetached } from './platform/index.mjs';
 import { terminateProcessTree } from './process-utils.mjs';
 import {
   DSH_BRIDGE_CLI_METHODS, DSH_BRIDGE_PATH,
