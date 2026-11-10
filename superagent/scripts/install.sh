@@ -7,8 +7,8 @@
 #   curl -fsSL <download base>/install.sh | sh
 #   sh scripts/install.sh --file dist/superagent-<version>-<platform>.tar.gz   # a local build
 #
-# Installs the release for this machine under ~/.superagent (releases/<version>,
-# the `current` link, bin/vika) and then runs `ov-superagent setup` when the machine
+# Installs the release for this machine under ~/.ov-superagent (releases/<version>,
+# the `current` link, bin/ov-superagent) and then runs `ov-superagent setup` when the machine
 # has no instance yet. Needs only sh, curl, tar and sha256sum or shasum: the
 # release brings its own Node, pm2 and lark-cli, so nothing else on the
 # machine is used or changed.
@@ -22,13 +22,13 @@ set -eu
 # UTF-8 lead bytes as name characters, so "$VERSION（" names another variable.
 
 BASE="${OV_SUPERAGENT_DOWNLOAD_BASE:-__OV_SUPERAGENT_DOWNLOAD_BASE__}"
-OV_SUPERAGENT_HOME="$HOME/.superagent"
+OV_SUPERAGENT_HOME="$HOME/.ov-superagent"
 VERSION="${OV_SUPERAGENT_VERSION:-}"
 FILE=""
 RUN_SETUP=1
 LANG_FLAG=""
 
-# Chinese or English, as the vika command picks it (packages/cli/src/i18n.mjs):
+# Chinese or English, as the ov-superagent command picks it (packages/cli/src/i18n.mjs):
 # OV_SUPERAGENT_LANG or --lang, else what setup saved, else Chinese.
 # m <Chinese> <English> prints the one in use.
 UI_LANG=${OV_SUPERAGENT_LANG:-}
@@ -241,9 +241,47 @@ else
   note "$(m "注意：${FILE} 旁边没有 .sha256，跳过校验" "note: there is no .sha256 next to ${FILE}, so it is not verified")"
 fi
 
-if [ ! -f "$OV_SUPERAGENT_HOME/config.json" ] && { [ -f "$HOME/.vika/config.json" ] || [ -f "$HOME/.ovsa/config.json" ]; }; then
-  die 'Legacy ~/.vika or ~/.ovsa installation found. Stop the old services, move the existing legacy home to ~/.superagent and keep its old path as a compatibility symlink, then rerun this installer. See superagent/docs/migration-to-superagent.md.'
-fi
+# Safety net for machines that ran a pre-release build (~/.vika, ~/.ovsa or
+# ~/.superagent). Nothing is migrated and no legacy data is deleted: this only
+# stops the old processes and turns off their autostart so they do not run next
+# to the new install. Best effort; it never fails the install, and does nothing
+# when no legacy install is found.
+stop_legacy_instances() {
+  for legacy_name in vika ovsa superagent; do
+    legacy_home="$HOME/.$legacy_name"
+    [ -d "$legacy_home" ] || continue
+    note "$(m "发现旧版安装 ~/.${legacy_name}：停止它的进程和开机自启（数据保留，不迁移）" "found a legacy install at ~/.${legacy_name}: stopping its processes and autostart (its data is kept, not migrated)")"
+    # Autostart first, so nothing restarts what is stopped below.
+    legacy_unit="$HOME/.config/systemd/user/${legacy_name}.service"
+    if [ -f "$legacy_unit" ] && { [ "$legacy_name" != superagent ] || grep -q "/\.superagent/" "$legacy_unit" 2>/dev/null; }; then
+      if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user disable --now "${legacy_name}.service" >/dev/null 2>&1 || true
+      fi
+    fi
+    legacy_plist="$HOME/Library/LaunchAgents/com.${legacy_name}.agent.plist"
+    if [ -f "$legacy_plist" ] && { [ "$legacy_name" != superagent ] || grep -q "/\.superagent/" "$legacy_plist" 2>/dev/null; }; then
+      if command -v launchctl >/dev/null 2>&1; then
+        launchctl bootout "gui/$(id -u)" "$legacy_plist" >/dev/null 2>&1 || true
+      fi
+      mv -f "$legacy_plist" "$legacy_plist.disabled" 2>/dev/null || true
+    fi
+    # The legacy release's own pm2, else one on PATH, against the legacy PM2_HOME.
+    [ -d "$legacy_home/pm2" ] || continue
+    legacy_pm2=""
+    for candidate in "$legacy_home/current/bin/pm2" "$legacy_home"/releases/*/bin/pm2; do
+      if [ -x "$candidate" ]; then legacy_pm2="$candidate"; break; fi
+    done
+    [ -n "$legacy_pm2" ] || legacy_pm2=$(command -v pm2 2>/dev/null || true)
+    [ -n "$legacy_pm2" ] || continue
+    legacy_apps=$(PM2_HOME="$legacy_home/pm2" "$legacy_pm2" jlist 2>/dev/null \
+      | grep -oE '"name":"(vika|ovsa|superagent)-[A-Za-z0-9._-]*"' | sed 's/^"name":"//; s/"$//' | sort -u || true)
+    for app in $legacy_apps; do
+      PM2_HOME="$legacy_home/pm2" "$legacy_pm2" delete "$app" >/dev/null 2>&1 || true
+    done
+  done
+}
+stop_legacy_instances
+
 mkdir -p "$OV_SUPERAGENT_HOME/releases"
 # The updater takes the same lock while it upgrades.
 mkdir "$OV_SUPERAGENT_HOME/deploy.lock" 2>/dev/null || die "$(m "另一个安装或升级正在进行（${OV_SUPERAGENT_HOME}/deploy.lock）" "another install or upgrade is running (${OV_SUPERAGENT_HOME}/deploy.lock)")"
@@ -262,7 +300,7 @@ VERSION=${DIR#superagent-}
 VERSION=${VERSION%-"$PLATFORM"}
 # Run the new release's own Node before anything points at it: a glibc or
 # CPU mismatch surfaces here and the existing install is left untouched.
-if ! "$PENDING/$DIR/node/bin/node" "$PENDING/$DIR/packages/cli/bin/vika.mjs" --version >/dev/null 2>&1; then
+if ! "$PENDING/$DIR/node/bin/node" "$PENDING/$DIR/packages/cli/bin/ov-superagent.mjs" --version >/dev/null 2>&1; then
   rm -rf "$PENDING"
   die "$(m '这台机器运行不了这个版本（系统库太旧或 CPU 不匹配）' 'this machine cannot run this release (its system libraries are too old, or the CPU differs)')"
 fi
@@ -306,14 +344,9 @@ mkdir -p "$OV_SUPERAGENT_HOME/bin"
 cat > "$OV_SUPERAGENT_HOME/bin/ov-superagent" <<'LAUNCHER'
 #!/bin/sh
 # Always the installed release: `current` moves on upgrade, this file does not.
-exec "$HOME/.superagent/current/node/bin/node" "$HOME/.superagent/current/packages/cli/bin/vika.mjs" "$@"
+exec "$HOME/.ov-superagent/current/node/bin/node" "$HOME/.ov-superagent/current/packages/cli/bin/ov-superagent.mjs" "$@"
 LAUNCHER
 chmod 755 "$OV_SUPERAGENT_HOME/bin/ov-superagent"
-# Keep the old command working for existing scripts and autostart entries.
-cp "$OV_SUPERAGENT_HOME/bin/ov-superagent" "$OV_SUPERAGENT_HOME/bin/vika"
-chmod 755 "$OV_SUPERAGENT_HOME/bin/vika"
-cp "$OV_SUPERAGENT_HOME/bin/ov-superagent" "$OV_SUPERAGENT_HOME/bin/ovsa"
-chmod 755 "$OV_SUPERAGENT_HOME/bin/ovsa"
 
 case ":$PATH:" in
   *":$OV_SUPERAGENT_HOME/bin:"*) ;;
@@ -323,11 +356,11 @@ case ":$PATH:" in
       bash) if [ "$os" = darwin ]; then RC="$HOME/.bash_profile"; else RC="$HOME/.bashrc"; fi ;;
       *) RC="$HOME/.profile" ;;
     esac
-    if ! grep -q '/.superagent/bin' "$RC" 2>/dev/null; then
-      if { printf '\n# vika\nexport PATH="$HOME/.superagent/bin:$PATH"\n' >> "$RC"; } 2>/dev/null; then
-        ok "$(m '命令' 'Command ')  ${GRAY}$(m "~/.superagent/bin 已加进 $(short "$RC")，新开的终端里可以直接用 ov-superagent" "~/.superagent/bin is added to $(short "$RC"); new terminals know ov-superagent")${RESET}"
+    if ! grep -q '/.ov-superagent/bin' "$RC" 2>/dev/null; then
+      if { printf '\n# ov-superagent\nexport PATH="$HOME/.ov-superagent/bin:$PATH"\n' >> "$RC"; } 2>/dev/null; then
+        ok "$(m '命令' 'Command ')  ${GRAY}$(m "~/.ov-superagent/bin 已加进 $(short "$RC")，新开的终端里可以直接用 ov-superagent" "~/.ov-superagent/bin is added to $(short "$RC"); new terminals know ov-superagent")${RESET}"
       else
-        warn "$(m "写不了 $(short "$RC")；OpenViking SuperAgent 已安装完成。新终端要直接用 ov-superagent，请手动加入：export PATH=\"\$HOME/.superagent/bin:\$PATH\"" "Could not write $(short "$RC"); OpenViking SuperAgent is installed. To use ov-superagent directly in new terminals, add this yourself: export PATH=\"\$HOME/.superagent/bin:\$PATH\"")"
+        warn "$(m "写不了 $(short "$RC")；OpenViking SuperAgent 已安装完成。新终端要直接用 ov-superagent，请手动加入：export PATH=\"\$HOME/.ov-superagent/bin:\$PATH\"" "Could not write $(short "$RC"); OpenViking SuperAgent is installed. To use ov-superagent directly in new terminals, add this yourself: export PATH=\"\$HOME/.ov-superagent/bin:\$PATH\"")"
       fi
     fi
     ;;

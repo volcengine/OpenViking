@@ -74,7 +74,7 @@ try {
       assert.equal(result.code, 0, result.output);
       assert.match(result.output, /INSTALL-RETURNED/);
       assert.ok(fs.existsSync(path.join(home, 'releases', version, 'windows-preview.json')));
-      assert.ok(fs.existsSync(path.join(home, 'bin/vika.cmd')));
+      assert.ok(fs.existsSync(path.join(home, 'bin/ov-superagent.cmd')));
       if (scenario === 'pinned') assert.ok(!requests.includes('/windows-preview/latest/version'));
     } else {
       assert.notEqual(result.code, 0, result.output);

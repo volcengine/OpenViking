@@ -35,7 +35,7 @@ function New-Fixture {
         'windows-preview.json' = (@{version=$Version; platform=$FixturePlatform; channel=$Channel} | ConvertTo-Json -Compress)
         'superagent-preview.ps1' = $Check
         'runtime/node.exe' = ''
-        'packages/cli/bin/vika.mjs' = ''
+        'packages/cli/bin/ov-superagent.mjs' = ''
     }
     if ($OvCheck) { $entries['packages/cli/src/check-ov.mjs'] = '' }
     if ($Traversal) { $entries['../escaped.txt'] = 'must not escape' }
@@ -133,7 +133,7 @@ try {
     $bad = New-Fixture 'bad-hash'
     Add-Content -LiteralPath $bad -Value 'corruption'
     $failed = Expect-Failure 'checksum' @('-File', $bad, '-Destination', (Join-Path $work 'bad'), '-Lang', 'en') 'failed verification \(SHA-256 mismatch\)'
-    if ($failed.Output -notmatch 'vika install failed: ') { throw "the failure has no prefix:`n$($failed.Output)" }
+    if ($failed.Output -notmatch 'OpenViking SuperAgent install failed: ') { throw "the failure has no prefix:`n$($failed.Output)" }
 
     $misnamed = New-Fixture 'misnamed' -ChecksumName 'another-package.zip'
     Expect-Failure 'checksum name' @('-File', $misnamed, '-Destination', (Join-Path $work 'misnamed'), '-Lang', 'en') 'the checksum file names another-package\.zip' | Out-Null
@@ -155,7 +155,7 @@ try {
     foreach ($name in @('bad', 'misnamed', 'escape', 'wrong', 'channel', 'broken')) {
         if (Test-Path -LiteralPath (Join-Path $work $name)) { throw "a failed install created $name" }
     }
-    if (Get-ChildItem -LiteralPath $work -Filter '.superagent-pending-*' -Force) { throw 'staging directories were left behind' }
+    if (Get-ChildItem -LiteralPath $work -Filter '.ov-superagent-pending-*' -Force) { throw 'staging directories were left behind' }
 
     # Reject version traversal before running package code or changing releases.
     $sentinel = Join-Path $testHome 'outside.txt'
@@ -181,13 +181,13 @@ try {
     $one = [IO.Path]::GetFullPath((Join-Path $releases '0.5.0-windows-preview-test'))
     if ((Resolve-LinkOrFile (Join-Path $testHome 'current')) -ne $one) { throw 'current does not point at the release' }
     $launcher = [IO.Path]::Combine($testHome, 'bin', 'ov-superagent.cmd')
-    if (-not (Test-Path -LiteralPath ([IO.Path]::Combine($testHome, 'bin', 'vika.cmd')))) { throw 'no compatibility launcher' }
+    foreach ($gone in @('vika.cmd', 'ovsa.cmd')) { if (Test-Path -LiteralPath ([IO.Path]::Combine($testHome, 'bin', $gone))) { throw "a removed compatibility launcher was written: $gone" } }
     if (-not (Test-Path -LiteralPath $launcher)) { throw 'no bin\ov-superagent.cmd was written' }
     $launcherText = Get-Content -LiteralPath $launcher -Raw
     if ($launcherText -notmatch 'current') { throw 'the launcher does not go through current' }
-    if ($launcherText -notmatch 'vika\.mjs') { throw 'the launcher does not run the CLI' }
+    if ($launcherText -notmatch 'ov-superagent\.mjs') { throw 'the launcher does not run the CLI' }
     # The home may be HOME or the profile, so the launcher reads neither: it finds
-    # the .superagent directory it was written into.
+    # the .ov-superagent directory it was written into.
     if ($launcherText -match 'USERPROFILE|%HOME%') { throw "the launcher guesses the home directory:`n$launcherText" }
     if ($launcherText -notmatch '%~dp0') { throw "the launcher does not resolve its own location:`n$launcherText" }
     # Redirected output uses the console code page, which can turn the arrow into ?/^Z.
@@ -197,7 +197,7 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $testHome 'language'))) { throw '-Lang was not saved for later commands' }
     if ((Get-Content -LiteralPath (Join-Path $testHome 'language') -Raw).Trim() -ne 'en') { throw 'the saved language is not the one asked for' }
 
-    # The shell that ran the installer already knows vika: a .ps1 run with &
+    # The shell that ran the installer already knows ov-superagent: a .ps1 run with &
     # shares its environment, which is why setup can be started from here.
     $probe = Join-Path $work 'session.ps1'
     Set-Content -LiteralPath $probe -Encoding ascii -Value @"
@@ -209,7 +209,7 @@ if ((`$env:PATH -split [IO.Path]::PathSeparator) -contains (Join-Path `$env:OV_S
     $sessionResult = Invoke-TestProcess -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $probe)
     $session = $sessionResult.Output
     if ($sessionResult.Code -ne 0) { throw "session probe failed: $session" }
-    if ($session -notmatch 'SESSION-PATH-OK') { throw "the current terminal was not given vika:`n$session" }
+    if ($session -notmatch 'SESSION-PATH-OK') { throw "the current terminal was not given ov-superagent:`n$session" }
 
     # A second run of the same package is a no-op that still names the version.
     # English output: redirected streams use the console code page, which turns CJK into ?.
@@ -270,8 +270,46 @@ if ((`$env:PATH -split [IO.Path]::PathSeparator) -contains (Join-Path `$env:OV_S
         foreach ($key in $saved.Keys) { Set-Item -LiteralPath "Env:$key" -Value $saved[$key] }
     }
     if ($code -ne 0) { throw "installing with HOME set failed:`n$output" }
-    if (-not (Test-Path -LiteralPath (Join-Path $homeWins '.superagent\releases'))) { throw "HOME was not used:`n$output" }
-    if (Test-Path -LiteralPath (Join-Path $profileIgnored '.superagent')) { throw 'USERPROFILE won over HOME' }
+    if (-not (Test-Path -LiteralPath (Join-Path $homeWins '.ov-superagent\releases'))) { throw "HOME was not used:`n$output" }
+    if (Test-Path -LiteralPath (Join-Path $profileIgnored '.ov-superagent')) { throw 'USERPROFILE won over HOME' }
+
+    # ---- a legacy pre-release install is stopped, never migrated --------------
+    # The legacy pm2 is a batch fake that records its calls; its data must stay.
+    $legacyRoot = Join-Path $work 'legacy-root'
+    $legacyHome = Join-Path $legacyRoot '.vika'
+    $legacyBin = [IO.Path]::Combine($legacyHome, 'releases', '0.4.0', 'bin')
+    [IO.Directory]::CreateDirectory($legacyBin) | Out-Null
+    [IO.Directory]::CreateDirectory((Join-Path $legacyHome 'pm2')) | Out-Null
+    Set-Content -LiteralPath (Join-Path $legacyHome 'config.json') -Value 'keep-me' -Encoding ascii
+    $legacyCalls = Join-Path $work 'legacy-calls.txt'
+    Set-Content -LiteralPath (Join-Path $legacyBin 'pm2.cmd') -Encoding ascii -Value @(
+        '@echo off',
+        "echo %PM2_HOME% %*>>`"$legacyCalls`"",
+        'if "%1"=="jlist" echo [{"name":"vika-primary","pm2_env":{"name":"vika-primary"}},{"name":"vika-web"},{"name":"vika-updater"},{"name":"other"}]',
+        'exit /b 0'
+    )
+    $appData = Join-Path $work 'appdata'
+    $startup = [IO.Path]::Combine($appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup')
+    [IO.Directory]::CreateDirectory($startup) | Out-Null
+    Set-Content -LiteralPath (Join-Path $startup 'vika-autostart.vbs') -Value 'legacy' -Encoding ascii
+    $legacyInstallHome = Join-Path $work 'legacy-install-home'
+    $saved = @{ OV_SUPERAGENT_LEGACY_ROOT = $env:OV_SUPERAGENT_LEGACY_ROOT; APPDATA = $env:APPDATA }
+    $env:OV_SUPERAGENT_LEGACY_ROOT = $legacyRoot
+    $env:APPDATA = $appData
+    try { $run = Invoke-Installer -Arguments @('-File', $first, '-NoSetup', '-Lang', 'en') -Root $legacyInstallHome }
+    finally { foreach ($key in $saved.Keys) { Set-Item -LiteralPath "Env:$key" -Value $saved[$key] } }
+    if ($run.Code -ne 0) { throw "a legacy install blocked the install:`n$($run.Output)" }
+    if ($run.Output -notmatch 'found a legacy install') { throw "the legacy install is not reported:`n$($run.Output)" }
+    $recorded = Get-Content -LiteralPath $legacyCalls -Raw
+    foreach ($app in @('vika-primary', 'vika-web', 'vika-updater')) {
+        if ($recorded -notmatch "delete $app") { throw "legacy app $app was not deleted:`n$recorded" }
+    }
+    if ($recorded -match 'delete other') { throw "an unrelated pm2 app was deleted:`n$recorded" }
+    if ($recorded -notmatch [regex]::Escape((Join-Path $legacyHome 'pm2'))) { throw "the legacy PM2_HOME was not used:`n$recorded" }
+    if (Test-Path -LiteralPath (Join-Path $startup 'vika-autostart.vbs')) { throw 'the legacy Startup entry is still active' }
+    if (-not (Test-Path -LiteralPath (Join-Path $startup 'vika-autostart.vbs.disabled'))) { throw 'the legacy Startup entry was not kept as .disabled' }
+    if ((Get-Content -LiteralPath (Join-Path $legacyHome 'config.json') -Raw).Trim() -ne 'keep-me') { throw 'legacy data was changed' }
+    if (Test-Path -LiteralPath (Join-Path $legacyInstallHome 'config.json')) { throw 'legacy config was migrated' }
 
     # ---- OpenViking is reported, not required -------------------------------
     $ov = New-Fixture 'ov' -Version '0.9.0-windows-preview-test' -OvCheck
@@ -280,7 +318,7 @@ if ((`$env:PATH -split [IO.Path]::PathSeparator) -contains (Join-Path `$env:OV_S
     if ($run.Output -notmatch 'OpenViking check failed') { throw "the OpenViking result is not reported:`n$($run.Output)" }
 
     if (Get-ChildItem -LiteralPath $releases -Filter '.pending-*' -Force) { throw 'a staging directory was left in releases' }
-    Write-Host 'Installer tests passed: isolated and default layouts, idempotency, rollback, launcher, lock, checksum, traversal, platform, runtime, OpenViking.'
+    Write-Host 'Installer tests passed: isolated and default layouts, legacy stop, idempotency, rollback, launcher, lock, checksum, traversal, platform, runtime, OpenViking.'
 } finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }

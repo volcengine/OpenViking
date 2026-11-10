@@ -30,8 +30,8 @@ node scripts/install-lark-cli.mjs
 npm run check:pi
 npm run check:durable
 $env:HOME = $env:USERPROFILE
-$env:PM2_HOME = Join-Path $env:USERPROFILE '.superagent\pm2'
-$env:OV_SUPERAGENT_CONFIG = Join-Path $env:USERPROFILE '.superagent\windows-preview.json'
+$env:PM2_HOME = Join-Path $env:USERPROFILE '.ov-superagent\pm2'
+$env:OV_SUPERAGENT_CONFIG = Join-Path $env:USERPROFILE '.ov-superagent\windows-preview.json'
 ```
 
 Create that manifest using [config.example.json](../config.example.json), keeping
@@ -91,8 +91,8 @@ apps; it does not update a separate installed release.
 ## Migration and validation
 
 This replaces the full Windows fork's installation approach. That fork's
-installer, its `.superagent/bin` launchers and its patched `pm2.cmd` are no longer
-provided; the preview package's installer adds only a `vika.cmd` shim that runs
+installer, its old `bin` launchers and its patched `pm2.cmd` are no longer
+provided; the preview package's installer adds only an `ov-superagent.cmd` shim that runs
 this release's CLI, and the release's own `bin\pm2.cmd`, which runs that release's
 Node on its bundled pm2, so `ov-superagent start` uses no system Node or PM2. Keep the old
 checkout/commit and configuration for rollback; do not copy this tree over a

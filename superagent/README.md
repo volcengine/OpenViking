@@ -4,7 +4,7 @@
 
 Set up your machine (local or a cloud VM) with the software, projects, and tools you need. OpenViking SuperAgent connects your agent to OpenViking and instant messaging: send a task in chat, let your agent work on your machine, and receive the results in the same conversation. OpenViking provides knowledge, memory, and context across sessions.
 
-OpenViking SuperAgent supports runtimes such as Codex, Claude Code, DeepSeek Harness, and Pi, and connects to Feishu / Lark, WeChat, Telegram, Slack, QQ, and email. The CLI command is `ov-superagent`. The previous `ovsa` and `vika` commands remain compatibility aliases. For an existing installation, follow the migration guide below, then rerun the installer to add the `ov-superagent` launcher; upgrading the release alone does not replace launchers.
+OpenViking SuperAgent supports runtimes such as Codex, Claude Code, DeepSeek Harness, and Pi, and connects to Feishu / Lark, WeChat, Telegram, Slack, QQ, and email. The CLI command is `ov-superagent`.
 
 [Quick start](install.md) · [Features and architecture](docs/usage-reference.md) · [Configuration example](config.example.json) · [Contributing](../CONTRIBUTING.md)
 
@@ -74,4 +74,4 @@ The release-process guide is currently in Chinese.
 
 Features in the source tree may not yet be published. Check your installed release.
 
-Existing `~/.vika` or `~/.ovsa` installations: follow the [ov-superagent migration guide](docs/migration-to-superagent.md) before installing this version.
+Pre-release installations (`~/.vika`, `~/.ovsa`, `~/.superagent`) are not migrated. The installer stops their processes and autostart entries and then performs a fresh install into `~/.ov-superagent`; the old directory is left in place for you to inspect or delete.

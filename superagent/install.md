@@ -1,6 +1,6 @@
 # Install OpenViking SuperAgent
 
-Install OpenViking SuperAgent and verify that it can receive and answer messages. See the [README](README.md) for an overview and the [configuration reference](docs/installation-reference.md) for advanced setup. The CLI command is `ov-superagent`. The previous `ovsa` and `vika` commands remain compatibility aliases. For an existing installation, follow the migration guide below, then rerun the installer to add the `ov-superagent` launcher; upgrading the release alone does not replace launchers.
+Install OpenViking SuperAgent and verify that it can receive and answer messages. See the [README](README.md) for an overview and the [configuration reference](docs/installation-reference.md) for advanced setup. The CLI command is `ov-superagent`.
 
 ## Prerequisites
 
@@ -42,7 +42,7 @@ irm https://ovrelease.tos-cn-beijing.volces.com/superagent/install.ps1 | iex
 
 This downloads the latest Windows x64 preview. No separate ZIP or setup wrapper is needed. See [installer options](docs/installation-reference.md#one-command-installation) to pin a Windows version.
 
-Both installers verify the downloaded archive, install it under `~/.superagent/releases/`, and open `ov-superagent setup` on a first interactive installation. Follow the same setup steps below on either platform. If your shell cannot find `ov-superagent`, reopen the terminal. On macOS / Linux you can also use `~/.superagent/bin/ov-superagent`; on Windows the launcher is `bin\ov-superagent.cmd` under the OpenViking SuperAgent home (`$env:HOME` when set, otherwise `$env:USERPROFILE`).
+Both installers verify the downloaded archive, install it under `~/.ov-superagent/releases/`, and open `ov-superagent setup` on a first interactive installation. Follow the same setup steps below on either platform. If your shell cannot find `ov-superagent`, reopen the terminal. On macOS / Linux you can also use `~/.ov-superagent/bin/ov-superagent`; on Windows the launcher is `bin\ov-superagent.cmd` under the OpenViking SuperAgent home (`$env:HOME` when set, otherwise `$env:USERPROFILE`).
 
 ```bash
 ov-superagent setup
@@ -75,7 +75,7 @@ Open `http://127.0.0.1:3737` to view activity. Send a specific task in a direct 
 - Enable startup at login: `ov-superagent autostart enable`. On Linux, use `loginctl enable-linger` if the service must continue after logout; on Windows it adds a per-user Startup-folder entry, with no service or administrator.
 - Change the interface language: `ov-superagent --lang zh` or `ov-superagent --lang en`.
 
-Configuration defaults to `~/.superagent/config.json`. For a custom location, set the same absolute `OV_SUPERAGENT_CONFIG` path for related commands. Editing a source checkout does not update an installed service.
+Configuration defaults to `~/.ov-superagent/config.json`. For a custom location, set the same absolute `OV_SUPERAGENT_CONFIG` path for related commands. Editing a source checkout does not update an installed service.
 
 ## Troubleshooting
 
@@ -93,4 +93,4 @@ The release-process guide below is currently in Chinese.
 
 [Source development](docs/installation-reference.md#running-from-source) · [Upgrade and rollback](docs/installation-reference.md#upgrade-and-rollback) · [Multiple instances and memory](docs/installation-reference.md#multiple-agents) · [Release process](../docs/repository/RELEASE_CN.md)
 
-Existing `~/.vika` or `~/.ovsa` installations: follow the [ov-superagent migration guide](docs/migration-to-superagent.md) before installing this version.
+Pre-release installations (`~/.vika`, `~/.ovsa`, `~/.superagent`) are not migrated. The installer stops their processes and autostart entries and then performs a fresh install into `~/.ov-superagent`; the old directory is left in place for you to inspect or delete.

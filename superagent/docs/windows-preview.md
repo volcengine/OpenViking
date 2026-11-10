@@ -74,13 +74,13 @@ unpack, self-check, install, then say what is next. It verifies the SHA-256
 (a package without a `.sha256` beside it installs with a note instead of a
 check), unpacks into a staging directory while rejecting unsafe entries, runs the
 package's own runtime check, and only then installs. The layout is the POSIX one
-under `~\.superagent`: `releases\<version>`, the `current` link, the `rollback` link
-to the version installed before, `bin\ov-superagent.cmd`, and `~\.superagent\bin` on the PATH of
+under `~\.ov-superagent`: `releases\<version>`, the `current` link, the `rollback` link
+to the version installed before, `bin\ov-superagent.cmd`, and `~\.ov-superagent\bin` on the PATH of
 the terminal that ran the installer and of new ones. The release also carries `bin\pm2.cmd`, so `ov-superagent start`
 runs its PM2 with its own Node. Installing the same version again changes nothing;
 installing another one moves `current` and keeps the previous release.
 
-`-Lang en` picks the language for this run and saves it in `~\.superagent\language`, as
+`-Lang en` picks the language for this run and saves it in `~\.ov-superagent\language`, as
 `ov-superagent --lang` does; `OV_SUPERAGENT_LANG` overrides it for one run and `NO_COLOR` turns the
 colours off. Colour and the unpacking spinner appear only on a terminal; piped
 output stays plain lines.
@@ -88,11 +88,11 @@ output stays plain lines.
 OpenViking SuperAgent's home is `$env:HOME` when it is set, otherwise `%USERPROFILE%`: `ov-superagent`, the
 installer and the release link all resolve it that way, so a machine that points
 `HOME` elsewhere still gets one installation. `bin\ov-superagent.cmd` reads neither — it
-finds the `.superagent` directory it was written into — so `ov-superagent` keeps working if `HOME`
+finds the `.ov-superagent` directory it was written into — so `ov-superagent` keeps working if `HOME`
 changes later; only a new install follows it.
 
 With no manifest yet and a terminal to ask in, the installer goes straight into
-`ov-superagent setup`, as the POSIX installer does. `~\.superagent\bin` is on the PATH of the
+`ov-superagent setup`, as the POSIX installer does. `~\.ov-superagent\bin` is on the PATH of the
 terminal that ran it, so `ov-superagent setup` works in that same window; keep it open until
 setup finishes. A `cmd.exe` window opened before the install does not see the new
 PATH. `-NoSetup`, or a run with no terminal, stops after the install and prints
@@ -110,13 +110,13 @@ no `current`, no launcher, no PATH entry, no saved language, no lock. Use it to
 keep an existing installation and configuration untouched.
 
 ```powershell
-$destination = Join-Path $env:LOCALAPPDATA 'VikaPreview\test-1'
+$destination = Join-Path $env:LOCALAPPDATA 'SuperAgentPreview\test-1'
 ./install-preview.ps1 -File $archive -Destination $destination
 ```
 
 An existing destination is rejected, including on repeated installation. In
 neither mode does the installer write configuration, start services, or switch an
-existing `~\.superagent\current` installation. The checksum detects corruption; obtain
+existing `~\.ov-superagent\current` installation. The checksum detects corruption; obtain
 both the package and installer from a trusted run. If local execution policy
 blocks downloaded scripts, review/unblock them under your organization's policy;
 administrator rights and a machine-wide policy change are not required.
@@ -137,22 +137,22 @@ ov-superagent logs primary
 ov-superagent stop
 ```
 
-An isolated copy is not under `~\.superagent\current`, so `ov-superagent` cannot manage it: write
+An isolated copy is not under `~\.ov-superagent\current`, so `ov-superagent` cannot manage it: write
 its manifest from `config.example.json` as [windows.md](windows.md) describes (only
 the `primary` agent, absolute Windows paths, an existing OpenViking service), then
 start it with the `superagent-preview.ps1` inside the copy and an explicit `PM2_HOME`:
 
 ```powershell
-$destination = Join-Path $env:LOCALAPPDATA 'VikaPreview\test-1'   # as installed above
+$destination = Join-Path $env:LOCALAPPDATA 'SuperAgentPreview\test-1'   # as installed above
 $home = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }   # OpenViking SuperAgent's home
-$env:PM2_HOME = Join-Path $home '.superagent\pm2'
+$env:PM2_HOME = Join-Path $home '.ov-superagent\pm2'
 $config = Join-Path $destination 'config.json'
 & "$destination\superagent-preview.ps1" -Action start -Config $config
 & "$destination\superagent-preview.ps1" -Action logs
 & "$destination\superagent-preview.ps1" -Action stop
 ```
 
-Both paths use the package's Node and PM2 and manage only `superagent-primary`/`superagent-web`.
+Both paths use the package's Node and PM2 and manage only `superagent-primary`/`superagent-web`. `-Action start` and `-Action restart` first remove those apps (and the pre-release `vika-primary`/`vika-web`, if present) and then start them, so an old copy never runs beside the new one.
 Windows PM2 is unmodified: a different `PM2_HOME` is **not** proof of process
 isolation. Do not run alongside an existing instance with those names, reuse a
 running PM2 daemon from another Node installation, or use `pm2 kill` on a shared
@@ -170,13 +170,13 @@ actual PIDs, the configured `/ready` response and connector state, then one
 uniquely labelled message/reply with no duplicate delivery. Report the commit,
 Windows/PowerShell versions, results and sanitized errors. No automatic upgrade is
 provided: a default install keeps the version it replaced under
-`~\.superagent\releases` and names it in `~\.superagent\rollback`, so rolling back means
+`~\.ov-superagent\releases` and names it in `~\.ov-superagent\rollback`, so rolling back means
 pointing `current` at that release again and running `ov-superagent restart`; an isolated
 copy is rolled back by stopping it and starting the preserved installation with its
 own configuration. `ov-superagent autostart enable` writes a script into the current user's
 own Startup folder — no service, no administrator, visible in Task Manager's
 Startup tab — which runs `ov-superagent start` hidden at logon and logs to
-`~\.superagent\logs\autostart.log`; an isolated copy is not covered by it.
+`~\.ov-superagent\logs\autostart.log`; an isolated copy is not covered by it.
 `ov-superagent start` needs `current` to be a directory link: on a
 volume without junctions the installer writes a pointer file instead, which runs
 `ov-superagent` but cannot be resolved as a release.
