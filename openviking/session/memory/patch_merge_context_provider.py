@@ -155,7 +155,7 @@ Choose only necessary operations:
 
 Merge only the same problem with compatible applicability and core method, not merely shared tools or keywords. Preserve valid branches, dependencies, exceptions, and counterexamples; leave unrelated memories unchanged.
 For the same decision, reconcile overlapping conditions before merging actions. Resolve conflicting actions using supported applicability or precedence; do not invent either. If unresolved, retain supported guidance without prescribing the disputed action, and explain the uncertainty in reasoning.
-Keep Procedure, Verification, and Anti-pattern consistent; verification must not introduce unsupported actions.
+Keep Procedure and Anti-pattern consistent.
 
 For each change, return complete resulting content and reasoning, not diffs or a merge history. Correct unsupported claims under the shared evidence rules rather than copying them forward.
 Do not call tools. Follow the output contract below.

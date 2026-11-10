@@ -55,13 +55,12 @@ def test_experience_contract_renders_fixed_headings_and_body_language(
     headings = [
         "## Situation",
         "## Procedure",
-        "## Verification",
         "## Anti-pattern",
     ]
     positions = [contract.index(heading) for heading in headings]
     assert positions == sorted(positions)
     assert "title, Situation, and Procedure are required" in contract
-    assert "Verification and Anti-pattern are optional" in contract
+    assert "Anti-pattern is optional" in contract
     assert "omit empty or redundant sections" in contract
     assert "## Approach" not in contract
     assert "## Reflect" not in contract
@@ -105,7 +104,6 @@ def test_experience_storage_schema_includes_replaceable_reasoning(experience_sch
     assert "Write before content" in reasoning
     assert "three short items, each 1–2 sentences" in reasoning
     assert "match evaluation feedback to actual steps" in reasoning
-    assert "Note untested recommendations or unresolved causes" in reasoning
     assert "do not audit every step, repeat the body" in reasoning
 
     proposal_schema = experience_schema.model_copy(update={"operation_mode": "add_only"})

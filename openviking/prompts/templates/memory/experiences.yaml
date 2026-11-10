@@ -26,7 +26,7 @@ fields:
       - Evidence: identify unverified assumptions first, then relevant facts supported by policy, user input, or tool observations. Assistant claims and loaded memories are not independent proof.
         Identify the information and authorization required by key actions and how they were obtained, including user additions or corrections.
       - Comparison: compare the same decision point across trajectories using the state, known information, constraints, and available options at that step; match evaluation feedback to actual steps and subsequent observations. Distinguish assistant choices from differences in user requirements or tool state; do not infer causation from outcome differences alone.
-      - Conclusion: identify the key factors supported by the evidence and the reusable decision with its applicable conditions. Note untested recommendations or unresolved causes.
+      - Conclusion: distinguish supported requirements, conditional options, and unresolved cases. State the reusable condition-action relationships; do not turn an observed choice into a mandatory step or invent rules for unseen cases.
       Evaluation helps locate failures, but does not supply execution-time facts, authorization, or new policy. A passing score, including repeated success on the same case, does not prove an inferred rule.
       With one run, analyze its decision points without inventing a comparison. Keep only the evidence summary; do not audit every step, repeat the body, or include raw payloads.
     merge_op: replace
@@ -36,7 +36,7 @@ fields:
     description: |
       The title and body must be written in {{ language }}.
       Keep the English headings below exactly as written, even when the body uses another language.
-      Follow the conclusions in reasoning. A one-sentence title, Situation, and Procedure are required; Verification and Anti-pattern are optional. Follow the section order shown below and omit empty or redundant sections.
+      Follow the conclusions in reasoning. A one-sentence title, Situation, and Procedure are required; Anti-pattern is optional. Use only the sections below, in order, and omit empty or redundant sections.
 
       # <one-sentence title summarizing the reusable method or problem>
 
@@ -44,13 +44,12 @@ fields:
       <Conditions, state, and interface characteristics that determine when the method applies. Include relevant limits; omit task history and broad background.>
 
       ## Procedure
-      <Key decisions, actions, and necessary ordering with supported applicability. For conditional steps, use "When <condition>, <action>" and include relevant constraints or cautions.
+      <Keep key decisions, actions, and necessary ordering, not a fixed replay.
+      For conditional steps, use "When <condition>, <action>" and preserve the user request, prerequisites, and policy limits that justify the action.
+      Do not turn an offered option into an automatic action.
       Preserve dependencies; put necessary checks before actions or offers that block remaining work. Omit routine setup, unrelated requests, and instance-specific choices.
       Preserve necessary information gathering, clarification, and confirmation. When required information or authorization is missing, obtain it before acting; do not assume the user will volunteer it.
       Correct evidenced mistakes without discarding valid steps from failed runs. If no established solution exists, retain supported checks and state the limitation.>
-
-      ## Verification
-      <Observable states or values that confirm task completion, not evaluator-only scores or reference-match flags. Do not repeat Procedure or claim the experience has been validated.>
 
       ## Anti-pattern
       <An evidenced wrong action, omission, or misuse and its consequence. A failed score alone does not establish an execution mistake. Do not mechanically negate Procedure.>
