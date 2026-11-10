@@ -40,6 +40,28 @@ _DERIVED_FILE_NAMES = frozenset({".abstract.md", ".overview.md", ".relations.jso
 class _SnapshotMixin:
     """Snapshot/git-like version control (commit/restore/show/diff/log)."""
 
+    def _snapshot_read_check_uris(self, uris: List[str], ctx: RequestContext) -> List[str]:
+        """Return commit/diff-paths targets that require ordinary read authorization.
+
+        GLOBAL can snapshot other users' memories/resources/peers/skills subtrees.
+        """
+        checked = []
+        for uri in uris:
+            parts = self._safe_uri_parts(uri)
+            if (
+                ctx.role == Role.GLOBAL
+                and parts[:1] == ["user"]
+                and (len(parts) < 2 or parts[1] != ctx.user.user_id)
+            ):
+                if len(parts) >= 3 and parts[2] in {"memories", "resources", "peers", "skills"}:
+                    continue
+                raise PermissionDeniedError(
+                    "GLOBAL cross-user snapshots require memories/resources/peers/skills",
+                    resource=uri,
+                )
+            checked.append(uri)
+        return checked
+
     def _ensure_snapshot_admin(self, ctx: RequestContext) -> None:
         if ctx.role not in {Role.ROOT, Role.ADMIN}:
             raise PermissionDeniedError(
@@ -232,6 +254,7 @@ class _SnapshotMixin:
             number of candidate paths skipped by the account ``.ovgitignore``
             rules (system pruning is not counted). Noop omits ``changed``.
             The first commit creates a valid snapshot even with no file changes.
+            GLOBAL can snapshot other users' memories/resources/peers/skills subtrees.
         """
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
@@ -254,6 +277,7 @@ class _SnapshotMixin:
         }
         if real_ctx.role == Role.ROOT or not paths:
             return await self._async_agfs.run("git_commit", **kwargs)
+        read_uris = self._snapshot_read_check_uris(paths, real_ctx)
 
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 
@@ -300,7 +324,7 @@ class _SnapshotMixin:
                     uri=paths[0],
                 ) from exc
         try:
-            scope_uris = await self._snapshot_scope_uris(paths, real_ctx)
+            scope_uris = await self._snapshot_scope_uris(read_uris, real_ctx)
             await self._ensure_access_many(scope_uris, real_ctx, action=AclAction.READ)
             return await self._async_agfs.run("git_commit", **kwargs)
         finally:
@@ -790,12 +814,15 @@ class _SnapshotMixin:
     ) -> List[Dict[str, str]]:
         """List files changed under ``dirs`` between two commits.
 
-        ``base=None`` treats every file as added. Requires read access only;
-        derived summaries (.abstract.md / .overview.md / .relations.json) are
+        ``base=None`` treats every file as added. GLOBAL can compare other users'
+        memories/resources/peers/skills subtrees; other scopes require read access.
+        Derived summaries (.abstract.md / .overview.md / .relations.json) are
         omitted so regenerated summaries do not count as source changes.
         """
         real_ctx = self._ctx_or_default(ctx)
-        await self._ensure_access_many(dirs, real_ctx, action=AclAction.READ)
+        await self._ensure_access_many(
+            self._snapshot_read_check_uris(dirs, real_ctx), real_ctx, action=AclAction.READ
+        )
         changes = await self._async_agfs.run(
             "git_diff_paths",
             account=real_ctx.account_id,

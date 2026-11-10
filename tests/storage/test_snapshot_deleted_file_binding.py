@@ -14,7 +14,9 @@ import pytest
 from openviking.pyagfs import get_binding_client
 from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.identity import RequestContext, Role
+from openviking.service.fs_service import FSService
 from openviking.storage.viking_fs import VikingFS
+from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -116,3 +118,34 @@ async def test_commit_lock_kinds_follow_target_state(snapshot_env, monkeypatch):
     )
     await vfs.commit(message="cache provider", paths=targets, ctx=ctx)
     assert seen[-1] == [("dir", "tree"), ("file.md", "exact"), ("missing.md", "tree")]
+
+
+@pytest.mark.parametrize("owner", ["", "alice", "bob"])
+@pytest.mark.parametrize(
+    "directory",
+    ["", "memories", "resources", "peers", "skills", "sessions", "privacy", "memories-extra"],
+)
+async def test_global_snapshot_scope(snapshot_env, owner, directory):
+    vfs, fs_root = snapshot_env
+    ctx = _ctx(Role.GLOBAL)
+    scope = f"{owner}/{directory}".strip("/")
+    uri = f"viking://user/{scope}".rstrip("/")
+    allowed = owner == "alice" or (
+        owner == "bob" and directory in {"memories", "resources", "peers", "skills"}
+    )
+    service = FSService(viking_fs=vfs)
+    if not allowed:
+        with pytest.raises(PermissionDeniedError):
+            await vfs.commit(message="snapshot", paths=[uri], ctx=ctx)
+        with pytest.raises(PermissionDeniedError):
+            await service.diff_paths([uri], from_ref=None, to_ref="main", ctx=ctx)
+        return
+    target = fs_root / "test/user" / scope / "note.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("content")
+    snapshot = await vfs.commit(message="snapshot", paths=[uri], ctx=ctx)
+    page = await service.diff_paths([uri], from_ref=None, to_ref=snapshot["commit_oid"], ctx=ctx)
+    assert page["changes"] == [{"uri": f"{uri}/note.md", "change_type": "added"}]
+    if scope.startswith("bob/"):
+        with pytest.raises(PermissionDeniedError):
+            await vfs.show(snapshot["commit_oid"], path=f"{uri}/note.md", ctx=ctx)
