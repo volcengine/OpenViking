@@ -2,6 +2,8 @@
 
 English / [中文](README_CN.md)
 
+Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
+
 The entry row at the top of the file browsing area: connect an agent, import resources.
 
 It is fixed to two entries. The host only decides which appear and what a click does; the icons, copy, equal-width layout and the divider between them belong to the component — both look the same under every host and differ only in behaviour.
@@ -11,6 +13,7 @@ import { FileBrowserEntries } from '@openviking/react/components/file-browser-en
 import '@openviking/react/components/file-browser-entries/style.css';
 
 <FileBrowserEntries
+  locale="en-US"
   onConnectAgent={openConnectDialog}
   onImportResources={openImportFlow}
 />;
@@ -26,7 +29,7 @@ With a single entry **no divider is drawn**: a divider separates two neighbours,
 
 ```tsx
 // Only the import entry, with no divider
-<FileBrowserEntries onImportResources={openImportFlow} />
+<FileBrowserEntries locale="en-US" onImportResources={openImportFlow} />
 ```
 
 ## Copy
@@ -35,6 +38,7 @@ Both labels are replaceable and default to English:
 
 ```tsx
 <FileBrowserEntries
+  locale="en-US"
   onConnectAgent={openConnectDialog}
   onImportResources={openImportFlow}
   labels={{
@@ -49,9 +53,9 @@ Both labels are replaceable and default to English:
 `FileBrowser`'s `toolbarActions` accepts any node. Passing this component there makes the entry row match the rest of the module:
 
 ```tsx
-<FileBrowser
+<FileBrowser locale="en-US"
   toolbarActions={
-    <FileBrowserEntries onConnectAgent={connect} onImportResources={import} />
+    <FileBrowserEntries locale="en-US" onConnectAgent={connect} onImportResources={import} />
   }
 />;
 ```
@@ -60,12 +64,13 @@ Connection dialogs, import flows and onboarding belong to the host; the componen
 
 ## Props
 
-| Property            | Type                       | Default | Description                                               |
-| ------------------- | -------------------------- | ------- | --------------------------------------------------------- |
-| `onConnectAgent`    | `() => void`               | —       | The connect entry was clicked; omit it to hide that entry |
-| `onImportResources` | `() => void`               | —       | The import entry was clicked; omit it to hide that entry  |
-| `labels`            | `FileBrowserEntriesLabels` | —       | The two labels; omitted ones keep their English defaults  |
-| `className`         | `string`                   | —       | Additional container class                                |
+| Property            | Type                       | Default  | Description                                               |
+| ------------------- | -------------------------- | -------- | --------------------------------------------------------- |
+| `locale`            | `'zh-CN' \| 'en-US'`       | Required | Built-in Chinese and English copy.                        |
+| `onConnectAgent`    | `() => void`               | —        | The connect entry was clicked; omit it to hide that entry |
+| `onImportResources` | `() => void`               | —        | The import entry was clicked; omit it to hide that entry  |
+| `labels`            | `FileBrowserEntriesLabels` | —        | The two labels; omitted ones follow locale                |
+| `className`         | `string`                   | —        | Additional container class                                |
 
 ## Theme
 

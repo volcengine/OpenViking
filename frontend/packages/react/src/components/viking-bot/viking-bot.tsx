@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { DEFAULT_LABELS } from './labels.js';
+import { resolveVikingBotLabels } from './labels.js';
 import { VikingBotSessionActions } from './session-actions.js';
 import { VikingBotWelcome } from './welcome.js';
 import { QuickInputScope, useQuickInput } from './use-quick-input.js';
@@ -55,7 +55,7 @@ export function VikingBot({
   labels: overrides,
   ...rest
 }: VikingBotProps) {
-  const labels = { ...DEFAULT_LABELS, ...overrides };
+  const labels = resolveVikingBotLabels(locale, overrides);
   const hasMessages = messages.length > 0;
   const localComposer = useRef<VikingBotComposerRef>(null);
   const inputRef = composerRef ?? localComposer;
@@ -146,11 +146,14 @@ export function VikingBot({
         </div>
         {footer ? <div className="ov-viking-bot__footer">{footer}</div> : null}
         {interaction
-          ? (interactionSlot ?? <VikingBotInteraction {...interaction} />)
+          ? (interactionSlot ?? (
+              <VikingBotInteraction {...interaction} locale={locale} />
+            ))
           : (composer ??
             // 省略 draft 表示只读会话，此时不渲染默认输入区。
             (draft !== undefined ? (
               <VikingBotComposer
+                locale={locale}
                 ref={inputRef}
                 value={draft}
                 attachments={attachments}

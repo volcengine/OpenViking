@@ -1,6 +1,7 @@
+import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes } from 'react';
 
-export type AgentConnectLocale = 'zh' | 'en';
+export type AgentConnectLocale = Locale;
 export type AgentConnectTabId = 'mainstream' | 'custom';
 
 /** 固定目录中选中的 Agent。Selected agent from the built-in catalog. */

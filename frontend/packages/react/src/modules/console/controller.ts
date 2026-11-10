@@ -1,3 +1,10 @@
+import type { Locale } from '../../shared/locale.js';
+import {
+  ConsoleCommandError,
+  formatConsoleMessage,
+  type ConsoleMessage,
+  type ConsoleRecord,
+} from './command-messages.js';
 import { isOvClientError } from '../../client/errors.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type { ConsoleState } from './types.js';
@@ -8,7 +15,9 @@ export function createConsoleController(
   client: OvClient,
   options: OvRequestOptions = {},
 ) {
-  let state: ConsoleState = {
+  let state: Omit<ConsoleState, 'records'> & {
+    records: readonly ConsoleRecord[];
+  } = {
     records: [],
     command: '',
     conversationDraft: '',
@@ -33,7 +42,7 @@ export function createConsoleController(
       failedCommand: undefined,
     });
   };
-  async function execute(input = state.command, locale: 'en' | 'zh' = 'en') {
+  async function execute(input = state.command, locale: Locale = 'en-US') {
     const command = input.trim();
     if (!active || running || !command) return;
     try {
@@ -54,7 +63,7 @@ export function createConsoleController(
     running = controller;
     const id = `command-${++sequence}`;
     const current = () => active && running === controller;
-    const finish = (content: string) => {
+    const finish = (message: ConsoleMessage) => {
       if (!current()) return;
       running = undefined;
       cancelRunning = undefined;
@@ -65,18 +74,17 @@ export function createConsoleController(
             ? {
                 ...record,
                 status: 'error',
-                content: { variant: 'text', text: content },
+                localMessage: message,
+                content: {
+                  variant: 'text',
+                  text: formatConsoleMessage(message, 'en-US'),
+                },
               }
             : record,
         ),
       });
     };
-    const onAbort = () =>
-      finish(
-        locale === 'zh'
-          ? '请求已取消；服务端可能仍在处理已接收的操作。'
-          : 'Request cancelled; the server may still process an accepted operation.',
-      );
+    const onAbort = () => finish({ code: 'cancelled' });
     cancelRunning = () => {
       controller.abort();
       signal.removeEventListener('abort', onAbort);
@@ -111,6 +119,10 @@ export function createConsoleController(
       });
     } catch (error) {
       if (!current() || signal.aborted) return;
+      const localMessage =
+        error instanceof ConsoleCommandError
+          ? { code: error.code, value: error.value, usage: error.usage }
+          : undefined;
       const message = isOvClientError(error)
         ? `${error.code}: ${error.message}`
         : error instanceof Error
@@ -124,6 +136,7 @@ export function createConsoleController(
             ? {
                 ...record,
                 status: 'error',
+                localMessage,
                 content: { variant: 'text', text: message },
               }
             : record,
@@ -159,7 +172,7 @@ export function createConsoleController(
     setCommand: (command: string) => update({ command }),
     setConversationDraft: (conversationDraft: string) =>
       update({ conversationDraft }),
-    retry: (locale: 'en' | 'zh') =>
+    retry: (locale: Locale) =>
       state.failedCommand
         ? execute(state.failedCommand, locale)
         : Promise.resolve(),

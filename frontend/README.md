@@ -1,5 +1,7 @@
 # OpenViking Frontend
 
+All public UI components and composed modules require an explicit `locale: 'zh-CN' | 'en-US'` for built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow the current locale and update when it changes. Hosts still provide business content, slots and callback messages.
+
 React foundations for building OpenViking AI application interfaces: Rslib builds, bilingual Rspress documentation, layered directory conventions, and scoped styles. FileTree, Tui and FilePreview provide working views, alongside five file-type icons. Console provides native command execution and ScopeCascade coordinates identity selection. FileBrowser remains a layout placeholder.
 
 Agent-facing development constraints are documented in [AGENTS.md](./AGENTS.md).

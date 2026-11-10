@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes, ReactNode } from 'react';
 import type { OvRequestOptions } from '../../client/types.js';
 import type {
@@ -36,10 +37,10 @@ export interface ConsoleLabels {
 
 /** Options shared by Console and useConsole. */
 export interface ConsoleOptions {
+  locale?: Locale;
   mode?: ConsoleMode;
   /** Initial uncontrolled mode. Defaults to VikingBot ('conversation'). */
   defaultMode?: ConsoleMode;
-  locale?: 'en' | 'zh';
   /** Change with the identity when using dynamic credential/identity functions. */
   scopeKey?: string;
   onModeChange?: (mode: ConsoleMode) => void;
@@ -50,6 +51,8 @@ export interface ConsoleProps
   extends
     ConsoleOptions,
     Omit<HTMLAttributes<HTMLDivElement>, 'onSelect' | 'children'> {
+  /** 内置中英文文案的语言。Language of the built-in interface copy. */
+  locale: Locale;
   /** Host-owned conversation state/capabilities. Omit draft callbacks to use Console's local draft. */
   conversation?: Partial<VikingBotProps>;
   /** Reports navigation intent; the host opens the resource. */

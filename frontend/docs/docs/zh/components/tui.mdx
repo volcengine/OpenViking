@@ -1,5 +1,7 @@
 # Tui 命令控制台
 
+必填 `locale: 'zh-CN' | 'en-US'` 选择内置中英文文案；已有 `labels` 可逐项覆盖，未覆盖项跟随当前语言。业务内容仍由宿主提供。
+
 命令控制台主体：当前命令记录、结果、空态，以及带建议和帮助的输入区域。宿主提供命令目录并负责请求、权限、执行和会话；组件通过 `onSubmit` 上报提交意图，通过 `onCopy` 通知复制完成。
 
 视图已实现命令记录与七种结果变体、空态，以及带补全和参数提示的受控输入。业务命令目录由宿主提供。
@@ -22,7 +24,7 @@
 
 输入区与命令记录统一使用灰色 CLI 前缀、正文色加重的命令名、链接色资源 URI；链接仅在 hover 时显示下划线。命令记录按同一份 `inputText` 显示，参数原样保留；时间单独位于下一行并右对齐。复制和历史回填使用相同前缀，未匹配目录的命令按原文显示。
 
-共用示例通过 `useLang()` 跟随文档站语言，同时提供对应语言的命令描述、分组和结果。`locale="zh"` 选择中文界面文案，默认 `locale="en"`；`labels` 可单独覆盖界面文案。命令和结果文案由宿主本地化。
+共用示例通过 `useLang()` 跟随文档站语言，同时提供对应语言的命令描述、分组和结果。`locale="zh-CN"` 选择中文界面文案，`locale` 为必填；`labels` 可单独覆盖界面文案。命令和结果文案由宿主本地化。
 
 ## 空态与快捷命令
 
@@ -68,7 +70,7 @@ import type {
 | value         | string                          | 必填         | 受控输入值。                                                                           |
 | disabled      | boolean                         | false        | 禁用命令输入与提交，提示文案由 `labels.unavailableMessage` 提供。                      |
 | emptyState    | ReactNode                       | labels.empty | 无记录时展示的完整空态，可包含标题、说明与快捷入口；传 `null` 时隐藏。                 |
-| locale        | `"en" \| "zh"`                  | `"en"`       | 内置界面文案的语言；labels 可单独覆盖界面文案。                                        |
+| `locale`      | `'zh-CN' \| 'en-US'`            | 必填         | 选择内置中英文文案。                                                                   |
 | commands      | readonly TuiCommandDefinition[] | `[]`         | 宿主命令目录，用于补全、帮助及等待骨架。                                               |
 | commandGroups | readonly TuiCommandGroup[]      | `[]`         | 宿主分组名称和顺序；未声明的组按目录顺序追加。                                         |
 | labels        | TuiLabels                       | —            | 统一的界面文案与引导提示。                                                             |

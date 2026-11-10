@@ -21,7 +21,7 @@ Because a module loads its own data, no prop carries data. A host supplies confi
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
 
-<FileBrowser labels={{ title: 'File browser' }} />;
+<FileBrowser locale="en-US" labels={{ title: 'File browser' }} />;
 ```
 
 The two components and their main Props types are also exported from the `@openviking/react` root entry; Labels, Slots and the enum types come from the module subpath. Runnable examples and property descriptions are in the [module docs](../../../../docs/docs/en/modules/index.mdx). The sections below describe the target architecture and capability still to be migrated.
@@ -77,8 +77,8 @@ import { OpenVikingProvider } from '@openviking/react/client';
   userId={userId}
   resourceId={libraryId}
 >
-  <FileBrowser />
-  <Console />
+  <FileBrowser locale="en-US" />
+  <Console locale="en-US" />
 </OpenVikingProvider>;
 ```
 

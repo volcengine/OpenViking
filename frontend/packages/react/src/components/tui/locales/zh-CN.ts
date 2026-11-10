@@ -1,6 +1,6 @@
-import type { ResolvedTuiLabels } from './tui-labels.js';
+import type { ResolvedTuiLabels } from '../tui-labels.js';
 
-export const ZH_TUI_LABELS: ResolvedTuiLabels = {
+const messages = {
   placeholder: '>_ 输入 CLI 命令，如 ov find OpenViking',
   unavailableMessage: '当前无法执行命令。',
   send: '发送',
@@ -31,4 +31,6 @@ export const ZH_TUI_LABELS: ResolvedTuiLabels = {
   defaultValue: '默认值',
   yes: '是',
   no: '否',
-};
+} satisfies ResolvedTuiLabels;
+
+export default messages;

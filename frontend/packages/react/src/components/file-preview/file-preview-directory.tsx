@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import { useLayoutEffect, useRef, useState } from 'react';
 
 import type {
@@ -34,7 +35,7 @@ import type {
 export interface FilePreviewDirectoryBodyProps {
   tab: FilePreviewDirectoryTab;
   text: Required<FilePreviewLabels>;
-  locale?: 'en-US' | 'zh-CN';
+  locale?: Locale;
   actions: FilePreviewActions;
   editing: ReturnType<typeof useFilePreviewEditing>;
   viewMode: FilePreviewViewMode;

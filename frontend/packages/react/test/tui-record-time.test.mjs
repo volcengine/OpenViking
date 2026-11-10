@@ -58,7 +58,7 @@ test('relative record times respect minute and hour boundaries in both locales',
     const record = { createdAtMs: now - elapsed, createdAt: 'legacy' };
     assert.equal(formatTuiRecordTime(record, resolveTuiLabels(), now), en);
     assert.equal(
-      formatTuiRecordTime(record, resolveTuiLabels({}, 'zh'), now),
+      formatTuiRecordTime(record, resolveTuiLabels({}, 'zh-CN'), now),
       zh,
     );
   }
@@ -114,7 +114,7 @@ test('hosts can replace dynamic time copy while keeping other locale defaults', 
       formatMinutesAgo: (count) => `${count} min`,
       formatHoursAgo: (count) => `${count} hr`,
     },
-    'zh',
+    'zh-CN',
   );
   assert.equal(labels.noResult, '暂无返回结果');
   for (const [elapsed, expected] of [
@@ -133,7 +133,7 @@ test('server rendering uses stable fallback copy before the client reads its clo
     renderToStaticMarkup(
       createElement(Tui, {
         value: '',
-        locale: 'zh',
+        locale: 'zh-CN',
         records: [{ id: 'time', command: 'demo', status: 'success', ...time }],
       }),
     );

@@ -5,8 +5,8 @@ import {
   resolveFileTreeInfoKey,
   showsInlineDescription,
   splitVikingUri,
-} from '../src/components/file-tree/file-tree-info.ts';
-import { resolveInfoCopy } from '../src/components/file-tree/file-tree-info-labels.ts';
+  resolveInfoCopy,
+} from '@openviking/react/components/file-tree';
 
 test('splits a viking URI into lower-cased segments', () => {
   assert.deepEqual(splitVikingUri('viking://user/Alice/memories/'), [

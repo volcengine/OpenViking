@@ -52,7 +52,7 @@ export function Tui({
   value,
   disabled = false,
   emptyState,
-  locale = 'en',
+  locale = 'en-US',
   commands = [],
   commandGroups = [],
   onValueChange,

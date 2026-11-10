@@ -1,9 +1,9 @@
+import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes } from 'react';
 
 /**
- * 文件浏览入口条的文案。两项的文案都可替换，缺省为英文。
- * Copy of the file browser entry row. Both labels are replaceable, English by
- * default.
+ * 文件浏览入口条的文案。两项文案均可覆盖，默认跟随 locale。
+ * Copy of the file browser entry row. Both labels are replaceable and follow locale.
  */
 export interface FileBrowserEntriesLabels {
   /** 连接 Agent 的文案。Label of the connect-agent entry. */
@@ -35,6 +35,8 @@ export interface FileBrowserEntriesProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
   'children'
 > {
+  /** 内置中英文文案的语言。Language of the built-in interface copy. */
+  locale: Locale;
   /**
    * 连接 Agent 成功后触发。省略时不显示该入口。
    * Called after the connect-agent entry is clicked. Omit it to hide that entry.
@@ -45,6 +47,6 @@ export interface FileBrowserEntriesProps extends Omit<
    * Called after the import-resources entry is clicked. Omit it to hide that entry.
    */
   onImportResources?: () => void;
-  /** 可替换文案，缺省为英文。Replaceable copy; English by default. */
+  /** 可替换文案，未提供的项使用当前 locale 的内置文案。Replaceable copy; omitted fields follow locale. */
   labels?: FileBrowserEntriesLabels;
 }

@@ -115,7 +115,7 @@ test('failed clipboard writes keep the copy action and do not report success', a
     },
   });
   const view = await mount({
-    locale: 'zh',
+    locale: 'zh-CN',
     records: [markdown('```json\n{"demo":true}\n```')],
     onCopy: (text) => copied.push(text),
   });

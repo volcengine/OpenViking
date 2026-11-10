@@ -21,12 +21,13 @@ export type {
 
 /** No shared state, data aggregation or subscription in the layout root. */
 export function ScopeSwitcher({
+  locale,
   children,
   className = '',
   ...props
 }: ScopeSwitcherProps) {
   return (
-    <div {...props} className={`ov-scope-switcher ${className}`}>
+    <div lang={locale} {...props} className={`ov-scope-switcher ${className}`}>
       {children}
     </div>
   );

@@ -21,7 +21,7 @@ Console 已提供原生命令面板；FileBrowser 已实现目录、搜索与预
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
 
-<FileBrowser labels={{ title: '文件浏览' }} />;
+<FileBrowser locale="zh-CN" labels={{ title: '文件浏览' }} />;
 ```
 
 两个组件与主 Props 类型也从 `@openviking/react` 根入口导出；Labels、Slots 与枚举类型从模块子路径导出。可运行示例与属性说明见[模块文档](../../../../docs/docs/zh/modules/index.mdx)。以下各节描述目标架构和待迁入能力。
@@ -77,8 +77,8 @@ import { OpenVikingProvider } from '@openviking/react/client';
   userId={userId}
   resourceId={libraryId}
 >
-  <FileBrowser />
-  <Console />
+  <FileBrowser locale="zh-CN" />
+  <Console locale="zh-CN" />
 </OpenVikingProvider>;
 ```
 
