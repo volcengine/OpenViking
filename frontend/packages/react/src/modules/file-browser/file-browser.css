@@ -1,0 +1,535 @@
+/**
+ * 文件浏览模块的样式，对齐控制台设计稿：左侧目录树，右侧详情区。
+ *
+ * 两栏之间是一条可拖拽的分隔条，树宽由 `--ov-file-browser-tree-width` 给出，
+ * 默认 352px，拖动时由组件改这个变量。没有外层卡片——树与详情各自铺满，由
+ * 宿主决定外框。颜色全部从包级主题基线派生；只有纯几何量（栏宽、行高、圆角）
+ * 直接赋值。
+ *
+ * Styles of the file browser module, matching the console design: the tree on the
+ * left, the detail pane on the right.
+ *
+ * A draggable divider sits between them and the tree width comes from
+ * `--ov-file-browser-tree-width`, 352px by default, which the component rewrites
+ * while dragging. There is no outer card — the tree and the detail each fill their
+ * side, leaving the frame to the host. Every colour derives from the package
+ * baseline; only pure geometry is assigned here.
+ */
+.ov-file-browser {
+  --ov-file-browser-tree-width: 352px;
+  --ov-file-browser-row-height: 32px;
+  --ov-file-browser-stroke: 0.5px;
+
+  display: flex;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  font: inherit;
+}
+
+/* ── 左栏：入口条、搜索行、目录树 ─────────────────────────────────── */
+
+.ov-file-browser__tree {
+  display: flex;
+  flex: none;
+  width: var(--ov-file-browser-tree-width);
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 8px 8px 12px;
+}
+
+/*
+ * 分隔条紧贴左栏，把原来那根 0.5px 描边换成可拖动的命中区：描边留着会与分隔条
+ * 自己的竖线重叠成两根。左右各留 4px 内缩，让命中区不压住树里的行尾内容。
+ *
+ * The divider hugs the left column and replaces the 0.5px border that used to sit
+ * there — keeping both would show two vertical lines. A 4px inset on each side
+ * keeps the hit area off the row-end content inside the tree.
+ */
+.ov-file-browser__resizer {
+  margin: 0 4px;
+}
+
+/* 入口条：主色浅底，两个入口等分，中间一根半透明竖线。 */
+/* 搜索行：卡片式输入框 + 独立刷新按钮，两者同用 0.5px 深色描边。 */
+.ov-file-browser__toolbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.ov-file-browser__search {
+  display: flex;
+  flex: 1 0 0;
+  min-width: 1px;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  padding: 3px 12px;
+  border: var(--ov-file-browser-stroke) solid
+    var(--ov-ui-color-border-3, var(--ov-ui-border-3-default, #c9cbd4));
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #ffffff));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #787c91));
+}
+
+.ov-file-browser__search:focus-within {
+  border-color: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default, #5252ff)
+  );
+}
+
+.ov-file-browser__search-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+
+.ov-file-browser__search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  font: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  letter-spacing: 0.039px;
+  outline: none;
+}
+
+.ov-file-browser__search-input::placeholder {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #787c91));
+}
+
+.ov-file-browser__refresh {
+  display: flex;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: var(--ov-file-browser-stroke) solid
+    var(--ov-ui-color-border-3, var(--ov-ui-border-3-default, #c9cbd4));
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #ffffff));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  cursor: pointer;
+  transition: background-color 160ms ease;
+}
+
+.ov-file-browser__refresh:hover:not(:disabled) {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default, #f1f2f9));
+}
+
+.ov-file-browser__refresh:focus-visible {
+  outline: 2px solid
+    var(--ov-ui-color-focus, var(--ov-ui-focus-default, #5252ff));
+  outline-offset: 1px;
+}
+
+.ov-file-browser__refresh:disabled {
+  color: var(
+    --ov-ui-color-text-disabled,
+    var(--ov-ui-text-disabled-default, #a5a7bb)
+  );
+  cursor: not-allowed;
+}
+
+.ov-file-browser__refresh--spinning svg {
+  animation: ov-file-browser-spin 900ms linear infinite;
+}
+
+@keyframes ov-file-browser-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/*
+ * 树自己负责滚动（两个方向），这里只负责给它一个有界高度。两层都设 `auto` 会
+ * 出现两根横向滚动条，且外层先吃掉滚动、内层的行尾内容反而滚不到。
+ *
+ * The tree scrolls itself in both directions; this only gives it a bounded height.
+ * Two `auto` layers would show two horizontal scrollbars, with the outer one taking
+ * the scroll so the row ends inside never come into view.
+ */
+.ov-file-browser__tree-scroll {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 树铺满这一层，滚动交给树自己的内容区，横向与纵向都只出现一组滚动条。 */
+/* The tree fills this layer and scrolls in its own content box, so both axes show
+   exactly one scrollbar. */
+.ov-file-browser__tree-scroll > .ov-file-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* ── 右栏：详情 ─────────────────────────────────────────────────── */
+
+.ov-file-browser__detail {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+/* 空状态：插画在上、提示在下，整体居中。 */
+/* The empty state: artwork above, hint below, centred as a whole. */
+.ov-file-browser__empty {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #787c91));
+  font: inherit;
+  text-align: center;
+}
+
+/*
+ * 插画：位图只提供形状，白底已经转成 alpha，因此浅色与暗色都不会出现白板。暗色
+ * 下原色偏深，提亮一档与周围文字同层次——只改亮度，不动色相，灰蓝的冷暖关系保留。
+ *
+ * The artwork: the bitmap only supplies the shape, its white background already
+ * turned into alpha, so neither theme shows a white slab. The strokes read too dark
+ * on a dark background and are lifted by brightness alone — hue is untouched, so the
+ * cool cast survives.
+ */
+.ov-file-browser__empty-art {
+  display: block;
+  width: 258px;
+  max-width: 100%;
+  height: auto;
+}
+
+/* 暗色只认宿主放在 <html> 上的 .dark，与包内其他组件一致。 */
+/* Dark mode follows the host's `.dark` on <html>, like every other component here. */
+.dark .ov-file-browser__empty-art {
+  filter: brightness(2.2);
+}
+
+.ov-file-browser__empty-label {
+  margin: 0;
+  font-size: 13px;
+  line-height: 22px;
+  letter-spacing: 0.039px;
+}
+
+.ov-file-browser__hint {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 16px;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #787c91));
+  font: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  text-align: center;
+}
+
+/* 面包屑：每节可点，节之间用斜线分隔。 */
+.ov-file-browser__crumbs {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  overflow: hidden;
+  padding: 8px 16px 0;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #787c91));
+  font-size: 13px;
+  line-height: 22px;
+  letter-spacing: 0.039px;
+  white-space: nowrap;
+}
+
+.ov-file-browser__crumb {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+}
+
+.ov-file-browser__crumb-sep {
+  flex: none;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #787c91));
+}
+
+.ov-file-browser__crumb-button {
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ov-file-browser__crumb-button:hover {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+}
+
+/* 标题行右侧：分段器 + 分隔线 + 图标按钮。 */
+.ov-file-browser__detail-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 预览 / 源码分段器：浅灰底、8px 圆角，选中项白底加 1px 描边。 */
+/* The preview / source switch: a light grey track, 8px radius, the active item
+   white with a 1px outline. */
+.ov-file-browser__segmented {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  align-items: center;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default, #f6f7fa));
+}
+
+.ov-file-browser__segment {
+  display: inline-flex;
+  min-width: 50px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  font: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  letter-spacing: 0.039px;
+  cursor: pointer;
+}
+
+.ov-file-browser__segment[data-active] {
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #ffffff));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  font-weight: 500;
+  box-shadow: 0 0 0 1px
+    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default, #f0f2fa));
+}
+
+.ov-file-browser__detail-sep {
+  flex: none;
+  width: 1px;
+  height: 10px;
+  background: var(
+    --ov-ui-color-border-1,
+    var(--ov-ui-border-1-default, #f0f2fa)
+  );
+}
+
+/* 图标按钮：28px 方形、透明底，与分段器同高。 */
+/* Icon buttons: 28px square on a transparent fill, matching the switch's height. */
+.ov-file-browser__detail-icon {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.ov-file-browser__detail-icon:hover:not(:disabled) {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default, #f1f2f9));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+}
+
+.ov-file-browser__detail-icon:disabled {
+  color: var(
+    --ov-ui-color-text-disabled,
+    var(--ov-ui-text-disabled-default, #a5a7bb)
+  );
+  cursor: not-allowed;
+}
+
+/* 底部元信息：字符数、更新时间等，靠右对齐。 */
+/* ── 内容区的摘要页签：下划线样式 ─────────────────────────────────── */
+
+/*
+ * 与控制台一致：34px 高、13px 字号、间距 32px，激活项 500 字重加 2px 下划线。
+ * 它排在标题行之下、正文之上，和文件页签不是一层。
+ *
+ * Matching the console: 34px tall, 13px, 32px apart, the active item at 500
+ * weight with a 2px underline. It sits below the header and above the body, a
+ * different layer from the file tabs.
+ */
+.ov-file-browser__summary-tabs {
+  display: flex;
+  flex: none;
+  height: 34px;
+  align-items: stretch;
+  gap: 32px;
+  padding: 0 16px;
+  border-bottom: 1px solid
+    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default, #f0f2fa));
+}
+
+.ov-file-browser__summary-tab {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0 2px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  font: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  letter-spacing: 0.039px;
+  cursor: pointer;
+  transition: color 160ms ease;
+}
+
+.ov-file-browser__summary-tab:hover {
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+}
+
+.ov-file-browser__summary-tab[data-active] {
+  border-bottom-color: var(
+    --ov-ui-color-text-1,
+    var(--ov-ui-text-1-default, #0b0b0f)
+  );
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  font-weight: 500;
+}
+
+/*
+ * 读失败态：结论、原始原因与重试。原因用等宽字与次要色，与服务端给的措辞保持
+ * 一致，不在这里改写。
+ *
+ * The read-failure state: conclusion, raw reason and retry. The reason uses a
+ * monospace face in the muted colour and keeps the server's own wording rather
+ * than being rewritten here.
+ */
+.ov-file-browser__failure {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+}
+
+.ov-file-browser__failure-title {
+  margin: 0;
+  color: var(
+    --ov-ui-color-status-error,
+    var(--ov-ui-status-error-default, #c43838)
+  );
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.ov-file-browser__failure-detail {
+  max-width: 480px;
+  margin: 0;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #787c91));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.ov-file-browser__failure-retry {
+  padding: 4px 12px;
+  border: var(--ov-file-browser-stroke) solid
+    var(--ov-ui-color-border-3, var(--ov-ui-border-3-default, #c9cbd4));
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #ffffff));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 160ms ease;
+}
+
+.ov-file-browser__failure-retry:hover {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default, #f1f2f9));
+}
+
+.ov-file-browser__failure-retry:focus-visible {
+  outline: 2px solid
+    var(--ov-ui-color-focus, var(--ov-ui-focus-default, #5252ff));
+  outline-offset: 1px;
+}
+
+/*
+ * 失败态里重试按钮紧跟提示文字，两者之间留一点间距。
+ * The retry button sits right after the message, with a little space between.
+ */
+.ov-file-browser__hint--error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ov-file-browser__retry {
+  padding: 2px 10px;
+  border: var(--ov-file-browser-stroke) solid
+    var(--ov-ui-color-border-3, var(--ov-ui-border-3-default, #c9cbd4));
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #ffffff));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ov-file-browser__retry:hover {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default, #f1f2f9));
+}
+
+.ov-file-browser__retry:focus-visible {
+  outline: 2px solid
+    var(--ov-ui-color-focus, var(--ov-ui-focus-default, #5252ff));
+  outline-offset: 1px;
+}

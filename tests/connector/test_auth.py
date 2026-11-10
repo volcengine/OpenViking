@@ -23,12 +23,17 @@ from openviking.server.identity import RequestContext, Role
 from openviking_cli.exceptions import InternalError, InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
-REFERENCE = {
+LEGACY_REFERENCE = {
     "account_id": "cloud-account",
     "user_id": "cloud-user",
     "ov_user_id": "alice",
     "platform": "feishu_doc",
     "type": "oauth",
+}
+REFERENCE = {
+    **LEGACY_REFERENCE,
+    "resource_id": "ov-resource",
+    "openviking_account_id": "default",
 }
 
 
@@ -127,6 +132,10 @@ async def test_long_import_reloads_token_and_scopes_are_isolated(monkeypatch):
 def test_reference_identity_is_checked(reference):
     with pytest.raises(InvalidArgumentError):
         auth.validate_oauth_ref(reference, "alice")
+
+
+def test_legacy_oauth_reference_is_still_accepted():
+    assert auth.validate_oauth_ref(LEGACY_REFERENCE, "alice") == LEGACY_REFERENCE
 
 
 @pytest.mark.asyncio
@@ -296,6 +305,21 @@ async def test_project_credentials_use_account_identity_and_validate_reference(m
             await auth.project_auth_config(args, ctx)
 
 
+@pytest.mark.asyncio
+async def test_project_credentials_accept_legacy_oauth_reference(monkeypatch):
+    ctx = SimpleNamespace(user=SimpleNamespace(user_id="alice"), api_key="caller-key")
+    reference = {**LEGACY_REFERENCE, "platform": "feishu_project"}
+    fetch = Mock(return_value={"access_token": " token ", "account": {"id": " project-user "}})
+    monkeypatch.setattr(ConnectorClient, "get_oauth_access_token", fetch)
+
+    assert await auth.project_auth_config({auth.OAUTH_REF_ARG: reference}, ctx) == {
+        "user_access_token": "token",
+        "user_key": "project-user",
+    }
+
+    fetch.assert_called_once_with(auth.external_auth_url(), "caller-key", reference)
+
+
 def _credential_reference(**changes):
     return {
         "account_id": "acct",
@@ -461,3 +485,17 @@ async def test_confluence_credentials_use_bearer_token_and_validate_reference(mo
         with pytest.raises(InvalidArgumentError):
             await auth.confluence_auth_config({**args, **extra}, ctx)
     assert fetch.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_confluence_credentials_accept_legacy_oauth_reference(monkeypatch):
+    ctx = SimpleNamespace(user=SimpleNamespace(user_id="alice"), api_key="caller-key")
+    reference = {**LEGACY_REFERENCE, "platform": "confluence"}
+    fetch = Mock(return_value={"access_token": " token ", "expires_at": 4102444800})
+    monkeypatch.setattr(ConnectorClient, "get_oauth_access_token", fetch)
+
+    assert await auth.confluence_auth_config({auth.OAUTH_REF_ARG: reference}, ctx) == {
+        "access_token": "token"
+    }
+
+    fetch.assert_called_once_with(auth.external_auth_url(), "caller-key", reference)

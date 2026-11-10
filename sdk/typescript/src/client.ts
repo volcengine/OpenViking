@@ -1521,34 +1521,6 @@ export class OpenVikingClient {
       { body: seed === undefined ? undefined : { seed } },
     );
   }
-  /** Return the effective Agent Evolution switch for the caller's account. */
-  adminGetAgentEvolution(): Promise<JsonObject> {
-    return this.request("GET", "/api/v1/admin/agent-evolution");
-  }
-  /** Persist and hot-reload Agent Evolution for the caller's account. */
-  adminSetAgentEvolution(enabled: boolean): Promise<JsonObject> {
-    return this.request("PUT", "/api/v1/admin/agent-evolution", {
-      body: { enabled },
-    });
-  }
-  /** Return effective and explicitly overridden settings for one account. */
-  adminGetAccountSettings(accountId: string): Promise<JsonObject> {
-    return this.request(
-      "GET",
-      `/api/v1/admin/accounts/${pathPart(accountId)}/settings`,
-    );
-  }
-  /** Update the allowlisted Agent Evolution setting for one account. */
-  adminSetAccountAgentEvolution(
-    accountId: string,
-    enabled: boolean,
-  ): Promise<JsonObject> {
-    return this.request(
-      "PATCH",
-      `/api/v1/admin/accounts/${pathPart(accountId)}/settings`,
-      { body: { agent_evolution: { enabled } } },
-    );
-  }
   /** List trajectories that consumed an Experience. */
   listExperienceTrajectories(
     experienceUri: string,

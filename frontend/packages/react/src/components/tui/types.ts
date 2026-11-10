@@ -1,4 +1,9 @@
+import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes, ReactNode } from 'react';
+import type {
+  TuiCommandDefinition,
+  TuiCommandGroup,
+} from './command-catalog.js';
 
 /**
  * 一条执行记录的状态。
@@ -330,8 +335,8 @@ export interface TuiCommandHelpItem {
    */
   key: string;
   /**
-   * 命令名，包含开头的斜杠。
-   * Command name including the leading slash.
+   * 用于显示和填入的命令文本。
+   * Command text used for display and insertion.
    */
   name: string;
   /**
@@ -374,15 +379,20 @@ export interface TuiRecord {
    */
   content?: TuiRecordContent;
   /**
-   * 记录头部的展示时间。
-   * Timestamp rendered in the record header.
+   * 未提供有效 createdAtMs 时使用的展示时间，不解析为日期。
+   * Display text used without a valid createdAtMs; never parsed as a date.
    */
   createdAt?: string;
+  /**
+   * 发送时的 Unix 毫秒时间戳，优先在客户端格式化为相对时间或本地日期。
+   * Unix timestamp in milliseconds; preferred for relative time or local date display on the client.
+   */
+  createdAtMs?: number;
 }
 
 /**
- * 可替换的界面文案，默认英文。
- * Replaceable interface copy, defaulting to English.
+ * 可替换的界面文案，默认跟随 locale。
+ * Replaceable interface copy, following locale.
  */
 export interface TuiLabels {
   /**
@@ -397,10 +407,14 @@ export interface TuiLabels {
    */
   unavailableMessage?: string;
   /**
-   * 发送按钮文案。
-   * Send button label.
+   * 底部发送快捷键的说明文案。
+   * Label for the send keyboard shortcut.
    */
   send?: string;
+  /** 全部指令快捷键说明。Label for the all-commands shortcut. */
+  allCommands?: string;
+  /** 历史指令快捷键说明。Label for recalling commands from the current records. */
+  historyCommands?: string;
   /**
    * 建议列表的无障碍名称。
    * Accessible name of the suggestion list.
@@ -437,10 +451,46 @@ export interface TuiLabels {
    */
   copied?: string;
   /**
-   * 无记录时的提示。
-   * Message shown when there are no records.
+   * 内置空态的标题。
+   * Heading of the built-in empty state.
    */
-  empty?: string;
+  emptyTitle?: string;
+  /**
+   * 内置空态的说明。
+   * Description of the built-in empty state.
+   */
+  emptyDescription?: string;
+  /**
+   * 快捷命令列表上方的引导文案。
+   * Label above the quick command list.
+   */
+  quickStart?: string;
+  /** 无返回结果时的提示。Message for an empty command result. */
+  noResult?: string;
+  /** 刚刚发送的时间文案。Time label for a just-sent record. */
+  justNow?: string;
+  /** 命令帮助的标题与操作提示。Command-help heading and hint. */
+  availableCommands?: string;
+  helpHint?: string;
+  /** 参数帮助标题、示例与空参数提示。Parameter help headings and empty copy. */
+  parameters?: string;
+  examples?: string;
+  noParameters?: string;
+  /** 参数表列名与必填值。Parameter columns and required values. */
+  parameter?: string;
+  required?: string;
+  description?: string;
+  defaultValue?: string;
+  yes?: string;
+  no?: string;
+  /** 资源列表分页。Resource list pagination. */
+  loadMore?: string;
+  /** 资源表格的名称列。Resource identity column heading. */
+  resource?: string;
+  /** 格式化已过去的整分钟。Formats elapsed whole minutes. */
+  formatMinutesAgo?: (minutes: number) => string;
+  /** 格式化已过去的整小时。Formats elapsed whole hours. */
+  formatHoursAgo?: (hours: number) => string;
 }
 
 /**
@@ -465,6 +515,8 @@ export interface TuiProps extends Omit<
    * Controlled input value.
    */
   value: string;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /**
    * 是否禁用命令输入与提交，缺省为 `false`。
    * 禁用时的提示文案由 `labels.unavailableMessage` 提供。
@@ -473,33 +525,46 @@ export interface TuiProps extends Omit<
    */
   disabled?: boolean;
   /**
-   * 无记录时展示的完整空态节点，可包含标题、说明与快捷入口。
-   * 省略时展示 `labels.empty`，传 `null` 时隐藏空态内容。
-   * Complete empty-state node when there are no records; may include a
-   * heading, description and shortcuts. Omission shows `labels.empty`;
-   * passing `null` hides empty-state content.
+   * 无记录时展示的空态节点，完全替换内置空态。
+   * 省略时按 `quickCommands` 展示内置空态，没有可用快捷命令时不显示任何空态内容；
+   * 传 `null` 时同样不显示。
+   * Empty-state node shown when there are no records, replacing the built-in
+   * empty state. When omitted, the built-in empty state renders the resolved
+   * `quickCommands`; without any resolved command nothing is shown. Passing
+   * `null` also shows nothing.
    */
   emptyState?: ReactNode;
   /**
-   * 统一的界面文案与引导提示；仅替换展示内容，不改变可用性。
-   * Interface copy and guidance; replaces display content without changing
-   * availability.
+   * 内置空态展示的快捷命令名称，按数组顺序取自 `commands`，未命中的名称跳过，
+   * 重复名称只保留首次出现。
+   * 点击后填入输入框并聚焦，不提交命令。
+   * Quick command names rendered by the built-in empty state, resolved from
+   * `commands` in array order; unknown names are skipped and repeats keep their
+   * first occurrence. Selecting one fills
+   * and focuses the input without submitting.
    */
-  labels?: TuiLabels;
+  quickCommands?: readonly string[];
+  /** 宿主提供的命令目录；省略时无候选和参数帮助，仍可提交文本。 */
+  commands?: readonly TuiCommandDefinition[];
+  /** 宿主提供的分组名称与顺序；未声明的组按目录顺序追加。 */
+  commandGroups?: readonly TuiCommandGroup[];
   /**
-   * 输入值变化时触发，包括接受补全或参数提示；填入不提交命令。
-   * Invoked when the input changes, including accepted completions
-   * and parameter hints; filling the input does not submit a command.
+   * 输入值变化时触发，包括接受命令或示例；行内占位不改变值，也不提交。省略时输入框
+   * 只读，用于展示历史记录。
+   * Invoked when the input changes, including accepted commands and examples; filling the input does not submit a command. Omission makes the input
+   * read-only, for showing history.
    */
-  onValueChange: (value: string) => void;
+  onValueChange?: (value: string) => void;
   /**
-   * 命令发送成功后触发，失败时不触发。
-   * Called after a command is sent successfully; not called on failure.
+   * 用户显式提交时上报命令意图，宿主负责请求、权限和执行，并通过 records 回填状态。
+   * Reports an explicit submission intent. The host owns requests, permissions
+   * and execution, and supplies subsequent status through records. Omission disables submission.
    */
-  onSubmit: (command: string) => void;
+  onSubmit?: (command: string) => void;
   /**
-   * 资源成功打开后触发，参数为已打开的资源 URI；失败时不触发。
-   * Called after a resource opens successfully, with its URI; not called on failure.
+   * 点击资源 URI 时触发，由宿主接管打开；覆盖输入区、命令记录和结果中的链接。
+   * Called when a resource URI is activated in the input, command echo or results;
+   * the host owns navigation. Without a handler, text links use their native href.
    */
   onOpenUri?: (uri: string) => void;
   /**
@@ -507,4 +572,10 @@ export interface TuiProps extends Omit<
    * Called after copying succeeds, with the copied text; not called on failure.
    */
   onCopy?: (text: string) => void;
+  /**
+   * 统一的界面文案与引导提示；仅替换展示内容，不改变可用性。
+   * Interface copy and guidance; replaces display content without changing
+   * availability.
+   */
+  labels?: TuiLabels;
 }

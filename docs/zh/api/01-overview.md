@@ -516,11 +516,12 @@ JSON 输出 - 错误：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| GET | `/api/v1/admin/metric-inventory` | 流式导出供离线报表使用的元数据清单（仅 ROOT） |
 | GET | `/api/v1/admin/configuration` | 获取 Cluster 层显式运行时配置 |
 | PATCH | `/api/v1/admin/configuration` | 更新 Cluster 层运行时配置 |
 | POST | `/api/v1/admin/configuration/test-model` | 测试草稿模型或 Embedding 连接，不保存配置 |
 | POST | `/api/v1/admin/restart` | 请求支持该能力的服务进程优雅重启（仅 ROOT） |
-| GET | `/api/v1/admin/accounts/{account_id}/configuration` | 获取 Account 层显式运行时配置 |
+| GET | `/api/v1/admin/accounts/{account_id}/configuration` | 获取 Account 配置及生效的 Agent 进化开关 |
 | PATCH | `/api/v1/admin/accounts/{account_id}/configuration` | 更新 Account 层运行时配置 |
 | GET | `/api/v1/admin/agent-evolution` | 获取 Agent 进化状态（deprecated） |
 | PUT | `/api/v1/admin/agent-evolution` | 更新 Agent 进化状态（deprecated） |
@@ -538,8 +539,11 @@ JSON 输出 - 错误：
 | POST | `/api/v1/admin/accounts/{account_id}/users` | 注册用户 |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | 列出用户 |
 | GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 获取单个用户的无凭据成员信息（user_id、role） |
-| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 获取用户记忆策略 |
-| PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 更新用户记忆策略 |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 获取用户添加位置、记忆策略和 TTL |
+| PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 更新用户添加位置、记忆策略和 TTL |
+| GET | `/api/v1/user-settings/add-locations` | 读取当前用户的添加位置（deprecated） |
+| PATCH | `/api/v1/user-settings/add-locations` | 更新当前用户的添加位置（deprecated） |
+| DELETE | `/api/v1/user-settings/add-locations` | 清除当前用户的添加位置设置（deprecated） |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 移除用户 |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 在 USER 与 ADMIN 之间变更用户角色 |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | 重新生成用户 Key |

@@ -1,8 +1,10 @@
 # FilePreview 文件预览
 
+可选 `locale: 'zh-CN' | 'en-US'` 覆盖最近的模块或 Provider；均未配置时默认 `en-US`。已有 `labels` 可逐项覆盖。业务内容仍由宿主提供。
+
 带页签的文件预览。宿主给出内容与文件名，组件负责格式识别、页签行、内容区标题行与正文。
 
-当前是占位实现：页签外壳、编辑流程与成功通知已就位并可交互，文件正文尚未接入渲染器，先以纯文本降级展示。视图后续按本文契约重写。
+正文已接入按需加载的 FileViewerCore，支持 Markdown、图片、代码、表格、PDF、Office 和音视频。组件保留控制台式文件标签、路径栏和页脚。
 
 ## 基础用法
 
@@ -12,6 +14,22 @@
 
 ```
 
+## 分级内容与图片
+
+```tsx file="../../_demos/file-preview-console.tsx" preview
+
+```
+
+文件页签可提供 `levels`：每项包含 `key`、`label`、`source`，可选 `resources`、`disabled`、`editing`。组件在路径下方显示分级切换，未指定时选第一个可用层级。`activeLevelKey` 与 `onLevelChange` 可控制当前层级；禁用项不可选。切换层级会丢弃草稿、恢复预览模式；读取或保存期间禁止切换。层级默认只读，只有该项明确提供 `editing` 才可编辑。
+
+各级内容由宿主加载；目录可提供 L0 摘要与 L1 总览，文件可增加 L2 正文。组件不自行读取服务端摘要。`source` 仍为必填，作为没有可用层级时的回落来源。
+
+原始图片用 `source.url` 或 `source.file`，不要把二进制图片当成 `source.content` 文本传入。图片在白色面板内按比例居中，右下角显示原始像素尺寸；点击可放大。
+
+Markdown 内图片可通过 `resources` 按原始图片地址匹配；动态鉴权图片使用 `resolveImage(src, source): Promise<string>`，宿主根据当前层级的 `source.path` 解析相对路径或 Viking URI 并返回可访问地址。宿主管理请求、取消和 blob URL 回收。每层可提供独立 `resources`，省略时继承文件页签资源。组件不会自动把 `viking://` 转成 HTTP 地址。
+
+`slots.footer` 可放更新时间与内容解析说明，采用左右对齐布局；权限徽标继续使用 `slots.titleExtra`，动作菜单由 `slots.actions` 提供。
+
 ## 两类页签
 
 | 类型              | 由谁渲染     | 典型用途             |
@@ -19,9 +37,13 @@
 | `kind: 'file'`    | 组件         | 文件原文、源码、文档 |
 | `kind: 'content'` | 宿主原样渲染 | 看板、图谱、摘要     |
 
-两类共享外壳——页签行、路径面包屑、复制路径与标题行插槽。差异在正文怎么来，以及预览/源码切换只属于文件页签：内容页签需要多种视图时在 `content` 里自行实现。
+两类共享外壳——页签行、路径面包屑与标题行动作区。差异在正文怎么来，以及预览/源码切换只属于文件页签：内容页签需要多种视图时在 `content` 里自行实现。
 
-当前激活哪个页签由组件内部维护。需要从外部切换时用 ref 句柄：
+**组件不内置动作按钮。** 复制正文、下载、预览/源码切换、编辑这些按钮依赖宿主的产品语义与文案，放在组件里既无法裁剪也难换形态，因此由宿主在 `slots.actions` 里渲染。组件通过该插槽的函数形式给出 `FilePreviewActions` 上下文——当前视图模式、编辑态、各项能力是否可用，以及改变它们的方法；状态仍由组件维护，宿主不需要接管。
+
+复制路径是例外：有 `source.path` 的文件在任何宿主下都需要它，因此内置在面包屑末尾。
+
+当前页签可通过 `activeKey` / `onActiveKeyChange` 受控，也可通过 `defaultActiveKey` 指定初始值；支持 ref 句柄：
 
 ```tsx
 const previewRef = useRef<FilePreviewHandle>(null);
@@ -32,7 +54,7 @@ previewRef.current?.setActiveTab('dashboard');
 
 `source` 接受三种互斥输入，按顺序取第一个有值的：
 
-- `content` —— 内联文本，会被包成以 `fileName` 命名的 `File`。
+- `content` —— 内联文本，会编码成字节交给底座。
 - `file` —— `File` 或 `Blob`，直接透传。
 - `url` —— 可访问链接，组件不自行鉴权。
 
@@ -40,77 +62,147 @@ previewRef.current?.setActiveTab('dashboard');
 
 ## 状态
 
-加载中、失败与格式不支持都不是 props，由组件根据内容与文件名判定。三种状态都可以通过插槽替换：
+加载中、失败与格式不支持都不是 props：加载与失败由组件判定，格式是否可预览由底座判定。三种状态都可以通过插槽替换：
 
 - `slots.loadingFallback`
 - `slots.errorFallback`
-- `slots.unsupportedFallback`
+- `slots.unsupportedFallback` —— 交给底座接管整个不支持态，因此传了它之后底座原本给出的下载入口也不再出现
 
 宿主提供异步 `editing.save` 执行保存，可选提供 `editing.loadContent` 读取完整文本；返回 `undefined` 表示放弃编辑，拒绝时显示读取失败提示。保存失败时保留草稿并显示错误。`editing.onSave` 仅通知保存成功，`editing.onCancel` 通知草稿已被丢弃。保存中阻止重复提交与页签切换。
 
-执行能力与通知分开：操作成功后才触发对应的 `on…` 回调，失败时不触发。省略方法时隐藏或禁用对应入口，通知本身不承担操作。正文 URI 交互待接入 FileViewer 时启用。
+执行能力与通知分开：操作成功后才触发对应的 `on…` 回调，失败时不触发。省略方法时隐藏或禁用对应入口，通知本身不承担操作。Markdown 链接通过 `operations.openUri` 交给宿主解析和导航。
 
 ## 属性
 
-| 属性     | 类型                                             | 默认值 | 说明                                 |
-| -------- | ------------------------------------------------ | ------ | ------------------------------------ |
-| `tabs`   | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | 必填   | 至少一个页签，初始展示第一个。       |
-| `labels` | `FilePreviewLabels`                              | 英文   | 所有页签的默认文案，页签可逐项覆盖。 |
-| 其余属性 | `HTMLAttributes<HTMLDivElement>`                 | —      | 标准 div 属性。                      |
+| 属性     | 类型                                             | 默认值 | 说明                                                                                     |
+| -------- | ------------------------------------------------ | ------ | ---------------------------------------------------------------------------------------- |
+| `tabs`   | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | 必填   | 至少一个页签，初始展示第一个。                                                           |
+| `labels` | `FilePreviewLabels`                              | locale | 组件自渲染部分的文案（复制路径、加载与失败态、空文件与截断提示）；动作按钮的文案归宿主。 |
+| 其余属性 | `HTMLAttributes<HTMLDivElement>`                 | —      | 标准 div 属性。                                                                          |
 
 ### 页签字段
 
 两类页签共有：
 
-| 属性                 | 类型                         | 默认值  | 说明                                   |
-| -------------------- | ---------------------------- | ------- | -------------------------------------- |
-| `key`                | `string`                     | 必填    | 页签唯一标识。                         |
-| `title`              | `ReactNode`                  | 文件名  | 页签行显示内容；内容页签必填。         |
-| `icon`               | `ReactNode`                  | 按格式  | 页签图标。                             |
-| `labels`             | `Partial<FilePreviewLabels>` | —       | 覆盖该页签的文案。                     |
-| `disabled`           | `boolean`                    | `false` | 禁用该页签。                           |
-| `onOpenParent`       | `(path: string) => void`     | —       | 上级目录成功打开后触发；失败时不触发。 |
-| `onCopyPath`         | `(path: string) => void`     | —       | 路径复制成功后通知。                   |
-| `showViewModeSwitch` | `boolean`                    | `true`  | 预览/源码切换；仅文件页签生效。        |
-| `slots`              | `FilePreviewHeaderSlots`     | —       | `actions`、`titleExtra`。              |
+| 属性           | 类型                         | 默认值  | 说明                                   |
+| -------------- | ---------------------------- | ------- | -------------------------------------- |
+| `key`          | `string`                     | 必填    | 页签唯一标识。                         |
+| `title`        | `ReactNode`                  | 文件名  | 页签行显示内容；内容页签必填。         |
+| `icon`         | `ReactNode`                  | —       | 页签图标，由宿主提供；省略则不显示。   |
+| `labels`       | `Partial<FilePreviewLabels>` | —       | 覆盖该页签的文案。                     |
+| `disabled`     | `boolean`                    | `false` | 禁用该页签。                           |
+| `onOpenParent` | `(path: string) => void`     | —       | 上级目录成功打开后触发；失败时不触发。 |
+| `onCopyPath`   | `(path: string) => void`     | —       | 路径复制成功后通知。                   |
+
+`slots.titleExtra` 渲染在路径与复制按钮之后、动作组之前，用于标题旁的附加标记，例如权限标签、状态徽标或版本号。组件不判断标记的含义与样式，传入什么就渲染什么；不传时不占位。
+
+```tsx
+{
+  kind: 'file',
+  key: 'file',
+  source: { content, fileName: 'JC-17-A.md', path },
+  slots: { titleExtra: <Tag>可管理</Tag> },
+}
+```
 
 文件页签额外提供：
 
-| 属性            | 类型                            | 默认值 | 说明                                                                                     |
-| --------------- | ------------------------------- | ------ | ---------------------------------------------------------------------------------------- |
-| `source`        | `FilePreviewSource`             | 必填   | 内容与文件名。                                                                           |
-| `operations`    | `FilePreviewOperations`         | —      | 异步执行能力：`openParent(path)`、`download()`、`openUri(uri)`，均返回 `Promise<void>`。 |
-| `resources`     | `readonly FileViewerResource[]` | —      | 伴随资源，例如 3D 贴图。                                                                 |
-| `editing`       | `FilePreviewEditing`            | —      | 编辑能力；不传即只读。                                                                   |
-| `slots`         | `FilePreviewFileTabSlots`       | —      | 增加三类状态兜底。                                                                       |
-| `onCopyContent` | `(text: string) => void`        | —      | 正文复制成功后通知。                                                                     |
-| `onDownload`    | `() => void`                    | —      | 下载操作成功后触发；失败时不触发。                                                       |
-| `onOpenUri`     | `(uri: string) => void`         | —      | 正文资源成功打开后触发；失败时不触发。                                                   |
+| 属性             | 类型                               | 默认值         | 说明                                                                                              |
+| ---------------- | ---------------------------------- | -------------- | ------------------------------------------------------------------------------------------------- |
+| `source`         | `FilePreviewSource`                | 必填           | 内容与文件名。                                                                                    |
+| `operations`     | `FilePreviewOperations`            | —              | 异步执行能力：`openParent(path)`、`download()`，均返回 `Promise<void>`。                          |
+| `resources`      | `readonly FileViewerResource[]`    | —              | 伴随资源，例如 3D 贴图。                                                                          |
+| `levels`         | `readonly FilePreviewLevel[]`      | —              | 分级内容，每项独立提供 source，可覆盖 resources 与 editing。                                      |
+| `activeLevelKey` | `string`                           | 第一个可用层级 | 受控层级。                                                                                        |
+| `onLevelChange`  | `(key: string) => void`            | —              | 切换意图；受控时由宿主更新 activeLevelKey。                                                       |
+| `resolveImage`   | `(src, source) => Promise<string>` | —              | 宿主解析 Markdown 图片，返回可访问 URL。                                                          |
+| `editing`        | `FilePreviewEditing`               | —              | 编辑能力；不传即只读。                                                                            |
+| `slots`          | `FilePreviewFileTabSlots`          | —              | `actions`（节点或接收上下文的函数）、`titleExtra`、`footer`，以及加载、失败、格式不支持三类兜底。 |
+| `onCopyContent`  | `(text: string) => void`           | —              | 正文复制成功后通知。                                                                              |
+| `onDownload`     | `() => void`                       | —              | 下载操作成功后触发；失败时不触发。                                                                |
+| `onOpenUri`      | `(uri: string) => void`            | —              | 正文资源成功打开后触发；失败时不触发。                                                            |
+
+内容页签额外提供：
+
+| 属性      | 类型        | 默认值 | 说明                                                       |
+| --------- | ----------- | ------ | ---------------------------------------------------------- |
+| `content` | `ReactNode` | 必填   | 页签正文，铺满页签行以下的整个区域，由宿主自行排版与滚动。 |
+
+内容页签没有内容区标题行，也不消费 `slots`——那一整块都是宿主的，没有组件提供的标题行或状态可填。组件也不在 `content` 外面套容器，套一层只会限制宿主的排版。需要工具栏、标题或状态提示时，都写在自己的 `content` 里。
 
 ```tsx
 import { FilePreview } from '@openviking/react/components/file-preview';
 import '@openviking/react/components/file-preview/style.css';
 ```
 
-复制由组件完成。文件页签提供 `source.path` 时显示路径复制按钮；没有可复制文本时，正文复制按钮禁用。两类回调都接收已经复制成功的值，失败时不触发；省略回调不影响复制，宿主无需再次执行复制。
+复制由组件完成，宿主只需渲染按钮并调用 `actions.copyContent()` / `actions.copyPath()`，两者返回是否成功。`onCopyContent` / `onCopyPath` 在复制成功后触发，接收已复制的值；失败时不触发。
 
 ## 无障碍
 
 页签行使用 `role="tablist"` 与 `role="tab"` 按钮并上报 `aria-selected`。图标按钮都带 `aria-label` 与 `title` 提示。路径面包屑只在传入 `operations.openParent` 时才可点击。
 
+## 类名
+
+类名带 `ov-` 前缀。块名为 `ov-file-preview`，元素使用 `ov-file-preview__<元素>`。
+
+| 类名                               | 元素     | 用途                           |
+| ---------------------------------- | -------- | ------------------------------ |
+| `ov-file-preview`                  | 根节点   | 纵向布局与基础排版。           |
+| `ov-file-preview__tab-row`         | 页签栏   | 可横向滚动的页签行。           |
+| `ov-file-preview__tab`             | 页签     | 单个页签，带 `aria-selected`。 |
+| `ov-file-preview__tab-title`       | 页签标题 | 截断的页签文本。               |
+| `ov-file-preview__header`          | 头部     | 路径行与操作区。               |
+| `ov-file-preview__breadcrumb`      | 面包屑   | 上级目录导航按钮。             |
+| `ov-file-preview__header-actions`  | 操作区   | 切换、按钮与扩展操作。         |
+| `ov-file-preview__action`          | 图标按钮 | 方形纯图标控件。               |
+| `ov-file-preview__button`          | 按钮     | 次要按钮。                     |
+| `ov-file-preview__button--primary` | 按钮     | 主要（保存）按钮。             |
+| `ov-file-preview__switch`          | 切换组   | 编辑与预览切换容器。           |
+| `ov-file-preview__switch-item`     | 切换项   | 单个切换，带 `data-active`。   |
+| `ov-file-preview__body`            | 滚动区域 | 内容滚动容器。                 |
+| `ov-file-preview__pre`             | 预览文本 | 只读文本内容。                 |
+| `ov-file-preview__textarea`        | 编辑器   | 可编辑文本域。                 |
+| `ov-file-preview__state`           | 状态面板 | 整高的加载、空态与错误视图。   |
+
+```css
+.my-workbench .ov-file-preview__tab {
+  max-width: 180px;
+}
+```
+
 ## 主题变量
 
-| CSS 变量             | 默认值                    | 用途               |
-| -------------------- | ------------------------- | ------------------ |
-| `--ov-ui-border`     | `rgb(0 0 0 / 8%)`         | 分隔线与边框。     |
-| `--ov-ui-text-muted` | `#8f959e`                 | 次要文字与图标。   |
-| `--ov-ui-row-hover`  | `rgb(0 0 0 / 4%)`         | 悬停背景。         |
-| `--ov-ui-accent`     | `#2563c5`                 | 面包屑与主按钮。   |
-| `--ov-ui-focus-ring` | `#2563c5`                 | 键盘焦点环。       |
-| `--ov-ui-radius`     | `6px`                     | 圆角。             |
-| `--ov-ui-surface`    | `canvas`                  | 选中页签背景。     |
-| `--ov-ui-font-mono`  | `ui-monospace, monospace` | 正文与编辑器文字。 |
+颜色取自 OpenViking 控制台使用的设计规范，只取色值，不引入它的组件样式。暗色只认宿主放在 `<html>` 上的 `.dark` 类，不读 `prefers-color-scheme`——系统偏好可能与宿主实际呈现的主题不一致。
+
+**主题基线**（`--ov-ui-color-*`，定义在包级 `theme.css`，与 FileTree 等组件共用）。组件私有变量都从这些值派生，宿主改基线即可整体换肤：
+
+| CSS 变量                      | 亮色      | 暗色      | 用途           |
+| ----------------------------- | --------- | --------- | -------------- |
+| `--ov-ui-color-primary`       | `#5252ff` | `#5f5fff` | 主色。         |
+| `--ov-ui-color-primary-hover` | `#7075ff` | `#7075ff` | 主色悬停。     |
+| `--ov-ui-color-text-1`        | `#0b0b0f` | `#c7ccd6` | 正文。         |
+| `--ov-ui-color-text-3`        | `#6e718c` | `#737a87` | 次要文字。     |
+| `--ov-ui-color-border-2`      | `#e1e4f2` | `#2e3138` | 分隔线与边框。 |
+| `--ov-ui-color-bg-1`          | `#ffffff` | `#131416` | 面板底色。     |
+| `--ov-ui-color-bg-5`          | `#f1f2f9` | `#23252a` | 悬停背景。     |
+
+**组件变量**（`--ov-ui-file-preview-*`），需要只调这一处时直接覆盖：
+
+| CSS 变量                            | 默认值                           | 用途                     |
+| ----------------------------------- | -------------------------------- | ------------------------ |
+| `--ov-ui-file-preview-accent`       | 同 `--ov-ui-color-primary`       | 面包屑与主按钮。         |
+| `--ov-ui-file-preview-accent-hover` | 同 `--ov-ui-color-primary-hover` | 链接与「…」悬停。        |
+| `--ov-ui-file-preview-border`       | 同 `--ov-ui-color-border-2`      | 分隔线与边框。           |
+| `--ov-ui-file-preview-row-hover`    | 同 `--ov-ui-color-bg-5`          | 悬停背景。               |
+| `--ov-ui-file-preview-surface`      | 同 `--ov-ui-color-bg-1`          | 页签与菜单背景。         |
+| `--ov-ui-file-preview-text`         | 同 `--ov-ui-color-text-1`        | 正文。                   |
+| `--ov-ui-file-preview-text-muted`   | 同 `--ov-ui-color-text-3`        | 次要文字与图标。         |
+| `--ov-ui-file-preview-focus-ring`   | 同 `--ov-ui-color-primary`       | 键盘焦点环。             |
+| `--ov-ui-radius`                    | `6px`                            | 圆角。                   |
+| `--ov-ui-font-mono`                 | `ui-monospace, monospace`        | 路径、正文与编辑器文字。 |
 
 ## 实现范围
 
 组件渲染外壳并通知成功的操作。读取、保存、下载与导航由宿主提供执行能力，成功通知不执行这些操作。
+
+`labels.showHiddenPath` 可覆盖折叠路径菜单按钮的无障碍名称，默认中文为“显示隐藏的路径层级”、英文为“Show hidden path levels”。

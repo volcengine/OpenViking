@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createOvClient, isOvClientError } from '@openviking/react/client';
+import {
+  createOvClient,
+  isOvClientError,
+  OV_PATHS,
+} from '@openviking/react/client';
 
 /** 记录每次调用，并按 handler 返回预设响应。 */
 function fakeFetch(handler) {
@@ -32,7 +36,7 @@ test('joins the gateway prefix with the API path', async () => {
 
   await client.request({
     method: 'GET',
-    path: '/api/v1/fs/ls',
+    path: OV_PATHS.fsLs,
     query: { uri: 'viking://a' },
   });
 
@@ -132,19 +136,22 @@ test('an apiKey function is re-evaluated on every request', async () => {
   assert.equal(fetch.calls[1].init.headers['x-api-key'], 'second');
 });
 
-test('credentials default to same-origin and can be overridden', async () => {
+test('credentials default to include and can be restricted explicitly', async () => {
   const fetch = fakeFetch(ok);
 
   await createOvClient({ baseURL: 'https://ov.test', fetch }).request({
     method: 'GET',
     path: '/api/v1/x',
   });
-  await createOvClient({
-    baseURL: 'https://ov.test',
-    credentials: 'include',
-    fetch,
-  }).request({ method: 'GET', path: '/api/v1/x' });
+  for (const credentials of ['same-origin', 'omit']) {
+    await createOvClient({
+      baseURL: 'https://ov.test',
+      credentials,
+      fetch,
+    }).request({ method: 'GET', path: '/api/v1/x' });
+  }
 
-  assert.equal(fetch.calls[0].init.credentials, 'same-origin');
-  assert.equal(fetch.calls[1].init.credentials, 'include');
+  assert.equal(fetch.calls[0].init.credentials, 'include');
+  assert.equal(fetch.calls[1].init.credentials, 'same-origin');
+  assert.equal(fetch.calls[2].init.credentials, 'omit');
 });

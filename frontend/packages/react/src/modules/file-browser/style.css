@@ -1,1 +1,8 @@
-@import '../shared/module-placeholder.module.css';
+@import '../../theme.css';
+@import '../../shared/components/popover/popover.css';
+@import '../../shared/components/tooltip/tooltip.css';
+@import '../../shared/components/resizable/resizable-handle.css';
+@import '../../components/file-browser-entries/style.css';
+@import '../../components/file-tree/style.css';
+@import '../../components/file-preview/style.css';
+@import './file-browser.css';

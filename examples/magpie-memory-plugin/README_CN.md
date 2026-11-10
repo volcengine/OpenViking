@@ -1,13 +1,31 @@
 # OpenViking for Magpie
 
-为经过 Magpie 网关的模型请求自动召回 OpenViking 记忆，直接读取现有
-`ovcli.conf`，无需在 Magpie 中重复填写服务地址和凭据。
+一个插件提供两项可独立控制的能力：
 
-市场展示名称为 **OpenViking**，npm 分发包名为 `@openviking/magpie-plugin`；两者独立配置。
+- **记忆**：为经过 Magpie 的模型请求召回 OpenViking 上下文，按需采集对话并提供记忆工具。
+- **模型管理**：在 **Agents → OpenViking** 切换 OV/VikingBot 使用的模型，自动保存配置、重启并验证生效。Query Planner 可通过插件 Options 的 `queryMode` / `queryModel` 单独指定模型，默认保留现有 Query 配置。
+
+市场展示名称为 **OpenViking**，统一 npm 包名为 `@openviking/magpie-plugin`。发现页归为「网关中间件」；已安装页可同时识别 Agent 与请求 Hook。没有额外页面或设置面板，不修改 Magpie 宿主。
+
+## 功能开关与迁移
+
+在 Magpie 的插件 Options 中分别设置 `memoryEnabled`、`modelsEnabled`（均默认为 true）：
+
+```json
+{ "memoryEnabled": false, "modelsEnabled": true, "restartOnChange": true }
+```
+
+上例只启用模型管理；记忆关闭时不会召回、采集或注册记忆工具。`modelsEnabled: false` 暂停模型同步；需要恢复原模型时，先在 Agent 行断开接入。现有记忆配置和凭据读取规则保持兼容，Root 凭据只用于模型管理。
+
+从两个插件合并时，将原记忆插件的启用状态迁为 `memoryEnabled`，将原模型插件的状态迁为 `modelsEnabled`，合并保留各自 Options。不要仅因为新插件整体开启，就把原先关闭的记忆功能开启。
+
+旧的 `@openviking/magpie-models-plugin` 已停止单独打包。通用手动迁移方式：备份 Options，在旧模型 Agent 行断开并等待恢复完成，移除两个旧安装项，安装统一包并写回功能开关和原选项，再重新选择模型。不要同时保留新旧模型插件，以免重复注册 Agent。如采用原地迁移，需保留 Agent ID、安装路径、选择文件和恢复日志，并核对迁移前后的 `ov.conf` 与 OV 实例未变化。
+
+模型配置 API、Root 权限、Bot 检测、自动重启和恢复限制见 [模型管理说明](models/README_CN.md)。模型管理不是长期记忆功能，不会自动启用 Bot。
 
 ## 安装
 
-首次 npm 发布完成后，在 Magpie 中安装 OpenViking：
+统一版本 0.2.0 尚未发布；当前请按下文从源码安装。发布后可安装：
 
 ```sh
 magpie plugin add @openviking/magpie-plugin
@@ -25,7 +43,7 @@ magpie plugin add ./examples/magpie-memory-plugin
 ```
 
 本地目录安装需要先生成共享模块。`npm pack` 会自动生成并打包这些模块。
-按 npm 包名安装需要先完成首次发布；直接将整个 OpenViking 仓库作为插件安装不会选中此子目录。
+按 npm 包名安装需要对应版本已发布；直接将整个 OpenViking 仓库作为插件安装不会选中此子目录。
 
 需要支持异步网关 Hook 和宿主 `origin` 分类的 Magpie，以及支持
 `POST /api/v1/search/search` 的 `mode: "context"` 的 OV 服务。
@@ -54,7 +72,7 @@ magpie plugin add ./examples/magpie-memory-plugin
 ```
 
 行为配置沿用共享插件字段名，`plugin.magpie` 覆盖 `plugin` 的同名设置；
-全局 `plugin.enabled: false` 始终关闭本插件。连接读取顶层的 `url`、`api_key`、
+全局 `plugin.enabled: false` 同时关闭记忆功能、模型自动同步和自动重启；显式执行的恢复 CLI 仍可使用。连接读取顶层的 `url`、`api_key`、
 `account`、`user`、`actor_peer_id`、`timeout`（秒）、`extra_headers`（或 CLI 别名 `extra_header`），支持身份字段的已有别名。
 账户、用户请求头沿用共享客户端的身份处理方式，需要与服务端认证模式匹配。
 自定义请求头不能覆盖鉴权、身份或传输请求头，包括 `X-API-Key`。
@@ -216,8 +234,12 @@ worker 在追加消息或 commit 前重新读取配置，检查连接身份、�
 工具默认关闭。设置 `plugin.magpie.mcpEnabled: true`，或在 Magpie 选项中保存 `mcpEnabled: true`，然后在 Magpie Library/MCP 路由
 中为需要的 Agent 开启插件服务。也可通过 Magpie 的 `/mcp/magpie/tools` 访问。
 
-提供 `status`、`find`、`read`、`ls`、`remember`，实际名称由 Magpie 加插件前缀。
+提供 `status`、`find`、`rule_search`、`read`、`ls`、`remember`，实际名称由 Magpie 加插件前缀。
 `status` 检查鉴权后的连接；`read` 最多读取 200 行，`ls` 最多返回 100 项。
+
+`rule_search` 接收 `task_context` 与可选的 `rule_probability_threshold`（默认 `0.65`），
+通过 `POST /api/v1/rules/search` 返回完整 Rule。执行受约束的操作或回复前，
+逐条检查条件、例外和正文，遵守所有适用规则。npm 安装时工具名为 `magpie-plugin_rule_search`。
 
 **工具回调不提供调用者的认证身份。开启工具意味着将当前文件的 OV 身份授权给能调用
 该 MCP 服务的调用者。** 共享网关应保持关闭，除非允许的工具调用者都应拥有该访问权限。

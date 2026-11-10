@@ -1,1 +1,2 @@
-@import './scope-switcher.module.css';
+@import '../../theme.css';
+@import './scope-switcher.css';

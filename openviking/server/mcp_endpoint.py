@@ -88,6 +88,7 @@ from openviking.server.routers.search import context_only_fields_error
 from openviking.server.skill_ingest import install_skills
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import download_token_store, upload_token_store
+from openviking.service.rule_service import RuleSearchRequest
 from openviking.service.skill_sources import GIT_SKILL_SOURCE_PREFIXES
 from openviking.storage.acl import AclSpec
 from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
@@ -806,6 +807,32 @@ async def search(
         events_time_decay_protection=events_time_decay_protection,
     )
     return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
+
+
+@_mcp_error_results()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+async def rule_search(
+    task_context: Annotated[str, Field(min_length=1, max_length=64_000)],
+    rule_probability_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.65,
+) -> str:
+    """Retrieve active OpenViking Rules applicable to a concrete task context.
+
+    Include the task goal, object, planned action, known facts, and material
+    unknowns in ``task_context``. Returned Rules are constraints, not evidence
+    that an unobserved applicability condition is true. Evaluate every Rule's
+    ``applies_when`` and ``exception`` before applying it.
+    """
+    result = await get_service().rules.search_rules(
+        RuleSearchRequest(
+            task_context=task_context,
+            rule_probability_threshold=rule_probability_threshold,
+        ),
+        ctx=_get_ctx(),
+    )
+    rendered = result.get("rendered") if isinstance(result, dict) else None
+    if isinstance(rendered, str) and rendered.strip():
+        return rendered
+    return json.dumps(result, ensure_ascii=False)
 
 
 def _hit_uri(ctx_type: str, uri: str) -> str:

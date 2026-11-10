@@ -1,14 +1,31 @@
 # OpenViking for Magpie
 
-Adds automatic OpenViking context recall to model requests passing through
-[Magpie](https://github.com/yetone/magpie). Reads the existing OpenViking client
-configuration; no second copy of your server address or credentials is needed.
+One OpenViking plugin provides two independently controlled capabilities:
+
+- **Memory:** context recall, optional conversation capture, and memory tools for requests through Magpie.
+- **Model management:** select OV/VikingBot models in **Agents → OpenViking**, then automatically save, restart and verify activation. Query Planner can use a separate model through plugin Options (`queryMode` / `queryModel`); existing Query settings are preserved by default.
+
+The package remains `@openviking/magpie-plugin`. Discovery uses the middleware category; Installed recognizes both Agent and request-hook capabilities. No extra page, settings panel or Magpie host modification is required.
 
 [中文](README_CN.md)
 
-The npm package is `@openviking/magpie-plugin`. Its marketplace display name is
-**OpenViking**; the npm package name is a separate distribution identifier.
-After the first npm publication, install it with:
+## Feature switches and migration
+
+Set `memoryEnabled` and `modelsEnabled` independently in plugin Options (both default to true):
+
+```json
+{ "memoryEnabled": false, "modelsEnabled": true, "restartOnChange": true }
+```
+
+This enables only model management: disabled memory performs no recall/capture and registers no memory tools. `modelsEnabled: false` pauses model synchronization; disconnect the Agent first to restore the original model. Existing memory configuration and credential rules remain compatible. Root credentials are used only for model administration.
+
+When migrating two existing installations, preserve the old memory plugin's on/off state as `memoryEnabled` and the model plugin's state as `modelsEnabled`, retaining their respective options. Enabling the unified package must not implicitly enable previously disabled memory.
+
+The standalone `@openviking/magpie-models-plugin` is no longer packaged. For manual migration: back up options; disconnect the old model Agent and wait for restoration; remove both old installations; install the unified package; restore switches/options; then select the desired model. Do not install both model Agents together. For an in-place migration, retain the Agent ID, install path, selection file and recovery journals, and verify that `ov.conf` and the OV instance remain unchanged.
+
+See [Model management](models/README.md) for Root permissions, Bot detection, restart and recovery limits. Model management never enables Bot automatically.
+
+Version 0.2.0 has not been published. Install from source below; after publication:
 
 ```sh
 magpie plugin add @openviking/magpie-plugin
@@ -30,8 +47,8 @@ magpie plugin add ./examples/magpie-memory-plugin
 
 The generator prepares shared modules before a source-folder installation.
 `npm pack` runs it automatically and produces a self-contained package. The
-package release workflow publishes on main; installing by npm name requires the first
-publication to have completed. Adding the whole OpenViking git repository as a
+package release workflow publishes on main; installing by npm name requires the requested version
+to have been published. Adding the whole OpenViking git repository as a
 Magpie plugin does not select this subdirectory.
 
 ## Connection
@@ -80,7 +97,7 @@ own adapter applies its file-only policy, hook timeout and opt-in tools without
 changing other plugins. Behavior keys use the
 existing shared plugin names. `plugin.magpie` overrides
 the corresponding `plugin` values; global `plugin.enabled: false` disables the
-plugin. Tools require explicit `plugin.magpie.mcpEnabled: true`. Capture defaults
+memory integration and automatic model synchronization/restarts. The explicit recovery CLI remains available. Tools require explicit `plugin.magpie.mcpEnabled: true`. Capture defaults
 to enabled; explicit `autoCapture: false` in host options or client settings is
 preserved. Host options override scoped settings, which override shared settings.
 
@@ -327,13 +344,18 @@ in Magpie's combined `/mcp/magpie/tools` server. Tools are:
 | --- | --- |
 | `status` | Authenticated connectivity check; fixed status without secrets |
 | `find` | Search accessible memories, resources and skills |
+| `rule_search` | Check constraints before a planned action or response; return complete compiled Rules |
 | `read` | Read up to 200 lines from a `viking://` URI |
 | `ls` | List up to 100 entries under a `viking://` directory |
 | `remember` | On explicit user request, create a session, add the supplied text and submit memory extraction |
 
+`rule_search` takes `task_context` and optional `rule_probability_threshold`
+(default `0.65`), requires a server with `POST /api/v1/rules/search`, and preserves
+all returned Rule text. Check conditions and exceptions before acting.
+
 With the npm installation, Magpie's current tool naming rules produce
 `magpie-plugin_status`, `magpie-plugin_find`, `magpie-plugin_read`,
-`magpie-plugin_ls` and `magpie-plugin_remember`.
+`magpie-plugin_ls`, `magpie-plugin_rule_search` and `magpie-plugin_remember`.
 Source-folder installations use the folder's name as the prefix instead.
 The tool callback has
 no authenticated caller identity: **enabling tools delegates this file's OV

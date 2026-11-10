@@ -1,1 +1,4 @@
-@import './tui.module.css';
+@import '../../theme.css';
+@import '../../shared/components/tooltip/style.css';
+@import './tui.css';
+@import './tui-empty.css';

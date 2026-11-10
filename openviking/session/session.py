@@ -1930,6 +1930,7 @@ class Session:
                     task_id,
                     self.ctx.account_id,
                     self.ctx.user.user_id,
+                    task_type="session_commit",
                 ):
                     await get_queue_manager().enqueue(
                         QueueManager.SESSION_COMMIT,
