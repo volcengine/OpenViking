@@ -3,6 +3,7 @@
 import os
 from typing import Dict, Optional
 
+from openviking.storage.vectordb.collection.collection import close_unclosed_collections
 from openviking.storage.vectordb.project.local_project import (
     LocalProject,
     get_or_create_local_project,
@@ -132,6 +133,7 @@ class ProjectGroup:
 
         self.projects.iterate(close_project)
         self.projects.clear()
+        close_unclosed_collections()
 
     def has_project(self, project_name: str) -> bool:
         """

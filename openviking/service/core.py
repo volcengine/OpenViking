@@ -49,6 +49,7 @@ from openviking.storage.queuefs.external_task_processor import ExternalTaskProce
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
 from openviking.storage.queuefs.reindex_processor import ReindexProcessor
 from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
+from openviking.storage.vectordb.collection.collection import close_unclosed_collections
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.system_assets.reconcile import AccountLister, SystemAssetReconciler
@@ -961,6 +962,7 @@ class OpenVikingService:
             await self._vikingdb_manager.close()
             self._vikingdb_manager = None
         self._vector_config_resolver = None
+        await asyncio.to_thread(close_unclosed_collections)
 
         if self._agfs_client:
             close_agfs = getattr(self._agfs_client, "close", None)

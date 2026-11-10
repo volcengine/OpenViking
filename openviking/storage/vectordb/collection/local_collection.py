@@ -226,6 +226,9 @@ class LocalCollection(ICollection):
     ):
         self.indexes = ThreadSafeDictManager[IIndex]()
         self._index_mutation_barrier = _IndexMutationBarrier()
+        self._close_lock = threading.Lock()
+        self._closing = False
+        self._closed = False
         self._bulk_ingest_lock = threading.RLock()
         self._bulk_ingest_depth = 0
         self.meta: CollectionMeta = meta
@@ -271,14 +274,16 @@ class LocalCollection(ICollection):
     def get_meta_data(self):
         return self.meta.get_meta_data()
 
-    def _close_unlocked(self) -> None:
+    def _stop_scheduler(self) -> None:
         self._delete_scheduler_job()
-
-        # Shutdown scheduler
         if self.scheduler:
-            self.scheduler.shutdown(wait=False)
+            # Join BOTH the scheduler and its in-flight jobs before closing
+            # indexes. Never hold the mutation barrier while waiting: a rebuild
+            # may need it to publish its result before its job can finish.
+            self.scheduler.shutdown(wait=True)
             self.scheduler = None
 
+    def _close_unlocked(self) -> None:
         self.store_mgr = None
 
         # Close all indexes
@@ -292,8 +297,15 @@ class LocalCollection(ICollection):
         self.indexes.clear()
 
     def close(self):
-        with self._index_mutation_barrier.exclusive_mutation():
-            self._close_unlocked()
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closing = True
+            self._stop_scheduler()
+            with self._index_mutation_barrier.exclusive_mutation():
+                self._persist_all_indexes()
+                self._close_unlocked()
+                self._closed = True
 
     def begin_bulk_ingest(self) -> None:
         """Defer optional derived-index rebuilds until the outer scope exits."""
@@ -1082,6 +1094,8 @@ class LocalCollection(ICollection):
 
     def _register_index_manage_job(self):
         """Register scheduled task for index maintenance."""
+        if self._closing:
+            return
         if not self.index_manage_job_id:
             self.index_manage_job_id = f"{time.time_ns()}_{self.collection_name}_index_manage"
         next_run_time = datetime.datetime.now() + datetime.timedelta(
@@ -1089,6 +1103,8 @@ class LocalCollection(ICollection):
         )
         self._rebuild_indexes_if_needed()
         self._persist_all_indexes()
+        if self._closing:
+            return
         try:
             self.scheduler.add_job(
                 self._register_index_manage_job,
@@ -1480,12 +1496,6 @@ class PersistCollection(LocalCollection):
         Iterates through all indexes. If they are PersistentIndex type, calls their persist() method.
         """
         self.flush_all_indexes()
-
-    def close(self):
-        """Close the collection and release resources."""
-        with self._index_mutation_barrier.exclusive_mutation():
-            self.flush_all_indexes()
-            self._close_unlocked()
 
     def flush_all_indexes(self):
         """Manually trigger persistence of all indexes.

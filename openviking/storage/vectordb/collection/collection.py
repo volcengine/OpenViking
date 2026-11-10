@@ -1,11 +1,45 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
+import atexit
 import importlib
+import threading
 from abc import ABC, abstractmethod
+from collections import deque
 from typing import Any, Dict, List, Optional, Type
 
 from openviking.storage.vectordb.collection.result import AggregateResult, SearchResult
 from openviking.storage.vectordb.index.index import IIndex
+
+# Finalizers can run while a logging handler (or another application lock) is
+# held. Retain abandoned backends here; only explicit lifecycle code closes
+# them. deque.append does not invoke Python callbacks or acquire an application
+# lock. In particular, do not log, start threads or close resources in __del__.
+_unclosed_collections = deque()
+_unclosed_collections_lock = threading.Lock()
+
+
+def close_unclosed_collections() -> None:
+    """Drain abandoned handles from normal shutdown code, outside finalizers.
+
+    Explicit Collection.close() remains the preferred way to release resources.
+    Failed closes stay registered for a subsequent shutdown attempt.
+    """
+    with _unclosed_collections_lock:
+        failures = []
+        for _ in range(len(_unclosed_collections)):
+            collection = _unclosed_collections.popleft()
+            try:
+                collection.close()
+            except Exception as exc:
+                failures.append((collection, exc))
+        _unclosed_collections.extend(collection for collection, _ in failures)
+        if failures:
+            raise RuntimeError("Failed to close abandoned collections") from failures[0][1]
+
+
+# Standalone vectordb callers may not have a service owner. Keep a last-resort
+# drain before logging's atexit shutdown; service shutdown drains explicitly.
+atexit.register(close_unclosed_collections)
 
 
 def load_collection_class(class_path: str) -> Type["ICollection"]:
@@ -224,13 +258,10 @@ class Collection:
         )
         self.__collection: Optional[ICollection] = collection
 
-    def __del__(self):
-        """
-        Destructor method that cleans up the underlying ICollection instance.
-        Closes the collection connection and sets the reference to None to free resources.
-        """
-        if self.__collection:
-            self.__collection.close()
+    def __del__(self, _pending=_unclosed_collections):
+        collection = getattr(self, "_Collection__collection", None)
+        if collection is not None:
+            _pending.append(collection)
             self.__collection = None
 
     def update(self, fields: Optional[Dict[str, Any]] = None, description: Optional[str] = None):

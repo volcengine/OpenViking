@@ -933,7 +933,8 @@ result = collection.search_by_vector(
 
 ### 4. 资源管理
 
-- 使用完毕后调用 `collection.close()` 释放资源
+- 使用完毕后调用 `collection.close()` 释放资源。重新打开同一路径前也必须显式关闭旧集合。
+- `del` / GC 不再同步关闭集合，以免在日志或其他应用锁内触发死锁。未显式关闭的后端会保留到服务关闭时统一回收；独立使用 vectordb 时可在正常关闭流程调用 `openviking.storage.vectordb.collection.collection.close_unclosed_collections()`，进程正常退出时也有兜底回收。不要在析构或持有应用锁时调用此函数。
 - 合理设置 TTL 自动清理过期数据
 - 定期监控索引大小和内存使用
 

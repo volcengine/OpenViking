@@ -574,7 +574,8 @@ class TestFilterOpsLifecycle(unittest.TestCase):
         self.collection.upsert_data(new_data)
 
         # Ensure data is written
-        # Simulate restart: release old object, reload
+        # Restart requires explicit shutdown, not finalizer-driven cleanup.
+        self.collection.close()
         del self.collection
         self.collection = None  # Avoid tearDown accessing deleted attribute
         gc.collect()
