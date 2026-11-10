@@ -34,6 +34,17 @@ import { padEnd, spinner, styler } from './ui.mjs';
 // under ~/.ovsa/current. Nothing here fetches code or publishes a release.
 
 const execFile = promisify(execFileCallback);
+
+// pm2 delete/stop waits up to the app's kill_timeout for a graceful exit
+// (30s for daemons), so the CLI must wait longer than that or it reports a
+// failure while the app is still shutting down cleanly.
+const PM2_DEFAULT_KILL_TIMEOUT_MS = 30_000;
+const PM2_STOP_MARGIN_MS = 30_000;
+export function pm2StopTimeout(processInfo) {
+  const killTimeout = Number(processInfo?.pm2_env?.kill_timeout);
+  const base = Number.isFinite(killTimeout) && killTimeout > 0 ? killTimeout : PM2_DEFAULT_KILL_TIMEOUT_MS;
+  return base + PM2_STOP_MARGIN_MS;
+}
 const UPDATER_APP = 'vika-updater';
 // This command's own release (or source checkout); bin/pm2 runs its pinned pm2.
 const RELEASE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
@@ -150,7 +161,7 @@ export async function startCommand(target, options) {
     }
     await step(context, t(`启动 ${spec.app}`, `Starting ${spec.app}`), t(`${spec.app} 已就绪`, `${spec.app} is ready`), async () => {
       if (current) {
-        await context.execFileImpl(context.pm2Bin, ['delete', spec.app], { timeout: 30_000, env: appControlEnv(spec.app, context.pm2Env) });
+        await context.execFileImpl(context.pm2Bin, ['delete', spec.app], { timeout: pm2StopTimeout(current), env: appControlEnv(spec.app, context.pm2Env) });
       }
       await startOne(spec, context);
     });
@@ -163,11 +174,11 @@ export async function restartCommand(target, options) {
   const context = defaults(options);
   const apps = appsFor(target, loadTargets(context.env));
   Object.assign(context, await installedRelease(context.releaseLink));
-  const running = new Set((await pm2Processes(context)).map((processInfo) => processInfo?.name));
+  const running = new Map((await pm2Processes(context)).map((processInfo) => [processInfo?.name, processInfo]));
   for (const spec of apps) {
     await step(context, t(`重启 ${spec.app}`, `Restarting ${spec.app}`), t(`${spec.app} 已就绪`, `${spec.app} is ready`), async () => {
       if (running.has(spec.app)) {
-        await context.execFileImpl(context.pm2Bin, ['delete', spec.app], { timeout: 30_000, env: appControlEnv(spec.app, context.pm2Env) });
+        await context.execFileImpl(context.pm2Bin, ['delete', spec.app], { timeout: pm2StopTimeout(running.get(spec.app)), env: appControlEnv(spec.app, context.pm2Env) });
       }
       await startOne(spec, context);
     });
@@ -179,10 +190,10 @@ export async function restartCommand(target, options) {
 export async function stopCommand(target, options) {
   const context = defaults(options);
   const apps = appsFor(target, loadTargets(context.env));
-  const running = new Set((await pm2Processes(context)).map((processInfo) => processInfo?.name));
+  const running = new Map((await pm2Processes(context)).map((processInfo) => [processInfo?.name, processInfo]));
   for (const spec of apps) {
     if (!running.has(spec.app)) continue;
-    await step(context, t(`停止 ${spec.app}`, `Stopping ${spec.app}`), t(`${spec.app} 已停止`, `${spec.app} is stopped`), () => context.execFileImpl(context.pm2Bin, ['stop', spec.app], { timeout: 30_000, env: context.pm2Env }));
+    await step(context, t(`停止 ${spec.app}`, `Stopping ${spec.app}`), t(`${spec.app} 已停止`, `${spec.app} is stopped`), () => context.execFileImpl(context.pm2Bin, ['stop', spec.app], { timeout: pm2StopTimeout(running.get(spec.app)), env: context.pm2Env }));
   }
   await context.execFileImpl(context.pm2Bin, ['save'], { timeout: 30_000, env: context.pm2Env });
   return 0;
