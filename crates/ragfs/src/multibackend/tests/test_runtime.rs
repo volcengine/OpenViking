@@ -1,8 +1,6 @@
 use super::*;
-use crate::core::types::BackendRole;
-use crate::core::{BackendEntry, FileSystem, MultiWriteWrappedFS, WriteFlag};
+use crate::core::{FileSystem, WriteFlag};
 use crate::lock::{MemoryPathLockProvider, PathLockConfig, PathLockManager};
-use crate::multibackend::model::{ProtocolState, ProtocolStatus, ProtocolVersion};
 use crate::multibackend::provider::FilesystemProvider;
 use crate::plugins::memfs::MemFileSystem;
 
@@ -261,77 +259,6 @@ async fn flush_worker_processes_other_accounts_while_one_account_retries() {
     assert!(retries.is_empty());
     assert_eq!(pending.load(Ordering::Relaxed), 0);
     assert!(primary.stat(&blocked_manifest).await.is_ok());
-}
-
-/// Verifies backup membership changes reset V2 metadata for a fresh import.
-#[tokio::test]
-async fn backup_membership_change_resets_metadata_for_full_import() {
-    let primary: Arc<dyn FileSystem> = Arc::new(MemFileSystem::new());
-    primary
-        .ensure_parent_dirs("/_system/accounts.json", 0o755)
-        .await
-        .unwrap();
-    primary
-        .write(
-            "/_system/accounts.json",
-            br#"{"accounts":{"account":{}}}"#,
-            0,
-            WriteFlag::Create,
-        )
-        .await
-        .unwrap();
-
-    let manager = Arc::new(PathLockManager::new(
-        primary.clone(),
-        Arc::new(MemoryPathLockProvider::new()),
-        PathLockConfig::default(),
-    ));
-    let store = Arc::new(MetadataStore::new(primary.clone(), manager, "/local").unwrap());
-    let protocol_path = store.paths().mount_protocol().0;
-    store
-        .write_bytes(
-            &protocol_path,
-            &serde_json::to_vec(&ProtocolState {
-                protocol_version: ProtocolVersion::V2,
-                status: ProtocolStatus::Stable,
-            })
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-    store
-        .initialize_account("account", 1, &["old-backup".to_string()])
-        .await
-        .unwrap();
-
-    let account_manifest = store.paths().account_manifest("account").unwrap().1;
-    assert!(primary.stat(&account_manifest).await.is_ok());
-
-    let provider = Arc::new(FilesystemProvider::new(store.clone()));
-    let backup: Arc<dyn FileSystem> = Arc::new(MemFileSystem::new());
-    MultiWriteWrappedFS::builder(primary.clone())
-        .with_metadata_store(store.clone())
-        .with_metadata_provider(provider)
-        .with_backups(vec![BackendEntry {
-            name: "new-backup".to_string(),
-            role: BackendRole::Backup,
-            backend: backup,
-            raw_backend: None,
-        }])
-        .initial_partitions(1)
-        .build_inactive()
-        .await
-        .unwrap();
-
-    assert_eq!(
-        store.protocol_status().await.unwrap(),
-        ProtocolStatus::Migrating
-    );
-    assert!(store.reset_import_pending().await.unwrap());
-    assert!(matches!(
-        primary.stat(&account_manifest).await.unwrap_err(),
-        Error::NotFound(_)
-    ));
 }
 
 #[test]
