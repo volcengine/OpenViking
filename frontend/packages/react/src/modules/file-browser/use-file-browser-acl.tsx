@@ -48,12 +48,26 @@ export function useFileBrowserAcl({
   const [opened, setOpened] = useState<string>();
   const [generation, setGeneration] = useState(0);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const { baseURL, apiKey, accountId, userId, resourceId } =
+    requestOptions ?? {};
+  // Equal configuration objects must not restart ACL requests or clear a pending
+  // confirmation when the host rerenders to change its interface language.
   const context = useMemo(
     () =>
       client
-        ? { client, requestOptions: { ...requestOptions, signal } }
+        ? {
+            client,
+            requestOptions: {
+              baseURL,
+              apiKey,
+              accountId,
+              userId,
+              resourceId,
+              signal,
+            },
+          }
         : undefined,
-    [client, requestOptions, signal],
+    [client, baseURL, apiKey, accountId, userId, resourceId, signal],
   );
   const enabled = Boolean(acl) && Boolean(client) && isAclTarget(uri);
   const resolver = options?.resolvePermission;
