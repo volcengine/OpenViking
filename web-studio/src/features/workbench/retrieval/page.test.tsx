@@ -88,6 +88,7 @@ async function mount(search = '') {
     routeTree: root.addChildren([route]),
     history: createMemoryHistory({ initialEntries: [`/retrieval${search}`] }),
   })
+  await router.load()
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
