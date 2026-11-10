@@ -321,7 +321,6 @@ export function StudioScopeSwitcher({
           state={{
             visible: open === 'connection',
             searchKeyword: search,
-            alwaysShowSearch: true,
           }}
           actions={{
             onVisibleChange: changeOpen('connection'),
@@ -408,7 +407,6 @@ export function StudioScopeSwitcher({
                 state={{
                   visible: open === 'account',
                   searchKeyword: search,
-                  alwaysShowSearch: true,
                   busy: pending,
                   loading: canListAccounts && accounts.isPending,
                   error: canListAccounts && accounts.isError,
@@ -484,7 +482,7 @@ export function StudioScopeSwitcher({
                   }}
                   state={{
                     visible: open === 'user',
-                    alwaysShowSearch: true,
+                    alwaysShowSearch: trusted,
                     searchKeyword: search,
                     busy: pending,
                     loading: trusted && trustedUsers.isPending,

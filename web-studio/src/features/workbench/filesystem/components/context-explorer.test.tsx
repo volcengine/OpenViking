@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { FileTreeRow } from '@openviking/react/components/file-tree'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -40,11 +41,11 @@ const row = {
   depth: 0,
   expanded: false,
 }
-function setup() {
+function setup(rows: readonly FileTreeRow[] = [row]) {
   const onOpenSearch = vi.fn(),
     onRefresh = vi.fn(async () => {})
   m.hook.mockReturnValue({
-    rows: [row],
+    rows,
     selectedId: row.id,
     isReady: true,
     treeError: null,
@@ -116,4 +117,37 @@ it('opens Studio search and refreshes through the shared tree toolbar', async ()
     screen.getByRole('button', { name: 'explorer.refresh' }),
   )
   expect(onRefresh).toHaveBeenCalledOnce()
+})
+
+it('puts the complete user subtree first while preserving other branches', () => {
+  const entry = (name: string, depth = 0) => ({
+    ...row,
+    id: `viking://${name}`,
+    uri: `viking://${name}`,
+    name: name.split('/').at(-1)!,
+    depth,
+    expanded: true,
+  })
+  const rows = [
+    entry('agent'),
+    entry('resources'),
+    entry('resources/demo', 1),
+    entry('system'),
+    entry('user'),
+    entry('user/default', 1),
+  ]
+  setup(rows)
+  expect(
+    screen
+      .getAllByRole('treeitem')
+      .map((item) => item.querySelector('.ov-file-tree__label')?.textContent),
+  ).toEqual(['user', 'default', 'agent', 'resources', 'demo', 'system'])
+  expect(rows.map((item) => item.name)).toEqual([
+    'agent',
+    'resources',
+    'demo',
+    'system',
+    'user',
+    'default',
+  ])
 })

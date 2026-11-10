@@ -450,3 +450,36 @@ it.each([false, true])(
     ).toBeTruthy()
   },
 )
+
+it('hides Account search for a small configured list', () => {
+  state.role = 'user'
+  mount()
+  fireEvent.click(screen.getByRole('button', { name: 'scope.switchAccount' }))
+  expect(screen.getByRole('option', { name: 'team-a' })).toBeTruthy()
+  expect(screen.queryByRole('searchbox')).toBeNull()
+})
+it('shows Account search above ten entries and keeps it while filtering', async () => {
+  state.accounts.mockResolvedValue(
+    Array.from({ length: 11 }, (_, index) => ({ accountId: `team-${index}` })),
+  )
+  mount('/admin/settings')
+  fireEvent.click(screen.getByRole('button', { name: 'scope.switchAccount' }))
+  const search = await screen.findByRole('searchbox', {
+    name: 'searchPlaceholder',
+  })
+  fireEvent.change(search, { target: { value: 'team-10' } })
+  expect(screen.getByRole('option', { name: 'team-10' })).toBeTruthy()
+  expect(screen.getAllByRole('option')).toHaveLength(1)
+  expect(screen.getByRole('searchbox')).toBe(search)
+})
+
+it.each(['connections.switch', 'scope.switchUser'])(
+  'hides search for a small configured list in %s',
+  (label) => {
+    state.role = 'user'
+    mount()
+    fireEvent.click(screen.getByRole('button', { name: label }))
+    expect(screen.queryByRole('searchbox')).toBeNull()
+    expect(screen.getAllByRole('option').length).toBeGreaterThan(0)
+  },
+)

@@ -2,7 +2,7 @@ import studioI18n from '#/i18n/core'
 import { useQueryClient } from '@tanstack/react-query'
 import type { Ref, PointerEvent as ReactPointerEvent } from 'react'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
-import { useImperativeHandle, useRef, useEffect } from 'react'
+import { useImperativeHandle, useRef, useEffect, useMemo } from 'react'
 import { useFileBrowser } from '@openviking/react/modules/file-browser'
 import { toast } from 'sonner'
 import { FileTree } from '@openviking/react/components/file-tree'
@@ -103,6 +103,24 @@ export function ContextTree({
         )
     },
   })
+  const rows = useMemo(() => {
+    const source = browser.rows
+    if (rootUri !== ROOT_URI) return source
+    const start = source.findIndex(
+      (row) => row.kind === 'entry' && row.uri === 'viking://user',
+    )
+    if (start <= 0) return source
+    const next = source.findIndex(
+      (row, index) => index > start && row.depth <= source[start].depth,
+    )
+    const end = next < 0 ? source.length : next
+    // Rows are flattened: move the complete user subtree, including loading rows.
+    return [
+      ...source.slice(start, end),
+      ...source.slice(0, start),
+      ...source.slice(end),
+    ]
+  }, [browser.rows, rootUri])
   const cache = useQueryClient().getQueryCache()
   const refresh = browser.actions.refresh
   // Observe Studio mutations in the external query cache; the module owns its own data.
@@ -140,7 +158,7 @@ export function ContextTree({
       className={styles.tree}
       search={Boolean(onOpenSearch)}
       refresh={{ loading: isRefreshing }}
-      rows={browser.rows}
+      rows={rows}
       selectedId={browser.selectedId}
       isReady={browser.isReady}
       errorFallback={browser.treeError?.message}

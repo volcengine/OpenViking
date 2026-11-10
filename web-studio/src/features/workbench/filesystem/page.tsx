@@ -671,9 +671,7 @@ function FilesystemWorkbench() {
                           onClick={() => setUploadDialogOpen(true)}
                         >
                           <UploadIcon className="size-4" />
-                          <span className="hidden xl:inline">
-                            {t('explorer.addResource')}
-                          </span>
+                          <span>{t('explorer.addResource')}</span>
                         </Button>
                       ) : null}
                       {canUseLocalTools &&
@@ -694,20 +692,19 @@ function FilesystemWorkbench() {
                             }
                           >
                             <WandSparkles className="size-4" />
-                            <span className="hidden sm:inline">
-                              {t('compile:compileThisFolder')}
-                            </span>
+                            <span>{t('compile:compileThisFolder')}</span>
                           </Button>
                         )}
                       <Button
                         type="button"
-                        size="icon-sm"
+                        size="sm"
                         variant="ghost"
                         title={t('dataManagement:historyTitle')}
                         aria-label={t('dataManagement:historyTitle')}
                         onClick={() => setDataManagementMode('history')}
                       >
                         <HistoryIcon className="size-4" />
+                        <span>{t('dataManagement:historyTitle')}</span>
                       </Button>
                       {canTransferSelectedUri ? (
                         <Button
@@ -719,9 +716,7 @@ function FilesystemWorkbench() {
                           onClick={() => setDataManagementMode('transfer')}
                         >
                           <PackageIcon className="size-4" />
-                          <span className="hidden sm:inline">
-                            {t('dataManagement:transferShortLabel')}
-                          </span>
+                          <span>{t('dataManagement:transferShortLabel')}</span>
                         </Button>
                       ) : null}
                     </div>

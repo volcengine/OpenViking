@@ -3,7 +3,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { ComponentType, PropsWithChildren } from 'react'
+import type { ComponentType, PropsWithChildren, ReactNode } from 'react'
 import {
   afterEach,
   beforeAll,
@@ -87,22 +87,31 @@ vi.mock('#/features/workbench/resources/hooks/use-resource-upload', () => ({
   }),
 }))
 
-vi.mock('#/features/workbench/resources/components/lazy-file-preview', () => ({
-  LazyFilePreview: (props: {
-    file: { uri: string } | null
-    readOnly?: boolean
-    defaultReadLimit?: number
-  }) => {
-    mocks.preview(props)
-    return <div data-testid="preview">{props.file?.uri}</div>
-  },
-}))
+vi.mock(
+  '#/features/workbench/filesystem/components/shared-file-preview',
+  () => ({
+    SharedFilePreview: (props: {
+      file: { uri: string } | null
+      readOnly?: boolean
+      defaultReadLimit?: number
+      extraActions?: ReactNode
+    }) => {
+      mocks.preview(props)
+      return (
+        <>
+          <div data-testid="preview">{props.file?.uri}</div>
+          {props.extraActions}
+        </>
+      )
+    },
+  }),
+)
 
 vi.mock('#/features/workbench/filesystem/components/context-explorer', () => ({
-  ContextExplorerHeader: ({ onRefresh }: { onRefresh: () => void }) => (
+  ContextTree: ({ onRefresh }: { onRefresh: () => void }) => (
     <button type="button" aria-label={mocks.refreshLabel} onClick={onRefresh} />
   ),
-  ContextTree: () => null,
+  ContextExplorerHeader: () => null,
   PanelTab: ({ label }: { label: string }) => (
     <button type="button" role="tab">
       {label}
@@ -184,6 +193,7 @@ describe('filesystem context tree refresh', () => {
     }
     renderFilesystem()
 
+    await userEvent.click(screen.getByLabelText('ide.more'))
     await userEvent.click(
       screen.getByRole('button', { name: 'dataManagement:transferTitle' }),
     )
@@ -201,6 +211,7 @@ describe('filesystem context tree refresh', () => {
     }
     renderFilesystem()
 
+    await userEvent.click(screen.getByLabelText('ide.more'))
     await userEvent.click(
       screen.getByRole('button', { name: 'dataManagement:transferTitle' }),
     )
@@ -230,9 +241,11 @@ describe('filesystem context tree refresh', () => {
     expect(mocks.agent).not.toHaveBeenCalled()
     expect(mocks.terminal).toHaveBeenCalled()
     expect(mocks.agent).not.toHaveBeenCalled()
-    expect(screen.getAllByRole('tab')).toHaveLength(1)
-    expect(screen.getByRole('tab', { name: 'tabs.terminal' })).toBeTruthy()
-    expect(screen.queryByRole('tab', { name: 'tabs.agent' })).toBeNull()
+    expect(
+      screen.getAllByRole('button', { name: 'tabs.terminal' }),
+    ).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'tabs.terminal' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'tabs.agent' })).toBeNull()
     expect(screen.queryByText('addResource.title')).toBeNull()
   })
 
