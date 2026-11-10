@@ -7,6 +7,7 @@ Provides rerank functionality for hierarchical retrieval.
 """
 
 import json
+import math
 
 # For logging, use Python's built-in logging
 import time
@@ -170,8 +171,10 @@ class RerankClient(RerankBase):
                 duration_seconds=time.monotonic() - started,
             )
 
-            # Each document is a separate group, data array returns scores for each group sequentially
+            # The response is ranked by relevance; ids refer to input document groups.
             data = result_payload["data"]
+            if not isinstance(data, list):
+                raise ValueError("Rerank data must be a list")
             if len(data) != len(documents):
                 logger.warning(
                     "[RerankClient] Unexpected rerank result length: expected=%s actual=%s",
@@ -179,7 +182,23 @@ class RerankClient(RerankBase):
                     len(data),
                 )
                 return None
-            scores = [item.get("score", 0.0) for item in data]
+            scores = [0.0] * len(documents)
+            seen = set()
+            for item in data:
+                if not isinstance(item, dict):
+                    raise ValueError("Invalid rerank result item")
+                index = item.get("id")
+                if isinstance(index, str) and index.isdecimal():
+                    index = int(index)
+                if type(index) is not int or not 0 <= index < len(documents):
+                    raise ValueError("Invalid rerank document id")
+                if index in seen:
+                    raise ValueError("Duplicate rerank document id")
+                score = float(item["score"])
+                if not math.isfinite(score):
+                    raise ValueError("Non-finite rerank score")
+                seen.add(index)
+                scores[index] = score
 
             logger.debug(f"[RerankClient] Reranked {len(documents)} documents")
             return scores

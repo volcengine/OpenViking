@@ -94,9 +94,8 @@ class TestSessionConcurrency:
     def test_delete_nonexistent_session_returns_404(self, api_client):
         fake_id = f"nonexistent-{uuid.uuid4().hex[:12]}"
         del_resp = api_client.delete_session(fake_id)
-        assert del_resp.status_code == 200, (
-            f"deleting nonexistent session returns 200, got {del_resp.status_code}"
-        )
+        assert del_resp.status_code == 404, del_resp.text
+        assert del_resp.json()["error"]["code"] == "NOT_FOUND"
 
     def test_add_message_to_deleted_session_fails(self, api_client):
         session_id = None

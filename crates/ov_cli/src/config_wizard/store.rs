@@ -9,7 +9,7 @@ use url::Url;
 
 use crate::{
     base_client::BaseClient,
-    config::{Config, DEFAULT_CUSTOM_PORT, KNOWN_CONFIG_KEYS, default_config_path},
+    config::{Config, DEFAULT_CUSTOM_PORT, KNOWN_CONFIG_KEYS, effective_config_path},
     error::{Error, Result},
 };
 
@@ -94,12 +94,66 @@ pub struct ConfigStore {
     active_path: PathBuf,
 }
 
+pub(crate) struct PreparedApiKeyUpdate {
+    path: PathBuf,
+    target: PathBuf,
+    old_key: String,
+    original: Vec<u8>,
+    value: Value,
+    temp_file: tempfile::NamedTempFile,
+}
+
+impl PreparedApiKeyUpdate {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn commit(mut self, new_key: &str) -> Result<()> {
+        if fs::canonicalize(&self.path)? != self.target
+            || fs::read(&self.target)? != self.original
+        {
+            return Err(Error::Config(
+                "Config changed during key rotation; refusing to overwrite it".into(),
+            ));
+        }
+        self.value["api_key"] = Value::String(new_key.to_string());
+        for field in ["extra_headers", "extra_header"] {
+            if let Some(headers) = self.value.get_mut(field).and_then(Value::as_object_mut) {
+                for (name, value) in headers {
+                    if name.eq_ignore_ascii_case("x-api-key")
+                        && value.as_str() == Some(self.old_key.as_str())
+                    {
+                        *value = Value::String(new_key.to_string());
+                    } else if name.eq_ignore_ascii_case("authorization")
+                        && value.as_str().and_then(|v| v.strip_prefix("Bearer "))
+                            == Some(self.old_key.as_str())
+                    {
+                        *value = Value::String(format!("Bearer {new_key}"));
+                    }
+                }
+            }
+        }
+        self.temp_file
+            .write_all(serde_json::to_string_pretty(&self.value)?.as_bytes())?;
+        self.temp_file.flush()?;
+        self.temp_file.as_file().sync_all()?;
+        self.temp_file.persist(&self.target).map_err(|error| {
+            Error::Config(format!("Failed to replace config file: {}", error.error))
+        })?;
+        Ok(())
+    }
+}
+
 impl ConfigStore {
     pub fn new() -> Result<Self> {
-        let active_path = default_config_path()?;
+        Self::for_active_path(effective_config_path()?)
+    }
+
+    fn for_active_path(active_path: PathBuf) -> Result<Self> {
         let config_dir = active_path
             .parent()
-            .ok_or_else(|| Error::Config("Could not determine config directory".to_string()))?
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
         Ok(Self {
             config_dir,
@@ -213,6 +267,12 @@ impl ConfigStore {
 
         configs.sort_by(|left, right| left.name.cmp(&right.name));
         invalid_configs.sort_by(|left, right| left.name.cmp(&right.name));
+        // A directly selected named file wins over an alphabetically earlier copy.
+        if let Some(selected) = self.selected_config_name() {
+            for entry in &mut configs {
+                entry.is_active = entry.name == selected;
+            }
+        }
         normalize_active_config(&mut configs);
         Ok(ConfigListReport {
             configs,
@@ -255,6 +315,39 @@ impl ConfigStore {
         write_config_file(&self.active_path, config)
     }
 
+    pub(crate) fn prepare_api_key_update(&self, expected: &Config, old_key: &str) -> Result<PreparedApiKeyUpdate> {
+        let target = fs::canonicalize(&self.active_path)?;
+        let original = fs::read(&target)?;
+        let current: Config = serde_json::from_slice(&original)?;
+        if current.url != expected.url || current.api_key != expected.api_key
+            || current.extra_headers != expected.extra_headers
+        {
+            return Err(Error::Config(
+                "Active connection changed; retry key rotation with the current config".into(),
+            ));
+        }
+        // Case variants can coexist in the JSON map but become the same HTTP
+        // header. Refuse ambiguous credentials before invalidating any key.
+        if current.extra_headers.as_ref().is_some_and(|headers| {
+            headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("x-api-key") && value != old_key
+            })
+        }) {
+            return Err(Error::Config(
+                "Conflicting X-API-Key headers; remove the overrides before rotating your key".into(),
+            ));
+        }
+        Ok(PreparedApiKeyUpdate {
+            path: self.active_path.clone(),
+            old_key: old_key.to_string(),
+            value: serde_json::from_slice(&original)?,
+            original,
+            // Check that a replacement can be created before invalidating the old key.
+            temp_file: create_config_temp_file(&target)?,
+            target,
+        })
+    }
+
     pub fn save_edited_config(
         &self,
         old_name: &str,
@@ -263,6 +356,11 @@ impl ConfigStore {
     ) -> Result<()> {
         let old_path = self.saved_config_path(old_name)?;
         let new_path = self.saved_config_path(new_name)?;
+        if old_name != new_name && self.selected_config_name() == Some(old_name) {
+            return Err(Error::Config(
+                "Cannot rename the file selected by OPENVIKING_CLI_CONFIG_FILE. Change the environment variable first.".to_string(),
+            ));
+        }
         let was_active = self.is_config_name_active(old_name)?;
 
         if old_name != new_name && new_path.exists() {
@@ -297,7 +395,19 @@ impl ConfigStore {
             .map_err(|e| Error::Config(format!("Failed to delete config '{name}': {e}")))
     }
 
+    pub(crate) fn selected_config_name(&self) -> Option<&str> {
+        let name = self
+            .active_path
+            .file_name()?
+            .to_str()?
+            .strip_prefix("ovcli.conf.")?;
+        (name != "bak" && validate_config_name(name).is_ok()).then_some(name)
+    }
+
     pub fn is_config_name_active(&self, name: &str) -> Result<bool> {
+        if let Some(selected) = self.selected_config_name() {
+            return Ok(name == selected);
+        }
         let Some(active_config) = self.load_active()? else {
             return Ok(false);
         };
@@ -775,18 +885,27 @@ fn carry_over_unmodeled_keys(path: &Path, value: &mut Value) {
 }
 
 fn write_file_atomically(path: &Path, content: &[u8]) -> Result<()> {
+    let mut temp_file = create_config_temp_file(path)?;
+    temp_file.write_all(content)?;
+    temp_file.flush()?;
+    temp_file.as_file().sync_all()?;
+    temp_file.persist(path).map_err(|error| {
+        Error::Config(format!("Failed to replace config file: {}", error.error))
+    })?;
+    Ok(())
+}
+
+fn create_config_temp_file(path: &Path) -> Result<tempfile::NamedTempFile> {
     let parent = path
         .parent()
-        .ok_or_else(|| Error::Config("Could not determine config file directory".to_string()))?;
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
 
-    let mut temp_file = tempfile::Builder::new()
+    let temp_file = tempfile::Builder::new()
         .prefix(".ovcli.conf.")
         .suffix(".tmp")
         .tempfile_in(parent)?;
-    temp_file.write_all(content)?;
-    temp_file.flush()?;
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -795,12 +914,7 @@ fn write_file_atomically(path: &Path, content: &[u8]) -> Result<()> {
         temp_file.as_file().set_permissions(permissions)?;
     }
 
-    temp_file.as_file().sync_all()?;
-    temp_file.persist(path).map_err(|error| {
-        Error::Config(format!("Failed to replace config file: {}", error.error))
-    })?;
-
-    Ok(())
+    Ok(temp_file)
 }
 
 pub(crate) fn configs_equivalent(left: &Config, right: &Config) -> Result<bool> {
@@ -835,6 +949,64 @@ mod tests {
             .expect("clock should be valid")
             .as_nanos();
         std::env::temp_dir().join(format!("openviking-config-{name}-{suffix}"))
+    }
+
+    #[test]
+    fn selected_named_file_wins_over_equivalent_profiles_and_is_protected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ovcli.conf.z");
+        let store = ConfigStore::for_active_path(path.clone()).unwrap();
+        let config = sample_config("http://selected", None);
+        store.save_named_config("a", &config).unwrap();
+        store.save_named_config("z", &config).unwrap();
+        fs::write(dir.path().join("ovcli.conf"), r#"{"url":"http://default"}"#).unwrap();
+        let entries = store.list_configs().unwrap();
+        assert_eq!(
+            entries.iter().find(|entry| entry.is_active).unwrap().name,
+            "z"
+        );
+        assert_eq!(store.load_active().unwrap().unwrap().url, "http://selected");
+        assert!(store.delete_config("z").is_err());
+        assert!(store.save_edited_config("z", "renamed", &config).is_err());
+        assert!(path.exists());
+        store.delete_config("a").unwrap();
+        store
+            .save_active_config(&sample_config("http://edited", None))
+            .unwrap();
+        assert_eq!(
+            Config::from_file(path.to_str().unwrap()).unwrap().url,
+            "http://edited"
+        );
+        assert_eq!(
+            Config::from_file(dir.path().join("ovcli.conf").to_str().unwrap())
+                .unwrap()
+                .url,
+            "http://default"
+        );
+    }
+
+    #[test]
+    fn switching_updates_the_override_without_touching_default_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let default = dir.path().join("ovcli.conf");
+        fs::write(&default, r#"{"url":"http://default"}"#).unwrap();
+        let store = ConfigStore::for_active_path(dir.path().join("custom.json")).unwrap();
+        store
+            .save_named_config("next", &sample_config("http://next", None))
+            .unwrap();
+        store.activate_config("next").unwrap();
+        assert_eq!(store.load_active().unwrap().unwrap().url, "http://next");
+        assert_eq!(
+            Config::from_file(default.to_str().unwrap()).unwrap().url,
+            "http://default"
+        );
+    }
+
+    #[test]
+    fn relative_override_uses_current_directory_for_profiles() {
+        let store = ConfigStore::for_active_path(PathBuf::from("custom.json")).unwrap();
+        assert_eq!(store.config_dir(), Path::new("."));
+        assert_eq!(store.active_path(), Path::new("custom.json"));
     }
 
     fn sample_config(url: &str, api_key: Option<&str>) -> Config {

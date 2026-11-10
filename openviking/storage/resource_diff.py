@@ -27,9 +27,9 @@ import asyncio
 import json
 import logging
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Mapping, Tuple
+from typing import Any, Dict, Literal, Mapping, Tuple
 
 from openviking.concurrency import bounded_map
 from openviking.storage.internal_names import is_storage_internal_name
@@ -45,6 +45,7 @@ from openviking.storage.resource_rnfv import (
     VectorRecordSnapshot,
     canonical_vector_records_by_level,
 )
+from openviking.utils.content_hash import content_md5
 from openviking.utils.log_correlation import log_correlation
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,8 @@ class ResourceDiffEntry:
     old_kind: str | None = None
     new_kind: str | None = None
     md5: str | None = None
+    level_states: Mapping[int, IndexState] = field(default_factory=dict)
+    level_md5s: Mapping[int, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -134,6 +137,34 @@ class ArtifactInventory:
     entries: Mapping[str, NewEntry]
     artifact_paths: Mapping[str, str]
     rewritten_paths: frozenset[str] = frozenset()
+
+
+class InlineBytesStore:
+    """Minimal parse-output store backed by a single file's final bytes.
+
+    The single-file write path has no parse artifact; it already holds the
+    fully rendered bytes. This store lets the shared RNFV plan pipeline read the
+    same bytes for body fallbacks and content commit without inventing a real
+    artifact backend. The ref is an opaque placeholder; only ``read_bytes`` is
+    exercised.
+    """
+
+    backend = "inline"
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    async def read_bytes(self, ref: Any, rel_path: str) -> bytes:
+        del ref, rel_path
+        return self._data
+
+
+def make_inline_file_inventory(final_bytes: bytes) -> ArtifactInventory:
+    """Build a single-file N snapshot from already-rendered bytes."""
+    return ArtifactInventory(
+        entries={"": NewEntry(md5=content_md5(final_bytes), is_dir=False)},
+        artifact_paths={"": ""},
+    )
 
 
 def count_tree_entry_kinds(
@@ -542,9 +573,18 @@ async def build_rnfv_snapshot(
     request_intent: RequestIntent | None = None,
     root_is_file: bool = False,
     target_preexisting: bool = True,
+    formal_snapshot: tuple[Dict[str, FormalEntry], bool] | None = None,
     artifact_inventory: ArtifactInventory | None = None,
+    vector_scope: Literal["subtree", "self"] = "subtree",
+    vector_inventory: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> RNFVSnapshot:
-    """Read the complete R/N/F/V inputs without deriving an executable plan."""
+    """Read the complete R/N/F/V inputs without deriving an executable plan.
+
+    ``vector_scope="self"`` restricts the subtree-strategy V read to the target URI itself
+    (all levels), which the single-file write path uses so an incremental
+    update never reads sibling records under a shared parent directory.
+
+    """
     request = request_intent or RequestIntent(
         target_uri=target_uri, processing_mode="semantic_and_vectors"
     )
@@ -555,6 +595,8 @@ async def build_rnfv_snapshot(
         )
 
     async def read_formal() -> tuple[Dict[str, FormalEntry], bool]:
+        if formal_snapshot is not None:
+            return formal_snapshot
         if not target_preexisting:
             return {}, True
         return await read_target_file_snapshot(
@@ -569,11 +611,15 @@ async def build_rnfv_snapshot(
         asyncio.create_task(read_artifact()),
         asyncio.create_task(read_formal()),
     ]
-    if request.vectorize:
+    if request.vectorize and vector_inventory is None:
         tasks.append(
             asyncio.create_task(
                 _read_incremental_vector_inventory(
-                    vikingdb, target_uri=target_uri, ctx=ctx, projection=projection
+                    vikingdb,
+                    target_uri=target_uri,
+                    ctx=ctx,
+                    projection=projection,
+                    vector_scope=vector_scope,
                 )
             )
         )
@@ -586,7 +632,12 @@ async def build_rnfv_snapshot(
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
     artifact, formal = results[:2]
-    inventory = results[2] if request.vectorize else {}
+    if not request.vectorize:
+        inventory: Dict[str, Dict[str, Any]] = {}
+    elif vector_inventory is not None:
+        inventory = dict(vector_inventory)
+    else:
+        inventory = results[2]
     target_files, files_complete = formal
     base = target_uri.rstrip("/")
     prefix = base + "/"
@@ -624,10 +675,19 @@ async def _read_incremental_vector_inventory(
     target_uri: str,
     ctx: Any,
     projection: frozenset[str],
+    vector_scope: Literal["subtree", "self"] = "subtree",
 ) -> Dict[str, Dict[str, Any]]:
     """Read the lightweight V snapshot used to build RNFV."""
     return await vikingdb.get_incremental_inventory_under_uri(
-        target_uri, ctx=ctx, output_fields=sorted(projection)
+        target_uri,
+        ctx=ctx,
+        output_fields=sorted(projection),
+        # The shared inventory API expresses an exact URI as a non-recursive
+        # scope without direct children. Keep its richer recursive/direct-child
+        # contract instead of adding a parallel depth parameter solely for the
+        # single-file write path.
+        recursive=vector_scope == "subtree",
+        include_direct_children=False,
     )
 
 
@@ -635,10 +695,12 @@ __all__ = [
     "ArtifactInventory",
     "ContentState",
     "IndexState",
+    "InlineBytesStore",
     "ResourceDiffEntry",
     "ResourceDiffResult",
     "build_rnfv_snapshot",
     "count_tree_entry_kinds",
+    "make_inline_file_inventory",
     "prepare_artifact_inventory",
     "read_target_file_snapshot",
 ]

@@ -86,10 +86,26 @@ function profileHandler(requests, { archiveOverview = "" } = {}) {
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/v1/content/read") {
-      writeJson(res, {
-        status: "ok",
-        result: "# Zeus\nWorks on OpenViking integrations.\nPrefers concise implementation notes.",
-      });
+      const uri = url.searchParams.get("uri");
+      // Both scopes carry a profile, with different bodies, so the block can
+      // show that each is injected: extraction writes the user's own facts to
+      // the user root even inside a peer session.
+      if (uri === "viking://user/zeus/peers/github.com-acme-codex-profile/memories/profile.md") {
+        writeJson(res, {
+          status: "ok",
+          result: "# Zeus\nPeer-scoped profile for the codex profile repository.",
+        });
+        return;
+      }
+      if (uri === "viking://user/zeus/memories/profile.md") {
+        writeJson(res, {
+          status: "ok",
+          result: "# Zeus\nWorks on OpenViking integrations.\nPrefers concise implementation notes.",
+        });
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", error: "not found" }));
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/v1/fs/ls") {
@@ -188,8 +204,10 @@ test("startup injects the shared profile block with workspace peer routing", asy
 
       assert.equal(output.hookSpecificOutput.hookEventName, "SessionStart");
       assert.match(output.hookSpecificOutput.additionalContext, /source="session-start"/);
-      assert.match(output.hookSpecificOutput.additionalContext, /<user-profile uri="viking:\/\/user\/zeus\/memories\/profile\.md">/);
-      assert.match(output.hookSpecificOutput.additionalContext, /Works on OpenViking integrations/);
+      assert.match(
+        output.hookSpecificOutput.additionalContext,
+        /<user-profile uri="viking:\/\/user\/zeus\/memories\/profile\.md">\n# Zeus\nWorks on OpenViking integrations\.[\s\S]*<\/user-profile>\n<user-profile uri="viking:\/\/user\/zeus\/peers\/github\.com-acme-codex-profile\/memories\/profile\.md">\nPeer-scoped profile for the codex profile repository\.\n<\/user-profile>/,
+      );
       assert.match(output.hookSpecificOutput.additionalContext, /zeus\/workflow\.md/);
       assert.match(output.hookSpecificOutput.additionalContext, /software\/openviking\.md/);
       assert.match(

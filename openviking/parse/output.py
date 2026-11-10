@@ -430,18 +430,6 @@ class LocalParseOutputStore(ParseOutputStore):
             raise ValueError(f"resolved path escapes the artifact root: {rel_path}")
         return target
 
-    @staticmethod
-    def _check_case_conflict(target: Path) -> None:
-        parent = target.parent
-        if not parent.is_dir():
-            return
-        lower = target.name.casefold()
-        for existing in parent.iterdir():
-            if existing.name != target.name and existing.name.casefold() == lower:
-                raise ValueError(
-                    f"case-only name conflict: {target.name} vs existing {existing.name}"
-                )
-
     async def create_artifact(self, *, root_type: str = "dir") -> ParseArtifactRef:
         if root_type not in _ROOT_TYPES:
             raise ValueError(f"root_type must be one of {sorted(_ROOT_TYPES)}")
@@ -462,7 +450,6 @@ class LocalParseOutputStore(ParseOutputStore):
 
         def _write() -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
-            self._check_case_conflict(target)
             target.write_bytes(content)
 
         await asyncio.to_thread(_write)
@@ -508,7 +495,6 @@ class LocalParseOutputStore(ParseOutputStore):
 
         def _move() -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
-            self._check_case_conflict(target)
             shutil.move(str(source), str(target))
 
         await asyncio.to_thread(_move)

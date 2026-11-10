@@ -20,15 +20,8 @@ ZCode does not expose `PreCompact`, `SessionEnd`, or subagent lifecycle hooks. T
 Prerequisites: Node.js 18+, a running OpenViking server, and ZCode.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
-  --harness zcode
-```
-
-Use the TOS mirror where GitHub is unavailable:
-
-```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) \
-  --harness zcode --dist tos
+curl -fsSL https://openviking.ai/install | bash
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
 ```
 
 The installer detects `~/.zcode/` or the `zcode` binary, installs the runtime under `~/.openviking/agent-integrations/zcode/`, and merges hooks and MCP configuration into `~/.zcode/cli/config.json`.
@@ -43,9 +36,11 @@ After restarting ZCode, verify that:
 | Hooks not firing | Hook configuration is disabled or stale | Re-run the installer and restart ZCode |
 | Recall returns nothing | OpenViking is unavailable or has not extracted memories yet | Check `curl http://127.0.0.1:1933/health` and wait for extraction |
 | MCP tools not appearing | The MCP proxy failed to start | Check the absolute `mcp.servers.openviking` command in `~/.zcode/cli/config.json` |
-| Duplicate captures | An older installation left duplicate hook entries | Run `install.sh --harness zcode --uninstall`, then reinstall |
+| Duplicate captures | An older installation left duplicate hook entries | Run `curl -fsSL https://openviking.ai/install \| bash -s -- --uninstall --yes --harness zcode`, then reinstall |
 
 Implementation details and currently verified ZCode assumptions are documented in the plugin's [README](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) and [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/DESIGN.md).
+
+Once installed, start a new ZCode session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
 
 ## Kimi Code memory integration
 
@@ -65,25 +60,60 @@ transcript decoding, output formatting, and commit policy:
 Prerequisites: Node.js 18+, a running OpenViking server, and Kimi Code CLI.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
-  --harness kimicode
-```
-
-Use the TOS mirror where GitHub is unavailable:
-
-```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) \
-  --harness kimicode --dist tos
+curl -fsSL https://openviking.ai/install | bash
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
 ```
 
 The installer assembles a self-contained runtime under
 `$KIMI_CODE_HOME/plugins/managed/openviking-memory/` (default Kimi home:
 `~/.kimi-code/`), then updates only the `openviking-memory` entry in
 `plugins/installed.json`. Existing plugin records are preserved. Re-run the
-same command to upgrade, or add `--uninstall` to remove only this plugin.
+same command to upgrade. To remove only this plugin:
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness kimicode
+```
 
 The verified host contract and version are recorded in
 [`hosts/kimicode/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/kimicode/DESIGN.md).
+
+Once installed, start a new Kimi Code session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
+
+## CodeBuddy Code memory integration
+
+Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+The CodeBuddy Code integration is an `agent-hook-plugin` host adapter. It reuses the shared OpenViking hook runtime and adds only CodeBuddy-specific event mapping, transcript decoding, output envelopes, and commit policy:
+
+- **SessionStart** injects the user profile and replays anything the offline queue is holding.
+- **UserPromptSubmit** recalls relevant memories and injects them as an `<openviking-context>` block in `additionalContext`. Host-generated continuation turns are skipped, so a turn the host produced on its own never triggers a search.
+- **PreToolUse** denies reading or writing a `viking://` URI as a local path and points the Agent at the OpenViking MCP tools. Shell commands are not checked, so `ov` invocations and literal `viking://` arguments still work.
+- **Stop**, **PreCompact**, and **SessionEnd** capture new transcript turns incrementally in a detached worker. `Stop` commits the OpenViking session every 8 captured messages (`commitTurnThreshold`); `PreCompact` and `SessionEnd` commit everything not yet committed, including messages `Stop` already sent.
+
+The plugin manifest also exposes the OpenViking MCP server as a stdio proxy onto the same resolved configuration, and ships the `openviking-memory`, `openviking-skills`, and `ov-experience-memory` skills. Hooks and MCP read the same credentials, so they cannot disagree about the server, account, or user. Subagent capture is not supported in v1, as on the other community adapters: the host fires `SubagentStart`/`SubagentStop`, but the shared dispatcher has no subagent stage yet.
+
+### Install
+
+Prerequisites: CodeBuddy Code, Node.js 18+, and a running OpenViking server.
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness codebuddy
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
+```
+
+The installer assembles a self-contained plugin under `~/.openviking/agent-integrations/codebuddy/marketplace/openviking-memory/`, with the shared hook runtime beside the adapters, registers it as a local marketplace named `openviking`, and installs it through the CodeBuddy CLI. To remove only this integration:
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness codebuddy
+```
+
+The plugin reads its connection from `~/.openviking/ovcli.conf`; `OPENVIKING_URL` and `OPENVIKING_API_KEY` override that file, and per-plugin settings live under `plugin.codebuddy` (see [Plugin Settings](../configuration/02-client.md#plugin-settings)). Start a new CodeBuddy session after installing (`/reload-plugins` applies it to a running one), and confirm with `codebuddy plugin list` that `openviking-memory@openviking` is enabled.
+
+### Behaviour that follows from the host
+
+`UserPromptSubmit` and `SessionEnd` fire **only in the interactive TUI** — headless runs (`-p`, `--input-format stream-json`) never emit them, so a headless session captures on `Stop` but never sends the final commit. `SessionStart` carries no `cwd` and can be delivered twice per session, so the session-start hook is idempotent and falls back to the process working directory. A hook that overruns its timeout is killed, but its child processes are not, which is what lets commits run in a detached worker after the hook process returns.
+
+The verified host contract, the transcript format, and the adapter's v1 scope are recorded in [`hosts/codebuddy/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/codebuddy/DESIGN.md).
 
 ## AstrBot plugin
 
@@ -95,11 +125,13 @@ Provides auto-capture of group/DM conversations, semantic recall before each LLM
 
 **Install**: In AstrBot WebUI, search **OpenViking Memory** in the Plugin Marketplace; or install from URL: `https://github.com/t0saki/astrbot_plugin_openviking_memory.git`
 
+The current plugin requires AstrBot 4.23.1+ and a compatible OpenViking server. Use a User key for `global`; `venue` needs an Admin key to create users. Check the linked plugin README before migrating an older configuration.
+
 **Key features**:
 
 - Auto-recall and auto-capture via hooks — the model doesn't need to invoke tools
-- Three isolation modes: `venue_user` (per-group/DM), `venue_user_fanout` (cross-venue sharing), `global_user` (single user)
-- Four auto-commit triggers: message count, token threshold, idle timeout, and process-exit flush
+- `self_scope=global` shares one bot identity; `venue` creates a separate user per group/DM. People are represented as peers. Legacy `isolation_mode` values are mapped to these scopes.
+- Automatic commit by message count, token threshold, or idle timeout
 - Backfills platform message history on first venue encounter
 
 ## Open WebUI tool server

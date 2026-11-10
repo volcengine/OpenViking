@@ -23,28 +23,9 @@ use crate::output::OutputFormat;
 pub const STATE_PROTOCOL: &str = "openviking-assets-state/1";
 const DEFAULT_CATALOG_FILENAME: &str = "catalog.yaml";
 const CREDENTIALS_ENV: &str = "OPENVIKING_ASSETS_CREDENTIALS_FILE";
-const NATIVE_AUTH_REQUEST_TIMEOUT_SECONDS: f64 = 300.0;
 
 fn client_err(msg: impl Into<String>) -> Error {
     Error::Client(msg.into())
-}
-
-fn manifest_request_timeout(
-    wait: bool,
-    requested_timeout: Option<f64>,
-    configured_timeout: f64,
-    has_native_auth: bool,
-) -> f64 {
-    let default_timeout = if has_native_auth {
-        NATIVE_AUTH_REQUEST_TIMEOUT_SECONDS
-    } else if wait {
-        60.0
-    } else {
-        20.0
-    };
-    requested_timeout
-        .unwrap_or(default_timeout)
-        .max(configured_timeout)
 }
 
 // The server owns OpenViking Assets syntax parsing and semantic validation.
@@ -840,7 +821,6 @@ pub async fn apply_manifest_core<S: Submitter>(
 struct HttpSubmitter {
     client: crate::client::HttpClient,
     wait: bool,
-    timeout: Option<f64>,
     processing_mode: String,
     external_connector: bool,
 }
@@ -884,7 +864,6 @@ impl Submitter for HttpSubmitter {
                 "",
                 "",
                 self.wait,
-                self.timeout,
                 false,
                 None,
                 None,
@@ -1033,7 +1012,6 @@ pub async fn handle_manifest_apply(
     manifest: String,
     catalog_file: Option<String>,
     options: ManifestRunOptions,
-    timeout: Option<f64>,
     ctx: CliContext,
 ) -> Result<()> {
     let manifest_path = PathBuf::from(&manifest);
@@ -1065,9 +1043,7 @@ pub async fn handle_manifest_apply(
         })
         .transpose()?;
 
-    let effective_timeout =
-        manifest_request_timeout(options.wait, timeout, ctx.config.timeout, false);
-    let client = ctx.get_client_with_timeout(Some(effective_timeout));
+    let client = ctx.get_client();
     let mut request = json!({
         "manifest_yaml": manifest_yaml,
         "manifest_label": manifest_path.display().to_string(),
@@ -1079,11 +1055,6 @@ pub async fn handle_manifest_apply(
     let resolved: ResolveResponse = client
         .post("/api/v1/openviking-assets/resolve", &request)
         .await?;
-    let has_native_auth =
-        !options.external_connector && resolved.assets.iter().any(|asset| asset.auth_ref.is_some());
-    let effective_timeout =
-        manifest_request_timeout(options.wait, timeout, ctx.config.timeout, has_native_auth);
-    let client = ctx.get_client_with_timeout(Some(effective_timeout));
 
     let json_mode = matches!(ctx.output_format, OutputFormat::Json);
     let mut emit = |event: Value| {
@@ -1098,7 +1069,6 @@ pub async fn handle_manifest_apply(
     let submitter = HttpSubmitter {
         client,
         wait: options.wait,
-        timeout,
         processing_mode: options.processing_mode.clone(),
         external_connector: options.external_connector,
     };
@@ -1146,20 +1116,6 @@ mod tests {
         assert_eq!(effective_add_type(false, "git"), None);
         assert_eq!(effective_add_type(true, "git"), Some("git".to_string()));
         assert_eq!(effective_add_type(true, "tos"), Some("tos".to_string()));
-    }
-
-    #[test]
-    fn native_auth_requests_get_a_long_default_and_honor_explicit_timeout() {
-        assert_eq!(manifest_request_timeout(false, None, 60.0, false), 60.0);
-        assert_eq!(manifest_request_timeout(false, None, 60.0, true), 300.0);
-        assert_eq!(
-            manifest_request_timeout(false, Some(900.0), 60.0, true),
-            900.0
-        );
-        assert_eq!(
-            manifest_request_timeout(false, Some(120.0), 180.0, true),
-            180.0
-        );
     }
 
     #[test]

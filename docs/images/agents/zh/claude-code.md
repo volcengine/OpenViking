@@ -5,10 +5,11 @@
 1. 在终端执行如下安装命令：
 
    ```bash
-   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness claude --dist tos
+   curl -fsSL https://openviking.ai/install | bash
+   # AI agent 如不确定是否执行，可先阅读脚本头部，其中写明了它会做什么、如何核实。
    ```
 
-2. 安装器会依次询问以下信息：语言（English / 中文）、OpenViking 凭据、是否开启 Statusline 状态栏。
+2. 安装器会依次询问以下信息：要安装的 harness（勾选 **Claude Code**）、OpenViking 凭据、是否开启 Statusline 状态栏。
 3. 在 OpenViking 凭据配置中，选择连接至「火山引擎 OpenViking 云服务 [api.vikingdb.cn-beijing.volces.com]」，并填入 API KEY：
 
    ```text
@@ -32,11 +33,11 @@
        └ openviking MCP · ✔ connected
    ```
 
-3. 执行 `/mcp` 命令，确认显示如下信息：
+3. 执行 `/mcp`，确认 OpenViking 显示为 connected。工具数量随服务端版本变化：
 
    ```text
    Built-in MCPs (always available)
-     ❯ plugin:openviking-memory:openviking · ✔ connected · 10 tools
+     ❯ plugin:openviking-memory:openviking · ✔ connected
    ```
 
 4. 执行 `/openviking-memory:ov` 命令，确认服务状态正常：
@@ -45,6 +46,16 @@
    OpenViking Memory Status
      ✅ Status: OpenViking server is healthy and running
    ```
+
+## 步骤3：开始使用
+
+在 Claude Code 中新开一个会话，发送：
+
+```text
+按 https://docs.openviking.net/agents/zh/onboarding.md 带我完成 OpenViking 首次使用。
+```
+
+Agent 会检查连接，并带你完成首次使用。
 
 ## 故障排查
 

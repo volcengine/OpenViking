@@ -4,8 +4,6 @@
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
 from openviking.retrieve.memory_lifecycle import DEFAULT_HALF_LIFE_DAYS, hotness_score
 
 NOW = datetime(2026, 2, 26, 12, 0, 0, tzinfo=timezone.utc)
@@ -76,49 +74,3 @@ class TestHotnessScore:
         s_mid = hotness_score(5, NOW - timedelta(days=3), now=NOW)
         s_new = hotness_score(5, NOW - timedelta(hours=1), now=NOW)
         assert s_old < s_mid < s_new
-
-
-class TestHotnessBlending:
-    """Tests for the blending logic (alpha weighting)."""
-
-    def test_alpha_zero_preserves_semantic_order(self):
-        """With alpha=0, final score equals semantic score exactly."""
-        semantic = 0.85
-        alpha = 0.0
-        h = hotness_score(100, NOW, now=NOW)
-        blended = (1 - alpha) * semantic + alpha * h
-        assert blended == pytest.approx(semantic)
-
-    def test_hotness_boost_can_rerank(self):
-        """A hot memory with lower semantic score can overtake a cold one."""
-        alpha = 0.4  # aggressive weight for demonstration
-
-        # Memory A: high semantic, cold (old, low access)
-        sem_a = 0.8
-        h_a = hotness_score(1, NOW - timedelta(days=60), now=NOW)
-        blended_a = (1 - alpha) * sem_a + alpha * h_a
-
-        # Memory B: lower semantic, hot (recent, high access)
-        sem_b = 0.6
-        h_b = hotness_score(500, NOW, now=NOW)
-        blended_b = (1 - alpha) * sem_b + alpha * h_b
-
-        # B should overtake A due to hotness
-        assert blended_b > blended_a
-
-    def test_small_alpha_preserves_semantic_dominance(self):
-        """With a small alpha, a large semantic gap is not overturned."""
-        alpha = 0.2
-
-        # Memory A: much higher semantic, cold
-        sem_a = 0.9
-        h_a = hotness_score(0, NOW - timedelta(days=30), now=NOW)
-        blended_a = (1 - alpha) * sem_a + alpha * h_a
-
-        # Memory B: much lower semantic, hot
-        sem_b = 0.3
-        h_b = hotness_score(1000, NOW, now=NOW)
-        blended_b = (1 - alpha) * sem_b + alpha * h_b
-
-        # A should still win — semantic dominance preserved
-        assert blended_a > blended_b

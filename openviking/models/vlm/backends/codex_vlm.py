@@ -22,6 +22,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any, Dict
 
+from ..base import ToolResultMediaMode
+
 try:
     import openai
 except ImportError:
@@ -45,6 +47,10 @@ class CodexVLM(OpenAIVLM):
             normalized["api_base"] = DEFAULT_CODEX_BASE_URL
         super().__init__(normalized)
         self._async_client = None
+
+    def tool_result_media_mode(self) -> ToolResultMediaMode:
+        """The Responses adapter preserves images inside function-call outputs."""
+        return "native"
 
     def _build_responses_client(self, api_key: str, api_base: str):
         kwargs = _build_openai_client_kwargs(

@@ -1,20 +1,12 @@
 # 可观测性与排障
 
-这份指南把 OpenViking 当前和“观测”有关的入口放在一起介绍，包括：
-
-- 服务健康检查与组件状态
-- 请求级 `telemetry`
-- 终端侧 `ov tui`
-- Web 侧 `Web Studio`（同 OV server，路径 `/studio`）
-- `/metrics` 时序指标
-
-如果你只想快速判断“该看哪里”，先看下面这张表。
+按排查目标选择入口：服务是否就绪、数据是否写入、单次请求发生了什么，或一段时间内指标如何变化。
 
 ## 先选哪个入口
 
 | 入口 | 适合看什么 | 典型场景 |
 | --- | --- | --- |
-| `/health`、`observer/*` | 服务是否健康、队列是否堆积、VikingDB/VLM 状态 | 部署验收、值班巡检 |
+| `/health`、`/ready`、`observer/*` | 服务是否健康、队列是否堆积、VikingDB/VLM 状态 | 部署验收、值班巡检 |
 | `ov tui` | `viking://` 文件树、目录摘要、文件正文、向量记录、受支持图片文件的预览 | 开发调试、核对资源是否真正落库 |
 | `Web Studio`（`/studio`） | 同 OV server 的 Web UI：Home 看 token / 检索 / context commits 趋势，Resources 浏览 URI，Retrieval 直接发 find，Request Logs 看审计日志 | 不想手敲命令时做交互式排查 |
 | `telemetry` | 单次请求耗时、token、向量检索、资源处理阶段 | 排查一次具体调用为什么慢、为什么结果异常 |
@@ -24,19 +16,19 @@
 
 ### 健康检查
 
-`/health` 提供简单的存活检查，不需要认证。
+`/health` 提供无需认证的存活检查，下方仅展示部分响应字段。就绪检查用 `/ready`。模型 observer 的健康状态不证明凭证有效或调用成功，详见[系统状态](../api/07-system.md)。
 
 ```bash
 curl http://localhost:1933/health
 ```
 
 ```json
-{"status": "ok"}
+{"status": "ok", "healthy": true}
 ```
 
 ### 整体系统状态
 
-**Python HTTP SDK**
+**Python HTTP SDK（`SyncHTTPClient`）**
 
 ```python
 status = client.get_status()
@@ -77,7 +69,7 @@ curl http://localhost:1933/api/v1/observer/system \
 | `GET /api/v1/observer/vikingdb` | VikingDB | 向量数据库状态 |
 | `GET /api/v1/observer/models` | Models | VLM、Embedding 和 Rerank 模型状态 |
 | `GET /api/v1/observer/lock` | Lock | 锁和事务状态 |
-| `GET /api/v1/observer/retrieval` | Retrieval | 检索质量指标 |
+| `GET /api/v1/observer/retrieval` | Retrieval | 检索次数和耗时，不代表相关性评估 |
 | `GET /api/v1/observer/filesystem` | Filesystem | 文件系统操作指标 |
 
 例如：
@@ -89,7 +81,7 @@ curl http://localhost:1933/api/v1/observer/queue \
 
 ### 快速健康检查
 
-**Python HTTP SDK**
+**Python HTTP SDK（`SyncHTTPClient`）**
 
 ```python
 if client.is_healthy():
@@ -109,11 +101,11 @@ curl http://localhost:1933/api/v1/debug/health \
 
 ### 响应时间
 
-每个 API 响应都包含一个 `X-Process-Time` 请求头，表示服务端处理时间（单位为秒）：
+`X-Process-Time` 表示请求进入服务端到发送响应头的耗时，单位为秒。流式响应不包含完整响应体的传输时间：
 
 ```bash
 curl -v http://localhost:1933/api/v1/fs/ls?uri=viking:// \
-  -H "X-API-Key: your-key" 2>&1 | grep X-Process-Time
+  -H "X-API-Key: your-key" 2>&1 | grep -i X-Process-Time
 # < X-Process-Time: 0.0023
 ```
 
@@ -185,7 +177,7 @@ http://127.0.0.1:1933/studio
 
 写操作（`Add Resource`、`Add Memory`、租户/用户管理）通过当前已登录的 API key 鉴权，没有额外的 `--write-enabled` 开关需要打开。
 
-从观测角度看，Studio 的一个优点是直接调用 `/api/v1/console/*` BFF 的统计接口（dashboard summary、token series、context commits、audit logs），跟旧 console 复用同一套数据，只是 UI 换了。对于 `find`、`add-resource` 和 `session commit` 这类操作，结果面板可以展开看 `telemetry.summary`。
+Studio 从 `/api/v1/console/*` 读取 dashboard summary、token series、context commits 和 audit logs。查看 `find`、`add-resource` 和 `session commit` 等操作的 `telemetry.summary` 时，按[操作遥测](07-operation-telemetry.md)读取完整 HTTP 响应。
 
 Studio 更适合“边点边看”的交互式排查；如果你要把观测数据接到自己的日志系统或自动化链路，建议直接调用 HTTP API 或 SDK，并显式请求 telemetry。
 
@@ -484,7 +476,7 @@ OpenViking 将信号级别的可观测性配置统一放在 `server.observabilit
 
 ### 直接访问 `/metrics`
 
-当前实现中，`/metrics` 未接入 `get_request_context` 等鉴权依赖，因此从代码行为上看，它当前等价于公开抓取端点：
+启用后，`/metrics` 是无需认证的抓取端点：
 
 ```bash
 curl http://localhost:1933/metrics
@@ -514,7 +506,7 @@ scrape_configs:
 
 - 在 Prometheus UI 里执行 `openviking_http_requests_total`
 - 或执行 `openviking_service_readiness`
-- 如果已经能返回时间序列，说明 Grafana 后续就能正常出图
+- 返回时间序列说明抓取正常；各面板还需要对应指标产生样本，且筛选条件匹配
 
 如果这一步没有数据，先回到上面的 Prometheus 抓取配置，确认 `targets`、`metrics_path` 和网络连通性。
 
@@ -552,7 +544,7 @@ OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 
 导入成功后，你最终会看到一个以 OpenViking 请求、队列、探针、模型调用和系统状态为主的总览 dashboard。效果示意可以参考：
 
-- [grafana-demo-dashboard.png](../../images/grafana-demo-dashboard.png)
+- [grafana-demo-dashboard.png](/grafana-demo-dashboard.png)
 
 这张图可以帮助你快速确认“导入后的面板布局是不是正常”。如果你的 dashboard 基本结构和它一致，但局部面板没有数据，通常说明是对应指标当前没有产生样本，或者筛选条件与实际流量不匹配。
 
@@ -571,6 +563,42 @@ OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 - 看资源是否真的落库、向量是否真的写进去：看 `ov tui`
 - 看某一次具体请求为什么慢、token 花在哪、资源处理卡在哪个阶段：看 `telemetry`
 - 看一段时间内请求量、错误率、时延是否持续恶化：看 `/metrics`
+
+## 可选 Kafka 事件上报
+
+安装 `openviking[reporting]` 并启用 `server.observability.reporting.enabled` 后，
+事件上报读取外部 JSON（`NACOS_CONFIG_FILE`）或配置的 Nacos 服务。
+Kafka 的地址、认证和 topic 来自该配置的 `kafka`，不能写入业务代码。
+该功能默认关闭，业务调用不会因上报失败而中断。
+
+上报器使用内存队列；`telemetry.queue_capacity` 必须为正整数，默认 `1024`。
+队列满、投递重试耗尽或进程退出时可能丢失事件。投递失败和丢弃事件会输出采样告警，
+日志只包含数量。此上报器适用于允许少量丢失的分析统计，不提供持久化审计或计费账本
+保证。停止服务时应预留优雅退出时间，等待队列发送完成。
+
+部署可通过 `OV_METRICS_ACCOUNT_ID` 和 `OV_RESOURCE_ID` 绑定外层云账号与实例，
+原始数据空间和成员保留为 `ov_account_id`、`ov_user_id`。仅当部署能够确定模型凭据
+归属时，设置 `OV_MODEL_COST_BEARER=customer` 或 `ov`；未设置时保持 `unknown`。
+混用不同归属的凭据时，可信部署配置应在每个 VLM／Embedding 凭据上分别设置
+`cost_bearer`（`ov`、`customer` 或 `unknown`）。实际选中的凭据将此元数据带入成功及失败
+调用事件，候选凭据切换时分别归属。明确的 `unknown` 不会被端点规则或整库默认值改写；
+只有未携带凭据元数据的历史调用才依次使用 `telemetry.model_cost_bearers` 精确规则和
+部署默认值，冲突规则保持 `unknown`。上报不包含原文、提示词或 API Key。
+
+共享记忆批处理根据本批输入请求确定上报归属，不使用长期存活的定时协程继承的旧请求。
+多个提交共用的模型调用只上报一次，通过 `source_task_ids` 保留已知来源任务；无法确定
+唯一归属时，`task_id`、`request_id` 为空。不能将这次调用展开为多条，也不能把整次 Token
+用量重复计到每个来源任务。文件变更能明确匹配输入操作时，恢复该操作的完整任务来源；
+真正合并多个任务的写入也采用上述多来源表达。空间和成员身份仍来自本批请求上下文。
+资源增量重新导入的删除路径也会在计划删除成功后上报删除事件。
+
+空间级模型凭据通过 ROOT 的配置接口下发或轮换时，`cost_bearer` 与该凭据一同保存，
+并传递到实际 VLM／Embedding 客户端。模型配置章节仍只允许 ROOT 修改，空间管理员
+和普通成员不能通过配置接口指定费用归属。
+
+可选 Nacos 上报器优先使用明确配置的 `nacos_namespace`、`nacos_data_id`、`nacos_group`，
+其次读取 `NACOS_NAMESPACE`、`NACOS_DATA_ID`、`NACOS_GROUP`，默认分别为 `public`、
+`global_configs`、`DEFAULT_GROUP`。
 
 ## 相关文档
 

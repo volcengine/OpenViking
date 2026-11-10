@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Mapping, Optional, TypedDict, Union
@@ -27,13 +30,15 @@ class FindOptions(_ExtraOptions, total=False):
     level: Level
     read_content: bool
     telemetry: Any
+    events_time_decay_protection: Optional[str]
 
 
 class SearchOptions(FindOptions, total=False):
-    pass
+    search_type: Literal["semantic", "keywords"]
 
 
 class SearchContextOptions(_ExtraOptions, total=False):
+    search_type: Literal["semantic", "keywords"]
     image: Any
     node_limit: int
     score_threshold: float
@@ -44,6 +49,7 @@ class SearchContextOptions(_ExtraOptions, total=False):
     since: str
     until: str
     time_field: TimeField
+    events_time_decay_protection: Optional[str]
     query_expansion: Literal["off", "auto"]
     max_tokens: int
     quotas: Dict[str, int]
@@ -88,6 +94,7 @@ class UpdateSkillOptions(AddSkillOptions, total=False):
 
 
 class WriteOptions(_ExtraOptions, total=False):
+    edit_source: Literal["manual", "agent", "compile"]
     acl: Dict[str, Any]
     telemetry: Any
     processing_mode: ProcessingMode
@@ -96,7 +103,26 @@ class WriteOptions(_ExtraOptions, total=False):
 
 
 class BatchWriteOptions(_ExtraOptions, total=False):
+    edit_source: Literal["manual", "agent", "compile"]
     telemetry: Any
+    processing_mode: ProcessingMode
+    # Return target-state conflicts without overwriting them or blocking compatible writes.
+    skip_conflicts: bool
+    # Save content without scheduling semantic or vector work.
+    defer_processing: bool
+
+
+class _RequiredMCPToolMount(TypedDict):
+    tool_uri: str
+    node_uri: str
+    title: str
+
+
+class MCPToolMount(_RequiredMCPToolMount, total=False):
+    description: str
+    timeout_seconds: int
+    arguments: Mapping[str, Any]
+    tags: List[str]
 
 
 class CompileOptions(_ExtraOptions, total=False):
@@ -104,13 +130,44 @@ class CompileOptions(_ExtraOptions, total=False):
     args: Dict[str, Any]
 
 
+class RuleCompileSource(AddResourceOptions, total=False):
+    resource_uri: str
+    path: str
+    temp_file_id: str
+    to: str
+    parent: str
+    wait: bool
+    internal_task: bool
+    source_name: str
+    is_active: bool
+
+
+class RuleCompileOptions(_ExtraOptions, total=False):
+    sources: List[Union[str, RuleCompileSource]]
+
+
+class RuleSearchOptions(_ExtraOptions, total=False):
+    rule_probability_threshold: float
+
+
 class SetTagsOptions(_ExtraOptions, total=False):
     telemetry: Any
 
 
 class ReindexOptions(_ExtraOptions, total=False):
+    force: bool
     tags: List[str]
     tag_mode: Literal["replace", "append", "clear"]
+
+
+class ListPage(TypedDict):
+    result: List[Any]
+    has_more: bool
+
+
+class TreePage(TypedDict):
+    result: List[Dict[str, Any]]
+    has_more: bool
 
 
 class CreateSessionOptions(_ExtraOptions, total=False):
@@ -155,6 +212,7 @@ class BatchAddMessagesOptions(_ExtraOptions, total=False):
 
 
 class CommitSessionOptions(_ExtraOptions, total=False):
+    enable_working_memory: Optional[bool]
     retention_mode: Literal["turn_budget"]
     keep_recent_turn_count: int
     retained_message_token_budget: int

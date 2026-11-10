@@ -65,11 +65,11 @@ export interface TakeoverIo {
   syncBranch?: (branch: any[]) => Promise<SyncBranchResult> | SyncBranchResult;
   /** Drain this session's queue within `budgetMs`; true once nothing of it is undelivered. */
   flush?: (budgetMs?: number) => Promise<boolean> | boolean;
-  commit?: (opts?: { queueOnFailure?: boolean; keepRecentCount?: number; timeoutMs?: number }) => Promise<unknown> | unknown;
+  commit?: (opts?: { queueOnFailure?: boolean; keepRecentCount?: number; timeoutMs?: number; enableWorkingMemory?: boolean }) => Promise<unknown> | unknown;
   /** Read one archive's `.overview.md` by its uri; null until it is ready. */
-  readArchiveOverview?: (archiveUri: string) => Promise<string | null> | string | null;
+  readArchiveOverview?: (archiveUri: string, timeoutMs?: number) => Promise<string | null> | string | null;
   /** An archive's terminal state from its `.done` / `.failed.json` markers; null when unknown. */
-  archiveState?: (archiveUri: string) => Promise<"completed" | "failed" | "pending" | null> | string | null;
+  archiveState?: (archiveUri: string, timeoutMs?: number) => Promise<"completed" | "failed" | "pending" | null> | string | null;
   /** Exact server keep_recent_count for a retained tail (message count). */
   captureCount?: (branchSlice: any[]) => number;
   persistEntry?: (customType: string, data: TakeoverPersistedState) => void;
@@ -80,6 +80,8 @@ export interface TakeoverIo {
   sleep?: (ms: number) => Promise<void>;
   /** Clock for handler deadlines; defaults to Date.now. */
   now?: () => number;
+  /** Why the last commit request returned no result, e.g. `HTTP 500: ...`. */
+  lastCommitError?: () => string;
   log?: (message: string) => void;
 }
 
@@ -112,6 +114,8 @@ export function buildOverviewMessage(overview: string, firstKeptTs?: number, bud
 export function countUndeliveredForSession(pendingEntries: any[], sid: string): number;
 export function deriveHistoryUri(archiveUri: string): string;
 export function commitOutcome(committed: unknown): CommitOutcome;
+/** A user-facing reading of a `skipped` commit's `reason`. */
+export function describeSkip(reason: string, keepRecentCount?: number): string;
 
 export type TakeoverState = TakeoverPersistedState & {
   coveredThroughEntryId: string;
@@ -128,6 +132,8 @@ export class TakeoverCore {
   constructor(opts?: { config?: TakeoverConfig; io?: TakeoverIo });
   get enabled(): boolean;
   get state(): TakeoverState;
+  /** Why the last commitAndAdvance() returned false; empty after a success. */
+  lastFailure: string;
   restore(entries: any[]): TakeoverState;
   /** `branch` is pi's `getBranch()`; the boundary is located on its context projection. */
   transformContext(messages: TakeoverMessage[], branch?: any[] | (() => any[])): TakeoverMessage[];
@@ -157,6 +163,6 @@ export class TakeoverCore {
   recordCaptureGap(): void;
   persistedState(): TakeoverPersistedState;
   persist(): void;
-  readOverviewOnce(archiveUri: string): Promise<string>;
-  pollArchiveOverview(archiveUri: string, signal?: AbortSignal, until?: number): Promise<string>;
+  readOverviewOnce(archiveUri: string, timeoutMs?: number): Promise<string>;
+  pollArchiveOverview(archiveUri: string, signal?: AbortSignal, until?: number): Promise<{ overview: string; terminal: boolean }>;
 }

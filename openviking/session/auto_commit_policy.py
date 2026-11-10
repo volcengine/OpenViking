@@ -22,7 +22,8 @@ DEFAULT_IDLE_TIMEOUT_SECONDS = 86400  # 1 day
 DEFAULT_KEEP_RECENT_COUNT = 0
 DEFAULT_MIN_COMMIT_INTERVAL_SECONDS = 0
 
-# PRD upper bounds.
+# PRD bounds.
+MIN_IDLE_TIMEOUT_SECONDS = 300  # 5 minutes
 MAX_PENDING_TOKEN_THRESHOLD = 1000000
 MAX_MESSAGE_COUNT_THRESHOLD = 1000
 MAX_IDLE_TIMEOUT_SECONDS = 604800  # 7 days
@@ -45,6 +46,20 @@ def _coerce_int(value: Any, *, field: str, minimum: int, maximum: int) -> int:
         parsed = minimum
     if parsed > maximum:
         parsed = maximum
+    return parsed
+
+
+def validate_idle_timeout_input(value: Any) -> int:
+    """Validate a newly supplied idle timeout without changing stored policies."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("auto_commit_policy.idle_timeout_seconds must be an integer")
+    if parsed != 0 and parsed < MIN_IDLE_TIMEOUT_SECONDS:
+        raise ValueError(
+            "auto_commit_policy.idle_timeout_seconds must be 0 or at least "
+            f"{MIN_IDLE_TIMEOUT_SECONDS}"
+        )
     return parsed
 
 
@@ -103,9 +118,7 @@ class AutoCommitPolicy:
                 maximum=MAX_MESSAGE_COUNT_THRESHOLD,
             ),
             min_commit_interval_seconds=_coerce_int(
-                data.get(
-                    "min_commit_interval_seconds", default.min_commit_interval_seconds
-                ),
+                data.get("min_commit_interval_seconds", default.min_commit_interval_seconds),
                 field="min_commit_interval_seconds",
                 minimum=0,
                 maximum=MAX_IDLE_TIMEOUT_SECONDS,

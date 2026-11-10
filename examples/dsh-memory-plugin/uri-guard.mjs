@@ -24,6 +24,11 @@ const GUARDED_TOOLS = {
     tool: `${mcp("read")} or ${mcp("search")}`,
     example: uri => `${mcp("read")}(uris="${uri}")`,
   },
+  // On Windows DSH mounts `pwsh` in place of `bash`; its command line is also `command`.
+  pwsh: {
+    tool: `${mcp("read")} or ${mcp("search")}`,
+    example: uri => `${mcp("read")}(uris="${uri}")`,
+  },
   edit: {
     tool: uri => (isSkillUri(uri) ? mcp("add_skill") : mcp("edit")),
     example: uri =>

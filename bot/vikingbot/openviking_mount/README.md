@@ -174,7 +174,7 @@ OpenViking URI 到本地文件路径的映射规则：
 OpenViking URI                    本地路径
 -------------------               ------------------
 viking://resources/foo     ->    {mount_point}/resources/foo
-viking://session/bar       ->    {mount_point}/session/bar
+viking://user/<uid>/sessions/bar -> {mount_point}/user/<uid>/sessions/bar
 viking://user/<uid>/baz    ->    {mount_point}/user/<uid>/baz
 ```
 

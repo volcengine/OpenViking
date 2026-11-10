@@ -14,8 +14,8 @@ from openviking.session.memory.utils.link_renderer import LinkRenderer
 RESOURCE_REF_SOURCE_CONTENT_WRITE = "content.write"
 RESOURCE_REF_SOURCE_SESSION_COMMIT = "session.commit"
 
-_RESOURCE_URI_PATH_CHARS = r"[^\s<>\]\)\"'，。；：！？、,;:!?）】》]+"
-_RESOURCE_URI_BOUNDARY = r"(?=$|[\s<>\]\)\"'，。；：！？、,;:!?.）】》])"
+_RESOURCE_URI_PATH_CHARS = r"[^\s<>\]\)\"'，。；：！？、,;:!?（）【】《》]+"
+_RESOURCE_URI_BOUNDARY = r"(?=$|[\s<>\]\)\"'，。；：！？、,;:!?.（）【】《》])"
 _RESOURCE_URI_PATTERN = (
     r"viking://(?:"
     rf"resources(?:/{_RESOURCE_URI_PATH_CHARS})?"
@@ -33,6 +33,10 @@ _INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
 _TRAILING_URI_PUNCTUATION = ".,;:!?，。；：！？、）】》"
 _SENTENCE_BOUNDARIES = "。！？.!?\n"
 _MAX_LINKIFIED_SENTENCE_CHARS = 160
+_MARKDOWN_CONTAINER_PREFIX_RE = re.compile(
+    r" {0,3}(?:>[ \t]?|(?:[-+*]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)"
+)
+_MARKDOWN_HEADING_PREFIX_RE = re.compile(r" {0,3}#{1,6}(?:[ \t]+|$)")
 
 
 def sync_memory_resource_refs(
@@ -272,12 +276,25 @@ def _previous_sentence_span(content: str, uri_start: int) -> Optional[tuple[int,
     if sentence_end <= 0:
         return None
 
+    line_start = content.rfind("\n", 0, sentence_end) + 1
+    sentence_start = _skip_markdown_line_prefix(content, line_start, uri_start)
+    table_start = sentence_start
+    while table_start < sentence_end and content[table_start].isspace():
+        table_start += 1
+    is_pipe_table = table_start < sentence_end and content[table_start] == "|"
     boundary_search_end = sentence_end
     if content[sentence_end - 1] in _SENTENCE_BOUNDARIES:
         boundary_search_end = sentence_end - 1
-    sentence_start = 0
-    for idx in range(boundary_search_end - 1, -1, -1):
-        if content[idx] in _SENTENCE_BOUNDARIES:
+    for idx in range(boundary_search_end - 1, sentence_start - 1, -1):
+        is_boundary = content[idx] in _SENTENCE_BOUNDARIES
+        if is_pipe_table and content[idx] == "|":
+            backslashes = 0
+            cursor = idx - 1
+            while cursor >= table_start and content[cursor] == "\\":
+                backslashes += 1
+                cursor -= 1
+            is_boundary = backslashes % 2 == 0
+        if is_boundary:
             sentence_start = idx + 1
             break
     while sentence_start < sentence_end and content[sentence_start].isspace():
@@ -287,6 +304,15 @@ def _previous_sentence_span(content: str, uri_start: int) -> Optional[tuple[int,
     if not anchor or len(anchor) > _MAX_LINKIFIED_SENTENCE_CHARS:
         return None
     return sentence_start, sentence_end
+
+
+def _skip_markdown_line_prefix(content: str, start: int, end: int) -> int:
+    position = start
+    while match := _MARKDOWN_CONTAINER_PREFIX_RE.match(content, position, end):
+        position = match.end()
+    if match := _MARKDOWN_HEADING_PREFIX_RE.match(content, position, end):
+        position = match.end()
+    return position
 
 
 def _merge_resource_refs(

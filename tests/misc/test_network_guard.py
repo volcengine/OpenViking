@@ -5,10 +5,18 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
+import httpx
 import pytest
 
+from openviking.parse.network import (
+    ParserNetworkContext,
+    ParserNetworkOperation,
+    create_parser_httpx_client,
+    register_parser_network_adapter,
+    reset_parser_network_adapter,
+)
 from openviking.utils.network_guard import (
     _get_allowed_code_hosting_domains,
     _is_public_ip,
@@ -271,10 +279,11 @@ class TestEnsurePublicRemoteTarget:
         ensure_public_remote_target("git@ssh.dev.azure.com:v3/org/project/repo")  # should not raise
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
-    def test_allows_when_dns_returns_empty(self, mock_resolve) -> None:
-        """Unresolvable host is allowed through (fail-open for DNS)."""
+    def test_rejects_when_dns_returns_empty(self, mock_resolve) -> None:
+        """Unresolvable host cannot be verified as public."""
         mock_resolve.return_value = set()
-        ensure_public_remote_target("http://new-host.example.com/path")  # should not raise
+        with pytest.raises(PermissionDeniedError, match="could not be resolved"):
+            ensure_public_remote_target("http://new-host.example.com/path")
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
     def test_allows_multiple_public_addresses(self, mock_resolve) -> None:
@@ -286,48 +295,43 @@ class TestEnsurePublicRemoteTarget:
 
 
 class TestBuildHttpxRequestValidationHooks:
-    """Verify httpx hook construction."""
+    """Verify optional validation and enforcement during parser downloads."""
 
     def test_returns_none_when_no_validator(self) -> None:
         assert build_httpx_request_validation_hooks(None) is None
 
-    def test_returns_request_hook_dict(self) -> None:
-        def dummy_validator(url: str) -> None:
-            pass
-
-        hooks = build_httpx_request_validation_hooks(dummy_validator)
-        assert hooks is not None
-        assert "request" in hooks
-        assert len(hooks["request"]) == 1
-
     @pytest.mark.asyncio
-    async def test_hook_calls_validator_with_url(self) -> None:
-        calls: list[str] = []
+    async def test_parser_adapter_preserves_redirect_validation(self) -> None:
+        source = "https://example.com/document.txt"
+        private_target = "http://127.0.0.1/admin"
+        validated = []
+        downloaded = []
 
-        def tracking_validator(url: str) -> None:
-            calls.append(url)
+        def validate(url):
+            validated.append(url)
+            if url == private_target:
+                raise PermissionDeniedError("blocked")
 
-        hooks = build_httpx_request_validation_hooks(tracking_validator)
-        assert hooks is not None
+        async def download(request):
+            downloaded.append(str(request.url))
+            return httpx.Response(302, headers={"Location": private_target})
 
-        mock_request = AsyncMock()
-        mock_request.url = "http://example.com/test"
+        register_parser_network_adapter(
+            SimpleNamespace(
+                supports=lambda context: context.operation is ParserNetworkOperation.HTTP_RESOURCE,
+                create_httpx_transport=lambda context: httpx.MockTransport(download),
+            )
+        )
+        try:
+            async with create_parser_httpx_client(
+                ParserNetworkContext(ParserNetworkOperation.HTTP_RESOURCE, source),
+                follow_redirects=True,
+                event_hooks=build_httpx_request_validation_hooks(validate),
+            ) as client:
+                with pytest.raises(PermissionDeniedError, match="blocked"):
+                    await client.get(source)
+        finally:
+            reset_parser_network_adapter()
 
-        hook_fn = hooks["request"][0]
-        await hook_fn(mock_request)
-
-        assert calls == ["http://example.com/test"]
-
-    @pytest.mark.asyncio
-    async def test_hook_propagates_validator_exception(self) -> None:
-        def failing_validator(url: str) -> None:
-            raise PermissionDeniedError("blocked")
-
-        hooks = build_httpx_request_validation_hooks(failing_validator)
-        assert hooks is not None
-
-        mock_request = AsyncMock()
-        mock_request.url = "http://evil.com"
-
-        with pytest.raises(PermissionDeniedError, match="blocked"):
-            await hooks["request"][0](mock_request)
+        assert validated == [source, private_target]
+        assert downloaded == [source]

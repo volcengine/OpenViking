@@ -226,10 +226,10 @@ available until that catch-up succeeds.
 After a complete append, Stop reads session meta and commits when
 `pending_tokens >= OPENVIKING_COMMIT_TOKEN_THRESHOLD` (default 20000).
 The threshold commit passes
-`keep_recent_count=OPENVIKING_COMMIT_KEEP_RECENT_COUNT` (default 10) so
-the newest turns stay live after archive/extract. This keeps long-running
-sessions from waiting until PreCompact/SessionStart while still avoiding
-commit-on-every-turn fragmentation.
+`keep_recent_count=0`: Codex keeps its own transcript, so a live tail in
+OpenViking would only delay extraction. Committing at the threshold
+keeps long-running sessions from waiting until PreCompact/SessionStart
+while still avoiding commit-on-every-turn fragmentation.
 
 ## Injected context boundary
 
@@ -443,9 +443,12 @@ codex -m <model> -c 'model_reasoning_effort="low"' exec ...
 ```
 
 The compressor runs with `--ignore-user-config`, so it does not inherit the
-main Codex process's provider table. When
-`OPENVIKING_RECALL_COMPRESS_BASE_URL` is set, the plugin adds an isolated
-provider for the nested request:
+main Codex process's provider table. When the user's `config.toml` selects a
+custom `model_provider`, the plugin forwards that provider's single-line
+`key = value` entries (endpoint and auth included) as `-c` overrides; a
+provider with sub-tables or multi-line values is not forwarded. When
+`OPENVIKING_RECALL_COMPRESS_BASE_URL` is set, the plugin instead adds an
+isolated provider for the nested request:
 
 ```bash
 -c 'model_provider="openviking_compressor"' \
@@ -474,7 +477,7 @@ Fallback order:
 
 1. configured model/thinking (`OPENVIKING_RECALL_COMPRESS_MODEL` +
    `OPENVIKING_RECALL_COMPRESS_THINKING`)
-2. `gpt-5.3-codex-spark`, thinking `default`
+2. `gpt-6-luna`, thinking `low`
 3. `gpt-5.6-luna`, thinking `low`
 4. off (deterministic digest, no child `codex exec`)
 

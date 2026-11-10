@@ -1,20 +1,12 @@
 # Observability & Diagnostics
 
-This guide collects the current OpenViking observability entry points in one place, including:
-
-- service health and component status
-- request-level `telemetry`
-- terminal-side `ov tui`
-- web-side `Web Studio` (served by the OV server at `/studio`)
-- `/metrics` time-series metrics
-
-If you just want to know where to look first, start with the table below.
+Choose an entry point based on the question you need to answer: service readiness, stored data, a single request, or a trend over time.
 
 ## Choose the right entry point
 
 | Entry point | Best for | Typical use case |
 | --- | --- | --- |
-| `/health`, `observer/*` | service health, queue backlog, VikingDB and VLM status | deployment validation, on-call checks |
+| `/health`, `/ready`, `observer/*` | service health, queue backlog, VikingDB and VLM status | deployment validation, on-call checks |
 | `ov tui` | `viking://` trees, directory summaries, file content, vector records, image preview for supported image files | development debugging, verifying that data actually landed |
 | `Web Studio` (`/studio`) | same-origin web UI on the OV server: Home shows token / retrieval / context-commit trends; Resources browses URIs; Retrieval runs find; Request Logs shows audit | interactive investigation without typing every command |
 | `telemetry` | per-request duration, token usage, vector retrieval, ingestion stages | debugging one specific slow or unexpected call |
@@ -24,19 +16,19 @@ If you just want to know where to look first, start with the table below.
 
 ### Health check
 
-`/health` provides a simple liveness check and does not require authentication.
+`/health` provides a simple liveness check and does not require authentication. The following response is an excerpt. Use `/ready` for readiness checks. Model observer health alone does not verify provider credentials or request success; see [System Status](../api/07-system.md).
 
 ```bash
 curl http://localhost:1933/health
 ```
 
 ```json
-{"status": "ok"}
+{"status": "ok", "healthy": true}
 ```
 
 ### Overall system status
 
-**Python HTTP SDK**
+**Python HTTP SDK (`SyncHTTPClient`)**
 
 ```python
 status = client.get_status()
@@ -77,7 +69,7 @@ curl http://localhost:1933/api/v1/observer/system \
 | `GET /api/v1/observer/vikingdb` | VikingDB | Vector database status |
 | `GET /api/v1/observer/models` | Models | VLM, embedding, and rerank model status |
 | `GET /api/v1/observer/lock` | Lock | Lock and transaction status |
-| `GET /api/v1/observer/retrieval` | Retrieval | Retrieval quality metrics |
+| `GET /api/v1/observer/retrieval` | Retrieval | Retrieval counts and latency; not a relevance evaluation |
 | `GET /api/v1/observer/filesystem` | Filesystem | Filesystem operation metrics |
 
 For example:
@@ -89,7 +81,7 @@ curl http://localhost:1933/api/v1/observer/queue \
 
 ### Quick health check
 
-**Python HTTP SDK**
+**Python HTTP SDK (`SyncHTTPClient`)**
 
 ```python
 if client.is_healthy():
@@ -109,11 +101,11 @@ curl http://localhost:1933/api/v1/debug/health \
 
 ### Response time
 
-Every API response includes an `X-Process-Time` header with the server-side processing time in seconds:
+`X-Process-Time` reports seconds from request entry to response-header emission. For streamed responses, it does not include the time needed to send the full body:
 
 ```bash
 curl -v http://localhost:1933/api/v1/fs/ls?uri=viking:// \
-  -H "X-API-Key: your-key" 2>&1 | grep X-Process-Time
+  -H "X-API-Key: your-key" 2>&1 | grep -i X-Process-Time
 # < X-Process-Time: 0.0023
 ```
 
@@ -185,7 +177,7 @@ The most useful pages for observability are:
 
 Write operations (`Add Resource`, `Add Memory`, tenant/user administration) are gated by the API key currently signed in — there's no separate `--write-enabled` switch.
 
-From an observability standpoint, Studio talks to the same `/api/v1/console/*` BFF (dashboard summary, token series, context commits, audit logs) the old standalone console used — only the UI changed. For operations such as `find`, `add-resource`, and `session commit`, you can expand the result panel to inspect `telemetry.summary`.
+From an observability standpoint, Studio reads dashboard summaries, token series, context commits, and audit logs through `/api/v1/console/*`. To inspect `telemetry.summary` for operations such as `find`, `add-resource`, and `session commit`, read the complete HTTP response as shown in [Operation Telemetry](07-operation-telemetry.md).
 
 Studio is best for interactive click-through debugging. If you need to feed observability data into your own logs or automation, prefer the HTTP API or SDK and request telemetry explicitly.
 
@@ -381,7 +373,7 @@ Compared with `telemetry`, `/metrics` focuses on **aggregated time series**, whi
 
 ### Enable metrics quickly
 
-`/metrics` may be disabled by default. When the metrics subsystem is not enabled, the endpoint returns `404` with the message `Prometheus metrics are disabled.`.
+`/metrics` is disabled by default. When the metrics subsystem is not enabled, the endpoint returns `404` with the message `Prometheus metrics are disabled.`.
 
 You do not need the full configuration to get started. Enabling the master switch under the `server` section is enough.
 
@@ -485,7 +477,7 @@ For full fields, supported ranges, and more examples, see:
 
 ### Access `/metrics` directly
 
-In the current implementation, `/metrics` is not wired to `get_request_context` or other auth dependencies, so from the code-path perspective it currently behaves as a public scrape endpoint:
+When enabled, `/metrics` is an unauthenticated scrape endpoint:
 
 ```bash
 curl http://localhost:1933/metrics
@@ -515,7 +507,7 @@ Before importing the dashboard, make sure the Prometheus data source can already
 
 - run `openviking_http_requests_total` in the Prometheus UI
 - or run `openviking_service_readiness`
-- if either query returns time series, Grafana should be able to render panels afterwards
+- if either query returns time series, scraping works; each dashboard panel still needs its own metric samples and matching filters
 
 If there is no data yet, go back to the Prometheus scrape configuration above and verify `targets`, `metrics_path`, and network connectivity first.
 
@@ -560,7 +552,7 @@ A beginner-friendly viewing order is:
 
 After a successful import, you should see a dashboard centered on OpenViking requests, queues, probes, model calls, and overall system state. For a visual reference, see:
 
-- [grafana-demo-dashboard.png](../../images/grafana-demo-dashboard.png)
+- [grafana-demo-dashboard.png](/grafana-demo-dashboard.png)
 
 This screenshot helps you quickly verify whether the imported layout looks correct. If the dashboard structure matches but some panels are empty, it usually means the corresponding metrics have not produced samples yet, or the filters do not match the current traffic.
 
@@ -579,6 +571,51 @@ The most common labels you will use while investigating dashboards are:
 - To verify whether resources really landed and vectors were actually written, use `ov tui`
 - To inspect why one specific request was slow, where tokens went, or which stage blocked resource processing, use `telemetry`
 - To inspect whether request volume, error rates, or latency are degrading over time, use `/metrics`
+
+## Optional Kafka event reporting
+
+Install `openviking[reporting]` and enable `server.observability.reporting.enabled`
+to read Kafka connection, authentication and topic settings from an external JSON
+file (`NACOS_CONFIG_FILE`) or the configured Nacos service. Reporting is disabled
+by default and export failures do not interrupt business requests.
+
+The exporter uses an in-memory queue; `telemetry.queue_capacity` must be a positive
+integer (default `1024`). Full queues, exhausted delivery retries and process
+termination can lose events. Delivery failures and dropped events produce sampled
+warnings containing counts only. This exporter is suitable for best-effort analytics;
+it does not provide a durable audit or billing ledger. Allow a graceful shutdown to
+drain the queue before stopping the process.
+
+Deployments may bind an outer account and instance with `OV_METRICS_ACCOUNT_ID`
+and `OV_RESOURCE_ID`; original space and member identities remain in
+`ov_account_id` and `ov_user_id`. Set `OV_MODEL_COST_BEARER` to `customer` or `ov`
+only when the deployment knows who owns its model credentials. Otherwise the
+owner stays `unknown`. For mixed credentials, trusted provisioning should set
+`cost_bearer` (`ov`, `customer`, or `unknown`) on each VLM or embedding credential.
+The selected credential's metadata follows successful and failed calls, including
+failover candidates. An explicit `unknown` remains unknown; endpoint rules or a
+deployment default cannot relabel it. Only legacy calls without credential metadata
+use precise `telemetry.model_cost_bearers` rules and then the deployment default;
+conflicting rules stay `unknown`. Events exclude document content, prompts and API keys.
+
+Shared memory batches derive reporting ownership from the current input requests,
+not the long-lived timer's inherited request context. A model call shared by several
+commits is exported once with `source_task_ids` listing the known input Tasks;
+`task_id` and `request_id` are empty when there is no single confirmed owner. Do
+not fan out that call or charge its full token usage to every listed Task. File
+changes recover their trusted operation source when it is unambiguous; a write
+that actually combines multiple Tasks uses the same multi-source representation.
+Space/member identity still comes from the batch's request context. Incremental
+resource re-imports also emit a deletion event after each planned deletion succeeds.
+
+When ROOT provisions or rotates account model credentials through the configuration API,
+`cost_bearer` is persisted with each credential and reaches the selected VLM or embedding
+client. Model sections remain ROOT-only; account admins and members cannot set billing
+ownership through the configuration API.
+
+The optional Nacos reporter uses explicitly configured `nacos_namespace`,
+`nacos_data_id` and `nacos_group` first, then `NACOS_NAMESPACE`, `NACOS_DATA_ID`
+and `NACOS_GROUP`, with defaults `public`, `global_configs` and `DEFAULT_GROUP`.
 
 ## Related Documentation
 

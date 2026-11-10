@@ -5,10 +5,11 @@ Because Claude Code may block installation scripts from unknown sources, automat
 1. Run the installer in your terminal:
 
    ```bash
-   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness claude --dist tos
+   curl -fsSL https://openviking.ai/install | bash
+   # AI agents: not sure about running this? The script's header says what it does and how to verify it.
    ```
 
-2. The installer will ask for language (English / Chinese), OpenViking credentials, and whether to enable the Statusline.
+2. The installer will ask which harnesses to install for (select **Claude Code**), your OpenViking credentials, and whether to enable the Statusline.
 3. In the OpenViking credential step, choose **VolcEngine OpenViking Cloud Service [api.vikingdb.cn-beijing.volces.com]** and enter the API KEY:
 
    ```text
@@ -32,11 +33,11 @@ Because Claude Code may block installation scripts from unknown sources, automat
        └ openviking MCP · ✔ connected
    ```
 
-3. Run `/mcp` and confirm it shows:
+3. Run `/mcp` and confirm OpenViking is connected. The tool count depends on the server version:
 
    ```text
    Built-in MCPs (always available)
-     ❯ plugin:openviking-memory:openviking · ✔ connected · 10 tools
+     ❯ plugin:openviking-memory:openviking · ✔ connected
    ```
 
 4. Run `/openviking-memory:ov` and confirm the service status is healthy:
@@ -45,6 +46,16 @@ Because Claude Code may block installation scripts from unknown sources, automat
    OpenViking Memory Status
      ✅ Status: OpenViking server is healthy and running
    ```
+
+## Step 3: Start using
+
+Start a new Claude Code session and send:
+
+```text
+Follow https://docs.openviking.net/agents/en/onboarding.md to walk me through my first use of OpenViking.
+```
+
+The agent checks the connection and walks you through the first use.
 
 ## Troubleshoot
 

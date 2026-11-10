@@ -4,7 +4,7 @@ WebDAV provides file-protocol access to the `resources` namespace.
 
 **Code entry point**: `openviking/server/routers/webdav.py`
 
-## WebDAV (Phase 1)
+## Supported operations
 
 OpenViking Server also exposes a minimal WebDAV adapter for resource files:
 
@@ -12,12 +12,12 @@ OpenViking Server also exposes a minimal WebDAV adapter for resource files:
 /webdav/resources
 ```
 
-Phase 1 intentionally keeps the scope narrow:
+The adapter supports the following scope:
 
 - Resources only. Memories, skills, sessions, and other namespaces are not exposed.
 - Text-first writes. `PUT` currently accepts UTF-8 text content only.
 - WebDAV subset only. `OPTIONS`, `PROPFIND`, `GET`, `HEAD`, `PUT`, `DELETE`, `MKCOL`, and `MOVE` are supported.
-- Semantic sidecars and internal system files stay internal. Derived or internal files such as `.abstract.md`, `.overview.md`, `.path.ovlock`, `.redirect.json`, and `.sync_log.json` are hidden from listings and cannot be accessed directly through WebDAV.
+- Semantic sidecars and internal system files stay internal. Derived or internal files such as `.abstract.md`, `.overview.md`, `.path.ovlock`, and multi-write metadata are hidden from listings and cannot be accessed directly through WebDAV.
 
 Behavior notes:
 
@@ -25,7 +25,7 @@ Behavior notes:
 - Replacing an existing file through WebDAV refreshes related semantics and vectors, same as `write()`.
 - `PUT` does not create parent collections automatically. Create missing directories with `MKCOL` first.
 - User-created dot-directories and dot-files remain visible unless they match one of the reserved internal filenames above.
-- When multi-write storage is enabled, files redirected to a backup are still exposed through the filesystem APIs as normal files; internal redirect and sync metadata never become visible to callers.
+- With multi-write enabled, WebDAV reads use the primary. Backup replication is asynchronous.
 
 ## API Reference
 
@@ -43,7 +43,7 @@ Except for `OPTIONS`, WebDAV requests use the same authentication headers as oth
 
 | Header | Methods | Required | Description |
 |--------|---------|----------|-------------|
-| `X-API-Key` | All except `OPTIONS` | Yes | OpenViking API key |
+| `X-API-Key` | All except `OPTIONS` | Depends on auth mode | OpenViking API key; trusted mode may also require identity headers |
 | `Depth` | `PROPFIND` | No | `0` returns only the target; other values use one level |
 | `Destination` | `MOVE` | Yes | Target path below `/webdav/resources` |
 | `Overwrite` | `MOVE` | No | Defaults to `T`; set `F` to preserve an existing target |

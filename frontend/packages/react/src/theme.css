@@ -1,0 +1,160 @@
+/**
+ * 包级主题基线。取值来自 OpenViking 控制台使用的设计规范（Arco 主题包
+ * `@arco-design/theme-ve-o-aml-design`）——只取颜色，不引入它的组件样式。
+ *
+ * 声明在组件根选择器上而不是 `:root`：库不修改宿主的全局样式，只在自身根节点
+ * 提供默认值。宿主可在应用入口覆盖任意一条，也可整组替换来换肤。
+ *
+ * 暗色只认宿主放在 `<html>` 上的 `.dark` 类，不读 `prefers-color-scheme`：
+ * 系统偏好和宿主实际呈现的主题可能不一致（文档站被手动切成浅色、系统仍是
+ * 暗色），跟系统走会让组件底色与周围文字对不上。宿主没有切换主题时保持亮色。
+ *
+ * Package-level theme baseline. Values come from the design system the OpenViking
+ * console uses (the Arco theme package `@arco-design/theme-ve-o-aml-design`) —
+ * the colours only, never its component styles.
+ *
+ * Declared on component roots rather than `:root`: the library never restyles a
+ * host's globals, it only supplies defaults on its own roots. A host overrides any
+ * single variable at its entry point, or the whole set to re-skin.
+ *
+ * Dark mode keys off the `.dark` class a host puts on `<html>`, never
+ * `prefers-color-scheme`: the system preference can disagree with the theme the
+ * host actually renders, and following the OS would leave surfaces clashing with
+ * the surrounding text. A host with no theme switch stays light.
+ */
+/*
+ * 基线只声明「组件私有」的变量，公开的 `--ov-ui-color-*` 一律不在这里赋值：
+ * 组件根节点上的声明会阻断继承，宿主写在祖先上的值永远盖不掉。组件内部改用
+ * `--ov-ui-<组件>-*` 读取，取值形如
+ * `var(--ov-ui-color-primary, 私有兜底值)`——宿主给了就用宿主的，没给才用兜底。
+ *
+ * Only component-private variables are declared here; the public
+ * `--ov-ui-color-*` are never assigned. A declaration on a component root blocks
+ * inheritance, so a value the host sets on an ancestor could never win. Components
+ * read through their own `--ov-ui-<component>-*`, written as
+ * `var(--ov-ui-color-primary, privateFallback)` — the host's value wins when set,
+ * the fallback applies otherwise.
+ */
+.ov-agent-connect,
+.ov-divider,
+.ov-file-browser,
+.ov-file-browser-entries,
+.ov-file-preview,
+.ov-file-tree,
+.ov-module-placeholder,
+.ov-popover,
+.ov-scope-switcher,
+.ov-tooltip,
+.ov-tui,
+.ov-viking-bot,
+.ov-viking-bot__interaction {
+  /* 主色：面包屑、焦点环、选中态与主要按钮。 */
+  --ov-ui-primary-default: #5252ff;
+  --ov-ui-primary-hover-default: #7075ff;
+  --ov-ui-primary-active-default: #3833d2;
+  /* 主色的浅色底，用于选中行与轻量高亮。 */
+  --ov-ui-primary-light-default: #f5f7ff;
+  /* Agent 接入背景光晕与主色按钮文字。 */
+  --ov-ui-connect-glow-warm-default: rgb(255 149 43 / 4%);
+  --ov-ui-connect-glow-pink-default: rgb(251 79 188 / 6%);
+  --ov-ui-connect-glow-pink-soft-default: rgb(251 79 188 / 4%);
+  --ov-ui-on-primary-default: #ffffff;
+
+  /* 文字：正文、次级、弱化、禁用。 */
+  --ov-ui-text-1-default: #0b0b0f;
+  --ov-ui-text-2-default: #3f3f51;
+  --ov-ui-text-3-default: #6e718c;
+  --ov-ui-text-description-default: rgb(0 0 0 / 40%);
+  --ov-ui-text-disabled-default: #a5a7bb;
+
+  /* 边框：分隔线、控件描边、强调描边。 */
+  --ov-ui-border-1-default: #f0f2fa;
+  --ov-ui-border-2-default: #e1e4f2;
+  --ov-ui-border-3-default: #d7daea;
+
+  /* 底色：面板、次级面板、选中、悬停。 */
+  --ov-ui-bg-1-default: #ffffff;
+  --ov-ui-bg-3-default: #f7f8fd;
+  --ov-ui-bg-4-default: #f6f7fa;
+  --ov-ui-bg-5-default: #f1f2f9;
+
+  /* 语义色。 */
+  --ov-ui-status-success-default: #1f9d55;
+  --ov-ui-shadow-default: #0f172a;
+  --ov-ui-focus-default: #5252ff;
+  --ov-ui-fill-hover-default: #f1f2f9;
+  --ov-ui-status-error-default: #c43838;
+  --ov-ui-warning-default: #b26a00;
+  --ov-ui-warning-light-default: #fff0b3;
+
+  /* 浮层。 */
+  --ov-ui-tooltip-bg-default: #1f2329;
+  --ov-ui-tooltip-text-default: #ffffff;
+}
+
+.dark .ov-agent-connect,
+.dark .ov-divider,
+.dark .ov-file-browser,
+.dark .ov-file-browser-entries,
+.dark .ov-file-preview,
+.dark .ov-file-tree,
+.dark .ov-module-placeholder,
+.dark .ov-popover,
+.dark .ov-scope-switcher,
+.dark .ov-tooltip,
+.dark .ov-tui,
+.dark .ov-viking-bot,
+.dark .ov-viking-bot__interaction {
+  --ov-ui-primary-default: #5f5fff;
+  --ov-ui-primary-hover-default: #7075ff;
+  --ov-ui-primary-active-default: #4242ba;
+  --ov-ui-primary-light-default: #1a1632;
+  --ov-ui-connect-glow-warm-default: rgb(255 149 43 / 2%);
+  --ov-ui-connect-glow-pink-default: rgb(251 79 188 / 3%);
+  --ov-ui-connect-glow-pink-soft-default: rgb(251 79 188 / 2%);
+
+  --ov-ui-text-1-default: #c7ccd6;
+  --ov-ui-text-2-default: #9da3af;
+  --ov-ui-text-3-default: #737a87;
+  --ov-ui-text-description-default: rgb(255 255 255 / 40%);
+  --ov-ui-text-disabled-default: #42464e;
+
+  --ov-ui-border-1-default: #23252a;
+  --ov-ui-border-2-default: #2e3138;
+  --ov-ui-border-3-default: #3a3d45;
+
+  --ov-ui-bg-1-default: #131416;
+  --ov-ui-bg-3-default: #1b1d21;
+  --ov-ui-bg-4-default: #202227;
+  --ov-ui-bg-5-default: #23252a;
+
+  --ov-ui-focus-default: #5f5fff;
+  --ov-ui-fill-hover-default: #23252a;
+  --ov-ui-status-error-default: #ff9595;
+  --ov-ui-warning-default: #e0a04a;
+  --ov-ui-warning-light-default: #3a2f14;
+
+  --ov-ui-tooltip-bg-default: #2a2d33;
+  --ov-ui-tooltip-text-default: #f0f1f3;
+}
+
+/* 接入设计稿的卡片、页签与说明语义；不改变其他组件的通用基线。 */
+.ov-agent-connect {
+  --ov-ui-connect-card-default: #fbfbfc;
+  --ov-ui-connect-tabs-default: #f7f7f9;
+  --ov-ui-connect-selected-default: #f3f4f7;
+  --ov-ui-connect-border-default: #edeef2;
+  --ov-ui-connect-outline-default: #e1e3ea;
+  --ov-ui-connect-muted-default: #787c91;
+  --ov-ui-connect-notice-default: #2e2984;
+}
+
+.dark .ov-agent-connect {
+  --ov-ui-connect-card-default: var(--ov-ui-bg-3-default);
+  --ov-ui-connect-tabs-default: var(--ov-ui-bg-3-default);
+  --ov-ui-connect-selected-default: var(--ov-ui-bg-4-default);
+  --ov-ui-connect-border-default: var(--ov-ui-border-1-default);
+  --ov-ui-connect-outline-default: var(--ov-ui-border-2-default);
+  --ov-ui-connect-muted-default: var(--ov-ui-text-3-default);
+  --ov-ui-connect-notice-default: var(--ov-ui-text-2-default);
+}

@@ -96,6 +96,7 @@ class RequestIntent:
     processing_mode: str
     vectorize: bool = True
     scalar_intents: tuple[ScalarIntent, ...] = ()
+    force: bool = False
 
     @classmethod
     def from_ingest_options(
@@ -105,6 +106,8 @@ class RequestIntent:
         processing_mode: Any,
         ingest_options: IngestOptions | Mapping[str, Any] | None,
         vectorize: bool = True,
+        force: bool = False,
+        scalar_target_levels: frozenset[int] | None = None,
     ) -> "RequestIntent":
         options = IngestOptions.from_value(ingest_options)
         scalar_intents: tuple[ScalarIntent, ...] = ()
@@ -115,9 +118,8 @@ class RequestIntent:
                     field="search_tags",
                     mode=IngestOptions.vector_search_tag_mode(options.search_tag_mode),
                     value=tuple(options.search_tags),
-                    target_levels=(
-                        frozenset({2}) if str(mode) == "vectors_only" else frozenset({0, 1, 2})
-                    ),
+                    target_levels=scalar_target_levels
+                    or (frozenset({2}) if str(mode) == "vectors_only" else frozenset({0, 1, 2})),
                 ),
             )
         else:
@@ -127,6 +129,7 @@ class RequestIntent:
             processing_mode=str(mode),
             vectorize=bool(vectorize),
             scalar_intents=scalar_intents,
+            force=force,
         )
 
     def required_vector_fields(self) -> frozenset[str]:

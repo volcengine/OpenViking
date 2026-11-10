@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from openviking.config.vlm import VLMResolver
@@ -27,7 +28,7 @@ from openviking.session.train.domain import (
     PolicyUpdatePlan,
 )
 from openviking.session.train.interfaces import SemanticGradient
-from openviking.session.train.utils import first_uri, safe_int
+from openviking.session.train.utils import experience_target_uri, first_uri, safe_int
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
@@ -51,6 +52,16 @@ class PatchMergePolicyOptimizer:
     memory_type: str = "experiences"
     memory_registry: MemoryTypeRegistry | None = None
     vlm_resolver: VLMResolver | None = None
+    runtime_config_manager: Any = None
+    thinking: bool | None = None
+    """Per-call thinking override for the merge extract loop.
+
+    None (default) defers to the VLM backend's configured ``thinking`` policy.
+    True/False force the mode for every merge call, overriding the backend
+    configuration. The optimizer never forces thinking on by itself: forcing
+    ``thinking=True`` for experiences/trajectories merges made reasoning consume
+    the whole completion budget and truncate the emitted program mid-string.
+    """
 
     @tracer(
         "train.policy_optimizer.patch_merge.plan",
@@ -104,8 +115,7 @@ class PatchMergePolicyOptimizer:
                 "gradient_count": len(gradients),
                 "patch_gradient_count": len(patch_gradients),
                 "gradients": [
-                    _gradient_to_dict(idx, gradient)
-                    for idx, gradient in enumerate(patch_gradients)
+                    _gradient_to_dict(idx, gradient) for idx, gradient in enumerate(patch_gradients)
                 ],
             },
         )
@@ -126,12 +136,9 @@ class PatchMergePolicyOptimizer:
         if self.vlm is None:
             if self.vlm_resolver is None:
                 raise RuntimeError(
-                    "PatchMergePolicyOptimizer requires a VLM resolver "
-                    "for account-owned work"
+                    "PatchMergePolicyOptimizer requires a VLM resolver for account-owned work"
                 )
-            vlm_config = await self.vlm_resolver.get_vlm(
-                context.request_context.account_id
-            )
+            vlm_config = await self.vlm_resolver.get_vlm(context.request_context.account_id)
             vlm = vlm_config
         else:
             vlm = self.vlm
@@ -140,19 +147,19 @@ class PatchMergePolicyOptimizer:
             raise RuntimeError("VikingFS is required for patch-merge policy optimization")
 
         extract_context = ExtractContext(list(context.messages or []))
-        provider_kwargs = {
-            "memory_type": self.memory_type,
-            "memory_registry": self.memory_registry,
-            "required_file_uris": _required_file_uris(gradients, policy_set),
-            "patches": [_gradient_to_merge_patch(gradient) for gradient in gradients],
-        }
-        if vlm_config is None:
-            provider = PatchMergeContextProvider(**provider_kwargs)
-        else:
-            provider = PatchMergeContextProvider(
-                **provider_kwargs,
-                vlm_config=vlm_config,
-            )
+        from openviking.config.generation import get_output_language_override
+
+        output_language_override = await get_output_language_override(
+            self.runtime_config_manager, context.request_context.account_id
+        )
+        provider = PatchMergeContextProvider(
+            output_language_override=output_language_override,
+            memory_type=self.memory_type,
+            memory_registry=self.memory_registry,
+            required_file_uris=_required_file_uris(gradients, policy_set),
+            patches=[_gradient_to_merge_patch(gradient) for gradient in gradients],
+            vlm_config=vlm_config,
+        )
         provider._ctx = context.request_context
         provider._viking_fs = viking_fs
         provider._extract_context = extract_context
@@ -183,16 +190,18 @@ class PatchMergePolicyOptimizer:
             context_provider=provider,
             isolation_handler=isolation_handler,
             max_iterations=1,
-            thinking=self.memory_type in {"trajectories", "experiences"},
+            thinking=self.thinking,
         )
         operations, _ = await orchestrator.run()
         return operations
+
 
 def _constant_prefetch(messages: list[dict[str, Any]]):
     async def prefetch() -> list[dict[str, Any]]:
         return list(messages)
 
     return prefetch
+
 
 def _log_merge_input(
     *,
@@ -241,6 +250,7 @@ def _log_merge_input(
     lines.append("===================================================\n")
     tracer.info("\n".join(lines), console=console)
 
+
 def _log_merge_output(
     *,
     target: str,
@@ -277,6 +287,7 @@ def _log_merge_output(
     lines.append("====================================================\n")
     tracer.info("\n".join(lines), console=console)
 
+
 def _dump_model_or_value(value: Any) -> str:
     dumper = getattr(value, "model_dump_json", None)
     if dumper is not None:
@@ -285,6 +296,7 @@ def _dump_model_or_value(value: Any) -> str:
         except TypeError:
             return str(dumper())
     return str(value)
+
 
 def _memory_file_summary(file: MemoryFile | None) -> str:
     if file is None:
@@ -299,6 +311,7 @@ def _memory_file_summary(file: MemoryFile | None) -> str:
             "extra_fields": file.extra_fields,
         }
     )
+
 
 def _gradient_to_dict(index: int, gradient: SemanticGradient) -> dict[str, Any]:
     result = {
@@ -319,6 +332,7 @@ def _gradient_to_dict(index: int, gradient: SemanticGradient) -> dict[str, Any]:
         result["after_file"] = _memory_file_to_dict(after_file)
     return result
 
+
 def _memory_file_to_dict(file: MemoryFile) -> dict[str, Any]:
     return {
         "uri": file.uri,
@@ -332,6 +346,7 @@ def _memory_file_to_dict(file: MemoryFile) -> dict[str, Any]:
 
 def _links_to_dicts(links: list[StoredLink] | None) -> list[dict[str, Any]]:
     return [link.model_dump() for link in links or []]
+
 
 def _gradient_to_merge_patch(gradient: SemanticGradient) -> PatchMergePatch:
     return PatchMergePatch(
@@ -349,6 +364,7 @@ def _gradient_to_merge_patch(gradient: SemanticGradient) -> PatchMergePatch:
 
 def _compact_gradient_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     compact = dict(metadata)
+    compact.pop("case_uris", None)  # Runtime link ownership, not merge instructions.
     memory_fields = compact.get("memory_fields")
     if isinstance(memory_fields, dict) and "content" in memory_fields:
         compact["memory_fields"] = {
@@ -364,12 +380,13 @@ def _required_file_uris(
     uris: list[str] = []
     for gradient in gradients:
         uri = gradient.target_uri
-        if not uri:
-            superseded = _find_superseded_policy(_gradient_supersedes(gradient), policy_set)
-            uri = superseded.uri if superseded is not None else None
         if uri and uri not in uris:
             uris.append(uri)
+        superseded = _find_superseded_policy(_gradient_supersedes(gradient), policy_set)
+        if superseded is not None and superseded.uri not in uris:
+            uris.append(superseded.uri)
     return uris
+
 
 def _seed_read_file_contents(
     provider: PatchMergeContextProvider,
@@ -406,6 +423,7 @@ def _policy_to_memory_file(policy: Policy, *, memory_type: str = "experiences") 
         extra_fields=extra_fields,
     )
 
+
 def _operations_to_plan_items(
     *,
     operations: Any,
@@ -426,6 +444,8 @@ def _operations_to_plan_items(
     for op in getattr(operations, "upsert_operations", []) or []:
         if getattr(op, "memory_type", None) != memory_type:
             continue
+        if getattr(op, "resolution_skip", None) is not None:
+            continue
         fields = dict(getattr(op, "memory_fields", {}) or {})
         after_content = str(fields.get("content") or "")
         if not after_content.strip():
@@ -436,6 +456,8 @@ def _operations_to_plan_items(
             or _fallback_policy_name(op, memory_type=memory_type)
         )
         target_uri = first_uri(getattr(op, "uris", []) or [])
+        if memory_type == "experiences":
+            target_uri = experience_target_uri(policy_set.root_uri, target_name, target_uri)
         old_file = getattr(op, "old_memory_file_content", None)
         before_content = old_file.plain_content() if old_file is not None else None
         if before_content is None and target_uri:
@@ -471,16 +493,13 @@ def _operations_to_plan_items(
                     "rationale": "PatchMergeContextProvider merged semantic gradients via ExtractLoop.",
                     "merge_gradient_count": len(gradients),
                     "merge_memory_fields": fields,
-                    "superseded_experience_uris": [
-                        policy.uri for policy in superseded_policies
-                    ],
+                    "superseded_experience_uris": [policy.uri for policy in superseded_policies],
                 },
             )
         )
         if target_uri:
             upsert_target_uris.add(target_uri)
 
-    delete_uris: set[str] = set()
     for old_file in getattr(operations, "delete_file_contents", []) or []:
         target_uri = old_file.uri
         target_name = str(
@@ -510,36 +529,41 @@ def _operations_to_plan_items(
                     "rationale": "PatchMergeContextProvider merge requested memory deletion.",
                     "merge_gradient_count": len(gradients),
                 },
+                replacement_uri=(getattr(operations, "delete_replacements", {}) or {}).get(
+                    target_uri
+                ),
             )
         )
-        delete_uris.add(target_uri)
-
-    for policy in superseded_policies:
-        if policy.uri in upsert_target_uris or policy.uri in delete_uris:
+    case_uris_by_source: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for gradient in gradients:
+        for key in _gradient_source_keys(gradient, policy_set):
+            case_uris_by_source[key].update(gradient.metadata.get("case_uris", []))
+    for item in items:
+        if item.kind != "upsert" or item.memory_type != "experiences":
             continue
-        items.append(
-            PolicyPlanItem(
-                kind="delete",
-                memory_type=memory_type,
-                target_name=policy.name,
-                target_uri=policy.uri,
-                before_content=policy.content,
-                after_content=None,
-                base_version=policy.version,
-                confidence=confidence,
-                links=_source_trajectory_links_from_experience(policy),
-                metadata={
-                    "rationale": "Superseded by broader experience from semantic gradient.",
-                    "merge_gradient_count": len(gradients),
-                    "superseded_by": [
-                        item.target_uri or item.target_name
-                        for item in items
-                        if item.kind == "upsert"
-                    ],
-                },
-            )
+        source_keys = _plan_item_source_keys(
+            target_uri=item.target_uri or "",
+            target_name=item.target_name,
+            before_content=item.before_content,
+            after_content=item.after_content,
+            source_links_by_target=source_links_by_target,
+            replacement_source_uris=replacement_source_uris_by_target.get(item.target_uri or "", []),
+            include_all_sources=upsert_output_count == 1,
         )
-        delete_uris.add(policy.uri)
+        case_uris = {
+            case_uri
+            for key in source_keys
+            for case_uri in case_uris_by_source.get(key, [])
+        }
+        item.links.extend(
+            StoredLink(
+                from_uri=case_uri,
+                to_uri=item.target_uri,
+                weight=1.0,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+            for case_uri in sorted(case_uris)
+        )
     return items
 
 
@@ -564,6 +588,7 @@ def _fallback_policy_name(op: Any, *, memory_type: str) -> str:
                 return parts[-2]
         return uri.rstrip("/").split("/")[-1].removesuffix(".md")
     return f"unknown_{memory_type.rstrip('s')}"
+
 
 def _source_trajectory_links_from_experience(policy: Policy | None) -> list[StoredLink]:
     if policy is None:
@@ -705,12 +730,8 @@ def _plan_item_source_keys(
     # treat it as this plan item's source.  This handles URI/name normalization
     # without turning duplicate-content batches into a broadcast.
     content = str(after_content or "").strip()
-    if content:
-        matches = [
-            key
-            for key in all_keys
-            if key[0] == "content" and key[1].strip() == content
-        ]
+    if content and not keys:
+        matches = [key for key in all_keys if key[0] == "content" and key[1].strip() == content]
         if len(matches) == 1:
             add(matches[0])
 
@@ -797,6 +818,8 @@ def _upsert_output_count(operations: Any, *, memory_type: str) -> int:
     for op in getattr(operations, "upsert_operations", []) or []:
         if getattr(op, "memory_type", None) != memory_type:
             continue
+        if getattr(op, "resolution_skip", None) is not None:
+            continue
         fields = dict(getattr(op, "memory_fields", {}) or {})
         if str(fields.get("content") or "").strip():
             count += 1
@@ -841,6 +864,7 @@ def _find_policy_by_uri(policy_set: PolicySet, uri: str) -> Policy | None:
         if policy.uri == uri:
             return policy
     return None
+
 
 def _base_version_from_old_file_or_policy(
     old_file: Any, target_uri: str | None, policy_set: PolicySet

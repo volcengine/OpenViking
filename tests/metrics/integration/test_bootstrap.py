@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -118,6 +119,7 @@ def test_resource_ingestion_event_datasource_can_drive_resource_ingestion_collec
     configure_metric_account_dimension(
         enabled=True,
         metric_allowlist={
+            ResourceIngestionCollector.IMPORTS_TOTAL,
             ResourceIngestionCollector.STAGE_TOTAL,
             ResourceIngestionCollector.STAGE_DURATION_SECONDS,
             ResourceIngestionCollector.WAIT_DURATION_SECONDS,
@@ -130,6 +132,11 @@ def test_resource_ingestion_event_datasource_can_drive_resource_ingestion_collec
 
     monkeypatch.setattr(EventMetricDataSource, "_emit", staticmethod(_emit), raising=False)
 
+    ResourceIngestionEventDataSource.record_import(
+        pipeline="connector",
+        source_type="repository",
+        account_id="acct-resource",
+    )
     ResourceIngestionEventDataSource.record_stage(stage="parse", status="ok", duration_seconds=0.01)
     ResourceIngestionEventDataSource.record_stage(
         stage="parse", status="error", duration_seconds=0.02
@@ -151,6 +158,10 @@ def test_resource_ingestion_event_datasource_can_drive_resource_ingestion_collec
 
     text = PrometheusExporter(registry=registry).render()
     assert (
+        'openviking_resource_imports_total{account_id="acct-resource",'
+        'pipeline="connector",source_type="repository"} 1'
+    ) in text
+    assert (
         'openviking_resource_stage_total{account_id="__unknown__",stage="parse",status="ok"} 1'
         in text
     )
@@ -158,17 +169,19 @@ def test_resource_ingestion_event_datasource_can_drive_resource_ingestion_collec
         'openviking_resource_stage_total{account_id="__unknown__",stage="parse",status="error"} 1'
         in text
     )
-    assert (
-        'openviking_resource_wait_duration_seconds_count{account_id="__unknown__",operation="queue_processing"} 1'
-        in text
+    assert re.search(
+        r'openviking_resource_wait_duration_seconds_count\{account_id="__unknown__",'
+        r'bucket_schema="[0-9a-f]{16}",operation="queue_processing"\} 1',
+        text,
     )
     assert (
         'openviking_resource_stage_total{account_id="acct-resource",stage="parse",status="ok"} 1'
         in text
     )
-    assert (
-        'openviking_resource_wait_duration_seconds_count{account_id="acct-resource",operation="queue_processing"} 1'
-        in text
+    assert re.search(
+        r'openviking_resource_wait_duration_seconds_count\{account_id="acct-resource",'
+        r'bucket_schema="[0-9a-f]{16}",operation="queue_processing"\} 1',
+        text,
     )
 
     reset_metric_account_dimension()

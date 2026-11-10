@@ -2,14 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for shared model retry helpers."""
 
+import asyncio
+
+import httpx
+import openai
 import pytest
 
+from openviking.models.model_error import ModelError, ModelErrorKind, model_error_boundary
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSConnectionError,
     AGFSNotADirectoryError,
     AGFSTimeoutError,
 )
+from openviking.storage.errors import InvalidPathLockRequestError
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
     ERROR_CLASS_AUTH,
@@ -35,6 +41,7 @@ from openviking.utils.model_retry import (
         IsADirectoryError,
         NotADirectoryError,
         AGFSNotADirectoryError,
+        InvalidPathLockRequestError,
     ],
 )
 @pytest.mark.parametrize("message", ["/resources/notes.txt", "timeout at /arbitrary/input.md"])
@@ -68,6 +75,21 @@ def test_classify_api_error_recognizes_request_burst_too_fast():
     assert classify_api_error(RuntimeError("RequestBurstTooFast")) == ERROR_CLASS_TRANSIENT
 
 
+def test_classify_api_error_recognizes_timed_out_message():
+    assert classify_api_error(RuntimeError("Request timed out.")) == ERROR_CLASS_TRANSIENT
+
+
+@pytest.mark.parametrize("error_type", [TimeoutError, asyncio.TimeoutError])
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_classify_api_error_treats_bare_timeout_as_transient(error_type, wrapped):
+    error = error_type()
+    if wrapped:
+        wrapper = RuntimeError("vlm call failed")
+        wrapper.__cause__ = error
+        error = wrapper
+    assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
+
+
 class _ProviderError(RuntimeError):
     def __init__(self, *, status_code=None, error_code=None, code=None, body=None):
         super().__init__("provider request failed")
@@ -96,40 +118,60 @@ def test_extract_metric_error_code_uses_safe_fallbacks_only():
     assert extract_metric_error_code(RuntimeError("request_id=not-a-metric-label")) == "unknown"
 
 
-def test_classify_all_credentials_failed_prefers_transient_over_auth():
+def test_all_credentials_failed_prefers_transient_over_auth():
     err = AllCredentialsFailedError(
         [
-            ("cred-a", ERROR_CLASS_AUTH, RuntimeError("401 Unauthorized"), 0),
-            ("cred-b", ERROR_CLASS_TRANSIENT, RuntimeError("500 server error"), 1),
+            (
+                "cred-a",
+                ModelErrorKind.AUTHENTICATION_ERROR,
+                ModelError(ModelErrorKind.AUTHENTICATION_ERROR, "unauthorized"),
+                0,
+            ),
+            (
+                "cred-b",
+                ModelErrorKind.TRANSIENT_SERVICE_ERROR,
+                ModelError(ModelErrorKind.TRANSIENT_SERVICE_ERROR, "server error"),
+                1,
+            ),
         ]
     )
-    assert classify_api_error(err) == ERROR_CLASS_TRANSIENT
+    assert err.kind is ModelErrorKind.TRANSIENT_SERVICE_ERROR
 
 
-def test_retry_sync_retries_transient_error_until_success():
+def test_retry_sync_retries_transient_error_until_success(monkeypatch):
     attempts = {"count": 0}
+    monkeypatch.setattr("openviking.utils.model_retry.time.sleep", lambda _delay: None)
+    sdk_error = openai.InternalServerError(
+        "Internal server error",
+        response=httpx.Response(500, request=httpx.Request("POST", "https://example.test")),
+        body={"error": {"code": 500, "type": "server_error", "message": "Internal server error"}},
+    )
 
+    @model_error_boundary
     def _call():
         attempts["count"] += 1
         if attempts["count"] < 3:
-            raise RuntimeError("429 TooManyRequests")
+            raise sdk_error
         return "ok"
 
-    assert retry_sync(_call, max_retries=3) == "ok"
+    assert retry_sync(_call, max_retries=3, model_errors_only=True) == "ok"
     assert attempts["count"] == 3
 
 
 @pytest.mark.asyncio
-async def test_retry_async_does_not_retry_unknown_error():
+async def test_retry_async_preserves_local_error_without_parsing_message():
     attempts = {"count": 0}
+    error = RuntimeError("HTTP 503 is input data, not an API failure")
 
+    @model_error_boundary
     async def _call():
         attempts["count"] += 1
-        raise RuntimeError("some unexpected validation failure")
+        raise error
 
-    with pytest.raises(RuntimeError):
-        await retry_async(_call, max_retries=3)
+    with pytest.raises(RuntimeError) as raised:
+        await retry_async(_call, max_retries=3, model_errors_only=True)
 
+    assert raised.value is error
     assert attempts["count"] == 1
 
 
@@ -223,16 +265,24 @@ def test_content_safety_takes_precedence_over_400():
 
 
 def test_retry_sync_does_not_retry_quota_exceeded():
-    """Quota-exceeded errors should NOT be retried."""
+    """Structured quota exhaustion takes precedence over the retryable HTTP 429."""
     attempts = {"count": 0}
+    sdk_error = openai.RateLimitError(
+        "rate limited",
+        response=httpx.Response(429, request=httpx.Request("POST", "https://example.test")),
+        body={"error": {"code": "insufficient_quota"}},
+    )
 
+    @model_error_boundary
     def _call():
         attempts["count"] += 1
-        raise RuntimeError("AccountQuotaExceeded")
+        raise sdk_error
 
-    with pytest.raises(RuntimeError, match="AccountQuotaExceeded"):
-        retry_sync(_call, max_retries=5)
+    with pytest.raises(ModelError) as raised:
+        retry_sync(_call, max_retries=5, model_errors_only=True)
 
+    assert raised.value.kind is ModelErrorKind.QUOTA_EXHAUSTED
+    assert raised.value.__cause__ is sdk_error
     assert attempts["count"] == 1
 
 
@@ -305,30 +355,44 @@ def test_20015_inside_request_id_is_not_input_too_large():
 
 
 @pytest.mark.parametrize(
-    "message",
+    "body",
     [
-        "expected maxLength: 50000, actual: 75000",
-        "Error code: 400 - InvalidParameter: Total tokens of multi-modal content "
-        "and text exceed max message tokens.",
+        {"code": "context_length_exceeded", "message": "Maximum context length exceeded"},
+        {
+            "code": 500,
+            "type": "server_error",
+            "message": (
+                "input (8525 tokens) is too large to process. increase the physical batch size "
+                "(current batch size: 2048)"
+            ),
+        },
     ],
 )
-def test_input_too_large_does_not_retry_or_trip_breaker(message):
+def test_input_too_large_does_not_retry_or_trip_breaker(body, monkeypatch):
     from openviking.utils.circuit_breaker import CircuitBreaker
 
     breaker = CircuitBreaker()
     attempts = {"count": 0}
+    monkeypatch.setattr("openviking.utils.model_retry.time.sleep", lambda _delay: None)
+    sdk_error = openai.InternalServerError(
+        "Input rejected",
+        response=httpx.Response(500, request=httpx.Request("POST", "https://example.test")),
+        body={"error": body},
+    )
 
+    @model_error_boundary
     def _call():
         attempts["count"] += 1
-        error = RuntimeError(message)
-        breaker.record_failure(error)
-        raise error
+        raise sdk_error
 
-    with pytest.raises(RuntimeError) as raised:
-        retry_sync(_call, max_retries=5)
+    # Repeated bad inputs must not block a subsequent valid request.
+    for _ in range(5):
+        with pytest.raises(ModelError) as raised:
+            retry_sync(_call, max_retries=3, model_errors_only=True)
+        assert raised.value.kind is ModelErrorKind.INPUT_TOO_LARGE
+        breaker.record_failure(raised.value)
 
-    assert str(raised.value) == message
-    assert attempts["count"] == 1
+    assert attempts["count"] == 5
     breaker.check()
 
 

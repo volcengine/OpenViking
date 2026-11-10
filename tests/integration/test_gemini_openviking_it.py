@@ -61,7 +61,7 @@ async def test_batch_documents_search(gemini_ov_service, tmp_path):
 @pytest.mark.parametrize(
     "model,dim,token_limit",
     [
-        pytest.param("gemini-embedding-2-preview", 768, 8192, id="g2p-large"),
+        pytest.param("gemini-embedding-2", 768, 8192, id="g2-stable-large"),
         pytest.param("gemini-embedding-001", 768, 2048, id="g001-large"),
     ],
 )
@@ -99,7 +99,7 @@ async def test_large_text_add_and_search(model, dim, token_limit, tmp_path):
 async def test_retrieval_routing_workflow(query_param, doc_param, tmp_path):
     service, ctx = await make_ov_service(
         gemini_config_dict(
-            "gemini-embedding-2-preview",
+            "gemini-embedding-2",
             768,
             query_param=query_param,
             doc_param=doc_param,
@@ -128,7 +128,7 @@ async def test_retrieval_routing_workflow(query_param, doc_param, tmp_path):
 @pytest.mark.parametrize("dim", [512, 768, 1536, 3072])
 async def test_dimension_variant_add_search(dim, tmp_path):
     service, ctx = await make_ov_service(
-        gemini_config_dict("gemini-embedding-2-preview", dim),
+        gemini_config_dict("gemini-embedding-2", dim),
         str(tmp_path / f"ov_dim_{dim}"),
     )
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton

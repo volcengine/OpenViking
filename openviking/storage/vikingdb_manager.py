@@ -5,6 +5,7 @@ VikingDB Manager class that extends VikingVectorIndexBackend with queue manageme
 """
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Mapping, Optional, Tuple
 
 from openviking.server.identity import RequestContext
@@ -51,9 +52,7 @@ class VikingDBManager(VikingVectorIndexBackend):
             queue_manager: QueueManager instance.
         """
         # Initialize the base VikingVectorIndexBackend without queue management
-        super().__init__(
-            config=vectordb_config,
-        )
+        super().__init__(config=vectordb_config)
 
         # Queue management specific attributes
         self._queue_manager = queue_manager
@@ -157,6 +156,7 @@ class VikingDBManager(VikingVectorIndexBackend):
         except Exception as e:
             logger.error(f"Error getting embedding queue size: {e}")
             return 0
+
 
 class VikingDBManagerProxy:
     """
@@ -433,11 +433,39 @@ class VikingDBManagerProxy:
         level: Optional[List[int]] = None,
         limit: int = 10,
         offset: int = 0,
+        events_time_decay_protection: Optional[str] = None,
+        request_now: Optional[datetime] = None,
     ) -> List[Dict[str, Any]]:
-        return await self._manager.search_in_tenant(
+        kwargs: Dict[str, Any] = {
+            "query_vector": query_vector,
+            "sparse_query_vector": sparse_query_vector,
+            "context_type": context_type,
+            "target_directories": target_directories,
+            "extra_filter": extra_filter,
+            "level": level,
+            "limit": limit,
+            "offset": offset,
+        }
+        if events_time_decay_protection is not None:
+            kwargs.update(
+                events_time_decay_protection=events_time_decay_protection,
+                request_now=request_now,
+            )
+        return await self._manager.search_in_tenant(self._ctx, **kwargs)
+
+    async def search_by_keywords_in_tenant(
+        self,
+        query: str,
+        context_type: Optional[str] = None,
+        target_directories: Optional[List[str]] = None,
+        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        level: Optional[List[int]] = None,
+        limit: int = 10,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        return await self._manager.search_by_keywords_in_tenant(
             self._ctx,
-            query_vector=query_vector,
-            sparse_query_vector=sparse_query_vector,
+            query=query,
             context_type=context_type,
             target_directories=target_directories,
             extra_filter=extra_filter,
@@ -463,27 +491,6 @@ class VikingDBManagerProxy:
             level=level,
             limit=limit,
             offset=offset,
-        )
-
-    async def search_children_in_tenant(
-        self,
-        parent_uri: str,
-        query_vector: Optional[List[float]],
-        sparse_query_vector: Optional[Dict[str, float]] = None,
-        context_type: Optional[str] = None,
-        target_directories: Optional[List[str]] = None,
-        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
-        limit: int = 10,
-    ) -> List[Dict[str, Any]]:
-        return await self._manager.search_children_in_tenant(
-            self._ctx,
-            parent_uri=parent_uri,
-            query_vector=query_vector,
-            sparse_query_vector=sparse_query_vector,
-            context_type=context_type,
-            target_directories=target_directories,
-            extra_filter=extra_filter,
-            limit=limit,
         )
 
     async def get_context_by_uri(

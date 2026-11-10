@@ -42,6 +42,7 @@ async def test_mcp_add_resource_schema_exposes_parse_mode_only_through_args(mcp_
 
     assert "parse_mode" not in schema["properties"]
     assert "args" in schema["properties"]
+    assert "create_parent" not in schema["properties"]
 
 
 @pytest.mark.asyncio

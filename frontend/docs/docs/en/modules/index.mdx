@@ -1,0 +1,34 @@
+# Modules
+
+`file-browser` is implemented and wires the directory tree, the search and the preview together; `console` is still a placeholder that renders only a module name and a replaceable message.
+
+Placeholder modules do not carry data props. A module loads its own data through a Hook, so the host supplies configuration and the controlled value, and the module reports changes through callbacks.
+
+| Module                           | Component     | Target capability |
+| -------------------------------- | ------------- | ----------------- |
+| [`file-browser`](./file-browser) | `FileBrowser` | File browser.     |
+| [`console`](./console)           | `Console`     | Console.          |
+
+## Preview
+
+This example uses the public module entries and the aggregate module stylesheet. The grid belongs to this documentation example; applications choose their own layout.
+
+```tsx file="../../_demos/modules-basic.tsx" preview
+
+```
+
+## Import and styles
+
+Import a component and its Props / Labels / Slots types from `@openviking/react/modules/<module>`. The two component bodies and their main Props types are also exported from `@openviking/react`; Labels, Slots and the enum types come from the subpath only.
+
+JavaScript does not load CSS. Import `@openviking/react/modules/<module>/style.css` for one module, `@openviking/react/modules/style.css` for all modules, or `@openviking/react/style.css` for the full library. Each stylesheet works independently. There is no aggregate `@openviking/react/modules` JavaScript entry.
+
+The current placeholders accept `className`, `style`, and `labels`. They do not require a Provider. Business Hooks, the shared Client, and `OpenVikingProvider` are planned and are not exported yet.
+
+## Host responsibilities
+
+Hosts own page layout, authentication, account scope, routing, and permissions. Product onboarding, resource and Skill import flows, and synchronization settings remain in the host. Administration is outside these module boundaries.
+
+## Scope cascade
+
+[ScopeCascade](./scope-cascade) provides working request and cascade Hooks plus a default view. Supply three host API adapters; each level subscribes independently.

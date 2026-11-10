@@ -1532,7 +1532,9 @@ def test_parse_sheets_handles_grid_and_embedded_bitable(monkeypatch):
                 b'"columnCount":0,"blockInfo":{"blockType":"BITABLE_BLOCK",'
                 b'"blockToken":"app-token_table-1"}}]}}'
             ),
-            _FakeMediaResponse(b'{"data":{"valueRange":{"values":[["name","amount"],["A",1]]}}}'),
+            _FakeMediaResponse(
+                b'{"data":{"valueRange":{"values":[["name","","amount"],["Rent | Fees\\nQ1","",1]]}}}'
+            ),
             _FakeMediaResponse(b"\x89PNG\r\n"),
         ]
     )
@@ -1606,7 +1608,11 @@ def test_parse_sheets_handles_grid_and_embedded_bitable(monkeypatch):
     )
 
     assert title == "Budget"
-    assert "| name | amount |" in markdown
+    assert (
+        "| name               |     | amount |\n"
+        "| ------------------ | --- | ------ |\n"
+        "| Rent \\| Fees<br>Q1 |     | 1      |"
+    ) in markdown
     assert "1 more rows truncated" in markdown
     assert "2 columns after Z omitted" in markdown
     assert "### Content Calendar" in markdown

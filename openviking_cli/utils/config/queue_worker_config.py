@@ -36,6 +36,7 @@ class QueueWorkersConfig(BaseModel):
 
     external_parse: QueueWorkerConfig = Field(default_factory=QueueWorkerConfig)
     add_resource: AddResourceQueueWorkerConfig = Field(default_factory=AddResourceQueueWorkerConfig)
+    reindex: QueueWorkerConfig = Field(default_factory=QueueWorkerConfig)
     session_commit: QueueWorkerConfig = Field(
         default_factory=lambda: QueueWorkerConfig(max_concurrent=8)
     )

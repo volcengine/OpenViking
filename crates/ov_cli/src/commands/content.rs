@@ -1,18 +1,21 @@
 use crate::client::HttpClient;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::output::OutputFormat;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 
+/// Print the requested line range; propagate request and output errors to the CLI.
 pub async fn read(
     client: &HttpClient,
     uri: &str,
+    offset: i64,
+    limit: i64,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let content = client.read_profiled(uri).await?;
+    let content = client.read_profiled(uri, offset, limit).await?;
     output_content_result(content, output_format, compact)
 }
 
@@ -42,11 +45,11 @@ pub async fn write(
     content: &str,
     mode: &str,
     wait: bool,
-    timeout: Option<f64>,
     processing_mode: &str,
     tags: Vec<String>,
     tag_mode: &str,
     acl: Option<serde_json::Value>,
+    edit_source: &str,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -56,11 +59,11 @@ pub async fn write(
             content,
             mode,
             wait,
-            timeout,
             processing_mode,
             tags,
             tag_mode,
             acl,
+            edit_source,
         )
         .await?;
     crate::output::output_success(result, output_format, compact);
@@ -87,7 +90,7 @@ pub async fn reindex(
     uri: &str,
     mode: &str,
     wait: bool,
-    dry_run: bool,
+    force: bool,
     tags: Vec<String>,
     tag_mode: &str,
     recursive: bool,
@@ -95,7 +98,7 @@ pub async fn reindex(
     compact: bool,
 ) -> Result<()> {
     let result = client
-        .reindex(uri, mode, wait, dry_run, tags, tag_mode, recursive)
+        .reindex(uri, mode, wait, force, tags, tag_mode, recursive)
         .await?;
     crate::output::output_success(result, output_format, compact);
     Ok(())
@@ -143,6 +146,14 @@ fn create_download_target(path: &Path, local_path: &str) -> Result<std::fs::File
 }
 
 fn output_content_result(result: Value, output_format: OutputFormat, compact: bool) -> Result<()> {
+    if let Some(is_error) = crate::output::output_tool_result(&result, output_format, compact) {
+        return if is_error {
+            Err(Error::AlreadyReported)
+        } else {
+            Ok(())
+        };
+    }
+
     match output_format {
         OutputFormat::Json => crate::output::output_success(result, output_format, compact),
         OutputFormat::Table => {

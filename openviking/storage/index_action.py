@@ -8,7 +8,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping
 
-from openviking.utils.tags import merge_search_tags, normalize_search_tags
+from openviking.utils.tags import (
+    merge_search_tags,
+    normalize_search_tags,
+    preserve_memory_type_tag,
+)
 
 PATCHABLE_INDEX_FIELDS = frozenset(
     {"md5", "content", "abstract", "updated_at", "active_count", "tags", "search_tags"}
@@ -73,6 +77,11 @@ class FieldPatch:
                     if self.modes.get(name, "replace") == "append"
                     else incoming
                 )
+                if existing.get("context_type") == "memory":
+                    resolved[name] = preserve_memory_type_tag(
+                        existing.get(name),
+                        resolved[name],
+                    )
             else:
                 resolved[name] = value
         return resolved

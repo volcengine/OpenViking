@@ -120,10 +120,10 @@ async def test_update_rollback_preserves_waiting_privacy_save(
             await asyncio.wait_for(asyncio.gather(*pending), 10)
 
 
-async def test_update_timeout_restores_privacy_and_releases_both_locks(
+async def test_update_cancellation_restores_privacy_and_releases_both_locks(
     client, service, monkeypatch
 ):
-    name = "privacy-update-timeout"
+    name = "privacy-update-cancellation"
     root = (await _add_skill(client, name, "Original"))["root_uri"]
     endpoint = f"/api/v1/privacy-configs/skill/{name}"
     seeded = await client.post(endpoint, json={"values": {"api_key": "old-value"}})
@@ -155,16 +155,17 @@ async def test_update_timeout_restores_privacy_and_releases_both_locks(
     updating = asyncio.create_task(
         client.put(
             f"/api/v1/skills/{name}",
-            json={"data": _skill_md(name, "Timed out replacement"), "wait": True, "timeout": 2},
+            json={"data": _skill_md(name, "Cancelled replacement"), "wait": True},
         )
     )
     try:
         await _wait_until(started.is_set)
         await _assert_locked(fs, root)
         await _assert_locked(fs, privacy_root)
-        failed = await asyncio.wait_for(asyncio.shield(updating), 5)
-        assert failed.status_code == 504, failed.text
-        assert cancelled.is_set(), "The timeout must cancel the actual background summary"
+        updating.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(updating), 5)
+        assert cancelled.is_set(), "Request cancellation must cancel the background summary"
         await _assert_unlocked(fs, root, ctx)
         await _assert_unlocked(fs, privacy_root, ctx)
         status, current, history = await _privacy_snapshot(client, endpoint)
@@ -181,7 +182,7 @@ async def test_update_timeout_restores_privacy_and_releases_both_locks(
         assert shown.json()["result"]["description"] == "Original"
     finally:
         resume.set()
-        await get_queue_manager().wait_complete(timeout=5)
+        await asyncio.wait_for(get_queue_manager().wait_complete(), 5)
         if not updating.done():
             updating.cancel()
         await asyncio.gather(updating, return_exceptions=True)

@@ -221,6 +221,7 @@ class PolicyPlanItem:
     confidence: float | None = None
     links: list[StoredLink] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    replacement_uri: str | None = None  # Delete replacement used to migrate stored links.
 
 
 @dataclass(slots=True)

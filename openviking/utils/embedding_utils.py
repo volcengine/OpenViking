@@ -32,7 +32,6 @@ from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.resource_rnfv import NON_PORTABLE_VECTOR_RECORD_FIELDS
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.embedding_input import truncate_embedding_input
 from openviking.utils.image_search import image_bytes_to_model_data_uri
 from openviking.utils.ingest_options import IngestOptions
@@ -128,38 +127,19 @@ def _apply_ingest_options(
             embedding_msg.context_data.get("search_tags"), incoming_tags
         )
     embedding_msg.context_data["search_tags"] = incoming_tags
-    embedding_msg.context_data.setdefault("_upsert_options", {})["search_tag_mode"] = (
-        tag_mode
-    )
+    embedding_msg.context_data.setdefault("_upsert_options", {})["search_tag_mode"] = tag_mode
 
 
 async def _enqueue_embedding_message(
     embedding_queue,
     embedding_msg,
     *,
-    failure_message: str,
+    failure_message: str = "Failed to enqueue embedding message",
 ) -> bool:
-    """Persist one embedding message and settle request tracking on enqueue failure."""
-    wait_tracker = get_request_wait_tracker()
-    wait_tracker.register_embedding_root(embedding_msg.telemetry_id, embedding_msg.id)
-
-    try:
-        enqueue_id = await embedding_queue.enqueue(embedding_msg)
-    except BaseException as exc:
-        wait_tracker.mark_embedding_failed(
-            embedding_msg.telemetry_id,
-            embedding_msg.id,
-            f"{failure_message}: {exc}",
-        )
-        raise
-
+    """Persist one embedding message."""
+    enqueue_id = await embedding_queue.enqueue(embedding_msg)
     if not enqueue_id:
-        wait_tracker.mark_embedding_failed(
-            embedding_msg.telemetry_id,
-            embedding_msg.id,
-            failure_message,
-        )
-        return False
+        raise RuntimeError(failure_message)
     return True
 
 
@@ -308,6 +288,7 @@ async def _build_image_data_uri(
     file_name: str,
     viking_fs,
     ctx: Optional[RequestContext],
+    content: Optional[bytes] = None,
 ) -> Optional[str]:
     """Read an image file and encode it as a base64 ``data:`` URI.
 
@@ -316,7 +297,8 @@ async def _build_image_data_uri(
     Returns None if the image cannot be read.
     """
     try:
-        content = await viking_fs.read_file_bytes(file_path, ctx=ctx)
+        if content is None:
+            content = await viking_fs.read_file_bytes(file_path, ctx=ctx)
         image_config = getattr(get_openviking_config(), "image", None)
         return image_bytes_to_model_data_uri(content, file_name, config=image_config)
     except Exception as e:
@@ -412,6 +394,7 @@ async def vectorize_directory_meta(
     actions: Optional[Dict[int, IndexAction | str]] = None,
     field_patches: Optional[Dict[int, FieldPatch]] = None,
     telemetry_id: str | None = None,
+    md5s: Optional[Dict[int, str]] = None,
 ) -> set[int]:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
@@ -461,6 +444,7 @@ async def vectorize_directory_meta(
                 account_id=ctx.account_id,
                 owner_space=owner_space,
                 meta=meta,
+                md5=(md5s or {}).get(int(ContextLevel.ABSTRACT.value)),
             )
             context_abstract.set_vectorize(
                 Vectorize(text=embedding_text_for_body(ContextLevel.ABSTRACT, uri, abstract))
@@ -490,7 +474,6 @@ async def vectorize_directory_meta(
                     enqueued = await _enqueue_embedding_message(
                         embedding_queue,
                         msg_abstract,
-                        failure_message=f"Failed to enqueue directory L0 vector for {uri}",
                     )
                     if enqueued:
                         enqueued_levels.add(int(ContextLevel.ABSTRACT.value))
@@ -522,6 +505,7 @@ async def vectorize_directory_meta(
                 account_id=ctx.account_id,
                 owner_space=owner_space,
                 meta=meta,
+                md5=(md5s or {}).get(int(ContextLevel.OVERVIEW.value)),
             )
             context_overview.set_vectorize(
                 Vectorize(text=embedding_text_for_body(ContextLevel.OVERVIEW, uri, overview))
@@ -551,7 +535,6 @@ async def vectorize_directory_meta(
                     enqueued = await _enqueue_embedding_message(
                         embedding_queue,
                         msg_overview,
-                        failure_message=f"Failed to enqueue directory L1 vector for {uri}",
                     )
                     if enqueued:
                         enqueued_levels.add(int(ContextLevel.OVERVIEW.value))
@@ -590,6 +573,7 @@ async def vectorize_file(
     ingest_options: IngestOptions | None = None,
     file_md5: Optional[str] = None,
     file_content: Optional[bytes] = None,
+    materialize_content: bool = False,
     action: str = "merge",
     telemetry_id: str | None = None,
 ) -> bool:
@@ -701,7 +685,9 @@ async def vectorize_file(
                     context.set_vectorize(Vectorize(text=embedding_text))
         elif content_type == ResourceContentType.IMAGE:
             # Multimodal embedders consume both parts; text-only embedders fall back to summary.
-            image_uri = await _build_image_data_uri(file_path, file_name, viking_fs, ctx)
+            image_uri = await _build_image_data_uri(
+                file_path, file_name, viking_fs, ctx, content=file_content
+            )
             if image_uri:
                 context.set_vectorize(Vectorize(text=summary, images=[image_uri]))
             elif summary:
@@ -739,11 +725,25 @@ async def vectorize_file(
 
         _apply_ingest_options(embedding_msg, ingest_options)
         _apply_scalar_overrides(embedding_msg, scalar_override)
+        if (
+            materialize_content
+            and file_content is not None
+            and (
+                content_type is ResourceContentType.TEXT
+                or (content_type is None and is_text_file(file_name))
+            )
+        ):
+            from openviking.storage.viking_vector_index_backend import (
+                VIKINGDB_CONTENT_MAX_SIZE,
+            )
+
+            embedding_msg.context_data["_materialized_content"] = _coerce_text_file_content(
+                file_content
+            )[:VIKINGDB_CONTENT_MAX_SIZE]
         _apply_planned_field_patch(embedding_msg, field_patch)
         enqueued = await _enqueue_embedding_message(
             embedding_queue,
             embedding_msg,
-            failure_message=f"Failed to enqueue file vector for {file_path}",
         )
         if not enqueued:
             return False

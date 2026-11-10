@@ -7,7 +7,6 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from .operation import OperationTelemetry
-from .request_wait_tracker import get_request_wait_tracker
 
 
 def _consume_semantic_request_stats(telemetry_id: str):
@@ -37,19 +36,6 @@ def _consume_semantic_tree_stats(telemetry_id: str, root_uri: str | None):
         return None
 
 
-def build_queue_status_payload(status: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """Convert queue status objects to response payload format."""
-    return {
-        name: {
-            "processed": s.processed,
-            "requeue_count": getattr(s, "requeue_count", 0),
-            "error_count": s.error_count,
-            "errors": [{"message": e.message} for e in s.errors],
-        }
-        for name, s in status.items()
-    }
-
-
 def _queue_metrics(stats: Any) -> Dict[str, int]:
     if stats is None:
         return {"processed": 0, "requeue_count": 0, "error_count": 0}
@@ -65,6 +51,7 @@ def record_resource_queue_metrics(
     telemetry: OperationTelemetry,
     telemetry_id: str,
     root_uri: str | None,
+    queue_timing: Dict[str, Dict[str, float]] | None = None,
 ) -> None:
     """Apply queue and semantic-tree metrics to a resource operation collector."""
     if not telemetry.enabled:
@@ -72,18 +59,20 @@ def record_resource_queue_metrics(
 
     semantic = _queue_metrics(_consume_semantic_request_stats(telemetry_id))
     embedding = _queue_metrics(_consume_embedding_request_stats(telemetry_id))
-    timing = get_request_wait_tracker().get_queue_timing(telemetry_id)
+    timing = queue_timing or {}
+    semantic_timing = timing.get("semantic", {"queue_wait_ms": 0.0, "execute_ms": 0.0})
+    embedding_timing = timing.get("embedding", {"queue_wait_ms": 0.0, "execute_ms": 0.0})
 
     telemetry.set("queue.semantic.processed", semantic["processed"])
     telemetry.set("queue.semantic.requeue_count", semantic["requeue_count"])
     telemetry.set("queue.semantic.error_count", semantic["error_count"])
-    telemetry.set("queue.semantic.queue_wait.duration_ms", timing["semantic"]["queue_wait_ms"])
-    telemetry.set("queue.semantic.execute.duration_ms", timing["semantic"]["execute_ms"])
+    telemetry.set("queue.semantic.queue_wait.duration_ms", semantic_timing["queue_wait_ms"])
+    telemetry.set("queue.semantic.execute.duration_ms", semantic_timing["execute_ms"])
     telemetry.set("queue.embedding.processed", embedding["processed"])
     telemetry.set("queue.embedding.requeue_count", embedding["requeue_count"])
     telemetry.set("queue.embedding.error_count", embedding["error_count"])
-    telemetry.set("queue.embedding.queue_wait.duration_ms", timing["embedding"]["queue_wait_ms"])
-    telemetry.set("queue.embedding.execute.duration_ms", timing["embedding"]["execute_ms"])
+    telemetry.set("queue.embedding.queue_wait.duration_ms", embedding_timing["queue_wait_ms"])
+    telemetry.set("queue.embedding.execute.duration_ms", embedding_timing["execute_ms"])
 
     tree_stats = _consume_semantic_tree_stats(telemetry_id, root_uri)
     if tree_stats is not None:
@@ -94,6 +83,5 @@ def record_resource_queue_metrics(
 
 
 __all__ = [
-    "build_queue_status_payload",
     "record_resource_queue_metrics",
 ]

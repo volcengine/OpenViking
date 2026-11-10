@@ -5,7 +5,7 @@
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.peer_id import normalize_peer_id
@@ -17,6 +17,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.responses import error_response
 from openviking.server.telemetry import run_operation
+from openviking.session.auto_commit_policy import validate_idle_timeout_input
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.image_search import is_viking_uri
 from openviking_cli.utils import get_logger
@@ -78,9 +79,9 @@ PartRequest = TextPartRequest | ContextPartRequest | ToolPartRequest
 class AutoCommitPolicyRequest(BaseModel):
     """Session-level auto-commit policy overrides.
 
-    All fields are optional. Bounds are not enforced here: ``AutoCommitPolicy``
-    clamps every value into ``[0, max]`` so clamping lives in one place across
-    the HTTP, SDK, and CLI entrypoints.
+    All fields are optional. ``idle_timeout_seconds`` validates its write-time
+    minimum here so legacy stored policies remain readable. Other bounds are
+    clamped by ``AutoCommitPolicy``.
     """
 
     pending_token_threshold: Optional[int] = None
@@ -90,6 +91,11 @@ class AutoCommitPolicyRequest(BaseModel):
     min_commit_interval_seconds: Optional[int] = None
 
     model_config = {"extra": "forbid"}
+
+    @field_validator("idle_timeout_seconds")
+    @classmethod
+    def validate_idle_timeout_seconds(cls, value: Optional[int]) -> Optional[int]:
+        return None if value is None else validate_idle_timeout_input(value)
 
     @model_validator(mode="after")
     def reject_explicit_null_fields(self) -> "AutoCommitPolicyRequest":
@@ -309,7 +315,6 @@ async def create_session(
     event_tags = _event_tags_from_extraction_config(request.memory_extraction_config)
 
     async def _create() -> dict[str, Any]:
-        await service.initialize_user_directories(_ctx)
         session = await service.sessions.create(
             _ctx,
             request.session_id,
@@ -366,8 +371,8 @@ async def get_session(
     result["pending_tokens"] = int(session.meta.pending_tokens or 0)
     result["auto_commit_policy"] = service.sessions.effective_auto_commit_policy(session)
     result.pop("event_search_tags", None)
-    result["memory_extraction_config"] = (
-        service.sessions.effective_memory_extraction_config(session)
+    result["memory_extraction_config"] = service.sessions.effective_memory_extraction_config(
+        session
     )
     return Response(status="ok", result=result)
 
@@ -400,9 +405,7 @@ async def update_session_config(
     from openviking_cli.exceptions import NotFoundError
 
     service = get_service()
-    event_tags = _event_tags_from_extraction_config(
-        request.memory_extraction_config
-    )
+    event_tags = _event_tags_from_extraction_config(request.memory_extraction_config)
     update_auto_commit_policy = "auto_commit_policy" in request.model_fields_set
     auto_commit_policy = (
         request.auto_commit_policy.model_dump(exclude_none=True)
@@ -434,9 +437,9 @@ async def update_session_config(
         )
     except NotFoundError:
         return error_response("NOT_FOUND", f"Session {session_id} not found")
-    return Response(
-        status="ok", result=execution.result, telemetry=execution.telemetry
-    ).model_dump(exclude_none=True)
+    return Response(status="ok", result=execution.result, telemetry=execution.telemetry).model_dump(
+        exclude_none=True
+    )
 
 
 @router.get("/{session_id}/tool-results")
@@ -448,7 +451,7 @@ async def list_tool_results(
 ):
     """List externalized tool results for a session."""
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.open(session_id, _ctx, auto_create=False)
     result = await session.list_tool_results(tool_name=tool_name, limit=limit)
     return Response(status="ok", result=_to_jsonable(result))
 
@@ -470,7 +473,7 @@ async def read_tool_result(
             details={"field": "limit", "value": limit},
         )
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.open(session_id, _ctx, auto_create=False)
     result = await session.read_tool_result(
         tool_result_id,
         offset=offset,
@@ -491,7 +494,7 @@ async def search_tool_result(
 ):
     """Search within an externalized tool result."""
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.open(session_id, _ctx, auto_create=False)
     result = await session.search_tool_result(
         tool_result_id,
         query=q,
@@ -527,17 +530,15 @@ async def get_session_archive(
     archive_id: str = Path(..., description="Archive ID"),
     _ctx: RequestContext = Depends(get_session_request_context),
 ):
-    """Get one completed archive for a session."""
+    """Get one archive; failed/pending archives include retry inputs."""
     from openviking_cli.exceptions import NotFoundError
 
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.open(session_id, _ctx, auto_create=False)
     try:
         result = await session.get_session_archive(archive_id)
     except NotFoundError:
-        return error_response(
-            code="NOT_FOUND", message=f"Archive {archive_id} not found"
-        )
+        return error_response(code="NOT_FOUND", message=f"Archive {archive_id} not found")
     return Response(status="ok", result=_to_jsonable(result))
 
 
@@ -591,6 +592,10 @@ class CommitRequest(BaseModel):
     behavior.
     """
 
+    enable_working_memory: Optional[StrictBool] = Field(
+        default=None,
+        description="Override only Working Memory generation for this commit; null inherits policy.",
+    )
     reset_context: bool = Field(
         default=False,
         strict=True,
@@ -629,6 +634,25 @@ class CommitRequest(BaseModel):
         le=10_000,
         description="Minimum number of latest atomic assistant Steps kept raw.",
     )
+    session_window_context: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Model context window used to derive Working Memory budgets.",
+    )
+    summary_token_ratio: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description="Working Memory summary budget ratio of session_window_context.",
+    )
+    retained_token_ratio: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description="Retained raw-message budget ratio of session_window_context.",
+    )
+    reasoning_effort: Optional[str] = Field(
+        default=None,
+        description="Per-call reasoning effort forwarded to Working Memory generation.",
+    )
     extraction_metadata: Optional[ExtractionMetadataRequest] = Field(
         default=None,
         description=(
@@ -657,6 +681,49 @@ class CommitRequest(BaseModel):
         return self
 
 
+class ArchiveRetryRequest(BaseModel):
+    """Hash-bound authorization for one audited archive recovery."""
+
+    expected_messages_sha256: str = Field(
+        ...,
+        pattern=r"^[0-9a-f]{64}$",
+        description="messages_sha256 returned by GET .../archives/{archive_id}, passed back unchanged.",
+    )
+    allow_ownerless_ready: bool = Field(
+        default=False,
+        description=(
+            "Permit a Phase 1 ready archive with no QueueFS or active task owner. "
+            "Failed archives do not require this opt-in."
+        ),
+    )
+    allow_cancelled_failure: bool = Field(
+        default=False,
+        description=(
+            "Permit a failed archive whose recorded failure is cancellation. "
+            "This is an explicit post-review opt-in; hash, ownership, and "
+            "durable-receipt safety checks still apply."
+        ),
+    )
+
+
+@router.post("/{session_id}/archives/{archive_id}/retry")
+async def retry_session_archive(
+    session_id: str = Path(...),
+    archive_id: str = Path(..., pattern=r"^archive_[0-9]+$"),
+    body: ArchiveRetryRequest = Body(...),
+    _ctx: RequestContext = Depends(get_session_request_context),
+):
+    result = await get_service().sessions.retry_archive(
+        session_id,
+        archive_id,
+        _ctx,
+        expected_messages_sha256=body.expected_messages_sha256,
+        allow_ownerless_ready=body.allow_ownerless_ready,
+        allow_cancelled_failure=body.allow_cancelled_failure,
+    )
+    return Response(status="ok", result=result).model_dump(exclude_none=True)
+
+
 @router.post("/{session_id}/commit")
 async def commit_session(
     session_id: str = Path(..., description="Session ID"),
@@ -672,10 +739,15 @@ async def commit_session(
     service = get_service()
     commit_kwargs: Dict[str, Any] = {"keep_recent_count": body.keep_recent_count}
     optional_retention = {
+        "enable_working_memory": body.enable_working_memory,
         "retention_mode": body.retention_mode,
         "keep_recent_turn_count": body.keep_recent_turn_count,
         "retained_message_token_budget": body.retained_message_token_budget,
         "min_raw_tail_steps": body.min_raw_tail_steps,
+        "session_window_context": body.session_window_context,
+        "summary_token_ratio": body.summary_token_ratio,
+        "retained_token_ratio": body.retained_token_ratio,
+        "reasoning_effort": body.reasoning_effort,
     }
     commit_kwargs.update(
         {key: value for key, value in optional_retention.items() if value is not None}
@@ -699,17 +771,6 @@ async def commit_session(
         result=execution.result,
         telemetry=execution.telemetry,
     ).model_dump(exclude_none=True)
-
-
-@router.post("/{session_id}/extract")
-async def extract_session(
-    session_id: str = Path(..., description="Session ID"),
-    _ctx: RequestContext = Depends(get_session_request_context),
-):
-    """Extract memories from a session."""
-    service = get_service()
-    result = await service.sessions.extract(session_id, _ctx)
-    return Response(status="ok", result=_to_jsonable(result))
 
 
 @router.post("/{session_id}/messages")
@@ -736,7 +797,7 @@ async def add_message(
     service = get_service()
 
     async def _add() -> dict[str, Any]:
-        session = await service.sessions.get(session_id, _ctx, auto_create=True)
+        session = await service.sessions.open(session_id, _ctx, auto_create=True)
         parts = _resolve_message_parts(request, _ctx)
 
         specs = [
@@ -791,7 +852,7 @@ async def batch_add_messages(
     service = get_service()
 
     async def _batch_add() -> dict[str, Any]:
-        session = await service.sessions.get(session_id, _ctx, auto_create=True)
+        session = await service.sessions.open(session_id, _ctx, auto_create=True)
         specs = []
         for msg_request in request.messages:
             parts = _resolve_message_parts(msg_request, _ctx)

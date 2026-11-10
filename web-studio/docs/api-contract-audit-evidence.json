@@ -1,0 +1,82 @@
+{
+  "date": "2026-10-02",
+  "source_commit": "1394d4769a34058dcd64bd9afcf917d3cae7ab54",
+  "source_declarations": 179,
+  "source_method_path_combinations": 181,
+  "source_schema_paths": 127,
+  "source_schema_operations": 168,
+  "original_snapshots_refreshed": 52,
+  "original_unique_urls": 48,
+  "changed_original_snapshots": [],
+  "incomplete_original_snapshots": [],
+  "newly_documented_operations": [
+    {
+      "method": "POST",
+      "path": "/api/v1/skills/find",
+      "url": "https://docs.volcengine.com/docs/84313/2600959",
+      "runtime_verified": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/skills/validate",
+      "url": "https://docs.volcengine.com/docs/84313/2600960",
+      "runtime_verified": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/skills/{skill_name}",
+      "url": "https://docs.volcengine.com/docs/84313/2600963",
+      "runtime_verified": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/skills/{skill_name}",
+      "url": "https://docs.volcengine.com/docs/84313/2600964",
+      "runtime_verified": false
+    },
+    {
+      "method": "TOP",
+      "path": "DeleteOpenVikingAccount",
+      "url": "https://docs.volcengine.com/docs/84313/2693669",
+      "runtime_verified": false
+    }
+  ],
+  "documentation_url": "https://www.feishu.cn/docx/TEFYdLRGHowqHcxfnrscJd6OnUh",
+  "feishu_readback": {
+    "TEFYdLRGHowqHcxfnrscJd6OnUh": {
+      "verified": true,
+      "chars": 16020,
+      "isError": null
+    },
+    "QSGidE7Z7oPciyxlZMYcUyoRnye": {
+      "verified": true,
+      "chars": 28161,
+      "isError": null
+    },
+    "Kj91dgb78olE3OxGNSRcbLH0npg": {
+      "verified": true,
+      "chars": 61115,
+      "isError": null
+    },
+    "AJLqdk7AfoaB7Uxwufxc9aANnrb": {
+      "verified": true,
+      "chars": 95906,
+      "isError": null
+    },
+    "EuuzdvO1mo4nsdxFU9UcEHqFnKN": {
+      "verified": true,
+      "chars": 80542,
+      "isError": null
+    },
+    "XTObd2zfvotg0zxXzvNcVXT8nQd": {
+      "verified": true,
+      "chars": 64926,
+      "isError": null
+    },
+    "XY1Cdkd27oxZy0x0ZY9cgLHonfe": {
+      "verified": true,
+      "chars": 101876,
+      "isError": null
+    }
+  }
+}

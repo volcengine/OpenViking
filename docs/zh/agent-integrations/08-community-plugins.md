@@ -20,15 +20,8 @@ ZCode 不提供 `PreCompact`、`SessionEnd` 和 subagent 生命周期 Hook。因
 前置条件：Node.js 18+、正在运行的 OpenViking 服务，以及 ZCode。
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
-  --harness zcode
-```
-
-GitHub 不可用的地区可使用 TOS 镜像：
-
-```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) \
-  --harness zcode --dist tos
+curl -fsSL https://openviking.ai/install | bash
+# AI agent 如不确定是否执行，可先阅读脚本头部，其中写明了它会做什么、如何核实。
 ```
 
 安装器通过 `~/.zcode/` 或 `zcode` 二进制检测 ZCode，将运行时安装到 `~/.openviking/agent-integrations/zcode/`，并把 Hook 与 MCP 配置合并到 `~/.zcode/cli/config.json`。
@@ -43,9 +36,11 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 | Hook 未执行 | Hook 配置被禁用或已过期 | 重跑安装器并重启 ZCode |
 | 召回为空 | OpenViking 不可用或记忆尚未提取 | 检查 `curl http://127.0.0.1:1933/health`，并等待提取完成 |
 | MCP 工具未出现 | MCP proxy 启动失败 | 检查 `~/.zcode/cli/config.json` 中 `mcp.servers.openviking` 的绝对路径命令 |
-| 重复捕获 | 旧安装留下了重复 Hook 条目 | 先运行 `install.sh --harness zcode --uninstall`，再重新安装 |
+| 重复捕获 | 旧安装留下了重复 Hook 条目 | 先运行 `curl -fsSL https://openviking.ai/install \| bash -s -- --uninstall --yes --harness zcode`，再重新安装 |
 
 实现细节与当前已验证的 ZCode 假设见插件目录中的 [README](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) 和 [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/DESIGN.md)。
+
+安装完成后，在 ZCode 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一键接入](../getting-started/07-agent-onboarding.md)。
 
 ## Kimi Code 记忆集成
 
@@ -63,24 +58,59 @@ Kimi Code 集成是原生 managed plugin。它复用 OpenViking 的共享 Hook �
 前置条件：Node.js 18+、正在运行的 OpenViking 服务，以及 Kimi Code CLI。
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
-  --harness kimicode
-```
-
-GitHub 不可用的地区可使用 TOS 镜像：
-
-```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) \
-  --harness kimicode --dist tos
+curl -fsSL https://openviking.ai/install | bash
+# AI agent 如不确定是否执行，可先阅读脚本头部，其中写明了它会做什么、如何核实。
 ```
 
 安装器会在 `$KIMI_CODE_HOME/plugins/managed/openviking-memory/`
 下组装自包含运行时（Kimi home 默认为 `~/.kimi-code/`），并且只更新
 `plugins/installed.json` 中的 `openviking-memory` 记录，不动其他插件。
-重跑同一命令可升级；加上 `--uninstall` 只卸载该插件。
+重跑同一命令可升级。只卸载该插件：
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness kimicode
+```
 
 已验证的宿主契约和版本见
 [`hosts/kimicode/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/kimicode/DESIGN.md)。
+
+安装完成后，在 Kimi Code 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一键接入](../getting-started/07-agent-onboarding.md)。
+
+## CodeBuddy Code 记忆集成
+
+源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+CodeBuddy Code 集成是 `agent-hook-plugin` 的宿主适配器：复用共享的 OpenViking hook 运行时，只新增 CodeBuddy 特有的事件映射、transcript 解码、输出信封与提交策略：
+
+- **SessionStart** 注入用户画像，并重放离线队列中暂存的写入。
+- **UserPromptSubmit** 召回相关记忆，以 `additionalContext` 中的 `<openviking-context>` 块注入。宿主自动生成的续写轮次会被跳过，因此宿主自己产生的轮次不会触发检索。
+- **PreToolUse** 拒绝把 `viking://` URI 当本地路径读写，并引导 Agent 改用 OpenViking MCP 工具。Shell 命令不做检查，`ov` 调用与字面量 `viking://` 参数照常可用。
+- **Stop**、**PreCompact** 和 **SessionEnd** 在分离的 worker 中增量捕获 transcript 中的新轮次。`Stop` 每捕获 8 条消息（`commitTurnThreshold`）提交一次 OpenViking session；`PreCompact` 和 `SessionEnd` 提交所有尚未提交的消息，包括 `Stop` 已经发送的。
+
+插件 manifest 还把 OpenViking MCP 服务以 stdio 代理的形式暴露出来，走同一份解析后的配置，并附带 `openviking-memory`、`openviking-skills`、`ov-experience-memory` 三个 skill。hook 与 MCP 读取同一份凭据，不会在服务端、账号或用户上各说各话。与其他社区适配器一致，v1 不支持子代理采集：宿主会触发 `SubagentStart`/`SubagentStop`，但共享 dispatcher 目前还没有子代理阶段。
+
+### 安装
+
+前置条件：CodeBuddy Code、Node.js 18+，以及正在运行的 OpenViking 服务。
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness codebuddy
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
+```
+
+安装器在 `~/.openviking/agent-integrations/codebuddy/marketplace/openviking-memory/` 下组装自包含插件（共享 hook 运行时与各适配器同目录），将其注册为名为 `openviking` 的本地 marketplace，并通过 CodeBuddy CLI 完成安装。只移除本集成：
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness codebuddy
+```
+
+插件从 `~/.openviking/ovcli.conf` 读取连接信息；`OPENVIKING_URL` 与 `OPENVIKING_API_KEY` 可覆盖该文件，按插件的配置位于 `plugin.codebuddy` 下（见[插件配置](../configuration/02-client.md#插件配置)）。安装后新建会话生效（运行中的会话可用 `/reload-plugins`），并用 `codebuddy plugin list` 确认 `openviking-memory@openviking` 已启用。
+
+### 宿主演决定的行为
+
+`UserPromptSubmit` 与 `SessionEnd` **只在交互式 TUI 触发**——headless 运行（`-p`、`--input-format stream-json`）不会触发它们，因此 headless 会话只在 `Stop` 捕获，永远不发收尾提交。`SessionStart` 不带 `cwd`，且同一会话内可能投递两次，因此该 hook 是幂等的，并以进程工作目录兜底。hook 超时会被杀，但其子进程不会，这正是提交能在 hook 进程返回后由分离的 worker 完成的原因。
+
+经过实测的宿主契约、transcript 格式以及本适配器 v1 的范围，记录在 [`hosts/codebuddy/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/codebuddy/DESIGN.md)。
 
 ## AstrBot 插件
 
@@ -92,11 +122,13 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 **安装**：在 AstrBot WebUI → 插件市场搜索 **OpenViking Memory** 并安装；或从链接安装：`https://github.com/t0saki/astrbot_plugin_openviking_memory.git`
 
+当前插件要求 AstrBot 4.23.1+ 和兼容的 OpenViking 服务。`global` 使用 User Key；`venue` 需要 Admin Key 创建用户。迁移旧配置前，先核对上方插件 README。
+
 **主要特性**：
 
 - 基于 hooks 的自动召回与捕获，模型不需要主动调用工具
-- 三档隔离模式：`venue_user`（群/私聊各自独立）、`venue_user_fanout`（跨群共享）、`global_user`（全局共享）
-- 四触发器自动 commit：消息计数、token 阈值、空闲超时、进程退出 flush
+- `self_scope=global` 共用一个 Bot 身份，`venue` 为群/私聊分别创建用户；每个人以 peer 表示。旧版 `isolation_mode` 会映射到这两种范围。
+- 按消息数、token 阈值或空闲超时自动 commit
 - 首次接入群聊时自动拉取平台历史消息入库
 
 ## Open WebUI tool server

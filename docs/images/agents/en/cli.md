@@ -20,5 +20,7 @@ npm i -g @openviking/cli && ov config
 ### Step 3: After configuration, run the following command to view CLI usage:
 
 ```bash
+ov config validate
+ov health
 ov --help
 ```

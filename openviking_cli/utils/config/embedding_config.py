@@ -17,6 +17,10 @@ TEXT_SOURCES = SUMMARY_TEXT_SOURCES | {TEXT_SOURCE_CONTENT_ONLY}
 class EmbeddingCredential(BaseModel):
     """Single embedding credential configuration for multi-credential failover."""
 
+    cost_bearer: Optional[Literal["ov", "customer", "unknown"]] = Field(
+        default=None, description="Billing owner supplied by the credential provisioner"
+    )
+
     id: Optional[str] = Field(default=None, description="Unique identifier for this credential")
     provider: Optional[str] = Field(default=None, description="Provider type")
     model: Optional[str] = Field(
@@ -454,6 +458,13 @@ class EmbeddingModelConfig(BaseModel):
 
             return get_cohere_model_default_dimension(model)
 
+        if provider == "jina":
+            from openviking.models.embedder.jina_embedders import (
+                get_jina_model_default_dimension,
+            )
+
+            return get_jina_model_default_dimension(model)
+
         if provider == "gemini":
             from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 
@@ -476,7 +487,7 @@ class EmbeddingModelConfig(BaseModel):
             except ImportError:
                 return 1024
 
-        # Providers without a known dimension lookup (volcengine, jina,
+        # Providers without a known dimension lookup (volcengine,
         # vikingdb, ollama for unlisted models, etc.) cannot be cross-checked
         # here without an explicit dimension. Return None so validation skips
         # them; same-provider credentials are typically dimension-compatible
@@ -539,6 +550,13 @@ class EmbeddingModelConfig(BaseModel):
             )
 
             return get_cohere_model_default_dimension(effective_model)
+
+        if provider == "jina":
+            from openviking.models.embedder.jina_embedders import (
+                get_jina_model_default_dimension,
+            )
+
+            return get_jina_model_default_dimension(effective_model)
 
         if provider == "gemini":
             from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
@@ -640,7 +658,7 @@ class EmbeddingConfig(BaseModel):
     max_concurrent: int = Field(
         default=10,
         ge=1,
-        description="Maximum number of concurrent embedding requests",
+        description="Maximum concurrent document embedding requests; retrieval queries bypass this limit",
     )
     max_retries: int = Field(
         default=3,
@@ -730,6 +748,7 @@ class EmbeddingConfig(BaseModel):
             LocalDenseEmbedder,
             MinimaxDenseEmbedder,
             OpenAIDenseEmbedder,
+            RetryEmbedder,
             VikingDBDenseEmbedder,
             VikingDBHybridEmbedder,
             VikingDBSparseEmbedder,
@@ -1007,7 +1026,12 @@ class EmbeddingConfig(BaseModel):
                 "google-genai is not installed. Install it with: pip install openviking[gemini]"
             )
         params = param_builder(config)
-        return embedder_class(**params)
+        embedder = embedder_class(**params)
+        if provider == "local":
+            return embedder
+        if isinstance(embedder, RetryEmbedder):
+            return embedder
+        return RetryEmbedder(embedder)
 
     def get_embedder(self):
         """Get embedder instance based on configuration.
@@ -1091,7 +1115,17 @@ class EmbeddingConfig(BaseModel):
                 **({"input": config.input} if "input" in config.model_fields_set else {}),
             )
             provider = self._require_provider(merged_config.provider)
-            embedders.append(self._create_embedder(provider, embedder_type, merged_config))
+            embedder = self._create_embedder(provider, embedder_type, merged_config)
+            # Retry wrappers delegate the actual provider request to their child.
+            # Each failover candidate keeps its own owner, including failed calls.
+            if cred.cost_bearer is not None:
+                current = embedder
+                seen = set()
+                while current is not None and id(current) not in seen:
+                    seen.add(id(current))
+                    current.cost_bearer = cred.cost_bearer
+                    current = getattr(current, "inner", None)
+            embedders.append(embedder)
             credential_ids.append(cred.id or f"credential-{len(credential_ids)}")
 
         if len(embedders) == 1:

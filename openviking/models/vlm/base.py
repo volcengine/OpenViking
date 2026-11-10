@@ -7,13 +7,13 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, Union
 
+from openviking.models.model_error import model_error_kind
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
     OrderedCredentialSwitcher,
     PrimaryBackupSwitcher,
-    classify_api_error,
     extract_metric_error_code,
 )
 from openviking_cli.utils import get_logger
@@ -22,6 +22,17 @@ from .token_usage import TokenUsageTracker
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
 logger = get_logger(__name__)
+
+ToolResultMediaMode = Literal["native", "user_message"]
+
+
+def _common_tool_result_media_mode(backends: List["VLMBase"]) -> ToolResultMediaMode | None:
+    """Use tool images only for all-native chains; otherwise use user images."""
+    modes = []
+    for backend in backends:
+        capability = getattr(backend, "tool_result_media_mode", None)
+        modes.append(capability() if callable(capability) else None)
+    return "native" if modes and all(mode == "native" for mode in modes) else "user_message"
 
 
 class UnsupportedMediaInputError(RuntimeError):
@@ -66,11 +77,12 @@ class VLMBase(ABC):
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
+        self.cost_bearer = config.get("cost_bearer")
         self.provider = config.get("provider", "openai")
         self.model = config.get("model")
         self.api_key = config.get("api_key")
         self.api_base = config.get("api_base")
-        self.temperature = config.get("temperature", 0.0)
+        self.temperature = config.get("temperature")
         self.max_retries = config.get("max_retries", 3)
         self.timeout = config.get("timeout", 600.0)
         self.max_tokens = config.get("max_tokens")
@@ -113,6 +125,7 @@ class VLMBase(ABC):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously
 
@@ -179,6 +192,10 @@ class VLMBase(ABC):
         """
         pass
 
+    def tool_result_media_mode(self) -> ToolResultMediaMode | None:
+        """Declare image transport, independently of a model's vision capability."""
+        return None
+
     def supports_media(
         self,
         *,
@@ -204,7 +221,8 @@ class VLMBase(ABC):
             f"VLM provider {self.provider!r} does not support audio/video inputs"
         )
 
-    def _clean_response(self, content: str) -> str:
+    @staticmethod
+    def _clean_response(content: str) -> str:
         """Strip reasoning tags (e.g. ``<think>...</think>``) from model output."""
         return _THINK_TAG_RE.sub("", content).strip()
 
@@ -268,6 +286,7 @@ class VLMBase(ABC):
         try:
             from openviking.metrics.datasources import VLMEventDataSource
             from openviking.observability.context import get_root_observability_context
+            from openviking.telemetry import get_ingestion_source_type
 
             root_context = get_root_observability_context()
 
@@ -278,6 +297,8 @@ class VLMBase(ABC):
                 prompt_tokens=int(prompt_tokens),
                 completion_tokens=int(completion_tokens),
                 account_id=root_context.account_id if root_context is not None else None,
+                source_type=get_ingestion_source_type(),
+                cost_bearer=self.cost_bearer,
             )
         except Exception as e:
             # Metrics must never break model inference.
@@ -304,6 +325,7 @@ class VLMBase(ABC):
                 prompt_tokens=0,
                 completion_tokens=0,
                 error_code=extract_metric_error_code(error),
+                cost_bearer=self.cost_bearer,
                 account_id=root_context.account_id if root_context is not None else None,
             )
         except Exception as metrics_error:
@@ -346,8 +368,8 @@ class VLMFactory:
     """VLM factory class, creates corresponding VLM instance based on config"""
 
     @staticmethod
-    def create(config: Dict[str, Any]) -> VLMBase:
-        """Create VLM instance
+    def _create_provider(config: Dict[str, Any]) -> VLMBase:
+        """Create one concrete VLM provider without an outer retry decorator.
 
         Args:
             config: VLM config, must contain 'provider' field
@@ -390,6 +412,13 @@ class VLMFactory:
             from .backends.litellm_vlm import LiteLLMVLMProvider
 
             return LiteLLMVLMProvider(config)
+
+    @staticmethod
+    def create(config: Dict[str, Any]) -> VLMBase:
+        """Create one VLM target with the standard retry owner."""
+        from .retry_vlm import RetryVLM
+
+        return RetryVLM(VLMFactory._create_provider(config))
 
 
 def _annotate_vlm_error(exc: Exception, vlm_instance: "VLMBase") -> None:
@@ -450,6 +479,9 @@ class FailoverVLM(VLMBase):
             failback_timeout_seconds=failback_timeout_seconds,
             failback_request_count=failback_request_count,
         )
+
+    def tool_result_media_mode(self) -> ToolResultMediaMode | None:
+        return _common_tool_result_media_mode([self.primary, self.backup])
 
     def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
         """Execute a VLM method with failover support.
@@ -604,6 +636,7 @@ class FailoverVLM(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously with failover support."""
         return await self._get_completion_with_failover_async(
@@ -614,6 +647,7 @@ class FailoverVLM(VLMBase):
             tool_choice=tool_choice,
             messages=messages,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     def get_vision_completion(
@@ -759,9 +793,7 @@ class FailoverVLM(VLMBase):
         backup_tracker = self.backup.token_tracker
         if primary_tracker is backup_tracker:
             return primary_tracker.to_dict()
-        merged_tracker = TokenUsageTracker.merge(
-            primary_tracker, backup_tracker
-        )
+        merged_tracker = TokenUsageTracker.merge(primary_tracker, backup_tracker)
         return merged_tracker.to_dict()
 
     def reset_token_usage(self) -> None:
@@ -820,9 +852,7 @@ class MultiCredentialVLM(VLMBase):
             "temperature": first.temperature,
             "max_retries": first.max_retries,
             "timeout": first.timeout,
-            "max_tokens": (
-                min(configured_token_limits) if configured_token_limits else None
-            ),
+            "max_tokens": (min(configured_token_limits) if configured_token_limits else None),
             "thinking": first.thinking,
         }
         super().__init__(config)
@@ -835,6 +865,9 @@ class MultiCredentialVLM(VLMBase):
             failback_timeout_seconds=failback_timeout_seconds,
             failback_request_count=failback_request_count,
         )
+
+    def tool_result_media_mode(self) -> ToolResultMediaMode | None:
+        return _common_tool_result_media_mode(self._vlm_instances)
 
     def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
         """Execute a VLM method with multi-credential failover support.
@@ -873,17 +906,19 @@ class MultiCredentialVLM(VLMBase):
                 return result
             except Exception as exc:
                 _annotate_vlm_error(exc, vlm_instance)
-                error_class = classify_api_error(exc)
-                aggregated_errors.append((credential_id, error_class, exc, idx))
+                kind = model_error_kind(exc)
 
-                if self._switcher.is_fail_fast(error_class):
+                if self._switcher.is_fail_fast(kind):
                     # Request-level failure (400 / input too large / content
                     # safety): re-raise the original exception so callers can
                     # react to its type; trying other credentials is useless.
                     raise
+                aggregated_errors.append((credential_id, kind, exc, idx))
 
                 self._logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, trying next credential"
+                    "Credential %s failed with %s, trying next credential",
+                    credential_id,
+                    kind.value,
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
@@ -920,16 +955,18 @@ class MultiCredentialVLM(VLMBase):
                 return result
             except Exception as exc:
                 _annotate_vlm_error(exc, vlm_instance)
-                error_class = classify_api_error(exc)
-                aggregated_errors.append((credential_id, error_class, exc, idx))
+                kind = model_error_kind(exc)
 
-                if self._switcher.is_fail_fast(error_class):
+                if self._switcher.is_fail_fast(kind):
                     # Request-level failure: re-raise the original exception;
                     # trying other credentials is useless.
                     raise
+                aggregated_errors.append((credential_id, kind, exc, idx))
 
                 self._logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, trying next credential"
+                    "Credential %s failed with %s, trying next credential",
+                    credential_id,
+                    kind.value,
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
@@ -965,13 +1002,14 @@ class MultiCredentialVLM(VLMBase):
                 if emitted:
                     raise
 
-                error_class = classify_api_error(exc)
-                aggregated_errors.append((credential_id, error_class, exc, idx))
-                if self._switcher.is_fail_fast(error_class):
+                kind = model_error_kind(exc)
+                if self._switcher.is_fail_fast(kind):
                     raise
-
+                aggregated_errors.append((credential_id, kind, exc, idx))
                 self._logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, trying next credential"
+                    "Credential %s failed with %s, trying next credential",
+                    credential_id,
+                    kind.value,
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
@@ -1002,6 +1040,7 @@ class MultiCredentialVLM(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously with multi-credential failover support."""
         return await self._get_completion_with_failover_async(
@@ -1012,6 +1051,7 @@ class MultiCredentialVLM(VLMBase):
             tool_choice=tool_choice,
             messages=messages,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     def get_vision_completion(
@@ -1110,16 +1150,16 @@ class MultiCredentialVLM(VLMBase):
                 return result
             except Exception as error:
                 _annotate_vlm_error(error, vlm)
-                error_class = classify_api_error(error)
-                errors.append((credential_id, error_class, error, idx))
+                kind = model_error_kind(error)
                 if idx == start:
                     active_credential_failed = True
-                if self._switcher.is_fail_fast(error_class):
+                if self._switcher.is_fail_fast(kind):
                     raise
+                errors.append((credential_id, kind, error, idx))
                 self._logger.warning(
                     "Credential %s failed media understanding with %s, trying next credential",
                     credential_id,
-                    error_class,
+                    kind.value,
                 )
 
         if attempted:

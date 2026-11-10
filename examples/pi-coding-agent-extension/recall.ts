@@ -1,6 +1,7 @@
 import type { OVClient } from "./client.js";
 import type { OVConfig } from "./config.js";
 import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
+import { applyInputFilters, compileInputFilters } from "./shared/input-filters.mjs";
 import { RecallLedger, ledgerKey } from "./lib/recall-ledger.mjs";
 
 export interface RecallCache {
@@ -48,7 +49,19 @@ export class RecallManager {
       this.cache = { block: null, promptText: userQuery };
       return null;
     }
-    if (userQuery.trim().length < this.config.minQueryLength) {
+    // Filters run before the length gate, so a prompt whose only content was a
+    // stripped prefix counts as short rather than searching for the rest.
+    let query = userQuery;
+    const queryFilters = compileInputFilters(this.config.recallQueryFilters);
+    if (queryFilters.rules.length) {
+      const verdict = applyInputFilters(query, queryFilters.rules, { role: "user" });
+      if (verdict.dropped) {
+        this.cache = { block: null, promptText: userQuery };
+        return null;
+      }
+      query = verdict.text;
+    }
+    if (query.trim().length < this.config.minQueryLength) {
       this.cache = { block: null, promptText: userQuery };
       return null;
     }
@@ -59,7 +72,7 @@ export class RecallManager {
       // deadline, and ignoring it would abort a request still inside its fuse.
       (path, init, options) => this.client.fetchJSON(path, init, options),
       this.config,
-      userQuery,
+      query,
       {
         actorPeerId: this.config.peerId,
         // Under `actor` scope the effective peer is the only one asked, so a
@@ -68,6 +81,7 @@ export class RecallManager {
         // Passing the OV session id is what turns on server-side query
         // expansion and the cross-turn dedup ledger.
         sessionId: this.sessionId() ?? "",
+        excludeUris: this.config.recallExcludeUris,
       },
     );
     this.cache = { block, promptText: userQuery };

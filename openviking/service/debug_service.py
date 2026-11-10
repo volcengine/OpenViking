@@ -365,19 +365,26 @@ class ObserverService:
         try:
             backend = await self._vikingdb.get_account_backend(ctx.account_id)
             healthy = await backend.health_check()
-            count = await backend.count() if healthy else 0
+            info = await backend.get_collection_info() if healthy else None
             status = (
                 {
-                    "backend": backend._mode,
-                    "collection": backend._collection_name,
-                    "index": backend._index_name,
-                    "dimension": backend.vector_dim,
-                    "vector_count": count,
+                    "backend": info.get("backend") if info else backend._mode,
+                    "collection": info.get("name") if info else backend._collection_name,
+                    "index": info.get("index_name") if info else backend._index_name,
+                    "dimension": info.get("vector_dim") if info else backend.vector_dim,
+                    "vector_count": info.get("count", 0) if info else 0,
+                    "distance_metric": info.get("distance_metric") if info else None,
+                    "pure_dense_score_scale": (
+                        info.get("pure_dense_score_scale", "backend_defined")
+                        if info
+                        else "backend_defined"
+                    ),
                 }
                 if format == "json"
                 else f"Account: {ctx.account_id}\nBackend: {backend._mode}\n"
                 f"Collection: {backend._collection_name}\nIndex: {backend._index_name}\n"
-                f"Dimension: {backend.vector_dim}\nVector count: {count}"
+                f"Dimension: {backend.vector_dim}\nVector count: "
+                f"{info.get('count', 0) if info else 0}"
             )
             return ComponentStatus(
                 name="vikingdb",
@@ -404,6 +411,8 @@ class ObserverService:
                         "index": None,
                         "dimension": None,
                         "vector_count": 0,
+                        "distance_metric": None,
+                        "pure_dense_score_scale": "backend_defined",
                         "error": str(exc),
                     }
                     if format == "json"

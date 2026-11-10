@@ -1,4 +1,4 @@
-# Claude Code Memory Plugin
+# Claude Code
 
 Give [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) cross-project and cross-session long-term memory. Once installed, every conversation automatically recalls relevant memories and captures new content without requiring the model to make any tool calls.
 
@@ -6,23 +6,18 @@ Source: [examples/claude-code-memory-plugin](https://github.com/volcengine/OpenV
 
 ## Install
 
-Claude Code and Codex share one installer. It asks for your language (English/中文), which harnesses to install, the download source, and your OpenViking credentials; every step is idempotent—re-running it is entirely safe.
+Claude Code and Codex share one installer. It asks which harnesses to install and for your OpenViking credentials; every step is idempotent—re-running it is entirely safe.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh)
+curl -fsSL https://openviking.ai/install | bash
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
 ```
 
-In regions where GitHub is hard to reach, run the same installer from the Volcengine TOS mirror (or pick "TOS mirror" at the download-source prompt):
-
-```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
-```
-
-> **TOS caveat for Claude Code**: the TOS channel registers a local directory marketplace, which cannot auto-update — re-run the installer to update. (Codex on TOS installs from a TOS-hosted git repo and keeps remote updates.)
+> **Plugin updates**: on Claude Code 2.1.224 or later, the installer registers a marketplace served by the OpenViking documentation site with auto-update turned on, so new plugin versions download in the background and load after a restart. Older Claude Code gets a local directory marketplace, which cannot auto-update — re-run the installer to update. (Codex installs from a git repository on the same site and keeps remote updates.)
 
 No shell wrapper is needed anymore: the plugin ships a stdio MCP proxy that reads `~/.openviking/ovcli.conf` (or `OPENVIKING_*` env vars) at runtime, same as the hooks.
 
-After using it for a while, try starting a new conversation and asking about something you mentioned earlier—it will remember.
+After a session has been captured and processed, start a new conversation and ask about a specific fact from it to check cross-session recall.
 
 <details>
 <summary><b>Manual setup</b></summary>
@@ -46,9 +41,11 @@ If you prefer to set it up manually:
 >
 > Using pure local mode (`http://127.0.0.1:1933`, no authentication)? Skip step 1—the plugin automatically defaults to the local setup.
 >
-> Running Claude Code < 2.0? The installer detects it and falls back to `claude mcp add` + a hooks merge automatically; see the [Legacy mode section in the plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#legacy-mode-claude-code--20).
+> Running Claude Code < 2.0? The installer skips it and asks you to upgrade. To wire it up by hand with `claude mcp add` and a hooks merge, see the [Legacy mode section in the plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#legacy-mode-claude-code--20).
 
 </details>
+
+Once installed, start a new Claude Code session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
 
 ## Verify
 
@@ -71,7 +68,7 @@ The plugin hooks into the Claude Code lifecycle:
 - **For each subagent** — assigns an isolated memory session
 - **Before a native file tool touches a `viking://` path** — blocks the call and names the OpenViking MCP tool to use instead; a `Write` or `Edit` on a skill path is pointed to `add_skill`
 
-All write operations run asynchronously, ensuring they never block your conversation.
+Capture runs in a detached worker and does not block the conversation turn. PreCompact and SessionEnd wait for the session commit, within their hook timeouts.
 
 The skill catalog is an `<available-skills>` block that lists the skills stored in OpenViking: your own under `viking://~/skills` first, then the ones shared with your account under `viking://agent/skills`, each with a short description. Before following a listed skill, Claude reads its `SKILL.md` with the OpenViking `read` tool. The catalog has its own token budget: when the descriptions do not fit, it lists names only, and when not even one name fits, it shrinks to a one-line count. The bundled `openviking-skills` skill tells Claude how to find and use OpenViking skills, create, install, and share them with the `add_skill` MCP tool, delete them, and move local skills such as `~/.claude/skills` into OpenViking when you ask.
 
@@ -102,7 +99,7 @@ Most of these knobs can also live in `ovcli.conf` under `plugin` — see [Plugin
 
 If recall latency matters most, see [Low-latency recall](./01-overview.md#low-latency-recall) for the environment-variable and `ovcli.conf` settings that disable query expansion and result compression.
 
-For multi-tenant deployments, configure `OPENVIKING_ACCOUNT` and `OPENVIKING_USER`. The complete list of environment variables is available in the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration).
+With a user/admin key, the server derives identity from the key. Set `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` only for trusted mode, using values supplied by your administrator. The complete list of environment variables is available in the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration).
 
 </details>
 
@@ -116,6 +113,12 @@ Change it with `OPENVIKING_PEER_SOURCE`, with `plugin.peerSource` in `ovcli.conf
 
 The plugin renders an OpenViking status indicator beneath your Claude Code input box, allowing you to check connection health, recall count, capture progress, and session state at a glance. See [STATUSLINE.md](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/STATUSLINE.md) for a complete glossary of segments and personalization recipes.
 
+## Source cards
+
+Under each answer, the plugin adds a one-line card listing the OpenViking sources that answer drew on: what auto-recall added to the prompt, and what Claude searched for and read on its own. For example: `OV · 8 sources · 4 past events · 3 work memories · 1 team doc · 1 read in full  [Expand]`. Expand a card with its button, or expand and collapse every card with `/openviking-usage expand` and `/openviking-usage collapse`. Cards are collapsed by default.
+
+The cards need Claude Code 2.1.286 or newer with plugin hooks modules enabled. On older versions, or with modules off, no cards are shown, and recall, capture and the other hooks work as before. See [Source cards](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#source-cards) in the plugin README.
+
 ## Troubleshooting
 
 | Issue | Cause | Solution |
@@ -124,7 +127,7 @@ The plugin renders an OpenViking status indicator beneath your Claude Code input
 | Hooks fire but recall is empty | Server is not running or the URL is incorrect | Check server health: `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
 | MCP tools hit `127.0.0.1` instead of the remote server | `~/.openviking/ovcli.conf` has no `url` (the proxy falls back to the local default) | Fix `ovcli.conf` (or run `node <plugin-dir>/scripts/setup.mjs`), then restart Claude Code |
 | MCP tool calls fail with an auth error | The active ovcli config has no valid `api_key` for an authenticated server | Update the `api_key` in `ovcli.conf`; the stdio proxy re-reads it after auth failures |
-| Remote auth 401 / 403 | Incorrect API key or missing tenant headers | Verify `OPENVIKING_API_KEY`; for multi-tenant setups, also check `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |
+| Remote auth 401 / 403 | Invalid credentials or insufficient permission | Check the active user/admin key and resource access. Only trusted mode requires administrator-supplied account/user headers; these headers cannot change a user key’s identity. |
 
 ## See also
 

@@ -799,6 +799,14 @@ bool parse_search_request(PyObject* obj, vdb::SearchRequest* request) {
   }
   Py_XDECREF(value);
 
+  if (!get_named_value(obj, "time_decay", &value, &found)) {
+    return false;
+  }
+  if (found && !py_to_string(value, &request->time_decay, false)) {
+    Py_DECREF(value);
+    return false;
+  }
+  Py_XDECREF(value);
   return true;
 }
 

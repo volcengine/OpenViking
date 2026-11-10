@@ -8,10 +8,11 @@ import asyncio
 import contextlib
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar
 
+from openviking.service.task_work_index import detach_task_context
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
@@ -19,6 +20,18 @@ logger = get_logger(__name__)
 
 T = TypeVar("T")
 R = TypeVar("R")
+
+
+def _create_background_task(
+    loop: asyncio.AbstractEventLoop,
+    coroutine: Coroutine[Any, Any, R],
+    *,
+    name: str,
+) -> asyncio.Task[R]:
+    """Create shared batch work outside any submitter's Task lifecycle."""
+
+    with detach_task_context():
+        return loop.create_task(coroutine, name=name)
 
 
 @dataclass(slots=True)
@@ -130,7 +143,10 @@ class StreamingBatcher(Generic[T, R]):
                     tracer.set("flush_reason", reason)
                     tracer.set("request_count", len(items))
                     tracer.set("input_size", sum(self._item_size(item.payload) for item in items))
-                    result = await self.process_batch([item.payload for item in items], reason)
+                    # A shared batch has no single caller-owned Task, including
+                    # when flush() or close() is awaited directly.
+                    with detach_task_context():
+                        result = await self.process_batch([item.payload for item in items], reason)
                     metadata = self._get_result_metadata(result)
                     if metadata is not None:
                         metadata.setdefault("batch_id", batch_id)
@@ -156,7 +172,8 @@ class StreamingBatcher(Generic[T, R]):
             logger.warning("[%s] timer loop not started: no running event loop", self.name)
             self._timer_task = None
             return
-        self._timer_task = loop.create_task(
+        self._timer_task = _create_background_task(
+            loop,
             self._run_timer_loop(),
             name=f"{self.name}-flush-loop",
         )
@@ -180,7 +197,8 @@ class StreamingBatcher(Generic[T, R]):
             try:
                 await asyncio.sleep(self.config.timer_check_interval_seconds)
                 if await self._should_flush_by_time_or_count():
-                    flush_task = asyncio.create_task(
+                    flush_task = _create_background_task(
+                        asyncio.get_running_loop(),
                         self.flush("time"),
                         name=f"{self.name}-flush-time",
                     )
@@ -220,7 +238,11 @@ class StreamingBatcher(Generic[T, R]):
             except Exception as exc:
                 logger.warning("[%s] background flush failed: %s", self.name, exc)
 
-        loop.create_task(_runner(), name=f"{self.name}-flush-{reason}")
+        _create_background_task(
+            loop,
+            _runner(),
+            name=f"{self.name}-flush-{reason}",
+        )
 
     def _buffered_size_unlocked(self) -> int:
         return sum(self._item_size(item.payload) for item in self._buffer)

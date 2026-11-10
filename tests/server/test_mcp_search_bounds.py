@@ -21,7 +21,7 @@ from pydantic import ValidationError
 
 import openviking.server.mcp_endpoint as mcp_endpoint
 from openviking.retrieve.context_assembler import MAX_EXCLUDE_URIS
-from openviking.server.routers.search import SearchRequest
+from openviking.server.routers.search import FindRequest, SearchRequest
 
 # name -> (REST field bound as it appears in the JSON schema, out-of-range value)
 BOUNDED = {
@@ -75,7 +75,7 @@ async def test_call_tool_rejects_more_exclusions_than_it_can_apply():
     assert "exclude_uris" in str(excinfo.value)
 
 
-def test_rest_rejects_the_same_values():
+async def test_rest_and_mcp_reject_invalid_search_requests():
     # The point of this file is parity, so pin the side being matched too: if a bound is
     # relaxed over REST, this fails next to the tool test that would then be wrong.
     for name, (_, value) in BOUNDED.items():
@@ -87,4 +87,17 @@ def test_rest_rejects_the_same_values():
             query="q",
             mode="context",
             exclude_uris=[f"viking://user/u/m{i}.md" for i in range(MAX_EXCLUDE_URIS + 1)],
+        )
+
+    with pytest.raises(ValidationError, match="events_time_decay_protection"):
+        SearchRequest(query="q", events_time_decay_protection="-1d")
+    result = await mcp_endpoint.mcp.call_tool(
+        "search", {"query": "q", "events_time_decay_protection": "-1d"}
+    )
+    assert result.isError is True
+    assert result.structuredContent["error"]["code"] == "INVALID_ARGUMENT"
+    assert "events_time_decay_protection" in result.structuredContent["error"]["message"]
+    with pytest.raises(ValidationError, match="semantic query or image"):
+        FindRequest(
+            filter={"op": "must", "field": "level", "conds": [2]}, events_time_decay_protection="0"
         )

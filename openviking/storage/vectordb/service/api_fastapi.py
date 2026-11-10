@@ -431,6 +431,8 @@ async def search_by_vector(request: SearchByVectorRequest, req: Request):
             filters=filters,
             sparse_vector=sparse_vector,
             output_fields=output_fields,
+            advance=request.advance,
+            return_detail_info=request.return_detail_info,
         )
         return success_response("search success", asdict(result), request=req)
     except VikingDBException as e:
@@ -657,6 +659,12 @@ async def search_by_keywords(request: SearchByKeywordsRequest, req: Request):
                 index_name=index_name,
                 keywords=keywords,
                 query=query,
+                mode=request.mode,
+                fields=(
+                    data_utils.convert_dict(request.fields)
+                    if request.fields is not None
+                    else None
+                ),
                 limit=limit,
                 offset=offset,
                 filters=filters,

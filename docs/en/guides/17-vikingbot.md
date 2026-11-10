@@ -1,5 +1,7 @@
 # VikingBot Installation and Configuration
 
+For its role and architecture, read [VikingBot](../concepts/15-vikingbot.md), then use this page to install it.
+
 VikingBot is the multi-channel AI Agent built into OpenViking. It can start together with OpenViking, run independently for local debugging, or operate as a long-running Gateway connected to chat platforms.
 
 This guide covers installation and configuration for the three main usage scenarios. For complete documentation about Agent tools, chat channels, and architecture, see the [VikingBot documentation](https://github.com/volcengine/OpenViking/blob/main/bot/README.md).
@@ -19,7 +21,7 @@ uv tool install "openviking[bot]" --upgrade
 ```
 
 ```bash [pip]
-pip install "openviking[bot]" --upgrade --force-reinstall
+pip install "openviking[bot]" --upgrade
 ```
 
 ```bash [pipx]
@@ -37,6 +39,8 @@ Verify the installation:
 ```bash
 vikingbot --version
 ```
+
+Use a virtual environment for the pip option. Source installation also requires the [development build dependencies](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING.md).
 
 ### Install from Source
 
@@ -94,6 +98,8 @@ openviking-server doctor
 
 See the [OpenViking Configuration Guide](01-configuration.md) for details. VikingBot inherits the root-level `vlm` as its Agent model by default, so you normally do not need to configure `bot.agents` again.
 
+For an `api_key` server, register a User/Admin key and set it in `bot.ov_server.api_key` before starting the Bot; the root API key cannot serve as that user key. See [Authentication](04-authentication.md). In inherited `trusted` mode the Bot uses the server’s trusted identity configuration.
+
 ### 2. Start Both Services
 
 ```bash
@@ -112,6 +118,8 @@ ov find "my response preference"
 ```
 
 The URL configured by `ov config` should point to the current OpenViking Server, which defaults to `http://127.0.0.1:1933`. If authentication is enabled, also configure the current caller's User/Admin API Key.
+
+Memory extraction runs asynchronously after a commit. An immediate `ov find` may return no result; check that the memory task completed before using retrieval as a persistence check.
 
 ## Scenario B: Debug the Agent Locally
 
@@ -186,7 +194,9 @@ vikingbot chat
 vikingbot chat --session my-session
 ```
 
-When no OpenViking Server is available, VikingBot runs in standalone mode. Local files, Shell, Web, and Skills remain available, but OpenViking resource retrieval and long-term memory are disabled.
+Without an explicit `bot.ov_server.server_url`, a connection failure to the inherited server allows standalone mode in local chat. An unavailable explicitly configured server stops startup. An inherited authentication-mode mismatch also stops startup; for an explicit server, Bot adopts the reported mode and validates the credentials. Authentication failures and unhealthy HTTP responses stop startup. In integrated server-managed startup, Bot keeps the inherited upstream while the server starts.
+
+In standalone mode, local files, Shell, Web, and Skills remain available, but OpenViking resource retrieval and long-term memory are disabled.
 
 ## Scenario C: Use the Gateway as a Unified Entry Point
 
@@ -210,6 +220,7 @@ The following example connects the Gateway to an existing OpenViking Server:
     },
     "ov_server": {
       "server_url": "https://openviking.example.com",
+      "api_key_type": "user",
       "api_key": "<bot-openviking-user-api-key>"
     }
   }
@@ -251,6 +262,20 @@ ov find "project release process"
 The Gateway listens on `127.0.0.1` by default. If you change it to `0.0.0.0` or another non-localhost address, configure `bot.gateway.token` and set the matching `gateway_token` on the client.
 
 For credentials and permissions required by each chat platform, see [VikingBot Channel Configuration](https://github.com/volcengine/OpenViking/blob/main/bot/docs/en/concepts/05-channel.md).
+
+## Manage through Web Studio
+
+Open Web Studio's `/vikingbot` page to chat on the web or manage Feishu connections for a Server-managed Bot. Connection management and Feishu history require ROOT access and are isolated by the account selected in Studio; an account ADMIN key is not sufficient. Studio calls `GET /api/v1/admin/bot/capabilities` and the connection, conversation, verification, and onboarding endpoints under `/api/v1/admin/accounts/{account_id}/bot`.
+
+The Feishu QR setup has three steps:
+
+1. Select a regular user in the same account as the connection's runtime identity. The server binds an available credential; the browser does not need that user's API key.
+2. Scan the Feishu QR code to create the application, configure permissions/events, and submit it for publication. Existing applications can use manual credential setup instead.
+3. Add the bot to a group and verify message receipt and reply. API acceptance of a reply does not prove that it is visible in the group; check the group as part of setup.
+
+Connections and captured messages are stored in `studio.sqlite3` under the Bot data directory with mode `0600`. The database contains application and bound-user credentials, so handle its backups like server configuration. Studio-managed Feishu sessions use only the OpenViking query and memory tools allowed for the bound identity; shell, local-file, scheduling, and unapproved MCP tools are unavailable.
+
+Pause stops the connection and keeps history. Deleting a connection removes its local records, not the Feishu application or messages in Feishu. Feishu history is read-only in Studio and starts with messages captured by that Studio connection; channels already configured in `ov.conf` and their old history are not migrated automatically. Resuming or restarting a connection preserves its context; deleting and recreating it creates a new context.
 
 ## More Documentation
 

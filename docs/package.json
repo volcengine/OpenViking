@@ -13,6 +13,7 @@
     "check:docs": "node scripts/check-docs-consistency.mjs"
   },
   "devDependencies": {
+    "markdown-it-task-lists": "^2.1.1",
     "vitepress": "1.6.4"
   },
   "dependencies": {

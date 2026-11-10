@@ -1,0 +1,139 @@
+/**
+ * 输入区样式。颜色取自 `viking-bot.css` 里从主题基线派生的组件变量，
+ * 这里只补充输入区特有的几何量。
+ *
+ * Composer styles. Colours come from the component variables derived from the
+ * theme baseline in `viking-bot.css`; only composer-specific geometry is set here.
+ */
+.ov-viking-bot__composer {
+  display: flex;
+  box-sizing: border-box;
+  flex: none;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--ov-viking-bot-border);
+  padding: 8px 12px 12px;
+}
+
+.ov-viking-bot__composer--compact {
+  padding: 6px 8px 8px;
+}
+
+.ov-viking-bot__composer-hint {
+  margin: 0;
+  color: var(--ov-viking-bot-text-muted);
+  font-size: 12px;
+}
+
+.ov-viking-bot__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ov-viking-bot__attachments > li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--ov-viking-bot-border);
+  border-radius: var(--ov-viking-bot-radius);
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+.ov-viking-bot__attachments button {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  color: var(--ov-viking-bot-text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ov-viking-bot__attachments button:hover {
+  color: var(--ov-viking-bot-text);
+}
+
+.ov-viking-bot__attachments button:focus-visible {
+  outline: 2px solid var(--ov-viking-bot-focus);
+  outline-offset: 1px;
+}
+
+.ov-viking-bot__attachment-status {
+  color: var(--ov-viking-bot-danger);
+}
+
+.ov-viking-bot__input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 64px;
+  max-height: 200px;
+  border: 1px solid var(--ov-viking-bot-border);
+  border-radius: var(--ov-viking-bot-radius);
+  padding: 8px;
+  color: inherit;
+  font: inherit;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.ov-viking-bot__input::placeholder {
+  color: var(--ov-viking-bot-text-muted);
+}
+
+.ov-viking-bot__input:focus-visible {
+  outline: 2px solid var(--ov-viking-bot-focus);
+  outline-offset: -1px;
+}
+
+.ov-viking-bot__input:disabled {
+  background: var(--ov-viking-bot-surface);
+  color: var(--ov-viking-bot-text-muted);
+  cursor: not-allowed;
+}
+
+.ov-viking-bot__composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ov-viking-bot__composer-actions > button {
+  border: 1px solid var(--ov-viking-bot-border);
+  border-radius: var(--ov-viking-bot-radius);
+  background: none;
+  padding: 4px 12px;
+  color: var(--ov-viking-bot-text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ov-viking-bot__composer-actions > button:last-child {
+  border-color: var(--ov-viking-bot-accent);
+  background: var(--ov-viking-bot-accent);
+  color: var(--ov-viking-bot-on-accent);
+}
+
+.ov-viking-bot__composer-actions > button:hover:not(:disabled) {
+  background: var(--ov-viking-bot-surface-hover);
+}
+
+.ov-viking-bot__composer-actions > button:last-child:hover:not(:disabled) {
+  border-color: var(--ov-viking-bot-accent-hover);
+  background: var(--ov-viking-bot-accent-hover);
+}
+
+.ov-viking-bot__composer-actions > button:focus-visible {
+  outline: 2px solid var(--ov-viking-bot-focus);
+  outline-offset: 2px;
+}
+
+.ov-viking-bot__composer-actions > button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

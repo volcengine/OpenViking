@@ -16,6 +16,7 @@
       "add_resource",
       "add_skill",
       "ov_search",
+      "ov_rule_search",
       "ov_read",
       "ov_multi_read",
       "ov_list",
@@ -45,7 +46,8 @@
   "skills": [
     "./skills/install-openviking-memory",
     "./skills/openviking-context-database",
-    "./skills/ov-experience-memory"
+    "./skills/ov-experience-memory",
+    "./skills/openviking-rule-search"
   ],
   "setup": {
     "providers": [
@@ -352,6 +354,12 @@
       },
       "timeoutMs": {
         "type": "number"
+      },
+      "contextManagementMode": {
+        "type": "string",
+        "enum": ["native", "openviking"],
+        "default": "native",
+        "description": "Use host history and compaction; openviking explicitly enables Working Memory context management."
       },
       "autoCapture": {
         "type": "boolean"

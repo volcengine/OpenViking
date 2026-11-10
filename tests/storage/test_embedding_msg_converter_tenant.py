@@ -8,7 +8,11 @@ import pytest
 from openviking.core.context import Context, Vectorize
 from openviking.storage.index_action import IndexAction
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
-from openviking.telemetry import OperationTelemetry, bind_telemetry
+from openviking.telemetry import (
+    OperationTelemetry,
+    bind_ingestion_source_type,
+    bind_telemetry,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -70,3 +74,13 @@ def test_embedding_msg_converter_prefers_explicit_telemetry_id():
 
     assert msg is not None
     assert msg.telemetry_id == "request-telemetry-id"
+
+
+def test_embedding_msg_converter_persists_ingestion_source_type():
+    context = Context(uri="viking://resources/code.py", abstract="summary")
+
+    with bind_ingestion_source_type("repository"):
+        msg = EmbeddingMsgConverter.from_context(context)
+
+    assert msg is not None
+    assert msg.source_type == "repository"

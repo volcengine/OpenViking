@@ -103,6 +103,14 @@ async def test_list_mode_is_unchanged_without_context_only_arguments():
 
 
 @pytest.mark.asyncio
+async def test_list_mode_forwards_keywords_search_type():
+    with pytest.raises(_SearchCalled) as excinfo:
+        await mcp_endpoint.search(query="anything", search_type="keywords")
+
+    assert excinfo.value.kwargs["search_type"] == "keywords"
+
+
+@pytest.mark.asyncio
 async def test_context_mode_still_accepts_them():
     # The guard is list-mode only; reaching assemble_context (which this stub service
     # cannot satisfy) is enough to show the arguments were not refused up front.

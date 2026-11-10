@@ -239,6 +239,7 @@ class OpenGaussConfig(OpenGaussIndexConfig):
     )
     connection_pool_min_size: int = Field(default=1, ge=1, le=64)
     connection_pool_max_size: int = Field(default=8, ge=1, le=128)
+    candidate_limit: int = Field(default=1000, ge=1, le=10000)
 
     model_config = {"extra": "forbid"}
 
@@ -538,8 +539,6 @@ class VectorDBBackendConfig(BaseModel):
                 raise ValueError("VectorDB opengauss backend requires 'opengauss' config")
             if not self.opengauss.host:
                 raise ValueError("VectorDB opengauss backend requires 'opengauss.host' to be set")
-            if self.sparse_weight > 0.0:
-                raise ValueError("VectorDB opengauss backend does not support sparse_weight > 0")
             distance = (self.distance_metric or "cosine").lower()
             if distance not in _OPENGAUSS_DISTANCE_METRICS:
                 raise ValueError(

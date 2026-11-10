@@ -183,26 +183,32 @@ def test_start_vikingbot_gateway_allows_slow_module_probe(monkeypatch):
     assert captured["cmd"][1:4] == ["-m", "vikingbot", "gateway"]
 
 
-def test_readiness_waits_for_matching_child_pid(monkeypatch, tmp_path):
+def test_readiness_accepts_gateway_pid_behind_launcher(monkeypatch, tmp_path):
     status = tmp_path / "status.json"
     process = SimpleNamespace(pid=123, poll=lambda: None)
-    status.write_text(json.dumps({"pid": 999, "status": "ready"}))
+    status.write_text(json.dumps({"pid": 999, "status": "starting"}))
     polls = []
+    clock = iter((0, 0, 1, 900))
 
     def advance(_):
         polls.append(1)
-        state = "starting" if len(polls) == 1 else "ready"
-        status.write_text(json.dumps({"pid": 123, "status": state}))
+        status.write_text(json.dumps({"pid": 999, "status": "ready"}))
 
-    monkeypatch.setattr(bootstrap.time, "sleep", advance)
+    monkeypatch.setattr(
+        bootstrap, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=advance)
+    )
     bootstrap._wait_for_bot_ready(process, status)
-    assert len(polls) == 2
+    assert len(polls) == 1
 
 
-def test_readiness_reports_sandbox_failure(tmp_path):
+def test_readiness_reports_sandbox_failure(monkeypatch, tmp_path):
     status = tmp_path / "status.json"
-    status.write_text(json.dumps({"pid": 123, "status": "failed", "error": "Docker missing"}))
+    status.write_text(json.dumps({"pid": 999, "status": "failed", "error": "Docker missing"}))
     process = SimpleNamespace(pid=123, poll=lambda: None)
+    clock = iter((0, 0, 900))
+    monkeypatch.setattr(
+        bootstrap, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _: None)
+    )
     with pytest.raises(RuntimeError, match="Docker missing"):
         bootstrap._wait_for_bot_ready(process, status)
 

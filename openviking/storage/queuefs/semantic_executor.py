@@ -5,15 +5,13 @@
 import asyncio
 import re
 import threading
-from contextlib import nullcontext
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Mapping, Optional, Set
 from weakref import WeakKeyDictionary
 
 from openviking.core.namespace import classify_uri
 from openviking.parse.parsers.media import get_media_type
 from openviking.server.identity import RequestContext
-from openviking.service.task_processing_time import pause_task_processing, processing_owner
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import (
     bind_task_context,
@@ -24,7 +22,6 @@ from openviking.storage.abstract_overview import (
     AbstractOverviewFormatError,
     AbstractOverviewWriteResult,
     body_for_preview,
-    deterministic_sample,
     freshness_metadata,
     read_abstract_overview_pending_snapshot,
     write_abstract_overview,
@@ -33,11 +30,10 @@ from openviking.storage.context_update_plan import FileVectorSource, SemanticAct
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.index_action import FieldPatch
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
-from openviking.telemetry import bind_telemetry, get_current_telemetry
+from openviking.telemetry import bind_ingestion_source_type, bind_telemetry, get_current_telemetry
 from openviking.utils.content_hash import content_md5
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.utils import VikingURI
-from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -196,8 +192,13 @@ class SemanticTreeExecutor:
         file_md5s: Optional[Dict[str, str]] = None,
         artifact_files: Optional[List[str]] = None,
         file_abstracts: Optional[Dict[str, str]] = None,
+        file_vector_actions: Optional[Dict[str, str]] = None,
+        file_ingest_options: Optional[Dict[str, IngestOptions | Dict[str, Any]]] = None,
         semantic_plan: Optional["SemanticPlan"] = None,
         telemetry_id: str | None = None,
+        source_contents: Optional[Mapping[tuple[str, int], str | bytes]] = None,
+        source_raw_contents: Optional[Mapping[tuple[str, int], str | bytes]] = None,
+        materialize_content: bool = False,
     ):
         self._processor = processor
         self._context_type = context_type
@@ -213,9 +214,19 @@ class SemanticTreeExecutor:
                 and semantic_plan.file_vector_source is FileVectorSource.SUMMARY_WHEN_AVAILABLE
             )
         )
+        self._source_type = (
+            ("repository" if self._is_code_repo else "document")
+            if context_type == "resource"
+            else None
+        )
         self._changes_provided = changes is not None
         self._changes = changes or {}
         self._semantic_plan = semantic_plan
+        self._source_contents = dict(source_contents or {})
+        self._source_raw_contents = (
+            dict(source_raw_contents) if source_raw_contents is not None else None
+        )
+        self._materialize_content = materialize_content
         self._semantic_resource_root = (
             semantic_plan.root_uri.rstrip("/") if semantic_plan is not None else None
         )
@@ -232,7 +243,6 @@ class SemanticTreeExecutor:
         self._aggregate_directory = aggregate_directory
         self._copy_source_uri = copy_source_uri
         self._task_context = get_task_context()
-        self._processing_index = None
         self._telemetry = get_current_telemetry()
         self._telemetry_id = telemetry_id
         self._stale = False
@@ -247,6 +257,12 @@ class SemanticTreeExecutor:
         self._file_md5s = dict(file_md5s or {})
         self._artifact_files = [path.strip("/") for path in (artifact_files or []) if path]
         self._file_abstracts = dict(file_abstracts or {})
+        self.file_abstracts: Dict[str, str] = {}
+        self._file_vector_actions = dict(file_vector_actions or {})
+        self._file_ingest_options = {
+            uri.rstrip("/"): IngestOptions.from_value(options)
+            for uri, options in (file_ingest_options or {}).items()
+        }
         self._plan_entries_by_uri: Dict[str, "SemanticTreeEntry"] = {}
         self._plan_children: Dict[str, tuple[List[str], List[str]]] = {}
         self._plan_active_dirs: Set[str] = set()
@@ -361,37 +377,49 @@ class SemanticTreeExecutor:
                 self._stats.total_nodes = 1
                 self._stats.done_nodes = 1
                 return
-
-        owner = processing_owner.get()
-        if owner is not None and self._task_context is not None:
-            if owner[1] == self._task_context.task_id:
-                self._processing_index = owner[0]
-        with pause_task_processing():
-            try:
-                self._register_active()
-                self._schedule_dir(root_uri, parent_uri=None)
-                await self._root_done.wait()
-                if self._failure:
-                    raise self._failure
-            except BaseException:
-                self._closed = True
-                if self._context_type == "skill":
-                    for task in self._skill_node_tasks:
-                        task.cancel()
-                    await run_to_completion(
-                        lambda: asyncio.gather(*self._skill_node_tasks, return_exceptions=True)
-                    )
-                await self._active_work_idle.wait()
-                raise
-            finally:
-                self._closed = True
+            if isinstance(entry, SemanticTreeEntry) and entry.kind == "file":
+                self._stats.total_nodes = 1
+                self._stats.in_progress_nodes = 1
+                # A file-root maintenance plan has no directory node or
+                # sidecars of its own. Execute its planned L2 work directly;
+                # the caller's parent freshness policy handles its parent.
+                previous_incremental = self._incremental_update
+                self._incremental_update = False
                 try:
-                    if self._context_type == "skill":
-                        await run_to_completion(self._active_work_idle.wait)
-                    else:
-                        await self._active_work_idle.wait()
+                    with bind_ingestion_source_type(self._source_type):
+                        await self._file_summary_task(root_uri, root_uri)
                 finally:
-                    self._unregister_active()
+                    self._incremental_update = previous_incremental
+                self._root_write_result = AbstractOverviewWriteResult(
+                    wrote=True, abstract_body_changed=True
+                )
+                return
+
+        try:
+            self._register_active()
+            self._schedule_dir(root_uri, parent_uri=None)
+            await self._root_done.wait()
+            if self._failure:
+                raise self._failure
+        except BaseException:
+            self._closed = True
+            if self._context_type == "skill":
+                for task in self._skill_node_tasks:
+                    task.cancel()
+                await run_to_completion(
+                    lambda: asyncio.gather(*self._skill_node_tasks, return_exceptions=True)
+                )
+            await self._active_work_idle.wait()
+            raise
+        finally:
+            self._closed = True
+            try:
+                if self._context_type == "skill":
+                    await run_to_completion(self._active_work_idle.wait)
+                else:
+                    await self._active_work_idle.wait()
+            finally:
+                self._unregister_active()
 
     def _schedule_work(self, work: SemanticTreeWork) -> None:
         if self._closed:
@@ -493,23 +521,20 @@ class SemanticTreeExecutor:
                 self._task_context.task_id,
                 self._task_context.account_id,
                 self._task_context.user_id,
+                enqueued_work=self._task_context.enqueued_work,
+                work_id=self._task_context.work_id,
+                task_type=self._task_context.task_type,
+                mode=self._task_context.mode,
             )
             if self._task_context is not None
             else detach_task_context()
         )
-        timing = (
-            self._processing_index.measure_processing(self._task_context.task_id)
-            if self._processing_index is not None and self._task_context is not None
-            else nullcontext()
-        )
-        # Shared workers inherit their creator's ContextVars. Never let an
-        # unrelated node pause the creator's clock when it has no timing owner.
-        token = processing_owner.set(None)
-        try:
-            with bind_telemetry(self._telemetry), task_context, timing:
-                await self._run_work_bound(work)
-        finally:
-            processing_owner.reset(token)
+        with (
+            bind_telemetry(self._telemetry),
+            bind_ingestion_source_type(self._source_type),
+            task_context,
+        ):
+            await self._run_work_bound(work)
 
     async def _await_write(self, operation):
         if self._context_type == "skill":
@@ -559,17 +584,12 @@ class SemanticTreeExecutor:
                 self._schedule_overview(dir_uri)
                 return False
 
-            sample_limit = getattr(
-                get_openviking_config().semantic,
-                "overview_sample_limit",
-                32,
-            )
             direct_entries = sorted(
                 [("directory", uri) for uri in children_dirs]
                 + [("file", uri) for uri in file_paths],
                 key=lambda item: item[1].rsplit("/", 1)[-1],
             )
-            sampled_entries = deterministic_sample(direct_entries, sample_limit)
+            sampled_entries = direct_entries
             sampled_children_dirs = {uri for kind, uri in sampled_entries if kind == "directory"}
             sampled_file_paths = {uri for kind, uri in sampled_entries if kind == "file"}
             pending_snapshot = 0
@@ -580,6 +600,16 @@ class SemanticTreeExecutor:
                         dir_uri=dir_uri,
                         ctx=self._ctx,
                         lock=self._lock,
+                        existing_raw=(
+                            {
+                                level: raw
+                                for level in (0, 1)
+                                if (raw := self._source_raw_contents.get((dir_uri, level)))
+                                is not None
+                            }
+                            if self._source_raw_contents is not None
+                            else None
+                        ),
                     )
                 except LockAcquisitionError:
                     if self._generation_trigger != "content_write":
@@ -659,6 +689,19 @@ class SemanticTreeExecutor:
                     )
                 )
             )
+            if (
+                self._generation_trigger == "content_write_parent_refresh"
+                and not self._skip_vectorization
+            ):
+                # Refresh only directory records. Read current L2 summaries in
+                # one batch for other files, including coalesced earlier writes.
+                # Keep the triggering write's summaries, also when it deliberately
+                # left existing file vectors unchanged.
+                self._file_abstracts.update(
+                    await self._processor._load_transfer_file_summaries(
+                        sorted(required_file_paths - self._file_abstracts.keys()), ctx=self._ctx
+                    )
+                )
             if self._recursive:
                 pending = len(children_dirs) + len(required_file_paths)
             else:
@@ -757,13 +800,12 @@ class SemanticTreeExecutor:
         children_dirs: List[str],
         file_paths: List[str],
     ) -> DirNode:
-        """Sample the target directory first, then read only existing summaries."""
+        """Read existing summaries for all direct children of the target directory."""
         candidates = sorted(
             [("file", uri) for uri in file_paths] + [("directory", uri) for uri in children_dirs],
             key=lambda item: (item[1].rsplit("/", 1)[-1], item[0], item[1]),
         )
-        sample_limit = getattr(get_openviking_config().semantic, "overview_sample_limit", 32)
-        primary = deterministic_sample(candidates, sample_limit)
+        primary = candidates
         loaded = await self._load_transfer_candidates(primary)
         selected = [candidate for candidate in primary if candidate in loaded]
 
@@ -887,6 +929,10 @@ class SemanticTreeExecutor:
         )
 
     def _ingest_options_for_file(self, file_path: str) -> IngestOptions:
+        if self._generation_trigger == "content_write":
+            options = self._file_ingest_options.get(file_path.rstrip("/"))
+            if options is not None:
+                return options
         if self._generation_trigger == "content_write" and file_path not in self._changed_paths:
             return IngestOptions(acl_update=self._ingest_options.acl_update)
         return self._ingest_options
@@ -1047,6 +1093,13 @@ class SemanticTreeExecutor:
         self, dir_uri: str
     ) -> tuple[Optional[str], Optional[str]]:
         if self._semantic_plan is not None:
+            snapshot_overview = self._source_contents.get((dir_uri.rstrip("/"), 1))
+            snapshot_abstract = self._source_contents.get((dir_uri.rstrip("/"), 0))
+            if snapshot_overview is not None or snapshot_abstract is not None:
+                return (
+                    str(snapshot_overview) if snapshot_overview is not None else None,
+                    str(snapshot_abstract) if snapshot_abstract is not None else None,
+                )
             entry = self._plan_entries_by_uri.get(dir_uri.rstrip("/"))
             if entry is None:
                 return None, None
@@ -1072,7 +1125,16 @@ class SemanticTreeExecutor:
         file_content = None
         try:
             summary_dict = None
-            if self._incremental_update:
+            directory_only = self._generation_trigger == "content_write_parent_refresh"
+            if directory_only:
+                need_vectorize = False
+                self._file_change_status[file_path] = file_path in self._changed_paths
+                if file_path in self._file_abstracts:
+                    summary_dict = {
+                        "name": file_name,
+                        "summary": self._file_abstracts[file_path],
+                    }
+            elif self._incremental_update:
                 content_changed = await self._check_file_content_changed(file_path)
                 self._file_change_status[file_path] = content_changed
                 node = self._nodes.get(parent_uri)
@@ -1100,8 +1162,10 @@ class SemanticTreeExecutor:
             else:
                 self._file_change_status[file_path] = True
             if summary_dict is None:
-                file_content = None
-                if hasattr(self._viking_fs, "read_file_bytes"):
+                file_content = self._source_contents.get((file_path.rstrip("/"), 2))
+                if file_content is not None and not isinstance(file_content, bytes):
+                    raise ValueError(f"file vector source must be bytes: {file_path}")
+                if file_content is None and hasattr(self._viking_fs, "read_file_bytes"):
                     file_content = await self._viking_fs.read_file_bytes(file_path, ctx=self._ctx)
                 summary_kwargs: Dict[str, Any] = {
                     "llm_sem": self._llm_sem,
@@ -1128,6 +1192,8 @@ class SemanticTreeExecutor:
 
         if self._closed:
             return
+        if file_path in self._changed_paths:
+            self.file_abstracts[file_path] = str(summary_dict.get("summary") or "")
         from openviking.storage.context_update_plan import (
             IndexAction,
             SemanticTreeEntry,
@@ -1149,6 +1215,8 @@ class SemanticTreeExecutor:
                     vectorize_kwargs["file_content"] = file_content
                 if self._telemetry_id is not None:
                     vectorize_kwargs["telemetry_id"] = self._telemetry_id
+                if self._materialize_content:
+                    vectorize_kwargs["materialize_content"] = True
                 manifest_md5 = self._file_md5s.get(file_path.rstrip("/")) or None
                 if file_content is not None and not manifest_md5:
                     file_md5 = content_md5(file_content)
@@ -1158,6 +1226,8 @@ class SemanticTreeExecutor:
                     vectorize_kwargs["scalar_override"] = self._plan_scalar_override(file_path, 2)
                     vectorize_kwargs["field_patch"] = self._plan_field_patch(file_path, 2)
                     vectorize_kwargs["action"] = slot.action.value if slot is not None else "upsert"
+                elif action := self._file_vector_actions.get(file_path.rstrip("/")):
+                    vectorize_kwargs["action"] = action
                 enqueued = await self._processor._vectorize_single_file(
                     parent_uri=parent_uri,
                     context_type=self._context_type,
@@ -1175,6 +1245,7 @@ class SemanticTreeExecutor:
                 )
                 if enqueued and slot is not None:
                     self._scheduled_vector_record_ids.add(slot.record_id)
+                    self._stats.indexed_records += 1
             except Exception as e:
                 logger.error(
                     "Failed to schedule vectorization for %s: %s",
@@ -1318,6 +1389,15 @@ class SemanticTreeExecutor:
         consume_pending: int,
         missing_summary_entries: Optional[int] = None,
     ) -> AbstractOverviewWriteResult:
+        if (
+            self._generation_trigger == "content_write_parent_refresh"
+            and not await self._viking_fs.exists(dir_uri, ctx=self._ctx)
+        ):
+            # Best-effort guard before sidecar lock acquisition can create its
+            # parent directory. A concurrent delete after this check may still race.
+            logger.info("Skipping semantic write for deleted directory: %s", dir_uri)
+            self._stale = True
+            return AbstractOverviewWriteResult(wrote=False)
         metadata: Dict[str, Any] = {
             "generated_by": {
                 "component": "SemanticProcessor",
@@ -1344,6 +1424,15 @@ class SemanticTreeExecutor:
                 consume_pending=consume_pending,
                 lock=self._lock,
                 log_prefix="[SemanticTree]",
+                existing_raw=(
+                    {
+                        level: raw
+                        for level in (0, 1)
+                        if (raw := self._source_raw_contents.get((dir_uri, level))) is not None
+                    }
+                    if self._source_raw_contents is not None
+                    else None
+                ),
             )
         )
         if not wrote.wrote:
@@ -1386,15 +1475,20 @@ class SemanticTreeExecutor:
                 # The package root describes the skill definition, independently
                 # of the summaries produced for its attachments.
                 definition_changed = f"{dir_uri}/SKILL.md" in self._changed_paths
+                plan_entry = self._plan_entries_by_uri.get(dir_uri.rstrip("/"))
+                repair = bool(plan_entry is not None and plan_entry.repair)
                 overview, abstract = await self._processor._skill_root_semantics(
                     dir_uri,
                     ctx=self._ctx,
-                    regenerate=self._generation_trigger == "reindex" or definition_changed,
+                    regenerate=self._generation_trigger == "reindex"
+                    or definition_changed
+                    or repair,
                     lock=self._lock,
+                    skill_content=self._source_contents.get((f"{dir_uri}/SKILL.md", 2)),
                 )
                 should_write = False
-                need_vectorize = not self._incremental_update or definition_changed
-                children_changed = definition_changed
+                need_vectorize = not self._incremental_update or definition_changed or repair
+                children_changed = definition_changed or repair
             elif self._generation_trigger == "content_copy" and not node.transfer_inputs_ready:
                 need_vectorize = False
                 should_write = False
@@ -1406,7 +1500,18 @@ class SemanticTreeExecutor:
                 if not children_changed:
                     overview, abstract = await self._read_existing_overview_abstract(dir_uri)
                     should_write = overview is None or abstract is None
-                    # Rebuilt sidecars must also replace their stale vectors.
+                    plan_entry = self._plan_entries_by_uri.get(dir_uri.rstrip("/"))
+                    if (
+                        self._semantic_plan is not None
+                        and plan_entry is not None
+                        and plan_entry.repair
+                    ):
+                        # RFV maintenance uses ``repair`` for both stale semantic
+                        # input and force rebuilds. Regenerate through the normal
+                        # semantic action before emitting its planned index slots.
+                        overview = None
+                        abstract = None
+                        should_write = True
                     need_vectorize = should_write
                     children_changed = should_write
             if should_write and (overview is None or abstract is None):
@@ -1479,6 +1584,7 @@ class SemanticTreeExecutor:
                 entry = self._plan_entries_by_uri.get(dir_uri.rstrip("/"))
                 slots = {slot.level: slot for slot in entry.index_slots} if entry else {}
 
+            enqueued_levels: set[int] = set()
             if need_vectorize and not self._skip_vectorization:
                 assert overview is not None and abstract is not None
                 try:
@@ -1499,7 +1605,7 @@ class SemanticTreeExecutor:
                                 return False
                             old_body = slot.abstract
                             new_body = abstract if level == 0 else overview
-                            return not old_body or old_body != new_body
+                            return entry.repair or not old_body or old_body != new_body
 
                         include_abstract = should_emit(0)
                         include_overview = should_emit(1)
@@ -1521,6 +1627,10 @@ class SemanticTreeExecutor:
                             },
                             "include_abstract": include_abstract,
                             "include_overview": include_overview,
+                            "md5s": {
+                                0: content_md5(abstract.encode("utf-8")),
+                                1: content_md5(overview.encode("utf-8")),
+                            },
                         }
                     if self._telemetry_id is not None:
                         directory_vector_kwargs["telemetry_id"] = self._telemetry_id
@@ -1556,8 +1666,6 @@ class SemanticTreeExecutor:
                     if self._context_type != "skill":
                         raise
                     self._record_skill_failure(dir_uri, e)
-            else:
-                enqueued_levels = set()
 
             for level, slot in sorted(slots.items()):
                 if (
@@ -1592,6 +1700,7 @@ class SemanticTreeExecutor:
                 self._scheduled_vector_record_ids.update(
                     slot.record_id for slot in slots.values() if slot.level in enqueued_levels
                 )
+                self._stats.indexed_records += len(enqueued_levels)
         finally:
             self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)

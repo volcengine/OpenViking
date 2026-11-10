@@ -1,4 +1,4 @@
-# API Overview
+# SDK, HTTP and CLI conventions
 
 This page covers how to connect to OpenViking and the conventions shared across all API endpoints.
 
@@ -68,7 +68,7 @@ tenant identity from the key. Set `Account` and `User` only for trusted
 deployments or gateways that explicitly forward tenant identity.
 
 It does not implement legacy `agent_id` compatibility.
-See [`sdk/go/README.md`](../../../sdk/go/README.md) for package-level examples.
+See [`sdk/go/README.md`](https://github.com/volcengine/OpenViking/blob/main/sdk/go/README.md) for package-level examples.
 
 #### JavaScript/TypeScript SDK Client
 
@@ -93,23 +93,21 @@ const results = await client.search("deployment guide", {
 ```
 
 It uses the same identity headers and response envelope as the Python and Go
-HTTP clients. See [`sdk/typescript/README.md`](../../../sdk/typescript/README.md)
+HTTP clients. See [`sdk/typescript/README.md`](https://github.com/volcengine/OpenViking/blob/main/sdk/typescript/README.md)
 for package-level examples.
 
-When `url` is not explicitly provided, the HTTP client automatically reads connection information from `ovcli.conf`. `ovcli.conf` is a configuration file shared between the HTTP client and CLI. Default path: `~/.openviking/ovcli.conf`. You can also specify the path via environment variable:
+The Python HTTP client reads connection information from `ovcli.conf`; explicit constructor values override the corresponding settings. `ovcli.conf` is a configuration file shared between the HTTP client and CLI. Default path: `~/.openviking/ovcli.conf`. You can also specify the path via environment variable:
 
 ```bash
 export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 ```
 
-Configuration file example:
+Configuration file example using a user/admin key:
 
 ```json
 {
   "url": "http://localhost:1933",
-  "api_key": "your-key",
-  "account": "acme",
-  "user": "alice"
+  "api_key": "your-user-or-admin-key"
 }
 ```
 
@@ -119,8 +117,8 @@ Configuration field description:
 |-------|-------------|---------|
 | `url` | Server address | (required) |
 | `api_key` | API Key | `null` (no auth) |
-| `account` | Default account header for tenant-scoped requests | `null` |
-| `user` | Default user header for tenant-scoped requests | `null` |
+| `account` | Account header; used in trusted and dev modes, ignored in api_key mode | `null` |
+| `user` | User header; used in trusted and dev modes, ignored in api_key mode | `null` |
 | `timeout` | HTTP request timeout in seconds | `60.0` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
 
@@ -166,7 +164,7 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 #### CLI Mode
 
-The OpenViking CLI command is `ov` (installed with `npm install -g @openviking/cli`). It connects to an OpenViking server and exposes all operations as shell commands. The CLI also reads connection information from `ovcli.conf` (shared with the HTTP client).
+The OpenViking CLI command is `ov` (installed with `npm install -g @openviking/cli`). It connects to an OpenViking server and provides shell commands for common operations. The CLI also reads connection information from `ovcli.conf` (shared with the HTTP client).
 
 Basic usage:
 
@@ -214,20 +212,19 @@ See the [Authentication Guide](../guides/04-authentication.md) for full details.
 
 - **Authorization Bearer** header: `Authorization: Bearer your-key` (recommended)
 - **X-API-Key** header: `X-API-Key: your-key`
-- If the server doesn't have an API Key configured, authentication is skipped.
+- Authentication is skipped only in dev mode, which is selected automatically when `server.root_api_key` is unset and `auth_mode` is not set. Other modes (api_key, trusted, OIDC, LDAP) resolve identity according to their configuration.
 - The `/health` and `/ready` endpoints never require authentication.
 
 ## Response Format
 
-All HTTP API responses follow a unified format:
+Regular JSON API responses use the following envelope. File downloads, SSE, Metrics, and WebDAV use the formats documented for those endpoints:
 
 ### Success Response
 
 ```json
 {
   "status": "ok",
-  "result": { ... },
-  "time": 0.123
+  "result": { ... }
 }
 ```
 
@@ -241,8 +238,7 @@ The top-level `status` describes whether the HTTP API request succeeded. Some su
   "error": {
     "code": "NOT_FOUND",
     "message": "Resource not found: viking://resources/nonexistent/"
-  },
-  "time": 0.01
+  }
 }
 ```
 
@@ -307,8 +303,8 @@ JSON output - error:
 
 ### Special Cases
 
-- **String results** (`read`, `abstract`, `overview`): printed directly as plain text
-- **None results** (`mkdir`, `rm`, `mv`): no output
+- In table mode, `read`, `abstract`, and `overview` print text directly. `mkdir`, `rm`, and `mv` print a confirmation message.
+- In JSON mode, these commands use the JSON output format described above.
 
 ### Exit Codes
 
@@ -359,14 +355,10 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Basic health check (no authentication) |
-| GET | `/ready` | AGFS, VectorDB, and API key manager readiness (no authentication) |
+| GET | `/ready` | AGFS, VectorDB, API key manager, and embedding readiness (no authentication) |
 | GET | `/api/v1/system/status` | System status |
 | POST | `/api/v1/system/wait` | Wait for background processing |
 | POST | `/api/v1/system/consistency` | Check filesystem and vector-index consistency |
-| POST | `/api/v1/system/backend/sync-status` | Query backend synchronization status |
-| POST | `/api/v1/system/backend/sync-retry` | Retry backend synchronization |
-| GET | `/api/v1/system/sync/{sync_path}` | Path-form compatibility endpoint for synchronization status |
-| POST | `/api/v1/system/sync/{sync_path}/retry` | Path-form compatibility endpoint for synchronization retry |
 
 ### [Resources](02-resources.md) and [Filesystem](03-filesystem.md)
 
@@ -403,8 +395,9 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/content/overview` | Read an overview (L1) |
 | GET | `/api/v1/content/download` | Download original file bytes |
 | POST | `/api/v1/content/write` | Write content and refresh semantic indexes |
-| POST | `/api/v1/content/batch-write` | Apply preconditioned multi-file writes |
+| POST | `/api/v1/content/batch-write` | Write multiple files and refresh their indexes |
 | POST | `/api/v1/content/set_tags` | Set retrieval tags |
+| POST | `/api/v1/content/ensure_directory_index` | Ensure indexes for one existing directory, seeding L0 only when both summaries are absent |
 | POST | `/api/v1/content/reindex` | Rebuild semantic or vector indexes |
 
 ### [Skills](04-skills.md)
@@ -418,6 +411,25 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/skills/{skill_name}` | Get a skill |
 | PUT | `/api/v1/skills/{skill_name}` | Update a skill |
 | DELETE | `/api/v1/skills/{skill_name}` | Delete a skill |
+
+### [MCP and Live Context](26-mcp-live-context.md)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/mcps/validate` | Validate an MCP server and discover tools without saving |
+| POST | `/api/v1/mcps` | Register an MCP server and publish its tool catalog |
+| GET | `/api/v1/mcps` | List registered MCP servers |
+| GET | `/api/v1/mcps/{name}` | Read an MCP server and its current tool definitions |
+| GET | `/api/v1/mcps/status` | Check whether an MCP server is reachable |
+| POST | `/api/v1/mcps/{name}/sync` | Synchronize tools and report affected live context mounts |
+| DELETE | `/api/v1/mcps/{name}` | Remove an MCP server and its tool catalog |
+| POST | `/api/v1/mcps/find` | Search MCP tools semantically |
+| POST | `/api/v1/mcps/invoke` | Invoke an MCP tool |
+| POST | `/api/v1/mcps/mount` | Create or replace one MCP-backed live context node |
+| POST | `/api/v1/mcps/batch-mount` | Create or replace live context nodes in a batch |
+| DELETE | `/api/v1/mcps/mount` | Remove one mount and its node |
+| POST | `/api/v1/mcps/batch-unmount` | Remove mounts and nodes in a batch |
+| GET | `/api/v1/mcps/mounts` | List mounts for an MCP server or tool |
 
 ### [Sessions](05-sessions.md), [Memory](16-memory.md), and [Agent Evolution](19-agent-evolution.md)
 
@@ -434,12 +446,21 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | Get a session archive |
 | DELETE | `/api/v1/sessions/{session_id}` | Delete a session |
 | POST | `/api/v1/sessions/{session_id}/commit` | Archive a session and extract memory |
-| POST | `/api/v1/sessions/{session_id}/extract` | Extract memory |
+| POST | `/api/v1/sessions/{session_id}/archives/{archive_id}/retry` | Retry a failed or ownerless session archive |
 | POST | `/api/v1/sessions/{session_id}/messages` | Add one message |
 | POST | `/api/v1/sessions/{session_id}/messages/batch` | Add messages in a batch |
 | POST | `/api/v1/search/recall` | Deprecated: thin preset over the search endpoint with `mode="context"` |
+| POST | `/api/v1/rules/compile` | Compile user rules asynchronously |
+| POST | `/api/v1/rules/search` | Retrieve complete rules applicable to a task |
 | GET | `/api/v1/agent-evolution/experiences/trajectories` | List trajectories that consumed an Experience |
 | GET | `/api/v1/agent-evolution/experiences/outcomes` | Aggregate outcomes of trajectories that consumed an Experience |
+
+### [Rules (Beta)](26-rules.md)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/rules/compile` | Submit a background rule compilation task |
+| POST | `/api/v1/rules/search` | Retrieve applicable active rules for task context |
 
 ### [Retrieval](06-retrieval.md)
 
@@ -464,9 +485,11 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/watches/{task_id}/trigger` | Trigger a watch by task ID |
 | POST | `/api/v1/snapshot/commit` | Create a snapshot |
 | GET | `/api/v1/snapshot/log` | Read snapshot history |
+| GET | `/api/v1/snapshot/versions` | List versions of a Compile output file |
 | POST | `/api/v1/snapshot/restore` | Restore a historical snapshot |
 | GET | `/api/v1/snapshot/show` | Inspect a snapshot or one of its files |
 | GET | `/api/v1/snapshot/diff` | Compare snapshots |
+| GET | `/api/v1/snapshot/diff-paths` | Page changed source files |
 | GET | `/api/v1/snapshot/ignore` | Read snapshot ignore rules |
 | PUT | `/api/v1/snapshot/ignore` | Replace snapshot ignore rules |
 | DELETE | `/api/v1/snapshot/ignore` | Clear snapshot ignore rules |
@@ -500,7 +523,9 @@ This catalog follows the routes actually mounted by the server. Each group headi
 |--------|------|-------------|
 | GET | `/api/v1/admin/configuration` | Get explicit Cluster runtime configuration |
 | PATCH | `/api/v1/admin/configuration` | Update Cluster runtime configuration |
-| GET | `/api/v1/admin/accounts/{account_id}/configuration` | Get explicit Account runtime configuration |
+| POST | `/api/v1/admin/configuration/test-model` | Test a draft model or embedding connection without saving it |
+| POST | `/api/v1/admin/restart` | Request a graceful restart of a supported server process (ROOT only) |
+| GET | `/api/v1/admin/accounts/{account_id}/configuration` | Get Account settings and the effective Agent Evolution switch |
 | PATCH | `/api/v1/admin/accounts/{account_id}/configuration` | Update Account runtime configuration |
 | GET | `/api/v1/admin/agent-evolution` | Get Agent Evolution status (deprecated) |
 | PUT | `/api/v1/admin/agent-evolution` | Update Agent Evolution status (deprecated) |
@@ -512,28 +537,68 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Remove a memory template override and restore deployment defaults |
 | POST | `/api/v1/admin/accounts` | Create an account and its first administrator |
 | GET | `/api/v1/admin/accounts` | List accounts |
-| POST | `/api/v1/admin/migrate` | Migrate legacy identity data |
+| POST | `/api/v1/admin/migrate` | Reserved migration endpoint; ROOT-only, currently returns 400 INVALID_ARGUMENT |
+| GET | `/api/v1/admin/accounts/{account_id}` | Get credential-free metadata for one account |
 | DELETE | `/api/v1/admin/accounts/{account_id}` | Delete an account |
 | POST | `/api/v1/admin/accounts/{account_id}/users` | Register a user |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | List users |
-| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Get a user's memory policy |
-| PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Update a user's memory policy |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Get one user's credential-free membership info (user_id, role) |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Get User add locations, memory policy, and TTL |
+| PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Update User add locations, memory policy, and TTL |
+| GET | `/api/v1/user-settings/add-locations` | Get current-user add locations (deprecated) |
+| PATCH | `/api/v1/user-settings/add-locations` | Update current-user add locations (deprecated) |
+| DELETE | `/api/v1/user-settings/add-locations` | Clear current-user add-location overrides (deprecated) |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Remove a user |
-| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Promote a user to ADMIN |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Change a user's role between USER and ADMIN |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | Regenerate a user key |
 | POST | `/api/v1/admin/accounts/{account_id}/groups` | Create a group |
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | List groups |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete a group |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List group members |
-| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Add a group member |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a group member |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Add group members |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Remove group members |
 | GET | `/api/v1/privacy-configs` | List privacy configuration categories |
+| GET | `/api/v1/privacy-configs/tree` | List current targets and field metadata as a tree without values |
+| POST | `/api/v1/privacy-configs/scan` | Scan or repair registered values in content |
 | GET | `/api/v1/privacy-configs/{category}` | List category targets |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}` | Get the active configuration |
+| GET | `/api/v1/privacy-configs/{category}/{target_key}/fields` | List safe active-field metadata without values |
+| GET | `/api/v1/privacy-configs/{category}/{target_key}/field` | Get a field reference or explicitly reveal its value |
+| POST | `/api/v1/privacy-configs/resolve` | Explicitly reveal a field by reference or URI |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}/versions` | List configuration versions |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}/versions/{version}` | Get one version |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}` | Write and activate a new version |
+| PATCH | `/api/v1/privacy-configs/{category}/{target_key}` | Atomically merge fields; create if missing |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | Activate a version |
+| DELETE | `/api/v1/privacy-configs/{category}/{target_key}` | Delete a target and every version |
+| DELETE | `/api/v1/privacy-configs/{category}/{target_key}/field` | Remove the active field |
+| DELETE | `/api/v1/privacy-configs/selector` | Delete a target or field by URI/reference |
+
+### [OpenViking Gateway Management](25-gateway.md)
+
+When the gateway runs inside the server, use the server's port; when it runs standalone, use the gateway's own port. The OpenViking API key decides which account the caller can reach. If the deployer set a gateway management key, changing upstreams and context profiles also requires it. Every user can issue gateway keys for themselves. The access matrix and error reasons are in the [Gateway Management API](25-gateway.md).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/gateway/admin/access` | Read the caller's permissions and deployment warnings |
+| GET | `/gateway/admin/guides` | Read the gateway address clients use |
+| GET | `/gateway/admin/tools` | List the OpenViking tools available to the caller |
+| GET | `/gateway/admin/upstreams/{identifier}` | Read one upstream |
+| GET | `/gateway/admin/policies/{identifier}` | Read one context profile |
+| GET | `/gateway/admin/keys/{identifier}` | Read one gateway key (without the secret) |
+| GET | `/gateway/admin/overview` | Read the usage overview within the caller's scope |
+| GET | `/gateway/admin/logs` | Read the request logs the caller can see |
+| GET | `/gateway/admin/upstreams` | List the account's upstreams |
+| PUT / DELETE | `/gateway/admin/upstreams/{identifier}` | Create/replace or delete an upstream |
+| POST | `/gateway/admin/upstreams/{identifier}/test` | Test an upstream connection or model |
+| POST | `/gateway/admin/upstreams/import-vlm` | Import the server's VLM settings as upstreams (embedded only) |
+| GET | `/gateway/admin/policies` | List the account's context profiles |
+| PUT / DELETE | `/gateway/admin/policies/{identifier}` | Create/replace or delete a context profile |
+| GET / POST | `/gateway/admin/keys` | List the gateway keys the caller can see, or issue a new one |
+| DELETE | `/gateway/admin/keys/{identifier}` | Revoke a gateway key |
+| POST | `/gateway/admin/keys/{identifier}/capture/reset` | Start saving a conversation again |
+| DELETE | `/gateway/admin/users/{user_id}/data` | Admin or root: delete a user's gateway data |
+| DELETE | `/gateway/admin/account/data` | Root: delete an account's gateway data |
 
 ### [OpenViking Assets](22-openviking-assets.md), [WebDAV](20-webdav.md), [Agent Runtime API](23-agent-runtime.md), and [VikingBot API](24-vikingbot.md)
 
@@ -549,21 +614,30 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | MKCOL | `/webdav/resources`, `/webdav/resources/{resource_path}` | Create a directory |
 | MOVE | `/webdav/resources`, `/webdav/resources/{resource_path}` | Move or rename a resource |
 | POST | `/api/v1/compile` | Create an asynchronous Compile task |
+| GET | `/api/v1/compile/config` | Read target settings |
+| POST | `/api/v1/compile/config/update` | Update target settings |
+| GET | `/api/v1/compile/configs` | List visible targets |
+| GET | `/api/v1/compile/operations` | List target operations |
+| GET | `/api/v1/compile/operations/{operation_id}` | Read one operation |
+| GET | `/api/v1/compile/operations/{operation_id}/outputs` | List operation outputs and version references |
+| POST | `/api/v1/compile/embeddings` | Embed transient Compile routing texts |
 | GET | `/api/v1/compile/capabilities` | Check Compile availability |
 | GET | `/api/v1/compile/submissions/{key}` | Find a task by submission key |
 | GET | `/bot/v1/health` | VikingBot health check |
 | POST | `/bot/v1/chat` | Non-streaming VikingBot chat |
 | POST | `/bot/v1/chat/stream` | Streaming VikingBot chat |
 | POST | `/bot/v1/feedback` | Submit feedback for a VikingBot answer |
+| POST | `/bot/v1/sessions/{session_id}/interrupt` | Interrupt an active or queued VikingBot session |
+| POST | `/bot/v1/sessions/{session_id}/steer` | Send additional input to an active streaming session |
 | POST | `/bot/v1/compile` | Retired; returns migration guidance for the new endpoint |
 | GET | `/bot/v1/compile/{task_id}` | Retired; returns Task API migration guidance |
 | POST | `/bot/v1/compile/{task_id}/cancel` | Retired; returns Task cancellation API migration guidance |
 
 ---
 
-## Documentation Reading Plan
+## Find an API by Task
 
-The sidebar is organized by responsibility rather than historical file size:
+Choose a reference page by operation type:
 
 | Group | What to look for |
 |-------|------------------|
@@ -572,4 +646,4 @@ The sidebar is organized by responsibility rather than historical file size:
 | Data Lifecycle | Watches, snapshots, and OVPack |
 | Operations & Observability | System, tasks, Observer, and Metrics |
 | Identity & Governance | Administration, ACL, and privacy configuration |
-| Protocols & Extensions | OpenViking Assets, WebDAV, Agent Runtime API, and VikingBot API |
+| Protocols & Extensions | MCP and live context, OpenViking Assets, WebDAV, Agent Runtime API, and VikingBot API |

@@ -67,9 +67,9 @@ several sections (a bad key → "api key rejected" + "system/status → 401").
 
 The API key is never printed in full. Three-segment keys are shown as
 `account=<a> user=<u> secret=abcd…wxyz` (the first two segments are base64url
-identity, decoded so the user can see which account/user the key claims);
-legacy keys as `abcd…wxyz (64 chars)`. Keep it that way in anything you show
-the user.
+identity, decoded so the user can see which account/user the key claims).
+Other shapes are shown as `abcd…wxyz (N chars, unsupported format)`. Keep it
+that way in anything you show the user.
 
 ## Step 2 — map findings to causes
 
@@ -78,7 +78,7 @@ Work top-down; fix the first ✗ and rerun before chasing the next.
 | Doctor finding | Meaning | Action |
 |---|---|---|
 | `ovcli.conf cannot be parsed` / `no usable config` | Trailing comma/comment; the plugin treats the file as absent and uses the localhost default | Fix the JSON. Fresh machine: create `~/.openviking/ovcli.conf` with `url` + `api_key`, `chmod 600`. |
-| `codex plugin list does not show …` | Plugin never installed, or installed under an old id | Re-run the one-line installer (`bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) --harness codex`; add `--dist tos` where GitHub is blocked). |
+| `codex plugin list does not show …` | Plugin never installed, or installed under an old id | Re-run the one-line installer (`curl -fsSL https://openviking.ai/install \| bash -s -- --harness codex`). |
 | `hooks disabled in [features]` / `hooks feature is disabled in Codex` | The applicable hooks feature is disabled | Set `hooks = true` under `[features]` in `~/.codex/config.toml` (or `plugin_hooks = true` for older Codex), restart Codex. |
 | `[features] hooks enabled by default` | The live CLI reports hooks enabled; legacy `plugin_hooks` has no effect | Continue with the remaining checks. |
 | `[features] hooks is not set` (info) | The CLI probe could not determine the modern feature state and no legacy flag decides it | Verify with `codex features list`; an unset key alone does not prove hooks are disabled. |

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -22,14 +25,15 @@ type Config struct {
 
 // AddResourceOptions controls AddResource.
 type AddResourceOptions struct {
-	ACL                 *ACLSpec
-	To                  string
-	Parent              string
-	CreateParent        *bool
-	AddType             string
-	Reason              string
-	Instruction         string
-	Wait                bool
+	ACL          *ACLSpec
+	To           string
+	Parent       string
+	CreateParent *bool
+	AddType      string
+	Reason       string
+	Instruction  string
+	Wait         bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout             *float64
 	Strict              bool
 	IgnoreDirs          string
@@ -48,7 +52,8 @@ type AddResourceOptions struct {
 
 // AddSkillOptions controls AddSkill.
 type AddSkillOptions struct {
-	Wait      bool
+	Wait bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout   *float64
 	Telemetry any
 	Extra     map[string]any
@@ -137,7 +142,8 @@ type GetSkillOptions struct {
 
 // UpdateSkillOptions controls UpdateSkill.
 type UpdateSkillOptions struct {
-	Wait           bool
+	Wait bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout        *float64
 	SourceMetadata map[string]any
 	Telemetry      any
@@ -150,8 +156,37 @@ type DeleteSkillOptions struct {
 	TargetURI any
 }
 
+// MountMCPToolOptions controls a live context mount backed by an MCP tool.
+type MountMCPToolOptions struct {
+	Description    *string
+	TimeoutSeconds int
+	Arguments      map[string]any
+	Tags           []string
+	Wait           bool
+}
+
+// WaitOptions controls whether an asynchronous operation waits for processing.
+type WaitOptions struct {
+	Wait      bool
+	TargetURI string
+}
+
+// MCPToolMount describes one live context mount in a batch request.
+type MCPToolMount struct {
+	ToolURI        string
+	NodeURI        string
+	Title          string
+	Description    *string
+	TimeoutSeconds int
+	Arguments      map[string]any
+	Tags           []string
+}
+
 // WaitProcessedOptions controls WaitProcessed.
+//
+// Deprecated: Waiting-specific timeout options are ignored.
 type WaitProcessedOptions struct {
+	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout *float64 `json:"timeout,omitempty"`
 }
 
@@ -184,18 +219,28 @@ type UpdateWatchOptions struct {
 
 // ListOptions controls List.
 type ListOptions struct {
-	Simple        bool
-	Recursive     bool
-	Output        string
-	AbsLimit      int
-	ShowAllHidden bool
-	NodeLimit     int
-	Offset        int
-	Limit         int
-	SortBy        string
-	SortOrder     string
-	Tags          []string
-	IncludeTags   bool
+	Simple          bool
+	Recursive       bool
+	Output          string
+	AbsLimit        int
+	IncludeAbstract *bool
+	IncludeOverview *bool
+	OverviewLimit   int
+	ShowAllHidden   bool
+	NodeLimit       int
+	Offset          int
+	Limit           int
+	SortBy          string
+	SortOrder       string
+	ExtraFields     []string
+	Tags            []string
+	IncludeTags     bool
+}
+
+// ListPage contains a page of directory entries and pagination metadata.
+type ListPage struct {
+	Result  []any
+	HasMore bool
 }
 
 // TreeOptions controls Tree.
@@ -211,22 +256,31 @@ type TreeOptions struct {
 	LevelLimit      *int
 	Offset          int
 	Limit           int
+	ExtraFields     []string
 	Tags            []string
 	IncludeTags     bool
+}
+
+// TreePage contains a page of tree nodes and pagination metadata.
+type TreePage struct {
+	Result  []map[string]any
+	HasMore bool
 }
 
 // RemoveOptions controls Remove.
 type RemoveOptions struct {
 	Recursive bool
 	Wait      bool
-	Timeout   *float64
+	// Deprecated: Timeout is accepted for compatibility and ignored.
+	Timeout *float64
 }
 
 // WriteOptions controls Write.
 type WriteOptions struct {
-	ACL            *ACLSpec
-	Mode           string
-	Wait           bool
+	ACL  *ACLSpec
+	Mode string
+	Wait bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout        *float64
 	Telemetry      any
 	ProcessingMode string
@@ -237,18 +291,30 @@ type WriteOptions struct {
 
 // BatchWriteOperation is one file write in a batch.
 type BatchWriteOperation struct {
-	URI           string  `json:"uri"`
-	Content       *string `json:"content,omitempty"`
-	ContentBase64 *string `json:"content_base64,omitempty"`
-	Mode          string  `json:"mode,omitempty"`
+	URI           string   `json:"uri"`
+	Content       *string  `json:"content,omitempty"`
+	ContentBase64 *string  `json:"content_base64,omitempty"`
+	Mode          string   `json:"mode,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+	TagMode       string   `json:"tag_mode,omitempty"`
+	ACL           *ACLSpec `json:"acl,omitempty"`
 }
 
 // BatchWriteOptions controls BatchWrite.
 type BatchWriteOptions struct {
-	Wait      *bool
-	Timeout   *float64
+	DeferProcessing bool
+	Wait            *bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
+	Timeout        *float64
+	Telemetry      any
+	ProcessingMode string
+	Extra          map[string]any
+}
+
+// EnsureDirectoryIndexOptions controls readiness waiting.
+type EnsureDirectoryIndexOptions struct {
+	Wait      *bool // Nil waits for indexes to become readable.
 	Telemetry any
-	Extra     map[string]any
 }
 
 // SetTagsOptions controls SetTags.
@@ -265,7 +331,7 @@ type SetTagsOptions struct {
 type ReindexOptions struct {
 	Mode      string
 	Wait      bool
-	DryRun    bool
+	Force     bool
 	Recursive *bool
 	Tags      []string
 	TagMode   string
@@ -274,72 +340,77 @@ type ReindexOptions struct {
 
 // FindOptions controls Find.
 type FindOptions struct {
-	TargetURI         any
-	Image             string
-	Limit             int
-	NodeLimit         *int
-	ScoreThreshold    *float64
-	Filter            map[string]any
-	ContextType       any
-	IncludeProvenance *bool
-	ReadContent       *bool
-	Telemetry         any
-	Since             string
-	Until             string
-	TimeField         string
-	Level             []int
-	Tags              []string
-	Extra             map[string]any
+	EventsTimeDecayProtection string
+	TargetURI                 any
+	Image                     string
+	Limit                     int
+	NodeLimit                 *int
+	ScoreThreshold            *float64
+	Filter                    map[string]any
+	ContextType               any
+	IncludeProvenance         *bool
+	ReadContent               *bool
+	Telemetry                 any
+	Since                     string
+	Until                     string
+	TimeField                 string
+	Level                     []int
+	Tags                      []string
+	Extra                     map[string]any
 }
 
 // SearchOptions controls Search.
 type SearchOptions struct {
-	TargetURI         any
-	Image             string
-	SessionID         string
-	Limit             int
-	NodeLimit         *int
-	ScoreThreshold    *float64
-	Filter            map[string]any
-	ContextType       any
-	IncludeProvenance *bool
-	ReadContent       *bool
-	Telemetry         any
-	Since             string
-	Until             string
-	TimeField         string
-	Level             []int
-	Tags              []string
-	Extra             map[string]any
+	EventsTimeDecayProtection string
+	SearchType                string
+	TargetURI                 any
+	Image                     string
+	SessionID                 string
+	Limit                     int
+	NodeLimit                 *int
+	ScoreThreshold            *float64
+	Filter                    map[string]any
+	ContextType               any
+	IncludeProvenance         *bool
+	ReadContent               *bool
+	Telemetry                 any
+	Since                     string
+	Until                     string
+	TimeField                 string
+	Level                     []int
+	Tags                      []string
+	Extra                     map[string]any
 }
 
 // SearchContextOptions controls server-side context assembly.
 type SearchContextOptions struct {
-	Image             string
-	SessionID         string
-	Limit             *int
-	NodeLimit         *int
-	ScoreThreshold    *float64
-	Filter            map[string]any
-	ContextType       any
-	IncludeProvenance *bool
-	Tags              []string
-	Since             string
-	Until             string
-	TimeField         string
-	QueryExpansion    string
-	MaxTokens         *int
-	Quotas            map[string]int
-	Purpose           string
-	Detail            any
-	DedupTurns        *int
-	ExcludeURIs       []string
-	PeerScope         string
-	OtherPeerPenalty  any
-	Rewrite           any
-	RewriteMaxBullets *int
-	Telemetry         any
-	Extra             map[string]any
+	Image                     string
+	SessionID                 string
+	SearchType                string
+	Limit                     *int
+	NodeLimit                 *int
+	ScoreThreshold            *float64
+	Filter                    map[string]any
+	ContextType               any
+	IncludeProvenance         *bool
+	Tags                      []string
+	Since                     string
+	Until                     string
+	TimeField                 string
+	EventsTimeDecayProtection string
+	QueryExpansion            string
+	MaxTokens                 *int
+	Quotas                    map[string]int
+	Purpose                   string
+	Detail                    any
+	DedupTurns                *int
+	ExcludeURIs               []string
+	PeerScope                 string
+	OtherPeerPenalty          any
+	Rewrite                   any
+	RewriteMaxBullets         *int
+	Telemetry                 any
+	Extra                     map[string]any
 }
 
 // GrepOptions controls Grep.
@@ -482,11 +553,6 @@ type ImportPackOptions struct {
 	VectorMode string
 }
 
-// AdminMigrateOptions controls AdminMigrate.
-type AdminMigrateOptions struct {
-	Cleanup bool
-}
-
 // FindResult is the structured retrieval response returned by Find and Search.
 type FindResult struct {
 	Memories     []MatchedContext `json:"memories,omitempty"`
@@ -526,6 +592,8 @@ type MatchedContext struct {
 	Content     string   `json:"content,omitempty"`
 	Overview    string   `json:"overview,omitempty"`
 	Category    string   `json:"category,omitempty"`
+	OriginScore *float64 `json:"origin_score,omitempty"`
+	TimeScore   *float64 `json:"time_score,omitempty"`
 	Score       float64  `json:"score,omitempty"`
 	MatchReason string   `json:"match_reason,omitempty"`
 	Tags        []string `json:"tags,omitempty"`

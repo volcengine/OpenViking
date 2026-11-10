@@ -6,7 +6,7 @@ OpenViking runs as an HTTP service. Choose who operates it before installing a s
 
 | Service | What you need |
 | --- | --- |
-| [Volcano Engine managed OpenViking](https://www.volcengine.com/product/openviking-service) | Obtain an API key in the [console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing), then connect with the independent CLI. No local server or model configuration is needed. |
+| [Volcano Engine managed OpenViking](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=guides_03-deployment) | Obtain an API key in the [console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=guides_03-deployment), then connect with the independent CLI. No local server or model configuration is needed. |
 | An existing team or remote deployment | Obtain the service URL and a user/admin key from its administrator. |
 | Self-hosted OpenViking | Install and configure the server using the instructions below. |
 
@@ -62,9 +62,9 @@ openviking-server --config /path/to/ov.conf --host 127.0.0.1 --port 8000
 
 ## Configuration
 
-The server reads all configuration from `ov.conf`. See [Configuration Guide](./01-configuration.md) for full details on config file format.
+The server reads `ov.conf` and supports the corresponding environment-variable and startup-option overrides. See [Configuration Guide](./01-configuration.md) for full details on config file format.
 
-The `server` section in `ov.conf` controls server behavior:
+Merge this listener, authentication, and storage excerpt with your existing embedding/VLM configuration:
 
 ```json
 {
@@ -104,7 +104,7 @@ openviking-server
 
 ## Deploying with Systemd (Recommended)
 
-For Linux systems, you can use Systemd to manage OpenViking as a service, enabling automatic restart and startup on boot. Firstly, you should tried to install and configure openviking on your own.
+For Linux systems, you can use Systemd to manage OpenViking as a service, enabling automatic restart and startup on boot. Install, configure, and verify OpenViking before creating the service.
 
 ### Create Systemd Service File
 
@@ -235,7 +235,9 @@ Since the server binds to `0.0.0.0` inside the container (required for Docker po
 }
 ```
 
-The server will refuse to start without it. You can override the bind address via the `OPENVIKING_SERVER_HOST` environment variable if needed.
+When `auth_mode` is unset and no `root_api_key` is configured, the server auto-detects dev mode and refuses to start on a non-loopback address. The example above uses API key authentication; see [Authentication](04-authentication.md) for other modes. Override the bind address with `OPENVIKING_SERVER_HOST` if needed.
+
+The image enables Bot by default. In API key mode, Bot also needs a valid User/Admin key in `bot.ov_server.api_key`; a root key is not a data credential. For a server-only deployment, use `--without-bot` below. To run Bot, complete the identity settings in [VikingBot Configuration](17-vikingbot.md).
 
 **Upgrading from an older image:** images that started in `/app` resolved `./data` to `/app/data`, outside the default mount. Before removing the old container, stop it and back up its configured workspace (for example, `docker cp openviking:/app/data ./openviking-data-backup`). Restore that backup into the mounted host workspace, normally `~/.openviking/data`, before starting the replacement. Do not overwrite an existing workspace without checking which data to retain. Absolute workspace paths are unchanged; other relative paths now resolve from `/app/.openviking`.
 
@@ -243,7 +245,7 @@ Upgrade the container:
 ```bash
 docker stop openviking
 docker pull ghcr.io/volcengine/openviking:latest
-docker rm -f openviking
+docker rm openviking
 # Then re-run docker run ...
 ```
 
@@ -301,7 +303,7 @@ docker compose up -d
 After startup, you can access:
 - API service: `http://localhost:1933`
 - Web Studio: `http://localhost:1933/studio` (same origin as the API)
-- Legacy entry point: `http://localhost:1934` (Caddy reverse proxy to 1933, kept for existing deployments)
+- Caddy entry point: `http://localhost:1934`. It proxies every path to 1933 and is kept for existing deployments. With OpenViking Gateway enabled, the gateway is served under `/gateway` on the same port, for example `http://localhost:1933/gateway/v1`; see [OpenViking Gateway deployment and operations](22-gateway-operations.md#docker-compose).
 
 ### Deploy on Railway
 
@@ -326,12 +328,12 @@ Initial bootstrap can be completed entirely within the browser:
 #### Configuration Management
 
 - **Initial Configuration**: The template pre-populates `OPENVIKING_CONF_CONTENT` with a complete configuration referencing `${OPENAI_API_KEY}`. This variable is used only on the first startup, when `ov.conf` does not yet exist.
-- **Later Changes**: After the first startup, edit the volume-backed `ov.conf` directly using `railway ssh` or `railway service files upload --overwrite`. Alternatively, delete `ov.conf` and redeploy to regenerate it from the current `OPENVIKING_CONF_CONTENT` value.
+- **Later Changes**: After the first startup, edit the volume-backed `ov.conf` directly using the commands supported by your installed [Railway CLI](https://docs.railway.com/cli). To regenerate it, first back up the old configuration and verify `OPENVIKING_CONF_CONTENT`, then move the old file aside and redeploy. Check storage and authentication settings afterward.
 
 #### Pricing & Resource Sizing
 
-- **Recommended Plan**: For continuous hosting, the **Hobby** plan ($5/mo, which includes $5 of usage credits) is recommended. At ~0.5 GB resident memory, typical monthly cost is around $5–$7.
-- **Free/Trial Limitations**: Railway Free plan ($1/mo credit) is insufficient for continuous service. Trial credits ($5 one-time) are suitable for short-term evaluation; note that volumes are purged 30 days after trial expiration.
+- **Estimate costs**: Check [Railway pricing](https://docs.railway.com/pricing) for the current plan and resource billing rules. Test with your document volume and request rate, then estimate costs from the usage dashboard.
+- **Trial and retention**: Check [Railway trial rules](https://docs.railway.com/pricing/free-trial) and your account for credits, expiration, and volume retention. Back up data before the applicable retention deadline.
 
 > **Security Note**: The service is publicly accessible by default. Keep `OPENVIKING_ROOT_API_KEY` confidential and consult the [public access guide](12-public-access.md) before production rollout.
 
@@ -401,8 +403,8 @@ This variant is useful when multiple instances share the same `workspace`, but Q
 
 For public HTTPS access, see the [Public Access Guide](12-public-access.md).
 
-To build the image yourself, pass an explicit OpenViking version:
-`docker build --build-arg OPENVIKING_VERSION=0.3.12 -t openviking:latest .`
+To build the image yourself, pass an explicit OpenViking version. Replace `<VERSION>` with a release number:
+`docker build --build-arg OPENVIKING_VERSION=<VERSION> -t openviking:latest .`
 
 ### Kubernetes + Helm
 
@@ -423,7 +425,7 @@ For a detailed cloud deployment guide (including Volcengine TOS + VikingDB + Ark
 
 | Endpoint | Auth | Purpose |
 |----------|------|---------|
-| `GET /health` | No | Liveness probe — returns `{"status": "ok"}` immediately |
+| `GET /health` | No | Process liveness; normally returns `status: ok` and `healthy: true`, without verifying model credentials |
 | `GET /ready` | No | Readiness probe — checks AGFS, VectorDB, APIKeyManager, Embedding, Ollama |
 
 ```bash
@@ -432,10 +434,10 @@ curl http://localhost:1933/health
 
 # Readiness
 curl http://localhost:1933/ready
-# {"status": "ready", "checks": {"agfs": "ok", "vectordb": "ok", "api_key_manager": "ok", "embedding": "ok", "ollama": "ok"}}
+# {"status":"ready","checks":{"agfs":{"status":"ok","checks":{"filesystem":"ok","multiwrite_sync":"not_supported"}},"vectordb":"ok","api_key_manager":"ok","embedding":"ok","ollama":"not_configured"}}
 ```
 
-Use `/health` for Kubernetes liveness probes and `/ready` for readiness probes.
+Use `/health` for Kubernetes liveness probes and `/ready` for readiness probes. See the [System API](../api/07-system.md) for the individual checks.
 
 ## Related Documentation
 

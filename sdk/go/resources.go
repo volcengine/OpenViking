@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -24,12 +27,13 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 	}
 	setString(payload, "to", opts.To)
 	setString(payload, "parent", opts.Parent)
-	setAny(payload, "create_parent", opts.CreateParent)
+	if opts.CreateParent != nil {
+		payload["create_parent"] = *opts.CreateParent
+	}
 	setString(payload, "add_type", opts.AddType)
 	setString(payload, "ignore_dirs", opts.IgnoreDirs)
 	setString(payload, "include", opts.Include)
 	setString(payload, "exclude", opts.Exclude)
-	setFloatPtr(payload, "timeout", opts.Timeout)
 	if opts.PreserveStructure != nil {
 		payload["preserve_structure"] = *opts.PreserveStructure
 	}
@@ -54,10 +58,10 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 			payload["tag_mode"] = opts.TagMode
 		}
 	}
-	if err := c.addLocalUpload(ctx, payload, path, true); err != nil {
+	if err := c.addLocalUpload(ctx, payload, path, true, false); err != nil {
 		return nil, err
 	}
-	if err := mergeExtra(payload, opts.Extra); err != nil {
+	if err := mergeExtraProtected(payload, opts.Extra, "create_parent"); err != nil {
 		return nil, err
 	}
 	var result map[string]any

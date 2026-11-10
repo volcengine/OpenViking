@@ -135,3 +135,45 @@ test("a queued short prompt clears the previous recall block", async () => {
   assert.deepEqual(recall.injectRecall(messages), messages);
   assert.equal(messages[0].content, "x");
 });
+
+test("recall forwards recallExcludeUris as exclude_uris", async () => {
+  const bodies = [];
+  const client = {
+    fetchJSON: async (path, init) => {
+      bodies.push(JSON.parse(init.body));
+      return { ok: true, result: { rendered: "- memory" } };
+    },
+  };
+  const excluded = ["viking://user/default/resources", "viking://agent/skills"];
+  const recall = new RecallManager(client, config({ recallExcludeUris: excluded }), () => "pi-session");
+
+  recall.queueSearch("project conventions");
+  await recall.searchPending();
+  assert.deepEqual(bodies[0].exclude_uris, excluded);
+});
+
+test("recallQueryFilters drop or rewrite the prompt before it is searched", async () => {
+  const bodies = [];
+  const client = {
+    fetchJSON: async (path, init) => {
+      bodies.push(JSON.parse(init.body));
+      return { ok: true, result: { rendered: "- memory" } };
+    },
+  };
+  const recall = new RecallManager(client, config({
+    recallQueryFilters: ["s/^\\s*ultrathink\\s+//i", "d/^\\s*(ok|yes)\\s*$/i"],
+  }));
+
+  recall.queueSearch("ok");
+  assert.equal(await recall.searchPending(), null);
+  assert.equal(bodies.length, 0, "a dropped prompt must not reach the server");
+
+  recall.queueSearch("ultrathink project conventions");
+  await recall.searchPending();
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0].query, "project conventions");
+
+  recall.queueSearch("ultrathink ab");
+  assert.equal(await recall.searchPending(), null, "the length gate applies to the filtered text");
+  assert.equal(bodies.length, 1);
+});
