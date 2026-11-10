@@ -19,8 +19,11 @@
     "rsbuild-plugin-workspace-dev": "^1.0.0"
   },
   "imports": {
+    "#file-tree-console-data": "./docs/_demos/file-tree-console-data.ts",
+    "#file-tree-console.css": "./docs/_demos/file-tree-console.css",
     "#scope-switcher-icons": "./docs/_demos/scope-switcher-icons.tsx",
     "#scope-switcher-source": "./docs/_demos/scope-switcher-source.ts",
-    "#scope-switcher-requests": "./docs/_demos/scope-switcher-requests.ts"
+    "#scope-switcher-requests": "./docs/_demos/scope-switcher-requests.ts",
+    "#file-preview-console-data": "./docs/_demos/file-preview-console-data.ts"
   }
 }

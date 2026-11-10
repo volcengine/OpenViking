@@ -2,7 +2,30 @@
 
 A flattened file tree. The host owns the tree state and passes the visible rows in order; the component renders them and reports successful operations.
 
-The component renders the host-flattened row list and handles selection, expansion, paging and keyboard interaction. Toolbars, search and import flows belong to the page layer and are injected through slots.
+The component renders the host-flattened row list and handles selection, expansion, paging and keyboard interaction. Search and refresh controls are optional; the host supplies search UI, data requests and import flows.
+
+## Console styling and optional toolbar
+
+Rows, indentation, the pale selected state, and 32px search and refresh controls match the Volcengine console. This example uses fixed public fixtures; its host simulates search and refresh.
+
+```tsx file="../../_demos/file-tree-console.tsx" preview
+
+```
+
+Enable `search` and `refresh` independently; both are hidden by default. `operations.search` opens the host search interface, and `operations.refresh` reloads data. A missing executor disables its button. While refresh is pending, the button is disabled and its icon spins. Duplicate clicks are ignored. Failure restores the button without calling `onRefresh`; the host owns error feedback.
+
+```tsx
+<FileTree
+  rows={rows}
+  search
+  refresh={{ loading: isRefreshing, disabled: !canRefresh }}
+  operations={{ search: openSearch, refresh: reloadTree }}
+  labels={{ search: 'Search files…', refresh: 'Refresh file tree' }}
+  onRefresh={() => notifySuccess()}
+/>
+```
+
+Use `search={{ disabled: true }}` to disable search. Search is a trigger, not a local filter: loaded rows may represent only part of the filesystem. The component registers no global shortcut. If the host supplies one, include its hint in `labels.search`. `slots.toolbar` remains available above the built-in controls for host actions such as connecting agents or importing resources.
 
 ## Basic usage
 
@@ -36,7 +59,7 @@ Emit only the ones your data source needs. A host that returns all children at o
 
 ## Slots and host content
 
-- `slots.toolbar` — search, import sources, refresh. The component does not know what is inside.
+- `slots.toolbar` — custom content above built-in controls, such as connecting agents or importing resources.
 - `slots.spinner` — replaces the spinner shown while a directory loads its children, rendered at 12 × 12. Omitted uses the built-in `FileTreeSpinner` (a CSS ring with no icon asset behind it).
 - `renderDashboard` — the row-end indicator, for example a dashboard entry.
 - `renderRowTooltip` — hover content; the component handles the delay and positioning. When omitted the component renders a built-in tooltip from the row `uri` (description, trigger copy, path).
@@ -109,27 +132,31 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 
 ## Props
 
-| Property                  | Type                                      | Default  | Description                                                                    |
-| ------------------------- | ----------------------------------------- | -------- | ------------------------------------------------------------------------------ |
-| `rows`                    | `readonly FileTreeRow[]`                  | Required | Visible rows in render order.                                                  |
-| `operations`              | `FileTreeOperations`                      | —        | Asynchronous operation capabilities; missing methods disable their operations. |
-| `selectedId`              | `string \| null`                          | —        | Selected row id, owned by the host.                                            |
-| `isReady`                 | `boolean`                                 | `true`   | Whether the first load finished.                                               |
-| `loadingFallback`         | `ReactNode`                               | —        | Shown instead of rows while the first load runs.                               |
-| `errorFallback`           | `ReactNode`                               | —        | Shown when a whole-tree error row is present.                                  |
-| `emptyFallback`           | `ReactNode`                               | —        | Shown when `rows` is empty.                                                    |
-| `slots`                   | `FileTreeSlots`                           | —        | `toolbar` and `spinner` slots.                                                 |
-| `labels`                  | `FileTreeLabels`                          | English  | Replaceable copy.                                                              |
-| `getRowAttributes`        | `(row) => HTMLAttributes<HTMLDivElement>` | —        | Extra attributes per row; `className` is merged.                               |
-| `renderDashboard`         | `(row) => ReactNode`                      | —        | Row-end indicator; `null` hides it.                                            |
-| `renderRowIcon`           | `(row) => ReactNode`                      | —        | Leading icon of a file row; the generic file icon when omitted.                |
-| `renderRowTooltip`        | `(row) => ReactNode`                      | —        | Hover content; `null` hides it.                                                |
-| `onSelect`                | `(row: FileTreeEntryRow) => void`         | —        | Called after selection succeeds; not called on failure.                        |
-| `onToggleExpand`          | `(row: FileTreeEntryRow) => void`         | —        | Called after expansion or collapse succeeds; not called on failure.            |
-| `onLoadMore`              | `(row: FileTreeLoadMoreRow) => void`      | —        | Called after loading more children succeeds; not called on failure.            |
-| `onRetry`                 | `(row: FileTreeErrorRow) => void`         | —        | Called after a retry succeeds; not called on failure.                          |
-| `onOpenRetentionSettings` | `(uri: string) => void`                   | —        | Called after retention settings open successfully; not called on failure.      |
-| Other props               | `HTMLAttributes<HTMLDivElement>`          | —        | Standard div attributes.                                                       |
+| Property                  | Type                                                   | Default  | Description                                                                    |
+| ------------------------- | ------------------------------------------------------ | -------- | ------------------------------------------------------------------------------ |
+| `rows`                    | `readonly FileTreeRow[]`                               | Required | Visible rows in render order.                                                  |
+| `operations`              | `FileTreeOperations`                                   | —        | Asynchronous operation capabilities; missing methods disable their operations. |
+| `selectedId`              | `string \| null`                                       | —        | Selected row id, owned by the host.                                            |
+| `isReady`                 | `boolean`                                              | `true`   | Whether the first load finished.                                               |
+| `loadingFallback`         | `ReactNode`                                            | —        | Shown instead of rows while the first load runs.                               |
+| `errorFallback`           | `ReactNode`                                            | —        | Shown when a whole-tree error row is present.                                  |
+| `emptyFallback`           | `ReactNode`                                            | —        | Shown when `rows` is empty.                                                    |
+| `slots`                   | `FileTreeSlots`                                        | —        | `toolbar` and `spinner` slots.                                                 |
+| `labels`                  | `FileTreeLabels`                                       | English  | Replaceable copy.                                                              |
+| `getRowAttributes`        | `(row) => HTMLAttributes<HTMLDivElement>`              | —        | Extra attributes per row; `className` is merged.                               |
+| `renderDashboard`         | `(row) => ReactNode`                                   | —        | Row-end indicator; `null` hides it.                                            |
+| `renderRowIcon`           | `(row) => ReactNode`                                   | —        | Leading icon of a file row; the generic file icon when omitted.                |
+| `renderRowTooltip`        | `(row) => ReactNode`                                   | —        | Hover content; `null` hides it.                                                |
+| `onSelect`                | `(row: FileTreeEntryRow) => void`                      | —        | Called after selection succeeds; not called on failure.                        |
+| `onToggleExpand`          | `(row: FileTreeEntryRow) => void`                      | —        | Called after expansion or collapse succeeds; not called on failure.            |
+| `onLoadMore`              | `(row: FileTreeLoadMoreRow) => void`                   | —        | Called after loading more children succeeds; not called on failure.            |
+| `onRetry`                 | `(row: FileTreeErrorRow) => void`                      | —        | Called after a retry succeeds; not called on failure.                          |
+| `search`                  | `boolean \| { disabled?: boolean }`                    | `false`  | Show the built-in search trigger.                                              |
+| `refresh`                 | `boolean \| { disabled?: boolean; loading?: boolean }` | `false`  | Show the built-in refresh button.                                              |
+| `onSearch`                | `() => void`                                           | —        | Called after search opens successfully.                                        |
+| `onRefresh`               | `() => void`                                           | —        | Called after refresh succeeds.                                                 |
+| `onOpenRetentionSettings` | `(uri: string) => void`                                | —        | Called after retention settings open successfully; not called on failure.      |
+| Other props               | `HTMLAttributes<HTMLDivElement>`                       | —        | Standard div attributes.                                                       |
 
 ```tsx
 import { FileTree } from '@openviking/react/components/file-tree';
@@ -148,19 +175,19 @@ Class names are prefixed with `ov-`. The block is `ov-file-tree`; elements use `
 import '@openviking/react/components/file-tree/style.css';
 ```
 
-| CSS variable                     | Default                  | Purpose              |
-| -------------------------------- | ------------------------ | -------------------- |
-| `--ov-ui-file-tree-text`         | `--ov-ui-color-text-1`   | Row text.            |
-| `--ov-ui-file-tree-text-muted`   | `--ov-ui-color-text-3`   | Secondary text.      |
-| `--ov-ui-file-tree-icon`         | `--ov-ui-color-text-2`   | Leading icon.        |
-| `--ov-ui-file-tree-row-hover`    | `--ov-ui-color-bg-5`     | Hover background.    |
-| `--ov-ui-file-tree-row-selected` | `--ov-ui-color-bg-4`     | Selected background. |
-| `--ov-ui-file-tree-guide`        | `--ov-ui-color-border-2` | Level guides.        |
-| `--ov-ui-file-tree-spinner`      | `--ov-ui-color-primary`  | Loading indicator.   |
-| `--ov-ui-file-tree-action`       | `--ov-ui-color-primary`  | Inline text action.  |
-| `--ov-ui-file-tree-row-height`   | `32px`                   | Row height.          |
-| `--ov-ui-file-tree-row-radius`   | `4px`                    | Row radius.          |
-| `--ov-ui-file-tree-indent`       | `20px`                   | Indent per level.    |
+| CSS variable                     | Default                       | Purpose              |
+| -------------------------------- | ----------------------------- | -------------------- |
+| `--ov-ui-file-tree-text`         | `--ov-ui-color-text-1`        | Row text.            |
+| `--ov-ui-file-tree-text-muted`   | `--ov-ui-color-text-3`        | Secondary text.      |
+| `--ov-ui-file-tree-icon`         | `--ov-ui-color-text-2`        | Leading icon.        |
+| `--ov-ui-file-tree-row-hover`    | `--ov-ui-color-bg-5`          | Hover background.    |
+| `--ov-ui-file-tree-row-selected` | `--ov-ui-color-primary-light` | Selected background. |
+| `--ov-ui-file-tree-guide`        | `--ov-ui-color-border-1`      | Level guides.        |
+| `--ov-ui-file-tree-spinner`      | `--ov-ui-color-primary`       | Loading indicator.   |
+| `--ov-ui-file-tree-action`       | `--ov-ui-color-primary`       | Inline text action.  |
+| `--ov-ui-file-tree-row-height`   | `32px`                        | Row height.          |
+| `--ov-ui-file-tree-row-radius`   | `4px`                         | Row radius.          |
+| `--ov-ui-file-tree-indent`       | `20px`                        | Indent per level.    |
 
 ## Implementation scope
 

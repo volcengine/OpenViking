@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 
+import { FilePreviewLevelTabs } from './file-preview-level-tabs.js';
 import { FilePreviewBreadcrumb } from './file-preview-breadcrumb.js';
 import { FilePreviewCopyPath } from './file-preview-copy-path.js';
 import { getPathFileName, splitPathSegments } from './file-preview-path.js';
@@ -8,6 +9,8 @@ import type { FilePreviewActions, FilePreviewFileTab } from './types.js';
 export interface FilePreviewHeaderProps {
   fileTab: FilePreviewFileTab;
   actions: FilePreviewActions;
+  levelKey?: string;
+  onLevelChange: (key: string) => void;
   text: { copyPath: string };
   onOpenParent: (uri: string) => void;
 }
@@ -29,6 +32,8 @@ export interface FilePreviewHeaderProps {
  */
 export function FilePreviewHeader({
   fileTab,
+  levelKey,
+  onLevelChange,
   actions,
   text,
   onOpenParent,
@@ -42,27 +47,35 @@ export function FilePreviewHeader({
     typeof slotActions === 'function' ? slotActions(actions) : slotActions;
 
   return (
-    <div className="ov-file-preview__header">
-      <div className="ov-file-preview__path-row">
-        <FilePreviewBreadcrumb
-          segments={segments}
-          title={title}
-          canOpen={Boolean(fileTab.operations?.openParent)}
-          disabled={actions.busy}
-          onOpen={onOpenParent}
-        />
-        {actions.canCopyPath ? (
-          <FilePreviewCopyPath
-            label={text.copyPath}
+    <>
+      <div className="ov-file-preview__header">
+        <div className="ov-file-preview__path-row">
+          <FilePreviewBreadcrumb
+            segments={segments}
+            title={title}
+            canOpen={Boolean(fileTab.operations?.openParent)}
             disabled={actions.busy}
-            onClick={() => void actions.copyPath()}
+            onOpen={onOpenParent}
           />
+          {actions.canCopyPath ? (
+            <FilePreviewCopyPath
+              label={text.copyPath}
+              disabled={actions.busy}
+              onClick={() => void actions.copyPath()}
+            />
+          ) : null}
+          {fileTab.slots?.titleExtra}
+        </div>
+        {actionNode ? (
+          <div className="ov-file-preview__header-actions">{actionNode}</div>
         ) : null}
-        {fileTab.slots?.titleExtra}
       </div>
-      {actionNode ? (
-        <div className="ov-file-preview__header-actions">{actionNode}</div>
-      ) : null}
-    </div>
+      <FilePreviewLevelTabs
+        levels={fileTab.levels}
+        activeKey={levelKey}
+        disabled={actions.busy}
+        onSelect={onLevelChange}
+      />
+    </>
   );
 }

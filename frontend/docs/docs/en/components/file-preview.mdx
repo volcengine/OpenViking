@@ -2,7 +2,7 @@
 
 A tabbed file preview. The host supplies the content and file name; the component handles format detection, the tab row, the content header and the body.
 
-This is a placeholder implementation: the shell, editing flow and success notifications are in place and interactive, and the file body falls back to plain text until FileViewer is wired in. The view will be rewritten against the contract described here.
+Bodies use lazily loaded FileViewerCore adapters for Markdown, images, code, tables, PDF, Office and media, inside the console-style tab, breadcrumb and footer shell.
 
 ## Basic usage
 
@@ -11,6 +11,22 @@ Pass at least one tab. A file tab carries `source`; a content tab carries a node
 ```tsx file="../../_demos/file-preview-basic.tsx" preview
 
 ```
+
+## Content levels and images
+
+```tsx file="../../_demos/file-preview-console.tsx" preview
+
+```
+
+A file tab may supply `levels`, each with `key`, `label`, `source` and optional `resources`, `disabled`, `editing`. The selector appears below the path and defaults to the first enabled level. Control it with `activeLevelKey` and `onLevelChange`. Disabled levels cannot be selected. Switching discards drafts and restores preview mode; loading or saving blocks switching. Levels are read-only unless that level explicitly supplies `editing`.
+
+The host loads each level: directories can expose L0 abstract and L1 overview, and files can add L2 content. The component does not request summaries. The required tab `source` remains the fallback when no level is available.
+
+Supply original images through `source.url` or `source.file`, rather than binary data decoded into `source.content`. Images fit proportionally in a plain panel, show their original pixel dimensions at the bottom right and open a larger preview on click.
+
+For Markdown images, `resources` matches the original image target. For dynamic authenticated images, supply `resolveImage(src, source): Promise<string>`. The host resolves relative paths or Viking URIs using the active level's `source.path`, returning an accessible URL. The host owns requests, cancellation and blob URL cleanup. Each level can override `resources`; omission inherits the file tab's resources. The component does not translate Viking URIs into HTTP endpoints.
+
+Use `slots.footer` for modification time and parsing attribution in a two-sided footer, `slots.titleExtra` for permission badges and `slots.actions` for the host's menu.
 
 ## Two tab kinds
 
@@ -23,7 +39,7 @@ Both share the shell — tab row, path breadcrumb, copy path and the header acti
 
 **The component ships no action buttons of its own.** Copy body, copy path, download, the preview/source switch and editing all carry host product semantics and copy; built in they could be neither trimmed nor restyled. Copy path is the exception — any file with a `source.path` needs it under every host, so it stays in the shell at the end of the breadcrumb. Everything else is rendered by the host in `slots.actions`, which receives a `FilePreviewActions` context: the current view mode, editing state, which capabilities are available, and the methods that change them. The state stays with the component.
 
-The active tab is owned by the component. To switch from outside, use the ref handle:
+Control the active tab with `activeKey` / `onActiveKeyChange`, set its initial value with `defaultActiveKey`, or use the ref handle:
 
 ```tsx
 const previewRef = useRef<FilePreviewHandle>(null);
@@ -87,16 +103,20 @@ Shared by both kinds:
 
 File tabs add:
 
-| Property        | Type                            | Default  | Description                                                                                                        |
-| --------------- | ------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
-| `source`        | `FilePreviewSource`             | Required | The content and file name.                                                                                         |
-| `operations`    | `FilePreviewOperations`         | —        | Async `openParent(path)` and `download()` capabilities, each returning `Promise<void>`.                            |
-| `resources`     | `readonly FileViewerResource[]` | —        | Companion resources, e.g. textures.                                                                                |
-| `editing`       | `FilePreviewEditing`            | —        | Editing capability; omit for read-only.                                                                            |
-| `slots`         | `FilePreviewFileTabSlots`       | —        | `actions` (node or renderer), `titleExtra`, `footer`, plus fallbacks for loading, failure and unsupported formats. |
-| `onCopyContent` | `(text: string) => void`        | —        | Called after content copying succeeds.                                                                             |
-| `onDownload`    | `() => void`                    | —        | Called after the download operation succeeds; not called on failure.                                               |
-| `onOpenUri`     | `(uri: string) => void`         | —        | Called after a content resource opens successfully; not called on failure.                                         |
+| Property         | Type                               | Default             | Description                                                                                                        |
+| ---------------- | ---------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `source`         | `FilePreviewSource`                | Required            | The content and file name.                                                                                         |
+| `operations`     | `FilePreviewOperations`            | —                   | Async `openParent(path)` and `download()` capabilities, each returning `Promise<void>`.                            |
+| `resources`      | `readonly FileViewerResource[]`    | —                   | Companion resources, e.g. textures.                                                                                |
+| `levels`         | `readonly FilePreviewLevel[]`      | —                   | Content levels with individual sources and optional resources/editing.                                             |
+| `activeLevelKey` | `string`                           | First enabled level | Controlled content level.                                                                                          |
+| `onLevelChange`  | `(key: string) => void`            | —                   | Selection intent; the host updates activeLevelKey when controlled.                                                 |
+| `resolveImage`   | `(src, source) => Promise<string>` | —                   | Host resolution of Markdown images to accessible URLs.                                                             |
+| `editing`        | `FilePreviewEditing`               | —                   | Editing capability; omit for read-only.                                                                            |
+| `slots`          | `FilePreviewFileTabSlots`          | —                   | `actions` (node or renderer), `titleExtra`, `footer`, plus fallbacks for loading, failure and unsupported formats. |
+| `onCopyContent`  | `(text: string) => void`           | —                   | Called after content copying succeeds.                                                                             |
+| `onDownload`     | `() => void`                       | —                   | Called after the download operation succeeds; not called on failure.                                               |
+| `onOpenUri`      | `(uri: string) => void`            | —                   | Called after a content resource opens successfully; not called on failure.                                         |
 
 Content tabs add:
 

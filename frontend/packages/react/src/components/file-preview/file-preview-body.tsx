@@ -4,6 +4,7 @@ import type {
 } from '@ark-design/ui/file-viewer/core';
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 
+import { FilePreviewImageFrame } from './file-preview-image-frame.js';
 import { FilePreviewEditor } from './file-preview-editor.js';
 import { isEmptyFile } from './file-preview-source.js';
 import { EmptyFileState } from './file-preview-state.js';
@@ -75,16 +76,24 @@ export function FilePreviewBody({
   if (isEmptyFile(fileTab.source)) return <EmptyFileState text={text} />;
 
   return (
-    <LazyFilePreviewViewer
-      tab={fileTab}
-      text={text}
-      locale={locale}
-      viewMode={viewMode}
-      onViewModeChange={onViewModeChange}
-      onDownload={onDownload}
-      onHandleChange={onHandleChange}
-      onViewModesChange={onViewModesChange}
-      onLinkClick={onLinkClick}
-    />
+    <FilePreviewImageFrame
+      key={JSON.stringify([
+        fileTab.source.path,
+        fileTab.source.fileName,
+        fileTab.source.url,
+      ])}
+    >
+      <LazyFilePreviewViewer
+        tab={fileTab}
+        text={text}
+        locale={locale}
+        viewMode={viewMode}
+        onViewModeChange={onViewModeChange}
+        onDownload={onDownload}
+        onHandleChange={onHandleChange}
+        onViewModesChange={onViewModesChange}
+        onLinkClick={onLinkClick}
+      />
+    </FilePreviewImageFrame>
   );
 }

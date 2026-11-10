@@ -30,15 +30,14 @@
     --ov-ui-color-bg-5,
     var(--ov-ui-bg-5-default, #f1f2f9)
   );
-  /* 选中态用中性底而非主色浅底：主色浅底在白底上几乎看不出差别，
-     且与宿主的树一致，选中只靠底色深浅区分，不额外引入品牌色。 */
+  /* Match the console's pale selected surface rather than a dark neutral fill. */
   --ov-ui-file-tree-row-selected: var(
-    --ov-ui-color-bg-4,
-    var(--ov-ui-bg-4-default, #f6f7fa)
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default, #f5f7ff)
   );
   --ov-ui-file-tree-guide: var(
-    --ov-ui-color-border-2,
-    var(--ov-ui-border-2-default, #e1e4f2)
+    --ov-ui-color-border-1,
+    var(--ov-ui-border-1-default, #f0f2fa)
   );
   --ov-ui-file-tree-spinner-track: var(
     --ov-ui-color-border-3,
@@ -62,6 +61,8 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  height: 100%;
+  max-width: 100%;
   color: var(--ov-ui-file-tree-text);
   font-family: inherit;
   font-size: 13px;
@@ -89,15 +90,20 @@
 .ov-file-tree__state-row {
   position: relative;
   display: flex;
+  flex: none;
   box-sizing: border-box;
   align-items: center;
   gap: 4px;
   height: var(--ov-ui-file-tree-row-height);
+  min-height: var(--ov-ui-file-tree-row-height);
   padding-right: 8px;
   border-radius: var(--ov-ui-file-tree-row-radius);
   cursor: default;
   outline: none;
   user-select: none;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .ov-file-tree__row {
@@ -141,6 +147,12 @@
   height: 16px;
   align-items: center;
   justify-content: center;
+}
+
+.ov-file-tree__toggle svg {
+  display: block;
+  width: 12px;
+  height: 12px;
 }
 
 .ov-file-tree__toggle {
@@ -214,12 +226,19 @@
 }
 
 .ov-file-tree__label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.ov-file-tree__label-group[data-description] .ov-file-tree__label {
+  flex: 0 0 auto;
+  max-width: 50%;
+}
+
 .ov-file-tree__description {
+  min-width: 0;
   overflow: hidden;
   color: var(--ov-ui-file-tree-text-muted);
   font-size: 12px;

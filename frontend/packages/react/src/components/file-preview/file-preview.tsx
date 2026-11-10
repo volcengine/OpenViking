@@ -1,17 +1,9 @@
-import type {
-  ViewerHandle,
-  ViewerViewModeOption,
-} from '@ark-design/ui/file-viewer/core';
-import {
-  forwardRef,
-  useCallback,
-  useImperativeHandle,
-  useRef,
-  useState,
-} from 'react';
+import { forwardRef, useCallback, useImperativeHandle, useState } from 'react';
 
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 
+import { useFilePreviewViewState } from './use-file-preview-view-state.js';
+import { useFilePreviewLevels } from './use-file-preview-levels.js';
 import { FilePreviewBody } from './file-preview-body.js';
 import { FilePreviewHeader } from './file-preview-header.js';
 import { DEFAULT_LABELS } from './file-preview-labels.js';
@@ -28,25 +20,6 @@ import type {
   FilePreviewHandle,
   FilePreviewProps,
   FilePreviewTab,
-  FilePreviewViewMode,
-} from './types.js';
-
-export type {
-  FilePreviewActions,
-  FilePreviewComponent,
-  FilePreviewContentTab,
-  FilePreviewEditing,
-  FilePreviewFileTab,
-  FilePreviewFileTabSlots,
-  FilePreviewHandle,
-  FilePreviewHeaderSlots,
-  FilePreviewLabels,
-  FilePreviewOperations,
-  FilePreviewProps,
-  FilePreviewSource,
-  FilePreviewTab,
-  FilePreviewTabBase,
-  FilePreviewViewMode,
 } from './types.js';
 
 function isFileTab(tab: FilePreviewTab): tab is FilePreviewFileTab {
@@ -84,17 +57,29 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   const [internalKey, setInternalKey] = useState(
     () => defaultActiveKey ?? tabs[0].key,
   );
-  const [viewMode, setViewMode] = useState<FilePreviewViewMode>('preview');
-  const [viewModes, setViewModes] = useState<readonly string[]>([]);
-  const viewerHandle = useRef<ViewerHandle | null>(null);
-
   const panelClass = 'ov-file-preview__panel';
   const currentKey = activeKey ?? internalKey;
-  const activeTab = tabs.find((tab) => tab.key === currentKey) ?? tabs[0];
+  const selectedTab = tabs.find((tab) => tab.key === currentKey) ?? tabs[0];
+  const {
+    tab: activeTab,
+    levelKey,
+    selectLevel,
+  } = useFilePreviewLevels(selectedTab);
+  const {
+    viewMode,
+    setViewMode,
+    viewModes,
+    setViewModes,
+    viewerHandle,
+    onHandleChange,
+    onViewModesChange,
+  } = useFilePreviewViewState(JSON.stringify([activeTab.key, levelKey]));
   const { tabId, panelId, panelProps } = useFilePreviewIds(activeTab.key);
   // 编辑态跟着实际渲染的页签走，理由见 `switchTab`。
   // Editing follows the tab that actually renders; see `switchTab`.
-  const editing = useFilePreviewEditing(activeTab.key);
+  const editing = useFilePreviewEditing(
+    JSON.stringify([activeTab.key, levelKey]),
+  );
   const actions = useFilePreviewActions();
 
   const tabText = { ...text, ...activeTab.labels };
@@ -135,23 +120,17 @@ export const FilePreview: FilePreviewComponent = forwardRef<
       onActiveKeyChange?.(key);
       return true;
     },
-    [activeKey, activeTab, currentKey, editing, onActiveKeyChange, tabs],
-  );
-
-  const onHandleChange = useCallback((handle: ViewerHandle | null) => {
-    viewerHandle.current = handle;
-  }, []);
-
-  const onViewModesChange = useCallback(
-    (modes: readonly ViewerViewModeOption[]) => {
-      // 内容没变就保留原引用：每次写入新数组都会触发一次重渲染，而适配器
-      // 可能在每次渲染后再次上报，形成反复更新。
-      const next = modes.map((mode) => mode.value);
-      setViewModes((previous) =>
-        previous.join() === next.join() ? previous : next,
-      );
-    },
-    [],
+    [
+      activeKey,
+      activeTab,
+      currentKey,
+      editing,
+      onActiveKeyChange,
+      tabs,
+      setViewMode,
+      setViewModes,
+      viewerHandle,
+    ],
   );
 
   useImperativeHandle(
@@ -161,7 +140,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
       getActiveTab: () => activeTab.key,
       getViewerHandle: () => (fileTab ? viewerHandle.current : null),
     }),
-    [activeTab.key, fileTab, switchTab],
+    [activeTab.key, fileTab, switchTab, viewerHandle],
   );
 
   // 只有该格式同时声明了预览与源码才可切换：图片、音视频、PDF 没有源码视图。
@@ -229,12 +208,22 @@ export const FilePreview: FilePreviewComponent = forwardRef<
         <div {...panelProps} className={panelClass}>
           <FilePreviewHeader
             fileTab={fileTab}
+            levelKey={levelKey}
+            onLevelChange={(key) => {
+              if (editing.saving || editing.loadingEdit) return;
+              editing.discard(activeTab);
+              setViewMode('preview');
+              setViewModes([]);
+              viewerHandle.current = null;
+              selectLevel(key);
+            }}
             actions={actionContext}
             text={tabText}
             onOpenParent={(uri) => void actions.openParent(activeTab, uri)}
           />
           <div className="ov-file-preview__body">
             <FilePreviewBody
+              key={JSON.stringify([fileTab.key, levelKey])}
               fileTab={fileTab}
               text={tabText}
               locale={locale}

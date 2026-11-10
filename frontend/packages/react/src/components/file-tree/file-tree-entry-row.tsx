@@ -139,7 +139,10 @@ export function FileTreeRowView({
         )}
       </span>
 
-      <span className="ov-file-tree__label-group">
+      <span
+        className="ov-file-tree__label-group"
+        data-description={Boolean(description) || undefined}
+      >
         <span className="ov-file-tree__label" title={row.name}>
           {row.name}
         </span>

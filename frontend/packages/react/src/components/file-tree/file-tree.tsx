@@ -7,6 +7,7 @@ import type {
   ResolvedLabels,
 } from './file-tree-row-context.js';
 import { useRowTooltip } from './file-tree-tooltip.js';
+import { FileTreeToolbar } from './file-tree-toolbar.js';
 import type {
   FileTreeComponent,
   FileTreeHandle,
@@ -46,6 +47,8 @@ export type {
 } from './types.js';
 
 const DEFAULT_LABELS: ResolvedLabels = {
+  search: 'Search files…',
+  refresh: 'Refresh file tree',
   empty: 'No files yet',
   error: 'Failed to load',
   retry: 'Retry',
@@ -80,6 +83,8 @@ export const FileTree: FileTreeComponent = forwardRef<
     rows,
     operations,
     selectedId,
+    search,
+    refresh,
     isReady = true,
     loadingFallback,
     errorFallback,
@@ -95,6 +100,8 @@ export const FileTree: FileTreeComponent = forwardRef<
     onLoadMore,
     onRetry,
     onOpenRetentionSettings,
+    onSearch,
+    onRefresh,
     className,
     ...rest
   },
@@ -114,6 +121,8 @@ export const FileTree: FileTreeComponent = forwardRef<
     onLoadMore,
     onRetry,
     onOpenRetentionSettings,
+    onSearch,
+    onRefresh,
   });
 
   useImperativeHandle(
@@ -161,6 +170,14 @@ export const FileTree: FileTreeComponent = forwardRef<
       {slots?.toolbar ? (
         <div className="ov-file-tree__toolbar">{slots.toolbar}</div>
       ) : null}
+      <FileTreeToolbar
+        search={search}
+        refresh={refresh}
+        text={text}
+        refreshing={actions.refreshing}
+        onSearch={actions.onSearch}
+        onRefresh={actions.onRefresh}
+      />
       <div
         role="tree"
         aria-label={rest['aria-label']}

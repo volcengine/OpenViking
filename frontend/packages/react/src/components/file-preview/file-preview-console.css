@@ -1,0 +1,126 @@
+/* The console shell owns the border and background; the renderer fills it. */
+.ov-file-preview {
+  background: var(--ov-ui-file-preview-surface);
+  color: var(--ov-ui-file-preview-text);
+}
+.ov-file-preview__header {
+  padding: 8px;
+  border-bottom: 0;
+}
+.ov-file-preview__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 0;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+.ov-file-preview__levels {
+  display: flex;
+  flex: none;
+  gap: 24px;
+  min-width: 0;
+  padding: 0 16px;
+  overflow-x: auto;
+  border-bottom: 1px solid
+    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+}
+.ov-file-preview__level {
+  position: relative;
+  flex: none;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ov-ui-file-preview-text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.ov-file-preview__level[aria-pressed='true'] {
+  color: var(--ov-ui-file-preview-accent);
+  font-weight: 500;
+}
+.ov-file-preview__level[aria-pressed='true']::after {
+  position: absolute;
+  bottom: 0;
+  left: calc(50% - 7px);
+  width: 14px;
+  height: 2px;
+  background: currentColor;
+  content: '';
+}
+.ov-file-preview__level:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ov-file-preview__level:focus-visible {
+  outline: 2px solid var(--ov-ui-file-preview-focus-ring);
+  outline-offset: -2px;
+}
+.ov-file-preview .ov-file-preview__viewer {
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--ov-ui-file-preview-surface);
+  color: inherit;
+}
+.ov-file-preview .ark-agentic-file-viewer-image {
+  min-height: 0;
+  overflow: hidden;
+  background: var(--ov-ui-file-preview-surface);
+}
+.ov-file-preview .ark-agentic-file-viewer-image__stage {
+  padding: 24px;
+  overflow: hidden;
+}
+.ov-file-preview .ark-agentic-file-viewer-markdown {
+  background: var(--ov-ui-file-preview-surface);
+  color: inherit;
+}
+.ov-file-preview .ark-agentic-file-viewer-markdown__content img {
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+@media (max-width: 480px) {
+  .ov-file-preview__header {
+    flex-wrap: wrap;
+  }
+  .ov-file-preview__path-row {
+    flex-basis: 100%;
+  }
+  .ov-file-preview__header-actions {
+    margin-left: auto;
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+  .ov-file-preview .ark-agentic-file-viewer-image__stage {
+    padding: 12px;
+  }
+  .ov-file-preview .ark-agentic-file-viewer-markdown {
+    padding: 16px;
+  }
+  .ov-file-preview__footer {
+    flex-wrap: wrap;
+  }
+}
+
+.ov-file-preview__image-frame {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.ov-file-preview__image-size {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 0 2px;
+  background: var(--ov-ui-file-preview-surface);
+  color: var(--ov-ui-file-preview-text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
