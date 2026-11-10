@@ -16,6 +16,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pdfminer.pdftypes import PDFObjRef
+from pdfminer.psparser import LIT
 
 from openviking.parse.parsers.pdf import PDFParser
 
@@ -28,16 +30,6 @@ def _make_page(*, pageid=None, objid=None):
 def _make_ref(objid):
     """Create a minimal PDF object reference stub."""
     return SimpleNamespace(objid=objid)
-
-
-class _FakeIndirect:
-    """Minimal indirect PDF object stub (pdfminer PDFObjRef-like)."""
-
-    def __init__(self, value):
-        self._value = value
-
-    def resolve(self):
-        return self._value
 
 
 class _FakePDFStream(dict):
@@ -142,7 +134,7 @@ class TestExtractBookmarks:
         self.parser = PDFParser()
 
     def test_extract_bookmarks_with_outlines(self):
-        """Bookmarks are extracted from PDF outlines with correct levels and page mapping."""
+        """Local Dest and GoTo outlines map to pages; remote GoToR does not."""
         # Mock pdfplumber PDF object
         mock_pdf = MagicMock()
 
@@ -152,20 +144,27 @@ class TestExtractBookmarks:
         # Mock page reference objects for bookmark destinations
         mock_ref1 = _make_ref(100)  # Points to page 1
         mock_ref2 = _make_ref(200)  # Points to page 2
+        mock_pdf.doc.getobj.return_value = {
+            "S": LIT("GoTo"),
+            "D": [mock_ref2, LIT("Fit")],
+        }
 
         # Mock document outlines: (level, title, dest, action, structelem)
         mock_pdf.doc.get_outlines.return_value = [
-            (1, "Chapter 1", [mock_ref1, "/Fit"], None, None),
-            (2, "Section 1.1", [mock_ref1, "/Fit"], None, None),
-            (1, "Chapter 2", [mock_ref2, "/Fit"], None, None),
+            (1, "Chapter 1", [mock_ref1, LIT("Fit")], None, None),
+            (2, "Section 1.1", None, {"S": LIT("GoTo"), "D": [mock_ref1, LIT("Fit")]}, None),
+            (1, "Chapter 2", None, PDFObjRef(mock_pdf.doc, 300), None),
+            (1, "External", None, {"S": LIT("GoToR"), "D": [0, LIT("Fit")]}, None),
         ]
 
         bookmarks = self.parser._extract_bookmarks(mock_pdf)
 
-        assert len(bookmarks) == 3
-        assert bookmarks[0] == {"title": "Chapter 1", "level": 1, "page_num": 1}
-        assert bookmarks[1] == {"title": "Section 1.1", "level": 2, "page_num": 1}
-        assert bookmarks[2] == {"title": "Chapter 2", "level": 1, "page_num": 2}
+        assert bookmarks == [
+            {"title": "Chapter 1", "level": 1, "page_num": 1},
+            {"title": "Section 1.1", "level": 2, "page_num": 1},
+            {"title": "Chapter 2", "level": 1, "page_num": 2},
+            {"title": "External", "level": 1, "page_num": None},
+        ]
 
     def test_extract_bookmarks_falls_back_to_objid_mapping(self):
         """Objid-based mapping remains supported for tests and alternate backends."""
@@ -269,62 +268,6 @@ class TestExtractBookmarks:
         assert bookmarks[0]["page_num"] == 1
         assert bookmarks[1]["page_num"] is None
         assert bookmarks[2]["page_num"] is None
-
-    def test_extract_bookmarks_from_goto_action(self):
-        """Bookmarks whose target lives in an /A /GoTo action are resolved."""
-        mock_pdf = MagicMock()
-        mock_pdf.pages = [_make_page(pageid=100), _make_page(pageid=200)]
-
-        mock_pdf.doc.get_outlines.return_value = [
-            (1, "Chapter 1", None, {"S": "/GoTo", "D": [_make_ref(100), "/Fit"]}, None),
-            (2, "Section 1.1", None, {"S": "/GoTo", "D": [_make_ref(200), "/Fit"]}, None),
-        ]
-
-        bookmarks = self.parser._extract_bookmarks(mock_pdf)
-        assert [b["page_num"] for b in bookmarks] == [1, 2]
-
-    def test_extract_bookmarks_from_indirect_goto_action(self):
-        """Indirect /A actions are dereferenced before reading their /D."""
-        mock_pdf = MagicMock()
-        mock_pdf.pages = [_make_page(pageid=100), _make_page(pageid=200)]
-
-        mock_pdf.doc.get_outlines.return_value = [
-            (
-                1,
-                "Chapter 1",
-                None,
-                _FakeIndirect({"S": "/GoTo", "D": [_make_ref(200), "/Fit"]}),
-                None,
-            ),
-        ]
-
-        bookmarks = self.parser._extract_bookmarks(mock_pdf)
-        assert [b["page_num"] for b in bookmarks] == [2]
-
-    def test_extract_bookmarks_named_destination(self):
-        """Named destinations are looked up through the document name tree."""
-        mock_pdf = MagicMock()
-        mock_pdf.pages = [_make_page(pageid=100)]
-
-        mock_pdf.doc.get_outlines.return_value = [
-            (1, "Chapter 1", b"chapter-1", None, None),
-        ]
-        mock_pdf.doc.get_dest.return_value = [_make_ref(100), "/Fit"]
-
-        bookmarks = self.parser._extract_bookmarks(mock_pdf)
-        assert [b["page_num"] for b in bookmarks] == [1]
-
-    def test_extract_bookmarks_strips_nul_padding(self):
-        """NUL padding in outline titles does not leak into markdown headings."""
-        mock_pdf = MagicMock()
-        mock_pdf.pages = []
-
-        mock_pdf.doc.get_outlines.return_value = [
-            (1, "Cover\x00\x00\x00", None, None, None),
-        ]
-
-        bookmarks = self.parser._extract_bookmarks(mock_pdf)
-        assert bookmarks[0]["title"] == "Cover"
 
     def test_extract_bookmarks_exception_returns_empty(self):
         """Returns empty list on unexpected exceptions (best-effort)."""

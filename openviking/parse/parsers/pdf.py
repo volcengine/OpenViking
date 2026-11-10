@@ -23,7 +23,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from pdfminer.psparser import PSLiteral
+from pdfminer.pdftypes import resolve1
+from pdfminer.psparser import LIT
 
 from openviking.parse.base import (
     NodeType,
@@ -455,18 +456,20 @@ class PDFParser(BaseParser):
 
             bookmarks = []
             for level, title, dest, action, _se in outlines:
-                # Some producers pad outline titles with NUL bytes, which
-                # strip() alone leaves in the generated Markdown heading.
-                title = (title or "").replace("\x00", "").strip()
-                if not title:
+                if not title or not title.strip():
                     continue
 
                 page_num = None
                 try:
-                    page_ref = self._bookmark_page_ref(pdf, dest, action)
-                    if page_ref is not None:
+                    if not dest and action:
+                        resolved_action = resolve1(action)
+                        if isinstance(resolved_action, dict) and resolved_action.get("S") == LIT(
+                            "GoTo"
+                        ):
+                            dest = resolve1(resolved_action.get("D"))
+                    if isinstance(dest, (list, tuple)) and dest:
                         page_num = self._resolve_bookmark_page(
-                            page_ref, page_ref_to_num, len(pdf.pages)
+                            dest[0], page_ref_to_num, len(pdf.pages)
                         )
                 except Exception:
                     pass
@@ -474,7 +477,7 @@ class PDFParser(BaseParser):
                 bookmarks.append(
                     {
                         "level": min(max(level, 1), 6),
-                        "title": title,
+                        "title": title.strip(),
                         "page_num": page_num,
                     }
                 )
@@ -484,51 +487,6 @@ class PDFParser(BaseParser):
         except Exception as e:
             logger.warning(f"Failed to extract bookmarks: {e}")
             return []
-
-    def _bookmark_page_ref(self, pdf, dest, action) -> Optional[Any]:
-        """Return the page reference of an outline item.
-
-        Writers store the target in ``/Dest`` or in an ``/A << /S /GoTo >>``
-        action, so both are tried. Either may hold an indirect object or a
-        named destination that has to be resolved through the name tree.
-        """
-        candidates = [dest]
-        resolved_action = self._resolve_indirect(action)
-        if isinstance(resolved_action, dict):
-            candidates.append(resolved_action.get("D"))
-
-        for candidate in candidates:
-            page_ref = self._destination_page_ref(pdf, candidate)
-            if page_ref is not None:
-                return page_ref
-        return None
-
-    def _destination_page_ref(self, pdf, target) -> Optional[Any]:
-        """Pick the page reference out of a single destination."""
-        target = self._resolve_indirect(target)
-        if isinstance(target, PSLiteral):
-            target = target.name
-        if isinstance(target, (str, bytes)):
-            try:
-                target = self._resolve_indirect(pdf.doc.get_dest(target))
-            except Exception:
-                return None
-        if isinstance(target, (list, tuple)):
-            return target[0] if target else None
-        return target
-
-    @staticmethod
-    def _resolve_indirect(value) -> Optional[Any]:
-        """Resolve a pdfminer indirect object, leaving plain values untouched."""
-        if value is None or isinstance(value, (dict, list, tuple, str, bytes, int)):
-            return value
-        resolve = getattr(value, "resolve", None)
-        if callable(resolve):
-            try:
-                return resolve()
-            except Exception:
-                return None
-        return value
 
     def _build_page_number_map(self, pdf) -> Dict[int, int]:
         """Build a lookup from PDF page object ids to 1-based page numbers.
