@@ -14,6 +14,7 @@ from openviking.models.network import (
     create_optional_async_httpx_client,
     create_optional_sync_httpx_client,
 )
+from openviking.observability.model_calls import model_call_diagnostic
 from openviking.telemetry import tracer
 from openviking.utils.message_format import format_messages, sanitize_openai_messages
 from openviking.utils.multimodal import redact_image_data_urls
@@ -254,11 +255,21 @@ class VolcEngineVLM(OpenAIVLM):
 
         client = self.get_client()
         t0 = time.perf_counter()
-        try:
-            response = self._create_chat_completion(client, **kwargs)
-        except Exception as error:
-            self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
-            raise
+        with model_call_diagnostic(
+            provider=self.provider,
+            model=kwargs["model"],
+            timeout_seconds=self.timeout,
+            input_chars=sum(len(str(message.get("content", ""))) for message in kwargs_messages),
+        ) as diagnostic:
+            try:
+                response = self._create_chat_completion(client, **kwargs)
+                diagnostic["response_id"] = str(getattr(response, "id", None) or "")
+                diagnostic["provider_request_id"] = str(
+                    getattr(response, "_request_id", None) or ""
+                )
+            except Exception as error:
+                self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
+                raise
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
         if tools is not None:
@@ -318,11 +329,23 @@ class VolcEngineVLM(OpenAIVLM):
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            try:
-                response = await self._create_chat_completion(client, **kwargs)
-            except Exception as error:
-                self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
-                raise
+            with model_call_diagnostic(
+                provider=self.provider,
+                model=kwargs["model"],
+                timeout_seconds=self.timeout,
+                input_chars=sum(
+                    len(str(message.get("content", ""))) for message in kwargs_messages
+                ),
+            ) as diagnostic:
+                try:
+                    response = await self._create_chat_completion(client, **kwargs)
+                    diagnostic["response_id"] = str(getattr(response, "id", None) or "")
+                    diagnostic["provider_request_id"] = str(
+                        getattr(response, "_request_id", None) or ""
+                    )
+                except Exception as error:
+                    self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
+                    raise
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             if tools is not None:
@@ -491,11 +514,21 @@ class VolcEngineVLM(OpenAIVLM):
 
         client = self.get_client()
         t0 = time.perf_counter()
-        try:
-            response = self._create_chat_completion(client, **kwargs)
-        except Exception as error:
-            self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
-            raise
+        with model_call_diagnostic(
+            provider=self.provider,
+            model=kwargs["model"],
+            timeout_seconds=self.timeout,
+            input_chars=sum(len(str(message.get("content", ""))) for message in kwargs_messages),
+        ) as diagnostic:
+            try:
+                response = self._create_chat_completion(client, **kwargs)
+                diagnostic["response_id"] = str(getattr(response, "id", None) or "")
+                diagnostic["provider_request_id"] = str(
+                    getattr(response, "_request_id", None) or ""
+                )
+            except Exception as error:
+                self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
+                raise
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
         if tools is not None:
@@ -545,11 +578,21 @@ class VolcEngineVLM(OpenAIVLM):
 
         client = self.get_async_client()
         t0 = time.perf_counter()
-        try:
-            response = await self._create_chat_completion(client, **kwargs)
-        except Exception as error:
-            self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
-            raise
+        with model_call_diagnostic(
+            provider=self.provider,
+            model=kwargs["model"],
+            timeout_seconds=self.timeout,
+            input_chars=sum(len(str(message.get("content", ""))) for message in kwargs_messages),
+        ) as diagnostic:
+            try:
+                response = await self._create_chat_completion(client, **kwargs)
+                diagnostic["response_id"] = str(getattr(response, "id", None) or "")
+                diagnostic["provider_request_id"] = str(
+                    getattr(response, "_request_id", None) or ""
+                )
+            except Exception as error:
+                self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
+                raise
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
         if tools is not None:

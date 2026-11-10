@@ -5,8 +5,10 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, TypeVar
 
+from openviking.observability.model_calls import log_diagnostic
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -86,11 +88,34 @@ class SemanticMessageWork:
         context = get_task_context()
         work_ids = get_enqueued_work_ids("Embedding")
         if context is not None and work_ids:
-            await get_task_tracker().wait_for_work(
-                context.task_id,
-                work_ids,
-                stop_waiting=stop_waiting,
-            )
+            fields = {
+                "task_id": context.task_id,
+                "account_id": context.account_id,
+                "uri": self.msg.uri,
+                "embedding_work_count": len(work_ids),
+                "embedding_work_ids": work_ids[:8],
+            }
+            log_diagnostic("SemanticEmbeddingWaitStarted", **fields)
+            started = time.perf_counter()
+            status = "completed"
+            try:
+                await get_task_tracker().wait_for_work(
+                    context.task_id,
+                    work_ids,
+                    stop_waiting=stop_waiting,
+                )
+            except BaseException:
+                status = "interrupted"
+                raise
+            finally:
+                elapsed = (time.perf_counter() - started) * 1000
+                log_diagnostic(
+                    "SemanticEmbeddingWaitFinished",
+                    warning=elapsed >= 1000,
+                    **fields,
+                    status=status,
+                    duration_ms=round(elapsed, 3),
+                )
 
     async def reenqueue(self) -> None:
         async def enqueue(queue, msg):

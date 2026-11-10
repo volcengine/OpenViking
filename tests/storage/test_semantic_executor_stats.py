@@ -148,6 +148,9 @@ class _ScheduledExecutor:
         self.failure = None
         self._run = run
 
+    def diagnostic_fields(self, work):
+        return {"task_id": "scheduled-test", "account_id": "account-a", "uri": work.dir_uri}
+
     def _start_scheduled_work(self) -> None:
         return None
 
@@ -565,3 +568,39 @@ async def test_semantic_executor_skip_vectorization_does_not_schedule_tasks(monk
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+@pytest.mark.asyncio
+async def test_scheduler_diagnostics_distinguish_wait_from_execution(caplog, monkeypatch):
+    import json
+    import logging
+
+    monkeypatch.setattr(logging.getLogger("openviking"), "propagate", True)
+    caplog.set_level("INFO")
+    running, release = asyncio.Event(), asyncio.Event()
+
+    async def blocked():
+        running.set()
+        await release.wait()
+
+    async def next_work():
+        pass
+
+    scheduler = SemanticTreeScheduler(max_workers=1)
+    scheduler.submit(_ScheduledExecutor(blocked), SemanticTreeWork(kind="file", dir_uri="a"))
+    await running.wait()
+    scheduler.submit(_ScheduledExecutor(next_work), SemanticTreeWork(kind="file", dir_uri="b"))
+    await asyncio.sleep(0.01)
+    release.set()
+    await asyncio.wait_for(scheduler._queue.join(), 1)
+    await asyncio.sleep(scheduler._idle_timeout * 2)
+    started = [
+        json.loads(record.message.split("] ", 1)[1])
+        for record in caplog.records
+        if record.message.startswith("[SemanticNodeStarted]")
+    ]
+    assert [row["uri"] for row in started] == ["a", "b"]
+    assert started[1]["queue_wait_ms"] > 0
+    assert all(row["running_nodes"] == 1 and row["max_workers"] == 1 for row in started)
+    assert scheduler._running_nodes == 0
+    assert all(task.done() for task in scheduler._workers)

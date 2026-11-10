@@ -88,3 +88,75 @@ def test_metric_datasource_publishes_to_shared_bus_without_metrics_init():
     )
     assert event["prompt_tokens"] == 3 and event["cost_bearer"] == "customer"
     assert "api_key" not in event and "prompt" not in event
+
+
+def test_model_attempt_diagnostics_preserve_errors_and_scope(caplog, monkeypatch):
+    import json
+    import logging
+
+    import pytest
+
+    from openviking.observability.model_calls import (
+        bind_model_call_node,
+        diagnostic_fields,
+        model_call_diagnostic,
+    )
+    from openviking.service.task_work_index import bind_task_context
+
+    monkeypatch.setattr(logging.getLogger("openviking"), "propagate", True)
+    caplog.set_level("INFO")
+    error = ValueError("private credential and request body")
+    with bind_task_context("task-a", "account-a", "alice"):
+        with bind_model_call_node("account-a", "viking://resources/a.md", "file"):
+            with model_call_diagnostic(
+                provider="volcengine", model="model-a", timeout_seconds=600, input_chars=50
+            ):
+                pass
+            with pytest.raises(ValueError) as caught:
+                with model_call_diagnostic(
+                    provider="volcengine", model="model-a", timeout_seconds=600, input_chars=50
+                ):
+                    raise error
+            assert caught.value is error
+        assert diagnostic_fields()["uri"] == ""
+    finished = [
+        json.loads(record.message.split("] ", 1)[1])
+        for record in caplog.records
+        if record.message.startswith("[VLMCallFinished]")
+    ]
+    assert len(finished) == 2
+    assert {row["status"] for row in finished} == {"completed", "failed"}
+    assert len({row["call_id"] for row in finished}) == 2
+    assert all(row["task_id"] == "task-a" and row["account_id"] == "account-a" for row in finished)
+    assert all(row["uri"] == "viking://resources/a.md" for row in finished)
+    assert all(row["duration_ms"] >= 0 for row in finished)
+    assert "private credential" not in caplog.text
+
+
+async def test_model_permit_diagnostics_cancel_without_taking_slot(caplog, monkeypatch):
+    import asyncio
+    import logging
+
+    import pytest
+
+    from openviking.observability.model_calls import model_permit_diagnostic
+
+    monkeypatch.setattr(logging.getLogger("openviking"), "propagate", True)
+    caplog.set_level("INFO")
+    semaphore = asyncio.Semaphore(0)
+
+    async def wait():
+        async with model_permit_diagnostic(semaphore):
+            raise AssertionError("a cancelled waiter must not acquire a slot")
+
+    task = asyncio.create_task(wait())
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert "SemanticVLMPermitWait" in caplog.text
+    assert "SemanticVLMPermitAcquired" not in caplog.text
+    semaphore.release()
+    async with model_permit_diagnostic(semaphore):
+        pass
+    assert "SemanticVLMPermitAcquired" in caplog.text

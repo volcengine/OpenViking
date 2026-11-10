@@ -5,6 +5,7 @@
 import asyncio
 import re
 import threading
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 from time import perf_counter
@@ -12,6 +13,11 @@ from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Mapping, Optional, 
 from weakref import WeakKeyDictionary
 
 from openviking.core.namespace import classify_uri
+from openviking.observability.model_calls import (
+    bind_model_call_node,
+    log_diagnostic,
+    model_permit_diagnostic,
+)
 from openviking.parse.parsers.media import get_media_type
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -109,6 +115,7 @@ class SemanticTreeWork:
 class ScheduledTreeWork:
     executor: "SemanticTreeExecutor"
     work: SemanticTreeWork
+    enqueued_at: float = field(default_factory=time.perf_counter)
 
 
 class SemanticTreeScheduler:
@@ -120,6 +127,7 @@ class SemanticTreeScheduler:
         self._max_workers = max(1, max_workers)
         self._queue: asyncio.Queue[ScheduledTreeWork] = asyncio.Queue()
         self._workers: Set[asyncio.Task] = set()
+        self._running_nodes = 0
 
     def configure(self, max_workers: int) -> None:
         self._max_workers = max(1, max_workers)
@@ -150,16 +158,41 @@ class SemanticTreeScheduler:
                 continue
 
             item.executor._start_scheduled_work()
+            self._running_nodes += 1
+            started = time.perf_counter()
+            ids = item.executor.diagnostic_fields(item.work)
+            log_diagnostic(
+                "SemanticNodeStarted",
+                **ids,
+                queue_wait_ms=round((started - item.enqueued_at) * 1000, 3),
+                queued_nodes=self._queue.qsize(),
+                running_nodes=self._running_nodes,
+                max_workers=self._max_workers,
+            )
+            status = "skipped" if item.executor.closed else "completed"
             try:
                 if not item.executor.closed:
                     await item.executor._run_work(item.work)
             except asyncio.CancelledError:
+                status = "cancelled"
                 raise
             except Exception as exc:
+                status = "failed"
                 item.executor.fail(exc)
             finally:
+                self._running_nodes -= 1
                 item.executor._finish_scheduled_work()
                 self._queue.task_done()
+                elapsed = (time.perf_counter() - started) * 1000
+                log_diagnostic(
+                    "SemanticNodeFinished",
+                    warning=status == "failed" or elapsed >= 30000,
+                    **ids,
+                    status=status,
+                    duration_ms=round(elapsed, 3),
+                    queued_nodes=self._queue.qsize(),
+                    running_nodes=self._running_nodes,
+                )
 
 
 _node_schedulers: "WeakKeyDictionary[asyncio.AbstractEventLoop, SemanticTreeScheduler]" = (
@@ -417,6 +450,7 @@ class SemanticTreeExecutor:
                 )
                 return
 
+        progress = asyncio.create_task(self._log_progress())
         try:
             self._register_active()
             self._schedule_dir(root_uri, parent_uri=None)
@@ -445,6 +479,8 @@ class SemanticTreeExecutor:
                 else:
                     await self._active_work_idle.wait()
             finally:
+                progress.cancel()
+                await asyncio.gather(progress, return_exceptions=True)
                 self._unregister_active()
                 self._log_parent_aggregations()
 
@@ -495,6 +531,40 @@ class SemanticTreeExecutor:
                 status,
             )
         self._parent_aggregation_stats.clear()
+
+    def diagnostic_fields(self, work: SemanticTreeWork | None = None) -> dict[str, Any]:
+        return {
+            "task_id": self._task_context.task_id if self._task_context else "",
+            "work_id": self._task_context.work_id if self._task_context else "",
+            "account_id": self._ctx.account_id,
+            "user_id": self._ctx.user.user_id,
+            "telemetry_id": self._telemetry_id or self._telemetry.telemetry_id,
+            "root_uri": self._root_uri,
+            "uri": (work.file_path or work.dir_uri) if work else self._root_uri,
+            "phase": work.kind if work else "tree",
+            "generation_trigger": self._generation_trigger,
+        }
+
+    async def _log_progress(self) -> None:
+        started = time.perf_counter()
+        while True:
+            await asyncio.sleep(30)
+            stats = self.get_stats()
+            log_diagnostic(
+                "SemanticProgress",
+                warning=True,
+                **self.diagnostic_fields(),
+                elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
+                total_nodes=stats.total_nodes,
+                pending_nodes=stats.pending_nodes,
+                in_progress_nodes=stats.in_progress_nodes,
+                done_nodes=stats.done_nodes,
+                root_done=bool(self._root_done and self._root_done.is_set()),
+                active_work=self._active_scheduled_work,
+                scheduler_queued_nodes=self._scheduler._queue.qsize() if self._scheduler else 0,
+                scheduler_running_nodes=self._scheduler._running_nodes if self._scheduler else 0,
+                scheduler_max_workers=self._scheduler._max_workers if self._scheduler else 0,
+            )
 
     def _schedule_work(self, work: SemanticTreeWork) -> None:
         if self._closed:
@@ -608,6 +678,7 @@ class SemanticTreeExecutor:
             bind_telemetry(self._telemetry),
             bind_ingestion_source_type(self._source_type),
             task_context,
+            bind_model_call_node(self._ctx.account_id, work.file_path or work.dir_uri, work.kind),
         ):
             await self._run_work_bound(work)
 
@@ -1650,7 +1721,7 @@ class SemanticTreeExecutor:
                 if self._generation_trigger != "content_copy":
                     overview = self._select_direct_media_overview(node, file_summaries)
                 if overview is None:
-                    async with self._llm_sem:
+                    async with model_permit_diagnostic(self._llm_sem):
                         overview = await self._processor._generate_overview(
                             dir_uri,
                             file_summaries,

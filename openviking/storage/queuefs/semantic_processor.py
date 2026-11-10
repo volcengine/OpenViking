@@ -18,6 +18,7 @@ from openviking.observability.context import (
     bind_root_observability_context,
     reset_root_observability_context,
 )
+from openviking.observability.model_calls import model_permit_diagnostic
 from openviking.parse.image_rewrite import (
     IMAGE_MAPPINGS_FILENAME,
     rewrite_image_uris,
@@ -1423,8 +1424,7 @@ class SemanticProcessor(DequeueHandlerBase):
             }
         prompt = render_prompt(prompt_id, prompt_variables)
 
-
-        async with llm_sem:
+        async with model_permit_diagnostic(llm_sem):
             with bind_telemetry_stage("semantic_execute"):
                 summary = await vlm.get_completion_async(prompt)
         return result(summary.strip())
