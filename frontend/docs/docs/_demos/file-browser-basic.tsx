@@ -194,7 +194,7 @@ export default function FileBrowserBasic() {
           toolbarActions={
             <FileBrowserEntries
               locale={componentLocale}
-              onConnectAgent={() => {}}
+              agentConnect={{ apiKey: 'demo-api-key', locale: componentLocale }}
               onImportResources={() => {}}
             />
           }

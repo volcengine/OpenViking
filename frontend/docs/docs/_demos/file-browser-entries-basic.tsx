@@ -8,14 +8,14 @@ export default function FileBrowserEntriesBasic() {
     <div style={{ width: '100%', maxWidth: 352, display: 'grid', gap: 12 }}>
       <FileBrowserEntries
         locale={componentLocale}
-        onConnectAgent={() => {}}
+        agentConnect={{ apiKey: 'demo-api-key', locale: componentLocale }}
         onImportResources={() => {}}
       />
       <FileBrowserEntries
         locale={componentLocale}
         onImportResources={() => {}}
       />
-      <FileBrowserEntries locale={componentLocale} onConnectAgent={() => {}} />
+      <FileBrowserEntries locale={componentLocale} agentConnect={{ apiKey: 'demo-api-key', locale: componentLocale }} />
     </div>
   );
 }

@@ -40,6 +40,7 @@
 .ov-console,
 .ov-divider,
 .ov-file-browser-entries,
+.ov-drawer,
 .ov-file-browser,
 .ov-file-preview,
 .ov-file-tree,
@@ -101,6 +102,7 @@
   --ov-ui-warning-light-default: #fff0b3;
 
   /* 浮层。 */
+  --ov-ui-overlay-default: rgb(0 0 0 / 40%);
   --ov-ui-tooltip-bg-default: #1f2329;
   --ov-ui-tooltip-text-default: #ffffff;
 }
@@ -110,6 +112,7 @@
 .dark .ov-console,
 .dark .ov-divider,
 .dark .ov-file-browser-entries,
+.dark .ov-drawer,
 .dark .ov-file-browser,
 .dark .ov-file-preview,
 .dark .ov-file-tree,
@@ -152,6 +155,7 @@
   --ov-ui-warning-light-default: #3a2f14;
 
   --ov-ui-tooltip-bg-default: #2a2d33;
+  --ov-ui-overlay-default: rgb(0 0 0 / 64%);
   --ov-ui-tooltip-text-default: #f0f1f3;
 }
 

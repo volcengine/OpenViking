@@ -31,8 +31,8 @@ The module covers the file tree and the file preview only. The command panel bel
 
 - Request configuration through the Provider, overridable per module through `requestOptions`.
 - Sign-in, account scope, routing and permissions.
-- The entries in the top row: connect an agent, import resources. Compose them with `FileBrowserEntries` inside `toolbarActions`, which owns the icons, copy and divider. Wrap it in a popover or dropdown when a click alone is not enough.
-- Connection dialogs, import flows and onboarding. The module embeds none of them.
+- The entries in the top row: connect an agent, import resources. Compose them with `FileBrowserEntries` inside `toolbarActions`, which owns the icons, copy and divider. Use `renderImportResources` to wrap the default import button when it needs a menu.
+- Connection credentials, import flows and onboarding. `FileBrowserEntries` can display the connection panel through `agentConnect`; the module itself embeds none of these flows.
 
 ## Entries and toolbar
 
@@ -46,9 +46,8 @@ import { FileBrowser } from '@openviking/react/modules/file-browser';
 <FileBrowser
   locale="en-US"
   toolbarActions={
-    <FileBrowserEntries
-      locale="en-US"
-      onConnectAgent={connect}
+    <FileBrowserEntries locale="en-US"
+      agentConnect={{ apiKey: 'demo-api-key', locale: 'en-US' }}
       onImportResources={openImport}
       labels={{
         connectAgent: 'Connect agent',
@@ -59,14 +58,18 @@ import { FileBrowser } from '@openviking/react/modules/file-browser';
 />;
 ```
 
-`FileBrowserEntries` is fixed to two entries; omitting a callback hides that entry. The icons, the copy and the divider between the two belong to it, so the host only decides which appear and what a click does. With a single entry no divider is drawn.
+`FileBrowserEntries` has two fixed entries. Pass `agentConnect` to open the built-in connection drawer, or use `onConnectAgent` alone for a host-owned flow; omitting both hides the connect entry. Omitting both `onImportResources` and `renderImportResources` hides the import entry. With a single entry no divider is drawn.
 
-Because `toolbarActions` is a node, an entry that needs a menu wraps `FileBrowserEntries` instead of asking for another prop:
+Use `renderImportResources` to wrap the default native button with a host-owned menu component, using that button directly as its trigger:
 
 ```tsx
-<Popover content={<ResourceMenu />} trigger="hover">
-  <FileBrowserEntries locale="en-US" onImportResources={openImport} />
-</Popover>
+<FileBrowserEntries locale="en-US"
+  renderImportResources={(trigger) => (
+    <Popover content={<ResourceMenu />} trigger="click">
+      {trigger}
+    </Popover>
+  )}
+/>
 ```
 
 ## Tree width

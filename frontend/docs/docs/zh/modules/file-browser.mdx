@@ -31,8 +31,8 @@
 
 - 通过 Provider 提供请求配置，模块可用 `requestOptions` 逐字段覆盖。
 - 登录、账号作用域、路由与权限。
-- 顶部入口条里的入口，例如连接 Agent、导入资源。用 `FileBrowserEntries` 在 `toolbarActions` 里组合，图标、文案与分隔线由它负责。需要菜单时把它包在气泡或下拉里。
-- 接入弹窗、导入流程与引导。模块都不内置。
+- 顶部入口条里的入口，例如连接 Agent、导入资源。用 `FileBrowserEntries` 在 `toolbarActions` 里组合，图标、文案与分隔线由它负责。导入入口需要菜单时，通过 `renderImportResources` 包装默认按钮。
+- 接入凭证、导入流程与引导。接入面板可通过 `FileBrowserEntries` 的 `agentConnect` 配置展示，模块不内置这些流程。
 
 ## 入口与工具栏
 
@@ -46,24 +46,31 @@ import { FileBrowser } from '@openviking/react/modules/file-browser';
 <FileBrowser
   locale="zh-CN"
   toolbarActions={
-    <FileBrowserEntries
-      locale="zh-CN"
-      onConnectAgent={connect}
+    <FileBrowserEntries locale="zh-CN"
+      agentConnect={{ apiKey: 'demo-api-key', locale: 'zh-CN' }}
       onImportResources={openImport}
-      labels={{ connectAgent: '连接 Agent', importResources: '导入资源' }}
+      labels={{
+        connectAgent: '连接 Agent',
+        importResources: '导入资源',
+        close: '关闭',
+      }}
     />
   }
 />;
 ```
 
-`FileBrowserEntries` 固定是两个入口，省略某个回调即隐藏对应入口；图标、文案与两者之间的分隔线都由它负责，宿主只决定显示哪几个与点击后做什么。只显示一个入口时不画分隔线。
+`FileBrowserEntries` 固定两个入口。传入 `agentConnect` 打开内置右侧接入抽屉，也可仅用 `onConnectAgent` 接入宿主自定义流程；两者都省略时隐藏连接入口。同时省略 `onImportResources` 和 `renderImportResources` 隐藏导入入口。只显示一个入口时不画分隔线。
 
-`toolbarActions` 是节点，需要菜单的入口直接把 `FileBrowserEntries` 包起来，不需要再加字段：
+宿主的菜单组件通过 `renderImportResources` 包装默认原生按钮，直接以该按钮为触发节点：
 
 ```tsx
-<Popover content={<ResourceMenu />} trigger="hover">
-  <FileBrowserEntries locale="zh-CN" onImportResources={openImport} />
-</Popover>
+<FileBrowserEntries locale="zh-CN"
+  renderImportResources={(trigger) => (
+    <Popover content={<ResourceMenu />} trigger="click">
+      {trigger}
+    </Popover>
+  )}
+/>
 ```
 
 ## 目录树宽度
