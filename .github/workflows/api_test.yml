@@ -20,7 +20,7 @@ on:
       - '**.svg'
       - '.gitignore'
       - '.editorconfig'
-      - 'vika/**'
+      - 'superagent/**'
   release:
     types: [published, prereleased]
 

@@ -1,13 +1,13 @@
 name: Vika Release
 
-# Tests, builds and publishes Vika (vika/) to the TOS release bucket, laid out
+# Tests, builds and publishes SuperAgent (superagent/) to the TOS release bucket, laid out
 # the way its installer and updater read it:
 #   <prefix>/releases/<version>/  vika-<version>-<platform>.tar.gz (+ .sha256),
 #                                 install.sh, and release.json, uploaded last
 #   <prefix>/install.sh, <prefix>/latest  written last, only for an
 #                                         openviking-vika@ tag newer than
 #                                         latest (pre-releases until a stable one)
-# A pull request that touches vika/ tests and builds linux-x64 and publishes
+# A pull request that touches superagent/ tests and builds linux-x64 and publishes
 # nothing. A manual run publishes the chosen branch as <version>-<commit>, a
 # preview that `latest` never points to.
 #
@@ -30,7 +30,7 @@ on:
         default: false
   pull_request:
     paths:
-      - "vika/**"
+      - "superagent/**"
       - ".github/workflows/vika-release.yml"
 
 permissions:
@@ -56,7 +56,7 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: vika
+        working-directory: superagent
     steps:
       - uses: actions/checkout@v6
 
@@ -64,7 +64,7 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: vika/package-lock.json
+          cache-dependency-path: superagent/package-lock.json
 
       - name: Validate release tag
         if: github.event_name == 'push'
@@ -298,7 +298,7 @@ jobs:
             echo
             echo 'Windows users: use the PowerShell one-line installer in the shared guide below. Windows previews are published separately; this command and these release assets are for macOS / Linux.'
             echo
-            echo "[Installation and setup guide](https://github.com/${GITHUB_REPOSITORY}/blob/feat/vika/vika/install.md)"
+            echo "[Installation and setup guide](https://github.com/${GITHUB_REPOSITORY}/blob/feat/vika/superagent/install.md)"
           } > "${RUNNER_TEMP}/vika-release-notes.md"
           gh release create "${TAG}" dist/*.tar.gz dist/*.sha256 dist/release.json \
             --repo "${GITHUB_REPOSITORY}" \
@@ -315,7 +315,7 @@ jobs:
     defaults:
       run:
         shell: pwsh
-        working-directory: vika
+        working-directory: superagent
     steps:
       - uses: actions/checkout@v6
         with:

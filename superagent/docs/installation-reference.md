@@ -233,7 +233,7 @@ Autostart executes `vika start` and captures the enabling shell's PATH so it can
 
 ## Publishing releases
 
-Maintainers publish through `.github/workflows/vika-release.yml`; see the Vika section of the [release guide](../../docs/repository/RELEASE_CN.md). Update `vika/package.json`, merge, and push `openviking-vika@<version>`. CI checks and tests, packages four platforms, uploads to `https://ovrelease.tos-cn-beijing.volces.com/vika/releases/<version>/`, then updates `latest`. A manual workflow creates a `<version>-<commit>` preview without changing `latest`.
+Maintainers publish through `.github/workflows/vika-release.yml`; see the Vika section of the [release guide](../../docs/repository/RELEASE_CN.md). Update `superagent/package.json`, merge, and push `openviking-vika@<version>`. CI checks and tests, packages four platforms, uploads to `https://ovrelease.tos-cn-beijing.volces.com/vika/releases/<version>/`, then updates `latest`. A manual workflow creates a `<version>-<commit>` preview without changing `latest`.
 
 Local packages are for testing:
 

@@ -266,7 +266,7 @@ The selected local lark-cli profile must exist with bot identity `ready`; user O
 ## Local development validation
 
 ```bash
-cd vika
+cd superagent
 mkdir -p ~/.vika
 cp config.example.json ~/.vika/config.json
 npm test

@@ -16,7 +16,7 @@ on:
       - '**.svg'
       - '.gitignore'
       - '.editorconfig'
-      - 'vika/**'
+      - 'superagent/**'
 
 concurrency:
   group: pr-checks-${{ github.event.pull_request.number || github.ref }}
