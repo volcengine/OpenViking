@@ -270,13 +270,20 @@ async def test_stale_memory_semantic_write_is_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
+async def test_memory_directory_summarizes_all_files_but_samples_overview(monkeypatch):
     processor = _processor(max_concurrent_llm=4)
     summaries = []
+    summarized_files = []
+    file_names = [f"file-{index:03}.md" for index in range(40)]
+    fake_fs = _FakeMemoryDirFS()
+    monkeypatch.setattr(
+        fake_fs, "ls", AsyncMock(return_value=[{"name": name} for name in file_names])
+    )
 
     async def generate_file_summary(file_path, llm_sem=None, ctx=None):
         del llm_sem, ctx
         name = file_path.rsplit("/", 1)[-1]
+        summarized_files.append(name)
         return {"name": name, "summary": f"summary:{name}"}
 
     async def generate_overview(
@@ -287,14 +294,15 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
         return "overview"
 
     async def write_semantics(**kwargs):
-        del kwargs
+        assert kwargs["total_entries"] == 40
+        assert kwargs["sampled_entries"] == 32
         return AbstractOverviewWriteResult(
             wrote=True, overview_body_changed=True, abstract_body_changed=True
         )
 
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
-        lambda: _FakeMemoryDirFS(),
+        lambda: fake_fs,
     )
     _patch_semantic_config(monkeypatch)
     monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
@@ -314,7 +322,10 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
         )
     )
 
-    assert [item["name"] for item in summaries] == ["first.md", "second.md"]
+    assert sorted(summarized_files) == file_names
+    assert len(summaries) == 32
+    assert summaries[0]["name"] == file_names[0]
+    assert summaries[-1]["name"] == file_names[-1]
 
 
 @pytest.mark.asyncio

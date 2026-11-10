@@ -45,6 +45,7 @@ from openviking.service.task_work_index import detach_task_context, get_task_con
 from openviking.storage.abstract_overview import (
     AbstractOverviewWriteResult,
     body_for_preview,
+    deterministic_sample,
     freshness_metadata,
     markdown_safe_viking_uri,
     parse_overview_file_summaries,
@@ -1146,9 +1147,12 @@ class SemanticProcessor(DequeueHandlerBase):
                 await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
 
         completed_summaries = [s for s in file_summaries if s is not None]
+        sampled_summaries = deterministic_sample(
+            completed_summaries, get_openviking_config().semantic.overview_sample_limit
+        )
         generated_content = await self._generate_overview(
             dir_uri,
-            completed_summaries,
+            sampled_summaries,
             [],
             llm_sem=llm_sem,
             total_files=len(file_paths),
@@ -1166,7 +1170,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 ctx=ctx,
                 lock=lock,
                 total_entries=len(file_paths),
-                sampled_entries=len(completed_summaries),
+                sampled_entries=len(sampled_summaries),
             )
         except LockAcquisitionError:
             raise
