@@ -5,6 +5,7 @@ import { bypassedSession } from "./scope.mjs";
 import { isAuxiliaryRequest } from "./conversation.mjs";
 
 export async function onRequest(body, ctx) {
+  if (ctx.options?.memoryEnabled === false) { ctx.report?.("skipped", 0); return; }
   const startedAt = performance.now();
   if (isAuxiliaryRequest(body, ctx)) { ctx.report?.("skipped", 0); return; }
   try {
@@ -19,7 +20,7 @@ export async function onRequest(body, ctx) {
 }
 
 export async function onResponse(reply, ctx) {
-  if (!ctx.state?.capture) return;
+  if (ctx.options?.memoryEnabled === false || !ctx.state?.capture) return;
   try {
     const cfg = await loadConfig(process.env, ctx.state?.capture?.options || ctx.options || {});
     await finishCapture(reply, ctx, cfg);

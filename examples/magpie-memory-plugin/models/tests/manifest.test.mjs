@@ -4,11 +4,13 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { settings } from "../lib/config.mjs";
-test("only the Agent is declared and automatic activation defaults on", async () => {
-  const manifest = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8"));
+test("unified plugin declares memory hooks and the Agent, with automatic activation on", async () => {
+  const manifest = JSON.parse(await fs.readFile(new URL("../../package.json", import.meta.url), "utf8"));
+  assert.equal(manifest.name, "@openviking/magpie-plugin");
+  assert.equal(manifest.magpie.hooks, "./hooks.mjs");
   assert.equal(manifest.magpie.page, undefined);
   assert.equal(manifest.magpie.panels, undefined);
-  assert.equal(manifest.magpie.agent, "./openviking.agent.js");
+  assert.equal(manifest.magpie.agent, "./models/openviking.agent.js");
   assert.equal(manifest.magpie.options.restartOnChange, true);
   const directory = await fs.mkdtemp(join(tmpdir(), "ov-model-default-"));
   try {

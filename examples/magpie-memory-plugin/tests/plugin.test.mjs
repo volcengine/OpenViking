@@ -219,7 +219,7 @@ test("existing OIDC and LDAP client files authenticate both recall and tools", a
   const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
   process.env.OPENVIKING_CLI_CONFIG_FILE = f.path;
   t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
-  const { tool } = await OpenVikingMemory();
+  const { tool } = await OpenVikingMemory(undefined, { modelsEnabled: false });
   for (const [fields, authorization] of [
     [{ auth_mode: "oidc", api_key: null, oidc_token: "fixture-jwt" }, "Bearer fixture-jwt"],
     [{ auth_mode: "ldap", api_key: null, ldap_username: "alice", ldap_password: "p:a:ss" }, `Basic ${Buffer.from("alice:p:a:ss").toString("base64")}`],
@@ -274,7 +274,7 @@ test("remember places the configured project peer in message data, not just head
   const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
   process.env.OPENVIKING_CLI_CONFIG_FILE = f.path;
   t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
-  const { tool } = await OpenVikingMemory();
+  const { tool } = await OpenVikingMemory(undefined, { modelsEnabled: false });
   await tool.remember.execute({ text: "project setting" }, { abort: new AbortController().signal });
   assert.equal(f.calls[1].body.peer_id, "project-A");
 });
@@ -450,7 +450,7 @@ test("tools require opt-in, validate arguments and use the same file connection"
   const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
   process.env.OPENVIKING_CLI_CONFIG_FILE = f.path;
   t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
-  const { tool } = await OpenVikingMemory();
+  const { tool } = await OpenVikingMemory(undefined, { modelsEnabled: false });
   const ctx = { abort: new AbortController().signal };
   await assert.rejects(tool.find.execute({ query: "test" }, ctx), /disabled/);
   await f.save({ plugin: { mcpEnabled: true } });
@@ -484,7 +484,7 @@ test("Rule search preserves complete constraints, opt-in, identity and errors", 
   const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
   process.env.OPENVIKING_CLI_CONFIG_FILE = f.path;
   t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
-  const { tool } = await OpenVikingMemory();
+  const { tool } = await OpenVikingMemory(undefined, { modelsEnabled: false });
   const ctx = { abort: new AbortController().signal };
   await assert.rejects(tool.rule_search.execute({ task_context: "deploy" }, ctx), /disabled/);
   await f.save({ actor_peer_id: "project", plugin: { magpie: { mcpEnabled: true } } });
@@ -509,7 +509,7 @@ test("actual Magpie Bun host loads package, runs recall and exposes working tool
   await f.save({ plugin: { magpie: { mcpEnabled: true } } });
   const target = process.env.MAGPIE_PLUGIN_TARGET || fileURLToPath(new URL("..", import.meta.url));
   const child = spawn(process.env.BUN_BIN || "bun", [process.env.MAGPIE_PLUGIN_HOST], {
-    env: { ...process.env, ...f.env, HOME: f.dir, XDG_CONFIG_HOME: join(f.dir, ".config") },
+    env: { ...process.env, ...f.env, HOME: f.dir, XDG_CONFIG_HOME: join(f.dir, ".config"), OPENVIKING_MAGPIE_MODELS_DIR: join(f.dir, "models-state") },
     stdio: ["pipe", "pipe", "pipe"],
   });
   const pending = new Map();
@@ -537,10 +537,10 @@ test("actual Magpie Bun host loads package, runs recall and exposes working tool
   };
   const spec = "openviking-test";
   const init = await rpc("init", { directory: f.dir, authPath: join(f.dir, "auth.json"), plugins: [
-    { spec, target, gateway: join(target, "hooks.mjs"), options: { gatewayTimeoutMs: 1500 } },
+    { spec, target, gateway: join(target, "hooks.mjs"), options: { gatewayTimeoutMs: 1500, memoryEnabled: true, modelsEnabled: true } },
   ] });
   assert.equal(init.plugins[0].error, undefined, JSON.stringify(init));
-  assert.equal(init.plugins[0].tools.length, 5);
+  assert.equal(init.plugins[0].tools.length, 6);
   for (const protocol of ["chat", "responses", "anthropic", "gemini"]) {
     const wire = body();
     if (protocol === "responses") { wire.store = false; wire.input = [{ role: "user", content: "TypeScript?" }]; delete wire.messages; }

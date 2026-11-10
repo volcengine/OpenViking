@@ -60,6 +60,7 @@ function clientAuthorization(file) {
 
 /** Magpie pins one client snapshot; host defaults do not alter other plugins. */
 export async function loadConfig(env = process.env, options = {}) {
+  if (options.memoryEnabled !== undefined && typeof options.memoryEnabled !== "boolean") throw Object.assign(new Error("OpenViking: invalid"), { code: "invalid" });
   const files = loadClientCredentialFiles(env);
   const file = files.cliFile;
   const scoped = file.plugin?.magpie;
@@ -90,7 +91,7 @@ export async function loadConfig(env = process.env, options = {}) {
   const version = readManifestVersion(new URL("./package.json", import.meta.url));
   const config = {
     ...settings,
-    enabled: file.plugin?.enabled !== false && settings.enabled,
+    enabled: options.memoryEnabled !== false && file.plugin?.enabled !== false && settings.enabled,
     baseUrl: connection.baseUrl, apiKey: connection.apiKey,
     account: connection.account, user: connection.user, peerId,
     authMode: authorization ? file.auth_mode : connection.authMode,

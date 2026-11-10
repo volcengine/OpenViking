@@ -1,4 +1,4 @@
-name: Magpie models plugin
+name: OpenViking Magpie plugin
 
 on:
   pull_request:
@@ -28,6 +28,4 @@ jobs:
           node-version: "22"
       - run: node examples/memory-plugin-shared/sync.mjs
       - run: npm run check && npm test && npm pack --dry-run
-        working-directory: examples/magpie-models-plugin
-      - run: npm run check && npm test
         working-directory: examples/magpie-memory-plugin
