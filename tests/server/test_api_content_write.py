@@ -8,7 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from openviking.server.routers import filesystem
+from openviking.service import fs_service
+from openviking.service.fs_service import FSService
 
 
 async def _first_file_uri(client, root_uri: str) -> str:
@@ -45,10 +46,9 @@ async def test_fs_attrs_filters_legacy_non_kv_search_tags(monkeypatch):
                 }
             ]
 
-    monkeypatch.setattr(filesystem, "VikingDBManagerProxy", FakeVikingDBManagerProxy)
+    monkeypatch.setattr(fs_service, "VikingDBManagerProxy", FakeVikingDBManagerProxy)
 
-    tags = await filesystem._tags_attr(
-        SimpleNamespace(vikingdb_manager=object()),
+    tags = await FSService(vikingdb=object())._tags_attr(
         "viking://user/default/memories/events/example.md",
         SimpleNamespace(),
         is_dir=False,

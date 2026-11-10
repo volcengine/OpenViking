@@ -20,7 +20,7 @@ from openviking.server.routers import filesystem
 from openviking.service.fs_service import FSService, ListingPage
 from openviking.storage.queuefs.queue_manager import get_queue_manager
 from openviking.system_assets import builtin_memory_templates_dir
-from openviking_cli.exceptions import InvalidURIError
+from openviking_cli.exceptions import InvalidURIError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -260,13 +260,13 @@ async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
                 }
             ]
 
+    fs = FSService(vikingdb=FakeVectorManager())
+    monkeypatch.setattr(fs, "stat", fake_stat)
+    monkeypatch.setattr(fs, "read", fake_read)
     monkeypatch.setattr(
         filesystem,
         "get_service",
-        lambda: SimpleNamespace(
-            fs=SimpleNamespace(stat=fake_stat, read=fake_read),
-            vikingdb_manager=FakeVectorManager(),
-        ),
+        lambda: SimpleNamespace(fs=fs),
     )
 
     response = await filesystem.attrs(
@@ -290,13 +290,12 @@ async def test_system_attrs_returns_empty_tags_without_querying_vector_store(mon
     uri = "viking://system/memory/memory_templates/custom/demo.md"
     stat = AsyncMock(return_value={"isDir": False})
     vector_filter = AsyncMock(side_effect=AssertionError("system attrs must not query vectors"))
+    fs = FSService(vikingdb=SimpleNamespace(filter=vector_filter))
+    monkeypatch.setattr(fs, "stat", stat)
     monkeypatch.setattr(
         filesystem,
         "get_service",
-        lambda: SimpleNamespace(
-            fs=SimpleNamespace(stat=stat),
-            vikingdb_manager=SimpleNamespace(filter=vector_filter),
-        ),
+        lambda: SimpleNamespace(fs=fs),
     )
     ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
 
@@ -309,6 +308,255 @@ async def test_system_attrs_returns_empty_tags_without_querying_vector_store(mon
     }
     stat.assert_awaited_once_with(uri, ctx=ctx, skip_count=True)
     vector_filter.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "params,body",
+    [
+        ({}, None),
+        ({"uri": "viking://resources/a.md"}, {"uris": ["viking://resources/b.md"]}),
+        ({}, {"uris": []}),
+        ({}, {"uris": ["viking://resources/a.md"] * 51}),
+        ({}, {"uris": None}),
+        ({}, {"uris": ["viking://resources/a.md"], "unexpected": True}),
+    ],
+)
+async def test_attrs_batch_rejects_invalid_request_http(client, params, body):
+    response = await client.request("GET", "/api/v1/fs/attrs", params=params, json=body)
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
+@pytest.mark.asyncio
+async def test_attrs_reuses_stat_permission_check_before_querying_tags(monkeypatch):
+    uri = "viking://resources/private"
+    ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
+    vector_filter = AsyncMock()
+    stat = AsyncMock(side_effect=PermissionDeniedError("read denied"))
+    fs = FSService(vikingdb=SimpleNamespace(filter=vector_filter))
+    monkeypatch.setattr(fs, "stat", stat)
+    monkeypatch.setattr(
+        filesystem,
+        "get_service",
+        lambda: SimpleNamespace(fs=fs),
+    )
+    response = await filesystem.attrs(
+        uri=None, request=filesystem.GetAttrsRequest(uris=[uri]), _ctx=ctx
+    )
+    result = response.result
+    assert result["items"] == []
+    assert result["failed"][0]["error"]["code"] == "PERMISSION_DENIED"
+    stat.assert_awaited_once_with(uri, ctx=ctx, skip_count=True)
+    vector_filter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_attrs_batch_reuses_bounded_execution_and_preserves_failures(monkeypatch):
+    ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
+    root = "viking://user/alice/resources/demo"
+    uris = [f"{root}/{index}.md" for index in range(50)]
+    release = asyncio.Event()
+    active = peak = 0
+
+    async def read(uri, ctx):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        if active == 8:
+            release.set()
+        await release.wait()
+        active -= 1
+        if uri == uris[3]:
+            raise PermissionDeniedError("denied")
+        return {"uri": uri, "attrs": {"tags": []}}
+
+    fs = FSService()
+    monkeypatch.setattr(filesystem, "get_service", lambda: SimpleNamespace(fs=fs))
+    monkeypatch.setattr(fs, "attrs", read)
+    response = await asyncio.wait_for(
+        filesystem.attrs(uri=None, request=filesystem.GetAttrsRequest(uris=uris), _ctx=ctx),
+        timeout=5,
+    )
+    result = response.result
+    assert peak == 8
+    assert [item["uri"] for item in result["items"]] == [uri for uri in uris if uri != uris[3]]
+    assert result["failed"] == [
+        {"uri": uris[3], "error": {"code": "PERMISSION_DENIED", "message": "denied"}}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_attrs_batch_propagates_cancellation(monkeypatch):
+    ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
+    fs = FSService()
+    monkeypatch.setattr(filesystem, "get_service", lambda: SimpleNamespace(fs=fs))
+    monkeypatch.setattr(fs, "attrs", AsyncMock(side_effect=asyncio.CancelledError))
+    with pytest.raises(asyncio.CancelledError):
+        await filesystem.attrs(
+            uri=None,
+            request=filesystem.GetAttrsRequest(uris=["viking://resources/a.md"]),
+            _ctx=ctx,
+        )
+
+
+async def test_attrs_batch_http_reads_exact_levels_and_preserves_stored_usage(client, service):
+    from openviking.core.namespace import canonical_user_root
+    from openviking.storage.vector_ids import vector_record_id
+    from openviking.utils.time_utils import get_current_timestamp
+
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    root = f"{canonical_user_root(ctx)}/resources/attrs-test"
+    file_uri = f"{root}/a.md"
+    unindexed_uri = f"{root}/unindexed.md"
+    missing_uri = f"{root}/missing.md"
+    await service.viking_fs.mkdir(root, ctx=ctx)
+    await service.viking_fs.write_file(file_uri, "original content", ctx=ctx)
+    await service.viking_fs.write_file(unindexed_uri, "no index", ctx=ctx)
+    timestamp = get_current_timestamp()
+    seeds = [
+        (root, 1, ["team=search", "used_count=7", "last_used_at=123"]),
+        (root, 0, ["team=search", "used_count=5", "last_used_at=123"]),
+        (root, 2, ["wrong_level=yes"]),
+        (file_uri, 2, ["used_count=9", "last_used_at=456"]),
+        (file_uri, 0, ["wrong_level=yes"]),
+        (f"{root}/child", 0, ["descendant=yes"]),
+    ]
+    record_ids = []
+    for uri, level, tags in seeds:
+        record_id = vector_record_id(ctx.account_id, uri, level)
+        record_ids.append(record_id)
+        await service.vikingdb_manager.upsert(
+            {
+                "id": record_id,
+                "uri": uri,
+                "context_type": "resource",
+                "level": level,
+                "abstract": "original content",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "vector": [0.1] * service.vikingdb_manager.vector_dim,
+                "search_tags": tags,
+            },
+            ctx=ctx,
+        )
+    before = await service.vikingdb_manager.get_strict(record_ids, ctx=ctx)
+    headers = {
+        "X-OpenViking-Account": ctx.account_id,
+        "X-OpenViking-User": ctx.user.user_id,
+    }
+    response = await client.request(
+        "GET",
+        "/api/v1/fs/attrs",
+        headers=headers,
+        json={
+            "uris": [
+                file_uri,
+                root,
+                "viking://~/resources/attrs-test/a.md",
+                missing_uri,
+                unindexed_uri,
+                "invalid",
+            ]
+        },
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert [item["uri"] for item in result["items"]] == [file_uri, root, unindexed_uri]
+    assert result["items"][0]["attrs"]["tags"] == ["used_count=9", "last_used_at=456"]
+    assert result["items"][1]["attrs"]["tags"] == [
+        "team=search",
+        "used_count=5",
+        "last_used_at=123",
+        "used_count=7",
+    ]
+    assert result["items"][2]["attrs"]["tags"] == []
+    assert [item["uri"] for item in result["failed"]] == [missing_uri, "invalid"]
+    assert [item["error"]["code"] for item in result["failed"]] == ["NOT_FOUND", "INVALID_URI"]
+    for item in result["items"]:
+        single = await client.get("/api/v1/fs/attrs", params={"uri": item["uri"]}, headers=headers)
+        assert single.status_code == 200, single.text
+        assert single.json()["result"] == item
+    assert await service.vikingdb_manager.get_strict(record_ids, ctx=ctx) == before
+    assert await service.viking_fs.read_file(file_uri, ctx=ctx) == "original content"
+
+
+async def test_attrs_batch_denies_foreign_memory_and_keeps_own_memory(service, monkeypatch):
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    own_uri = f"viking://user/{ctx.user.user_id}/memories/preferences/theme.md"
+    foreign_uri = "viking://user/other_user/memories/preferences/private.md"
+    foreign_ctx = RequestContext(user=UserIdentifier(ctx.account_id, "other_user"), role=Role.USER)
+    raw = 'Preference\n\n<!-- MEMORY_FIELDS\n{"memory_type": "preferences"}\n-->'
+    await service.viking_fs.write_file(own_uri, raw, ctx=ctx)
+    await service.viking_fs.write_file(foreign_uri, raw, ctx=foreign_ctx)
+    monkeypatch.setattr(filesystem, "get_service", lambda: service)
+    response = await filesystem.attrs(
+        uri=None, request=filesystem.GetAttrsRequest(uris=[own_uri, foreign_uri]), _ctx=ctx
+    )
+    result = response.result
+    assert [item["uri"] for item in result["items"]] == [own_uri]
+    assert result["items"][0]["attrs"]["memory"]["memory_type"] == "preferences"
+    assert "content" not in result["items"][0]["attrs"]["memory"]
+    assert result["failed"][0]["uri"] == foreign_uri
+    assert result["failed"][0]["error"]["code"] == "PERMISSION_DENIED"
+
+
+@pytest.mark.asyncio
+async def test_attrs_batch_reports_vector_read_errors_as_failures(monkeypatch):
+    fs = FSService(
+        vikingdb=SimpleNamespace(filter=AsyncMock(side_effect=[RuntimeError("I/O failed"), []]))
+    )
+    monkeypatch.setattr(fs, "stat", AsyncMock(return_value={"isDir": False}))
+    monkeypatch.setattr(
+        filesystem,
+        "get_service",
+        lambda: SimpleNamespace(fs=fs),
+    )
+    ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
+    first, second = "viking://resources/a.md", "viking://resources/b.md"
+    response = await filesystem.attrs(
+        uri=None, request=filesystem.GetAttrsRequest(uris=[first, second]), _ctx=ctx
+    )
+    result = response.result
+    assert result["items"] == [{"uri": second, "context_type": "resource", "attrs": {"tags": []}}]
+    assert result["failed"] == [
+        {"uri": first, "error": {"code": "INTERNAL", "message": "Attribute read failed"}}
+    ]
+
+
+async def test_attrs_batch_keeps_same_uri_isolated_between_accounts(service, monkeypatch):
+    from openviking.storage.vector_ids import vector_record_id
+    from openviking.utils.time_utils import get_current_timestamp
+
+    uri = "viking://resources/attrs-tenant/a.md"
+    timestamp = get_current_timestamp()
+    contexts = [
+        RequestContext(user=service.user, role=Role.ROOT),
+        RequestContext(user=UserIdentifier("attrs-other-account", "alice"), role=Role.ROOT),
+    ]
+    for count, ctx in enumerate(contexts, start=1):
+        await service.viking_fs.write_file(uri, "content", ctx=ctx)
+        await service.vikingdb_manager.upsert(
+            {
+                "id": vector_record_id(ctx.account_id, uri, 2),
+                "uri": uri,
+                "context_type": "resource",
+                "level": 2,
+                "abstract": "content",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "vector": [0.1] * service.vikingdb_manager.vector_dim,
+                "search_tags": [f"used_count={count}"],
+            },
+            ctx=ctx,
+        )
+    monkeypatch.setattr(filesystem, "get_service", lambda: service)
+    for count, ctx in enumerate(contexts, start=1):
+        response = await filesystem.attrs(
+            uri=None, request=filesystem.GetAttrsRequest(uris=[uri]), _ctx=ctx
+        )
+        result = response.result
+        assert result["failed"] == []
+        assert result["items"][0]["attrs"]["tags"] == [f"used_count={count}"]
 
 
 @pytest.mark.asyncio
