@@ -388,10 +388,44 @@ test('input arriving while a custom tool result is pending is steered only after
   assert.deepEqual(posted.map((event) => [event.type, event.content[0].text]), [['user.message', 'new input']]);
   assert.equal(agent.queue.length, 0);
   assert.equal(store.getManagedTurn('volc').steers[0].status, 'ACCEPTED');
-  // A call already answered (a history replay) does not hold steering.
-  store.updateMAToolCall(agent.sessionId, 'tool-1', 'POSTED');
-  agent._handleEvent({ ...toolUse, id: 'tool-1' });
+});
+
+test('a restart replaying an already answered custom call from history does not hold steering', async (t) => {
+  const { agent, store, toolUse, config, actions, turn } = steeringAgent(t);
+  agent._handleEvent(toolUse);
+  store.updateMAToolCall(turn.sessionId, 'tool-1', 'POSTED');
+  // A fresh adapter (restart): no seen event IDs, the journal row is POSTED.
+  const replay = new VolcAgent(config, store, quiet, { actions, files: noFiles });
+  Object.assign(replay, { sessionId: turn.sessionId, connected: true, turnActive: true,
+    expectedUserEventId: turn.fenceId, turnFenceSeen: true,
+    activeConversationKey: turn.conversationKey, activeItems: [...agent.activeItems] });
+  replay._handleEvent(toolUse);
+  assert.equal(replay.customPending.size, 0);
+  replay._handleEvent({ ...toolUse, id: 'tool-2' });
+  assert.deepEqual([...replay.customPending], ['tool-2']);
+});
+
+test('a RequiresActionRejected naming only results already echoed retries shortly instead of holding to turn end', async (t) => {
+  const requests = [];
+  const responses = [];
+  const fetch = (url, options) => { requests.push(JSON.parse(options.body)); return new Promise((resolve) => responses.push(resolve)); };
+  const { agent, newer, toolUse, echo } = steeringAgent(t, { fetch, reconnectBaseMs: 1 });
+  agent._handleEvent(toolUse);
+  agent._handleEvent(echo);
   assert.equal(agent.customPending.size, 0);
+  agent.deliver('new input', newer.seq);
+  responses.shift()(new Response(JSON.stringify({ error: { code: 'RequiresActionRejected',
+    message: 'Invalid user.message event at events[0]: waiting on responses to events [tool-1]; only ...' } }), { status: 400 }));
+  await agent.steerWork;
+  assert.equal(agent.sessionPoisoned, false);
+  assert.equal(agent.queue.length, 1);
+  assert.equal(requests.length, 1, 'not resent at once');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1].events.map((event) => event.content[0].text), ['new input']);
+  responses.shift()(Response.json({ data: [{ id: 'user-steer', type: 'user.message' }] }));
+  await agent.steerWork;
+  assert.equal(agent.queue.length, 0);
 });
 
 test('a steer MA rejects with RequiresActionRejected is held, not poisoned, and sent once after the tool result', async (t) => {
