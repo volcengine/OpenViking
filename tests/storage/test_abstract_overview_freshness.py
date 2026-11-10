@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -55,6 +56,68 @@ def _files(dir_uri, *, total=161, pending=3):
             ContextLevel.ABSTRACT, dir_uri, "abstract", metadata
         ),
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pending", [0, 3])
+async def test_capture_overview_body_uses_the_same_pending_reads(pending):
+    uri = "viking://resources/wide"
+    original = _FakeFS(_files(uri, pending=pending))
+    captured = _FakeFS(_files(uri, pending=pending))
+    original.read_file = AsyncMock(wraps=original.read_file)
+    captured.read_file = AsyncMock(wraps=captured.read_file)
+    bodies = {}
+
+    expected = await read_abstract_overview_pending_snapshot(
+        viking_fs=original, dir_uri=uri, ctx=None
+    )
+    actual = await read_abstract_overview_pending_snapshot(
+        viking_fs=captured, dir_uri=uri, ctx=None, overview_body_out=bodies
+    )
+
+    assert expected == actual == pending
+    assert bodies[uri].strip() == "overview"
+    assert captured.read_file.await_args_list == original.read_file.await_args_list
+    assert captured.lock_timeouts == original.lock_timeouts
+
+
+@pytest.mark.asyncio
+async def test_capture_missing_overview_does_not_acquire_a_lock():
+    uri = "viking://resources/missing"
+    fs = _FakeFS({})
+    bodies = {}
+
+    assert (
+        await read_abstract_overview_pending_snapshot(
+            viking_fs=fs, dir_uri=uri, ctx=None, overview_body_out=bodies
+        )
+        == 0
+    )
+    assert bodies == {uri: ""}
+    assert not fs.lock_timeouts
+
+
+@pytest.mark.asyncio
+async def test_capture_existing_raw_overview_does_not_read_storage():
+    uri = "viking://resources/wide"
+    files = _files(uri, pending=3)
+    fs = _FakeFS({})
+    fs.read_file = AsyncMock(side_effect=AssertionError("unexpected storage read"))
+    bodies = {}
+
+    assert (
+        await read_abstract_overview_pending_snapshot(
+            viking_fs=fs,
+            dir_uri=uri,
+            ctx=None,
+            existing_raw={1: files[f"{uri}/.overview.md"], 0: files[f"{uri}/.abstract.md"]},
+            overview_body_out=bodies,
+        )
+        == 3
+    )
+    assert bodies[uri].strip() == "overview"
+    fs.read_file.assert_not_awaited()
+    assert not fs.lock_timeouts
 
 
 @pytest.mark.asyncio
