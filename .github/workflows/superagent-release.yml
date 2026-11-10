@@ -118,7 +118,7 @@ jobs:
     if: github.event_name != 'pull_request' && !inputs.windows_preview_only
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    environment: superagent-release
+    environment: vika-release
     permissions:
       contents: write
     # Publishing runs one at a time, in order, and none is dropped: two runs of
@@ -391,7 +391,7 @@ jobs:
     # The ~100 MB ZIP goes up twice (versioned and latest) and a
     # GitHub runner reaches the Beijing bucket at roughly 1 Mbps.
     timeout-minutes: 60
-    environment: superagent-release
+    environment: vika-release
     concurrency:
       group: superagent-windows-preview-publish
       queue: max
