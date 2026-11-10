@@ -68,12 +68,15 @@ export function Popover({
   placement = 'right',
   trigger = 'hover',
   delay = 300,
+  open: controlledOpen,
+  role,
   disabled = false,
   className,
   style,
   onOpenChange,
 }: PopoverProps) {
-  const [open, setOpen] = useState(false);
+  const [localOpen, setOpen] = useState(false);
+  const open = !disabled && (controlledOpen ?? localOpen);
   const triggerRef = useRef<HTMLElement | null>(null);
   const timerRef = useRef<number | undefined>(undefined);
   // 用 state 而不是 ref 持有浮层节点：定位 effect 要在节点挂载后重跑，
@@ -212,7 +215,7 @@ export function Popover({
         <div
           ref={setSurfaceNode}
           id={id}
-          role={trigger === 'click' ? 'dialog' : 'note'}
+          role={role ?? (trigger === 'click' ? 'dialog' : 'note')}
           className={['ov-popover', className].filter(Boolean).join(' ')}
           data-placement={position.placement}
           style={{ top: position.top, left: position.left, ...style }}

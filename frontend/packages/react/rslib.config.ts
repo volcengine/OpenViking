@@ -28,6 +28,10 @@ export default defineConfig({
           'components/viking-bot/interaction':
             './src/components/viking-bot/interaction/index.ts',
           'modules/file-browser': './src/modules/file-browser/index.ts',
+          'components/wiki-dashboard':
+            './src/components/wiki-dashboard/index.ts',
+          'components/experience-dashboard':
+            './src/components/experience-dashboard/index.ts',
           'modules/console': './src/modules/console/index.ts',
         },
       },
@@ -72,6 +76,10 @@ export default defineConfig({
         './src/components/viking-bot/viking-bot-interaction.css',
       'modules/style': './src/modules/style.css',
       'modules/file-browser/style': './src/modules/file-browser/style.css',
+      'components/wiki-dashboard/style':
+        './src/components/wiki-dashboard/style.css',
+      'components/experience-dashboard/style':
+        './src/components/experience-dashboard/style.css',
       'modules/console/style': './src/modules/console/style.css',
     }).map(([name, entry]) => ({
       id: name.replaceAll('/', '-'),

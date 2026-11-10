@@ -1,0 +1,45 @@
+# ExperienceDashboard
+
+`ExperienceDashboard` is a pure UI view for Agent experience lists, effects, sources and optional test materials. It knows no APIs and needs no Provider. [FileBrowser](../modules/file-browser) or the host loads and adapts data. Layout, cards and SVGs follow Volcano release `release/openviking/2026-11-12`.
+
+## Example
+
+```tsx file="../../_demos/experience-dashboard-basic.tsx" preview
+
+```
+
+Fixed display data covers directory/file views, extra metrics and failure states. Missing metrics display “—”; supplied zero values display `0`. The Test tab appears only when `testMaterials` is supplied.
+
+## Integration
+
+```tsx
+import { ExperienceDashboard } from '@openviking/react/components/experience-dashboard';
+import '@openviking/react/components/experience-dashboard/style.css';
+
+<ExperienceDashboard uri="experience-id" kind="file" data={{}} />;
+```
+
+The view reports interaction intent without making requests. URI changes reset local interactions. The caller handles data loading, pagination and stale responses.
+
+## Props
+
+| Prop                 | Type / default                          | Description                                                                                                     |
+| -------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `uri`                | Required `string`                       | Current resource identity                                                                                       |
+| `kind`               | Required `directory` / `file`           | Explicit list or file view; resource type is not inferred from the URI                                          |
+| `data`               | `ExperienceDashboardData`               | Display model: experiences, metrics, outcomes, trajectories, sources and tests                                  |
+| `tab`                | `impact` / `source` / `test`            | Controlled tab; otherwise local, default `impact`                                                               |
+| `days`               | `number`                                | Controlled time range; otherwise local, default `7`; `0` means all time                                         |
+| `page`               | `number`, `0`                           | Zero-based page index                                                                                           |
+| `hasMore`            | `boolean`, `false`                      | Whether another page is available                                                                               |
+| `startIndex`         | `number`, `0`                           | Rows preceding this page, for displayed row numbers                                                             |
+| `states`             | Section states                          | `list`, `outcomes`, `trajectories`, `sources` and `tests` accept `{ loading?, error?, onRetry? }` independently |
+| `locale`             | `en-US` / `zh-CN`, inherited or `en-US` | Default copy and relative time                                                                                  |
+| `onTabChange`        | `(tab) => void`                         | Tab-change intent                                                                                               |
+| `onDaysChange`       | `(days: number) => void`                | Range-change intent                                                                                             |
+| `onPageChange`       | `(page: number) => void`                | Pagination intent; omitted callbacks disable paging                                                             |
+| `onOpenUri`          | `(uri: string) => void`                 | Resource-navigation intent                                                                                      |
+| `labels`             | `Partial<ExperienceDashboardLabels>`    | Copy overrides                                                                                                  |
+| `className`, `style` | HTML attributes                         | Layout and appearance; other HTML attributes pass through                                                       |
+
+Callers update controlled `tab` and `days` after callbacks; the view does not change them. Section errors and retries remain independent. Keyboard tabs, trajectory display, test-material copy and narrow-container scrolling are local UI behavior. Business Hooks are not public APIs.

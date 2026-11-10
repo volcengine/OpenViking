@@ -43,6 +43,8 @@ export function FileBrowser({
   defaultExpandedUri,
   locale: localeProp,
   agentConnect,
+  dashboardKinds,
+  renderDashboard,
   onUriChange,
   onImportResources,
   renderImportResources,
@@ -118,6 +120,9 @@ export function FileBrowser({
   const browser = useFileBrowser({
     rootUri,
     locale,
+    dashboardKinds,
+    renderDashboard,
+    dashboardLabels: labels?.dashboard,
     controlled: isControlled,
     summaryLabels,
     formatCharacterCount: text.formatCharacterCount,
@@ -155,6 +160,7 @@ export function FileBrowser({
             browser={browser}
             treeLabels={text.tree}
             locale={locale}
+            dashboardLabels={labels?.dashboard}
             searchPlaceholder={text.searchPlaceholder}
             refreshLabel={text.refresh}
             searchLoading={text.searchLoading}

@@ -1,5 +1,6 @@
 import { useLang } from '@rspress/core/runtime';
 import { useState } from 'react';
+import { dashboardDemoResponse, DEMO_WIKI } from '#dashboard-demo-data';
 import { OpenVikingProvider } from '@openviking/react/client';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
@@ -24,6 +25,7 @@ import '@openviking/react/modules/file-browser/style.css';
 interface Entry {
   uri: string;
   isDir?: boolean;
+  tags?: string[];
 }
 
 const USER = 'viking://user/alice';
@@ -67,6 +69,7 @@ const DIRS: Record<string, Entry[]> = {
   ],
   [ENTITIES]: [{ uri: `${ENTITIES}/openviking.md` }],
   [RESOURCES]: [
+    { uri: DEMO_WIKI, isDir: true, tags: ['compile_target=true'] },
     { uri: NOTES, isDir: true },
     { uri: `${RESOURCES}/2026-Q4-context-management-retrospective.md` },
     { uri: `${RESOURCES}/design-system-alignment-notes.md` },
@@ -154,6 +157,9 @@ function offlineFetch(
   const url = new URL(raw, 'https://offline.demo');
   const uri = url.searchParams.get('uri') ?? '';
   const body = typeof init?.body === 'string' ? init.body : '';
+
+  const board = dashboardDemoResponse(url);
+  if (board) return Promise.resolve(board);
 
   switch (url.pathname) {
     case '/api/v1/fs/ls':

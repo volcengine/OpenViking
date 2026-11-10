@@ -18,6 +18,10 @@
 export const OV_PATHS = {
   /** 列出目录内容。List directory contents. */
   fsLs: '/api/v1/fs/ls',
+  fsAttrs: '/api/v1/fs/attrs',
+  compileConfigs: '/api/v1/compile/configs',
+  experienceTrajectories: '/api/v1/agent-evolution/experiences/trajectories',
+  experienceOutcomes: '/api/v1/agent-evolution/experiences/outcomes',
   /** 读取条目状态。Read an entry's status. */
   fsStat: '/api/v1/fs/stat',
   /** 读取目录树。Read a directory tree. */

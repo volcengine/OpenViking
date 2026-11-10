@@ -6,3 +6,6 @@
 @import '../../components/file-tree/style.css';
 @import '../../components/file-preview/style.css';
 @import './file-browser.css';
+
+@import '../../components/wiki-dashboard/style.css';
+@import '../../components/experience-dashboard/style.css';

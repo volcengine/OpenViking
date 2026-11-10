@@ -1,6 +1,7 @@
 import type { Locale } from '../../shared/locale.js';
 import type { AgentConnectProps } from '../../components/agent-connect/index.js';
 import type { FileBrowserEntriesLabels } from '../../components/file-browser-entries/index.js';
+import type { FileBrowserDashboard } from './dashboard-model.js';
 import type {
   FilePreviewLabels,
   FilePreviewTab,
@@ -26,6 +27,15 @@ import type {
  * passed through as-is; the module shell only carries the strings
  * it renders itself.
  */
+export interface FileBrowserDashboardLabels {
+  experienceTitle?: string;
+  wikiTitle?: string;
+  openExperience?: string;
+  openWiki?: string;
+  wikiConflicts?: string;
+  failed?: string;
+}
+
 export interface FileBrowserLabels {
   /** 预览底部字符数。Character count in the preview footer. */
   formatCharacterCount?: (count: number) => string;
@@ -82,6 +92,7 @@ export interface FileBrowserLabels {
   entries?: FileBrowserEntriesLabels;
   /** 目录树文案。Copy of the file tree. */
   tree?: FileTreeLabels;
+  dashboard?: FileBrowserDashboardLabels;
   /** 预览文案。Copy of the file preview. */
   preview?: FilePreviewLabels;
 }
@@ -152,6 +163,8 @@ export interface FileBrowserProps extends Omit<
    * Configuration of the built-in connection drawer; enables its entry when provided.
    */
   agentConnect?: AgentConnectProps;
+  /** Host capability filter. Omitted enables both; an empty array disables discovery. */
+  dashboardKinds?: readonly FileBrowserDashboard['kind'][];
   /**
    * 当前资源变化后触发，参数为新的 URI。
    *
@@ -166,6 +179,8 @@ export interface FileBrowserProps extends Omit<
    * pane.
    */
   onUriChange?: (uri: string | null) => void;
+  /** Host gateway/view override; nullish values retain the native dashboard. */
+  renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
   /**
    * 默认导入按钮的点击回调，单独传入即可显示导入入口。
    * Click handler of the default import button; enables its entry on its own.
@@ -203,6 +218,8 @@ export interface FileBrowserProps extends Omit<
  * own view from these without the composite one.
  */
 export interface FileBrowserApi {
+  dashboards: ReadonlyMap<string, FileBrowserDashboard>;
+  dashboardError: Error | null;
   /** 按渲染顺序排列的可见行。Visible rows in render order. */
   rows: readonly FileTreeRow[];
   /** 当前选中的行 id。Selected row id. */
@@ -259,6 +276,7 @@ export interface FileBrowserApi {
 
 /** 模块 Hook 暴露的操作。Operations the module Hook exposes. */
 export interface FileBrowserActions {
+  openDashboard: (uri: string) => void;
   /** 选中条目。Selects an entry. */
   select: (row: FileTreeEntryRow) => Promise<void>;
   /** 展开或折叠目录。Expands or collapses a directory. */
@@ -273,4 +291,46 @@ export interface FileBrowserActions {
   setPreviewKey: (key: string) => void;
   /** 更新查询词；空串回到目录树。Updates the query; an empty string returns to the tree. */
   setQuery: (query: string) => void;
+}
+
+/** Internal options for the composed FileBrowser loader. */
+export interface UseFileBrowserOptions {
+  rootUri: string;
+  /** Built-in copy; inherits the Provider locale, otherwise en-US. */
+  locale?: Locale;
+  dashboardLabels?: FileBrowserDashboardLabels;
+  dashboardKinds?: readonly FileBrowserDashboard['kind'][];
+  renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
+  /**
+   * 宿主是否受控地持有当前资源。受控时 `currentUri` 就是唯一事实；非受控时
+   * `currentUri` 只是初始值，之后的选中由模块自己记在 `pendingUri` 里。
+   *
+   * 两者的区别只在「谁拥有选中」：非受控模块在初始没有选中时 `currentUri` 也是
+   * `null`，因此不能靠值来区分，必须显式声明。
+   *
+   * Whether the host owns the current resource. While controlled, `currentUri` is the
+   * single source of truth; while uncontrolled it is only the initial value and later
+   * selections live in the module's own `pendingUri`.
+   *
+   * The distinction is only about who owns the selection: an uncontrolled module also
+   * has a `null` `currentUri` when nothing is selected initially, so the value itself
+   * cannot tell the two apart and the mode has to be declared.
+   */
+  controlled?: boolean;
+  /**
+   * 目录两级摘要的标题与失败兜底文案。两级摘要各自可能请求失败，失败且服务端没给
+   * 消息时用 `failure` 显示——它必须可替换，否则宿主无法本地化。
+   *
+   * Titles of the two summary levels and the fallback copy for a failure. Either level
+   * can fail; when it fails without a server message, `failure` is shown — it has to be
+   * replaceable, or a host cannot localise it.
+   */
+  summaryLabels?: { l0: string; l1: string; failure: string };
+  /** 字符数文案；省略时跟随语言。Character count copy; follows the resolved locale. */
+  formatCharacterCount?: (count: number) => string;
+  /** 首次加载后自动展开到的路径。Path to expand to after the first load. */
+  defaultExpandedUri?: string;
+  currentUri: string | null;
+  requestOptions?: OvRequestOptions;
+  onUriChange: (uri: string | null) => void;
 }

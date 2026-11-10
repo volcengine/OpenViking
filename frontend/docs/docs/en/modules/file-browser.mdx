@@ -4,7 +4,7 @@ Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; w
 
 Directory navigation, search and content preview as one module. The module loads its own data; the host supplies configuration, the controlled current resource, connection configuration, import interactions and copy.
 
-The component already wires the tree, the search and the preview together: directories expand on demand and page, clicking a file loads the preview, and a search result opens the preview too. `useFileBrowser` can be used on its own to assemble a different view.
+The component already wires the tree, the search and the preview together: directories expand on demand and page, clicking a file loads the preview, and a search result opens the preview too. Data and coordination Hooks are internal; hosts use the component directly.
 
 ## Basic usage
 
@@ -110,4 +110,14 @@ The module loads its own data through `useFileBrowser`, so the host supplies no 
 
 `labels.formatCharacterCount(count)` overrides the preview footer’s character count. It follows `locale` by default.
 
-Standalone `useFileBrowser` accepts an optional `locale` (default `en-US`) and uses the same module resources as the composed view. `summaryLabels` and `formatCharacterCount` override summary titles, failure fallback and character counts. Changing language or copy updates presentation without reloading directory summaries or file content.
+## Built-in dashboards
+
+User `memories/experiences` directories and their direct Markdown files expose the experience dashboard. Wiki detection uses compile configurations or the `compile_target=true` resource marker, including descendant files/directories. Resource metadata wins over a missing registry. Ordinary resources have no Wiki tab; an identified Wiki retains its board when it has zero conflicts.
+
+Tree indicators open the board directly; preview tabs return to file content. FileBrowser's `style.css` includes both boards. See [WikiDashboard](../components/wiki-dashboard) and [ExperienceDashboard](../components/experience-dashboard) for native coverage and host data integration.
+
+`dashboardKinds?: readonly ('wiki' | 'experience')[]` enables both kinds by default; an empty array disables discovery and entries. The host applies product permissions. For example, `dashboardKinds={['experience']}` disables Wiki entries and compile discovery requests. Resource access remains enforced by the server.
+
+`renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode` integrates gateway data or replaces the composite view; a nullish result keeps the native view. The descriptor contains `kind`, `uri`, and optional Wiki `pendingConflicts`/`isRoot`.
+
+`labels.dashboard` overrides both tab titles, the three tree action names and discovery failure copy. Inner board copy is customized through each board's own `labels`, supplied through `renderDashboard` when composing FileBrowser.

@@ -13,7 +13,14 @@ import { act, createElement, startTransition } from 'react';
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   pretendToBeVisual: true,
 });
-for (const name of ['window', 'document', 'Node', 'Element', 'HTMLElement']) {
+for (const name of [
+  'window',
+  'document',
+  'Node',
+  'Element',
+  'HTMLElement',
+  'MutationObserver',
+]) {
   globalThis[name] = name === 'window' ? dom.window : dom.window[name];
 }
 Object.defineProperty(globalThis, 'navigator', {

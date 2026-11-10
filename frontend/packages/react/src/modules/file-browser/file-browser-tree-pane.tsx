@@ -1,4 +1,5 @@
 import type { Locale } from '../../shared/locale.js';
+import { dashboardLabels as resolveDashboardLabels } from './dashboard-labels.js';
 
 import { FileBrowserEntries } from '../../components/file-browser-entries/index.js';
 import type { FileBrowserEntriesProps } from '../../components/file-browser-entries/index.js';
@@ -8,8 +9,10 @@ import type {
   FileTreeLabels,
 } from '../../components/file-tree/index.js';
 import { FileBrowserToolbar } from './file-browser-toolbar.js';
+import { WikiBookIcon } from '../../icons/index.js';
+import { DashboardIndicator } from './dashboard-indicator.js';
 import { fileTypeIcon } from './fs-icon.js';
-import type { FileBrowserApi } from './types.js';
+import type { FileBrowserApi, FileBrowserDashboardLabels } from './types.js';
 
 /**
  * 左栏：内置入口条、搜索行与目录树。
@@ -29,6 +32,7 @@ export interface FileBrowserTreePaneProps {
     'agentConnect' | 'onImportResources' | 'renderImportResources' | 'labels'
   >;
   locale: Locale;
+  dashboardLabels?: FileBrowserDashboardLabels;
   searchId: string;
   browser: FileBrowserApi;
   treeLabels: FileTreeLabels | undefined;
@@ -45,6 +49,7 @@ export interface FileBrowserTreePaneProps {
 export function FileBrowserTreePane({
   entries,
   locale,
+  dashboardLabels,
   searchId,
   browser,
   treeLabels,
@@ -74,6 +79,23 @@ export function FileBrowserTreePane({
         onRefresh={() => void browser.actions.refresh()}
       />
       <div className="ov-file-browser__tree-scroll">
+        {browser.dashboardError ? (
+          <div
+            className="ov-file-browser__hint ov-file-browser__hint--error"
+            aria-live="polite"
+          >
+            <p>
+              {resolveDashboardLabels(locale, dashboardLabels).failed}:{' '}
+              {browser.dashboardError.message}
+            </p>
+            <button
+              type="button"
+              onClick={() => void browser.actions.refresh()}
+            >
+              {retryLabel}
+            </button>
+          </div>
+        ) : null}
         <FileTree
           locale={locale}
           rows={browser.rows}
@@ -120,7 +142,24 @@ export function FileBrowserTreePane({
               )
             ) : undefined
           }
-          renderRowIcon={(row: FileTreeEntryRow) => fileTypeIcon(row.name)}
+          renderRowIcon={(row: FileTreeEntryRow) =>
+            browser.dashboards.get(row.uri)?.isRoot ? (
+              <WikiBookIcon width={14} height={14} />
+            ) : (
+              fileTypeIcon(row.name)
+            )
+          }
+          renderDashboard={(row) => {
+            const dashboard = browser.dashboards.get(row.uri);
+            return dashboard ? (
+              <DashboardIndicator
+                dashboard={dashboard}
+                locale={locale}
+                labels={dashboardLabels}
+                onOpen={browser.actions.openDashboard}
+              />
+            ) : null;
+          }}
           operations={{
             select: browser.actions.select,
             toggleExpand: browser.actions.toggleExpand,

@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from 'react';
 
+import { toEntryRow } from './fs-model.js';
 import type { DirState } from './fs-model.js';
 /**
  * 树已知的目录 URI 集合：根目录，加上每一层已加载条目里标记为目录的那些。
@@ -61,4 +62,24 @@ export function useKnownFile(
 ): (uri: string) => boolean {
   const files = useMemo(() => knownFiles(dirs), [dirs]);
   return useCallback((uri: string) => files.has(uri), [files]);
+}
+
+/** Loaded resource metadata survives collapsed ancestors, unlike the visible rows. */
+export function useTreeMetadata(
+  rootUri: string,
+  dirs: Record<string, DirState>,
+) {
+  const directoryUris = useMemo(
+    () => knownDirectories(rootUri, dirs),
+    [rootUri, dirs],
+  );
+  const isKnownFile = useKnownFile(dirs);
+  const metadataRows = useMemo(
+    () =>
+      Object.values(dirs).flatMap((dir) =>
+        dir.entries.map((entry) => toEntryRow(entry, 0, false)),
+      ),
+    [dirs],
+  );
+  return { directoryUris, isKnownFile, metadataRows };
 }

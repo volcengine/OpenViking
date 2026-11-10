@@ -1,57 +1,24 @@
 import { useLocale } from '../../shared/locale-context.js';
-import type { Locale } from '../../shared/locale.js';
 import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
 import { useMemo, useRef, useState } from 'react';
+import { selectedRowId } from './fs-selection.js';
 
 import type {
   FileTreeEntryRow,
   FileTreeRow,
 } from '../../components/file-tree/index.js';
 import { useOvClient } from '../../client/provider.js';
-import type { OvRequestOptions } from '../../client/types.js';
 import { toEntryRow } from './fs-model.js';
 import { useFsPreview } from './use-fs-preview.js';
 import { useFsSearch } from './use-fs-search.js';
+import { dashboardKey } from './dashboard-model.js';
+import { useBrowserDashboards } from './use-browser-dashboards.js';
 import { useFsTree } from './use-fs-tree.js';
-import type { FileBrowserActions, FileBrowserApi } from './types.js';
-
-export interface UseFileBrowserOptions {
-  rootUri: string;
-  /** Built-in copy; inherits the Provider locale, otherwise en-US. */
-  locale?: Locale;
-  /**
-   * 宿主是否受控地持有当前资源。受控时 `currentUri` 就是唯一事实；非受控时
-   * `currentUri` 只是初始值，之后的选中由模块自己记在 `pendingUri` 里。
-   *
-   * 两者的区别只在「谁拥有选中」：非受控模块在初始没有选中时 `currentUri` 也是
-   * `null`，因此不能靠值来区分，必须显式声明。
-   *
-   * Whether the host owns the current resource. While controlled, `currentUri` is the
-   * single source of truth; while uncontrolled it is only the initial value and later
-   * selections live in the module's own `pendingUri`.
-   *
-   * The distinction is only about who owns the selection: an uncontrolled module also
-   * has a `null` `currentUri` when nothing is selected initially, so the value itself
-   * cannot tell the two apart and the mode has to be declared.
-   */
-  controlled?: boolean;
-  /**
-   * 目录两级摘要的标题与失败兜底文案。两级摘要各自可能请求失败，失败且服务端没给
-   * 消息时用 `failure` 显示——它必须可替换，否则宿主无法本地化。
-   *
-   * Titles of the two summary levels and the fallback copy for a failure. Either level
-   * can fail; when it fails without a server message, `failure` is shown — it has to be
-   * replaceable, or a host cannot localise it.
-   */
-  summaryLabels?: { l0: string; l1: string; failure: string };
-  /** 字符数文案；省略时跟随语言。Character count copy; follows the resolved locale. */
-  formatCharacterCount?: (count: number) => string;
-  /** 首次加载后自动展开到的路径。Path to expand to after the first load. */
-  defaultExpandedUri?: string;
-  currentUri: string | null;
-  requestOptions?: OvRequestOptions;
-  onUriChange: (uri: string | null) => void;
-}
+import type {
+  FileBrowserActions,
+  FileBrowserApi,
+  UseFileBrowserOptions,
+} from './types.js';
 
 /**
  * 文件浏览模块的取数与联动：把目录树、搜索与预览组合成一份视图数据。三者各自
@@ -65,6 +32,9 @@ export interface UseFileBrowserOptions {
 export function useFileBrowser({
   rootUri,
   locale: localeProp,
+  dashboardKinds,
+  renderDashboard,
+  dashboardLabels,
   controlled = false,
   summaryLabels,
   formatCharacterCount,
@@ -207,16 +177,41 @@ export function useFileBrowser({
     );
   }, [search.results, tree.rows]);
 
-  const selectedId = useMemo(() => {
-    if (!activeUri || search.results === null) return activeUri;
-    const index = search.results.findIndex((entry) => entry.uri === activeUri);
-    return index < 0 ? activeUri : `${activeUri}#${index}`;
-  }, [activeUri, search.results]);
+  const openPath = tree.openPath;
+  const openResource = useMemo(
+    () => async (uri: string) => {
+      setPendingUri(uri);
+      notifyUriChange.current(uri);
+      const directory = tree.directoryUris.has(uri)
+        ? uri
+        : uri.slice(0, uri.lastIndexOf('/'));
+      await openPath(directory);
+    },
+    [openPath, tree.directoryUris],
+  );
+
+  const boards = useBrowserDashboards({
+    rows,
+    metadataRows: tree.metadataRows,
+    uri: activeUri,
+    rootUri,
+    generation: refreshGeneration,
+    locale,
+    requestOptions,
+    onOpenUri: openResource,
+    dashboardKinds,
+    renderDashboard,
+    dashboardLabels,
+  });
+
+  const selectedId = selectedRowId(activeUri, search.results);
 
   // 解构出具体操作，`select` 里因此不再碰整个 `tree` 对象。
   // Destructure the operations so `select` never touches the whole `tree` object.
   const { open, toggleExpand, loadMore, retry, refresh } = tree;
 
+  const { open: openDashboard, close: closeDashboard } = boards;
+  const setActiveKey = preview.setActiveKey;
   const actions = useMemo<FileBrowserActions>(
     () => ({
       // 目录与文件都上报当前资源：控制台里点目录既展开也选中，右侧显示该目录的
@@ -235,6 +230,7 @@ export function useFileBrowser({
       // resource the user picked in the meantime. The selection belongs to the moment
       // of the click, not to a listing that arrives afterwards.
       select: async (row: FileTreeEntryRow) => {
+        closeDashboard();
         setPendingUri(row.uri);
         notifyUriChange.current(row.uri);
         if (row.type === 'directory') await open(row.uri);
@@ -266,7 +262,15 @@ export function useFileBrowser({
           setRefreshing(false);
         }
       },
-      setPreviewKey: preview.setActiveKey,
+      openDashboard: openDashboard,
+      setPreviewKey: (key: string) => {
+        if (activeUri && key === dashboardKey(activeUri))
+          openDashboard(activeUri);
+        else {
+          closeDashboard();
+          setActiveKey(key);
+        }
+      },
       setQuery,
     }),
     // 依赖收窄到具体的操作函数，不依赖整个 `tree`：后者每次展开都换新引用，
@@ -275,7 +279,17 @@ export function useFileBrowser({
     // Narrow the dependencies to the operations themselves rather than the whole
     // `tree`: the latter gets a new identity on every expansion, which would
     // replace `actions` and with it the `operations` handed to `FileTree`.
-    [preview.setActiveKey, open, toggleExpand, loadMore, retry, refresh],
+    [
+      setActiveKey,
+      open,
+      toggleExpand,
+      loadMore,
+      retry,
+      refresh,
+      openDashboard,
+      closeDashboard,
+      activeUri,
+    ],
   );
 
   return {
@@ -295,8 +309,13 @@ export function useFileBrowser({
     treeError: tree.error,
     previewError: preview.error,
     searchError: search.error,
-    previewTabs: preview.tabs,
-    previewKey: preview.activeKey,
+    dashboards: boards.dashboards,
+    dashboardError: boards.error,
+    previewTabs: boards.tab
+      ? [...(preview.tabs ?? []), boards.tab]
+      : preview.tabs,
+    previewKey:
+      boards.isOpen && activeUri ? dashboardKey(activeUri) : preview.activeKey,
     previewFooter: preview.footer,
     query,
     searching: search.results !== null,
