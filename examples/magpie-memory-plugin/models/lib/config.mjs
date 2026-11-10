@@ -49,8 +49,8 @@ export async function settings(options = {}, env = process.env) {
   if (!["preserve", "follow", "independent"].includes(queryMode)) throw new AdapterError("invalid_query_mode");
   const manageVlm = config.manageVlm ?? true;
   if (typeof manageVlm !== "boolean" || (!manageVlm && (botMode === "follow" || queryMode === "follow"))) throw new AdapterError("invalid_model_roles");
-  // Native forms retain inactive fields. Only consume the model in independent
-  // mode; an empty field means the Agent selection, as the UI promises.
+  // Only independent roles consume their model IDs. Empty means the Agent
+  // selection; inactive IDs may remain in existing Options.
   if (botMode === "independent" && config.botModel != null && typeof config.botModel !== "string") throw new AdapterError("invalid_bot_model");
   const botModel = botMode === "independent" ? config.botModel?.trim() || undefined : undefined;
   if (queryMode === "independent" && config.queryModel != null && typeof config.queryModel !== "string") throw new AdapterError("invalid_query_model");

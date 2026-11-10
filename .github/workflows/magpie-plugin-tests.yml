@@ -3,17 +3,15 @@ name: OpenViking Magpie plugin
 on:
   pull_request:
     paths:
-      - "examples/magpie-models-plugin/**"
       - "examples/magpie-memory-plugin/**"
       - "examples/memory-plugin-shared/lib/**"
-      - ".github/workflows/magpie-models-plugin-tests.yml"
+      - ".github/workflows/magpie-plugin-tests.yml"
   push:
     branches: [main]
     paths:
-      - "examples/magpie-models-plugin/**"
       - "examples/magpie-memory-plugin/**"
       - "examples/memory-plugin-shared/lib/**"
-      - ".github/workflows/magpie-models-plugin-tests.yml"
+      - ".github/workflows/magpie-plugin-tests.yml"
 
 permissions:
   contents: read

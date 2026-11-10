@@ -67,13 +67,13 @@ VLM 继续在 **Agents → OpenViking** 选择。在 **Plugins → OpenViking �
 }
 ```
 
-模型 ID 须来自 Magpie 模型目录，也可以填写路由组 `group/name`。不新增页面或面板，也没有原生多档位下拉界面。`queryMode: "preserve"` 会释放 Query 接管并恢复原配置；`"follow"` 移除整个可选配置，继承 VLM 模型及生成参数。`queryParameters` 仅在独立模式生效。Query 配置段整体保存恢复记录：接管期间手动修改其中任意字段都会阻止恢复，不会覆盖用户修改。原本为 `null` 或不存在的配置段也会准确还原。默认不启用 Bot，不改变 Query。
+模型 ID 须来自 Magpie 模型目录，也可以填写路由组 `group/name`。`queryMode: "preserve"` 会释放 Query 接管并恢复原配置；`"follow"` 移除整个可选配置，继承 VLM 模型及生成参数。`queryParameters` 仅在独立模式生效。Query 配置段整体保存恢复记录：接管期间手动修改其中任意字段都会阻止恢复，不会覆盖用户修改。原本为 `null` 或不存在的配置段也会准确还原。默认不启用 Bot，不改变 Query。
 
 仅修改 Query 同样通过现有生命周期重启并验证 OV。账号覆盖不在管理范围：账号显式 Query 配置可覆盖启动配置；账号未配置 Query、但有自己的 VLM 时，账号 VLM 也可能优先于服务端 Query。不能仅凭启动文件判断所有账号的实际模型。
 
 ### 输出预算和生成参数
 
-本插件仅提供 Agent 模型切换和自动重启验证，不提供配置页面或设置面板，不修改 Magpie 宿主。未指定的模型参数沿用现有配置；输出预算仍按所选模型的已知上限校验。
+未指定的模型参数沿用现有配置；输出预算仍按所选模型的已知上限校验。
 
 Options / `adapter.json` 中对应 `vlmParameters`、`queryParameters`（仅独立 Query）与 `botParameters`，使用统一的 snake_case 字段：
 

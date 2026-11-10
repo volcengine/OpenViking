@@ -67,13 +67,13 @@ Keep the VLM model picker in **Agents → OpenViking**. In **Plugins → OpenVik
 }
 ```
 
-Use an exact model ID offered by Magpie, including `group/name` for a route group. There is no additional page/panel or native multi-picker tier UI. `queryMode: "preserve"` releases Query ownership and restores its original configuration; `"follow"` removes the entire optional section so it inherits VLM, including generation parameters. `queryParameters` applies only in independent mode. The Query section is journaled atomically: manual changes anywhere in an owned section block restoration rather than being overwritten. Original null/absent sections restore exactly. Defaults do not enable Bot or modify Query.
+Use an exact model ID offered by Magpie, including `group/name` for a route group. `queryMode: "preserve"` releases Query ownership and restores its original configuration; `"follow"` removes the entire optional section so it inherits VLM, including generation parameters. `queryParameters` applies only in independent mode. The Query section is journaled atomically: manual changes anywhere in an owned section block restoration rather than being overwritten. Original null/absent sections restore exactly. Defaults do not enable Bot or modify Query.
 
 Query-only changes also restart and verify OV using the existing lifecycle. Account overrides remain outside scope: an account's explicit Query Planner can override startup settings, and an account VLM can take precedence over startup Query Planner when the account has no explicit Query configuration. Do not infer effective models from the startup file alone.
 
 ### Generation parameters
 
-This plugin provides only Agent model selection and automatic restart verification, with no configuration page or panel and no host modifications. Unspecified model parameters retain their existing values; output budgets are still checked against known model limits.
+Unspecified model parameters retain their existing values; output budgets are still checked against known model limits.
 
 Use `vlmParameters`, `queryParameters` (independent Query only) and `botParameters` in Options or `adapter.json`:
 

@@ -94,7 +94,7 @@ export function plan(document, records, desired) {
     }
   }
   if (conflicts.length) return { conflicts };
-  return { conflicts, document: output, records: next, changed: !equal(output, document) };
+  return { conflicts, document: output, records: next };
 }
 
 export function acknowledge(records) {
