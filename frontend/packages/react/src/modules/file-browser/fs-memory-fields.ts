@@ -13,6 +13,10 @@
  * - 连续多块尾注一起剥掉；
  * - 只在记忆命名空间生效，资源与技能文件不经过这一步。
  *
+ * 空白与「单词字符」都按 Python 的语义判定，不沿用 JS 的 `\s` / `\b` / `trim()`：
+ * 两者集合并不相同，照搬会在默认 `raw=false` 路径上删掉服务端已经保留的正文。
+ * 详见下面两个字符集的说明。
+ *
  * The `MEMORY_FIELDS` comment at the end of a memory file: internal metadata the
  * server writes for its own bookkeeping (version, trace ids, memory type). It is not
  * part of the body and must not reach the preview.
@@ -30,8 +34,92 @@
  * - consecutive trailing blocks are all removed;
  * - it applies to the memory namespace only — resource and skill files never go
  *   through it.
+ *
+ * Whitespace and "word characters" follow Python's definitions rather than JS's
+ * `\s` / `\b` / `trim()`. The two sets differ, and copying JS's would delete body text
+ * the server deliberately kept on the default `raw=false` path. Both sets are spelled
+ * out below.
  */
-const MEMORY_FIELDS_COMMENT = /<!--\s*MEMORY_FIELDS\b[\s\S]*?\s*-->/g;
+
+/**
+ * Python `\s` / `str.strip()` 认定的空白字符。与 JS 的 `\s` 有两处方向相反的差异：
+ *
+ * - JS 不认 `\x1c`–`\x1f`（文件/组/记录/单元分隔符）和 `\x85`（NEL），Python 认；
+ * - JS 认 U+FEFF（BOM），Python 不认。
+ *
+ * 照搬 JS 的 `\s`，前者会让「尾注后跟 NEL」不被识别，后者会把「正文末尾的 BOM」
+ * 当成尾注前的空白而删掉正文。
+ *
+ * The whitespace Python's `\s` and `str.strip()` recognise. Two differences from JS's
+ * `\s` run in opposite directions:
+ *
+ * - JS omits `\x1c`–`\x1f` (file/group/record/unit separators) and `\x85` (NEL);
+ *   Python includes them;
+ * - JS includes U+FEFF (BOM); Python does not.
+ *
+ * Copying JS's `\s` would miss a trailer followed by NEL, and would treat a BOM after
+ * the body as separator whitespace and delete that body.
+ */
+const PY_WHITESPACE_CODES = [
+  0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x85, 0xa0,
+  0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007,
+  0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000,
+];
+
+/** 上面的码位组成的字符串，用于 `includes` 与正则字符类。
+ *  The same code points as a string, for `includes` and a regex character class. */
+const PY_WHITESPACE = String.fromCharCode(...PY_WHITESPACE_CODES);
+
+/**
+ * Python `\w` 的集合：Unicode 的字母、数字与下划线。JS 的 `\w` 只有 ASCII，`\b`
+ * 因此把 `é`、`中` 这类字母当成非单词字符——`<!-- MEMORY_FIELDSé {} -->` 会被
+ * 误判为保留标记而删掉，而 Python 后端不会。
+ *
+ * 用 `\p{L}` / `\p{N}` 表达 Unicode 字母与数字，加上下划线，正好等价于 Python 的
+ * `\w`（逐码位比对过：0 处不一致）。
+ *
+ * The set Python's `\w` covers: Unicode letters, numbers and the underscore. JS's `\w`
+ * is ASCII-only, so its `\b` treats `é` or `中` as a non-word character —
+ * `<!-- MEMORY_FIELDSé {} -->` would be taken for a reserved marker and deleted, while
+ * the Python backend leaves it alone.
+ *
+ * `\p{L}` and `\p{N}` for Unicode letters and numbers plus the underscore is exactly
+ * Python's `\w` (compared code point by code point: no difference).
+ */
+const PY_WORD = '\\p{L}\\p{N}_';
+
+/**
+ * 一个保留注释：`<!--`、空白、`MEMORY_FIELDS`、**非单词字符**、任意内容、`-->`。
+ *
+ * 第三个分组要求 `MEMORY_FIELDS` 后面不能紧跟单词字符，对应 Python 正则里的
+ * `MEMORY_FIELDS\b`；用前瞻表达，避免依赖 JS 的 ASCII `\b`。
+ *
+ * A reserved comment: `<!--`, whitespace, `MEMORY_FIELDS`, a **non-word** character,
+ * any content, then `-->`.
+ *
+ * The third group requires no word character right after `MEMORY_FIELDS`, which is what
+ * `MEMORY_FIELDS\b` means in the Python pattern; a lookahead expresses it without
+ * relying on JS's ASCII-only `\b`.
+ */
+const MEMORY_FIELDS_COMMENT = new RegExp(
+  `<!--[${PY_WHITESPACE}]*MEMORY_FIELDS(?![${PY_WORD}])[\\s\\S]*?[${PY_WHITESPACE}]*-->`,
+  'gu',
+);
+
+/** 文本是否只由 Python 认定的空白组成。Whether the text is nothing but Python whitespace. */
+function isPythonBlank(text: string): boolean {
+  for (const char of text) {
+    if (!PY_WHITESPACE.includes(char)) return false;
+  }
+  return true;
+}
+
+/** 去掉结尾的 Python 空白。Drops the trailing Python whitespace. */
+function trimPythonEnd(text: string): string {
+  let end = text.length;
+  while (end > 0 && PY_WHITESPACE.includes(text[end - 1] ?? '')) end--;
+  return text.slice(0, end);
+}
 
 /** 拆分 Viking URI 的路径段，忽略查询串与末尾斜杠。Path segments of a Viking URI. */
 function uriParts(uri: string): string[] {
@@ -83,9 +171,9 @@ export function stripMemoryFieldsTrailer(text: string): string {
     let match: RegExpExecArray | null;
     while ((match = MEMORY_FIELDS_COMMENT.exec(visible)) !== null) {
       const after = visible.slice(match.index + match[0].length);
-      if (after.trim() === '') start = match.index;
+      if (isPythonBlank(after)) start = match.index;
     }
     if (start < 0) return visible;
-    visible = visible.slice(0, start).trimEnd();
+    visible = trimPythonEnd(visible.slice(0, start));
   }
 }

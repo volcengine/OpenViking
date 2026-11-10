@@ -221,3 +221,43 @@ test('a file of exactly the cap keeps its last newline', async () => {
   assert.equal(content, body);
   assert.equal(truncated, false);
 });
+
+test('whitespace after the trailer follows Python, not JS', async () => {
+  // 尾注后是不是「只剩空白」，按 Python 的空白集合判断。JS 的 `trim()` 不认 NEL
+  // 和 \x1c–\x1e，会把这种尾注当成正文留在预览里；反过来它认 BOM，会把正文末尾
+  // 的 BOM 当空白而连正文一起删掉。
+  //
+  // Whether only whitespace follows the trailer is decided by Python's whitespace set.
+  // JS's `trim()` omits NEL and \x1c–\x1e, so such a trailer would stay in the preview;
+  // and it includes BOM, so a body ending in one would be deleted along with it.
+  for (const separator of ['\u0085', '\u001c', '\u001d', '\u001e']) {
+    const body = `# Body\n\n<!-- MEMORY_FIELDS\n{}\n-->${separator}`;
+    const { content } = await previewOf(MEMORY, body);
+    assert.equal(content, '# Body', `separator ${JSON.stringify(separator)}`);
+  }
+
+  const withBom = '# Body\n\n<!-- MEMORY_FIELDS\n{}\n-->\uFEFF';
+  const { content } = await previewOf(MEMORY, withBom);
+  assert.equal(content, withBom);
+});
+
+test('a letter right after MEMORY_FIELDS is not a reserved marker', async () => {
+  // 保留标记要求 `MEMORY_FIELDS` 后面不紧跟单词字符。JS 的 `\b` 只认 ASCII，会把
+  // `é`、`中` 当成非单词字符，于是把正文里的 `<!-- MEMORY_FIELDSé ... -->` 删掉；
+  // Python 的 `\b` 认 Unicode 字母，不会删。
+  //
+  // The reserved marker requires no word character right after `MEMORY_FIELDS`. JS's
+  // `\b` is ASCII-only, so it treats `é` and `中` as non-word characters and deletes a
+  // body comment like `<!-- MEMORY_FIELDSé ... -->`; Python's `\b` knows Unicode
+  // letters and leaves it alone.
+  for (const letter of ['é', '中', 'Ⅻ', '⑤']) {
+    const body = `# Body\n<!-- MEMORY_FIELDS${letter} {} -->`;
+    const { content } = await previewOf(MEMORY, body);
+    assert.equal(content, body, `letter ${letter}`);
+  }
+
+  // 下划线属于单词字符，同样不是保留标记。
+  // The underscore is a word character too, so it is not a reserved marker either.
+  const underscored = '# Body\n<!-- MEMORY_FIELDS_ {} -->';
+  assert.equal((await previewOf(MEMORY, underscored)).content, underscored);
+});
