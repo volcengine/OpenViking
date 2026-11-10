@@ -9,11 +9,11 @@
 // and its settlement), events (what DSH reports back) and models (route
 // selection). The modules only define functions; installing them here keeps a
 // single class with a single public surface.
-import { spawn as nodeSpawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { assembleConversationPolicy } from './conversation-policy.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { DSH_DEFAULT_MODEL, DSH_EFFORTS } from './dsh-runtime.mjs';
+import { spawn as platformSpawn } from './platform/index.mjs';
 import { delay, installMembers } from './dsh/shared.mjs';
 import events from './dsh/events.mjs';
 import models from './dsh/models.mjs';
@@ -61,7 +61,10 @@ export class DshAgent {
     this.config = config;
     this.store = store;
     this.logger = logger;
-    this._spawn = options.spawn ?? nodeSpawn;
+    // Platform spawn, like the other runtimes: npm installs `dsh` as a .cmd shim
+    // on Windows, and a raw child_process.spawn of that shim throws EINVAL
+    // (CreateProcess cannot run a batch file), which start-looped the daemon.
+    this._spawn = options.spawn ?? platformSpawn;
     this._versionProbe = options.versionProbe ?? null;
     this._environment = options.environment ?? process.env;
     this._delay = options.delay ?? delay;
