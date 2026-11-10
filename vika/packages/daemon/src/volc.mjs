@@ -4,7 +4,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { assembleVolcCloudConversationPolicy } from './conversation-policy.mjs';
-import { MAToolExecutor, maTools, maToolsHash } from './volc-tools.mjs';
+import { MAToolExecutor, maTools, maToolsHash, maAgentModel, maAgentModelChanged } from './volc-tools.mjs';
 import { MAFiles } from './volc-files.mjs';
 import { safeError as safe } from './logger.mjs';
 import { activityPayload } from './activity.mjs';
@@ -110,6 +110,10 @@ export class VolcAgent {
 
     this.baseUrl = String(config.volcBaseUrl ?? 'https://ark.cn-beijing.volces.com/api/v3').replace(/\/+$/, '');
     this.apiKey = config.volcApiKey ?? '';
+    // BYOK model key: MA strips the X-User-Model-Header- prefix and forwards
+    // Authorization to the provider. Sent on events POSTs only, never stored.
+    this.byok = Boolean(config.volcModelByok);
+    this.modelApiKey = this.byok ? String(config.volcModelApiKey ?? '').trim() : '';
     this.templateSessionId = config.volcSessionId ?? '';
     this.requestTimeoutMs = config.volcRequestTimeoutMs ?? 30_000;
     this.streamIdleTimeoutMs = config.volcStreamIdleTimeoutMs ?? 900_000;
@@ -174,6 +178,9 @@ export class VolcAgent {
   async start() {
     if (typeof this.fetch !== 'function') throw new Error('Volc managed-agent runtime requires fetch');
     if (!this.apiKey) throw new Error('ARK_API_KEY is required for the Volc managed-agent runtime');
+    if (this.byok && !this.modelApiKey) {
+      throw new Error('VIKA_VOLC_MODEL_API_KEY is required when VIKA_VOLC_MODEL_PROVIDER is set');
+    }
     if (!this.templateSessionId) {
       throw new Error('VIKA_VOLC_SESSION_ID (or SESSION_ID) is required for the Volc managed-agent runtime');
     }
@@ -340,6 +347,11 @@ export class VolcAgent {
         tools: [...(latest.tools ?? []).filter((tool) => tool.type !== 'custom'), ...desired] } });
       if (maToolsHash(remote.tools ?? []) !== this.toolsHash) throw new Error('MA did not preserve the Core tool schemas');
     }
+    // The model key header only works against the BYOK model block, and a BYOK
+    // Agent fails without it. VIKA_VOLC_AGENT_SYNC=update never syncs the model.
+    if (this.byok ? maAgentModelChanged(remote.model, maAgentModel(this.config)) : remote.model?.base_url != null) {
+      throw new Error(`MA Agent model does not match ${this.byok ? 'the BYOK' : 'the non-BYOK'} config: run scripts/volc-sync-agent.mjs and update VIKA_VOLC_SESSION_ID`);
+    }
     this.template.agent = { ...this.template.agent, version: remote.version };
   }
 
@@ -431,14 +443,14 @@ export class VolcAgent {
     };
   }
 
-  async _request(path, { method = 'GET', body = null, accept = 'application/json', signal = null } = {}) {
+  async _request(path, { method = 'GET', body = null, accept = 'application/json', signal = null, headers: extraHeaders = null } = {}) {
     const controller = signal ? null : new AbortController();
     const timer = controller
       ? setTimeout(() => controller.abort(new Error('request timed out')), this.requestTimeoutMs)
       : null;
     timer?.unref?.();
     try {
-      const headers = this._headers(accept);
+      const headers = { ...this._headers(accept), ...extraHeaders };
       if (body !== null) headers['Content-Type'] = 'application/json';
       const response = await this.fetch(`${this.baseUrl}${path}`, {
         method,
@@ -721,6 +733,9 @@ export class VolcAgent {
     return await this._json(`/sessions/${encodeURIComponent(this.sessionId)}/events`, {
       method: 'POST',
       body: { events },
+      headers: this.modelApiKey ? {
+        'X-User-Model-Header-Authorization': /^Bearer\s/i.test(this.modelApiKey) ? this.modelApiKey : `Bearer ${this.modelApiKey}`,
+      } : null,
     });
   }
 

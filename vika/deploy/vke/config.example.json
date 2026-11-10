@@ -5,6 +5,7 @@
     "VIKA_TIMER_STORAGE": "sqlite",
     "VIKA_VOLC_AGENT_SYNC": "check",
     "VIKA_VOLC_FILES": "on",
+    "VIKA_VOLC_MODEL": "doubao-seed-2-1-turbo-260628",
     "VIKA_LARK_SUBSCRIPTION": "sdk",
     "VIKA_LARK_WS_CREDENTIALS": "/data/vika/lark-ws.json",
     "LARKSUITE_CLI_CONFIG_DIR": "/data/lark-cli"

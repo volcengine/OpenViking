@@ -57,6 +57,14 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'VIKA_VOLC_STREAM_IDLE_TIMEOUT_MS',
   'VIKA_VOLC_AGENT_SYNC',
   'VIKA_VOLC_FILES',
+  // The MA Agent's model; BYOK when VIKA_VOLC_MODEL_PROVIDER is set.
+  'VIKA_VOLC_MODEL',
+  'VIKA_VOLC_MODEL_PROVIDER',
+  'VIKA_VOLC_MODEL_BASE_URL',
+  'VIKA_VOLC_MODEL_PROTOCOL',
+  'VIKA_VOLC_MODEL_CONTEXT_WINDOW',
+  'VIKA_VOLC_MODEL_MAX_INPUT_TOKENS',
+  'VIKA_VOLC_MODEL_MAX_OUTPUT_TOKENS',
   'FALLBACK_MODEL',
   'VIKA_HISTORY_LIMIT',
 ]);
@@ -65,6 +73,8 @@ const DAEMON_ENV_FIELDS = Object.freeze([
 const DAEMON_SECRET_ENV_FIELDS = Object.freeze([
   'ARK_API_KEY',
   'ARK_MA_API_KEY',
+  // The BYOK model key of the MA runtime, sent per events POST, never stored in MA.
+  'VIKA_VOLC_MODEL_API_KEY',
   // Providers of the durable runtime (pi-ai) read their key from the child
   // environment. They may come from the operator environment or ~/.vika/secrets
   // but never from the deployment manifest.

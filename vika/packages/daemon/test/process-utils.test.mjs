@@ -114,6 +114,7 @@ test('CLI discovery preserves the agent credential boundary and leaves connector
     PATH: '/usr/bin:/bin', LARK_CLI_BIN: '/ignored/lark-cli', LARK_APP_SECRET: 'secret',
     FEISHU_TOKEN: 'secret', LARKSUITE_CLI_PROFILE: 'wrong', VIKA_PRIVATE: 'secret',
     ARK_API_KEY: 'secret', VOLCENGINE_TOKEN: 'secret', SESSION_ID: 'secret', CLAUDECODE: 'nested',
+    VIKA_VOLC_MODEL_API_KEY: 'model-secret',
     OPENAI_API_KEY: 'model-key', OPENVIKING_CLI_CONFIG_FILE: '/tmp/ov.conf',
   };
   const before = { ...inherited };
@@ -129,7 +130,10 @@ test('CLI discovery preserves the agent credential boundary and leaves connector
   assert.equal(env.OPENVIKING_CLI_CONFIG_FILE, '/tmp/ov.conf');
   assert.equal(env.PERSONAL_AGENT_SOCKET, '/tmp/actions.sock');
   assert.equal(env.PERSONAL_AGENT_AUTHORITY, 'authority');
+  assert.equal(env.VIKA_VOLC_MODEL_API_KEY, undefined);
   assert.equal(sanitizeNonArkChildEnv(inherited).PATH, inherited.PATH);
+  // Connector children (sanitizeNonArkChildEnv only) never see the MA BYOK key either.
+  assert.equal(sanitizeNonArkChildEnv(inherited).VIKA_VOLC_MODEL_API_KEY, undefined);
   assert.deepEqual(inherited, before);
 });
 

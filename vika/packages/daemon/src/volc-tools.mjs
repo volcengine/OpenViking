@@ -34,6 +34,31 @@ export function maToolsHash(tools) {
     .map(({ name, description, input_schema }) => ({ name, description, input_schema }))
     .sort((a, b) => a.name.localeCompare(b.name)))).digest('hex');
 }
+export const MA_DEFAULT_MODEL = 'doubao-seed-2-1-turbo-260628';
+
+// The Agent's model block (scripts/volc-sync-agent.mjs). BYOK carries no
+// credential: the model key rides on each events POST (volc.mjs).
+export function maAgentModel(config) {
+  const id = config.volcModel || MA_DEFAULT_MODEL;
+  const byok = config.volcModelByok;
+  if (!byok) return { id };
+  return { id, provider: byok.provider, base_url: byok.baseUrl, protocol: byok.protocol,
+    token_limits: { ...byok.tokenLimits } };
+}
+
+// MA may echo more model fields than it was sent; compare only the sent ones.
+function pickSent(remote, desired) {
+  if (!desired || typeof desired !== 'object' || Array.isArray(desired)) return remote;
+  return Object.fromEntries(Object.keys(desired).map((key) => [key, pickSent(remote?.[key], desired[key])]));
+}
+
+export function maAgentModelChanged(remoteModel, desiredModel) {
+  // Rolling BYOK back: only a Direct provider has a base_url (MA may echo its
+  // own provider name for a built-in model, so provider is no marker).
+  if (!desiredModel.base_url && remoteModel?.base_url != null) return true;
+  return canonicalJson(pickSent(remoteModel ?? {}, desiredModel)) !== canonicalJson(desiredModel);
+}
+
 export function toolError(toolUseId, code, message) {
   return { type: 'user.custom_tool_result', custom_tool_use_id: toolUseId, is_error: true,
     content: [{ type: 'text', text: JSON.stringify({ error: code, message }) }] };

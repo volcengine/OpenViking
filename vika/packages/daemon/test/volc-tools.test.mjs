@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { Store } from '../src/store.mjs';
 import { ActionService } from '../src/actions/service.mjs';
 import { TOOLS, publicTool } from '../src/actions/tools.mjs';
-import { MAToolExecutor, maTools, maToolsHash, maInputSchema } from '../src/volc-tools.mjs';
+import { MAToolExecutor, maTools, maToolsHash, maInputSchema, maAgentModel, maAgentModelChanged, MA_DEFAULT_MODEL } from '../src/volc-tools.mjs';
 import { MAFiles, outputRelative } from '../src/volc-files.mjs';
 import { VolcAgent } from '../src/volc.mjs';
 import { InstanceLock, sameProcess } from '../src/lock.mjs';
@@ -359,4 +359,37 @@ test('preparation migration preserves an existing tool journal and defaults old 
     assert.equal(row.status, 'SEEN'); assert.equal(row.preparing, 0);
     assert.equal(row.authority_token, turn.authorityToken);
   } finally { migrated.close(); }
+});
+
+test('sync-agent model block: built-in by default, BYOK without the key, update on any sent field change', () => {
+  assert.deepEqual(maAgentModel({}), { id: MA_DEFAULT_MODEL });
+  assert.deepEqual(maAgentModel({ volcModel: 'custom-model', volcModelApiKey: 'model-secret' }), { id: 'custom-model' });
+  const byok = {
+    provider: 'openviking-gateway',
+    baseUrl: 'https://gateway.example.test/gateway/api/v3/chat/completions',
+    protocol: 'openai_chat_completions',
+    tokenLimits: { context_window: 128000, max_input_token_length: 120000, max_output_token_length: 8000 },
+  };
+  const desired = maAgentModel({ volcModel: 'gateway-model', volcModelByok: byok, volcModelApiKey: 'model-secret' });
+  assert.deepEqual(desired, {
+    id: 'gateway-model',
+    provider: 'openviking-gateway',
+    base_url: 'https://gateway.example.test/gateway/api/v3/chat/completions',
+    protocol: 'openai_chat_completions',
+    token_limits: { context_window: 128000, max_input_token_length: 120000, max_output_token_length: 8000 },
+  });
+  assert.doesNotMatch(JSON.stringify(desired), /model-secret/);
+  // An existing built-in Agent migrates to BYOK; one already on it does not
+  // churn, even when MA echoes fields it was not sent.
+  assert.equal(maAgentModelChanged({ id: 'gateway-model' }, desired), true);
+  assert.equal(maAgentModelChanged(undefined, desired), true);
+  const echoed = { ...desired, type: 'direct', token_limits: { ...desired.token_limits, reserved: 1 } };
+  assert.equal(maAgentModelChanged(echoed, desired), false);
+  assert.equal(maAgentModelChanged({ ...echoed, base_url: 'https://other.example.test/v3/chat/completions' }, desired), true);
+  assert.equal(maAgentModelChanged({ ...echoed, token_limits: { ...desired.token_limits, max_output_token_length: 4000 } }, desired), true);
+  assert.equal(maAgentModelChanged({ id: MA_DEFAULT_MODEL, provider: 'volcengine' }, { id: MA_DEFAULT_MODEL }), false);
+  assert.equal(maAgentModelChanged({ id: 'other-model' }, { id: MA_DEFAULT_MODEL }), true);
+  // Rolling BYOK back: an Agent still on the Direct provider must be updated.
+  assert.equal(maAgentModelChanged(echoed, { id: 'gateway-model' }), true);
+  assert.equal(maAgentModelChanged({ id: 'gateway-model', provider: 'openviking-gateway', base_url: desired.base_url }, { id: 'gateway-model' }), true);
 });

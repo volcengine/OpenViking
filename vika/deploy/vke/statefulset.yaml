@@ -56,6 +56,13 @@ spec:
                 secretKeyRef:
                   name: vika-credentials
                   key: ARK_MA_API_KEY
+            # BYOK model key; only read when VIKA_VOLC_MODEL_PROVIDER is set.
+            - name: VIKA_VOLC_MODEL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vika-credentials
+                  key: VIKA_VOLC_MODEL_API_KEY
+                  optional: true
             - name: LARKSUITE_CLI_CONFIG_DIR
               value: /data/lark-cli
           volumeMounts:
