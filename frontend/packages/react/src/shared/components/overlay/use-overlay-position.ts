@@ -123,7 +123,7 @@ export function useOverlayPosition(
     placement,
   });
 
-  // Sync committed geometry; disconnect observers/listeners on close or unmount.
+  // Sync committed geometry and scoped theme; release both on close or unmount.
   // The server uses an inert effect instead of attempting layout measurement.
   usePositionEffect(() => {
     if (!open) return;
@@ -219,6 +219,7 @@ export function useOverlayPosition(
     return () => {
       observer.disconnect();
       themeObserver.disconnect();
+      written.forEach((name) => surface.style.removeProperty(name));
       window.removeEventListener('scroll', update, true);
       window.removeEventListener('resize', update);
     };
