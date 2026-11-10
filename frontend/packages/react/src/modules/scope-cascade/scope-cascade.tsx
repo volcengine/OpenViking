@@ -1,5 +1,7 @@
 import { resolveScopeCascadeLabels } from './labels.js';
 import { useState } from 'react';
+import { useLocale } from '../../shared/locale-context.js';
+import type { Locale } from '../../shared/locale.js';
 import {
   ScopeSelector,
   ScopeSwitcher,
@@ -11,10 +13,8 @@ import type {
   ScopeCascadeSnapshot,
 } from './types.js';
 
-type LevelProps = Pick<
-  ScopeCascadeProps,
-  'labels' | 'retryLabel' | 'locale'
-> & {
+type LevelProps = Pick<ScopeCascadeProps, 'labels' | 'retryLabel'> & {
+  locale: Locale;
   level: ScopeCascadeLevel;
   name: string;
 };
@@ -81,15 +81,17 @@ function LevelView({
   );
 }
 
-/** Only leaf selectors subscribe. This wrapper stays outside the update path. */
+/** Only leaf selectors subscribe to request state; this wrapper resolves language. */
 export function ScopeCascade({
   controller,
-  locale,
+  locale: localeProp,
   labels,
-  levelNames = resolveScopeCascadeLabels(locale).levelNames,
+  levelNames: names,
   retryLabel,
   ...props
 }: ScopeCascadeProps) {
+  const locale = useLocale(localeProp);
+  const levelNames = names ?? resolveScopeCascadeLabels(locale).levelNames;
   return (
     <ScopeSwitcher {...props} locale={locale}>
       <ConnectedLevel

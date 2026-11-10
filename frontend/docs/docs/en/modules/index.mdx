@@ -36,14 +36,15 @@ import { Console } from '@openviking/react/modules/console';
 import '@openviking/react/modules/style.css';
 
 <OpenVikingProvider
+  locale="en-US"
   baseURL={endpoint}
   apiKey={apiKey}
   accountId={accountId}
   userId={userId}
   resourceId={libraryId}
 >
-  <FileBrowser locale="en-US" />
-  <Console locale="en-US" />
+  <FileBrowser />
+  <Console />
 </OpenVikingProvider>;
 ```
 

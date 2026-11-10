@@ -19,4 +19,4 @@ modal mask, SVG, network dependency or internal asset URL is included.
 See the bilingual documentation and FileTree example in
 `frontend/docs/docs/{zh,en}/components/directory-tour.mdx`.
 
-Pass the required `locale` (`zh-CN` or `en-US`) for built-in controls. `labels` overrides individual defaults; step content remains host-provided.
+Optional `locale` (`zh-CN` or `en-US`) overrides the nearest scope; otherwise built-in controls inherit or fall back to `en-US`. `labels` overrides individual defaults; step content remains host-provided.

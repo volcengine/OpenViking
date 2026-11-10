@@ -1,3 +1,4 @@
+import { useLocale } from '../../shared/locale-context.js';
 import type { Locale } from '../../shared/locale.js';
 import type { ReactNode } from 'react';
 import { VikingBotIcon } from '../../icons/viking-bot-icons.js';
@@ -12,13 +13,14 @@ export function VikingBotSessionActions({
   sessions,
   extra,
   labels: overrides,
-  locale,
+  locale: localeProp,
 }: {
   sessions?: VikingBotSessions;
   extra?: ReactNode;
   labels?: VikingBotLabels;
-  locale: Locale;
+  locale?: Locale;
 }) {
+  const locale = useLocale(localeProp);
   const labels = resolveVikingBotLabels(locale, overrides);
   return (
     <div className="ov-viking-bot__session-actions">

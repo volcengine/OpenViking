@@ -2,7 +2,7 @@
 
 English / [中文](README_CN.md)
 
-Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
 
 The entry row at the top of the file browsing area: connect an agent, import resources.
 
@@ -21,7 +21,7 @@ import '@openviking/react/components/file-browser-entries/style.css';
 
 ## Showing and hiding
 
-Pass `agentConnect` to open the built-in right-side `AgentConnect` drawer. Its props, including the required `apiKey` and `locale`, are forwarded to the panel. The entry stylesheet includes all panel styles. The drawer slides in from the right and closes with its Close button, backdrop or Esc; narrow containers can scroll the panel horizontally.
+Pass `agentConnect` to open the built-in right-side `AgentConnect` drawer. Its props, including the required `apiKey` and optional `locale`, are forwarded to the panel. The entry stylesheet includes all panel styles. The drawer slides in from the right and closes with its Close button, backdrop or Esc; narrow containers can scroll the panel horizontally.
 
 `onConnectAgent` still supports a host-owned flow and runs on click when both options are supplied. Hide the connect entry by omitting both `agentConnect` and `onConnectAgent`; omit both `onImportResources` and `renderImportResources` to hide the import entry.
 
@@ -74,15 +74,15 @@ The host supplies `Popover` and `ImportMenu` below. The default button is the po
 
 ## Props
 
-| Property                | Type                                   | Default  | Description                                                         |
-| ----------------------- | -------------------------------------- | -------- | ------------------------------------------------------------------- |
-| `locale`                | `'zh-CN' \| 'en-US'`                   | Required | Built-in Chinese and English copy.                                  |
-| `agentConnect`          | `AgentConnectProps`                    | —        | Enables the built-in connection drawer                              |
-| `onConnectAgent`        | `() => void`                           | —        | Click notification; use alone for a host-owned flow                 |
-| `onImportResources`     | `() => void`                           | —        | Click handler of the default import button                          |
-| `renderImportResources` | `(trigger: ReactElement) => ReactNode` | —        | Wrap or replace the default button; return `null` to hide           |
-| `labels`                | `FileBrowserEntriesLabels`             | —        | Entry labels and drawer `close` label; omitted fields follow locale |
-| `className`             | `string`                               | —        | Additional container class                                          |
+| Property                | Type                                   | Default           | Description                                                         |
+| ----------------------- | -------------------------------------- | ----------------- | ------------------------------------------------------------------- |
+| `locale`                | `'zh-CN' \| 'en-US'`                   | Inherited / en-US | Built-in Chinese and English copy.                                  |
+| `agentConnect`          | `AgentConnectProps`                    | —                 | Enables the built-in connection drawer                              |
+| `onConnectAgent`        | `() => void`                           | —                 | Click notification; use alone for a host-owned flow                 |
+| `onImportResources`     | `() => void`                           | —                 | Click handler of the default import button                          |
+| `renderImportResources` | `(trigger: ReactElement) => ReactNode` | —                 | Wrap or replace the default button; return `null` to hide           |
+| `labels`                | `FileBrowserEntriesLabels`             | —                 | Entry labels and drawer `close` label; omitted fields follow locale |
+| `className`             | `string`                               | —                 | Additional container class                                          |
 
 ## Theme
 

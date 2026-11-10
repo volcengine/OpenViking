@@ -1,3 +1,4 @@
+import { useLocale } from '../../shared/locale-context.js';
 import { useId, useRef, useState } from 'react';
 import { resolveFileBrowserEntriesLabels } from './labels.js';
 
@@ -27,7 +28,7 @@ export type {
  * Nothing renders without visible entries; hosts can wrap the default import button.
  */
 export function FileBrowserEntries({
-  locale = 'en-US',
+  locale: localeProp,
   agentConnect,
   onConnectAgent,
   onImportResources,
@@ -36,6 +37,7 @@ export function FileBrowserEntries({
   className,
   ...rest
 }: FileBrowserEntriesProps) {
+  const locale = useLocale(localeProp);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const drawerId = useId();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -117,10 +119,13 @@ export function FileBrowserEntries({
           closeLabel={text.close}
           triggerRef={triggerRef}
           className="ov-file-browser-entries__drawer"
-          lang={agentConnect.locale}
+          lang={agentConnect.locale ?? locale}
           onClose={() => setDrawerOpen(false)}
         >
-          <AgentConnect {...agentConnect} />
+          <AgentConnect
+            {...agentConnect}
+            locale={agentConnect.locale ?? locale}
+          />
         </Drawer>
       ) : null}
       {showImport ? (

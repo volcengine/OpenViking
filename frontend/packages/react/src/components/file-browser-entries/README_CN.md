@@ -2,7 +2,7 @@
 
 [English](README.md) / 中文
 
-必填 `locale: 'zh-CN' | 'en-US'` 选择内置中英文文案；已有 `labels` 可逐项覆盖，未覆盖项跟随当前语言。业务内容仍由宿主提供。
+可选 `locale: 'zh-CN' | 'en-US'` 覆盖最近的模块或 Provider；均未配置时默认 `en-US`。已有 `labels` 可逐项覆盖。业务内容仍由宿主提供。
 
 文件浏览区域顶部的入口条：连接 Agent 与导入资源。
 
@@ -21,7 +21,7 @@ import '@openviking/react/components/file-browser-entries/style.css';
 
 ## 显示与隐藏
 
-传入 `agentConnect` 即可打开内置的 `AgentConnect` 右侧抽屉。参数直接透传给接入面板，其中 `apiKey` 和 `locale` 为必填项；入口条样式已包含面板样式，无需额外导入。抽屉从右侧滑出，可通过关闭按钮、遮罩或 Esc 关闭；窄容器内可横向滚动面板。
+传入 `agentConnect` 即可打开内置的 `AgentConnect` 右侧抽屉。参数直接透传给接入面板，其中 `apiKey` 必填，`locale` 可选并继承入口条语言；入口条样式已包含面板样式，无需额外导入。抽屉从右侧滑出，可通过关闭按钮、遮罩或 Esc 关闭；窄容器内可横向滚动面板。
 
 `onConnectAgent` 仍支持宿主自定义流程；与 `agentConnect` 同时传入时，作为点击通知触发。两者都省略才隐藏连接入口；同时省略 `onImportResources` 和 `renderImportResources` 隐藏导入入口。
 
@@ -75,15 +75,15 @@ import '@openviking/react/components/file-browser-entries/style.css';
 
 ## 属性
 
-| 属性                    | 类型                                   | 默认值 | 说明                                         |
-| ----------------------- | -------------------------------------- | ------ | -------------------------------------------- |
-| `locale`                | `'zh-CN' \| 'en-US'`                   | 必填   | 内置中英文文案。                             |
-| `agentConnect`          | `AgentConnectProps`                    | —      | 启用内置右侧接入抽屉                         |
-| `onConnectAgent`        | `() => void`                           | —      | 点击通知；单独使用时接入宿主自定义流程       |
-| `onImportResources`     | `() => void`                           | —      | 默认导入按钮的点击回调                       |
-| `renderImportResources` | `(trigger: ReactElement) => ReactNode` | —      | 包装或替换默认导入按钮；返回 `null` 隐藏     |
-| `labels`                | `FileBrowserEntriesLabels`             | —      | 入口及抽屉 `close` 文案，未覆盖项跟随 locale |
-| `className`             | `string`                               | —      | 容器附加类名                                 |
+| 属性                    | 类型                                   | 默认值           | 说明                                         |
+| ----------------------- | -------------------------------------- | ---------------- | -------------------------------------------- |
+| `locale`                | `'zh-CN' \| 'en-US'`                   | 继承上层 / en-US | 内置中英文文案。                             |
+| `agentConnect`          | `AgentConnectProps`                    | —                | 启用内置右侧接入抽屉                         |
+| `onConnectAgent`        | `() => void`                           | —                | 点击通知；单独使用时接入宿主自定义流程       |
+| `onImportResources`     | `() => void`                           | —                | 默认导入按钮的点击回调                       |
+| `renderImportResources` | `(trigger: ReactElement) => ReactNode` | —                | 包装或替换默认导入按钮；返回 `null` 隐藏     |
+| `labels`                | `FileBrowserEntriesLabels`             | —                | 入口及抽屉 `close` 文案，未覆盖项跟随 locale |
+| `className`             | `string`                               | —                | 容器附加类名                                 |
 
 ## 主题
 

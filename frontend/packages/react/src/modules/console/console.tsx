@@ -1,3 +1,4 @@
+import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import { useId, useRef } from 'react';
 import { Tui } from '../../components/tui/index.js';
 import {
@@ -15,7 +16,7 @@ const DEFAULT_QUICK_COMMANDS = ['help', 'ls', 'find', 'read', 'status'];
 export function Console({
   mode,
   defaultMode,
-  locale = 'en-US',
+  locale: localeProp,
   quickCommands = DEFAULT_QUICK_COMMANDS,
   scopeKey,
   requestOptions,
@@ -27,6 +28,7 @@ export function Console({
   className,
   ...rest
 }: ConsoleProps) {
+  const locale = useLocale(localeProp);
   const state = useConsole({
     mode,
     defaultMode,
@@ -37,7 +39,11 @@ export function Console({
   });
   const labels = consoleLabels(locale, overrides);
   const { sessions, headerActions, ...conversationProps } = conversation ?? {};
-  const botLabels = { ...labels.vikingBot, ...conversationProps.labels };
+  const botLocale = conversationProps.locale ?? locale;
+  const botLabels = {
+    ...consoleLabels(botLocale, overrides).vikingBot,
+    ...conversationProps.labels,
+  };
   const id = useId();
   const commandPanel = useRef<HTMLDivElement>(null);
   const fillCommand = (command: string) => {
@@ -47,79 +53,81 @@ export function Console({
       ?.focus({ preventScroll: true });
   };
   return (
-    <div
-      {...rest}
-      className={['ov-console', className].filter(Boolean).join(' ')}
-    >
-      <ConsoleToolbar
-        mode={state.mode}
-        panelId={id}
-        locale={locale}
-        labels={labels}
-        records={state.records}
-        isExecuting={state.isExecuting}
-        onModeChange={(next) => state.setMode(next)}
-        onClear={() => {
-          state.clear();
-          fillCommand('');
-        }}
-        onRecall={fillCommand}
-        conversationActions={
-          <VikingBotSessionActions
-            sessions={sessions}
-            extra={headerActions}
-            labels={botLabels}
-            locale={locale}
-          />
-        }
-      >
-        {slots?.toolbar}
-      </ConsoleToolbar>
+    <LocaleProvider locale={locale}>
       <div
-        id={`${id}-conversation`}
-        className="ov-console__panel"
-        hidden={state.mode !== 'conversation'}
+        {...rest}
+        className={['ov-console', className].filter(Boolean).join(' ')}
       >
-        {state.mode === 'conversation' ? (
-          <VikingBot
-            {...conversationProps}
-            onOpenUri={conversationProps.onOpenUri ?? onOpenUri}
-            messages={conversationProps.messages ?? []}
-            draft={conversationProps.draft ?? state.conversationDraft}
-            onDraftChange={
-              conversationProps.draft === undefined
-                ? (value) => {
-                    state.setConversationDraft(value);
-                    conversationProps.onDraftChange?.(value);
-                  }
-                : conversationProps.onDraftChange
-            }
-            footer={slots?.conversationContext ?? conversationProps.footer}
-            locale={conversationProps.locale ?? locale}
-            labels={botLabels}
-          />
-        ) : null}
-      </div>
-      <div
-        id={`${id}-command`}
-        ref={commandPanel}
-        className="ov-console__panel"
-        hidden={state.mode !== 'command'}
-      >
-        {slots?.commandHelp}
-        <Tui
-          records={state.records}
-          value={state.command}
-          commands={state.commands}
+        <ConsoleToolbar
+          mode={state.mode}
+          panelId={id}
           locale={locale}
-          disabled={state.isExecuting}
-          quickCommands={quickCommands}
-          onValueChange={state.setCommand}
-          onSubmit={(command) => void state.execute(command)}
-          onOpenUri={onOpenUri}
-          labels={labels.tui}
-        />
+          labels={labels}
+          records={state.records}
+          isExecuting={state.isExecuting}
+          onModeChange={(next) => state.setMode(next)}
+          onClear={() => {
+            state.clear();
+            fillCommand('');
+          }}
+          onRecall={fillCommand}
+          conversationActions={
+            <VikingBotSessionActions
+              sessions={sessions}
+              extra={headerActions}
+              labels={botLabels}
+              locale={botLocale}
+            />
+          }
+        >
+          {slots?.toolbar}
+        </ConsoleToolbar>
+        <div
+          id={`${id}-conversation`}
+          className="ov-console__panel"
+          hidden={state.mode !== 'conversation'}
+        >
+          {state.mode === 'conversation' ? (
+            <VikingBot
+              {...conversationProps}
+              onOpenUri={conversationProps.onOpenUri ?? onOpenUri}
+              messages={conversationProps.messages ?? []}
+              draft={conversationProps.draft ?? state.conversationDraft}
+              onDraftChange={
+                conversationProps.draft === undefined
+                  ? (value) => {
+                      state.setConversationDraft(value);
+                      conversationProps.onDraftChange?.(value);
+                    }
+                  : conversationProps.onDraftChange
+              }
+              footer={slots?.conversationContext ?? conversationProps.footer}
+              locale={botLocale}
+              labels={botLabels}
+            />
+          ) : null}
+        </div>
+        <div
+          id={`${id}-command`}
+          ref={commandPanel}
+          className="ov-console__panel"
+          hidden={state.mode !== 'command'}
+        >
+          {slots?.commandHelp}
+          <Tui
+            records={state.records}
+            value={state.command}
+            commands={state.commands}
+            locale={locale}
+            disabled={state.isExecuting}
+            quickCommands={quickCommands}
+            onValueChange={state.setCommand}
+            onSubmit={(command) => void state.execute(command)}
+            onOpenUri={onOpenUri}
+            labels={labels.tui}
+          />
+        </div>
       </div>
-    </div>
+    </LocaleProvider>
   );
 }

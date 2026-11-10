@@ -1,6 +1,6 @@
 # 快速开始
 
-所有公开 UI 组件和组合模块均需显式传入 `locale: 'zh-CN' | 'en-US'`，选择内置中文或英文文案。已有的 `labels` 可逐项覆盖，未覆盖项跟随当前语言；切换 `locale` 会立即更新基础文案。业务数据、插槽与回调返回的文案仍由宿主提供。
+公开 UI 组件、组合模块和独立 Hook 均支持可选的 `locale: 'zh-CN' | 'en-US'`。Props 覆盖最近的模块或 Provider，均未配置时默认 `en-US`。已有 `labels` 保留逐项覆盖能力，业务内容、插槽和回调文案仍由宿主提供。
 
 OpenViking UI 是构建 OpenViking AI 应用界面的 React 基础。OpenViking 是面向 AI 智能体的上下文数据库；本 workspace 提供 Rslib 构建、双语文档、分层目录约定与样式隔离方案。应用负责业务界面、数据、认证与流程编排。
 
@@ -114,4 +114,14 @@ npm run preview
 
 组件和模块采用本地的类型化中英文语言包，共用轻量解析规则。译文在各自目录就近维护，不依赖宿主的 i18next 或翻译平台。已有 `labels` 的未定义项继承当前语言；空字符串保留为显式覆盖。
 
-独立使用 `useConsole`、`useFileBrowser` 时可传入 `locale`，默认 `en-US`。切换语言会更新库生成的提示、命令帮助和摘要标题，不重新发起请求，也不清空会话或草稿；服务端正文、错误原文和 AI 回复保持原值。
+独立使用 `useConsole`、`useFileBrowser` 时可传入 `locale`；省略时继承最近的 Provider，否则默认 `en-US`。切换语言会更新库生成的提示、命令帮助和摘要标题，不重新发起请求，也不清空会话或草稿；服务端正文、错误原文和 AI 回复保持原值。
+
+### 语言继承
+
+在 `OpenVikingProvider` 上统一设置 `locale`，组件、组合模块和独立 Hook 均可省略该属性。模块 Props 覆盖 Provider，作用于模块内置视图和宿主插槽；组件显式 Props 再覆盖模块。嵌套 Provider 省略时继承外层，显式指定时覆盖。全链路均未配置时默认 `en-US`，`labels` 仍可逐项覆盖文案。
+
+示例使用固定离线服务。切换三个选择框，再提交 `ov read`，可对比错误提示的语言。语言变化保留请求、记录、草稿和服务端原文。
+
+```tsx file="../../_demos/locale-inheritance.tsx" preview
+
+```

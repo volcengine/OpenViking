@@ -1,3 +1,4 @@
+import { useLocale } from '../../shared/locale-context.js';
 import { forwardRef, useImperativeHandle, useRef } from 'react';
 
 import { resolveFileTreeLabels } from './file-tree-labels.js';
@@ -66,7 +67,7 @@ export const FileTree: FileTreeComponent = forwardRef<
 >(function FileTree(
   {
     rows,
-    locale,
+    locale: localeProp,
     operations,
     selectedId,
     search,
@@ -93,6 +94,7 @@ export const FileTree: FileTreeComponent = forwardRef<
   },
   ref,
 ) {
+  const locale = useLocale(localeProp);
   const rootRef = useRef<HTMLDivElement>(null);
   const text = resolveFileTreeLabels(locale, labels);
   const actions = useFileTreeActions({

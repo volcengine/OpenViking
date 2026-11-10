@@ -2,7 +2,7 @@
 
 English / [中文](README_CN.md)
 
-Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
 
 The view and interaction for command records, results and input. The record area, empty state, input, command suggestions and parameter help make up the TUI body. The host provides command descriptors and execution records. The component reports submission intent through `onSubmit` and copying completion through `onCopy`.
 

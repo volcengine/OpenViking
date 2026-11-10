@@ -43,8 +43,8 @@ export interface FileBrowserEntriesProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
   'children'
 > {
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /**
    * 内置 AgentConnect 右侧抽屉的参数；传入后显示连接入口。
    * Options for the built-in AgentConnect drawer; enables the connect entry.
