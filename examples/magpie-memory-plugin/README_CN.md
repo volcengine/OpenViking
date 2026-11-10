@@ -72,7 +72,7 @@ magpie plugin add ./examples/magpie-memory-plugin
 ```
 
 行为配置沿用共享插件字段名，`plugin.magpie` 覆盖 `plugin` 的同名设置；
-全局 `plugin.enabled: false` 始终关闭本插件。连接读取顶层的 `url`、`api_key`、
+全局 `plugin.enabled: false` 同时关闭记忆功能、模型自动同步和自动重启；显式执行的恢复 CLI 仍可使用。连接读取顶层的 `url`、`api_key`、
 `account`、`user`、`actor_peer_id`、`timeout`（秒）、`extra_headers`（或 CLI 别名 `extra_header`），支持身份字段的已有别名。
 账户、用户请求头沿用共享客户端的身份处理方式，需要与服务端认证模式匹配。
 自定义请求头不能覆盖鉴权、身份或传输请求头，包括 `X-API-Key`。

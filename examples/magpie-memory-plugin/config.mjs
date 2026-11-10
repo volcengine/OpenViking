@@ -49,6 +49,12 @@ function loadClientCredentialFiles(env = process.env) {
   return { cliFile: { ...file, actor_peer_id: file.actor_peer_id ?? file.agent_id }, cliPath: path, cliPathCandidate: path, ovFile: {}, ovPath: "" };
 }
 
+/** Global client-file switch shared by memory hooks and model management. */
+export function pluginEnabled(env = process.env) {
+  try { return loadClientCredentialFiles(env).cliFile.plugin?.enabled !== false; }
+  catch (error) { if (error.code === "unconfigured") return true; throw error; }
+}
+
 /** Match the CLI's explicit LDAP/OIDC authorization without exposing secrets. */
 function clientAuthorization(file) {
   if (file.auth_mode === "ldap") {

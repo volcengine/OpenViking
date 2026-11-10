@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { pluginEnabled } from "../../config.mjs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { settings } from "./config.mjs";
@@ -10,6 +11,10 @@ import { activate } from "./activation.mjs";
 
 const route = "/api/v1/admin/configuration?source=file";
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+function ownsConfiguration(ownership, config, file, document) {
+  return ownership?.serverUrl === config.serverUrl && ownership.filePath === file.file_path
+    && ownership.contentHash === digest(document) && (!ownership.revision || ownership.revision === file.revision);
+}
 export async function readSelection(config) {
   const value = await readJSON(config.selectionFile);
   if (value) await fs.chmod(config.selectionFile, 0o600);
@@ -50,6 +55,12 @@ export async function synchronize(config, { restore = false, resume = false, fet
     try { document = JSON.parse(current.content.replace(/^\uFEFF/, "")); }
     catch { throw new AdapterError("invalid_server_config"); }
     if (!document || Array.isArray(document) || typeof document !== "object") throw new AdapterError("invalid_server_config");
+    const previousOwnership = await readJSON(savedFile);
+    // A new whole-file save must not turn someone else's pending changes into
+    // our own revision. Preserve the journal and wait for explicit activation.
+    if (current.restart_required && !ownsConfiguration(previousOwnership, config, current, document)) {
+      return publish(config, { status: "external_restart_required", revision: current.revision, restartRequired: true });
+    }
     let selection = null;
     if (!restoring) selection = await validateSelection(raw, config, fetcher);
     const bot = await detectBot(config, fetcher);
@@ -91,8 +102,7 @@ export async function synchronize(config, { restore = false, resume = false, fet
     } else await fs.rm(config.stateFile, { force: true });
     if (restoring && paused) await writeJSON(pauseFile, { fingerprint: paused.fingerprint, restorePending: false });
     const ownership = await readJSON(savedFile);
-    const ownsRevision = ownership?.serverUrl === config.serverUrl && ownership.filePath === current.file_path
-      && ownership.contentHash === digest(result.document) && (!ownership.revision || ownership.revision === current.revision);
+    const ownsRevision = ownsConfiguration(ownership, config, current, result.document);
     const savedRevision = ownsRevision ? current.revision : undefined;
     if (ownsRevision && !ownership.revision) await writeJSON(savedFile, { ...ownership, revision: savedRevision });
     const activation = await readJSON(join(config.directory, "activation.json"));
@@ -134,13 +144,14 @@ export function startAdapter(input, options = {}) {
   const tick = async () => {
     let delay = 2000;
     try {
+      if (!pluginEnabled()) { log("disabled"); return; }
       const config = await settings(options); delay = config.pollMs;
       const selection = digest(await readSelection(config));
       // Magpie writes model, URL and key separately. Let one quiet poll elapse.
       if (selection !== lastSelection) lastSelection = selection;
       else {
         let result = await synchronize(config);
-        if (config.restartOnChange && result.restartRequired && result.savedRevision && result.savedRevision === result.revision && ["saved", "restored"].includes(result.status)) result = await activate(config, { automatic: true });
+        if (pluginEnabled() && config.restartOnChange && result.restartRequired && result.savedRevision && result.savedRevision === result.revision && ["saved", "restored"].includes(result.status)) result = await activate(config, { automatic: true });
         log([result.status, result.code, result.ovRuntime && `OV:${result.ovRuntime}`, result.botRuntime && `Bot:${result.botRuntime}`,
           ...(result.adjustments || []).map((entry) => `${entry.field}=${entry.value}`),
           ...(result.warnings || [])].filter(Boolean).join(" · "));

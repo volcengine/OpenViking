@@ -99,9 +99,11 @@ node cli.mjs sync
 node cli.mjs apply
 ```
 
-`doctor` checks local CLI discovery, authenticated configuration access, restart capability and Bot state. `status` reads local diagnostics, without network calls or credentials. `restore` pauses the current selection while restoring owned fields. `sync` resumes management. `apply` restarts the saved configuration via the Root API and verifies its new instance. Managed `--with-bot` processes restart with OV and must recover health; standalone Bots require their own process manager. The standalone CLI does not read Magpie plugin options: use the same adapter file and credentials for recovery.
+`doctor` checks local CLI discovery, authenticated configuration access, restart capability and Bot state. `status` reads local diagnostics, without network calls or credentials. `restore` pauses the current selection while restoring owned fields. `sync` resumes management. `apply` restarts the saved configuration via the Root API and verifies its new instance. Managed `--with-bot` processes restart with OV and must recover health; standalone Bots require their own process manager. The CLI reads this installation's Options from Magpie's `plugins.json`, including a disabled plugin entry, then uses the same settings resolver as the background adapter. It uses `$XDG_CONFIG_HOME/magpie/plugins.json` (absolute XDG path) or `~/.config/magpie/plugins.json`; for portable or custom profiles, pass `--magpie-config /path/to/magpie-config` after the action. Missing registry entries fall back to `adapter.json` and the selected OV client file; duplicate matching entries are rejected. No credentials are copied into another settings file.
 
-Keep `~/.config/magpie-openviking-models/state.json` until recovery completes. It contains original settings, potentially including credentials, and intended writes. The directory is `0700`; selection, journal and status are `0600`. `recoveryPending` means ownership/recovery records still exist, including while successfully connected.
+Keep The client-file global `plugin.enabled: false` pauses background model synchronization and automatic restart on the next poll. Explicit recovery CLI actions remain available.
+
+`~/.config/magpie-openviking-models/state.json` until recovery completes. It contains original settings, potentially including credentials, and intended writes. The directory is `0700`; selection, journal and status are `0600`. `recoveryPending` means ownership/recovery records still exist, including while successfully connected.
 
 Writes use server revisions and a write-ahead journal. Manual edits to managed fields produce `conflict`, listing field names without values. They are never forcibly overwritten. Restore the last adapter-written values before retrying restoration, or back up the recovery record and reconcile the changes manually. Restore the original target before changing backend URL or startup-file location.
 
@@ -138,7 +140,7 @@ The opt-in actual-host smoke uses temporary child-process HOME/XDG directories a
 | `paused.json` | Pause marker after manual restoration, preventing immediate reconnection |
 | `saved` | The service configuration was saved; check restart requirements |
 | `applied` | Activation checks completed; also inspect `ovRuntime`, `botRuntime` and `restartRequired` |
-| `external_restart_required` | A configuration saved outside this plugin needs a restart; it is not restarted automatically |
+| `external_restart_required` | External pending configuration blocks plugin writes and automatic restarts; apply or revert it through its original manager, then synchronization resumes |
 | `conflict` / `apply_failed` | Manual-edit conflict or restart failure requiring attention |
 
 Plugin files default to `~/.config/magpie-openviking-models/`. Magpie writes `selection.json`; the bridge calls the server API to update its actual `ov.conf`, then restarts and verifies as configured. Magpie's connected badge only confirms its wiring was written; it is not proof that OV switched models.

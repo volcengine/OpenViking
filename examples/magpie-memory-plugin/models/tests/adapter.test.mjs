@@ -77,6 +77,7 @@ test("Bot follows root by removing explicit model and credential chain; preserve
   const f = await fixture(t);
   f.config.botMode = "follow";
   f.backend.edit((doc) => { doc.bot.agents.credentials = [{ model: "explicit-chain" }]; });
+  f.backend.markApplied();
   const before = structuredClone(f.backend.document);
   await f.run();
   assert.equal("model" in f.backend.document.bot.agents, false);
@@ -98,6 +99,7 @@ test("Bot-only independent model uses its own catalog budget and leaves root unc
 test("manual edits to managed fields block apply and restore without leaking values", async (t) => {
   const f = await fixture(t); await f.run();
   f.backend.edit((doc) => { doc.vlm.api_key = "manual-secret"; });
+  f.backend.markApplied();
   const expected = structuredClone(f.backend.document);
   const result = await f.run({ restore: true });
   assert.equal(result.status, "conflict");
@@ -109,6 +111,9 @@ test("manual edits to managed fields block apply and restore without leaking val
 test("unrelated user edits survive restoration", async (t) => {
   const f = await fixture(t); await f.run();
   f.backend.edit((doc) => { doc.vlm.timeout = 900; doc.bot.channels.push({ type: "telegram" }); });
+  assert.equal((await f.run({ restore: true })).status, "external_restart_required");
+  assert.ok(await readJSON(f.config.stateFile));
+  f.backend.markApplied();
   await f.run({ restore: true });
   assert.deepEqual(f.backend.document, { ...original, vlm: { ...original.vlm, timeout: 900 }, bot: { ...original.bot, channels: [...original.bot.channels, { type: "telegram" }] } });
 });
@@ -184,6 +189,7 @@ test("unknown context metadata never overwrites an independently selected model 
 test("max_tokens follows output limits on successive models and restores the original request", async (t) => {
   const f = await fixture(t);
   f.backend.edit((doc) => { doc.vlm.max_tokens = 16000; });
+  f.backend.markApplied();
   f.backend.output = 8192;
   const saved = await f.run();
   assert.equal(f.backend.document.vlm.max_tokens, 8192);
@@ -208,6 +214,7 @@ test("Bot-specific output override is capped independently; provider defaults st
 test("unknown output capacity is reported instead of inventing a budget", async (t) => {
   const f = await fixture(t);
   f.backend.edit((doc) => { doc.vlm.max_tokens = 16000; });
+  f.backend.markApplied();
   const saved = await f.run();
   assert.equal(f.backend.document.vlm.max_tokens, 16000);
   assert.ok(saved.warnings.includes("vlm:output_limit_unknown"));
@@ -235,6 +242,7 @@ test("restart diagnostics distinguish OV and Bot-only changes and survive discon
 test("primary credential output limit survives replacing its binding and restores exactly", async (t) => {
   const f = await fixture(t);
   f.backend.edit((doc) => { doc.vlm.max_tokens = 16000; doc.vlm.credentials[0].max_tokens = 4000; });
+  f.backend.markApplied();
   const before = structuredClone(f.backend.document);
   f.backend.output = 2000; await f.run();
   assert.equal(f.backend.document.vlm.max_tokens, 2000);
@@ -247,6 +255,7 @@ test("following Bot's independent output limit cannot exceed its new inherited m
   const f = await fixture(t);
   f.config.botMode = "follow";
   f.backend.edit((doc) => { doc.bot.agents.maxTokens = 16000; });
+  f.backend.markApplied();
   f.backend.output = 4096;
   await f.run();
   assert.equal(f.backend.document.bot.agents.maxTokens, 4096);
@@ -383,4 +392,36 @@ test("simultaneous stale-lock recovery never deletes a new owner's lock", async 
     fs.readFile = originalRead; fs.open = originalOpen; fs.rm = originalRemove;
   }
   await withLock(f.config.directory, async () => {});
+});
+
+test("a new model cannot claim or activate an external pending configuration", async (t) => {
+  const f = await fixture(t);
+  await f.run(); f.backend.markApplied();
+  const saved = await readJSON(join(f.config.directory, "saved.json"));
+  f.backend.edit((doc) => { doc.server.port = 9123; });
+  await fs.writeFile(f.config.selectionFile, JSON.stringify({ ...selection, model: "vendor/bot" }));
+  const writes = f.requests.filter((r) => r.init.method === "PATCH").length;
+  const blocked = await f.run();
+  assert.equal(blocked.status, "external_restart_required");
+  assert.equal(blocked.savedRevision, undefined);
+  assert.equal(f.backend.document.vlm.model, selection.model);
+  assert.equal(f.requests.filter((r) => r.init.method === "PATCH").length, writes);
+  assert.deepEqual(await readJSON(join(f.config.directory, "saved.json")), saved);
+  f.backend.markApplied();
+  assert.equal((await f.run()).status, "saved");
+  assert.equal(f.backend.document.vlm.model, "vendor/bot");
+  assert.equal(f.backend.document.server.port, 9123);
+});
+test("initial external pending changes block first model binding", async (t) => {
+  const f = await fixture(t); f.backend.edit((doc) => { doc.server.port = 8123; });
+  assert.equal((await f.run()).status, "external_restart_required");
+  assert.equal(f.requests.some((r) => r.init.method === "PATCH"), false);
+  assert.equal(await readJSON(f.config.stateFile), null);
+});
+test("a newer selection may replace the plugin's own pending revision", async (t) => {
+  const f = await fixture(t); const first = await f.run();
+  await fs.writeFile(f.config.selectionFile, JSON.stringify({ ...selection, model: "vendor/bot" }));
+  const changed = await f.run();
+  assert.equal(changed.status, "saved"); assert.notEqual(changed.savedRevision, first.savedRevision);
+  assert.equal(f.backend.document.vlm.model, "vendor/bot");
 });

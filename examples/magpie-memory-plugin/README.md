@@ -97,7 +97,7 @@ own adapter applies its file-only policy, hook timeout and opt-in tools without
 changing other plugins. Behavior keys use the
 existing shared plugin names. `plugin.magpie` overrides
 the corresponding `plugin` values; global `plugin.enabled: false` disables the
-plugin. Tools require explicit `plugin.magpie.mcpEnabled: true`. Capture defaults
+memory integration and automatic model synchronization/restarts. The explicit recovery CLI remains available. Tools require explicit `plugin.magpie.mcpEnabled: true`. Capture defaults
 to enabled; explicit `autoCapture: false` in host options or client settings is
 preserved. Host options override scoped settings, which override shared settings.
 
