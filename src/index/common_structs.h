@@ -29,6 +29,7 @@ struct SearchRequest {
   std::vector<float> sparse_values;
   uint32_t topk = 0;
   std::string dsl;
+  std::string time_decay;
 };
 
 struct SearchResult {
@@ -36,6 +37,16 @@ struct SearchResult {
   std::vector<uint64_t> labels;
   std::vector<float> scores;
   std::string extra_json;
+};
+
+// A filter bitmap projected into an external row order. Bit i in
+// bitset_words corresponds to ordered_labels[i] supplied by the caller.
+// This keeps native logical offsets private while allowing an external dense
+// index (for example, cuVS) to reuse the native scalar-index semantics.
+struct FilterResult {
+  uint64_t eligible_count = 0;
+  std::vector<uint32_t> bitset_words;
+  uint64_t native_filter_token = 0;
 };
 
 struct StateResult {

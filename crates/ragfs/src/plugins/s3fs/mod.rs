@@ -18,21 +18,26 @@ pub mod client;
 mod tree;
 
 use async_trait::async_trait;
+use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use cache::{S3ListDirCache, S3StatCache};
-use client::S3Client;
+use client::{ListTreePage, S3Client};
 use futures::stream::{self, StreamExt};
 use regex::Regex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::core::filesystem::{relative_depth, relative_match_file};
+use crate::core::context::FsContextView;
+use crate::core::filesystem::{relative_depth, relative_match_file, sort_directory_entries};
+use crate::core::glob::PreparedGlob;
+use crate::core::grep::GrepLineCollector;
+use crate::core::types::GrepContextLine;
 use crate::core::{
-    ConfigParameter, Error, FileInfo, FileSystem, GrepMatch, GrepResult, PluginConfig, Result,
-    ServicePlugin, TreeEntry, WriteFlag,
+    ConfigParameter, Error, FileInfo, FileSystem, GlobEntry, GlobPage, GrepMatch, GrepOptions,
+    GrepResult, PluginConfig, Result, ServicePlugin, TreeEntry, WriteFlag,
 };
-use tree::build_tree_entries_from_flat_listing;
+use tree::{build_tree_entries_from_flat_listing, build_tree_entries_from_listing_page, rel_parts};
 
 /// Check whether `path` is under `exclude_path` (including itself).
 fn s3_is_excluded_path(path: &str, exclude_path: &str) -> bool {
@@ -46,6 +51,24 @@ fn s3_is_excluded_path(path: &str, exclude_path: &str) -> bool {
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
+async fn finalize_remove_all(
+    dir_cache: &S3ListDirCache,
+    stat_cache: &S3StatCache,
+    path: &str,
+    result: Result<()>,
+) -> Result<()> {
+    if path == "/" {
+        dir_cache.invalidate_prefix("/").await;
+        stat_cache.invalidate_prefix("/").await;
+    } else {
+        dir_cache.invalidate_parent(path).await;
+        dir_cache.invalidate_prefix(path).await;
+        stat_cache.invalidate_prefix(path).await;
+    }
+
+    result
+}
+
 /// Abstract trait for reading chunks from a file during grep.
 /// Extracted to allow unit testing chunk-boundary logic with mock providers.
 #[async_trait]
@@ -57,6 +80,15 @@ trait ChunkReader: Send {
 struct S3ChunkReader<'a> {
     client: &'a S3Client,
     key: &'a str,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct S3GlobToken {
+    scope: String,
+    scan_token: Option<String>,
+    page_entries: Vec<GlobEntry>,
+    page_offset: usize,
+    last_rel_parts: Vec<String>,
 }
 
 #[async_trait]
@@ -74,92 +106,81 @@ async fn grep_stream(
     file_size: u64,
     re: &Regex,
     remaining_limit: usize,
+    before_context: usize,
+    after_context: usize,
     chunk_size: u64,
     max_partial_size: usize,
     reader: &mut dyn ChunkReader,
 ) -> Result<Vec<GrepMatch>> {
+    if remaining_limit == 0 {
+        return Ok(Vec::new());
+    }
+
     let mut offset: u64 = 0;
-    let mut partial = String::new();
+    let mut partial = Vec::new();
     let mut line_no: u64 = 0;
-    let mut matches = Vec::with_capacity(remaining_limit.min(64));
+    let mut result = GrepResult {
+        matches: Vec::with_capacity(remaining_limit.min(64)),
+        count: 0,
+    };
+    let mut collector = GrepLineCollector::new(
+        rel_file.to_string(),
+        before_context,
+        after_context,
+        remaining_limit,
+        &mut result,
+    );
 
-    loop {
-        if matches.len() >= remaining_limit || offset >= file_size {
-            break;
-        }
-
+    while offset < file_size {
         let chunk = reader.read_chunk(offset, chunk_size).await?;
-
         let is_last = chunk.is_empty()
             || chunk.len() < chunk_size as usize
-            || offset + chunk_size >= file_size;
+            || offset + chunk.len() as u64 >= file_size;
+        offset += chunk.len() as u64;
+        partial.extend_from_slice(&chunk);
 
-        let chunk_str = String::from_utf8_lossy(&chunk);
-
-        let complete_end = if is_last {
-            chunk_str.len()
-        } else {
-            chunk_str.rfind('\n').map(|p| p + 1).unwrap_or(0)
-        };
-
-        if complete_end == 0 && !is_last {
-            partial.push_str(&chunk_str);
-            if partial.len() > max_partial_size {
-                return Ok(matches);
-            }
-            offset += chunk_size;
-            continue;
+        if is_last && !partial.is_empty() && !partial.ends_with(b"\n") {
+            partial.push(b'\n');
         }
 
-        let (text, remainder) = if partial.is_empty() {
-            if complete_end == chunk_str.len() {
-                (chunk_str.into_owned(), String::new())
-            } else {
-                (
-                    chunk_str[..complete_end].to_string(),
-                    chunk_str[complete_end..].to_string(),
-                )
-            }
-        } else {
-            let merged = format!("{}{}", partial, &chunk_str[..complete_end]);
-            partial.clear();
-            (merged, chunk_str[complete_end..].to_string())
-        };
-
-        for line in text.lines() {
-            if matches.len() >= remaining_limit {
-                break;
-            }
-            line_no += 1;
-            if re.is_match(line) {
-                matches.push(GrepMatch {
-                    file: rel_file.to_string(),
-                    line: line_no,
-                    content: line.to_string(),
-                });
+        if let Some(complete_end) = partial
+            .iter()
+            .rposition(|&byte| byte == b'\n')
+            .map(|p| p + 1)
+        {
+            let remainder = partial.split_off(complete_end);
+            let complete = std::mem::replace(&mut partial, remainder);
+            for line_bytes in complete[..complete.len() - 1].split(|&byte| byte == b'\n') {
+                line_no += 1;
+                let content = String::from_utf8_lossy(line_bytes)
+                    .trim_end_matches('\r')
+                    .to_string();
+                let is_match = re.is_match(&content);
+                if !collector.consume_line(
+                    rel_file,
+                    GrepContextLine {
+                        line: line_no,
+                        content,
+                    },
+                    is_match,
+                ) {
+                    drop(collector);
+                    return Ok(result.matches);
+                }
             }
         }
 
-        partial.push_str(&remainder);
-
+        if partial.len() > max_partial_size {
+            drop(collector);
+            return Ok(result.matches);
+        }
         if is_last {
             break;
         }
-        offset += chunk_size;
     }
 
-    if !partial.is_empty() && matches.len() < remaining_limit {
-        line_no += 1;
-        if re.is_match(&partial) {
-            matches.push(GrepMatch {
-                file: rel_file.to_string(),
-                line: line_no,
-                content: partial,
-            });
-        }
-    }
-
-    Ok(matches)
+    drop(collector);
+    Ok(result.matches)
 }
 
 /// S3-backed file system
@@ -237,6 +258,98 @@ impl S3FileSystem {
         result
     }
 
+    fn decode_glob_token(
+        token: Option<&str>,
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        level_limit: Option<usize>,
+    ) -> Result<S3GlobToken> {
+        let scope = Self::glob_token_scope(path, pattern, show_hidden, level_limit);
+        match token {
+            None => Ok(S3GlobToken {
+                scope,
+                scan_token: None,
+                page_entries: Vec::new(),
+                page_offset: 0,
+                last_rel_parts: Vec::new(),
+            }),
+            Some(raw) if raw.is_empty() => {
+                Err(Error::invalid_operation("empty continuation token"))
+            }
+            Some(raw) => {
+                let state: S3GlobToken = serde_json::from_str(raw)
+                    .map_err(|_| Error::invalid_operation("invalid continuation token"))?;
+                if state.scope != scope {
+                    return Err(Error::invalid_operation(
+                        "continuation token scope mismatch",
+                    ));
+                }
+                Ok(state)
+            }
+        }
+    }
+
+    fn encode_glob_token(state: &S3GlobToken) -> Result<String> {
+        // ponytail: the token carries the remaining entries from the current
+        // page directly to avoid extra state storage; the ceiling is bounded
+        // by `page_size` and the S3 single-page limit of 1000 keys.
+        serde_json::to_string(state).map_err(|err| Error::Serialization(err.to_string()))
+    }
+
+    fn glob_token_scope(
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        level_limit: Option<usize>,
+    ) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(path.as_bytes());
+        hasher.update([0]);
+        hasher.update(pattern.as_bytes());
+        hasher.update([0, show_hidden as u8, 0]);
+        hasher.update(level_limit.unwrap_or(usize::MAX).to_string().as_bytes());
+        format!("{:x}", hasher.finalize())
+    }
+
+    fn glob_entries_from_listing_page(
+        &self,
+        query_root: &str,
+        page: &ListTreePage,
+        matcher: &PreparedGlob,
+        show_hidden: bool,
+        level_limit: Option<usize>,
+        last_rel_parts: &[String],
+    ) -> Result<(Vec<GlobEntry>, Vec<String>)> {
+        let ordered = build_tree_entries_from_listing_page(
+            query_root,
+            &page.objects,
+            show_hidden,
+            level_limit,
+            last_rel_parts,
+            |key| self.client.strip_prefix(key),
+        )?;
+
+        let mut matched = Vec::new();
+        let next_last_rel_parts = ordered
+            .last()
+            .map(|entry| rel_parts(&entry.rel_path))
+            .unwrap_or_else(|| last_rel_parts.to_vec());
+
+        for entry in ordered {
+            if matcher.is_match(&entry.rel_path) {
+                matched.push(GlobEntry {
+                    path: entry.path,
+                    rel_path: entry.rel_path,
+                    name: entry.info.name,
+                    is_dir: entry.info.is_dir,
+                });
+            }
+        }
+
+        Ok((matched, next_last_rel_parts))
+    }
+
     /// Get file name from path
     fn file_name(path: &str) -> String {
         if path == "/" {
@@ -268,6 +381,8 @@ impl S3FileSystem {
         file_size: u64,
         re: &Regex,
         remaining_limit: usize,
+        before_context: usize,
+        after_context: usize,
     ) -> Result<Vec<GrepMatch>> {
         let normalized = Self::normalize_path(path);
         let key = self.client.build_key(&normalized);
@@ -281,6 +396,8 @@ impl S3FileSystem {
             file_size,
             re,
             remaining_limit,
+            before_context,
+            after_context,
             Self::GREP_CHUNK_SIZE,
             Self::GREP_MAX_PARTIAL_SIZE,
             &mut reader,
@@ -295,9 +412,9 @@ impl S3FileSystem {
         base_path: &str,
         files: Vec<(String, u64)>,
         re: &Regex,
-        node_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
-        let limit = node_limit.unwrap_or(usize::MAX);
+        let limit = options.node_limit.unwrap_or(usize::MAX);
         let result = Arc::new(Mutex::new(GrepResult::new()));
         let matched_count = Arc::new(AtomicUsize::new(0));
         let buf_size = Self::default_grep_concurrency().min(files.len());
@@ -314,7 +431,15 @@ impl S3FileSystem {
 
                     let remaining = limit.saturating_sub(done);
                     let matches = self
-                        .grep_one_file(base_path, &path, file_size, re, remaining)
+                        .grep_one_file(
+                            base_path,
+                            &path,
+                            file_size,
+                            re,
+                            remaining,
+                            options.before_context,
+                            options.after_context,
+                        )
                         .await?;
 
                     let mut r = result.lock().unwrap();
@@ -432,53 +557,74 @@ impl FileSystem for S3FileSystem {
 
         if normalized == "/" {
             // Delete everything under prefix
-            self.client.delete_directory("").await?;
-            self.dir_cache.invalidate_prefix("/").await;
-            self.stat_cache.invalidate_prefix("/").await;
-            return Ok(());
+            let result = self.client.delete_directory("").await;
+            return finalize_remove_all(&self.dir_cache, &self.stat_cache, &normalized, result)
+                .await;
         }
 
-        // Delete the file itself (if it exists as a file)
-        let key = self.client.build_key(&normalized);
-        let _ = self.client.delete_object(&key).await;
+        let result = async {
+            // Delete the file itself (if it exists as a file)
+            let key = self.client.build_key(&normalized);
+            self.client.delete_object(&key).await?;
 
-        // Delete directory and all children
-        self.client.delete_directory(&normalized).await?;
+            // Delete directory and all children
+            self.client.delete_directory(&normalized).await
+        }
+        .await;
 
-        self.dir_cache.invalidate_parent(&normalized).await;
-        self.dir_cache.invalidate_prefix(&normalized).await;
-        self.stat_cache.invalidate_prefix(&normalized).await;
-
-        Ok(())
+        // DeleteObjects may succeed for only part of a batch. Always evict the
+        // affected cache scope before returning its error so deleted objects do
+        // not remain visible until cache expiry.
+        finalize_remove_all(&self.dir_cache, &self.stat_cache, &normalized, result).await
     }
 
     async fn read(&self, path: &str, offset: u64, size: u64) -> Result<Vec<u8>> {
         let normalized = Self::normalize_path(path);
         let key = self.client.build_key(&normalized);
 
-        // Check if it's a directory
-        if key.ends_with('/') || self.client.directory_exists(&normalized).await? {
-            // Try to read as file first
-            if self.client.head_object(&key).await?.is_none() {
-                return Err(Error::IsADirectory(normalized));
-            }
+        // Preserve existing root and explicit directory-marker key handling.
+        let check_directory_first = normalized == "/" || key.ends_with('/');
+        if check_directory_first
+            && (key.ends_with('/') || self.client.directory_exists(&normalized).await?)
+            && self.client.head_object(&key).await?.is_none()
+        {
+            return Err(Error::IsADirectory(normalized));
         }
 
-        if offset == 0 && size == 0 {
-            // Full read
+        let result = if offset == 0 && size == 0 {
             self.client.get_object(&key).await
         } else {
-            // Range read
             self.client.get_object_range(&key, offset, size).await
+        };
+
+        // Successful file reads need no directory HEAD or LIST requests.
+        match result {
+            Err(error @ Error::NotFound(_)) if !check_directory_first => {
+                if self.client.directory_exists(&normalized).await? {
+                    Err(Error::IsADirectory(normalized))
+                } else {
+                    Err(error)
+                }
+            }
+            other => other,
         }
     }
 
-    async fn write(&self, path: &str, data: &[u8], _offset: u64, _flags: WriteFlag) -> Result<u64> {
+    async fn write(&self, path: &str, data: &[u8], _offset: u64, flags: WriteFlag) -> Result<u64> {
         let normalized = Self::normalize_path(path);
         let key = self.client.build_key(&normalized);
 
-        // S3 always replaces the full object
-        self.client.put_object(&key, data.to_vec()).await?;
+        match flags {
+            WriteFlag::CreateNew => {
+                self.client
+                    .put_object_create_new(&key, data.to_vec())
+                    .await?;
+            }
+            _ => {
+                // S3 always replaces the full object for non-exclusive writes.
+                self.client.put_object(&key, data.to_vec()).await?;
+            }
+        }
 
         // Invalidate caches
         self.dir_cache.invalidate_parent(&normalized).await;
@@ -487,12 +633,63 @@ impl FileSystem for S3FileSystem {
         Ok(data.len() as u64)
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+    async fn compare_and_write(
+        &self,
+        path: &str,
+        expected: &[u8],
+        new_data: &[u8],
+    ) -> Result<bool> {
+        let normalized = Self::normalize_path(path);
+        let key = self.client.build_key(&normalized);
+        let Some((current, etag)) = self.client.get_object_with_etag(&key).await? else {
+            return Ok(false);
+        };
+        if current.as_slice() != expected {
+            return Ok(false);
+        }
+        let changed = self
+            .client
+            .put_object_if_match(&key, new_data.to_vec(), &etag)
+            .await?;
+        if changed {
+            self.dir_cache.invalidate_parent(&normalized).await;
+            self.stat_cache.invalidate(&normalized).await;
+        }
+        Ok(changed)
+    }
+
+    async fn compare_and_remove(&self, path: &str, expected: &[u8]) -> Result<bool> {
+        let normalized = Self::normalize_path(path);
+        let key = self.client.build_key(&normalized);
+        let Some((current, etag)) = self.client.get_object_with_etag(&key).await? else {
+            return Ok(false);
+        };
+        if current.as_slice() != expected {
+            return Ok(false);
+        }
+        let changed = self.client.delete_object_if_match(&key, &etag).await?;
+        if changed {
+            self.dir_cache.invalidate_parent(&normalized).await;
+            self.stat_cache.invalidate(&normalized).await;
+        }
+        Ok(changed)
+    }
+
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
         let normalized = Self::normalize_path(path);
 
         // Check cache
         if let Some(files) = self.dir_cache.get(&normalized).await {
-            return Ok(files);
+            return Ok(crate::core::filesystem::apply_read_dir_options(
+                files, offset, limit, sort_by, sort_order,
+            ));
         }
 
         // Build prefix for listing
@@ -546,13 +743,14 @@ impl FileSystem for S3FileSystem {
             });
         }
 
-        // Sort by name
-        files.sort_by(|a, b| a.name.cmp(&b.name));
+        sort_directory_entries(&mut files);
 
         // Cache
         self.dir_cache.put(normalized.clone(), files.clone()).await;
 
-        Ok(files)
+        Ok(crate::core::filesystem::apply_read_dir_options(
+            files, offset, limit, sort_by, sort_order,
+        ))
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -569,9 +767,16 @@ impl FileSystem for S3FileSystem {
             });
         }
 
+        // Bypass the stat cache when the caller demands fresh backend metadata
+        // (e.g. read replicas polling the API-key store for writer-side changes).
+        // The sliding-TTL cache would otherwise pin stale size/modTime forever.
+        let bypass_cache = FsContextView::current().bypass_cache();
+
         // Check stat cache
-        if let Some(cached) = self.stat_cache.get(&normalized).await {
-            return cached.ok_or_else(|| Error::not_found(&normalized));
+        if !bypass_cache {
+            if let Some(cached) = self.stat_cache.get(&normalized).await {
+                return cached.ok_or_else(|| Error::not_found(&normalized));
+            }
         }
 
         let key = self.client.build_key(&normalized);
@@ -682,7 +887,6 @@ impl FileSystem for S3FileSystem {
         Err(Error::not_found(&old_normalized))
     }
 
-
     async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
         let src_normalized = Self::normalize_path(src_path);
         let dst_normalized = Self::normalize_path(dst_path);
@@ -746,18 +950,18 @@ impl FileSystem for S3FileSystem {
         &self,
         path: &str,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
         let normalized = Self::normalize_path(path);
-        let normalized_exclude = exclude_path.map(|p| Self::normalize_path(p));
+        let normalized_exclude = options.exclude_path.map(Self::normalize_path);
+        let normalized_options = GrepOptions {
+            exclude_path: normalized_exclude.as_deref(),
+            ..options
+        };
 
         let info = self.stat(&normalized).await?;
 
-        let re = if case_insensitive {
+        let re = if options.case_insensitive {
             Regex::new(&format!("(?i){}", pattern))
         } else {
             Regex::new(pattern)
@@ -770,7 +974,7 @@ impl FileSystem for S3FileSystem {
                     return Ok(GrepResult::new());
                 }
             }
-            if let Some(limit) = level_limit {
+            if let Some(limit) = options.level_limit {
                 let rel = relative_match_file(&normalized, &normalized);
                 if relative_depth(&rel) > limit {
                     return Ok(GrepResult::new());
@@ -778,7 +982,7 @@ impl FileSystem for S3FileSystem {
             }
             let files = vec![(normalized.clone(), info.size)];
             return self
-                .grep_files_concurrent(&normalized, files, &re, node_limit)
+                .grep_files_concurrent(&normalized, files, &re, normalized_options)
                 .await;
         }
 
@@ -805,14 +1009,14 @@ impl FileSystem for S3FileSystem {
                 }
             }
 
-            if !recursive || level_limit.is_some() {
+            if !options.recursive || options.level_limit.is_some() {
                 let rel = relative_match_file(&normalized, &fs_path);
                 let depth = relative_depth(&rel);
 
-                if !recursive && depth > 1 {
+                if !options.recursive && depth > 1 {
                     continue;
                 }
-                if let Some(limit) = level_limit {
+                if let Some(limit) = options.level_limit {
                     if depth > limit {
                         continue;
                     }
@@ -826,7 +1030,7 @@ impl FileSystem for S3FileSystem {
             return Ok(GrepResult::new());
         }
 
-        self.grep_files_concurrent(&normalized, files, &re, node_limit)
+        self.grep_files_concurrent(&normalized, files, &re, normalized_options)
             .await
     }
 
@@ -836,8 +1040,31 @@ impl FileSystem for S3FileSystem {
         show_hidden: bool,
         node_limit: Option<usize>,
         level_limit: Option<usize>,
+        offset: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+        directories_only: bool,
     ) -> Result<Vec<TreeEntry>> {
         let normalized = Self::normalize_path(path);
+        if sort_by.is_some() {
+            let mut result = Vec::new();
+            let traversal_limit = node_limit.map(|limit| offset.unwrap_or(0).saturating_add(limit));
+            self.tree_directory_internal(
+                &normalized,
+                &normalized,
+                show_hidden,
+                traversal_limit,
+                level_limit,
+                sort_by,
+                sort_order,
+                directories_only,
+                &mut result,
+            )
+            .await?;
+            return Ok(crate::core::filesystem::paginate_entries(
+                result, offset, node_limit,
+            ));
+        }
 
         let prefix = if normalized == "/" {
             self.client.build_key("")
@@ -847,23 +1074,112 @@ impl FileSystem for S3FileSystem {
 
         let objects = self.client.list_tree_objects(&prefix).await?;
 
-        let ordered = build_tree_entries_from_flat_listing(
+        let mut ordered = build_tree_entries_from_flat_listing(
             &normalized,
             &objects,
             show_hidden,
             level_limit,
             |key| self.client.strip_prefix(key),
         )?;
-
-        let mut result = Vec::new();
-        for entry in ordered {
-            if node_limit.is_some_and(|limit| result.len() >= limit) {
-                break;
-            }
-            result.push(entry);
+        if directories_only {
+            ordered.retain(|entry| entry.info.is_dir);
         }
 
-        Ok(result)
+        Ok(crate::core::filesystem::paginate_entries(
+            ordered, offset, node_limit,
+        ))
+    }
+
+    async fn glob_directory(
+        &self,
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        let matcher = PreparedGlob::new(pattern)?;
+        if matches!(page_size, Some(0)) {
+            return Err(Error::invalid_operation("page_size must be positive"));
+        }
+
+        let normalized = Self::normalize_path(path);
+        let info = self.stat(&normalized).await?;
+        if !info.is_dir {
+            return Err(Error::NotADirectory(normalized));
+        }
+
+        let prefix = if normalized == "/" {
+            self.client.build_key("")
+        } else {
+            format!("{}/", self.client.build_key(&normalized))
+        };
+        let mut state = Self::decode_glob_token(
+            continuation_token.as_deref(),
+            path,
+            pattern,
+            show_hidden,
+            level_limit,
+        )?;
+        let target_limit = page_size.unwrap_or(usize::MAX);
+        let fetch_size = 1000;
+        let mut matched = Vec::new();
+
+        loop {
+            while state.page_offset < state.page_entries.len() {
+                let entry = state.page_entries[state.page_offset].clone();
+                state.page_offset += 1;
+                matched.push(entry);
+                if matched.len() >= target_limit {
+                    let next_token = if state.page_offset < state.page_entries.len()
+                        || state.scan_token.is_some()
+                    {
+                        Some(Self::encode_glob_token(&state)?)
+                    } else {
+                        None
+                    };
+                    return Ok(GlobPage {
+                        entries: matched,
+                        next_token,
+                    });
+                }
+            }
+
+            state.page_entries.clear();
+            state.page_offset = 0;
+
+            if state.scan_token.is_none() && !state.last_rel_parts.is_empty() {
+                break;
+            }
+
+            let page = self
+                .client
+                .list_tree_objects_page(&prefix, state.scan_token.as_deref(), fetch_size)
+                .await?;
+            state.scan_token = page.next_continuation_token.clone();
+            let (entries, next_last_rel_parts) = self.glob_entries_from_listing_page(
+                &normalized,
+                &page,
+                &matcher,
+                show_hidden,
+                level_limit,
+                &state.last_rel_parts,
+            )?;
+            state.last_rel_parts = next_last_rel_parts;
+            if entries.is_empty() {
+                if state.scan_token.is_none() {
+                    break;
+                }
+                continue;
+            }
+            state.page_entries = entries;
+        }
+
+        Ok(GlobPage {
+            entries: matched,
+            next_token: None,
+        })
     }
 }
 
@@ -1135,6 +1451,180 @@ plugins:
 mod tests {
     use super::*;
 
+    async fn read_fixture(prefix: &str) -> (S3FileSystem, Arc<AtomicUsize>) {
+        use crate::core::ConfigValue;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let requests = Arc::new(AtomicUsize::new(0));
+        let recorded = requests.clone();
+        tokio::spawn(async move {
+            let objects = [
+                ("prefix/", "root marker"),
+                ("prefix/file", "abcdef"),
+                ("prefix/empty", ""),
+                ("prefix/marker/", ""),
+                ("prefix/nonempty/", "directory marker"),
+                ("prefix/implicit/child", "child"),
+                ("prefix/both", "file"),
+                ("prefix/both/child", "child"),
+            ];
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                while !bytes.windows(4).any(|chunk| chunk == b"\r\n\r\n") {
+                    let mut chunk = [0; 4096];
+                    let n = stream.read(&mut chunk).await.unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    bytes.extend_from_slice(&chunk[..n]);
+                }
+                let request = String::from_utf8(bytes).unwrap();
+                let mut parts = request.split_whitespace();
+                let method = parts.next().unwrap();
+                let target = parts.next().unwrap();
+                recorded.fetch_add(1, Ordering::SeqCst);
+                let url = url::Url::parse(&format!("http://localhost{target}")).unwrap();
+                let key = url.path().strip_prefix("/test-bucket/").unwrap_or("");
+                let (mut status, mut body) = if let Some((_, prefix)) =
+                    url.query_pairs().find(|(name, _)| name == "prefix")
+                {
+                    let entry = objects
+                        .iter()
+                        .find(|(key, _)| key.starts_with(prefix.as_ref()));
+                    let contents = entry.map_or(String::new(), |(key, _)| {
+                        format!("<Contents><Key>{key}</Key></Contents>")
+                    });
+                    (
+                        "200 OK",
+                        format!("<ListBucketResult>{contents}</ListBucketResult>"),
+                    )
+                } else if key == "prefix/denied" {
+                    (
+                        "403 Forbidden",
+                        "<Error><Code>AccessDenied</Code></Error>".into(),
+                    )
+                } else if let Some((_, content)) = objects.iter().find(|(name, _)| *name == key) {
+                    ("200 OK", content.to_string())
+                } else {
+                    (
+                        "404 Not Found",
+                        "<Error><Code>NoSuchKey</Code></Error>".into(),
+                    )
+                };
+                let lowercase = request.to_ascii_lowercase();
+                if status == "200 OK" && method == "GET" {
+                    if let Some(range) = lowercase
+                        .lines()
+                        .find_map(|line| line.strip_prefix("range: bytes="))
+                    {
+                        let (start, end) = range.split_once('-').unwrap();
+                        let start = start.parse::<usize>().unwrap();
+                        let end = if end.is_empty() {
+                            body.len()
+                        } else {
+                            end.parse::<usize>().unwrap() + 1
+                        };
+                        body = body[start..end.min(body.len())].to_string();
+                        status = "206 Partial Content";
+                    }
+                }
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    if method == "HEAD" { "" } else { &body }
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let config = PluginConfig {
+            params: [
+                ("bucket", "test-bucket"),
+                ("endpoint", endpoint.as_str()),
+                ("prefix", prefix),
+                ("access_key_id", "test"),
+                ("secret_access_key", "test"),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.into(), ConfigValue::String(value.into())))
+            .collect(),
+            ..PluginConfig::default()
+        };
+        (S3FileSystem::new(&config).await.unwrap(), requests)
+    }
+
+    #[tokio::test]
+    async fn test_read_files_need_only_one_request() {
+        let (fs, requests) = read_fixture("prefix").await;
+        for (path, offset, size, expected) in [
+            ("/file", 0, 0, "abcdef"),
+            ("/file/", 0, 0, "abcdef"),
+            ("/file", 0, 3, "abc"),
+            ("/file", 1, 3, "bcd"),
+            ("/file", 2, 0, "cdef"),
+            ("/empty", 0, 0, ""),
+            ("/both", 0, 0, "file"),
+        ] {
+            requests.store(0, Ordering::SeqCst);
+            assert_eq!(
+                fs.read(path, offset, size).await.unwrap(),
+                expected.as_bytes()
+            );
+            assert_eq!(
+                requests.load(Ordering::SeqCst),
+                1,
+                "{path} offset={offset} size={size}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_preserves_directories_missing_files_and_errors() {
+        let (fs, requests) = read_fixture("prefix").await;
+        for (path, count) in [
+            ("/marker", 2),
+            ("/marker/", 2),
+            ("/nonempty", 2),
+            ("/implicit", 3),
+        ] {
+            requests.store(0, Ordering::SeqCst);
+            assert!(
+                matches!(fs.read(path, 0, 0).await, Err(Error::IsADirectory(actual)) if actual == path.trim_end_matches('/'))
+            );
+            assert_eq!(requests.load(Ordering::SeqCst), count, "{path}");
+        }
+        requests.store(0, Ordering::SeqCst);
+        assert!(
+            matches!(fs.read("/missing", 0, 0).await, Err(Error::NotFound(key)) if key == "prefix/missing")
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+        for (offset, size) in [(0, 0), (1, 2)] {
+            requests.store(0, Ordering::SeqCst);
+            let error = fs.read("/denied", offset, size).await.unwrap_err();
+            assert!(error.to_string().contains("AccessDenied"));
+            assert_eq!(requests.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_preserves_root_and_marker_key_behavior() {
+        let (fs, requests) = read_fixture("prefix").await;
+        for path in ["/", ""] {
+            requests.store(0, Ordering::SeqCst);
+            assert_eq!(fs.read(path, 0, 0).await.unwrap(), b"root marker");
+            assert_eq!(requests.load(Ordering::SeqCst), 2);
+        }
+        assert_eq!(fs.read("/marker//", 0, 0).await.unwrap(), b"");
+        let (fs, requests) = read_fixture("missing-prefix").await;
+        assert!(matches!(fs.read("/", 0, 0).await, Err(Error::IsADirectory(path)) if path == "/"));
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        let (fs, _) = read_fixture("").await;
+        assert!(matches!(fs.read("/", 0, 0).await, Err(Error::Internal(_))));
+    }
+
     #[test]
     fn test_normalize_path() {
         assert_eq!(S3FileSystem::normalize_path(""), "/");
@@ -1299,6 +1789,50 @@ mod tests {
         assert!(plugin.validate(&config).await.is_ok());
     }
 
+    #[tokio::test]
+    async fn test_partial_remove_all_error_invalidates_deleted_prefix_caches() {
+        let dir_cache = S3ListDirCache::new(10, 60, true);
+        let stat_cache = S3StatCache::new(10, 60, true);
+
+        let info = FileInfo {
+            name: "file.txt".to_string(),
+            size: 1,
+            mode: 0o644,
+            mod_time: SystemTime::now(),
+            is_dir: false,
+        };
+        dir_cache
+            .put("/parent".to_string(), vec![info.clone()])
+            .await;
+        dir_cache
+            .put("/parent/child".to_string(), vec![info.clone()])
+            .await;
+        dir_cache
+            .put("/unrelated".to_string(), vec![info.clone()])
+            .await;
+        stat_cache
+            .put("/parent/child/file.txt".to_string(), Some(info.clone()))
+            .await;
+        stat_cache
+            .put("/unrelated/file.txt".to_string(), Some(info))
+            .await;
+
+        let result = finalize_remove_all(
+            &dir_cache,
+            &stat_cache,
+            "/parent/child",
+            Err(Error::internal("S3 DeleteObjects partial failure")),
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(dir_cache.get("/parent").await.is_none());
+        assert!(dir_cache.get("/parent/child").await.is_none());
+        assert!(stat_cache.get("/parent/child/file.txt").await.is_none());
+        assert!(dir_cache.get("/unrelated").await.is_some());
+        assert!(stat_cache.get("/unrelated/file.txt").await.is_some());
+    }
+
     #[test]
     fn test_s3_is_excluded_path() {
         assert!(
@@ -1388,11 +1922,13 @@ mod tests {
     /// Returns the range `[offset, offset+size)` clamped to `data.len()`.
     struct MockChunkReader {
         data: Vec<u8>,
+        reads: usize,
     }
 
     #[async_trait]
     impl ChunkReader for MockChunkReader {
         async fn read_chunk(&mut self, offset: u64, size: u64) -> Result<Vec<u8>> {
+            self.reads += 1;
             let start = offset as usize;
             if start >= self.data.len() {
                 return Ok(Vec::new());
@@ -1415,13 +1951,15 @@ mod tests {
     ) -> Result<Vec<GrepMatch>> {
         let data = data.as_ref().to_vec();
         let file_size = data.len() as u64;
-        let mut reader = MockChunkReader { data };
+        let mut reader = MockChunkReader { data, reads: 0 };
         let re = build_re(pattern);
         grep_stream(
             "f",
             file_size,
             &re,
             100,
+            0,
+            0,
             chunk_size,
             max_partial,
             &mut reader,
@@ -1429,7 +1967,7 @@ mod tests {
         .await
     }
 
-    // ── Case  3: 正则无效 ──
+    // ── Case  3: invalid regex ──
 
     #[test]
     fn test_grep_invalid_regex() {
@@ -1443,7 +1981,7 @@ mod tests {
         );
     }
 
-    // ── Case 17: case_insensitive 正则构建 ──
+    // ── Case 17: case-insensitive regex construction ──
 
     #[test]
     fn test_case_insensitive_regex() {
@@ -1457,7 +1995,8 @@ mod tests {
         assert!(re2.is_match("world"), "uppercase pattern matches lowercase");
     }
 
-    // ── Case  9: 文件大小恰好为 CHUNK_SIZE（单 chunk，is_last 靠 offset+size>=file_size） ──
+    // ── Case  9: file size exactly equals CHUNK_SIZE (single chunk, with
+    // `is_last` determined by `offset + size >= file_size`) ──
 
     #[tokio::test]
     async fn test_grep_stream_exact_chunk_single() {
@@ -1473,7 +2012,8 @@ mod tests {
         assert_eq!(matches[1].content, "world");
     }
 
-    // ── Case 10: 最后 chunk 恰好等于 CHUNK_SIZE（多 chunk 场景） ──
+    // ── Case 10: last chunk size exactly equals CHUNK_SIZE (multi-chunk
+    // scenario) ──
 
     #[tokio::test]
     async fn test_grep_stream_last_chunk_exact_size() {
@@ -1484,7 +2024,7 @@ mod tests {
         assert_eq!(matches[3].content, "line4");
     }
 
-    // ── Case 11: 跨 chunk 边界行的拼接 ──
+    // ── Case 11: line stitching across chunk boundaries ──
 
     #[tokio::test]
     async fn test_grep_stream_cross_chunk_line() {
@@ -1496,7 +2036,89 @@ mod tests {
         assert_eq!(matches[0].content, "lo wo", "stitched across boundary");
     }
 
-    // ── Case 12: 连续多 chunk 无换行符 ──
+    #[tokio::test]
+    async fn test_grep_stream_includes_context_across_chunks() {
+        let data = b"first\nbefore\nhit\nafter\n".to_vec();
+        let mut reader = MockChunkReader {
+            data: data.clone(),
+            reads: 0,
+        };
+        let matches = grep_stream(
+            "f",
+            data.len() as u64,
+            &build_re("hit"),
+            100,
+            2,
+            1,
+            8,
+            1024,
+            &mut reader,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line, 3);
+        assert_eq!(
+            matches[0].before_context.as_ref().unwrap()[0].content,
+            "first"
+        );
+        assert_eq!(
+            matches[0].before_context.as_ref().unwrap()[1].content,
+            "before"
+        );
+        assert_eq!(
+            matches[0].after_context.as_ref().unwrap()[0].content,
+            "after"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_grep_stream_stops_after_limited_match_context() {
+        let data = b"hit\none\ntwo\nunread\nunread\nunread\n".to_vec();
+        let mut reader = MockChunkReader {
+            data: data.clone(),
+            reads: 0,
+        };
+        let matches = grep_stream(
+            "f",
+            data.len() as u64,
+            &build_re("hit"),
+            1,
+            0,
+            2,
+            4,
+            1024,
+            &mut reader,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0]
+                .after_context
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|line| line.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["one", "two"]
+        );
+        assert_eq!(reader.reads, 3);
+    }
+
+    #[tokio::test]
+    async fn test_grep_stream_preserves_utf8_split_across_chunks() {
+        let data = "before\n命中\nafter\n".as_bytes();
+        let matches = grep_chunks(data, "命中", 9, 1024).await.unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line, 2);
+        assert_eq!(matches[0].content, "命中");
+    }
+
+    // ── Case 12: multiple consecutive chunks with no newline ──
 
     #[tokio::test]
     async fn test_grep_stream_multi_chunk_no_newline() {
@@ -1512,7 +2134,7 @@ mod tests {
         );
     }
 
-    // ── Case 13: 超长行 > GREP_MAX_PARTIAL_SIZE ──
+    // ── Case 13: oversized line > GREP_MAX_PARTIAL_SIZE ──
 
     #[tokio::test]
     async fn test_grep_stream_line_exceeds_max_partial() {
@@ -1525,7 +2147,7 @@ mod tests {
         );
     }
 
-    // ── Case 14: 二进制内容（含无效 UTF-8） ──
+    // ── Case 14: binary content (including invalid UTF-8) ──
 
     #[tokio::test]
     async fn test_grep_stream_binary_content() {

@@ -22,7 +22,7 @@ def test_runtime_modules_use_unified_get_logger():
         "openviking/parse/tree_builder.py",
         "openviking/parse/accessors/registry.py",
         "openviking/parse/parsers/pdf.py",
-        "openviking/parse/parsers/code/ast/extractor.py",
+        "openviking/parse/parsers/code/ast/providers.py",
         "openviking/models/rerank/base.py",
         "openviking/models/rerank/volcengine_rerank.py",
         "openviking/models/rerank/openai_rerank.py",

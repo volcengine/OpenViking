@@ -45,8 +45,6 @@ async def test_write_omits_removed_semantic_flags_from_http_payload(tmp_path, mo
         "content": "updated",
         "mode": "replace",
         "wait": True,
-        "timeout": None,
-        "telemetry": False,
     }
 
 
@@ -90,7 +88,10 @@ async def test_add_resource_uploads_local_file_even_when_url_is_localhost(tmp_pa
         "result": {"root_uri": "viking://resources/demo"}
     }
 
-    await client.add_resource(str(resource_file), reason="test", watch_interval=60)
+    await client.add_resource(
+        str(resource_file),
+        options={"reason": "test", "watch_interval": 60},
+    )
 
     call = fake_http.calls[-1]
     assert call["path"] == "/api/v1/resources"

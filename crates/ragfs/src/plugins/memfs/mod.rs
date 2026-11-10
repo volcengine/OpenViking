@@ -280,6 +280,9 @@ impl FileSystem for MemFileSystem {
                     WriteFlag::Create | WriteFlag::Truncate => {
                         entry.data = data.to_vec();
                     }
+                    WriteFlag::CreateNew => {
+                        return Err(Error::AlreadyExists(normalized));
+                    }
                     WriteFlag::Append => {
                         entry.data.extend_from_slice(data);
                     }
@@ -299,8 +302,8 @@ impl FileSystem for MemFileSystem {
                 Ok(data.len() as u64)
             }
             None => {
-                // Create file if Create flag is set
-                if matches!(flags, WriteFlag::Create) {
+                // Create file if Create or CreateNew flag is set
+                if matches!(flags, WriteFlag::Create | WriteFlag::CreateNew) {
                     // Check parent exists
                     if let Some(parent) = Self::parent_path(&normalized) {
                         match entries.get(&parent) {
@@ -321,7 +324,47 @@ impl FileSystem for MemFileSystem {
         }
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+    /// Atomically replace a memory file when its content matches `expected`.
+    async fn compare_and_write(
+        &self,
+        path: &str,
+        expected: &[u8],
+        new_data: &[u8],
+    ) -> Result<bool> {
+        let normalized = Self::normalize_path(path);
+        let mut entries = self.entries.write().await;
+        let Some(entry) = entries.get_mut(&normalized) else {
+            return Ok(false);
+        };
+        if entry.is_dir || entry.data != expected {
+            return Ok(false);
+        }
+        entry.data = new_data.to_vec();
+        entry.touch();
+        Ok(true)
+    }
+
+    /// Atomically remove a memory file when its content matches `expected`.
+    async fn compare_and_remove(&self, path: &str, expected: &[u8]) -> Result<bool> {
+        let normalized = Self::normalize_path(path);
+        let mut entries = self.entries.write().await;
+        let matches = entries
+            .get(&normalized)
+            .is_some_and(|entry| !entry.is_dir && entry.data == expected);
+        if matches {
+            entries.remove(&normalized);
+        }
+        Ok(matches)
+    }
+
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
         let normalized = Self::normalize_path(path);
         let entries = self.entries.read().await;
 
@@ -349,7 +392,9 @@ impl FileSystem for MemFileSystem {
             }
         }
 
-        Ok(result)
+        Ok(crate::core::filesystem::apply_read_dir_options(
+            result, offset, limit, sort_by, sort_order,
+        ))
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -459,7 +504,10 @@ impl FileSystem for MemFileSystem {
             }
         }
 
-        if entries.get(&dst_normalized).is_some_and(|entry| entry.is_dir) {
+        if entries
+            .get(&dst_normalized)
+            .is_some_and(|entry| entry.is_dir)
+        {
             return Err(Error::IsADirectory(dst_normalized));
         }
 
@@ -605,7 +653,10 @@ mod tests {
         fs.create("/testdir/file2.txt").await.unwrap();
 
         // List directory
-        let entries = fs.read_dir("/testdir").await.unwrap();
+        let entries = fs
+            .read_dir("/testdir", None, None, None, None)
+            .await
+            .unwrap();
         assert_eq!(entries.len(), 2);
     }
 

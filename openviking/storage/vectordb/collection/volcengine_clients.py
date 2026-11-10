@@ -3,6 +3,7 @@
 import json
 
 import requests  # type: ignore
+from requests.adapters import HTTPAdapter
 from volcengine.auth.SignerV4 import SignerV4
 from volcengine.base.Request import Request
 from volcengine.Credentials import Credentials
@@ -14,6 +15,23 @@ DEFAULT_TIMEOUT = 30
 
 # VikingDB API Version
 VIKING_DB_VERSION = "2025-06-09"
+
+# Connection pool sizing for the per-client keep-alive session.
+_POOL_CONNECTIONS = 16
+_POOL_MAXSIZE = 32
+
+
+def _build_pooled_session() -> requests.Session:
+    """Create a session that reuses TCP/TLS connections across requests.
+
+    Each client owns one long-lived session so repeated search/find calls hit a
+    warm keep-alive connection instead of paying a fresh TCP + TLS handshake.
+    """
+    session = requests.Session()
+    adapter = HTTPAdapter(pool_connections=_POOL_CONNECTIONS, pool_maxsize=_POOL_MAXSIZE)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 class ClientForConsoleApi:
@@ -33,6 +51,8 @@ class ClientForConsoleApi:
 
         if not all([self.ak, self.sk, self.host, self.region]):
             raise ValueError("AK, SK, Host, and Region are required for ClientForConsoleApi")
+
+        self._session = _build_pooled_session()
 
     def prepare_request(self, method, params=None, data=None):
         if Request is None:
@@ -71,7 +91,7 @@ class ClientForConsoleApi:
 
     def do_req(self, req_method, req_params=None, req_body=None):
         req = self.prepare_request(method=req_method, params=req_params, data=req_body)
-        return requests.request(
+        return self._session.request(
             method=req.method,
             url=f"https://{self.host}{req.path}",
             headers=req.headers,
@@ -98,6 +118,8 @@ class ClientForDataApi:
 
         if not all([self.ak, self.sk, self.host, self.region]):
             raise ValueError("AK, SK, Host, and Region are required for ClientForDataApi")
+
+        self._session = _build_pooled_session()
 
     def prepare_request(self, method, path, params=None, data=None):
         if Request is None:
@@ -138,7 +160,7 @@ class ClientForDataApi:
         req = self.prepare_request(
             method=req_method, path=req_path, params=req_params, data=req_body
         )
-        return requests.request(
+        return self._session.request(
             method=req.method,
             url=f"https://{self.host}{req.path}",
             headers=req.headers,
@@ -157,6 +179,8 @@ class ClientForDataApiWithApiKey:
 
         if not self.api_key or not self.host:
             raise ValueError("api_key and host are required for ClientForDataApiWithApiKey")
+
+        self._session = _build_pooled_session()
 
     def prepare_request(self, method, path, params=None, data=None):
         if Request is None:
@@ -189,7 +213,7 @@ class ClientForDataApiWithApiKey:
         req = self.prepare_request(
             method=req_method, path=req_path, params=req_params, data=req_body
         )
-        return requests.request(
+        return self._session.request(
             method=req.method,
             url=f"https://{self.host}{req.path}",
             headers=req.headers,

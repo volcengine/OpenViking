@@ -8,18 +8,22 @@ from vikingbot.agent.tools.image import ImageGenerationTool
 from vikingbot.agent.tools.message import MessageTool
 from vikingbot.agent.tools.ov_file import (
     VikingAddResourceTool,
+    VikingDiffPathsTool,
+    VikingExportTool,
     VikingGlobTool,
     VikingGrepTool,
     VikingListTool,
     VikingMemoryCommitTool,
     VikingMultiReadTool,
+    VikingRuleSearchTool,
     VikingSearchTool,
 )
+from vikingbot.agent.tools.ov_mcp import VikingFindMCPToolsTool, VikingInvokeMCPTool
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.shell import ExecTool
 from vikingbot.agent.tools.web import WebFetchTool
 from vikingbot.agent.tools.websearch import WebSearchTool
-from vikingbot.config.loader import load_config
+from vikingbot.config.schema import SandboxBackend
 
 if TYPE_CHECKING:
     from vikingbot.agent.subagent import SubagentManager
@@ -56,6 +60,7 @@ def register_default_tools(
         include_viking_tools: Whether to include Viking tools
     """
     # Derive all parameters from config
+    registry.config = config
     exec_config = config.tools.exec
     brave_api_key = config.tools.web.search.api_key if config.tools.web.search else None
     exa_api_key = None  # TODO: Add to config if needed
@@ -63,7 +68,7 @@ def register_default_tools(
 
     # Get provider API key and base from config
 
-    agent_config = load_config().agents
+    agent_config = config.agents
     provider_api_key = agent_config.api_key if agent_config else None
     provider_api_base = agent_config.api_base if agent_config else None
     gen_image_model = agent_config.gen_image_model
@@ -73,12 +78,13 @@ def register_default_tools(
     registry.register(EditFileTool())
     registry.register(ListDirTool())
 
-    # Shell tool
-    registry.register(
-        ExecTool(
-            timeout=exec_config.timeout,
+    # All agents share this registration, including Compile and subagents.
+    if config.sandbox.backend != SandboxBackend.DIRECT or config.sandbox.backends.direct.allow_exec:
+        registry.register(
+            ExecTool(
+                timeout=exec_config.timeout,
+            )
         )
-    )
 
     # Web tools
     registry.register(
@@ -93,14 +99,19 @@ def register_default_tools(
 
     # Open Viking tools
     if include_viking_tools:
-        registry.register(VikingMultiReadTool())
-        registry.register(VikingListTool())
-        registry.register(VikingSearchTool())
-        registry.register(VikingGrepTool())
-        registry.register(VikingGlobTool())
-        registry.register(VikingMemoryCommitTool())
+        registry.register(VikingMultiReadTool(config=config))
+        registry.register(VikingListTool(config=config))
+        registry.register(VikingDiffPathsTool(config=config))
+        registry.register(VikingSearchTool(config=config))
+        registry.register(VikingGrepTool(config=config))
+        registry.register(VikingGlobTool(config=config))
+        registry.register(VikingExportTool(config=config))
+        registry.register(VikingMemoryCommitTool(config=config))
+        registry.register(VikingFindMCPToolsTool(config=config))
+        registry.register(VikingRuleSearchTool(config=config))
         if not config.read_only:
-            registry.register(VikingAddResourceTool())
+            registry.register(VikingAddResourceTool(config=config))
+            registry.register(VikingInvokeMCPTool(config=config))
 
     # Image generation tool
     if include_image_tool:
@@ -126,7 +137,7 @@ def register_default_tools(
         registry.register(spawn_tool)
 
     # Cron tool
-    if include_cron_tool and cron_service:
+    if include_cron_tool and cron_service and config.tools.cron.enabled:
         registry.register(CronTool(cron_service))
 
 

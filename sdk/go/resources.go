@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -21,22 +24,44 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 		"strict":                opts.Strict,
 		"directly_upload_media": boolValue(opts.DirectlyUploadMedia, true),
 		"watch_interval":        opts.WatchInterval,
-		"args":                  map[string]any{},
 	}
 	setString(payload, "to", opts.To)
 	setString(payload, "parent", opts.Parent)
+	if opts.CreateParent != nil {
+		payload["create_parent"] = *opts.CreateParent
+	}
+	setString(payload, "add_type", opts.AddType)
 	setString(payload, "ignore_dirs", opts.IgnoreDirs)
 	setString(payload, "include", opts.Include)
 	setString(payload, "exclude", opts.Exclude)
-	setFloatPtr(payload, "timeout", opts.Timeout)
 	if opts.PreserveStructure != nil {
 		payload["preserve_structure"] = *opts.PreserveStructure
 	}
+	setString(payload, "processing_mode", opts.ProcessingMode)
 	setAny(payload, "telemetry", opts.Telemetry)
-	if opts.Args != nil {
+	// Only attach args when arguments were actually provided. Instances that
+	// predate #2549 (which added the args field to the resources route under
+	// model_config=ConfigDict(extra="forbid")) reject an empty args object with
+	// "body.args: Extra inputs are not permitted". Mirrors the Python SDK
+	// _compact_request_body (#2834) and the Rust CLI compact_request_body (#2799).
+	if len(opts.Args) > 0 {
 		payload["args"] = opts.Args
 	}
-	if err := c.addLocalUpload(ctx, payload, path, true); err != nil {
+	if opts.ACL != nil {
+		payload["acl"] = opts.ACL
+	}
+	if opts.Tags != nil || opts.TagMode == "clear" {
+		if opts.Tags != nil {
+			payload["tags"] = opts.Tags
+		}
+		if opts.TagMode != "" {
+			payload["tag_mode"] = opts.TagMode
+		}
+	}
+	if err := c.addLocalUpload(ctx, payload, path, true, false); err != nil {
+		return nil, err
+	}
+	if err := mergeExtraProtected(payload, opts.Extra, "create_parent"); err != nil {
 		return nil, err
 	}
 	var result map[string]any

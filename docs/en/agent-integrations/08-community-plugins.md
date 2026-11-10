@@ -2,6 +2,119 @@
 
 Community-maintained integrations for various agent runtimes. Each differs in target platform, integration depth, and maintenance status — check the linked README before adopting.
 
+## ZCode memory integration
+
+Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+The ZCode community integration adds cross-project, cross-session memory through config-driven lifecycle hooks and an OpenViking MCP server:
+
+- **SessionStart** injects the user profile.
+- **UserPromptSubmit** recalls relevant memories.
+- **PreToolUse** redirects direct `viking://` reads to MCP tools.
+- **Stop** captures unseen rollout turns in a detached worker, then commits the OpenViking session.
+
+ZCode does not expose `PreCompact`, `SessionEnd`, or subagent lifecycle hooks. The adapter therefore commits on `Stop`, uses ZCode rollout files as the authoritative incremental transcript, and falls back to hook stdin only when no rollout file is available.
+
+### Install
+
+Prerequisites: Node.js 18+, a running OpenViking server, and ZCode.
+
+```bash
+curl -fsSL https://openviking.ai/install | bash
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
+```
+
+The installer detects `~/.zcode/` or the `zcode` binary, installs the runtime under `~/.openviking/agent-integrations/zcode/`, and merges hooks and MCP configuration into `~/.zcode/cli/config.json`.
+
+After restarting ZCode, verify that:
+
+- `~/.zcode/cli/config.json` contains `hooks.enabled: true`, OpenViking entries under `hooks.events`, and `mcp.servers.openviking`.
+- `OPENVIKING_DEBUG=1` produces diagnostics in `~/.openviking/logs/zcode-hooks.log`.
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Hooks not firing | Hook configuration is disabled or stale | Re-run the installer and restart ZCode |
+| Recall returns nothing | OpenViking is unavailable or has not extracted memories yet | Check `curl http://127.0.0.1:1933/health` and wait for extraction |
+| MCP tools not appearing | The MCP proxy failed to start | Check the absolute `mcp.servers.openviking` command in `~/.zcode/cli/config.json` |
+| Duplicate captures | An older installation left duplicate hook entries | Run `curl -fsSL https://openviking.ai/install \| bash -s -- --uninstall --yes --harness zcode`, then reinstall |
+
+Implementation details and currently verified ZCode assumptions are documented in the plugin's [README](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) and [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/DESIGN.md).
+
+Once installed, start a new ZCode session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
+
+## Kimi Code memory integration
+
+Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+The Kimi Code integration is a native managed plugin. It reuses the shared
+OpenViking hook runtime and adds only Kimi-specific event mapping, wire
+transcript decoding, output formatting, and commit policy:
+
+- **UserPromptSubmit** recalls memory and prints raw context text for Kimi to inject.
+- **PreToolUse** blocks direct Read/Glob/Grep access to `viking://` URIs.
+- **Stop**, **PreCompact**, and **SessionEnd** capture new `wire.jsonl` turns; **Interrupt** runs the same capture synchronously within one two-second OpenViking request budget.
+- The plugin manifest exposes the OpenViking MCP server without editing Kimi's legacy config files.
+
+### Install
+
+Prerequisites: Node.js 18+, a running OpenViking server, and Kimi Code CLI.
+
+```bash
+curl -fsSL https://openviking.ai/install | bash
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
+```
+
+The installer assembles a self-contained runtime under
+`$KIMI_CODE_HOME/plugins/managed/openviking-memory/` (default Kimi home:
+`~/.kimi-code/`), then updates only the `openviking-memory` entry in
+`plugins/installed.json`. Existing plugin records are preserved. Re-run the
+same command to upgrade. To remove only this plugin:
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness kimicode
+```
+
+The verified host contract and version are recorded in
+[`hosts/kimicode/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/kimicode/DESIGN.md).
+
+Once installed, start a new Kimi Code session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
+
+## CodeBuddy Code memory integration
+
+Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+The CodeBuddy Code integration is an `agent-hook-plugin` host adapter. It reuses the shared OpenViking hook runtime and adds only CodeBuddy-specific event mapping, transcript decoding, output envelopes, and commit policy:
+
+- **SessionStart** injects the user profile and replays anything the offline queue is holding.
+- **UserPromptSubmit** recalls relevant memories and injects them as an `<openviking-context>` block in `additionalContext`. Host-generated continuation turns are skipped, so a turn the host produced on its own never triggers a search.
+- **PreToolUse** denies reading or writing a `viking://` URI as a local path and points the Agent at the OpenViking MCP tools. Shell commands are not checked, so `ov` invocations and literal `viking://` arguments still work.
+- **Stop**, **PreCompact**, and **SessionEnd** capture new transcript turns incrementally in a detached worker. `Stop` commits the OpenViking session every 8 captured messages (`commitTurnThreshold`); `PreCompact` and `SessionEnd` commit everything not yet committed, including messages `Stop` already sent.
+
+The plugin manifest also exposes the OpenViking MCP server as a stdio proxy onto the same resolved configuration, and ships the `openviking-memory`, `openviking-skills`, and `ov-experience-memory` skills. Hooks and MCP read the same credentials, so they cannot disagree about the server, account, or user. Subagent capture is not supported in v1, as on the other community adapters: the host fires `SubagentStart`/`SubagentStop`, but the shared dispatcher has no subagent stage yet.
+
+### Install
+
+Prerequisites: CodeBuddy Code, Node.js 18+, and a running OpenViking server.
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness codebuddy
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
+```
+
+The installer assembles a self-contained plugin under `~/.openviking/agent-integrations/codebuddy/marketplace/openviking-memory/`, with the shared hook runtime beside the adapters, registers it as a local marketplace named `openviking`, and installs it through the CodeBuddy CLI. To remove only this integration:
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness codebuddy
+```
+
+The plugin reads its connection from `~/.openviking/ovcli.conf`; `OPENVIKING_URL` and `OPENVIKING_API_KEY` override that file, and per-plugin settings live under `plugin.codebuddy` (see [Plugin Settings](../configuration/02-client.md#plugin-settings)). Start a new CodeBuddy session after installing (`/reload-plugins` applies it to a running one), and confirm with `codebuddy plugin list` that `openviking-memory@openviking` is enabled.
+
+### Behaviour that follows from the host
+
+`UserPromptSubmit` and `SessionEnd` fire **only in the interactive TUI** — headless runs (`-p`, `--input-format stream-json`) never emit them, so a headless session captures on `Stop` but never sends the final commit. `SessionStart` carries no `cwd` and can be delivered twice per session, so the session-start hook is idempotent and falls back to the process working directory. A hook that overruns its timeout is killed, but its child processes are not, which is what lets commits run in a detached worker after the hook process returns.
+
+The verified host contract, the transcript format, and the adapter's v1 scope are recorded in [`hosts/codebuddy/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/codebuddy/DESIGN.md).
+
 ## AstrBot plugin
 
 [AstrBot](https://github.com/AstrBotDevs/AstrBot) is a multi-platform IM bot framework supporting QQ, Telegram, Discord, Lark, and 20+ other platforms.
@@ -12,139 +125,27 @@ Provides auto-capture of group/DM conversations, semantic recall before each LLM
 
 **Install**: In AstrBot WebUI, search **OpenViking Memory** in the Plugin Marketplace; or install from URL: `https://github.com/t0saki/astrbot_plugin_openviking_memory.git`
 
+The current plugin requires AstrBot 4.23.1+ and a compatible OpenViking server. Use a User key for `global`; `venue` needs an Admin key to create users. Check the linked plugin README before migrating an older configuration.
+
 **Key features**:
 
 - Auto-recall and auto-capture via hooks — the model doesn't need to invoke tools
-- Three isolation modes: `venue_user` (per-group/DM), `venue_user_fanout` (cross-venue sharing), `global_user` (single user)
-- Four auto-commit triggers: message count, token threshold, idle timeout, and process-exit flush
+- `self_scope=global` shares one bot identity; `venue` creates a separate user per group/DM. People are represented as peers. Legacy `isolation_mode` values are mapped to these scopes.
+- Automatic commit by message count, token threshold, or idle timeout
 - Backfills platform message history on first venue encounter
 
-## OpenCode plugin
+## Open WebUI tool server
 
-OpenViking provides one unified OpenCode plugin for repository context and long-term memory workflows.
+[Open WebUI](https://github.com/open-webui/open-webui) is a self-hosted AI chat interface.
 
-Source: [examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)
+Source: [examples/openwebui-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openwebui-plugin)
 
-The plugin combines indexed repository context, OpenViking memory tools, session synchronization, lifecycle commit, and automatic recall through OpenCode plugin hooks. Use this plugin for both the former explicit-tool and context-injection use cases.
+A standalone FastAPI server that exposes a curated subset of OpenViking endpoints as OpenAPI tools, so Open WebUI can call them as native tools. Setup and endpoint details are in the README.
 
-### Prerequisites
+## More examples
 
-- [OpenCode](https://opencode.ai/)
-- Node.js and npm
-- An OpenViking HTTP server
-- An OpenViking API key when your server requires authentication
+The [examples/](https://github.com/volcengine/OpenViking/tree/main/examples) directory also contains deployment and integration samples beyond agent plugins — Grafana dashboards, Kubernetes Helm charts, multi-tenant setups, snapshot workflows, and SDK snippets.
 
-Start your OpenViking server first:
+## See also
 
-```bash
-openviking-server --config ~/.openviking/ov.conf
-```
-
-In another terminal, check the service:
-
-```bash
-curl http://localhost:1933/health
-```
-
-### Install
-
-The published npm package is `@openviking/opencode-plugin`; verify availability with `npm view @openviking/opencode-plugin version`. For package installs, add the plugin to `~/.config/opencode/opencode.json`. If package installation is not available in your environment yet, use the source install path below.
-
-```json
-{
-  "plugin": ["@openviking/opencode-plugin"]
-}
-```
-
-For development, debugging, or PR testing, install the plugin from this repository instead:
-
-```bash
-git clone https://github.com/volcengine/OpenViking.git
-cd OpenViking
-mkdir -p ~/.config/opencode/plugins/openviking
-cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
-cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
-cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
-cd ~/.config/opencode/plugins/openviking
-npm install
-```
-
-This source install creates the layout OpenCode can discover:
-
-```text
-~/.config/opencode/plugins/
-├── openviking.js
-└── openviking/
-    ├── index.mjs
-    ├── package.json
-    ├── lib/
-    └── node_modules/
-```
-
-The top-level `openviking.js` is only a wrapper that forwards OpenCode's first-level plugin entry to the installed package directory.
-Use the `.js` wrapper for source installs; OpenCode's local plugin scanner discovers JavaScript/TypeScript plugin files.
-
-### Configure
-
-Create `~/.config/opencode/openviking-config.json`:
-
-```json
-{
-  "endpoint": "http://localhost:1933",
-  "apiKey": "",
-  "account": "",
-  "user": "",
-  "peerId": "",
-  "enabled": true,
-  "timeoutMs": 30000,
-  "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
-  "autoRecall": {
-    "enabled": true,
-    "limit": 6,
-    "scoreThreshold": 0.15,
-    "maxContentChars": 500,
-    "preferAbstract": true,
-    "tokenBudget": 2000
-  }
-}
-```
-
-Prefer environment variables for secrets:
-
-```bash
-export OPENVIKING_API_KEY="your-api-key-here"
-export OPENVIKING_ACCOUNT="default"   # optional, trusted-mode deployments only
-export OPENVIKING_USER="opencode"     # optional, trusted-mode deployments only
-export OPENVIKING_PEER_ID="opencode"  # optional, peer-scoped memory routing
-```
-
-Environment variables override `openviking-config.json`. `apiKey` is sent as `X-API-Key`; `account` and `user` are trusted-mode headers; `peerId` is sent as request-level `peer_id` for recall, search, and captured session messages.
-
-### Verify
-
-Restart OpenCode after installation. In an OpenCode session, the plugin should expose these tools:
-
-- `memsearch`, `memread`, `membrowse`
-- `memgrep`, `memglob`
-- `memadd`, `memwrite`, `memremove`, `memqueue`
-- `memcommit`
-- `codesearch`, `codeoutline`, `codeexpand`
-
-Ask OpenCode to search or browse OpenViking memory, or request a manual session commit. Runtime state and errors are written to:
-
-```bash
-~/.config/opencode/openviking/openviking-memory.log
-~/.config/opencode/openviking/openviking-session-map.json
-```
-
-### Troubleshooting
-
-| Issue | What to check |
-|-------|---------------|
-| Plugin does not load | Confirm `~/.config/opencode/opencode.json` references `@openviking/opencode-plugin`, or that `~/.config/opencode/plugins/openviking.js` exists for source installs |
-| Tools call the wrong server | Check `endpoint` in `~/.config/opencode/openviking-config.json`, or set `OPENVIKING_PLUGIN_CONFIG` to the intended config path |
-| 401 / 403 from OpenViking | Verify `OPENVIKING_API_KEY`; for trusted-mode deployments, also verify `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |
-| Recall is empty | Confirm the OpenViking server has indexed memories/resources and that `autoRecall.enabled` is `true` |
-| Local `memadd` fails | Pass a file path, not a directory; local directories are not uploaded automatically yet |
-
-For all available tools, configuration fields, and runtime file details, see the [plugin README](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin).
+- [Capability Reference](./16-capability-reference.md)

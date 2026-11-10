@@ -10,8 +10,9 @@ No tool calls — all context is prefetched. Top-3 candidates also include their
 source_trajectories as grounding material.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.session_extract_context_provider import (
@@ -24,6 +25,9 @@ from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
+if TYPE_CHECKING:
+    from openviking.config.vlm import VLMHandle
+
 logger = get_logger(__name__)
 
 
@@ -31,10 +35,21 @@ EXPERIENCE_MEMORY_TYPE = "experiences"
 SEARCH_TOP_K = 5
 SOURCE_TRAJ_TOP_K = 3  # only attach source_trajectories for the top-3 candidates
 MAX_SOURCE_TRAJS = 3  # max trajectories to load per experience
+# Hide storage bookkeeping only in read-only grounding sent to the model.
+_SOURCE_TRAJECTORY_HIDDEN_FIELDS = frozenset(
+    {"backlinks", "source_archive_uri", "last_update_trace_id", "version"}
+)
+
+
+def _is_directory_not_found_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "directory not found" in message or "not_found" in message
 
 
 class AgentExperienceContextProvider(SessionExtractContextProvider):
     """Phase 2 provider: consolidate the new trajectory into experience memories."""
+
+    include_tool_parts_in_conversation = True
 
     def __init__(
         self,
@@ -42,8 +57,13 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
         trajectory_summary: str,
         trajectory_uri: str,
         latest_archive_overview: str = "",
+        vlm_config: Optional["VLMHandle"] = None,
     ):
-        super().__init__(messages=messages, latest_archive_overview=latest_archive_overview)
+        super().__init__(
+            messages=messages,
+            latest_archive_overview=latest_archive_overview,
+            vlm_config=vlm_config,
+        )
         self.trajectory_summary = trajectory_summary
         self.trajectory_uri = trajectory_uri
         self.prefetched_uris: List[str] = []
@@ -70,14 +90,14 @@ Each entry:
 The system handles create vs update automatically:
 - Same `experience_name` as an existing one → updates it in place
 - New `experience_name` → creates a new experience
-- `supersedes` set → old experience is deleted and its history is inherited
+- `supersedes` set → proposes a replacement for the final merge to review
 
 ## Rules
 
 - **One experience per distinct user intent.** If a trajectory covers N different user goals (e.g., cancel + modify + add baggage), output N separate entries — never merge them into one.
 - **Split over merge.** When in doubt whether two patterns belong together, split them. Only merge with an existing experience when it covers the EXACT same user intent and tool sequence.
 - **Consistent naming language.** All `experience_name` values in one output must use the same language.
-- **Do NOT use `delete_uris`** for experience operations — use `supersedes` instead.
+- **Do NOT use `delete_ids`** for experience operations — use `supersedes` instead.
 - Follow field descriptions in the schema.
 - Output JSON only. Do not call any tools.
 
@@ -130,7 +150,11 @@ All memory content must be written in {output_language}.
             try:
                 raw = await viking_fs.read_file(uri, ctx=ctx) or ""
                 mf = MemoryFileUtils.read(raw, uri=uri)
-                result = mf.to_metadata()
+                result = {
+                    key: value
+                    for key, value in mf.to_metadata().items()
+                    if key not in _SOURCE_TRAJECTORY_HIDDEN_FIELDS
+                }
                 result["content"] = mf.content
                 result["uri"] = uri
                 results.append(result)
@@ -187,8 +211,15 @@ All memory content must be written in {output_language}.
                             continue
                         fallback_uris.append(uri)
                     candidate_uris = fallback_uris[:SEARCH_TOP_K]
+                except AGFSNotFoundError:
+                    candidate_uris = []
+                except FileNotFoundError:
+                    candidate_uris = []
                 except Exception as e:
-                    tracer.error(f"Failed to list experiences in {experience_dir}: {e}")
+                    if _is_directory_not_found_error(e):
+                        candidate_uris = []
+                    else:
+                        tracer.error(f"Failed to list experiences in {experience_dir}: {e}")
 
         prefetch_messages: List[Dict[str, Any]] = [self._build_conversation_message()]
         add_tool_call_pair_to_messages(

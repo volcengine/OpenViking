@@ -87,6 +87,73 @@ pub async fn read_object(
     Ok(Bytes::from(decompressed))
 }
 
+/// Read and decompress a loose object while bounding both compressed and
+/// decompressed materialization. `max_payload_bytes` excludes the Git header.
+pub async fn read_object_limited(
+    store: &dyn crate::git::object_store::ObjectStore,
+    account: &str,
+    oid: &gix_hash::ObjectId,
+    max_payload_bytes: u64,
+) -> Result<Bytes, crate::git::error::ObjectStoreError> {
+    const MAX_LOOSE_HEADER_BYTES: u64 = 64;
+    let max_loose_bytes = max_payload_bytes.saturating_add(MAX_LOOSE_HEADER_BYTES);
+    let compressed_limit = zlib_compress_bound(max_loose_bytes);
+    let compressed = store.get_limited(account, oid, compressed_limit).await?;
+
+    let mut decoder = flate2::read::ZlibDecoder::new(compressed.as_ref());
+    let mut header = Vec::with_capacity(MAX_LOOSE_HEADER_BYTES as usize);
+    loop {
+        if header.len() >= MAX_LOOSE_HEADER_BYTES as usize {
+            return Err(crate::git::error::ObjectStoreError::Backend(
+                "invalid object header: exceeds 64 bytes".to_string(),
+            ));
+        }
+        let mut byte = [0u8; 1];
+        let read = decoder.read(&mut byte)?;
+        if read == 0 {
+            return Err(crate::git::error::ObjectStoreError::Backend(
+                "invalid object header: missing terminator".to_string(),
+            ));
+        }
+        header.push(byte[0]);
+        if byte[0] == 0 {
+            break;
+        }
+    }
+
+    let (_, payload_size, _) = parse_object_header(&header)?;
+    if payload_size > max_payload_bytes {
+        return Err(crate::git::error::ObjectStoreError::ReadLimitExceeded {
+            size: payload_size,
+            limit: max_payload_bytes,
+        });
+    }
+
+    let payload_limit = payload_size.saturating_add(1);
+    let mut payload = Vec::with_capacity(usize::try_from(payload_size).unwrap_or(usize::MAX));
+    decoder
+        .take(payload_limit)
+        .read_to_end(&mut payload)
+        .map_err(|e| crate::git::error::ObjectStoreError::Zlib(e.to_string()))?;
+    if payload.len() as u64 != payload_size {
+        return Err(crate::git::error::ObjectStoreError::Backend(format!(
+            "invalid object payload: header declares {payload_size} bytes, decoded {}",
+            payload.len()
+        )));
+    }
+
+    header.extend_from_slice(&payload);
+    Ok(Bytes::from(header))
+}
+
+fn zlib_compress_bound(source_len: u64) -> u64 {
+    source_len
+        .saturating_add(source_len >> 12)
+        .saturating_add(source_len >> 14)
+        .saturating_add(source_len >> 25)
+        .saturating_add(13)
+}
+
 /// Serialize, compress, and write a Git object to ObjectStore.
 /// Returns the object's ObjectId.
 pub async fn write_object(

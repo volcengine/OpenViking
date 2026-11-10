@@ -1,0 +1,24 @@
+# Integration logo sources
+
+These are the same product marks used by the OpenViking website and documentation.
+
+Docs sidebar additions (2026-10-03):
+
+- `claude-code.svg`, `codex.svg`, `cursor.svg`, `trae.svg`, and `opencode.svg`: copied from the image assets rendered by [OpenViking integrations](https://openviking.ai/integrations). Monochrome marks invert in dark mode, matching the website; colored marks retain their colors.
+- DSH reuses the README's `logos/dsh.svg` and `logos/dsh-dark.svg` monochrome marks, switching between black and white with the theme. The blue DeepSeek mark is not used for this entry.
+- `langchain.svg`: the framework's chain-link icon from the [official LangChain product page](https://www.langchain.com/langchain), reused in both themes. The corporate LangChain symbol is a different mark and is not used for this framework entry.
+- The sidebar reuses `openclaw.jpg`, `hermes-agent.png`, and `pi.svg` below. All images are served locally, have empty alt text beside their product names, and keep their aspect ratio.
+
+- `codex.png`: [documentation catalog artwork](https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/codex.png), referenced by `docs/images/agents/en/index.json`.
+- `openclaw.jpg`, `hermes-agent.png`, `pi.svg`: reused from `openviking_playground/src/assets/brand/` (`ca4fb82`). The OpenClaw file contains JPEG data and uses the matching extension here.
+- `pi-dark.svg`: the same monochrome pi mark with a light foreground for dark backgrounds.
+- `docs/images/agents/image/{pi,zcode,kimi-code}/logo.png`: 128×128 transparent PNGs for the agent catalog, rendered from `pi.svg` and from the ZCode and Kimi marks used by [OpenViking integrations](https://openviking.ai/integrations), with the longest side at 96px like the other catalog logos.
+
+The READMEs also reuse Claude Code, Cursor, TRAE, and OpenCode logos from `docs/images/agents/image/`.
+
+- `agent-plugins.svg`: [Agent Plugins official site icon](https://agent-plugins.org/icon.svg), including its theme-aware fill.
+- `mcp.svg`: [Model Context Protocol official favicon](https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/main/docs/favicon.svg).
+- `langchain.svg`: [LangChain official product icon](https://cdn.prod.website-files.com/65b8cd72835ceeacd4449a53/69981d0819e88e3d4dd7b917_langchain%20icon.svg), linked by https://www.langchain.com/langchain.
+- `deerflow.svg`: [DeerFlow official vector mark](https://raw.githubusercontent.com/bytedance/deer-flow/main/frontend/public/images/deer.svg). `deerflow-dark.svg` uses the same paths with a white foreground.
+
+HTML display sizes account for artwork padding: padded PNGs use 32px boxes, full-bleed marks use 24px, and pi uses 41px because its mark occupies about 59% of its viewBox. Visible marks target a 24px longest side, preserve aspect ratio, and align the names along the bottom of each row. DeerFlow's portrait mark uses 19×24px. No raster logos were resampled.

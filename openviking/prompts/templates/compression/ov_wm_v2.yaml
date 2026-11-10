@@ -2,7 +2,7 @@ metadata:
   id: "compression.ov_wm_v2"
   name: "Working Memory v2 - Creation"
   description: "Produce a structured Working Memory document for a session archive (no prior WM)."
-  version: "2.2.0"
+  version: "2.3.0"
   language: "en"
   category: "compression"
 
@@ -11,12 +11,20 @@ variables:
     type: "string"
     description: "Session content to summarize into the new Working Memory"
     required: true
+  - name: "output_language"
+    type: "string"
+    description: "Language for generated Working Memory section content"
+    required: true
   - name: "latest_archive_overview"
     type: "string"
     description: "Optional prior Working Memory. When provided, still-valid info should be carried forward."
     required: false
     default: ""
-
+  - name: "checkpoint_instructions"
+    type: "string"
+    description: "Optional instructions for checkpoint summaries produced by the same call."
+    required: false
+    default: ""
 template: |
   You are a session note-taker. Produce a structured Working Memory document
   that captures everything a future assistant would need to seamlessly continue
@@ -35,11 +43,19 @@ template: |
   {{ messages }}
   </session_content>
 
+  {% if checkpoint_instructions %}
+  {{ checkpoint_instructions }}
+  {% endif %}
+
   Output a complete Working Memory using the 7-section structure below.
 
   RULES:
+  - Write all section content in {{ output_language }}. Keep the 7 canonical English section headers and italic descriptions unchanged so existing Working Memory archives remain machine-detectable.
   - All 7 section headers and italic descriptions must appear unchanged.
   - Write INFO-DENSE content: names, numbers, dates, locations, exact values.
+  - Conversation content is grouped into <turn created_at="YYYY-MM-DD"> blocks.
+    Interpret relative time expressions such as "today", "yesterday", and
+    "last week" using the created_at of the turn that contains that statement.
   - For temporal facts, record the EVENT date, not the conversation date.
     Example: conversation on May 8 mentions "I went yesterday" -> record "7 May".
   - "Current State" is highest priority — always reflect the latest status.
@@ -82,6 +98,12 @@ template: |
 
   ## Open Issues
   _Unresolved questions, blockers, follow-ups, risks, or topics to revisit._
+
+  {% if checkpoint_instructions %}
+  Put the complete document above in the `working_memory` field, satisfy the
+  checkpoint instructions in `checkpoint_summaries`, and call
+  `create_working_memory` exactly once. Do not emit freeform text.
+  {% endif %}
 
 llm_config:
   temperature: 0.0

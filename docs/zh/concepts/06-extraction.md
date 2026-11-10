@@ -1,17 +1,12 @@
 # 上下文提取
 
-OpenViking 采用三层异步架构处理文档解析和上下文提取。
+资源导入依次经过解析、目标路径确定、内容写入、语义生成和向量化。记忆和技能有各自的入口，也会使用语义处理和向量索引。
 
 ## 概览
 
-```
-输入文件 → Parser → TreeBuilder → SemanticQueue → 向量库
-           ↓           ↓              ↓
-        解析转换    文件移动     L0/L1 生成
-        (无 LLM)   入队语义      (LLM 异步)
-```
+<IngestionPipelineDiagram />
 
-**设计原则**：解析与语义分离，Parser 不调用 LLM，语义生成异步进行。
+解析与目录语义生成分开处理。具体解析器可能调用模型或外部解析服务，因此不能把解析阶段视为一律不使用 LLM。导入接口通常先返回任务 ID；需要立即检索时，应先确认该任务完成，见[任务管理](../api/17-tasks.md)。
 
 ## Parser（解析器）
 
@@ -26,70 +21,40 @@ Parser 负责文档格式转换和结构化，在临时目录创建文件结构�
 | PDF | PDFParser | .pdf | 已支持 |
 | HTML | HTMLParser | .html, .htm | 已支持 |
 | 代码 | CodeRepositoryParser | github 代码仓库等 | 遵循 `.gitignore` 并忽略常见非代码目录 |
-| 图片 | ImageParser | .png, .jpg 等 |  |
-| 视频 | VideoParser | .mp4, .avi, .mov, .mkv, .webm, .flv, .wmv |  |
-| 音频 | AudioParser | .mp3, .wav, .ogg, .flac, .aac, .m4a, .opus |  |
+| 图片 | ImageParser | .png, .jpg 等 | 已支持；处理依赖媒体配置 |
+| 视频 | VideoParser | .mp4, .avi, .mov, .mkv, .webm, .flv, .wmv, .ts（仅 MPEG-TS 内容） | 已支持；处理依赖媒体配置 |
+| 音频 | AudioParser | .mp3, .wav, .ogg, .flac, .aac, .m4a, .opus, .ac3 | 已支持；处理依赖媒体配置 |
 
-### 核心流程 (以文档为例)
+### 解析产物
 
-```python
-# 1. 解析文件
-parse_result = registry.parse("/path/to/doc.md")
+内部 `registry.parse()` 是异步接口，返回 `ParseResult`。解析产物可以存放在本地临时目录或 AGFS；`temp_dir_path` 不一定是 Viking URI，`artifact_ref` 用来标识其存储后端。这些是服务端实现细节，客户端应使用资源导入 API。
 
-# 2. 返回临时目录 URI
-parse_result.temp_dir_path  # viking://temp/abc123
-```
+| 字段 | 含义 |
+| --- | --- |
+| `root` | 解析后的资源树根节点 |
+| `temp_dir_path` | 临时产物位置 |
+| `artifact_ref` | 产物后端及根路径 |
+| `source_format` / `parser_name` | 源格式和解析器名称 |
+| `parse_time` | 解析耗时（秒） |
+| `meta` / `warnings` | 元数据及解析警告 |
 
-### 智能分割
+### 文档分节
 
-```
-如果 document_tokens <= 1024:
-    → 保存为单文件
-否则:
-    → 按标题分割
-    → 小节 < 512 tokens → 合并
-    → 大节 > 1024 tokens → 创建子目录
-```
+Markdown 解析器按标题和字符数组织章节，合并较短小节，拆分过长内容。默认 `max_section_chars` 为 2000 字符；`max_section_size` 和 `section_size_flexibility` 仅保留配置兼容，不参与分节。普通文本遵守字符上限，过长的单个表格行仍保持完整。显式 `no_split` 模式不拆分正文。
 
-### 返回结果
-
-```python
-ParseResult(
-    temp_dir_path: str,    # 临时目录 URI
-    source_format: str,    # pdf/markdown/html
-    parser_name: str,      # 解析器名称
-    parse_time: float,     # 耗时（秒）
-    meta: Dict,            # 元数据
-)
-```
+不同解析器和 `parse_mode` 的行为不同。需要保持单文件时，可在支持的导入中使用 `parse_mode="no_split"`，详见[资源管理](../api/02-resources.md)。
 
 ## TreeBuilder（树构建器）
 
-TreeBuilder 负责将临时目录移动到 AGFS，并入队语义处理。
+`TreeBuilder.finalize_from_temp()` 检查解析产物并确定最终 URI，返回包含根节点和临时位置的 `BuildingTree`。它本身不复制文件、不清理产物，也不提交语义任务。
 
-### 核心流程
+### 导入中的后续步骤
 
-```python
-building_tree = tree_builder.finalize_from_temp(
-    temp_dir_path="viking://temp/abc123",
-    scope="resources",  # resources/user
-)
-```
+1. 根据解析产物、`to` 或 `parent` 确定目标 URI，并检查目标路径。
+2. 导入处理器将内容写入最终存储，处理资源锁和已有内容更新。
+3. 提交后续语义处理和向量化，按产物所属后端清理临时数据。
 
-### 5 阶段处理
-
-1. **查找文档根目录**：确保临时目录下恰好 1 个子目录
-2. **确定目标 URI**：根据 scope 映射基础 URI
-3. **递归移动目录树**：复制所有文件到 AGFS
-4. **清理临时目录**：删除临时文件
-5. **入队语义生成**：提交 SemanticMsg 到队列
-
-### URI 映射
-
-| scope | 基础 URI |
-|-------|----------|
-| resources | `viking://resources` |
-| user | `viking://user` |
+默认资源根目录是 `viking://resources`。个人资源应显式指定 `viking://~/resources/...`；`viking://user` 是用户空间容器，不能当作自己的资源根。
 
 ## SemanticQueue（语义队列）
 
@@ -97,14 +62,16 @@ SemanticQueue 异步处理 L0/L1 生成和向量化。
 
 ### 消息结构
 
-```python
-SemanticMsg(
-    id: str,           # UUID
-    uri: str,          # 目录 URI
-    context_type: str, # resource/memory/skill
-    status: str,       # pending/processing/completed
-)
-```
+下面列出部分内部消息字段，不是客户端提交格式：
+
+| 字段 | 含义 |
+| --- | --- |
+| `id` | 消息 UUID |
+| `uri` | 待处理目录 |
+| `context_type` | resource、memory、skill 或 session |
+| `status` | 队列处理状态 |
+| `recursive` | 是否处理子目录 |
+| `propagate_to_parent` | 完成后是否允许安排父目录刷新 |
 
 ### 处理流程（自底向上）
 
@@ -114,76 +81,45 @@ SemanticMsg(
 
 ### 单目录处理步骤
 
-1. **并发生成文件摘要**：限制并发数 10
+1. **并发生成文件摘要**：并发上限由 `vlm.max_concurrent` 控制
 2. **收集子目录摘要**：读取已生成的 .abstract.md
 3. **生成 .overview.md**：LLM 生成 L1 概览
 4. **提取 .abstract.md**：从 overview 提取 L0 摘要
-5. **写入文件**：保存到 AGFS
+5. **写入文件**：以 OKF Markdown 保存正文和受保护元数据
 6. **向量化**：创建 Context 并入队 EmbeddingQueue
 
-### 配置参数
+L0/L1 是目录级 sidecar，不是 per-file sidecar。生成父目录摘要时只使用子目录 L0 的正文，OKF frontmatter 不进入 prompt。Embedding 使用正文和白名单中的 `directory`；`source`、`generated_by`、`freshness` 不进入向量输入。
+
+### Freshness、采样与父级刷新
+
+每次生成都会收集全部直接子项摘要，不再按 32 条采样；保留原有 `semantic.max_overview_prompt_chars`（默认 60000 字符）预算及分批、截断逻辑。resource/skill 的父级刷新取决于子目录 L0 正文变化和 freshness 阈值，L0 正文不变时不向上传播。`pending_child_changes` 统计等待刷新的变化事件，同一子项重复变化也会分别计数。阈值、手动刷新和延后更新的规则见[上下文层级](03-context-layers.md)。
+
+### 处理限制
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `max_concurrent_llm` | 10 | 并发 LLM 调用数 |
-| `max_images_per_call` | 10 | 单次 VLM 最大图片数 |
-| `max_sections_per_call` | 20 | 单次 VLM 最大章节数 |
+| `vlm.max_concurrent` | 32 | 语义处理并发上限，传入 `SemanticProcessor.max_concurrent_llm` |
+| `max_images_per_call` | 10 | `VLMProcessor` 构造参数：单次最大图片数，非 `ov.conf` 字段 |
+| `max_sections_per_call` | 20 | `VLMProcessor` 构造参数：单次最大章节数，非 `ov.conf` 字段 |
+| `semantic.overview_sample_limit` | 32 | freshness 调度的小目录阈值，不限制摘要输入条数 |
 
-## 代码骨架提取（AST 模式）
+## 代码骨架提取
 
-对于代码文件，OpenViking 支持基于 tree-sitter 的 AST 骨架提取，作为 LLM 摘要的轻量替代方案，可显著降低处理成本。
+对于代码文件，OpenViking 使用固定的代码骨架提取路线。该路线内置在代码摘要流程中，不再通过逐语言解析参数选择或调节。
 
-### 工作模式
+### 代码骨架内容
 
-在 `ov.conf` 中通过 `code_summary_mode` 字段控制（参见[配置文档](../guides/01-configuration.md#code)），支持三种模式：
+骨架可包含 import、类、方法、函数及其他语言级符号。具体输出取决于该语言维护中的 query 或通用解析结果，但提取路线本身是固定的。
 
-| 模式 | 说明 |
-|------|------|
-| `"ast"` | 对 ≥100 行的代码文件提取结构骨架，跳过 LLM 调用（**默认**） |
-| `"llm"` | 全部走 LLM 生成摘要（原有行为） |
-| `"ast_llm"` | 先提取 AST 骨架，再将骨架作为上下文辅助 LLM 生成摘要 |
+### 提取路线
 
-### AST 提取内容
+代码骨架提取按以下固定顺序执行：
 
-提取的骨架包含：
+1. 语言存在维护中的 `tags.scm` 时，优先使用 tags query。
+2. 不存在对应的 `tags.scm` 时，使用 `tree-sitter-language-pack.process()`。
+3. 两种提取方式都无可用结果时，才将 `semantic.code_summary` 作为兜底处理。
 
-- 模块级 docstring（首行）
-- import 语句列表
-- 类名、继承关系及方法签名（`ast` 模式仅保留 docstring 首行，`ast_llm` 模式保留完整 docstring）
-- 顶层函数签名
-
-### 支持语言
-
-以下语言有专属 extractor，基于 tree-sitter 实现精确提取：
-
-| 语言 | 说明 |
-|------|------|
-| Python | 完整支持 |
-| JavaScript / TypeScript | 完整支持 |
-| Rust | 完整支持 |
-| Go | 完整支持 |
-| Java | 完整支持 |
-| C / C++ | 完整支持 |
-
-其他语言不在支持列表内，自动 fallback 到 LLM。
-
-### Fallback 机制
-
-以下情况自动回退到 LLM，并在日志中记录原因，整体流程不受影响：
-
-- 语言不在支持列表中
-- 文件行数 < 100
-- AST 解析报错
-- 提取结果为空骨架
-
-### 文件结构
-
-```
-openviking/parse/parsers/code/ast/
-├── extractor.py      # 语言检测 + 分发入口
-├── skeleton.py       # CodeSkeleton / FunctionSig / ClassSkeleton 数据结构
-└── languages/        # 各语言专属 extractor
-```
+长短代码文件都遵循同一路由。
 
 ## 三种上下文提取
 
@@ -191,18 +127,19 @@ openviking/parse/parsers/code/ast/
 
 | 环节 | Resource | Memory | Skill |
 |------|----------|--------|-------|
-| **Parser** | 通用流程 | 通用流程 | 通用流程 |
-| **基础 URI** | `viking://resources` | `viking://user/memories` | `viking://user/skills` |
-| **TreeBuilder scope** | resources | user | user |
+| **入口** | 资源解析器 | 会话提取、记忆更新 | 技能导入 |
+| **基础 URI** | `viking://resources` | `viking://~/memories` | `viking://~/skills` |
 | **SemanticMsg type** | resource | memory | skill |
+
+以下示例使用已配置的同步 Python SDK 客户端 `client`。
 
 ### 资源提取
 
 ```python
 # 添加资源
-await client.add_resource(
-    "/path/to/doc.pdf",
-    reason="API 文档"
+client.add_resource(
+    path="/path/to/doc.pdf",
+    options={"reason": "API 文档"},
 )
 
 # 流程: Parser → TreeBuilder(scope=resources) → SemanticQueue
@@ -212,22 +149,28 @@ await client.add_resource(
 
 ```python
 # 添加技能
-await client.add_skill({
-    "name": "search-web",
-    "content": "# search-web\\n..."
-})
+client.add_skill(
+    data={
+        "name": "search-web",
+        "content": "# search-web\n...",
+    },
+)
 
-# 流程: 直接写入 viking://user/skills/{name}/ → SemanticQueue
+# 流程: 直接写入 viking://~/skills/{name}/ → SemanticQueue
 ```
 
 ### 记忆提取
 
 ```python
 # 记忆从会话自动提取
-await session.commit()
+client.commit_session(session_id)
 
-# 流程: SessionCompressorV2 → ExtractLoop → MemoryUpdater → SemanticQueue
+# 流程: SessionCompressorV3 → ExtractLoop → MemoryUpdater → SemanticQueue
 ```
+
+V3 只提供一个提取入口。它先提取启用的用户记忆 schema（包括 `cases`）；
+只有本次提取实际产生至少一个 case，才会继续训练 trajectory、experience，
+以及可选的可执行 session skill。没有 case 的会话不会生成这些执行派生记忆。
 
 ## 相关文档
 

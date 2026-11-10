@@ -1,13 +1,28 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { defineConfig, type DefaultTheme } from 'vitepress'
+import { defineConfig } from 'vitepress'
+import taskLists from 'markdown-it-task-lists'
+import { hasPageLlmsTxt, pageLlmsTxtPath } from './theme/llms-txt'
+import { inferDescription, seoLinks } from './theme/seo'
+import { titleFromMarkdown, docPageTitle, documentationNav, documentationSidebars, documentationSections } from './docs-navigation'
 
 const docsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repo = process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'
-const base = process.env.DOCS_BASE || '/'
-const withTrailingSlash = (url: string) => (url.endsWith('/') ? url : `${url}/`)
-const mainSiteBase = withTrailingSlash(process.env.OPENVIKING_SITE_BASE || 'https://www.openviking.ai/')
+const githubRepositoryUrl = `https://github.com/${repo}?utm_source=docs&utm_medium=referral&utm_campaign=docs`
+const configuredBase = '/' + (process.env.DOCS_BASE || '/').split('/').filter(Boolean).join('/') + '/'
+const base = configuredBase === '//' ? '/' : configuredBase
+const siteRoot = `${(process.env.DOCS_SITE_URL || 'https://docs.openviking.ai').replace(/\/$/, '')}${base}`
+// Version the filename so social crawlers do not reuse the previous artwork.
+const ogImageUrl = `${siteRoot}og-openviking-docs-8efb541b.png`
+// Same GA4 property as openviking.ai; the linker keeps one session across both domains.
+const gaMeasurementId = 'G-86SNDZ0EY9'
+const languageSource = fs.readFileSync(path.join(docsRoot, '.vitepress/theme/language-preference.js'), 'utf8').replace('export function', 'function')
+const entrySource = fs.readFileSync(path.join(docsRoot, '.vitepress/theme/language-entry.js'), 'utf8').replace('export function', 'function')
+const languageBootstrapScript = `${languageSource}\n${entrySource}\n;(() => {
+  const target = docsLanguageEntry(location.href, ${JSON.stringify(base)}, createLanguagePreference())
+  if (target) location.replace(target)
+})()`
 const preferenceBootstrapScript = `;(() => {
   const prefix = 'openviking-preferences:'
   const cookieKey = 'openviking-preferences'
@@ -28,110 +43,8 @@ const preferenceBootstrapScript = `;(() => {
   } catch {}
 })()`
 
-const sectionNames: Record<string, string> = {
-  'getting-started': 'Getting Started',
-  concepts: 'Concepts',
-  guides: 'Guides',
-  'agent-integrations': 'Agent Integrations',
-  migration: 'Migration',
-  api: 'API Reference',
-  faq: 'FAQ',
-  about: 'About',
-  design: 'Design Notes'
-}
-
-const zhSectionNames: Record<string, string> = {
-  'getting-started': '快速开始',
-  concepts: '核心概念',
-  guides: '指南',
-  'agent-integrations': 'Agent 集成',
-  migration: '迁移指南',
-  api: 'API 参考',
-  faq: '常见问题',
-  about: '关于',
-  design: '设计文档'
-}
-
-const navLabels = {
-  en: {
-    guide: 'Guide',
-    api: 'API Reference',
-    faq: 'FAQ',
-    about: 'About'
-  },
-  zh: {
-    guide: '指南',
-    api: 'API 参考',
-    faq: '常见问题',
-    about: '关于'
-  }
-}
-
-function titleFromMarkdown(filePath: string): string {
-  const content = fs.readFileSync(filePath, 'utf8')
-  const heading = content.match(/^#\s+(.+)$/m)?.[1]
-  const fallback = path.basename(filePath, '.md')
-  return (heading || fallback).replace(/^\d+[-_]/, '').trim()
-}
-
-function linkFor(filePath: string): string {
-  const relativePath = path.relative(docsRoot, filePath).replaceAll(path.sep, '/')
-  return `/${relativePath.replace(/\.md$/, '')}`
-}
-
-function sidebarSection(dir: string, title: string, collapsed = true): DefaultTheme.SidebarItem {
-  const absoluteDir = path.join(docsRoot, dir)
-  const items = fs
-    .readdirSync(absoluteDir)
-    .filter((file) => file.endsWith('.md'))
-    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-    .map((file) => {
-      const filePath = path.join(absoluteDir, file)
-      return {
-        text: titleFromMarkdown(filePath),
-        link: linkFor(filePath)
-      }
-    })
-
-  return { text: title, collapsed, items }
-}
-
-function localizedGuideSidebarItems(locale: 'en' | 'zh'): DefaultTheme.SidebarItem[] {
-  const labels = locale === 'zh' ? zhSectionNames : sectionNames
-  const sections = ['getting-started', 'concepts', 'guides', 'agent-integrations', 'migration']
-
-  return sections.map((section, index) =>
-    sidebarSection(`${locale}/${section}`, labels[section], index !== 0)
-  )
-}
-
-function localizedReferenceSidebarItems(locale: 'en' | 'zh'): DefaultTheme.SidebarItem[] {
-  const labels = locale === 'zh' ? zhSectionNames : sectionNames
-  return [sidebarSection(`${locale}/api`, labels.api, false)]
-}
-
-function localizedAboutSidebarItems(locale: 'en' | 'zh'): DefaultTheme.SidebarItem[] {
-  const labels = locale === 'zh' ? zhSectionNames : sectionNames
-  return [sidebarSection(`${locale}/about`, labels.about, false)]
-}
-
-const designSidebar: DefaultTheme.SidebarItem[] = [
-  sidebarSection('design', sectionNames.design, false)
-]
-
-const enNav: DefaultTheme.NavItem[] = [
-  { text: navLabels.en.guide, link: '/en/getting-started/01-introduction', activeMatch: '/en/(getting-started|concepts|guides|agent-integrations|migration)/' },
-  { text: navLabels.en.api, link: '/en/api/01-overview', activeMatch: '/en/api/' },
-  { text: navLabels.en.faq, link: '/en/faq/faq', activeMatch: '/en/faq/' },
-  { text: navLabels.en.about, link: '/en/about/01-about-us', activeMatch: '/en/about/' }
-]
-
-const zhNav: DefaultTheme.NavItem[] = [
-  { text: navLabels.zh.guide, link: '/zh/getting-started/01-introduction', activeMatch: '/zh/(getting-started|concepts|guides|agent-integrations|migration)/' },
-  { text: navLabels.zh.api, link: '/zh/api/01-overview', activeMatch: '/zh/api/' },
-  { text: navLabels.zh.faq, link: '/zh/faq/faq', activeMatch: '/zh/faq/' },
-  { text: navLabels.zh.about, link: '/zh/about/01-about-us', activeMatch: '/zh/about/' }
-]
+const enNav = documentationNav('en')
+const zhNav = documentationNav('zh')
 
 function collectAllMdFiles(
   srcDir: string,
@@ -143,7 +56,7 @@ function collectAllMdFiles(
 
   function walk(dir: string) {
     for (const entry of fs.readdirSync(dir)) {
-      if (ignored.has(entry)) continue
+      if (ignored.has(entry) || (dir === srcDir && ['repository', 'review', 'images'].includes(entry))) continue
       const abs = path.join(dir, entry)
       const stat = fs.statSync(abs)
       if (stat.isDirectory()) {
@@ -220,19 +133,17 @@ function buildLlmsTxt(siteConfig: any) {
   const srcDir = siteConfig.srcDir
   const outDir = siteConfig.outDir
 
-  const files = collectAllMdFiles(srcDir)
-
-  // Group by section prefix (e.g. en/getting-started, zh/concepts)
+  const allFiles = collectAllMdFiles(srcDir)
+  const files = documentationSections('en').flatMap(section =>
+    section.groups.flatMap(group => group.pages.filter(page => !page.reference).map(page => ({
+      relativePath: `en/${page.path}.md`, absPath: path.join(srcDir, `en/${page.path}.md`)
+    })))
+  )
   const sections = new Map<string, { title: string; url: string }[]>()
-  for (const { relativePath, absPath } of files) {
-    const parts = relativePath.replace(/\\/g, '/').split('/')
-    const section = parts.length >= 2 ? parts.slice(0, -1).join('/') : 'misc'
-    const content = fs.readFileSync(absPath, 'utf-8')
-    const heading = content.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? path.basename(absPath, '.md')
-    const urlPath = `/${relativePath.replace(/\\/g, '/').replace(/\.md$/, '')}`
-    const url = `${siteUrl}${base}${urlPath}`
-    if (!sections.has(section)) sections.set(section, [])
-    sections.get(section)!.push({ title: heading, url })
+  for (const section of documentationSections('en')) {
+    sections.set(section.en, section.groups.flatMap(group => group.pages.filter(page => !page.reference).map(page => ({
+      title: `${group.en} — ${docPageTitle('en', page.path)}`, url: `${siteUrl}${base}/en/${page.path}`
+    }))))
   }
 
   const lines: string[] = [
@@ -240,7 +151,7 @@ function buildLlmsTxt(siteConfig: any) {
     '',
     '> Open-source context database for AI Agents. OpenViking unifies memory, resources, and skills management for AI Agents through a file system paradigm.',
     '',
-    `- Source: https://github.com/${process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'}`,
+    `- Source: ${githubRepositoryUrl}`,
     '',
   ]
 
@@ -258,7 +169,7 @@ function buildLlmsTxt(siteConfig: any) {
   const fullLines: string[] = [
     '# OpenViking — Full Documentation',
     '',
-    '> This file contains the complete documentation for LLM consumption.',
+    '> This file contains the English documentation for LLM consumption.',
     '',
   ]
   for (const { relativePath, absPath } of files) {
@@ -267,9 +178,15 @@ function buildLlmsTxt(siteConfig: any) {
   }
   fs.writeFileSync(path.join(outDir, 'llms-full.txt'), fullLines.join('\n'), 'utf-8')
 
-  // Per-page llms.txt: /{page-path}/llms.txt returns the raw markdown of that page
-  for (const { relativePath, absPath } of files) {
-    const content = fs.readFileSync(absPath, 'utf-8')
+  // Keep existing URLs, including /zh/, but serve their English counterpart.
+  for (const { relativePath, absPath } of allFiles) {
+    const normalized = relativePath.replaceAll(path.sep, '/')
+    const englishPath = normalized.startsWith('zh/')
+      ? path.join(srcDir, normalized.replace(/^zh\//, 'en/'))
+      : normalized.startsWith('en/') ? absPath : null
+    const content = englishPath && fs.existsSync(englishPath)
+      ? fs.readFileSync(englishPath, 'utf-8')
+      : '# English documentation\n\nNo English version is available for this page. See the [documentation index](' + siteUrl + base + '/llms.txt).\n'
     const pageDir = path.join(outDir, relativePath.replace(/\.md$/, ''))
     fs.mkdirSync(pageDir, { recursive: true })
     fs.writeFileSync(path.join(pageDir, 'llms.txt'), content, 'utf-8')
@@ -282,21 +199,47 @@ export default defineConfig({
   description: 'Open-source context database for AI Agents',
   cleanUrls: true,
   lastUpdated: true,
-  // The existing Markdown corpus links to examples, bot docs, localhost snippets,
-  // and historical design notes that are outside the VitePress page tree.
-  ignoreDeadLinks: true,
+  sitemap: { hostname: siteRoot },
+  markdown: { config: md => md.use(taskLists, { label: true }) },
+  // Repository guides are read on GitHub; review notes are local artifacts.
+  // images/ is the public asset directory, including raw Markdown consumed by other apps.
+  srcExclude: ['repository/**', 'review/**', 'images/**'],
   head: [
     ['link', { rel: 'icon', type: 'image/x-icon', href: `${base}favicon.ico` }],
     ['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: `${base}favicon-32.png` }],
-    ['link', { rel: 'apple-touch-icon', href: `${base}apple-touch-icon.png` }],
-    ['script', {}, preferenceBootstrapScript]
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}favicon.svg` }],
+    ['link', { rel: 'apple-touch-icon', sizes: '180x180', href: `${base}apple-touch-icon.png` }],
+    ['meta', { property: 'og:image', content: ogImageUrl }],
+    ['meta', { property: 'og:image:type', content: 'image/png' }],
+    ['meta', { property: 'og:image:alt', content: 'OpenViking / docs — Guides and API reference for AI agent context.' }],
+    ['meta', { property: 'og:image:width', content: '1200' }],
+    ['meta', { property: 'og:image:height', content: '630' }],
+    ['link', { rel: 'alternate', type: 'text/plain', title: 'LLM documentation index', href: `${base}llms.txt` }],
+    ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
+    ['meta', { name: 'twitter:image', content: ogImageUrl }],
+    ['meta', { name: 'twitter:image:alt', content: 'OpenViking / docs — Guides and API reference for AI agent context.' }],
+    ['script', { async: '', src: `https://www.googletagmanager.com/gtag/js?id=${gaMeasurementId}` }],
+    ['script', {}, `window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', '${gaMeasurementId}', { linker: { domains: ['openviking.ai', 'docs.openviking.ai'] } });`],
+    ['script', {}, preferenceBootstrapScript],
+    ['script', {}, languageBootstrapScript]
   ],
   transformPageData(pageData, { siteConfig }) {
+    const head = pageData.frontmatter.head ??= []
+    if (hasPageLlmsTxt(pageData.relativePath)) {
+      head.push(['link', { rel: 'alternate', type: 'text/plain', title: 'LLM page content', href: `${base.replace(/\/$/, '')}${pageLlmsTxtPath(pageData.relativePath)}` }])
+    }
+    head.push(...seoLinks(siteRoot, pageData.relativePath, relativePath => fs.existsSync(path.join(siteConfig.srcDir, relativePath))))
     const srcPath = path.join(siteConfig.srcDir, pageData.relativePath)
     try {
-      pageData.frontmatter._rawMarkdown = fs.readFileSync(srcPath, 'utf-8')
+      const markdown = fs.readFileSync(srcPath, 'utf-8')
+      pageData.description ||= inferDescription(markdown)
+      // Raw SFC closing tags must not terminate VitePress's generated script block.
+      pageData.frontmatter._rawMarkdownEncoded = encodeURIComponent(markdown)
     } catch {
-      pageData.frontmatter._rawMarkdown = ''
+      pageData.frontmatter._rawMarkdownEncoded = ''
     }
   },
   buildEnd(siteConfig) {
@@ -304,6 +247,12 @@ export default defineConfig({
     buildDocsSearchIndex(siteConfig)
   },
   vite: {
+    resolve: {
+      alias: [
+        { find: './VPNavBarTitle.vue', replacement: path.join(docsRoot, '.vitepress/theme/components/SiteSwitcher.vue') },
+        { find: './VPSidebarGroup.vue', replacement: path.join(docsRoot, '.vitepress/theme/components/SidebarGroups.vue') }
+      ]
+    },
     publicDir: 'images',
     plugins: [
       {
@@ -315,7 +264,10 @@ export default defineConfig({
             const candidate = stripped ? path.join(docsRoot, stripped + '.md') : null
             if (candidate && fs.existsSync(candidate)) {
               res.setHeader('Content-Type', 'text/plain; charset=utf-8')
-              res.end(fs.readFileSync(candidate, 'utf-8'))
+              const english = candidate.replace(/([/\\])zh([/\\])/, '$1en$2')
+              res.end(fs.existsSync(english)
+                ? fs.readFileSync(english, 'utf-8')
+                : '# English documentation\n\nNo English version is available for this page. See /llms.txt.\n')
             } else {
               next()
             }
@@ -332,13 +284,15 @@ export default defineConfig({
     ]
   },
   themeConfig: {
-    logo: '/ov-logo.png',
-    logoLink: mainSiteBase,
+    siteTitle: false,
+    logo: { light: '/brand-lockup-light.svg', dark: '/brand-lockup-dark.svg', alt: 'OpenViking' },
+    logoLink: base,
+    nav: enNav,
     socialLinks: [
-      { icon: 'github', link: `https://github.com/${repo}` }
+      { icon: 'github', link: githubRepositoryUrl }
     ],
     footer: {
-      message: 'Released under the Apache-2.0 License.',
+      message: `Open source under the AGPL-3.0 License. <a href="${base}font-licenses.html" target="_self">Font licenses</a>`,
       copyright: 'Copyright OpenViking contributors'
     }
   },
@@ -348,17 +302,12 @@ export default defineConfig({
       lang: 'en-US',
       link: '/en/',
       themeConfig: {
+        logoLink: `${base}en/`,
         nav: enNav,
-        sidebar: {
-          '/en/getting-started/': localizedGuideSidebarItems('en'),
-          '/en/concepts/': localizedGuideSidebarItems('en'),
-          '/en/guides/': localizedGuideSidebarItems('en'),
-          '/en/agent-integrations/': localizedGuideSidebarItems('en'),
-          '/en/migration/': localizedGuideSidebarItems('en'),
-          '/en/api/': localizedReferenceSidebarItems('en'),
-          '/en/about/': localizedAboutSidebarItems('en'),
-          '/design/': designSidebar
-        }
+        outline: {
+          level: [2, 3]
+        },
+        sidebar: documentationSidebars('en')
       }
     },
     zh: {
@@ -368,18 +317,12 @@ export default defineConfig({
       title: 'OpenViking',
       description: '面向 AI Agent 的开源上下文数据库',
       themeConfig: {
+        logoLink: `${base}zh/`,
         nav: zhNav,
-        sidebar: {
-          '/zh/getting-started/': localizedGuideSidebarItems('zh'),
-          '/zh/concepts/': localizedGuideSidebarItems('zh'),
-          '/zh/guides/': localizedGuideSidebarItems('zh'),
-          '/zh/agent-integrations/': localizedGuideSidebarItems('zh'),
-          '/zh/migration/': localizedGuideSidebarItems('zh'),
-          '/zh/api/': localizedReferenceSidebarItems('zh'),
-          '/zh/about/': localizedAboutSidebarItems('zh')
-        },
+        sidebar: documentationSidebars('zh'),
         outline: {
-          label: '页面导航'
+          label: '页面导航',
+          level: [2, 3]
         },
         docFooter: {
           prev: '上一页',

@@ -1,4 +1,8 @@
+import importlib.util
+import runpy
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -57,11 +61,13 @@ def test_release_workflows_default_to_single_cp310_and_drop_pybind11():
     assert 'name = "pybind11"' not in uv_lock
 
 
-def test_release_build_workflow_no_longer_defines_extra_wheel_verify_jobs():
-    build_workflow = _read_text(".github/workflows/_build.yml")
+def test_ci_plan_keeps_marketplace_checks():
+    plan = runpy.run_path(str(REPO_ROOT / ".github/scripts/ci_plan.py"))["plan"]
 
-    assert "verify-linux-abi3-wheel:" not in build_workflow
-    assert "verify-macos-14-wheel-on-macos-15:" not in build_workflow
+    selection = plan([".claude-plugin/marketplace.json"])
+
+    assert selection["plugins_changed"]
+    assert not selection["deps_changed"]
 
 
 def test_build_workflow_smoke_tests_windows_wheel_engine_import():
@@ -122,7 +128,34 @@ def test_repo_no_longer_contains_pybind11_engine_bindings():
     assert not (REPO_ROOT / "src" / "py_accessors.h").exists()
 
 
-def test_python_engine_exports_only_live_abi3_api():
-    import openviking.storage.vectordb.engine as engine
+def test_native_bundle_preserves_commit_and_contents(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location(
+        "native_bundle", REPO_ROOT / ".github/scripts/native_bundle.py"
+    )
+    bundle = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bundle)
+    context = bundle.identity(REPO_ROOT)
+    source_commit = context["sha"]
+    monkeypatch.setattr(bundle, "identity", lambda root: context.copy())
+    files = {
+        "openviking/bin/ov": b"cli",
+        "openviking/lib/ragfs_python.abi3.so": b"ragfs",
+        "openviking/storage/vectordb/engine/_x86_sse3.abi3.so": b"engine",
+    }
+    for name, content in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    archive = tmp_path / "runtime.tar.gz"
+    bundle.pack(tmp_path, archive)
+    for name in files:
+        (tmp_path / name).unlink()
 
-    assert not hasattr(engine, "FetchDataResult")
+    context["sha"] = "different-commit"
+    with pytest.raises(ValueError, match="sha"):
+        bundle.restore(tmp_path, archive)
+    assert not any((tmp_path / name).exists() for name in files)
+
+    context["sha"] = source_commit
+    bundle.restore(tmp_path, archive)
+    assert {name: (tmp_path / name).read_bytes() for name in files} == files

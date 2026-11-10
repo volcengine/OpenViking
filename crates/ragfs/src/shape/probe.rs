@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::core::errors::{Error, Result};
 use crate::core::filesystem::FileSystem;
+use crate::core::internal_names::is_hidden_runtime_lock_name;
 use crate::core::WriteFlag;
 use crate::crypto;
 use futures::stream::{self, StreamExt};
@@ -9,8 +10,6 @@ use futures::stream::{self, StreamExt};
 use super::manifest::{StorageShape, SHAPE_MANIFEST_PATH};
 
 const SYSTEM_ACCOUNT_ID: &[u8] = b"_system";
-const PATH_LOCK_FILE: &str = ".path.ovlock";
-const EXACT_LOCK_FILE_PREFIX: &str = ".exact.ovlock.";
 
 fn normalize_shape_path(path: &str) -> String {
     let mut normalized = path.trim().to_string();
@@ -36,7 +35,7 @@ fn is_persistent_task_record_path(path: &str) -> bool {
 
 fn is_path_lock_record_path(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or("");
-    name == PATH_LOCK_FILE || name.starts_with(EXACT_LOCK_FILE_PREFIX)
+    is_hidden_runtime_lock_name(name)
 }
 
 /// Read the raw guard-file bytes from the backend root.
@@ -116,7 +115,9 @@ pub async fn write_shape_guard(
 
 /// Probe existing backend files to infer the legacy storage shape.
 pub async fn detect_legacy_shape(raw_fs: &Arc<dyn FileSystem>) -> Result<Option<StorageShape>> {
-    let entries = raw_fs.tree_directory("/", true, None, None).await?;
+    let entries = raw_fs
+        .tree_directory("/", true, None, None, None, None, None, false)
+        .await?;
     let mut candidates = Vec::new();
 
     for entry in entries {

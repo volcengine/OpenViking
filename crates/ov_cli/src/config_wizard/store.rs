@@ -9,7 +9,7 @@ use url::Url;
 
 use crate::{
     base_client::BaseClient,
-    config::{Config, DEFAULT_CUSTOM_PORT, default_config_path},
+    config::{Config, DEFAULT_CUSTOM_PORT, KNOWN_CONFIG_KEYS, effective_config_path},
     error::{Error, Result},
 };
 
@@ -94,12 +94,66 @@ pub struct ConfigStore {
     active_path: PathBuf,
 }
 
+pub(crate) struct PreparedApiKeyUpdate {
+    path: PathBuf,
+    target: PathBuf,
+    old_key: String,
+    original: Vec<u8>,
+    value: Value,
+    temp_file: tempfile::NamedTempFile,
+}
+
+impl PreparedApiKeyUpdate {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn commit(mut self, new_key: &str) -> Result<()> {
+        if fs::canonicalize(&self.path)? != self.target
+            || fs::read(&self.target)? != self.original
+        {
+            return Err(Error::Config(
+                "Config changed during key rotation; refusing to overwrite it".into(),
+            ));
+        }
+        self.value["api_key"] = Value::String(new_key.to_string());
+        for field in ["extra_headers", "extra_header"] {
+            if let Some(headers) = self.value.get_mut(field).and_then(Value::as_object_mut) {
+                for (name, value) in headers {
+                    if name.eq_ignore_ascii_case("x-api-key")
+                        && value.as_str() == Some(self.old_key.as_str())
+                    {
+                        *value = Value::String(new_key.to_string());
+                    } else if name.eq_ignore_ascii_case("authorization")
+                        && value.as_str().and_then(|v| v.strip_prefix("Bearer "))
+                            == Some(self.old_key.as_str())
+                    {
+                        *value = Value::String(format!("Bearer {new_key}"));
+                    }
+                }
+            }
+        }
+        self.temp_file
+            .write_all(serde_json::to_string_pretty(&self.value)?.as_bytes())?;
+        self.temp_file.flush()?;
+        self.temp_file.as_file().sync_all()?;
+        self.temp_file.persist(&self.target).map_err(|error| {
+            Error::Config(format!("Failed to replace config file: {}", error.error))
+        })?;
+        Ok(())
+    }
+}
+
 impl ConfigStore {
     pub fn new() -> Result<Self> {
-        let active_path = default_config_path()?;
+        Self::for_active_path(effective_config_path()?)
+    }
+
+    fn for_active_path(active_path: PathBuf) -> Result<Self> {
         let config_dir = active_path
             .parent()
-            .ok_or_else(|| Error::Config("Could not determine config directory".to_string()))?
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
         Ok(Self {
             config_dir,
@@ -213,6 +267,12 @@ impl ConfigStore {
 
         configs.sort_by(|left, right| left.name.cmp(&right.name));
         invalid_configs.sort_by(|left, right| left.name.cmp(&right.name));
+        // A directly selected named file wins over an alphabetically earlier copy.
+        if let Some(selected) = self.selected_config_name() {
+            for entry in &mut configs {
+                entry.is_active = entry.name == selected;
+            }
+        }
         normalize_active_config(&mut configs);
         Ok(ConfigListReport {
             configs,
@@ -232,7 +292,18 @@ impl ConfigStore {
         }
         let content = fs::read(&path)
             .map_err(|e| Error::Config(format!("Failed to read config '{name}': {e}")))?;
-        write_file_atomically(&self.active_path, &content)
+        // The connection fields switch wholesale, but the keys `Config` does not
+        // model are machine-level settings rather than part of the profile, so
+        // they stay with the active file — unless the incoming profile names
+        // them itself.
+        match serde_json::from_slice::<Value>(&content) {
+            Ok(mut value) if value.is_object() => {
+                carry_over_unmodeled_keys(&self.active_path, &mut value);
+                let merged = serde_json::to_string_pretty(&value)?;
+                write_file_atomically(&self.active_path, merged.as_bytes())
+            }
+            _ => write_file_atomically(&self.active_path, &content),
+        }
     }
 
     pub fn save_and_activate(&self, name: &str, config: &Config) -> Result<()> {
@@ -244,6 +315,39 @@ impl ConfigStore {
         write_config_file(&self.active_path, config)
     }
 
+    pub(crate) fn prepare_api_key_update(&self, expected: &Config, old_key: &str) -> Result<PreparedApiKeyUpdate> {
+        let target = fs::canonicalize(&self.active_path)?;
+        let original = fs::read(&target)?;
+        let current: Config = serde_json::from_slice(&original)?;
+        if current.url != expected.url || current.api_key != expected.api_key
+            || current.extra_headers != expected.extra_headers
+        {
+            return Err(Error::Config(
+                "Active connection changed; retry key rotation with the current config".into(),
+            ));
+        }
+        // Case variants can coexist in the JSON map but become the same HTTP
+        // header. Refuse ambiguous credentials before invalidating any key.
+        if current.extra_headers.as_ref().is_some_and(|headers| {
+            headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("x-api-key") && value != old_key
+            })
+        }) {
+            return Err(Error::Config(
+                "Conflicting X-API-Key headers; remove the overrides before rotating your key".into(),
+            ));
+        }
+        Ok(PreparedApiKeyUpdate {
+            path: self.active_path.clone(),
+            old_key: old_key.to_string(),
+            value: serde_json::from_slice(&original)?,
+            original,
+            // Check that a replacement can be created before invalidating the old key.
+            temp_file: create_config_temp_file(&target)?,
+            target,
+        })
+    }
+
     pub fn save_edited_config(
         &self,
         old_name: &str,
@@ -252,13 +356,18 @@ impl ConfigStore {
     ) -> Result<()> {
         let old_path = self.saved_config_path(old_name)?;
         let new_path = self.saved_config_path(new_name)?;
+        if old_name != new_name && self.selected_config_name() == Some(old_name) {
+            return Err(Error::Config(
+                "Cannot rename the file selected by OPENVIKING_CLI_CONFIG_FILE. Change the environment variable first.".to_string(),
+            ));
+        }
         let was_active = self.is_config_name_active(old_name)?;
 
         if old_name != new_name && new_path.exists() {
             return Err(Error::Config(format!("Config '{new_name}' already exists")));
         }
 
-        self.save_named_config(new_name, config)?;
+        write_config_file_inheriting(&new_path, config, &old_path)?;
         if was_active {
             // Keep the active config consistent before removing the old saved file. If cleanup
             // fails, the user may see both names, but the active config still points at the edit.
@@ -286,7 +395,19 @@ impl ConfigStore {
             .map_err(|e| Error::Config(format!("Failed to delete config '{name}': {e}")))
     }
 
+    pub(crate) fn selected_config_name(&self) -> Option<&str> {
+        let name = self
+            .active_path
+            .file_name()?
+            .to_str()?
+            .strip_prefix("ovcli.conf.")?;
+        (name != "bak" && validate_config_name(name).is_ok()).then_some(name)
+    }
+
     pub fn is_config_name_active(&self, name: &str) -> Result<bool> {
+        if let Some(selected) = self.selected_config_name() {
+            return Ok(name == selected);
+        }
         let Some(active_config) = self.load_active()? else {
             return Ok(false);
         };
@@ -540,9 +661,17 @@ pub(crate) fn normalize_custom_url(url: &str) -> String {
 pub fn redacted_config_value(config: &Config) -> Result<Value> {
     let mut value = serde_json::to_value(config)?;
     if let Some(object) = value.as_object_mut() {
-        for key in ["api_key", "root_api_key"] {
+        for key in ["api_key", "root_api_key", "gateway_token"] {
             if object.get(key).is_some_and(|value| !value.is_null()) {
                 object.insert(key.to_string(), Value::String("********".to_string()));
+            }
+        }
+        if let Some(headers) = object
+            .get_mut("extra_headers")
+            .and_then(Value::as_object_mut)
+        {
+            for value in headers.values_mut() {
+                *value = Value::String("********".to_string());
             }
         }
     }
@@ -566,6 +695,8 @@ pub(crate) async fn validate_candidate_config_with_role(
     config: &Config,
     require_api_key: bool,
 ) -> Result<Option<ApiKeyRole>> {
+    config.validate_runtime_values()?;
+
     let api_key = non_empty_option(config.api_key.as_deref());
     if require_api_key && api_key.is_none() {
         return Err(Error::Config("API key is required".to_string()));
@@ -581,8 +712,9 @@ pub(crate) async fn validate_candidate_config_with_role(
         config.actor_peer_id.clone(),
         timeout,
         config.profile,
-        config.extra_headers.clone(),
-    );
+        config.effective_extra_headers(),
+    )
+    .with_gateway_token(config.effective_gateway_token());
 
     let value: Value = client.get("/health", &[]).await?;
     if value
@@ -613,7 +745,17 @@ async fn detect_api_key_role(client: &BaseClient) -> Result<ApiKeyRole> {
             status: Some(status),
             ..
         }) if admin_probe_regular_key_status(status) => Ok(ApiKeyRole::Regular),
-        Err(Error::Api { message, status }) => Err(Error::Api { message, status }),
+        Err(Error::Api {
+            code,
+            message,
+            details,
+            status,
+        }) => Err(Error::Api {
+            code,
+            message,
+            details,
+            status,
+        }),
         Err(error) => Err(error),
     }
 }
@@ -664,19 +806,13 @@ pub(crate) fn validation_error_copy(kind: ConfigKind, error: &Error) -> String {
                 "Cannot reach the server. Check the URL and your network connection.".to_string()
             }
         },
-        Error::Api {
-            status: Some(401 | 403),
-            ..
-        } => "API key was rejected. Check your API key.".to_string(),
-        Error::Api { status: Some(404), .. } => {
-            "Server responded but the API endpoint was not found. Check the server URL.".to_string()
+        Error::Timeout(_) => {
+            "Connection timed out. Increase the request timeout or check the server.".to_string()
         }
-        Error::Api { status: Some(status), .. } => {
-            format!("Server returned HTTP {status}. Check the server configuration.")
+        error @ Error::Api { .. } if error.code() == "UNAUTHENTICATED" => {
+            "API key was rejected. Check your API key.".to_string()
         }
-        Error::Api { .. } => {
-            "Server returned an error during validation. Check the server logs.".to_string()
-        }
+        Error::Api { message, .. } => message.clone(),
         Error::Config(msg) => msg.clone(),
         _ => match kind {
             ConfigKind::OpenVikingService => {
@@ -698,23 +834,13 @@ pub(crate) fn validation_error_copy_zh(kind: ConfigKind, error: &Error) -> Strin
             ConfigKind::OpenVikingService => {
                 "无法连接 OpenViking 服务。请检查网络连接。".to_string()
             }
-            ConfigKind::Custom => {
-                "无法连接服务器。请检查 URL 和网络连接。".to_string()
-            }
+            ConfigKind::Custom => "无法连接服务器。请检查 URL 和网络连接。".to_string(),
         },
-        Error::Api {
-            status: Some(401 | 403),
-            ..
-        } => "API Key 被拒绝。请检查 API Key。".to_string(),
-        Error::Api { status: Some(404), .. } => {
-            "服务器响应了，但 API 端点未找到。请检查服务器 URL。".to_string()
+        Error::Timeout(_) => "连接超时。请提高请求超时时间或检查服务器状态。".to_string(),
+        error @ Error::Api { .. } if error.code() == "UNAUTHENTICATED" => {
+            "API Key 被拒绝。请检查 API Key。".to_string()
         }
-        Error::Api { status: Some(status), .. } => {
-            format!("服务器返回 HTTP {status}。请检查服务器配置。")
-        }
-        Error::Api { .. } => {
-            "服务器验证时返回错误。请检查服务器日志。".to_string()
-        }
+        Error::Api { message, .. } => message.clone(),
         Error::Config(msg) => msg.clone(),
         _ => match kind {
             ConfigKind::OpenVikingService => "验证失败。请检查 API Key 后重试。".to_string(),
@@ -724,23 +850,62 @@ pub(crate) fn validation_error_copy_zh(kind: ConfigKind, error: &Error) -> Strin
 }
 
 fn write_config_file(path: &Path, config: &Config) -> Result<()> {
-    let content = serde_json::to_string_pretty(config)?;
+    write_config_file_inheriting(path, config, path)
+}
+
+/// `inherit_from` is the file whose unmodeled keys survive the write: the file
+/// being replaced, except on a rename, where they live under the old name.
+fn write_config_file_inheriting(path: &Path, config: &Config, inherit_from: &Path) -> Result<()> {
+    let mut value = serde_json::to_value(config)?;
+    carry_over_unmodeled_keys(inherit_from, &mut value);
+    let content = serde_json::to_string_pretty(&value)?;
     write_file_atomically(path, content.as_bytes())
 }
 
+/// Re-attach the top-level keys `Config` does not model — above all the
+/// `plugin` section the memory plugins keep in ovcli.conf — to a freshly
+/// serialized config that is about to replace the whole file. Modeled keys are
+/// deliberately not carried over: one that is `None` was cleared on purpose,
+/// and restoring it would make clearing impossible.
+fn carry_over_unmodeled_keys(path: &Path, value: &mut Value) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    let Ok(previous) = fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(Value::Object(previous)) = serde_json::from_str::<Value>(&previous) else {
+        return;
+    };
+    for (key, previous_value) in previous {
+        if !KNOWN_CONFIG_KEYS.contains(&key.as_str()) {
+            object.entry(key).or_insert(previous_value);
+        }
+    }
+}
+
 fn write_file_atomically(path: &Path, content: &[u8]) -> Result<()> {
+    let mut temp_file = create_config_temp_file(path)?;
+    temp_file.write_all(content)?;
+    temp_file.flush()?;
+    temp_file.as_file().sync_all()?;
+    temp_file.persist(path).map_err(|error| {
+        Error::Config(format!("Failed to replace config file: {}", error.error))
+    })?;
+    Ok(())
+}
+
+fn create_config_temp_file(path: &Path) -> Result<tempfile::NamedTempFile> {
     let parent = path
         .parent()
-        .ok_or_else(|| Error::Config("Could not determine config file directory".to_string()))?;
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
 
-    let mut temp_file = tempfile::Builder::new()
+    let temp_file = tempfile::Builder::new()
         .prefix(".ovcli.conf.")
         .suffix(".tmp")
         .tempfile_in(parent)?;
-    temp_file.write_all(content)?;
-    temp_file.flush()?;
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -749,12 +914,7 @@ fn write_file_atomically(path: &Path, content: &[u8]) -> Result<()> {
         temp_file.as_file().set_permissions(permissions)?;
     }
 
-    temp_file.as_file().sync_all()?;
-    temp_file.persist(path).map_err(|error| {
-        Error::Config(format!("Failed to replace config file: {}", error.error))
-    })?;
-
-    Ok(())
+    Ok(temp_file)
 }
 
 pub(crate) fn configs_equivalent(left: &Config, right: &Config) -> Result<bool> {
@@ -774,7 +934,7 @@ mod tests {
         ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, OPENVIKING_SERVICE_URL,
         admin_probe_ambiguous_status, admin_probe_regular_key_status, build_config,
         should_run_authenticated_probe, validate_candidate_config,
-        validate_candidate_config_with_role, validate_config_name, validation_error_copy,
+        validate_candidate_config_with_role, validate_config_name,
     };
     use crate::config::Config;
     use std::fs;
@@ -791,11 +951,194 @@ mod tests {
         std::env::temp_dir().join(format!("openviking-config-{name}-{suffix}"))
     }
 
+    #[test]
+    fn selected_named_file_wins_over_equivalent_profiles_and_is_protected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ovcli.conf.z");
+        let store = ConfigStore::for_active_path(path.clone()).unwrap();
+        let config = sample_config("http://selected", None);
+        store.save_named_config("a", &config).unwrap();
+        store.save_named_config("z", &config).unwrap();
+        fs::write(dir.path().join("ovcli.conf"), r#"{"url":"http://default"}"#).unwrap();
+        let entries = store.list_configs().unwrap();
+        assert_eq!(
+            entries.iter().find(|entry| entry.is_active).unwrap().name,
+            "z"
+        );
+        assert_eq!(store.load_active().unwrap().unwrap().url, "http://selected");
+        assert!(store.delete_config("z").is_err());
+        assert!(store.save_edited_config("z", "renamed", &config).is_err());
+        assert!(path.exists());
+        store.delete_config("a").unwrap();
+        store
+            .save_active_config(&sample_config("http://edited", None))
+            .unwrap();
+        assert_eq!(
+            Config::from_file(path.to_str().unwrap()).unwrap().url,
+            "http://edited"
+        );
+        assert_eq!(
+            Config::from_file(dir.path().join("ovcli.conf").to_str().unwrap())
+                .unwrap()
+                .url,
+            "http://default"
+        );
+    }
+
+    #[test]
+    fn switching_updates_the_override_without_touching_default_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let default = dir.path().join("ovcli.conf");
+        fs::write(&default, r#"{"url":"http://default"}"#).unwrap();
+        let store = ConfigStore::for_active_path(dir.path().join("custom.json")).unwrap();
+        store
+            .save_named_config("next", &sample_config("http://next", None))
+            .unwrap();
+        store.activate_config("next").unwrap();
+        assert_eq!(store.load_active().unwrap().unwrap().url, "http://next");
+        assert_eq!(
+            Config::from_file(default.to_str().unwrap()).unwrap().url,
+            "http://default"
+        );
+    }
+
+    #[test]
+    fn relative_override_uses_current_directory_for_profiles() {
+        let store = ConfigStore::for_active_path(PathBuf::from("custom.json")).unwrap();
+        assert_eq!(store.config_dir(), Path::new("."));
+        assert_eq!(store.active_path(), Path::new("custom.json"));
+    }
+
     fn sample_config(url: &str, api_key: Option<&str>) -> Config {
         let mut config = Config::default();
         config.url = url.to_string();
         config.api_key = api_key.map(ToString::to_string);
         config
+    }
+
+    fn plugin_section() -> serde_json::Value {
+        serde_json::json!({
+            "recallCompress": "auto",
+            "claude_code": { "recallCompress": "client" },
+        })
+    }
+
+    fn read_json(path: &Path) -> serde_json::Value {
+        serde_json::from_str(&fs::read_to_string(path).expect("config should exist"))
+            .expect("config should be valid JSON")
+    }
+
+    #[test]
+    fn rewriting_a_config_keeps_the_plugin_section() {
+        let dir = unique_dir("plugin-passthrough");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("ovcli.conf");
+        fs::write(
+            &path,
+            serde_json::json!({
+                "url": "http://old", "api_key": "old-key", "plugin": plugin_section(),
+            })
+            .to_string(),
+        )
+        .expect("seed config");
+
+        super::write_config_file(&path, &sample_config("http://new", Some("new-key"))).unwrap();
+
+        let written = read_json(&path);
+        assert_eq!(written["url"], "http://new");
+        assert_eq!(written["api_key"], "new-key");
+        assert_eq!(written["plugin"], plugin_section());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rewriting_a_config_still_clears_a_modeled_key() {
+        let dir = unique_dir("plugin-clear");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("ovcli.conf");
+        fs::write(
+            &path,
+            serde_json::json!({
+                "url": "http://local", "api_key": "old-key", "gateway_token": "old-token",
+            })
+            .to_string(),
+        )
+        .expect("seed config");
+
+        super::write_config_file(&path, &sample_config("http://local", Some("new-key"))).unwrap();
+
+        let written = read_json(&path);
+        assert_eq!(written["api_key"], "new-key");
+        assert!(
+            written.get("gateway_token").is_none(),
+            "a modeled key cleared to None must not come back from the old file",
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn renaming_a_config_carries_the_plugin_section_to_the_new_name() {
+        let dir = unique_dir("plugin-rename");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let store = ConfigStore::for_config_dir(dir.clone());
+        let old_path = dir.join("ovcli.conf.before");
+        fs::write(
+            &old_path,
+            serde_json::json!({ "url": "http://local", "plugin": plugin_section() }).to_string(),
+        )
+        .expect("seed config");
+
+        store
+            .save_edited_config("before", "after", &sample_config("http://local", None))
+            .expect("rename should succeed");
+
+        assert_eq!(
+            read_json(&dir.join("ovcli.conf.after"))["plugin"],
+            plugin_section()
+        );
+        assert!(!old_path.exists(), "the old name should be removed");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn activating_a_config_keeps_the_active_files_plugin_section() {
+        let dir = unique_dir("plugin-activate");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let store = ConfigStore::for_config_dir(dir.clone());
+        fs::write(
+            dir.join("ovcli.conf"),
+            serde_json::json!({ "url": "http://old", "plugin": plugin_section() }).to_string(),
+        )
+        .expect("seed active config");
+        fs::write(
+            dir.join("ovcli.conf.other"),
+            serde_json::json!({ "url": "http://other" }).to_string(),
+        )
+        .expect("seed saved config");
+
+        store
+            .activate_config("other")
+            .expect("activate should succeed");
+
+        let active = read_json(&dir.join("ovcli.conf"));
+        assert_eq!(active["url"], "http://other");
+        assert_eq!(active["plugin"], plugin_section());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn redacted_config_masks_gateway_and_header_secrets() {
+        let mut config = sample_config("http://local", Some("api-secret"));
+        config.gateway_token = Some("gateway-secret".to_string());
+        config.extra_headers = Some(std::collections::HashMap::from([
+            ("Authorization".to_string(), "Bearer secret".to_string()),
+            ("X-Gateway-Token".to_string(), "header-secret".to_string()),
+        ]));
+
+        let redacted = super::redacted_config_value(&config).unwrap();
+        assert_eq!(redacted["gateway_token"], "********");
+        assert_eq!(redacted["extra_headers"]["Authorization"], "********");
+        assert_eq!(redacted["extra_headers"]["X-Gateway-Token"], "********");
     }
 
     #[test]
@@ -1128,28 +1471,6 @@ mod tests {
         assert!(admin_probe_ambiguous_status(500));
         assert!(admin_probe_ambiguous_status(503));
         assert!(!admin_probe_regular_key_status(500));
-    }
-
-    #[test]
-    fn validation_error_copy_hides_raw_backend_details() {
-        let error = crate::error::Error::api(
-            "[AuthenticationError] invalid key. Request ID: 02177930089909800000000000000000ffff"
-                .to_string(),
-        );
-
-        let cloud = validation_error_copy(ConfigKind::OpenVikingService, &error);
-        let custom = validation_error_copy(ConfigKind::Custom, &error);
-
-        assert_eq!(
-            cloud,
-            "Server returned an error during validation. Check the server logs."
-        );
-        assert_eq!(
-            custom,
-            "Server returned an error during validation. Check the server logs."
-        );
-        assert!(!cloud.contains("Request ID"));
-        assert!(!custom.contains("AuthenticationError"));
     }
 
     #[test]

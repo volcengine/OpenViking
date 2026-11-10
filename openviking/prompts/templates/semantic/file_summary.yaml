@@ -35,9 +35,12 @@ template: |
 
   Output requirements:
   - Length: 50-150 words
-  - Explain what this file is, what it covers, and what it's used for
-  - Include core keywords for understanding
+  - Explain what this file is, what it covers, and what it's used for if apparent from the file content
+  - Include core keywords from the file content for understanding
   - Output plain text directly, no markdown format
+  Faithfulness rules:
+  - Describe only what the file content states; do not invent entities, facts, or relationships not present in it.
+  - Do not introduce entity names not present in the file content (such as names of people, organizations, companies, products, projects, brands, or places); omit unstated entity relationships rather than guessing.
 
 llm_config:
   temperature: 0.0

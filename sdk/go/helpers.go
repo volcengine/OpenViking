@@ -1,9 +1,17 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
+	"encoding/base64"
 	"fmt"
+	"mime"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 func setString(m map[string]any, key, value string) {
@@ -43,6 +51,33 @@ func setFloatPtr(m map[string]any, key string, value *float64) {
 	}
 }
 
+func mergeExtra(payload map[string]any, extra map[string]any) error {
+	return mergeExtraProtected(payload, extra)
+}
+
+func mergeExtraProtected(
+	payload map[string]any,
+	extra map[string]any,
+	protected ...string,
+) error {
+	protectedFields := make(map[string]struct{}, len(protected))
+	for _, key := range protected {
+		protectedFields[key] = struct{}{}
+	}
+	for key, value := range extra {
+		if _, exists := payload[key]; exists {
+			return fmt.Errorf("openviking: extra cannot override %q", key)
+		}
+		if _, exists := protectedFields[key]; exists {
+			return fmt.Errorf("openviking: extra cannot override %q", key)
+		}
+		if value != nil {
+			payload[key] = value
+		}
+	}
+	return nil
+}
+
 func boolValue(ptr *bool, fallback bool) bool {
 	if ptr == nil {
 		return fallback
@@ -70,16 +105,17 @@ func Float64(v float64) *float64 {
 	return &v
 }
 
+// Map returns a map pointer for request fields that distinguish null from omitted.
+func Map(v map[string]any) *map[string]any {
+	return &v
+}
+
 func queryBool(values url.Values, key string, value bool) {
 	values.Set(key, strconv.FormatBool(value))
 }
 
 func queryInt(values url.Values, key string, value int) {
 	values.Set(key, strconv.Itoa(value))
-}
-
-func queryFloat(values url.Values, key string, value float64) {
-	values.Set(key, strconv.FormatFloat(value, 'f', -1, 64))
 }
 
 func normalizeTarget(target any) any {
@@ -104,4 +140,32 @@ func normalizeTarget(target any) any {
 	default:
 		return v
 	}
+}
+
+func normalizeImageInput(image string) (string, error) {
+	if image == "" || strings.HasPrefix(image, "data:image/") ||
+		strings.HasPrefix(image, "http://") ||
+		strings.HasPrefix(image, "https://") ||
+		strings.HasPrefix(image, "viking://") {
+		return image, nil
+	}
+	info, err := os.Stat(image)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return image, nil
+		}
+		return "", err
+	}
+	if info.IsDir() {
+		return image, nil
+	}
+	data, err := os.ReadFile(image)
+	if err != nil {
+		return "", err
+	}
+	mimeType := mime.TypeByExtension(strings.ToLower(filepath.Ext(image)))
+	if mimeType == "" || !strings.HasPrefix(mimeType, "image/") {
+		mimeType = "image/png"
+	}
+	return fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(data)), nil
 }

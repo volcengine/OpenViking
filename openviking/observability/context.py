@@ -193,21 +193,6 @@ class ObservabilityContext:
         self.execution_span_id = span_id or self.execution_trace_id[:16]
         return self
 
-    def set_extra(self, key: str, value: Any) -> "ObservabilityContext":
-        """
-        Set an extra attribute.
-
-        Args:
-            key: The attribute key.
-            value: The attribute value.
-
-        Returns:
-            Self for method chaining.
-        """
-        self.extra[key] = value
-        return self
-
-
 # Global context variable
 _OBSERVABILITY_CONTEXT: contextvars.ContextVar[Optional[ObservabilityContext]] = (
     contextvars.ContextVar(

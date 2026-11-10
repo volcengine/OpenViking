@@ -1,6 +1,6 @@
 {
   "name": "@openviking/openclaw-plugin",
-  "version": "2026.6.18",
+  "version": "2026.11.3",
   "displayName": "OpenViking",
   "description": "OpenClaw context-engine plugin — OpenViking AI memory, long-term memory, knowledge base, semantic search, RAG, context engine. 长期记忆 · 知识库 · 语义检索 · 上下文引擎",
   "type": "module",
@@ -26,6 +26,7 @@
     "config/feature-gates.json",
     "registries/",
     "routing/",
+    "shared/",
     "plugin/",
     "services/",
     "!vitest.config.ts",
@@ -41,13 +42,13 @@
   ],
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json",
-    "prepack": "npm run build",
+    "prepack": "node ../memory-plugin-shared/sync.mjs && npm run build",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json",
     "test:watch": "vitest"
   },
   "engines": {
-    "openclaw": ">=2026.4.8"
+    "openclaw": ">=2026.5.27"
   },
   "dependencies": {
     "@sinclair/typebox": "0.34.48",
@@ -69,12 +70,12 @@
     ],
     "setupEntry": "./dist/commands/setup.js",
     "compat": {
-      "pluginApi": ">=2026.4.8",
-      "minGatewayVersion": "2026.4.8"
+      "pluginApi": ">=2026.5.27",
+      "minGatewayVersion": "2026.5.27"
     },
     "build": {
-      "openclawVersion": "2026.4.8",
-      "pluginSdkVersion": "2026.4.8"
+      "openclawVersion": "2026.5.27",
+      "pluginSdkVersion": "2026.5.27"
     }
   },
   "devDependencies": {

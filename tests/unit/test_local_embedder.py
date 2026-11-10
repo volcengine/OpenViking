@@ -1,7 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event, Lock
 from types import SimpleNamespace
 
 import pytest
@@ -39,38 +41,10 @@ class _FakeLlama:
 
     def __init__(self, **kwargs):
         self.__class__.init_kwargs.append(kwargs)
-        self.context_params = SimpleNamespace(n_seq_max=2)
 
     def create_embedding(self, payload):
         self.__class__.inputs.append(payload)
-        if isinstance(payload, list):
-            return {
-                "data": [
-                    {"embedding": [float(index)] * 512}
-                    for index, _item in enumerate(payload, start=1)
-                ]
-            }
         return {"data": [{"embedding": [0.1] * 512}]}
-
-
-class _FakeLlamaFailBatch(_FakeLlama):
-    def create_embedding(self, payload):
-        self.__class__.inputs.append(payload)
-        if isinstance(payload, list) and len(payload) > 1:
-            raise RuntimeError("llama_decode returned -1")
-        return {"data": [{"embedding": [0.2] * 512}]}
-
-
-class _FakeLlamaSequentialOnly(_FakeLlama):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.context_params = SimpleNamespace(n_seq_max=1)
-
-    def create_embedding(self, payload):
-        self.__class__.inputs.append(payload)
-        if isinstance(payload, list):
-            raise AssertionError("native batch path should not be used when n_seq_max=1")
-        return {"data": [{"embedding": [0.3] * 512}]}
 
 
 @pytest.fixture(autouse=True)
@@ -136,11 +110,11 @@ def test_local_embedder_downloads_default_model_and_prefixes_query(monkeypatch, 
         downloaded["count"] += 1
         return _FakeResponse(b"gguf")
 
+    monkeypatch.setattr("openviking.models.embedder.local_embedders.requests.get", _fake_get)
     monkeypatch.setattr(
         "openviking.models.embedder.local_embedders.importlib.import_module",
         lambda _name: SimpleNamespace(Llama=_FakeLlama),
     )
-    monkeypatch.setattr("openviking.models.embedder.local_embedders.requests.get", _fake_get)
 
     embedder = LocalDenseEmbedder(cache_dir=str(tmp_path))
 
@@ -152,73 +126,68 @@ def test_local_embedder_downloads_default_model_and_prefixes_query(monkeypatch, 
     assert _FakeLlama.inputs[-1] == f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}测试问题"
 
 
-def test_local_embedder_embed_batch_preserves_count(monkeypatch, tmp_path):
-    model_path = tmp_path / "model.gguf"
-    model_path.write_bytes(b"gguf")
-
-    monkeypatch.setattr(
-        "openviking.models.embedder.local_embedders.importlib.import_module",
-        lambda _name: SimpleNamespace(Llama=_FakeLlama),
-    )
-
-    embedder = LocalDenseEmbedder(model_path=str(model_path))
-    results = embedder.embed_batch(["a", "b"], is_query=True)
-
-    assert len(results) == 2
-    assert all(len(item.dense_vector) == 512 for item in results)
-    assert _FakeLlama.inputs[-1] == [
-        f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}a",
-        f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}b",
-    ]
-
-
-def test_local_embedder_embed_batch_falls_back_to_sequential(monkeypatch, tmp_path):
-    model_path = tmp_path / "model.gguf"
-    model_path.write_bytes(b"gguf")
-
-    _FakeLlamaFailBatch.init_kwargs = []
-    _FakeLlamaFailBatch.inputs = []
-
-    monkeypatch.setattr(
-        "openviking.models.embedder.local_embedders.importlib.import_module",
-        lambda _name: SimpleNamespace(Llama=_FakeLlamaFailBatch),
-    )
-
-    embedder = LocalDenseEmbedder(model_path=str(model_path))
-    results = embedder.embed_batch(["a", "b"], is_query=True)
-
-    assert len(results) == 2
-    assert all(len(item.dense_vector) == 512 for item in results)
-    assert _FakeLlamaFailBatch.inputs[0] == [
-        f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}a",
-        f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}b",
-    ]
-    assert _FakeLlamaFailBatch.inputs[1:] == [
-        f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}a",
-        f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}b",
-    ]
-
-
-def test_local_embedder_embed_batch_uses_sequential_mode_when_native_batch_unsupported(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize("concurrent_operation", ["embed", "close"])
+@pytest.mark.parametrize("fail_first", [False, True])
+def test_local_embedder_serializes_native_calls(
+    monkeypatch, tmp_path, concurrent_operation, fail_first
 ):
+    entered = Event()
+    release = Event()
+    overlapping = Event()
+    state_lock = Lock()
+    active = 0
+
+    class BlockingLlama(_FakeLlama):
+        def create_embedding(self, payload):
+            nonlocal active
+            with state_lock:
+                active += 1
+                if active > 1:
+                    overlapping.set()
+            entered.set()
+            assert release.wait(5)
+            with state_lock:
+                active -= 1
+            if fail_first and payload == "first":
+                raise ValueError("native embedding failed")
+            return super().create_embedding(payload)
+
+        def close(self):
+            with state_lock:
+                if active:
+                    overlapping.set()
+
     model_path = tmp_path / "model.gguf"
     model_path.write_bytes(b"gguf")
-
-    _FakeLlamaSequentialOnly.init_kwargs = []
-    _FakeLlamaSequentialOnly.inputs = []
-
     monkeypatch.setattr(
         "openviking.models.embedder.local_embedders.importlib.import_module",
-        lambda _name: SimpleNamespace(Llama=_FakeLlamaSequentialOnly),
+        lambda _name: SimpleNamespace(Llama=BlockingLlama),
     )
+    embedder = LocalDenseEmbedder(model_path=str(model_path), config={"max_retries": 0})
+    started = Event()
 
-    embedder = LocalDenseEmbedder(model_path=str(model_path))
-    results = embedder.embed_batch(["a", "b"], is_query=True)
+    def run_second_call():
+        started.set()
+        if concurrent_operation == "embed":
+            return embedder.embed("second", is_query=True)
+        return embedder.close()
 
-    assert len(results) == 2
-    assert all(len(item.dense_vector) == 512 for item in results)
-    assert _FakeLlamaSequentialOnly.inputs == [
-        f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}a",
-        f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}b",
-    ]
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(embedder.embed, "first")
+        try:
+            assert entered.wait(5)
+            second = executor.submit(run_second_call)
+            assert started.wait(5)
+            assert not overlapping.wait(0.1)
+        finally:
+            release.set()
+        if fail_first:
+            with pytest.raises(RuntimeError, match="native embedding failed"):
+                first.result(timeout=5)
+        else:
+            assert first.result(timeout=5).dense_vector == [0.1] * 512
+        result = second.result(timeout=5)
+        if concurrent_operation == "embed":
+            assert result.dense_vector == [0.1] * 512
+            assert BlockingLlama.inputs[-1] == f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}second"
+        assert not overlapping.is_set()

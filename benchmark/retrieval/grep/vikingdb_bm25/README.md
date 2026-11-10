@@ -2,6 +2,8 @@
 
 Benchmark suite for evaluating OpenViking's grep retrieval with VikingDB BM25 engine.
 
+Start `openviking-server` before running any import, reindex, or benchmark step.
+
 ## Directory Structure
 
 ```
@@ -58,8 +60,8 @@ Tests grep speed and returned match count on a large synthetic dataset (default:
 | Step | Script | Description |
 |------|--------|-------------|
 | 0 | `step0_prepare_data.py` | Generate synthetic dataset (dir_xxx/wiki_xxx.txt) |
-| 1 | `step1_add_resource.py` | Import data (no VLM/embedding, fast) |
-| 2 | `step2_reindex.py` | Async reindex via openviking-server (concurrency=16, polling) |
+| 1 | `step1_add_resource.py` | Import data through the HTTP SDK (`vectors_only`, no VLM) |
+| 2 | `step2_reindex.py` | Optional async index rebuild via openviking-server (concurrency=16, polling) |
 | 3 | `step3_benchmark.py` | Measure latency and returned match count with `node_limit=256` |
 
 ### Target Words
@@ -87,10 +89,10 @@ python3 step0_prepare_data.py
 # Optional: append more data for scale-out without overwriting existing dirs
 python3 step0_prepare_data.py --start-dir 100 --num-dirs 100
 
-# Step 1: Import without indexing (fast)
+# Step 1: Import with vectors only (no VLM semantic processing)
 python3 step1_add_resource.py
 
-# Step 2: Build vector indexes (requires openviking-server running)
+# Step 2 (optional): Rebuild vector indexes
 python3 step2_reindex.py
 # Optional: --concurrency N  (default: 16)
 
@@ -111,7 +113,7 @@ python3 step3_benchmark.py --engine-label auto --compare step3_result_fs.json
 - **Effectiveness** tests compare grep results against ground truth from fs-engine grep (cached locally)
 - **Performance** tests compare grep latency and returned match counts between engine configs; no ground truth is generated
 - **Effectiveness** imports real repos with indexing in a single step, then evaluates quality
-- **Performance** imports synthetic data without indexing, builds vector indexes asynchronously, then benchmarks latency
+- **Performance** imports synthetic data through the HTTP SDK in `vectors_only` mode, optionally rebuilds indexes asynchronously, then benchmarks latency
 - **Performance** import/reindex steps support resumable execution via progress files
 - Change grep engine via `ov.conf` and restart the server between benchmark runs
 - To horizontally scale the synthetic dataset, run Step 0 again with a new `--start-dir`,

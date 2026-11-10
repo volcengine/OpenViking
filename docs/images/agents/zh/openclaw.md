@@ -1,22 +1,68 @@
-## 步骤 1：安装 OpenViking
-在你的 OpenClaw 的机器终端，执行以下命令以安装 OpenViking Plugin
+## 步骤1：安装
 
-```bash
-openclaw plugins install clawhub:@openviking/openclaw-plugin && openclaw openviking setup
-```
+1. 安装 OpenViking 插件：
 
-## 步骤 2：复制 Base URL 和 API Key
-执行安装命令后会依次提示输入 Base URL 和 API Key，可复制后粘贴到你的 Agent 终端
+   ```bash
+   openclaw plugins install clawhub:@openviking/openclaw-plugin
+   ```
 
-- Base URL: 复制以下 Base URL 到你的 Agent 终端
-```text
-https://api.vikingdb.cn-beijing.volces.com/openviking
-```
-- API Key: 复制页面中展示的 API Key 到你的 Agent 终端
+2. 运行配置向导，服务地址填 `{{OPENVIKING_BASE_URL}}`，API Key 填当前页面提供的 key：
 
-## 步骤 3：重启 OpenClaw
-复制以下指令到 Agent 终端以重启 OpenClaw，重启后控制台将自动判断 Agent 接入状态
+   ```bash
+   openclaw openviking setup
+   ```
 
-```bash
-openclaw gateway restart
-```
+   也可以一步完成配置，key 放在 `OPENVIKING_API_KEY` 中：
+
+   ```bash
+   openclaw openviking setup --base-url {{OPENVIKING_BASE_URL}} --api-key "$OPENVIKING_API_KEY"
+   ```
+
+3. 配置 `peer_role`：`peer_role` 用于标识对话参与者的类型，并非权限角色。其中，`assistant` 表示不同的 Agent、工具或模型，`sender` 表示不同的消息发送者（旧值 `person` 仍兼容）。完成上述配置后，`peer_role` 默认为 `none`。如需调整 `peer_role`，可执行以下命令：
+
+   ```bash
+   openclaw openviking setup --reconfigure
+   ```
+
+4. 重启 Gateway 使配置生效：
+
+   ```bash
+   openclaw gateway restart
+   ```
+
+## 步骤2：验证
+
+1. 在终端执行如下命令检查接入状态：
+
+   ```bash
+   openclaw openviking status
+   ```
+
+2. 返回如下结果即表示接入成功：
+
+   ```text
+   🦣 OpenViking Plugin Status
+
+     Status: Configured
+     mode:      remote
+     baseUrl:   `https://api.vikingdb.cn-beijing.volces.com/openviking`
+     apiKey:    set
+     peer_role: none
+     accountId: not set
+     userId:    not set
+     slot:      active
+
+     ✓ Server reachable (version: v0.x.xx.x)
+   ```
+
+## 故障排查
+
+| 问题 | 处理 |
+|---|---|
+| 插件未生效 | 重跑安装，再执行 `openclaw gateway restart` |
+| 401 / 403 | 检查鉴权凭据 |
+
+## 参考
+
+- 手动配置文档：[OpenClaw](https://docs.openviking.net/zh/agent-integrations/03-openclaw)
+- 源码：[examples/openclaw-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin)

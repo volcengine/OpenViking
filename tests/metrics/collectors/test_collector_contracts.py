@@ -22,6 +22,7 @@ from openviking.metrics.collectors.service_probe import ServiceProbeCollector
 from openviking.metrics.collectors.storage_probe import StorageProbeCollector
 from openviking.metrics.core.base import ReadEnvelope
 from openviking.metrics.core.registry import MetricRegistry
+from openviking.metrics.datasources import probes as probe_datasources
 
 
 class _FailingProbeCollector(ProbeMetricCollector):
@@ -193,9 +194,13 @@ def test_domain_stats_delta_helper_applies_non_negative_deltas_and_handles_reset
 
     collector.collect(registry)
 
-    counters = dict(registry.iter_counters())
-    series = dict(counters["openviking_test_cumulative_total"])
-    assert series[()] == 18
+    metrics = {
+        m.name: m
+        for r in registry.collect().resource_metrics
+        for s in r.scope_metrics
+        for m in s.metrics
+    }
+    assert metrics["openviking_test_cumulative_total"].data.data_points[0].value == 18
 
 
 def test_service_probe_collector_emits_valid_on_success_and_invalid_on_failure(
@@ -279,14 +284,20 @@ def test_model_provider_probe_collector_uses_last_provider_on_failure(registry, 
     assert 'openviking_model_provider_readiness{provider="volcengine",valid="0"} 0.0' in text2
 
 
-def test_async_system_probe_collector_marks_invalid_on_failure(registry, render_prometheus):
-    ds = _ProbeDataSource(value={"queue": True}, ok=True)
+def test_async_system_probe_collector_marks_invalid_on_failure(
+    monkeypatch, registry, render_prometheus
+):
+    monkeypatch.setattr(probe_datasources, "get_queue_manager", lambda: object())
+    ds = probe_datasources.AsyncSystemProbeDataSource()
     c = AsyncSystemProbeCollector(data_source=ds)
     c.collect(registry)
     text = render_prometheus(registry)
     assert 'openviking_async_system_readiness{probe="queue",valid="1"} 1.0' in text
 
-    ds.raises = True
+    def _raise_queue_manager():
+        raise RuntimeError("probe read failed")
+
+    monkeypatch.setattr(probe_datasources, "get_queue_manager", _raise_queue_manager)
     c.collect(registry)
     text2 = render_prometheus(registry)
     assert 'openviking_async_system_readiness{probe="queue",valid="0"} 0.0' in text2
@@ -347,12 +358,13 @@ def test_prometheus_exporter_inherits_base_metric_exporter():
 
 def test_concrete_datasources_and_collectors_follow_doc_inheritance():
     from openviking.metrics.collectors.base import (
+        DomainStatsMetricCollector,
         ProbeMetricCollector,
         Refreshable,
         StateMetricCollector,
     )
-    from openviking.metrics.collectors.lock import LockCollector
     from openviking.metrics.collectors.queue import QueueCollector
+    from openviking.metrics.collectors.ragfs import RagfsMetricCollector
     from openviking.metrics.collectors.service_probe import ServiceProbeCollector
     from openviking.metrics.collectors.vikingdb import VikingDBCollector
     from openviking.metrics.datasources.base import (
@@ -361,25 +373,25 @@ def test_concrete_datasources_and_collectors_follow_doc_inheritance():
         StateMetricDataSource,
     )
     from openviking.metrics.datasources.observer_state import (
-        LockStateDataSource,
         ObserverStateDataSource,
         VikingDBStateDataSource,
     )
     from openviking.metrics.datasources.probes import ServiceProbeDataSource
     from openviking.metrics.datasources.queue import QueuePipelineStateDataSource
+    from openviking.metrics.datasources.ragfs import RagfsMetricDataSource
 
     assert issubclass(QueuePipelineStateDataSource, StateMetricDataSource)
     assert issubclass(ObserverStateDataSource, DomainStatsMetricDataSource)
-    assert issubclass(LockStateDataSource, StateMetricDataSource)
+    assert issubclass(RagfsMetricDataSource, DomainStatsMetricDataSource)
     assert issubclass(VikingDBStateDataSource, StateMetricDataSource)
     assert issubclass(ServiceProbeDataSource, ProbeMetricDataSource)
 
     assert issubclass(QueueCollector, StateMetricCollector)
-    assert issubclass(LockCollector, StateMetricCollector)
+    assert issubclass(RagfsMetricCollector, DomainStatsMetricCollector)
     assert issubclass(VikingDBCollector, StateMetricCollector)
     assert issubclass(ServiceProbeCollector, ProbeMetricCollector)
     assert issubclass(QueueCollector, Refreshable)
-    assert issubclass(LockCollector, Refreshable)
+    assert issubclass(RagfsMetricCollector, Refreshable)
     assert issubclass(VikingDBCollector, Refreshable)
     assert issubclass(ServiceProbeCollector, Refreshable)
 

@@ -8,6 +8,17 @@ body:
       value: |
         Thanks for taking the time to report a bug! Please fill out the form below.
 
+  - type: dropdown
+    id: issue-origin
+    attributes:
+      label: Issue Origin
+      description: Was this issue observed in a real environment or inferred by an AI agent?
+      options:
+        - Observed or reproduced in a real environment
+        - Inferred by an AI agent and not observed or reproduced
+    validations:
+      required: true
+
   - type: textarea
     id: description
     attributes:

@@ -1,4 +1,5 @@
 import type { OVMessage } from "../client.js";
+import { sanitizeOpenVikingPeerId } from "../routing/identity-routing.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 
 export type AgentMessage = {
@@ -8,15 +9,7 @@ export type AgentMessage = {
 };
 
 export function toRoleId(senderId: string | undefined): string | undefined {
-  if (!senderId) {
-    return undefined;
-  }
-  const normalized = senderId
-    .trim()
-    .replace(/[^a-zA-Z0-9_-]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .replace(/_+/g, "_");
-  return normalized || undefined;
+  return sanitizeOpenVikingPeerId(senderId);
 }
 
 /**

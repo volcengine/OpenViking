@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createSessionAgentResolver,
   openClawSessionRefToOvStorageId,
   openClawSessionToOvStorageId,
+  resolveOpenVikingActorPeerId,
+  resolveOpenVikingMessagePeerId,
   sanitizeOpenVikingAgentIdHeader,
 } from "../../routing/identity-routing.js";
 
@@ -30,6 +32,35 @@ describe("identity routing registry", () => {
     expect(sanitizeOpenVikingAgentIdHeader("agent:role:v1")).toBe("agent_role_v1");
     expect(sanitizeOpenVikingAgentIdHeader("   ")).toBe("default");
     expect(sanitizeOpenVikingAgentIdHeader("@#$%")).toBe("ov_agent");
+  });
+
+  it("routes sender scope to the sender peer for messages and data-plane requests", () => {
+    expect(resolveOpenVikingMessagePeerId({
+      peerRole: "sender",
+      role: "user",
+      senderPeerId: "sender-42",
+    })).toBe("sender-42");
+    expect(resolveOpenVikingMessagePeerId({
+      peerRole: "sender",
+      role: "assistant",
+      senderPeerId: "sender-42",
+    })).toBeUndefined();
+    expect(resolveOpenVikingActorPeerId({
+      peerRole: "sender",
+      senderPeerId: "sender-42",
+    })).toBe("sender-42");
+  });
+
+  it("widens to the unscoped request with a warning when the sender is missing", () => {
+    const warn = vi.fn();
+    expect(resolveOpenVikingActorPeerId({ peerRole: "sender", warn })).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("no sender identity"));
+
+    warn.mockClear();
+    expect(resolveOpenVikingActorPeerId({ peerRole: "sender", senderPeerId: "sender-42", warn })).toBe("sender-42");
+    expect(resolveOpenVikingActorPeerId({ peerRole: "assistant", assistantPeerId: "agent", warn })).toBe("agent");
+    expect(resolveOpenVikingActorPeerId({ peerRole: "none", warn })).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("resolves session-scoped agents with aliases and config prefix unchanged", () => {

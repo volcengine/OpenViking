@@ -9,8 +9,7 @@
 
 ## 这个示例覆盖什么
 
-- 本地快速试用时的嵌入式 SDK 用法
-- 服务端模式下的 HTTP 客户端用法
+- HTTP SDK 用法
 - 从远程 URL 导入资源
 - 使用 `ls`、`tree`、`read` 浏览 `viking://` 文件系统
 - 使用 `find`、`abstract`、`overview`、`grep` 做检索和加载
@@ -18,15 +17,13 @@
 
 ## 先选对接入方式
 
-目前 OpenViking 常见有三种接入路径：
+目前 OpenViking 常见有两种接入路径：
 
 | 模式 | 适合场景 | 是否推荐 |
 |------|----------|----------|
-| 嵌入式 SDK | 单进程、本地试用、快速验证 | 是，适合第一次上手 |
 | HTTP 服务端 + SDK/CLI | 共享服务、多会话、多 Agent | 是，正式使用优先 |
 | MCP | Claude Code、Cursor、Claude Desktop、OpenClaw 等 MCP 宿主 | 是，工具化集成优先 |
 
-如果不是单进程本地 demo，而是要长期运行或多端接入，优先使用 HTTP 服务端模式。  
 如果你是给 Claude Code、Cursor 这类客户端接入，请直接看 [MCP 集成指南](../../docs/zh/guides/06-mcp-integration.md)。
 
 ## 前置条件
@@ -35,10 +32,10 @@
 2. 安装 OpenViking：
 
 ```bash
-pip install openviking --upgrade --force-reinstall
+pip install openviking-sdk --upgrade
 ```
 
-3. 准备好 `~/.openviking/ov.conf`
+3. 启动 OpenViking Server
 
 ## 快速开始
 
@@ -50,21 +47,12 @@ cd OpenViking/examples/basic-usage
 python basic_usage.py
 ```
 
-脚本默认使用嵌入式模式：
+脚本默认连接本地 OpenViking Server：
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.OpenViking(path="./data")
-client.initialize()
-```
-
-如果你想把同样的流程切到服务端模式，改成：
-
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(url="http://localhost:1933")
+client = SyncHTTPClient(url="http://localhost:1933")
 client.initialize()
 ```
 
@@ -87,28 +75,19 @@ client.initialize()
 
 ### 初始化
 
-本地首次试用建议先用嵌入式模式：
+使用 HTTP 客户端连接 OpenViking Server：
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.OpenViking(path="./data")
-client.initialize()
-```
-
-如果 OpenViking 作为独立服务运行，则使用 HTTP 客户端：
-
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(url="http://localhost:1933")
+client = SyncHTTPClient(url="http://localhost:1933")
 client.initialize()
 ```
 
 如果服务端启用了认证，普通数据访问请优先使用 `user_key`：
 
 ```python
-client = ov.SyncHTTPClient(
+client = SyncHTTPClient(
     url="http://localhost:1933",
     api_key="<user-key>",
 )
@@ -126,35 +105,33 @@ client = ov.SyncHTTPClient(
 ```python
 result = client.add_resource(
     path="https://example.com/docs",
-    wait=False,
 )
 
 result = client.add_resource(path="/path/to/manual.pdf")
 
 result = client.add_resource(
     path="/path/to/repo",
-    instruction="这是一个 Python Web 应用",
+    options={"instruction": "这是一个 Python Web 应用"},
 )
 ```
 
-脚本和 demo 可以直接用 `wait=True`。  
-真正的服务里更常见的做法是异步导入，等到你确实需要结果时再调用 `wait_processed()`。
+导入默认返回 `task_id`。通过 `client.get_task(result["task_id"])` 查询状态，只有任务为 `completed` 时才读取摘要或检索本次导入的内容。轮询示例见 [后台任务](../../docs/zh/api/17-tasks.md)。
 
 ### 文件系统访问
 
 OpenViking 的上下文统一组织在虚拟文件系统里：
 
 ```python
-files = client.ls("viking://resources/")
-tree = client.tree("viking://resources/my-project", level_limit=3)
-content = client.read("viking://resources/my-project/README.md")
+files = client.ls(uri="viking://resources/")
+tree = client.tree(uri="viking://resources/my-project", level_limit=3)
+content = client.read(uri="viking://resources/my-project/README.md")
 ```
 
 同样的 URI 模型也适用于记忆和技能：
 
 - `viking://resources/`
-- `viking://user/memories/`
-- `viking://user/skills/`
+- `viking://~/memories/`
+- `viking://~/skills/`
 
 ### 检索
 
@@ -163,14 +140,12 @@ content = client.read("viking://resources/my-project/README.md")
 ```python
 results = client.find(
     query="认证逻辑是怎么做的",
-    target_uri="viking://resources/my-project",
-    limit=5,
+    options={"target_uri": "viking://resources/my-project", "limit": 5},
 )
 
 results = client.search(
     query="数据库配置和故障处理",
-    target_uri="viking://resources/",
-    limit=10,
+    options={"target_uri": "viking://resources/", "limit": 10},
 )
 ```
 
@@ -179,15 +154,19 @@ results = client.search(
 ```python
 uri = "viking://resources/my-project/docs/api.md"
 
-abstract = client.abstract(uri)
-overview = client.overview(uri)
-content = client.read(uri)
+abstract = client.abstract(uri=uri)
+overview = client.overview(uri=uri)
+content = client.read(uri=uri)
 ```
 
 如果你要的是字面匹配而不是语义检索，用 `grep`：
 
 ```python
-result = client.grep("viking://resources/my-project", "Agent", case_insensitive=True)
+result = client.grep(
+    uri="viking://resources/my-project",
+    pattern="Agent",
+    case_insensitive=True,
+)
 matches = result.get("matches", [])
 ```
 
@@ -199,14 +178,22 @@ matches = result.get("matches", [])
 session_info = client.create_session()
 session_id = session_info["session_id"]
 
-client.add_message(session_id, "user", "我更喜欢 TypeScript 而不是 JavaScript")
-client.add_message(session_id, "assistant", "明白了，在合适场景下我会优先使用 TypeScript。")
+client.add_message(
+    session_id=session_id,
+    role="user",
+    content="我更喜欢 TypeScript 而不是 JavaScript",
+)
+client.add_message(
+    session_id=session_id,
+    role="assistant",
+    content="明白了，在合适场景下我会优先使用 TypeScript。",
+)
 ```
 
 如果要把这段对话真正提取成长期记忆，需要提交 session：
 
 ```python
-client.commit_session(session_id)
+client.commit_session(session_id=session_id)
 ```
 
 提交后，记忆可以通过正常检索接口再次找回：
@@ -214,7 +201,7 @@ client.commit_session(session_id)
 ```python
 memories = client.find(
     query="用户编程偏好",
-    target_uri="viking://user/memories/",
+    target_uri="viking://~/memories/",
 )
 ```
 
@@ -244,7 +231,7 @@ memories = client.find(
 }
 ```
 
-你也可以使用火山引擎、Azure OpenAI 等提供商。当前配置示例请以主 [README](../../README_CN.md) 和 [配置指南](../../docs/zh/guides/01-configuration.md) 为准。
+你也可以使用火山引擎、Azure OpenAI 等提供商。当前配置示例请以主 [README](../../docs/repository/README_CN.md) 和 [配置指南](../../docs/zh/guides/01-configuration.md) 为准。
 
 ## 推荐下一步
 
@@ -262,7 +249,7 @@ memories = client.find(
 | `ImportError` 或本地扩展问题 | 重新安装 `openviking`；如果是源码开发，确认本地构建依赖齐全。 |
 | HTTP 模式下 `Connection refused` | 启动 `openviking-server`，并检查 `http://localhost:1933/health`。 |
 | 租户或认证报错 | 普通数据接口优先使用 `user_key`；`root_key` 仅在显式传入租户信息时使用。 |
-| 刚导入后检索慢或搜不到 | 等待 `wait_processed()`，或在导入时直接用 `wait=True`。 |
+| 刚导入后检索慢或搜不到 | 查询本次导入的 `task_id`，确认任务状态为 `completed` 后再检索。 |
 | 多个客户端或会话争用本地存储 | 不要反复起独立本地进程，改用 HTTP 服务端模式。 |
 
 ## 许可证

@@ -2,6 +2,13 @@
 
 <!-- Provide a brief description of the changes in this PR -->
 
+## Human Involvement
+
+<!-- Select exactly one option -->
+
+- [ ] A human participated in the implementation or review loop
+- [ ] This PR was generated entirely by AI agents without human participation in the loop
+
 ## Related Issue
 
 <!-- Link to the related issue (if applicable) -->

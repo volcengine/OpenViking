@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -5,12 +8,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 )
 
 func zipDirectory(dir string) (string, error) {
@@ -51,7 +57,7 @@ func zipDirectory(dir string) (string, error) {
 		if err != nil {
 			return err
 		}
-		if relToRoot, err := filepath.Rel(root, abs); err != nil || strings.HasPrefix(relToRoot, "..") {
+		if relToRoot, err := filepath.Rel(root, abs); err != nil || !filepath.IsLocal(relToRoot) {
 			return nil
 		}
 		rel, err := filepath.Rel(root, path)
@@ -140,10 +146,17 @@ func (c *Client) uploadTempFile(ctx context.Context, filePath string) (string, e
 	return result.TempFileID, nil
 }
 
-func (c *Client) addLocalUpload(ctx context.Context, payload map[string]any, path string, includeSourceName bool) error {
+func (c *Client) addLocalUpload(ctx context.Context, payload map[string]any, path string, includeSourceName, allowInlineContent bool) error {
+	for _, prefix := range []string{"http://", "https://", "git@", "ssh://", "git://"} {
+		if strings.HasPrefix(path, prefix) {
+			payload["path"] = path
+			return nil
+		}
+	}
+
 	info, err := os.Stat(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if os.IsNotExist(err) || (allowInlineContent && isInlineSkillPathError(err)) {
 			payload["path"] = path
 			return nil
 		}
@@ -178,4 +191,14 @@ func (c *Client) addLocalUpload(ctx context.Context, payload map[string]any, pat
 	}
 	payload["path"] = path
 	return nil
+}
+
+func isInlineSkillPathError(err error) bool {
+	if errors.Is(err, syscall.ENAMETOOLONG) {
+		return true
+	}
+	// Windows uses native error codes for invalid or overlong inline content.
+	const errorInvalidName, errorFilenameExcedRange syscall.Errno = 123, 206
+	return runtime.GOOS == "windows" &&
+		(errors.Is(err, errorInvalidName) || errors.Is(err, errorFilenameExcedRange))
 }

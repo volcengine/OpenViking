@@ -142,7 +142,9 @@ def _create_ragas_llm_from_config() -> Optional[Any]:
         logger.debug("OpenViking config file not found, skipping VLM config")
         return None
 
-    vlm_config = config.vlm
+    from openviking.config.vlm import ClusterVLMResolver
+
+    vlm_config = ClusterVLMResolver(lambda: config).get_vlm_sync()
 
     if not vlm_config.is_available():
         logger.warning(

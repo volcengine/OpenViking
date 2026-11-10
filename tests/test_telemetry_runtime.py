@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -19,36 +21,27 @@ from openviking.observability.context import (
     reset_operation_observability_context,
     reset_root_observability_context,
 )
-from openviking.server.identity import RequestContext, Role
-from openviking.service.resource_service import ResourceService
 from openviking.storage.collection_schemas import TextEmbeddingHandler
-from openviking.storage.queuefs.semantic_dag import DagStats
+from openviking.storage.queuefs.process_result import ProcessOutcome
+from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.telemetry import (
     get_current_telemetry,
-    get_telemetry_runtime,
     register_telemetry,
     tracer_module,
     unregister_telemetry,
 )
 from openviking.telemetry.backends.memory import MemoryOperationTelemetry
-from openviking.telemetry.context import bind_telemetry, bind_telemetry_stage
+from openviking.telemetry.context import (
+    bind_ingestion_source_type,
+    bind_telemetry,
+    bind_telemetry_stage,
+    get_ingestion_source_type,
+)
 from openviking.telemetry.snapshot import TelemetrySnapshot
 from openviking.telemetry.span_models import OperationSpanAttributes, RootSpanAttributes
-from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import logger as logger_module
-
-
-def test_telemetry_module_exports_snapshot_and_runtime():
-    snapshot = TelemetrySnapshot(
-        telemetry_id="tm_demo",
-        summary={"duration_ms": 1.2},
-    )
-    usage = snapshot.to_usage_dict()
-
-    assert usage == {"duration_ms": 1.2, "token_total": 0}
-    assert get_telemetry_runtime().meter() is not None
 
 
 def test_root_observability_context_bind_and_reset():
@@ -145,6 +138,21 @@ async def test_bind_telemetry_stage_propagates_across_async_tasks():
         "output": 4,
         "total": 10,
     }
+
+
+@pytest.mark.asyncio
+async def test_ingestion_source_type_is_scoped_and_propagates_across_async_tasks():
+    assert get_ingestion_source_type() is None
+
+    with bind_ingestion_source_type("repository"):
+        assert await asyncio.create_task(_read_ingestion_source_type()) == "repository"
+
+    assert get_ingestion_source_type() is None
+
+
+async def _read_ingestion_source_type() -> str | None:
+    await asyncio.sleep(0)
+    return get_ingestion_source_type()
 
 
 @pytest.mark.asyncio
@@ -247,6 +255,265 @@ def test_telemetry_summary_uses_simplified_internal_metric_keys():
         "pending": 1,
     }
     assert result["memory"] == {"extracted": 6}
+
+
+def test_telemetry_summary_includes_cuvs_route_and_stage_timings():
+    telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
+    telemetry.record_cuvs_search(
+        {
+            "algorithm": "brute_force",
+            "dtype": "float16",
+            "max_concurrent_gpu_searches": 2,
+            "auto_mode": True,
+            "route_reason": "native_filter_threshold",
+            "filter_kind": "path",
+            "filter_cache_hit": True,
+            "native_filter_reused": True,
+            "build_performed": False,
+            "eligible_count": 12,
+            "records_generation": 3,
+            "index_size": 1000,
+            "memory_estimated_peak_bytes": 4096,
+            "memory_free_bytes": 8192,
+            "memory_usable_bytes": 6144,
+            "total_ms": 1.25,
+            "preflight_ms": 0.4,
+            "native_search_ms": 0.7,
+        }
+    )
+
+    cuvs = telemetry.finish().summary["vector"]["cuvs"]
+
+    assert cuvs == {
+        "searches": 1,
+        "algorithms": {"brute_force": 1},
+        "dtypes": {"float16": 1},
+        "max_concurrent_gpu_searches": 2,
+        "auto_mode_searches": 1,
+        "routes": {"native_filter_threshold": 1},
+        "filter_kinds": {"path": 1},
+        "filter_cache_hits": 1,
+        "native_filter_reuses": 1,
+        "eligible_count_max": 12,
+        "records_generation_max": 3,
+        "index_size_max": 1000,
+        "memory": {
+            "estimated_peak_bytes_max": 4096,
+            "free_bytes_min": 8192,
+            "usable_bytes_min": 6144,
+        },
+        "timings_ms": {
+            "total": {"sum": 1.25, "max": 1.25},
+            "preflight": {"sum": 0.4, "max": 0.4},
+            "native_search": {"sum": 0.7, "max": 0.7},
+        },
+    }
+
+
+def test_telemetry_summary_includes_cuvs_micro_batching_fields():
+    telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
+    for batch_size, batch_wait_ms in ((4, 0.8), (4, 0.7), (1, 1.0)):
+        telemetry.record_cuvs_search(
+            {
+                "algorithm": "brute_force",
+                "dtype": "float32",
+                "route_reason": "cuvs",
+                "filter_kind": "none",
+                "micro_batching_enabled": True,
+                "micro_batching_warm_fast_path": batch_size == 4,
+                "batch_size": batch_size,
+                "batch_wait_ms": batch_wait_ms,
+            }
+        )
+
+    cuvs = telemetry.finish().summary["vector"]["cuvs"]
+
+    assert cuvs["micro_batching_searches"] == 3
+    assert cuvs["micro_batched_searches"] == 2
+    assert cuvs["micro_batching_warm_fast_path_searches"] == 2
+    assert cuvs["batch_size_max"] == 4
+    assert cuvs["searches_by_batch_size"] == {"1": 1, "4": 2}
+    assert cuvs["timings_ms"]["batch_wait"] == {"sum": 2.5, "max": 1.0}
+
+
+def test_cuvs_telemetry_aggregation_is_completion_order_independent():
+    samples = [
+        {
+            "algorithm": "brute_force",
+            "dtype": "float32",
+            "max_concurrent_gpu_searches": 1,
+            "auto_mode": False,
+            "route_reason": "cuvs",
+            "filter_kind": "none",
+            "filter_cache_eviction_fallback": True,
+            "filter_words_packed": True,
+            "build_performed": True,
+            "records_generation": 2,
+            "index_size": 100,
+            "memory_estimated_peak_bytes": 4000,
+            "memory_free_bytes": 8000,
+            "memory_usable_bytes": 7000,
+            "total_ms": 12,
+            "queue_ms": 2,
+            "gpu_gate_queue_ms": 1.5,
+            "build_ms": 5,
+            "gpu_search_ms": 5,
+        },
+        {
+            "algorithm": "brute_force",
+            "dtype": "float32",
+            "max_concurrent_gpu_searches": 2,
+            "auto_mode": True,
+            "route_reason": "native_filter_threshold",
+            "filter_kind": "path",
+            "filter_cache_hit": True,
+            "native_filter_reused": True,
+            "eligible_count": 3,
+            "records_generation": 2,
+            "index_size": 100,
+            "memory_free_bytes": 6000,
+            "memory_usable_bytes": 5000,
+            "total_ms": 3,
+            "preflight_ms": 1,
+            "native_search_ms": 2,
+        },
+    ]
+
+    def aggregate(order):
+        telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
+        for index in order:
+            telemetry.record_cuvs_search(samples[index])
+        return telemetry.finish().summary["vector"]["cuvs"]
+
+    forward = aggregate([0, 1])
+    reverse = aggregate([1, 0])
+
+    assert forward == reverse
+    assert forward["routes"] == {"cuvs": 1, "native_filter_threshold": 1}
+    assert forward["builds"] == 1
+    assert forward["filter_cache_eviction_fallbacks"] == 1
+    assert forward["packed_filter_queries"] == 1
+    assert forward["memory"]["free_bytes_min"] == 6000
+    assert forward["timings_ms"]["total"] == {"sum": 15.0, "max": 12.0}
+    assert forward["timings_ms"]["gpu_gate_queue"] == {"sum": 1.5, "max": 1.5}
+
+
+def test_cuvs_telemetry_timing_sum_is_strictly_order_independent():
+    # A large first value makes ordinary floating-point associativity loss observable.
+    durations_ms = [10_000_000_000_000.0, 0.001, 0.001]
+
+    def aggregate(order):
+        telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
+        for index in order:
+            telemetry.record_cuvs_search(
+                {
+                    "algorithm": "brute_force",
+                    "dtype": "float32",
+                    "route_reason": "cuvs",
+                    "filter_kind": "none",
+                    "total_ms": durations_ms[index],
+                }
+            )
+        return telemetry.finish().summary["vector"]["cuvs"]["timings_ms"]["total"]
+
+    forward = aggregate([0, 1, 2])
+    reverse = aggregate([2, 1, 0])
+
+    assert (
+        forward
+        == reverse
+        == {
+            "sum": 10_000_000_000_000.002,
+            "max": 10_000_000_000_000.0,
+        }
+    )
+
+
+def test_cuvs_telemetry_aggregation_is_thread_safe():
+    telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
+    samples = [
+        {
+            "algorithm": "brute_force",
+            "dtype": "float32",
+            "route_reason": "cuvs",
+            "filter_kind": "none",
+            "memory_free_bytes": 8000,
+            "total_ms": 0.001,
+            "gpu_search_ms": 0.001,
+        },
+        {
+            "algorithm": "cagra",
+            "dtype": "float16",
+            "route_reason": "native_filter_threshold",
+            "filter_kind": "path",
+            "memory_free_bytes": 6000,
+            "total_ms": 0.002,
+            "native_search_ms": 0.002,
+        },
+    ] * 100
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(telemetry.record_cuvs_search, samples))
+
+    cuvs = telemetry.finish().summary["vector"]["cuvs"]
+
+    assert cuvs["searches"] == 200
+    assert cuvs["algorithms"] == {"brute_force": 100, "cagra": 100}
+    assert cuvs["dtypes"] == {"float16": 100, "float32": 100}
+    assert cuvs["routes"] == {"cuvs": 100, "native_filter_threshold": 100}
+    assert cuvs["filter_kinds"] == {"none": 100, "path": 100}
+    assert cuvs["memory"]["free_bytes_min"] == 6000
+    assert cuvs["timings_ms"]["total"] == {"sum": 0.3, "max": 0.002}
+
+
+def test_cuvs_telemetry_bounds_dimensions_and_prunes_unobserved_values():
+    telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
+    telemetry.record_cuvs_search(
+        {
+            "algorithm": "tenant-specific-algorithm",
+            "dtype": "tenant-specific-dtype",
+            "route_reason": "tenant/1234",
+            "filter_kind": "tenant-specific-filter",
+            "auto_mode": "false",
+            "filter_cache_hit": "false",
+            "native_filter_reused": "false",
+            "build_performed": "false",
+            "eligible_count": None,
+            "memory_estimated_peak_bytes": float("inf"),
+            "total_ms": float("nan"),
+            "gpu_search_ms": -1,
+        }
+    )
+
+    cuvs = telemetry.finish().summary["vector"]["cuvs"]
+
+    assert cuvs == {
+        "searches": 1,
+        "algorithms": {"other": 1},
+        "dtypes": {"other": 1},
+        "max_concurrent_gpu_searches": 1,
+        "routes": {"other": 1},
+        "filter_kinds": {"other": 1},
+    }
+
+
+def test_cuvs_telemetry_distinguishes_zero_memory_from_unobserved_memory():
+    telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
+    telemetry.record_cuvs_search(
+        {
+            "algorithm": "brute_force",
+            "dtype": "float32",
+            "route_reason": "native_memory_budget",
+            "filter_kind": "none",
+            "memory_free_bytes": 0,
+            "memory_usable_bytes": 0,
+        }
+    )
+
+    cuvs = telemetry.finish().summary["vector"]["cuvs"]
+
+    assert cuvs["memory"] == {"free_bytes_min": 0, "usable_bytes_min": 0}
+    assert "estimated_peak_bytes_max" not in cuvs["memory"]
 
 
 def test_init_tracer_forwards_headers_to_grpc_exporter(monkeypatch):
@@ -483,44 +750,53 @@ async def test_semantic_processor_binds_registered_operation_telemetry(monkeypat
     telemetry = MemoryOperationTelemetry(operation="resources.add_resource", enabled=True)
     register_telemetry(telemetry)
 
-    processor = SemanticProcessor()
+    resolver = SimpleNamespace(get_vlm=AsyncMock())
+    processor = SemanticProcessor(vlm_resolver=resolver)
 
     class FakeVikingFS:
+        async def exists(self, uri, ctx=None):
+            return True
+
         async def ls(self, uri, ctx=None):
             return []
 
-    class _FakeDagExecutor:
+    class _FakeTreeExecutor:
+        stale = False
+
         def __init__(self, **kwargs):
-            pass
+            assert kwargs["processor"]._vlm_resolver is resolver
+            assert kwargs["ctx"].account_id == "default"
 
         async def run(self, root_uri):
             assert get_current_telemetry() is telemetry
             get_current_telemetry().record_token_usage("llm", 11, 7)
 
         def get_stats(self):
-            return DagStats()
+            return SemanticTreeStats()
 
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: FakeVikingFS(),
     )
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor",
-        lambda **kwargs: _FakeDagExecutor(**kwargs),
+        "openviking.storage.queuefs.semantic_processor.SemanticTreeExecutor",
+        lambda **kwargs: _FakeTreeExecutor(**kwargs),
     )
 
     try:
-        await processor.on_dequeue(
+        outcome = await processor.on_dequeue(
             SemanticMsg(
                 uri="viking://resources/demo",
                 context_type="resource",
                 recursive=False,
+                propagate_to_parent=False,
                 telemetry_id=telemetry.telemetry_id,
             ).to_dict()
         )
     finally:
         unregister_telemetry(telemetry.telemetry_id)
 
+    assert outcome.outcome is ProcessOutcome.SUCCESS
     result = telemetry.finish()
     summary = result.summary
     assert summary["tokens"]["total"] == 18
@@ -530,16 +806,23 @@ async def test_semantic_processor_binds_registered_operation_telemetry(monkeypat
 
 @pytest.mark.asyncio
 async def test_semantic_processor_binds_metric_account_context(monkeypatch):
-    processor = SemanticProcessor()
+    resolver = SimpleNamespace(get_vlm=AsyncMock())
+    processor = SemanticProcessor(vlm_resolver=resolver)
     ran = {"value": False}
 
     class FakeVikingFS:
+        async def exists(self, uri, ctx=None):
+            return True
+
         async def ls(self, uri, ctx=None):
             return []
 
-    class _FakeDagExecutor:
+    class _FakeTreeExecutor:
+        stale = False
+
         def __init__(self, **kwargs):
-            pass
+            assert kwargs["processor"]._vlm_resolver is resolver
+            assert kwargs["ctx"].account_id == "acct-semantic"
 
         async def run(self, root_uri):
             ran["value"] = True
@@ -548,25 +831,27 @@ async def test_semantic_processor_binds_metric_account_context(monkeypatch):
             assert root_context.account_id == "acct-semantic"
 
         def get_stats(self):
-            return DagStats()
+            return SemanticTreeStats()
 
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: FakeVikingFS(),
     )
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor",
-        lambda **kwargs: _FakeDagExecutor(**kwargs),
+        "openviking.storage.queuefs.semantic_processor.SemanticTreeExecutor",
+        lambda **kwargs: _FakeTreeExecutor(**kwargs),
     )
 
-    await processor.on_dequeue(
+    outcome = await processor.on_dequeue(
         SemanticMsg(
             uri="viking://resources/demo",
             context_type="resource",
             recursive=False,
+            propagate_to_parent=False,
             account_id="acct-semantic",
         ).to_dict()
     )
+    assert outcome.outcome is ProcessOutcome.SUCCESS
     assert ran["value"] is True
 
 
@@ -576,37 +861,33 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
     register_telemetry(telemetry)
 
     class _TelemetryAwareEmbedder:
+        def prepare_embedding_input(self, content):
+            return content
+
         def embed(self, text: str, is_query: bool = False) -> EmbedResult:
             assert text == "hello"
             assert is_query is False
             get_current_telemetry().record_token_usage("embedding", 9, 0)
             return EmbedResult(dense_vector=[0.1, 0.2])
 
-    class _DummyConfig:
-        def __init__(self):
-            self.storage = SimpleNamespace(vectordb=SimpleNamespace(name="context"))
-            self.embedding = SimpleNamespace(
-                dimension=2,
-                get_embedder=lambda: _TelemetryAwareEmbedder(),
-                circuit_breaker=SimpleNamespace(
-                    failure_threshold=5,
-                    reset_timeout=300.0,
-                    max_reset_timeout=300.0,
-                ),
-            )
+        async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+            return self.embed(text, is_query=is_query)
 
     class _DummyVikingDB:
         is_closing = False
+        uses_content_field = False
 
-        async def upsert(self, _data, *, ctx=None):
+        async def account_uses_content_field(self, account_id):
+            assert account_id == "default"
+            return False
+
+        async def upsert(self, _data, *, ctx=None, options=None):
             return "rec-1"
 
-    monkeypatch.setattr(
-        "openviking_cli.utils.config.get_openviking_config",
-        lambda: _DummyConfig(),
+    provider = SimpleNamespace(bind=Mock(return_value=_TelemetryAwareEmbedder()))
+    handler = TextEmbeddingHandler(
+        _DummyVikingDB(), embedding_provider=provider,
     )
-
-    handler = TextEmbeddingHandler(_DummyVikingDB())
     payload = {
         "data": json.dumps(
             {
@@ -624,96 +905,15 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
     }
 
     try:
-        await handler.on_dequeue(payload)
+        outcome = await handler.on_dequeue(payload)
     finally:
         unregister_telemetry(telemetry.telemetry_id)
 
+    assert outcome.outcome is ProcessOutcome.SUCCESS
+    provider.bind.assert_called_once_with("default")
     result = telemetry.finish()
     summary = result.summary
     assert summary["tokens"]["embedding"] == {"total": 9}
-
-
-@pytest.mark.asyncio
-async def test_resource_service_add_resource_reports_queue_summary(monkeypatch):
-    telemetry = MemoryOperationTelemetry(operation="resources.add_resource", enabled=True)
-    queue_status = {
-        "Semantic": {
-            "processed": 2,
-            "requeue_count": 0,
-            "error_count": 1,
-            "errors": [],
-        },
-        "Embedding": {
-            "processed": 5,
-            "requeue_count": 0,
-            "error_count": 0,
-            "errors": [],
-        },
-    }
-
-    class _DummyProcessor:
-        async def process_resource(self, **kwargs):
-            return {
-                "status": "success",
-                "root_uri": "viking://resources/demo",
-            }
-
-    class _DummyRequestWaitTracker:
-        def register_request(self, telemetry_id: str) -> None:
-            del telemetry_id
-
-        async def wait_for_request(self, telemetry_id: str, timeout=None) -> None:
-            del telemetry_id, timeout
-
-        def build_queue_status(self, telemetry_id: str):
-            del telemetry_id
-            return queue_status
-
-        def cleanup(self, telemetry_id: str) -> None:
-            del telemetry_id
-
-    monkeypatch.setattr(
-        "openviking.service.resource_service.get_request_wait_tracker",
-        lambda: _DummyRequestWaitTracker(),
-        raising=False,
-    )
-
-    class _DagStats:
-        total_nodes = 3
-        done_nodes = 2
-        pending_nodes = 1
-        in_progress_nodes = 0
-
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.SemanticProcessor.consume_dag_stats",
-        classmethod(lambda cls, telemetry_id="", uri=None: _DagStats()),
-    )
-
-    service = ResourceService(
-        vikingdb=object(),
-        viking_fs=object(),
-        resource_processor=_DummyProcessor(),
-        skill_processor=object(),
-    )
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-
-    with bind_telemetry(telemetry):
-        result = await service.add_resource(path="/tmp/demo.md", ctx=ctx, wait=True)
-
-    assert result["root_uri"] == "viking://resources/demo"
-    telemetry_result = telemetry.finish()
-    summary = telemetry_result.summary
-    assert summary["queue"] == {
-        "semantic": {"processed": 2, "error_count": 1},
-        "embedding": {"processed": 5},
-    }
-    assert summary["semantic_nodes"] == {
-        "total": 3,
-        "done": 2,
-        "pending": 1,
-    }
-    assert "memory" not in summary
-    assert "errors" not in summary
 
 
 def test_telemetry_summary_includes_only_memory_group_when_memory_metrics_exist():

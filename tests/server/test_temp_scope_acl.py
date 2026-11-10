@@ -9,6 +9,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -205,6 +206,24 @@ async def test_temp_root_destructive_operations_are_blocked_for_non_root_users(v
 
     with pytest.raises(PermissionError):
         await viking_fs.delete_temp("viking://temp", ctx=alice_ctx)
+
+
+@pytest.mark.asyncio
+async def test_delete_temp_removes_repository_tasks_directory(viking_fs):
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="acct1", user_id="alice"),
+        role=Role.ROOT,
+    )
+    temp_uri = viking_fs.create_temp_uri(ctx=ctx)
+    tasks_file_uri = f"{temp_uri}/repository/src/tasks/task-registry.ts"
+
+    await viking_fs.mkdir(f"{temp_uri}/repository/src/tasks", exist_ok=True, ctx=ctx)
+    await viking_fs.write(tasks_file_uri, "task registry", ctx=ctx)
+
+    await viking_fs.delete_temp(temp_uri, ctx=ctx)
+
+    with pytest.raises(NotFoundError):
+        await viking_fs.read(tasks_file_uri, ctx=ctx)
 
 
 @pytest.mark.asyncio

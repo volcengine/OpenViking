@@ -2,7 +2,16 @@
 
 replicaCount: 1
 
+# Gateway runs inside the server under /gateway on the same port and uses the server's encryption settings.
+gateway:
+  enabled: false
+  # Optional Secret name. Entries (each optional): management-key (32+ characters) and
+  # encryption-key (the v0.5.0 gateway key, read only to migrate old data).
+  existingSecret: ""
+
 image:
+  # Prefer ghcr.io. If it is hard to reach, use the mirror:
+  #   repository: openviking-cn-beijing.cr.volces.com/volcengine/openviking
   repository: ghcr.io/volcengine/openviking
   # Use Always for the default moving tag. Pin a version and set IfNotPresent if
   # you want Kubernetes to reuse cached immutable images.
@@ -85,7 +94,8 @@ bot:
 # ${persistence.mountPath}/ov.conf.
 config:
   storage:
-    workspace: /app/.openviking/openviking_workspace
+    # Defaults to <persistence.mountPath>/openviking_workspace when empty.
+    workspace: ""
     vectordb:
       name: context
       backend: local
@@ -118,7 +128,7 @@ config:
     api_base: "https://ark.cn-beijing.volces.com/api/v3"
     api_key: ""
     provider: "volcengine"
-    model: "doubao-seed-2-0-pro-260215"
+    model: "doubao-seed-2-0-lite-260428"
     temperature: 0.0
     max_retries: 2
     thinking: false

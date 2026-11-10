@@ -1,0 +1,26 @@
+[
+  {
+    "raw": "alice",
+    "canonical": "alice"
+  },
+  {
+    "raw": "张三 Alice",
+    "canonical": "ext-5byg5LiJIEFsaWNl"
+  },
+  {
+    "raw": "李四 Alice",
+    "canonical": "ext-5p2O5ZubIEFsaWNl"
+  },
+  {
+    "raw": "José",
+    "canonical": "ext-Sm9zw6k"
+  },
+  {
+    "raw": "杨冠姝",
+    "canonical": "ext-5p2o5Yag5aed"
+  },
+  {
+    "raw": "ext-5byg5LiJIEFsaWNl",
+    "canonical": "ext-ZXh0LTVieWc1TGlKSUVGc2FXTmw"
+  }
+]

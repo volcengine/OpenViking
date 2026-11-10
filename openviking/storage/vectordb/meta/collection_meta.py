@@ -61,6 +61,7 @@ class CollectionMeta:
             Dict[str, Any]: The internal metadata structure.
         """
         inner_meta = copy.deepcopy(user_meta)
+        inner_meta.pop("Vectorize", None)
         fields = inner_meta.get("Fields", [])
         has_pk = next(
             (True for item in fields if item.get("IsPrimaryKey", False)),
@@ -129,6 +130,7 @@ class CollectionMeta:
         user_meta.pop("PrimaryKey", None)
         user_meta.pop("VectorKey", None)
         user_meta.pop("SparseVectorKey", None)
+        user_meta.pop("Vectorize", None)
         for item in user_meta.get("Fields", []):
             item.pop("FieldID", None)
         return user_meta
@@ -189,11 +191,6 @@ class CollectionMeta:
         return self.inner_meta.get("FieldsDict", {})
 
     @property
-    def vectorize(self) -> Dict[str, Any]:
-        """Get the vectorization configuration."""
-        return self.inner_meta.get("Vectorize", {})
-
-    @property
     def vector_key(self) -> str:
         """Get the vector field name."""
         return self.inner_meta.get("VectorKey", "")
@@ -202,11 +199,6 @@ class CollectionMeta:
     def sparse_vector_key(self) -> str:
         """Get the sparse vector field name."""
         return self.inner_meta.get("SparseVectorKey", "")
-
-    @property
-    def has_sparse(self) -> bool:
-        """Check if sparse vector is enabled."""
-        return "Sparse" in self.inner_meta.get("Vectorize", {})
 
     @property
     def vector_dim(self) -> int:

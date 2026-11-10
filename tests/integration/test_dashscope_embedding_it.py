@@ -78,15 +78,6 @@ def test_text_embedding_dimension(dashscope_text_embedder):
         e.close()
 
 
-def test_text_embedding_batch(dashscope_text_embedder):
-    """Batch of 3 texts returns 3 results, all correct dimension."""
-    texts = ["苹果是水果", "香蕉也是水果", "樱桃很好吃"]
-    results = dashscope_text_embedder.embed_batch(texts)
-    assert len(results) == 3
-    for r in results:
-        assert r.dense_vector and len(r.dense_vector) == DASHSCOPE_TEXT_DIM
-
-
 # ── Multimodal embedding tests ───────────────────────────────────────────────
 
 

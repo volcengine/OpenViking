@@ -18,14 +18,15 @@ that.
 
 ## Tools Exposed
 
-Seven curated tools, all auto-discovered by Open WebUI:
+Eight curated tools, all auto-discovered by Open WebUI:
 
 | Tool | OpenViking endpoint | Purpose |
 | --- | --- | --- |
 | `ov_search` | `POST /api/v1/search/find` | Semantic search across memories, resources, skills |
-| `ov_recall_memories` | `POST /api/v1/search/find` (scoped to `viking://user/memories/`) | Recall personal memories for the current query |
-| `ov_add_memory` | `POST /api/v1/content/write` to `viking://user/memories/<name>` | Persist a new memory |
-| `ov_list_memories` | `GET /api/v1/fs/ls?uri=viking://user/memories/` | Browse the memories directory |
+| `ov_rule_search` | `POST /api/v1/rules/search` | Check task-specific constraints and return complete Rules, including conditions and exceptions |
+| `ov_recall_memories` | `POST /api/v1/search/find` (scoped to `viking://~/memories/`) | Recall personal memories for the current query |
+| `ov_add_memory` | `POST /api/v1/content/write` to `viking://~/memories/<name>` | Persist a new memory |
+| `ov_list_memories` | `GET /api/v1/fs/ls?uri=viking://~/memories/` | Browse the memories directory |
 | `ov_read_resource` | `GET /api/v1/content/read` | Read full text content of any `viking://` URI |
 | `ov_add_resource` | `POST /api/v1/resources` | Ingest a remote URL or path-reachable file |
 | `ov_session_status` | `GET /api/v1/sessions/{id}` | Inspect counts and archive state of a session |
@@ -57,7 +58,7 @@ curl http://localhost:8765/openapi.json | jq '.paths | keys'
 
 1. Open WebUI → **Settings** → **Tools** → **Add Tool Server**.
 2. Paste the URL where this server is reachable, e.g. `http://localhost:8765`.
-3. Open WebUI fetches `/openapi.json`, lists all seven tools, and presents
+3. Open WebUI fetches `/openapi.json`, lists all eight tools, and presents
    them to the LLM as callable tools on every chat turn.
 
 No copy-pasting Python files, no admin-panel uploads. The same tool server is
@@ -74,7 +75,7 @@ All configuration is via environment variables:
 | `OV_ACCOUNT` | `default` | Tenant — sent as `X-OpenViking-Account` |
 | `OV_USER` | `default` | User — sent as `X-OpenViking-User` |
 | `OV_AGENT` | `default` | Actor peer ID — sent as `X-OpenViking-Actor-Peer` |
-| `OV_BIND` | `0.0.0.0:8765` | Host:port the tool server binds to |
+| `OV_BIND` | `0.0.0.0:8765` | Host:port the tool server binds to; bracket IPv6 addresses, e.g. `[::1]:8765` |
 | `OV_TIMEOUT` | `30` | HTTP timeout in seconds when calling OpenViking |
 
 There is no config file. This is intentional — make the deployment unit one
@@ -88,17 +89,17 @@ and returns `{hits: [{uri, score, snippet?}], raw}`. Use this when you want to
 search across memories, resources, and skills together.
 
 ### `ov_recall_memories`
-Same as `ov_search` but `target_uri` is forced to `viking://user/memories/`,
+Same as `ov_search` but `target_uri` is forced to `viking://~/memories/`,
 so only personal memories are searched. Use this in chat to ask "what do you
 remember about me re: X?".
 
 ### `ov_add_memory`
 Persists a memory. Takes `{name, content, mode?, wait?}` and writes
-`viking://user/memories/<name>` via OpenViking's content write API. `mode` is
+`viking://~/memories/<name>` via OpenViking's content write API. `mode` is
 one of `replace | append | create`.
 
 ### `ov_list_memories`
-Lists entries directly under `viking://user/memories/`. Takes
+Lists entries directly under `viking://~/memories/`. Takes
 `{recursive?, limit?}`.
 
 ### `ov_read_resource`
@@ -112,6 +113,11 @@ the OV server validates the source.
 ### `ov_session_status`
 Returns session metadata for a given session ID — message counts, archive
 state, pending tokens. Takes `{session_id}`.
+
+The ID must be a non-empty single path segment. Standalone `.` / `..`,
+`/`, `\`, `?`, `#`, `%`, and ASCII control characters are rejected with
+HTTP 422 before contacting OpenViking. Dots within an ID and Unicode IDs
+remain supported.
 
 ## Tests
 
@@ -173,9 +179,9 @@ Open WebUI 支持两种工具集成方式：把 Python "Functions" 粘贴进管�
 或对接外部 OpenAPI 工具服务器（自动从 `/openapi.json` 发现工具）。
 本插件实现第二种方式——纯 HTTP 转发，不重复实现任何业务逻辑。
 
-### 暴露的 7 个工具
+### 暴露的 8 个工具
 
-`ov_search`、`ov_recall_memories`、`ov_add_memory`、`ov_list_memories`、
+`ov_search`、`ov_rule_search`、`ov_recall_memories`、`ov_add_memory`、`ov_list_memories`、
 `ov_read_resource`、`ov_add_resource`、`ov_session_status`。详见上方表格。
 
 ### 快速开始
@@ -192,7 +198,11 @@ OV_API_KEY=your-key python -m openviking_openwebui
 
 进入 Open WebUI 的 **设置 → 工具 → 添加工具服务器**，粘贴
 `http://localhost:8765`。Open WebUI 会自动读取 `/openapi.json`
-并把全部 7 个工具暴露给模型。
+并把全部 8 个工具暴露给模型。
+
+`ov_rule_search` 接收 `task_context` 与可选的 `rule_probability_threshold`
+（默认 `0.65`），调用 `POST /api/v1/rules/search` 并返回完整 Rule。
+在受约束的操作或回复前调用，逐条检查适用条件、例外和正文。
 
 ### 环境变量
 

@@ -6,6 +6,9 @@ version: "3.8"
 #   .env example for local-only (leave unset or empty):
 #     # no .env needed — just `docker compose up -d`
 #
+#   .env example for a custom OpenViking port:
+#     OPENVIKING_SERVER_PORT=2000
+#
 #   .env example for public HTTPS:
 #     OPENVIKING_PUBLIC_BASE_URL=https://ov.your-domain.com
 #     OV_ACME_EMAIL=admin@your-domain.com
@@ -14,18 +17,26 @@ version: "3.8"
 
 services:
   openviking:
+    # Prefer ghcr.io. If it is hard to reach, use the mirror:
+    #   image: openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest
     image: ghcr.io/volcengine/openviking:latest
     container_name: openviking
     # Direct access (optional — caddy:1934 is the recommended single entry
     # point). Comment this out once Caddy is your only ingress.
     ports:
-      - "1933:1933"
+      - "${OPENVIKING_SERVER_PORT:-1933}:${OPENVIKING_SERVER_PORT:-1933}"
     volumes:
       - ~/.openviking:/app/.openviking
     environment:
+      # Set OPENVIKING_GATEWAY_ENABLED=true in .env to run the gateway on this port.
+      OPENVIKING_GATEWAY_ENABLED: ${OPENVIKING_GATEWAY_ENABLED:-}
+      OPENVIKING_GATEWAY_MANAGEMENT_KEY: ${OPENVIKING_GATEWAY_MANAGEMENT_KEY:-}
+      # Only read once, to migrate data stored by the v0.5.0 gateway.
+      OPENVIKING_GATEWAY_ENCRYPTION_KEY: ${OPENVIKING_GATEWAY_ENCRYPTION_KEY:-}
       OPENVIKING_PUBLIC_BASE_URL: ${OPENVIKING_PUBLIC_BASE_URL:-}
+      OPENVIKING_SERVER_PORT: ${OPENVIKING_SERVER_PORT:-1933}
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:1933/health || exit 1"]
+      test: ["CMD", "openviking-entrypoint", "--healthcheck"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -54,6 +65,7 @@ services:
       # - caddy_config:/config
     environment:
       OPENVIKING_PUBLIC_BASE_URL: ${OPENVIKING_PUBLIC_BASE_URL:-}
+      OPENVIKING_SERVER_PORT: ${OPENVIKING_SERVER_PORT:-1933}
       OV_ACME_EMAIL: ${OV_ACME_EMAIL:-}
     depends_on:
       - openviking

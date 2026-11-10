@@ -2,7 +2,7 @@ metadata:
   id: "compression.ov_wm_v2_update"
   name: "Working Memory v2 - Incremental Update (tool_call)"
   description: "Incrementally update an existing Working Memory by emitting per-section decisions via the `update_working_memory` tool."
-  version: "2.4.0"
+  version: "2.5.0"
   language: "en"
   category: "compression"
 
@@ -15,17 +15,26 @@ variables:
     type: "string"
     description: "New conversation content since the last update."
     required: true
+  - name: "output_language"
+    type: "string"
+    description: "Language for generated Working Memory section content"
+    required: true
   - name: "wm_section_reminders"
     type: "string"
     description: "Dynamic section-size warnings generated from the current Working Memory."
     required: false
     default: ""
-
+  - name: "checkpoint_instructions"
+    type: "string"
+    description: "Optional instructions for checkpoint summaries produced by the same call."
+    required: false
+    default: ""
 template: |
-  You are the Working Memory maintainer for a long-running session. Your one and
-  only job is to produce a per-section decision via the `update_working_memory`
-  tool. The session will keep going for many more rounds, so information you
-  drop now is GONE — nobody else will put it back.
+  You are the Working Memory maintainer for a long-running session. Produce a
+  per-section decision via the `update_working_memory` tool{% if checkpoint_instructions %}
+  and the explicitly requested checkpoint summaries in that same tool call{% endif %}.
+  The session will keep going for many more rounds, so information you drop now
+  is GONE — nobody else will put it back.
 
   <current_wm>
   {{ latest_archive_overview }}
@@ -35,11 +44,17 @@ template: |
   {{ messages }}
   </new_content>
 
+  {% if checkpoint_instructions %}
+  {{ checkpoint_instructions }}
+  {% endif %}
+
   {% if wm_section_reminders %}
   {{ wm_section_reminders }}
   {% endif %}
 
   # RULE 0 — Produce a continuation-grade Working Memory.
+
+  Write all generated section content in {{ output_language }}. Keep the 7 canonical English section headers unchanged because the update parser relies on them.
 
   The goal is a document that lets a future assistant seamlessly continue the
   conversation. Concrete facts (names, dates, decisions, relationships, exact
@@ -47,6 +62,11 @@ template: |
   consolidated into patterns — "Tim competed in 5 swimming contests" is better
   than 5 separate entries. The test: can a new assistant answer the user's
   likely follow-up questions from this WM alone?
+
+  <new_content> is grouped into <turn created_at="YYYY-MM-DD"> blocks. Interpret
+  relative time expressions such as "today", "yesterday", and "last week" using
+  the created_at of the turn that contains that statement. For temporal facts,
+  record the event date, not the compression/update date.
 
   Before you choose an op for a section, mentally list the CONCRETE FACTS it
   currently holds:
@@ -193,7 +213,12 @@ template: |
      URL lists instead of preserving each raw URL.
   - Do not fabricate information not grounded in <new_content> or <current_wm>.
   - You MUST call `update_working_memory` exactly once. No freeform text
-     outside the tool call.
+    outside the tool call.
+  {% if checkpoint_instructions %}
+  - The same tool call MUST also include `checkpoint_summaries` exactly as
+    requested. Do not add message IDs, archive IDs, token budgets, or storage
+    metadata; the server owns that mapping.
+  {% endif %}
 
 llm_config:
   temperature: 0.0

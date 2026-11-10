@@ -7,9 +7,26 @@
 use async_trait::async_trait;
 use regex::Regex;
 use std::any::Any;
+use std::cmp::Ordering;
+use std::path::{Component, Path};
 
 use super::errors::{Error, Result};
-use super::types::{FileInfo, GrepResult, TreeEntry, WriteFlag};
+use super::glob::{compare_rel_paths, decode_offset_token, encode_offset_token, PreparedGlob};
+use super::types::{
+    FileInfo, GlobEntry, GlobPage, GrepMatch, GrepOptions, GrepResult, ListSortBy, SortOrder,
+    TreeEntry, WriteFlag,
+};
+
+/// Reject virtual paths that can escape a mounted backend lexically.
+pub(crate) fn validate_virtual_path(path: &str) -> Result<()> {
+    if Path::new(path)
+        .components()
+        .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
+    {
+        return Err(Error::invalid_path(path));
+    }
+    Ok(())
+}
 
 /// Normalize a path for prefix comparisons.
 ///
@@ -21,6 +38,86 @@ pub(crate) fn normalize_prefix_path(path: &str) -> String {
     } else {
         path.trim_end_matches('/').to_string()
     }
+}
+
+/// Compare listing names case-insensitively, with the original name as tie-breaker.
+pub(crate) fn compare_listing_names(a: &str, b: &str) -> Ordering {
+    a.to_lowercase()
+        .cmp(&b.to_lowercase())
+        .then_with(|| a.cmp(b))
+}
+
+/// Sort listing entries with directories first, then case-insensitive name.
+pub(crate) fn sort_directory_entries(entries: &mut [FileInfo]) {
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| compare_listing_names(&a.name, &b.name))
+    });
+}
+
+/// Sort entries by `sort_by` and `sort_order`, keeping directories before files.
+///
+/// Returns through the mutable `entries` slice.
+pub(crate) fn sort_directory_entries_by(
+    entries: &mut [FileInfo],
+    sort_by: Option<ListSortBy>,
+    sort_order: Option<SortOrder>,
+) {
+    let Some(sort_by) = sort_by else {
+        return;
+    };
+    let descending = matches!(sort_order, Some(SortOrder::Desc));
+    entries.sort_by(|a, b| {
+        let group_order = b.is_dir.cmp(&a.is_dir);
+        if group_order != Ordering::Equal {
+            return group_order;
+        }
+        match sort_by {
+            ListSortBy::Name => {
+                let order = compare_listing_names(&a.name, &b.name);
+                if descending {
+                    order.reverse()
+                } else {
+                    order
+                }
+            }
+            ListSortBy::Mtime => {
+                let order = a.mod_time.cmp(&b.mod_time);
+                let order = if descending { order.reverse() } else { order };
+                order.then_with(|| compare_listing_names(&a.name, &b.name))
+            }
+        }
+    });
+}
+
+/// Consume `entries` and return the range selected by `offset` and `limit`.
+pub(crate) fn paginate_entries<T>(
+    entries: Vec<T>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Vec<T> {
+    entries
+        .into_iter()
+        .skip(offset.unwrap_or(0))
+        .take(limit.unwrap_or(usize::MAX))
+        .collect()
+}
+
+/// Apply the requested sorting and pagination options and return the selected entries.
+pub(crate) fn apply_read_dir_options(
+    mut entries: Vec<FileInfo>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    sort_by: Option<ListSortBy>,
+    sort_order: Option<SortOrder>,
+) -> Vec<FileInfo> {
+    if sort_by.is_some() {
+        sort_directory_entries_by(&mut entries, sort_by, sort_order);
+    } else {
+        sort_directory_entries(&mut entries);
+    }
+    paginate_entries(entries, offset, limit)
 }
 
 /// Check whether `path` is under `exclude_path` (including itself).
@@ -167,10 +264,60 @@ pub trait FileSystem: Send + Sync + Any {
     /// * `Error::IsADirectory` - If the path points to a directory
     async fn write(&self, path: &str, data: &[u8], offset: u64, flags: WriteFlag) -> Result<u64>;
 
+    /// Replace a file only when its full current content equals `expected`.
+    ///
+    /// # Arguments
+    /// * `path` - The path of the file to replace
+    /// * `expected` - Exact current file content required for the replacement
+    /// * `new_data` - New full file content
+    ///
+    /// # Returns
+    /// `true` when replaced, `false` when the file is missing or no longer matches.
+    ///
+    /// # Errors
+    /// Returns `Error::InvalidOperation` when the backend cannot provide a native
+    /// compare-and-write operation.
+    async fn compare_and_write(
+        &self,
+        path: &str,
+        expected: &[u8],
+        new_data: &[u8],
+    ) -> Result<bool> {
+        let _ = (expected, new_data);
+        Err(Error::invalid_operation(format!(
+            "compare_and_write is not supported: {}",
+            path
+        )))
+    }
+
+    /// Remove a file only when its full current content equals `expected`.
+    ///
+    /// # Arguments
+    /// * `path` - The path of the file to remove
+    /// * `expected` - Exact current file content required for removal
+    ///
+    /// # Returns
+    /// `true` when removed, `false` when the file is missing or no longer matches.
+    ///
+    /// # Errors
+    /// Returns `Error::InvalidOperation` when the backend cannot provide a native
+    /// compare-and-remove operation.
+    async fn compare_and_remove(&self, path: &str, expected: &[u8]) -> Result<bool> {
+        let _ = expected;
+        Err(Error::invalid_operation(format!(
+            "compare_and_remove is not supported: {}",
+            path
+        )))
+    }
+
     /// List directory contents
     ///
     /// # Arguments
     /// * `path` - The path of the directory to list
+    /// * `offset` - Number of sorted entries to skip
+    /// * `limit` - Maximum number of entries to return
+    /// * `sort_by` - Optional field used to sort entries
+    /// * `sort_order` - Optional sort direction
     ///
     /// # Returns
     /// A vector of FileInfo for each entry in the directory
@@ -178,7 +325,25 @@ pub trait FileSystem: Send + Sync + Any {
     /// # Errors
     /// * `Error::NotFound` - If the directory doesn't exist
     /// * `Error::NotADirectory` - If the path is not a directory
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>>;
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
+    ) -> Result<Vec<FileInfo>>;
+
+    /// List directory contents without public internal-name filtering.
+    ///
+    /// # Arguments
+    /// * `path` - The directory path to list
+    ///
+    /// # Returns
+    /// Raw directory entries visible to filesystem internals.
+    async fn read_internal_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+        self.read_dir(path, None, None, None, None).await
+    }
 
     /// Get file or directory metadata
     ///
@@ -263,11 +428,7 @@ pub trait FileSystem: Send + Sync + Any {
     /// # Arguments
     /// * `path` - The path to search (file or directory)
     /// * `pattern` - The regular expression pattern to search for
-    /// * `recursive` - Whether to search recursively in subdirectories
-    /// * `case_insensitive` - Whether to perform case-insensitive matching
-    /// * `node_limit` - Maximum number of matches to return (None means no limit)
-    /// * `exclude_path` - Optional path prefix to exclude from search
-    /// * `level_limit` - Optional maximum depth relative to query root
+    /// * `options` - Search behavior and result limits
     ///
     /// # Returns
     /// A GrepResult containing all matches found
@@ -279,26 +440,23 @@ pub trait FileSystem: Send + Sync + Any {
         &self,
         path: &str,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
-        let re = compile_grep_regex(pattern, case_insensitive)?;
+        let re = compile_grep_regex(pattern, options.case_insensitive)?;
 
         let mut result = GrepResult::new();
         let normalized_path = normalize_prefix_path(path);
-        let normalized_exclude = exclude_path.map(normalize_prefix_path);
+        let normalized_exclude = options.exclude_path.map(normalize_prefix_path);
+        let normalized_options = GrepOptions {
+            exclude_path: normalized_exclude.as_deref(),
+            ..options
+        };
 
         self.grep_internal(
             normalized_path.as_str(),
             normalized_path.as_str(),
             &re,
-            recursive,
-            node_limit,
-            normalized_exclude.as_deref(),
-            level_limit,
+            normalized_options,
             &mut result,
         )
         .await?;
@@ -312,17 +470,17 @@ pub trait FileSystem: Send + Sync + Any {
         base_path: &str,
         current_path: &str,
         re: &Regex,
-        recursive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
         result: &mut GrepResult,
     ) -> Result<()> {
-        if node_limit.is_some_and(|limit| result.count >= limit) {
+        if options
+            .node_limit
+            .is_some_and(|limit| result.count >= limit)
+        {
             return Ok(());
         }
 
-        if let Some(exclude) = exclude_path {
+        if let Some(exclude) = options.exclude_path {
             if is_excluded_path(current_path, exclude) {
                 return Ok(());
             }
@@ -331,11 +489,11 @@ pub trait FileSystem: Send + Sync + Any {
         let stat = self.stat(current_path).await?;
 
         if stat.is_dir {
-            if !recursive && current_path != base_path {
+            if !options.recursive && current_path != base_path {
                 return Ok(());
             }
 
-            if let Some(limit) = level_limit {
+            if let Some(limit) = options.level_limit {
                 let rel = relative_match_file(base_path, current_path);
                 let depth = relative_depth(&rel);
                 // Directories at depth >= limit cannot contain files within the limit.
@@ -344,10 +502,13 @@ pub trait FileSystem: Send + Sync + Any {
                 }
             }
 
-            let entries = self.read_dir(current_path).await?;
+            let entries = self.read_dir(current_path, None, None, None, None).await?;
 
             for entry in entries {
-                if node_limit.is_some_and(|limit| result.count >= limit) {
+                if options
+                    .node_limit
+                    .is_some_and(|limit| result.count >= limit)
+                {
                     break;
                 }
 
@@ -357,20 +518,11 @@ pub trait FileSystem: Send + Sync + Any {
                     format!("{}/{}", current_path, entry.name)
                 };
 
-                self.grep_internal(
-                    base_path,
-                    &entry_path,
-                    re,
-                    recursive,
-                    node_limit,
-                    exclude_path,
-                    level_limit,
-                    result,
-                )
-                .await?;
+                self.grep_internal(base_path, &entry_path, re, options, result)
+                    .await?;
             }
         } else {
-            if let Some(limit) = level_limit {
+            if let Some(limit) = options.level_limit {
                 let rel = relative_match_file(base_path, current_path);
                 let depth = relative_depth(&rel);
                 if depth > limit {
@@ -378,7 +530,7 @@ pub trait FileSystem: Send + Sync + Any {
                 }
             }
 
-            self.grep_file(base_path, current_path, re, node_limit, result)
+            self.grep_file(base_path, current_path, re, options, result)
                 .await?;
         }
 
@@ -391,26 +543,39 @@ pub trait FileSystem: Send + Sync + Any {
         base_path: &str,
         path: &str,
         re: &Regex,
-        node_limit: Option<usize>,
+        options: GrepOptions<'_>,
         result: &mut GrepResult,
     ) -> Result<()> {
-        if node_limit.is_some_and(|limit| result.count >= limit) {
+        if options
+            .node_limit
+            .is_some_and(|limit| result.count >= limit)
+        {
             return Ok(());
         }
 
         let content = self.read(path, 0, 0).await?;
 
         let content_str = String::from_utf8_lossy(&content);
-
         let rel_file = relative_match_file(base_path, path);
+        let lines: Vec<_> = content_str.lines().collect();
 
-        for (line_num, line) in content_str.lines().enumerate() {
-            if node_limit.is_some_and(|limit| result.count >= limit) {
+        for (line_index, line) in lines.iter().enumerate() {
+            if options
+                .node_limit
+                .is_some_and(|limit| result.count >= limit)
+            {
                 break;
             }
 
             if re.is_match(line) {
-                result.add_match(rel_file.clone(), (line_num + 1) as u64, line.to_string());
+                result.matches.push(GrepMatch::from_lines(
+                    rel_file.clone(),
+                    &lines,
+                    line_index,
+                    options.before_context,
+                    options.after_context,
+                ));
+                result.count += 1;
             }
         }
 
@@ -427,6 +592,10 @@ pub trait FileSystem: Send + Sync + Any {
     /// * `show_hidden` - Whether to include hidden files (names starting with `.`)
     /// * `node_limit` - Maximum number of nodes to return (None means no limit)
     /// * `level_limit` - Maximum depth relative to query root (None means no limit)
+    /// * `offset` - Number of flattened DFS entries to skip
+    /// * `sort_by` - Optional sibling sort field
+    /// * `sort_order` - Optional sibling sort direction
+    /// * `directories_only` - Whether to return only directory entries
     ///
     /// # Returns
     /// A flat `Vec<TreeEntry>` in DFS order (directories before their children).
@@ -436,21 +605,97 @@ pub trait FileSystem: Send + Sync + Any {
         show_hidden: bool,
         node_limit: Option<usize>,
         level_limit: Option<usize>,
+        offset: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
+        directories_only: bool,
     ) -> Result<Vec<TreeEntry>> {
         let normalized_path = normalize_prefix_path(path);
         let mut result = Vec::new();
+        let traversal_limit = node_limit.map(|limit| offset.unwrap_or(0).saturating_add(limit));
 
         self.tree_directory_internal(
             normalized_path.as_str(),
             normalized_path.as_str(),
             show_hidden,
-            node_limit,
+            traversal_limit,
             level_limit,
+            sort_by,
+            sort_order,
+            directories_only,
             &mut result,
         )
         .await?;
 
-        Ok(result)
+        Ok(paginate_entries(result, offset, node_limit))
+    }
+
+    /// Return one page of flat glob results under `path`.
+    ///
+    /// The default implementation preserves the current Python behavior by
+    /// reusing `tree_directory()` and matching against the returned `rel_path`
+    /// values, then slicing matches with an opaque continuation token.
+    async fn glob_directory(
+        &self,
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        let matcher = PreparedGlob::new(pattern)?;
+        if matches!(page_size, Some(0)) {
+            return Err(Error::invalid_operation("page_size must be positive"));
+        }
+
+        let entries = self
+            .tree_directory(
+                path,
+                show_hidden,
+                None,
+                level_limit,
+                None,
+                None,
+                None,
+                false,
+            )
+            .await?;
+
+        let mut matched = Vec::new();
+        for entry in entries {
+            if matcher.is_match(&entry.rel_path) {
+                matched.push(GlobEntry {
+                    path: entry.path,
+                    rel_path: entry.rel_path,
+                    name: entry.info.name,
+                    is_dir: entry.info.is_dir,
+                });
+            }
+        }
+        matched.sort_by(|left, right| compare_rel_paths(&left.rel_path, &right.rel_path));
+
+        let start = decode_offset_token(
+            continuation_token.as_deref(),
+            path,
+            pattern,
+            show_hidden,
+            level_limit,
+        )?;
+        if start > matched.len() {
+            return Err(Error::invalid_operation("continuation token out of range"));
+        }
+        let end = page_size
+            .map(|limit| start.saturating_add(limit))
+            .unwrap_or(matched.len())
+            .min(matched.len());
+        let next_token = (end < matched.len())
+            .then(|| encode_offset_token(end, path, pattern, show_hidden, level_limit));
+
+        Ok(GlobPage {
+            entries: matched[start..end].to_vec(),
+            next_token,
+        })
     }
 
     /// Internal recursive helper for tree_directory.
@@ -461,6 +706,9 @@ pub trait FileSystem: Send + Sync + Any {
     /// * `show_hidden` - Whether to include hidden files
     /// * `node_limit` - Maximum number of nodes to return
     /// * `level_limit` - Maximum depth relative to base_path
+    /// * `sort_by` - Optional sibling sort field
+    /// * `sort_order` - Optional sibling sort direction
+    /// * `directories_only` - Whether to add only directory entries to the result
     /// * `result` - Accumulator for the flat result list
     async fn tree_directory_internal(
         &self,
@@ -469,6 +717,9 @@ pub trait FileSystem: Send + Sync + Any {
         show_hidden: bool,
         node_limit: Option<usize>,
         level_limit: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
+        directories_only: bool,
         result: &mut Vec<TreeEntry>,
     ) -> Result<()> {
         if node_limit.is_some_and(|limit| result.len() >= limit) {
@@ -487,7 +738,9 @@ pub trait FileSystem: Send + Sync + Any {
             }
         }
 
-        let entries = self.read_dir(current_path).await?;
+        let mut entries = self.read_dir(current_path, None, None, None, None).await?;
+        sort_directory_entries(&mut entries);
+        sort_directory_entries_by(&mut entries, sort_by, sort_order);
 
         for entry in entries {
             if node_limit.is_some_and(|limit| result.len() >= limit) {
@@ -507,12 +760,14 @@ pub trait FileSystem: Send + Sync + Any {
 
             let rel_path = relative_match_file(base_path, &entry_path);
 
-            result.push(TreeEntry {
-                path: entry_path.clone(),
-                rel_path,
-                info: entry.clone(),
-                extra: std::collections::HashMap::new(),
-            });
+            if entry.is_dir || !directories_only {
+                result.push(TreeEntry {
+                    path: entry_path.clone(),
+                    rel_path,
+                    info: entry.clone(),
+                    extra: std::collections::HashMap::new(),
+                });
+            }
 
             if entry.is_dir {
                 self.tree_directory_internal(
@@ -521,6 +776,9 @@ pub trait FileSystem: Send + Sync + Any {
                     show_hidden,
                     node_limit,
                     level_limit,
+                    sort_by,
+                    sort_order,
+                    directories_only,
                     result,
                 )
                 .await?;
@@ -609,7 +867,14 @@ mod tests {
             Ok(_data.len() as u64)
         }
 
-        async fn read_dir(&self, _path: &str) -> Result<Vec<FileInfo>> {
+        async fn read_dir(
+            &self,
+            _path: &str,
+            _offset: Option<usize>,
+            _limit: Option<usize>,
+            _sort_by: Option<ListSortBy>,
+            _sort_order: Option<SortOrder>,
+        ) -> Result<Vec<FileInfo>> {
             Ok(vec![])
         }
 
@@ -699,12 +964,22 @@ mod tests {
             Ok(data.len() as u64)
         }
 
-        async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+        async fn read_dir(
+            &self,
+            path: &str,
+            offset: Option<usize>,
+            limit: Option<usize>,
+            sort_by: Option<ListSortBy>,
+            sort_order: Option<SortOrder>,
+        ) -> Result<Vec<FileInfo>> {
             let entries = self.dirs.get(path).cloned().unwrap_or_default();
-            Ok(entries
+            let entries = entries
                 .into_iter()
                 .map(|(name, is_dir)| TreeFS::file_info(name, is_dir))
-                .collect())
+                .collect::<Vec<_>>();
+            Ok(apply_read_dir_options(
+                entries, offset, limit, sort_by, sort_order,
+            ))
         }
 
         async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -734,13 +1009,53 @@ mod tests {
             .with_file("/root/sub/b.txt", "hello\n");
 
         let out = fs
-            .grep("/root", "hello", true, false, None, None, None)
+            .grep(
+                "/root",
+                "hello",
+                GrepOptions {
+                    recursive: true,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 
         let files: Vec<String> = out.matches.into_iter().map(|m| m.file).collect();
         assert!(files.contains(&"a.txt".to_string()));
         assert!(files.contains(&"sub/b.txt".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_default_grep_includes_bounded_context() {
+        let fs = TreeFS::default().with_file("/root/a.txt", "first\nbefore\nhit\nafter\n");
+
+        let out = fs
+            .grep(
+                "/root/a.txt",
+                "hit",
+                GrepOptions {
+                    recursive: false,
+                    before_context: 2,
+                    after_context: 2,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(out.count, 1);
+        let matched = &out.matches[0];
+        assert_eq!(matched.line, 3);
+        let before = matched.before_context.as_ref().unwrap();
+        assert_eq!(before.len(), 2);
+        assert_eq!(before[0].line, 1);
+        assert_eq!(before[0].content, "first");
+        assert_eq!(before[1].line, 2);
+        assert_eq!(before[1].content, "before");
+        let after = matched.after_context.as_ref().unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].line, 4);
+        assert_eq!(after[0].content, "after");
     }
 
     #[tokio::test]
@@ -756,11 +1071,12 @@ mod tests {
             .grep(
                 "/root",
                 "hit",
-                true,
-                false,
-                Some(1),
-                Some("/root/excluded"),
-                None,
+                GrepOptions {
+                    recursive: true,
+                    node_limit: Some(1),
+                    exclude_path: Some("/root/excluded"),
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();
@@ -778,7 +1094,16 @@ mod tests {
             .with_file("/root/deep/b.txt", "hit\n");
 
         let out = fs
-            .grep("/root", "hit", true, false, Some(1), None, Some(1))
+            .grep(
+                "/root",
+                "hit",
+                GrepOptions {
+                    recursive: true,
+                    node_limit: Some(1),
+                    level_limit: Some(1),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 
@@ -807,9 +1132,18 @@ mod tests {
         node_limit: Option<usize>,
         level_limit: Option<usize>,
     ) -> Vec<TreeEntry> {
-        fs.tree_directory("/root", show_hidden, node_limit, level_limit)
-            .await
-            .unwrap()
+        fs.tree_directory(
+            "/root",
+            show_hidden,
+            node_limit,
+            level_limit,
+            None,
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap()
     }
 
     /// Assert tree entry names in order.
@@ -840,35 +1174,76 @@ mod tests {
     async fn test_tree_single_layer_files() {
         let fs = TreeFS::default().with_dir_entries(
             "/root",
-            vec![("a.txt", false), ("b.txt", false), ("c.txt", false)],
+            vec![("c.txt", false), ("a.txt", false), ("b.txt", false)],
         );
 
         let entries = root_tree(&fs, false, None, None).await;
+        let default_page = fs
+            .read_dir("/root", Some(1), Some(1), None, None)
+            .await
+            .unwrap();
+        let page = fs
+            .read_dir(
+                "/root",
+                Some(1),
+                Some(1),
+                Some(ListSortBy::Name),
+                Some(SortOrder::Desc),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(entries.len(), 3);
         assert_tree_names(&entries, &["a.txt", "b.txt", "c.txt"]);
         assert_tree_rel_paths(&entries, &["a.txt", "b.txt", "c.txt"]);
+        assert_eq!(default_page[0].name, "b.txt");
+        assert_eq!(page[0].name, "b.txt");
+
+        let mut by_mtime = vec![
+            TreeFS::file_info("a.txt".to_string(), false),
+            TreeFS::file_info("b.txt".to_string(), false),
+            TreeFS::file_info("c.txt".to_string(), false),
+        ];
+        by_mtime[0].mod_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
+        by_mtime[1].mod_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(2);
+        by_mtime[2].mod_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(2);
+        let page = apply_read_dir_options(
+            by_mtime,
+            None,
+            Some(2),
+            Some(ListSortBy::Mtime),
+            Some(SortOrder::Desc),
+        );
+        assert_eq!(
+            page.iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b.txt", "c.txt"]
+        );
     }
 
     #[tokio::test]
     async fn test_tree_nested_dfs_order() {
         let fs = TreeFS::default()
-            .with_dir_entries("/root", vec![("a.txt", false), ("sub", true)])
-            .with_dir_entries("/root/sub", vec![("b.txt", false)]);
+            .with_dir_entries("/root", vec![("a.txt", false), ("Sub", true), ("b", true)])
+            .with_dir_entries("/root/Sub", vec![("b.txt", false)])
+            .with_dir_entries("/root/b", vec![]);
 
         let entries = root_tree(&fs, false, None, None).await;
 
-        assert_eq!(entries.len(), 3);
-        assert_tree_names(&entries, &["a.txt", "sub", "b.txt"]);
-        assert_tree_rel_paths(&entries, &["a.txt", "sub", "sub/b.txt"]);
+        assert_eq!(entries.len(), 4);
+        assert_tree_names(&entries, &["b", "Sub", "b.txt", "a.txt"]);
+        assert_tree_rel_paths(&entries, &["b", "Sub", "Sub/b.txt", "a.txt"]);
         assert_eq!(
             tree_paths(&entries),
-            vec!["/root/a.txt", "/root/sub", "/root/sub/b.txt"]
+            vec!["/root/b", "/root/Sub", "/root/Sub/b.txt", "/root/a.txt"]
         );
-        assert_eq!(entries[0].info.mode, 0o644);
-        assert!(!entries[0].info.is_dir);
+        assert_eq!(entries[0].info.mode, 0o755);
+        assert!(entries[0].info.is_dir);
         assert_eq!(entries[1].info.mode, 0o755);
         assert!(entries[1].info.is_dir);
+        assert_eq!(entries[2].info.mode, 0o644);
+        assert!(!entries[2].info.is_dir);
         assert!(entries.iter().all(|entry| entry.extra.is_empty()));
     }
 
@@ -877,18 +1252,62 @@ mod tests {
         let fs = TreeFS::default().with_dir_entries(
             "/root",
             vec![
-                ("a.txt", false),
-                ("b.txt", false),
-                ("c.txt", false),
-                ("d.txt", false),
                 ("e.txt", false),
+                ("c.txt", false),
+                ("a.txt", false),
+                ("d.txt", false),
+                ("b.txt", false),
             ],
         );
 
-        let entries = root_tree(&fs, false, Some(3), None).await;
+        let entries = fs
+            .tree_directory(
+                "/root",
+                false,
+                Some(3),
+                None,
+                Some(1),
+                Some(ListSortBy::Name),
+                Some(SortOrder::Asc),
+                false,
+            )
+            .await
+            .unwrap();
 
         assert_eq!(entries.len(), 3);
-        assert_tree_names(&entries, &["a.txt", "b.txt", "c.txt"]);
+        assert_tree_names(&entries, &["b.txt", "c.txt", "d.txt"]);
+    }
+
+    #[tokio::test]
+    async fn test_tree_directories_only_filters_before_pagination() {
+        let fs = TreeFS::default()
+            .with_dir_entries(
+                "/root",
+                vec![
+                    ("file-a.txt", false),
+                    ("dir-a", true),
+                    ("file-b.txt", false),
+                    ("dir-b", true),
+                ],
+            )
+            .with_dir_entries("/root/dir-a", vec![])
+            .with_dir_entries("/root/dir-b", vec![]);
+
+        let entries = fs
+            .tree_directory(
+                "/root",
+                false,
+                Some(1),
+                None,
+                Some(1),
+                Some(ListSortBy::Name),
+                Some(SortOrder::Asc),
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert_tree_names(&entries, &["dir-b"]);
     }
 
     #[tokio::test]
@@ -923,7 +1342,7 @@ mod tests {
         let entries = root_tree(&fs, false, None, Some(1)).await;
 
         assert_eq!(entries.len(), 2);
-        assert_tree_names(&entries, &["a.txt", "sub"]);
+        assert_tree_names(&entries, &["sub", "a.txt"]);
     }
 
     #[tokio::test]
@@ -985,11 +1404,14 @@ mod tests {
     async fn test_tree_root_path() {
         let fs = TreeFS::default().with_dir_entries("/", vec![("a.txt", false), ("sub", true)]);
 
-        let entries = fs.tree_directory("/", false, None, None).await.unwrap();
+        let entries = fs
+            .tree_directory("/", false, None, None, None, None, None, false)
+            .await
+            .unwrap();
 
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].path, "/a.txt");
-        assert_eq!(entries[0].rel_path, "a.txt");
+        assert_eq!(entries[0].path, "/sub");
+        assert_eq!(entries[0].rel_path, "sub");
     }
 
     #[tokio::test]
@@ -1001,7 +1423,10 @@ mod tests {
             .with_dir_entries("/a/b/c/d", vec![("e", true)])
             .with_dir_entries("/a/b/c/d/e", vec![("f.txt", false)]);
 
-        let entries = fs.tree_directory("/a", false, None, None).await.unwrap();
+        let entries = fs
+            .tree_directory("/a", false, None, None, None, None, None, false)
+            .await
+            .unwrap();
 
         assert_eq!(entries.len(), 5);
         assert_eq!(
@@ -1041,5 +1466,140 @@ mod tests {
         assert!(names.contains(&".hidden_dir".to_string()));
         assert!(names.contains(&"secret.txt".to_string()));
         assert!(!names.contains(&".hidden_file".to_string()));
+    }
+
+    /// Test helper that calls `glob_directory` with a fixed `/root` query root.
+    ///
+    /// Args:
+    /// - `fs`: The `TreeFS` instance under test.
+    /// - `pattern`: The glob pattern to match.
+    /// - `page_size`: The requested page size.
+    /// - `continuation_token`: The pagination token for the next page.
+    ///
+    /// Returns:
+    /// - A `GlobPage` on success. In tests this helper uses `unwrap()`, so any
+    ///   error fails the test immediately.
+    async fn root_glob(
+        fs: &TreeFS,
+        pattern: &str,
+        page_size: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> crate::core::GlobPage {
+        fs.glob_directory("/root", pattern, false, page_size, None, continuation_token)
+            .await
+            .unwrap()
+    }
+
+    /// Test helper that extracts each entry's `rel_path` from a `GlobPage`.
+    ///
+    /// Args:
+    /// - `page`: The glob page whose relative paths should be collected.
+    ///
+    /// Returns:
+    /// - A list of `rel_path` values in their original order, suitable for
+    ///   result-content and ordering assertions.
+    fn glob_rel_paths(page: &crate::core::GlobPage) -> Vec<String> {
+        page.entries
+            .iter()
+            .map(|entry| entry.rel_path.clone())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_glob_directory_matches_full_relative_path_semantics() {
+        let fs = TreeFS::default()
+            .with_dir_entries("/root", vec![("sub", true), ("top.md", false)])
+            .with_dir_entries(
+                "/root/sub",
+                vec![("nested.md", false), ("nested.txt", false)],
+            );
+
+        let page = root_glob(&fs, "**/*.md", None, None).await;
+
+        assert_eq!(glob_rel_paths(&page), vec!["sub/nested.md", "top.md"]);
+        assert!(page.next_token.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_glob_directory_anchors_multi_segment_patterns_at_root() {
+        let fs = TreeFS::default()
+            .with_dir_entries("/root", vec![("a", true), ("x", true)])
+            .with_dir_entries("/root/a", vec![("b", true)])
+            .with_dir_entries("/root/a/b", vec![("c.md", false)])
+            .with_dir_entries("/root/x", vec![("a", true)])
+            .with_dir_entries("/root/x/a", vec![("b", true)])
+            .with_dir_entries("/root/x/a/b", vec![("c.md", false)]);
+
+        let page = root_glob(&fs, "a/**/*.md", None, None).await;
+
+        assert_eq!(glob_rel_paths(&page), vec!["a/b/c.md"]);
+    }
+
+    #[tokio::test]
+    async fn test_glob_directory_paginates_with_opaque_offset_tokens() {
+        let fs = TreeFS::default().with_dir_entries(
+            "/root",
+            vec![("a.md", false), ("b.md", false), ("c.md", false)],
+        );
+
+        let first = root_glob(&fs, "*.md", Some(2), None).await;
+        assert_eq!(glob_rel_paths(&first), vec!["a.md", "b.md"]);
+        assert!(first.next_token.is_some());
+
+        let second = root_glob(&fs, "*.md", Some(2), first.next_token).await;
+        assert_eq!(glob_rel_paths(&second), vec!["c.md"]);
+        assert!(second.next_token.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_glob_directory_rejects_token_from_different_query_scope() {
+        let fs = TreeFS::default().with_dir_entries(
+            "/root",
+            vec![("a.md", false), ("b.md", false), ("c.md", false)],
+        );
+
+        let first = root_glob(&fs, "*.md", Some(2), None).await;
+        let err = fs
+            .glob_directory("/root", "*.txt", false, Some(2), None, first.next_token)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::InvalidOperation(_)));
+    }
+
+    #[tokio::test]
+    async fn test_glob_directory_empty_pattern_is_invalid() {
+        let fs = TreeFS::default().with_dir_entries("/root", vec![("a.md", false)]);
+
+        let err = fs
+            .glob_directory("/root", "", false, None, None, None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::InvalidOperation(_)));
+    }
+
+    #[tokio::test]
+    async fn test_glob_directory_empty_pattern_is_invalid_for_empty_directory() {
+        let fs = TreeFS::default().with_dir_entries("/root", vec![]);
+
+        let err = fs
+            .glob_directory("/root", "", false, None, None, None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::InvalidOperation(_)));
+    }
+
+    #[tokio::test]
+    async fn test_glob_directory_zero_page_size_is_invalid() {
+        let fs = TreeFS::default().with_dir_entries("/root", vec![("a.md", false)]);
+
+        let err = fs
+            .glob_directory("/root", "*.md", false, Some(0), None, None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::InvalidOperation(_)));
     }
 }

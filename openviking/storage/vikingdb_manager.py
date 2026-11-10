@@ -4,14 +4,21 @@
 VikingDB Manager class that extends VikingVectorIndexBackend with queue management functionality.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import Any, AsyncIterator, Dict, List, Mapping, Optional, Tuple
 
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import FilterExpr
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.embedding_queue import EmbeddingQueue
 from openviking.storage.queuefs.queue_manager import QueueManager
-from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
+from openviking.storage.viking_vector_index_backend import (
+    UpsertOptions,
+    VectorTransferResult,
+    VikingVectorIndexBackend,
+    normalize_upsert_options,
+)
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
@@ -45,9 +52,7 @@ class VikingDBManager(VikingVectorIndexBackend):
             queue_manager: QueueManager instance.
         """
         # Initialize the base VikingVectorIndexBackend without queue management
-        super().__init__(
-            config=vectordb_config,
-        )
+        super().__init__(config=vectordb_config)
 
         # Queue management specific attributes
         self._queue_manager = queue_manager
@@ -152,22 +157,6 @@ class VikingDBManager(VikingVectorIndexBackend):
             logger.error(f"Error getting embedding queue size: {e}")
             return 0
 
-    def get_embedder(self):
-        """
-        Get the embedder instance from configuration.
-
-        Returns:
-            Embedder instance or None if not configured
-        """
-        try:
-            from openviking_cli.utils.config import get_openviking_config
-
-            config = get_openviking_config()
-            return config.embedding.get_embedder()
-        except Exception as e:
-            logger.warning(f"Failed to get embedder from configuration: {e}")
-            return None
-
 
 class VikingDBManagerProxy:
     """
@@ -183,7 +172,7 @@ class VikingDBManagerProxy:
         proxy = VikingDBManagerProxy(manager, ctx)
 
         # 使用（无需传 ctx；仅在需要保留未显式传入字段时开启 partial_update）
-        await proxy.upsert(data, partial_update=True)
+        await proxy.upsert(data, options=UpsertOptions(partial_update=True))
         ```
     """
 
@@ -253,46 +242,67 @@ class VikingDBManagerProxy:
     async def get_embedding_queue_size(self) -> int:
         return await self._manager.get_embedding_queue_size()
 
-    def get_embedder(self):
-        return self._manager.get_embedder()
-
     # =========================================================================
     # Collection Management（透传）
     # =========================================================================
 
     async def create_collection(self, name: str, schema: Dict[str, Any]) -> bool:
-        return await self._manager.create_collection(name, schema)
+        backend = await self._manager.get_account_backend(self._ctx.account_id)
+        return await backend.create_collection(name, schema)
 
     async def drop_collection(self) -> bool:
-        return await self._manager.drop_collection()
+        backend = await self._manager.get_account_backend(self._ctx.account_id)
+        return await backend.drop_collection()
 
     async def collection_exists(self) -> bool:
-        return await self._manager.collection_exists()
+        backend = await self._manager.get_account_backend(self._ctx.account_id)
+        return await backend.collection_exists()
 
     async def collection_exists_bound(self) -> bool:
-        return await self._manager.collection_exists_bound()
+        return await self.collection_exists()
 
     async def get_collection_info(self) -> Optional[Dict[str, Any]]:
-        return await self._manager.get_collection_info()
+        backend = await self._manager.get_account_backend(self._ctx.account_id)
+        return await backend.get_collection_info()
 
     async def get_collection_meta(self) -> Optional[Dict[str, Any]]:
-        return await self._manager.get_collection_meta()
+        return await self._manager.get_collection_meta(ctx=self._ctx)
 
     async def update_collection_description(self, description: str) -> bool:
-        return await self._manager.update_collection_description(description)
+        backend = await self._manager.get_account_backend(self._ctx.account_id)
+        return await backend.update_collection_description(description)
 
     # =========================================================================
     # 数据操作 API（自动携带 ctx）
     # =========================================================================
 
-    async def upsert(self, data: Dict[str, Any], partial_update: bool = False):
+    async def upsert(
+        self,
+        data: Dict[str, Any],
+        options: UpsertOptions | Mapping[str, Any] | None = None,
+    ):
         """Bound write entrypoint.
 
-        ``partial_update=False`` keeps the legacy full-record upsert semantics.
-        ``partial_update=True`` reads the current record first and preserves
+        ``options.partial_update=False`` keeps the legacy full-record upsert semantics.
+        ``options.partial_update=True`` reads the current record first and preserves
         fields that are omitted from ``data`` before writing.
         """
-        return await self._manager.upsert(data, ctx=self._ctx, partial_update=partial_update)
+        options = normalize_upsert_options(options)
+        return await self._manager.upsert(
+            data,
+            ctx=self._ctx,
+            options=options,
+        )
+
+    async def upsert_many(self, data_list: List[Dict[str, Any]]) -> List[str]:
+        """Bulk full-record upsert with the proxy's bound request context."""
+        return await self._manager.upsert_many(data_list, ctx=self._ctx)
+
+    @asynccontextmanager
+    async def bulk_ingest(self) -> AsyncIterator[None]:
+        """Bind the proxy context to a bulk-ingest maintenance scope."""
+        async with self._manager.bulk_ingest(ctx=self._ctx):
+            yield
 
     async def get(self, ids: List[str]) -> List[Dict[str, Any]]:
         return await self._manager.get(ids, ctx=self._ctx)
@@ -395,16 +405,19 @@ class VikingDBManagerProxy:
         return await self._manager.clear(ctx=self._ctx)
 
     async def optimize(self) -> bool:
-        return await self._manager.optimize()
+        backend = await self._manager.get_account_backend(self._ctx.account_id)
+        return await backend.optimize()
 
     async def close(self) -> None:
         return await self._manager.close()
 
     async def health_check(self) -> bool:
-        return await self._manager.health_check()
+        backend = await self._manager.get_account_backend(self._ctx.account_id)
+        return await backend.health_check()
 
     async def get_stats(self) -> Dict[str, Any]:
-        return await self._manager.get_stats()
+        backend = await self._manager.get_account_backend(self._ctx.account_id)
+        return await backend.get_stats()
 
     # =========================================================================
     # Tenant-Aware 方法（自动携带 ctx）
@@ -420,11 +433,39 @@ class VikingDBManagerProxy:
         level: Optional[List[int]] = None,
         limit: int = 10,
         offset: int = 0,
+        events_time_decay_protection: Optional[str] = None,
+        request_now: Optional[datetime] = None,
     ) -> List[Dict[str, Any]]:
-        return await self._manager.search_in_tenant(
+        kwargs: Dict[str, Any] = {
+            "query_vector": query_vector,
+            "sparse_query_vector": sparse_query_vector,
+            "context_type": context_type,
+            "target_directories": target_directories,
+            "extra_filter": extra_filter,
+            "level": level,
+            "limit": limit,
+            "offset": offset,
+        }
+        if events_time_decay_protection is not None:
+            kwargs.update(
+                events_time_decay_protection=events_time_decay_protection,
+                request_now=request_now,
+            )
+        return await self._manager.search_in_tenant(self._ctx, **kwargs)
+
+    async def search_by_keywords_in_tenant(
+        self,
+        query: str,
+        context_type: Optional[str] = None,
+        target_directories: Optional[List[str]] = None,
+        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        level: Optional[List[int]] = None,
+        limit: int = 10,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        return await self._manager.search_by_keywords_in_tenant(
             self._ctx,
-            query_vector=query_vector,
-            sparse_query_vector=sparse_query_vector,
+            query=query,
             context_type=context_type,
             target_directories=target_directories,
             extra_filter=extra_filter,
@@ -433,25 +474,23 @@ class VikingDBManagerProxy:
             offset=offset,
         )
 
-    async def search_children_in_tenant(
+    async def filter_in_tenant(
         self,
-        parent_uri: str,
-        query_vector: Optional[List[float]],
-        sparse_query_vector: Optional[Dict[str, float]] = None,
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        level: Optional[List[int]] = None,
         limit: int = 10,
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
-        return await self._manager.search_children_in_tenant(
+        return await self._manager.filter_in_tenant(
             self._ctx,
-            parent_uri=parent_uri,
-            query_vector=query_vector,
-            sparse_query_vector=sparse_query_vector,
             context_type=context_type,
             target_directories=target_directories,
             extra_filter=extra_filter,
+            level=level,
             limit=limit,
+            offset=offset,
         )
 
     async def get_context_by_uri(
@@ -477,16 +516,28 @@ class VikingDBManagerProxy:
     async def delete_uris(self, uris: List[str]) -> None:
         return await self._manager.delete_uris(self._ctx, uris)
 
-    async def update_uri_mapping(
+    async def copy_uri_mapping(
         self,
-        uri: str,
-        new_uri: str,
-    ) -> bool:
-        return await self._manager.update_uri_mapping(
+        source_uri: str,
+        target_uri: str,
+        recursive: bool = False,
+    ) -> VectorTransferResult:
+        return await self._manager.copy_uri_mapping(
             self._ctx,
-            uri=uri,
-            new_uri=new_uri,
+            source_uri=source_uri,
+            target_uri=target_uri,
+            recursive=recursive,
         )
 
-    async def increment_active_count(self, uris: List[str]) -> int:
-        return await self._manager.increment_active_count(self._ctx, uris)
+    async def update_uri_mapping(
+        self,
+        source_uri: str,
+        target_uri: str,
+        recursive: bool = False,
+    ) -> VectorTransferResult:
+        return await self._manager.update_uri_mapping(
+            self._ctx,
+            source_uri=source_uri,
+            target_uri=target_uri,
+            recursive=recursive,
+        )

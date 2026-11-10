@@ -1,226 +1,243 @@
-# Quick Start
+<a id="import-and-retrieve-your-first-document"></a>
 
-Get started with OpenViking in 5 minutes.
+# Quickstart
+
+To answer questions about your project, an AI agent first needs to find relevant material and read the source. OpenViking is a context database for agents: it stores and retrieves that material so the agent can ground its answers in your sources.
+
+In this walkthrough, you will import fictional Lighthouse project notes, ask an agent about feedback collection, and open its citations to check the answer. Choose Volcengine's cloud service or run OpenViking locally. Both paths take you through **import → retrieve and read → generate an answer → verify its sources**.
 
 ## Prerequisites
 
-Before using OpenViking, ensure your environment meets the following requirements:
+Choose where to run OpenViking, then prepare the corresponding tools:
 
-- **Python Version**: 3.10 or higher
-- **Operating System**: Linux, macOS, Windows
-- **Network Connection**: Stable network connection required (for downloading dependencies and accessing model services)
+| Option | When to choose it | What to prepare |
+| --- | --- | --- |
+| **Volcengine cloud service** | Use a managed service and ask questions through an existing agent | Node.js/npm, a Volcengine account, and an agent that can run terminal commands on your machine |
+| **Local service** | Run OpenViking on your computer with its built-in agent, VikingBot | Node.js/npm, uv, Python, and model credentials |
 
-## Installation & Startup
+### Install Node.js
 
-OpenViking can be installed via a Python Package to be used as a local library, or you can quickly launch it as an independent service using Docker.
+Both paths use the `ov` CLI to work with your sources. Open the [Node.js download page](https://nodejs.org/en/download), select an **LTS** release for your operating system, and follow its installer or command instructions. npm is included with Node.js.
 
-### Option 1: Install via pip (As a local library)
+Reopen your terminal after installation and confirm that both commands print a version:
 
 ```bash
-pip install openviking --upgrade --force-reinstall
+node --version
+npm --version
 ```
 
-### Option 2: Start via Docker (As an independent service)
+For the cloud service, continue to [Set up the service](#set-up-the-service).
 
-If you prefer to run OpenViking as a standalone service, Docker is recommended.
+### Prepare the local runtime
 
-1. **Prepare Configuration Directory**
-   Create the OpenViking directory on your host and prepare the `ov.conf` configuration file (see the "Configuration" section below for details). All persistent state — config and workspace data — lives under this single directory:
-   ```bash
-   mkdir -p ~/.openviking
-   touch ~/.openviking/ov.conf
-   ```
+The local service uses uv to install OpenViking and Python to run it. The commands below use a macOS / Linux terminal. For other systems, see the [uv installation guide](https://docs.astral.sh/uv/getting-started/installation/) and [server deployment](../guides/03-deployment.md).
 
-2. **Start with Docker Compose**
-   Create a `docker-compose.yml` file:
-   ```yaml
-   services:
-     openviking:
-       image: ghcr.io/volcengine/openviking:latest
-       container_name: openviking
-       ports:
-         - "1933:1933"
-       volumes:
-         - ~/.openviking:/app/.openviking
-       restart: unless-stopped
-   ```
-   Then run the following command in the same directory:
-   ```bash
-   docker-compose up -d
-   ```
+Install uv first:
 
-   By default, the container starts the OpenViking API server on `1933` (which also serves the Web Studio UI at `/studio`) and the bundled `vikingbot` gateway. If you need to disable `vikingbot`, add either `command: ["--without-bot"]` or `environment: ["OPENVIKING_WITH_BOT=0"]`.
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
 
-   On platforms that don't allow bind mounts, set `OPENVIKING_CONF_CONTENT` to the full config JSON to bootstrap on first start, or `docker exec` in and run `openviking-server init` after the container is up. See [Deployment Guide](../guides/03-deployment.md#when-docker--v-is-not-available) for details.
+Reopen your terminal and confirm that uv is available:
 
-> **💡 Mac Local Network Access Tip (Connection reset error):**
->
-> By default, OpenViking only listens to `127.0.0.1` for security reasons. If you are using Docker on a Mac, your host machine may not be able to access it directly via `localhost:1933`.
-> 
-> **Recommended Solution: Use socat for port forwarding (No config changes needed):**
-> Override the default startup command in your `docker-compose.yml` to use `socat` for internal port forwarding:
-> ```yaml
-> services:
->   openviking:
->     image: ghcr.io/volcengine/openviking:latest
->     ports:
->       - "1933:1934" # Map host 1933 to container 1934
->     volumes:
->       - ~/.openviking:/app/.openviking
->     command: /bin/sh -c "apt-get update && apt-get install -y socat && socat TCP-LISTEN:1934,fork,reuseaddr TCP:127.0.0.1:1933 & openviking-server"
-> ```
-> This perfectly solves the access issue for Mac host machines.
+```bash
+uv --version
+```
 
-## Model Preparation
+Then install Python 3.13 for the service:
 
-OpenViking requires the following model capabilities:
-- **VLM Model**: For image and content understanding
-- **Embedding Model**: For vectorization and semantic retrieval
+```bash
+uv python install 3.13
+```
 
-OpenViking supports multiple model services:
-- **Volcengine (Doubao Models)**: Recommended, cost-effective with good performance, free quota for new users. For purchase and activation, see: [Volcengine Purchase Guide](../guides/02-volcengine-purchase-guide.md)
-- **OpenAI Models**: Supports GPT-4V and other VLM models, plus OpenAI Embedding models
-- **OpenAI Codex**: Supports Codex as the VLM provider through ChatGPT/Codex OAuth
-- **Other Custom Model Services**: Supports model services compatible with OpenAI API format
+You can use an existing Python 3.13 installation. Other installation options are available on the [Python download page](https://www.python.org/downloads/) and in the [uv Python guide](https://docs.astral.sh/uv/guides/install-python/).
 
-## Configuration
+Prepare credentials for two models: an **embedding model** for indexing and retrieval, and a **VLM with tool-call support** for content understanding and VikingBot answers. For each, you need a model name, endpoint, and API key. Follow the [Volcengine model activation guide](../guides/02-volcengine-purchase-guide.md) to obtain these details. With Agent Plan, choose a model and endpoint supported by your plan. Importing sources and generating answers invoke models and incur charges according to your provider's pricing.
 
-### Configuration File Template
+<a id="_1-start-the-server"></a>
 
-Recommended first-time setup:
+<a id="_1-choose-a-service"></a>
+
+<a id="_1-set-up-the-service"></a>
+
+## Set up the service
+
+Complete one of the following paths, then continue to [Connect the CLI](#connect-the-cli).
+
+<a id="managed-service-on-volcengine"></a>
+
+### Volcengine cloud service
+
+The cloud service runs OpenViking and processes your sources. Your computer only needs the client tools.
+
+1. Open the [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing), sign in to Volcengine, and follow the console's activation steps. See the [service description](https://docs.volcengine.com/docs/84313/2374478) for plans and quotas.
+2. Obtain an **OpenViking API key** from the console for the CLI connection in the next step.
+3. Prepare an agent that can run terminal commands on your machine. In “Ask and verify,” it will use `ov` to retrieve cloud-hosted sources and generate an answer. See [CLI basics](05-cli-setup.md) for agent access.
+
+Once you have the API key, continue to [Connect the CLI](#connect-the-cli).
+
+<a id="self-host-a-server"></a>
+
+### Local service
+
+Install OpenViking with VikingBot to manage sources and answer questions on your machine:
+
+```bash
+uv tool install --python 3.13 "openviking[bot]" --upgrade
+```
+
+Run the setup wizard. Choose local access and enter the embedding and VLM settings you prepared. VikingBot uses this VLM configuration by default.
 
 ```bash
 openviking-server init
+```
+
+Check the model and service configuration. If the check reports an error, correct the indicated setting and run it again:
+
+```bash
 openviking-server doctor
 ```
 
-If you prefer manual setup, create `~/.openviking/ov.conf`:
-
-```json
-{
-  "embedding": {
-    "dense": {
-      "api_base" : "<api-endpoint>",
-      "api_key"  : "<your-api-key>",
-      "provider" : "<provider-type>",
-      "dimension": 1024,
-      "model"    : "<model-name>"
-    }
-  },
-  "vlm": {
-    "api_base" : "<api-endpoint>",
-    "api_key"  : "<your-api-key>",
-    "provider" : "<provider-type>",
-    "model"    : "<model-name>"
-  }
-}
-```
-
-`provider`, `model`, `api_base`, and `api_key` depend on the VLM service you choose. Some providers may use local OAuth state instead of a manually copied API key.
-
-For complete examples for each model provider, see [Configuration Guide - Examples](../guides/01-configuration.md#configuration-examples).
-
-For first-time setup, `openviking-server init` is the recommended path. It helps you pick a provider and writes a working config template for the selected setup.
-
-### Environment Variables
-
-When the config file is at the default path `~/.openviking/ov.conf`, no additional setup is needed — OpenViking loads it automatically.
-
-If the config file is at a different location, specify it via environment variable:
+Once the checks pass, start the service with VikingBot. Keep this terminal running and use another terminal for the remaining commands.
 
 ```bash
-export OPENVIKING_CONFIG_FILE=/path/to/your/ov.conf
+openviking-server --with-bot
 ```
 
-## Run Your First Example
-
-### Create Python Script
-
-Create `example.py`:
-
-```python
-import openviking as ov
-
-# Initialize OpenViking client with data directory
-client = ov.OpenViking(path="./data")
-
-try:
-    # Initialize the client
-    client.initialize()
-
-    # Add resource (supports URL, file, or directory)
-    # Local directory scans respect .gitignore by default.
-    # Wait until semantic processing completes before inspecting the resource.
-    print("Wait for semantic processing...")
-    add_result = client.add_resource(
-        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
-        wait=True,
-    )
-    root_uri = add_result['root_uri']
-
-    # Explore the resource tree structure
-    ls_result = client.ls(root_uri)
-    print(f"Directory structure:\n{ls_result}\n")
-
-    # Use glob to find markdown files
-    glob_result = client.glob(pattern="**/*.md", uri=root_uri)
-    if glob_result['matches']:
-        content = client.read(glob_result['matches'][0])
-        print(f"Content preview: {content[:200]}...\n")
-
-    # Get abstract and overview of the resource
-    abstract = client.abstract(root_uri)
-    overview = client.overview(root_uri)
-    print(f"Abstract:\n{abstract}\n\nOverview:\n{overview}\n")
-
-    # Perform semantic search
-    results = client.find("what is openviking", target_uri=root_uri)
-    print("Search results:")
-    for r in results.resources:
-        print(f"  {r.uri} (score: {r.score:.4f})")
-
-    # Close the client
-    client.close()
-
-except Exception as e:
-    print(f"Error: {e}")
-```
-
-### Run the Script
+In the new terminal, check that both the data service and agent are ready:
 
 ```bash
-python example.py
+curl -f http://127.0.0.1:1933/health
+curl -f http://127.0.0.1:1933/bot/v1/health
 ```
 
-### Expected Output
+Continue when the first response reports `healthy: true` and the Bot response reports `status: healthy`.
 
-```
-Wait for semantic processing...
+<a id="_2-install-and-connect-the-cli"></a>
 
-Directory structure:
-...
+<a id="_2-connect-the-cli"></a>
 
-Content preview: ...
+## Connect the CLI
 
-Abstract:
-...
+Install the CLI to import, retrieve, and read sources from your terminal. Skip installation if `ov` is already available.
 
-Overview:
-...
-
-Search results:
-  viking://resources/... (score: 0.8523)
-  ...
+```bash
+npm install -g @openviking/cli
 ```
 
-Congratulations! You have successfully run OpenViking.
+Set the interface language and open the connection wizard:
 
-## Server Mode
+```bash
+ov language en
+ov config
+```
 
-Want to run OpenViking as a shared service? See [Quick Start: Server Mode](03-quickstart-server.md).
+Add a connection using the settings for your chosen path, then save and activate it:
 
-## Next Steps
+| Option | Connection type | Settings |
+| --- | --- | --- |
+| Volcengine cloud service | **OpenViking Service** | Use the service address provided by the wizard and enter the API key from the console |
+| Local service | **Custom** | Set the URL to `http://127.0.0.1:1933`; leave the key empty for default local mode |
 
-- [Configuration Guide](../guides/01-configuration.md) - Detailed configuration options
-- [API Overview](../api/01-overview.md) - API reference
-- [Resource Management](../api/02-resources.md) - Resource management API
+If your local service already has authentication configured, use its User/Admin key. See [Authentication](../guides/04-authentication.md) for setup details.
+
+Check the active connection before importing:
+
+```bash
+ov health
+```
+
+<a id="_3-import-a-document"></a>
+
+<a id="_3-import-the-sample"></a>
+
+## Import the sample
+
+<a href="/quickstart/lighthouse.en.txt" download="lighthouse.en.md">Download the Lighthouse notes</a>, save them as `lighthouse.en.md`, and open your terminal in that directory. The notes describe the pilot's network constraints, feedback collection, and open questions.
+
+Import the file into a separate demo directory. `--wait` waits for processing to finish. For a repeat run, replace `lighthouse-demo` with a new directory name and use that same name in subsequent commands.
+
+```bash
+ov add-resource ./lighthouse.en.md --to viking://resources/lighthouse-demo --wait
+```
+
+Once processing succeeds, inspect the imported files:
+
+```bash
+ov tree viking://resources/lighthouse-demo
+```
+
+If waiting times out, run `ov task status <task_id>` with the returned task ID to check progress. Continue after completion. If the task fails, correct the model or connection settings indicated by the error before retrying. See [Background tasks](../api/17-tasks.md) for task states.
+
+<a id="_4-browse-and-search"></a>
+
+<a id="_4-ask-and-verify"></a>
+
+## Ask and verify
+
+### Retrieve and read a source
+
+Find the material about feedback collection:
+
+```bash
+ov find "How does the first version of Lighthouse collect feedback?" --uri viking://resources/lighthouse-demo
+```
+
+The results include URIs for matching content. Copy a source file URI, replace the placeholder below, and read the original text:
+
+```bash
+ov read "<source-file-uri>"
+```
+
+Once you can read sections such as "Pilot environment" and "Feedback collection," ask an agent to use those sources.
+
+### Generate an answer
+
+**Cloud service:** Send the following task to an agent that can run local terminal commands. It should use the CLI connection you just configured. If the agent runs on another machine or in a separate container, [connect the CLI](#connect-the-cli) in that environment first.
+
+```text
+Use the locally configured ov CLI to answer a question from project sources in OpenViking.
+Run ov health to check the connection, then run:
+ov find "How does the first version of Lighthouse collect feedback?" --uri viking://resources/lighthouse-demo
+Use ov read to open the relevant original text from the results, then answer:
+How should the first version of Lighthouse collect user feedback, and what must be prepared?
+Use only sources in that directory. Cite the full source file viking:// URI for each
+key conclusion, and identify anything the sources do not specify.
+```
+
+**Local service:** Use `ov chat` to ask the running VikingBot the same question. It will use its retrieval and reading tools:
+
+```bash
+ov chat -m "Use only the sources under viking://resources/lighthouse-demo. Run a semantic search for the question, then read the relevant original text and answer: How should the first version of Lighthouse collect user feedback, and what must be prepared? Cite the full source file viking:// URI for each key conclusion. Explicitly identify anything the sources do not specify."
+```
+
+### Check the supporting evidence
+
+Open the source files cited in the answer and compare the following facts. Wording can vary; check that each conclusion agrees with the original text.
+
+| Expected conclusion | Supporting section |
+| --- | --- |
+| Save feedback locally; the pilot administrator exports it weekly to the project owner | Feedback collection |
+| Prepare an offline installation package and a local storage directory | Pilot environment |
+| No cloud synchronization in the first version; future support is undecided | Feedback collection |
+
+If a conclusion lacks a citation, ask the agent to add it and check the source again. Then ask when the pilot ends and check that the answer identifies the date as undecided.
+
+You have now imported sources, retrieved and read them, and checked an answer against its citations. Try the same workflow with your own material next.
+
+## Troubleshooting
+
+| Symptom | Next step |
+| --- | --- |
+| `uv`, `node`, or `ov` is not found after installation | Reopen the terminal. If needed, follow the relevant installation guide to check the command path. |
+| `ov health` cannot connect | Check the active connection, service URL, and API key in `ov config`. For a local service, also check its running terminal. |
+| Bot health returns `503` | Confirm the service started with `--with-bot`; inspect the service terminal and [VikingBot logs](../guides/17-vikingbot.md). |
+| Import fails or retrieval is empty | Inspect the returned task, model availability, processing completion, and target URI. |
+| A model returns `UnsupportedModel` | Check that the model, endpoint, and plan match; see the [model activation guide](../guides/02-volcengine-purchase-guide.md). |
+| The agent cannot run `ov` | Check `ov --version` and `ov health` in the agent's terminal, then complete installation and connection setup there. |
+
+<a id="use-an-sdk"></a>
+
+## Next steps
+
+Continue to [Resource retrieval](08-resources.md) to try questions requiring multiple sources or information missing from the material. Use [Evaluation](06-evaluate.md) to record results on your own tasks.

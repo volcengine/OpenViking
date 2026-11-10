@@ -141,4 +141,6 @@ def part_from_dict(data: Dict[str, Any]) -> Part:
             tool_output_group_budget_chars=data.get("tool_output_group_budget_chars"),
         )
     else:
+        if "text" in data:
+            return TextPart(text=str(data.get("text", "") or ""))
         return TextPart(text=str(data))

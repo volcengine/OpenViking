@@ -411,7 +411,7 @@ export function extractNewTurnMessages(
             toolName,
             toolInput,
             toolOutput: output,
-            toolStatus: "completed",
+            toolStatus: msg.isError === true ? "error" : "completed",
           }],
         });
       }

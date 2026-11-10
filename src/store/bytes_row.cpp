@@ -63,6 +63,7 @@ Schema::Schema(const std::vector<FieldDef>& fields) {
         break;
       case FieldType::STRING:
       case FieldType::BINARY:
+      case FieldType::TEXT:
       case FieldType::LIST_INT64:
       case FieldType::LIST_STRING:
       case FieldType::LIST_FLOAT32:
@@ -76,6 +77,15 @@ Schema::Schema(const std::vector<FieldDef>& fields) {
     meta.offset = current_offset;
     meta.id = field.id;
     meta.default_value = field.default_value;
+    meta.legacy_data_type = field.legacy_data_type.value_or(field.data_type);
+    if (meta.legacy_data_type != meta.data_type) {
+      // STRING -> TEXT preserves the fixed-region offset layout.
+      if (meta.legacy_data_type != FieldType::STRING ||
+          meta.data_type != FieldType::TEXT) {
+        throw std::invalid_argument("Only STRING to TEXT migration is supported");
+      }
+      has_legacy_fields_ = true;
+    }
 
     field_metas_[field.name] = meta;
     field_orders_[field.id] = meta;
@@ -148,6 +158,17 @@ std::string BytesRow::serialize(const std::vector<Value>& row_data) const {
         }
         break;
       }
+      case FieldType::TEXT: {
+        if (std::holds_alternative<std::string>(val)) {
+          int len = std::get<std::string>(val).length();
+          var_infos[i] = {variable_region_offset, len};
+          variable_region_offset += UINT32_SIZE + len;
+        } else {
+          var_infos[i] = {variable_region_offset, 0};
+          variable_region_offset += UINT32_SIZE;
+        }
+        break;
+      }
       case FieldType::LIST_INT64: {
         if (std::holds_alternative<std::vector<int64_t>>(val)) {
           const auto& vec = std::get<std::vector<int64_t>>(val);
@@ -193,9 +214,14 @@ std::string BytesRow::serialize(const std::vector<Value>& row_data) const {
   }
 
   // Allocate buffer
-  std::string buffer;
-  buffer.resize(variable_region_offset);
-  char* ptr = &buffer[0];
+  // Include the version in the original allocation; offsets remain relative
+  // to the row body so legacy and current schemas share the fixed layout.
+  const size_t header_size =
+      schema_->has_legacy_fields() ? VERSIONED_ROW_HEADER.size() : 0;
+  std::string buffer(variable_region_offset + header_size, '\0');
+  if (header_size != 0)
+    std::memcpy(buffer.data(), VERSIONED_ROW_HEADER.data(), header_size);
+  char* ptr = buffer.data() + header_size;
 
   // Write header (field count)
   // Be careful with alignment if we were doing raw casting, but we use memcpy
@@ -253,6 +279,7 @@ std::string BytesRow::serialize(const std::vector<Value>& row_data) const {
       // to variable region
       case FieldType::STRING:
       case FieldType::BINARY:
+      case FieldType::TEXT:
       case FieldType::LIST_INT64:
       case FieldType::LIST_FLOAT32:
       case FieldType::LIST_STRING: {
@@ -269,7 +296,8 @@ std::string BytesRow::serialize(const std::vector<Value>& row_data) const {
           std::memcpy(var_ptr, &len, sizeof(len));
           if (len > 0)
             std::memcpy(var_ptr + sizeof(len), s.data(), len);
-        } else if (meta.data_type == FieldType::BINARY) {
+        } else if (meta.data_type == FieldType::BINARY ||
+                   meta.data_type == FieldType::TEXT) {
           const std::string& s = std::holds_alternative<std::string>(val)
                                      ? std::get<std::string>(val)
                                      : "";
@@ -319,8 +347,17 @@ std::string BytesRow::serialize(const std::vector<Value>& row_data) const {
   return buffer;
 }
 
-Value BytesRow::deserialize_field(const std::string& serialized_data,
+Value BytesRow::deserialize_field(std::string_view serialized_data,
                                   const std::string& field_name) const {
+  bool legacy = schema_->has_legacy_fields();
+  if (legacy && !serialized_data.empty() && serialized_data[0] == '\0') {
+    if (serialized_data.size() <= VERSIONED_ROW_HEADER.size() ||
+        serialized_data.substr(0, VERSIONED_ROW_HEADER.size()) != VERSIONED_ROW_HEADER) {
+      throw std::invalid_argument("Invalid or unsupported bytes_row record version");
+    }
+    serialized_data.remove_prefix(VERSIONED_ROW_HEADER.size());
+    legacy = false;
+  }
   const FieldMeta* meta_ptr = schema_->get_field_meta(field_name);
   if (!meta_ptr)
     return std::monostate{};
@@ -340,7 +377,7 @@ Value BytesRow::deserialize_field(const std::string& serialized_data,
 
   const char* field_ptr = ptr + meta.offset;
 
-  switch (meta.data_type) {
+  switch (legacy ? meta.legacy_data_type : meta.data_type) {
     case FieldType::INT64: {
       int64_t v;
       std::memcpy(&v, field_ptr, sizeof(v));
@@ -382,6 +419,26 @@ Value BytesRow::deserialize_field(const std::string& serialized_data,
       return std::string(ptr + offset + sizeof(len), len);
     }
     case FieldType::BINARY: {
+      uint32_t offset;
+      if (sizeof(offset) >
+          serialized_data.size() -
+              static_cast<size_t>(field_ptr - serialized_data.data()))
+        return std::string("");
+      std::memcpy(&offset, field_ptr, sizeof(offset));
+      if (offset >= serialized_data.size())
+        return std::string("");
+
+      uint32_t len;
+      if (offset + sizeof(len) > serialized_data.size())
+        return std::string("");
+      std::memcpy(&len, ptr + offset, sizeof(len));
+
+      if (static_cast<size_t>(offset) + sizeof(len) + len >
+          serialized_data.size())
+        return std::string("");
+      return std::string(ptr + offset + sizeof(len), len);
+    }
+    case FieldType::TEXT: {
       uint32_t offset;
       if (sizeof(offset) >
           serialized_data.size() -
@@ -492,7 +549,7 @@ Value BytesRow::deserialize_field(const std::string& serialized_data,
 }
 
 std::map<std::string, Value> BytesRow::deserialize(
-    const std::string& serialized_data) const {
+    std::string_view serialized_data) const {
   std::map<std::string, Value> result;
   const auto& order = schema_->get_field_order();
   for (const auto& meta : order) {

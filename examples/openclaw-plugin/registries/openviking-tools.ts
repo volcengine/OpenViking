@@ -1,6 +1,7 @@
 export type OpenVikingToolGroup =
   | "memory"
   | "resource_query"
+  | "rules"
   | "import"
   | "recall_trace"
   | "archive"
@@ -10,6 +11,7 @@ export type OpenVikingToolName =
   | "add_resource"
   | "add_skill"
   | "ov_search"
+  | "ov_rule_search"
   | "ov_read"
   | "ov_multi_read"
   | "ov_list"
@@ -41,6 +43,7 @@ export const OPENVIKING_TOOL_SPECS = [
   },
   { name: "add_skill", group: "import", defaultEnabled: true },
   { name: "ov_search", group: "resource_query", defaultEnabled: true },
+  { name: "ov_rule_search", group: "rules", defaultEnabled: true },
   { name: "ov_read", group: "resource_query", defaultEnabled: true },
   { name: "ov_multi_read", group: "resource_query", defaultEnabled: true },
   { name: "ov_list", group: "resource_query", defaultEnabled: true },
@@ -64,6 +67,7 @@ export const OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES = OPENVIKING_TOOL_SPECS
 const OPENVIKING_TOOL_GROUP_ORDER: readonly OpenVikingToolGroup[] = [
   "memory",
   "resource_query",
+  "rules",
   "import",
   "recall_trace",
   "archive",
@@ -73,6 +77,8 @@ const OPENVIKING_TOOL_GROUP_ORDER: readonly OpenVikingToolGroup[] = [
 export const OPENVIKING_TOOL_GROUPS: Record<string, readonly OpenVikingToolName[]> = {
   all: OPENVIKING_ALL_TOOL_NAMES,
   default: OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES,
+  // Migration alias for the removed dedicated Experience tools.
+  experience: ["ov_search", "ov_read"],
   ...Object.fromEntries(
     OPENVIKING_TOOL_GROUP_ORDER.map((group) => [
       group,

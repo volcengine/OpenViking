@@ -1,4 +1,4 @@
-import { effectivePeerId, log, makeRequest, unwrapResponse } from "./utils.mjs"
+import { effectivePeerId, log, makeRequest } from "./utils.mjs"
 
 export function createRepoContext({ config }) {
   let cachedRepos = null
@@ -14,13 +14,12 @@ export function createRepoContext({ config }) {
     }
 
     try {
-      const response = await makeRequest(config, {
+      const result = await makeRequest(config, {
         method: "GET",
         endpoint: `/api/v1/fs/ls?uri=${encodeURIComponent("viking://resources/")}&recursive=false&simple=false`,
         timeoutMs: 8000,
         actorPeerId: effectivePeerId(config),
       })
-      const result = unwrapResponse(response)
       const items = Array.isArray(result) ? result : []
       const repos = items
         .filter((item) => item?.uri?.startsWith("viking://resources/") && item.uri !== "viking://resources/")
@@ -45,11 +44,11 @@ export function createRepoContext({ config }) {
       "When the user asks about these projects or their internals, use the OpenViking tools before answering.",
       "",
       "Tool guidance:",
-      "- Use `memsearch` for semantic or conceptual repository questions.",
-      "- Use `memgrep` for exact symbols, error strings, class names, function names, and regex-like searches.",
-      "- Use `memglob` to enumerate files by pattern.",
-      "- Use `membrowse` to inspect directory structure and `memread` to read specific URIs.",
-      "- Use `memadd`, `memremove`, and `memqueue` for repository resource management when explicitly requested.",
+      "- Use the `openviking_search` MCP tool for semantic or conceptual repository questions.",
+      "- Use `openviking_grep` for exact symbols, error strings, class names, function names, and regex-like searches.",
+      "- Use `openviking_glob` to enumerate files by pattern.",
+      "- Use `openviking_list` to inspect directory structure and `openviking_read` to read specific URIs.",
+      "- Use `openviking_add_resource` and `openviking_forget` for repository resource management when explicitly requested.",
       "",
       cachedRepos,
     ].join("\n")

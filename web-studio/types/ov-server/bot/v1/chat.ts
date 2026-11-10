@@ -1,5 +1,6 @@
 export type ChatStreamEventType =
   | 'response'
+  | 'interrupt'
   | 'tool_call'
   | 'tool_result'
   | 'reasoning'
@@ -7,9 +8,18 @@ export type ChatStreamEventType =
   | 'content_delta'
   | 'reasoning_delta'
 
+export type BotChatImage = {
+  type: 'image_url'
+  image_url: {
+    url: string
+    detail?: 'auto' | 'low' | 'high'
+  }
+}
+
 export type BotChatRequest = {
   channel_id?: string
-  message: string
+  images?: BotChatImage[]
+  message?: string
   need_reply?: boolean
   session_id?: string
   stream?: boolean
@@ -23,7 +33,9 @@ export type BotChatResponse = {
   timestamp: string
 }
 
-export type BotChatStreamEvent<TEvent extends ChatStreamEventType = ChatStreamEventType> = {
+export type BotChatStreamEvent<
+  TEvent extends ChatStreamEventType = ChatStreamEventType,
+> = {
   data: unknown
   event: TEvent
   timestamp: string

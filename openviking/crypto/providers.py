@@ -53,6 +53,20 @@ PROVIDER_VAULT = 0x02
 PROVIDER_VOLCENGINE = 0x03
 
 
+def decode_inline_root_key(root_key: object) -> bytes:
+    """Decode a 32-byte root key without exposing it in validation errors."""
+    error = "encryption.local.root_key must be a 64-character hexadecimal string"
+    if not isinstance(root_key, str) or len(root_key) != 64:
+        raise ConfigError(error)
+    try:
+        decoded = bytes.fromhex(root_key)
+    except ValueError as exc:
+        raise ConfigError(error) from exc
+    if len(decoded) != 32:
+        raise ConfigError(error)
+    return decoded
+
+
 class RootKeyProvider(ABC):
     """Root Key Provider abstract base class."""
 
@@ -179,17 +193,20 @@ class BaseProvider(RootKeyProvider):
 
 
 class LocalFileProvider(BaseProvider):
-    """Local file Root Key Provider."""
+    """Local Root Key Provider backed by a file or inline configuration."""
 
-    def __init__(self, key_file: str):
+    def __init__(self, key_file: Optional[str] = None, root_key: Optional[str] = None):
         """
         Initialize LocalFileProvider.
 
         Args:
-            key_file: Root Key file path
+            key_file: Root Key file path.
+            root_key: 32-byte Root Key encoded as 64 hexadecimal characters.
         """
-        self.key_file = Path(key_file).expanduser()
-        self._root_key: Optional[bytes] = None
+        if (key_file is None) == (root_key is None):
+            raise ConfigError("exactly one of key_file or root_key must be configured")
+        self.key_file = Path(key_file).expanduser() if key_file is not None else None
+        self._root_key = decode_inline_root_key(root_key) if root_key is not None else None
 
     async def get_root_key(self) -> bytes:
         """Get Root Key."""
@@ -224,6 +241,7 @@ class LocalFileProvider(BaseProvider):
 
     async def _load_or_create_root_key(self) -> bytes:
         """Load or create Root Key."""
+        assert self.key_file is not None
         if self.key_file.exists():
             # Read existing key
             with open(self.key_file, "r") as f:
@@ -415,6 +433,8 @@ class VaultProvider(BaseProvider):
         client = await self._get_client()
         import base64
 
+        from hvac.exceptions import InvalidPath
+
         try:
             # Try to read encrypted root key from Vault kv
             if self.kv_version == 2:
@@ -423,27 +443,25 @@ class VaultProvider(BaseProvider):
                     path=self.encrypted_root_key_key,
                     mount_point=self.kv_mount_path,
                 )
-                encrypted_root_key_b64 = response["data"]["data"]["encrypted_root_key"]
             else:
                 response = await asyncio.to_thread(
                     client.secrets.kv.v1.read_secret,
                     path=self.encrypted_root_key_key,
                     mount_point=self.kv_mount_path,
                 )
-                encrypted_root_key_b64 = response["data"]["encrypted_root_key"]
-
-            encrypted_root_key = base64.b64decode(encrypted_root_key_b64)
-            self._root_key = await self._decrypt_with_vault(encrypted_root_key)
-            logger.info("Loaded existing root key from Vault")
-        except Exception:
+        except InvalidPath:
             # Generate new root key
             import secrets
 
             self._root_key = secrets.token_bytes(32)
 
-            # Encrypt and store root key in Vault kv
-            encrypted_root_key = await self._encrypt_with_vault(self._root_key)
+            # Encrypt and store root key in Vault kv. Any failure here (transit
+            # encrypt down, KV write outage) must clear the cached ephemeral key
+            # before raising: otherwise a retried get_root_key() hits the
+            # `self._root_key is not None` fast path and encrypts data with a key
+            # that was never persisted — the data-loss class this provider guards.
             try:
+                encrypted_root_key = await self._encrypt_with_vault(self._root_key)
                 if self.kv_version == 2:
                     await asyncio.to_thread(
                         client.secrets.kv.v2.create_or_update_secret,
@@ -468,10 +486,20 @@ class VaultProvider(BaseProvider):
                     )
                 logger.info("Created and stored new root key in Vault")
             except Exception as e:
+                self._root_key = None
                 raise ConfigError(
                     f"Failed to persist root key to Vault. "
                     f"Refusing to start with ephemeral key (data loss risk): {e}"
                 )
+            return self._root_key
+
+        if self.kv_version == 2:
+            encrypted_root_key_b64 = response["data"]["data"]["encrypted_root_key"]
+        else:
+            encrypted_root_key_b64 = response["data"]["encrypted_root_key"]
+        encrypted_root_key = base64.b64decode(encrypted_root_key_b64)
+        self._root_key = await self._decrypt_with_vault(encrypted_root_key)
+        logger.info("Loaded existing root key from Vault")
 
         return self._root_key
 
@@ -709,12 +737,26 @@ class VolcengineKMSProvider(BaseProvider):
                 f"Failed to load existing root key from {self.key_file}. Cannot continue: {e}"
             )
 
+        # Releases before key_file was accepted ignored it and used the default path.
+        default_key_file = Path.home() / ".openviking" / self.ROOT_KEY_FILENAME
+        if default_key_file.exists():
+            raise ConfigError(
+                f"Root key file {self.key_file} does not exist, but {default_key_file} does. "
+                "Earlier releases ignored volcengine_kms.key_file and stored the root key at the "
+                f"default path; move it to {self.key_file}. If {default_key_file} belongs to "
+                "another deployment, generate this key on a host without it."
+            )
+
         # Generate new root key
         import secrets
 
         self._root_key = secrets.token_bytes(32)
 
-        # Encrypt and store root key
+        # Encrypt and store root key. Any failure here (KMS outage, read-only
+        # or full filesystem) must clear the cached ephemeral key before raising:
+        # otherwise a retried get_root_key() hits the `self._root_key is not None`
+        # fast path and encrypts data with a key that was never persisted — the
+        # data-loss class this provider guards.
         try:
             encrypted_root_key = await self._encrypt_with_kms(self._root_key)
             self.key_file.parent.mkdir(parents=True, exist_ok=True)
@@ -722,6 +764,7 @@ class VolcengineKMSProvider(BaseProvider):
                 f.write(encrypted_root_key)
             logger.info(f"Created and stored new root key at {self.key_file}")
         except Exception as e:
+            self._root_key = None
             raise ConfigError(
                 f"Failed to persist root key to file. "
                 f"Refusing to start with ephemeral key (data loss risk): {e}"
@@ -795,8 +838,17 @@ def create_root_key_provider(
     """
     if provider_type == "local":
         local_config = config.get("local", {})
-        key_file_path = local_config.get("key_file", "~/.openviking/master.key")
+        key_file_path = local_config.get("key_file")
+        root_key = local_config.get("root_key")
 
+        if key_file_path is not None and root_key is not None:
+            raise ConfigError(
+                "encryption.local.root_key and encryption.local.key_file are mutually exclusive"
+            )
+        if root_key is not None:
+            return LocalFileProvider(root_key=root_key)
+        if key_file_path is None:
+            key_file_path = "~/.openviking/master.key"
         if not key_file_path:
             raise ConfigError("encryption.local.key_file is required")
         return LocalFileProvider(key_file_path)

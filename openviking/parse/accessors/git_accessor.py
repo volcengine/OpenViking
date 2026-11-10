@@ -8,25 +8,41 @@ This is the DataAccessor layer extracted from CodeRepositoryParser.
 """
 
 import asyncio
+import contextlib
 import os
 import shutil
+import signal
 import stat
 import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import Any, Optional, Tuple, Union
-from urllib.parse import unquote, urlparse
+from typing import Optional, Tuple, Union
+from urllib.parse import quote, urlparse
 
-from openviking.utils import is_github_url, is_gitlab_url, parse_code_hosting_url
+from openviking.parse.network import (
+    ParserNetworkContext,
+    ParserNetworkOperation,
+    open_parser_url,
+    overlay_parser_subprocess_env,
+)
+from openviking.parse.temp import get_parser_download_temp_dir
+from openviking.utils import (
+    is_github_url,
+    is_gitlab_url,
+    parse_code_hosting_url,
+    parse_git_repo_url,
+)
 from openviking.utils.code_hosting_utils import (
-    _domain_matches,
-    _extract_azure_devops_repo_parts,
-    is_code_hosting_url,
     is_git_repo_url,
     validate_git_ssh_uri,
 )
-from openviking_cli.utils.config import get_openviking_config
+from openviking.utils.git_auth import (
+    build_git_http_auth_env,
+    is_git_https_url,
+    parse_git_http_auth_config,
+    raise_git_auth_error,
+)
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
@@ -46,6 +62,10 @@ class GitAccessor(DataAccessor):
     """
 
     PRIORITY = 80  # Higher than generic HTTP, lower than specific services
+    # Upper bound for reaping the git process tree after cancellation. The
+    # tree is SIGKILLed as a group, so this only guards pathological reap
+    # delays and must stay short to avoid pinning the caller's slot.
+    CANCEL_REAP_TIMEOUT = 1.0
 
     @property
     def priority(self) -> int:
@@ -58,7 +78,7 @@ class GitAccessor(DataAccessor):
         Handles:
         - git@ SSH URLs
         - git://, ssh:// URLs
-        - GitHub/GitLab repository URLs (http/https)
+        - Configured code-hosting repository URLs (http/https)
         - Local paths ending with .git (NOT .zip - those go to ZipParser)
         """
         source_str = str(source)
@@ -68,7 +88,7 @@ class GitAccessor(DataAccessor):
             try:
                 if source_str.startswith("git@"):
                     validate_git_ssh_uri(source_str)
-                return is_code_hosting_url(source_str)
+                return is_git_repo_url(source_str)
             except ValueError:
                 return False
 
@@ -100,10 +120,22 @@ class GitAccessor(DataAccessor):
         temp_local_dir = None
         branch = kwargs.get("branch") or kwargs.get("ref")
         commit = kwargs.get("commit")
+        if commit:
+            branch = None
+        auth_config = parse_git_http_auth_config(kwargs.get("auth_config"), source_str)
+        git_env = None
+        used_git_clone = False
+        # Exact immutable revision fetched. Branch tracking resolves this from
+        # the remote/local HEAD; commit-only imports use the supplied commit.
+        resolved_sha: Optional[str] = None
 
         try:
             # Create local temp directory (non-blocking)
-            temp_local_dir = await asyncio.to_thread(tempfile.mkdtemp, prefix="ov_git_")
+            temp_local_dir = await asyncio.to_thread(
+                tempfile.mkdtemp,
+                prefix="ov_git_",
+                dir=get_parser_download_temp_dir(),
+            )
             logger.info(f"[GitAccessor] Created local temp dir for git: {temp_local_dir}")
 
             # Fetch content (Clone or Extract)
@@ -117,14 +149,43 @@ class GitAccessor(DataAccessor):
                     temp_local_dir,
                     branch=branch,
                     commit=commit,
+                    env=git_env,
                 )
+                used_git_clone = True
             elif source_str.startswith(("http://", "https://", "git://", "ssh://")):
                 repo_url, branch, commit = self._parse_repo_source(source_str, **kwargs)
-                if self._is_github_url(repo_url):
+                github_token = None
+                if auth_config is not None:
+                    git_env = build_git_http_auth_env(auth_config, repo_url)
+                elif self._is_github_url(repo_url):
+                    github_token = kwargs.get("github_token") or os.environ.get("GITHUB_TOKEN")
+                    if github_token and is_git_https_url(repo_url):
+                        github_auth = parse_git_http_auth_config(
+                            {"token": github_token},
+                            repo_url,
+                        )
+                        assert github_auth is not None
+                        git_env = build_git_http_auth_env(github_auth, repo_url)
+                if commit:
+                    resolved_sha = commit
+                else:
+                    # Watch refresh / add_resource first round pass the revision
+                    # they already resolved (scheduler probe or preflight) here.
+                    # Without a hint the ref is fetched by its moving branch name
+                    # and no exact-revision checkpoint is recorded; this accessor
+                    # never issues its own ls-remote.
+                    resolved_sha = kwargs.get("git_head_sha_hint") or None
+                # Fetch an immutable per-SHA archive when resolved; fall back to
+                # the moving branch/commit name only when no revision was supplied.
+                download_ref = resolved_sha or commit or branch
+                if self._is_github_url(repo_url) and auth_config is None:
                     # Try GitHub ZIP API first, fall back to git clone
                     try:
                         local_dir, repo_name = await self._github_zip_download(
-                            repo_url, branch or commit, temp_local_dir
+                            repo_url,
+                            download_ref,
+                            temp_local_dir,
+                            github_token=github_token,
                         )
                     except Exception as zip_exc:
                         logger.warning(
@@ -145,12 +206,14 @@ class GitAccessor(DataAccessor):
                             temp_local_dir,
                             branch=branch,
                             commit=commit,
+                            env=git_env,
                         )
-                elif self._is_gitlab_url(repo_url):
+                        used_git_clone = True
+                elif self._can_use_gitlab_zip(repo_url) and auth_config is None:
                     # Try GitLab ZIP API first, fall back to git clone
                     try:
                         local_dir, repo_name = await self._gitlab_zip_download(
-                            repo_url, branch or commit, temp_local_dir
+                            repo_url, download_ref, temp_local_dir
                         )
                     except Exception as zip_exc:
                         logger.warning(
@@ -171,26 +234,44 @@ class GitAccessor(DataAccessor):
                             temp_local_dir,
                             branch=branch,
                             commit=commit,
+                            env=git_env,
                         )
+                        used_git_clone = True
                 else:
-                    # Non-GitHub/GitLab URL: use git clone
+                    # Other configured code-hosting URLs: use git clone
                     repo_name = await self._git_clone(
                         repo_url,
                         temp_local_dir,
                         branch=branch,
                         commit=commit,
+                        env=git_env,
                     )
+                    used_git_clone = True
             else:
                 raise ValueError(f"Unsupported source for GitAccessor: {source}")
+
+            if commit:
+                # A commit-only import is already pinned to an immutable revision.
+                # Keep the supplied value as the checkpoint without another probe.
+                resolved_sha = commit
+            elif used_git_clone:
+                # The clone fallback preserves the historical branch/commit
+                # behavior. Record the revision that was actually checked out,
+                # rather than the SHA probed before cloning.
+                resolved_sha = await self._resolve_local_head(temp_local_dir, git_env)
 
             # Build metadata
             # repo_name is in "org/repo" format (e.g. "volcengine/OpenViking")
             # This is extracted via parse_code_hosting_url() from the original URL
-            meta = {"repo_name": repo_name}
+            meta = {"repo_name": repo_name, "_cleanup_path": temp_local_dir}
             if branch:
                 meta["repo_ref"] = branch
             if commit:
                 meta["repo_commit"] = commit
+            if resolved_sha:
+                # Exact revision fetched; the watch layer persists this as its
+                # source checkpoint.
+                meta["resolved_head_sha"] = resolved_sha
 
             return LocalResource(
                 path=local_dir,
@@ -200,10 +281,12 @@ class GitAccessor(DataAccessor):
                 is_temporary=True,
             )
 
-        except Exception as e:
-            logger.error(
-                f"[GitAccessor] Failed to access git repository {source}: {e}", exc_info=True
-            )
+        except BaseException as e:
+            if not isinstance(e, asyncio.CancelledError):
+                logger.error(
+                    f"[GitAccessor] Failed to access git repository {source}: {e}",
+                    exc_info=True,
+                )
             # Clean up on error
             if temp_local_dir and os.path.exists(temp_local_dir):
                 try:
@@ -216,77 +299,84 @@ class GitAccessor(DataAccessor):
         """Parse repository source URL to extract branch/commit info."""
         branch = kwargs.get("branch") or kwargs.get("ref")
         commit = kwargs.get("commit")
-        repo_url = source
-        if source.startswith(("http://", "https://", "git://", "ssh://")):
-            parsed = urlparse(source)
-            repo_url = parsed._replace(query="", fragment="").geturl()
-            if commit is None or branch is None:
-                branch, commit = self._extract_ref_from_url(parsed, branch, commit)
-        repo_url = self._normalize_repo_url(repo_url)
-        return repo_url, branch, commit
-
-    def _extract_ref_from_url(
-        self,
-        parsed: Any,
-        branch: Optional[str],
-        commit: Optional[str],
-    ) -> Tuple[Optional[str], Optional[str]]:
-        """Extract branch/commit from URL path."""
-        if parsed.path:
-            path_branch, path_commit = self._parse_ref_from_path(parsed.path)
-            commit = path_commit or commit
-            # If commit is present in path, ignore branch entirely
+        parsed_source = parse_git_repo_url(source)
+        if parsed_source is None:
+            if source.startswith(("git@", "http://", "https://", "git://", "ssh://")):
+                raise ValueError(f"Unsupported Git repository URL: {source}")
             if commit:
                 branch = None
-            else:
-                branch = branch or path_branch
-        return branch, commit
+            return source, branch, commit
 
-    def _parse_ref_from_path(self, path: str) -> Tuple[Optional[str], Optional[str]]:
-        """Parse ref from URL path components."""
-        parts = [p for p in path.split("/") if p]
-        branch = None
-        commit = None
-        if "commit" in parts:
-            idx = parts.index("commit")
-            if idx + 1 < len(parts):
-                commit = parts[idx + 1]
-        if "tree" in parts:
-            idx = parts.index("tree")
-            if idx + 1 < len(parts):
-                ref = unquote(parts[idx + 1])
-                if self._looks_like_sha(ref):
-                    commit = ref
-                else:
-                    branch = ref
-        return branch, commit
+        commit = commit or parsed_source.commit
+        branch = None if commit else branch or parsed_source.branch
+        return parsed_source.clone_url, branch, commit
 
     @staticmethod
-    def _looks_like_sha(ref: str) -> bool:
-        """Return True if ref looks like a git commit SHA (7-40 hex chars)."""
-        return 7 <= len(ref) <= 40 and all(c in "0123456789abcdefABCDEF" for c in ref)
+    def _resolve_probe_target(
+        source: str, **kwargs
+    ) -> Optional[Tuple[str, Optional[str], Optional[str]]]:
+        """Resolve (clone_url, branch, commit) for a watch probe.
+
+        Mirrors ``_parse_repo_source`` but returns None for non-git sources
+        instead of raising, so callers can fall back to a full refresh.
+        """
+        branch = kwargs.get("branch") or kwargs.get("ref")
+        commit = kwargs.get("commit")
+        parsed_source = parse_git_repo_url(source)
+        if parsed_source is None:
+            if source.startswith(("git@", "http://", "https://", "git://", "ssh://")):
+                if commit:
+                    branch = None
+                return source, branch, commit
+            return None
+        commit = commit or parsed_source.commit
+        branch = None if commit else branch or parsed_source.branch
+        return parsed_source.clone_url, branch, commit
+
+    @staticmethod
+    def _parse_ls_remote_ref(stdout: str, ref: str) -> Optional[str]:
+        """Extract the SHA advertised for *ref* from ``git ls-remote`` output."""
+        for line in stdout.splitlines():
+            parts = line.split("\t", 1)
+            if len(parts) == 2 and parts[1].strip() == ref:
+                return parts[0].strip() or None
+        return None
+
+    async def probe_git_remote_head(
+        self, source: Union[str, Path], **kwargs
+    ) -> Optional[Tuple[str, str]]:
+        """Resolve the watched git revision without downloading repository content.
+
+        Branch watches return the remotely advertised ``(ref, head_sha)``.
+        Commit-only watches return an empty ref and the supplied commit locally.
+        Raises on branch probe failures so callers can apply a fail-open policy.
+        """
+        source_str = str(source)
+        resolved = self._resolve_probe_target(source_str, **kwargs)
+        if resolved is None:
+            return None
+        repo_url, branch, commit = resolved
+        if commit:
+            # The supplied commit is already an immutable revision. Return it
+            # directly so callers can compare checkpoints without ls-remote.
+            return "", commit
+
+        auth_config = parse_git_http_auth_config(kwargs.get("auth_config"), source_str)
+        env = build_git_http_auth_env(auth_config, repo_url) if auth_config is not None else None
+        env = overlay_parser_subprocess_env(
+            ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, repo_url),
+            env,
+        )
+        return await self._git_ls_remote_head(repo_url, branch, env)
 
     def _normalize_repo_url(self, url: str) -> str:
-        """Normalize repository URL to base form."""
-        if url.startswith(("http://", "https://", "git://", "ssh://")):
-            parsed = urlparse(url)
-            path_parts = [p for p in parsed.path.split("/") if p]
-            base_parts = path_parts
-            git_index = next((i for i, p in enumerate(path_parts) if p.endswith(".git")), None)
-            if git_index is not None:
-                base_parts = path_parts[: git_index + 1]
-
-            config = get_openviking_config()
-            if _domain_matches(parsed, getattr(config.code, "azure_devops_domains", [])):
-                azure_repo_parts = _extract_azure_devops_repo_parts(path_parts)
-                if azure_repo_parts:
-                    base_parts = path_parts[: len(azure_repo_parts) + 1]
-
-            if _domain_matches(parsed, config.code.github_domains + config.code.gitlab_domains):
-                base_parts = path_parts[:2]
-            base_path = "/" + "/".join(base_parts)
-            return parsed._replace(path=base_path, query="", fragment="").geturl()
-        return url
+        """Normalize a validated repository URL to a cloneable base form."""
+        parsed_source = parse_git_repo_url(url)
+        if parsed_source is not None:
+            return parsed_source.clone_url
+        if not url.startswith(("git@", "http://", "https://", "git://", "ssh://")):
+            return url
+        raise ValueError(f"Unsupported Git repository URL: {url}")
 
     def _get_repo_name(self, url: str) -> str:
         """Get repository name with organization for GitHub/GitLab URLs.
@@ -317,35 +407,92 @@ class GitAccessor(DataAccessor):
         name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
         return name or "repository"
 
-    async def _run_git(self, args: list[str], cwd: Optional[str] = None) -> str:
+    async def _run_git(
+        self,
+        args: list[str],
+        cwd: Optional[str] = None,
+        env: Optional[dict[str, str]] = None,
+    ) -> str:
         """Run a git command."""
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            cwd=cwd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
+        process_kwargs = {
+            "cwd": cwd,
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+        }
+        if env is not None:
+            process_kwargs["env"] = env
+        if os.name == "posix":
+            # Detach git into a fresh session/process group so that remote
+            # helpers (http/ssh) and other descendants can be signalled
+            # together on timeout/cancellation instead of being orphaned
+            # while they still hold our stdout/stderr pipes.
+            process_kwargs["start_new_session"] = True
+        proc = await asyncio.create_subprocess_exec(*args, **process_kwargs)
+        try:
+            stdout, stderr = await proc.communicate()
+        except BaseException:
+            await self._terminate_git_process(proc)
+            raise
         if proc.returncode != 0:
+            raise_git_auth_error(stderr)
             error_msg = stderr.decode().strip()
             user_msg = "Git command failed."
             if "Could not resolve hostname" in error_msg:
                 user_msg = (
                     "Git command failed: could not resolve hostname. Check the URL or your network."
                 )
-            elif "Permission denied" in error_msg or "publickey" in error_msg:
-                user_msg = (
-                    "Git command failed: authentication error. Check your SSH keys or credentials."
-                )
-            raise RuntimeError(
-                f"{user_msg} Command: git {' '.join(args[1:])}. Details: {error_msg}"
-            )
+            if env is None:
+                logger.warning(f"[GitAccessor] {user_msg} Details: {error_msg}")
+            else:
+                # An authenticated remote controls parts of stderr and may echo
+                # the request's Authorization header. Keep credentialed failures
+                # out of logs as well as argv and raised exceptions.
+                logger.warning(f"[GitAccessor] {user_msg}")
+            raise RuntimeError(user_msg)
         return stdout.decode().strip()
 
-    async def _has_commit(self, repo_dir: str, commit: str) -> bool:
+    async def _terminate_git_process(self, proc: asyncio.subprocess.Process) -> None:
+        """Best-effort termination of the whole git process tree.
+
+        Git spawns remote helpers (http/ssh) which inherit the stdout/stderr
+        pipes. Killing only the direct git child leaves those descendants
+        alive and holding the pipes open, so ``communicate()``/``wait()`` may
+        block long after cancellation. On POSIX git runs in its own process
+        group (see ``start_new_session``), so signal the entire group.
+        """
+        if os.name == "posix":
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            # Non-POSIX platforms have no process-group signal primitive;
+            # fall back to the direct child.
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+
+        # Reaping itself must be bounded: shield protects the reap from a
+        # second cancellation, while wait_for guarantees cleanup cannot pin
+        # the caller's execution slot indefinitely. CancelledError derives
+        # from BaseException and is deliberately not suppressed.
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(
+                asyncio.shield(proc.wait()),
+                timeout=self.CANCEL_REAP_TIMEOUT,
+            )
+
+    async def _has_commit(
+        self,
+        repo_dir: str,
+        commit: str,
+        env: Optional[dict[str, str]] = None,
+    ) -> bool:
         """Check if a commit exists in the repository."""
         try:
-            await self._run_git(["git", "-C", repo_dir, "rev-parse", "--verify", commit])
+            await self._run_git(
+                ["git", "-C", repo_dir, "rev-parse", "--verify", commit],
+                env=env,
+            )
             return True
         except RuntimeError:
             return False
@@ -360,48 +507,67 @@ class GitAccessor(DataAccessor):
         """Return True for gitlab.com URLs (supports ZIP archive API)."""
         return is_gitlab_url(url)
 
+    def _can_use_gitlab_zip(self, url: str) -> bool:
+        """Return True when the URL fits the two-segment GitLab ZIP helper."""
+        if not self._is_gitlab_url(url):
+            return False
+        path_parts = [p for p in urlparse(url).path.split("/") if p]
+        return len(path_parts) == 2
+
     async def _git_clone(
         self,
         url: str,
         target_dir: str,
         branch: Optional[str] = None,
         commit: Optional[str] = None,
+        env: Optional[dict[str, str]] = None,
     ) -> str:
         """Clone a git repository into target_dir; return the repo name."""
         name = self._get_repo_name(url)
         logger.info(f"[GitAccessor] Cloning {url} to {target_dir}...")
+        if commit:
+            branch = None
+        network_env = overlay_parser_subprocess_env(
+            ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, url),
+            env,
+        )
 
         clone_args = [
             "git",
             "clone",
             "--depth",
             "1",
-            "--recursive",
+            "--no-recurse-submodules",
         ]
         if branch and not commit:
             clone_args.extend(["--branch", branch])
         clone_args.extend([url, target_dir])
-        await self._run_git(clone_args)
+        await self._run_git(clone_args, env=network_env)
 
         if commit:
             try:
-                await self._run_git(["git", "-C", target_dir, "fetch", "origin", commit])
+                await self._run_git(
+                    ["git", "-C", target_dir, "fetch", "origin", commit],
+                    env=network_env,
+                )
             except RuntimeError:
                 try:
                     await self._run_git(
-                        ["git", "-C", target_dir, "fetch", "--all", "--tags", "--prune"]
+                        ["git", "-C", target_dir, "fetch", "--all", "--tags", "--prune"],
+                        env=network_env,
                     )
                 except RuntimeError:
                     pass
-                ok = await self._has_commit(target_dir, commit)
+                ok = await self._has_commit(target_dir, commit, env=env)
                 if not ok:
                     try:
                         await self._run_git(
-                            ["git", "-C", target_dir, "fetch", "--unshallow", "origin"]
+                            ["git", "-C", target_dir, "fetch", "--unshallow", "origin"],
+                            env=network_env,
                         )
                     except RuntimeError:
                         pass
-                ok = await self._has_commit(target_dir, commit)
+                ok = await self._has_commit(target_dir, commit, env=env)
                 if not ok:
                     await self._run_git(
                         [
@@ -411,12 +577,16 @@ class GitAccessor(DataAccessor):
                             "fetch",
                             "origin",
                             "+refs/heads/*:refs/remotes/origin/*",
-                        ]
+                        ],
+                        env=network_env,
                     )
-                    ok = await self._has_commit(target_dir, commit)
+                    ok = await self._has_commit(target_dir, commit, env=env)
                     if not ok:
                         raise RuntimeError(f"Failed to fetch commit {commit} from {url}")
-            await self._run_git(["git", "-C", target_dir, "checkout", commit])
+            await self._run_git(
+                ["git", "-C", target_dir, "checkout", commit],
+                env=env,
+            )
 
         # Add .git_source_repo marker file with original URL (for consistency)
         def _write_marker():
@@ -427,11 +597,58 @@ class GitAccessor(DataAccessor):
 
         return name
 
+    async def _resolve_local_head(
+        self,
+        repo_dir: str,
+        env: Optional[dict[str, str]] = None,
+    ) -> Optional[str]:
+        """Return the revision actually checked out by git clone."""
+        try:
+            head_sha = await self._run_git(
+                ["git", "-C", repo_dir, "rev-parse", "HEAD"],
+                env=env,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"[GitAccessor] failed to resolve cloned repository HEAD: {exc}; "
+                "continuing without an exact-revision checkpoint"
+            )
+            return None
+        return head_sha.strip() or None
+
+    async def _git_ls_remote_head(
+        self,
+        url: str,
+        branch: Optional[str],
+        env: Optional[dict[str, str]] = None,
+    ) -> Tuple[str, str]:
+        """Probe a remote for the tip SHA of *branch* (or HEAD if branch is None).
+
+        Returns ``(ref, sha)`` where ref is the fully qualified ref advertised by
+        the remote. Uses ``ls-remote`` only (no content download) so the cost is
+        a single network round-trip.
+        """
+        if branch:
+            ref = branch if branch.startswith("refs/") else f"refs/heads/{branch}"
+            args = ["git", "ls-remote", "--heads", url, ref]
+        else:
+            # Track the remote's default branch via HEAD, which every server
+            # advertises; no --symref dependency.
+            ref = "HEAD"
+            args = ["git", "ls-remote", url, "HEAD"]
+        stdout = await self._run_git(args, env=env)
+        sha = self._parse_ls_remote_ref(stdout, ref)
+        if sha is None:
+            raise RuntimeError(f"git ls-remote did not advertise {ref} for {url}")
+        return ref, sha
+
     async def _github_zip_download(
         self,
         repo_url: str,
         branch: Optional[str],
         target_dir: str,
+        *,
+        github_token: Optional[str] = None,
     ) -> Tuple[Path, str]:
         """Download a GitHub repo as a ZIP archive and extract it."""
         repo_name = self._get_repo_name(repo_url)
@@ -444,10 +661,8 @@ class GitAccessor(DataAccessor):
         # Strip .git suffix for the archive URL
         repo_slug = repo_raw[:-4] if repo_raw.endswith(".git") else repo_raw
 
-        if branch:
-            zip_url = f"https://github.com/{owner}/{repo_slug}/archive/{branch}.zip"
-        else:
-            zip_url = f"https://github.com/{owner}/{repo_slug}/archive/HEAD.zip"
+        ref = quote(branch or "HEAD", safe="/")
+        zip_url = f"https://github.com/{owner}/{repo_slug}/archive/{ref}.zip"
 
         logger.info(f"[GitAccessor] Downloading GitHub ZIP: {zip_url}")
 
@@ -455,15 +670,17 @@ class GitAccessor(DataAccessor):
         extract_dir = os.path.join(target_dir, "_extracted")
         os.makedirs(extract_dir, exist_ok=True)
 
+        github_token = github_token or os.environ.get("GITHUB_TOKEN")
+
         # Download (blocking HTTP; run in thread pool)
         def _download() -> None:
             headers = {"User-Agent": "OpenViking"}
-            github_token = os.environ.get("GITHUB_TOKEN")
             if github_token:
                 headers["Authorization"] = f"token {github_token}"
 
             req = urllib.request.Request(zip_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:
+            context = ParserNetworkContext(ParserNetworkOperation.GIT_ARCHIVE, zip_url)
+            with open_parser_url(context, req, timeout=1800) as resp, open(zip_path, "wb") as f:
                 shutil.copyfileobj(resp, f)
 
         try:
@@ -556,7 +773,8 @@ class GitAccessor(DataAccessor):
             headers = {"User-Agent": "OpenViking"}
 
             req = urllib.request.Request(zip_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:
+            context = ParserNetworkContext(ParserNetworkOperation.GIT_ARCHIVE, zip_url)
+            with open_parser_url(context, req, timeout=1800) as resp, open(zip_path, "wb") as f:
                 shutil.copyfileobj(resp, f)
 
         try:

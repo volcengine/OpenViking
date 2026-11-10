@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 from openviking.storage.vectordb.store.data import DeltaRecord
 
@@ -190,6 +190,13 @@ class IIndex(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def rebuild_scalar_index(
+        self, scalar_index: List[str], cands_fields: Iterable[Tuple[int, str]]
+    ) -> None:
+        """Replace the scalar index from a Store snapshot without rebuilding vectors."""
+        raise NotImplementedError
+
+    @abstractmethod
     def get_meta_data(self):
         """Retrieve the complete metadata of the index.
 
@@ -272,6 +279,12 @@ class IIndex(ABC):
             improve search performance and reduce memory/disk usage.
         """
         return True
+
+    def begin_bulk_ingest(self) -> None:
+        """Suspend optional derived-index rebuilds across a bulk write scope."""
+
+    def end_bulk_ingest(self) -> None:
+        """Resume optional derived-index rebuilds after a bulk write scope."""
 
 
 class Index:

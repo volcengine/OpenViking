@@ -1,6 +1,11 @@
+import asyncio
 import shutil
+import threading
+import uuid
 from pathlib import Path
 from unittest.mock import MagicMock
+
+from openviking.pyagfs import AGFSNotFoundError
 
 
 class MockLocalAGFS:
@@ -14,6 +19,9 @@ class MockLocalAGFS:
         self.config = config
         self.root = Path(root_path) if root_path else Path("/tmp/viking_data")
         self.root.mkdir(parents=True, exist_ok=True)
+        self._pathlocks_guard = threading.Lock()
+        self._pathlocks = {}
+        self._pathlock_leases = {}
 
     def _resolve(self, path):
         if str(path).startswith("viking://"):
@@ -28,7 +36,11 @@ class MockLocalAGFS:
     def mkdir(self, path, ctx=None, parents=True, exist_ok=True):
         self._resolve(path).mkdir(parents=parents, exist_ok=exist_ok)
 
+    def ensure_parent_dirs(self, path, ctx=None):
+        self._resolve(path).parent.mkdir(parents=True, exist_ok=True)
+
     def ls(self, path, ctx=None, **kwargs):
+        """List test entries with the same sorting and pagination contract as RagFS."""
         p = self._resolve(path)
         if not p.exists():
             return []
@@ -44,7 +56,63 @@ class MockLocalAGFS:
                     "uri": f"viking://{path}/{item.name}".replace("//", "/"),
                 }
             )
-        return res
+        sort_by = kwargs.get("sort_by")
+        reverse = kwargs.get("sort_order", "asc") == "desc"
+        if sort_by:
+            key = (
+                (lambda entry: (str(entry["name"]).lower(), str(entry["name"])))
+                if sort_by == "name"
+                else (
+                    lambda entry: (
+                        entry["mtime"],
+                        str(entry["name"]).lower(),
+                        str(entry["name"]),
+                    )
+                )
+            )
+            directories = sorted(
+                (entry for entry in res if entry["isDir"]), key=key, reverse=reverse
+            )
+            files = sorted((entry for entry in res if not entry["isDir"]), key=key, reverse=reverse)
+            res = directories + files
+        offset = kwargs.get("offset", 0)
+        limit = kwargs.get("limit")
+        return res[offset:] if limit is None else res[offset : offset + limit]
+
+    def glob_directory(
+        self,
+        path,
+        pattern,
+        show_hidden=False,
+        page_size=None,
+        level_limit=None,
+        continuation_token=None,
+        ctx=None,
+    ):
+        del ctx
+        root = self._resolve(path)
+        matches = []
+        for item in sorted(root.glob(pattern)):
+            relative = item.relative_to(root)
+            if not show_hidden and any(part.startswith(".") for part in relative.parts):
+                continue
+            if level_limit is not None and len(relative.parts) > level_limit:
+                continue
+            matches.append(
+                {
+                    "path": f"{str(path).rstrip('/')}/{relative.as_posix()}",
+                    "rel_path": relative.as_posix(),
+                    "name": item.name,
+                    "is_dir": item.is_dir(),
+                }
+            )
+
+        start = int(continuation_token or 0)
+        end = len(matches) if not page_size else start + page_size
+        return {
+            "entries": matches[start:end],
+            "next_token": str(end) if end < len(matches) else None,
+        }
 
     def writeto(self, path, content, ctx=None, **kwargs):
         p = self._resolve(path)
@@ -64,10 +132,13 @@ class MockLocalAGFS:
     def read_file(self, path, ctx=None, **kwargs):
         p = self._resolve(path)
         if not p.exists():
-            raise FileNotFoundError(path)
+            raise AGFSNotFoundError(path)
         return p.read_bytes()
 
     def read(self, path, ctx=None, **kwargs):
+        return self.read_file(path, ctx, **kwargs)
+
+    def cat(self, path, ctx=None, **kwargs):
         return self.read_file(path, ctx, **kwargs)
 
     def rm(self, path, recursive=False, ctx=None):
@@ -93,9 +164,54 @@ class MockLocalAGFS:
     def stat(self, path, ctx=None):
         p = self._resolve(path)
         if not p.exists():
-            raise FileNotFoundError(path)
+            raise AGFSNotFoundError(path)
         s = p.stat()
-        return {"size": s.st_size, "mtime": s.st_mtime, "is_dir": p.is_dir()}
+        return {
+            "size": s.st_size,
+            "mtime": s.st_mtime,
+            "isDir": p.is_dir(),
+            "is_dir": p.is_dir(),
+        }
 
     def bind_request_context(self, ctx):
         return MagicMock(__enter__=lambda x: None, __exit__=lambda x, y, z: None)
+
+    async def pathlock_acquire_batch_async(
+        self,
+        ctx,
+        requests,
+        timeout_secs=0.0,
+        owner_lease_ref=None,
+    ):
+        del ctx, owner_lease_ref
+        acquired = []
+        try:
+            for path in sorted({request["path"] for request in requests}):
+                with self._pathlocks_guard:
+                    lock = self._pathlocks.setdefault(path, threading.Lock())
+                if not await asyncio.to_thread(lock.acquire, timeout=timeout_secs):
+                    raise TimeoutError(f"timed out acquiring test path lock: {path}")
+                acquired.append(lock)
+        except BaseException:
+            for lock in reversed(acquired):
+                lock.release()
+            raise
+
+        lease_ref = str(uuid.uuid4())
+        lease = {
+            "lease_ref": lease_ref,
+            "ownership_ref": str(uuid.uuid4()),
+            "owner_id": "mock-local-agfs",
+            "owned": True,
+        }
+        with self._pathlocks_guard:
+            self._pathlock_leases[lease_ref] = acquired
+        return lease
+
+    def pathlock_release(self, ctx, owned_lease_ref):
+        del ctx
+        lease_ref = owned_lease_ref["lease_ref"]
+        with self._pathlocks_guard:
+            locks = self._pathlock_leases.pop(lease_ref)
+        for lock in reversed(locks):
+            lock.release()

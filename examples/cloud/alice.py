@@ -67,7 +67,7 @@ def main():
         print("\n== 1. 添加资源: OpenViking README ==")
         result = client.add_resource(
             path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
-            reason="项目核心文档",
+            options={"reason": "项目核心文档"},
         )
         readme_uri = result.get("root_uri", "")
         print(f"  URI: {readme_uri}")
@@ -91,14 +91,17 @@ def main():
 
         # ── 4. 语义搜索 ──
         print("\n== 4. 语义搜索: 'context database for AI agent' ==")
-        results = client.find("context database for AI agent", limit=3)
-        if hasattr(results, "resources") and results.resources:
-            for i, r in enumerate(results.resources, 1):
-                print(f"  {i}. [{r.score:.3f}] {r.uri}")
+        results = client.find(query="context database for AI agent", limit=3)
+        for index, resource in enumerate(results.get("resources", []), 1):
+            print(
+                f"  {index}. [{resource.get('score', 0.0):.3f}] "
+                f"{resource['uri']}"
+            )
 
         # ── 5. 创建会话，模拟技术讨论 ──
         print("\n== 5. 对话: 技术架构讨论 ==")
-        session = client.session()
+        session_info = client.create_session()
+        session = client.session(session_id=session_info["session_id"])
         print(f"  Session: {session.session_id}")
 
         messages = [
@@ -150,16 +153,25 @@ def main():
 
         # ── 8. 搜索回顾记忆 ──
         print("\n== 8. 回顾记忆: '为什么选择 VikingDB' ==")
-        results = client.find("为什么选择 VikingDB 作为向量数据库", limit=3)
-        if hasattr(results, "memories") and results.memories:
+        results = client.find(query="为什么选择 VikingDB 作为向量数据库", limit=3)
+        memories = results.get("memories", [])
+        if memories:
             print("  记忆:")
-            for i, m in enumerate(results.memories, 1):
-                desc = m.abstract or m.overview or str(m.uri)
-                print(f"  {i}. [{m.score:.3f}] {desc[:150]}")
-        if hasattr(results, "resources") and results.resources:
+            for index, memory in enumerate(memories, 1):
+                description = (
+                    memory.get("abstract")
+                    or memory.get("overview")
+                    or memory.get("uri", "")
+                )
+                print(f"  {index}. [{memory.get('score', 0.0):.3f}] {description[:150]}")
+        resources = results.get("resources", [])
+        if resources:
             print("  资源:")
-            for i, r in enumerate(results.resources, 1):
-                print(f"  {i}. [{r.score:.3f}] {r.uri}")
+            for index, resource in enumerate(resources, 1):
+                print(
+                    f"  {index}. [{resource.get('score', 0.0):.3f}] "
+                    f"{resource['uri']}"
+                )
 
         print("\nAlice 流程完成")
 

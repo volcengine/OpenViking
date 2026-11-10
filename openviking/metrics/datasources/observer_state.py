@@ -3,14 +3,13 @@
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from openviking.metrics.core.base import ReadEnvelope
-from openviking.storage.transaction import get_lock_manager
 from openviking_cli.utils import run_async
 
 from .base import DomainStatsMetricDataSource, StateMetricDataSource
+from .vikingdb import VikingDBEventDataSource
 
 
 class ObserverStateDataSource(DomainStatsMetricDataSource):
@@ -60,42 +59,6 @@ class ObserverStateDataSource(DomainStatsMetricDataSource):
         return self.safe_read(_read, default={})
 
 
-class LockStateDataSource(StateMetricDataSource):
-    """
-    Read lock-manager counters needed by lock-related state collectors.
-
-    The datasource inspects active lock handles and derives a stale-handle count using the
-    current in-process timeout heuristic.
-    """
-
-    def read_lock_state(self) -> ReadEnvelope[tuple[int, int, int]]:
-        """
-        Read active and stale lock counts from the global transaction lock manager.
-
-        Returns:
-            A tuple of `(active_locks, waiting_locks, stale_handles)` where waiting locks are
-            currently not tracked separately and therefore remain `0`.
-        """
-
-        def _read() -> tuple[int, int, int]:
-            lock_manager = get_lock_manager()
-            handles = lock_manager.get_active_handles()
-            active = 0
-            stale = 0
-            now = time.time()
-            for handle in handles.values():
-                try:
-                    active += len(getattr(handle, "locks", []) or [])
-                    last = getattr(handle, "last_active_at", None)
-                    if last is not None and (now - float(last)) > 600:
-                        stale += 1
-                except Exception:
-                    continue
-            return active, 0, stale
-
-        return self.safe_read(_read, default=(0, 0, 0))
-
-
 class VikingDBStateDataSource(StateMetricDataSource):
     """
     Read health and size signals from the active VikingDB manager, when available.
@@ -132,16 +95,17 @@ class VikingDBStateDataSource(StateMetricDataSource):
         collection = self.normalize_str(
             getattr(vikingdb, "collection_name", "default"), default="default"
         )
-        ok_env = self.safe_read_async(
-            lambda: vikingdb.health_check(),
-            default=False,
-            runner=run_async,
-        )
-        count_env = self.safe_read_async(
-            lambda: vikingdb.count(filter=None, ctx=None),
-            default=0,
-            runner=run_async,
-        )
+        with VikingDBEventDataSource.suppress_operations():
+            ok_env = self.safe_read_async(
+                lambda: vikingdb.health_check(),
+                default=False,
+                runner=run_async,
+            )
+            count_env = self.safe_read_async(
+                lambda: vikingdb.count(filter=None, ctx=None),
+                default=0,
+                runner=run_async,
+            )
         ok = bool(ok_env.value)
         count = self.as_int(count_env.value, default=0)
         envelope_ok = bool(ok_env.ok and count_env.ok)

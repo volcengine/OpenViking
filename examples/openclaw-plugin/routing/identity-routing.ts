@@ -15,6 +15,58 @@ export type SessionAgentLookup = {
   ovSessionId?: string;
 };
 
+export type OpenVikingPeerRole = "none" | "assistant" | "sender";
+
+export function sanitizeOpenVikingPeerId(raw?: string): string | undefined {
+  const normalized = raw
+    ?.trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_");
+  return normalized || undefined;
+}
+
+export function resolveOpenVikingMessagePeerId(params: {
+  peerRole: OpenVikingPeerRole;
+  role?: string;
+  senderPeerId?: string;
+  assistantPeerId?: string;
+}): string | undefined {
+  if (params.peerRole === "sender" && params.role === "user") {
+    return params.senderPeerId;
+  }
+  if (params.peerRole === "assistant" && params.role === "assistant") {
+    return params.assistantPeerId;
+  }
+  return undefined;
+}
+
+/**
+ * Peer scoping is soft isolation. OpenClaw does not hand every path a sender
+ * (context-engine assemble gets no runtimeContext; cron and heartbeat turns
+ * have no sender at all), so a missing one widens to the unscoped request a
+ * caller without X-OpenViking-Actor-Peer gets, with a warning, rather than
+ * taking OpenViking away for the turn.
+ */
+export function resolveOpenVikingActorPeerId(params: {
+  peerRole: OpenVikingPeerRole;
+  senderPeerId?: string;
+  assistantPeerId?: string;
+  warn?: (message: string) => void;
+}): string | undefined {
+  const actorPeerId = resolveOpenVikingMessagePeerId({
+    ...params,
+    role: params.peerRole === "sender" ? "user" : "assistant",
+  });
+  if (params.peerRole === "sender" && !actorPeerId) {
+    params.warn?.(
+      "openviking: peer_role=sender but OpenClaw supplied no sender identity; " +
+        "continuing as an unscoped request under this user (no X-OpenViking-Actor-Peer)",
+    );
+  }
+  return actorPeerId;
+}
+
 export type SessionAgentResolveBranch =
   | "session_resolved"
   | "config_only_fallback"

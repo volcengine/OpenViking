@@ -1,12 +1,12 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
+use crate::cli::SnapshotCmd;
 use crate::client::{HttpClient, SnapshotCommitReq, SnapshotRestoreReq, SnapshotShowResult};
 use crate::error::Result;
 use crate::output::{OutputFormat, output_success};
-use crate::SnapshotCmd;
 
 pub async fn dispatch(
     client: &HttpClient,
@@ -63,9 +63,39 @@ pub async fn dispatch(
             let result = client.snapshot_show(&target_ref, path.as_deref()).await?;
             handle_show(result, out_path, output_format, compact)
         }
-        SnapshotCmd::Log { branch, limit } => {
-            let value = client.snapshot_log(&branch, limit).await?;
+        SnapshotCmd::Log {
+            branch,
+            limit,
+            paths,
+        } => {
+            let value = client
+                .snapshot_log(&branch, limit, paths.as_deref())
+                .await?;
             print_log(&value, output_format, compact);
+            Ok(())
+        }
+        SnapshotCmd::Diff {
+            path,
+            from_ref,
+            to_ref,
+        } => {
+            let value = client
+                .snapshot_diff(&path, from_ref.as_deref(), &to_ref)
+                .await?;
+            print_diff(&value, output_format, compact);
+            Ok(())
+        }
+        SnapshotCmd::DiffPaths {
+            paths,
+            from_ref,
+            to_ref,
+            offset,
+            limit,
+        } => {
+            let value = client
+                .snapshot_diff_paths(&paths, from_ref.as_deref(), &to_ref, offset, limit)
+                .await?;
+            output_success(&value, output_format, compact);
             Ok(())
         }
         SnapshotCmd::IgnoreGet => {
@@ -87,12 +117,20 @@ pub async fn dispatch(
     }
 }
 
+fn print_diff(value: &Value, output_format: OutputFormat, compact: bool) {
+    if matches!(output_format, OutputFormat::Json) {
+        output_success(value, output_format, compact);
+        return;
+    }
+    let diff = value.get("diff_text").and_then(Value::as_str).unwrap_or("");
+    let mut stdout = std::io::stdout();
+    let _ = stdout.write_all(diff.as_bytes());
+    let _ = stdout.flush();
+}
+
 /// Resolve `.ovgitignore` content: `--file` takes precedence over `--content`;
 /// if neither is given, the content is left empty (clears the rules).
-fn resolve_ignore_content(
-    content: Option<&str>,
-    file: Option<&std::path::Path>,
-) -> Result<String> {
+fn resolve_ignore_content(content: Option<&str>, file: Option<&std::path::Path>) -> Result<String> {
     if let Some(path) = file {
         use std::io::Read;
         let mut buf = String::new();
@@ -188,18 +226,23 @@ fn handle_show(
         SnapshotShowResult::Blob { oid, bytes, size } => {
             if matches!(output_format, OutputFormat::Json) {
                 let envelope = serde_json::json!({"oid": oid, "size": size});
-                output_success(&envelope, output_format, compact);
                 if let Some(path) = out_path {
                     let mut f = std::fs::File::create(&path)?;
                     f.write_all(&bytes)?;
                 }
+                output_success(&envelope, output_format, compact);
                 return Ok(());
             }
             match out_path {
                 Some(path) => {
                     let mut f = std::fs::File::create(&path)?;
                     f.write_all(&bytes)?;
-                    eprintln!("Wrote {} bytes from {} to {}", size, &oid[..12.min(oid.len())], path.display());
+                    eprintln!(
+                        "Wrote {} bytes from {} to {}",
+                        size,
+                        &oid[..12.min(oid.len())],
+                        path.display()
+                    );
                 }
                 None => {
                     let mut out = std::io::stdout().lock();
@@ -241,4 +284,52 @@ fn print_log(value: &Value, output_format: OutputFormat, compact: bool) {
         })
         .collect();
     output_success(&rows, OutputFormat::Table, compact);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::handle_show;
+    use crate::client::SnapshotShowResult;
+    use crate::output::OutputFormat;
+
+    #[test]
+    fn json_blob_show_writes_requested_output_file() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("blob.bin");
+
+        handle_show(
+            SnapshotShowResult::Blob {
+                oid: "abc123".to_string(),
+                bytes: b"snapshot-bytes".to_vec(),
+                size: 14,
+            },
+            Some(path.clone()),
+            OutputFormat::Json,
+            true,
+        )
+        .expect("blob output should be written");
+
+        assert_eq!(
+            std::fs::read(path).expect("blob output should be readable"),
+            b"snapshot-bytes"
+        );
+    }
+
+    #[test]
+    fn json_blob_show_propagates_output_file_errors() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+
+        let result = handle_show(
+            SnapshotShowResult::Blob {
+                oid: "abc123".to_string(),
+                bytes: b"snapshot-bytes".to_vec(),
+                size: 14,
+            },
+            Some(dir.path().to_path_buf()),
+            OutputFormat::Json,
+            true,
+        );
+
+        assert!(result.is_err());
+    }
 }

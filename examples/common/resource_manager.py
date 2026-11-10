@@ -3,39 +3,31 @@
 Resource Manager - Shared utilities for adding resources to OpenViking
 """
 
-import json
 from pathlib import Path
 from typing import Optional
 
+from openviking_sdk import SyncHTTPClient
 from rich.console import Console
 
-import openviking as ov
-from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
-
-def create_client(config_path: str = "./ov.conf", data_path: str = "./data") -> ov.SyncOpenViking:
+def create_client(server_url: str = "http://127.0.0.1:1933") -> SyncHTTPClient:
     """
     Create and initialize OpenViking client
 
     Args:
-        config_path: Path to config file
-        data_path: Path to data directory
+        server_url: OpenViking HTTP server URL
 
     Returns:
-        Initialized SyncOpenViking client
+        Initialized HTTP client
     """
-    with open(config_path, "r") as f:
-        config_dict = json.load(f)
-
-    config = OpenVikingConfig.from_dict(config_dict)
-    client = ov.SyncOpenViking(path=data_path, config=config)
+    client = SyncHTTPClient(url=server_url)
     client.initialize()
 
     return client
 
 
 def add_resource(
-    client: ov.SyncOpenViking,
+    client: SyncHTTPClient,
     resource_path: str,
     console: Optional[Console] = None,
     show_output: bool = True,
@@ -44,7 +36,7 @@ def add_resource(
     Add a resource to OpenViking database
 
     Args:
-        client: Initialized SyncOpenViking client
+        client: Initialized HTTP client
         resource_path: Path to file/directory or URL
         console: Rich Console for output (creates new if None)
         show_output: Whether to print status messages

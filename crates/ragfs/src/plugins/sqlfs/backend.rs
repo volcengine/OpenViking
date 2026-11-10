@@ -46,6 +46,12 @@ pub trait DatabaseBackend: Send + Sync {
     /// Update file data
     fn update_file(&self, path: &str, data: &[u8]) -> Result<()>;
 
+    /// Update file data only when the current data equals `expected`.
+    fn compare_and_update_file(&self, path: &str, expected: &[u8], data: &[u8]) -> Result<bool>;
+
+    /// Delete a file only when the current data equals `expected`.
+    fn compare_and_delete_file(&self, path: &str, expected: &[u8]) -> Result<bool>;
+
     /// Get file metadata
     fn get_metadata(&self, path: &str) -> Result<Option<FileMetadata>>;
 
@@ -276,6 +282,35 @@ impl DatabaseBackend for SQLiteBackend {
         )
         .map_err(|e| Error::internal(format!("update error: {}", e)))?;
         Ok(())
+    }
+
+    fn compare_and_update_file(&self, path: &str, expected: &[u8], data: &[u8]) -> Result<bool> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(e.to_string()))?;
+        let now = chrono::Utc::now().timestamp();
+        let changed = conn
+            .execute(
+                "UPDATE files SET data = ?1, size = ?2, mod_time = ?3 WHERE path = ?4 AND is_dir = 0 AND data = ?5",
+                params![data, data.len() as i64, now, path, expected],
+            )
+            .map_err(|e| Error::internal(format!("conditional update error: {}", e)))?;
+        Ok(changed == 1)
+    }
+
+    fn compare_and_delete_file(&self, path: &str, expected: &[u8]) -> Result<bool> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(e.to_string()))?;
+        let changed = conn
+            .execute(
+                "DELETE FROM files WHERE path = ?1 AND is_dir = 0 AND data = ?2",
+                params![path, expected],
+            )
+            .map_err(|e| Error::internal(format!("conditional delete error: {}", e)))?;
+        Ok(changed == 1)
     }
 
     fn get_metadata(&self, path: &str) -> Result<Option<FileMetadata>> {

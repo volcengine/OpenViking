@@ -34,7 +34,6 @@ from openviking.observability.context import (
     get_operation_observability_context,
     get_root_observability_context,
     reset_observability_context,
-    set_observability_context,
 )
 from openviking.telemetry.span_models import (
     OperationSpanAttributes,
@@ -109,28 +108,6 @@ class TestObservabilityContextBasics:
 
         assert ctx.execution_trace_id == "custom_trace_id"
         assert ctx.execution_span_id == "custom_span_id"
-
-    def test_set_extra(self) -> None:
-        """
-        Test that set_extra adds custom attributes.
-        """
-        ctx = ObservabilityContext()
-        ctx.set_extra("custom_key", "custom_value")
-        ctx.set_extra("number_key", 42)
-
-        assert ctx.extra["custom_key"] == "custom_value"
-        assert ctx.extra["number_key"] == 42
-
-    def test_to_log_fields_includes_extra(self) -> None:
-        """
-        Test that to_log_fields includes extra attributes.
-        """
-        ctx = ObservabilityContext()
-        ctx.set_extra("custom_field", "custom_value")
-
-        fields = ctx.to_log_fields()
-
-        assert fields["custom_field"] == "custom_value"
 
     def test_import_from_fresh_interpreter_does_not_trigger_circular_import(self) -> None:
         """
@@ -480,80 +457,7 @@ class TestContextManagerIntegration:
     Tests for integration with context manager patterns.
     """
 
-    def test_set_and_reset_observability_context(self) -> None:
-        """
-        Test that set_observability_context and reset_observability_context work correctly.
-        """
-        # Create a custom context
-        custom_ctx = ObservabilityContext()
-        custom_ctx.set_extra("custom_key", "custom_value")
-        custom_ctx.bind_execution(trace_id="custom_trace", span_id="custom_span")
-
-        # Set the context
-        token = set_observability_context(custom_ctx)
-
-        try:
-            # Verify the context is set
-            retrieved = get_observability_context()
-            assert retrieved.execution_trace_id == "custom_trace"
-            assert retrieved.execution_span_id == "custom_span"
-            assert retrieved.extra["custom_key"] == "custom_value"
-
-        finally:
-            # Reset the context
-            reset_observability_context(token)
-
-        # After reset, should be back to default
-        after_reset = get_observability_context()
-        assert after_reset.execution_trace_id is None
-        assert after_reset.execution_span_id is None
-
-
 class TestLogFieldsIntegration:
     """
     Tests for log fields integration.
     """
-
-    def test_to_log_fields_combines_all_contexts(self) -> None:
-        """
-        Test that to_log_fields combines all context types correctly.
-        """
-        ctx = ObservabilityContext()
-
-        # Add root context
-        root_attrs = RootSpanAttributes(
-            http_method="GET",
-            http_route="/test",
-            request_id="req-123",
-        )
-        root_attrs.account_id = "acct-456"
-        ctx.bind_root(root_attrs)
-
-        # Add operation context
-        operation_attrs = OperationSpanAttributes(
-            operation="search.find",
-            telemetry_id="tm-789",
-        )
-        operation_attrs.status = "ok"
-        ctx.bind_operation(operation_attrs)
-
-        # Add execution context
-        ctx.bind_execution(trace_id="exec_trace", span_id="exec_span")
-
-        # Add extra fields
-        ctx.set_extra("extra_field", "extra_value")
-
-        # Get log fields
-        fields = ctx.to_log_fields()
-
-        # Verify all fields are present
-        assert fields["trace_id"] == "exec_trace"
-        assert fields["span_id"] == "exec_span"
-        assert fields["request_id"] == "req-123"
-        assert fields["account_id"] == "acct-456"
-        assert fields["http_method"] == "GET"
-        assert fields["http_route"] == "/test"
-        assert fields["operation"] == "search.find"
-        assert fields["telemetry_id"] == "tm-789"
-        assert fields["status"] == "ok"
-        assert fields["extra_field"] == "extra_value"

@@ -14,12 +14,18 @@ from starlette.requests import Request
 
 from openviking.message import ImagePart, Message, TextPart
 from openviking.server.app import create_app
-from openviking.server.config import ServerConfig, ToolOutputExternalizationConfig
+from openviking.server.config import (
+    ServerConfig,
+    ToolOutputExternalizationConfig,
+)
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import sessions as sessions_router
+from openviking.session.auto_commit_policy import MAX_PENDING_TOKEN_THRESHOLD, AutoCommitPolicy
+from openviking.session.session import Session
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
+from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from tests.utils.mock_agfs import MockLocalAGFS
 
@@ -133,12 +139,27 @@ async def _call_add_message_route(
     )
 
 
-async def test_create_session(client: httpx.AsyncClient):
-    resp = await client.post("/api/v1/sessions", json={})
+async def test_create_session(client: httpx.AsyncClient, service):
+    headers = {"X-OpenViking-Account": "session-only", "X-OpenViking-User": "alice"}
+    ctx = RequestContext(user=UserIdentifier("session-only", "alice"), role=Role.ROOT)
+    resp = await client.post("/api/v1/sessions", json={}, headers=headers)
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
     assert "session_id" in body["result"]
+    assert {
+        entry["name"] for entry in await service.viking_fs.ls("viking://user/alice", ctx=ctx)
+    } == {"sessions"}
+    session_id = body["result"]["session_id"]
+    assert (
+        await service.viking_fs.read_file(
+            f"viking://user/alice/sessions/{session_id}/messages.jsonl", ctx=ctx
+        )
+        == ""
+    )
+    retrieved = await client.get(f"/api/v1/sessions/{session_id}", headers=headers)
+    assert retrieved.status_code == 200
+    assert retrieved.json()["result"]["session_id"] == session_id
 
 
 async def test_list_sessions(client: httpx.AsyncClient):
@@ -164,21 +185,110 @@ async def test_get_session(client: httpx.AsyncClient):
     assert body["result"]["uri"] == session_uri
 
 
-async def test_legacy_session_uri_alias_reads_current_user_session(client: httpx.AsyncClient):
-    session_id = "legacy-alias-read"
-    await client.post("/api/v1/sessions", json={"session_id": session_id})
-    await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json=_message_request("user", content="legacy alias message"),
+@pytest.mark.parametrize("artifact", ["empty", "recall_ledger", "meta"])
+async def test_add_message_repairs_session_directory_without_live_messages(
+    client: httpx.AsyncClient,
+    service,
+    artifact: str,
+):
+    session_id = f"{artifact}-only-session"
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+    ledger_uri = f"viking://user/default/sessions/{session_id}/.recall_log.json"
+    meta_uri = f"viking://user/default/sessions/{session_id}/.meta.json"
+    await service.viking_fs.mkdir(
+        f"viking://user/default/sessions/{session_id}",
+        exist_ok=True,
+        ctx=ctx,
     )
+    if artifact == "recall_ledger":
+        await service.viking_fs.write_file(
+            uri=ledger_uri,
+            content=json.dumps({"version": 1, "updated_turn": 0, "entries": {}}),
+            ctx=ctx,
+        )
+    elif artifact == "meta":
+        meta = service.sessions.session(ctx, session_id).meta.to_dict()
+        meta["last_commit_at"] = "preserve-existing-meta"
+        await service.viking_fs.write_file(
+            uri=meta_uri,
+            content=json.dumps(meta),
+            ctx=ctx,
+        )
 
-    resp = await client.get(
-        "/api/v1/content/read",
-        params={"uri": f"viking://session/{session_id}/messages.jsonl"},
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="first captured message"),
     )
 
     assert resp.status_code == 200
-    assert "legacy alias message" in resp.json()["result"]
+    assert resp.json()["result"]["message_count"] == 1
+    messages = await service.viking_fs.read_file(
+        f"viking://user/default/sessions/{session_id}/messages.jsonl",
+        ctx=ctx,
+    )
+    assert "first captured message" in messages
+    assert await service.viking_fs.exists(ledger_uri, ctx=ctx) is (artifact == "recall_ledger")
+    persisted_meta = json.loads(await service.viking_fs.read_file(meta_uri, ctx=ctx))
+    if artifact == "meta":
+        assert persisted_meta["last_commit_at"] == "preserve-existing-meta"
+
+
+async def test_partial_session_remains_visible_and_deletable(
+    client: httpx.AsyncClient,
+    service,
+):
+    session_id = "partial-session-lifecycle"
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+    session_uri = f"viking://user/default/sessions/{session_id}"
+    await service.viking_fs.mkdir(session_uri, exist_ok=True, ctx=ctx)
+
+    get_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["result"]["message_count"] == 0
+
+    duplicate = await client.post("/api/v1/sessions", json={"session_id": session_id})
+    assert duplicate.status_code == 409
+
+    delete_resp = await client.delete(f"/api/v1/sessions/{session_id}")
+    assert delete_resp.status_code == 200
+    assert not await service.viking_fs.exists(session_uri, ctx=ctx)
+
+
+async def test_add_message_recovers_after_interrupted_session_initialization(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    session_id = "interrupted-initialization"
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+    session_uri = f"viking://user/default/sessions/{session_id}"
+    original_write_file = service.viking_fs.write_file
+    failed_once = False
+
+    async def fail_first_message_file(uri, content, **kwargs):
+        nonlocal failed_once
+        if uri == f"{session_uri}/messages.jsonl" and not failed_once:
+            failed_once = True
+            raise OSError("simulated initialization interruption")
+        return await original_write_file(uri, content, **kwargs)
+
+    monkeypatch.setattr(service.viking_fs, "write_file", fail_first_message_file)
+    first = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="first attempt"),
+    )
+    assert first.status_code == 500
+    assert await service.viking_fs.exists(session_uri, ctx=ctx)
+    assert not await service.viking_fs.exists(f"{session_uri}/messages.jsonl", ctx=ctx)
+
+    second = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="second attempt"),
+    )
+    assert second.status_code == 200
+    assert second.json()["result"]["message_count"] == 1
+    messages = await service.viking_fs.read_file(f"{session_uri}/messages.jsonl", ctx=ctx)
+    assert "second attempt" in messages
 
 
 async def test_get_session_context(client: httpx.AsyncClient):
@@ -209,7 +319,7 @@ async def test_get_session_context_rejects_negative_token_budget(client: httpx.A
     assert body["error"]["details"] == {"field": "token_budget", "value": -1}
 
 
-async def test_tool_result_externalization_read_and_search(client: httpx.AsyncClient):
+async def test_tool_result_externalization_read_and_search(client: httpx.AsyncClient, service):
     session_id = "tool-result-api-session"
     raw = "alpha\n" + ("needle-" * 4000) + "\nomega"
 
@@ -240,6 +350,9 @@ async def test_tool_result_externalization_read_and_search(client: httpx.AsyncCl
     assert raw not in part["tool_output"]
     assert "kind: text" in part["tool_output"]
     assert "openviking_tool_result_search" in part["tool_output"]
+
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+    await service.viking_fs.write_file(f"{session_uri}/messages.jsonl", "invalid JSONL", ctx=ctx)
 
     tool_result_id = part["tool_output_ref"].rsplit("/", 1)[-1]
     read_resp = await client.get(
@@ -272,6 +385,8 @@ async def test_tool_result_externalization_read_and_search(client: httpx.AsyncCl
 
 
 async def test_tool_result_externalization_respects_server_config_disabled(service):
+    from openviking.server.auth.plugins import DevAuthPlugin
+
     app = create_app(
         config=ServerConfig(
             tool_output_externalization=ToolOutputExternalizationConfig(enabled=False)
@@ -279,6 +394,9 @@ async def test_tool_result_externalization_respects_server_config_disabled(servi
         service=service,
     )
     set_service(service)
+    # ASGITransport does not run the application lifespan that normally
+    # initializes the configured auth plugin.
+    app.state.auth_plugin = DevAuthPlugin()
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -361,9 +479,17 @@ async def test_get_session_context_includes_incomplete_archive_messages(
     ]
 
 
-async def test_get_session_context_skips_failed_archive_messages(
+async def test_get_session_context_stops_at_newest_failed_archive(
     client: httpx.AsyncClient, service
 ):
+    """The read path stops at the newest terminal archive.
+
+    Archive history grows without bound, so ``get_session_context`` no longer
+    walks it. A newest ``.failed.json`` therefore contributes no overview and no
+    replayed raw messages; the raw file stays durable and Phase 2 roll-forward
+    still absorbs it. This is a deliberate deviation from the RFC #3330
+    ``logical live`` formula.
+    """
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
@@ -408,6 +534,11 @@ async def test_get_session_context_skips_failed_archive_messages(
     assert [m["parts"][0]["text"] for m in body["result"]["messages"]] == [
         "Current live message",
     ]
+    assert body["result"]["stats"]["failedArchives"] == 1
+
+    # The failed archive's raw messages are still durable on disk.
+    raw = await session._archives.read_messages(failed_archive_uri)
+    assert [message.content for message in raw] == ["Failed archive message"]
 
 
 async def test_add_message(client: httpx.AsyncClient):
@@ -422,6 +553,373 @@ async def test_add_message(client: httpx.AsyncClient):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["message_count"] == 1
+
+
+async def test_add_message_records_last_message_at(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "Hello, world!"},
+    )
+    assert resp.status_code == 200
+
+    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    assert session_resp.status_code == 200
+    assert session_resp.json()["result"]["last_message_at"]
+
+
+async def test_direct_session_add_message_records_last_message_at(service):
+    session = await service.sessions.get(
+        "direct-last-message-at-session",
+        RequestContext(user=DEFAULT_USER, role=Role.ROOT),
+        auto_create=True,
+    )
+    assert session.meta.last_message_at == ""
+
+    session.add_message("user", [TextPart("Hello, world!")])
+
+    assert session.meta.last_message_at
+
+
+async def test_session_initialization_preserves_concurrent_message(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    session_id = "concurrent-initialization"
+    ctx = RequestContext(user=DEFAULT_USER, role=Role(Role.ROOT))
+    session_uri = f"viking://user/default/sessions/{session_id}"
+    initial_meta_ready = asyncio.Event()
+    finish_initialization = asyncio.Event()
+    append_started = asyncio.Event()
+    original_write = service.viking_fs.write_file
+    original_append = Session._append_messages_authoritatively
+
+    async def pause_initial_meta(uri, content, **kwargs):
+        if uri == f"{session_uri}/.meta.json" and not json.loads(content)["message_count"]:
+            initial_meta_ready.set()
+            await finish_initialization.wait()
+        return await original_write(uri, content, **kwargs)
+
+    async def append(self, messages):
+        if self.session_id == session_id:
+            append_started.set()
+        return await original_append(self, messages)
+
+    monkeypatch.setattr(service.viking_fs, "write_file", pause_initial_meta)
+    monkeypatch.setattr(Session, "_append_messages_authoritatively", append)
+    create_task = asyncio.create_task(
+        client.post("/api/v1/sessions", json={"session_id": session_id})
+    )
+    message_task = None
+    try:
+        await asyncio.wait_for(initial_meta_ready.wait(), timeout=5)
+        message_task = asyncio.create_task(
+            client.post(
+                f"/api/v1/sessions/{session_id}/messages",
+                json={"role": "user", "content": "message during initialization"},
+            )
+        )
+        await asyncio.wait_for(append_started.wait(), timeout=5)
+        # Without the session lock the append finishes before the initial meta
+        # overwrites it. With the lock it waits for initialization to finish.
+        await asyncio.wait({message_task}, timeout=1)
+    finally:
+        finish_initialization.set()
+        tasks = [task for task in (create_task, message_task) if task is not None]
+        responses = await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
+
+    assert all(response.status_code == 200 for response in responses)
+    meta = json.loads(await service.viking_fs.read_file(f"{session_uri}/.meta.json", ctx=ctx))
+    messages = await service.viking_fs.read_file(f"{session_uri}/messages.jsonl", ctx=ctx)
+    assert [json.loads(line)["parts"][0]["text"] for line in messages.splitlines()] == [
+        "message during initialization"
+    ]
+    assert meta["message_count"] == 1
+    assert meta["pending_tokens"] > 0
+    assert meta["last_message_at"]
+
+
+async def test_add_message_ignores_extra_metadata_fields(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "role": "user",
+            "content": "Hello, world!",
+            "metadata": {"source": "test"},
+            "auto_commit_policy": {"pending_token_threshold": 123},
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["result"]["message_count"] == 1
+
+
+async def test_create_session_defaults_auto_commit_policy_to_disabled(
+    client: httpx.AsyncClient,
+):
+    resp = await client.post("/api/v1/sessions", json={})
+    assert resp.status_code == 200
+    assert resp.json()["result"]["auto_commit_policy"] is None
+
+
+async def test_create_session_uses_default_policy_when_server_default_enabled(
+    client: httpx.AsyncClient,
+    service,
+):
+    service.sessions.set_session_auto_commit_config(SessionAutoCommitConfig(enabled=True))
+
+    resp = await client.post("/api/v1/sessions", json={})
+    assert resp.status_code == 200
+    assert resp.json()["result"]["auto_commit_policy"] == AutoCommitPolicy.default().to_dict()
+
+
+async def test_create_session_can_disable_server_default_auto_commit(
+    client: httpx.AsyncClient,
+    service,
+):
+    service.sessions.set_session_auto_commit_config(SessionAutoCommitConfig(enabled=True))
+
+    resp = await client.post(
+        "/api/v1/sessions",
+        json={"auto_commit_policy": None},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["result"]["auto_commit_policy"] is None
+
+
+async def test_auto_commit_policy_rejects_null_fields(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/sessions",
+        json={"auto_commit_policy": {"message_count_threshold": None}},
+    )
+
+    assert resp.status_code == 400
+    assert "auto_commit_policy=null" in resp.json()["error"]["message"]
+
+
+async def test_auto_created_session_uses_default_policy_when_server_default_enabled(
+    client: httpx.AsyncClient,
+    service,
+):
+    service.sessions.set_session_auto_commit_config(SessionAutoCommitConfig(enabled=True))
+    session_id = "auto-created-default-policy"
+
+    add_resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "create this session by writing first"},
+    )
+    assert add_resp.status_code == 200
+
+    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    assert session_resp.status_code == 200
+    assert (
+        session_resp.json()["result"]["auto_commit_policy"]
+        == AutoCommitPolicy.default().to_dict()
+    )
+
+
+async def test_create_session_applies_config_and_fills_defaults(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/sessions",
+        json={
+            "auto_commit_policy": {
+                "pending_token_threshold": 8000,
+                "keep_recent_count": 10,
+            }
+        },
+    )
+    assert resp.status_code == 200
+    result = resp.json()["result"]
+    expected_policy = AutoCommitPolicy.default().to_dict()
+    expected_policy.update({"pending_token_threshold": 8000, "keep_recent_count": 10})
+    assert result["auto_commit_policy"] == expected_policy
+
+    session_resp = await client.get(f"/api/v1/sessions/{result['session_id']}")
+    session_result = session_resp.json()["result"]
+    assert session_result["auto_commit_policy"]["pending_token_threshold"] == 8000
+    assert session_result["auto_commit_policy"]["keep_recent_count"] == 10
+
+
+async def test_create_session_clamps_config_above_bounds(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/sessions",
+        json={"auto_commit_policy": {"pending_token_threshold": 10_000_000}},
+    )
+    assert resp.status_code == 200
+    policy = resp.json()["result"]["auto_commit_policy"]
+    assert policy["pending_token_threshold"] == MAX_PENDING_TOKEN_THRESHOLD
+
+
+async def test_session_idle_policy_validates_writes_and_preserves_stored_values(
+    client: httpx.AsyncClient, service
+):
+    rejected = await client.post(
+        "/api/v1/sessions",
+        json={"auto_commit_policy": {"idle_timeout_seconds": 299}},
+    )
+    assert rejected.status_code == 400
+    assert "must be 0 or at least 300" in rejected.json()["error"]["message"]
+
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.get(f"/api/v1/sessions/{session_id}")
+    assert resp.status_code == 200
+    assert resp.json()["result"]["auto_commit_policy"] is None
+
+    # Emulate a stored policy from before the HTTP write-time minimum existed.
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+    session = await service.sessions.get(session_id, ctx)
+    await session.update_config(
+        auto_commit_policy={"idle_timeout_seconds": 60},
+        update_auto_commit_policy=True,
+    )
+    config_url = f"/api/v1/sessions/{session_id}/config"
+    updated = await client.patch(
+        config_url, json={"auto_commit_policy": {"message_count_threshold": 25}}
+    )
+    assert updated.status_code == 200
+    policy = updated.json()["result"]["auto_commit_policy"]
+    assert policy["idle_timeout_seconds"] == 60
+    assert policy["message_count_threshold"] == 25
+
+    rejected = await client.patch(
+        config_url, json={"auto_commit_policy": {"idle_timeout_seconds": 299}}
+    )
+    assert rejected.status_code == 400
+    persisted = await client.get(f"/api/v1/sessions/{session_id}")
+    assert persisted.json()["result"]["auto_commit_policy"] == policy
+
+    updated = await client.patch(
+        config_url, json={"auto_commit_policy": {"idle_timeout_seconds": 300}}
+    )
+    assert updated.status_code == 200
+    assert updated.json()["result"]["auto_commit_policy"]["idle_timeout_seconds"] == 300
+    disabled = await client.patch(
+        config_url, json={"auto_commit_policy": {"idle_timeout_seconds": 0}}
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["result"]["auto_commit_policy"]["idle_timeout_seconds"] == 0
+
+
+async def test_patch_session_config_is_not_supported(client: httpx.AsyncClient):
+    create_resp = await client.post(
+        "/api/v1/sessions",
+        json={
+            "auto_commit_policy": {
+                "pending_token_threshold": 8000,
+                "message_count_threshold": 40,
+                "keep_recent_count": 10,
+            }
+        },
+    )
+    session_id = create_resp.json()["result"]["session_id"]
+
+    patch_resp = await client.patch(
+        f"/api/v1/sessions/{session_id}",
+        json={"auto_commit_policy": {"message_count_threshold": 25}},
+    )
+    assert patch_resp.status_code == 405
+
+    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    session_config = session_resp.json()["result"]["auto_commit_policy"]
+    assert session_config["message_count_threshold"] == 40
+    assert session_config["pending_token_threshold"] == 8000
+
+
+async def test_session_load_recovers_message_count_from_live_messages(service):
+    ctx = RequestContext(user=UserIdentifier("acct_a", "user_b"), role=Role.ADMIN)
+    await service.initialize_account_directories(ctx)
+    await service.initialize_user_directories(ctx)
+
+    session = await service.sessions.create(ctx)
+    session.add_message("user", [TextPart("我爱吃西瓜")])
+
+    session = await service.sessions.get(session.session_id, ctx, auto_create=False)
+    session.meta.message_count = 0
+    session.meta.pending_tokens = 0
+    await session._save_meta()
+
+    reloaded = service.sessions.session(ctx, session.session_id)
+    await reloaded.load()
+
+    assert len(reloaded.messages) == 1
+    assert reloaded.meta.message_count == 1
+
+
+async def test_write_responses_return_pending_tokens_for_commit_policy(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    """A commit policy must be able to decide from the write response alone.
+
+    Exercises the real REST endpoints rather than a test double, so the
+    ``pending_tokens`` contract is verified where LangChain actually reads it.
+    """
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    session_uri = create_resp.json()["result"]["uri"]
+    reads = []
+    original_read = service.viking_fs._async_agfs.read
+
+    async def read(path, *args, **kwargs):
+        reads.append(path.rsplit("/", 1)[-1])
+        return await original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(service.viking_fs._async_agfs, "read", read)
+
+    add_resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="Hello, world!"),
+    )
+    assert add_resp.status_code == 200
+    after_add = add_resp.json()["result"]["pending_tokens"]
+    assert after_add > 0
+    assert reads.count("messages.jsonl") == reads.count(".meta.json") == 1
+
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+    meta = json.loads(await service.viking_fs.read_file(f"{session_uri}/.meta.json", ctx=ctx))
+    meta["pending_tokens"] = 0
+    await service.viking_fs.write_file(f"{session_uri}/.meta.json", json.dumps(meta), ctx=ctx)
+    reads.clear()
+
+    batch_resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages/batch",
+        json={
+            "messages": [
+                _message_request("assistant", content="First reply"),
+                _message_request("user", content="Follow-up question"),
+            ]
+        },
+    )
+    assert batch_resp.status_code == 200
+    after_batch = batch_resp.json()["result"]["pending_tokens"]
+    assert after_batch > after_add
+    assert reads.count("messages.jsonl") == reads.count(".meta.json") == 1
+
+    # The write-returned value must match what get_session would have reported,
+    # which is exactly the extra round trip this field removes.
+    get_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    assert get_resp.json()["result"]["pending_tokens"] == after_batch
+
+    empty_resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages/batch", json={"messages": []}
+    )
+    assert empty_resp.status_code == 200
+    assert empty_resp.json()["result"] == {
+        "session_id": session_id,
+        "message_count": 3,
+        "pending_tokens": after_batch,
+        "added": 0,
+    }
 
 
 async def test_add_message_accepts_image_part(client: httpx.AsyncClient, service):
@@ -587,6 +1085,22 @@ async def test_batch_add_message_accepts_mixed_parts(client: httpx.AsyncClient, 
     assert isinstance(session.messages[0].parts[1], ImagePart)
 
 
+async def test_batch_add_message_ignores_removed_auto_commit_policy(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages/batch",
+        json={
+            "messages": [{"role": "user", "content": "hello"}],
+            "auto_commit_policy": {"pending_token_threshold": 1},
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["result"]["message_count"] == 1
+
+
 async def test_add_message_splits_tool_result_aggregate(client: httpx.AsyncClient):
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
@@ -748,7 +1262,8 @@ async def test_delete_session(client: httpx.AsyncClient):
         json=_message_request("user", content="ensure persisted"),
     )
     # Compress to persist
-    await client.post(f"/api/v1/sessions/{session_id}/commit")
+    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    await _wait_for_task(client, commit_resp.json()["result"]["task_id"])
 
     resp = await client.delete(f"/api/v1/sessions/{session_id}")
     assert resp.status_code == 200
@@ -824,33 +1339,6 @@ async def test_commit_updates_archive_metadata_before_background_task(client: ht
     assert after_result["commit_count"] == 1
 
 
-async def test_extract_session_jsonable_regression(client: httpx.AsyncClient, service, monkeypatch):
-    """Regression: extract endpoint should serialize internal objects."""
-
-    class FakeMemory:
-        __slots__ = ("uri",)
-
-        def __init__(self, uri: str):
-            self.uri = uri
-
-        def to_dict(self):
-            return {"uri": self.uri}
-
-    async def fake_extract(_session_id: str, _ctx):
-        return [FakeMemory("viking://user/memories/mock.md")]
-
-    monkeypatch.setattr(service.sessions, "extract", fake_extract)
-
-    create_resp = await client.post("/api/v1/sessions", json={"user": "test"})
-    session_id = create_resp.json()["result"]["session_id"]
-
-    resp = await client.post(f"/api/v1/sessions/{session_id}/extract")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"] == [{"uri": "viking://user/memories/mock.md"}]
-
-
 async def test_get_session_context_endpoint_returns_trimmed_latest_archive_and_messages(
     client: httpx.AsyncClient,
     service,
@@ -863,7 +1351,6 @@ async def test_get_session_context_endpoint_returns_trimmed_latest_archive_and_m
         return []
 
     service.sessions._session_compressor.extract_long_term_memories = _no_memories
-    service.sessions._session_compressor.extract_execution_memories = _no_memories
 
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
@@ -903,21 +1390,30 @@ async def test_get_session_context_endpoint_returns_trimmed_latest_archive_and_m
     result = body["result"]
     assert result["latest_archive_overview"] == ""
     assert result["pre_archive_abstracts"] == []
-    assert len(result["messages"]) == 1
-    assert result["messages"][0]["role"] == "assistant"
-    assert any(
-        part["type"] == "tool" and part["tool_id"] == "tool_123"
-        for part in result["messages"][0]["parts"]
-    )
+    assert result["messages"] == []
+    assert result["estimatedTokens"] <= 1
+    assert result["stats"]["activeTokens"] <= 1
     assert result["stats"]["totalArchives"] == 1
     assert result["stats"]["includedArchives"] == 0
     assert result["stats"]["droppedArchives"] == 1
     assert result["stats"]["failedArchives"] == 0
 
+    # Budget fitting is a virtual view and must not mutate the durable live row.
+    full_resp = await client.get(f"/api/v1/sessions/{session_id}/context?token_budget=128000")
+    full_result = full_resp.json()["result"]
+    assert len(full_result["messages"]) == 1
+    assert full_result["messages"][0]["role"] == "assistant"
+    assert any(
+        part["type"] == "tool" and part["tool_id"] == "tool_123"
+        for part in full_result["messages"][0]["parts"]
+    )
 
+
+@pytest.mark.parametrize("wm_enabled", [False, True])
 async def test_get_session_archive_endpoint_returns_archive_details(
     client: httpx.AsyncClient,
     service,
+    wm_enabled,
 ):
     # See test_get_session_context_*: stub memory extraction (not covered by the
     # server fake VLM) so the archive completes; this test checks the archive
@@ -927,7 +1423,6 @@ async def test_get_session_archive_endpoint_returns_archive_details(
         return []
 
     service.sessions._session_compressor.extract_long_term_memories = _no_memories
-    service.sessions._session_compressor.extract_execution_memories = _no_memories
 
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
@@ -940,7 +1435,10 @@ async def test_get_session_archive_endpoint_returns_archive_details(
         f"/api/v1/sessions/{session_id}/messages",
         json=_message_request("assistant", content="archived answer"),
     )
-    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    commit_resp = await client.post(
+        f"/api/v1/sessions/{session_id}/commit", json={"enable_working_memory": wm_enabled}
+    )
+    assert commit_resp.json()["result"]["effective_enable_working_memory"] is wm_enabled
     task_id = commit_resp.json()["result"]["task_id"]
     await _wait_for_task(client, task_id)
 
@@ -949,8 +1447,8 @@ async def test_get_session_archive_endpoint_returns_archive_details(
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["archive_id"] == "archive_001"
-    assert body["result"]["overview"]
-    assert body["result"]["abstract"]
+    assert bool(body["result"]["overview"]) is wm_enabled
+    assert bool(body["result"]["abstract"]) is wm_enabled
     assert [m["parts"][0]["text"] for m in body["result"]["messages"]] == [
         "archived question",
         "archived answer",
@@ -992,11 +1490,12 @@ async def test_commit_failed_when_long_term_extraction_fails_does_not_block_next
     assert not await _archive_marker_exists(session, archive_uri, ".done")
     assert not await _archive_marker_exists(session, archive_uri, ".partial.json")
 
-    # The failed archive is skipped, not retrievable as a completed archive.
+    # The failed archive is inspectable but has no Working Memory overview.
     archive_resp = await client.get(f"/api/v1/sessions/{session_id}/archives/archive_001")
-    archive_body = archive_resp.json()
-    assert archive_body["status"] == "error"
-    assert archive_body["error"]["code"] == "NOT_FOUND"
+    archive_result = archive_resp.json()["result"]
+    assert archive_result["status"] == "failed"
+    assert archive_result["overview"] == ""
+    assert archive_result["failure"]
 
     # A failed archive is a skippable terminal state; the next commit proceeds.
     await client.post(
@@ -1010,75 +1509,54 @@ async def test_commit_failed_when_long_term_extraction_fails_does_not_block_next
     assert body["result"]["archived"] is True
 
 
-async def test_commit_failed_when_execution_extraction_fails_does_not_block_next_commit(
+async def test_retry_failed_archive_with_hash_from_archive_inspection(
     client: httpx.AsyncClient,
     service,
 ):
-    """Binary archive outcome: if execution memory extraction fails (after
-    retries), the whole archive is marked .failed.json and skipped — there is
-    no partial state — but a failed archive must not block the next commit.
-    """
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
+    """API-only recovery: the retry hash comes from GET archive, not the filesystem."""
+    import hashlib
 
-    # Stub long-term extraction to succeed so the only failing Phase 2 step is
-    # execution memory extraction, isolating the execution failure path.
+    session_id = (await client.post("/api/v1/sessions", json={})).json()["result"]["session_id"]
+
+    async def failing_extract(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("synthetic extraction failure")
+
+    service.sessions._session_compressor.extract_long_term_memories = failing_extract
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="retry me"),
+    )
+    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    assert (await _wait_for_task(client, commit_resp.json()["result"]["task_id"]))[
+        "status"
+    ] == "failed"
+
+    archive_url = f"/api/v1/sessions/{session_id}/archives/archive_001"
+    archive = (await client.get(archive_url)).json()["result"]
+    assert archive["status"] == "failed"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    session = service.sessions.session(ctx, session_id)
+    raw = await session._viking_fs.read_file(
+        f"{session.uri}/history/archive_001/messages.jsonl", ctx=ctx
+    )
+    assert archive["messages_sha256"] == hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
     async def _no_memories(*args, **kwargs):
         del args, kwargs
         return []
 
-    async def failing_extract(*args, **kwargs):
-        del args, kwargs
-        raise RuntimeError("synthetic execution failure")
-
     service.sessions._session_compressor.extract_long_term_memories = _no_memories
-    service.sessions._session_compressor.extract_execution_memories = failing_extract
-
-    await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json=_message_request("user", content="first round"),
+    retry_resp = await client.post(
+        f"/api/v1/sessions/{session_id}/archives/archive_001/retry",
+        json={"expected_messages_sha256": archive["messages_sha256"]},
     )
-    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
-    task_id = commit_resp.json()["result"]["task_id"]
-    task = await _wait_for_task(client, task_id)
-    # Any Phase 2 step failing fails the whole archive (no partial state).
-    assert task["status"] == "failed"
-
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-    session = service.sessions.session(ctx, session_id)
-    await session.load()
-    archive_uri = f"{session.uri}/history/archive_001"
-    assert await _archive_marker_exists(session, archive_uri, ".failed.json")
-    assert not await _archive_marker_exists(session, archive_uri, ".done")
-    assert not await _archive_marker_exists(session, archive_uri, ".partial.json")
-
-    # The marker carries the execution-step error, proving execution extraction
-    # (not some other step) is what failed the archive.
-    failed_payload = json.loads(
-        await session._viking_fs.read_file(
-            f"{archive_uri}/.failed.json",
-            ctx=session.ctx,
-        )
-    )
-    assert failed_payload.get("skipped") is True
-    assert "synthetic execution failure" in failed_payload["error"]
-
-    # The failed archive is skipped, not retrievable as a completed archive.
-    archive_resp = await client.get(f"/api/v1/sessions/{session_id}/archives/archive_001")
-    archive_body = archive_resp.json()
-    assert archive_body["status"] == "error"
-    assert archive_body["error"]["code"] == "NOT_FOUND"
-
-    # A failed archive is a skippable terminal state; the next commit proceeds.
-    await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json=_message_request("user", content="second round"),
-    )
-    resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["archived"] is True
+    assert retry_resp.status_code == 200, retry_resp.text
+    retry = retry_resp.json()["result"]
+    assert retry["status"] == "accepted"
+    assert (await _wait_for_task(client, retry["task_id"]))["status"] == "completed"
+    archive = (await client.get(archive_url)).json()["result"]
+    assert archive["status"] == "completed"
 
 
 async def test_commit_failed_when_summary_fails_does_not_block_next_commit(
@@ -1088,7 +1566,9 @@ async def test_commit_failed_when_summary_fails_does_not_block_next_commit(
     """If the core Working Memory summary fails, the archive is .failed.json (no
     .done) and the task fails — but a failed archive must not block later commits.
     """
-    create_resp = await client.post("/api/v1/sessions", json={})
+    create_resp = await client.post(
+        "/api/v1/sessions", json={"memory_policy": {"working_memory": {"enabled": True}}}
+    )
     session_id = create_resp.json()["result"]["session_id"]
 
     async def failing_summary(*args, **kwargs):
@@ -1125,3 +1605,24 @@ async def test_commit_failed_when_summary_fails_does_not_block_next_commit(
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["archived"] is True
+
+
+@pytest.mark.parametrize("invalid", ["false", "true", 0, 1, {}, []])
+def test_commit_working_memory_override_requires_boolean(invalid):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        sessions_router.CommitRequest.model_validate({"enable_working_memory": invalid})
+
+
+async def test_retry_archive_validates_request_and_missing_archive(client: httpx.AsyncClient):
+    session_id = (await client.post("/api/v1/sessions", json={})).json()["result"]["session_id"]
+    url = f"/api/v1/sessions/{session_id}/archives/archive_001/retry"
+
+    bad_hash = await client.post(url, json={"expected_messages_sha256": "not-a-digest"})
+    assert bad_hash.status_code == 400
+    assert bad_hash.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+    missing = await client.post(url, json={"expected_messages_sha256": "0" * 64})
+    assert missing.status_code == 404
+    assert missing.json()["error"]["details"] == {"type": "archive", "resource": "archive_001"}

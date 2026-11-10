@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use super::{
-    FileInfo, FileSystem, FsOperation, GrepResult, OperationTimer, Result, StatsCollector,
-    TreeEntry, WriteFlag,
+    FileInfo, FileSystem, FsOperation, GlobPage, GrepOptions, GrepResult, OperationTimer, Result,
+    StatsCollector, TreeEntry, WriteFlag,
 };
 
 /// A wrapper around FileSystem that automatically collects operation statistics
@@ -67,98 +67,113 @@ impl FileSystem for StatsWrappedFS {
     async fn create(&self, path: &str) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::Create, Arc::clone(&self.stats));
         let result = self.inner.create(path).await;
-        timer.finish().await;
+        timer.finish(result.as_ref().err().map(|error| error.kind_name())).await;
         result
     }
 
     async fn mkdir(&self, path: &str, mode: u32) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::Mkdir, Arc::clone(&self.stats));
         let result = self.inner.mkdir(path, mode).await;
-        timer.finish().await;
+        timer.finish(result.as_ref().err().map(|error| error.kind_name())).await;
         result
     }
 
     async fn remove(&self, path: &str) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::Remove, Arc::clone(&self.stats));
         let result = self.inner.remove(path).await;
-        timer.finish().await;
+        timer.finish(result.as_ref().err().map(|error| error.kind_name())).await;
         result
     }
 
     async fn remove_all(&self, path: &str) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::RemoveAll, Arc::clone(&self.stats));
         let result = self.inner.remove_all(path).await;
-        timer.finish().await;
+        timer.finish(result.as_ref().err().map(|error| error.kind_name())).await;
         result
     }
 
     async fn read(&self, path: &str, offset: u64, size: u64) -> Result<Vec<u8>> {
         let timer = OperationTimer::start(FsOperation::Read, Arc::clone(&self.stats));
         let result = self.inner.read(path, offset, size).await;
-        timer.finish().await;
+        timer.finish(result.as_ref().err().map(|error| error.kind_name())).await;
         result
     }
 
     async fn write(&self, path: &str, data: &[u8], offset: u64, flags: WriteFlag) -> Result<u64> {
         let timer = OperationTimer::start(FsOperation::Write, Arc::clone(&self.stats));
         let result = self.inner.write(path, data, offset, flags).await;
-        timer.finish().await;
+        timer.finish(result.as_ref().err().map(|error| error.kind_name())).await;
         result
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
         let timer = OperationTimer::start(FsOperation::ReadDir, Arc::clone(&self.stats));
-        let result = self.inner.read_dir(path).await;
-        timer.finish().await;
+        let result = self
+            .inner
+            .read_dir(path, offset, limit, sort_by, sort_order)
+            .await;
+        timer.finish(result.as_ref().err().map(|error| error.kind_name())).await;
         result
+    }
+
+    /// List internal directory entries without changing inner filesystem semantics.
+    async fn read_internal_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+        self.inner.read_internal_dir(path).await
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
         let timer = OperationTimer::start(FsOperation::Stat, Arc::clone(&self.stats));
         let result = self.inner.stat(path).await;
-        timer.finish().await;
+        timer.finish(result.as_ref().err().map(|error| error.kind_name())).await;
         result
     }
 
     async fn rename(&self, old_path: &str, new_path: &str) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::Rename, Arc::clone(&self.stats));
         let result = self.inner.rename(old_path, new_path).await;
-        timer.finish().await;
+        timer.finish(result.as_ref().err().map(|error| error.kind_name())).await;
         result
     }
 
     async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::Rename, Arc::clone(&self.stats));
         let result = self.inner.replace(src_path, dst_path).await;
-        timer.finish().await;
+        timer.finish(result.as_ref().err().map(|error| error.kind_name())).await;
         result
     }
 
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::Chmod, Arc::clone(&self.stats));
         let result = self.inner.chmod(path, mode).await;
-        timer.finish().await;
+        timer.finish(result.as_ref().err().map(|error| error.kind_name())).await;
         result
     }
 
     async fn truncate(&self, path: &str, size: u64) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::Truncate, Arc::clone(&self.stats));
         let result = self.inner.truncate(path, size).await;
-        timer.finish().await;
+        timer.finish(result.as_ref().err().map(|error| error.kind_name())).await;
         result
     }
 
     async fn ensure_parent_dirs(&self, path: &str, mode: u32) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::EnsureParentDirs, Arc::clone(&self.stats));
         let result = self.inner.ensure_parent_dirs(path, mode).await;
-        timer.finish().await;
+        timer.finish(result.as_ref().err().map(|error| error.kind_name())).await;
         result
     }
 
     async fn exists(&self, path: &str) -> bool {
         let timer = OperationTimer::start(FsOperation::Exists, Arc::clone(&self.stats));
         let result = self.inner.exists(path).await;
-        timer.finish().await;
+        timer.finish(None).await;
         result
     }
 
@@ -166,26 +181,11 @@ impl FileSystem for StatsWrappedFS {
         &self,
         path: &str,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
         let timer = OperationTimer::start(FsOperation::Grep, Arc::clone(&self.stats));
-        let result = self
-            .inner
-            .grep(
-                path,
-                pattern,
-                recursive,
-                case_insensitive,
-                node_limit,
-                exclude_path,
-                level_limit,
-            )
-            .await;
-        timer.finish().await;
+        let result = self.inner.grep(path, pattern, options).await;
+        timer.finish(result.as_ref().err().map(|error| error.kind_name())).await;
         result
     }
 
@@ -195,13 +195,51 @@ impl FileSystem for StatsWrappedFS {
         show_hidden: bool,
         node_limit: Option<usize>,
         level_limit: Option<usize>,
+        offset: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+        directories_only: bool,
     ) -> Result<Vec<TreeEntry>> {
         let timer = OperationTimer::start(FsOperation::TreeDir, Arc::clone(&self.stats));
         let result = self
             .inner
-            .tree_directory(path, show_hidden, node_limit, level_limit)
+            .tree_directory(
+                path,
+                show_hidden,
+                node_limit,
+                level_limit,
+                offset,
+                sort_by,
+                sort_order,
+                directories_only,
+            )
             .await;
-        timer.finish().await;
+        timer.finish(result.as_ref().err().map(|error| error.kind_name())).await;
+        result
+    }
+
+    async fn glob_directory(
+        &self,
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        let timer = OperationTimer::start(FsOperation::GlobDir, Arc::clone(&self.stats));
+        let result = self
+            .inner
+            .glob_directory(
+                path,
+                pattern,
+                show_hidden,
+                page_size,
+                level_limit,
+                continuation_token,
+            )
+            .await;
+        timer.finish(result.as_ref().err().map(|error| error.kind_name())).await;
         result
     }
 }

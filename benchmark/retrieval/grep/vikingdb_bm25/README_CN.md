@@ -2,6 +2,8 @@
 
 用于评估 OpenViking grep 检索配合 VikingDB BM25 引擎的基准测试套件。
 
+执行导入、重建索引或基准测试前，需要先启动 `openviking-server`。
+
 ## 目录结构
 
 ```
@@ -58,8 +60,8 @@ python3 step2_quality.py --keywords grep reindex SyncHTTPClient
 | 步骤 | 脚本 | 说明 |
 |------|------|------|
 | 0 | `step0_prepare_data.py` | 生成合成数据集（dir_xxx/wiki_xxx.txt） |
-| 1 | `step1_add_resource.py` | 导入数据（不建索引，速度快） |
-| 2 | `step2_reindex.py` | 通过 openviking-server 异步构建索引（并发=16，轮询） |
+| 1 | `step1_add_resource.py` | 通过 HTTP SDK 导入数据（`vectors_only`，不执行 VLM） |
+| 2 | `step2_reindex.py` | 可选：通过 openviking-server 异步重建索引（并发=16，轮询） |
 | 3 | `step3_benchmark.py` | 使用 `node_limit=256` 测量延迟和返回匹配数 |
 
 ### 目标单词
@@ -87,10 +89,10 @@ python3 step0_prepare_data.py
 # 可选：追加更多数据，用于水平扩容，不覆盖已有目录
 python3 step0_prepare_data.py --start-dir 100 --num-dirs 100
 
-# 步骤 1：导入数据（不建索引，速度快）
+# 步骤 1：仅生成向量，不执行 VLM 语义处理
 python3 step1_add_resource.py
 
-# 步骤 2：构建向量索引（需 openviking-server 运行中）
+# 步骤 2（可选）：重建向量索引
 python3 step2_reindex.py
 # 可选参数：--concurrency N  （默认：16）
 
@@ -111,7 +113,7 @@ python3 step3_benchmark.py --engine-label auto --compare step3_result_fs.json
 - **Effectiveness（效果测试）** 将 grep 结果与 fs 引擎的 ground truth 对比（本地缓存）
 - **Performance（性能测试）** 对比不同引擎的延迟和返回匹配数，不生成 ground truth
 - **Effectiveness** 直接一次性导入真实代码仓并建索引，然后执行效果评估
-- **Performance** 先导入合成数据（不建索引），再异步建向量索引，最后执行延迟基准测试
+- **Performance** 通过 HTTP SDK 以 `vectors_only` 模式导入合成数据，可选异步重建索引，最后执行延迟基准测试
 - **Performance** 的导入与 reindex 步骤支持**断点续传**（各有独立进度文件）
 - 切换 grep 引擎需修改 `ov.conf` 并重启服务，在不同运行之间对比
 - 如需水平扩展合成数据集，可用新的 `--start-dir` 再运行步骤 0，然后重跑步骤 1 和步骤 2。

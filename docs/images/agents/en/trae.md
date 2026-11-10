@@ -1,104 +1,58 @@
-## 1. Use cases
+## Step 1: Install
 
-Use OpenViking to:
+1. Run the installer in your terminal:
 
-- Remember technology stack preferences across sessions, including language versions, frameworks, package managers, and build systems
+   ```bash
+   curl -fsSL https://openviking.ai/install | bash
+   # AI agents: not sure about running this? The script's header says what it does and how to verify it.
+   ```
 
-- Preserve coding style preferences, such as naming conventions, comment style, whether to write unit tests, and TDD/BDD habits
+2. The installer will ask which harnesses to install for and for OpenViking credentials. Select **TRAE** for Trae International, **TRAE CN** for Trae China, or **TraeCode CLI 2.0**. In the OpenViking credential step, choose **VolcEngine OpenViking Cloud Service [api.vikingdb.cn-beijing.volces.com]** and enter the API KEY:
 
-- Remember common project context, such as monorepo structure, build commands, deployment workflows, and environment differences
+   ```text
+   {{OPENVIKING_API_KEY}}
+   ```
 
-- Store historical decisions and troubleshooting notes, such as why option X was avoided or what issue happened last time with option Y
+## Step 2: Verify
 
-- Persist long-term personal goals, OKRs, and roadmap context so the agent can align with them while planning work
+**TRAE / TRAE CN**: open **Settings → MCP → Configured MCP Servers** and confirm that the `openviking` entry is visible.
 
-## 2. Trae Integration Steps for OpenViking
+**TraeCode CLI 2.0**: start `trae-cli` and pick **Trust all and continue** at the hook review prompt (exact layout varies by version):
 
-**Trae** is an AI IDE from ByteDance that natively supports loading external tools and context services through MCP. Follow the steps below in Trae.
+```text
+Hooks need review
+6 hooks are new or changed.
+Hooks can run outside the sandbox after you trust them.
 
-### Step 1: Open Trae settings
-
-In the Trae main window, click **Settings** (gear icon) in the upper-right corner to open the settings panel.
-
-![Open Trae settings](https://docs.openviking.net/agents/image/trae/02-open-settings.jpg)
-
-### Step 2: Open the MCP configuration page
-
-In the left menu, select **MCP** to open the MCP Servers management page.
-
-![Open the MCP configuration page](https://docs.openviking.net/agents/image/trae/03-mcp-settings.jpg)
-
-### Step 3: Add an MCP Server
-
-Click the **+ Add** button on the right, then choose **Manual configuration** from the dropdown menu.
-
-![Add MCP Server](https://docs.openviking.net/agents/image/trae/04-add-mcp-server.jpg)
-
-![Choose manual configuration](https://docs.openviking.net/agents/image/trae/05-manual-config.png)
-
-### Step 4: Paste the JSON configuration
-
-Paste the following JSON into the configuration dialog:
-
-```json
-{
-  "mcpServers": {
-    "ov-mcp-server": {
-      "url": "https://api.vikingdb.cn-beijing.volces.com/openviking/mcp",
-      "headers": {
-        "Authorization": "Bearer ZGVmYXV********YzdlZjhiMg"
-      }
-    }
-  }
-}
+  1. Review hooks
+> 2. Trust all and continue
+  3. Continue without trusting (hooks won't run)
 ```
 
-![Paste MCP JSON configuration](https://docs.openviking.net/agents/image/trae/06-paste-mcp-json.jpg)
+If you skipped it or picked option 3, review and enable the OpenViking hooks in `/hooks`. Confirm the plugin is enabled with `trae-cli plugin list`. New or changed hooks need another review. See the full guide for version-specific lifecycle support.
 
-### Step 5: Confirm and enable
+An MCP entry only confirms configuration. Ask the assistant to call OpenViking `health` and `list`, then check automatic recall separately using a new conversation in the same workspace after a previous session has been committed and processed.
 
-Click **Confirm**. Trae automatically establishes the MCP connection and loads the tool list. When the connection succeeds, `ov-mcp-server` appears in the configured MCP Servers list. After setup, you can see that `ov-mcp-server` is loaded and enabled on the MCP management page, with the switch on the right shown in green.
+## Step 3: Start using
 
-![Confirm and enable MCP Server](https://docs.openviking.net/agents/image/trae/07-enable-server.jpg)
+Start a new TRAE, TRAE CN or TraeCode CLI 2.0 session and send:
 
-### Step 6: Check MCP connectivity
-
-After connecting, it is recommended to run two simple queries in Trae to verify that MCP is working correctly:
-
-**1.** **`ov ls`** - List the OpenViking root directory contents to confirm the connection is available and the directory structure is returned correctly:
-
-```bash
-ov ls
+```text
+Follow https://docs.openviking.net/agents/en/onboarding.md to walk me through my first use of OpenViking.
 ```
 
-![Run ov ls](https://docs.openviking.net/agents/image/trae/08-ov-ls.jpg)
+The agent checks the connection and walks you through the first use.
 
-**2.** **`ov health`** - Call the health tool to confirm the OpenViking server status and current user identity:
+## Troubleshoot
 
-```bash
-ov health
-```
-
-![Run ov health](https://docs.openviking.net/agents/image/trae/09-ov-health.jpg)
-
-**Acceptance criteria**: `ov ls` returns directories such as `agent / resources / session / user`; `ov health` returns `service initialized` and the current username, which means the integration succeeded.
-
-## 3. Configuration fields
-
-| Field | Required | Description |
-|---|---|---|
-| `mcpServers` | Yes | Root node for MCP Server configuration |
-| `ov-mcp-server` | Yes | Service alias. It can be customized, but keeping this name is recommended for contextual recognition |
-| `url` | Yes | OpenViking MCP endpoint. For CN, use `https://api.vikingdb.cn-beijing.volces.com/openviking/mcp` |
-| `headers.Authorization` | Yes | Format: `Bearer <API Key>`. Source: see chapter 2 |
-
----
-
-## 4. FAQ
-
-| Problem | Suggested fix |
+| Problem | Fix |
 |---|---|
-| Connection failed / 401 Unauthorized | Check that `Authorization` includes the `Bearer` prefix and confirm the API Key has not expired or been reset |
-| Connection failed / network timeout | Confirm the network can reach `api.vikingdb.cn-beijing.volces.com`; for corporate networks, add the domain to the proxy allowlist |
-| Agent cannot recognize tools | Confirm the MCP Server is enabled; some clients need a process restart before loading the new configuration |
-| MCP tools are incompatible with the current model because of the argument schema; switch or fix the MCP server, or switch the model (4027) | ![Trae MCP schema compatibility error](https://docs.openviking.net/agents/image/trae/10-schema-error.png)<br>![Trae MCP schema compatibility detail](https://docs.openviking.net/agents/image/trae/11-schema-error-detail.png)<br>Try switching models or upgrading Trae to the latest version |
+| No auto recall | Quit TRAE completely, restart, new Agent session |
+| TraeCode CLI 2.0 has the plugin but recalls nothing | The startup hook trust was skipped: trust and enable in `/hooks`, confirm the plugin is enabled in `/plugins` |
+| Connection / auth fails | Check `~/.openviking/ovcli.conf` and restart the client |
+| Need logs | `~/.openviking/logs/trae-hooks.log`, `trae-cn-hooks.log`, or `codex-hooks.log` (TraeCode CLI 2.0) |
+
+## Reference
+
+- Docs on Manual Settings: [TRAE](https://docs.openviking.net/en/agent-integrations/13-trae)
+- Code: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) (TRAE / TRAE CN), [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) (TraeCode CLI 2.0)

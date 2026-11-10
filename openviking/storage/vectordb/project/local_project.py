@@ -218,29 +218,3 @@ class LocalProject:
         if collection:
             collection.drop()
             logger.info(f"Dropped collection: {collection_name}")
-
-    def get_or_create_collection(
-        self, collection_name: str, meta_data: Optional[Dict[str, Any]] = None
-    ) -> Collection:
-        """Get or create collection.
-
-        Args:
-            collection_name: Collection name
-            meta_data: Collection metadata (only required when creating)
-
-        Returns:
-            Collection instance
-
-        Raises:
-            ValueError: If collection does not exist and no meta_data provided
-        """
-        collection = self.get_collection(collection_name)
-        if collection:
-            return collection
-
-        if meta_data is None:
-            raise ValueError(
-                f"Collection {collection_name} does not exist and no meta_data provided"
-            )
-
-        return self.create_collection(collection_name, meta_data)

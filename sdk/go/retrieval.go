@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -14,27 +17,40 @@ func (c *Client) Find(ctx context.Context, queryText string, opts *FindOptions) 
 	if limit == 0 {
 		limit = 10
 	}
-	actualLimit := limit
 	if opts.NodeLimit != nil {
-		actualLimit = *opts.NodeLimit
+		limit = *opts.NodeLimit
 	}
-	payload := map[string]any{
-		"query":      queryText,
-		"target_uri": normalizeTarget(opts.TargetURI),
-		"limit":      actualLimit,
+	imageURL, err := normalizeImageInput(opts.Image)
+	if err != nil {
+		return nil, err
 	}
+	payload := map[string]any{"query": queryText}
+	if opts.TargetURI != nil {
+		payload["target_uri"] = normalizeTarget(opts.TargetURI)
+	}
+	payload["limit"] = limit
+	setString(payload, "image_url", imageURL)
+	setString(payload, "events_time_decay_protection", opts.EventsTimeDecayProtection)
 	setAny(payload, "score_threshold", opts.ScoreThreshold)
 	setAny(payload, "filter", opts.Filter)
 	setAny(payload, "context_type", opts.ContextType)
+	setAny(payload, "include_provenance", opts.IncludeProvenance)
+	setAny(payload, "read_content", opts.ReadContent)
 	setString(payload, "since", opts.Since)
 	setString(payload, "until", opts.Until)
 	setString(payload, "time_field", opts.TimeField)
-	if len(opts.Level) > 0 {
+	if opts.Level != nil {
 		payload["level"] = opts.Level
 	}
+	if opts.Tags != nil {
+		payload["tags"] = opts.Tags
+	}
 	setAny(payload, "telemetry", opts.Telemetry)
+	if err := mergeExtra(payload, opts.Extra); err != nil {
+		return nil, err
+	}
 	var result FindResult
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/find", nil, payload, &result)
+	err = c.doJSON(ctx, http.MethodPost, "/api/v1/search/find", nil, payload, &result)
 	return &result, err
 }
 
@@ -47,28 +63,95 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 	if limit == 0 {
 		limit = 10
 	}
-	actualLimit := limit
 	if opts.NodeLimit != nil {
-		actualLimit = *opts.NodeLimit
+		limit = *opts.NodeLimit
 	}
-	payload := map[string]any{
-		"query":      queryText,
-		"target_uri": normalizeTarget(opts.TargetURI),
-		"limit":      actualLimit,
+	imageURL, err := normalizeImageInput(opts.Image)
+	if err != nil {
+		return nil, err
 	}
+	payload := map[string]any{"query": queryText}
+	setString(payload, "search_type", opts.SearchType)
+	if opts.TargetURI != nil {
+		payload["target_uri"] = normalizeTarget(opts.TargetURI)
+	}
+	payload["limit"] = limit
+	setString(payload, "image_url", imageURL)
 	setString(payload, "session_id", opts.SessionID)
+	setString(payload, "events_time_decay_protection", opts.EventsTimeDecayProtection)
 	setAny(payload, "score_threshold", opts.ScoreThreshold)
 	setAny(payload, "filter", opts.Filter)
 	setAny(payload, "context_type", opts.ContextType)
+	setAny(payload, "include_provenance", opts.IncludeProvenance)
+	setAny(payload, "read_content", opts.ReadContent)
 	setString(payload, "since", opts.Since)
 	setString(payload, "until", opts.Until)
 	setString(payload, "time_field", opts.TimeField)
-	if len(opts.Level) > 0 {
+	if opts.Level != nil {
 		payload["level"] = opts.Level
 	}
+	if opts.Tags != nil {
+		payload["tags"] = opts.Tags
+	}
 	setAny(payload, "telemetry", opts.Telemetry)
+	if err := mergeExtra(payload, opts.Extra); err != nil {
+		return nil, err
+	}
 	var result FindResult
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/search", nil, payload, &result)
+	err = c.doJSON(ctx, http.MethodPost, "/api/v1/search/search", nil, payload, &result)
+	return &result, err
+}
+
+// SearchContext assembles injection-ready context on the server.
+func (c *Client) SearchContext(ctx context.Context, query string, opts *SearchContextOptions) (*SearchContextResult, error) {
+	if opts == nil {
+		opts = &SearchContextOptions{}
+	}
+	payload := map[string]any{
+		"query": query,
+		"mode":  "context",
+	}
+	setString(payload, "search_type", opts.SearchType)
+	imageURL, err := normalizeImageInput(opts.Image)
+	if err != nil {
+		return nil, err
+	}
+	setString(payload, "image_url", imageURL)
+	setString(payload, "session_id", opts.SessionID)
+	setAny(payload, "limit", opts.Limit)
+	setAny(payload, "node_limit", opts.NodeLimit)
+	setAny(payload, "score_threshold", opts.ScoreThreshold)
+	setAny(payload, "filter", opts.Filter)
+	setAny(payload, "context_type", opts.ContextType)
+	setAny(payload, "include_provenance", opts.IncludeProvenance)
+	if opts.Tags != nil {
+		payload["tags"] = opts.Tags
+	}
+	setString(payload, "since", opts.Since)
+	setString(payload, "until", opts.Until)
+	setString(payload, "time_field", opts.TimeField)
+	setString(payload, "events_time_decay_protection", opts.EventsTimeDecayProtection)
+	setString(payload, "query_expansion", opts.QueryExpansion)
+	setAny(payload, "max_tokens", opts.MaxTokens)
+	if opts.Quotas != nil {
+		payload["quotas"] = opts.Quotas
+	}
+	setString(payload, "purpose", opts.Purpose)
+	setAny(payload, "detail", opts.Detail)
+	setAny(payload, "dedup_turns", opts.DedupTurns)
+	if opts.ExcludeURIs != nil {
+		payload["exclude_uris"] = opts.ExcludeURIs
+	}
+	setString(payload, "peer_scope", opts.PeerScope)
+	setAny(payload, "other_peer_penalty", opts.OtherPeerPenalty)
+	setAny(payload, "rewrite", opts.Rewrite)
+	setAny(payload, "rewrite_max_bullets", opts.RewriteMaxBullets)
+	setAny(payload, "telemetry", opts.Telemetry)
+	if err := mergeExtra(payload, opts.Extra); err != nil {
+		return nil, err
+	}
+	var result SearchContextResult
+	err = c.doJSON(ctx, http.MethodPost, "/api/v1/search/search", nil, payload, &result)
 	return &result, err
 }
 
@@ -91,20 +174,39 @@ func (c *Client) Grep(ctx context.Context, uri, pattern string, opts *GrepOption
 	if opts.ExcludeURI != "" {
 		payload["exclude_uri"] = NormalizeURI(opts.ExcludeURI)
 	}
+	if opts.Tags != nil {
+		payload["tags"] = opts.Tags
+	}
+	if opts.IncludeTags {
+		payload["include_tags"] = true
+	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/grep", nil, payload, &result)
 	return result, err
 }
 
 // Glob finds files by glob pattern.
-func (c *Client) Glob(ctx context.Context, pattern string, uri string) (map[string]any, error) {
+func (c *Client) Glob(ctx context.Context, pattern string, uri string, opts *GlobOptions) (map[string]any, error) {
+	if opts == nil {
+		opts = &GlobOptions{}
+	}
 	if uri == "" {
 		uri = "viking://"
 	}
-	var result map[string]any
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/glob", nil, map[string]any{
+	payload := map[string]any{
 		"pattern": pattern,
 		"uri":     NormalizeURI(uri),
-	}, &result)
+	}
+	if opts.NodeLimit != nil {
+		payload["node_limit"] = *opts.NodeLimit
+	}
+	if opts.Tags != nil {
+		payload["tags"] = opts.Tags
+	}
+	if opts.IncludeTags {
+		payload["include_tags"] = true
+	}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/glob", nil, payload, &result)
 	return result, err
 }

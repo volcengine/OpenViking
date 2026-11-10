@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for LiteLLM Embedder and factory integration."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -44,6 +44,23 @@ class TestLiteLLMDenseEmbedder:
         assert call_kwargs["api_key"] == "test-key"
 
     @patch("openviking.models.embedder.litellm_embedders.litellm")
+    async def test_embed_async_truncates_vector_to_configured_dimension(self, mock_litellm):
+        """Async embedding should truncate vectors to the configured dimension."""
+        mock_litellm.aembedding = AsyncMock(
+            return_value=_mock_litellm_response(vectors=[[0.1, 0.2, 0.3, 0.4]])
+        )
+
+        from openviking.models.embedder.litellm_embedders import LiteLLMDenseEmbedder
+
+        embedder = LiteLLMDenseEmbedder(
+            model_name="bedrock/amazon.titan-embed-text-v2:0",
+            dimension=3,
+        )
+        result = await embedder.embed_async("Hello world")
+
+        assert result.dense_vector == [0.1, 0.2, 0.3]
+
+    @patch("openviking.models.embedder.litellm_embedders.litellm")
     def test_embed_with_api_base(self, mock_litellm):
         """api_base should be forwarded to litellm."""
         mock_litellm.embedding.return_value = _mock_litellm_response()
@@ -60,40 +77,6 @@ class TestLiteLLMDenseEmbedder:
 
         call_kwargs = mock_litellm.embedding.call_args[1]
         assert call_kwargs["api_base"] == "https://openrouter.ai/api/v1"
-
-    @patch("openviking.models.embedder.litellm_embedders.litellm")
-    def test_embed_batch(self, mock_litellm):
-        """Batch embedding should return multiple results."""
-        vectors = [[0.1] * 1536, [0.2] * 1536]
-        mock_litellm.embedding.return_value = _mock_litellm_response(vectors)
-
-        from openviking.models.embedder.litellm_embedders import LiteLLMDenseEmbedder
-
-        embedder = LiteLLMDenseEmbedder(
-            model_name="openai/text-embedding-3-small",
-            api_key="test-key",
-            dimension=1536,
-        )
-        results = embedder.embed_batch(["Hello", "World"])
-
-        assert len(results) == 2
-        assert results[0].dense_vector[0] == 0.1
-        assert results[1].dense_vector[0] == 0.2
-
-    @patch("openviking.models.embedder.litellm_embedders.litellm")
-    def test_embed_batch_empty(self, mock_litellm):
-        """Empty batch should return empty list without API call."""
-        from openviking.models.embedder.litellm_embedders import LiteLLMDenseEmbedder
-
-        embedder = LiteLLMDenseEmbedder(
-            model_name="openai/text-embedding-3-small",
-            api_key="test-key",
-            dimension=1536,
-        )
-        results = embedder.embed_batch([])
-
-        assert results == []
-        mock_litellm.embedding.assert_not_called()
 
     @patch("openviking.models.embedder.litellm_embedders.litellm")
     def test_embed_non_symmetric_query(self, mock_litellm):
@@ -223,6 +206,7 @@ class TestLiteLLMEmbeddingFactory:
         """EmbeddingConfig factory should create LiteLLMDenseEmbedder for provider='litellm'."""
         mock_litellm.embedding.return_value = _mock_litellm_response()
 
+        from openviking.models.embedder import RetryEmbedder
         from openviking.models.embedder.litellm_embedders import LiteLLMDenseEmbedder
 
         cfg = EmbeddingModelConfig(
@@ -234,10 +218,11 @@ class TestLiteLLMEmbeddingFactory:
         )
         embedder = EmbeddingConfig(dense=cfg)._create_embedder("litellm", "dense", cfg)
 
-        assert isinstance(embedder, LiteLLMDenseEmbedder)
+        assert isinstance(embedder, RetryEmbedder)
+        assert isinstance(embedder.inner, LiteLLMDenseEmbedder)
         assert embedder.model_name == "openai/text-embedding-3-small"
-        assert embedder.api_key == "test-key"
-        assert embedder.api_base == "https://openrouter.ai/api/v1"
+        assert embedder.inner.api_key == "test-key"
+        assert embedder.inner.api_base == "https://openrouter.ai/api/v1"
 
     @patch("openviking.models.embedder.litellm_embedders.litellm")
     def test_factory_forwards_query_document_params(self, mock_litellm):

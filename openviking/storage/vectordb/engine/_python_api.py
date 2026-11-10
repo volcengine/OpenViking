@@ -25,6 +25,7 @@ class FieldType(IntEnum):
     list_int64 = 6
     list_string = 7
     list_float32 = 8
+    text = 9
 
 
 class StorageOpType(IntEnum):
@@ -52,6 +53,7 @@ def _default_value_for_type(data_type: FieldType) -> Any:
         FieldType.list_int64: [],
         FieldType.list_string: [],
         FieldType.list_float32: [],
+        FieldType.text: "",
     }[data_type]
 
 
@@ -66,6 +68,7 @@ def _field_type_size(data_type: FieldType) -> int:
         FieldType.list_int64: UINT32_SIZE,
         FieldType.list_string: UINT32_SIZE,
         FieldType.list_float32: UINT32_SIZE,
+        FieldType.text: UINT32_SIZE,
     }[data_type]
 
 
@@ -125,9 +128,6 @@ class Schema:
 
     def get_field_order(self) -> list[FieldMeta]:
         return self.field_orders
-
-    def get_total_byte_length(self) -> int:
-        return self.total_byte_length
 
 
 def _get_row_value(row_data: Any, field_name: str, default_value: Any) -> Any:
@@ -246,6 +246,11 @@ class BytesRow:
             blob_len = struct.unpack_from("<I", serialized_data, blob_offset)[0]
             blob_offset += UINT32_SIZE
             return serialized_data[blob_offset : blob_offset + blob_len]
+        if field_meta.data_type == FieldType.text:
+            text_offset = struct.unpack_from("<I", serialized_data, field_meta.offset)[0]
+            text_len = struct.unpack_from("<I", serialized_data, text_offset)[0]
+            text_offset += UINT32_SIZE
+            return serialized_data[text_offset : text_offset + text_len].decode("utf-8")
         if field_meta.data_type == FieldType.list_int64:
             list_offset = struct.unpack_from("<I", serialized_data, field_meta.offset)[0]
             list_len = struct.unpack_from("<H", serialized_data, list_offset)[0]
@@ -311,7 +316,7 @@ class DeleteDataRequest(_RequestBase):
 
 
 class SearchRequest(_RequestBase):
-    __slots__ = ("query", "sparse_raw_terms", "sparse_values", "topk", "dsl")
+    __slots__ = ("query", "sparse_raw_terms", "sparse_values", "topk", "dsl", "time_decay")
 
     def __init__(self):
         self.query = []
@@ -319,6 +324,7 @@ class SearchRequest(_RequestBase):
         self.sparse_values = []
         self.topk = 0
         self.dsl = ""
+        self.time_decay = ""
 
 
 class SearchResult:
@@ -344,6 +350,42 @@ class SearchResult:
             labels=list(payload.get("labels", [])),
             scores=list(payload.get("scores", [])),
             extra_json=str(payload.get("extra_json", "")),
+        )
+
+
+class FilterResult:
+    __slots__ = ("eligible_count", "bitset_words", "native_filter_token")
+
+    def __init__(
+        self,
+        *,
+        eligible_count: int = 0,
+        bitset_words: list[int] | bytes | None = None,
+        native_filter_token: int = 0,
+    ):
+        self.eligible_count = eligible_count
+        self.bitset_words = [] if bitset_words is None else bitset_words
+        self.native_filter_token = native_filter_token
+
+    @classmethod
+    def from_backend(cls, payload: dict[str, Any]) -> "FilterResult":
+        return cls(
+            eligible_count=int(payload.get("eligible_count", 0)),
+            bitset_words=[int(word) for word in payload.get("bitset_words", [])],
+            native_filter_token=int(payload.get("native_filter_token", 0)),
+        )
+
+    @classmethod
+    def from_packed_backend(cls, payload: dict[str, Any]) -> "FilterResult":
+        if "bitset_words_le" not in payload:
+            raise KeyError("Packed filter ABI response is missing bitset_words_le")
+        bitset_words = payload["bitset_words_le"]
+        if not isinstance(bitset_words, bytes):
+            raise TypeError("Packed filter ABI must return bitset_words_le as bytes")
+        return cls(
+            eligible_count=int(payload.get("eligible_count", 0)),
+            bitset_words=bitset_words,
+            native_filter_token=int(payload.get("native_filter_token", 0)),
         )
 
 
@@ -388,9 +430,6 @@ def _build_native_bytes_row_exports(backend: Any):
             except RuntimeError as exc:
                 raise ValueError(str(exc)) from exc
 
-        def get_total_byte_length(self) -> int:
-            return int(backend._schema_get_total_byte_length(self._handle))
-
     class BytesRow:
         def __init__(self, schema: Schema):
             self.schema = schema
@@ -418,9 +457,9 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
         SchemaExport, BytesRowExport = Schema, BytesRow
 
     class IndexEngine:
-        def __init__(self, path_or_json: str):
+        def __init__(self, path_or_json: str, normalize_vector: bool = False):
             self._backend = backend
-            self._handle = backend._new_index_engine(path_or_json)
+            self._handle = backend._new_index_engine(path_or_json, normalize_vector)
 
         def add_data(self, data_list: list[AddDataRequest]) -> int:
             return int(
@@ -436,8 +475,105 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
                 )
             )
 
+        def rebuild_scalar_index(
+            self, scalar_index_json: str, data_list: Iterable[AddDataRequest]
+        ) -> int:
+            return int(
+                self._backend._index_engine_rebuild_scalar_index(
+                    self._handle,
+                    scalar_index_json,
+                    data_list,
+                )
+            )
+
         def search(self, req: SearchRequest) -> SearchResult:
             return SearchResult.from_backend(self._backend._index_engine_search(self._handle, req))
+
+        def search_with_filter_token(
+            self, req: SearchRequest, filter_token: int
+        ) -> SearchResult | None:
+            search_with_token = getattr(
+                self._backend, "_index_engine_search_with_filter_token", None
+            )
+            if search_with_token is None:
+                return None
+            payload = search_with_token(self._handle, req, filter_token)
+            return None if payload is None else SearchResult.from_backend(payload)
+
+        def set_filter_layout(self, ordered_labels: list[int]) -> int:
+            return int(self._backend._index_engine_set_filter_layout(self._handle, ordered_labels))
+
+        def evaluate_filter(self, dsl: str, max_cached_candidates: int = 0) -> FilterResult:
+            evaluate_cached = getattr(self._backend, "_index_engine_evaluate_filter_cached", None)
+            if max_cached_candidates > 0 and evaluate_cached is not None:
+                payload = evaluate_cached(
+                    self._handle,
+                    dsl,
+                    max_cached_candidates,
+                )
+            else:
+                payload = self._backend._index_engine_evaluate_filter(self._handle, dsl)
+            return FilterResult.from_backend(payload)
+
+        def evaluate_filter_packed(self, dsl: str, max_cached_candidates: int = 0) -> FilterResult:
+            symbol_name = (
+                "_index_engine_evaluate_filter_cached_packed"
+                if max_cached_candidates > 0
+                else "_index_engine_evaluate_filter_packed"
+            )
+            evaluate_packed = getattr(self._backend, symbol_name, None)
+            if evaluate_packed is None:
+                return self.evaluate_filter(
+                    dsl,
+                    max_cached_candidates=max_cached_candidates,
+                )
+            if max_cached_candidates > 0:
+                payload = evaluate_packed(
+                    self._handle,
+                    dsl,
+                    max_cached_candidates,
+                )
+            else:
+                payload = evaluate_packed(self._handle, dsl)
+            return FilterResult.from_packed_backend(payload)
+
+        def evaluate_filter_for_routing(self, dsl: str, native_threshold: int) -> FilterResult:
+            evaluate_for_routing = getattr(
+                self._backend,
+                "_index_engine_evaluate_filter_for_routing",
+                None,
+            )
+            if evaluate_for_routing is None:
+                return self.evaluate_filter(
+                    dsl,
+                    max_cached_candidates=native_threshold,
+                )
+            payload = evaluate_for_routing(
+                self._handle,
+                dsl,
+                native_threshold,
+            )
+            return FilterResult.from_backend(payload)
+
+        def evaluate_filter_for_routing_packed(
+            self, dsl: str, native_threshold: int
+        ) -> FilterResult:
+            evaluate_packed = getattr(
+                self._backend,
+                "_index_engine_evaluate_filter_for_routing_packed",
+                None,
+            )
+            if evaluate_packed is None:
+                return self.evaluate_filter_for_routing(
+                    dsl,
+                    native_threshold=native_threshold,
+                )
+            payload = evaluate_packed(
+                self._handle,
+                dsl,
+                native_threshold,
+            )
+            return FilterResult.from_packed_backend(payload)
 
         def dump(self, path: str) -> int:
             return int(self._backend._index_engine_dump(self._handle, path))
@@ -468,6 +604,28 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
         def seek_range(self, start_key: str, end_key: str) -> list[tuple[str, bytes]]:
             return list(self._backend._store_seek_range(self._handle, start_key, end_key))
 
+        def seek_range_page(
+            self,
+            start_key: str,
+            end_key: str,
+            limit: int,
+            max_bytes: int,
+            start_exclusive: bool = False,
+        ) -> list[tuple[str, bytes]]:
+            seek_page = getattr(self._backend, "_store_seek_range_page", None)
+            if seek_page is None:
+                raise NotImplementedError("This native engine does not support paged store scans")
+            return list(
+                seek_page(
+                    self._handle,
+                    start_key,
+                    end_key,
+                    limit,
+                    max_bytes,
+                    start_exclusive,
+                )
+            )
+
     class PersistStore(_StoreBase):
         def __init__(self, path: str):
             super().__init__(backend._new_persist_store(path))
@@ -490,6 +648,7 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
         "DeleteDataRequest": DeleteDataRequest,
         "SearchRequest": SearchRequest,
         "SearchResult": SearchResult,
+        "FilterResult": FilterResult,
         "StateResult": StateResult,
         "StorageOp": StorageOp,
         "IndexEngine": IndexEngine,

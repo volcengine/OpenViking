@@ -1,7 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 from . import embedding_config
+from .agent_evolution_config import AgentEvolutionConfig
 from .agfs_config import AGFSConfig
+from .cache_config import CacheConfig
 from .config_loader import (
     load_json_config,
     require_config,
@@ -51,10 +53,14 @@ from .consts import (
     SYSTEM_CONFIG_DIR,
 )
 from .embedding_config import EmbeddingConfig
-from .grep_config import GrepConfig, GrepEngine
+from .expiry_config import ExpiryConfig, ExpiryRedisConfig
 from .git_config import GitConfig, GitLocalConfig, GitS3Config
+from .glob_config import GlobConfig, GlobEngine
+from .grep_config import GrepConfig, GrepEngine
+from .jev_config import JevConfig
 from .log_config import LogConfig
 from .open_viking_config import (
+    CompileApiConfig,
     OpenVikingConfig,
     OpenVikingConfigSingleton,
     get_openviking_config,
@@ -65,6 +71,7 @@ from .open_viking_config import (
 from .ovcli_config import OVCLIConfig, load_ovcli_config
 from .parser_config import (
     PARSER_CONFIG_REGISTRY,
+    AnydocConfig,
     AudioConfig,
     CodeConfig,
     HTMLConfig,
@@ -80,13 +87,16 @@ from .parser_config import (
 from .prompts_config import PromptsConfig
 from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
+from .rules_config import RulesConfig
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig, TracerConfig
-from .vectordb_config import VectorDBBackendConfig
+from .vectordb_config import OpenGaussConfig, VectorDBBackendConfig
 from .vlm_config import VLMConfig
 
 __all__ = [
     "AGFSConfig",
+    "AgentEvolutionConfig",
+    "CacheConfig",
     "SYSTEM_CONFIG_DIR",
     "DEFAULT_OV_CONF",
     "DEFAULT_OVCLI_CONF",
@@ -129,14 +139,22 @@ __all__ = [
     "OPENVIKING_GO_PATH_ENV",
     "OPENVIKING_GOPATH_ENV",
     "OPENVIKING_GOPROXY_ENV",
+    "CompileApiConfig",
     "OpenVikingConfig",
     "OpenVikingConfigSingleton",
     "OVCLIConfig",
+    "GlobConfig",
+    "GlobEngine",
     "GrepConfig",
     "GrepEngine",
+    "JevConfig",
     "RerankConfig",
     "RetrievalConfig",
+    "RulesConfig",
+    "ExpiryConfig",
+    "ExpiryRedisConfig",
     "StorageConfig",
+    "OpenGaussConfig",
     "VectorDBBackendConfig",
     "VLMConfig",
     "ParserConfig",
@@ -146,6 +164,7 @@ __all__ = [
     "AudioConfig",
     "VideoConfig",
     "MarkdownConfig",
+    "AnydocConfig",
     "HTMLConfig",
     "TextConfig",
     "get_parser_config",

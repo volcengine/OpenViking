@@ -1,0 +1,398 @@
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from openviking.parse.accessors.base import LocalResource, SourceType
+from openviking.parse.parsers.media.utils import MPEG_TS_PACKET_SIZE, MPEG_TS_PROBE_BYTES
+from openviking.server.identity import RequestContext, Role
+from openviking.service import resource_service as resource_service_module
+from openviking.service.resource_service import ResourceService
+from openviking.storage.queuefs import QueueManager
+from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
+from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.session.user_id import UserIdentifier
+
+
+def mpeg_ts_probe() -> bytes:
+    """Build a minimal MPEG-TS probe payload for routing tests."""
+    content = bytearray(MPEG_TS_PROBE_BYTES)
+    for offset in range(0, MPEG_TS_PROBE_BYTES, MPEG_TS_PACKET_SIZE):
+        content[offset] = 0x47
+    return bytes(content)
+
+
+@pytest.mark.asyncio
+async def test_extensionless_remote_url_queues_frozen_understanding_route(
+    monkeypatch,
+    tmp_path,
+):
+    """Queue understanding ingestion for extensionless remote URLs after prepare."""
+    ctx = RequestContext(
+        user=UserIdentifier("acct", "alice"),
+        role=Role.USER,
+        api_key="secret",
+    )
+    downloaded = tmp_path / "download.pdf"
+    downloaded.write_bytes(b"%PDF-1.7")
+    prepared = LocalResource(
+        path=downloaded,
+        source_type=SourceType.HTTP,
+        original_source="https://example.com/download?id=1",
+        meta={
+            "resolved_extension": ".pdf",
+            "original_filename": "manual.pdf",
+        },
+        is_temporary=True,
+    )
+    lock = {"lease_ref": "lock-1"}
+    agfs = SimpleNamespace(
+        pathlock_to_handoff=AsyncMock(return_value={"handle_id": "lock-1"}),
+        pathlock_handoff=AsyncMock(),
+        pathlock_release=AsyncMock(),
+    )
+    processor = SimpleNamespace(
+        should_use_understanding_directly=lambda _source, **_kwargs: False,
+        prepare_durable_source=AsyncMock(return_value=prepared),
+        should_use_understanding_api=lambda resource: resource is prepared,
+        submit_understanding=AsyncMock(return_value="response-1"),
+        tree_builder=SimpleNamespace(
+            resolve_target_uri=AsyncMock(
+                return_value=(
+                    "viking://resources/manual",
+                    "viking://resources/manual",
+                )
+            )
+        ),
+        reserve_unique_candidate=AsyncMock(return_value=("viking://resources/manual", lock)),
+        process_resource=AsyncMock(),
+    )
+    service = ResourceService(
+        vikingdb=object(),
+        viking_fs=SimpleNamespace(_async_agfs=agfs),
+        resource_processor=processor,
+        skill_processor=object(),
+    )
+    service._connector_delegate = SimpleNamespace(should_delegate=lambda *_args, **_kwargs: False)
+    tracker = SimpleNamespace(
+        create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
+        patch_task=AsyncMock(),
+        fail=AsyncMock(),
+    )
+    queue_manager = SimpleNamespace(enqueue=AsyncMock())
+    monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: False)
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: tracker,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: queue_manager,
+    )
+
+    with pytest.raises(InvalidArgumentError, match="args cannot contain"):
+        await service.add_resource(
+            path="https://example.com/download?id=1",
+            ctx=ctx,
+            to="viking://resources/manual",
+            args={"parser_api_config": {"api_key": "caller-key"}},
+        )
+
+    result = await service.add_resource(
+        path="https://example.com/download?id=1",
+        ctx=ctx,
+        to="viking://resources/manual",
+        wait=False,
+        allow_local_path_resolution=False,
+    )
+
+    assert result == {
+        "status": "success",
+        "root_uri": "viking://resources/manual",
+        "task_id": "task-1",
+        "source_path": "https://example.com/download?id=1",
+    }
+    _, message = queue_manager.enqueue.await_args.args
+    assert queue_manager.enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
+    queued = AddResourceMsg.from_dict(message)
+    assert queued.account_id == ctx.account_id
+    assert ctx.api_key not in json.dumps(message)
+    assert "parser_backend" not in queued.args
+    assert queued.args["resolved_extension"] == ".pdf"
+    assert queued.understanding_response_id == "response-1"
+    assert queued.source_name == "manual.pdf"
+    assert not downloaded.exists()
+    processor.submit_understanding.assert_awaited_once_with(prepared, ctx=ctx)
+    processor.process_resource.assert_not_awaited()
+    agfs.pathlock_to_handoff.assert_awaited_once_with(lock)
+    agfs.pathlock_handoff.assert_awaited_once_with(lock)
+
+
+@pytest.mark.asyncio
+async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
+    monkeypatch,
+    tmp_path,
+):
+    """Route MPEG-TS resources to understanding with video target resolution."""
+    ctx = RequestContext(
+        user=UserIdentifier("acct", "alice"),
+        role=Role.USER,
+        api_key="secret",
+    )
+    downloaded = tmp_path / "sample.ts"
+    downloaded.write_bytes(mpeg_ts_probe())
+    prepared = LocalResource(
+        path=downloaded,
+        source_type=SourceType.HTTP,
+        original_source="https://example.com/video/sample.ts?sign=1",
+        meta={
+            "resolved_extension": "mpegts",
+            "original_filename": "sample.ts",
+        },
+        is_temporary=True,
+    )
+    lock = {"lease_ref": "lock-1"}
+    agfs = SimpleNamespace(
+        pathlock_to_handoff=AsyncMock(return_value={"handle_id": "lock-1"}),
+        pathlock_handoff=AsyncMock(),
+        pathlock_release=AsyncMock(),
+    )
+    resolve_target_uri = AsyncMock(
+        return_value=(
+            "viking://resources/video/sample",
+            "viking://resources/video/sample",
+        )
+    )
+    processor = SimpleNamespace(
+        should_use_understanding_directly=lambda _source, **_kwargs: False,
+        prepare_durable_source=AsyncMock(return_value=prepared),
+        should_use_understanding_api=lambda resource: resource is prepared,
+        submit_understanding=AsyncMock(return_value="response-1"),
+        tree_builder=SimpleNamespace(resolve_target_uri=resolve_target_uri),
+        reserve_unique_candidate=AsyncMock(return_value=("viking://resources/video/sample", lock)),
+        process_resource=AsyncMock(),
+    )
+    service = ResourceService(
+        vikingdb=object(),
+        viking_fs=SimpleNamespace(_async_agfs=agfs),
+        resource_processor=processor,
+        skill_processor=object(),
+    )
+    service._connector_delegate = SimpleNamespace(should_delegate=lambda *_args, **_kwargs: False)
+    tracker = SimpleNamespace(
+        create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
+        patch_task=AsyncMock(),
+        fail=AsyncMock(),
+    )
+    queue_manager = SimpleNamespace(enqueue=AsyncMock())
+    monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: False)
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: tracker,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: queue_manager,
+    )
+
+    result = await service.add_resource(
+        path="https://example.com/video/sample.ts?sign=1",
+        ctx=ctx,
+        wait=False,
+        allow_local_path_resolution=False,
+    )
+
+    assert result == {
+        "status": "success",
+        "root_uri": "viking://resources/video/sample",
+        "task_id": "task-1",
+        "source_path": "https://example.com/video/sample.ts?sign=1",
+    }
+    processor.prepare_durable_source.assert_awaited_once()
+    processor.process_resource.assert_not_awaited()
+    processor.submit_understanding.assert_awaited_once_with(prepared, ctx=ctx)
+    resolve_target_uri.assert_awaited_once()
+    assert resolve_target_uri.await_args.kwargs["source_format"] == "video"
+    _, message = queue_manager.enqueue.await_args.args
+    assert queue_manager.enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
+    queued = AddResourceMsg.from_dict(message)
+    assert "parser_backend" not in queued.args
+    assert queued.args["resolved_extension"] == "mpegts"
+    assert queued.understanding_response_id == "response-1"
+    assert queued.source_name == "sample.ts"
+    assert not downloaded.exists()
+    agfs.pathlock_to_handoff.assert_awaited_once_with(lock)
+    agfs.pathlock_handoff.assert_awaited_once_with(lock)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("temp_file_id", ["upload_audio.m4a", "shared_audio"])
+async def test_temp_uploaded_file_queues_external_parse_with_file_id(
+    monkeypatch,
+    tmp_path,
+    temp_file_id,
+):
+    """Upload snapshots keep only the external file_id before entering ExternalParse."""
+    ctx = RequestContext(
+        user=UserIdentifier("acct", "alice"),
+        role=Role.USER,
+        api_key="secret",
+    )
+    uploaded = tmp_path / "audio.m4a"
+    uploaded.write_bytes(b"audio bytes")
+    prepared = LocalResource(
+        path=uploaded,
+        source_type=SourceType.LOCAL,
+        original_source=str(uploaded),
+        meta={
+            "resolved_extension": ".m4a",
+            "original_filename": "audio.m4a",
+        },
+        is_temporary=True,
+    )
+    lock = {"lease_ref": "lock-1"}
+    agfs = SimpleNamespace(
+        pathlock_to_handoff=AsyncMock(return_value={"handle_id": "lock-1"}),
+        pathlock_handoff=AsyncMock(),
+        pathlock_release=AsyncMock(),
+    )
+    processor = SimpleNamespace(
+        should_use_understanding_directly=lambda _source, **_kwargs: False,
+        prepare_durable_source=AsyncMock(return_value=prepared),
+        should_use_understanding_api=lambda resource: resource is prepared,
+        upload_understanding_file=AsyncMock(return_value="file-1"),
+        submit_understanding=AsyncMock(side_effect=AssertionError("should not create response")),
+        tree_builder=SimpleNamespace(
+            resolve_target_uri=AsyncMock(
+                return_value=(
+                    "viking://resources/audio",
+                    "viking://resources/audio",
+                )
+            )
+        ),
+        reserve_unique_candidate=AsyncMock(return_value=("viking://resources/audio", lock)),
+        process_resource=AsyncMock(),
+    )
+    service = ResourceService(
+        vikingdb=object(),
+        viking_fs=SimpleNamespace(_async_agfs=agfs),
+        resource_processor=processor,
+        skill_processor=object(),
+    )
+    service._connector_delegate = SimpleNamespace(should_delegate=lambda *_args, **_kwargs: False)
+    tracker = SimpleNamespace(
+        create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
+        patch_task=AsyncMock(),
+        fail=AsyncMock(),
+    )
+    queue_manager = SimpleNamespace(enqueue=AsyncMock())
+    monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: False)
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: tracker,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: queue_manager,
+    )
+
+    result = await service.add_resource(
+        path=str(uploaded),
+        ctx=ctx,
+        to="viking://resources/audio",
+        wait=False,
+        allow_local_path_resolution=True,
+        internal_task=True,
+        temp_file_id=temp_file_id,
+    )
+
+    assert result == {
+        "status": "success",
+        "root_uri": "viking://resources/audio",
+        "task_id": "task-1",
+        "source_path": "audio.m4a",
+    }
+    _, message = queue_manager.enqueue.await_args.args
+    assert queue_manager.enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
+    queued = AddResourceMsg.from_dict(message)
+    assert queued.account_id == ctx.account_id
+    assert ctx.api_key not in json.dumps(message)
+    assert queued.understanding_file_id == "file-1"
+    assert queued.understanding_response_id is None
+    assert queued.staged_source is None
+    assert queued.internal_task is True
+    assert queued.path == "audio.m4a"
+    assert queued.source_name == "audio.m4a"
+    assert not uploaded.exists()
+    processor.upload_understanding_file.assert_awaited_once_with(prepared, ctx=ctx)
+    processor.submit_understanding.assert_not_called()
+    processor.process_resource.assert_not_awaited()
+    agfs.pathlock_to_handoff.assert_awaited_once_with(lock)
+    agfs.pathlock_handoff.assert_awaited_once_with(lock)
+
+
+@pytest.mark.asyncio
+async def test_background_directory_keeps_extension_routing(monkeypatch, tmp_path):
+    from openviking.parse.base import NodeType, ResourceNode, create_parse_result
+    from openviking.parse.parsers.base_parser import BaseParser
+    from openviking.parse.parsers.directory import DirectoryParser
+    from openviking.parse.parsers.pdf import PDFParser
+    from openviking.parse.understanding_api import UnderstandingAPI
+    from openviking.utils.media_processor import UnifiedResourceProcessor
+    from tests.parse.test_add_directory import FakeVikingFS
+    from tests.parse.test_directory_understanding_routing import _configure_understanding
+
+    _configure_understanding(monkeypatch, ["pdf"])
+    (tmp_path / "paper.pdf").write_bytes(b"%PDF-1.7")
+    prepared = LocalResource(tmp_path, SourceType.LOCAL, str(tmp_path), is_temporary=False)
+    fs = FakeVikingFS()
+    service = ResourceService(viking_fs=fs)
+    parsed = create_parse_result(
+        root=ResourceNode(type=NodeType.ROOT, title="paper"),
+        source_path=str(tmp_path / "paper.pdf"),
+        source_format="pdf",
+        parser_name="test",
+    )
+    parsed.temp_dir_path = "viking://temp/parsed"
+    native_parse = AsyncMock(return_value=parsed)
+    api_parse = AsyncMock(return_value=parsed)
+    processor = UnifiedResourceProcessor(vlm_processor=object())
+
+    async def execute(**kwargs):
+        await processor.process(
+            str(tmp_path),
+            prepared_resource=kwargs["prepared_resource"],
+            parser_backend=kwargs["parser_backend"],
+        )
+        return {"status": "success"}
+
+    monkeypatch.setattr(service, "_execute_resource_ingestion", execute)
+    monkeypatch.setattr(BaseParser, "_get_viking_fs", lambda self: fs)
+    monkeypatch.setattr(
+        "openviking.resource.staged_source.materialize_source", AsyncMock(return_value=prepared)
+    )
+    monkeypatch.setattr(PDFParser, "parse", native_parse)
+    monkeypatch.setattr(UnderstandingAPI, "parse", api_parse)
+    monkeypatch.setattr(DirectoryParser, "_merge_parser_result", AsyncMock())
+    msg = AddResourceMsg(
+        task_id="task-1",
+        path=str(tmp_path),
+        root_uri="viking://resources/directory",
+        account_id="acct",
+        user_id="alice",
+        role="user",
+        staged_source={
+            "temp_uri": "viking://temp/staged",
+            "source_uri": "viking://temp/staged/source/directory",
+            "source_type": SourceType.LOCAL,
+            "original_source": str(tmp_path),
+            "meta": {},
+        },
+    )
+    ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
+    await service.execute_add_resource_job(
+        msg, ctx=ctx, resource_lock=None, stage_callback=AsyncMock()
+    )
+    api_parse.assert_awaited_once()
+    native_parse.assert_not_awaited()

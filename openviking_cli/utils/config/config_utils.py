@@ -3,9 +3,13 @@
 """Shared helpers for config validation and error formatting."""
 
 import difflib
+import logging
+from collections.abc import Mapping
 from typing import Any, Optional, get_args, get_origin
 
 from pydantic import BaseModel, ValidationError
+
+DEFAULT_SERVICE_NAME = "openviking-server"
 
 
 def suggest_closest_field(field_name: str, valid_fields: set[str]) -> Optional[str]:
@@ -14,31 +18,6 @@ def suggest_closest_field(field_name: str, valid_fields: set[str]) -> Optional[s
     if close_matches:
         return close_matches[0]
     return None
-
-
-def raise_unknown_config_fields(
-    *,
-    data: dict[str, Any],
-    valid_fields: set[str],
-    context_name: str,
-) -> None:
-    """Raise a user-friendly error for unexpected config fields."""
-    unknown_fields = [key for key in data if key not in valid_fields]
-    if not unknown_fields:
-        return
-
-    errors = []
-    for field_name in unknown_fields:
-        suggestion = suggest_closest_field(field_name, valid_fields)
-        if suggestion:
-            errors.append(
-                f"Unknown config field '{field_name}' in {context_name} "
-                f"(did you mean '{suggestion}'?)"
-            )
-        else:
-            errors.append(f"Unknown config field '{field_name}' in {context_name}")
-
-    raise ValueError("\n".join(errors))
 
 
 def _unwrap_model_type(annotation: Any) -> Optional[type[BaseModel]]:
@@ -69,6 +48,109 @@ def _get_model_at_path(
             return None
         current_model = next_model
     return current_model
+
+
+def warn_unknown_fields(
+    *,
+    data: Mapping[str, Any],
+    valid_fields: set[str],
+    logger: logging.Logger,
+    path_prefix: str = "",
+) -> None:
+    """Warn about keys the owner of one config section does not declare.
+
+    Unknown fields stay ignored so legacy configuration keeps loading; the
+    warning keeps the mismatch visible to whoever wrote the file. Only field
+    names are logged, never values.
+    """
+    messages = []
+    for key in data:
+        if key in valid_fields:
+            continue
+        field_path = f"{path_prefix}.{key}" if path_prefix else key
+        # Config files are JSON, but from_dict() is also called programmatically;
+        # a diagnostic must never be the reason loading fails.
+        messages.append(f"Ignoring unknown config field '{field_path!s}'")
+    if messages:
+        logger.warning("%s", "\n".join(messages))
+
+
+def _child_model_type(annotation: Any) -> Optional[type[BaseModel]]:
+    """Return the model nested values must validate against, when unambiguous."""
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation
+
+    args = get_args(annotation)
+    if not args or any(get_origin(arg) in (dict, Mapping) for arg in args):
+        return None
+
+    models = {model for model in (_unwrap_model_type(arg) for arg in args) if model is not None}
+    if len(models) == 1:
+        return models.pop()
+    return None
+
+
+def warn_unknown_config_fields(
+    *,
+    data: Mapping[str, Any],
+    model: type[BaseModel],
+    logger: logging.Logger,
+    path_prefix: str = "",
+    extra_valid_fields: Optional[set[str]] = None,
+) -> None:
+    """Warn about config keys the model does not declare, recursing into sub-models.
+
+    ``extra_valid_fields`` lists keys consumed by another owner (for example the
+    ``server`` section) so they are not reported as unknown.
+    """
+    warn_unknown_fields(
+        data=data,
+        valid_fields=set(model.model_fields)
+        | {field.alias for field in model.model_fields.values() if isinstance(field.alias, str)}
+        | (extra_valid_fields or set()),
+        logger=logger,
+        path_prefix=path_prefix,
+    )
+
+    for key, value in data.items():
+        field = model.model_fields.get(key)
+        if field is None:
+            continue
+        child_model = _child_model_type(field.annotation)
+        if child_model is None:
+            continue
+        child_prefix = f"{path_prefix}.{key}" if path_prefix else key
+        is_mapping = get_origin(field.annotation) in (dict, Mapping)
+        if is_mapping and not isinstance(value, Mapping):
+            continue
+        is_sequence = isinstance(value, (list, tuple))
+        items = value.items() if is_mapping else enumerate(value if is_sequence else (value,))
+        for child_key, item in items:
+            if not isinstance(item, Mapping):
+                continue
+            item_prefix = child_prefix
+            if is_mapping:
+                item_prefix = f"{child_prefix}.{child_key}"
+            elif is_sequence:
+                item_prefix = f"{child_prefix}[{child_key}]"
+            warn_unknown_config_fields(
+                data=item,
+                model=child_model,
+                logger=logger,
+                path_prefix=item_prefix,
+            )
+
+
+def normalize_service_name(value: Any, field_name: str = "service_name") -> str:
+    """Return a validated service name for cache namespaces and OTel defaults."""
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field_name} must not be empty")
+    if any(not (char.isascii() and (char.isalnum() or char in "._-")) for char in normalized):
+        raise ValueError(f"{field_name} must contain only ASCII letters, digits, '.', '_' or '-'")
+    return normalized
 
 
 def format_validation_error(

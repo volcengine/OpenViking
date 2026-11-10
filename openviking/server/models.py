@@ -25,10 +25,17 @@ class Response(BaseModel):
     profile: Optional[list[str]] = None
 
 
+class ListingResponse(Response):
+    """Filesystem listing response with pagination metadata."""
+
+    has_more: bool
+
+
 # Error code to HTTP status code mapping
 ERROR_CODE_TO_HTTP_STATUS = {
     "OK": 200,
     "INVALID_ARGUMENT": 400,
+    "GIT_AUTH_FAILED": 400,
     "INVALID_URI": 400,
     "NOT_FOUND": 404,
     "ALREADY_EXISTS": 409,
@@ -50,5 +57,16 @@ ERROR_CODE_TO_HTTP_STATUS = {
     "UNSUPPORTED_URI": 400,
     "UNSUPPORTED_MODE": 400,
     "RESTORE_WRITEBACK_PARTIAL": 500,
+    "SKILL_INVALID": 400,
+    "SKILL_CAPABILITY_UNAVAILABLE": 400,
+    "AGENT_OUTPUT_INVALID": 500,
+    "MODEL_UNAVAILABLE": 503,
+    "WRITE_CONFLICT": 409,
+    "WRITE_FAILED": 500,
+    "REFRESH_FAILED": 500,
+    "BOT_RESTARTED": 503,
+    "INTERNAL_ERROR": 500,
+    "NO_VECTOR_DB": 503,
+    "INVALID_FILTER": 400,
     "UNKNOWN": 500,
 }

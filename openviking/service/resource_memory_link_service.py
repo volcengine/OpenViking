@@ -8,16 +8,15 @@ files' MEMORY_FIELDS metadata.
 
 from __future__ import annotations
 
-import asyncio
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
+from openviking.concurrency import AsyncSemaphore
 from openviking.core.namespace import (
     NamespaceShapeError,
     canonical_user_root,
-    canonicalize_uri,
     context_type_for_uri,
     uri_parts,
 )
@@ -33,8 +32,9 @@ from openviking.session.memory.utils.resource_refs import (
     resource_ref_matches,
     unlink_resource_references_from_memory,
 )
-from openviking.storage import VikingDBManager
+from openviking.storage.abstract_overview import body_for_preview
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
@@ -91,7 +91,7 @@ def _resource_reason_peer_id(ctx: RequestContext, resource_uri: str) -> Optional
 
 def _peer_id_from_resource_uri(resource_uri: str, ctx: RequestContext) -> Optional[str]:
     try:
-        parts = uri_parts(canonicalize_uri(resource_uri, ctx))
+        parts = uri_parts(resource_uri)
     except (NamespaceShapeError, ValueError):
         return None
     if len(parts) >= 5 and parts[0] == "user" and parts[2] == "peers":
@@ -127,7 +127,8 @@ class ResourceMemoryLinkService:
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._session_service = session_service
-        self._reason_session_lock = asyncio.Lock()
+        # Additions run on queue loops; deletions can run on the HTTP loop.
+        self._reason_session_lock = AsyncSemaphore()
 
     def set_dependencies(
         self,
@@ -151,9 +152,15 @@ class ResourceMemoryLinkService:
         resource_uri: str,
         reason: str,
         source_name: Optional[str] = None,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Bridge add-resource reason extraction through normal session commit."""
+        """Queue add-resource reason extraction as a normal session commit.
+
+        Returns ``status="accepted"`` once the commit is queued; poll
+        ``commit_task_id`` through the Task API for its result. Every reason commit
+        serializes on one shared session, so waiting for it here held the caller
+        behind all earlier reason commits (one stalled commit could block resource
+        ingestion).
+        """
         reason = (reason or "").strip()
         if not reason:
             return {"status": "skipped", "reason": "empty_reason"}
@@ -167,10 +174,9 @@ class ResourceMemoryLinkService:
         session_id = _RESOURCE_REASON_SESSION_ID
         target_peer_id = _resource_reason_peer_id(ctx, resource_uri)
         commit_result: Dict[str, Any] = {}
-        task_result: Optional[Dict[str, Any]] = None
 
         async with self._reason_session_lock:
-            session = await self._session_service.get(
+            session = await self._session_service.open(
                 session_id,
                 ctx,
                 auto_create=True,
@@ -193,26 +199,22 @@ class ResourceMemoryLinkService:
             }
             if target_peer_id:
                 message_spec["peer_id"] = target_peer_id
-            session.add_messages([message_spec])
+            add_many_async = getattr(session, "add_messages_async", None)
+            if callable(add_many_async):
+                await add_many_async([message_spec])
+            else:
+                session.add_messages([message_spec])
             commit_result = await self._session_service.commit_async(
                 session_id,
                 ctx,
                 keep_recent_count=0,
             )
 
-        task_id = commit_result.get("task_id")
-        if task_id:
-            task_result = await self._wait_for_commit_task(
-                task_id=str(task_id),
-                ctx=ctx,
-                timeout=timeout,
-            )
         return {
-            "status": "success",
+            "status": "accepted",
             "session_id": session_id,
-            "commit_task_id": task_id,
+            "commit_task_id": commit_result.get("task_id"),
             "archive_uri": commit_result.get("archive_uri"),
-            "commit_task": task_result,
         }
 
     async def on_resource_deleted(
@@ -222,7 +224,6 @@ class ResourceMemoryLinkService:
         resource_uri: str,
         memory_uris: Sequence[str],
         recursive: bool = False,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Bridge resource deletion through normal session commit for mutable memories."""
         if not resource_uri:
@@ -237,7 +238,7 @@ class ResourceMemoryLinkService:
         task_result: Optional[Dict[str, Any]] = None
 
         async with self._reason_session_lock:
-            session = await self._session_service.get(
+            session = await self._session_service.open(
                 session_id,
                 ctx,
                 auto_create=True,
@@ -259,7 +260,11 @@ class ResourceMemoryLinkService:
             }
             if target_peer_id:
                 message_spec["peer_id"] = target_peer_id
-            session.add_messages([message_spec])
+            add_many_async = getattr(session, "add_messages_async", None)
+            if callable(add_many_async):
+                await add_many_async([message_spec])
+            else:
+                session.add_messages([message_spec])
             commit_result = await self._session_service.commit_async(
                 session_id,
                 ctx,
@@ -271,7 +276,6 @@ class ResourceMemoryLinkService:
             task_result = await self._wait_for_commit_task(
                 task_id=str(task_id),
                 ctx=ctx,
-                timeout=timeout,
             )
         return {
             "status": "success",
@@ -326,31 +330,20 @@ class ResourceMemoryLinkService:
         *,
         task_id: str,
         ctx: RequestContext,
-        timeout: Optional[float],
     ) -> Dict[str, Any]:
-        from openviking.service.task_tracker import get_task_tracker
+        from openviking.service.task_tracker import TaskStatus, get_task_tracker
 
-        async def _poll() -> Dict[str, Any]:
-            tracker = get_task_tracker()
-            while True:
-                task = await tracker.get(
-                    task_id,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                )
-                if task is None:
-                    raise RuntimeError(f"session commit task not found: {task_id}")
-                status = task.status.value if hasattr(task.status, "value") else str(task.status)
-                if status == "completed":
-                    return task.to_dict()
-                if status == "failed":
-                    raise RuntimeError(task.error or f"session commit task failed: {task_id}")
-                await asyncio.sleep(0.1)
-
-        return await asyncio.wait_for(
-            _poll(),
-            timeout=timeout or _RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS,
+        task = await get_task_tracker().wait(
+            task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            timeout=_RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS,
         )
+        if task.status == TaskStatus.COMPLETED:
+            return task.to_dict()
+        if task.status == TaskStatus.FAILED:
+            raise RuntimeError(task.error)
+        raise RuntimeError(f"session commit task cancelled: {task_id}")
 
     async def before_resource_delete(
         self,
@@ -637,7 +630,7 @@ class ResourceMemoryLinkService:
 
     @staticmethod
     def _clean_resource_abstract(abstract: Any) -> str:
-        text = " ".join(str(abstract or "").split())
+        text = " ".join(body_for_preview(str(abstract or "")).split())
         if not text:
             return ""
         if any(text == marker or text.endswith(marker) for marker in _ABSTRACT_NOT_READY_MARKERS):

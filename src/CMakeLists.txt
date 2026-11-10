@@ -62,6 +62,16 @@ set(LEVELDB_INSTALL OFF CACHE BOOL "" FORCE)
 set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
 
+# The vendored leveldb (third_party/leveldb-1.23/CMakeLists.txt) auto-detects a
+# system tcmalloc via check_library_exists() and links it with PUBLIC
+# propagation. Because the Python abi3 extension module ends up transitively
+# linking that tcmalloc, the extension mixes the tcmalloc heap with the Python
+# allocator, which corrupts memory and intermittently SIGSEGVs inside
+# vectordb::Schema/bytes_row construction. Official wheels never link tcmalloc.
+# Default to OFF (opt-in via -DHAVE_TCMALLOC=ON) so builds behave like the
+# released wheels.
+set(HAVE_TCMALLOC OFF CACHE BOOL "Link system tcmalloc into the Python extension" FORCE)
+
 add_subdirectory(../third_party/leveldb-1.23 ${CMAKE_BINARY_DIR}/leveldb_build)
 if(TARGET leveldb)
     target_compile_options(leveldb PRIVATE -fPIC)

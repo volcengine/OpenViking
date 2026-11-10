@@ -1,33 +1,65 @@
-# Hermes Agent
+# Hermes
 
-[Hermes Agent](https://hermes-agent.nousresearch.com/) (Nous Research) 内置 OpenViking 记忆提供方。无需安装插件——把 Hermes 指向你的 OpenViking 服务即可，记忆存储、召回和抽取均原生支持。
+为 [Hermes Agent](https://hermes-agent.nousresearch.com/) 配置 OpenViking 长期记忆。
 
-## 配置
+## 开始使用
 
-运行 Hermes 记忆配置向导：
+在要使用的 Hermes profile 中运行：
 
 ```bash
-hermes memory setup
+hermes plugins install openviking --enable
+hermes memory setup openviking
+hermes
 ```
 
-向导会询问：
+安装时接受依赖安装提示。如果当前 Hermes 版本仍内置 OpenViking，请跳过安装命令。
+该版本会使用内置副本，不提供 Quick Local。
 
-- **OpenViking 服务 URL** — 自托管服务器（默认 `http://127.0.0.1:1933`）或 OpenViking Service（火山引擎云）
-- **API Key** — 本地开发模式留空
-- **租户 account / user / peer ID** — 多租户部署时使用。迁移期的旧 `agent_id` 配置会映射为请求的 actor peer。
+对话历史用于理解当前聊天。长期记忆保存有用的信息，供后续聊天使用。
+公共记忆是不属于某个发送者的记忆。
 
-配置保存在 Hermes 的 `config.yaml` 和 `.env` 文件中。
+选择 **Personal Agent** 可召回公共记忆和当前发送者的记忆，并保留现有对话历史设置。
+选择 **Shared Agent** 可在每个群组或话题内共享对话历史，并召回同一 OpenViking 用户
+下所有发送者的记忆。Shared Agent 会要求确认。
 
-## 验证
+然后选择连接方式：
+
+- **Quick Local** 安装本地服务和 embedding 模型，复用受支持的 Hermes LLM 抽取记忆。
+  LLM 仍可使用远程 API。
+- **OpenViking Service (VolcEngine Cloud)** 通过服务 API Key 连接火山引擎的
+  [OpenViking 托管云服务](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=agent-integrations_05-hermes)，
+  无需安装服务端或配置本地模型。
+- **Custom** 使用 URL 和凭据连接自己的服务，也可以复用已保存的 `ovcli.conf`。
+
+配置后正常聊天即可。插件默认在待提交内容达到 20,000 tokens、会话结束或切换时
+请求提交。OpenViking 完成抽取后，记忆才能被召回。已有服务端数据会保留。
+
+Quick Local 服务在 Hermes 退出后仍会运行。支持的模型、服务控制命令和运行环境
+升级说明见[插件指南](https://hermes-agent.nousresearch.com/docs/plugins/openviking)。
+
+## 查看状态
 
 ```bash
 hermes memory status
 ```
 
-配置完成后，Hermes 自动使用 OpenViking 作为长期记忆——`viking_remember`、`viking_recall` 等记忆工具即刻可用。
+`available` 表示 provider 已配置，不代表服务健康，也不代表记忆抽取成功。
 
-## 参见
+## 更新
 
-- [Hermes — OpenViking memory provider 文档](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking) — 完整配置指南
-- [部署指南](../guides/03-deployment.md) — 搭建 OpenViking 服务
-- [鉴权](../guides/04-authentication.md) — 远程访问的 API Key 设置
+```bash
+hermes plugins update openviking
+```
+
+更新后重启 Hermes 或 gateway。连接设置和数据会保留。更新 Quick Local 服务时，
+重新运行配置向导并选择 Quick Local。正常聊天使用已安装的服务，不会检查更新。
+
+Hermes 更新移除内置副本时，会为已使用 OpenViking 的 profile 尝试安装目录插件。
+如果失败，请在该 profile 中运行上面的安装命令。
+
+## 更多信息
+
+- [插件指南](https://hermes-agent.nousresearch.com/docs/plugins/openviking)
+- [集成能力参考](./16-capability-reference.md)
+- [服务部署](../guides/03-deployment.md)
+- [API Key](../guides/04-authentication.md)

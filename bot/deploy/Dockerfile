@@ -2,7 +2,7 @@ FROM python:3.13-slim-bookworm
 
 # Install base tools, Node.js 20, and uv
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates gnupg git ripgrep bubblewrap socat libfuse2 build-essential && \
+    apt-get install -y --no-install-recommends curl ca-certificates gnupg git bubblewrap socat libfuse2 build-essential && \
     # Add NodeSource repository for Node.js 20 (new setup script, old node_20.x URL is deprecated)
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
@@ -36,9 +36,6 @@ COPY bridge/package*.json ./bridge/
 ENV UV_HTTP_TIMEOUT=300
 RUN uv pip install --system --no-cache "openviking>=0.3.9" && \
     uv pip install --system --no-cache .
-
-# Install global npm packages for sandbox
-RUN npm install -g @anthropic-ai/sandbox-runtime
 
 # ============================================
 # Layer 2: Copy source code and build

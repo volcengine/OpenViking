@@ -1,0 +1,290 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+"""Shared constants, helpers, and singleton management for VikingFS."""
+
+import os
+from typing import TYPE_CHECKING, Any, Dict, Optional, TypeVar
+
+from openviking_cli.exceptions import (
+    InvalidArgumentError,
+    ResourceExhaustedError,
+)
+from openviking_cli.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from openviking.config.vlm import VLMResolver
+    from openviking.storage.acl import AclManager
+    from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
+    from openviking_cli.utils.config import GlobConfig, GrepConfig, RerankConfig, RetrievalConfig
+
+logger = get_logger(__name__)
+
+# Sentinel node_limit for internal callers that MUST enumerate an entire
+# directory. ``ls()`` defaults to ``node_limit=1000`` to protect agent-facing
+# context from being flooded, but internal system operations (parse merge,
+# temp->final sync, semantic-tree execution, vectorization) must see every child or they
+# silently drop entries beyond the cap — e.g. a >1000-doc directory ingest only
+# materializes its first 1000 subdirectories. Pass this explicitly at those
+# call sites.
+LS_ALL_NODES = 2**31 - 1
+SNAPSHOT_DIFF_MAX_FILE_BYTES = 10 * 1024 * 1024
+SNAPSHOT_DIFF_MAX_OUTPUT_BYTES = 20 * 1024 * 1024
+SNAPSHOT_DIFF_MAX_LINES = 100_000
+SNAPSHOT_DIFF_TIMEOUT_MS = 500
+_T = TypeVar("_T")
+
+
+def _snapshot_line_count(text: str) -> int:
+    if not text:
+        return 0
+    line_breaks = (
+        "\n",
+        "\r",
+        "\v",
+        "\f",
+        "\x1c",
+        "\x1d",
+        "\x1e",
+        "\x85",
+        "\u2028",
+        "\u2029",
+    )
+    count = sum(text.count(separator) for separator in line_breaks)
+    count -= text.count("\r\n")
+    return count if text.endswith(line_breaks) else count + 1
+
+
+def _prepare_snapshot_diff(
+    *,
+    path: str,
+    before_bytes: Optional[bytes],
+    after_bytes: Optional[bytes],
+    max_lines: int,
+) -> tuple[str, str, str]:
+    try:
+        before = before_bytes.decode("utf-8") if before_bytes is not None else ""
+        after = after_bytes.decode("utf-8") if after_bytes is not None else ""
+    except UnicodeDecodeError as exc:
+        raise InvalidArgumentError("snapshot diff only supports UTF-8 text files") from exc
+
+    for text in (before, after):
+        line_count = _snapshot_line_count(text)
+        if line_count > max_lines:
+            raise ResourceExhaustedError(
+                f"snapshot diff line count limit exceeded ({max_lines} lines per file)",
+                details={"limit_lines": max_lines, "path": path},
+            )
+
+    if before_bytes is None:
+        change_type = "added"
+    elif after_bytes is None:
+        change_type = "deleted"
+    elif before_bytes == after_bytes:
+        change_type = "unchanged"
+    else:
+        change_type = "modified"
+
+    return change_type, before, after
+
+
+def _ensure_non_empty_search_query(query: str, image_url: str | list[str] | None = None) -> None:
+    if not query.strip() and not image_url:
+        raise InvalidArgumentError("Search query or image_url must not be empty.")
+
+
+def is_filter_only_query(query: str, image_url: str | list[str] | None = None) -> bool:
+    """Return True when the caller supplied no query and no image."""
+    return not query.strip() and not image_url
+
+
+def _ensure_filter_present(filter: Optional[Dict[str, Any]]) -> None:
+    """Reject a query-less request that also carries no filter.
+
+    Without either one there is nothing to narrow the search by, and returning
+    an arbitrary slice of the whole store would be worse than an error.
+    """
+    if not filter:
+        raise InvalidArgumentError(
+            "Search query or image_url must not be empty unless a filter is provided."
+        )
+
+
+def build_matched_context_from_record(record: Dict[str, Any]) -> Any:
+    """Turn a raw vector-store record into a MatchedContext.
+
+    ``score`` is left at 0: a filter-only lookup has no similarity ranking, and
+    fabricating a score would let callers sort on a meaningless number.
+    """
+    from openviking.utils.tags import normalize_search_tags
+    from openviking_cli.retrieve import ContextType, MatchedContext
+
+    uri = record.get("uri")
+    if not uri or not isinstance(uri, str):
+        return None
+    raw_type = record.get("context_type")
+    try:
+        context_type = ContextType(raw_type) if raw_type else ContextType.RESOURCE
+    except ValueError:
+        context_type = ContextType.RESOURCE
+    raw_level = record.get("level")
+    # Not `or 2`: level 0 is a valid value (a directory abstract record) and
+    # would otherwise be silently reported as 2.
+    level = int(raw_level) if raw_level is not None else 2
+    return MatchedContext(
+        uri=uri,
+        context_type=context_type,
+        level=level,
+        abstract=record.get("abstract", "") or "",
+        category=record.get("category", "") or "",
+        score=0.0,
+        match_reason="filter",
+        search_tags=normalize_search_tags(record.get("search_tags"), discard_invalid=True),
+    )
+
+
+def _is_directory_not_empty_error(message: str) -> bool:
+    """Check if an error message indicates a directory not empty error.
+
+    Handles multiple possible error message formats from different backends.
+    """
+    msg = message.lower()
+    return any(
+        pattern in msg
+        for pattern in [
+            "directory not empty",
+            "dir not empty",
+            "directory is not empty",
+        ]
+    )
+
+
+def _get_cpu_count() -> int:
+    """Return the number of CPUs available to this process.
+
+    Tries process_cpu_count (Python 3.13+, cgroup-aware),
+    falls back to sched_getaffinity (Linux),
+    then os.cpu_count (may report host CPUs in containers).
+    """
+    if hasattr(os, "process_cpu_count"):
+        return os.process_cpu_count() or 1
+    try:
+        return len(os.sched_getaffinity(0))
+    except (AttributeError, NotImplementedError):
+        return os.cpu_count() or 1
+
+
+def _get_abstract_worker_count() -> int:
+    default = max(4, min(12, min(32, _get_cpu_count() + 4) // 2))
+    env_val = os.getenv("OPENVIKING_FILE_OPS_CONCURRENCY")
+    if env_val is not None:
+        try:
+            return max(1, int(env_val))
+        except ValueError:
+            pass
+    return max(1, default)
+
+
+_ABSTRACT_WORKER_COUNT = _get_abstract_worker_count()
+_DEFAULT_GREP_FILE_CONCURRENCY = 32
+
+
+# ========== Singleton Pattern ==========
+
+_instance: Optional["Any"] = None
+
+
+def init_viking_fs(
+    agfs: Any,
+    query_embedder: Optional[Any] = None,
+    rerank_config: Optional["RerankConfig"] = None,
+    vector_store: Optional["VikingVectorIndexBackend"] = None,
+    acl_manager: Optional["AclManager"] = None,
+    retrieval_config: Optional["RetrievalConfig"] = None,
+    grep_config: Optional["GrepConfig"] = None,
+    glob_config: Optional["GlobConfig"] = None,
+    timeout: int = 10,
+    enable_recorder: bool = False,
+    encryptor: Optional[Any] = None,
+    vlm_resolver: Optional["VLMResolver"] = None,
+    embedding_provider: Optional[Any] = None,
+    vector_config_resolver: Optional[Any] = None,
+):
+    """Initialize VikingFS singleton.
+
+    Args:
+        agfs: Pre-initialized AGFS client (HTTP or Binding)
+        query_embedder: Embedder instance
+        rerank_config: Rerank configuration
+        retrieval_config: Retrieval behavior configuration
+        grep_config: Grep engine configuration
+        glob_config: Glob engine configuration
+        vector_store: Vector store instance
+        enable_recorder: Whether to enable IO recording
+        encryptor: FileEncryptor instance for encryption/decryption
+    """
+    from openviking.storage.viking_fs import VikingFS
+
+    global _instance
+
+    _instance = VikingFS(
+        agfs=agfs,
+        query_embedder=query_embedder,
+        rerank_config=rerank_config,
+        vector_store=vector_store,
+        acl_manager=acl_manager,
+        retrieval_config=retrieval_config,
+        grep_config=grep_config,
+        glob_config=glob_config,
+        encryptor=encryptor,
+        vlm_resolver=vlm_resolver,
+        embedding_provider=embedding_provider,
+        vector_config_resolver=vector_config_resolver,
+    )
+
+    if enable_recorder:
+        _enable_viking_fs_recorder(_instance)
+
+    return _instance
+
+
+def _enable_viking_fs_recorder(viking_fs) -> None:
+    """
+    Enable recorder for a VikingFS instance.
+
+    This wraps the VikingFS instance with recording capabilities.
+    Called automatically when enable_recorder=True in init_viking_fs.
+
+    Args:
+        viking_fs: VikingFS instance to enable recording for
+    """
+    from openviking.eval.recorder import RecordingVikingFS, get_recorder
+
+    recorder = get_recorder()
+    if not recorder.enabled:
+        from openviking.eval.recorder import init_recorder
+
+        init_recorder(enabled=True)
+
+    global _instance
+    _instance = RecordingVikingFS(viking_fs)
+    logger.info("[VikingFS] IO Recorder enabled")
+
+
+def enable_viking_fs_recorder() -> None:
+    """
+    Enable recorder for the global VikingFS singleton.
+
+    This function wraps the existing VikingFS's AGFS client with recording.
+    Must be called after init_viking_fs().
+    """
+    global _instance
+    if _instance is None:
+        raise RuntimeError("VikingFS not initialized. Call init_viking_fs() first.")
+    _enable_viking_fs_recorder(_instance)
+
+
+def get_viking_fs():
+    """Get VikingFS singleton."""
+    if _instance is None:
+        raise RuntimeError("VikingFS not initialized. Call init_viking_fs() first.")
+    return _instance

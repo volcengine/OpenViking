@@ -35,10 +35,11 @@ Monitors queue system status (Embedding, Semantic, and custom queues).
 **Usage:**
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.OpenViking(path="./data")
-print(client.observer.queue)
+client = SyncHTTPClient(url="http://127.0.0.1:1933")
+client.initialize()
+print(client.observer.queue())
 # Output:
 #     Queue  Pending  In Progress  Processed  Errors  Total
 # Embedding        5            2          100       0      107
@@ -55,9 +56,10 @@ Monitors VikingDB collection status (index count and vector count per collection
 **Usage:**
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.OpenViking(path="./data")
+client = SyncHTTPClient(url="http://127.0.0.1:1933")
+client.initialize()
 print(client.observer.vikingdb())
 # Output:
 #    Collection  Index Count  Vector Count Status
@@ -69,7 +71,7 @@ print(client.observer.vikingdb())
 
 1. **Use `get_status_table()` for human-readable output**: Provides clean, formatted tables
 2. **Check the table output**: Look at "Errors" column to detect issues early
-3. **Use with sync or async client**: Works seamlessly with both `OpenViking` and `AsyncOpenViking`
+3. **Use the HTTP SDK**: Both `SyncHTTPClient` and `AsyncHTTPClient` expose observer endpoints
 
 ## See Also
 

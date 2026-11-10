@@ -1,0 +1,615 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+"""Semantic retrieval mixin for VikingFS."""
+
+import asyncio
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Literal, Optional, Union
+
+from openviking.core.context import ContextLevel
+from openviking.core.retrieval_targets import resolve_retrieval_targets
+from openviking.core.retrieval_types import SearchType
+from openviking.server.error_mapping import is_not_found_error, map_exception
+from openviking.server.identity import RequestContext, Role
+from openviking.storage.abstract_overview import (
+    AbstractOverviewFormatError,
+    body_for_preview,
+    render_abstract_overview,
+)
+from openviking.storage.acl import AclAction
+from openviking.storage.viking_fs._base import (
+    _ensure_filter_present,
+    _ensure_non_empty_search_query,
+    build_matched_context_from_record,
+    is_filter_only_query,
+    logger,
+)
+from openviking.telemetry import get_current_telemetry
+from openviking.utils.image_search import build_multimodal_embedding_input
+from openviking.utils.time_decay import parse_duration_ms
+from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.retrieve import ContextType
+from openviking_cli.utils.config.retrieval_config import RetrievalConfig
+
+
+class _SemanticMixin:
+    """Abstract/overview/find/search semantic retrieval layer."""
+
+    # ========== VikingFS Specific Capabilities ==========
+
+    async def _read_directory_summary(
+        self, uri: str, field: Literal["abstract", "overview"], ctx: Optional[RequestContext] = None
+    ) -> str:
+        """Read a fixed summary file from an already authorized, known directory."""
+        real_ctx = self._ctx_or_default(ctx)
+        if real_ctx.role == Role.GLOBAL:
+            ctx = self.authorize_read(real_ctx, [uri])
+            if ctx.data_access is not None:
+                await self._ensure_access(f"{uri.rstrip('/')}/.{field}.md", ctx)
+        path = self._uri_to_path(uri, ctx=ctx)
+        try:
+            raw = self._handle_agfs_read(await self._async_agfs.read(f"{path}/.{field}.md"))
+            return body_for_preview(self._decode_bytes(raw))
+        except AbstractOverviewFormatError as exc:
+            logger.warning("Malformed directory %s for %s: %s", field, uri, exc)
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                mapped = map_exception(exc, resource=uri)
+                if mapped is not None:
+                    raise mapped from exc
+                raise
+        if field == "abstract":
+            return f"# {uri} [Directory abstract is not ready]"
+        return f"# {uri}\n\n[Directory overview is not ready]"
+
+    async def abstract(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> str:
+        """Read directory's L0 summary (.abstract.md).
+
+        If the caller points to a file, its parent directory is used instead so
+        the endpoint remains usable for both file and directory URIs.
+        """
+        real_ctx = self._ctx_or_default(ctx)
+        ctx = self.authorize_read(real_ctx, [uri])
+        await self._ensure_access(uri, ctx)
+        path = self._uri_to_path(uri, ctx=ctx)
+        try:
+            info = await self._async_agfs.stat(path)
+        except Exception as exc:
+            mapped = map_exception(exc, resource=uri)
+            if mapped is not None:
+                raise mapped from exc
+            raise
+        if not info.get("isDir", info.get("is_dir")):
+            parent_path = path.rsplit("/", 1)[0] or "/"
+            parent_uri = self._path_to_uri(parent_path, ctx=ctx)
+            logger.info(
+                "content/abstract: %s is a file, falling back to parent directory %s",
+                uri,
+                parent_uri,
+            )
+            return await self.abstract(parent_uri, ctx=real_ctx)
+        return await self._read_directory_summary(uri, "abstract", ctx=ctx)
+
+    async def overview(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> str:
+        """Read directory's L1 overview (.overview.md).
+
+        If the caller points to a file, its parent directory is used instead so
+        the endpoint remains usable for both file and directory URIs.
+        """
+        real_ctx = self._ctx_or_default(ctx)
+        ctx = self.authorize_read(real_ctx, [uri])
+        await self._ensure_access(uri, ctx)
+        path = self._uri_to_path(uri, ctx=ctx)
+        try:
+            info = await self._async_agfs.stat(path)
+        except Exception as exc:
+            mapped = map_exception(exc, resource=uri)
+            if mapped is not None:
+                raise mapped from exc
+            raise
+        if not info.get("isDir", info.get("is_dir")):
+            parent_path = path.rsplit("/", 1)[0] or "/"
+            parent_uri = self._path_to_uri(parent_path, ctx=ctx)
+            logger.info(
+                "content/overview: %s is a file, falling back to parent directory %s",
+                uri,
+                parent_uri,
+            )
+            return await self.overview(parent_uri, ctx=real_ctx)
+        return await self._read_directory_summary(uri, "overview", ctx=ctx)
+
+    async def find(
+        self,
+        query: str,
+        target_uri: Union[str, List[str]] = "",
+        limit: int = 10,
+        score_threshold: Optional[float] = None,
+        filter: Optional[Dict] = None,
+        ctx: Optional[RequestContext] = None,
+        level: Optional[List[int]] = None,
+        image_url: str | list[str] | None = None,
+        events_time_decay_protection: Optional[str] = None,
+        search_type: SearchType = "semantic",
+    ):
+        """Semantic search.
+
+        Args:
+            query: Search query
+            target_uri: Target directory URI(s), supports str or List[str]
+            limit: Return count
+            score_threshold: Score threshold
+            filter: Metadata filter
+
+        Returns:
+            FindResult
+        """
+        # Validate before touching any state: callers rely on a bad request
+        # being rejected even when the instance has not been initialized yet.
+        #
+        # An empty query is allowed only when a metadata filter narrows the
+        # search: the result is then fully determined by that filter, so there
+        # is nothing to embed or rank. Callers that look records up by an exact
+        # tag (e.g. a legacy id carried on the record) would otherwise be forced
+        # to invent a meaningless query string whose similarity score is noise.
+        filter_only = is_filter_only_query(query, image_url)
+        if filter_only:
+            _ensure_filter_present(filter)
+            if events_time_decay_protection is not None:
+                raise InvalidArgumentError(
+                    "events_time_decay_protection requires a semantic query or image"
+                )
+        else:
+            _ensure_non_empty_search_query(query, image_url)
+        if events_time_decay_protection is not None:
+            parse_duration_ms(
+                events_time_decay_protection, parameter_name="events_time_decay_protection"
+            )
+        request_now = (
+            datetime.now(timezone.utc) if events_time_decay_protection is not None else None
+        )
+
+        telemetry = get_current_telemetry()
+        from openviking.retrieve.hierarchical_retriever import (
+            HierarchicalRetriever,
+            RetrieverMode,
+        )
+        from openviking_cli.retrieve import (
+            ContextType,
+            FindResult,
+            TypedQuery,
+        )
+
+        real_ctx = self._require_request_context(ctx)
+        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
+
+        real_ctx = self.authorize_read(real_ctx, retrieval_targets.target_directories)
+        if real_ctx.data_access is not None:
+            from dataclasses import replace
+
+            retrieval_targets = replace(
+                retrieval_targets, target_directories=list(real_ctx.data_access.effective_targets)
+            )
+
+        if filter_only:
+            return await self._find_by_filter(
+                filter=filter,
+                ctx=real_ctx,
+                target_directories=retrieval_targets.target_directories,
+                limit=limit,
+                level=level,
+            )
+
+        for target_dir in retrieval_targets.target_directories:
+            await self._ensure_retrieval_scope(target_dir, real_ctx)
+
+        storage = self._get_vector_store()
+        if not storage:
+            raise RuntimeError("Vector store not initialized. Call OpenViking.initialize() first.")
+
+        embedder = self._get_embedder(real_ctx)
+        if search_type == "semantic" and not embedder:
+            raise RuntimeError("Embedder not configured.")
+
+        retriever = HierarchicalRetriever(
+            storage=storage,
+            embedder=embedder,
+            rerank_config=self.rerank_config,
+        )
+
+        typed_query = TypedQuery(
+            query=query,
+            context_type=None,
+            intent="",
+            target_directories=retrieval_targets.target_directories,
+            embedding_input=(
+                build_multimodal_embedding_input(query, image_url) if image_url else None
+            ),
+            image_query=bool(image_url),
+        )
+
+        logger.debug(
+            "[VikingFS.find] Calling retriever.retrieve with "
+            f"ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"
+        )
+
+        result = await retriever.retrieve(
+            typed_query,
+            ctx=real_ctx,
+            limit=limit,
+            mode=RetrieverMode.QUICK,
+            score_threshold=score_threshold,
+            has_explicit_target=bool(retrieval_targets.first_explicit_directory),
+            scope_dsl=filter,
+            level=level,
+            events_time_decay_protection=events_time_decay_protection,
+            request_now=request_now,
+            search_type=search_type,
+        )
+
+        # Convert QueryResult to FindResult
+        memories, resources, skills = [], [], []
+        access = (
+            await self._can_access_many([hit.uri for hit in result.matched_contexts], real_ctx)
+            if real_ctx.data_access is not None
+            else None
+        )
+        for ctx in result.matched_contexts:
+            if access is not None and not access.get(ctx.uri, False):
+                continue
+            if (
+                ctx.level == ContextLevel.OVERVIEW
+                and real_ctx.data_access is not None
+                and not real_ctx.data_access.allows_overview(ctx.uri)
+            ):
+                continue
+            if ctx.context_type == ContextType.MEMORY:
+                memories.append(ctx)
+            elif ctx.context_type == ContextType.RESOURCE:
+                resources.append(ctx)
+            elif ctx.context_type == ContextType.SKILL:
+                skills.append(ctx)
+
+        find_result = FindResult(
+            memories=memories,
+            resources=resources,
+            skills=skills,
+        )
+        telemetry.set("vector.returned", find_result.total)
+        return find_result
+
+    async def _find_by_filter(
+        self,
+        filter: Optional[Dict],
+        ctx: Any,
+        target_directories: Any,
+        limit: int,
+        level: Optional[List[int]] = None,
+    ) -> Any:
+        """Resolve a query-less find purely from the metadata filter.
+
+        Scoping is delegated to filter_in_tenant, which builds the same scope
+        filter the vector path uses — tenant isolation and target-directory
+        limits therefore stay identical between the two. Hand-building the
+        filter here would be one refactor away from silently losing them.
+
+        Records come back in whatever order the store yields; there is no
+        similarity ranking, so ``score`` stays 0 rather than a fabricated value
+        callers might try to sort on.
+        """
+        from openviking.storage.vikingdb_manager import VikingDBManagerProxy
+        from openviking_cli.retrieve import ContextType, FindResult
+
+        telemetry = get_current_telemetry()
+        store = self._get_vector_store()
+        if not store:
+            raise RuntimeError("Vector store not initialized. Call OpenViking.initialize() first.")
+
+        for target_dir in target_directories:
+            await self._ensure_retrieval_scope(target_dir, ctx)
+
+        proxy = VikingDBManagerProxy(store, ctx)
+        records = await proxy.filter_in_tenant(
+            target_directories=list(target_directories or []),
+            extra_filter=filter,
+            level=level,
+            limit=limit,
+        )
+
+        memories, resources, skills = [], [], []
+        # Deduplicate by URI, mirroring what the vector path does: tags live on
+        # per-level records, so a directory carrying one matches on both its L0
+        # and L1 record and would otherwise be returned twice — inflating the
+        # total and eating two of the caller's limit slots for one result.
+        seen_uris: set = set()
+        access = (
+            await self._can_access_many([str(r.get("uri", "")) for r in records], ctx)
+            if ctx.data_access is not None
+            else None
+        )
+        for record in records:
+            if access is not None and not access.get(str(record.get("uri", "")), False):
+                continue
+            matched = build_matched_context_from_record(record)
+            if matched is None or matched.uri in seen_uris:
+                continue
+            if (
+                matched.level == ContextLevel.OVERVIEW
+                and ctx.data_access is not None
+                and not ctx.data_access.allows_overview(matched.uri)
+            ):
+                continue
+            seen_uris.add(matched.uri)
+            if matched.context_type == ContextType.MEMORY:
+                memories.append(matched)
+            elif matched.context_type == ContextType.RESOURCE:
+                resources.append(matched)
+            elif matched.context_type == ContextType.SKILL:
+                skills.append(matched)
+
+        find_result = FindResult(memories=memories, resources=resources, skills=skills)
+        telemetry.set("vector.returned", find_result.total)
+        return find_result
+
+    async def search(
+        self,
+        query: str,
+        target_uri: Union[str, List[str]] = "",
+        session_info: Optional[Dict] = None,
+        limit: int = 10,
+        score_threshold: Optional[float] = None,
+        filter: Optional[Dict] = None,
+        ctx: Optional[RequestContext] = None,
+        level: Optional[List[int]] = None,
+        image_url: str | list[str] | None = None,
+        events_time_decay_protection: Optional[str] = None,
+        search_type: SearchType = "semantic",
+        context_types: Optional[List[ContextType]] = None,
+    ):
+        """Complex search with session context.
+
+        Args:
+            query: Search query
+            target_uri: Target directory URI(s), supports str or List[str]
+            session_info: Session information
+            limit: Return count
+            filter: Metadata filter
+
+        Returns:
+            FindResult
+        """
+        _ensure_non_empty_search_query(query, image_url)
+        if events_time_decay_protection is not None:
+            parse_duration_ms(
+                events_time_decay_protection, parameter_name="events_time_decay_protection"
+            )
+        request_now = (
+            datetime.now(timezone.utc) if events_time_decay_protection is not None else None
+        )
+        telemetry = get_current_telemetry()
+        from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
+        from openviking.retrieve.intent_analyzer import IntentAnalyzer
+        from openviking_cli.retrieve import (
+            FindResult,
+            QueryPlan,
+            TypedQuery,
+        )
+
+        real_ctx = self._require_request_context(ctx)
+        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
+        primary_target_uri = retrieval_targets.first_explicit_directory
+
+        session_summary = (
+            str(session_info.get("latest_archive_overview") or "") if session_info else ""
+        )
+        current_messages = session_info.get("current_messages") if session_info else None
+
+        query_plan: Optional[QueryPlan] = None
+        for target_dir in retrieval_targets.target_directories:
+            await self._ensure_retrieval_scope(target_dir, real_ctx)
+
+        # When target_uri exists, read its abstract as optional query-planning context.
+        target_abstract = ""
+        if primary_target_uri:
+            try:
+                with telemetry.measure("search.target_abstract"):
+                    target_abstract = await self.abstract(primary_target_uri, ctx=real_ctx)
+            except Exception:
+                target_abstract = ""
+
+        retrieval_config = self.retrieval_config or RetrievalConfig()
+        # The raw query remains usable if optional intent analysis times out or fails.
+        typed_queries = [
+            TypedQuery(
+                query=query,
+                context_type=None,
+                intent="",
+                priority=1,
+                target_directories=retrieval_targets.target_directories,
+            )
+        ]
+
+        # With session context: optional intent analysis
+        if image_url:
+            typed_queries = [
+                TypedQuery(
+                    query=query,
+                    context_type=None,
+                    intent="",
+                    priority=1,
+                    target_directories=retrieval_targets.target_directories,
+                    embedding_input=build_multimodal_embedding_input(query, image_url),
+                    image_query=True,
+                )
+            ]
+        elif retrieval_config.enable_intent and (session_summary or current_messages):
+            try:
+                if self._vlm_resolver is None:
+                    raise RuntimeError(
+                        "VikingFS requires a VLM resolver for account-owned intent analysis"
+                    )
+                analyzer = IntentAnalyzer(
+                    max_recent_messages=5,
+                    query_planner=await self._vlm_resolver.get_query_planner(real_ctx.account_id),
+                )
+                with telemetry.measure("search.intent_analysis"):
+                    query_plan = await asyncio.wait_for(
+                        analyzer.analyze(
+                            compression_summary=session_summary or "",
+                            messages=current_messages or [],
+                            current_message=query,
+                            context_type=context_types[0]
+                            if context_types and len(context_types) == 1
+                            else None,
+                            target_abstract=target_abstract,
+                        ),
+                        timeout=retrieval_config.recall_intent_timeout_s,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Intent analysis failed (%s); using original query: %s",
+                    type(exc).__name__,
+                    exc,
+                )
+            else:
+                typed_queries = query_plan.queries
+                for tq in typed_queries:
+                    tq.target_directories = retrieval_targets.target_directories
+                    # Caller scope is authoritative even when the planner ignores its prompt.
+                    if context_types and len(context_types) == 1:
+                        tq.context_type = context_types[0]
+                    elif context_types and tq.context_type not in context_types:
+                        # The existing scope filter searches only the caller's allowed types.
+                        tq.context_type = None
+        telemetry.set("search.typed_queries_count", len(typed_queries))
+
+        # Concurrent execution
+        storage = self._get_vector_store()
+        embedder = self._get_embedder(real_ctx)
+        retriever = HierarchicalRetriever(
+            storage=storage,
+            embedder=embedder,
+            rerank_config=self.rerank_config,
+        )
+
+        async def _execute(tq: TypedQuery):
+            logger.debug(
+                "[VikingFS.search._execute] Calling retriever.retrieve with "
+                f"ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"
+            )
+            return await retriever.retrieve(
+                tq,
+                ctx=real_ctx,
+                limit=limit,
+                score_threshold=score_threshold,
+                has_explicit_target=bool(retrieval_targets.first_explicit_directory),
+                scope_dsl=filter,
+                level=level,
+                events_time_decay_protection=events_time_decay_protection,
+                request_now=request_now,
+                search_type=search_type,
+            )
+
+        query_results = await asyncio.gather(*[_execute(tq) for tq in typed_queries])
+
+        # Aggregate results to FindResult
+        memories, resources, skills = [], [], []
+        for result in query_results:
+            for ctx in result.matched_contexts:
+                if (
+                    ctx.level == ContextLevel.OVERVIEW
+                    and real_ctx.data_access is not None
+                    and not real_ctx.data_access.allows_overview(ctx.uri)
+                ):
+                    continue
+                if ctx.context_type == ContextType.MEMORY:
+                    memories.append(ctx)
+                elif ctx.context_type == ContextType.RESOURCE:
+                    resources.append(ctx)
+                elif ctx.context_type == ContextType.SKILL:
+                    skills.append(ctx)
+
+        find_result = FindResult(
+            memories=memories,
+            resources=resources,
+            skills=skills,
+            query_plan=query_plan,
+            query_results=query_results,
+        )
+        telemetry.set("vector.returned", find_result.total)
+        return find_result
+
+    async def write_context(
+        self,
+        uri: str,
+        content: Union[str, bytes] = "",
+        abstract: str = "",
+        overview: str = "",
+        content_filename: str = "content.md",
+        is_leaf: bool = False,
+        ctx: Optional[RequestContext] = None,
+        *,
+        lease_ref: Any = None,
+    ) -> None:
+        """Write context, preparing and authorizing its directory summaries together."""
+
+        summaries = [
+            (level, f"{uri}/{filename}", text)
+            for level, filename, text in (
+                (ContextLevel.ABSTRACT, ".abstract.md", abstract),
+                (ContextLevel.OVERVIEW, ".overview.md", overview),
+            )
+            if text
+        ]
+        await self._ensure_access_many(
+            [uri, *(summary_uri for _, summary_uri, _ in summaries)],
+            ctx,
+            action=AclAction.WRITE,
+        )
+        path = self._uri_to_path(uri, ctx=ctx)
+
+        try:
+            await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
+            try:
+                # _pathlock_fs_ctx is supplied by VikingFS's _AccessMixin.
+                fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)  # type: ignore[attr-defined]
+                await self._async_agfs.mkdir(path, fs_ctx=fs_ctx)
+            except Exception as e:
+                if "exist" not in str(e).lower():
+                    raise
+
+            if content:
+                content_uri = f"{uri}/{content_filename}"
+                await self.write_file(content_uri, content, ctx=ctx, lease_ref=lease_ref)
+
+            # Both summary files have already been authorized, and mkdir above
+            # prepared their shared parent. Keep sanitization and write observers
+            # in the same storage path used by ordinary file writes.
+            for level, summary_uri, text in summaries:
+                await self._write_file_content(
+                    summary_uri,
+                    render_abstract_overview(
+                        level,
+                        uri,
+                        text,
+                        {
+                            "generated_by": {
+                                "component": "VikingFS.write_context",
+                                "trigger": "context_write",
+                            }
+                        },
+                    ),
+                    ctx=ctx,
+                    lease_ref=lease_ref,
+                )
+
+        except Exception as e:
+            logger.error(f"[VikingFS] Failed to write {uri}: {e}")
+            raise IOError(f"Failed to write {uri}: {e}")

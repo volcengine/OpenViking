@@ -21,6 +21,7 @@ use tracing::warn;
 
 use crate::core::filesystem::FileSystem;
 use crate::core::types::FileInfo;
+use crate::core::{FsContextInner, FsContextView, PathLockContext, FS_CTX};
 use crate::git::{
     error::{GitError, ObjectStoreError, RefStoreError},
     ignore::{should_track_path, IgnoreMatcher, OVGITIGNORE_PATH},
@@ -28,10 +29,14 @@ use crate::git::{
     object_store::ObjectStore,
     ref_store::RefStore,
     types::{
-        CommitRequest, CommitResponse, IndexEntry, RestoreRequest, RestoreResponse, ShowRequest,
-        ShowResponse,
+        CommitRequest, CommitResponse, IndexEntry, LogEntry, LogRequest, RestoreRequest,
+        RestoreResponse, ShowRequest, ShowResponse,
     },
 };
+
+const MAX_LOG_COMMITS_SCANNED: usize = 1_000;
+const MAX_LOG_FILTER_PATHS: usize = 32;
+const MAX_LOG_PATH_DEPTH: usize = 64;
 
 /// `GitService` orchestrates the full commit pipeline against a `FileSystem`
 /// (the working tree), an `ObjectStore`, and a `RefStore`. An optional
@@ -101,16 +106,16 @@ impl GitService {
     /// account's VFS subtree.
     ///
     /// - If `paths` is `Some`, only those account-relative paths are
-    ///   considered (each is still pruned via `enumerate::prune_path`).
+    ///   considered. Directories are expanded recursively.
     /// - If `paths` is `None`, the full `/local/{account}` subtree is
     ///   enumerated via `enumerate::collect_all`.
     ///
     /// On no-op (no editor change) the branch ref is untouched and
     /// `CommitResponse::Noop` is returned.
     ///
-    /// When `paths` is `Some(...)`, every listed path must refer to a file in
-    /// the VFS. To commit a subtree, list each file explicitly or omit `paths`
-    /// for full enumeration.
+    /// Entries in `paths` may identify files, directories, or paths deleted
+    /// since the previous snapshot. Directories are expanded recursively;
+    /// missing entries remove matching files/subtrees from the snapshot.
     ///
     /// On a CAS conflict, returns `GitError::ConcurrentCommit` so the
     /// caller can decide whether to retry. There is intentionally no
@@ -123,6 +128,18 @@ impl GitService {
     /// error silently falls back to the slow path; a stale or corrupt
     /// index can never produce an incorrect commit.
     pub async fn commit(&self, req: CommitRequest) -> Result<CommitResponse, GitError> {
+        validate_account_id(&req.account)?;
+        if let Some(paths) = &req.paths {
+            for path in paths {
+                validate_relative_path(path)?;
+            }
+        }
+
+        let ctx = Arc::new(FsContextInner::new(req.account.clone()));
+        FS_CTX.scope(ctx, self.commit_impl(req)).await
+    }
+
+    async fn commit_impl(&self, req: CommitRequest) -> Result<CommitResponse, GitError> {
         let CommitRequest {
             account,
             branch,
@@ -131,12 +148,6 @@ impl GitService {
             author_name,
             author_email,
         } = req;
-        validate_account_id(&account)?;
-        if let Some(ps) = &paths {
-            for p in ps {
-                validate_relative_path(p)?;
-            }
-        }
         let ref_name = format!("refs/heads/{branch}");
 
         // Load ignore matcher and initialize counters.
@@ -251,7 +262,10 @@ impl GitService {
                     let abs = format!("/local/{}/{}", account, p);
                     match self.vfs.stat(&abs).await {
                         Ok(info) if info.is_dir => {
-                            // Directory: recursive listing + prev_tree subtree.
+                            // Directory: recursive listing + prev_tree subtree. Include an
+                            // old blob at this exact path too (file -> directory), even if
+                            // the new directory is empty and contributes no listed files.
+                            cleanup_exact.insert(p.clone());
                             cleanup_prefixes.push(format!("{}/", p));
 
                             let listed =
@@ -277,7 +291,7 @@ impl GitService {
                                 }
                                 let pref = format!("{}/", p);
                                 for (path, _) in prev_paths_cache.as_ref().unwrap() {
-                                    if !path.starts_with(&pref) {
+                                    if path != p && !path.starts_with(&pref) {
                                         continue;
                                     }
                                     if should_track_path(path, &ignore_matcher) {
@@ -538,8 +552,17 @@ impl GitService {
         let index_saved_at_ns: Option<i128> = prev_index.as_ref().and_then(|idx| idx.saved_at_ns);
         for rel_path in candidates {
             let abs = format!("/local/{}/{}", account, rel_path);
-            match self.vfs.stat(&abs).await {
-                Ok(info) => {
+            // Candidates include previous snapshot blobs. If one has become a
+            // directory, remove the old blob rather than reading the directory as
+            // a file. Its current children are separate, later-sorted candidates.
+            let file_info = match self.vfs.stat(&abs).await {
+                Ok(info) if !info.is_dir => Some(info),
+                Ok(_) => None,
+                Err(e) if is_not_found(&e) => None,
+                Err(e) => return Err(e.into()),
+            };
+            match file_info {
+                Some(info) => {
                     let stat = stat_signature(&info);
 
                     // Fast Path 1: cached `(size, mtime_ns)` match → reuse oid,
@@ -624,7 +647,7 @@ impl GitService {
                         }
                     }
                 }
-                Err(e) if is_not_found(&e) => {
+                None => {
                     // Only count as a change if the path actually existed
                     // in prev_tree, since TreeEditor::remove silently no-ops
                     // for missing paths. With no prev_tree (root commit) a
@@ -648,12 +671,11 @@ impl GitService {
                             .await?;
                         changed += 1;
                     }
-                    // Path is gone → drop any lingering cache entry.
+                    // The file is gone (or became a directory): drop its cached blob.
                     if self.index_store.is_some() {
                         new_index_entries.remove(&rel_path);
                     }
                 }
-                Err(e) => return Err(e.into()),
             }
         }
 
@@ -751,6 +773,15 @@ impl GitService {
     /// Missing ref → `GitError::RefStore(RefStoreError::NotFound)`.
     /// Missing commit object → `GitError::ObjectStore(ObjectStoreError::NotFound)`.
     pub async fn show(&self, req: ShowRequest) -> Result<ShowResponse, GitError> {
+        self.show_with_limit(req, None).await
+    }
+
+    /// Same as [`GitService::show`], with an optional maximum blob payload size.
+    pub async fn show_with_limit(
+        &self,
+        req: ShowRequest,
+        max_blob_bytes: Option<u64>,
+    ) -> Result<ShowResponse, GitError> {
         let ShowRequest {
             account,
             target_ref,
@@ -793,14 +824,40 @@ impl GitService {
                 if mode.is_tree() {
                     return Err(GitError::PathIsDirectory(p));
                 }
-                let raw =
-                    crate::git::util::read_object(self.object_store.as_ref(), &account, &blob_oid)
-                        .await?;
+                let raw = match max_blob_bytes {
+                    Some(limit) => crate::git::util::read_object_limited(
+                        self.object_store.as_ref(),
+                        &account,
+                        &blob_oid,
+                        limit,
+                    )
+                    .await
+                    .map_err(|err| match err {
+                        ObjectStoreError::ReadLimitExceeded { size, .. } => {
+                            GitError::BlobTooLarge { size, limit }
+                        }
+                        other => GitError::ObjectStore(other),
+                    })?,
+                    None => crate::git::util::read_object(
+                        self.object_store.as_ref(),
+                        &account,
+                        &blob_oid,
+                    )
+                    .await?,
+                };
                 let (kind, payload_size, hdr) = crate::git::util::parse_object_header(&raw)?;
                 if kind != gix_object::Kind::Blob {
                     return Err(GitError::CorruptedObject(format!(
                         "expected blob at {p}, got {kind:?}"
                     )));
+                }
+                if let Some(limit) = max_blob_bytes {
+                    if payload_size > limit {
+                        return Err(GitError::BlobTooLarge {
+                            size: payload_size,
+                            limit,
+                        });
+                    }
                 }
                 // `raw` is already a `Bytes`; `slice` is O(1) and shares the
                 // backing buffer instead of allocating a fresh payload copy.
@@ -812,6 +869,144 @@ impl GitService {
                 })
             }
         }
+    }
+
+    /// List files that changed under `paths` between two commits.
+    ///
+    /// `base = None` compares against an empty tree, so every file is added.
+    /// Each entry is `(account-relative path, "added" | "modified" | "deleted")`.
+    /// A directory missing from one side counts as an empty tree there.
+    pub async fn diff_paths(
+        &self,
+        account: &str,
+        base: Option<&str>,
+        head: &str,
+        paths: &[String],
+    ) -> Result<Vec<(String, &'static str)>, GitError> {
+        validate_account_id(account)?;
+        for path in paths {
+            validate_relative_path(path)?;
+        }
+        let store = self.object_store.as_ref();
+        let mut roots = Vec::new();
+        for target in base.into_iter().chain([head]) {
+            let oid = resolve_ref(self.ref_store.as_ref(), store, account, target).await?;
+            roots.push(load_commit_meta(store, account, &oid).await?.tree);
+        }
+        let head_tree = roots.pop();
+        let base_tree = roots.pop();
+        let mut out = Vec::new();
+        for dir in paths {
+            let dir = dir.trim_matches('/');
+            let mut sides = [None, None];
+            for (side, tree) in sides.iter_mut().zip([base_tree, head_tree]) {
+                if let Some(tree) = tree {
+                    *side = crate::git::tree_builder::lookup(store, account, tree, dir)
+                        .await?
+                        .filter(|(_, mode)| mode.is_tree())
+                        .map(|(oid, _)| oid);
+                }
+            }
+            for (path, change) in
+                crate::git::tree_builder::diff_trees(store, account, sides[0], sides[1]).await?
+            {
+                out.push((format!("{dir}/{path}"), change));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Walk commit history newest-first, optionally returning only commits
+    /// that changed at least one requested path relative to their first parent.
+    ///
+    /// `limit` counts returned commits, not commits inspected. With `paths`
+    /// set, traversal continues through unrelated commits until `limit`
+    /// matching commits are collected or history ends. Filtered traversal
+    /// returns `GitError::LogScanLimitExceeded` when history remains after
+    /// 1,000 candidate commits.
+    pub async fn log(&self, mut req: LogRequest) -> Result<Vec<LogEntry>, GitError> {
+        validate_account_id(&req.account)?;
+        req.paths = normalize_log_paths(req.paths)?;
+        if req.limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        self.log_with_scan_limit(req, MAX_LOG_COMMITS_SCANNED).await
+    }
+
+    async fn log_with_scan_limit(
+        &self,
+        req: LogRequest,
+        max_commits_scanned: usize,
+    ) -> Result<Vec<LogEntry>, GitError> {
+        debug_assert!(max_commits_scanned > 0);
+
+        let mut next_oid = Some(
+            resolve_ref(
+                self.ref_store.as_ref(),
+                self.object_store.as_ref(),
+                &req.account,
+                &req.branch,
+            )
+            .await?,
+        );
+        let filtered_paths = req.paths.as_deref();
+        let mut next_meta: Option<CommitMeta> = None;
+        let mut scanned = 0usize;
+        let mut out = Vec::new();
+
+        while let Some(commit_oid) = next_oid {
+            let meta = match next_meta.take() {
+                Some(meta) => meta,
+                None => {
+                    load_commit_meta(self.object_store.as_ref(), &req.account, &commit_oid).await?
+                }
+            };
+            let parent_oid = meta.parents.first().copied();
+
+            let parent_meta = match (filtered_paths, parent_oid) {
+                (Some(_), Some(parent_oid)) => Some(
+                    load_commit_meta(self.object_store.as_ref(), &req.account, &parent_oid).await?,
+                ),
+                _ => None,
+            };
+
+            let include = match filtered_paths {
+                None => true,
+                Some(paths) => {
+                    scanned += 1;
+                    commit_touches_any_path(
+                        self.object_store.as_ref(),
+                        &req.account,
+                        meta.tree,
+                        parent_meta.as_ref().map(|parent| parent.tree),
+                        paths,
+                    )
+                    .await?
+                }
+            };
+
+            next_oid = parent_oid;
+            next_meta = parent_meta;
+
+            if include {
+                out.push(log_entry_from_meta(commit_oid, meta));
+                if out.len() >= req.limit {
+                    return Ok(out);
+                }
+            }
+
+            if filtered_paths.is_some() && scanned >= max_commits_scanned && next_oid.is_some() {
+                return Err(GitError::LogScanLimitExceeded {
+                    scanned,
+                    max_scanned: max_commits_scanned,
+                    matched: out.len(),
+                    requested: req.limit,
+                });
+            }
+        }
+
+        Ok(out)
     }
 
     /// Restore a subtree at `project_dir` to the state it had in `source_commit`,
@@ -829,6 +1024,26 @@ impl GitService {
     /// - `GitError::ConcurrentCommit` — branch ref changed between our read
     ///   and the CAS swap.
     pub async fn restore(&self, req: RestoreRequest) -> Result<RestoreResponse, GitError> {
+        validate_account_id(&req.account)?;
+        if let Some(project_dir) = &req.project_dir {
+            validate_project_dir(project_dir)?;
+        }
+
+        // Encrypted writeback must reuse the caller's tree lock rather than
+        // acquire a conflicting lock. The request remains the tenant authority.
+        let ctx = Arc::new(FsContextInner::with_pathlock(
+            req.account.clone(),
+            PathLockContext {
+                lease_ref: FsContextView::current()
+                    .pathlock_lease_ref()
+                    .map(str::to_owned),
+                ..Default::default()
+            },
+        ));
+        FS_CTX.scope(ctx, self.restore_impl(req)).await
+    }
+
+    async fn restore_impl(&self, req: RestoreRequest) -> Result<RestoreResponse, GitError> {
         let RestoreRequest {
             account,
             branch,
@@ -839,12 +1054,6 @@ impl GitService {
             author_name: _,
             author_email: _,
         } = &req;
-
-        validate_account_id(account)?;
-
-        if let Some(project_dir) = project_dir {
-            validate_project_dir(project_dir)?;
-        }
         let ref_name = format!("refs/heads/{branch}");
 
         // 1. Resolve both commits.
@@ -1124,6 +1333,10 @@ impl GitService {
             let is_empty = match crate::core::filesystem::FileSystem::read_dir(
                 self.vfs.as_ref(),
                 &abs,
+                None,
+                None,
+                None,
+                None,
             )
             .await
             {
@@ -1160,6 +1373,8 @@ impl GitService {
                 Err(e) => failed_deletes.push((path, e.to_string())),
             }
         }
+        written_paths.sort();
+        deleted_paths.sort();
 
         let written_actual = written_paths.len();
         let deleted_actual = deleted_paths.len();
@@ -1294,6 +1509,89 @@ async fn load_commit_meta(
         committer: actor_from_signature_ref(&parsed.committer),
         message: parsed.message.to_string(),
     })
+}
+
+fn log_entry_from_meta(oid: ObjectId, meta: CommitMeta) -> LogEntry {
+    LogEntry {
+        oid,
+        tree: meta.tree,
+        parents: meta.parents,
+        author: meta.author,
+        committer: meta.committer,
+        message: meta.message,
+    }
+}
+
+fn normalize_log_paths(paths: Option<Vec<String>>) -> Result<Option<Vec<String>>, GitError> {
+    let Some(mut paths) = paths else {
+        return Ok(None);
+    };
+
+    for path in &paths {
+        validate_relative_path(path)?;
+    }
+
+    let mut seen = HashSet::new();
+    paths.retain(|path| seen.insert(path.clone()));
+
+    if paths.len() > MAX_LOG_FILTER_PATHS {
+        return Err(GitError::TooManyLogPaths {
+            count: paths.len(),
+            limit: MAX_LOG_FILTER_PATHS,
+        });
+    }
+
+    for path in &paths {
+        let depth = path.split('/').count();
+        if depth > MAX_LOG_PATH_DEPTH {
+            return Err(GitError::LogPathTooDeep {
+                path: path.clone(),
+                depth,
+                limit: MAX_LOG_PATH_DEPTH,
+            });
+        }
+    }
+
+    Ok((!paths.is_empty()).then_some(paths))
+}
+
+async fn commit_touches_any_path(
+    store: &dyn ObjectStore,
+    account: &str,
+    current_tree: ObjectId,
+    parent_tree: Option<ObjectId>,
+    paths: &[String],
+) -> Result<bool, GitError> {
+    let mut current_cache = crate::git::tree_builder::TreeLookupCache::new();
+    let mut parent_cache = crate::git::tree_builder::TreeLookupCache::new();
+
+    for path in paths {
+        let current = crate::git::tree_builder::lookup_cached(
+            store,
+            account,
+            current_tree,
+            path,
+            &mut current_cache,
+        )
+        .await?;
+        let parent = match parent_tree {
+            Some(tree) => {
+                crate::git::tree_builder::lookup_cached(
+                    store,
+                    account,
+                    tree,
+                    path,
+                    &mut parent_cache,
+                )
+                .await?
+            }
+            None => None,
+        };
+        if current != parent {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Resolve an abbreviated commit OID (4–39 hex chars) by walking the parent
@@ -1720,7 +2018,14 @@ mod tests {
                 .insert(path.to_string(), data.to_vec());
             Ok(data.len() as u64)
         }
-        async fn read_dir(&self, _path: &str) -> Result<Vec<FileInfo>> {
+        async fn read_dir(
+            &self,
+            _path: &str,
+            _offset: Option<usize>,
+            _limit: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
+        ) -> Result<Vec<FileInfo>> {
             unimplemented!()
         }
 
@@ -1746,6 +2051,10 @@ mod tests {
             _show_hidden: bool,
             _node_limit: Option<usize>,
             _level_limit: Option<usize>,
+            _offset: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
+            _directories_only: bool,
         ) -> Result<Vec<TreeEntry>> {
             let prefix = if path == "/" {
                 "/".to_string()
@@ -2083,6 +2392,77 @@ mod tests {
 
         let paths = commit_paths(object_store.as_ref() as &dyn ObjectStore, "acct", oid).await;
         assert_eq!(paths, vec!["foo/bar.md".to_string()]);
+    }
+
+    /// A previously snapshotted file can become a real directory. MockVfs reports
+    /// directories as NotFound, so it misses both the read-directory error when
+    /// committing a parent and the stale blob when committing the exact directory.
+    #[tokio::test]
+    async fn test_commit_file_to_directory_on_localfs() {
+        use crate::git::backends::local::LocalIndexStore;
+        use crate::git::index_store::IndexStore;
+        use crate::plugins::localfs::LocalFileSystem;
+
+        for scope in [None, Some("docs"), Some("docs/note.md")] {
+            for with_child in [false, true] {
+                let store_dir = tempfile::tempdir().unwrap();
+                let object_store = Arc::new(LocalObjectStore::new(store_dir.path()));
+                let ref_store = Arc::new(LocalRefStore::new(store_dir.path()));
+                let index_store = Arc::new(LocalIndexStore::new(store_dir.path()));
+                let work_dir = tempfile::tempdir().unwrap();
+                let acct_root = work_dir.path().join("local/acct");
+                std::fs::create_dir_all(acct_root.join("docs")).unwrap();
+                std::fs::write(acct_root.join("docs/note.md"), b"old file").unwrap();
+                std::fs::write(acct_root.join("outside.md"), b"keep").unwrap();
+                let vfs: Arc<dyn FileSystem> =
+                    Arc::new(LocalFileSystem::new(work_dir.path().to_str().unwrap()).unwrap());
+                let svc = GitService::with_index(
+                    vfs,
+                    object_store.clone(),
+                    ref_store,
+                    Some(index_store.clone()),
+                );
+                make_commit(&svc, "acct", "main", "before").await;
+                std::fs::remove_file(acct_root.join("docs/note.md")).unwrap();
+                std::fs::create_dir(acct_root.join("docs/note.md")).unwrap();
+                if with_child {
+                    std::fs::write(acct_root.join("docs/note.md/child.md"), b"new child").unwrap();
+                }
+                let paths = scope.map(|path| vec![path.to_string()]);
+                let response = svc
+                    .commit(req("acct", "main", "after", paths.clone()))
+                    .await
+                    .unwrap();
+                let commit_oid = match response {
+                    CommitResponse::Created { commit_oid, .. } => commit_oid,
+                    other => {
+                        panic!("expected Created for {scope:?}, child={with_child}: {other:?}")
+                    }
+                };
+                let actual = commit_paths(object_store.as_ref(), "acct", commit_oid).await;
+                let expected = if with_child {
+                    vec![
+                        "docs/note.md/child.md".to_string(),
+                        "outside.md".to_string(),
+                    ]
+                } else {
+                    vec!["outside.md".to_string()]
+                };
+                assert_eq!(actual, expected, "scope={scope:?}, child={with_child}");
+                let index = index_store.load("acct", "main").await.unwrap().unwrap();
+                assert!(!index.entries.contains_key("docs/note.md"));
+                assert_eq!(
+                    index.entries.contains_key("docs/note.md/child.md"),
+                    with_child
+                );
+                assert!(matches!(
+                    svc.commit(req("acct", "main", "unchanged", paths))
+                        .await
+                        .unwrap(),
+                    CommitResponse::Noop { .. }
+                ));
+            }
+        }
     }
 
     // ── 4e ─────────────────────────────────────────────────────────────
@@ -2975,7 +3355,217 @@ mod tests {
         }
     }
 
-    // ── 9: show ────────────────────────────────────────────────────────
+    // ── 9: log path filtering ─────────────────────────────────────────
+    #[test]
+    fn test_normalize_log_paths_rejects_more_than_32_unique_paths() {
+        let paths = (0..=MAX_LOG_FILTER_PATHS)
+            .map(|index| format!("resources/docs/{index}.md"))
+            .collect();
+
+        let err = normalize_log_paths(Some(paths)).unwrap_err();
+        assert!(matches!(
+            err,
+            GitError::TooManyLogPaths {
+                count: 33,
+                limit: MAX_LOG_FILTER_PATHS,
+            }
+        ));
+    }
+
+    #[test]
+    fn test_normalize_log_paths_deduplicates_before_counting() {
+        let paths = vec!["resources/docs/a.md".to_string(); MAX_LOG_FILTER_PATHS + 1];
+
+        let normalized = normalize_log_paths(Some(paths)).unwrap().unwrap();
+        assert_eq!(normalized, vec!["resources/docs/a.md"]);
+    }
+
+    #[test]
+    fn test_normalize_log_paths_enforces_64_component_depth() {
+        let accepted = std::iter::repeat_n("segment", MAX_LOG_PATH_DEPTH)
+            .collect::<Vec<_>>()
+            .join("/");
+        let rejected = std::iter::repeat_n("segment", MAX_LOG_PATH_DEPTH + 1)
+            .collect::<Vec<_>>()
+            .join("/");
+
+        assert_eq!(
+            normalize_log_paths(Some(vec![accepted.clone()]))
+                .unwrap()
+                .unwrap(),
+            vec![accepted]
+        );
+
+        let err = normalize_log_paths(Some(vec![rejected.clone()])).unwrap_err();
+        assert!(matches!(
+            err,
+            GitError::LogPathTooDeep {
+                path,
+                depth: 65,
+                limit: MAX_LOG_PATH_DEPTH,
+            } if path == rejected
+        ));
+    }
+
+    #[test]
+    fn test_normalize_log_paths_preserves_unfiltered_semantics() {
+        assert!(normalize_log_paths(None).unwrap().is_none());
+        assert!(normalize_log_paths(Some(Vec::new())).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_log_with_paths_returns_matching_commits_up_to_limit() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");
+        vfs.put("resources/target.md", b"v1");
+        vfs.put("resources/other.md", b"other-v1");
+        let c1 = make_commit(&svc, "acct", "main", "target root").await;
+
+        vfs.put("resources/other.md", b"other-v2");
+        let _c2 = make_commit(&svc, "acct", "main", "unrelated").await;
+
+        vfs.put("resources/target.md", b"v2");
+        let c3 = make_commit(&svc, "acct", "main", "target edit").await;
+
+        vfs.put("resources/docs/readme.md", b"docs");
+        let c4 = make_commit(&svc, "acct", "main", "docs edit").await;
+
+        let log = svc
+            .log(crate::git::types::LogRequest {
+                account: "acct".to_string(),
+                branch: "main".to_string(),
+                limit: 2,
+                paths: Some(vec![
+                    "resources/target.md".to_string(),
+                    "resources/docs".to_string(),
+                ]),
+            })
+            .await
+            .unwrap();
+
+        let oids: Vec<ObjectId> = log.into_iter().map(|entry| entry.oid).collect();
+        assert_eq!(oids, vec![c4, c3], "limit counts matching commits only");
+
+        let log = svc
+            .log(crate::git::types::LogRequest {
+                account: "acct".to_string(),
+                branch: "main".to_string(),
+                limit: 10,
+                paths: Some(vec!["resources/target.md".to_string()]),
+            })
+            .await
+            .unwrap();
+        let oids: Vec<ObjectId> = log.into_iter().map(|entry| entry.oid).collect();
+        assert_eq!(oids, vec![c3, c1]);
+    }
+
+    #[tokio::test]
+    async fn test_log_with_empty_paths_is_unfiltered() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");
+        vfs.put("resources/first.md", b"v1");
+        let c1 = make_commit(&svc, "acct", "main", "first").await;
+        vfs.put("resources/second.md", b"v2");
+        let c2 = make_commit(&svc, "acct", "main", "second").await;
+
+        let log = svc
+            .log(crate::git::types::LogRequest {
+                account: "acct".to_string(),
+                branch: "main".to_string(),
+                limit: 10,
+                paths: Some(Vec::new()),
+            })
+            .await
+            .unwrap();
+
+        let oids: Vec<ObjectId> = log.into_iter().map(|entry| entry.oid).collect();
+        assert_eq!(oids, vec![c2, c1]);
+    }
+
+    #[tokio::test]
+    async fn test_filtered_log_errors_when_uninspected_history_remains() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct_log_budget");
+        vfs.put("resources/target.md", b"target");
+        make_commit(&svc, "acct_log_budget", "main", "target root").await;
+        vfs.put("resources/other.md", b"v1");
+        make_commit(&svc, "acct_log_budget", "main", "unrelated one").await;
+        vfs.put("resources/other.md", b"v2");
+        make_commit(&svc, "acct_log_budget", "main", "unrelated two").await;
+
+        let err = svc
+            .log_with_scan_limit(
+                LogRequest {
+                    account: "acct_log_budget".into(),
+                    branch: "main".into(),
+                    limit: 1,
+                    paths: Some(vec!["resources/target.md".into()]),
+                },
+                2,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            GitError::LogScanLimitExceeded {
+                scanned: 2,
+                max_scanned: 2,
+                matched: 0,
+                requested: 1,
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_filtered_log_accepts_match_on_scan_boundary() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct_log_match");
+        vfs.put("resources/seed.md", b"seed");
+        make_commit(&svc, "acct_log_match", "main", "seed").await;
+        vfs.put("resources/target.md", b"target");
+        let target_commit = make_commit(&svc, "acct_log_match", "main", "target").await;
+        vfs.put("resources/other.md", b"other");
+        make_commit(&svc, "acct_log_match", "main", "unrelated").await;
+
+        let log = svc
+            .log_with_scan_limit(
+                LogRequest {
+                    account: "acct_log_match".into(),
+                    branch: "main".into(),
+                    limit: 1,
+                    paths: Some(vec!["resources/target.md".into()]),
+                },
+                2,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].oid, target_commit);
+    }
+
+    #[tokio::test]
+    async fn test_filtered_log_returns_complete_empty_history_at_scan_boundary() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct_log_complete");
+        vfs.put("resources/other.md", b"v1");
+        make_commit(&svc, "acct_log_complete", "main", "one").await;
+        vfs.put("resources/other.md", b"v2");
+        make_commit(&svc, "acct_log_complete", "main", "two").await;
+
+        let log = svc
+            .log_with_scan_limit(
+                LogRequest {
+                    account: "acct_log_complete".into(),
+                    branch: "main".into(),
+                    limit: 1,
+                    paths: Some(vec!["resources/never-created.md".into()]),
+                },
+                2,
+            )
+            .await
+            .unwrap();
+
+        assert!(log.is_empty());
+    }
+
+    // ── 10: show ───────────────────────────────────────────────────────
     #[tokio::test]
     async fn test_show_commit_meta_by_oid() {
         let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");
@@ -3138,6 +3728,55 @@ mod tests {
             }
             other => panic!("expected Blob, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_show_blob_limit_rejects_before_returning_payload() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");
+        vfs.put("resources/a.md", b"payload exceeds limit");
+        let _ = make_commit(&svc, "acct", "main", "first").await;
+
+        let err = svc
+            .show_with_limit(
+                ShowRequest {
+                    account: "acct".into(),
+                    target_ref: "main".into(),
+                    path: Some("resources/a.md".into()),
+                },
+                Some(4),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, GitError::BlobTooLarge { size: 21, limit: 4 }));
+    }
+
+    #[tokio::test]
+    async fn test_show_blob_limit_allows_payload_at_limit() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");
+        vfs.put("resources/a.md", b"payload");
+        let _ = make_commit(&svc, "acct", "main", "first").await;
+
+        let response = svc
+            .show_with_limit(
+                ShowRequest {
+                    account: "acct".into(),
+                    target_ref: "main".into(),
+                    path: Some("resources/a.md".into()),
+                },
+                Some(7),
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            response,
+            ShowResponse::Blob {
+                bytes,
+                size: 7,
+                ..
+            } if bytes.as_ref() == b"payload"
+        ));
     }
 
     // ── 12 ─────────────────────────────────────────────────────────────
@@ -4165,10 +4804,7 @@ mod tests {
         );
     }
 
-    // Regression: a path the restore diff wants to delete may already be absent
-    // from the VFS (e.g. a derived file like `.abstract.md` removed out of
-    // band). The delete must be idempotent — restore should succeed and advance
-    // the branch ref rather than aborting with a `vfs: not found` error.
+    // Restore deletion is idempotent when a tracked file is already absent.
     #[tokio::test]
     async fn test_restore_tolerates_already_deleted_path() {
         let dir = tempfile::tempdir().unwrap();
@@ -4181,12 +4817,11 @@ mod tests {
             ref_store.clone() as Arc<dyn RefStore>,
         );
 
-        // Source commit: a.md plus a derived file the diff will later delete.
+        // The source excludes the file that HEAD adds.
         vfs.put("resources/proj_a/a.md", b"A v1");
         let source_oid = make_commit(&svc, "acct", "main", "source").await;
 
-        // HEAD adds the derived file, so restoring source wants to delete it.
-        vfs.put("resources/proj_a/.abstract.md", b"derived");
+        vfs.put("resources/proj_a/obsolete.md", b"obsolete");
         vfs.put("resources/proj_a/a.md", b"A v2");
         let head_oid = match svc
             .commit(req(
@@ -4195,7 +4830,7 @@ mod tests {
                 "head",
                 Some(vec![
                     "resources/proj_a/a.md".to_string(),
-                    "resources/proj_a/.abstract.md".to_string(),
+                    "resources/proj_a/obsolete.md".to_string(),
                 ]),
             ))
             .await
@@ -4205,9 +4840,7 @@ mod tests {
             other => panic!("expected Created, got {other:?}"),
         };
 
-        // Simulate the derived file vanishing from the VFS out of band, so the
-        // restore's delete step hits a missing path.
-        vfs.delete("resources/proj_a/.abstract.md");
+        vfs.delete("resources/proj_a/obsolete.md");
 
         let resp = svc
             .restore(RestoreRequest {
@@ -4232,7 +4865,7 @@ mod tests {
             } => {
                 // The diff still *plans* the delete (count is unchanged); the
                 // VFS apply just no-ops on the missing path.
-                assert_eq!(deleted, 1, ".abstract.md");
+                assert_eq!(deleted, 1, "obsolete.md");
                 assert_eq!(deleted_paths.len(), 1);
                 new_commit_oid
             }
@@ -4984,6 +5617,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_filtered_log_reads_each_commit_object_at_most_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let object_store = Arc::new(GetSpyObjectStore {
+            inner: LocalObjectStore::new(dir.path()),
+            gets: std::sync::Mutex::new(Vec::new()),
+        });
+        let ref_store = Arc::new(LocalRefStore::new(dir.path()));
+        let vfs = MockVfs::new("acct_log_reads");
+        let svc = GitService::new(
+            vfs.clone() as Arc<dyn FileSystem>,
+            object_store.clone() as Arc<dyn ObjectStore>,
+            ref_store as Arc<dyn RefStore>,
+        );
+
+        let mut commits = Vec::new();
+        for version in 1..=4 {
+            let content = format!("v{version}");
+            vfs.put("resources/other.md", content.as_bytes());
+            commits.push(
+                make_commit(&svc, "acct_log_reads", "main", &format!("commit {version}")).await,
+            );
+        }
+        object_store.reset();
+
+        let err = svc
+            .log_with_scan_limit(
+                LogRequest {
+                    account: "acct_log_reads".into(),
+                    branch: "main".into(),
+                    limit: 1,
+                    paths: Some(vec!["resources/never-created.md".into()]),
+                },
+                3,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            GitError::LogScanLimitExceeded { scanned: 3, .. }
+        ));
+
+        let commit_gets: usize = commits.iter().map(|oid| object_store.count_gets(oid)).sum();
+        assert_eq!(commit_gets, 4, "three candidates plus one parent lookahead");
+        for oid in commits {
+            assert_eq!(object_store.count_gets(&oid), 1, "commit {oid} was re-read");
+        }
+    }
+
+    #[tokio::test]
     async fn test_commit_prev_tree_lookup_cache_amortises_ancestors() {
         // Build a prev tree where many candidates share the same depth-3
         // ancestor chain (root → resources → docs). Without the lookup cache,
@@ -5534,7 +6216,14 @@ mod fast_path1_tests {
                 .insert(path.to_string(), (data.to_vec(), 0));
             Ok(data.len() as u64)
         }
-        async fn read_dir(&self, _path: &str) -> Result<Vec<FileInfo>> {
+        async fn read_dir(
+            &self,
+            _path: &str,
+            _offset: Option<usize>,
+            _limit: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
+        ) -> Result<Vec<FileInfo>> {
             unimplemented!()
         }
 
@@ -5566,6 +6255,10 @@ mod fast_path1_tests {
             _show_hidden: bool,
             _node_limit: Option<usize>,
             _level_limit: Option<usize>,
+            _offset: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
+            _directories_only: bool,
         ) -> Result<Vec<TreeEntry>> {
             let prefix = if path == "/" {
                 "/".to_string()
@@ -5972,6 +6665,70 @@ mod fast_path1_tests {
         assert!(
             loaded.entries.contains_key("other/c.md"),
             "files outside the partial scope must be preserved verbatim"
+        );
+    }
+
+    #[tokio::test]
+    async fn commit_directory_path_sets_fs_context_for_mountable_multiwrite() {
+        use crate::core::builder::{build_default_stack, RagfsConfig};
+        use crate::core::{BackendItemConfig, BackendsConfig, ConfigValue, PluginConfig};
+
+        let store_dir = tempfile::tempdir().unwrap();
+        let primary_dir = tempfile::tempdir().unwrap();
+        let backup_dir = tempfile::tempdir().unwrap();
+
+        std::fs::create_dir_all(primary_dir.path().join("acct").join("docs")).unwrap();
+        std::fs::write(
+            primary_dir.path().join("acct").join("docs").join("a.md"),
+            b"AA",
+        )
+        .unwrap();
+
+        let mut ragfs_config = RagfsConfig::default();
+        ragfs_config.pathlock.provider = "memory".to_string();
+        let stack = build_default_stack(ragfs_config).await.unwrap();
+        let mut params = HashMap::new();
+        params.insert(
+            "local_dir".to_string(),
+            ConfigValue::String(primary_dir.path().to_str().unwrap().to_string()),
+        );
+        stack
+            .mountable
+            .mount(PluginConfig {
+                name: "localfs".to_string(),
+                mount_path: "/local".to_string(),
+                params,
+                backups: Some(BackendsConfig {
+                    service_name: "mw-test".to_string(),
+                    initial_partitions: 16,
+                    checkpoint_interval_secs: 86_400,
+                    reconcile_existing_data: false,
+                    provider: "filesystem".to_string(),
+                    items: vec![BackendItemConfig {
+                        name: "backup1".to_string(),
+                        backend: "localfs".to_string(),
+                        params: serde_json::json!({
+                            "local_dir": backup_dir.path().to_str().unwrap(),
+                        }),
+                        encryption: None,
+                    }],
+                }),
+                ..PluginConfig::default()
+            })
+            .await
+            .unwrap();
+
+        let object_store = Arc::new(LocalObjectStore::new(store_dir.path()));
+        let ref_store = Arc::new(LocalRefStore::new(store_dir.path()));
+        let svc = GitService::new(stack.top.clone(), object_store, ref_store);
+
+        let resp = svc
+            .commit(req("acct", "main", Some(vec!["docs".into()])))
+            .await
+            .expect("commit should provide FS_CTX to mountable multi-write VFS");
+        assert!(
+            matches!(resp, CommitResponse::Created { changed: 1, .. }),
+            "directory commit should succeed through mountable multi-write stack"
         );
     }
 }

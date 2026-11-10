@@ -3,11 +3,14 @@
 """Utility functions and helpers."""
 
 from openviking.utils.code_hosting_utils import (
+    ParsedGitRepoURL,
+    is_code_hosting_blob_url,
     is_code_hosting_url,
     is_git_repo_url,
     is_github_url,
     is_gitlab_url,
     parse_code_hosting_url,
+    parse_git_repo_url,
     validate_git_ssh_uri,
 )
 from openviking.utils.time_utils import get_current_timestamp
@@ -25,10 +28,13 @@ __all__ = [
     "parse_json_from_response",
     "parse_json_to_model",
     "run_async",
+    "ParsedGitRepoURL",
     "parse_code_hosting_url",
+    "parse_git_repo_url",
     "is_github_url",
     "is_gitlab_url",
     "is_code_hosting_url",
+    "is_code_hosting_blob_url",
     "validate_git_ssh_uri",
     "is_git_repo_url",
 ]

@@ -124,15 +124,9 @@ class TestFsFieldConsistency:
             stat_resp = api_client.fs_stat(file_uri)
             assert stat_resp.status_code == 200
             result = stat_resp.json().get("result", {})
-            if "uri" in result:
-                assert result["uri"] == file_uri, (
-                    f"stat uri should match request, got {result['uri']} != {file_uri}"
-                )
-            elif "name" in result:
-                expected_name = file_uri.rstrip("/").split("/")[-1]
-                assert result["name"] == expected_name, (
-                    f"stat name should match file name, got {result['name']} != {expected_name}"
-                )
+            assert result.get("uri") == file_uri, (
+                f"stat uri should match request, got {result.get('uri')} != {file_uri}"
+            )
 
     def test_ls_simple_mode(self, api_client):
         with tempfile.TemporaryDirectory() as temp_dir:

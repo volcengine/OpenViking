@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0
 from __future__ import annotations
 
+import math
+import os
 from enum import Enum
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -85,8 +88,6 @@ class S3Config(BaseModel):
         "during uploads. Disabled by default for backward compatibility.",
     )
 
-    model_config = {"extra": "forbid"}
-
     def validate_config(self):
         """Validate S3 configuration completeness"""
         missing = []
@@ -117,7 +118,7 @@ class QueueFSConfig(BaseModel):
 
     backend: str = Field(
         default="sqlite",
-        description="QueueFS backend: 'memory' | 'sqlite' | 'sqlite3'",
+        description="QueueFS backend: 'memory' | 'sqlite' | 'sqlite3' | 'cache'",
     )
 
     db_path: Optional[str] = Field(
@@ -135,17 +136,19 @@ class QueueFSConfig(BaseModel):
         description="SQLite busy timeout for QueueFS in milliseconds.",
     )
 
-    model_config = {"extra": "forbid"}
-
     @model_validator(mode="after")
     def validate_config(self):
+        """Validate QueueFS mode and backend choices."""
         valid_modes = {"shared", "worker"}
         if self.mode not in valid_modes:
             raise ValueError("queuefs mode must be one of: 'shared', 'worker'")
 
-        valid_backends = {"memory", "sqlite", "sqlite3"}
+        valid_backends = {"memory", "sqlite", "sqlite3", "cache"}
         if self.backend not in valid_backends:
-            raise ValueError("queuefs backend must be one of: 'memory', 'sqlite', 'sqlite3'")
+            raise ValueError(
+                "queuefs backend must be one of: 'memory', 'sqlite', 'sqlite3', 'cache'; "
+                "backend='redis' was removed, use backend='cache' with top-level cache.provider/cache.params"
+            )
         if self.recover_stale_sec < 0:
             raise ValueError("queuefs recover_stale_sec must be >= 0")
         if self.busy_timeout_ms < 0:
@@ -153,87 +156,23 @@ class QueueFSConfig(BaseModel):
         return self
 
 
-class AGFSCacheProvider(str, Enum):
-    """Cache providers supported by RAGFS."""
+class AGFSCacheFSConfig(BaseModel):
+    """CacheFS behavior independent from the selected global Provider."""
 
-    MEMORY = "memory"
-    YUANRONG = "yuanrong"
-    MOONCAKE = "mooncake"
-    REDIS = "redis"
-
-
-class AGFSCacheTraversalMode(str, Enum):
-    """Traversal strategy for cache-aware recursive RAGFS APIs."""
-
-    BACKEND = "backend"
-    CACHED_TRAVERSAL = "cached_traversal"
-
-
-class YuanrongCacheConfig(BaseModel):
-    """Configuration for Yuanrong cache provider."""
-
-    host: str = Field(default="127.0.0.1", description="Yuanrong worker host")
-    port: int = Field(default=31501, description="Yuanrong worker port")
-    connect_timeout_ms: int = Field(default=5000, description="Yuanrong connect timeout")
-    request_timeout_ms: int = Field(default=5000, description="Yuanrong request timeout")
-    sdk_concurrency: int = Field(default=4, description="Yuanrong SDK concurrency")
-
-    model_config = {"extra": "forbid"}
+    backend: Literal["local", "cache"] = Field(
+        default="local",
+        description="CacheFS backend: 'local' | 'cache'",
+    )
+    shared_redis_ttl_seconds: int = Field(
+        default=0,
+        description="TTL override for cache query buckets on a shared Redis service; 0 keeps the provider default",
+    )
 
     @model_validator(mode="after")
     def validate_config(self):
-        if not self.host.strip():
-            raise ValueError("yuanrong host must not be empty")
-        if self.port <= 0 or self.port > 65535:
-            raise ValueError("yuanrong port must be between 1 and 65535")
-        if self.connect_timeout_ms <= 0:
-            raise ValueError("yuanrong connect_timeout_ms must be > 0")
-        if self.request_timeout_ms <= 0:
-            raise ValueError("yuanrong request_timeout_ms must be > 0")
-        if self.sdk_concurrency <= 0:
-            raise ValueError("yuanrong sdk_concurrency must be > 0")
-        return self
-
-
-class MooncakeCacheConfig(BaseModel):
-    """Configuration for Mooncake cache provider."""
-
-    local_hostname: str = Field(default="127.0.0.1", description="Mooncake local hostname")
-    metadata_server: str = Field(
-        default="http://127.0.0.1:8080/metadata",
-        description="Mooncake metadata server",
-    )
-    master_server_addr: str = Field(
-        default="127.0.0.1:50051",
-        description="Mooncake master server address",
-    )
-    protocol: str = Field(default="tcp", description="Mooncake transfer protocol")
-    device_name: str = Field(default="", description="Mooncake transport device name")
-    global_segment_size: int = Field(default=512 << 20, description="Mooncake global segment size")
-    local_buffer_size: int = Field(default=128 << 20, description="Mooncake local buffer size")
-    replica_num: int = Field(default=2, description="Mooncake replica count")
-    sdk_concurrency: int = Field(default=4, description="Mooncake SDK concurrency")
-    operation_timeout_ms: int = Field(default=5000, description="Mooncake operation timeout")
-
-    model_config = {"extra": "forbid"}
-
-    @model_validator(mode="after")
-    def validate_config(self):
-        for name in ("local_hostname", "metadata_server", "master_server_addr", "protocol"):
-            if not getattr(self, name).strip():
-                raise ValueError(f"mooncake {name} must not be empty")
-        if self.protocol not in {"tcp", "rdma", "ascend", "cxl", "nvlink", "barex"}:
-            raise ValueError("mooncake protocol is unsupported")
-        if self.global_segment_size <= 0:
-            raise ValueError("mooncake global_segment_size must be > 0")
-        if self.local_buffer_size <= 0:
-            raise ValueError("mooncake local_buffer_size must be > 0")
-        if self.replica_num <= 0:
-            raise ValueError("mooncake replica_num must be > 0")
-        if self.sdk_concurrency <= 0:
-            raise ValueError("mooncake sdk_concurrency must be > 0")
-        if self.operation_timeout_ms <= 0:
-            raise ValueError("mooncake operation_timeout_ms must be > 0")
+        """Validate CacheFS query-cache settings."""
+        if self.shared_redis_ttl_seconds < 0:
+            raise ValueError("cachefs shared_redis_ttl_seconds must be >= 0")
         return self
 
 
@@ -247,71 +186,135 @@ class RedisCacheConfig(BaseModel):
     )
     username: str = Field(default="", description="Redis ACL username")
     password_env: str = Field(default="", description="Environment variable containing password")
+    password: str = Field(
+        default="",
+        description="Legacy plaintext Redis password; prefer password_env",
+        repr=False,
+    )
+    master_name: Optional[str] = Field(default=None, description="Sentinel master name")
+    sentinel_username: str = Field(default="", description="Sentinel ACL username")
+    sentinel_password_env: str = Field(
+        default="", description="Environment variable containing Sentinel password"
+    )
+    sentinel_password: str = Field(
+        default="",
+        description="Legacy plaintext Sentinel password; prefer sentinel_password_env",
+        repr=False,
+    )
+    db: int = Field(default=0, description="Redis database number")
     pool_size: int = Field(default=32, description="Redis command concurrency")
-    connect_timeout_ms: int = Field(default=1000, description="Redis connect timeout")
-    command_timeout_ms: int = Field(default=20, description="Redis command timeout")
-    key_prefix: str = Field(default="ragfs-cache", description="Redis cache key prefix")
-    default_ttl_seconds: int = Field(default=3600, description="Redis default cache TTL")
-    read_from_replica: bool = Field(default=False, description="Read from Redis replicas")
-
-    model_config = {"extra": "forbid"}
+    connect_timeout_ms: int = Field(default=10000, description="Redis connect timeout")
+    command_timeout_ms: int = Field(default=0, description="Redis command timeout; 0 disables command timeout")
+    default_ttl_seconds: int = Field(default=300, description="Redis default cache TTL")
+    tls_insecure_skip_verify: bool = Field(
+        default=False, description="Skip Redis TLS certificate verification"
+    )
 
     @model_validator(mode="after")
     def validate_config(self):
-        if self.mode != "standalone":
-            raise ValueError("redis mode must be standalone")
+        if self.mode not in {"standalone", "cluster", "sentinel"}:
+            raise ValueError("redis mode must be standalone, cluster, or sentinel")
         if not self.endpoints:
             raise ValueError("redis endpoints must not be empty")
-        if any(not endpoint.strip() for endpoint in self.endpoints):
-            raise ValueError("redis endpoints must not contain empty values")
+        schemes = set()
+        for endpoint in self.endpoints:
+            parsed = urlparse(endpoint)
+            if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname:
+                raise ValueError("redis endpoints must use redis:// or rediss:// URLs")
+            schemes.add(parsed.scheme)
+            try:
+                port = parsed.port
+            except ValueError as error:
+                raise ValueError("redis endpoint port is invalid") from error
+            if port == 0:
+                raise ValueError("redis endpoint port is invalid")
+            if (
+                parsed.username is not None
+                or parsed.password is not None
+                or parsed.path not in {"", "/"}
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    "redis endpoints must not include credentials, database paths, "
+                    "query parameters, or fragments; use dedicated redis fields"
+                )
+        if self.mode == "standalone" and len(self.endpoints) != 1:
+            raise ValueError("redis standalone mode requires exactly one endpoint")
+        if self.mode == "cluster" and self.db != 0:
+            raise ValueError("redis cluster mode requires db=0")
+        if self.mode == "sentinel" and not (self.master_name or "").strip():
+            raise ValueError("redis sentinel mode requires master_name")
+        if self.db < 0 or self.db > 255:
+            raise ValueError("redis db must be between 0 and 255")
         if self.pool_size <= 0:
             raise ValueError("redis pool_size must be > 0")
         if self.connect_timeout_ms <= 0:
             raise ValueError("redis connect_timeout_ms must be > 0")
-        if self.command_timeout_ms <= 0:
-            raise ValueError("redis command_timeout_ms must be > 0")
-        if not self.key_prefix.strip():
-            raise ValueError("redis key_prefix must not be empty")
+        if self.command_timeout_ms < 0:
+            raise ValueError("redis command_timeout_ms must be >= 0")
         if self.default_ttl_seconds < 0:
             raise ValueError("redis default_ttl_seconds must be >= 0")
-        if self.read_from_replica:
-            raise ValueError("redis read_from_replica is not supported in standalone mode")
+        if len(schemes) != 1:
+            raise ValueError("redis endpoints must use the same URL scheme")
+        if self.password_env and self.password:
+            raise ValueError("redis password and password_env cannot both be configured")
+        if self.sentinel_password_env and self.sentinel_password:
+            raise ValueError(
+                "redis sentinel_password and sentinel_password_env cannot both be configured"
+            )
+        if self.tls_insecure_skip_verify and schemes != {"rediss"}:
+            raise ValueError("redis tls_insecure_skip_verify requires rediss:// endpoints")
         return self
 
 
-class AGFSCacheConfig(BaseModel):
-    """Configuration for optional RAGFS cache layer."""
+class AGFSPathLockConfig(BaseModel):
+    """Configuration for the native RAGFS path lock service."""
 
-    enabled: bool = Field(default=False, description="Enable RAGFS cache")
-    provider: AGFSCacheProvider = Field(
-        default=AGFSCacheProvider.MEMORY,
-        description="RAGFS cache provider",
-    )
-    namespace: str = Field(default="openviking", description="RAGFS cache namespace")
-    max_file_size_bytes: int = Field(
-        default=1024 * 1024,
-        description="Maximum full-file object size admitted to cache",
-    )
-    traversal_mode: AGFSCacheTraversalMode = Field(
-        default=AGFSCacheTraversalMode.BACKEND,
-        description="Traversal strategy for tree, glob, and grep",
-    )
-    bypass_prefixes: list[str] = Field(
-        default_factory=list,
-        description="Path prefixes that bypass cache",
-    )
-    yuanrong: YuanrongCacheConfig = Field(default_factory=YuanrongCacheConfig)
-    mooncake: MooncakeCacheConfig = Field(default_factory=MooncakeCacheConfig)
-    redis: RedisCacheConfig = Field(default_factory=RedisCacheConfig)
+    @model_validator(mode="after")
+    def ignore_deprecated_lock_timeout(self):
+        """Warn and force the deprecated timeout back to the fixed runtime value."""
+        if "lock_timeout_secs" in self.model_fields_set:
+            logger.warning(
+                "AGFSPathLockConfig: 'storage.agfs.pathlock.lock_timeout_secs' is deprecated "
+                "and ignored; the runtime wait timeout is fixed at 0.0 seconds."
+            )
+            self.lock_timeout_secs = 0.0
+        return self
 
-    model_config = {"extra": "forbid"}
+    provider: str = Field(
+        default="filesystem",
+        description="PathLock provider: 'filesystem' | 'memory' | 'sqlite' | 'cache'",
+    )
+    sqlite_path: Optional[str] = Field(
+        default=None,
+        description="Absolute local SQLite lock database file shared by all participating processes. "
+        "Defaults to '{storage.workspace}/_system/pathlock/pathlock.db' when not set.",
+    )
+    lock_timeout_secs: float = Field(
+        default=0.0,
+        description="Deprecated internal field. Runtime auto-pathlock wait timeout is fixed at 0.0 seconds.",
+    )
+    lock_expire_secs: float = Field(
+        default=30.0,
+        description="Seconds before an unrefreshed lock token becomes stale.",
+    )
 
     @model_validator(mode="after")
     def validate_config(self):
-        if not self.namespace.strip():
-            raise ValueError("cache namespace must not be empty")
-        if self.max_file_size_bytes <= 0:
-            raise ValueError("cache max_file_size_bytes must be > 0")
+        """Validate provider and timeout/expiry ranges."""
+        if self.provider not in {"filesystem", "memory", "sqlite", "cache"}:
+            raise ValueError(
+                "pathlock provider must be one of: 'filesystem', 'memory', 'sqlite', 'cache'"
+            )
+        if (
+            self.provider == "sqlite"
+            and self.sqlite_path is not None
+            and not os.path.isabs(self.sqlite_path)
+        ):
+            raise ValueError("pathlock sqlite_path must be an absolute local file path")
+        if not math.isfinite(self.lock_expire_secs) or self.lock_expire_secs < 1.0:
+            raise ValueError("pathlock lock_expire_secs must be finite and >= 1.0")
         return self
 
 
@@ -376,9 +379,14 @@ class AGFSConfig(BaseModel):
         description="QueueFS configuration.",
     )
 
-    cache: AGFSCacheConfig = Field(
-        default_factory=AGFSCacheConfig,
-        description="RAGFS cache configuration.",
+    cachefs: AGFSCacheFSConfig = Field(
+        default_factory=AGFSCacheFSConfig,
+        description="CacheFS configuration.",
+    )
+
+    pathlock: AGFSPathLockConfig = Field(
+        default_factory=AGFSPathLockConfig,
+        description="Native RAGFS path lock configuration.",
     )
 
     retry_times: Any = Field(
@@ -409,10 +417,8 @@ class AGFSConfig(BaseModel):
         default=None, description="Multi-write backups configuration. None = single backend mode."
     )
     redirects: Optional[List[dict[str, Any]]] = Field(
-        default=None, description="Primary redirect policies."
+        default=None, description="[Deprecated] Primary redirect policies. Ignored by V2."
     )
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_config(self):
@@ -459,9 +465,38 @@ class AGFSConfig(BaseModel):
                     "db_path/queue_db_path will be ignored."
                 )
 
-        if self.redirects is not None and self.backups is None:
-            raise ValueError(
-                "redirects requires backups; single-backend mode does not support redirects"
-            )
+        if self.backups is not None:
+            initial_partitions = self.backups.get("initial_partitions", 16)
+            if (
+                not isinstance(initial_partitions, int)
+                or isinstance(initial_partitions, bool)
+                or not 1 <= initial_partitions <= 1024
+            ):
+                raise ValueError("backups initial_partitions must be between 1 and 1024")
+
+            checkpoint_interval_secs = self.backups.get("checkpoint_interval_secs", 86400)
+            if (
+                not isinstance(checkpoint_interval_secs, int)
+                or isinstance(checkpoint_interval_secs, bool)
+                or checkpoint_interval_secs < 60
+            ):
+                raise ValueError("backups checkpoint_interval_secs must be at least 60")
+
+            if self.backups.get("provider", "filesystem") not in {"filesystem", "cache"}:
+                raise ValueError("backups provider must be 'filesystem' or 'cache'")
+
+            names = set()
+            for item in self.backups.get("items", []):
+                if not isinstance(item, dict):
+                    raise ValueError("backups items must be objects")
+                name = item.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    raise ValueError("backup name must not be empty")
+                name = name.strip()
+                if name == "primary":
+                    raise ValueError("backup name 'primary' is reserved")
+                if name in names:
+                    raise ValueError("backup names must be unique")
+                names.add(name)
 
         return self

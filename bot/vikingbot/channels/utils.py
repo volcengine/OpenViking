@@ -1,11 +1,8 @@
 """Shared utilities for channel implementations - image path handling, etc."""
 
-import base64
 import re
 from pathlib import Path
-from loguru import logger
-from typing import Tuple, List
-
+from typing import List, Tuple
 
 # Common image file extensions
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".tiff"}
@@ -103,18 +100,3 @@ def read_image_file(path_str: str) -> bytes:
         raise IOError(f"Path is not a file: {path_str}")
 
     return path.read_bytes()
-
-
-def image_to_data_uri(image_bytes: bytes, mime_type: str = "image/png") -> str:
-    """
-    Convert image bytes to a data URI.
-
-    Args:
-        image_bytes: Image data
-        mime_type: MIME type of the image
-
-    Returns:
-        Data URI string
-    """
-    b64 = base64.b64encode(image_bytes).decode("utf-8")
-    return f"data:{mime_type};base64,{b64}"

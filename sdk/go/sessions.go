@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -15,8 +18,21 @@ func (c *Client) CreateSession(ctx context.Context, opts *CreateSessionOptions) 
 	}
 	payload := map[string]any{}
 	setString(payload, "session_id", opts.SessionID)
-	setAny(payload, "memory_policy", opts.MemoryPolicy)
+	if opts.MemoryPolicy != nil {
+		payload["memory_policy"] = opts.MemoryPolicy
+	}
+	if opts.DisableAutoCommit {
+		payload["auto_commit_policy"] = nil
+	} else if opts.AutoCommitPolicy != nil {
+		payload["auto_commit_policy"] = opts.AutoCommitPolicy
+	}
+	if opts.MemoryExtractionConfig != nil {
+		payload["memory_extraction_config"] = opts.MemoryExtractionConfig
+	}
 	setAny(payload, "telemetry", opts.Telemetry)
+	if err := mergeExtraProtected(payload, opts.Extra, "memory_policy", "auto_commit_policy", "memory_extraction_config"); err != nil {
+		return nil, err
+	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions", nil, payload, &result)
 	return result, err
@@ -37,6 +53,25 @@ func (c *Client) GetSession(ctx context.Context, sessionID string, opts *GetSess
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/sessions/"+url.PathEscape(sessionID), query, nil, &result)
+	return result, err
+}
+
+// UpdateSessionConfig updates mutable session memory extraction settings.
+func (c *Client) UpdateSessionConfig(ctx context.Context, sessionID string, opts *UpdateSessionConfigOptions) (map[string]any, error) {
+	if opts == nil {
+		opts = &UpdateSessionConfigOptions{}
+	}
+	payload := map[string]any{}
+	setAny(payload, "memory_extraction_config", opts.MemoryExtractionConfig)
+	if opts.AutoCommitPolicy != nil {
+		payload["auto_commit_policy"] = *opts.AutoCommitPolicy
+	}
+	setAny(payload, "telemetry", opts.Telemetry)
+	if err := mergeExtra(payload, opts.Extra); err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPatch, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/config", nil, payload, &result)
 	return result, err
 }
 
@@ -88,7 +123,15 @@ func (c *Client) AddMessage(ctx context.Context, sessionID, role string, opts Ad
 	}
 	setString(payload, "created_at", opts.CreatedAt)
 	setString(payload, "peer_id", opts.PeerID)
+	setString(payload, "turn_id", opts.TurnID)
+	setString(payload, "message_kind", opts.MessageKind)
+	if opts.SourceMessageIDs != nil {
+		payload["source_message_ids"] = opts.SourceMessageIDs
+	}
 	setAny(payload, "telemetry", opts.Telemetry)
+	if err := mergeExtra(payload, opts.Extra); err != nil {
+		return nil, err
+	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/messages", nil, payload, &result)
 	return result, err
@@ -99,6 +142,9 @@ func (c *Client) BatchAddMessages(ctx context.Context, sessionID string, message
 	payload := map[string]any{"messages": messages}
 	if opts != nil {
 		setAny(payload, "telemetry", opts.Telemetry)
+		if err := mergeExtra(payload, opts.Extra); err != nil {
+			return nil, err
+		}
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/messages/batch", nil, payload, &result)
@@ -110,10 +156,23 @@ func (c *Client) CommitSession(ctx context.Context, sessionID string, opts *Comm
 	if opts == nil {
 		opts = &CommitSessionOptions{}
 	}
-	payload := map[string]any{
-		"keep_recent_count": opts.KeepRecentCount,
+	payload := map[string]any{}
+	if opts.KeepRecentCount != nil {
+		payload["keep_recent_count"] = *opts.KeepRecentCount
 	}
+	setString(payload, "retention_mode", opts.RetentionMode)
+	setAny(payload, "keep_recent_turn_count", opts.KeepRecentTurnCount)
+	setAny(payload, "retained_message_token_budget", opts.RetainedMessageTokenBudget)
+	setAny(payload, "min_raw_tail_steps", opts.MinRawTailSteps)
 	setAny(payload, "telemetry", opts.Telemetry)
+	if opts.EventTags != nil {
+		payload["extraction_metadata"] = map[string]any{
+			"event": map[string]any{"tags": opts.EventTags},
+		}
+	}
+	if err := mergeExtra(payload, opts.Extra); err != nil {
+		return nil, err
+	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/commit", nil, payload, &result)
 	return result, err
@@ -134,6 +193,23 @@ func (c *Client) GetTask(ctx context.Context, taskID string) (map[string]any, er
 		return nil, err
 	}
 	return result, nil
+}
+
+// CancelTask requests cooperative cancellation of a background task.
+func (c *Client) CancelTask(
+	ctx context.Context,
+	taskID string,
+) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(
+		ctx,
+		http.MethodPost,
+		"/api/v1/tasks/"+url.PathEscape(taskID)+"/cancel",
+		nil,
+		nil,
+		&result,
+	)
+	return result, err
 }
 
 // ListTasks lists background tasks visible to the caller.

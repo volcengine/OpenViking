@@ -2,10 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Replay driver: SDK-client chunking/ensure, batch append, commit, and crash reconcile."""
 
+from unittest.mock import patch
+
 from openviking.ingest.cursor_store import CursorStore
 from openviking.ingest.models import BYTE_OFFSET, Cursor, NormalizedMessage, SessionRef
+from openviking.ingest.orchestrator import IngestOrchestrator
+from openviking.ingest.poller import IngestPoller
 from openviking.ingest.replay import ConversationReplayClient, SessionReplayer
+from openviking.ingest.sources.hermes import HermesSource
 from openviking_cli.exceptions import NotFoundError
+from openviking_cli.utils.config.ingest_config import IngestConfig, IngestHarnessConfig
 
 
 class _FakeSDK:
@@ -22,8 +28,8 @@ class _FakeSDK:
             raise NotFoundError(sid, "session")
         return {"session_id": sid, "pending_tokens": 0, "message_count": 0}
 
-    async def create_session(self, session_id=None, memory_policy=None):
-        self.created.append(session_id)
+    async def create_session(self, session_id=None, options=None):
+        self.created.append((session_id, options))
         self.existing.add(session_id)
         return {"session_id": session_id}
 
@@ -40,9 +46,12 @@ async def test_ensure_session_get_or_create():
     sdk = _FakeSDK()
     client = ConversationReplayClient(sdk)
     await client.ensure_session("s1")  # not present -> create
-    assert sdk.created == ["s1"]
+    assert sdk.created == [("s1", None)]
     await client.ensure_session("s1")  # now present -> no second create
-    assert sdk.created == ["s1"]
+    assert sdk.created == [("s1", None)]
+    # a memory policy travels inside CreateSessionOptions, not as a keyword
+    await client.ensure_session("s2", {"working_memory": {"enabled": False}})
+    assert sdk.created[-1] == ("s2", {"memory_policy": {"working_memory": {"enabled": False}}})
 
 
 async def test_append_chunks_at_100():
@@ -115,25 +124,46 @@ async def test_append_batch_confirms_cursor_and_marks_needs_commit(tmp_path):
     assert fake.committed == []  # append does not commit
 
 
-async def test_reconcile_confirms_landed_batch(tmp_path):
-    store = CursorStore(tmp_path)
-    sid = "import__claude_code__s1"
+async def test_reconcile_defers_replay_then_confirms_landed_batch(tmp_path):
+    (tmp_path / "s1.jsonl").write_text('{"role": "user", "content": "hello"}\n')
+    config = IngestHarnessConfig(enabled=True, paths=[str(tmp_path)])
+    source = HermesSource(config, fallback_user="test")
+    ref = next(iter(source.discover_sessions()))
+    _, cursor = source.read_messages(ref, None)
+    store = CursorStore(tmp_path / "state")
     store.set_pending(
-        "claude_code",
+        "hermes",
         "s1",
-        sid,
-        Cursor(BYTE_OFFSET, {"offset": 0}),
-        Cursor(BYTE_OFFSET, {"offset": 50}),
-        pend_count=2,
+        "import__hermes__s1",
+        Cursor.zero(BYTE_OFFSET),
+        cursor,
+        pend_count=1,
         baseline=0,
     )
-    fake = _FakeReplay(count=2)  # server already has the 2 messages -> batch landed
+    pending = store.get("hermes", "s1")
+    fake = _FakeReplay(count=1, pending=1)  # The batch landed before the crash.
     replayer = SessionReplayer(fake, store)
-    await replayer.reconcile("claude_code", _ref())
-    rec = store.get("claude_code", "s1")
-    assert rec.cursor.value["offset"] == 50  # confirmed without re-append
+    orchestrator = IngestOrchestrator(IngestConfig(), replayer)
+    poller = IngestPoller([("hermes", config, source)], replayer)
+
+    with patch.object(fake, "message_count", side_effect=OSError("temporary session read failure")):
+        stats = await orchestrator.backfill_source("hermes", config, source)
+        assert stats.sessions == 0
+        assert stats.errors == ["hermes/s1: pending batch reconciliation deferred"]
+        await poller._tick()
+        assert fake.appended == []
+        assert store.get("hermes", "s1") == pending
+
+    await poller._tick()
+    rec = store.get("hermes", "s1")
+    assert rec.cursor == cursor
     assert rec.pending_count == 0
     assert rec.needs_commit is True
+    stats = await orchestrator.backfill_source("hermes", config, source)
+    assert stats.sessions == 1
+    assert stats.messages == 0
+    assert stats.errors == []
+    assert fake.appended == []
 
 
 async def test_reconcile_drops_unlanded_batch(tmp_path):
@@ -150,7 +180,7 @@ async def test_reconcile_drops_unlanded_batch(tmp_path):
     )
     fake = _FakeReplay(count=0)  # batch did not land
     replayer = SessionReplayer(fake, store)
-    await replayer.reconcile("claude_code", _ref("s2"))
+    assert await replayer.reconcile("claude_code", _ref("s2")) is True
     rec = store.get("claude_code", "s2")
     assert rec.cursor.value["offset"] == 0  # NOT advanced -> will re-read & re-append
     assert rec.pending_count == 0  # intent cleared
@@ -192,3 +222,46 @@ async def test_commit_if_needed_commits_when_needs_commit_and_pending(tmp_path):
     assert await replayer.commit_if_needed("claude_code", _ref()) is True
     assert replayer.client.committed == ["import__claude_code__s1"]
     assert store.get("claude_code", "s1").needs_commit is False
+
+
+async def test_commit_if_needed_ignores_server_pending_without_local_appends(tmp_path):
+    """Regression: server-side pending tokens alone must not trigger a commit.
+
+    The watch sweep calls ``commit_if_needed`` for every session on every tick, and the
+    server keeps reporting pending tokens until the queued commit is processed. Treating
+    that as "needs commit" re-enqueues the same session on every tick and the queue can
+    never catch up.
+    """
+    store = CursorStore(tmp_path)
+    ref = _ref("s1")
+    # Known session with live pending tokens server-side, but nothing appended locally.
+    store.ensure_row(
+        "claude_code", "s1", "import__claude_code__s1", Cursor(BYTE_OFFSET, {"offset": 10})
+    )
+    fake = _FakeReplay(pending=9000)
+    replayer = SessionReplayer(fake, store)
+
+    for _ in range(3):  # three consecutive sweeps
+        assert await replayer.commit_if_needed("claude_code", ref) is False
+    assert fake.committed == []
+
+
+async def test_commit_if_needed_still_recovers_after_crash(tmp_path):
+    """``needs_commit`` persists, so appended-but-uncommitted work is still flushed."""
+    store = CursorStore(tmp_path)
+    ref = _ref("s1")
+    store.set_pending(
+        "claude_code",
+        "s1",
+        "import__claude_code__s1",
+        Cursor(BYTE_OFFSET, {"offset": 0}),
+        Cursor(BYTE_OFFSET, {"offset": 10}),
+        1,
+        0,
+    )
+    store.confirm_append("claude_code", "s1", Cursor(BYTE_OFFSET, {"offset": 10}), 1)
+    fake = _FakeReplay(pending=500)
+    # Simulates a restart: a fresh replayer with no in-memory state still commits.
+    replayer = SessionReplayer(fake, store)
+    assert await replayer.commit_if_needed("claude_code", ref) is True
+    assert fake.committed == ["import__claude_code__s1"]

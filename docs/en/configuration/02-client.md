@@ -1,0 +1,361 @@
+# Client configuration fields
+
+`ovcli.conf` is the client configuration file for the `ov` CLI. It stores the server connection, authentication identity, and command defaults.
+
+Agent plugins using the shared configuration loader also read the `plugin` section, workspace settings, and `OPENVIKING_*` environment variables for recall, conversation capture, and diagnostics. This page distinguishes CLI settings from plugin settings. See [Agent Integrations](../agent-integrations/01-overview.md) for host-specific support.
+
+Use `ov config` to manage CLI connections and `ov config show` to inspect the active configuration with secrets redacted. Editing or renaming a configuration preserves extra top-level fields such as `plugin`. On a switch, fields explicitly present in the incoming profile take precedence; if it omits `plugin`, the active file’s existing plugin settings are retained.
+
+Default path:
+
+```text
+~/.openviking/ovcli.conf
+```
+
+To select another file:
+
+```bash
+export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
+```
+
+## Complete Example
+
+```json
+{
+  "url": "https://openviking.example.com",
+  "api_key": "<user-or-admin-key>",
+  "root_api_key": "<root-key>",
+  "actor_peer_id": "agent:research-assistant",
+  "timeout": 60,
+  "output": "table",
+  "echo_command": true,
+  "show_progress": false,
+  "verbose": false,
+  "profile": false,
+  "upload": {
+    "ignore_dirs": "node_modules,.cache,dist",
+    "include": "*.md,*.pdf",
+    "exclude": "*.tmp,*.log"
+  },
+  "extra_headers": {
+    "X-Tenant": "acme"
+  },
+  "gateway_token": "<gateway-token>",
+  "plugin": {
+    "recallCompress": "off"
+  }
+}
+```
+
+This example uses API key mode. Omit fields you do not need; a local server in `dev` mode usually needs only `url`. Trusted deployments additionally configure `account`, `user`, and the required credentials as described in [Authentication](../guides/04-authentication.md). In API key mode, the server takes identity from the key and ignores these fields.
+
+## Connection and Authentication
+
+```json
+{
+  "url": "https://openviking.example.com",
+  "api_key": "<user-or-admin-key>",
+  "root_api_key": "<root-key>",
+  "actor_peer_id": "agent:research-assistant",
+  "extra_headers": {
+    "X-Tenant": "acme"
+  },
+  "gateway_token": "<gateway-token>"
+}
+```
+
+| Field | Type / Values | Default | Purpose |
+|---|---|---|---|
+| `url` | HTTP(S) URL | `http://127.0.0.1:1933` | OpenViking server endpoint |
+| `api_key` | string / `null` | `null` | User/admin key for normal data operations |
+| `root_api_key` | string / `null` | `null` | Root key for `ov --sudo` administrative operations |
+| `account` | string / `null` | `null` | Account identity for trusted deployments |
+| `user` | string / `null` | `null` | User identity for trusted deployments |
+| `actor_peer_id` | string / `null` | `null` | Default Actor Peer identifier |
+| `agent_id` | string / `null` | `null` | Compatibility field; use `actor_peer_id` for new configs and do not set both |
+| `extra_headers` | object / `null` | `null` | Additional headers sent with every request; `extra_header` is a compatibility alias |
+| `gateway_token` | string / `null` | `null` | `X-Gateway-Token` used when retrying a gateway challenge |
+
+### Choosing API Keys
+
+| Configuration | Normal Commands | `ov --sudo` |
+|---|---|---|
+| `api_key` only | User/admin key | unavailable |
+| `root_api_key` plus `account` and `user` | Trusted mode: root key with explicit identity; API key mode: tenant data access denied | Root key |
+| Both keys | `api_key` | `root_api_key` |
+| No keys | Local server with authentication disabled only | unavailable |
+
+`server.root_api_key` in `ov.conf` is accepted by the server. When the CLI manages that server, `root_api_key` in `ovcli.conf` must match it.
+
+## Command Behavior
+
+```json
+{
+  "timeout": 120,
+  "echo_command": true,
+  "show_progress": true,
+  "verbose": false,
+  "profile": false
+}
+```
+
+| Field | Type / Values | Default | Purpose |
+|---|---|---|---|
+| `timeout` | number, seconds, `> 0` | `60` | HTTP request timeout |
+| `echo_command` | boolean | `true` | Show effective request parameters for commands such as `find`, `search`, and `ls` |
+| `show_progress` | boolean | `false` | Show upload progress by default |
+| `verbose` | boolean | `false` | Show upload diagnostics by default |
+| `profile` | boolean | `false` | Request performance profiles; also requires `server.profile_enabled` |
+| `output` | `"table"` / `"json"` | `"table"` | Default output format; `-o table` or `-o json` overrides it for the current command |
+
+Command-line options such as `--profile`, `--progress`, `--no-progress`, and `--verbose` override the configuration for the current command.
+
+## Upload Filters
+
+```json
+{
+  "upload": {
+    "ignore_dirs": "node_modules,.cache,dist",
+    "include": "*.md,*.pdf",
+    "exclude": "*.tmp,*.log"
+  }
+}
+```
+
+| Field | Type / Format | Default | Purpose |
+|---|---|---|---|
+| `upload.ignore_dirs` | comma-separated string / `null` | `null` | Directory names to ignore |
+| `upload.include` | comma-separated globs / `null` | `null` | Upload only matching files |
+| `upload.exclude` | comma-separated globs / `null` | `null` | Exclude matching files |
+
+Local directory uploads also honor `.gitignore`. Command-line `--include` and `--exclude` rules are merged with the configuration.
+
+## Plugin Settings
+
+Settings for memory plugins live under `plugin`. Keys directly under it provide defaults for plugins using the shared loader; a nested object named after a harness, such as `claude_code`, `codex`, or `opencode`, overrides them for that one.
+
+```json
+{
+  "url": "https://openviking.example.com",
+  "api_key": "<user-or-admin-key>",
+  "plugin": {
+    "recallCompress": "off",
+    "bypassSessionPatterns": ["/tmp/**", "**/scratch/**"],
+    "claude_code": {
+      "captureAssistantTurns": false
+    }
+  }
+}
+```
+
+Many settings have a corresponding `OPENVIKING_*` environment variable: `OPENVIKING_RECALL_LIMIT` is `recallLimit`, `OPENVIKING_CAPTURE_ASSISTANT_TURNS` is `captureAssistantTurns`. `OPENVIKING_BYPASS_SESSION` also has a file setting, `plugin.bypassSession`; use the environment variable for a process-specific override. The full shared list is defined in `examples/memory-plugin-shared/lib/config-schema.mjs`. For usage, see the plugin READMEs: [Claude Code](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration) and [Codex](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin). List-valued knobs — `bypassSessionPatterns`, `recallQueryFilters`, `captureFilters` — are JSON arrays here, while their environment counterparts are comma-separated strings, so a value containing a literal comma can only be written in the array.
+
+Resolution order, highest first: environment variables → the [workspace layers](#workspace-configuration) → `plugin.<harness>` → `plugin` → the legacy per-harness block in `ov.conf` → built-in defaults. Separately launched hook processes reread the file on each invocation. Reload behavior for persistent plugins depends on the host; restart the agent when uncertain. Environment changes also require a restart because hooks inherit the agent’s environment.
+
+Memory plugins using the shared configuration loader read this section. See the corresponding [integration guide](../agent-integrations/01-overview.md) for supported fields and defaults. `ov-memory-doctor` prints what it resolved and warns about keys it does not recognise, naming the closest real one.
+
+## Workspace Configuration
+
+A repository can carry its own plugin settings, so the memory behavior of a project travels with the checkout instead of living in each contributor's home directory. Two files sit under the workspace root, and a third layer is kept per machine:
+
+```text
+<repo-root>/.openviking/config.json         # committed, shared by the team
+<repo-root>/.openviking/config.local.json   # private, not committed
+~/.openviking/workspaces/<slot>.json        # per-machine registry, one file per workspace
+```
+
+The workspace root is the nearest ancestor directory holding a `.git`, or one holding `.openviking/config.json` (or `config.local.json`) — whichever the walk upward reaches first; `$HOME` and the filesystem root are never workspace roots. A directory that is neither is not a workspace at all: no configuration layer, no registry entry, and no peer of its own. The registry slot name combines the root's directory name with a hash of its full path, so two clones of one repository on one machine never share an entry. Memory plugins using the shared configuration loader read these layers; `ov` commands do not.
+
+### Precedence
+
+Highest first:
+
+| Layer | Scope |
+|---|---|
+| `OPENVIKING_*` environment variables | Current process |
+| `~/.openviking/workspaces/<slot>.json` | This machine, this workspace |
+| `<repo-root>/.openviking/config.local.json` | This checkout, private |
+| `<repo-root>/.openviking/config.json` | This repository, committed |
+| `ovcli.conf` [`plugin.<harness>`](#plugin-settings) | This machine, one harness |
+| `ovcli.conf` `plugin` | This machine, every harness |
+| `ov.conf` harness section | Compatibility layer for older deployments |
+| Built-in defaults | |
+
+A scalar from a higher layer replaces the lower one. Lists are unioned across layers; a leading `"!reset"` element drops everything the lower layers contributed, so `["!reset", "*/scratch/*"]` is the whole list.
+
+No command writes the registry file. Create it by hand at the path `ov-memory-doctor` prints, with `version: 1` and the same schema as the workspace files.
+
+### Schema
+
+`version: 1` is required. A file declaring another version is skipped with a warning rather than guessed at.
+
+```json
+{
+  "version": 1,
+  "peer": { "source": "git" },
+  "recall": { "peer_scope": "actor", "max_items": 20 },
+  "capture": { "commit_token_threshold": 20000 },
+  "labels": { "team": "search" }
+}
+```
+
+| Key | Type / Values | Purpose |
+|---|---|---|
+| `peer.source` | `"git"` / `"cwd"` / `"none"` / template / list of templates | How the workspace peer is derived; only a git repository gets one by default |
+| `peer.id` | string | Pin the peer explicitly; takes precedence over `peer.source` |
+| `recall.enabled` | boolean | Whether the plugin recalls at all |
+| `recall.peer_scope` | `"all"` / `"actor"` | `all` also sweeps this user's other peers, demoted in ranking; `actor` reads only user-level memories and this workspace's peer |
+| `recall.dedup_turns` | integer, `0`–`20` | Recent turns a recalled item is deduplicated against |
+| `recall.max_items` | integer, `1`–`100` | Maximum recalled items |
+| `recall.score_threshold` | number, `0`–`1` | Minimum score for a recalled item |
+| `capture.enabled` | boolean | Whether the session is captured |
+| `capture.commit_token_threshold` | integer, `1000`–`1000000` | Tokens accumulated before a capture commits |
+| `bypass.session_patterns` | list of globs | A session whose id or working directory matches skips recall and capture |
+| `usage.view` / `usage.output` | string | Codex OV-Usage footer: `summary` / `expanded` / `off`, and `auto` / `terminal` / `desktop` |
+| `labels` | object | Free-form metadata for humans; not read by the plugins |
+
+An out-of-range number is clamped to the nearest bound and reported; an unrecognized enum value is ignored. The table lists common fields; `config-schema.mjs` defines the full shared schema. Unrecognized keys do not take effect.
+
+### Workspace Peer
+
+A peer is a path prefix under your own user space — `viking://user/<you>/peers/<peer>/memories` — that keeps one project's memories together. By default only a git repository gets one: the normalized `origin` URL, else the repository root path. A directory that is not a repository sends no peer at all, and what is remembered there goes to your user-level space at `viking://user/<you>/memories` instead. That is deliberate: an application that opens a fresh directory for every task would otherwise mint a fresh, empty peer for every task.
+
+`peer.source` decides the rule. The same setting is spelled `OPENVIKING_PEER_SOURCE` in the environment and `plugin.peerSource` or `plugin.<harness>.peerSource` in `ovcli.conf`.
+
+Remote identity comes only from `origin`; there is no fallback to `upstream`, because adding an upstream remote must not silently change the memory namespace. Root-commit hashes are not used either: forks share ancestry, and shallow clones or newly fetched histories can change which roots are visible. Without `origin`, a Git repository uses its root path. Use an explicit `peer.id` when repositories should share memories or when path-based identity must survive a move. Non-Git directories still have no derived peer by default.
+
+#### Give a Directory Its Own Peer
+
+Create `.openviking/config.json` in the directory:
+
+```json
+{"version": 1, "peer": {"id": "my-project"}}
+```
+
+Unless a higher-priority peer setting or a nested workspace overrides it, memories captured by the plugin in that directory and its subdirectories are written under the peer `my-project`, whether or not it is a Git repository. The id names no path, so it survives a move, a rename and a second machine — and two directories using the same server, account, user, and peer id share the same memory scope, which is how you merge them on purpose.
+
+The other ways to set it, highest precedence first:
+
+| Where | What it does |
+|---|---|
+| `OPENVIKING_PEER_ID=my-project` | Sets the peer for one process; ignored when credentials are pinned to `ovcli.conf`, and an explicit host peer takes precedence |
+| `peer.id` in `.openviking/config.json` | Names this workspace's peer. The recommended way; `config.local.json` is the same key kept out of the commit |
+| `peer.source` in the same file | Derives the peer instead of naming it — `"cwd"` for the directory path, `"team-{dir}"` for a template |
+| `plugin.peerSource` in `ovcli.conf`, or `OPENVIKING_PEER_SOURCE` | The same choice for every directory on this machine; `"cwd"` restores the pre-`git` behavior everywhere |
+
+| `peer.source` | Meaning |
+|---|---|
+| `"git"` | Default. The normalized `origin` URL, else the repository root path — equivalent to `["{git_remote}", "{git_root}"]`. Outside a repository nothing is sent. No prefix is added. |
+| `"cwd"` | The working directory with every non-alphanumeric character replaced by `-`, byte for byte what earlier releases sent |
+| `"none"` | Send no peer at all; `OPENVIKING_WORKSPACE_PEER=0` means the same |
+| template / list of templates | For example `"git-{git_remote}"` or `["{git_remote}", "team-{dir}"]`; templates are tried in order, and one whose variables are empty falls through to the next |
+
+| Variable | Value | Empty when |
+|---|---|---|
+| `{git_remote}` | Normalized `origin`, as `github.com-org-repo` | Outside a git repository, or the repository has no `origin` |
+| `{git_root}` | Repository root path, with every non-alphanumeric character replaced by `-` | Outside a git repository. A `.openviking/config.json` inside a repository still leaves this the repository's own root, so marking a subdirectory does not split the default peer |
+| `{cwd}` | Working directory, with every non-alphanumeric character replaced by `-` | Never — and it is in no default chain, so a bare path becomes a peer only when you ask for one |
+| `{dir}` | The workspace root's directory name: the repository root, or the directory holding `.openviking/config.json` | The directory is not a workspace |
+| `{harness}` | The name of the agent running (`claude-code`, `codebuddy`, `codex`, `dsh`, `opencode`, `pi`, `cursor`, `trae`, `trae-cn`, `zcode`) | Never — but the MCP proxy takes no part in derivation, so a read path that goes only through it cannot resolve it |
+
+In `/Users/x/Dev/OpenViking/examples/codex-memory-plugin` with `origin` `git@github.com:volcengine/OpenViking.git`, the peer is `github.com-volcengine-openviking` — the same value from any subdirectory, worktree, machine, or clone. Every clone of one repository therefore shares one peer, while a fork has a different `origin` and stays separate. The derivation reads the repository's files directly instead of running `git`, so it also works where `git` is missing from `PATH`, and the URL is normalized so that the ssh and https spellings of one repository agree and a token embedded in the URL never reaches the peer id.
+
+#### By Situation
+
+| Situation | What to do |
+|---|---|
+| A repository with an `origin` | Nothing. Every clone, worktree and subdirectory shares one peer |
+| A fork | Separate from upstream by default, because `origin` differs. To merge the two, write the same `peer.id` in both |
+| A local repository with no remote | The repository root path by default, which changes on another machine. For anything long-lived, write a `peer.id` |
+| A long-lived directory that is not a repository | Create `.openviking/config.json` with a `peer.id` |
+| One subproject of a monorepo needing its own memory | Put a `config.json` in the subdirectory with `peer.source: "{git_remote}-{dir}"`. A marker file alone keeps the repository's peer, because `{git_remote}` resolves first |
+| A throwaway task directory (a dated folder an app creates, an unpacked archive) | Nothing. Its memories go to your user-level space |
+| Each agent keeping its own memory of one repository | `peer.source: "{git_remote}-{harness}"`. Set this explicitly; the default shares project memory across agents |
+| Several directories sharing one memory | Write the same `peer.id` in each |
+| Not wanting per-project separation at all | `peer.source: "none"` (the same as `OPENVIKING_WORKSPACE_PEER=0`) |
+
+### Recall Isolation
+
+`peer.source` decides where memories are written; `recall.peer_scope` decides what is read back. A peer is a path prefix, not a tenant boundary. The same setting is spelled `plugin.recallPeerScope` in `ovcli.conf` and `OPENVIKING_RECALL_PEER_SCOPE` in the environment.
+
+| `recall.peer_scope` | What recall reads |
+|---|---|
+| `"all"` (default) | User-level memories and this workspace's peer at full weight, plus a sweep across the user's other peers whose hits are demoted by category — the server's `other_peer_penalty` defaults to 0.1 for events and entities, 0.02 for preferences, experiences, resources and skills. The penalty lowers other-project scores but does not guarantee that they always rank last |
+| `"actor"` | User-level memories and this workspace's peer only. The plugin additionally asks once for the peer the pre-`git` rule would have derived here, so nothing written by an earlier release is lost |
+
+User-level memories are read at full weight under both, and that is the cost of sending no peer outside a repository: what a throwaway task teaches is recalled in every project afterwards. To separate future memories from such a directory, give it a `peer.id` and use `"actor"` to limit cross-peer recall. The actor scope still reads existing user-level memories; it does not reassign or hide them.
+
+Switching to the `git` default needs no migration and moves nothing: memories written under the earlier cwd-derived peer stay where they are, and recall keeps reaching them — through the cross-peer sweep under `"all"`, and through the extra query under `"actor"`. `peer_scope` is a per-request parameter; against a server too old to know it, the plugin records the downgrade once and warns rather than silently reading everything.
+
+### What a Workspace File May Not Set
+
+A hook runs without a prompt, so these files are trusted; what is refused is structural instead:
+
+- Connection and credential keys — `url`, `api_key`, `root_api_key`, `account`, `user`, `extra_headers`, and the rest — are stripped with a warning wherever they appear. Which server the data goes to stays answerable from `ovcli.conf` and the environment alone.
+- `${VAR}` is never expanded in these files.
+
+What a committed file switches off is announced rather than blocked: the plugin's `ov-memory-doctor` reports every workspace-scoped value, the layer it came from, and what it shadowed.
+
+`.gitignore` must not ignore all of `.openviking/`, or `config.json` can never be committed. Narrow the rule to the parser's scratch directories and the private file:
+
+```text
+.openviking/media/
+.openviking/downloads/
+.openviking/config.local.json
+```
+
+`ov-memory-doctor` warns when a blanket rule is in effect.
+
+## Related Environment Variables
+
+The `ov` CLI directly uses only a small set of environment variables:
+
+| Environment Variable | Purpose |
+|---|---|
+| `OPENVIKING_CLI_CONFIG_FILE` | Select the `ovcli.conf` path |
+| `OPENVIKING_UPLOAD_MODE` | Select temporary upload mode: `local` or `shared` |
+
+The `--api-key-env <name>` and `--root-api-key-env <name>` options for `ov config add` and `ov config edit` read keys from a named environment variable and write them to the configuration.
+
+Agent plugins read environment variables such as `OPENVIKING_AUTO_RECALL`, `OPENVIKING_RECALL_LIMIT`, `OPENVIKING_AUTO_CAPTURE`, and `OPENVIKING_DEBUG`. Do not use the environment-variable names as JSON keys; supported file settings use their corresponding fields under `plugin`.
+
+## Multiple Servers
+
+Normal `ov` commands, plus `ov config show` and `ov config validate`, resolve the effective configuration in this order:
+
+1. When `OPENVIKING_CLI_CONFIG_FILE` is set, that path is authoritative; a missing file is an error.
+2. When the variable is unset, the default active file:
+
+```text
+~/.openviking/ovcli.conf
+```
+
+The interactive manager and `ov config list`, `switch`, `add`, `edit`, and `delete` use the same effective path. Named configurations live next to that active file. Without an override, their paths are:
+
+```text
+~/.openviking/ovcli.conf.<name>
+```
+
+For example, a production configuration can contain:
+
+```json
+{
+  "url": "https://openviking.example.com",
+  "api_key": "<production-api-key>",
+  "timeout": 120
+}
+```
+
+Common commands:
+
+```bash
+ov config
+ov config list
+ov config switch <name>
+ov config validate
+ov config show
+```
+
+`ov config switch <name>` copies the named configuration to the effective active file, including the path selected by `OPENVIKING_CLI_CONFIG_FILE`. This overwrites the selected file; unset the variable first if you intend to switch the default `~/.openviking/ovcli.conf` instead. A directly selected `ovcli.conf.<name>` is shown as active even when another profile has identical contents, and cannot be deleted or renamed while selected. New `ov` commands reread the effective file, while already-running Agent clients must restart before reading changes.
+
+See [OpenViking CLI Setup](../getting-started/05-cli-setup.md) for interactive and agent-assisted configuration workflows.

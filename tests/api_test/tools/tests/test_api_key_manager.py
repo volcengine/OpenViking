@@ -34,8 +34,8 @@ async def test_api_key_manager():
                 manager = _get_api_key_manager(mock_request)
                 print(f"✅ _get_api_key_manager returned: {manager}")
 
-                print("\nTesting manager.get_accounts()...")
-                accounts = manager.get_accounts()
+                print("\nTesting manager.list_accounts()...")
+                accounts = await manager.list_accounts()
                 print(f"  accounts: {accounts}")
             except Exception as e:
                 print(f"❌ _get_api_key_manager error: {e}")

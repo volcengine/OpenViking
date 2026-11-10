@@ -4,7 +4,12 @@
 
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
 from typing import Any, Dict
+
+import httpx
 
 from openviking_cli._sdk_import import import_openviking_sdk
 from openviking_cli.exceptions import (
@@ -29,6 +34,9 @@ from openviking_cli.exceptions import (
     UnimplementedError,
     VLMFailedError,
 )
+from openviking_cli.utils.async_utils import run_async
+
+_SESSION_CONFIG_UNSET = object()
 
 ERROR_CODE_TO_EXCEPTION = {
     "INVALID_ARGUMENT": InvalidArgumentError,
@@ -54,6 +62,23 @@ ERROR_CODE_TO_EXCEPTION = {
 }
 
 
+def _timeout_configured_outside_call() -> bool:
+    if os.getenv("OPENVIKING_TIMEOUT"):
+        return True
+    config_path = os.getenv("OPENVIKING_CLI_CONFIG_FILE")
+    if config_path:
+        path = Path(config_path).expanduser()
+    else:
+        path = Path.home() / ".openviking" / "ovcli.conf"
+    if not path.exists():
+        return False
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(raw, dict) and "timeout" in raw
+
+
 def _raise_legacy_exception(error: Dict[str, Any]) -> None:
     code = error.get("code", "UNKNOWN")
     message = error.get("message", "Unknown error")
@@ -61,36 +86,184 @@ def _raise_legacy_exception(error: Dict[str, Any]) -> None:
     exc_class = ERROR_CODE_TO_EXCEPTION.get(code, OpenVikingError)
 
     if exc_class == OpenVikingError:
-        raise exc_class(message, code=code, details=details)
-    if exc_class in (
+        exception = exc_class(message, code=code, details=details)
+    elif exc_class in (
         InvalidArgumentError,
         FailedPreconditionError,
         ResourceExhaustedError,
         AbortedError,
         UnimplementedError,
     ):
-        raise exc_class(message, details=details)
-    if exc_class == InvalidURIError:
+        exception = exc_class(message, details=details)
+    elif exc_class == InvalidURIError:
         uri = details.get("uri", "") if details else ""
         reason = details.get("reason", "") if details else ""
-        raise exc_class(uri, reason)
-    if exc_class == NotFoundError:
+        exception = exc_class(uri, reason)
+    elif exc_class == NotFoundError:
         resource = details.get("resource", "") if details else ""
         resource_type = details.get("type", "resource") if details else "resource"
-        raise exc_class(resource, resource_type)
-    if exc_class == AlreadyExistsError:
+        exception = exc_class(resource, resource_type)
+    elif exc_class == AlreadyExistsError:
         resource = details.get("resource", "") if details else ""
         resource_type = details.get("type", "resource") if details else "resource"
-        raise exc_class(resource, resource_type)
-    raise exc_class(message)
+        exception = exc_class(resource, resource_type)
+    else:
+        exception = exc_class(message)
+    if details is not None:
+        exception.details.update(details)
+    raise exception
 
 
 class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
+    def __init__(self, *args, **kwargs):
+        # Heavy local benchmark runs can keep OpenViking search requests queued
+        # behind embedding/vector work. Use a larger default read timeout than
+        # the upstream SDK's 60s while still respecting explicit caller values
+        # and timeouts configured via environment or ovcli.conf.
+        if "timeout" not in kwargs:
+            try:
+                import inspect
+
+                sig = inspect.signature(import_openviking_sdk().AsyncHTTPClient.__init__)
+                params = [
+                    name
+                    for name, param in sig.parameters.items()
+                    if name != "self"
+                    and param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
+                ]
+                timeout_index = params.index("timeout")
+            except Exception:
+                timeout_index = 7
+            if len(args) <= timeout_index and not _timeout_configured_outside_call():
+                kwargs["timeout"] = 180.0
+        super().__init__(*args, **kwargs)
+        # High-parallel tau2 rollouts can exceed httpx defaults from one shared
+        # client and hit PoolTimeout while waiting for a free connection.
+        self._http_limits = httpx.Limits(max_connections=512, max_keepalive_connections=128)
+
     def _raise_exception(self, error: Dict[str, Any]) -> None:
         _raise_legacy_exception(error)
+
+    async def update_session_config(
+        self,
+        session_id: str,
+        *,
+        memory_extraction_config: Dict[str, Any] | None = None,
+        auto_commit_policy: Any = _SESSION_CONFIG_UNSET,
+        telemetry: Any = False,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {}
+        if memory_extraction_config is not None:
+            payload["memory_extraction_config"] = memory_extraction_config
+        if auto_commit_policy is not _SESSION_CONFIG_UNSET:
+            payload["auto_commit_policy"] = auto_commit_policy
+        if telemetry is not False:
+            payload["telemetry"] = telemetry
+        session_path = self._path_segment(session_id)
+        response = await self._request(
+            "PATCH",
+            f"/api/v1/sessions/{session_path}/config",
+            json=payload,
+        )
+        return self._handle_response_data(response).get("result", {})
+
+    async def commit_session(
+        self,
+        session_id: str,
+        telemetry: Any = False,
+        *,
+        keep_recent_count: int = 0,
+        enable_working_memory: bool | None = None,
+        retention_mode: str | None = None,
+        keep_recent_turn_count: int | None = None,
+        retained_message_token_budget: int | None = None,
+        min_raw_tail_steps: int | None = None,
+        session_window_context: int | None = None,
+        summary_token_ratio: float | None = None,
+        retained_token_ratio: float | None = None,
+        reasoning_effort: str | None = None,
+        event_tags: list[str] | None = None,
+    ) -> Dict[str, Any]:
+        """Commit with optional Turn-aware retention fields understood by the server."""
+        payload: Dict[str, Any] = {
+            "keep_recent_count": keep_recent_count,
+            "telemetry": telemetry,
+        }
+        optional = {
+            "enable_working_memory": enable_working_memory,
+            "retention_mode": retention_mode,
+            "keep_recent_turn_count": keep_recent_turn_count,
+            "retained_message_token_budget": retained_message_token_budget,
+            "min_raw_tail_steps": min_raw_tail_steps,
+            "session_window_context": session_window_context,
+            "summary_token_ratio": summary_token_ratio,
+            "retained_token_ratio": retained_token_ratio,
+            "reasoning_effort": reasoning_effort,
+        }
+        payload.update({key: value for key, value in optional.items() if value is not None})
+        if event_tags is not None:
+            payload["extraction_metadata"] = {"event": {"tags": event_tags}}
+        session_path = self._path_segment(session_id)
+        response = await self._request(
+            "POST",
+            f"/api/v1/sessions/{session_path}/commit",
+            json=payload,
+        )
+        return self._handle_response_data(response).get("result", {})
 
 
 class SyncHTTPClient(import_openviking_sdk().SyncHTTPClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._async_client = AsyncHTTPClient(*args, **kwargs)
+
+    def update_session_config(
+        self,
+        session_id: str,
+        *,
+        memory_extraction_config: Dict[str, Any] | None = None,
+        auto_commit_policy: Any = _SESSION_CONFIG_UNSET,
+        telemetry: Any = False,
+    ) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {
+            "memory_extraction_config": memory_extraction_config,
+            "telemetry": telemetry,
+        }
+        if auto_commit_policy is not _SESSION_CONFIG_UNSET:
+            kwargs["auto_commit_policy"] = auto_commit_policy
+        return run_async(self._async_client.update_session_config(session_id, **kwargs))
+
+    def commit_session(
+        self,
+        session_id: str,
+        telemetry: Any = False,
+        *,
+        keep_recent_count: int = 0,
+        enable_working_memory: bool | None = None,
+        retention_mode: str | None = None,
+        keep_recent_turn_count: int | None = None,
+        retained_message_token_budget: int | None = None,
+        min_raw_tail_steps: int | None = None,
+        session_window_context: int | None = None,
+        summary_token_ratio: float | None = None,
+        retained_token_ratio: float | None = None,
+        reasoning_effort: str | None = None,
+        event_tags: list[str] | None = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.commit_session(
+                session_id,
+                telemetry=telemetry,
+                keep_recent_count=keep_recent_count,
+                enable_working_memory=enable_working_memory,
+                retention_mode=retention_mode,
+                keep_recent_turn_count=keep_recent_turn_count,
+                retained_message_token_budget=retained_message_token_budget,
+                min_raw_tail_steps=min_raw_tail_steps,
+                session_window_context=session_window_context,
+                summary_token_ratio=summary_token_ratio,
+                retained_token_ratio=retained_token_ratio,
+                reasoning_effort=reasoning_effort,
+                event_tags=event_tags,
+            )
+        )

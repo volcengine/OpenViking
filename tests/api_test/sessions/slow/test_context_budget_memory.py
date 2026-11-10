@@ -278,31 +278,6 @@ class TestContextBudgetMemory:
             if session_id:
                 api_client.delete_session(session_id)
 
-    def test_session_used_increments_counters(self, api_client):
-        session_id = None
-        try:
-            create_resp = api_client.create_session()
-            assert create_resp.status_code == 200
-            session_id = create_resp.json()["result"]["session_id"]
-
-            used1 = api_client.session_used(session_id, contexts=["viking://resources/test1"])
-            assert used1.status_code == 200
-
-            used2 = api_client.session_used(session_id, contexts=["viking://resources/test2"])
-            assert used2.status_code == 200
-
-            get_resp = api_client.get_session(session_id)
-            assert get_resp.status_code == 200
-            result = get_resp.json().get("result", {})
-            contexts_used = result.get("contexts_used", 0)
-            if isinstance(contexts_used, int) and contexts_used > 0:
-                assert contexts_used >= 2, (
-                    f"contexts_used should be >= 2 after 2 used calls, got {contexts_used}"
-                )
-        finally:
-            if session_id:
-                api_client.delete_session(session_id)
-
     def test_llm_token_usage_structure(self, api_client):
         session_id = None
         try:

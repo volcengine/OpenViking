@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import httpx
 import pytest
 
-from openviking.parse.parsers.html import URLTypeDetector
+from openviking.parse.accessors.http_accessor import URLTypeDetector
 from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import PermissionDeniedError
 from tests.server.ovpack_test_helpers import build_ovpack_bytes
@@ -329,6 +329,27 @@ async def test_add_resource_rejects_private_git_ssh_url(client: httpx.AsyncClien
     body = resp.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "PERMISSION_DENIED"
+
+
+async def test_add_resource_rejects_unverifiable_remote_dns(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        "openviking.utils.network_guard._resolve_host_addresses",
+        lambda _host: set(),
+    )
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={"path": "http://new-host.example.com/doc.md", "reason": "ssrf probe"},
+    )
+
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert "could not be resolved" in body["error"]["message"]
 
 
 async def test_url_detector_request_validator_blocks_loopback_head(loopback_http_url: str):

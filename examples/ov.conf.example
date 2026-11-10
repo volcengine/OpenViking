@@ -1,9 +1,15 @@
 {
+    "service_name": "openviking-server",
     "server": {
         "host": "0.0.0.0",
         "port": 1933,
+        "executor_threads": 0,
+        "timeout_keep_alive": 5,
         "root_api_key": null,
         "cors_origins": ["*"],
+        "agent_evolution": {
+            "enabled": false,
+        },
         "observability": {
             "metrics": {
                 "enabled": true,
@@ -43,6 +49,17 @@
             },
         },
     },
+    "cache": {
+        "provider": "redis",
+        "params": {
+            "mode": "standalone",
+            "endpoints": ["redis://127.0.0.1:6379"],
+            "pool_size": 32,
+            "connect_timeout_ms": 1000,
+            "command_timeout_ms": 1000,
+            "default_ttl_seconds": 300,
+        },
+    },
     "storage": {
         "workspace": "./data",
         "vectordb": {
@@ -61,6 +78,28 @@
         "agfs": {
             "backend": "local",
             "timeout": 10,
+            "backups_example": {
+                "_comment": "Rename this key to backups to enable V2 multi-write.",
+                "initial_partitions": 16,
+                "checkpoint_interval_secs": 86400,
+                "reconcile_existing_data": false,
+                "provider": "cache",
+                "items": [{
+                    "name": "local-backup",
+                    "backend": "local",
+                    "params": {"workspace": "./data/backup"}
+                }]
+            },
+            "cachefs": {
+                "backend": "local",
+            },
+            "queuefs": {
+                "backend": "sqlite",
+            },
+            "pathlock": {
+                "provider": "filesystem",
+                "lock_expire_secs": 30.0
+            },
             "s3": {
                 "bucket": null,
                 "region": null,
@@ -73,6 +112,24 @@
                 "disable_batch_delete": false,
             },
         },
+    },
+    "queue_workers": {
+        "external_parse": {"max_concurrent": 4},
+        "add_resource": {
+            "max_concurrent": 4,
+            "file_vectorization_concurrency": 8
+        },
+        "session_commit": {"max_concurrent": 8},
+        "external_task": {"max_concurrent": 10},
+    },
+    "compile_api": {
+        "base_url": "",
+        "gateway_token": "",
+        "http_timeout_seconds": 10,
+        "poll_interval_ms": 3000,
+    },
+    "reindex": {
+        "file_vectorization_concurrency": 8
     },
     "embedding": {
         "dense": {
@@ -97,20 +154,49 @@
             "input": "text",
         },
     },
+    "embedding_volcengine_plan_example": {
+        "_comment": "For VolcEngine subscription plans instead of pay-as-you-go: Agent Plan uses api_base https://ark.cn-beijing.volces.com/api/plan/v3, Coding Plan uses https://ark.cn-beijing.volces.com/api/coding/v3. On BytePlus, the ModelArk Coding Plan uses https://ark.ap-southeast.bytepluses.com/api/coding/v3 with model skylark-embedding-vision.",
+        "dense": {
+            "model": "doubao-embedding-vision",
+            "api_key": "{your-api-key}",
+            "api_base": "https://ark.cn-beijing.volces.com/api/plan/v3",
+            "dimension": 1024,
+            "provider": "volcengine",
+            "input": "multimodal",
+        },
+    },
     "vlm": {
-        "model": "doubao-seed-2-0-pro-260215",
+        "model": "doubao-seed-2-0-lite-260428",
         "api_key": "{your-api-key}",
         "api_base": "https://ark.cn-beijing.volces.com/api/v3",
         "temperature": 0.0,
         "max_retries": 2,
         "provider": "volcengine",
         "thinking": false,
+        "_max_tokens_comment": "Optional output cap. Memory extraction needs ~32768 output tokens to avoid truncating a full memory-file rewrite; that default suits Doubao. If your model's max output is lower (e.g. gpt-4o-mini at 16384), set max_tokens to its limit here to override the extraction default.",
+        "media": {
+            "enabled": false,
+            "file_processing_timeout": 1800,
+            "file_poll_interval": 3,
+            "max_concurrent": 2,
+            "video_fps": 1.0,
+        },
+    },
+    "vlm_volcengine_plan_example": {
+        "_comment": "For VolcEngine subscription plans instead of pay-as-you-go: Agent Plan uses api_base https://ark.cn-beijing.volces.com/api/plan/v3, Coding Plan uses https://ark.cn-beijing.volces.com/api/coding/v3. On BytePlus, the ModelArk Coding Plan uses https://ark.ap-southeast.bytepluses.com/api/coding/v3 with model dola-seed-2.0-lite.",
+        "provider": "volcengine",
+        "model": "doubao-seed-2.1-lite",
+        "api_key": "{your-api-key}",
+        "api_base": "https://ark.cn-beijing.volces.com/api/plan/v3",
+        "temperature": 0.0,
+        "max_retries": 2,
     },
     "vlm_codex_example": {
         "_comment": "For Codex OAuth via subscription. Complete sign-in from `openviking-server init`. OV stores tokens in ~/.openviking/codex_auth.json and can bootstrap from an existing Codex CLI auth file if needed.",
         "provider": "openai-codex",
-        "model": "gpt-5.3-codex",
+        "model": "gpt-5.6-terra",
         "api_base": "https://chatgpt.com/backend-api/codex",
+        "reasoning_effort": "xhigh",
         "temperature": 0.0,
         "max_retries": 2,
     },
@@ -149,8 +235,37 @@
         "model": "qwen3-rerank",
         "threshold": 0.1,
     },
-    "retrieval": {"hotness_alpha": 0.0, "score_propagation_alpha": 1.0},
+    "rerank_jev_example": {
+        "_comment": "For direct Jev access through the TypeSafe System One API:",
+        "provider": "jev",
+        "api_key": "{your-typesafe-api-key}",
+        "model": "jev-latest",
+        "log_payloads": false,
+        "threshold": 0.1,
+    },
+    "rerank_jev_vercel_example": {
+        "_comment": "For Jev through Vercel AI Gateway (TypeSafe-compatible endpoint):",
+        "provider": "jev",
+        "api_key": "{your-vercel-ai-gateway-api-key}",
+        "api_base": "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
+        "model": "typesafe-ai/jev",
+        "threshold": 0.1,
+    },
+    "rules": {
+        "jev_rule_matcher": {
+            "provider": "typesafe",
+            "api_key": "{your-typesafe-api-key}",
+            "timeout": 30,
+            "log_payloads": false,
+        },
+        "scenario_irrelevance_threshold": 0.9,
+    },
+    "retrieval": {
+        "recall_intent_timeout_s": 5.0,
+        "recall_rewrite_timeout_s": 30.0,
+    },
     "grep": {"engine": "auto", "switch_to_remote_threshold": 10000},
+    "glob": {"engine": "fs", "switch_to_remote_threshold": 100},
     "auto_generate_l0": true,
     "auto_generate_l1": true,
     "default_search_mode": "thinking",
@@ -160,6 +275,8 @@
     "memory": {
         "version": "v2",
         "extraction_enabled": true,
+        "extraction_output_format": "python",
+        "maintenance_review_tokens": 1000,
         "session_skill_extraction_enabled": false,
     },
     "ingest": {
@@ -174,6 +291,18 @@
             "opencode": {"enabled": false, "mode": "watch", "experimental": true},
             "hermes": {"enabled": false, "mode": "both", "user_field": "sender"},
             "openclaw": {"enabled": false, "mode": "both", "user_field": "sender"},
+        },
+    },
+    "bot": {
+        "gateway": {
+            "host": "127.0.0.1",
+            "port": 18790,
+            "token": null,
+        },
+        "ov_server": {
+            "server_url": null,
+            "api_key_type": "user",
+            "api_key": null,
         },
     },
     "log": {
@@ -191,22 +320,27 @@
             "max_section_size": 4000,
             "section_size_flexibility": 0.3,
             "max_section_chars": 6000,
-            "mineru_endpoint": "https://mineru.example.com/api/v1",
-            "mineru_api_key": "{your-mineru-api-key}",
+            "mineru_endpoint": "http://127.0.0.1:8000",
             "mineru_timeout": 300.0,
+            "mineru_bodys": {
+                "backend": "hybrid-auto-engine",
+                "lang_list": ["ch"],
+                "parse_method": "auto"
+            },
         },
         "code": {
-            "code_summary_mode": "ast",
-            "extract_functions": true,
-            "extract_classes": true,
-            "extract_imports": true,
-            "include_comments": true,
-            "max_line_length": 1000,
-            "max_token_limit": 50000,
-            "truncation_strategy": "head",
-            "warn_on_truncation": true,
             "github_raw_domain": "raw.githubusercontent.com",
-            "code_hosting_domains": ["github.com", "gitlab.com"],
+            "code_hosting_domains": [
+                "github.com",
+                "gitlab.com",
+                "gitcode.com",
+                "gitee.com",
+                "bitbucket.org",
+                "codeberg.org",
+                "gitea.com",
+                "atomgit.com",
+                "git.sr.ht"
+            ],
             "github_domains": ["github.com", "www.github.com"],
             "gitlab_domains": ["gitlab.com", "www.gitlab.com"],
         },
@@ -215,7 +349,11 @@
             "enable_vlm": true,
             "ocr_lang": "eng",
             "vlm_model": "gpt-4-vision",
-            "max_dimension": 2048,
+            "preview_max_dimension": 2048,
+            "max_file_size_mb": 10.0,
+            "max_tile_dimension_px": 2048,
+            "tile_overlap_px": 2,
+            "large_image_threshold_dimension": 4096
         },
         "audio": {
             "enable_transcription": true,
@@ -235,6 +373,9 @@
             "extract_frontmatter": true,
             "include_metadata": true,
             "max_heading_depth": 3,
+        },
+        "anydoc": {
+            "enabled": true,
         },
         "html": {
             "extract_text_only": false,

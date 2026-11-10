@@ -5,6 +5,8 @@ import ast
 import re
 from typing import Any, Iterator
 
+import httpx
+
 from openviking.pyagfs.exceptions import (
     AGFSAlreadyExistsError,
     AGFSClientError,
@@ -21,41 +23,33 @@ from openviking.pyagfs.exceptions import (
     AGFSNetworkError,
     AGFSNotADirectoryError,
     AGFSNotFoundError,
+    AGFSNotSupportedError,
     AGFSPermissionDeniedError,
     AGFSPluginError,
+    AGFSResourceExhaustedError,
     AGFSSerializationError,
     AGFSTimeoutError,
     GitConcurrentCommitError,
 )
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.utils.exceptions import (
+    AllCredentialsFailedError,
+    error_code_from_http_status,
+)
 from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
+    InternalError,
     InvalidArgumentError,
     InvalidURIError,
     NotFoundError,
     OpenVikingError,
     PermissionDeniedError,
+    ResourceExhaustedError,
     UnavailableError,
+    UnimplementedError,
 )
 
-_UPSTREAM_HTTP_STATUS_TO_ERROR_CODE = {
-    400: "INVALID_ARGUMENT",
-    401: "UNAUTHENTICATED",
-    402: "RESOURCE_EXHAUSTED",
-    403: "PERMISSION_DENIED",
-    404: "NOT_FOUND",
-    408: "DEADLINE_EXCEEDED",
-    409: "CONFLICT",
-    422: "INVALID_ARGUMENT",
-    429: "RESOURCE_EXHAUSTED",
-    500: "UNAVAILABLE",
-    502: "UNAVAILABLE",
-    503: "UNAVAILABLE",
-    504: "DEADLINE_EXCEEDED",
-}
-
-_KNOWN_HTTP_STATUS_CODES = frozenset(_UPSTREAM_HTTP_STATUS_TO_ERROR_CODE)
 _UPSTREAM_ERROR_MARKERS = (
     "api error",
     "apierror",
@@ -105,7 +99,7 @@ _API_KEY_CONFIG_MARKERS = (
 _HTTP_STATUS_PATTERNS = (
     re.compile(r"\bHTTP\s*(\d{3})\b", re.IGNORECASE),
     re.compile(r"\bstatus(?:\s+code)?\s*[:=]?\s*(\d{3})\b", re.IGNORECASE),
-    re.compile(r"\berror\s+code\s*[:=]?\s*(\d{3})\b", re.IGNORECASE),
+    re.compile(r"\berror(?:\s+code)?\s*[:=]?\s*(\d{3})\b", re.IGNORECASE),
 )
 
 
@@ -282,20 +276,7 @@ def _extract_text_http_status(exc: Exception) -> int | None:
             status = _coerce_http_status(match.group(1))
             if status is not None:
                 return status
-    for status in _KNOWN_HTTP_STATUS_CODES:
-        if re.search(rf"\b{status}\b", text):
-            return status
     return None
-
-
-def _upstream_code_for_status(status: int) -> str:
-    if status in _UPSTREAM_HTTP_STATUS_TO_ERROR_CODE:
-        return _UPSTREAM_HTTP_STATUS_TO_ERROR_CODE[status]
-    if 400 <= status < 500:
-        return "INVALID_ARGUMENT"
-    if 500 <= status < 600:
-        return "UNAVAILABLE"
-    return "UNKNOWN"
 
 
 def _extract_vlm_info(exc: Exception | None) -> tuple[str | None, str | None]:
@@ -355,17 +336,39 @@ def _build_upstream_error(
 
 
 def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
-    if _is_model_api_key_configuration_error(exc):
-        return FailedPreconditionError(
-            "Model provider API key is not configured",
-            details={"reason": _trim_message(_exception_chain_text(exc))},
-        )
+    for item in _iter_exception_chain(exc):
+        if isinstance(item, AllCredentialsFailedError):
+            failures = [_map_upstream_api_error(error) for _, _, error, _ in item.errors]
+            codes = {failure.code if failure is not None else "INTERNAL" for failure in failures}
+            # A mixed failure has no single accurate status. Do not infer one
+            # from whichever credential happens to appear first in the message.
+            if len(codes) != 1 or "INTERNAL" in codes:
+                return InternalError(str(exc))
+            return _build_upstream_error(
+                code=codes.pop(),
+                message=_upstream_detail_message(exc),
+                source=item,
+                vlm_context=exc,
+            )
 
     status, source = _extract_structured_http_status(exc)
     if status is None:
+        for item in _iter_exception_chain(exc):
+            if isinstance(item, httpx.TimeoutException):
+                code = "DEADLINE_EXCEEDED"
+            elif isinstance(item, (httpx.NetworkError, httpx.RemoteProtocolError)):
+                code = "UNAVAILABLE"
+            else:
+                continue
+            return _build_upstream_error(
+                code=code,
+                message=_upstream_detail_message(exc),
+                source=item,
+                vlm_context=exc,
+            )
         status = _extract_text_http_status(exc)
     if status is not None:
-        code = _upstream_code_for_status(status)
+        code = error_code_from_http_status(status, default="UNKNOWN")
         if code == "UNKNOWN":
             return None
         return _build_upstream_error(
@@ -374,6 +377,12 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
             source=source,
             message=_upstream_detail_message(exc),
             vlm_context=exc,
+        )
+
+    if _is_model_api_key_configuration_error(exc):
+        return FailedPreconditionError(
+            "Model provider API key is not configured",
+            details={"reason": _trim_message(_exception_chain_text(exc))},
         )
 
     if not _looks_like_upstream_model_error(exc):
@@ -495,18 +504,12 @@ def map_exception(
         return PermissionDeniedError(str(exc), resource=resource)
     if isinstance(exc, FileNotFoundError):
         return _not_found_error(resource, resource_type)
-    if _is_model_api_key_configuration_error(exc):
-        return FailedPreconditionError(
-            "Model provider API key is not configured",
-            details={"reason": _trim_message(_exception_chain_text(exc))},
-        )
     if isinstance(exc, ValueError):
+        if _is_model_api_key_configuration_error(exc):
+            return _map_upstream_api_error(exc)
         message = str(exc)
         if is_invalid_uri_error(exc):
             return InvalidURIError(resource or message, message)
-        if "not a directory" in message.lower():
-            details = {"resource": resource} if resource else None
-            return FailedPreconditionError(message, details=details)
         return InvalidArgumentError(message, details={"resource": resource} if resource else None)
     if isinstance(exc, (AGFSConnectionError, AGFSTimeoutError)):
         return UnavailableError("storage backend", reason=str(exc))
@@ -527,26 +530,30 @@ def map_exception(
         return PermissionDeniedError(str(exc), resource=resource)
     if isinstance(exc, AGFSAlreadyExistsError):
         return ConflictError(str(exc), resource=resource)
+    if isinstance(exc, AGFSNotSupportedError):
+        return UnimplementedError(str(exc), details=_resource_details(resource))
     if isinstance(exc, AGFSInvalidPathError):
         message = str(exc)
         return InvalidURIError(resource or message, message)
-    if isinstance(exc, AGFSNotADirectoryError):
-        return FailedPreconditionError(str(exc), details=_resource_details(resource))
-    if isinstance(exc, AGFSIsADirectoryError):
+    if isinstance(exc, (AGFSNotADirectoryError, NotADirectoryError)):
+        return InvalidArgumentError(str(exc), details=_resource_details(resource))
+    if isinstance(exc, (AGFSIsADirectoryError, IsADirectoryError)):
         return InvalidArgumentError(str(exc), details=_file_directory_details(resource))
     if isinstance(exc, AGFSDirectoryNotEmptyError):
-        return FailedPreconditionError(str(exc), details=_resource_details(resource))
+        return InvalidArgumentError(str(exc), details=_resource_details(resource))
+    if isinstance(exc, AGFSResourceExhaustedError):
+        return ResourceExhaustedError(str(exc), details=_resource_details(resource))
     if isinstance(exc, AGFSInvalidOperationError):
         return InvalidArgumentError(str(exc), details=_resource_details(resource))
+    if isinstance(exc, AGFSInternalError):
+        return InternalError(str(exc))
     if isinstance(
         exc,
         (
             AGFSConfigError,
-            AGFSInternalError,
             AGFSIoError,
             AGFSMountPointNotFoundError,
             AGFSNetworkError,
-            AGFSPluginError,
             AGFSSerializationError,
         ),
     ):
@@ -559,11 +566,11 @@ def map_exception(
             return InvalidURIError(resource or message, message)
         lowered = message.lower()
         if "not a directory" in lowered:
-            return FailedPreconditionError(message, details=_resource_details(resource))
+            return InvalidArgumentError(message, details=_resource_details(resource))
         if "is a directory" in lowered:
             return InvalidArgumentError(message, details=_resource_details(resource))
         if "directory not empty" in lowered:
-            return FailedPreconditionError(message, details=_resource_details(resource))
+            return InvalidArgumentError(message, details=_resource_details(resource))
         if "permission denied" in lowered:
             return PermissionDeniedError(message, resource=resource)
         if "already exists" in lowered:
@@ -574,7 +581,11 @@ def map_exception(
             or "invalid regular expression" in lowered
         ):
             return InvalidArgumentError(message, details=_resource_details(resource))
-        if "timeout" in lowered or "connection refused" in lowered:
+        if (
+            isinstance(exc, AGFSPluginError)
+            or "timeout" in lowered
+            or "connection refused" in lowered
+        ):
             return UnavailableError("storage backend", reason=message)
     upstream_mapped = _map_upstream_api_error(exc)
     if upstream_mapped is not None:

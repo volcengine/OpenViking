@@ -6,12 +6,23 @@ LiteLLM Rerank API Client.
 
 # For logging, use Python's built-in logging
 import time
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from openviking.models.rerank.base import RerankBase
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+def _result_field(item: Any, name: str, default: Any = None) -> Any:
+    """Read a field from a litellm rerank result item.
+
+    LiteLLM returns result items as objects for some providers (e.g. Cohere)
+    and as plain dicts for others (e.g. Voyage), so support both shapes.
+    """
+    if isinstance(item, dict):
+        return item.get(name, default)
+    return getattr(item, name, default)
 
 
 class LiteLLMRerankClient(RerankBase):
@@ -56,7 +67,7 @@ class LiteLLMRerankClient(RerankBase):
             response = litellm.rerank(
                 model=self.model_name,
                 query=query,
-                documents=[{"text": d} for d in documents],
+                documents=documents,
                 api_key=self.api_key,
                 api_base=self.api_base,
             )
@@ -86,7 +97,7 @@ class LiteLLMRerankClient(RerankBase):
                 return None
 
             for item in results:
-                idx = getattr(item, "index", None)
+                idx = _result_field(item, "index")
                 if idx is None or not (0 <= idx < len(documents)):
                     logger.warning(
                         "[LiteLLMRerankClient] Out-of-bounds or missing index in result: %s", item
@@ -94,8 +105,8 @@ class LiteLLMRerankClient(RerankBase):
                     return None
 
             # Results may not be in original order — sort by index
-            sorted_results = sorted(results, key=lambda x: x.index)
-            scores = [getattr(item, "relevance_score", 0.0) for item in sorted_results]
+            sorted_results = sorted(results, key=lambda x: _result_field(x, "index"))
+            scores = [_result_field(item, "relevance_score", 0.0) for item in sorted_results]
 
             logger.debug(f"[LiteLLMRerankClient] Reranked {len(documents)} documents")
             return scores

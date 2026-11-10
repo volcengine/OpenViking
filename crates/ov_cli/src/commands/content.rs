@@ -1,19 +1,21 @@
 use crate::client::HttpClient;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::output::OutputFormat;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
-use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
+/// Print the requested line range; propagate request and output errors to the CLI.
 pub async fn read(
     client: &HttpClient,
     uri: &str,
+    offset: i64,
+    limit: i64,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let content = client.read_profiled(uri).await?;
+    let content = client.read_profiled(uri, offset, limit).await?;
     output_content_result(content, output_format, compact)
 }
 
@@ -43,11 +45,27 @@ pub async fn write(
     content: &str,
     mode: &str,
     wait: bool,
-    timeout: Option<f64>,
+    processing_mode: &str,
+    tags: Vec<String>,
+    tag_mode: &str,
+    acl: Option<serde_json::Value>,
+    edit_source: &str,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.write(uri, content, mode, wait, timeout).await?;
+    let result = client
+        .write(
+            uri,
+            content,
+            mode,
+            wait,
+            processing_mode,
+            tags,
+            tag_mode,
+            acl,
+            edit_source,
+        )
+        .await?;
     crate::output::output_success(result, output_format, compact);
     Ok(())
 }
@@ -72,10 +90,16 @@ pub async fn reindex(
     uri: &str,
     mode: &str,
     wait: bool,
+    force: bool,
+    tags: Vec<String>,
+    tag_mode: &str,
+    recursive: bool,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.reindex(uri, mode, wait).await?;
+    let result = client
+        .reindex(uri, mode, wait, force, tags, tag_mode, recursive)
+        .await?;
     crate::output::output_success(result, output_format, compact);
     Ok(())
 }
@@ -99,7 +123,7 @@ pub async fn get(client: &HttpClient, uri: &str, local_path: &str) -> Result<()>
     let bytes = client.get_bytes(uri).await?;
 
     // Write to local file
-    let mut file = File::create(path)?;
+    let mut file = create_download_target(path, local_path)?;
     file.write_all(&bytes)?;
     file.flush()?;
 
@@ -107,7 +131,29 @@ pub async fn get(client: &HttpClient, uri: &str, local_path: &str) -> Result<()>
     Ok(())
 }
 
+fn create_download_target(path: &Path, local_path: &str) -> Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                crate::error::Error::Client(format!("File already exists: {local_path}"))
+            } else {
+                crate::error::Error::Io(error)
+            }
+        })
+}
+
 fn output_content_result(result: Value, output_format: OutputFormat, compact: bool) -> Result<()> {
+    if let Some(is_error) = crate::output::output_tool_result(&result, output_format, compact) {
+        return if is_error {
+            Err(Error::AlreadyReported)
+        } else {
+            Ok(())
+        };
+    }
+
     match output_format {
         OutputFormat::Json => crate::output::output_success(result, output_format, compact),
         OutputFormat::Table => {
@@ -192,6 +238,7 @@ fn render_set_tags_result_for_table(result: &Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::error::Error;
     use serde_json::json;
 
     fn strip_ansi(input: &str) -> String {
@@ -269,6 +316,22 @@ mod tests {
                 .join("\n")
                     + "\n"
             )
+        );
+    }
+
+    #[test]
+    fn download_target_creation_does_not_truncate_an_existing_file() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("result.bin");
+        std::fs::write(&path, b"existing").expect("fixture should be written");
+
+        let error = super::create_download_target(&path, &path.to_string_lossy())
+            .expect_err("existing targets must be rejected atomically");
+
+        assert!(matches!(error, Error::Client(_)));
+        assert_eq!(
+            std::fs::read(&path).expect("existing file should remain readable"),
+            b"existing"
         );
     }
 }

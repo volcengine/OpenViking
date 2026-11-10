@@ -58,20 +58,30 @@ class TestPageIdMap:
         assert pim.resolve(existing_id) == "viking://profile.md"
         assert pim.resolve(100) == "viking://profile.md"
 
-    def test_has_links_enabled_after_existing_page_registration(self):
+    def test_response_allocator_normalizes_low_requested_id(self):
         pim = PageIdMap()
+        pim.get_page_id("viking://user/a/memories/profile.md")
+        allocator = pim.new_page_id_allocator()
 
-        assert not pim.has_links_enabled
+        assert allocator.allocate(1) == 100
 
-        pim.get_page_id("viking://test")
-
-        assert pim.has_links_enabled
-
-    def test_has_links_enabled_after_new_page_id_registration(self):
+    def test_response_allocator_preserves_available_new_id(self):
         pim = PageIdMap()
+        allocator = pim.new_page_id_allocator()
 
-        assert not pim.has_links_enabled
+        assert allocator.allocate(105) == 105
+        assert allocator.allocate(105) == 100
 
+    def test_response_allocator_skips_registered_and_allocated_ids(self):
+        pim = PageIdMap()
         pim.register_new_page_id("viking://new-item", 100)
+        allocator = pim.new_page_id_allocator()
 
-        assert pim.has_links_enabled
+        assert allocator.allocate(None) == 101
+        assert allocator.allocate(None) == 102
+
+    def test_new_response_can_reuse_unregistered_page_id(self):
+        pim = PageIdMap()
+
+        assert pim.new_page_id_allocator().allocate(100) == 100
+        assert pim.new_page_id_allocator().allocate(100) == 100

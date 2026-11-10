@@ -455,7 +455,7 @@ describe("Tool: memory_store (behavioral)", () => {
     expect(store!.description).toContain("threshold/commit dependent");
   });
 
-  it("uses requesterSenderId to populate role_id for user writes", async () => {
+  it("uses requesterSenderId to populate peer_id for user writes", async () => {
     const openVikingTransport = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith("/api/v1/system/status")) {
         return okResponse({ user: "default" });
@@ -473,7 +473,7 @@ describe("Tool: memory_store (behavioral)", () => {
       return okResponse({});
     });
 
-    const { factoryTools, api } = setupPlugin();
+    const { factoryTools, api } = setupPlugin(undefined, { peer_role: "sender" });
     (api as any).openVikingTransport = openVikingTransport;
     contextEnginePlugin.register(api as any);
     const factory = factoryTools.get("memory_store");
@@ -494,7 +494,85 @@ describe("Tool: memory_store (behavioral)", () => {
     const [, init] = messageCall as [string, RequestInit];
     const body = JSON.parse(String(init.body));
     expect(body.role).toBe("user");
-    expect(body.role_id).toBe("wx_user-01_abc");
+    expect(body.peer_id).toBe("wx_user-01_abc");
+    expect(body).not.toHaveProperty("role_id");
+  });
+
+  it("shows commit trace_id in the memory_store success result", async () => {
+    const openVikingTransport = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-trace" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({
+          status: "completed",
+          archived: true,
+          memories_extracted: { core: 1 },
+          trace_id: "trace-memory-store",
+        });
+      }
+      return okResponse({});
+    });
+
+    const { factoryTools, api } = setupPlugin();
+    (api as any).openVikingTransport = openVikingTransport;
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_store")!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("tc-memory-store", { text: "remember this trace" });
+
+    expect(result.content[0].text).toContain("trace_id=trace-memory-store");
+    expect(result.details).toMatchObject({ traceId: "trace-memory-store" });
+  });
+
+  it("returns a tool-visible failure when commit extracts zero memories", async () => {
+    const openVikingTransport = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-1" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({
+          status: "completed",
+          archived: true,
+          memories_extracted: {},
+          trace_id: "trace-zero",
+        });
+      }
+      return okResponse({});
+    });
+
+    const { factoryTools, api } = setupPlugin();
+    (api as any).openVikingTransport = openVikingTransport;
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_store")!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("tc-memory-store-zero", {
+      text: "Remember this important thing",
+    });
+
+    expect(result.content[0].text).toContain("created or updated no memory");
+    expect(result.content[0].text).toContain("no new memory was created");
+    expect(result.content[0].text).toContain("trace_id=trace-zero");
+    expect(result.content[0].text).not.toContain("Stored");
+    expect(result.details).toMatchObject({
+      action: "failed",
+      error: "no_memories_extracted",
+      memoriesCount: 0,
+      archived: true,
+      traceId: "trace-zero",
+    });
   });
 
   it("uses a temporary session by default instead of the current tool session", async () => {
@@ -633,7 +711,7 @@ describe("Tool: OpenViking tool result access", () => {
         total_chars: 42,
         has_more: true,
         metadata: {
-          storage_uri: "viking://session/test-session/tool-results/tr_call_abc",
+          storage_uri: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
           tool_name: "read_file",
         },
       });
@@ -645,7 +723,7 @@ describe("Tool: OpenViking tool result access", () => {
     const tool = tools.get("openviking_tool_result_read")!;
 
     const result = await tool.execute("tc-read", {
-      tool_output_ref: "viking://session/test-session/tool-results/tr_call_abc",
+      tool_output_ref: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
       offset: 5,
       limit: 10,
     }) as ToolResult;
@@ -653,7 +731,7 @@ describe("Tool: OpenViking tool result access", () => {
     expect(result.content[0]!.text).toBe("raw");
     expect(result.details).toMatchObject({
       action: "read",
-      tool_output_ref: "viking://session/test-session/tool-results/tr_call_abc",
+      tool_output_ref: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
       tool_result_id: "tr_call_abc",
       offset: 5,
       limit: 10,
@@ -688,7 +766,7 @@ describe("Tool: OpenViking tool result access", () => {
     const tool = tools.get("openviking_tool_result_search")!;
 
     const result = await tool.execute("tc-search", {
-      tool_output_ref: "viking://session/test-session/tool-results/tr_call_abc",
+      tool_output_ref: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
       query: "needle",
       limit: 2,
       context_chars: 15,
@@ -699,7 +777,7 @@ describe("Tool: OpenViking tool result access", () => {
     expect(result.content[0]!.text).toContain("hay needle stack");
     expect(result.details).toMatchObject({
       action: "searched",
-      tool_output_ref: "viking://session/test-session/tool-results/tr_call_abc",
+      tool_output_ref: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
       tool_result_id: "tr_call_abc",
       query: "needle",
       match_count: 1,
@@ -715,7 +793,7 @@ describe("Tool: OpenViking tool result access", () => {
         tool_results: [
           {
             tool_result_id: "tr_call_abc",
-            storage_uri: "viking://session/test-session/tool-results/tr_call_abc",
+            storage_uri: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
             tool_name: "read_file",
             original_chars: 42000,
             created_at: "2026-05-15T00:00:00Z",
@@ -736,7 +814,7 @@ describe("Tool: OpenViking tool result access", () => {
 
     expect(result.content[0]!.text).toContain("read_file");
     expect(result.content[0]!.text).toContain("original_chars=42000");
-    expect(result.content[0]!.text).toContain("viking://session/test-session/tool-results/tr_call_abc");
+    expect(result.content[0]!.text).toContain("viking://user/default/sessions/test-session/tool-results/tr_call_abc");
     expect(result.details).toMatchObject({
       action: "listed",
       session_id: "test-session",
@@ -751,7 +829,7 @@ describe("Tool: OpenViking tool result access", () => {
     const tool = tools.get("openviking_tool_result_read")!;
 
     const result = await tool.execute("tc-read", {
-      tool_output_ref: "viking://session/other-session/tool-results/tr_call_abc",
+      tool_output_ref: "viking://user/default/sessions/other-session/tool-results/tr_call_abc",
     }) as ToolResult;
 
     expect(result.content[0]!.text).toContain("another session");
@@ -797,7 +875,7 @@ describe("Tool: add_resource, add_skill, and ov_search (registration)", () => {
     expect(props).toHaveProperty("source");
     expect(props).toHaveProperty("data");
     expect(props).toHaveProperty("wait");
-    expect(props).toHaveProperty("timeout");
+    expect(props).not.toHaveProperty("timeout");
     expect(props).not.toHaveProperty("to");
     expect(props).not.toHaveProperty("parent");
   });
@@ -875,7 +953,6 @@ describe("Tool: ov_search (behavioral)", () => {
                 score: 0.82,
                 category: "",
                 match_reason: "",
-                relations: [],
                 abstract: "OpenViking install guide",
                 overview: null,
               },
@@ -895,7 +972,6 @@ describe("Tool: ov_search (behavioral)", () => {
               score: 0.7,
               category: "",
               match_reason: "",
-              relations: [],
               abstract: "Install OpenViking memory integration",
               overview: null,
             },
@@ -926,7 +1002,7 @@ describe("Tool: ov_search (behavioral)", () => {
       .filter((call) => String(call[0]).endsWith("/api/v1/search/find"))
       .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
     expect(findBodies.some((body) => body.target_uri === "viking://resources")).toBe(true);
-    expect(findBodies.some((body) => String(body.target_uri).startsWith("viking://user/") && String(body.target_uri).endsWith("/skills"))).toBe(true);
+    expect(findBodies.some((body) => String(body.target_uri) === "viking://~/skills")).toBe(true);
   });
 
   it("returns partial results when one default scope search fails", async () => {
@@ -950,7 +1026,6 @@ describe("Tool: ov_search (behavioral)", () => {
                 score: 0.82,
                 category: "",
                 match_reason: "",
-                relations: [],
                 abstract: "OpenViking install guide",
                 overview: null,
               },
@@ -987,7 +1062,6 @@ describe("Tool: ov_search (behavioral)", () => {
               score: 0.91,
               category: "preferences",
               match_reason: "",
-              relations: [],
               abstract: "User prefers dark theme",
               overview: null,
             },
@@ -1170,7 +1244,6 @@ describe("Tool: ov_search (behavioral)", () => {
                 score: 0.92,
                 category: "",
                 match_reason: "",
-                relations: [],
                 abstract: "OpenCompass evaluation details",
                 overview: null,
               },
@@ -1211,7 +1284,6 @@ describe("Tool: ov_search (behavioral)", () => {
               score: 0.88,
               category: "",
               match_reason: "",
-              relations: [],
               abstract: "Runtime default search result",
               overview: null,
             },
@@ -1311,14 +1383,6 @@ describe("OpenViking import command parsing", () => {
     expect(() =>
       parseAddResourceCommandArgs("./README.md --to viking://resources/a --parent viking://resources"),
     ).toThrow("Cannot specify both");
-  });
-
-  it("parses add-skill flags", () => {
-    expect(parseAddSkillCommandArgs("./skills/demo --wait --timeout=30")).toMatchObject({
-      source: "./skills/demo",
-      wait: true,
-      timeout: 30,
-    });
   });
 
   it("rejects resource-only flags for skill imports", () => {
@@ -1957,7 +2021,7 @@ describe("Tool: ov_recall_trace", () => {
         return okResponse({
           matches: [{
             line: 12,
-            uri: "viking://session/test-session/history/archive_001#L12",
+            uri: "viking://user/default/sessions/test-session/history/archive_001#L12",
             content: "discussion about recall traces",
           }],
           count: 1,
@@ -1981,16 +2045,16 @@ describe("Tool: ov_recall_trace", () => {
     const entry = (result.details.entries as any[])[0];
     expect(entry.operationType).toBe("archive_grep");
     expect(entry.selected).toEqual(expect.arrayContaining([
-      expect.objectContaining({ uri: "viking://session/test-session/history/archive_001#L12", displayed: true }),
+      expect.objectContaining({ uri: "viking://user/default/sessions/test-session/history/archive_001#L12", displayed: true }),
     ]));
   });
 });
 
 describe("Plugin registration", () => {
-  it("registers all 14 default tools", () => {
+  it("registers all 15 default tools", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    expect(api.registerTool).toHaveBeenCalledTimes(14);
+    expect(api.registerTool).toHaveBeenCalledTimes(15);
   });
 
   it("registers only resource query tools when enabledTools is resource_query", () => {
@@ -2070,7 +2134,7 @@ describe("Plugin registration", () => {
       return okResponse({});
     });
 
-    const { commands, api } = setupPlugin();
+    const { commands, api } = setupPlugin(undefined, { peer_role: "assistant" });
     (api as any).openVikingTransport = openVikingTransport;
     contextEnginePlugin.register(api as any);
 
@@ -2087,7 +2151,7 @@ describe("Plugin registration", () => {
     expect(headers.get("X-OpenViking-Actor-Peer")).toBe("worker");
   });
 
-  it("search command propagates configured tenant headers", async () => {
+  it("search command omits actor peer identity with the default memory scope", async () => {
     const openVikingTransport = vi.fn(async (url: string) => {
       if (url.endsWith("/api/v1/search/find")) {
         return okResponse({ memories: [], resources: [], skills: [], total: 0 });
@@ -2096,6 +2160,31 @@ describe("Plugin registration", () => {
     });
 
     const { commands, api } = setupPlugin();
+    (api as any).openVikingTransport = openVikingTransport;
+    contextEnginePlugin.register(api as any);
+
+    await commands.get("ov-search")!.handler({
+      args: "test query --uri viking://resources",
+      commandBody: "/ov-search",
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:session-1",
+    });
+
+    const [, init] = openVikingTransport.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/search/find")) as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-OpenViking-Actor-Peer")).toBeNull();
+  });
+
+  it("search command propagates configured tenant headers", async () => {
+    const openVikingTransport = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/search/find")) {
+        return okResponse({ memories: [], resources: [], skills: [], total: 0 });
+      }
+      return okResponse({});
+    });
+
+    const { commands, api } = setupPlugin(undefined, { peer_role: "assistant" });
     (api as any).openVikingTransport = openVikingTransport;
     api.pluginConfig = {
       ...api.pluginConfig,
@@ -2193,7 +2282,6 @@ describe("Plugin registration", () => {
     const result = await tool.execute("tc-add-skill", {
       data: "name: demo\n",
       wait: true,
-      timeout: 30,
     }) as ToolResult;
 
     expect(result.content[0]!.text).toContain("Imported OpenViking skill");
@@ -2203,7 +2291,6 @@ describe("Plugin registration", () => {
     expect(body).toMatchObject({
       data: "name: demo\n",
       wait: true,
-      timeout: 30,
     });
   });
 

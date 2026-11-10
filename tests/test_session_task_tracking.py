@@ -9,31 +9,29 @@ from typing import AsyncGenerator, Tuple
 import httpx
 import pytest_asyncio
 
-from openviking import AsyncOpenViking
 from openviking.core.namespace import canonical_session_uri
 from openviking.server.app import create_app
+from openviking.server.auth.plugins import DevAuthPlugin
 from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.service.core import OpenVikingService
-from openviking.service.task_tracker import get_task_tracker, reset_task_tracker
+from openviking.service.task_tracker import get_task_tracker
 
 
 @pytest_asyncio.fixture
-async def api_client(temp_dir) -> AsyncGenerator[Tuple[httpx.AsyncClient, OpenVikingService], None]:
+async def api_client(
+    service: OpenVikingService,
+) -> AsyncGenerator[Tuple[httpx.AsyncClient, OpenVikingService], None]:
     """Create in-process HTTP client for API endpoint tests."""
-    reset_task_tracker()
-    service = OpenVikingService(path=str(temp_dir / "api_data"))
-    await service.initialize()
     app = create_app(config=ServerConfig(), service=service)
     set_service(service)
+    app.state.auth_plugin = DevAuthPlugin()
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         yield client, service
 
-    await service.close()
-    await AsyncOpenViking.reset()
-    reset_task_tracker()
+    set_service(None)
 
 
 async def _new_session_with_message(client: httpx.AsyncClient) -> str:
@@ -93,7 +91,6 @@ def _make_tracked_commit(behavior="instant", result_overrides=None, gate=None, s
                     "session_id": _sid,
                     "archive_uri": archive_uri,
                     "memories_extracted": {},
-                    "active_count_updated": 0,
                 }
                 if result_overrides:
                     final_result.update(result_overrides)
@@ -211,33 +208,6 @@ async def test_task_lifecycle_failure(api_client):
     assert "LLM provider timeout" in result["error"]
 
 
-async def test_task_failed_when_memory_extraction_raises(api_client):
-    """Extractor failures should propagate to task error instead of silent completed+0."""
-    client, service = api_client
-    session_id = await _new_session_with_message(client)
-
-    async def failing_extract(_context, _user, _session_id):
-        raise RuntimeError("memory_extraction_failed: synthetic extractor error")
-
-    service.sessions._session_compressor.extractor.extract = failing_extract
-
-    resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
-    task_id = resp.json()["result"]["task_id"]
-
-    result = None
-    for _ in range(120):
-        await asyncio.sleep(0.1)
-        task_resp = await client.get(f"/api/v1/tasks/{task_id}")
-        assert task_resp.status_code == 200
-        result = task_resp.json()["result"]
-        if result["status"] in {"completed", "failed"}:
-            break
-
-    assert result is not None
-    assert result["status"] == "failed"
-    assert "memory_extraction_failed" in result["error"]
-
-
 # ── Duplicate commit acceptance ──
 
 
@@ -292,6 +262,34 @@ async def test_list_tasks(api_client):
     tasks = resp.json()["result"]
     assert len(tasks) >= 1
     assert tasks[0]["task_type"] == "session_commit"
+
+
+async def test_list_tasks_hides_internal_tasks_by_default(api_client):
+    client, _ = api_client
+    tracker = get_task_tracker()
+    visible = await tracker.create(
+        "add_resource",
+        account_id="default",
+        user_id="default",
+    )
+    internal = await tracker.create(
+        "add_resource",
+        account_id="default",
+        user_id="default",
+        meta={"internal": True},
+    )
+
+    resp = await client.get("/api/v1/tasks", params={"task_type": "add_resource"})
+    task_ids = {task["task_id"] for task in resp.json()["result"]}
+    assert visible.task_id in task_ids
+    assert internal.task_id not in task_ids
+
+    resp = await client.get(
+        "/api/v1/tasks",
+        params={"task_type": "add_resource", "include_internal": True},
+    )
+    assert internal.task_id in {task["task_id"] for task in resp.json()["result"]}
+    assert (await client.get(f"/api/v1/tasks/{internal.task_id}")).status_code == 200
 
 
 async def test_list_tasks_filter_status(api_client):

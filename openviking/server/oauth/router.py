@@ -34,7 +34,7 @@ from pydantic import AnyHttpUrl, BaseModel, Field
 
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext
-from openviking.server.oauth.provider import OpenVikingOAuthProvider
+from openviking.server.oauth.provider import MCP_SCOPE, OpenVikingOAuthProvider
 from openviking.server.oauth.storage import OAuthStore
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -237,7 +237,7 @@ async def oauth_protected_resource(request: Request) -> JSONResponse:
     metadata = ProtectedResourceMetadata(
         resource=AnyHttpUrl(resource),
         authorization_servers=[AnyHttpUrl(issuer)],
-        scopes_supported=["mcp"],
+        scopes_supported=[MCP_SCOPE],
         bearer_methods_supported=["header"],
         resource_name="OpenViking MCP",
     )
@@ -473,10 +473,10 @@ async def oauth_verify(
     # If the verifier has no resolvable key (ROOT, trusted-mode requester
     # without a real key), refuse to mint OAuth: there's no key to bind to,
     # so we cannot honor the "OAuth lifetime ≤ key lifetime" invariant.
-    api_key_manager = getattr(request.app.state, "api_key_manager", None)
+    manager = getattr(request.app.state, "api_key_manager", None)
     verifier_fp: Optional[str] = None
-    if api_key_manager is not None and hasattr(api_key_manager, "get_user_key_fingerprint"):
-        verifier_fp = api_key_manager.get_user_key_fingerprint(
+    if manager is not None:
+        verifier_fp = await manager.get_user_key_fingerprint(
             ctx.user.account_id, ctx.user.user_id
         )
     if not verifier_fp:

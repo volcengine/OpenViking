@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { useData, withBase } from 'vitepress'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { hasPageLlmsTxt } from './llms-txt'
+import { trackEvent } from './track'
 
 const { frontmatter, page } = useData()
 
@@ -32,9 +34,10 @@ const items = computed(() => {
 })
 
 async function copyToClipboard() {
-  const md: string = frontmatter.value._rawMarkdown ?? ''
+  const md = decodeURIComponent(frontmatter.value._rawMarkdownEncoded ?? '')
   if (!md) return
   await navigator.clipboard.writeText(md)
+  trackEvent('copy-markdown')
   copied.value = true
   setTimeout(() => { copied.value = false }, 2000)
 }
@@ -58,7 +61,7 @@ function onOutsideClick(e: MouseEvent) {
 onMounted(() => document.addEventListener('click', onOutsideClick))
 onBeforeUnmount(() => document.removeEventListener('click', onOutsideClick))
 
-const isDoc = computed(() => page.value.relativePath !== 'index.md')
+const isDoc = computed(() => hasPageLlmsTxt(page.value.relativePath))
 </script>
 
 <template>

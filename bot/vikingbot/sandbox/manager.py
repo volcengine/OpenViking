@@ -2,14 +2,13 @@
 
 import asyncio
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-from openviking.async_client import logger
-from vikingbot.sandbox.base import SandboxBackend, SandboxDisabledError, UnsupportedBackendError
+from loguru import logger
+
+from vikingbot.config.schema import Config, SessionKey
 from vikingbot.sandbox.backends import get_backend
-
-
-from vikingbot.config.schema import SandboxConfig, SessionKey, Config
+from vikingbot.sandbox.base import SandboxBackend, UnsupportedBackendError
+from vikingbot.utils.session_paths import resolve_workspace_path, workspace_name
 
 
 class SandboxManager:
@@ -18,10 +17,19 @@ class SandboxManager:
     COPY_BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
 
     def __init__(self, config: Config, sandbox_parent_path: Path, source_workspace_path: Path):
+        from vikingbot.agent.remote_skill_cache import RemoteSkillSnapshotCache
+
         self.config = config
         self.workspace = sandbox_parent_path
         self.source_workspace = source_workspace_path
         self._sandboxes: dict[str, SandboxBackend] = {}
+        self._create_lock = asyncio.Lock()
+        self.remote_skill_cache = (
+            RemoteSkillSnapshotCache(config)
+            if getattr(config, "remote_skills", None) is not None
+            and getattr(config, "bot_data_path", None) is not None
+            else None
+        )
         backend_cls = get_backend(config.sandbox.backend)
         if not backend_cls:
             raise UnsupportedBackendError(f"Unknown sandbox backend: {config.backend}")
@@ -33,30 +41,70 @@ class SandboxManager:
     async def _get_or_create_sandbox(self, session_key: SessionKey) -> SandboxBackend:
         """Get or create session-specific sandbox."""
         workspace_id = self.to_workspace_id(session_key)
-        if workspace_id not in self._sandboxes:
-            sandbox = await self._create_sandbox(workspace_id)
-            self._sandboxes[workspace_id] = sandbox
-        return self._sandboxes[workspace_id]
+        async with self._create_lock:
+            sandbox = self._sandboxes.get(workspace_id)
+            if sandbox is not None and self.config.sandbox.backend == "opensandbox":
+                if not await sandbox.is_healthy():
+                    await self.cleanup_session(session_key)
+                    sandbox = None
+            if sandbox is None:
+                sandbox = await self._create_sandbox(
+                    workspace_id,
+                    self.get_workspace_path(session_key),
+                )
+                self._sandboxes[workspace_id] = sandbox
+            return sandbox
 
-    async def _create_sandbox(self, workspace_id: str) -> SandboxBackend:
+    async def _create_sandbox(self, workspace_id: str, workspace: Path) -> SandboxBackend:
         """Create new sandbox instance."""
-        workspace = self.workspace / workspace_id
-        instance = self._backend_cls(self.config.sandbox, workspace_id, workspace)
+        backend_options = {}
+        managed = self.config.uses_managed_opensandbox
+        if managed:
+            root = self.config.opensandbox_workspaces_path
+            # Never mount credentials, the parent runtime directory, or a symlink escape.
+            if root.is_symlink() or workspace.resolve() == root.resolve():
+                raise ValueError("Invalid OpenSandbox host workspace")
+            if not workspace.resolve().is_relative_to(root.resolve()):
+                raise ValueError(
+                    "OpenSandbox host workspace must be under its workspaces directory"
+                )
+            backend_options["host_workspace"] = workspace
+        instance = self._backend_cls(
+            self.config.sandbox, workspace_id, workspace, **backend_options
+        )
+        needs_bootstrap = not workspace.exists()
         try:
+            if needs_bootstrap and self.config.sandbox.backend == "opensandbox":
+                await self._copy_bootstrap_files(workspace)
             await instance.start()
-        except Exception as e:
-            import traceback
-
-            traceback.print_exc()
-        if not workspace.exists():
-            await self._copy_bootstrap_files(workspace)
+            if not workspace.exists():
+                await self._copy_bootstrap_files(workspace)
+            if self.config.sandbox.backend == "opensandbox" and not managed:
+                # External services have no local mount; upload bootstrap inputs via APIs.
+                for name in [*self.COPY_BOOTSTRAP_FILES, "skills"]:
+                    root = workspace / name
+                    paths = root.rglob("*") if root.is_dir() else [root]
+                    for path in paths:
+                        if path.is_file() and not path.is_symlink():
+                            if path.resolve().is_relative_to(workspace.resolve()):
+                                await instance.write_file_bytes(
+                                    path.relative_to(workspace).as_posix(),
+                                    path.read_bytes(),
+                                )
+        except BaseException:
+            logger.exception(f"Failed to start sandbox for workspace {workspace_id}")
+            try:
+                await instance.stop()
+            except Exception:
+                logger.exception(f"Failed to clean up sandbox for workspace {workspace_id}")
+            raise
         return instance
 
     async def _copy_bootstrap_files(self, sandbox_workspace: Path) -> None:
         """Copy bootstrap files from source workspace to sandbox workspace."""
-        from vikingbot.agent.context import ContextBuilder
-        from vikingbot.agent.skills import BUILTIN_SKILLS_DIR
         import shutil
+
+        from vikingbot.agent.context import ContextBuilder
 
         # Copy from source workspace init directory (if exists)
         init_dir = self.source_workspace / ContextBuilder.INIT_DIR
@@ -91,26 +139,32 @@ class SandboxManager:
     async def cleanup_session(self, session_key: SessionKey) -> None:
         """Clean up sandbox for a session."""
         workspace_id = self.to_workspace_id(session_key)
-        if workspace_id in self._sandboxes:
-            await self._sandboxes[workspace_id].stop()
-            del self._sandboxes[workspace_id]
+        sandbox = self._sandboxes.pop(workspace_id, None)
+        if sandbox is not None:
+            await sandbox.stop()
 
     async def cleanup_all(self) -> None:
         """Clean up all sandboxes."""
-        for sandbox in self._sandboxes.values():
-            await sandbox.stop()
+        sandboxes = list(self._sandboxes.values())
         self._sandboxes.clear()
+        for sandbox in sandboxes:
+            try:
+                await sandbox.stop()
+            except Exception:
+                logger.exception("Failed to clean up sandbox")
 
     def get_workspace_path(self, session_key: SessionKey) -> Path:
-        return self.workspace / self.to_workspace_id(session_key)
+        # Compile managers receive a task-specific root shared by parent and child agents.
+        if session_key.type == "compile":
+            return self.workspace
+        return resolve_workspace_path(
+            self.workspace,
+            session_key,
+            self.config.sandbox.mode,
+        )
 
     def to_workspace_id(self, session_key: SessionKey):
-        if self.config.sandbox.mode == "shared":
-            return "shared"
-        elif self.config.sandbox.mode == "per-channel":
-            return session_key.channel_key()
-        else:  # per-session
-            return session_key.safe_name()
+        return workspace_name(session_key, self.config.sandbox.mode, portable=False)
 
     async def get_sandbox_cwd(self, session_key: SessionKey) -> str:
         sandbox: SandboxBackend = await self._get_or_create_sandbox(session_key)

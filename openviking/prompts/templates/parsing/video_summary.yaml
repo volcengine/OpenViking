@@ -1,0 +1,34 @@
+metadata:
+  id: "parsing.video_summary"
+  name: "Video Summary"
+  description: "Generate a high-information video overview for semantic indexing"
+  version: "1.0.0"
+  language: "en"
+  category: "parsing"
+variables:
+  - name: "filename"
+    type: "string"
+    description: "Original video filename"
+    required: true
+  - name: "fallback_language"
+    type: "string"
+    description: "Output language when the media has no identifiable language"
+    required: true
+template: |
+  Analyze the supplied video faithfully for semantic retrieval, using both visuals and audio.
+  Write in the video's primary language; if it has no identifiable language, use {{ fallback_language }}.
+  Return Markdown only, with no code fence.
+
+  Required structure:
+  # A specific content title
+
+  A dense overview paragraph immediately after H1.
+
+  ### {{ filename }}
+
+  Then retain as much useful detail as fits: people, objects, scenes, actions, key events,
+  conclusions, facts and numbers, short recognizable dialogue, on-screen text, music and sound.
+  Include coarse time ranges only when recognizable. Do not create a full transcript or timeline.
+  Do not invent identity, wording, facts, text, or timestamps.
+llm_config:
+  temperature: 0.0

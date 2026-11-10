@@ -5,12 +5,23 @@ LLMProvider interface, so that bot.agents.provider / bot.agents.model
 configuration semantics are consistent with openviking server's vlm section.
 """
 
+import json
+import re
 import time
-from collections.abc import AsyncIterator
+import traceback
+from collections.abc import AsyncIterator, Mapping
+from contextlib import aclosing
 from typing import Any
 
 from loguru import logger
 
+from openviking.models.model_error import model_error_kind
+from openviking.models.vlm.backends.volcengine_vlm import build_volcengine_request_headers
+from openviking.models.vlm.base import ToolResultMediaMode
+from openviking.utils.message_format import tool_images_as_user_messages
+from openviking.utils.model_retry import effective_max_retries, retry_async
+from openviking.utils.multimodal import redact_image_data_urls
+from openviking_cli.utils import get_logger
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.providers.base import (
     LLMProvider,
@@ -22,6 +33,203 @@ from vikingbot.providers.base import (
     stream_delta_value,
 )
 from vikingbot.utils.tracing import get_current_response_id
+
+_MAX_ERROR_LOG_VALUE_CHARS = 4096
+_MAX_ERROR_LOG_ITEMS = 50
+_SENSITIVE_ERROR_KEYS = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "apikey",
+        "authorization",
+        "client_secret",
+        "credential",
+        "credentials",
+        "id_token",
+        "password",
+        "refresh_token",
+        "secret",
+        "session_token",
+        "token",
+    }
+)
+_SENSITIVE_ERROR_KEY_SUFFIXES = (
+    "api_key",
+    "password",
+    "secret",
+    "token",
+)
+_SENSITIVE_ERROR_KV_RE = re.compile(
+    r"(?i)((?:api[_-]?key|authorization|credential|password|secret|token)"
+    r"[\"']?\s*[:=]\s*[\"']?)[^\s,;\]\}\"']+"
+)
+_BEARER_TOKEN_RE = re.compile(r"(?i)(bearer\s+)[^\s,;\]\}\"']+")
+_API_KEY_TOKEN_RE = re.compile(r"\bsk-[a-zA-Z0-9._-]{8,}")
+_SERVER_REQUEST_ID_HEADERS = ("x-request-id",)
+_SERVER_TRACE_ID_HEADERS = (
+    "x-trace-id",
+    "trace-id",
+    "x-tt-logid",
+    "x-log-id",
+)
+
+
+def _safe_exception_attribute(error: BaseException, name: str) -> Any:
+    try:
+        return getattr(error, name, None)
+    except BaseException:
+        return None
+
+
+def _exception_chain(error: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = _safe_exception_attribute(current, "__cause__") or _safe_exception_attribute(
+            current, "__context__"
+        )
+    return chain
+
+
+def _redact_error_text(value: str) -> str:
+    value = redact_image_data_urls(value)
+    value = _SENSITIVE_ERROR_KV_RE.sub(lambda match: f"{match.group(1)}<redacted>", value)
+    value = _BEARER_TOKEN_RE.sub(lambda match: f"{match.group(1)}<redacted>", value)
+    value = _API_KEY_TOKEN_RE.sub("<redacted>", value)
+    if len(value) > _MAX_ERROR_LOG_VALUE_CHARS:
+        return value[:_MAX_ERROR_LOG_VALUE_CHARS] + "...[truncated]"
+    return value
+
+
+def _sanitize_error_value(value: Any, *, depth: int = 0) -> Any:
+    """Prepare an upstream error body for logs without exposing credentials or huge values."""
+    if depth >= 5:
+        return "<max-depth>"
+    if isinstance(value, Mapping):
+        sanitized: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= _MAX_ERROR_LOG_ITEMS:
+                sanitized["<truncated>"] = f"{len(value) - _MAX_ERROR_LOG_ITEMS} more items"
+                break
+            key_text = str(key)
+            normalized_key = key_text.lower().replace("-", "_")
+            if normalized_key in _SENSITIVE_ERROR_KEYS or any(
+                normalized_key.endswith(f"_{suffix}") for suffix in _SENSITIVE_ERROR_KEY_SUFFIXES
+            ):
+                sanitized[key_text] = "<redacted>"
+            else:
+                sanitized[key_text] = _sanitize_error_value(item, depth=depth + 1)
+        return sanitized
+    if isinstance(value, (list, tuple, set, frozenset)):
+        items = list(value)
+        sanitized_items = [
+            _sanitize_error_value(item, depth=depth + 1) for item in items[:_MAX_ERROR_LOG_ITEMS]
+        ]
+        if len(items) > _MAX_ERROR_LOG_ITEMS:
+            sanitized_items.append(f"<{len(items) - _MAX_ERROR_LOG_ITEMS} more items>")
+        return sanitized_items
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if isinstance(value, str):
+        return _redact_error_text(value)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    try:
+        return _redact_error_text(str(value))
+    except BaseException:
+        return f"<{type(value).__name__}>"
+
+
+def _render_error_log_value(value: Any) -> str:
+    if value is None:
+        return "-"
+    sanitized = _sanitize_error_value(value)
+    try:
+        rendered = json.dumps(sanitized, ensure_ascii=False, default=str, separators=(",", ":"))
+    except BaseException:
+        rendered = _redact_error_text(str(sanitized))
+    if len(rendered) > _MAX_ERROR_LOG_VALUE_CHARS:
+        return rendered[:_MAX_ERROR_LOG_VALUE_CHARS] + "...[truncated]"
+    return rendered
+
+
+def _first_exception_attribute(chain: list[BaseException], name: str) -> Any:
+    for item in chain:
+        value = _safe_exception_attribute(item, name)
+        if value is not None:
+            return value
+    return None
+
+
+def _first_header_value(headers: Any, names: tuple[str, ...]) -> str | None:
+    if headers is None:
+        return None
+    for name in names:
+        try:
+            value = headers.get(name)
+        except BaseException:
+            value = None
+        if value:
+            return _redact_error_text(str(value))
+    return None
+
+
+def _exception_log_details(error: BaseException) -> dict[str, str]:
+    """Extract Ark/OpenAI-compatible exception details for one structured log line."""
+    chain = _exception_chain(error)
+    response = _first_exception_attribute(chain, "response")
+    request = _first_exception_attribute(chain, "request")
+    if request is None and response is not None:
+        request = _safe_exception_attribute(response, "request")
+
+    status = _first_exception_attribute(chain, "status_code")
+    if status is None and response is not None:
+        status = _safe_exception_attribute(response, "status_code")
+
+    body = _first_exception_attribute(chain, "body")
+    if body is None and response is not None:
+        body = _safe_exception_attribute(response, "text")
+
+    response_headers = (
+        _safe_exception_attribute(response, "headers") if response is not None else None
+    )
+    request_headers = _safe_exception_attribute(request, "headers") if request is not None else None
+    client_request_id = _first_exception_attribute(chain, "request_id")
+    if client_request_id is None:
+        client_request_id = _first_header_value(request_headers, ("x-client-request-id",))
+
+    method = _safe_exception_attribute(request, "method") if request is not None else None
+    url = _safe_exception_attribute(request, "url") if request is not None else None
+    # Query strings can contain credentials. The Ark API endpoint path is sufficient for diagnosis.
+    safe_url = str(url).split("?", 1)[0] if url is not None else "-"
+
+    causes = [f"{type(item).__name__}: {_redact_error_text(str(item))}" for item in chain[1:]]
+    stack_frames: list[str] = []
+    for item in chain:
+        item_traceback = _safe_exception_attribute(item, "__traceback__")
+        if item_traceback is None:
+            continue
+        for frame in traceback.extract_tb(item_traceback)[-12:]:
+            stack_frames.append(
+                f"{type(item).__name__}@{frame.filename}:{frame.lineno} in {frame.name}"
+            )
+    return {
+        "error_type": type(error).__name__,
+        "status": str(status) if status is not None else "-",
+        "code": _render_error_log_value(_first_exception_attribute(chain, "code")),
+        "client_request_id": _render_error_log_value(client_request_id),
+        "server_request_id": _first_header_value(response_headers, _SERVER_REQUEST_ID_HEADERS)
+        or "-",
+        "server_trace_id": _first_header_value(response_headers, _SERVER_TRACE_ID_HEADERS) or "-",
+        "method": str(method) if method is not None else "-",
+        "url": safe_url,
+        "response_body": _render_error_log_value(body),
+        "cause_chain": " <- ".join(causes) if causes else "-",
+        "traceback": " <- ".join(stack_frames) if stack_frames else "-",
+    }
 
 
 class VLMProviderAdapter(LLMProvider):
@@ -50,9 +258,11 @@ class VLMProviderAdapter(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
-        temperature: float = 0.7,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
         session_id: str | None = None,
+        thinking: bool | None = None,
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
         effective_model = model or self._default_model
 
@@ -70,7 +280,7 @@ class VLMProviderAdapter(LLMProvider):
                         name="llm-chat",
                         as_type="generation",
                         model=effective_model,
-                        input=messages,
+                        input=redact_image_data_urls(messages),
                         metadata=metadata,
                     )
                     if response_id:
@@ -79,11 +289,27 @@ class VLMProviderAdapter(LLMProvider):
                         )
 
             # --- Call VLM backend ---
+            # An explicit empty list asks VLM backends for a structured response
+            # without exposing tools, so per-response usage is preserved.
+            response_tools = tools if tools is not None else []
+            # Effort overrides are scoped to the native Ark backend, not compatible APIs.
+            completion_overrides = (
+                {"reasoning_effort": reasoning_effort}
+                if reasoning_effort is not None and self._vlm.provider == "volcengine"
+                else {}
+            )
+            request_messages = (
+                tool_images_as_user_messages(messages)
+                if self._tool_result_media_mode(self._vlm) == "user_message"
+                else messages
+            )
             result = await self._vlm.get_completion_async(
-                messages=messages,
-                thinking=getattr(self._vlm, "thinking", None),
-                tools=tools,
-                tool_choice="auto" if tools else None,
+                messages=request_messages,
+                thinking=thinking if thinking is not None else getattr(self._vlm, "thinking", None),
+                tools=response_tools,
+                tool_choice="auto" if response_tools else None,
+                max_tokens=max_tokens,
+                **completion_overrides,
             )
 
             llm_response = self._convert_response(result)
@@ -97,9 +323,11 @@ class VLMProviderAdapter(LLMProvider):
         except Exception as e:
             if langfuse_observation:
                 self._end_langfuse_observation_error(langfuse_observation, e)
+            self._log_request_exception("chat", e, model=effective_model)
             return LLMResponse(
                 content=f"Error calling LLM in VLM Adapter: {str(e)}",
                 finish_reason="error",
+                error_kind=model_error_kind(e),
             )
 
     async def chat_stream(
@@ -107,11 +335,11 @@ class VLMProviderAdapter(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
-        temperature: float = 0.7,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
         session_id: str | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:
-        if getattr(self._vlm, "provider", None) != "volcengine":
+        if not self._supports_native_stream(self._vlm):
             async for event in super().chat_stream(
                 messages=messages,
                 tools=tools,
@@ -123,41 +351,145 @@ class VLMProviderAdapter(LLMProvider):
                 yield event
             return
 
-        async for event in self._chat_stream_volcengine(
+        try:
+            stream_with_failover = getattr(self._vlm, "stream_with_failover", None)
+            if callable(stream_with_failover):
+                async for event in stream_with_failover(
+                    lambda vlm: self._chat_stream_with_retry(
+                        vlm,
+                        messages=messages,
+                        tools=tools,
+                        model=model,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                    )
+                ):
+                    yield event
+                return
+
+            async for event in self._chat_stream_with_retry(
+                self._vlm,
+                messages=messages,
+                tools=tools,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            ):
+                yield event
+        except Exception as exc:
+            self._log_request_exception("chat_stream", exc, model=model or self._default_model)
+            yield LLMStreamEvent(
+                type="response",
+                response=LLMResponse(
+                    content=f"Error calling LLM in VLM Adapter stream: {str(exc)}",
+                    finish_reason="error",
+                    error_kind=model_error_kind(exc),
+                ),
+            )
+
+    def _log_request_exception(
+        self,
+        operation: str,
+        error: BaseException,
+        *,
+        model: str,
+    ) -> None:
+        details = _exception_log_details(error)
+        logger.error(
+            "VLM Adapter request failed: operation={} provider={} model={} timeout={}s "
+            "error_type={} status={} code={} client_request_id={} "
+            "server_request_id={} server_trace_id={} method={} url={} "
+            "response_body={} cause_chain={} traceback={}",
+            operation,
+            getattr(self._vlm, "provider", None) or "unknown",
+            model,
+            getattr(self._vlm, "timeout", None) or "-",
+            details["error_type"],
+            details["status"],
+            details["code"],
+            details["client_request_id"],
+            details["server_request_id"],
+            details["server_trace_id"],
+            details["method"],
+            details["url"],
+            details["response_body"],
+            details["cause_chain"],
+            details["traceback"],
+        )
+
+    @classmethod
+    def _supports_native_stream(cls, vlm: Any) -> bool:
+        instances = getattr(vlm, "_vlm_instances", None)
+        if instances is not None:
+            return bool(instances) and all(cls._supports_native_stream(item) for item in instances)
+
+        primary = getattr(vlm, "primary", None)
+        backup = getattr(vlm, "backup", None)
+        if primary is not None and backup is not None:
+            return cls._supports_native_stream(primary) and cls._supports_native_stream(backup)
+
+        return getattr(vlm, "provider", None) in {"openai", "volcengine"} and callable(
+            getattr(vlm, "get_async_client", None)
+        )
+
+    async def _chat_stream_with_retry(
+        self,
+        vlm: Any,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        model: str | None,
+        max_tokens: int | None,
+        temperature: float | None,
+    ) -> AsyncIterator[LLMStreamEvent]:
+        """Retry before the first event; never replay emitted output."""
+
+        async def start_stream():
+            """Return the stream and first event; close failed attempts."""
+            stream = self._chat_stream_backend(
+                vlm,
+                messages=messages,
+                tools=tools,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            try:
+                return stream, await anext(stream)
+            except BaseException:
+                await stream.aclose()
+                raise
+
+        stream, first = await retry_async(
+            start_stream,
+            max_retries=effective_max_retries(getattr(vlm, "max_retries", 0)),
+            logger=get_logger(__name__),
+            operation_name=f"{vlm.provider} VLM stream",
+            model_errors_only=True,
+        )
+        async with aclosing(stream):
+            yield first
+            async for event in stream:
+                yield event
+
+    async def _chat_stream_backend(
+        self,
+        vlm: Any,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        model: str | None,
+        max_tokens: int | None,
+        temperature: float | None,
+    ) -> AsyncIterator[LLMStreamEvent]:
+        """Release the HTTP response after normal or failed SDK iteration."""
+        kwargs = self._build_stream_kwargs(
+            vlm,
             messages=messages,
             tools=tools,
             model=model,
             max_tokens=max_tokens,
             temperature=temperature,
-        ):
-            yield event
-
-    async def _chat_stream_volcengine(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None,
-        model: str | None,
-        max_tokens: int,
-        temperature: float,
-    ) -> AsyncIterator[LLMStreamEvent]:
-        kwargs: dict[str, Any] = {
-            "model": model or getattr(self._vlm, "model", None) or self._default_model,
-            "messages": messages,
-            "temperature": getattr(self._vlm, "temperature", temperature),
-            "max_tokens": getattr(self._vlm, "max_tokens", None) or max_tokens,
-            "thinking": {
-                "type": "enabled" if getattr(self._vlm, "thinking", False) else "disabled"
-            },
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-        extra_headers = getattr(self._vlm, "extra_headers", None)
-        if extra_headers:
-            kwargs["extra_headers"] = extra_headers
-        if tools:
-            kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
-
+        )
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_calls: dict[int, dict[str, Any]] = {}
@@ -165,10 +497,15 @@ class VLMProviderAdapter(LLMProvider):
         usage: dict[str, int] = {}
         start_time = time.perf_counter()
 
-        try:
-            client = self._vlm.get_async_client()
-            response = await client.chat.completions.create(**kwargs)
-            async for chunk in response:
+        client = vlm.get_async_client()
+        response = (
+            await vlm._create_chat_completion(client, **kwargs)
+            if getattr(vlm, "provider", None) == "volcengine"
+            and getattr(vlm, "temperature", temperature) is None
+            else await client.chat.completions.create(**kwargs)
+        )
+        async with response as stream:
+            async for chunk in stream:
                 chunk_usage = self._parse_usage(getattr(chunk, "usage", None))
                 if chunk_usage:
                     usage = chunk_usage
@@ -202,27 +539,85 @@ class VLMProviderAdapter(LLMProvider):
                         fallback_index=fallback_index,
                     )
 
-            if usage:
-                self._record_vlm_usage(usage, time.perf_counter() - start_time)
+        if usage:
+            self._record_vlm_usage(vlm, usage, time.perf_counter() - start_time)
 
-            yield LLMStreamEvent(
-                type="response",
-                response=build_stream_response(
-                    content="".join(content_parts),
-                    reasoning_content="".join(reasoning_parts),
-                    raw_tool_calls=tool_calls,
-                    finish_reason=finish_reason,
-                    usage=usage,
-                ),
+        yield LLMStreamEvent(
+            type="response",
+            response=build_stream_response(
+                content="".join(content_parts),
+                reasoning_content="".join(reasoning_parts),
+                raw_tool_calls=tool_calls,
+                finish_reason=finish_reason,
+                usage=usage,
+            ),
+        )
+
+    def _build_stream_kwargs(
+        self,
+        vlm: Any,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        model: str | None,
+        max_tokens: int | None,
+        temperature: float | None,
+    ) -> dict[str, Any]:
+        if self._tool_result_media_mode(vlm) == "user_message":
+            messages = tool_images_as_user_messages(messages)
+        provider = getattr(vlm, "provider", None)
+        configured_max_tokens = getattr(vlm, "max_tokens", None)
+        effective_max_tokens = max_tokens if max_tokens is not None else configured_max_tokens
+        # A wrapped credential owns its model.  The model passed by AgentLoop is
+        # the outer/default model and must not overwrite a backup credential.
+        effective_model = (
+            getattr(vlm, "model", None)
+            if vlm is not self._vlm
+            else model or getattr(vlm, "model", None)
+        ) or self._default_model
+
+        if provider == "volcengine":
+            kwargs: dict[str, Any] = {
+                "model": effective_model,
+                "messages": messages,
+                "thinking": {"type": "enabled" if getattr(vlm, "thinking", False) else "disabled"},
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            }
+            effective_temperature = getattr(vlm, "temperature", temperature)
+            if effective_temperature is not None:
+                kwargs["temperature"] = effective_temperature
+            if effective_max_tokens is not None:
+                kwargs["max_tokens"] = effective_max_tokens
+            reasoning_effort = getattr(vlm, "reasoning_effort", None)
+            if getattr(vlm, "thinking", False) and reasoning_effort is not None:
+                kwargs["reasoning_effort"] = reasoning_effort
+            kwargs["extra_headers"] = build_volcengine_request_headers(
+                getattr(vlm, "extra_headers", None)
             )
-        except Exception as e:
-            yield LLMStreamEvent(
-                type="response",
-                response=LLMResponse(
-                    content=f"Error calling LLM in VLM Adapter stream: {str(e)}",
-                    finish_reason="error",
-                ),
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = "auto"
+            return kwargs
+
+        kwargs = vlm._build_text_kwargs(
+            messages=messages,
+            tools=tools,
+            tool_choice="auto" if tools else None,
+            thinking=getattr(vlm, "thinking", None),
+        )
+        kwargs["model"] = effective_model
+        kwargs["stream"] = True
+        kwargs["stream_options"] = {"include_usage": True}
+        if effective_max_tokens is not None:
+            token_key = (
+                "max_completion_tokens"
+                if "max_completion_tokens" in kwargs
+                or ("max_tokens" not in kwargs and "reasoning_effort" in kwargs)
+                else "max_tokens"
             )
+            kwargs[token_key] = effective_max_tokens
+        return kwargs
 
     @staticmethod
     def _usage_value(usage: Any, name: str) -> int:
@@ -260,14 +655,19 @@ class VLMProviderAdapter(LLMProvider):
             usage["reasoning_tokens"] = reasoning
         return usage
 
-    def _record_vlm_usage(self, usage: dict[str, int], duration_seconds: float) -> None:
-        update_token_usage = getattr(self._vlm, "update_token_usage", None)
+    def _record_vlm_usage(
+        self,
+        vlm: Any,
+        usage: dict[str, int],
+        duration_seconds: float,
+    ) -> None:
+        update_token_usage = getattr(vlm, "update_token_usage", None)
         if not callable(update_token_usage):
             return
         try:
             update_token_usage(
-                model_name=getattr(self._vlm, "model", None) or self._default_model,
-                provider=getattr(self._vlm, "provider", None) or "volcengine",
+                model_name=getattr(vlm, "model", None) or self._default_model,
+                provider=getattr(vlm, "provider", None) or "unknown",
                 prompt_tokens=usage.get("prompt_tokens", 0),
                 completion_tokens=usage.get("completion_tokens", 0),
                 duration_seconds=duration_seconds,
@@ -297,15 +697,34 @@ class VLMProviderAdapter(LLMProvider):
             content=result.content,
             tool_calls=tool_calls,
             finish_reason=result.finish_reason,
-            usage=result.usage,
+            usage={
+                k: v
+                for k, v in (result.usage if isinstance(result.usage, dict) else {}).items()
+                if isinstance(v, int)
+            }
+            | self._parse_usage(result.usage),
             reasoning_content=result.reasoning_content,
         )
 
     def get_default_model(self) -> str:
         return self._default_model
 
+    def supports_tool_result_media(self, model: str | None = None) -> bool:
+        """Accept image evidence without predicting the endpoint's model capabilities."""
+        return True
+
+    def should_inline_tool_result_media(self, model: str | None = None) -> bool:
+        """Keep ordinary chats native-only; Compile's scoped providers opt in."""
+        return self._tool_result_media_mode(self._vlm) == "native"
+
+    @staticmethod
+    def _tool_result_media_mode(vlm: Any) -> ToolResultMediaMode:
+        capability = getattr(vlm, "tool_result_media_mode", None)
+        mode = capability() if callable(capability) else None
+        return "native" if mode == "native" else "user_message"
+
     # ------------------------------------------------------------------
-    # Langfuse helpers (same pattern as LiteLLMProvider.chat())
+    # Langfuse helpers
     # ------------------------------------------------------------------
 
     def _end_langfuse_observation(self, obs, llm_response: LLMResponse) -> None:

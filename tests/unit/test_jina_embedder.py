@@ -10,6 +10,8 @@ from openviking.models.embedder import JinaDenseEmbedder
 from openviking.models.embedder.jina_embedders import (
     JINA_MODEL_DIMENSIONS,
 )
+from openviking.models.model_error import ModelError, ModelErrorKind
+from openviking_cli.utils.config.embedding_config import EmbeddingModelConfig
 
 
 class TestJinaDenseEmbedder:
@@ -221,44 +223,6 @@ class TestJinaDenseEmbedder:
         assert call_kwargs["extra_body"]["late_chunking"] is True
 
     @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
-    def test_embed_batch(self, mock_openai_class):
-        """Test batch embedding"""
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-
-        mock_embeddings = [MagicMock(embedding=[0.1] * 1024) for _ in range(3)]
-
-        mock_response = MagicMock()
-        mock_response.data = mock_embeddings
-        mock_client.embeddings.create.return_value = mock_response
-
-        embedder = JinaDenseEmbedder(
-            model_name="jina-embeddings-v5-text-small",
-            api_key="test-api-key",
-        )
-        results = embedder.embed_batch(["Hello", "World", "Test"])
-
-        assert len(results) == 3
-        for result in results:
-            assert result.dense_vector is not None
-            assert len(result.dense_vector) == 1024
-
-    @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
-    def test_embed_batch_empty(self, mock_openai_class):
-        """Test batch embedding with empty list"""
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-
-        embedder = JinaDenseEmbedder(
-            model_name="jina-embeddings-v5-text-small",
-            api_key="test-api-key",
-        )
-        results = embedder.embed_batch([])
-
-        assert results == []
-        mock_client.embeddings.create.assert_not_called()
-
-    @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
     def test_embed_api_error(self, mock_openai_class):
         """Test embedding with API error"""
         import openai
@@ -266,19 +230,24 @@ class TestJinaDenseEmbedder:
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
 
-        mock_client.embeddings.create.side_effect = openai.APIError(
+        error = openai.APIError(
             message="Test API error",
             request=MagicMock(),
             body=None,
         )
+        mock_client.embeddings.create.side_effect = error
 
         embedder = JinaDenseEmbedder(
             model_name="jina-embeddings-v5-text-small",
             api_key="test-api-key",
         )
 
-        with pytest.raises(RuntimeError, match="Jina API error"):
+        with pytest.raises(ModelError, match="Jina API error") as raised:
             embedder.embed("Hello world")
+
+        assert raised.value.kind is ModelErrorKind.UNKNOWN
+        assert raised.value.provider == "jina"
+        assert raised.value.__cause__.__cause__ is error
 
     def test_build_extra_body_none(self):
         """Test _build_extra_body returns None when no params set"""
@@ -327,7 +296,7 @@ class TestJinaDenseEmbedder:
 
     @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
     def test_422_task_error_actionable_message(self, mock_openai_class):
-        """422 error mentioning 'task' should produce actionable RuntimeError."""
+        """422 error mentioning 'task' should preserve the actionable provider message."""
         import openai
 
         mock_client = MagicMock()
@@ -345,30 +314,7 @@ class TestJinaDenseEmbedder:
             api_key="test-key",
         )
 
-        with pytest.raises(RuntimeError, match="query_param.*document_param"):
-            embedder.embed("hello")
-
-    @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
-    def test_non_422_error_passthrough(self, mock_openai_class):
-        """Non-422 API errors should use the generic 'Jina API error' message."""
-        import openai
-
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-
-        error = openai.APIError(
-            message="Internal server error",
-            request=MagicMock(),
-            body=None,
-        )
-        mock_client.embeddings.create.side_effect = error
-
-        embedder = JinaDenseEmbedder(
-            model_name="jina-embeddings-v5-text-small",
-            api_key="test-key",
-        )
-
-        with pytest.raises(RuntimeError, match="Jina API error"):
+        with pytest.raises(ModelError, match="query_param.*document_param"):
             embedder.embed("hello")
 
     def test_code_model_dimensions(self):
@@ -384,3 +330,10 @@ class TestJinaDenseEmbedder:
             api_key="test-key",
         )
         assert embedder_0_5b.get_dimension() == 768
+
+    @pytest.mark.parametrize("model", sorted(JINA_MODEL_DIMENSIONS))
+    def test_config_default_dimension_matches_embedder(self, model):
+        """Without an explicit dimension, the schema must match the vectors Jina returns."""
+        config = EmbeddingModelConfig(provider="jina", api_key="test-key", model=model)
+        embedder = JinaDenseEmbedder(model_name=model, api_key="test-key")
+        assert config.get_effective_dimension() == embedder.get_dimension()

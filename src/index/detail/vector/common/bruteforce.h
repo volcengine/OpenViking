@@ -262,9 +262,15 @@ class BruteforceSearch {
     labels.resize(result_size);
     scores.resize(result_size);
 
+    const bool cosine_score =
+        meta_->distance_type == "ip" && meta_->normalize_vector &&
+        (!query_sparse_view || meta_->search_with_sparse_logit_alpha <= 0.0f);
     for (int i = static_cast<int>(result_size) - 1; i >= 0; --i) {
       const auto& top = pq.top();
-      scores[i] = top.first;
+      // Map after ranking so clamping quantization error cannot change top-k.
+      scores[i] = cosine_score
+                      ? std::clamp((top.first + 1.0f) * 0.5f, 0.0f, 1.0f)
+                      : top.first;
       labels[i] = top.second;
       pq.pop();
     }
@@ -284,6 +290,11 @@ class BruteforceSearch {
 
     out.write(data_buffer_, capacity_ * element_byte_size_);
     write_binary(out, next_logical_offset_);
+
+    out.close();
+    if (out.fail()) {
+      throw std::runtime_error("Failed to write vector index file: " + path);
+    }
 
     if (sparse_index_) {
       size_t dummy;

@@ -1,16 +1,19 @@
-import asyncio
 import base64
 import json
 import re
 import uuid
-from typing import Any, Dict, List, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional
 
 from loguru import logger
 
 import openviking as ov
 from openviking.core.namespace import uri_parts
 from openviking.core.peer_id import normalize_peer_id
+from openviking_cli.exceptions import InvalidArgumentError
 from vikingbot.config.loader import load_config
+
+if TYPE_CHECKING:
+    from vikingbot.config.schema import Config
 
 viking_resource_prefix = "viking://resources/"
 
@@ -37,6 +40,8 @@ def _peer_id_from_external_id(peer_id: Optional[str]) -> Optional[str]:
 
 
 class VikingClient:
+    _skill_snapshot: Optional[Mapping[str, Any]] = None
+
     def __init__(
         self,
         workspace_id: Optional[str] = None,
@@ -44,15 +49,19 @@ class VikingClient:
         agent_id: Optional[str] = None,
         connection: Optional[Mapping[str, Any]] = None,
         actor_peer_id: Optional[str] = None,
+        config: "Config | None" = None,
     ):
         if agent_id is None:
             agent_id = workspace_id
         if agent_id and "#" in agent_id:
             agent_id = agent_id.split("#", 1)[0]
 
-        config = load_config()
+        config = config or load_config()
+        self.config = config
         openviking_config = config.ov_server
         self.openviking_config = openviking_config
+        if not str(getattr(openviking_config, "server_url", "") or "").strip():
+            raise RuntimeError("OpenViking is unavailable in VikingBot standalone mode")
         self.workspace_id = agent_id
         self.agent_id = agent_id
         self.ov_path = config.ov_data_path
@@ -60,15 +69,15 @@ class VikingClient:
         self.mode = "local" if self.auth_mode == "dev" else "remote"
         self.api_key_type = self._resolve_api_key_type(openviking_config)
 
-        self.admin_user_client = None
-        self._user_clients = {}
-        self._namespace_policy = {
-            "isolate_user_scope_by_agent": False,
-            "isolate_agent_scope_by_user": False,
-        }
-        self._namespace_policy_loaded = False
+        self._skill_snapshot = (connection or {}).get("skill_snapshot")
+        snapshot_id = (self._skill_snapshot or {}).get("snapshot_id")
+        if snapshot_id and not re.fullmatch(r"[0-9a-fA-F]{40}", snapshot_id):
+            raise ValueError("Skill snapshot_id must be a commit ID")
         self._request_connection = self._normalize_connection(connection)
         self._request_role: str | None = None
+
+        self.admin_user_client = None
+        self._user_clients = {}
         connection_actor_peer_id = (
             self._request_connection.get("actor_peer_id") if self._request_connection else None
         )
@@ -153,23 +162,7 @@ class VikingClient:
             value = connection.get(key)
             if isinstance(value, str) and value.strip():
                 normalized[key] = value.strip()
-        policy = connection.get("namespace_policy")
-        if isinstance(policy, Mapping):
-            normalized["namespace_policy"] = {
-                "isolate_user_scope_by_agent": bool(
-                    policy.get("isolate_user_scope_by_agent", False)
-                ),
-                "isolate_agent_scope_by_user": bool(
-                    policy.get("isolate_agent_scope_by_user", False)
-                ),
-            }
         if not normalized.get("api_key"):
-            if (
-                normalized.get("api_key_type") == "root"
-                and normalized.get("account_id")
-                and normalized.get("user_id")
-            ):
-                return normalized
             return None
         return normalized
 
@@ -182,23 +175,18 @@ class VikingClient:
         self.auth_mode = "trusted" if self.api_key_type == "root" else "api_key"
         self.agent_id = connection.get("agent_id") or agent_id
         self.workspace_id = self.agent_id
-        self.account_id = connection.get("account_id") or self.openviking_config.account_id
-        self.admin_user_id = connection.get("user_id") or self.openviking_config.admin_user_id
-
-        policy = connection.get("namespace_policy")
-        if isinstance(policy, dict):
-            self._namespace_policy = policy
-            self._namespace_policy_loaded = True
+        self.account_id = connection.get("account_id")
+        self.admin_user_id = connection.get("user_id")
 
         remote_client_kwargs = {
-            "url": connection.get("server_url") or self.openviking_config.server_url,
+            "url": self.openviking_config.server_url,
             "profile_enabled": False,
         }
         if connection.get("api_key"):
             remote_client_kwargs["api_key"] = connection["api_key"]
-        if self.api_key_type == "root" and self.account_id:
+        if self.account_id:
             remote_client_kwargs["account"] = self.account_id
-        if self.api_key_type == "root" and self.admin_user_id:
+        if self.admin_user_id:
             remote_client_kwargs["user"] = self.admin_user_id
 
         self._apply_actor_peer_scope(remote_client_kwargs)
@@ -207,7 +195,6 @@ class VikingClient:
     async def _initialize(self):
         """Initialize the client (must be called after construction)"""
         await self.client.initialize()
-        await self._load_namespace_policy()
 
     @classmethod
     async def create(
@@ -217,6 +204,7 @@ class VikingClient:
         agent_id: Optional[str] = None,
         connection: Optional[Mapping[str, Any]] = None,
         actor_peer_id: Optional[str] = None,
+        config: "Config | None" = None,
     ):
         """Factory method to create and initialize a VikingClient instance."""
         instance = cls(
@@ -224,12 +212,26 @@ class VikingClient:
             agent_id=agent_id,
             connection=connection,
             actor_peer_id=actor_peer_id,
+            config=config,
         )
         await instance._initialize()
         return instance
 
     def _matched_context_to_dict(self, matched_context: Any) -> Dict[str, Any]:
-        """将 MatchedContext 对象转换为字典"""
+        """将 MatchedContext 对象或 dict 结果转换为字典。"""
+        if isinstance(matched_context, dict):
+            return {
+                "uri": str(matched_context.get("uri", "") or ""),
+                "context_type": str(
+                    matched_context.get("context_type") or matched_context.get("type") or ""
+                ),
+                "is_leaf": bool(matched_context.get("is_leaf", False)),
+                "abstract": str(matched_context.get("abstract", "") or ""),
+                "overview": matched_context.get("overview"),
+                "category": str(matched_context.get("category", "") or ""),
+                "score": matched_context.get("score", 0.0),
+                "match_reason": str(matched_context.get("match_reason", "") or ""),
+            }
         return {
             "uri": getattr(matched_context, "uri", ""),
             "context_type": str(getattr(matched_context, "context_type", "")),
@@ -239,18 +241,6 @@ class VikingClient:
             "category": getattr(matched_context, "category", ""),
             "score": getattr(matched_context, "score", 0.0),
             "match_reason": getattr(matched_context, "match_reason", ""),
-            "relations": [
-                self._relation_to_dict(r) for r in getattr(matched_context, "relations", [])
-            ],
-        }
-
-    def _relation_to_dict(self, relation: Any) -> Dict[str, Any]:
-        """将 Relation 对象转换为字典"""
-        return {
-            "from_uri": getattr(relation, "from_uri", ""),
-            "to_uri": getattr(relation, "to_uri", ""),
-            "relation_type": getattr(relation, "relation_type", ""),
-            "reason": getattr(relation, "reason", ""),
         }
 
     def _matched_context_group_to_dicts(self, result: Any, group_name: str) -> List[Dict[str, Any]]:
@@ -268,7 +258,8 @@ class VikingClient:
                 items.append(dict(item))
             else:
                 items.append(self._matched_context_to_dict(item))
-        return items
+        # Search snippets cannot supply live rules from the task's pinned Skill.
+        return [item for item in items if not self._skill_snapshot_ref(item.get("uri", ""))]
 
     def _matched_context_total(
         self,
@@ -281,7 +272,7 @@ class VikingClient:
             total = result.get("total")
         else:
             total = getattr(result, "total", None)
-        if isinstance(total, int):
+        if isinstance(total, int) and not self._skill_snapshot:
             return total
         return len(memories) + len(resources) + len(skills)
 
@@ -340,54 +331,17 @@ class VikingClient:
         if self.actor_peer_id:
             client_kwargs["actor_peer_id"] = self.actor_peer_id
 
-    async def _load_namespace_policy(self) -> None:
-        if self._namespace_policy_loaded:
-            return
-
-        policy = {
-            "isolate_user_scope_by_agent": False,
-            "isolate_agent_scope_by_user": False,
-        }
-        if self._has_request_connection() or self._is_dev_mode() or self._is_user_key_mode():
-            self._namespace_policy = policy
-            self._namespace_policy_loaded = True
-            return
-
-        if self._is_root_key_mode() and self.account_id:
-            try:
-                accounts = await self.client.admin_list_accounts()
-                for account in accounts or []:
-                    if account.get("account_id") == self.account_id:
-                        policy = {
-                            "isolate_user_scope_by_agent": bool(
-                                account.get("isolate_user_scope_by_agent", False)
-                            ),
-                            "isolate_agent_scope_by_user": bool(
-                                account.get("isolate_agent_scope_by_user", False)
-                            ),
-                        }
-                        break
-            except Exception as e:
-                logger.warning(
-                    f"Failed to load account namespace policy for {self.account_id}: {e}"
-                )
-
-        self._namespace_policy = policy
-        self._namespace_policy_loaded = True
-
     def _user_space_fragment(self, user_id: Optional[str]) -> str:
         effective_user_id = self._effective_user_id(user_id)
         if not effective_user_id:
             return ""
-        if self._namespace_policy["isolate_user_scope_by_agent"] and self.agent_id:
-            return f"{effective_user_id}/agent/{self.agent_id}"
         return effective_user_id
 
     def _memory_target_uri(self, user_id: Optional[str]) -> str:
         user_space = self._user_space_fragment(user_id)
         if user_space:
             return f"viking://user/{user_space}/memories/"
-        return "viking://user/memories/"
+        return "viking://~/memories/"
 
     def _owner_user_id_for_uri(self, uri: Optional[str]) -> Optional[str]:
         if not self._is_root_key_mode():
@@ -398,6 +352,11 @@ class VikingClient:
             return None
         if len(parts) < 2 or parts[0] != "user":
             return None
+        # Mirrors the server's reserved user-space segment set. We keep the duplicated
+        # allowlist so legacy ``viking://user/<reserved>/...`` URIs (still present in stored
+        # bot configs and occasionally produced by LLM output) are not misrouted to a user
+        # named e.g. "memories" while running in root-key mode. Home-alias URIs
+        # (``viking://~/...``) never reach this branch and return None naturally.
         if parts[1] in {"memories", "resources", "skills", "peers", "privacy", "sessions"}:
             return None
         owner_user_id = parts[1]
@@ -425,7 +384,7 @@ class VikingClient:
         if not normalized_peer_id:
             raise ValueError("peer_id is required for peer memory target")
         if self._is_user_key_mode() or self._has_request_connection():
-            return f"viking://user/peers/{normalized_peer_id}/memories/"
+            return f"viking://~/peers/{normalized_peer_id}/memories/"
         user_space = self._current_user_space_fragment()
         if not user_space:
             raise ValueError("peer memory target requires current user_id")
@@ -546,41 +505,267 @@ class VikingClient:
         limit: int = 10,
     ):
         """搜索资源"""
-        kwargs: Dict[str, Any] = {"limit": limit}
+        # The SDK find/search sync moved context_type/filter out of top-level
+        # find() kwargs into FindOptions. Adapt here so callers keep the stable
+        # VikingClient.find(context_type=..., filter=...) interface.
+        options: Dict[str, Any] = {}
         if context_type is not None:
-            kwargs["context_type"] = context_type
+            options["context_type"] = context_type
         if filter is not None:
-            kwargs["filter"] = filter
+            options["filter"] = filter
+        kwargs: Dict[str, Any] = {"limit": limit}
+        if options:
+            kwargs["options"] = options
         if target_uri:
             return await self.client.find(query, target_uri=target_uri, **kwargs)
         return await self.client.find(query, **kwargs)
 
-    async def add_resource(self, local_path: str, desc: str) -> Optional[Dict[str, Any]]:
+    async def add_resource(
+        self,
+        local_path: str,
+        desc: str,
+        to: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         """添加资源到 Viking"""
-        result = await self.client.add_resource(path=local_path, reason=desc)
+        result = await self.client.add_resource(
+            path=local_path,
+            to=to,
+            options={"reason": desc},
+        )
         return result
 
+    async def rule_search(
+        self,
+        task_context: str,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Search compiled Rules applicable to the current task context."""
+        return await self.client.rule_search(task_context, options=options)
+
+    async def compile_embeddings(
+        self, texts: List[str], *, target_uri: str, expected_model: str | None = None
+    ) -> Dict[str, Any]:
+        """Use the authenticated server embedder for transient Compile routing batches."""
+        response = await self.client._request(
+            "POST",
+            "/api/v1/compile/embeddings",
+            json={"texts": texts, "target_uri": target_uri, "expected_model": expected_model},
+        )
+        return self.client._handle_response_data(response).get("result", {})
+
+    async def diff_paths(
+        self,
+        dirs: list[str],
+        *,
+        head: str,
+        base: str | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Return one authenticated directory-change page; a null base compares an empty tree."""
+        return await self.client.git_diff_paths(
+            dirs, to_ref=head, from_ref=base, offset=offset, limit=limit
+        )
+
     async def list_resources(
-        self, path: Optional[str] = None, recursive: bool = False
+        self,
+        path: Optional[str] = None,
+        recursive: bool = False,
+        node_limit: int = 1000,
+        *,
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
-        """列出资源"""
+        """列出资源；offset 跳过指定数量的可见节点，递归深度遵循服务端默认值。"""
         if path is None or path == "":
             path = viking_resource_prefix
-        entries = await self.client.ls(path, recursive=recursive)
+        entries = await self.client.ls(
+            path, recursive=recursive, node_limit=node_limit, offset=offset
+        )
         return entries
+
+    def _skill_snapshot_ref(self, uri: str) -> Optional[str]:
+        """Select the task's immutable Skill commit; reads outside its package stay live."""
+        snapshot = self._skill_snapshot
+        if snapshot and (
+            uri == snapshot["uri"] or uri.startswith(snapshot["uri"].rstrip("/") + "/")
+        ):
+            return snapshot.get("snapshot_id")
+        return None
+
+    async def stat(self, uri: str) -> Dict[str, Any]:
+        if self._skill_snapshot_ref(uri):
+            try:
+                data = await self.download_bytes(uri)
+            except InvalidArgumentError as exc:
+                # Git reports existing trees through its invalid-operation response.
+                if "path is a directory, not a file:" not in str(exc):
+                    raise
+                return {"uri": uri, "isDir": True, "size": 0}
+            return {"uri": uri, "isDir": False, "size": len(data)}
+        client = self.client
+        should_close = False
+        scoped_user_id = self._owner_user_id_for_uri(uri)
+        if scoped_user_id:
+            client, should_close = await self._get_user_scoped_client(scoped_user_id)
+
+        try:
+            return await client.stat(uri)
+        finally:
+            if should_close:
+                await client.close()
+
+    async def attrs(self, uri: str) -> Dict[str, Any]:
+        return await self.client.attrs(uri)
+
+    async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
+        """Create a directory; description initializes its L0 when provided."""
+        await self.client.mkdir(uri, description=description)
+
+    async def tree(
+        self, uri: str, *, node_limit: int = 1000, offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Return one visible tree page; offset skips entries from preceding pages."""
+        return await self.client.tree(uri, node_limit=node_limit, offset=offset)
+
+    async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        if self._skill_snapshot_ref(uri):
+            if offset < 0 or limit < -1:
+                raise ValueError("Invalid snapshot line range")
+            lines = (await self.download_bytes(uri)).decode("utf-8").splitlines(keepends=True)
+            return "".join(lines[offset:] if limit == -1 else lines[offset : offset + limit])
+        return await self.client.read_raw(uri, offset=offset, limit=limit)
+
+    async def download_bytes(self, uri: str) -> bytes:
+        client = self.client
+        should_close = False
+        scoped_user_id = self._owner_user_id_for_uri(uri)
+        if scoped_user_id:
+            client, should_close = await self._get_user_scoped_client(scoped_user_id)
+
+        try:
+            snapshot_id = self._skill_snapshot_ref(uri)
+            if snapshot_id:
+                return (await client.git_show(snapshot_id, path=uri))["bytes"]
+            return await client.download_bytes(uri)
+        finally:
+            if should_close:
+                await client.close()
+
+    async def find_skills(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        score_threshold: float | None = None,
+        target_uri: str | None = None,
+    ) -> Dict[str, Any]:
+        return await self.client.find_skills(
+            query=query,
+            limit=limit,
+            score_threshold=score_threshold,
+            target_uri=target_uri,
+        )
+
+    async def get_skill(
+        self,
+        skill_name: str,
+        *,
+        target_uri: str,
+        include_content: bool = True,
+        include_files: bool = True,
+        include_integrity: bool = False,
+    ) -> Dict[str, Any]:
+        return await self.client.get_skill(
+            skill_name,
+            include_content=include_content,
+            include_files=include_files,
+            include_integrity=include_integrity,
+            include_source=False,
+            target_uri=target_uri,
+        )
+
+    async def add_skill(
+        self,
+        path: str,
+        *,
+        target_uri: str,
+        wait: bool = True,
+    ) -> Dict[str, Any]:
+        """Publish a Compile-created package so failed tasks can roll back their own output."""
+        return await self.client.add_skill(
+            path,
+            options={
+                "target_uri": target_uri,
+                "extra": {
+                    "source_metadata": {"type": "api", "source": "compile", "operation": "add"}
+                },
+            },
+            wait=wait,
+        )
+
+    async def update_skill(
+        self,
+        skill_name: str,
+        path: str,
+        *,
+        target_uri: str,
+        wait: bool = True,
+    ) -> Dict[str, Any]:
+        """Replace the named Skill package with files from path."""
+        return await self.client.update_skill(
+            skill_name,
+            path,
+            options={"target_uri": target_uri},
+            wait=wait,
+        )
+
+    async def batch_write(
+        self,
+        *,
+        root_uri: str,
+        operations: List[Dict[str, Any]],
+        wait: bool = True,
+        skip_conflicts: bool = False,
+        defer_processing: bool = False,
+        edit_source: Literal["manual", "agent", "compile"] = "manual",
+    ) -> Dict[str, Any]:
+        """Publish a bundle, optionally retaining conflicting targets and reporting their URIs."""
+        return await self.client.batch_write(
+            root_uri=root_uri,
+            operations=operations,
+            wait=wait,
+            options={
+                "skip_conflicts": skip_conflicts,
+                "defer_processing": defer_processing,
+                "edit_source": edit_source,
+            },
+        )
 
     async def read_content(
         self,
         uri: str,
         level: str = "abstract",
         user_id: Optional[str] = None,
+        offset: int = 0,
+        limit: int = -1,
     ) -> str:
         """读取内容
 
         Args:
             uri: Viking URI
             level: 读取级别 ("abstract" - L0摘要, "overview" - L1概览, "read" - L2完整内容)
+            offset: Starting line number (0-indexed); only used for level="read"
+            limit: Number of lines to read, -1 means read to end; only used for level="read"
         """
+        if self._skill_snapshot_ref(uri):
+            if level in {"read", "raw"}:
+                return await self.read_raw(uri, offset=offset, limit=limit)
+            if level in {"abstract", "overview"}:
+                directory = uri.rstrip("/")
+                if not (await self.stat(uri))["isDir"]:
+                    directory = directory.rsplit("/", 1)[0]
+                return await self.read_raw(f"{directory}/.{level}.md")
+            raise ValueError(f"Unsupported level: {level}")
         client = self.client
         should_close = False
         scoped_user_id = user_id or self._owner_user_id_for_uri(uri)
@@ -593,7 +778,17 @@ class VikingClient:
             elif level == "overview":
                 return await client.overview(uri)
             elif level == "read":
-                return await client.read(uri)
+                if offset == 0 and limit == -1:
+                    return await client.read(uri)
+                return await client.read(uri, offset=offset, limit=limit)
+            elif level == "raw":
+                read_raw = getattr(client, "read_raw", None)
+                if read_raw is not None:
+                    return await read_raw(uri)
+                try:
+                    return await client.read(uri, raw=True)
+                except TypeError:
+                    return await client.read(uri)
             else:
                 raise ValueError(f"Unsupported level: {level}")
         except FileNotFoundError:
@@ -609,7 +804,7 @@ class VikingClient:
         """读取用户 profile。"""
         effective_user_id = self._effective_user_id(user_id)
         if not effective_user_id:
-            return await self.read_content(uri="viking://user/memories/profile.md", level="read")
+            return await self.read_content(uri="viking://~/memories/profile.md", level="read")
 
         uri = f"{self._memory_target_uri(effective_user_id)}profile.md"
         result = await self.read_content(uri=uri, level="read", user_id=effective_user_id)
@@ -629,6 +824,7 @@ class VikingClient:
         target_uri: str | list[str] | None = None,
         limit: int = 10,
         user_id: Optional[str] = None,
+        peer_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         client = self.client
         should_close = False
@@ -639,6 +835,8 @@ class VikingClient:
             client, should_close = await self._get_user_scoped_client(scoped_user_id)
 
         try:
+            if peer_id:
+                target_uri = target_uri or self._current_peer_memory_target_uri(peer_id)
             result = await client.search(
                 query,
                 target_uri=target_uri,
@@ -660,6 +858,18 @@ class VikingClient:
             "query": query,
             "target_uri": target_uri,
         }
+
+    async def find_mcp_tools(self, query: str, limit: int = 10) -> Dict[str, Any]:
+        """Discover OpenViking-managed MCP tools with complete definitions."""
+        return await self.client.find_mcp_tools(query, limit=limit)
+
+    async def invoke_mcp_tool(
+        self,
+        tool_uri: str,
+        arguments: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Invoke an OpenViking-managed MCP tool using the current identity."""
+        return await self.client.invoke_mcp_tool(tool_uri, arguments=arguments)
 
     async def search_user_memory(self, query: str, user_id: str) -> list[Any]:
         effective_user_id = self._effective_user_id(user_id)
@@ -773,8 +983,8 @@ class VikingClient:
     async def search_experiences(self, query: str, limit: int = 5) -> list[Any]:
         """用 query 检索 vikingbot experience 记忆。"""
         exp_uri = f"{self._memory_target_uri(self.admin_user_id)}experiences/"
-        result = await self.search(query=query, target_uri=exp_uri, limit=limit)
-        return result.get("memories", [])
+        result = await self.client.find(query=query, target_uri=exp_uri, limit=limit)
+        return self._matched_context_group_to_dicts(result, "memories")
 
     async def grep(
         self,
@@ -786,19 +996,29 @@ class VikingClient:
         user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """通过模式（正则表达式）搜索内容"""
+        if self._skill_snapshot_ref(uri):
+            raise ValueError("Read fixed Skill files with openviking_multi_read")
         client = self.client
         should_close = False
         if user_id:
             client, should_close = await self._get_user_scoped_client(user_id)
 
         try:
-            return await client.grep(
+            result = await client.grep(
                 uri,
                 pattern,
                 case_insensitive=case_insensitive,
                 node_limit=node_limit,
                 exclude_uri=exclude_uri,
             )
+            if (self._skill_snapshot or {}).get("snapshot_id"):
+                result["matches"] = [
+                    item
+                    for item in result.get("matches", [])
+                    if not self._skill_snapshot_ref(item.get("uri", ""))
+                ]
+                result["count"] = len(result["matches"])
+            return result
         finally:
             if should_close:
                 await client.close()
@@ -849,6 +1069,87 @@ class VikingClient:
         normalized: list[dict[str, Any]] = []
         assistant_peer_id = self._assistant_peer_id()
 
+        def build_payload(
+            payload_role: str,
+            parts: list[dict[str, Any]],
+            created_at: Any,
+            peer_id: Optional[str],
+        ) -> dict[str, Any]:
+            payload: dict[str, Any] = {
+                "role": payload_role,
+                "parts": parts,
+                "created_at": created_at,
+            }
+            if peer_id:
+                payload["peer_id"] = peer_id
+            return payload
+
+        def build_tool_parts(tool_infos: Any) -> list[dict[str, Any]]:
+            parts: list[dict[str, Any]] = []
+            if not isinstance(tool_infos, list):
+                return parts
+
+            for tool_info in tool_infos:
+                if not isinstance(tool_info, dict):
+                    continue
+                tool_name = str(tool_info.get("tool_name") or tool_info.get("name") or "").strip()
+                if not tool_name:
+                    continue
+                if tool_info.get("auto") is True or tool_name == "auto_memory_search":
+                    continue
+
+                raw_args = tool_info.get("args", tool_info.get("arguments", {}))
+                if isinstance(raw_args, dict):
+                    tool_input = raw_args
+                else:
+                    try:
+                        tool_input = json.loads(raw_args) if raw_args else {}
+                    except Exception:
+                        tool_input = {"raw_args": str(raw_args)}
+
+                result_str = str(tool_info.get("result", tool_info.get("tool_output", "")))
+                skill_uri = str(tool_info.get("skill_uri") or "").strip()
+                if not skill_uri:
+                    explicit_skill_uris = tool_info.get("skill_uris") or []
+                    if isinstance(explicit_skill_uris, list) and explicit_skill_uris:
+                        skill_uri = str(explicit_skill_uris[0] or "").strip()
+                if not skill_uri and tool_name == "read_file" and result_str:
+                    match = re.search(
+                        r"^---\s*\nname:\s*(.+?)\s*\n",
+                        result_str,
+                        re.MULTILINE,
+                    )
+                    if match:
+                        skill_name = match.group(1).strip()
+                        skill_uri = self._skill_memory_uri(skill_name)
+
+                tool_id = str(
+                    tool_info.get("tool_call_id")
+                    or tool_info.get("tool_id")
+                    or tool_info.get("id")
+                    or f"{tool_name}_{uuid.uuid4().hex[:8]}"
+                )
+                explicit_status = str(tool_info.get("tool_status") or "").strip()
+                parts.append(
+                    {
+                        "type": "tool",
+                        "tool_id": tool_id,
+                        "tool_name": tool_name,
+                        "tool_uri": f"viking://~/sessions/{session_id}/tools/{tool_id}"
+                        if session_id
+                        else "",
+                        "tool_input": tool_input,
+                        "tool_output": result_str,
+                        "tool_status": explicit_status
+                        or ("completed" if tool_info.get("execute_success", True) else "error"),
+                        "skill_uri": skill_uri,
+                        "duration_ms": float(tool_info.get("duration", 0.0) or 0.0),
+                        "prompt_tokens": tool_info.get("input_token"),
+                        "completion_tokens": tool_info.get("output_token"),
+                    }
+                )
+            return parts
+
         for message in messages:
             role = str(message.get("role") or "").strip().lower()
             if role not in {"user", "assistant", "system", "tool"}:
@@ -856,72 +1157,13 @@ class VikingClient:
 
             content = self._session_message_content(message)
             tools_used = message.get("tools_used") or []
-            parts: list[dict[str, Any]] = []
+            tool_parts = build_tool_parts(tools_used)
+            agent_turns = message.get("agent_turns")
 
-            if content:
-                parts.append({"type": "text", "text": content})
-
-            if isinstance(tools_used, list):
-                for tool_info in tools_used:
-                    if not isinstance(tool_info, dict):
-                        continue
-                    tool_name = str(tool_info.get("tool_name") or "").strip()
-                    if not tool_name:
-                        continue
-
-                    raw_args = tool_info.get("args", {})
-                    if isinstance(raw_args, dict):
-                        tool_input = raw_args
-                    else:
-                        try:
-                            tool_input = json.loads(raw_args) if raw_args else {}
-                        except Exception:
-                            tool_input = {"raw_args": str(raw_args)}
-
-                    result_str = str(tool_info.get("result", ""))
-                    skill_uri = ""
-                    if tool_name == "read_file" and result_str:
-                        match = re.search(
-                            r"^---\s*\nname:\s*(.+?)\s*\n",
-                            result_str,
-                            re.MULTILINE,
-                        )
-                        if match:
-                            skill_name = match.group(1).strip()
-                            skill_uri = self._skill_memory_uri(skill_name)
-
-                    tool_id = f"{tool_name}_{uuid.uuid4().hex[:8]}"
-                    parts.append(
-                        {
-                            "type": "tool",
-                            "tool_id": tool_id,
-                            "tool_name": tool_name,
-                            "tool_uri": f"viking://session/{session_id}/tools/{tool_id}"
-                            if session_id
-                            else "",
-                            "tool_input": tool_input,
-                            "tool_output": result_str[:2000],
-                            "tool_status": "completed"
-                            if tool_info.get("execute_success", True)
-                            else "error",
-                            "skill_uri": skill_uri,
-                            "duration_ms": float(tool_info.get("duration", 0.0) or 0.0),
-                            "prompt_tokens": tool_info.get("input_token"),
-                            "completion_tokens": tool_info.get("output_token"),
-                        }
-                    )
-
-            if not parts:
+            if not content and not tool_parts and not agent_turns:
                 continue
 
             ov_role = "user" if role == "user" else "assistant"
-            payload = {
-                "role": ov_role,
-                "content": content,
-                "parts": parts,
-                "created_at": message.get("created_at") or message.get("timestamp"),
-            }
-
             peer_id = message.get("peer_id")
             if not peer_id and ov_role == "user":
                 peer_id = message.get("sender_id") or default_user_peer_id
@@ -929,10 +1171,58 @@ class VikingClient:
                 peer_id = assistant_peer_id
 
             safe_message_peer_id = self._peer_id(peer_id)
-            if safe_message_peer_id:
-                payload["peer_id"] = safe_message_peer_id
+            created_at = message.get("created_at") or message.get("timestamp")
 
-            normalized.append(payload)
+            turn_payloads: list[dict[str, Any]] = []
+            if ov_role == "assistant" and isinstance(agent_turns, list):
+                for turn in agent_turns:
+                    if not isinstance(turn, dict):
+                        continue
+                    turn_parts: list[dict[str, Any]] = []
+                    turn_content = self._session_message_content(turn)
+                    if turn_content:
+                        turn_parts.append({"type": "text", "text": turn_content})
+                    turn_parts.extend(build_tool_parts(turn.get("tool_calls") or turn.get("tools")))
+                    if not turn_parts:
+                        continue
+                    turn_payloads.append(
+                        build_payload(
+                            "assistant",
+                            turn_parts,
+                            turn.get("created_at") or turn.get("timestamp") or created_at,
+                            safe_message_peer_id,
+                        )
+                    )
+
+            if ov_role == "user" and content:
+                normalized.append(
+                    build_payload(
+                        "user",
+                        [{"type": "text", "text": content}],
+                        created_at,
+                        safe_message_peer_id,
+                    )
+                )
+            if turn_payloads:
+                normalized.extend(turn_payloads)
+            elif tool_parts:
+                normalized.append(
+                    build_payload(
+                        "assistant",
+                        tool_parts,
+                        created_at,
+                        safe_message_peer_id if ov_role == "assistant" else None,
+                    )
+                )
+            if ov_role == "assistant" and content:
+                normalized.append(
+                    build_payload(
+                        "assistant",
+                        [{"type": "text", "text": content}],
+                        created_at,
+                        safe_message_peer_id,
+                    )
+                )
 
         return normalized
 
@@ -957,7 +1247,7 @@ class VikingClient:
 
         return await client.create_session(
             session_id=session_id,
-            memory_policy=memory_policy,
+            options={"memory_policy": memory_policy} if memory_policy is not None else None,
         )
 
     @staticmethod
@@ -1017,6 +1307,15 @@ class VikingClient:
         keep_recent_count: int = 0,
         user_id: Optional[str] = None,
         memory_policy: Optional[Dict[str, Any]] = None,
+        enable_working_memory: Optional[bool] = None,
+        retention_mode: Optional[str] = None,
+        keep_recent_turn_count: Optional[int] = None,
+        retained_message_token_budget: Optional[int] = None,
+        min_raw_tail_steps: Optional[int] = None,
+        session_window_context: Optional[int] = None,
+        summary_token_ratio: Optional[float] = None,
+        retained_token_ratio: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         await self.ensure_session(
             session_id,
@@ -1026,9 +1325,25 @@ class VikingClient:
             else self.default_memory_policy(),
         )
         client = await self._session_client_for_user(user_id)
+        retention_kwargs = {
+            key: value
+            for key, value in {
+                "enable_working_memory": enable_working_memory,
+                "retention_mode": retention_mode,
+                "keep_recent_turn_count": keep_recent_turn_count,
+                "retained_message_token_budget": retained_message_token_budget,
+                "min_raw_tail_steps": min_raw_tail_steps,
+                "session_window_context": session_window_context,
+                "summary_token_ratio": summary_token_ratio,
+                "retained_token_ratio": retained_token_ratio,
+                "reasoning_effort": reasoning_effort,
+            }.items()
+            if value is not None
+        }
         return await client.commit_session(
             session_id,
             keep_recent_count=keep_recent_count,
+            **retention_kwargs,
         )
 
     async def commit(
@@ -1039,6 +1354,14 @@ class VikingClient:
         keep_recent_count: int = 0,
         peer_id: Optional[str] = None,
         memory_policy: Optional[Dict[str, Any]] = None,
+        retention_mode: Optional[str] = None,
+        keep_recent_turn_count: Optional[int] = None,
+        retained_message_token_budget: Optional[int] = None,
+        min_raw_tail_steps: Optional[int] = None,
+        session_window_context: Optional[int] = None,
+        summary_token_ratio: Optional[float] = None,
+        retained_token_ratio: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
     ):
         """Append messages to a stable session and commit it."""
         session_user_id = self._effective_session_user_id(user_id)
@@ -1056,11 +1379,26 @@ class VikingClient:
             default_user_peer_id=self._peer_id(peer_id),
             session_user_id=session_user_id,
         )
+        retention_kwargs = {
+            key: value
+            for key, value in {
+                "retention_mode": retention_mode,
+                "keep_recent_turn_count": keep_recent_turn_count,
+                "retained_message_token_budget": retained_message_token_budget,
+                "min_raw_tail_steps": min_raw_tail_steps,
+                "session_window_context": session_window_context,
+                "summary_token_ratio": summary_token_ratio,
+                "retained_token_ratio": retained_token_ratio,
+                "reasoning_effort": reasoning_effort,
+            }.items()
+            if value is not None
+        }
         commit_result = await self.commit_session(
             session_id,
             keep_recent_count=keep_recent_count,
             user_id=session_user_id,
             memory_policy=session_memory_policy,
+            **retention_kwargs,
         )
         logger.debug(
             f"Committed OpenViking session {session_id}, "
@@ -1080,43 +1418,3 @@ class VikingClient:
             await self.admin_user_client.close()
         for client in self._user_clients.values():
             await client.close()
-
-
-async def main_test():
-    client = await VikingClient.create()
-    # res = client.list_resources()
-    # res = await client.search("头有点疼", target_uri="viking://user/memories/")
-    # res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
-    res = await client.search_memory("你好", "user_1")
-    # res = await client.list_resources("viking://resources/")
-    # res = await client.read_content("viking://user/memories/profile.md", level="read")
-    # res = await client.add_resource("https://github.com/volcengine/OpenViking", "ov代码")
-    # res = await client.grep("viking://resources/", "viking", True)
-    # res = await client.commit(
-    #     session_id="99999",
-    #     messages=[{"role": "user", "content": "你好"}],
-    #     user_id="1010101010",
-    # )
-    # res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
-    #                                    ,{"role": "assistant", "content": "我来帮你r搜索 Python asyncio 相关的教程。"}])
-    print(res)
-
-    await client.close()
-    print("处理完成！")
-
-
-async def account_test():
-    client = ov.AsyncHTTPClient(
-        url="http://localhost:1933",
-        api_key="",
-    )
-    await client.initialize()
-
-    res = await client.search("123")
-
-    print(res)
-
-
-if __name__ == "__main__":
-    asyncio.run(main_test())
-    # asyncio.run(account_test())

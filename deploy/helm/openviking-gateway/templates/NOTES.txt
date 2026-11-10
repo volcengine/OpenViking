@@ -1,0 +1,7 @@
+Gateway Service: {{ include "openviking-gateway.fullname" . }}:{{ .Values.service.port }}
+Model API: /gateway/v1; health: /health
+
+{{- if and (include "openviking-gateway.sqlite" .) (not .Values.persistence.enabled) }}
+WARNING: SQLite is on emptyDir. Pod replacement loses upstreams, issued keys,
+profiles, conversation state, and pending captures. Enable persistence to retain them.
+{{- end }}

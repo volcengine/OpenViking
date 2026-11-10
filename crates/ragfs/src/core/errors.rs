@@ -36,6 +36,14 @@ pub enum Error {
     #[error("permission denied: {0}")]
     PermissionDenied(String),
 
+    /// Storage or account quota exceeded.
+    #[error("quota exceeded: {0}")]
+    QuotaExceeded(String),
+
+    /// Upstream service temporarily rejected the request due to rate limiting.
+    #[error("rate limited: {0}")]
+    RateLimited(String),
+
     /// Invalid path
     #[error("invalid path: {0}")]
     InvalidPath(String),
@@ -55,6 +63,10 @@ pub enum Error {
     /// Invalid operation
     #[error("invalid operation: {0}")]
     InvalidOperation(String),
+
+    /// Operation is intentionally unsupported by the current protocol.
+    #[error("not supported: {0}")]
+    NotSupported(String),
 
     /// I/O error
     #[error("I/O error: {0}")]
@@ -87,6 +99,14 @@ pub enum Error {
     /// Timeout error
     #[error("operation timed out: {0}")]
     Timeout(String),
+
+    /// Non-blocking operation would block and should be retried by the caller
+    #[error("operation would block: {0}")]
+    WouldBlock(String),
+
+    /// Preserve acquisition failures so callers can distinguish contention from corruption.
+    #[error(transparent)]
+    PathLock(#[from] crate::lock::types::PathLockError),
 
     /// Multi-write synchronous fanout failed to reach the required acknowledgement quorum
     #[error(
@@ -134,6 +154,16 @@ impl Error {
         Self::PermissionDenied(path.into())
     }
 
+    /// Create a quota-exceeded error.
+    pub fn quota_exceeded(message: impl Into<String>) -> Self {
+        Self::QuotaExceeded(message.into())
+    }
+
+    /// Create a rate-limited error.
+    pub fn rate_limited(message: impl Into<String>) -> Self {
+        Self::RateLimited(message.into())
+    }
+
     /// Create an InvalidPath error
     pub fn invalid_path(path: impl Into<String>) -> Self {
         Self::InvalidPath(path.into())
@@ -164,17 +194,25 @@ impl Error {
         Self::Timeout(msg.into())
     }
 
+    /// Create a WouldBlock error
+    pub fn would_block(msg: impl Into<String>) -> Self {
+        Self::WouldBlock(msg.into())
+    }
+
     /// Return a stable error kind name for structured reporting.
     pub fn kind_name(&self) -> &'static str {
         match self {
             Self::NotFound(_) => "not_found",
             Self::AlreadyExists(_) => "already_exists",
             Self::PermissionDenied(_) => "permission_denied",
+            Self::QuotaExceeded(_) => "quota_exceeded",
+            Self::RateLimited(_) => "rate_limited",
             Self::InvalidPath(_) => "invalid_path",
             Self::NotADirectory(_) => "not_a_directory",
             Self::IsADirectory(_) => "is_a_directory",
             Self::DirectoryNotEmpty(_) => "directory_not_empty",
             Self::InvalidOperation(_) => "invalid_operation",
+            Self::NotSupported(_) => "not_supported",
             Self::Io(_) => "io",
             Self::Plugin(_) => "plugin",
             Self::Config(_) => "config",
@@ -183,6 +221,8 @@ impl Error {
             Self::Serialization(_) => "serialization",
             Self::Network(_) => "network",
             Self::Timeout(_) => "timeout",
+            Self::WouldBlock(_) => "would_block",
+            Self::PathLock(_) => "path_lock",
             Self::SyncWriteQuorum { .. } => "sync_write_quorum",
             Self::ContextMissing(_) => "context_missing",
             Self::Internal(_) => "internal",
@@ -192,6 +232,11 @@ impl Error {
     /// Create an InvalidOperation error
     pub fn invalid_operation(msg: impl Into<String>) -> Self {
         Self::InvalidOperation(msg.into())
+    }
+
+    /// Create a NotSupported error.
+    pub fn not_supported(msg: impl Into<String>) -> Self {
+        Self::NotSupported(msg.into())
     }
 }
 

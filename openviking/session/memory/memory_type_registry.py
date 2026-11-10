@@ -5,6 +5,7 @@ Memory type registry - loads YAML configurations.
 """
 
 from pathlib import Path
+from threading import Lock
 from typing import Any, Dict, List, Optional
 
 import yaml
@@ -15,6 +16,7 @@ from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
 from openviking.session.memory.merge_op import MergeOp
 from openviking.session.memory.merge_op.base import FieldType
 from openviking.session.memory.utils.template_utils import TemplateUtils
+from openviking.system_assets import builtin_memory_templates_dir
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -22,7 +24,10 @@ logger = get_logger(__name__)
 
 def resolve_memory_templates_dir() -> Path:
     """Resolve the memory templates directory from PromptManager semantics."""
-    return PromptManager._resolve_templates_dir(None) / "memory"
+    templates_dir = PromptManager._resolve_templates_dir(None)
+    if templates_dir == PromptManager._get_bundled_templates_dir():
+        return builtin_memory_templates_dir()
+    return templates_dir / "memory"
 
 
 class MemoryTypeRegistry:
@@ -45,7 +50,7 @@ class MemoryTypeRegistry:
 
         from openviking_cli.utils.config import get_openviking_config
 
-        memory_templates_dir = str(PromptManager._get_bundled_templates_dir() / "memory")
+        memory_templates_dir = str(builtin_memory_templates_dir())
         config = get_openviking_config()
         custom_dir = config.memory.custom_templates_dir
 
@@ -80,9 +85,9 @@ class MemoryTypeRegistry:
                 )
         else:
             memory_templates_dir = str(resolve_memory_templates_dir())
-            if memory_templates_dir != str(
-                PromptManager._get_bundled_templates_dir() / "memory"
-            ) and os.path.exists(memory_templates_dir):
+            if memory_templates_dir != str(builtin_memory_templates_dir()) and os.path.exists(
+                memory_templates_dir
+            ):
                 loaded = self.load_from_directory(memory_templates_dir, replace=True)
                 logger.info(
                     "Loaded %s memory schemas from configured prompt templates: %s",
@@ -131,25 +136,6 @@ class MemoryTypeRegistry:
         if include_disabled:
             return list(self._types.keys())
         return [mt.memory_type for mt in self._types.values() if mt.enabled]
-
-    def list_search_uris(self, user_space: str) -> List[str]:
-        """List all directory URIs for search scope.
-
-        Args:
-            user_space: User space name
-
-        Returns:
-            List of directory URIs from enabled schemas
-        """
-        uris = []
-        for schema in self.list_all(include_disabled=False):
-            if schema.directory:
-                dir_path = TemplateUtils.render(
-                    schema.directory,
-                    {"user_space": user_space},
-                )
-                uris.append(dir_path)
-        return uris
 
     def load_from_yaml(self, yaml_path: str, replace: bool = False) -> None:
         """
@@ -206,6 +192,11 @@ class MemoryTypeRegistry:
         """Parse memory type from YAML data."""
         fields_data = data.get("fields", [])
         fields = []
+        stage = data.get("stage")
+        if stage is None and data.get("agent_only", False):
+            stage = "agent"
+        if stage is None:
+            stage = "user"
 
         for field_data in fields_data:
             field = MemoryField(
@@ -214,6 +205,7 @@ class MemoryTypeRegistry:
                 description=field_data.get("description", ""),
                 merge_op=MergeOp(field_data.get("merge_op", "patch")),
                 init_value=field_data.get("init_value"),
+                required=field_data.get("required", True),
             )
             fields.append(field)
 
@@ -227,7 +219,8 @@ class MemoryTypeRegistry:
             directory=data.get("directory", ""),
             enabled=data.get("enabled", data.get("enable", True)),
             operation_mode=data.get("operation_mode", "upsert"),
-            agent_only=data.get("agent_only", False),
+            stage=stage,
+            peer_enabled=data.get("peer_enabled", True),
             overview_template=data.get("overview_template"),
         )
 
@@ -271,9 +264,11 @@ class MemoryTypeRegistry:
             if "{{" in schema.filename_template:
                 continue
 
-            # Check if any field has init_value
+            # Seed template variables with every field so that placeholders for
+            # fields without an explicit init_value render as empty instead of
+            # leaking the literal "{{ field }}" text into the initialized file.
             fields_with_init = {
-                f.name: f.init_value for f in schema.fields if f.init_value is not None
+                f.name: f.init_value if f.init_value is not None else "" for f in schema.fields
             }
             if not fields_with_init:
                 continue
@@ -312,21 +307,36 @@ class MemoryTypeRegistry:
             full_content = MemoryFileUtils.write(
                 mf,
                 content_template=schema.content_template,
+                account_content_template_type=(
+                    schema.memory_type if schema._account_content_template else None
+                ),
             )
 
             # Write the file
             try:
-                await viking_fs.write_file(file_uri, full_content, ctx=ctx)
+                from openviking.observability.reporting.facts import bind_memory_type
+
+                with bind_memory_type(schema.memory_type):
+                    await viking_fs.write_file(file_uri, full_content, ctx=ctx)
                 logger.info(f"[MemoryTypeRegistry] Initialized memory file: {file_uri}")
             except Exception:
                 pass
 
 
-def create_default_registry() -> MemoryTypeRegistry:
-    """
-    Create a registry with memory types loaded at initialization.
+_default_registry: Optional[MemoryTypeRegistry] = None
+_default_registry_lock = Lock()
 
-    Returns:
-        MemoryTypeRegistry with built-in types (loaded in __init__)
+
+def get_default_registry() -> MemoryTypeRegistry:
+    """Return the shared default registry, loaded on first use.
+
+    Template changes take effect after restarting the process. Callers must
+    not modify this registry or its schemas; use a separate registry to load
+    additional templates.
     """
-    return MemoryTypeRegistry(load_schemas=True)
+    global _default_registry
+    if _default_registry is None:
+        with _default_registry_lock:
+            if _default_registry is None:
+                _default_registry = MemoryTypeRegistry()
+    return _default_registry

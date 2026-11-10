@@ -18,9 +18,23 @@ path = "src/lib.rs"
 name = "ragfs-shell"
 path = "src/shell/main.rs"
 
+[[bench]]
+name = "pathlock_perf"
+harness = false
+
 [[test]]
-name = "cache_wrapper"
-path = "tests/cache_wrapper.rs"
+name = "cache_runtime"
+path = "tests/cache_runtime.rs"
+required-features = ["cache", "test-utils"]
+
+[[test]]
+name = "redis_runtime"
+path = "tests/redis_runtime.rs"
+required-features = ["cache"]
+
+[[test]]
+name = "dynamic_provider"
+path = "tests/dynamic_provider.rs"
 required-features = ["cache"]
 
 [dependencies]
@@ -31,9 +45,14 @@ async-trait = "0.1"
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9"
 
 # Logging
 tracing = "0.1"
+
+# Metrics aggregation; the binding reads cumulative SDK snapshots on demand.
+opentelemetry = { version = "0.33", default-features = false, features = ["metrics"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["metrics", "experimental_metrics_custom_reader"] }
 
 # Git (gitoxide)
 gix-hash = "0.14"
@@ -48,9 +67,12 @@ flate2 = "1.0"
 
 # Path handling and filesystem
 path-clean = "1.0"
+filelocks = "0.1.0"
 
 # Data structures
 radix_trie = "0.2"
+aho-corasick = "1.1"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 # Error handling
 anyhow = "1.0"
@@ -67,6 +89,9 @@ bytes = "1.5"
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
+fred = { version = "10.1.0", default-features = false, features = ["i-hashes", "i-keys", "i-lists", "i-scripts", "i-server", "i-sets", "i-sorted-sets", "sentinel-auth", "sha-1", "vendored-openssl"], optional = true }
+libloading = { version = "0.8", optional = true }
+native-tls = { version = "0.2", optional = true }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "mysql"], optional = true }
 
 # AWS S3
@@ -80,22 +105,28 @@ lru = "0.12"
 # Regular expressions for grep
 regex = "1.10"
 mime_guess = "2.0"
+globset = "0.4"
+url = "2.5"
 
 # Encryption (envelope encryption: AES-256-GCM + HKDF-SHA256)
 aes-gcm = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"
+sha1 = "0.10"
 rand = "0.8"
 
 # Stream combinators for concurrent I/O
 futures = "0.3"
 
-# Grep acceleration (localfs fallback, rg-like behavior)
+# In-process LocalFS grep
 ignore = "0.4.25"
 grep = "0.4.1"
 grep-matcher = "0.1.8"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.16"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 # Development dependencies
 [dev-dependencies]
@@ -112,6 +143,7 @@ uuid = { version = "1.0", features = ["v4"] }
 
 [features]
 default = []
-cache = []
+cache = ["dep:fred", "dep:libloading", "dep:native-tls"]
+test-utils = []
 s3 = ["aws-sdk-s3", "aws-config", "aws-types"]
 full = ["s3", "cache"]

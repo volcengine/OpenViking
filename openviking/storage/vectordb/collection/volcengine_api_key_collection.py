@@ -12,13 +12,14 @@ from openviking.storage.vectordb.collection.result import (
     AggregateResult,
     DataItem,
     FetchDataInCollectionResult,
-    SearchItemResult,
     SearchResult,
+    parse_remote_search_result,
 )
 from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForDataApi,
     ClientForDataApiWithApiKey,
 )
+from openviking.utils.search_filters import VALID_TIME_FIELDS
 from openviking_cli.utils.logger import default_logger as logger
 
 
@@ -150,8 +151,28 @@ class VolcengineApiKeyCollection(ICollection):
                 sanitized_list.append(y)
         return sanitized_list
 
+    @classmethod
+    def _normalize_date_time_filter(cls, obj: Any) -> Any:
+        """Rewrite ``range`` nodes on date_time fields to VikingDB ``time_range``.
+
+        OpenViking compiles ``TimeRange`` down to the internal ``range`` DSL, but the
+        commercial data-plane expects ``time_range`` for date_time fields and ``range``
+        only for numeric fields. Numeric ``range`` nodes are left untouched.
+        """
+        if isinstance(obj, list):
+            return [cls._normalize_date_time_filter(item) for item in obj]
+        if not isinstance(obj, dict):
+            return obj
+
+        normalized = {key: cls._normalize_date_time_filter(value) for key, value in obj.items()}
+        if normalized.get("op") == "range" and normalized.get("field") in VALID_TIME_FIELDS:
+            normalized["op"] = "time_range"
+        return normalized
+
     def _data_post(self, path: str, data: Dict[str, Any]):
         safe_data = self._sanitize_payload(data)
+        if isinstance(safe_data, dict) and "filter" in safe_data:
+            safe_data["filter"] = self._normalize_date_time_filter(safe_data["filter"])
         response = self.data_client.do_req("POST", path, req_body=safe_data)
         if response.status_code != 200:
             raise self._build_response_error(response, path)
@@ -190,18 +211,7 @@ class VolcengineApiKeyCollection(ICollection):
         return result
 
     def _parse_search_result(self, data: Dict[str, Any]) -> SearchResult:
-        result = SearchResult()
-        if isinstance(data, dict) and "data" in data:
-            data_list = data.get("data", [])
-            result.data = [
-                SearchItemResult(
-                    id=item.get("id"),
-                    fields=item.get("fields"),
-                    score=item.get("score"),
-                )
-                for item in data_list
-            ]
-        return result
+        return parse_remote_search_result(data)
 
     def _parse_aggregate_result(
         self,
@@ -235,15 +245,21 @@ class VolcengineApiKeyCollection(ICollection):
             "volcengine api_key mode is data-plane only; update is not supported"
         )
 
-    def get_meta_data(self):
+    def get_meta_data(self, *, raise_on_error: bool = False):
         from openviking.storage.collection_schemas import CollectionSchemas
 
+        schema = CollectionSchemas.context_collection(
+            self.collection_name,
+            int(self.meta_data.get("VectorDim") or self.meta_data.get("Dimension") or 0),
+        )
         return {
             "ProjectName": self.project_name,
             "CollectionName": self.collection_name,
             "IndexName": self.index_name,
             "Description": "data-plane only backend",
-            "Fields": CollectionSchemas.context_collection.get("Fields", []),
+            "Fields": schema.get("Fields", []),
+            "ScalarIndex": schema.get("ScalarIndex", []),
+            "FullText": schema.get("FullText", []),
         }
 
     def close(self):
@@ -271,7 +287,7 @@ class VolcengineApiKeyCollection(ICollection):
     def update_index(
         self,
         index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
+        scalar_index: Optional[List[str]] = None,
         description: Optional[str] = None,
     ):
         raise NotImplementedError(
@@ -297,6 +313,7 @@ class VolcengineApiKeyCollection(ICollection):
             **self._base_data_payload(),
             "data": data_list,
             "ttl": ttl,
+            "ignore_unknown_fields": True,
         }
         return self._data_post(path, data)
 
@@ -305,6 +322,7 @@ class VolcengineApiKeyCollection(ICollection):
         data = {
             **self._base_data_payload(),
             "data": data_list,
+            "ignore_unknown_fields": True,
         }
         return self._data_post(path, data)
 
@@ -313,6 +331,7 @@ class VolcengineApiKeyCollection(ICollection):
         data = {
             **self._base_data_payload(),
             "ids": primary_keys,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_fetch_result(resp_data)
@@ -342,6 +361,8 @@ class VolcengineApiKeyCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
+        return_detail_info: bool = False,
     ) -> SearchResult:
         if dense_vector is None and sparse_vector is None:
             raise ValueError("At least one of dense_vector or sparse_vector is required")
@@ -354,9 +375,14 @@ class VolcengineApiKeyCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         if sparse_vector:
             data["sparse_vector"] = sparse_vector
+        if advance is not None:
+            data["advance"] = advance
+        if return_detail_info:
+            data["return_detail_info"] = True
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
 
@@ -369,16 +395,21 @@ class VolcengineApiKeyCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[List[str]] = None,
     ) -> SearchResult:
         path = "/api/vikingdb/data/search/keywords"
         data = {
             **self._base_data_payload(index_name=index_name),
             "keywords": keywords,
             "query": query,
+            "mode": mode,
+            "fields": fields,
             "filter": filters,
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         data = {k: v for k, v in data.items() if v is not None}
         resp_data = self._data_post(path, data)
@@ -401,6 +432,7 @@ class VolcengineApiKeyCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
@@ -426,6 +458,7 @@ class VolcengineApiKeyCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
@@ -437,6 +470,7 @@ class VolcengineApiKeyCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         path = "/api/vikingdb/data/search/random"
         data = {
@@ -445,7 +479,10 @@ class VolcengineApiKeyCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
+        if advance is not None:
+            data["advance"] = advance
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
 
@@ -468,6 +505,7 @@ class VolcengineApiKeyCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)

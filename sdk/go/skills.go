@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -14,10 +17,12 @@ func (c *Client) AddSkill(ctx context.Context, data any, opts *AddSkillOptions) 
 	payload := map[string]any{
 		"wait": opts.Wait,
 	}
-	setFloatPtr(payload, "timeout", opts.Timeout)
 	setAny(payload, "telemetry", opts.Telemetry)
 	setAny(payload, "target_uri", opts.TargetURI)
 	if err := c.attachSkillData(ctx, payload, data); err != nil {
+		return nil, err
+	}
+	if err := mergeExtra(payload, opts.Extra); err != nil {
 		return nil, err
 	}
 	var result map[string]any
@@ -114,11 +119,13 @@ func (c *Client) UpdateSkill(ctx context.Context, skillName string, data any, op
 	payload := map[string]any{
 		"wait": opts.Wait,
 	}
-	setFloatPtr(payload, "timeout", opts.Timeout)
 	setAny(payload, "source_metadata", opts.SourceMetadata)
 	setAny(payload, "telemetry", opts.Telemetry)
 	setAny(payload, "target_uri", opts.TargetURI)
 	if err := c.attachSkillData(ctx, payload, data); err != nil {
+		return nil, err
+	}
+	if err := mergeExtra(payload, opts.Extra); err != nil {
 		return nil, err
 	}
 	var result map[string]any
@@ -146,7 +153,7 @@ func (c *Client) attachSkillData(ctx context.Context, payload map[string]any, da
 		payload["data"] = data
 		return nil
 	}
-	if err := c.addLocalUpload(ctx, payload, path, false); err != nil {
+	if err := c.addLocalUpload(ctx, payload, path, false, true); err != nil {
 		return err
 	}
 	if _, ok := payload["path"]; ok {

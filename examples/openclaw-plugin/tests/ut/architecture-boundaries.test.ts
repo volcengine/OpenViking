@@ -73,7 +73,7 @@ describe("architecture boundaries", () => {
     const violations = collectSourceFiles(join(rootDir, "tests"), [".ts", ".tsx", ".js", ".mjs", ".cjs"])
       .flatMap((file) => {
         const source = readFileSync(file, "utf8");
-        const relativePath = relative(rootDir, file);
+        const relativePath = relative(rootDir, file).replace(/\\/g, "/");
         if (relativePath === "tests/ut/architecture-boundaries.test.ts") {
           return [];
         }
@@ -458,47 +458,6 @@ describe("architecture boundaries", () => {
     expect(mcpSkillBlock).toMatch(/new OpenVikingClient\([\s\S]*\{\s*transport\s*\}/);
   });
 
-  it("keeps OpenViking error response client tests on the injected transport seam", () => {
-    const clientTestSource = readFileSync(join(rootDir, "tests/ut/client.test.ts"), "utf8");
-    const start = clientTestSource.indexOf('it("surfaces OpenViking error responses"');
-    const end = clientTestSource.indexOf('  it("uses an extended request timeout for wait=true imports"', start);
-
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-
-    const errorResponseBlock = clientTestSource.slice(start, end);
-    expect(errorResponseBlock).not.toMatch(/vi\.stubGlobal\("fetch"/);
-    expect(errorResponseBlock).toMatch(/new OpenVikingClient\([\s\S]*\{\s*transport\s*\}/);
-  });
-
-  it("keeps import timeout client tests on the injected transport seam", () => {
-    const clientTestSource = readFileSync(join(rootDir, "tests/ut/client.test.ts"), "utf8");
-    const waitStart = clientTestSource.indexOf('it("uses an extended request timeout for wait=true imports"');
-    const waitEnd = clientTestSource.indexOf('  it("still uses the default request timeout for non-wait imports"', waitStart);
-    const nonWaitEnd = clientTestSource.indexOf('  it("keeps polling wait=true commit long enough for slow Phase 2 completion"', waitEnd);
-
-    expect(waitStart).toBeGreaterThanOrEqual(0);
-    expect(waitEnd).toBeGreaterThan(waitStart);
-    expect(nonWaitEnd).toBeGreaterThan(waitEnd);
-
-    const timeoutBlock = clientTestSource.slice(waitStart, nonWaitEnd);
-    expect(timeoutBlock).not.toMatch(/vi\.stubGlobal\("fetch"/);
-    expect(timeoutBlock).toMatch(/new OpenVikingClient\([\s\S]*\{\s*transport\s*\}/);
-  });
-
-  it("keeps commit polling client tests on the injected transport seam", () => {
-    const clientTestSource = readFileSync(join(rootDir, "tests/ut/client.test.ts"), "utf8");
-    const start = clientTestSource.indexOf('it("keeps polling wait=true commit long enough for slow Phase 2 completion"');
-    const end = clientTestSource.indexOf('});\n\ndescribe("OpenVikingClient tenant headers', start);
-
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-
-    const commitPollingBlock = clientTestSource.slice(start, end);
-    expect(commitPollingBlock).not.toMatch(/vi\.stubGlobal\("fetch"/);
-    expect(commitPollingBlock).toMatch(/new OpenVikingClient\([\s\S]*\{\s*transport\s*\}/);
-  });
-
   it("keeps tenant header client tests on the injected transport seam", () => {
     const clientTestSource = readFileSync(join(rootDir, "tests/ut/client.test.ts"), "utf8");
     const start = clientTestSource.indexOf('describe("OpenVikingClient tenant headers');
@@ -515,7 +474,7 @@ describe("architecture boundaries", () => {
   it("keeps canonical namespace client tests on the injected transport seam", () => {
     const clientTestSource = readFileSync(join(rootDir, "tests/ut/client.test.ts"), "utf8");
     const start = clientTestSource.indexOf('describe("OpenVikingClient canonical namespace policy"');
-    const end = clientTestSource.indexOf('  it("includes role_id when addSessionMessage receives one"', start);
+    const end = clientTestSource.indexOf('  it("includes peer_id when addSessionMessage receives one"', start);
 
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
@@ -527,7 +486,7 @@ describe("architecture boundaries", () => {
 
   it("keeps addSessionMessage client tests on the injected transport seam", () => {
     const clientTestSource = readFileSync(join(rootDir, "tests/ut/client.test.ts"), "utf8");
-    const start = clientTestSource.indexOf('it("includes role_id when addSessionMessage receives one"');
+    const start = clientTestSource.indexOf('it("includes peer_id when addSessionMessage receives one"');
     const end = clientTestSource.indexOf('\n});', start);
 
     expect(start).toBeGreaterThanOrEqual(0);
@@ -870,7 +829,6 @@ describe("architecture boundaries", () => {
   it("keeps auto-recall helper tests off the index compatibility facade", () => {
     const violations = [
       "tests/ut/build-memory-lines.test.ts",
-      "tests/context-bloat-730.test.ts",
       "tests/ut/index-utils.test.ts",
     ].flatMap((file) => {
       const source = readFileSync(join(rootDir, file), "utf8");

@@ -1,44 +1,45 @@
 import { dirname } from "path"
 import { fileURLToPath } from "url"
-import { initializeRuntime } from "./lib/runtime.mjs"
-import { createRepoContext } from "./lib/repo-context.mjs"
-import { createMemorySessionManager } from "./lib/memory-session.mjs"
-import { createCodeTools } from "./lib/code-tools.mjs"
-import { createMemoryTools } from "./lib/memory-tools.mjs"
-import { createMemoryRecall } from "./lib/memory-recall.mjs"
-import { createVikingUriGuard } from "./lib/viking-uri-guard.mjs"
-import { initLogger, loadConfig, log, resolveDataDir } from "./lib/utils.mjs"
+import { createOpenVikingRuntime } from "./lib/plugin-runtime.mjs"
+import { startV2Plugin } from "./lib/v2-plugin.mjs"
+import { injectOpenVikingMcpConfig, injectOpenVikingSkillPaths } from "./lib/mcp-config.mjs"
+import { isRecallEnabled } from "./lib/shared/recall-core.mjs"
+import { log } from "./lib/utils.mjs"
 
 const pluginRoot = dirname(fileURLToPath(import.meta.url))
 
-/**
- * @type {import('@opencode-ai/plugin').Plugin}
- */
-export async function OpenVikingPlugin({ client, directory }) {
-  const config = loadConfig(pluginRoot, directory)
-  const dataDir = resolveDataDir(pluginRoot, config)
-  initLogger(dataDir)
+export async function OpenVikingPlugin({ client, directory } = {}) {
+  const runtime = createOpenVikingRuntime({ client, directory, pluginRoot })
+  if (!runtime) return {}
+  await runtime.ready
+  return v1Hooks(runtime)
+}
 
-  if (!config.enabled) {
-    log("INFO", "plugin", "OpenViking plugin is disabled in configuration")
-    return {}
-  }
-
-  const repoContext = createRepoContext({ config })
-  const sessionManager = createMemorySessionManager({ config, pluginRoot: dataDir })
-  const recall = createMemoryRecall({ config })
-  const vikingUriGuard = createVikingUriGuard()
-  const tools = createMemoryTools({ config, sessionManager, projectDirectory: directory })
-  const codeTools = createCodeTools({ config })
-
-  await sessionManager.init()
-
-  Promise.resolve().then(async () => {
-    const ready = await initializeRuntime(config, client)
-    if (ready) await repoContext.refreshRepos({ force: true })
-  })
+function v1Hooks(runtime) {
+  const {
+    config,
+    sessionManager,
+    repoContext,
+    recall,
+    sessionInject,
+    vikingUriGuard,
+    vikingUriNotice,
+  } = runtime
 
   return {
+    config: async (opencodeConfig) => {
+      const injected = injectOpenVikingMcpConfig(opencodeConfig, pluginRoot, config.mcp.enabled)
+      if (injected) injectOpenVikingSkillPaths(opencodeConfig, pluginRoot)
+      const hookOnly = !config.mcp.enabled
+      log(
+        injected || hookOnly ? "INFO" : "WARN",
+        "mcp",
+        injected ? "Registered OpenViking MCP server" :
+          hookOnly ? "Skipped bundled MCP registration in hook-only mode" :
+            "OpenViking MCP server was not registered",
+      )
+    },
+
     event: async ({ event }) => {
       await sessionManager.handleEvent(event)
       if (event?.type === "session.created") {
@@ -47,8 +48,7 @@ export async function OpenVikingPlugin({ client, directory }) {
     },
 
     "tool.execute.before": vikingUriGuard,
-
-    tool: { ...tools, ...codeTools },
+    "tool.execute.after": vikingUriNotice,
 
     "experimental.chat.system.transform": (_input, output) => {
       const prompt = repoContext.getRepoSystemPrompt()
@@ -57,8 +57,18 @@ export async function OpenVikingPlugin({ client, directory }) {
 
     "chat.message": async (input, output) => {
       try {
-        if (!config.autoRecall?.enabled) return
-        await recall.injectRelevantMemories(input, output)
+        // opencode awaits this hook before persisting/broadcasting the user
+        // message, so serial awaits here stack remote latency onto message
+        // display (#5148). Session inject and recall are independent after
+        // entry; overlap them the way the dsh plugin does (#4643).
+        if (!isRecallEnabled(config)) {
+          await sessionInject.injectSessionContext(input, output)
+          return
+        }
+        await Promise.all([
+          sessionInject.injectSessionContext(input, output),
+          recall.injectRelevantMemories(input, output),
+        ])
       } catch (error) {
         log("WARN", "recall", "Auto recall failed", { error: error?.message ?? String(error) })
       }
@@ -74,11 +84,24 @@ export async function OpenVikingPlugin({ client, directory }) {
       })
     },
 
-    stop: async () => {
+    dispose: async () => {
       await sessionManager.flushAll({ commit: true })
-      log("INFO", "plugin", "OpenViking plugin stopped")
+      log("INFO", "plugin", "OpenViking plugin disposed")
     },
   }
 }
 
-export default OpenVikingPlugin
+const OpenVikingV2Plugin = {
+  id: "openviking",
+  async setup(ctx) {
+    const directory = ctx?.location?.project?.directory || ctx?.location?.directory
+    const runtime = createOpenVikingRuntime({ directory, pluginRoot })
+    if (!runtime) return
+    return startV2Plugin(ctx, runtime, { pluginRoot })
+  },
+  async server(input) {
+    return OpenVikingPlugin(input)
+  },
+}
+
+export default OpenVikingV2Plugin

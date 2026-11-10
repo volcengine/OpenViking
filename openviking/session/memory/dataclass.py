@@ -22,12 +22,13 @@ from typing import (
     get_type_hints,
 )
 
-from pydantic import BaseModel, Field, WithJsonSchema, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, WithJsonSchema, model_validator
 
 from openviking.session.memory.merge_op.base import (
     FieldType,
     MergeOp,
 )
+from openviking.session.memory.utils.template_utils import TemplateUtils
 
 T = TypeVar("T")
 
@@ -135,6 +136,78 @@ class StoredLink(BaseModel):
     created_at: str = ""
 
 
+class DeleteId(BaseModel):
+    """Delete request by page_id, optionally remapped to a replacement page_id."""
+
+    delete_page_id: Annotated[Optional[int], WithJsonSchema({"type": "integer"})] = Field(
+        ..., description="Page_id of the memory item to delete."
+    )
+    replacement_page_id: Annotated[
+        Optional[int],
+        WithJsonSchema({"anyOf": [{"type": "integer"}, {"type": "null"}]}),
+    ] = Field(
+        ...,
+        description=(
+            "Replacement page_id that should inherit this deleted page's existing links/backlinks; "
+            "use null for a pure delete."
+        ),
+    )
+
+
+class MemoryOperationSource(BaseModel):
+    """Runtime and persisted provenance for one extracted memory operation.
+
+    ``extraction_id`` identifies one archive/commit extraction run, not an
+    entire chat session.  Streaming memory merge uses it to detect batches that
+    combine patches produced from different extraction snapshots.
+    """
+
+    extraction_id: Optional[str] = None
+    session_id: Optional[str] = None
+    archive_uri: Optional[str] = None
+    task_id: Optional[str] = None
+    # Runtime provenance for a write merged from several commits. Such a write
+    # has no single task_id; do not charge it to the first batch submitter.
+    task_ids: List[str] = Field(default_factory=list)
+    trace_id: Optional[str] = None
+    extracted_at: Optional[str] = None
+
+
+class MemoryOperationSkipCode(str, Enum):
+    """Stable reason codes for intentionally skipped memory operations."""
+
+    MEMORY_TYPE_FILTERED = "memory_type_filtered"
+    SELF_MEMORY_DISABLED = "self_memory_disabled"
+    PEER_MEMORY_DISABLED = "peer_memory_disabled"
+    INVALID_PEER_ID = "invalid_peer_id"
+    PEER_NOT_ALLOWED = "peer_not_allowed"
+    INVALID_RANGES = "invalid_ranges"
+    AMBIGUOUS_TARGET = "ambiguous_target"
+    NO_WRITABLE_TARGET = "no_writable_target"
+    PAGE_ID_TYPE_MISMATCH = "page_id_type_mismatch"
+    INVALID_URI_TEMPLATE_VARS = "invalid_uri_template_vars"
+
+
+class MemoryOperationSkip(BaseModel):
+    """Internal policy/validation decision explaining why no URI was produced."""
+
+    reason_code: MemoryOperationSkipCode
+    reason: str
+
+
+class SkippedMemoryOperation(BaseModel):
+    """Structured, task-visible record for one intentionally skipped operation."""
+
+    memory_type: str
+    page_id: Optional[int] = None
+    uri: Optional[str] = None
+    reason_code: MemoryOperationSkipCode
+    reason: str
+    # Source is used only to scope shared streaming-batch results back to the
+    # submitting commit. It must never be serialized into the public task result.
+    source: Optional[MemoryOperationSource] = Field(default=None, exclude=True)
+
+
 # ============================================================================
 # Memory Field and Schema Definitions
 # ============================================================================
@@ -148,10 +221,15 @@ class MemoryField(BaseModel):
     description: str = Field("", description="Field description")
     merge_op: MergeOp = Field(MergeOp.PATCH, description="Merge strategy")
     init_value: Optional[str] = Field(None, description="Initial value for this field")
+    required: bool = Field(True, description="Required in complete Python SDK create/set calls")
 
 
 class MemoryTypeSchema(BaseModel):
     """Memory type schema definition."""
+
+    # True only for account bodies differing from server-owned deployment defaults.
+    # Recomputed by the loader, never serialized or accepted as a client trust flag.
+    _account_content_template: bool = PrivateAttr(default=False)
 
     memory_type: str = Field(..., description="Memory type name")
     description: str = Field("", description="Type description")
@@ -164,11 +242,15 @@ class MemoryTypeSchema(BaseModel):
     directory: str = Field("", description="Directory path")
     enabled: bool = Field(True, description="Whether this memory type is enabled")
     operation_mode: str = Field(
-        "upsert", description="Operation mode: 'upsert' (default), 'add_only', or 'update_only'"
+        "upsert", description="Operation mode: 'upsert' (default) or 'add_only'"
     )
-    agent_only: bool = Field(
-        False,
-        description="If true, only used by execution-derived extraction, not long-term memory",
+    stage: str = Field(
+        "user",
+        description="Extraction stage: 'user' for long-term user memory, 'agent' for execution-derived memory.",
+    )
+    peer_enabled: bool = Field(
+        True,
+        description="Whether this memory type is stored separately under peer directories.",
     )
     overview_template: Optional[str] = Field(
         None, description="Overview template for auto-generating .overview.md files"
@@ -176,6 +258,14 @@ class MemoryTypeSchema(BaseModel):
 
     def filename_has_variables(self):
         return "{{" in self.filename_template and "}}" in self.filename_template
+
+    def identity_fields(self, *, include_peer_id: bool = True) -> tuple[str, ...]:
+        """Return fields whose values determine the memory object's URI identity."""
+        identity = ["peer_id"] if include_peer_id and self.peer_enabled else []
+        uri_template = f"{self.directory}/{self.filename_template}"
+        referenced = TemplateUtils.referenced_variables(uri_template)
+        identity.extend(field.name for field in self.fields if field.name in referenced)
+        return tuple(dict.fromkeys(identity))
 
 
 class MemoryData(BaseModel):
@@ -237,7 +327,12 @@ class MemoryFile(BaseModel):
 
     def to_metadata(self) -> Dict[str, Any]:
         """Flatten to a dict suitable for serialize_with_metadata."""
-        metadata = dict(self.extra_fields)
+        metadata = {
+            key: value
+            for key, value in dict(self.extra_fields).items()
+            if key not in {"user_id", "user_ids", "_uri"}
+        }
+        metadata.setdefault("version", 1)
         metadata["content"] = self.content
         if self.links:
             metadata["links"] = self.links
@@ -254,6 +349,14 @@ class ResolvedOperation(BaseModel):
     memory_type: str  # The memory type (e.g., 'tools', 'skills', 'events')
     uris: List[str]
     page_id: Optional[int] = None  # Temporary page_id for link resolution (not persisted)
+    source: Optional[MemoryOperationSource] = None
+    # Runtime-only resolution decision. It is deliberately excluded from model
+    # serialization so it cannot enter later LLM merge prompts or memory files.
+    resolution_skip: Optional[MemoryOperationSkip] = Field(default=None, exclude=True)
+    # Custom scalar tags (already normalized as "key=value") to attach to this
+    # operation's memories in the vector index. None means "no tags"; used by
+    # event-memory auto-tagging. Not persisted in the memory file content.
+    search_tags: Optional[List[str]] = None
 
     def is_edit(self):
         return self.old_memory_file_content is not None
@@ -264,6 +367,7 @@ class ResolvedOperations(BaseModel):
     delete_file_contents: List[MemoryFile]
     errors: List[str]
     resolved_links: List[StoredLink] = Field(default_factory=list)
+    delete_replacements: Dict[str, str] = Field(default_factory=dict)
 
     def has_errors(self) -> bool:
         return len(self.errors) > 0
@@ -398,7 +502,7 @@ class MemoryOperationsProtocol(Protocol):
     reasoning: str
     write_uris: List[Any]
     edit_uris: List[Any]
-    delete_uris: List[str]
+    delete_ids: List[DeleteId]
 
     def is_empty(self) -> bool: ...
 
@@ -423,21 +527,21 @@ class StructuredMemoryOperations(FaultTolerantBaseModel):
         default_factory=list,
         description="Edit operations with flat data format",
     )
-    delete_uris: List[str] = Field(
+    delete_ids: List[DeleteId] = Field(
         default_factory=list,
-        description="Delete operations as URI strings",
+        description="Delete operations by page_id, with optional replacement_page_id",
     )
 
     def is_empty(self) -> bool:
         """Check if there are any operations."""
-        return len(self.write_uris) == 0 and len(self.edit_uris) == 0 and len(self.delete_uris) == 0
+        return len(self.write_uris) == 0 and len(self.edit_uris) == 0 and len(self.delete_ids) == 0
 
     def to_legacy_operations(self) -> Dict[str, Any]:
         """Convert to legacy format (identity for fallback)."""
         return {
             "write_uris": self.write_uris,
             "edit_uris": self.edit_uris,
-            "delete_uris": self.delete_uris,
+            "delete_ids": self.delete_ids,
         }
 
     model_config = {"extra": "ignore"}

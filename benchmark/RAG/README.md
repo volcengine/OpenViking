@@ -277,7 +277,6 @@ RAG uses YAML configuration files to control the evaluation process. Each datase
 4. **Path Configuration**:
    - `dataset_dir`: Path to dataset file or directory
    - `doc_output_dir`: Directory for processed documents
-   - `vector_store`: Directory for vector index storage
    - `output_dir`: Directory for evaluation results
    - `log_file`: Path to log file
 5. **LLM Configuration**:
@@ -330,12 +329,8 @@ Output/
         └── benchmark.log                 # Log file
 ```
 
-**Vector Store Database Location:**
-The vector index (document database) is stored in the path specified by `vector_store` in the configuration file. By default, this is:
-
-```
-datasets/{dataset_name}/viking_store_index_dir
-```
+**OpenViking Storage:**
+The benchmark uses the OpenViking Server configured for the Python HTTP SDK. Storage and vector-index locations are owned by that Server rather than by the benchmark process.
 
 #### File descriptions and examples
 
@@ -638,8 +633,8 @@ FinanceBench has 3 question types:
 
 This project integrates with OpenViking through:
 
-- Using `openviking` client for data ingestion and retrieval
-- Configuring OpenViking connection via `ov.conf`
+- Using the OpenViking Python HTTP SDK for data ingestion and retrieval
+- Configuring the OpenViking connection via `ovcli.conf` or SDK environment variables
 - Supporting dynamic loading of OpenViking's latest features
 
 ### Frequently Asked Questions (FAQ)

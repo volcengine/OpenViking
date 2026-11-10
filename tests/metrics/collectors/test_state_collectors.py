@@ -3,22 +3,130 @@
 
 from __future__ import annotations
 
-import time
+import asyncio
+import multiprocessing
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+from types import SimpleNamespace
 
-from openviking.metrics.collectors.lock import LockCollector
+import pytest
+
+from openviking.metrics.collectors.async_system_probe import AsyncSystemProbeCollector
 from openviking.metrics.collectors.observer_health import ObserverHealthCollector
 from openviking.metrics.collectors.queue import QueueCollector
 from openviking.metrics.collectors.task_tracker import TaskTrackerCollector
 from openviking.metrics.collectors.vikingdb import VikingDBCollector
+from openviking.metrics.core.base import ReadEnvelope
 from openviking.metrics.core.registry import MetricRegistry
+from openviking.metrics.core.runtime import install_executor_monitor, uninstall_executor_monitor
 from openviking.metrics.datasources.observer_state import (
-    LockStateDataSource,
     ObserverStateDataSource,
     VikingDBStateDataSource,
 )
 from openviking.metrics.datasources.queue import QueuePipelineStateDataSource
 from openviking.metrics.datasources.task import TaskStateDataSource
 from openviking.metrics.exporters.prometheus import PrometheusExporter
+
+
+def test_executor_collector_exports_default_executor_metrics(registry, render_prometheus):
+    class DummyDataSource:
+        def read_async_system_state(self):
+            return ReadEnvelope(
+                ok=True,
+                value={
+                    "probes": {"queue": True},
+                    "probes_valid": True,
+                    "executor": {
+                        "process_role": "legacy_server",
+                        "worker": "MainProcess",
+                        "pool": "asyncio_default",
+                        "max_workers": 4,
+                        "threads": 2,
+                        "active_tasks": 1,
+                        "pending_tasks": 3,
+                        "submitted_total": 5,
+                        "completed_total": 4,
+                        "failed_total": 1,
+                    },
+                },
+            )
+
+    AsyncSystemProbeCollector(data_source=DummyDataSource()).collect(registry)
+    text = render_prometheus(registry)
+    labels = 'pool="asyncio_default",process_role="legacy_server",worker="MainProcess"'
+    expected = {
+        "openviking_executor_max_workers": "4.0",
+        "openviking_executor_threads": "2.0",
+        "openviking_executor_active_tasks": "1.0",
+        "openviking_executor_pending_tasks": "3.0",
+        "openviking_executor_submitted_total": "5",
+        "openviking_executor_completed_total": "4",
+        "openviking_executor_failed_total": "1",
+    }
+    for name, value in expected.items():
+        assert f"{name}{{{labels}}} {value}" in text
+
+
+@pytest.mark.asyncio
+async def test_executor_monitor_tracks_default_executor_only():
+    loop = asyncio.get_running_loop()
+    previous_default = getattr(loop, "_default_executor", None)
+    default_executor = ThreadPoolExecutor(max_workers=1)
+    custom_executor = ThreadPoolExecutor(max_workers=1)
+    loop.set_default_executor(default_executor)
+    monitor = install_executor_monitor(
+        loop=loop,
+        process_role="legacy_server",
+    )
+    started, release = Event(), Event()
+
+    def blocking_default():
+        started.set()
+        release.wait(5)
+        return "ok"
+
+    def raising_default():
+        raise RuntimeError("boom")
+
+    try:
+        first = loop.run_in_executor(None, blocking_default)
+        while not started.is_set():
+            await asyncio.sleep(0.01)
+        second = loop.run_in_executor(None, lambda: "queued")
+
+        metrics = monitor.read_metrics()
+        assert metrics["active_tasks"] == 1
+        assert metrics["pending_tasks"] == 1
+        assert metrics["submitted_total"] == 2
+
+        release.set()
+        assert await first == "ok"
+        assert await second == "queued"
+        with pytest.raises(RuntimeError, match="boom"):
+            await loop.run_in_executor(None, raising_default)
+        assert await loop.run_in_executor(custom_executor, lambda: "custom") == "custom"
+
+        final = monitor.read_metrics()
+        assert final == {
+            "process_role": "legacy_server",
+            "worker": multiprocessing.current_process().name,
+            "pool": "asyncio_default",
+            "max_workers": 1,
+            "threads": 1,
+            "active_tasks": 0,
+            "pending_tasks": 0,
+            "submitted_total": 3,
+            "completed_total": 3,
+            "failed_total": 1,
+        }
+    finally:
+        uninstall_executor_monitor()
+        if previous_default is not None:
+            loop.set_default_executor(previous_default)
+        else:
+            loop._default_executor = None  # type: ignore[attr-defined]
+        custom_executor.shutdown(wait=True)
+        default_executor.shutdown(wait=True)
 
 
 def test_queue_collector_maps_status(monkeypatch):
@@ -233,31 +341,6 @@ def test_model_usage_collector_failure_reuses_last_available_state_with_valid_ze
     assert 'openviking_model_usage_available{model_type="rerank",valid="0"} 0.0' in text
 
 
-def test_lock_collector_counts_active_and_stale(monkeypatch):
-    class Handle:
-        def __init__(self, locks: int, last_active_at: float) -> None:
-            self.locks = [object()] * locks
-            self.last_active_at = last_active_at
-
-    class DummyLockManager:
-        def get_active_handles(self):
-            now = time.time()
-            return {
-                "a": Handle(locks=2, last_active_at=now - 10),
-                "b": Handle(locks=1, last_active_at=now - 1000),
-            }
-
-    monkeypatch.setattr(
-        "openviking.metrics.datasources.observer_state.get_lock_manager",
-        lambda: DummyLockManager(),
-    )
-    registry = MetricRegistry()
-    LockCollector(data_source=LockStateDataSource()).collect(registry)
-    text = PrometheusExporter(registry=registry).render()
-    assert "openviking_lock_active 3.0" in text
-    assert "openviking_lock_stale 1.0" in text
-
-
 def test_vikingdb_collector_exports_health_and_count(monkeypatch):
     class DummyVikingDB:
         collection_name = "my_collection"
@@ -278,3 +361,115 @@ def test_vikingdb_collector_exports_health_and_count(monkeypatch):
     assert (
         'openviking_vikingdb_collection_vectors{collection="my_collection",valid="1"} 123.0' in text
     )
+
+
+def test_ragfs_collector_replaces_recovers_and_deletes(monkeypatch):
+    """Drive real registry writes through controlled native batches and faults; return None."""
+    from openviking.metrics.collectors.ragfs import RagfsMetricCollector
+    from openviking.metrics.datasources.ragfs import RagfsMetricDataSource
+
+    records = []
+    service = SimpleNamespace(_agfs_client=SimpleNamespace(metrics=lambda: records))
+    collector = RagfsMetricCollector(data_source=RagfsMetricDataSource(service=service))
+    registry = MetricRegistry()
+    for count in (4, 2, 0):
+        records[:] = [
+            {
+                "name": "ragfs_calls_total",
+                "labels": {},
+                "type": "counter",
+                "value": count,
+                "scale": 1.0,
+            },
+            {"name": "ragfs_tasks", "labels": {}, "type": "gauge", "value": float(count)},
+            {
+                "name": "ragfs_latency_seconds",
+                "labels": {},
+                "type": "histogram",
+                "bucket_bounds": [1000],
+                "bucket_counts": [count, 0],
+                "count": count,
+                "sum": 123 * count,
+                "scale": 1e-9,
+            },
+        ]
+        collector.collect(registry)
+        metrics = {
+            m.name: m
+            for r in registry.collect().resource_metrics
+            for s in r.scope_metrics
+            for m in s.metrics
+        }
+        assert metrics["openviking_ragfs_calls_total"].data.data_points[0].value == count
+        assert registry.gauge_get("openviking_ragfs_tasks") == count
+        hist = metrics["openviking_ragfs_latency_seconds"].data.data_points[0]
+        assert hist.explicit_bounds == pytest.approx((1e-6,))
+        assert hist.bucket_counts == (count, 0) and hist.count == count
+        assert hist.sum == pytest.approx(123e-9 * count)
+        assert "account_id" not in PrometheusExporter(registry=registry).render()
+    previous = PrometheusExporter(registry=registry).render()
+    records.append({"broken": True})
+    with pytest.raises(RuntimeError):
+        collector.collect(registry)
+    assert PrometheusExporter(registry=registry).render() == previous
+
+    def fail(*args, **kwargs):
+        """Raise an injected storage error for supplied write or delete arguments."""
+        raise RuntimeError("injected")
+
+    records[:] = [
+        {
+            "name": "ragfs_partial_total",
+            "labels": {},
+            "type": "counter",
+            "value": 9,
+            "scale": 1.0,
+        },
+        {"name": "ragfs_tasks", "labels": {}, "type": "gauge", "value": 1.0},
+    ]
+    with monkeypatch.context() as patch:
+        patch.setattr(registry, "set_gauge", fail)
+        with pytest.raises(RuntimeError, match="injected"):
+            collector.collect(registry)
+    assert "openviking_ragfs_partial_total 9.0" in PrometheusExporter(registry=registry).render()
+    records.clear()
+    with monkeypatch.context() as patch:
+        patch.setattr(registry, "delete_matching", fail)
+        with pytest.raises(RuntimeError, match="injected"):
+            collector.collect(registry)
+    collector.collect(registry)
+    assert not registry.collect().resource_metrics[0].scope_metrics[0].metrics
+    assert "openviking_ragfs_" not in PrometheusExporter(registry=registry).render()
+
+
+def test_ragfs_collector_serializes_whole_refresh():
+    """Hold a native read with Events and verify concurrent refresh cannot overwrite it."""
+    from openviking.metrics.collectors.ragfs import RagfsMetricCollector
+    from openviking.metrics.datasources.ragfs import RagfsMetricDataSource
+
+    entered, release = Event(), Event()
+    calls = []
+
+    def metrics():
+        """Block one native read until released and return a gauge record."""
+        calls.append(1)
+        entered.set()
+        assert release.wait(5)
+        return [{"name": "ragfs_tasks", "labels": {}, "type": "gauge", "value": 3.0}]
+
+    collector = RagfsMetricCollector(
+        data_source=RagfsMetricDataSource(
+            service=SimpleNamespace(_agfs_client=SimpleNamespace(metrics=metrics))
+        )
+    )
+    registry = MetricRegistry()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(collector.collect, registry)
+        try:
+            assert entered.wait(5)
+            pool.submit(collector.collect, registry).result(timeout=2)
+            assert len(calls) == 1
+        finally:
+            release.set()
+        first.result(timeout=5)
+    assert registry.gauge_get("openviking_ragfs_tasks") == 3

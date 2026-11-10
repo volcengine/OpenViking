@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import os
 import time
 import uuid
-from pathlib import Path
 from typing import Any
 
-OV_CONFIG_FILE = "/home/byteide/.openviking/ov.conf"
+OPENVIKING_URL = "http://127.0.0.1:1933"
 WORKSPACE_URI = "viking://resources/snapshot_sdk_demo"
 WAIT_TIMEOUT = 180.0
 
@@ -34,34 +32,46 @@ def short_oid(commit_oid: str | None) -> str:
 
 
 def write_text(client: Any, uri: str, content: str, mode: str) -> None:
-    result = client.write(uri, content, mode=mode, wait=True, timeout=WAIT_TIMEOUT)
+    result = client.write(
+        uri=uri,
+        content=content,
+        mode=mode,
+        wait=True,
+    )
     print(f"write: {uri} (mode={result.get('mode')}, bytes={result.get('written_bytes')})")
 
 
 def remove_resource(client: Any, uri: str) -> None:
-    client.rm(uri, wait=True, timeout=WAIT_TIMEOUT)
+    client.rm(uri=uri, wait=True)
     print(f"rm: {uri}")
 
 
 def print_find(client: Any, query: str, root_uri: str) -> None:
-    results = client.find(query, target_uri=root_uri, limit=10)
-    if not results.resources:
+    results = client.find(
+        query=query,
+        target_uri=root_uri,
+        limit=10,
+    )
+    resources = results.get("resources", [])
+    if not resources:
         print(f"find {query!r}: (no matches)")
         return
-    print(f"find {query!r}: {len(results.resources)} match(es)")
-    for r in results.resources:
-        print(f"  {r.uri} (score: {r.score:.4f})")
+    print(f"find {query!r}: {len(resources)} match(es)")
+    for resource in resources:
+        print(f"  {resource['uri']} (score: {resource.get('score', 0.0):.4f})")
 
 
 def print_read(client: Any, uri: str) -> None:
-    content = client.read(uri)
+    content = client.read(uri=uri)
     first_line = content.splitlines()[0] if content else ""
     print(f"read {uri}: {len(content)} chars | {first_line}")
 
 
 def commit_snapshot(client: Any, message: str, paths: list[str] | None = None) -> dict[str, Any]:
     result = client.snapshot.commit(message=message, paths=paths)
-    print(f"commit {message!r}: result={result.get('result')} oid={short_oid(result.get('commit_oid'))}")
+    print(
+        f"commit {message!r}: result={result.get('result')} oid={short_oid(result.get('commit_oid'))}"
+    )
     return result
 
 
@@ -82,7 +92,7 @@ def wait_for_task(
         return
     deadline = time.time() + timeout
     while True:
-        task = client.get_task(task_id) or {}
+        task = client.get_task(task_id=task_id) or {}
         status = task.get("status")
         if status in ("completed", "failed"):
             print(f"wait_for_task {task_id[:12]}: {status}")
@@ -95,9 +105,7 @@ def wait_for_task(
 
 
 def main() -> None:
-    os.environ["OPENVIKING_CONFIG_FILE"] = str(Path(OV_CONFIG_FILE).resolve())
-
-    import openviking as ov
+    from openviking_sdk import SyncHTTPClient
 
     run_id, root_uri = unique_run_uri()
     uris = resource_uris(root_uri)
@@ -108,36 +116,49 @@ def main() -> None:
     gamma = f"gamma_{run_id}"
     archive = f"archive_{run_id}"
 
-    client = ov.OpenViking(path="./data")
+    client = SyncHTTPClient(url=OPENVIKING_URL)
     client.initialize()
     try:
         print_section("setup")
-        print(f"config: {Path(OV_CONFIG_FILE).resolve()}")
+        print(f"server: {OPENVIKING_URL}")
         print(f"workspace: {root_uri}")
-        client.mkdir(root_uri)
-        client.mkdir(f"{root_uri}/notes")
+        client.mkdir(uri=root_uri)
+        client.mkdir(uri=f"{root_uri}/notes")
         print(f"mkdir: {root_uri}, {root_uri}/notes")
 
         print_section("v1 initial import")
-        write_text(client, uris["guide"], f"# Guide\n\nInitial SDK content with {alpha}.\n", mode="create")
+        write_text(
+            client, uris["guide"], f"# Guide\n\nInitial SDK content with {alpha}.\n", mode="create"
+        )
         write_text(client, uris["todo"], f"# Todo\n\nRemember {todo}.\n", mode="create")
         v1 = commit_snapshot(client, "sdk v1 initial import", paths=[root_uri])
         print_find(client, alpha, root_uri)
 
         print_section("v2 modify delete add")
-        write_text(client, uris["guide"], f"# Guide\n\nUpdated SDK content with {beta}.\n", mode="replace")
+        write_text(
+            client, uris["guide"], f"# Guide\n\nUpdated SDK content with {beta}.\n", mode="replace"
+        )
         remove_resource(client, uris["todo"])
-        write_text(client, uris["changelog"], f"# Changelog\n\nCreated {changelog}.\n", mode="create")
+        write_text(
+            client, uris["changelog"], f"# Changelog\n\nCreated {changelog}.\n", mode="create"
+        )
         v2 = commit_snapshot(client, "sdk v2 modify delete add", paths=[root_uri])
         print_find(client, beta, root_uri)
         print_find(client, todo, root_uri)
         print_find(client, changelog, root_uri)
 
         print_section("v3 second changes")
-        client.mkdir(f"{root_uri}/archive")
+        client.mkdir(uri=f"{root_uri}/archive")
         print(f"mkdir: {root_uri}/archive")
-        write_text(client, uris["changelog"], f"# Changelog\n\nCreated {changelog}. Added {gamma}.\n", mode="replace")
-        write_text(client, uris["archive"], f"# Archive\n\nArchived marker {archive}.\n", mode="create")
+        write_text(
+            client,
+            uris["changelog"],
+            f"# Changelog\n\nCreated {changelog}. Added {gamma}.\n",
+            mode="replace",
+        )
+        write_text(
+            client, uris["archive"], f"# Archive\n\nArchived marker {archive}.\n", mode="create"
+        )
         v3 = commit_snapshot(client, "sdk v3 second changes", paths=[root_uri])
         print_find(client, gamma, root_uri)
         print_find(client, archive, root_uri)
@@ -147,7 +168,9 @@ def main() -> None:
             print(f"  {short_oid(commit.get('oid'))} {commit.get('message', '')}")
         for label, snap in (("v1", v1), ("v2", v2), ("v3", v3)):
             meta = client.snapshot.show(snap["commit_oid"])
-            print(f"snapshot show {label}: oid={short_oid(meta.get('oid'))} message={meta.get('message', '')!r}")
+            print(
+                f"snapshot show {label}: oid={short_oid(meta.get('oid'))} message={meta.get('message', '')!r}"
+            )
 
         print_section("restore to v1")
         restore = client.snapshot.restore(
@@ -160,7 +183,7 @@ def main() -> None:
             f"written={len(restore.get('written_paths') or [])} deleted={len(restore.get('deleted_paths') or [])}"
         )
         wait_for_task(client, restore.get("task_id"))
-        entries = client.ls(root_uri, recursive=True)
+        entries = client.ls(uri=root_uri, recursive=True)
         print(f"ls after restore: {len(entries)} entry(ies)")
         for entry in entries:
             print(f"  {entry.get('uri') if isinstance(entry, dict) else entry}")

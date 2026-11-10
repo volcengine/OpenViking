@@ -1,0 +1,112 @@
+# FileBrowser
+
+Directory navigation, search and content preview as one module. The module loads its own data; the host supplies configuration, the controlled current resource, the toolbar entries and copy.
+
+The component already wires the tree, the search and the preview together: directories expand on demand and page, clicking a file loads the preview, and a search result opens the preview too. `useFileBrowser` can be used on its own to assemble a different view.
+
+## Basic usage
+
+The example uses fixed data and makes no network request:
+
+```tsx file="../../_demos/file-browser-basic.tsx" preview
+
+```
+
+## Scope
+
+The module covers the file tree and the file preview only. The command panel belongs to `console`.
+
+## What the module owns
+
+- Directory, search, current URI and preview loading, coordinated inside the module: clicking a directory node or a search result moves the selection and loads the preview, and switching resources drops stale requests. Clicking a directory also expands it and makes it the current resource, with its L1 overview on the right (falling back to the L0 abstract when empty).
+- Refreshing the affected directory, search results and preview after a save, rename or delete.
+- The layout of the search, directory and preview area, including the draggable divider between the tree and the detail pane. The tree starts at 352px, resizes between 200px and a cap that leaves the detail pane its readable width, and the arrow keys work once the divider has focus.
+- The search box and refresh control in the toolbar, plus per-row state such as uploading progress, conflicts and retention settings.
+- The preview tabs. Which tabs a resource has follows from the resource itself, so the host does not supply them.
+- The search view. Search is a private view inside this module, not a published component or module: it opens from the toolbar or ⌘K, and picking a result moves the tree and loads the preview. Nothing about it is exported, because leaving the tree leaves it without a destination. `console` has its own `@` picker over the same kind of API; that is a separate view, not this one.
+
+## What the host owns
+
+- Request configuration through the Provider, overridable per module through `requestOptions`.
+- Sign-in, account scope, routing and permissions.
+- The entries in the top row: connect an agent, import resources. Compose them with `FileBrowserEntries` inside `toolbarActions`, which owns the icons, copy and divider. Wrap it in a popover or dropdown when a click alone is not enough.
+- Connection dialogs, import flows and onboarding. The module embeds none of them.
+
+## Entries and toolbar
+
+The top band holds the host's entries on a tinted background; under it sit the module's own search box and refresh button. The host adds entries through `toolbarActions`, using `FileBrowserEntries` so the styling matches:
+
+```tsx
+import { FileBrowserEntries } from '@openviking/react/components/file-browser-entries';
+import '@openviking/react/components/file-browser-entries/style.css';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+
+<FileBrowser
+  toolbarActions={
+    <FileBrowserEntries
+      onConnectAgent={connect}
+      onImportResources={openImport}
+      labels={{
+        connectAgent: 'Connect agent',
+        importResources: 'Import resources',
+      }}
+    />
+  }
+/>;
+```
+
+`FileBrowserEntries` is fixed to two entries; omitting a callback hides that entry. The icons, the copy and the divider between the two belong to it, so the host only decides which appear and what a click does. With a single entry no divider is drawn.
+
+Because `toolbarActions` is a node, an entry that needs a menu wraps `FileBrowserEntries` instead of asking for another prop:
+
+```tsx
+<Popover content={<ResourceMenu />} trigger="hover">
+  <FileBrowserEntries onImportResources={openImport} />
+</Popover>
+```
+
+## Tree width
+
+A draggable divider sits between the tree and the detail pane: drag it sideways to resize the tree, or focus it and use the arrow keys, 16px at a time.
+
+- 352px by default, matching the design; 200px minimum, below which only icons stay legible.
+- The cap is the smaller of 520px and the container width minus 320px for the detail pane and 24px for the divider. A host that puts the module in a narrow column narrows the tree rather than crushing the detail.
+- Dragging changes the width of the current instance only and writes nothing to `localStorage`: width is layout, and whether to remember it is the host's decision.
+
+The module owns the width and publishes it as `--ov-file-browser-tree-width` on the container: read it to mirror the layout elsewhere, but overriding it does not change the actual width, because a drag writes straight back to the same variable. To fix the width, wrap the module in a sized container and let its width cap the tree.
+
+The divider's accessible name comes from `labels.resizeTree`; override it to follow the interface language.
+
+## Failure states
+
+"Could not read" and "read an empty result" are different, and the module shows them differently:
+
+- When a listing fails, the tree shows a failure row with a retry instead of "no files". The root is no exception — painting it as empty would make a 403 look like a directory that simply has no content.
+- When the preview fails, the detail pane shows a failure state: `labels.error` as the conclusion, the server's own message as the reason, and `labels.retry` as the retry. A selected resource that cannot be read never falls back to the empty-state artwork.
+- The empty state appears only when nothing is selected.
+- A failed search shows the reason and a retry rather than "no matching resources": the two are different situations, and merging them makes a 403 look like a search that genuinely matched nothing. The conclusion is `labels.searchFailed` and the reason is the server's own message.
+- A directory's two summary levels can fail independently. A failed level keeps its reason instead of becoming an empty body — an empty body means "not generated yet", which differs from "could not load" (a backend fault or missing permission); when both levels fail the whole preview enters its failure state. Without a server message the copy falls back to `labels.summaryFailed`, so that line follows the interface language too.
+
+A retry reloads the listings, the current preview and an active search together — after an external change, reloading only the tree would leave the detail pane on stale content.
+
+## Props
+
+The module exports `FileBrowserProps` from the subpath and the root entry; `FileBrowserLabels` comes from the subpath only. The entry row `FileBrowserEntries` belongs to the component layer and is imported from `@openviking/react/components/file-browser-entries`.
+
+| Property             | Type                            | Default     | Description                                                                                                                                                                                                                                                                                                                                                                     |
+| -------------------- | ------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `requestOptions`     | `OvRequestOptions`              | —           | Request configuration override, applied field by field over the nearest Provider.                                                                                                                                                                                                                                                                                               |
+| `uri`                | `string`                        | —           | The controlled current resource URI. When given, the host owns the current resource and the module only reports switch intent.                                                                                                                                                                                                                                                  |
+| `defaultUri`         | `string`                        | —           | Initial resource URI when uncontrolled. Nothing is selected when omitted.                                                                                                                                                                                                                                                                                                       |
+| `toolbarActions`     | `ReactNode`                     | —           | Host entries above the search row, composed with `FileBrowserEntries`. The search box and the refresh button are rendered by the module itself.                                                                                                                                                                                                                                 |
+| `onUriChange`        | `(uri: string \| null) => void` | —           | Called after the current resource changes, with the new URI. The signature allows `null` (the upstream contract), but the module never reports it today: there is no deselect interaction, so a host must not rely on it to collapse the detail pane.                                                                                                                           |
+| `rootUri`            | `string`                        | `viking://` | Root of the tree, narrowing the browsed scope to a subtree.                                                                                                                                                                                                                                                                                                                     |
+| `defaultExpandedUri` | `string`                        | —           | Path to expand to after the first load, opening and loading each level. When omitted only the root is expanded.                                                                                                                                                                                                                                                                 |
+| `locale`             | `'en-US' \| 'zh-CN'`            | —           | Language of the preview base's built-in copy. The module's own copy stays with `labels`.                                                                                                                                                                                                                                                                                        |
+| `labels`             | `FileBrowserLabels`             | —           | Replaceable copy: `searchPlaceholder`, `searchEmpty`, `searchFailed`, `loading`, `refresh`, `empty`, `error`, `retry`, `previewMode`, `sourceMode`, `history`, `copyPath`, `viewSwitch`, `resizeTree`, `summaryEmpty`, `summaryFailed` (the fallback when a summary level failed without a server message), plus `tree` / `preview` passed through to the tree and the preview. |
+| `className`          | `string`                        | —           | Additional container class.                                                                                                                                                                                                                                                                                                                                                     |
+| `style`              | `CSSProperties`                 | —           | Container style overrides.                                                                                                                                                                                                                                                                                                                                                      |
+
+Labels are plain text; the host maps its own translation system into these props. No prop carries data — the module loads it.
+
+The module loads its own data through `useFileBrowser`, so the host supplies no directory or preview data; `labels.tree` and `labels.preview` are passed through to the file tree and the file preview.

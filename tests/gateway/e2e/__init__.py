@@ -1,0 +1,1 @@
+"""Gateway deployment acceptance tests."""

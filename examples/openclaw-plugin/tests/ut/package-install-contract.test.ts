@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "../..");
+const repoRoot = join(rootDir, "../..");
 
 function readJson(path: string): any {
   return JSON.parse(readFileSync(join(rootDir, path), "utf8"));
@@ -45,6 +46,7 @@ describe("OpenClaw plugin package and install contract", () => {
       "adapters/",
       "registries/",
       "routing/",
+      "shared/",
       "plugin/",
       "services/",
       "commands/setup.ts",
@@ -70,6 +72,7 @@ describe("OpenClaw plugin package and install contract", () => {
       "config/feature-gates.json",
       "registries/",
       "routing/",
+      "shared/",
       "plugin/",
       "services/",
       "install-manifest.json",
@@ -82,6 +85,46 @@ describe("OpenClaw plugin package and install contract", () => {
       "images/",
       "skills/",
     ]));
+  });
+
+  it("strips dev dependencies before packing npm and ClawHub release artifacts", () => {
+    const workflow = readFileSync(
+      join(repoRoot, ".github/workflows/clawhub-dev-release.yml"),
+      "utf8",
+    );
+
+    for (const stepName of [
+      "Pack OpenViking plugin",
+      "Prepare ClawHub legacy package folder",
+    ]) {
+      const stepStart = workflow.indexOf(`      - name: ${stepName}`);
+      expect(stepStart, `${stepName} should exist`).toBeGreaterThanOrEqual(0);
+      const nextStep = workflow.indexOf("\n      - name:", stepStart + 1);
+      const step = workflow.slice(stepStart, nextStep < 0 ? undefined : nextStep);
+      const buildIndex = step.indexOf("npm run prepack");
+      const stripIndex = step.indexOf("npm pkg delete devDependencies");
+      const packIndex = step.indexOf("npm pack --ignore-scripts --pack-destination");
+
+      expect(buildIndex, `${stepName} should build before sanitizing`).toBeGreaterThanOrEqual(0);
+      expect(stripIndex, `${stepName} should strip devDependencies`).toBeGreaterThan(buildIndex);
+      expect(packIndex, `${stepName} should pack without rerunning scripts`).toBeGreaterThan(
+        stripIndex,
+      );
+    }
+  });
+
+  it("ships and registers the canonical Experience skill", () => {
+    const pluginManifest = readJson("openclaw.plugin.json");
+    const installManifest = readJson("install-manifest.json");
+    const packagedSkillPath = join(rootDir, "skills/ov-experience-memory/SKILL.md");
+    const canonicalSkillPath = join(repoRoot, "examples/skills/ov-experience-memory/SKILL.md");
+
+    expect(pluginManifest.skills).toContain("./skills/ov-experience-memory");
+    expect(installManifest.files.optional).toContain("skills/ov-experience-memory/SKILL.md");
+    expect(existsSync(packagedSkillPath)).toBe(true);
+    expect(readFileSync(packagedSkillPath, "utf8")).toBe(
+      readFileSync(canonicalSkillPath, "utf8"),
+    );
   });
 
   it("keeps runtime dependencies and overrides available for installed plugin loading", () => {
@@ -104,6 +147,8 @@ describe("OpenClaw plugin package and install contract", () => {
     expect(installHelper).toContain(`slot: "${installManifest.plugin.slot}"`);
     expect(installHelper).toContain("OPENVIKING_PEER_ROLE");
     expect(installHelper).toContain("OPENVIKING_PEER_PREFIX");
+    expect(installHelper).toContain('if (role === "person") return "sender"');
+    expect(installHelper).toContain('return role === "person" ? null : normalizePeerRole(role);');
     expect(installHelper).not.toContain("OPENVIKING_AGENT_PREFIX");
   });
 });

@@ -7,9 +7,16 @@
     "docs:dev": "vitepress dev . --host 0.0.0.0",
     "docs:build": "vitepress build .",
     "docs:preview": "vitepress preview . --host 0.0.0.0",
-    "test:search": "node --experimental-strip-types --test .vitepress/theme/openviking-search-*.test.ts"
+    "check:api": "node scripts/check-api-reference.mjs",
+    "test:theme": "node --experimental-strip-types --test .vitepress/theme/*.test.ts",
+    "test:search": "node --experimental-strip-types --test .vitepress/theme/openviking-search-*.test.ts",
+    "check:docs": "node scripts/check-docs-consistency.mjs"
   },
   "devDependencies": {
+    "markdown-it-task-lists": "^2.1.1",
     "vitepress": "1.6.4"
+  },
+  "dependencies": {
+    "ogl": "^1.0.11"
   }
 }

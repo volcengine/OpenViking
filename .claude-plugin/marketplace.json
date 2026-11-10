@@ -1,0 +1,20 @@
+{
+  "name": "openviking",
+  "description": "OpenViking plugins for Claude Code.",
+  "owner": {
+    "name": "OpenViking"
+  },
+  "plugins": [
+    {
+      "name": "openviking-memory",
+      "description": "Long-term semantic memory for Claude Code, powered by OpenViking",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/volcengine/OpenViking.git",
+        "path": "examples/claude-code-memory-plugin",
+        "ref": "main"
+      },
+      "category": "productivity"
+    }
+  ]
+}

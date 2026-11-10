@@ -8,4 +8,4 @@ To protect the security of our customers, ByteDance requests that you do not pub
 Individuals, companies, and security teams may wish to publish security advisories on their own websites or other forums. Please contact us via the email or website mentioned above prior to publication to discuss the information that can be disclosed and to coordinate the disclosure timeline.
 
 ## Bug Bounty Reward
-[For the policy of bug bounty reward](🚀ByteDance Security Response Center Security Report Handling Rules V6.0), if you have any questions about the rules, please contact https://src.bytedance.com/home for consultation.
+The bug bounty reward policy ("ByteDance Security Response Center Security Report Handling Rules") is published on the [security center](https://security.bytedance.com/src). If you have any questions about the rules, please contact us there or via [src@bytedance.com](mailto:src@bytedance.com).

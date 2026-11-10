@@ -351,7 +351,15 @@ def check_vlm() -> tuple[bool, str, Optional[str]]:
 
     raw_vlm = data.get("vlm", {})
     normalized_vlm = VLMConfig.sync_provider_backend(dict(raw_vlm))
-    vlm = VLMConfig.model_construct(**normalized_vlm)
+    try:
+        # Doctor owns the runtime credential probe below. Skip only the model's
+        # Codex availability check while retaining all structural validation.
+        vlm = VLMConfig.model_validate(
+            normalized_vlm,
+            context={"skip_codex_auth_availability": True},
+        )
+    except Exception as exc:
+        return False, f"Invalid VLM config: {exc}", "Fix vlm section in ov.conf"
     _, provider = vlm.get_provider_config()
     model = vlm.model or ""
 
@@ -536,8 +544,7 @@ def check_vikingbot() -> CheckResult:
                 return (
                     "warn",
                     "server.auth_mode=trusted without server.root_api_key",
-                    "Configure server.root_api_key for VikingBot trusted OpenViking calls "
-                    "outside localhost",
+                    "Configure server.root_api_key; trusted mode requires it even on localhost",
                 )
             return (
                 "warn",
@@ -578,6 +585,62 @@ def check_vikingbot() -> CheckResult:
     return "pass", "bot.ov_server.api_key configured for api_key mode", None
 
 
+def check_authentication() -> CheckResult:
+    """Check authentication configuration using auth health checks."""
+    config_path = _find_config()
+    if config_path is None:
+        return "warn", "Cannot check (no config file)", None
+
+    data = _load_config_json(config_path)
+    if data is None:
+        return "warn", "Cannot check (config unreadable)", None
+
+    # Load server config
+    try:
+        from openviking.server.auth.health_check import run_health_check
+        from openviking.server.config import ServerConfig
+
+        server_data = data.get("server", {}) if isinstance(data.get("server"), dict) else {}
+        config = ServerConfig(**server_data)
+    except ImportError:
+        return "warn", "Auth health check not available (module missing)", None
+    except Exception as exc:
+        return "warn", f"Could not load server config: {exc}", None
+
+    # Run auth health checks
+    try:
+        report = asyncio.run(run_health_check(config, fail_on_warn=False))
+    except Exception as exc:
+        return "warn", f"Auth health check failed to run: {exc}", None
+
+    # Format results
+    auth_mode = report.auth_mode
+    pass_count = sum(1 for c in report.checks if c.status == "pass")
+    warn_count = sum(1 for c in report.checks if c.status == "warn")
+    fail_count = sum(1 for c in report.checks if c.status == "fail")
+
+    detail = f"{auth_mode}: {pass_count} passed, {warn_count} warned, {fail_count} failed"
+
+    if report.overall_status == "pass":
+        return "pass", detail, None
+    elif report.overall_status == "warn":
+        # Collect warning messages
+        warn_msgs = []
+        for c in report.checks:
+            if c.status == "warn":
+                warn_msgs.append(f"  - {c.name}: {c.message}")
+        fix = "\n".join(warn_msgs) if warn_msgs else None
+        return "warn", detail, fix
+    else:
+        # Collect fail messages
+        fail_msgs = []
+        for c in report.checks:
+            if c.status == "fail":
+                fail_msgs.append(f"  - {c.name}: {c.message}")
+        fix = "\n".join(fail_msgs) if fail_msgs else None
+        return "fail", detail, fix
+
+
 def check_disk() -> tuple[bool, str, Optional[str]]:
     """Check free disk space in the workspace directory."""
     config_path = _find_config()
@@ -614,6 +677,7 @@ _CHECKS = [
     ("Python", check_python),
     ("Native Engine", check_native_engine),
     ("AGFS", check_agfs),
+    ("Authentication", check_authentication),
     ("Embedding", check_embedding),
     ("VLM", check_vlm),
     ("Ollama", check_ollama),

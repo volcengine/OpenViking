@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -59,8 +60,18 @@ class RecallRequest(BaseModel):
     limit: int = Field(6, ge=1, le=50)
 
 
+class RuleSearchRequest(BaseModel):
+    task_context: str = Field(
+        ...,
+        min_length=1,
+        max_length=64000,
+        description="User goal, planned action, and facts affecting Rule applicability",
+    )
+    rule_probability_threshold: float = Field(0.65, ge=0.0, le=1.0)
+
+
 class AddMemoryRequest(BaseModel):
-    name: str = Field(..., description="Filename under viking://user/memories/, e.g. 'profile.md'")
+    name: str = Field(..., description="Filename under viking://~/memories/, e.g. 'profile.md'")
     content: str = Field(..., description="Memory body, plain text or Markdown")
     mode: Literal["replace", "append", "create"] = "replace"
     wait: bool = Field(False, description="Block until semantic indexing completes")
@@ -161,6 +172,26 @@ async def ov_search(
 
 
 @router.post(
+    "/tools/ov_rule_search",
+    operation_id="ov_rule_search",
+    summary="Check constraints before a planned action or response; return complete compiled Rules.",
+)
+async def ov_rule_search(
+    body: RuleSearchRequest,
+    client: OVClient = Depends(get_client),
+) -> str:
+    """Return full Rules including applicability conditions and exceptions."""
+    try:
+        raw = await client.post("/api/v1/rules/search", json=body.model_dump())
+    except OVError as exc:
+        raise _forward(exc) from exc
+    result = raw.get("result") if isinstance(raw, dict) else None
+    if not isinstance(result, dict) or not isinstance(result.get("rendered"), str):
+        raise HTTPException(status_code=502, detail="OpenViking returned no rendered Rules")
+    return result["rendered"]
+
+
+@router.post(
     "/tools/ov_recall_memories",
     response_model=SearchResponse,
     operation_id="ov_recall_memories",
@@ -171,7 +202,7 @@ async def ov_recall_memories(
     client: OVClient = Depends(get_client),
     settings: Settings = Depends(get_settings),
 ) -> SearchResponse:
-    """Search scoped to viking://user/memories/ for personal memory recall."""
+    """Search scoped to viking://~/memories/ for personal memory recall."""
     payload = {
         "query": body.query,
         "limit": body.limit,
@@ -188,7 +219,7 @@ async def ov_recall_memories(
     "/tools/ov_add_memory",
     response_model=AddMemoryResponse,
     operation_id="ov_add_memory",
-    summary="Persist a new memory under viking://user/memories/.",
+    summary="Persist a new memory under viking://~/memories/.",
 )
 async def ov_add_memory(
     body: AddMemoryRequest,
@@ -213,7 +244,7 @@ async def ov_add_memory(
 @router.post(
     "/tools/ov_list_memories",
     operation_id="ov_list_memories",
-    summary="List entries under viking://user/memories/.",
+    summary="List entries under viking://~/memories/.",
 )
 async def ov_list_memories(
     body: ListMemoriesRequest,
@@ -289,7 +320,14 @@ async def ov_session_status(
     client: OVClient = Depends(get_client),
 ) -> Dict[str, Any]:
     """GET /api/v1/sessions/{session_id}."""
+    session_id = body.session_id
+    # Reject percent escapes as well: upstream routers may decode the path.
+    if session_id in {".", ".."} or not re.fullmatch(r"[^/\\?#%\x00-\x1f\x7f]+", session_id):
+        raise HTTPException(
+            status_code=422,
+            detail="session_id must be a single path segment without URL syntax or control characters",
+        )
     try:
-        return await client.get(f"/api/v1/sessions/{body.session_id}")
+        return await client.get(f"/api/v1/sessions/{session_id}")
     except OVError as exc:
         raise _forward(exc) from exc

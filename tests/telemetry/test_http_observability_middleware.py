@@ -1,6 +1,10 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from openviking.metrics.datasources import HttpRequestLifecycleDataSource
+from openviking.server.request_id import RequestIdMiddleware
+from openviking.server.responses import error_response, response_from_result
+
 
 class _DummySpan:
     def __init__(self) -> None:
@@ -23,10 +27,10 @@ class _DummySpanCM:
 
 def test_http_observability_middleware_updates_route_template_after_routing(monkeypatch) -> None:
     """
-    Ensure `http_route` is finalized after routing has occurred (post-call_next).
+    Ensure `http_route` is finalized after routing has occurred (before response headers).
 
     Starlette/FastAPI route matching happens downstream of middleware, so reading
-    `request.scope["route"]` before `call_next` may yield no route.
+    `request.scope["route"]` before routing may yield no route.
     """
     from openviking.observability import http_observability_middleware as mw_mod
 
@@ -56,20 +60,118 @@ def test_http_observability_middleware_updates_route_template_after_routing(monk
     monkeypatch.setattr(mw_mod, "create_root_span_attributes", _capture_create_root_span_attributes)
 
     app = FastAPI()
-    http_mw = mw_mod.create_http_observability_middleware()
-
-    @app.middleware("http")
-    async def _mw(request, call_next):
-        return await http_mw(request, call_next)
+    app.add_middleware(mw_mod.HTTPObservabilityMiddleware)
+    app.add_middleware(RequestIdMiddleware)
 
     @app.get("/hello")
     async def hello():
         return {"ok": True}
 
     with TestClient(app) as client:
-        resp = client.get("/hello")
+        resp = client.get("/hello?token=top-secret")
         assert resp.status_code == 200
 
     root_attrs = captured["root_attrs"]
     assert root_attrs.http_route == "/hello"
+    assert root_attrs.url_query is None
+    assert "url.query" not in root_attrs.to_otel_attributes()
     assert "GET /hello" in dummy_span.updated_names
+
+
+def test_http_observability_captures_public_error_without_reading_response_body(
+    monkeypatch,
+) -> None:
+    from openviking.observability import http_observability_middleware as mw_mod
+
+    completed: list[dict] = []
+    monkeypatch.setattr(HttpRequestLifecycleDataSource, "set_inflight", lambda **_: None)
+    monkeypatch.setattr(
+        HttpRequestLifecycleDataSource,
+        "record_request",
+        lambda **kwargs: completed.append(kwargs),
+    )
+    monkeypatch.setattr(mw_mod, "maybe_start_root_span", lambda *_: None)
+
+    app = FastAPI()
+    app.add_middleware(mw_mod.HTTPObservabilityMiddleware)
+    app.add_middleware(RequestIdMiddleware)
+
+    @app.get("/invalid")
+    async def invalid():
+        return error_response(
+            "INVALID_ARGUMENT",
+            "limit must be at most 200",
+            details={"limit": 300, "api_key": "sk-not-persisted"},
+        )
+
+    @app.get("/unavailable")
+    async def unavailable():
+        return error_response(
+            "UNAVAILABLE",
+            "Parser service is unavailable",
+            details={"retryable": True},
+        )
+
+    @app.get("/business-error")
+    async def business_error():
+        return response_from_result(
+            {
+                "status": "error",
+                "code": "PROCESSING_ERROR",
+                "message": "Resource processing failed",
+                "details": {"stage": "parse"},
+            }
+        )
+
+    with TestClient(app) as client:
+        invalid_response = client.get("/invalid")
+        unavailable_response = client.get("/unavailable")
+        business_response = client.get("/business-error")
+
+    assert invalid_response.status_code == 400
+    assert invalid_response.json()["error"]["details"]["api_key"] == "sk-not-persisted"
+    assert unavailable_response.status_code == 503
+    assert business_response.status_code == 500
+    assert len(completed) == 3
+    assert completed[0]["error_code"] == "INVALID_ARGUMENT"
+    assert completed[0]["error_message"] == "limit must be at most 200"
+    assert completed[0]["error_details"] == {"limit": 300, "api_key": "[REDACTED]"}
+    assert completed[1]["error_code"] == "UNAVAILABLE"
+    assert completed[1]["error_message"] == "Parser service is unavailable"
+    assert completed[1]["error_details"] == {"retryable": True}
+    assert completed[2]["error_code"] == "PROCESSING_ERROR"
+    assert completed[2]["error_message"] == "Resource processing failed"
+    assert completed[2]["error_details"] == {"stage": "parse"}
+
+
+def test_route_template_keeps_mount_path_for_mounted_apps() -> None:
+    """A mounted sub-app (the embedded gateway) is labelled with its mount path, while
+    a root_path set before the server (a proxy prefix) stays out of the template."""
+    from openviking.observability.http_observability_middleware import scope_route_template
+
+    inner = FastAPI()
+
+    @inner.get("/admin/keys")
+    async def keys():
+        return {}
+
+    app = FastAPI()
+
+    @app.get("/health")
+    async def health():
+        return {}
+
+    seen = []
+
+    @app.middleware("http")
+    async def record(request, call_next):
+        response = await call_next(request)
+        seen.append(scope_route_template(request.scope))
+        return response
+
+    app.mount("/gateway", inner)
+    for root_path in ("", "/proxy"):
+        with TestClient(app, root_path=root_path) as client:
+            for path in ("/gateway/admin/keys", "/gateway/missing", "/health"):
+                client.get(root_path + path)
+    assert seen == ["/gateway/admin/keys", "/__unmatched__", "/health"] * 2

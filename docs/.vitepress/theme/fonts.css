@@ -1,0 +1,11 @@
+@import "./fonts/tosaki/typography.css";
+/* Self-hosted fonts. IPA and OFL licenses: fonts/tosaki/ and fonts/reading/. */
+@import "./fonts/reading/subsets.css";
+
+@font-face {
+  font-family: 'Source Serif 4';
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url('./fonts/reading/source-serif-4.woff2') format('woff2');
+}

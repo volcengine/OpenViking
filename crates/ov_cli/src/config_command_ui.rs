@@ -5,7 +5,6 @@ use crate::{
     config::{Config, display_config_home},
     config_wizard::ConfigKind,
     error::Error,
-    error_classifier::looks_like_auth_error,
     i18n::{Language, copy},
     theme,
 };
@@ -405,6 +404,7 @@ fn unknown_value(value: &str) -> String {
 #[derive(Debug, Clone, Copy)]
 enum ValidationFailureKind {
     Network,
+    Timeout,
     Auth,
     Unhealthy,
     Other,
@@ -415,7 +415,8 @@ impl ValidationFailureKind {
         match error {
             Error::Network(message) if message.contains("unhealthy") => Self::Unhealthy,
             Error::Network(_) => Self::Network,
-            Error::Api { message, .. } if looks_like_auth_error(message) => Self::Auth,
+            Error::Timeout(_) => Self::Timeout,
+            error @ Error::Api { .. } if error.code() == "UNAUTHENTICATED" => Self::Auth,
             _ => Self::Other,
         }
     }
@@ -423,6 +424,7 @@ impl ValidationFailureKind {
     fn server_check(self, language: Language) -> String {
         match self {
             Self::Network => fail_value(copy(language, "unreachable", "无法连接")),
+            Self::Timeout => fail_value(copy(language, "timed out", "超时")),
             Self::Auth | Self::Unhealthy => ok_value(copy(language, "reachable", "可连接")),
             Self::Other => warn_value(unknown(language)),
         }
@@ -431,7 +433,7 @@ impl ValidationFailureKind {
     fn auth_check(self, language: Language) -> String {
         match self {
             Self::Auth => fail_value(copy(language, "rejected", "被拒绝")),
-            Self::Network => warn_value(copy(language, "not checked", "未检查")),
+            Self::Network | Self::Timeout => warn_value(copy(language, "not checked", "未检查")),
             Self::Unhealthy => ok_value(copy(language, "accepted", "已通过")),
             Self::Other => warn_value(unknown(language)),
         }
@@ -440,7 +442,9 @@ impl ValidationFailureKind {
     fn health_check(self, language: Language) -> String {
         match self {
             Self::Unhealthy => fail_value(copy(language, "unhealthy", "不健康")),
-            Self::Network | Self::Auth => warn_value(copy(language, "not checked", "未检查")),
+            Self::Network | Self::Timeout | Self::Auth => {
+                warn_value(copy(language, "not checked", "未检查"))
+            }
             Self::Other => warn_value(unknown(language)),
         }
     }
@@ -449,12 +453,16 @@ impl ValidationFailureKind {
         match language {
             Language::En => match self {
                 Self::Network => "Could not reach the configured OpenViking server.",
+                Self::Timeout => {
+                    "OpenViking did not respond before the configured timeout expired."
+                }
                 Self::Auth => "OpenViking rejected the API key for this config.",
                 Self::Unhealthy => "OpenViking is reachable but reported an unhealthy state.",
                 Self::Other => "The active config could not be validated.",
             },
             Language::ZhCn => match self {
                 Self::Network => "无法连接已配置的 OpenViking 服务器。",
+                Self::Timeout => "OpenViking 未在配置的超时时间内响应。",
                 Self::Auth => "OpenViking 拒绝了这个配置的 API Key。",
                 Self::Unhealthy => "服务器可连接，但健康状态异常。",
                 Self::Other => "当前配置验证失败。",

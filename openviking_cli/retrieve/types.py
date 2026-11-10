@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from openviking.utils.tags import normalize_search_tags
+
 
 class ContextType(str, Enum):
     """Context type for retrieval."""
@@ -64,7 +66,7 @@ class TraceEvent:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
-        result = {
+        result: Dict[str, Any] = {
             "event_type": self.event_type.value,
             "timestamp": round(self.timestamp, 4),
             "message": self.message,
@@ -251,6 +253,8 @@ class TypedQuery:
     intent: str
     priority: int = 3
     target_directories: List[str] = field(default_factory=list)
+    embedding_input: Optional[Any] = None
+    image_query: bool = False
 
 
 @dataclass
@@ -270,14 +274,6 @@ class QueryPlan:
 
 
 @dataclass
-class RelatedContext:
-    """Related context with summary."""
-
-    uri: str
-    abstract: str
-
-
-@dataclass
 class MatchedContext:
     """Matched context from retrieval."""
 
@@ -289,8 +285,10 @@ class MatchedContext:
     category: str = ""
     score: float = 0.0
     match_reason: str = ""
-
-    relations: List[RelatedContext] = field(default_factory=list)
+    search_tags: List[str] = field(default_factory=list)
+    # Recall-stage vector score and time factor, retained after model rerank.
+    origin_score: Optional[float] = None
+    time_score: Optional[float] = None
 
 
 @dataclass
@@ -352,7 +350,7 @@ class FindResult:
             include_provenance: If True, include query_results with thinking
                 trace and searched_directories for retrieval observability.
         """
-        result = {
+        result: Dict[str, Any] = {
             "memories": [self._context_to_dict(m) for m in self.memories],
             "resources": [self._context_to_dict(r) for r in self.resources],
             "skills": [self._context_to_dict(s) for s in self.skills],
@@ -371,24 +369,30 @@ class FindResult:
         return result
 
     def _context_to_dict(self, ctx: MatchedContext) -> Dict[str, Any]:
-        """Convert MatchedContext to dict."""
-        return {
+        """Convert MatchedContext to dict.
+
+        Only fields the retrieval pipeline actually populates are exposed.
+        ``search_tags`` is surfaced under the ``tags`` key to match the
+        ``tags`` filter parameter accepted by find/search.
+        """
+        result: Dict[str, Any] = {
             "context_type": ctx.context_type.value,
             "uri": ctx.uri,
             "level": ctx.level,
             "score": ctx.score,
-            "category": ctx.category,
-            "match_reason": ctx.match_reason,
-            "relations": [{"uri": r.uri, "abstract": r.abstract} for r in ctx.relations],
             "abstract": ctx.abstract,
-            "overview": ctx.overview,
+            "tags": normalize_search_tags(ctx.search_tags, discard_invalid=True),
         }
+        if ctx.origin_score is not None:
+            result["origin_score"] = ctx.origin_score
+            result["time_score"] = ctx.time_score
+        return result
 
     def _query_to_dict(self, q: TypedQuery) -> Dict[str, Any]:
         """Convert TypedQuery to dict."""
         return {
             "query": q.query,
-            "context_type": q.context_type.value,
+            "context_type": q.context_type.value if q.context_type is not None else None,
             "intent": q.intent,
             "priority": q.priority,
         }
@@ -404,6 +408,14 @@ class FindResult:
                     "tier": f"L{ctx.level}",
                     "context_type": ctx.context_type.value,
                     "score": ctx.score,
+                    **(
+                        {
+                            "origin_score": ctx.origin_score,
+                            "time_score": ctx.time_score,
+                        }
+                        if ctx.origin_score is not None
+                        else {}
+                    ),
                     "match_reason": ctx.match_reason,
                 }
                 for ctx in qr.matched_contexts
@@ -424,11 +436,10 @@ class FindResult:
                 overview=d.get("overview"),
                 category=d.get("category", ""),
                 score=d.get("score", 0.0),
+                origin_score=d.get("origin_score"),
+                time_score=d.get("time_score"),
                 match_reason=d.get("match_reason", ""),
-                relations=[
-                    RelatedContext(uri=r.get("uri", ""), abstract=r.get("abstract", ""))
-                    for r in d.get("relations", [])
-                ],
+                search_tags=list(d.get("tags") or d.get("search_tags") or []),
             )
 
         return cls(

@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from fastapi.responses import JSONResponse
 
+from openviking.observability.http_error_context import capture_public_http_error
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 
 
@@ -50,6 +51,11 @@ def response_from_result(
             message=_message_from_business_error(result),
             details=details if isinstance(details, dict) else None,
         )
+        capture_public_http_error(
+            code=error.code,
+            message=error.message,
+            details=error.details,
+        )
         content = Response(
             status="error",
             error=error,
@@ -75,6 +81,7 @@ def error_response(
     telemetry: Optional[Dict[str, Any]] = None,
 ):
     """Build a standard API error response with the mapped HTTP status."""
+    capture_public_http_error(code=code, message=message, details=details)
     content = Response(
         status="error",
         error=ErrorInfo(code=code, message=message, details=details),

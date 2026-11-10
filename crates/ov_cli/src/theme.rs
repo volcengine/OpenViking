@@ -8,6 +8,10 @@ pub(crate) struct Rgb(pub(crate) u8, pub(crate) u8, pub(crate) u8);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ThemeColor {
     TrueColor(Rgb),
+    /// Terminal default foreground (SGR 39). Follows the current light/dark theme.
+    DefaultFg,
+    /// Dim/faint (SGR 2). Secondary text relative to the default foreground.
+    Dim,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,19 +26,27 @@ impl ThemeColor {
     pub(crate) fn rgb_fallback(&self) -> Rgb {
         match self {
             ThemeColor::TrueColor(rgb) => *rgb,
+            ThemeColor::DefaultFg | ThemeColor::Dim => {
+                unreachable!("semantic text colors follow the terminal palette")
+            }
         }
     }
 }
 
+#[cfg(test)]
+const BRAND_SIGNAL: Rgb = Rgb(79, 214, 240);
+
+/// OpenViking brand deep teal (#0A7C93). Readable on both light and dark
+/// terminals, so it is the accent for borders, commands and headings.
+pub(crate) const BRAND_DEEP_TEAL: Rgb = Rgb(10, 124, 147);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CliTheme {
-    pub(crate) wordmark_start: Rgb,
-    pub(crate) wordmark_mid: Rgb,
-    pub(crate) wordmark_end: Rgb,
-    pub(crate) logo_end: Rgb,
-    pub(crate) tagline_start: Rgb,
-    pub(crate) tagline_mid: Rgb,
-    pub(crate) tagline_end: Rgb,
+    /// Solid ink for the braille mark, readable on both terminal backgrounds.
+    pub(crate) mark: Rgb,
+    /// Block-letter wordmark. The brand wordmark is Paper on dark and Ink on
+    /// light, which is what the terminal default foreground already gives.
+    pub(crate) wordmark: ThemeColor,
     pub(crate) border: ThemeColor,
     pub(crate) version: ThemeColor,
     pub(crate) brand_title: ThemeColor,
@@ -59,20 +71,15 @@ pub(crate) fn active_theme() -> CliTheme {
 
 pub(crate) fn palette() -> CliTheme {
     CliTheme {
-        wordmark_start: Rgb(22, 181, 166),
-        wordmark_mid: Rgb(0, 140, 132),
-        wordmark_end: Rgb(5, 86, 80),
-        logo_end: Rgb(5, 86, 80),
-        tagline_start: Rgb(0, 128, 128),
-        tagline_mid: Rgb(0, 112, 190),
-        tagline_end: Rgb(0, 128, 128),
-        border: ThemeColor::TrueColor(Rgb(0, 128, 128)),
-        version: ThemeColor::TrueColor(Rgb(0, 128, 128)),
-        brand_title: ThemeColor::TrueColor(Rgb(0, 128, 128)),
-        body: ThemeColor::TrueColor(Rgb(96, 111, 126)),
-        muted: ThemeColor::TrueColor(Rgb(104, 112, 120)),
-        command: ThemeColor::TrueColor(Rgb(0, 128, 128)),
-        heading: ThemeColor::TrueColor(Rgb(0, 128, 128)),
+        mark: BRAND_DEEP_TEAL,
+        wordmark: ThemeColor::DefaultFg,
+        border: ThemeColor::TrueColor(BRAND_DEEP_TEAL),
+        version: ThemeColor::TrueColor(BRAND_DEEP_TEAL),
+        brand_title: ThemeColor::TrueColor(BRAND_DEEP_TEAL),
+        body: ThemeColor::DefaultFg,
+        muted: ThemeColor::Dim,
+        command: ThemeColor::TrueColor(BRAND_DEEP_TEAL),
+        heading: ThemeColor::TrueColor(BRAND_DEEP_TEAL),
         value: ThemeColor::TrueColor(Rgb(0, 112, 190)),
         sky_value: ThemeColor::TrueColor(Rgb(0, 112, 190)),
         success: ThemeColor::TrueColor(Rgb(0, 133, 90)),
@@ -89,7 +96,24 @@ pub(crate) fn colorize(text: impl Into<String>, color: ThemeColor) -> ColoredStr
     let text = text.into();
     match color {
         ThemeColor::TrueColor(Rgb(red, green, blue)) => text.truecolor(red, green, blue),
+        ThemeColor::DefaultFg => default_foreground(text),
+        ThemeColor::Dim => text.dimmed(),
     }
+}
+
+fn default_foreground(text: String) -> ColoredString {
+    paint_default_foreground(text, false)
+}
+
+fn paint_default_foreground(text: String, bold: bool) -> ColoredString {
+    if !colored::control::SHOULD_COLORIZE.should_colorize() {
+        return ColoredString::from(text);
+    }
+
+    // colored 2.x has no Default color. Emit SGR 39 so body text uses the
+    // terminal default foreground instead of a hardcoded gray, black, or white.
+    let code = if bold { "1;39" } else { "39" };
+    ColoredString::from(format!("\u{1b}[{code}m{text}\u{1b}[0m"))
 }
 
 pub(crate) fn terminal_color_level() -> ColorLevel {
@@ -164,6 +188,23 @@ pub(crate) fn style_rgb_for_level(
             ansi_style(text, &format!("38;5;{}", ansi256_index_for_rgb(rgb)), bold)
         }
         ColorLevel::Ansi16 => ansi_style(text, &ansi16_fg_code_for_rgb(rgb).to_string(), bold),
+    }
+}
+
+/// Styles `text` with a semantic theme color at an explicit color level, so
+/// callers that already resolved the level (banner art) stay deterministic.
+pub(crate) fn style_theme_color_for_level(
+    text: impl AsRef<str>,
+    color: ThemeColor,
+    bold: bool,
+    level: ColorLevel,
+) -> String {
+    let text = text.as_ref();
+    match (color, level) {
+        (_, ColorLevel::NoColor) => text.to_string(),
+        (ThemeColor::TrueColor(rgb), _) => style_rgb_for_level(text, rgb, bold, level),
+        (ThemeColor::DefaultFg, _) => ansi_style(text, "39", bold),
+        (ThemeColor::Dim, _) => ansi_style(text, "2", bold),
     }
 }
 
@@ -320,7 +361,7 @@ pub(crate) fn selection(text: impl Into<String>) -> ColoredString {
 }
 
 pub(crate) fn strong(text: impl Into<String>) -> ColoredString {
-    body(text).bold()
+    paint_default_foreground(text.into(), true)
 }
 
 #[cfg(test)]
@@ -339,8 +380,9 @@ fn relative_luminance(color: Rgb) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        CliTheme, ColorLevel, Rgb, ThemeColor, active_theme, ansi256_index_for_rgb, palette,
-        relative_luminance, style_rgb_for_level, terminal_color_level_from_env,
+        BRAND_DEEP_TEAL, BRAND_SIGNAL, CliTheme, ColorLevel, Rgb, ThemeColor, active_theme,
+        ansi256_index_for_rgb, palette, relative_luminance, style_rgb_for_level,
+        style_theme_color_for_level, terminal_color_level_from_env,
     };
 
     const PALE_PEARL: Rgb = Rgb(234, 253, 247);
@@ -384,11 +426,9 @@ mod tests {
         assert!(!styled.contains("38;2"));
     }
 
-    fn functional_colors(palette: CliTheme) -> [(&'static str, ThemeColor); 13] {
+    fn accent_colors(palette: CliTheme) -> [(&'static str, ThemeColor); 11] {
         [
             ("brand_title", palette.brand_title),
-            ("body", palette.body),
-            ("muted", palette.muted),
             ("command", palette.command),
             ("heading", palette.heading),
             ("value", palette.value),
@@ -424,7 +464,7 @@ mod tests {
     #[test]
     fn single_palette_uses_explicit_balanced_functional_colors() {
         let palette = palette();
-        for (name, color) in functional_colors(palette) {
+        for (name, color) in accent_colors(palette) {
             assert_ne!(
                 color.rgb_fallback(),
                 PALE_PEARL,
@@ -436,20 +476,101 @@ mod tests {
     }
 
     #[test]
-    fn single_palette_separates_neutral_text_from_teal_structure() {
-        let palette = palette();
+    fn brand_colors_match_the_openviking_brand_manual() {
+        assert_eq!(BRAND_SIGNAL, Rgb(0x4F, 0xD6, 0xF0));
+        assert_eq!(BRAND_DEEP_TEAL, Rgb(0x0A, 0x7C, 0x93));
+    }
 
-        for (name, color) in [("body", palette.body), ("muted", palette.muted)] {
-            let Rgb(red, green, blue) = color.rgb_fallback();
-            assert!(
-                red >= 80,
-                "{name} should be a readable neutral, not another teal accent"
-            );
-            assert!(
-                green.abs_diff(blue) <= 35,
-                "{name} should stay neutral enough for descriptions"
+    #[test]
+    fn signal_cyan_never_carries_text() {
+        // The brand forbids Signal on light backgrounds, and the CLI cannot
+        // see the terminal background, so the CLI uses solid deep teal for the mark and accents.
+        let palette = palette();
+        for (name, color) in accent_colors(palette) {
+            assert_ne!(
+                color,
+                ThemeColor::TrueColor(BRAND_SIGNAL),
+                "{name} must not be Signal"
             );
         }
+        assert!(contrast_ratio(BRAND_SIGNAL, WHITE) < 4.0);
+        assert!(contrast_ratio(BRAND_DEEP_TEAL, WHITE) >= 4.5);
+        assert!(contrast_ratio(BRAND_DEEP_TEAL, BLACK) >= 4.0);
+    }
+
+    #[test]
+    fn theme_color_styling_respects_the_color_level() {
+        assert_eq!(
+            style_theme_color_for_level("OV", ThemeColor::DefaultFg, true, ColorLevel::TrueColor),
+            "\u{1b}[1;39mOV\u{1b}[0m"
+        );
+        assert_eq!(
+            style_theme_color_for_level("OV", ThemeColor::DefaultFg, true, ColorLevel::NoColor),
+            "OV"
+        );
+        assert_eq!(
+            style_theme_color_for_level(
+                "OV",
+                ThemeColor::TrueColor(BRAND_DEEP_TEAL),
+                false,
+                ColorLevel::Ansi256
+            ),
+            "\u{1b}[38;5;30mOV\u{1b}[0m"
+        );
+    }
+
+    #[test]
+    fn body_and_muted_follow_the_terminal_instead_of_fixed_gray() {
+        let palette = palette();
+        assert_eq!(palette.body, ThemeColor::DefaultFg);
+        assert_eq!(palette.muted, ThemeColor::Dim);
+    }
+
+    #[test]
+    fn body_uses_default_foreground_instead_of_black_white_or_rgb_gray() {
+        colored::control::set_override(true);
+        let rendered = super::body("The context database").to_string();
+        colored::control::unset_override();
+
+        assert_eq!(rendered, "\u{1b}[39mThe context database\u{1b}[0m");
+        assert!(!rendered.contains("38;2"));
+        assert!(!rendered.contains("\u{1b}[30m"));
+        assert!(!rendered.contains("\u{1b}[37m"));
+        assert!(!rendered.contains("\u{1b}[90m"));
+        assert!(!rendered.contains("\u{1b}[97m"));
+    }
+
+    #[test]
+    fn muted_uses_dim_instead_of_gray_rgb() {
+        colored::control::set_override(true);
+        let rendered = super::muted("optional hint").to_string();
+        colored::control::unset_override();
+
+        assert!(
+            rendered.contains("\u{1b}[2m"),
+            "muted text should use SGR 2 (dim): {rendered:?}"
+        );
+        assert!(rendered.contains("optional hint"));
+        assert!(!rendered.contains("38;2"));
+        assert!(!rendered.contains("\u{1b}[30m"));
+        assert!(!rendered.contains("\u{1b}[37m"));
+        assert!(!rendered.contains("\u{1b}[90m"));
+        assert!(!rendered.contains("\u{1b}[97m"));
+    }
+
+    #[test]
+    fn strong_bolds_the_default_foreground() {
+        colored::control::set_override(true);
+        let rendered = super::strong("Normal commands").to_string();
+        colored::control::unset_override();
+
+        assert_eq!(rendered, "\u{1b}[1;39mNormal commands\u{1b}[0m");
+        assert!(!rendered.contains("38;2"));
+    }
+
+    #[test]
+    fn single_palette_keeps_teal_structure_and_sky_values() {
+        let palette = palette();
 
         let Rgb(command_red, command_green, _) = palette.command.rgb_fallback();
         assert!(

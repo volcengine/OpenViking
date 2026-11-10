@@ -66,7 +66,7 @@ def test_actor_search_keeps_explicit_resource_target():
 
 
 def test_actor_search_user_root_keeps_user_content_and_filters_peer_collection():
-    targets = _target_dirs("viking://user", actor_peer_id="web-visitor-alice")
+    targets = _target_dirs("viking://user/support_bot", actor_peer_id="web-visitor-alice")
 
     assert targets == [
         "viking://user/support_bot/memories",
@@ -84,6 +84,20 @@ def test_actor_default_memory_targets_actor_peer_memory():
         "viking://user/support_bot/memories",
         "viking://user/support_bot/peers/web-visitor-alice/memories",
     ]
+
+
+def test_encoded_actor_cannot_read_colliding_ascii_peer():
+    encoded_peer = "ext-5byg5LiJIEFsaWNl"
+
+    assert default_target_directories(_ctx(encoded_peer), context_type=ContextType.MEMORY) == [
+        "viking://user/support_bot/memories",
+        f"viking://user/support_bot/peers/{encoded_peer}/memories",
+    ]
+    with pytest.raises(PermissionDeniedError, match="another peer"):
+        _target_dirs(
+            "viking://user/support_bot/peers/Alice/memories",
+            actor_peer_id=encoded_peer,
+        )
 
 
 def test_actor_skill_defaults_include_user_and_shared_agent_skills():
@@ -106,7 +120,7 @@ def test_actor_default_resource_targets_global_and_actor_peer_resources():
 
 
 def test_explicit_user_memory_target_stays_self_memory_only():
-    targets = _target_dirs("viking://user/memories")
+    targets = _target_dirs("viking://user/support_bot/memories")
 
     assert targets == ["viking://user/support_bot/memories"]
 

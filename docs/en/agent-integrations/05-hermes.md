@@ -1,33 +1,75 @@
-# Hermes Agent
+# Hermes
 
-[Hermes Agent](https://hermes-agent.nousresearch.com/) by Nous Research has a first-class OpenViking memory provider built in. No plugin to install — just point Hermes at your OpenViking server and it handles memory storage, recall, and extraction natively.
+Use OpenViking for long-term memory in [Hermes Agent](https://hermes-agent.nousresearch.com/).
 
-## Setup
+## Get started
 
-Run the Hermes memory setup wizard:
+Run these commands in the Hermes profile you want to use:
 
 ```bash
-hermes memory setup
+hermes plugins install openviking --enable
+hermes memory setup openviking
+hermes
 ```
 
-The wizard prompts for:
+Accept the dependency prompt during installation. If your Hermes release still
+includes OpenViking, skip the install command. That release uses its built-in
+copy and does not provide Quick Local.
 
-- **OpenViking server URL** — your self-hosted server (default `http://127.0.0.1:1933`) or OpenViking Service (VolcEngine Cloud)
-- **API key** — leave blank for local dev mode
-- **Tenant account / user / peer IDs** — for multi-tenant deployments. Legacy `agent_id` settings map to the request actor peer during migration.
+Hermes uses conversation history to follow the current chat. OpenViking saves
+useful facts as long-term memory for later chats. Common memory is not linked
+to a sender.
 
-Configuration is saved to Hermes's `config.yaml` and `.env` files.
+Choose **Personal Agent** to recall common memory and the current sender's
+memory while keeping your conversation history settings. Choose **Shared Agent**
+to share history within each group or thread and recall all senders' memories
+under the same OpenViking user. Shared Agent asks for confirmation.
 
-## Verify
+Then choose a connection:
+
+- **Quick Local** installs a local server and embedding model. It reuses your
+  supported Hermes language model for extraction, which can use a remote API.
+- **OpenViking Service (VolcEngine Cloud)** connects to VolcEngine's
+  [managed OpenViking cloud service](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=agent-integrations_05-hermes)
+  with a service API key. You do not need to install a server or configure
+  local models.
+- **Custom** connects to your own server with its URL and credentials. Setup
+  can also reuse a saved `ovcli.conf`.
+
+After setup, chat as usual. The plugin requests a commit at 20,000 pending
+tokens by default, at session end and when switching sessions. Memories become
+available after OpenViking finishes extraction. Existing server data is kept.
+
+Quick Local keeps its server running after Hermes exits. See the
+[plugin guide](https://hermes-agent.nousresearch.com/docs/plugins/openviking)
+for model support, server controls and runtime upgrade instructions.
+
+## Check status
 
 ```bash
 hermes memory status
 ```
 
-Once configured, Hermes automatically uses OpenViking for long-term memory — `viking_remember`, `viking_recall`, and other memory tools become available to the agent.
+`available` means the provider is configured. It does not confirm server
+health or successful memory extraction.
 
-## See also
+## Update
 
-- [Hermes — OpenViking memory provider docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking) — full setup guide and configuration options
-- [Deployment Guide](../guides/03-deployment.md) — setting up your OpenViking server
-- [Authentication](../guides/04-authentication.md) — API key setup for remote access
+```bash
+hermes plugins update openviking
+```
+
+Restart Hermes or the gateway afterward. Your connection settings and data
+are kept. To update a Quick Local server, run setup again and choose Quick
+Local. Normal chat uses the installed server without checking for updates.
+
+When a Hermes update removes the built-in provider, it attempts to install
+the catalog plugin for profiles already using OpenViking. If that fails,
+run the install command above in that profile.
+
+## More information
+
+- [Plugin guide](https://hermes-agent.nousresearch.com/docs/plugins/openviking)
+- [Capability reference](./16-capability-reference.md)
+- [Server deployment](../guides/03-deployment.md)
+- [API keys](../guides/04-authentication.md)

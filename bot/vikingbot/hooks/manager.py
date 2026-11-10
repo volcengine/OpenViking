@@ -40,6 +40,11 @@ class HookManager:
                 continue
             for event_type, hook_types in hooks.items():
                 for hook_type in hook_types:
+                    # AgentLoop is also constructed per Compile task. Module-level
+                    # hook instances must be registered once per event, not once
+                    # per AgentLoop; distinct hook instances remain independent.
+                    if any(existing is hook_type for existing in self._hooks[event_type]):
+                        continue
                     self._hooks[event_type].append(hook_type)
                     logger.debug(f"Registered hook '{hook_type}' for event '{event_type}'")
 
@@ -55,7 +60,7 @@ class HookManager:
                     logger.error(f"Hook '{async_hooks[i].name}' failed: {result}")
 
         if sync_hooks:
-            logger.debug(f"Executing {len(sync_hooks)} sync hooks for event '{context.event_type}'")
+            logger.info(f"Executing {len(sync_hooks)} sync hooks for event '{context.event_type}'")
             for hook in sync_hooks:
                 kwargs = await hook.execute(context, **kwargs)
         return kwargs

@@ -56,6 +56,34 @@ std::vector<std::pair<std::string, std::string>> VolatileStore::seek_range(
   return key_values;
 }
 
+std::vector<std::pair<std::string, std::string>>
+VolatileStore::seek_range_page(const std::string& start_key,
+                               const std::string& end_key, size_t limit,
+                               size_t max_bytes, bool start_exclusive) {
+  std::shared_lock<std::shared_mutex> lock(mutex_);
+  std::vector<std::pair<std::string, std::string>> key_values;
+  if (limit == 0 || max_bytes == 0) {
+    return key_values;
+  }
+  size_t page_bytes = 0;
+  auto iter = start_exclusive ? data_.upper_bound(start_key)
+                              : data_.lower_bound(start_key);
+  for (; iter != data_.end() && iter->first < end_key &&
+         key_values.size() < limit;
+       ++iter) {
+    const size_t item_bytes = iter->first.size() + iter->second.size();
+    // Always admit one oversized row so pagination can make progress. Every
+    // additional row must fit within the encoded-byte budget.
+    if (!key_values.empty() &&
+        (page_bytes >= max_bytes || item_bytes > max_bytes - page_bytes)) {
+      break;
+    }
+    key_values.push_back({iter->first, iter->second});
+    page_bytes += item_bytes;
+  }
+  return key_values;
+}
+
 int VolatileStore::exec_op(const std::vector<StorageOp>& ops) {
   std::unique_lock<std::shared_mutex> lock(mutex_);
   for (const auto& op : ops) {

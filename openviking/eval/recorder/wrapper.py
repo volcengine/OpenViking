@@ -118,9 +118,6 @@ class RecordingVikingFS:
             "tree",
             "abstract",
             "overview",
-            "relations",
-            "link",
-            "unlink",
             "write_file",
             "read_file",
             "read_file_bytes",
@@ -129,8 +126,6 @@ class RecordingVikingFS:
             "move_file",
             "delete_temp",
             "write_context",
-            "get_relations",
-            "get_relations_with_content",
             "find",
             "search",
         ):

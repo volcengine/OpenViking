@@ -1,0 +1,10 @@
+# OpenViking Assets manifest: selects assets by name from the catalog.yaml
+# next to it (found automatically; override with --args catalog:<file>).
+# Validate first, then apply:
+#   ov add-resource -m manifest.yaml --args dry_run:true
+#   ov add-resource -m manifest.yaml
+# Simple setups can skip the separate catalog file and define assets inline
+# under `catalog:` — see the OpenViking Assets guide.
+assets:
+  - openviking
+  - flask

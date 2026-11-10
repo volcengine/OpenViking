@@ -91,7 +91,7 @@ class AsyncRecordWriter:
         batch: list[Dict[str, Any]] = []
         last_flush = time.time()
 
-        while not self._stop_event.is_set():
+        while True:
             try:
                 record = self._queue.get(timeout=0.1)
 

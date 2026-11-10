@@ -1,0 +1,40 @@
+# AgentConnect Agent 接入
+
+Agent 接入视图。内置中英文接入内容与图标。调用方必须提供 `API Key` 和 `locale` 语言参数。
+
+## 基础用法
+
+```tsx file="../../_demos/agent-connect-basic.tsx" preview
+
+```
+
+示例使用虚构的 `demo-api-key`。默认宽 1000px、最小高度 949px；左侧列表 200px、间距 40px、详情宽 660px，窄容器横向滚动。
+
+「接入主流 Agent」展示 Codex、Claude Code、豆包工作、WorkBuddy、TRAE、Cursor、OpenClaw、Hermes Agent、OpenCode、DeepSeek Harness、DeerFlow、pi、ZCode、Kimi Code，共十四项。「开发自己的 Agent」展示 MCP、CLI、API、SDK，使用同一列表与详情布局。
+
+Codex、Claude Code、Cursor、OpenClaw、Hermes Agent、OpenCode、pi 的详情保留原接入标签并增加「境外」标签。DeerFlow 详情支持 MemoryManager 和 MCP 两种说明切换，复制当前说明；默认选中 MemoryManager。
+
+CLI 详情提供「手动终端安装」「通过 AI Agent 安装」两个内部页签，默认手动安装；分别展示本地 CLI 操作步骤和发送给 AI Agent 的安装配置提示词。页签采用参考组件的下划线样式，复制当前页签正文，切换后复制反馈重置。
+
+切换条目会更新说明、标签与正文。内容来自组件内置的本地文档快照，不在运行时加载远端 JSON 或 Markdown。安装器提示通过 `--harness` 指定当前 Agent 和 `cli`，服务地址与密钥采用 Shell 字面值转义；TRAE 对应国际版。自定义 Hermes 地址使用 Custom 配置步骤。文档外链仅供用户或其 Agent 阅读，组件不执行安装命令。
+
+## 属性
+
+| 属性           | 类型                                 | 默认值                                                  | 说明                                                                                 |
+| -------------- | ------------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `apiKey`       | `string`                             | 必填                                                    | 调用方提供的 API Key；展示脱敏，复制使用原值。                                       |
+| `locale`       | `'zh' \| 'en'`                       | 必填                                                    | 标题、页签、目录、正文和反馈的语言。                                                 |
+| `baseUrl`      | `string`                             | `https://api.vikingdb.cn-beijing.volces.com/openviking` | 接入服务地址；拼接子路径及 API 示例变量时移除末尾斜杠，安装命令与独立地址保留原值。  |
+| `agreementUrl` | `string`                             | —                                                       | 宿主协议链接；提供时显示可访问的协议引用，未提供时仅显示数据访问提示。               |
+| `activeTabId`  | `'mainstream' \| 'custom'`           | `mainstream`                                            | 可选受控页签；未传时由组件维护。                                                     |
+| `selectedId`   | `string`                             | 当前分组首项                                            | 可选受控条目；主流首项为 `codex`，开发首项为 `mcp`。不属于当前分组时显示该分组首项。 |
+| `onTabChange`  | `(tabId: AgentConnectTabId) => void` | —                                                       | 页签选择通知，方向键、Home、End 也会触发。                                           |
+| `onSelect`     | `(item: AgentConnectItem) => void`   | —                                                       | 返回内置条目的 `id` 与当前语言的 `name`。                                            |
+| `onCopy`       | `(text: string) => void`             | —                                                       | 复制成功后返回含原始密钥的完整正文；组件负责剪贴板写入。                             |
+| 其余属性       | `HTMLAttributes<HTMLDivElement>`     | —                                                       | 标准 div 属性；不接收 `children`。                                                   |
+
+主流条目 ID：`codex`、`claude-code`、`doubao`、`workbuddy`、`trae`、`cursor`、`openclaw`、`hermes`、`opencode`、`deepseek-harness`、`deerflow`、`pi`、`zcode`、`kimi-code`。开发条目 ID：`mcp`、`cli`、`api`、`sdk`。非受控实例分别记住两个分组的选择。
+
+复制需要安全上下文和 Clipboard API 权限。复制期间阻止重复操作；成功显示「已复制」，失败显示「复制失败，请重试」。切换条目、指南、语言、凭据或地址后清空反馈和 pending 状态，旧请求完成不再通知宿主；返回旧指南也不恢复旧反馈。已开始的剪贴板写入无法取消。复制回调包含密钥，宿主应按凭据处理。
+
+图标已包含在 JS 构建中，开发方式图标沿用参考组件原始 SVG。样式从 `@openviking/react/components/agent-connect/style.css` 引入。暗色跟随宿主 `.dark`，保留 Codex 的透明外底与原始白色符号。

@@ -83,6 +83,58 @@ describe("context-engine message adapter seam", () => {
 });
 
 describe("context-engine lifecycle service seam", () => {
+  it("short-circuits transformContext non-user tails before lifecycle work", async () => {
+    const messages = [
+      { role: "user", content: "run the tool" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tool_1", name: "bash", arguments: {} }],
+      },
+    ];
+    const getClient = vi.fn();
+    const resolveAgentId = vi.fn();
+    const rememberSessionAgentId = vi.fn();
+    const isBypassedSession = vi.fn(() => false);
+    const diag = vi.fn();
+    const roughEstimate = vi.fn(() => 42);
+    const messageDigest = vi.fn(() => []);
+    const extractAgentMessageText = vi.fn(() => "");
+    const hasAutoRecallBlock = vi.fn(() => false);
+    const prependRecallToLatestUserMessage = vi.fn();
+
+    const result = await assembleOpenVikingSession({
+      sessionId: "tool-loop-session",
+      messages,
+      tokenBudget: 4096,
+      isMainAssemble: false,
+      cfg: { autoRecall: true },
+      getClient,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      resolveAgentId,
+      rememberSessionAgentId,
+      isBypassedSession,
+      diag,
+      roughEstimate,
+      messageDigest,
+      extractAgentMessageText,
+      hasAutoRecallBlock,
+      prependRecallToLatestUserMessage,
+    });
+
+    expect(result).toEqual({ messages, estimatedTokens: 0 });
+    expect(result.messages).toBe(messages);
+    expect(roughEstimate).not.toHaveBeenCalled();
+    expect(messageDigest).not.toHaveBeenCalled();
+    expect(rememberSessionAgentId).not.toHaveBeenCalled();
+    expect(isBypassedSession).not.toHaveBeenCalled();
+    expect(diag).not.toHaveBeenCalled();
+    expect(getClient).not.toHaveBeenCalled();
+    expect(resolveAgentId).not.toHaveBeenCalled();
+    expect(extractAgentMessageText).not.toHaveBeenCalled();
+    expect(hasAutoRecallBlock).not.toHaveBeenCalled();
+    expect(prependRecallToLatestUserMessage).not.toHaveBeenCalled();
+  });
+
   it("assembles through the lifecycle service seam and preserves no-data passthrough diagnostics", async () => {
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const messages = [{ role: "user", content: "hello world" }];
@@ -104,7 +156,7 @@ describe("context-engine lifecycle service seam", () => {
       tokenBudget: 4096,
       runtimeContext: { senderId: "telegram:123", agentId: "runtime-agent" },
       isMainAssemble: true,
-      cfg: { autoRecall: false },
+      cfg: { autoRecall: false, contextManagementMode: "openviking" },
       getClient: vi.fn().mockResolvedValue(client),
       logger,
       resolveAgentId: vi.fn().mockReturnValue("agent_main"),
@@ -126,7 +178,7 @@ describe("context-engine lifecycle service seam", () => {
       agentId: "runtime-agent",
       ovSessionId,
     });
-    expect(client.getSessionContext).toHaveBeenCalledWith(ovSessionId, 4096, "agent_main");
+    expect(client.getSessionContext).toHaveBeenCalledWith(ovSessionId, 4096);
     expect(buildAssembledContext).not.toHaveBeenCalled();
     expect(result).toEqual({ messages, estimatedTokens: 42 });
     expect(diag).toHaveBeenCalledWith("assemble_result", ovSessionId, expect.objectContaining({
@@ -151,15 +203,12 @@ describe("context-engine lifecycle service seam", () => {
     };
     const getClient = vi.fn().mockResolvedValue(client);
     const rememberSessionAgentId = vi.fn();
-    const resolveAgentId = vi.fn().mockReturnValue("agent_main");
-
     const ok = await commitOpenVikingSession({
       sessionId: "plain-session",
       sessionKey: "agent:main:main",
       getClient,
       logger,
       rememberSessionAgentId,
-      resolveAgentId,
       isBypassedSession: () => false,
     });
 
@@ -170,13 +219,33 @@ describe("context-engine lifecycle service seam", () => {
       sessionKey: "agent:main:main",
       ovSessionId,
     });
-    expect(resolveAgentId).toHaveBeenCalledWith("plain-session", "agent:main:main", ovSessionId);
     expect(client.commitSession).toHaveBeenCalledWith(ovSessionId, {
       wait: true,
-      agentId: "agent_main",
       keepRecentCount: 0,
+      resetContext: true,
     });
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("memories=5"));
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("trace_id=trace-1"));
+  });
+
+  it("logs commit trace_id when Phase 2 reports failure", async () => {
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const ok = await commitOpenVikingSession({
+      sessionId: "failed-session",
+      sessionKey: "agent:main:main",
+      getClient: vi.fn().mockResolvedValue({
+        commitSession: vi.fn().mockResolvedValue({
+          status: "failed",
+          error: "extract failed",
+          trace_id: "trace-failed-commit",
+        }),
+      }),
+      logger,
+      isBypassedSession: () => false,
+    });
+
+    expect(ok).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("trace_id=trace-failed-commit"));
   });
 
   it("compacts an OpenViking session behind the lifecycle service seam", async () => {
@@ -193,6 +262,7 @@ describe("context-engine lifecycle service seam", () => {
       commitSession: vi.fn().mockResolvedValue({
         status: "completed",
         archived: true,
+        effective_enable_working_memory: true,
         archive_uri: "ov://archive/archive-9",
         memories_extracted: { core: 4 },
         task_id: "task-9",
@@ -202,6 +272,7 @@ describe("context-engine lifecycle service seam", () => {
     const diag = vi.fn();
 
     const result = await compactOpenVikingSession({
+      contextManagementMode: "openviking",
       sessionId: "plain-session",
       sessionKey: "agent:main:main",
       tokenBudget: 4096,
@@ -217,11 +288,11 @@ describe("context-engine lifecycle service seam", () => {
     });
 
     const ovSessionId = openClawSessionToOvStorageId("plain-session", "agent:main:main");
-    expect(client.getSessionContext).toHaveBeenNthCalledWith(1, ovSessionId, 4096, "agent_main");
+    expect(client.getSessionContext).toHaveBeenNthCalledWith(1, ovSessionId, 4096);
     expect(client.commitSession).toHaveBeenCalledWith(ovSessionId, {
       wait: true,
-      agentId: "agent_main",
       keepRecentCount: 0,
+      enableWorkingMemory: true,
     });
     expect(result).toEqual({
       ok: true,
@@ -236,6 +307,7 @@ describe("context-engine lifecycle service seam", () => {
           commit: {
             status: "completed",
             archived: true,
+        effective_enable_working_memory: true,
             archive_uri: "ov://archive/archive-9",
             memories_extracted: { core: 4 },
             task_id: "task-9",
@@ -314,14 +386,13 @@ describe("context-engine lifecycle service seam", () => {
       ovSessionId,
       "user",
       [{ type: "text", text: "hello world" }],
-      "agent_main",
+      undefined,
       "2026-04-01T10:01:00.000Z",
-      "telegram_123",
+      undefined,
     );
-    expect(client.getSession).toHaveBeenCalledWith(ovSessionId, "agent_main");
+    expect(client.getSession).toHaveBeenCalledWith(ovSessionId);
     expect(client.commitSession).toHaveBeenCalledWith(ovSessionId, {
       wait: false,
-      agentId: "agent_main",
       keepRecentCount: 7,
     });
     expect(diag).toHaveBeenCalledWith("afterTurn_commit", ovSessionId, expect.objectContaining({

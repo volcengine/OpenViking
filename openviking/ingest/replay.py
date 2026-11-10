@@ -68,7 +68,8 @@ class ConversationReplayClient:
             return await self._client.get_session(ov_session_id)
         except NotFoundError:
             return await self._client.create_session(
-                session_id=ov_session_id, memory_policy=memory_policy or None
+                session_id=ov_session_id,
+                options={"memory_policy": memory_policy} if memory_policy else None,
             )
 
     async def append(self, ov_session_id: str, messages: List[Dict[str, Any]]) -> int:
@@ -122,17 +123,17 @@ class SessionReplayer:
             [_sanitize_id(self.prefix), _sanitize_id(harness), _sanitize_id(native_session_id)]
         )
 
-    async def reconcile(self, harness: str, ref: SessionRef) -> None:
-        """Resolve a pending batch intent left by a crash before the next read happens."""
+    async def reconcile(self, harness: str, ref: SessionRef) -> bool:
+        """Resolve a pending batch; return False if replay must wait for a count read."""
         rec = self.store.get(harness, ref.native_session_id)
         if not rec or not rec.pending_count or rec.pending_cursor is None:
-            return
+            return True
         sid = self.ov_session_id(harness, ref.native_session_id)
         try:
             count = await self.client.message_count(sid)
         except Exception:  # noqa: BLE001 - leave the intent; retry next time
             logger.warning("[ingest:%s] reconcile read failed for %s", harness, sid)
-            return
+            return False
         if count >= rec.pending_baseline + rec.pending_count:
             # The batch landed before the crash: confirm it without re-appending.
             self.store.confirm_append(
@@ -142,6 +143,7 @@ class SessionReplayer:
         else:
             # It did not land: drop the intent and re-read from the confirmed cursor.
             self.store.clear_pending(harness, ref.native_session_id)
+        return True
 
     async def append_batch(
         self,
@@ -180,13 +182,22 @@ class SessionReplayer:
     async def commit_if_needed(
         self, harness: str, ref: SessionRef, keep_recent_count: int = 0
     ) -> bool:
-        """Commit when the session has un-committed appends or live pending tokens."""
+        """Commit when this session has appended-but-uncommitted messages.
+
+        Deliberately does **not** fall back to the server's ``pending_tokens``: the
+        periodic sweep calls this for every session on every tick (and ``backfill``
+        calls it once per session even when nothing was appended), while the server
+        keeps reporting pending tokens until the queued commit is actually processed.
+        That fallback therefore re-enqueues the same session on every tick whenever the
+        commit queue is behind, which grows the queue without bound. ``needs_commit``
+        is persisted by ``confirm_append``, so crash recovery (appended but not yet
+        committed) is still covered.
+        """
         sid = self.ov_session_id(harness, ref.native_session_id)
         rec = self.store.get(harness, ref.native_session_id)
-        need = bool(rec and rec.needs_commit)
-        pending = await self.client.pending_tokens(sid)
-        if not need and pending <= 0:
+        if not (rec and rec.needs_commit):
             return False
+        pending = await self.client.pending_tokens(sid)
         if pending <= 0:
             # Nothing live to archive (already committed elsewhere); clear the stale flag.
             self.store.mark_committed(harness, ref.native_session_id)

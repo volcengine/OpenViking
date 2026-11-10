@@ -13,11 +13,11 @@ every credential of the same model.
 """
 
 import time
-from typing import List
 
 import pytest
 
 from openviking.models.embedder.base import EmbedderBase, EmbedResult, FailoverEmbedder
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.utils.exceptions import AllCredentialsFailedError
 
 
@@ -43,30 +43,27 @@ class _StubEmbedder(EmbedderBase):
             raise self._error
         return EmbedResult(dense_vector=[0.0] * self._dim)
 
-    def embed_batch(self, contents, is_query: bool = False) -> List[EmbedResult]:
-        self.calls += 1
-        if self._error is not None:
-            raise self._error
-        return [EmbedResult(dense_vector=[0.0] * self._dim) for _ in contents]
-
     async def embed_async(self, content, is_query: bool = False) -> EmbedResult:
         return self.embed(content, is_query=is_query)
 
-    async def embed_batch_async(self, contents, is_query: bool = False) -> List[EmbedResult]:
-        return self.embed_batch(contents, is_query=is_query)
-
 
 def _make_400_error() -> Exception:
-    """Construct a request-level 400 parameter error (PERMANENT, fail-fast)."""
-    return RuntimeError(
+    """Construct a request-level invalid request error."""
+    return ModelError(
+        ModelErrorKind.INVALID_REQUEST,
         "Error code: 400 - {'error': {'message': "
-        "'The parameter `model` specified in the request are not valid'}}"
+        "'The parameter `model` specified in the request are not valid'}}",
+        status_code=400,
     )
 
 
 def _make_401_error() -> Exception:
-    """Construct a credential-level 401 auth error (AUTH, advances in multi-credential)."""
-    return RuntimeError("Error code: 401 - {'error': {'message': 'Incorrect API key provided'}}")
+    """Construct a credential-level auth error."""
+    return ModelError(
+        ModelErrorKind.AUTHENTICATION_ERROR,
+        "Error code: 401 - {'error': {'message': 'Incorrect API key provided'}}",
+        status_code=401,
+    )
 
 
 def test_auth_error_on_primary_advances_to_backup():
@@ -116,7 +113,7 @@ def test_permanent_400_fails_fast_without_trying_backup():
         credential_ids=["primary", "backup"],
     )
 
-    with pytest.raises(RuntimeError, match="400"):
+    with pytest.raises(ModelError, match="400"):
         fe.embed("hello")
 
     assert primary.calls == 1
@@ -212,12 +209,18 @@ def test_fast_failover_commits_new_active_index():
 
 def test_content_safety_does_not_cycle_the_ring():
     """Request-level content-safety errors fail fast and must not try others."""
-    cs = _StubEmbedder("cs", error=RuntimeError("content_filter: sensitive content detected"))
+    cs = _StubEmbedder(
+        "cs",
+        error=ModelError(
+            ModelErrorKind.CONTENT_SAFETY,
+            "content_filter: sensitive content detected",
+        ),
+    )
     backup = _StubEmbedder("backup")
 
     fe = FailoverEmbedder(embedders=[cs, backup], credential_ids=["cs", "backup"])
 
-    with pytest.raises(RuntimeError, match="content_filter"):
+    with pytest.raises(ModelError, match="content_filter"):
         fe.embed("hello")
 
     assert cs.calls == 1

@@ -1,328 +1,445 @@
-const TEXT_BLOCK_TYPES = new Set(["text", "input_text", "output_text"]);
-const TOOL_CALL_TYPES = new Set([
-  "tool_call",
-  "toolcall",
-  "tool_use",
-  "tooluse",
+import {
+  extractCaptureTurns as extractSharedCaptureTurns,
+} from "./shared/capture-utils.mjs";
+
+// Named one by one rather than re-exported wholesale: this module has an
+// `extractCaptureTurns` of its own, and `export *` would let the shared one
+// through under the same name with nothing to say which a caller holds.
+export { findLastHumanTurnIndex } from "./shared/capture-utils.mjs";
+
+function mcpResultText(result) {
+  let value = result;
+  if (Object.prototype.hasOwnProperty.call(result || {}, "Ok")) value = result.Ok;
+  else if (Object.prototype.hasOwnProperty.call(result || {}, "Err")) value = result.Err;
+  if (Array.isArray(value?.content)) {
+    const text = value.content
+      .filter((part) => part?.type === "text" && typeof part.text === "string")
+      .map((part) => part.text)
+      .join("\n");
+    if (text) return text;
+  }
+  if (typeof value === "string") return value;
+  return value == null ? "" : JSON.stringify(value);
+}
+
+const RESPONSE_TOOL_TYPES = new Set([
   "function_call",
-  "functioncall",
-]);
-const TOOL_RESULT_TYPES = new Set([
-  "tool_result",
-  "toolresult",
-  "tool_output",
-  "tooloutput",
   "function_call_output",
-  "functioncalloutput",
+  "custom_tool_call",
+  "custom_tool_call_output",
+]);
+const COMPLETED_TURN_TOOL_TYPES = new Set([
+  "CommandExecution",
+  "DynamicToolCall",
+  "FileChange",
+  "McpToolCall",
 ]);
 
-const ACK_RE = /^(?:ok|okay|k|yes|yep|no|nope|thanks|thank you|thx|done|收到|好的|好|嗯|可以|继续|不用|不需要|没了|好了)[.!?。！？\s]*$/i;
-const SLASH_COMMAND_RE = /^\/[a-z0-9_-]{1,64}\b/i;
-const METADATA_KEYS = [
-  "session_id",
-  "sessionid",
-  "sessionkey",
-  "conversation_id",
-  "conversationid",
-  "channel",
-  "sender",
-  "user_id",
-  "userid",
-  "agent_id",
-  "agentid",
-  "timestamp",
-  "timezone",
-  "cwd",
-  "model",
-  "permission_mode",
-];
+const FAILED_TOOL_STATUSES = new Set(["failed", "error", "declined"]);
+const TERMINAL_TOOL_STATUSES = new Set(["completed", ...FAILED_TOOL_STATUSES]);
 
-function normalizeType(value) {
-  return String(value || "").toLowerCase().replace(/[-\s]/g, "_");
+function inheritedEntry(entry, type, payload) {
+  const turnId = entry?.payload?.turn_id;
+  return {
+    ...entry,
+    type,
+    payload: turnId != null && payload?.turn_id == null
+      ? { ...payload, turn_id: turnId }
+      : payload,
+  };
 }
 
-function isToolCallBlock(block) {
-  const type = normalizeType(block?.type || block?.kind || block?.role);
-  return TOOL_CALL_TYPES.has(type) || Boolean(block?.tool_calls) || Boolean(block?.function?.name);
-}
-
-function isToolResultBlock(block) {
-  const type = normalizeType(block?.type || block?.kind || block?.role);
-  return TOOL_RESULT_TYPES.has(type) || type === "tool" || type === "function";
-}
-
-function oneLine(text) {
-  return String(text || "").replace(/\s+/g, " ").trim();
-}
-
-export function truncateCaptureText(text, maxChars = 2000) {
-  const value = String(text || "").trim();
-  if (!Number.isFinite(maxChars) || maxChars <= 0 || value.length <= maxChars) return value;
-  return `${value.slice(0, Math.max(0, maxChars - 20)).trimEnd()}\n[truncated]`;
-}
-
-function stringifyCompact(value, maxChars) {
-  if (value == null) return "";
-  if (typeof value === "string") return truncateCaptureText(value, maxChars);
-  try {
-    return truncateCaptureText(JSON.stringify(value), maxChars);
-  } catch {
-    return truncateCaptureText(String(value), maxChars);
-  }
-}
-
-function blockText(block) {
-  if (!block || typeof block !== "object") return "";
-  if (typeof block.text === "string") return block.text;
-  if (typeof block.output_text === "string") return block.output_text;
-  if (typeof block.input_text === "string") return block.input_text;
-  if (typeof block.content === "string") return block.content;
-  return "";
-}
-
-function toolName(block) {
-  return oneLine(
-    block?.name ||
-    block?.tool_name ||
-    block?.toolName ||
-    block?.function?.name ||
-    block?.call?.name ||
-    block?.id ||
-    "",
-  );
-}
-
-function toolPayload(block, kind) {
-  if (!block || typeof block !== "object") return "";
-  if (kind === "call") {
-    return block.input ??
-      block.arguments ??
-      block.args ??
-      block.params ??
-      block.function?.arguments ??
-      block.command ??
-      block.call?.input ??
-      block.call?.arguments ??
-      "";
-  }
-  return block.output ??
-    block.result ??
-    block.error ??
-    block.data ??
-    block.content ??
-    block.text ??
-    "";
-}
-
-function formatToolBlock(block, kind, maxChars) {
-  const name = toolName(block);
-  const payload = toolPayload(block, kind);
-  const body = oneLine(stringifyCompact(payload, maxChars));
-  const label = kind === "call" ? "tool-call" : "tool-result";
-  return body
-    ? `[${label}${name ? ` ${name}` : ""}] ${body}`
-    : `[${label}${name ? ` ${name}` : ""}]`;
-}
-
-function blockToText(block, options) {
-  if (!block) return "";
-  if (typeof block === "string") return block;
-  if (Array.isArray(block)) return extractTextFromContent(block, options);
-  if (typeof block !== "object") return "";
-
-  if (block.item && typeof block.item === "object") {
-    const itemText = blockToText(block.item, options);
-    if (itemText) return itemText;
-  }
-
-  const type = normalizeType(block.type || block.kind || block.role);
-  if (TEXT_BLOCK_TYPES.has(type)) return blockText(block);
-  if (isToolCallBlock(block)) return formatToolBlock(block, "call", options.toolMaxChars);
-  if (isToolResultBlock(block)) return formatToolBlock(block, "result", options.toolMaxChars);
-  if (Array.isArray(block.content)) return extractTextFromContent(block.content, options);
-  if (!type) return blockText(block);
-  return "";
-}
-
-export function extractTextFromContent(content, options = {}) {
-  const opts = { toolMaxChars: 2000, ...options };
-  if (!content) return "";
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((block) => blockToText(block, opts))
-      .filter(Boolean)
-      .join("\n\n");
-  }
-  if (typeof content === "object") {
-    return blockToText(content, opts) || stringifyCompact(content, opts.toolMaxChars);
-  }
-  return "";
-}
-
-export function extractTextFromPayload(payload, options = {}) {
-  if (!payload || typeof payload !== "object") return "";
-  const chunks = [];
-  const directType = normalizeType(payload.type || payload.kind || payload.role);
-  if (TOOL_RESULT_TYPES.has(directType) || directType === "tool" || TOOL_CALL_TYPES.has(directType)) {
-    const direct = blockToText(payload, { toolMaxChars: 2000, ...options });
-    if (direct) return direct;
-  }
-
-  if (payload.message && typeof payload.message === "object") {
-    const messageText = extractTextFromPayload(payload.message, options);
-    if (messageText) chunks.push(messageText);
-  } else if (payload.content !== undefined) {
-    const contentText = extractTextFromContent(payload.content, options);
-    if (contentText) chunks.push(contentText);
-  }
-
-  for (const key of ["tool_calls", "toolCalls", "function_call", "functionCall", "tool_call", "toolCall"]) {
-    const value = payload[key];
-    if (!value) continue;
-    const toolText = extractTextFromContent(value, options);
-    if (toolText) chunks.push(toolText);
-  }
-
-  if (chunks.length === 0) {
-    const direct = blockToText(payload, { toolMaxChars: 2000, ...options });
-    if (direct) chunks.push(direct);
-  }
-
-  return chunks.join("\n\n");
-}
-
-export function normalizeCaptureRole(role) {
-  const value = normalizeType(role);
-  if (value === "user") return "user";
-  if (value === "assistant") return "assistant";
-  if (value === "tool" || value === "tool_result" || value === "function" || value === "function_call_output") {
-    return "user";
-  }
-  if (value === "tool_call" || value === "function_call") return "assistant";
-  return null;
-}
-
-export function isAssistantSideCaptureRole(role) {
-  const value = normalizeType(role);
-  return value === "assistant" ||
-    value === "tool" ||
-    value === "tool_result" ||
-    value === "tool_call" ||
-    value === "function" ||
-    value === "function_call" ||
-    value === "function_call_output";
-}
-
-function stripMetadataFences(text) {
-  return String(text || "").replace(/```(?:json)?\s*([\s\S]*?)```/gi, (match, body) => {
-    const lower = body.toLowerCase();
-    let hits = 0;
-    for (const key of METADATA_KEYS) {
-      const re = new RegExp(`["']?${key}["']?\\s*:`, "i");
-      if (re.test(lower)) hits += 1;
+function expandCodexRolloutEntries(rolloutEntries) {
+  return (rolloutEntries || []).flatMap((entry) => {
+    const payload = entry?.payload;
+    if (entry?.type === "history_mutation" && payload?.operation === "append") {
+      if (!Array.isArray(payload.items)) return [entry];
+      return payload.items.map((item) => inheritedEntry(entry, "response_item", item));
     }
-    return hits >= 3 ? "" : match;
+    if (
+      entry?.type === "event_msg"
+      && payload?.type === "item_completed"
+      && COMPLETED_TURN_TOOL_TYPES.has(payload.item?.type)
+    ) {
+      return [inheritedEntry(entry, "turn_item", payload.item)];
+    }
+    return [entry];
   });
 }
 
-function stripInjectedDigestBlocks(text) {
-  const lines = String(text || "").split(/\r?\n/);
-  const out = [];
-  let skipping = false;
-  let skipUntilMcpHint = false;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (/^OpenViking session archive digest:/i.test(trimmed)) {
-      skipping = true;
-      skipUntilMcpHint = true;
-      continue;
-    }
-    if (/^OpenViking memory digest:/i.test(trimmed)) {
-      skipping = true;
-      skipUntilMcpHint = false;
-      continue;
-    }
-    if (skipping) {
-      if (skipUntilMcpHint) {
-        if (/^More detail: use the OpenViking MCP /i.test(trimmed)) {
-          skipping = false;
-          skipUntilMcpHint = false;
-        }
-        continue;
-      }
-      if (!trimmed) {
-        skipping = false;
-        continue;
-      }
-      if (
-        /^(?:[-*]\s+|#{1,6}\s+|More detail:|Use OpenViking MCP|Latest committed archive|Resume continuity|viking:\/\/)/i.test(trimmed) ||
-        /^\s{2,}\S/.test(line)
-      ) {
-        continue;
-      }
-      skipping = false;
-    }
-    out.push(line);
-  }
-
-  return out.join("\n");
+function compactObject(value) {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, item]) => item !== undefined && item !== null),
+  );
 }
 
-export function sanitizeCapturedText(text) {
-  let value = String(text || "");
-  value = value
-    .replace(/\u0000/g, "")
-    .replace(/<openviking-context\b[^>]*>[\s\S]*?<\/openviking-context>/gi, " ")
-    .replace(/<relevant-memor(?:y|ies)\b[^>]*>[\s\S]*?<\/relevant-memor(?:y|ies)>/gi, " ")
-    .replace(/^\s*Sender\s*\([^)]+\)\s*```[\s\S]*?```\s*/gim, " ")
-    .replace(/^\s*Conversation (?:metadata|info):\s*```[\s\S]*?```\s*/gim, " ")
-    .replace(/^\s*\[?\d{4}-\d{2}-\d{2}[T ][^\]\n]{3,80}\]?\s*/gm, "")
-    .replace(/^\s*\d{10,13}\s+/gm, "");
-  value = stripMetadataFences(value);
-  value = stripInjectedDigestBlocks(value);
-  value = value.replace(/^\s*More detail: use the OpenViking MCP .*$/gim, " ");
-  return value
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
+function joinedOutput(payload) {
+  return [payload?.stdout, payload?.stderr].filter(Boolean).join("\n");
+}
+
+function isFailed(payload) {
+  return payload?.success === false
+    || (typeof payload?.exit_code === "number" && payload.exit_code !== 0)
+    || FAILED_TOOL_STATUSES.has(String(payload?.status || "").toLowerCase())
+    || Boolean(payload?.error);
+}
+
+function completedToolEvent(entry) {
+  const payload = entry?.payload;
+  if (payload?.type === "mcp_tool_call_end") {
+    const hasResult = Object.prototype.hasOwnProperty.call(payload.result || {}, "Ok");
+    const failed = !hasResult || payload.result.Ok?.isError === true;
+    return {
+      kind: "mcp",
+      id: payload.call_id,
+      name: payload.invocation?.tool,
+      input: payload.invocation?.arguments ?? {},
+      output: mcpResultText(payload.result),
+      failed,
+    };
+  }
+  if (payload?.type === "McpToolCall") {
+    return {
+      kind: "mcp",
+      id: payload.id,
+      name: payload.tool,
+      input: payload.arguments ?? {},
+      output: mcpResultText(payload.error ?? payload.result),
+      failed: isFailed(payload) || payload.result?.isError === true,
+    };
+  }
+  if (payload?.type === "exec_command_end" || payload?.type === "CommandExecution") {
+    return {
+      kind: "command",
+      id: payload.call_id || payload.id,
+      name: "exec_command",
+      input: compactObject({
+        command: payload.command,
+        cwd: payload.cwd,
+        source: payload.source,
+        interaction_input: payload.interaction_input,
+      }),
+      output: payload.aggregated_output ?? payload.formatted_output ?? joinedOutput(payload),
+      failed: isFailed(payload),
+    };
+  }
+  if (payload?.type === "patch_apply_end" || payload?.type === "FileChange") {
+    return {
+      kind: "patch",
+      id: payload.call_id || payload.id,
+      name: "apply_patch",
+      input: compactObject({
+        changes: payload.changes,
+        auto_approved: payload.auto_approved,
+      }),
+      output: joinedOutput(payload),
+      failed: isFailed(payload),
+    };
+  }
+  if (payload?.type === "DynamicToolCall") {
+    return {
+      kind: "dynamic",
+      id: payload.id,
+      name: payload.tool,
+      input: payload.arguments ?? {},
+      output: payload.error ?? payload.content_items ?? [],
+      failed: isFailed(payload),
+    };
+  }
+  return null;
+}
+
+function completedToolKey(tool) {
+  return [tool.kind, tool.id, tool.name].join("\0");
+}
+
+function completedToolPriority(entry) {
+  const source = entry?.type === "turn_item" ? 2 : 0;
+  const status = String(entry?.payload?.status || "").toLowerCase();
+  return source + (TERMINAL_TOOL_STATUSES.has(status) ? 1 : 0);
+}
+
+function responseItemKey(entry) {
+  if (entry?.type !== "response_item") return "";
+  const payload = entry.payload;
+  if (!payload?.type) return "";
+  const id = payload.call_id || payload.id;
+  if (!id) return "";
+  const kind = payload.type === "custom_tool_call"
+    ? "function_call"
+    : payload.type === "custom_tool_call_output"
+      ? "function_call_output"
+      : payload.type;
+  return `${kind}\0${id}`;
+}
+
+function deduplicateCodexToolEvents(rolloutEntries) {
+  const entries = [];
+  const responseItems = new Set();
+  for (const entry of rolloutEntries || []) {
+    const key = responseItemKey(entry);
+    if (key && responseItems.has(key)) continue;
+    if (key) responseItems.add(key);
+    entries.push(entry);
+  }
+
+  const completedTools = new Map();
+  const preferredCompleted = new Map();
+  for (const entry of entries) {
+    const tool = completedToolEvent(entry);
+    if (!tool?.id || !tool.name) continue;
+    completedTools.set(entry, tool);
+    const key = completedToolKey(tool);
+    const previous = preferredCompleted.get(key);
+    if (!previous || completedToolPriority(entry) >= completedToolPriority(previous)) {
+      preferredCompleted.set(key, entry);
+    }
+  }
+  const completedNamesById = new Map();
+  for (const entry of preferredCompleted.values()) {
+    const tool = completedTools.get(entry);
+    const names = completedNamesById.get(tool.id) ?? new Set();
+    names.add(tool.name);
+    completedNamesById.set(tool.id, names);
+  }
+  const responseNamesById = new Map();
+  for (const entry of entries) {
+    const payload = entry?.payload;
+    if (
+      entry?.type === "response_item"
+      && RESPONSE_TOOL_TYPES.has(payload?.type)
+      && payload?.name
+    ) {
+      responseNamesById.set(payload.call_id || payload.id, payload.name);
+    }
+  }
+
+  return entries.flatMap((entry) => {
+    const tool = completedTools.get(entry);
+    if (tool?.id && tool.name) {
+      return preferredCompleted.get(completedToolKey(tool)) === entry ? [entry] : [];
+    }
+    const payload = entry?.payload;
+    const id = payload?.call_id || payload?.id;
+    const name = payload?.name || responseNamesById.get(id);
+    const completedNames = completedNamesById.get(id);
+    if (!RESPONSE_TOOL_TYPES.has(payload?.type) || !completedNames) return [entry];
+    if (completedNames.has(name)) return [];
+    if (name === "exec") {
+      return [{
+        ...entry,
+        payload: { ...payload, call_id: `codex-container:${id}` },
+      }];
+    }
+    return [];
+  });
+}
+
+function agentMessageText(payload) {
+  const content = Array.isArray(payload?.content) ? payload.content : [];
+  return content
+    .filter((part) => (
+      (part?.type === "input_text" || part?.type === "output_text" || part?.type === "text")
+      && typeof part.text === "string"
+    ))
+    .map((part) => part.text)
+    .join("\n")
     .trim();
 }
 
-function hasEnoughSignal(text) {
-  const cjk = text.match(/[\u3400-\u9fff]/g)?.length || 0;
-  const alnum = text.match(/[a-z0-9]/gi)?.length || 0;
-  return cjk >= 4 || alnum >= 6 || text.length >= 12;
+function normalizeCodexNativeToolEvents(rolloutEntries) {
+  return (rolloutEntries || []).map((entry) => {
+    const payload = entry?.payload;
+    if (entry?.type === "response_item" && payload?.type === "agent_message") {
+      const text = agentMessageText(payload);
+      const author = String(payload.author || "subagent");
+      const recipient = String(payload.recipient || "main");
+      return {
+        ...entry,
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{
+            type: "output_text",
+            text: `[agent-message ${author} -> ${recipient}]${text ? `\n${text}` : ""}`,
+          }],
+        },
+      };
+    }
+    if (payload?.type === "sub_agent_activity") {
+      return {
+        ...entry,
+        payload: {
+          type: "tool_result",
+          call_id: `subagent-activity:${payload.event_id}`,
+          name: "sub_agent_activity",
+          output: {
+            agent_thread_id: payload.agent_thread_id,
+            agent_path: payload.agent_path,
+            kind: payload.kind,
+            occurred_at_ms: payload.occurred_at_ms,
+          },
+          status: "completed",
+        },
+      };
+    }
+    if (payload?.type === "custom_tool_call") {
+      return {
+        ...entry,
+        payload: {
+          type: "function_call",
+          call_id: payload.call_id || payload.id,
+          name: payload.name,
+          arguments: payload.input,
+        },
+      };
+    }
+    if (payload?.type === "custom_tool_call_output") {
+      return {
+        ...entry,
+        payload: {
+          type: "function_call_output",
+          call_id: payload.call_id || payload.id,
+          output: payload.output,
+        },
+      };
+    }
+    if (payload?.type === "tool_search_call") {
+      return {
+        ...entry,
+        payload: {
+          type: "function_call",
+          call_id: payload.call_id || payload.id,
+          name: "tool_search",
+          arguments: payload.arguments || {},
+        },
+      };
+    }
+    if (payload?.type === "tool_search_output") {
+      return {
+        ...entry,
+        payload: {
+          type: "function_call_output",
+          call_id: payload.call_id || payload.id,
+          output: JSON.stringify({ tools: payload.tools || [] }),
+        },
+      };
+    }
+    return entry;
+  });
 }
 
-function isPunctuationOnly(text) {
-  return !/[a-z0-9\u3400-\u9fff]/i.test(text);
+function normalizeCodexCompletedToolEvents(rolloutEntries) {
+  return (rolloutEntries || []).flatMap((entry) => {
+    const tool = completedToolEvent(entry);
+    if (!tool?.id || !tool.name) return [entry];
+
+    const call = inheritedEntry(entry, "response_item", {
+      type: "function_call",
+      id: tool.id,
+      call_id: tool.id,
+      name: tool.name,
+      arguments: tool.input,
+    });
+    const result = inheritedEntry(entry, "response_item", {
+      type: "function_call_output",
+      call_id: tool.id,
+      status: tool.failed ? "error" : "completed",
+      ...(tool.failed
+        ? { error: tool.output || `${tool.name} failed` }
+        : { output: tool.output }),
+    });
+    return [call, result];
+  });
 }
 
-export function shouldCaptureText(text, role, cfg = {}) {
-  const maxLength = cfg.captureMaxLength || 24000;
-  const sanitized = sanitizeCapturedText(text);
-  if (!sanitized) return { shouldCapture: false, reason: "empty", text: "" };
+// Codex writes these host-provided blocks as a user message before its first
+// turn_context. Match the complete wrapper, not a tag mentioned by a user.
+const STARTUP_BLOCKS = [
+  /^<recommended_plugins>\r?\nHere is a list of plugins that are available but not installed\.[\s\S]*?\r?\n<\/recommended_plugins>$/,
+  /^# AGENTS\.md instructions(?: for [^\r\n]+)?\r?\n\r?\n<INSTRUCTIONS>\r?\n[\s\S]*?\r?\n<\/INSTRUCTIONS>$/,
+  /^<environment_context>\r?\n\s*<cwd>[^\r\n]*<\/cwd>\r?\n\s*<shell>[^\r\n]*<\/shell>\r?\n\s*<current_date>[^\r\n]*<\/current_date>\r?\n\s*<timezone>[^\r\n]*<\/timezone>[\s\S]*?<\/environment_context>$/,
+];
 
-  const capped = truncateCaptureText(sanitized, maxLength);
-  const compact = oneLine(capped);
-  const isToolSummary = /^\[tool-(?:call|result)\b/i.test(compact);
+function stripStartupBlocks(text) {
+  const source = String(text);
+  // Blocks can share an input_text part with a real prompt. A complete host
+  // block starts on its own line and ends there or at end of text.
+  const candidates = [
+    /<recommended_plugins>\r?\nHere is a list of plugins that are available but not installed\.[\s\S]*?\r?\n<\/recommended_plugins>/g,
+    /# AGENTS\.md instructions(?: for [^\r\n]+)?\r?\n\r?\n<INSTRUCTIONS>\r?\n[\s\S]*?\r?\n<\/INSTRUCTIONS>/g,
+    /<environment_context>\r?\n\s*<cwd>[^\r\n]*<\/cwd>\r?\n\s*<shell>[^\r\n]*<\/shell>\r?\n\s*<current_date>[^\r\n]*<\/current_date>\r?\n\s*<timezone>[^\r\n]*<\/timezone>[\s\S]*?<\/environment_context>/g,
+  ];
+  const matches = [];
+  for (let i = 0; i < candidates.length; i += 1) {
+    for (const match of source.matchAll(candidates[i])) {
+      const start = match.index;
+      const end = start + match[0].length;
+      if (start > 0 && !/\r?\n$/.test(source.slice(0, start))) continue;
+      if (end < source.length && !/^\r?\n/.test(source.slice(end))) continue;
+      if (STARTUP_BLOCKS[i].test(match[0])) matches.push({ start, end });
+    }
+  }
+  if (!matches.length) return source;
+  matches.sort((a, b) => a.start - b.start);
+  let output = "";
+  let cursor = 0;
+  for (const { start, end } of matches) {
+    if (start < cursor) continue;
+    output += source.slice(cursor, start);
+    cursor = end;
+  }
+  return (output + source.slice(cursor)).trim();
+}
 
-  if (!isToolSummary && role === "user" && SLASH_COMMAND_RE.test(compact)) {
-    return { shouldCapture: false, reason: "slash_command", text: "" };
+function withoutStartupContext(entries, cfg) {
+  const filtered = [];
+  const excludedLegacyTurnIndices = [];
+  let beforeFirstTurn = true;
+  for (const [index, entry] of entries.entries()) {
+    if (entry?.type === "turn_context") beforeFirstTurn = false;
+    const payload = entry?.payload;
+    if (
+      !beforeFirstTurn || entry?.type !== "response_item"
+      || payload?.type !== "message" || payload.role !== "user"
+      || !Array.isArray(payload.content)
+    ) {
+      filtered.push(entry);
+      continue;
+    }
+    let changed = false;
+    const content = payload.content.flatMap((part) => {
+      if (part?.type !== "input_text" || typeof part.text !== "string") return [part];
+      const text = stripStartupBlocks(part.text);
+      if (text === part.text) return [part];
+      changed = true;
+      return text ? [{ ...part, text }] : [];
+    });
+    if (!changed) {
+      filtered.push(entry);
+    } else if (content.length) {
+      filtered.push({ ...entry, payload: { ...payload, content } });
+    } else {
+      // Use the old extractor to locate this message in the old cursor's
+      // coordinate system. Capture filters may already have dropped it.
+      const prefix = extractSharedCaptureTurns(entries.slice(0, index), cfg).length;
+      if (extractSharedCaptureTurns(entries.slice(0, index + 1), cfg).length > prefix) {
+        excludedLegacyTurnIndices.push(prefix);
+      }
+    }
   }
-  if (!isToolSummary && ACK_RE.test(compact)) {
-    return { shouldCapture: false, reason: "ack", text: "" };
-  }
-  if (!isToolSummary && isPunctuationOnly(compact)) {
-    return { shouldCapture: false, reason: "punctuation", text: "" };
-  }
-  if (!isToolSummary && !hasEnoughSignal(compact)) {
-    return { shouldCapture: false, reason: "too_short", text: "" };
-  }
-  if (/^\[openviking-memory\]/i.test(compact)) {
-    return { shouldCapture: false, reason: "plugin_status", text: "" };
-  }
+  return { entries: filtered, excludedLegacyTurnIndices };
+}
 
-  return { shouldCapture: true, reason: "ok", text: capped };
+export function extractCaptureTranscript(rolloutEntries, cfg = {}) {
+  const expanded = expandCodexRolloutEntries(rolloutEntries);
+  const deduplicated = deduplicateCodexToolEvents(expanded);
+  const normalized = normalizeCodexNativeToolEvents(deduplicated);
+  const completed = normalizeCodexCompletedToolEvents(normalized);
+  const { entries, excludedLegacyTurnIndices } = withoutStartupContext(completed, cfg);
+  return { turns: extractSharedCaptureTurns(entries, cfg), excludedLegacyTurnIndices };
+}
+
+export function extractCaptureTurns(rolloutEntries, cfg = {}) {
+  return extractCaptureTranscript(rolloutEntries, cfg).turns;
 }

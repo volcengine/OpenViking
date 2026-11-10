@@ -5,6 +5,7 @@ Merge operation implementations.
 """
 
 from openviking.session.memory.merge_op.base import (
+    DeleteBlock,
     FieldType,
     MergeOp,
     MergeOpBase,
@@ -14,17 +15,18 @@ from openviking.session.memory.merge_op.base import (
 from openviking.session.memory.merge_op.factory import MergeOpFactory
 from openviking.session.memory.merge_op.immutable import ImmutableOp
 from openviking.session.memory.merge_op.patch import PatchOp
-from openviking.session.memory.merge_op.replace import ReplaceOp
 from openviking.session.memory.merge_op.patch_handler import (
     PatchParseError,
     apply_str_patch,
 )
+from openviking.session.memory.merge_op.replace import ReplaceOp
 from openviking.session.memory.merge_op.sum import SumOp
 
 __all__ = [
     "MergeOp",
     "MergeOpBase",
     "FieldType",
+    "DeleteBlock",
     "SearchReplaceBlock",
     "StrPatch",
     "PatchOp",

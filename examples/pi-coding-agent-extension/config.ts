@@ -1,5 +1,9 @@
-import { readFileSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readManifestVersion } from "./shared/credentials.mjs";
+import { toMcpProxyConfig } from "./shared/mcp-proxy-config.mjs";
+import { buildPluginConfig } from "./shared/plugin-config.mjs";
+
+/** The version the User-Agent reports, read from the manifest the gate checks. */
+export const EXTENSION_VERSION = readManifestVersion(new URL("./package.json", import.meta.url));
 
 export interface OVConfig {
   enabled: boolean;
@@ -7,68 +11,85 @@ export interface OVConfig {
   apiKey: string;
   account: string;
   user: string;
-  agentId: string;
-  syncTurns: boolean;
-  recallBudget: number;
+  /** `trusted` or `api_key`; only the former puts the identity on the wire. */
+  authMode: string;
+  sendIdentityHeaders: boolean;
+  peerId: string;
+  /** The pre-git workspace id, when it differs — recall still reaches it. */
+  legacyPeerId: string;
+  userAgent: string;
+  harness: string;
+  workspacePeer: boolean;
+  recallPeerScope: "actor" | "all";
+  recallQueryExpansion: "auto" | "off";
+  recallQueryExpansionConfigured: boolean;
+  autoCapture: boolean;
+  recallTokenBudget: number;
   recallMaxContentChars: number;
   recallPreferAbstract: boolean;
   recallLimit: number;
-  recallScoreThreshold: number;
-  recallMinQueryLength: number;
-  profileBudget: number;
+  recallLimitConfigured: boolean;
+  recallLedger: boolean;
+  scoreThreshold: number;
+  minQueryLength: number;
+  recallQueryFilters: string[];
+  recallExcludeUris: string[];
+  profileTokenBudget: number;
+  skillCatalog: boolean;
+  skillCatalogTokenBudget: number;
   resumeContextBudget: number;
-  indexBudget: number;
+  resumeArchiveInject: boolean;
   commitTokenThreshold: number;
-  commitOnShutdown: boolean;
+  commitKeepRecentCount: number;
+  takeoverEnabled: boolean;
+  takeoverTokenThreshold: number;
+  takeoverKeepRecentTurns: number;
+  takeoverOverviewBudget: number;
+  takeoverOverviewPollMs: number;
+  takeoverOverviewPollMax: number;
   captureToolResults: boolean;
   captureMode: "semantic" | "keyword";
   captureMaxLength: number;
+  captureToolMaxChars: number;
   captureAssistantTurns: boolean;
-  mirrorMemoryWrites: boolean;
-  writeQueueFlushInterval: number;
-  writeQueueFlushThreshold: number;
+  /** Kept as this extension's original spelling; projected onto the shared one. */
   bypassPatterns: string[];
+  bypassSession: boolean;
+  bypassSessionPatterns: string[];
   logLevel: "silent" | "error" | "info";
+  debugLogPath: string;
 }
 
-const DEFAULT_CONFIG: OVConfig = {
-  enabled: true,
-  endpoint: "http://127.0.0.1:1933",
-  apiKey: "",
-  account: "",
-  user: "",
-  agentId: "pi",
-  syncTurns: true,
-  recallBudget: 2000,
-  recallMaxContentChars: 500,
-  recallPreferAbstract: true,
-  recallLimit: 6,
-  recallScoreThreshold: 0.35,
-  recallMinQueryLength: 3,
-  profileBudget: 10000,
-  resumeContextBudget: 2000,
-  indexBudget: 2000,
-  commitTokenThreshold: 20000,
-  commitOnShutdown: true,
-  captureToolResults: false,
-  captureMode: "semantic",
-  captureMaxLength: 24000,
-  captureAssistantTurns: true,
-  mirrorMemoryWrites: true,
-  writeQueueFlushInterval: 5000,
-  writeQueueFlushThreshold: 5,
-  bypassPatterns: [],
-  logLevel: "error",
-};
+/**
+ * Load the extension's configuration.
+ *
+ * The extension used to keep a `config.json` beside itself. It shipped with the
+ * extension holding exactly the code defaults, so nothing could tell an
+ * operator's choice from the factory setting. Every knob is declared in
+ * `shared/config-schema.mjs` now and resolved from the same layers as every
+ * other harness: env → the workspace file → `ovcli.conf`'s `plugin.pi` →
+ * `ovcli.conf`'s `plugin` → defaults.
+ */
+export function loadConfig(cwd: string = process.cwd()): OVConfig {
+  const config = buildPluginConfig("pi", { cwd, version: EXTENSION_VERSION, deriveEffectivePeer: true });
 
-export function loadConfig(extensionDir: string): OVConfig {
-  const configPath = join(extensionDir, "config.json");
-  if (!existsSync(configPath)) return { ...DEFAULT_CONFIG };
+  return {
+    ...config,
+    // `bypassSessionPatterns` is the name the shared matcher reads and every
+    // other harness spells; `bypassPatterns` was this extension's own and is
+    // still accepted. Both hold the same list so either can be inspected.
+    bypassPatterns: config.bypassSessionPatterns,
+    // OPENVIKING_DEBUG_LOG is the shared spelling and lands in the schema;
+    // OV_DEBUG_LOG is pi's older name, kept working so existing setups log.
+    debugLogPath: config.debugLogPath || String(process.env.OV_DEBUG_LOG || "").trim(),
+    // The whole resolution, not just the id: `legacyPeerId` is what lets recall
+    // under `actor` scope still reach memories written before the git-derived
+    // peer replaced the path-derived one.
+    peerId: config.effectivePeer.peerId,
+  } as OVConfig;
+}
 
-  try {
-    const file = JSON.parse(readFileSync(configPath, "utf8"));
-    return { ...DEFAULT_CONFIG, ...file };
-  } catch {
-    return { ...DEFAULT_CONFIG };
-  }
+/** Tools use the same resolved identity and actor peer as REST recall. */
+export function buildBridgeProxyConfig(cfg: OVConfig) {
+  return toMcpProxyConfig(cfg, { peerId: cfg.peerId, debug: Boolean((cfg as any).debug || cfg.debugLogPath) });
 }

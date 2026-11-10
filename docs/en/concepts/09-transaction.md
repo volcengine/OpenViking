@@ -1,84 +1,45 @@
 # Path Locks and Crash Recovery
 
-OpenViking uses two simple primitives — **path locks** and **redo log** — to protect the consistency of core write operations (`rm`, `mv`, `add_resource`, `session.commit`), ensuring that VikingFS, VectorDB, and QueueManager remain consistent even when failures occur.
+OpenViking uses two mechanisms — **path locks** and **persistent queue recovery** — to protect the consistency of core write operations (`rm`, `mv`, `add_resource`, `session.commit`), coordinating concurrent writes and resuming queued session work after a process restart. These primitives do not form an atomic transaction across VikingFS, VectorDB, and QueueManager.
 
 ## Design Philosophy
 
-OpenViking is a context database where FS is the source of truth and VectorDB is a derived index. A lost index can be rebuilt from source data, but lost source data is unrecoverable. Therefore:
+OpenViking is a context database where FS is the source of truth and VectorDB is a derived index. An index can generally be rebuilt from retained source data; recovering lost source data depends on backups. Therefore:
 
 > **Better to miss a search result than to return a bad one.**
 
 ## Design Principles
 
-1. **Write-exclusive**: Path locks ensure only one write operation can operate on a path at a time
-2. **On by default**: All data operations automatically acquire locks; no extra configuration needed
-3. **Lock as protection**: LockContext acquires locks on entry, releases on exit — no undo/journal/commit semantics
-4. **Only session_memory needs crash recovery**: RedoLog re-executes memory extraction after a process crash
-5. **Queue operations run outside locks**: SemanticQueue/EmbeddingQueue enqueue operations are idempotent and retriable
+1. **Write-exclusive**: Different owners participating in the protocol cannot hold conflicting path locks simultaneously
+2. **On by default**: Protected writes acquire locks by default; ordinary reads and low-level mkdir do not automatically acquire locks
+3. **Concurrency protection**: Runtime leases do not provide cross-store undo/journal/commit semantics
+4. **Persistent task recovery**: the `SessionCommit` queue resumes session Phase 2; the corresponding persistent queues recover derived resource processing
+5. **Locks and queues work together**: A business path may enqueue while holding a lock and hand off its lease; retries and deduplication depend on each task protocol, not a universal enqueue guarantee
 
 ## Architecture
 
-```
-Service Layer (rm / mv / add_resource / session.commit)
-    |
-    v
-+--[LockContext async context manager]--+
-|                                       |
-|  1. Create LockHandle                 |
-|  2. Acquire path lock (poll+timeout)  |
-|  3. Execute operations (FS+VectorDB)  |
-|  4. Release lock                      |
-|                                       |
-|  On exception: auto-release lock,     |
-|  exception propagates unchanged       |
-+---------------------------------------+
-    |
-    v
-Storage Layer (VikingFS, VectorDB, QueueManager)
-```
+<PathLockDiagram />
 
 ## Two Core Components
 
-### Component 1: PathLockEngine + LockManager + LockContext (Path Lock System)
+### Component 1: Path Lock System
 
-**PathLockEngine** implements file-based distributed locks with two lock types — EXACT and TREE — using fencing tokens to prevent TOCTOU races and automatic stale lock detection and cleanup.
+Rust RAGFS `PathLockManager` and its Provider own runtime locks. Python services acquire, reuse, hand off, and release leases through the binding. The later `LockContext` examples illustrate the lifecycle; they are not current Python SDK or runtime class interfaces.
 
-**LockHandle** is a lightweight lock holder token:
+- **Scope**: EXACT protects one path; TREE protects a path and its subtree.
+- **Provider**: The default filesystem provider stores lock files; cache uses Redis for atomic token checks and writes; memory coordinates only within one process.
+- **Lease**: Records the owner, covered paths, token locations, and refresh state. Background tasks can receive an explicit lease handoff.
+- **Failure handling**: Release validates ownership, and later acquisitions detect stale tokens. Releasing a lock does not undo persisted changes.
 
-```python
-@dataclass
-class LockHandle:
-    id: str          # Unique ID used to generate fencing tokens
-    locks: list[str] # Acquired lock file paths
-    created_at: float # Handle creation time
-    last_active_at: float # Last successful acquire/refresh time
-```
+### Component 2: Persistent `SessionCommit` Queue (Crash Recovery)
 
-**LockManager** is a global singleton managing lock lifecycle:
-- Creates/releases LockHandles
-- Background cleanup of leaked locks (in-process safety net)
-- Executes RedoLog recovery on startup
+The queue name is `SessionCommit`; the task type is `session_commit`.
 
-**LockContext** is an async context manager encapsulating the lock/unlock lifecycle:
+`session.commit` Phase 2 no longer uses a standalone redo log. Phase 1 persists archive metadata first,
+then enqueues a durable `SessionCommitMsg`; after restart, QueueManager resumes any leftover
+`session_commit` jobs and continues Phase 2.
 
-```python
-from openviking.storage.transaction import LockContext, get_lock_manager
-
-async with LockContext(get_lock_manager(), [path], lock_mode="exact") as handle:
-    # Perform operations under lock protection
-    ...
-# Lock automatically released on exit (including exceptions)
-```
-
-### Component 2: RedoLog (Crash Recovery)
-
-Used only for the memory extraction phase of `session.commit`. Writes a marker before the operation, deletes it after success, and scans for leftover markers on startup to redo.
-
-```
-/local/_system/redo/{task_id}/redo.json
-```
-
-Memory extraction is idempotent — re-extracting from the same archive produces the same result.
+Recovery uses the saved archive and processing state. Memory extraction includes model calls; repeating it does not guarantee identical generated text.
 
 ## Consistency Issues and Solutions
 
@@ -86,7 +47,7 @@ Memory extraction is idempotent — re-extracting from the same archive produces
 
 | Problem | Solution |
 |---------|----------|
-| Delete file first, then index -> file gone but index remains -> search returns non-existent file | **Reverse order**: delete index first, then file. Index deletion failure -> both file and index intact |
+| Delete file first, then index -> file gone but index remains -> search returns non-existent file | **Reverse order**: delete index first, then file. Index deletion failure -> the source file remains and retry completes any partial index cleanup |
 
 **Locking strategy** (depends on target type):
 - Deleting a **directory**: `lock_mode="tree"`, locks the directory and its subtree
@@ -102,7 +63,10 @@ Operation flow:
 5. Release lock
 ```
 
-VectorDB deletion fails -> exception thrown, lock auto-released, file and index both intact. FS deletion fails -> VectorDB already deleted but file remains, retry is safe.
+Index URI collection or VectorDB deletion fails -> exception thrown, lock auto-released, and the
+source file remains. A backend may already have deleted part of a multi-record index operation, but
+retry is safe and completes cleanup. FS deletion fails -> VectorDB already deleted but file remains,
+retry is also safe.
 
 ### mv(old_uri, new_uri)
 
@@ -110,8 +74,8 @@ VectorDB deletion fails -> exception thrown, lock auto-released, file and index 
 |---------|----------|
 | File moved to new path but index points to old path -> search returns old path (doesn't exist) | Copy first then update index; clean up copy on failure |
 
-**Locking strategy** (handled automatically via `lock_mode="mv"`):
-- Moving a **directory**: TreeLock on the source path and ExactPathLock on the destination path
+**Locking strategy** (acquired by the public `VikingFS.mv` implementation):
+- Moving a **directory**: TreeLock on both source and destination subtrees
 - Moving a **file**: EXACT lock on both source path and destination path
 
 Operation flow:
@@ -122,7 +86,7 @@ Operation flow:
 3. Copy to new location (source still intact, safe)
 4. If directory, remove the lock file carried over by cp into the copy
 5. Update VectorDB URIs
-   - Failure -> clean up copy, source and old index intact, consistent state
+   - Failure -> attempt target cleanup; index updates or cleanup may be partial, so inspect before retrying
 6. Delete source
 7. Release lock
 ```
@@ -131,54 +95,38 @@ Operation flow:
 
 | Problem | Solution |
 |---------|----------|
-| File moved from temp to final directory, then crash -> file exists but never searchable | Two separate paths for first-time add vs incremental update |
+| File moved from temp to final directory, then crash -> file exists but never searchable | Commit the content plan first; persistent queues complete derived indexing |
 | Resource already on disk but rm deletes it while semantic processing / vectorization is still running -> wasted work | Lifecycle TreeLock held from finalization through processing completion |
 
-**First-time add** (target does not exist) — handled in `ResourceProcessor.process_resource` Phase 3.5:
+**First-time add and incremental update** use the same planned commit path:
 
 ```
-1. Acquire TreeLock on final_uri
-   - If final_uri does not exist, check ancestor/descendant/same-path conflicts first
-   - If there is no conflict, create final_uri and write final_uri/.path.ovlock as a T lock
-2. Keep temp as the source directory and enqueue SemanticMsg(uri=temp, target_uri=final_uri, lifecycle_lock_handle_id=...)
-3. DAG runs on temp and syncs temp content into final_uri after completion
-   - Do not use raw agfs.mv(temp -> final_uri), because final_uri already exists for the lock file
-4. Clean up temp directory
-5. DAG starts lock refresh loop (refreshes the lock token and updates handle activity every lock_expire/2 seconds)
-6. DAG complete + all embeddings done -> release TreeLock
+1. Acquire the resource lock on final_uri.
+2. Build the R/N/F/V snapshot while holding the lock:
+   - R: normalized request intent
+   - N: parsed artifact inventory
+   - F: current formal resource tree
+   - V: current vector records, unless build_index=false
+3. Compile a ContextUpdatePlan.
+4. Apply the plan's content actions to final_uri synchronously.
+5. Clean up the parser artifact.
+6. Enqueue direct index actions and, when needed, a SemanticMsg containing the remaining SemanticPlan.
+7. Hand off the resource lock to semantic processing, or release it when there is no semantic work.
 ```
 
-If summarization and indexing are both disabled, no downstream DAG takes over.
-In that case `ResourceProcessor` copies temp directory content into `final_uri`
-under the same TreeLock, deletes temp, then releases the lock. It does not call
-`VikingFS.mv(temp, final_uri, lock_handle=handle)`, because move cleanup can
-remove the directory lock file.
+The formal content tree is therefore updated before semantic or embedding work
+runs. A successful content commit may temporarily be ahead of its derived
+summaries and vectors. Queue-backed work repairs that derived state; it no
+longer copies the parser temp tree into the formal tree.
 
 During this period, `rm` attempting to acquire a TreeLock on the same path will fail with `ResourceBusyError`.
-
-**Incremental update** (target already exists) — temp stays in place:
-
-```
-1. Acquire TreeLock on target_uri (protect existing resource)
-2. Enqueue SemanticMsg(uri=temp, target_uri=final, lifecycle_lock_handle_id=...)
-3. DAG runs on temp, lock refresh loop active
-4. DAG completion triggers sync_diff_callback or move_temp_to_target_callback
-5. Callback completes -> release TreeLock
-```
-
-Note: DAG callbacks do NOT wrap operations in an outer lock. Each `VikingFS.rm` and `VikingFS.mv` has its own lock internally. An outer lock would conflict with these inner locks causing deadlock.
-
-Both first-time add and incremental update hold only `TreeLock(resource_dir)`.
-There is no `ExactPathLock(resource_dir) -> TreeLock(resource_dir)` handoff, so
-the two modes cannot accidentally release the same `.path.ovlock` file in the
-wrong scope.
 
 Automatic naming is handled by the resource layer, not the lock service:
 `ResourceProcessor` checks `exists(candidate_uri)` first; occupied candidates
 try `_1`, `_2`, and so on. Only a non-existing candidate attempts `TreeLock`,
 without waiting. If that candidate is busy, the next suffix is tried.
 
-**Server restart recovery**: SemanticMsg is persisted in QueueFS. On restart, `SemanticProcessor` detects that the `lifecycle_lock_handle_id` handle is missing from the in-memory LockManager and re-acquires a TreeLock.
+**Server restart recovery**: Persistent QueueFS backends retain `SemanticMsg` and `SemanticPlan`. Semantic processing attempts to adopt `lock_handoff`; recoverable stale handoffs reacquire the original `covered_paths`. Conflicts or unrecoverable handoff errors can still fail processing, so check the task state.
 
 ### Derived Semantic Files (.abstract.md / .overview.md)
 
@@ -202,45 +150,37 @@ hold separate ExactPathLocks for the two source files. Refreshing `preferences/.
 
 ### session.commit()
 
-| Problem | Solution |
-|---------|----------|
-| Messages cleared but archive not written -> conversation data lost | Phase 1 without lock (incomplete archive has no side effects) + Phase 2 with RedoLog |
+Phase 1 holds an EXACT lock on the session root to establish the commit boundary. Summary generation and memory extraction run in the background, outside that boundary lock, because model calls have unpredictable latency:
 
-LLM calls have unpredictable latency (5s~60s+) and cannot be inside a lock-holding operation. The design splits into two phases:
+```text
+Phase 1: prepare and publish the archive under lock
+  1. Read messages and policy; allocate an archive number and split archived/retained messages
+  2. Persist archive messages and metadata
+  3. Enqueue SessionCommitMsg and create the task
+  4. Persist retained live messages, session metadata, and the phase1 ready marker
+  5. Release the lock; return task_id, or skipped if nothing was archived
 
-```
-Phase 1 — Archive (no lock):
-  1. Generate archive summary (LLM)
-  2. Write archive (history/archive_N/messages.jsonl + summaries)
-  3. Clear messages.jsonl
-  4. Clear in-memory message list
-
-Phase 2 — Memory extraction + write (RedoLog):
-  1. Write redo marker (archive_uri, session_uri, user identity)
-  2. Extract memories from archived messages (LLM)
-  3. Write current message state
-  4. Write relations
-  5. Directly enqueue SemanticQueue
-  6. Delete redo marker
+Phase 2: process the published archive in the background
+  1. Read archived messages and generate summaries
+  2. Extract/update memories and schedule derived processing
+  3. Write memory_diff.json and the completion marker
 ```
 
-**Crash recovery analysis**:
+**Crash recovery checks**:
 
-| Failure moment | State | Recovery action |
-|------------|-------|----------------|
-| During Phase 1 archive write | No marker | Incomplete archive; next commit scans history/ for index, unaffected |
-| Phase 1 archive complete but messages not cleared | No marker | Archive complete + messages still present = redundant but safe |
-| During Phase 2 memory extraction/write | Redo marker exists | On startup: redo extraction + write + enqueue from archive |
-| Phase 2 complete | Redo marker deleted | No recovery needed |
+| Failure point | What to check |
+| --- | --- |
+| Phase 1 not yet published | Preparation may be partial; inspect archive state and live messages rather than treating directory existence as success |
+| Queued but not yet marked ready | Background processing must check Phase 1 state; error paths attempt to mark failure, so task existence alone does not prove success |
+| During Phase 2 extraction or writes | A persistent queue can resume processing, but model retries need not produce identical text |
+| After Phase 2 | Check the terminal task state, archive completion marker, and actual memory changes |
 
 ## LockContext
 
-`LockContext` is an **async** context manager that encapsulates lock acquisition and release:
+This pseudocode illustrates acquiring, using, and releasing a lock. The runtime uses RAGFS lease APIs; `LockContext` cannot be imported from the current Python SDK:
 
 ```python
-from openviking.storage.transaction import LockContext, get_lock_manager
-
-lock_manager = get_lock_manager()
+# Conceptual example: production path locks are acquired inside the Rust ragfs layer.
 
 # Exact lock (write operations, semantic processing)
 async with LockContext(lock_manager, [path], lock_mode="exact"):
@@ -264,9 +204,9 @@ async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_path=dst):
 |-----------|----------|----------|
 | `exact` | File writes, single-file delete, sidecar writeback | Lock the specified path; conflicts with same-path locks and ancestor TreeLocks |
 | `tree` | Directory delete, resource lifecycle, directory-level protection | Lock the subtree root; conflicts with same-path locks, descendant locks, and ancestor TreeLocks |
-| `mv` | Move operations | Directory move: source TreeLock + destination ExactPathLock; File move: ExactPathLock on both source and destination (controlled by `src_is_dir`) |
+| `mv` | Move operations | Directory move: source TreeLock + destination TreeLock; File move: ExactPathLock on both source and destination (controlled by `src_is_dir`) |
 
-**Exception handling**: `__aexit__` always releases locks and does not swallow exceptions. Lock acquisition failure raises `LockAcquisitionError`.
+**Exception handling**: Business paths release or hand off leases in `finally`. Conflicts surface as busy/lock-acquisition errors. Tokens left by release failure or process exit rely on stale cleanup.
 
 ## Lock Types (EXACT vs TREE)
 
@@ -278,28 +218,96 @@ The lock mechanism uses two lock types to handle different conflict patterns:
 | **TREE** | Conflict | Conflict | Conflict | Conflict |
 
 - **EXACT (E)**: Locks one concrete path. It can protect files, directory names, and not-yet-created target paths. Blocks if any ancestor holds a TreeLock.
-- **TREE (T)**: Used for directory delete, directory move, resource lifecycle protection, and similar subtree-level operations. Logically covers the entire subtree but only writes **one lock file** at the root. Before acquiring, scans all descendants and ancestor directories for conflicting locks. If the target directory is missing, conflicts are checked first; only then is the directory created and locked. If a later double-check finds a new conflict, the acquire fails or retries without rolling back the empty directory.
+- **TREE (T)**: Used for directory delete, directory move, resource lifecycle protection, and similar subtree-level operations. Logically covers the entire subtree but stores one provider token for the root path. Conflict checks cover descendants and Tree-locked ancestors within the provider's scope. The filesystem provider may create a missing target directory to place its lock file.
+
+### Path scope and target type
+
+Exact and Tree describe an operation's scope; file, directory, and missing describe the target's current state. These are independent. Locks protect path names, including names that do not currently exist.
+
+Lock paths must be absolute. The Manager rejects empty or relative paths, repeated
+`/`, `.` or `..` components, and NUL with `InvalidRequest` before acquiring locks
+or checking lease coverage. A single trailing `/` is stripped, except at `/`.
+Redis and SQLite token operations require this normalized form; Redis Lua batch
+acquisition also validates every request before mutating tokens. Use
+`/local/account-a/file`, rather than aliases such as `/local/account-a/./file`
+or `/local/account-a//file`.
+
+The following conflicts apply to different owners within the same provider scope:
+
+| Held lock | New request | Conflict |
+| --- | --- | --- |
+| Exact(`/docs/a.md`) | Exact or Tree(`/docs/a.md`) | Yes |
+| Exact(`/docs`) | Exact(`/docs/a.md`) | No |
+| Tree(`/docs`) | Exact or Tree(`/docs/a.md`) | Yes |
+| Exact(`/docs/a.md`) | Tree(`/docs`) | Yes |
+| Tree(`/docs/a.md`) | Exact(`/docs/b.md`) | No |
+
+`Tree(/docs/a.md)` does not expand to `Tree(/docs)`. Likewise, Exact on a directory name does not protect its descendants; recursive deletion needs Tree.
+
+Locks coordinate participating operations. The low-level `PathLockWrappedFS` uses Exact for create, write, truncate, and non-recursive remove, and Tree for remove_all. File rename uses Exact on both paths; low-level directory rename uses Tree on the source and Exact on the destination. Public directory `mv` additionally covers both subtrees. Read, stat, directory listing, and mkdir pass through, though higher layers may hold their own locks. The operating system does not block I/O that bypasses this protocol.
 
 ## Lock Mechanism
 
-### Lock Protocol
+### Filesystem Provider Lock Protocol
 
-Lock file paths:
+The caller chooses the lock type. The filesystem provider uses a parent sidecar for every target:
+
+| Target state | Exact token | Tree token |
+| --- | --- | --- |
+| Existing file `/docs/a` | `/docs/.exact.ovlock.a.<hash>`, containing E | Same sidecar, containing T |
+| Existing directory `/docs/a` | `/docs/.exact.ovlock.a.<hash>`, containing E | Same sidecar, containing T |
+| Missing `/docs/a` | `/docs/.exact.ovlock.a.<hash>`, containing E | Same sidecar, containing T |
+
+A sidecar sits beside its target but represents only that target, not its parent directory. Recursively deleting the target does not delete the token in its parent, so mutual exclusion remains active until the lease is formally released. `<hash>` is a SHA-1 prefix of the full backend path, not the business file's contents.
+
+`.exact.ovlock.*` stores E or T according to the logical lock type. For compatibility with tokens left by older versions, conflict checks still read `.path.ovlock` inside the target, but new locks are no longer written there. Filenames are part of the storage protocol, but do not alone identify the logical lock type. Token contents are:
 
 ```text
-TreeLock(path)                  -> {path}/.path.ovlock
-ExactPathLock(existing dir path) -> {path}/.path.ovlock
-ExactPathLock(file or missing path) -> {parent}/.exact.ovlock.<name>.<hash>
+{owner_id}:{time_ns}:{lock_type}
 ```
 
-Lock file content (Fencing Token):
-```
-{handle_id}:{time_ns}:{lock_type}
+`lock_type` is `E` or `T`. This ownership token supports conflict checks, refresh, and conditional release; it does not imply storage-side fencing of every business write.
+
+A lease records logical scope in `covered_paths` separately from token locations in `lock_paths`. An owned lease controls refresh, release, and handoff. A borrowed lease proves coverage by an existing lock without permission to release the outer lock.
+
+#### Protocol Migration and Deployment
+
+The new version reads both the new sidecar and the legacy `.path.ovlock`, but writes new tokens only to the sidecar. Existing leases are not migrated in place: refresh, release, and handoff continue to use the legacy `lock_paths` recorded by the lease until those tokens are released or expire.
+
+Old versions do not inspect new ancestor sidecars, so filesystem-provider instances of different protocol versions must not process writes against the same backend concurrently. The current version requires a coordinated cutover:
+
+1. Stop new writes, wait for active leases and pending handoffs to drain, then stop every old instance.
+2. Start all new instances, confirm legacy tokens were released or can be reclaimed by expiry, then resume writes.
+
+A zero-downtime rolling deployment requires two independently deployable protocol stages: first deploy a compatibility version that reads both formats but still writes legacy tokens; after every instance is upgraded, switch all instances to reading both formats and writing only new sidecars. There must be no interval where an old instance can encounter a new sidecar.
+
+### Cache Provider Lock Protocol
+
+The cache provider stores the same token format in Redis HASH fields. It uses
+Lua scripts to atomically check conflicts and write a complete batch:
+
+```text
+field = logical_path
+value = owner_id:time_ns:lock_type
 ```
 
-Where `lock_type` is `E` (EXACT) or `T` (TREE).
+HASH keys are isolated by path scope:
 
-### Lock Acquisition (EXACT mode)
+```text
+{service_name}:ov:pathlock:global:tokens
+{service_name}:ov:pathlock:scope:_system:tokens
+{service_name}:ov:pathlock:scope:account:{account}:tokens
+```
+
+All keys use `{service_name}` as the Redis Cluster hash tag. Exact acquisition
+reads the target and ancestors with `HMGET`; Tree acquisition scans only its
+scope HASH with `HGETALL`. Tree locks at `/` and `/local` are rejected with
+`InvalidRequest`, because their subtrees span account and `_system` HASHes.
+Use `/local/<account>` or `/local/_system` (or a descendant) as the Tree root.
+Exact locks at `/` and `/local` remain supported and protect only those paths.
+Cross-scope batches are rejected.
+
+### Filesystem Lock Acquisition (EXACT mode)
 
 ```
 loop until timeout (poll interval: 200ms):
@@ -321,11 +329,11 @@ loop until timeout (poll interval: 200ms):
 Timeout (default 0 = no-wait) raises LockAcquisitionError
 ```
 
-### Lock Acquisition (TREE mode)
+### Filesystem Lock Acquisition (TREE mode)
 
 ```
 loop until timeout (poll interval: 200ms):
-    1. Check if target directory is locked by another operation
+    1. Check if target path is locked by another operation
        - Stale lock? -> remove and retry
        - Active lock? -> wait
     2. Check all ancestor directories for TREE locks
@@ -335,8 +343,8 @@ loop until timeout (poll interval: 200ms):
        - Missing target directory? -> treat as no descendant locks
        - Stale lock? -> remove and retry
        - Active lock? -> wait
-    4. Ensure the target directory exists; create it if missing
-    5. Write TREE (T) lock file (only one file, at the root path)
+    4. Ensure the resolved sidecar parent exists; do not create the missing target itself
+    5. Write the TREE (T) token to the parent sidecar
     6. TOCTOU double-check: re-scan descendants and ancestors
        - Conflict found: compare (timestamp, handle_id)
        - Later one (larger timestamp/handle_id) backs off (removes own lock) to prevent livelock
@@ -349,34 +357,46 @@ Timeout (default 0 = no-wait) raises LockAcquisitionError
 
 ### Missing Directory Creation
 
-The lock system may create directories so it can place lock files, but it checks
-for conflicts first:
+The lock system may create a missing parent chain so it can place a sidecar,
+but it does not create the locked target itself. It checks for conflicts first:
 
 ```
-1. Ancestor TreeLock / same-path lock / descendant lock conflict -> do not create the directory
-2. No current conflict -> create the directory and write the lock
+1. Ancestor TreeLock / same-path lock / descendant lock conflict -> do not create directories
+2. No current conflict -> create the sidecar parent and write the lock
 3. A post-write double-check finds a new conflict -> remove our own lock and fail or retry
 4. Step 3 does not roll back the empty directory
 ```
 
+Acquisition rollback and normal release clean up tokens without guaranteeing removal of a parent chain created to store the sidecar. Snapshots use a separate policy for missing targets; see [snapshot scope and concurrency](../guides/15-snapshot.md#commit-scope-and-concurrency).
+
 ### Lock Expiry Cleanup
 
-**Stale lock detection**: PathLockEngine checks the fencing token timestamp. Locks older than `lock_expire` (default 300s) are considered stale and are removed automatically during acquisition.
+**Automatic refresh**: Rust PathLockManager refreshes active leases every `lock_expire / 3`. The default 30-second expiry is not a maximum operation duration. Refresh stops when the process exits.
 
-**In-process cleanup**: LockManager checks active LockHandles every 60 seconds. Handles that still own lock files but have been inactive for longer than `lock_expire` are force-released.
+**Stale lock detection**: PathLockEngine checks the ownership token timestamp. Locks older than `lock_expire` (default 30s) are considered stale and are removed automatically during acquisition.
 
-**Orphan locks**: Lock files left behind after a process crash are automatically removed via stale lock detection when any operation next attempts to acquire a lock on the same path.
+**Lost lease authorization**: Explicit and background refresh use the same rules. A missing token or owner mismatch immediately invalidates every local lease under that owner sharing the actual token path (`lock_paths`). Losing any required token invalidates the entire lease, including a pending handoff. A Tree ancestor and an Exact descendant have different tokens and do not invalidate each other.
+
+A transport error preserves authorization only until `0.8 × lock_expire` since that token's last successful confirmation (24 seconds by default). Each token has its own monotonic deadline; partial refresh, reentry, and local handoff/adoption do not extend failed tokens. Authorization checks enforce the deadline even before the next heartbeat. Invalidated leases cannot authorize subsequent protected writes, refresh, owner reuse, or handoff/adoption, and cannot become valid again.
+
+**In-process cleanup**: Invalidated leases retain their release capability and local references while ownership-checked cleanup is retried. A missing or foreign-owned token completes cleanup without deleting a new owner's token. Tokens shared with another valid local lease remain protected. After six heartbeat intervals from the first invalidation (`2 × lock_expire`, 60 seconds by default), the manager logs remaining paths and forgets the local entry even if the provider is unavailable; remaining provider tokens rely on expiry. Cleanup retries never extend this window.
+
+**Invalidation diagnostics**: The manager retains the first invalidation time and reason through cleanup. The `pathlock lease invalidated` log includes `reason`, `lease_ref`, `owner_id`, and `affected_paths`. `TokenLost` means a required token is missing or ownership no longer matches; inspect token expiry, removal, and takeover. `ConfirmationDeadlineExceeded` means ownership could not be confirmed before the safety deadline; inspect provider health, network latency, and renewal scheduling. Its token log includes `since_last_confirmation_ms` and `failures`. `ReleaseFailed` means a release or downgrade error revoked authorization while cleanup is retried; the release log includes the error. Later results and cleanup failures do not replace the first reason or reset its time; the cleanup-window exhaustion log retains that reason.
+
+These checks revoke authorization for future operations after loss is detected or the deadline passes. They do not cancel writes that already passed authorization or provide storage-side fencing.
+
+**Orphan locks**: Provider tokens left behind after a process crash are automatically removed via stale lock detection when a later acquisition checks the same path or scope.
 
 ## Crash Recovery
 
-`LockManager.start()` automatically scans for leftover markers in `/local/_system/redo/` on startup:
+After startup, QueueManager resumes persisted `session_commit` jobs:
 
 | Scenario | Recovery action |
 |----------|----------------|
-| session_memory extraction crash | Redo memory extraction + write + enqueue from archive |
-| Crash while holding lock | Lock file remains in AGFS; stale detection auto-cleans on next acquisition (default 300s expiry) |
+| session_memory extraction crash | Recover Phase 2 from archive and continue the `session_commit` job |
+| Crash while holding lock | Provider token remains; stale detection auto-cleans on a later matching acquisition (default 30s expiry) |
 | Crash after enqueue, before worker processes | QueueFS SQLite persistence; worker auto-pulls after restart |
-| Orphan index | Cleaned on L2 on-demand load |
+| Orphan index | `rm` attempts related vector cleanup even when the target is missing |
 
 ### Defense Summary
 
@@ -384,20 +404,54 @@ for conflicts first:
 |-----------------|--------|-----------------|
 | Crash during operation | Lock auto-expires + stale detection | Next acquisition of same path lock |
 | Crash during add_resource semantic processing | Lifecycle lock expires + SemanticProcessor re-acquires on restart | Worker restart |
-| Crash during session.commit Phase 2 | RedoLog marker + redo | On restart |
+| Crash during session.commit Phase 2 | Persistent `SessionCommit` queue + resumed consumption | On restart |
 | Crash after enqueue, before worker | QueueFS SQLite persistence | Worker restart |
-| Orphan index | L2 on-demand load cleanup | When user accesses |
+| Orphan index | `rm` attempts related vector cleanup even if the target is missing | When `rm` is requested |
 
 ## Configuration
 
-Path locks are enabled by default with no extra configuration needed. **The default behavior is no-wait**: if the path is locked, `LockAcquisitionError` is raised immediately. To allow wait/retry, configure the `storage.transaction` section:
+Path locks are enabled by default with the `filesystem` provider. Use
+`storage.agfs.pathlock.provider=cache` for Redis-backed coordination between
+processes. Cache-backed PathLock requires a top-level Redis Cache Provider and
+uses top-level `service_name` as the Redis namespace. The runtime wait timeout
+is fixed at `0.0` seconds. `storage.transaction` remains only as a legacy compatibility layer:
+`lock_timeout` is deprecated and ignored, `lock_expire` is automatically
+mapped when the new field is unset, and `redo_recovery_enabled` is deprecated
+and ignored.
+
+Recommended configuration:
 
 ```json
 {
   "storage": {
-    "transaction": {
-      "lock_timeout": 5.0,
-      "lock_expire": 300.0
+    "agfs": {
+      "pathlock": {
+        "provider": "filesystem",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+Redis-backed configuration:
+
+```json
+{
+  "service_name": "production",
+  "cache": {
+    "provider": "redis",
+    "params": {
+      "mode": "standalone",
+      "endpoints": ["redis://127.0.0.1:6379"]
+    }
+  },
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "cache",
+        "lock_expire_secs": 30.0
+      }
     }
   }
 }
@@ -405,12 +459,142 @@ Path locks are enabled by default with no extra configuration needed. **The defa
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `lock_timeout` | float | Lock acquisition timeout (seconds). `0` = fail immediately if locked (default). `> 0` = wait/retry up to this many seconds. | `0.0` |
-| `lock_expire` | float | Lock inactivity threshold (seconds). Locks not refreshed within this window are treated as stale and reclaimed. | `300.0` |
+| `provider` | str | `filesystem`, `memory`, `sqlite`, or `cache` | `filesystem` |
+| `sqlite_path` | str / null | Optional absolute local database path for `sqlite`; see [SQLite setup](../configuration/01-server.md#storage) | `{storage.workspace}/_system/pathlock/pathlock.db` for `sqlite` |
+| `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale | `30.0` |
+
+For replicas sharing EFS across containers or hosts, use `provider="cache"` with
+shared Redis. SQLite is limited to one shared database file on the same machine's
+local disk; EFS/NFS/SMB and independent container-local databases are unsupported.
+See [deployment limits and provider selection](../configuration/01-server.md#storage).
+
+Legacy compatibility form:
+
+```json
+{
+  "storage": {
+    "transaction": {
+      "lock_expire": 30.0
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `lock_timeout` | float | Deprecated and ignored. Runtime wait timeout is fixed at `0.0`. | `0.0` |
+| `lock_expire` | float | Deprecated. Use `storage.agfs.pathlock.lock_expire_secs`. | `30.0` |
 
 ### QueueFS Persistence
 
-The lock mechanism relies on QueueFS using the SQLite backend to ensure enqueued tasks survive process restarts. This is the default configuration and requires no manual setup.
+Restart recovery requires persisted queue data. QueueFS uses SQLite by default. With the cache backend, durability depends on the configured Provider; the memory backend loses queued work when the process exits.
+
+### Single-instance path lock provider switch: filesystem → Redis
+
+This switches the **storage and coordination backend for path locks**: from
+`.ovlock` files managed by the filesystem provider to Redis lock records managed
+by the cache provider. Business files stay in their existing file storage, and
+QueueFS keeps its existing persistent queue backend, such as SQLite. Business
+data and queue messages do not need to move to Redis.
+
+This procedure supports only a **single instance with downtime**:
+
+1. Pause incoming requests and task submissions. Disable any automatic restart
+   or scheduling policy that could restart the old instance. Keep
+   the existing file storage and persistent queues.
+2. Stop the old service and all its queue consumer processes. Verify in the
+   process manager or deployment platform that every old instance PID / container
+   has exited, with no remaining child processes, standalone workers or other
+   writers using filesystem path locks against the same storage. Confirm that
+   the old instance's lock heartbeat renewal tasks have also stopped.
+   **Do not start the instance using Redis path locks until this check passes.**
+3. Change `storage.agfs.pathlock.provider` from `filesystem` to `cache` and
+   configure that cache provider to use Redis.
+4. Start one new instance. Verify that pending jobs recover from the existing
+   queue, acquire fresh path locks in Redis and resume consumption, then reopen
+   incoming requests and task submissions.
+
+`handoff` retains the lease in the old process and keeps its heartbeat running.
+Pausing requests or closing the listening port does not prove that the old
+writers have stopped; verify that all the processes above have exited. Process
+exit terminates their in-memory lease registries and heartbeat tasks, while
+`.ovlock` tokens may remain on disk. Draining the queue, deleting those lock
+files or waiting for old leases to expire is not required.
+
+Filesystem and Redis are independent lock coordination domains: Redis acquire
+**does not check or block old filesystem tokens**. If an old process remains
+alive, both backends can grant different owners the same path, allowing both
+processes to write business files. Waiting for old tokens to expire cannot
+replace the process exit check.
+
+New handoffs include `handle_mode`; historic payloads without it remain supported.
+Native adoption only transfers a live source holder; a missing or expired source
+or a provider change returns `HandoffRecoveryRequired`. Consumers use
+`adopt_or_reacquire` to validate account and coverage and acquire the complete
+logical coverage with its Exact/Tree kinds under the original owner, receiving
+a fresh holder, `lease_ref` and `ownership_ref` before resuming.
+They prefer `covered_paths`, invert historic `.path.ovlock` Tree handles, and use
+the operation's complete requests for non-invertible Exact handles. Recovery
+never acquires only part of a mixed batch. Acquisition conflicts and service
+errors leave durable work pending for retry. Malformed coverage and invalid local
+ownership capabilities do not trigger reacquisition. Duplicate deliveries whose
+source holder has already been consumed also use this recovery path; business
+writes must be idempotent. Old `.ovlock` files need no scanning or copying into Redis.
+
+`owner_lease_ref` contains `lease_ref` and `ownership_ref` and is a live local
+ownership capability. It cannot recover a lease across a restart or provider migration.
+
+Recovery requires a valid account context and rejects coverage outside that
+account. Semantic jobs preserve the Exact/Tree kind in `covered_paths`. When a
+historic message has no coverage kind and its original granularity cannot be
+determined, recovery conservatively acquires a Tree lock on the operation path
+and logs a warning. This can widen an original Exact lock to Tree and reduce
+concurrency during recovery.
+
+### Blocked recovery retries and alerts
+
+QueueFS has no global retry limit or dead-letter queue. AddResource, Reindex,
+ContentWrite and Semantic consumers allow up to eight retries per delivery chain
+after the initial attempt for `HandoffRecoveryBlocked`, persisting
+`lock_handoff_retry` in the replacement message. If the process crashes after
+the replacement is enqueued but before the original is ACKed, recovery can
+create separate delivery chains from both messages, each retaining its own
+counter. This is therefore not a global retry limit for the same work.
+Each retry waits `min(0.5 × 2^retry, 30)` seconds; backoff
+holds the current consumer slot. Cancellation during backoff or a failed
+enqueue leaves the original delivery unacknowledged. Exhaustion ends the work
+with a failure; task tracking transitions the associated task to FAILED with a
+queryable reason. Failures do not automatically enter a dead-letter queue.
+
+Each blocked recovery logs a warning; exhaustion logs an error. The counter
+`openviking_pathlock_recovery_blocked_total{queue, outcome}` distinguishes
+`retry` from `exhausted`. Enable `server.observability.metrics.enabled` and
+`server.observability.metrics.exporters.prometheus.enabled`, configure Prometheus
+to scrape `/metrics`, then add these example alert rules:
+
+```yaml
+groups:
+  - name: openviking-pathlock-recovery
+    rules:
+      - alert: OpenVikingPathlockRecoveryBlocked
+        expr: sum by (queue) (increase(openviking_pathlock_recovery_blocked_total{outcome="retry"}[5m])) >= 8
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenViking pathlock recovery is repeatedly blocked"
+      - alert: OpenVikingPathlockRecoveryExhausted
+        expr: sum by (queue) (increase(openviking_pathlock_recovery_blocked_total{outcome="exhausted"}[5m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenViking pathlock recovery retry limit reached"
+```
+
+Adjust thresholds for workload volume. Use the logged `task_id` and failure
+reason to investigate competing writers or Redis availability, then resubmit
+failed tasks after resolving the cause. See [Metrics](./12-metrics.md) and
+[Grafana and Prometheus](../guides/11-grafana-prometheus.md) for monitoring setup.
 
 ## Related Documentation
 

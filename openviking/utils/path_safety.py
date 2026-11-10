@@ -3,11 +3,24 @@
 """Shared helpers for safe user-supplied path handling."""
 
 import re
+from urllib.parse import unquote
 
 from openviking_cli.utils.uri import VikingURI
 
 _UNSAFE_REL_PATH_RE = re.compile(r"(^|[\\/])\.\.($|[\\/])")
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
+
+
+def _reject_encoded_path_escape(path: str) -> None:
+    # Raw backslashes are accepted as Windows separators and normalized by
+    # ``sanitize_relative_viking_path``. Decode only after splitting on both
+    # raw separator forms so encoded separators cannot create a new segment.
+    for segment in path.replace("\\", "/").split("/"):
+        decoded = unquote(segment)
+        if decoded != segment and (
+            decoded in {".", ".."} or "/" in decoded or "\\" in decoded
+        ):
+            raise ValueError(f"Unsafe relative path rejected: {path}")
 
 
 def sanitize_relative_viking_path(rel_path: str) -> str:
@@ -25,7 +38,39 @@ def sanitize_relative_viking_path(rel_path: str) -> str:
         raise ValueError(f"Unsafe relative path rejected: {rel_path}")
     if _UNSAFE_REL_PATH_RE.search(rel_path):
         raise ValueError(f"Unsafe relative path rejected: {rel_path}")
+    _reject_encoded_path_escape(rel_path)
     return rel_path.replace("\\", "/")
+
+
+def _normalize_storage_segments(path: str) -> str:
+    return "/".join(
+        VikingURI.sanitize_segment(segment)
+        if any(character.isspace() for character in segment)
+        else segment
+        for segment in path.split("/")
+    )
+
+
+def validate_safe_viking_uri_path(uri: str) -> str:
+    """Validate a literal storage path, where ``#`` is part of the filename."""
+    normalized = VikingURI(uri.strip()).uri.rstrip("/")
+    if "?" in normalized:
+        raise ValueError(f"Unsafe Viking URI path rejected: {uri}")
+    path = normalized[len(f"{VikingURI.SCHEME}://") :]
+    if not path:
+        return normalized
+    safe_path = sanitize_relative_viking_path(path)
+    if safe_path != path:
+        raise ValueError(f"Unsafe Viking URI path rejected: {uri}")
+    return normalized
+
+
+def normalize_storage_target_uri(uri: str) -> str:
+    """Return a safe Viking URI with whitespace-bearing path segments sanitized."""
+    normalized = validate_safe_viking_uri_path(uri)
+    prefix = f"{VikingURI.SCHEME}://"
+    path = normalized[len(prefix) :]
+    return f"{prefix}{_normalize_storage_segments(path)}"
 
 
 def safe_join_viking_uri(base_uri: str, rel_path: str) -> str:

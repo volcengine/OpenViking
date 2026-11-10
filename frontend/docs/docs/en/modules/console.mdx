@@ -1,0 +1,81 @@
+# Console
+
+`Console` combines `Tui` and `VikingBot`, managing native API commands, execution records and separate drafts. Switching modes preserves records and drafts.
+
+Commands use native APIs. Conversation mode follows Volcengine release/openviking/2026-11-12 with session controls, the updated welcome state, quick inputs, attachments and reference selection. Supply VikingBot data and callbacks through `conversation`; the host integrates real chat, streaming, uploads and session persistence.
+
+The panel follows the Volcengine layout with a pill mode switch, icon toolbar and terminal quick start. Quick actions fill and focus the input without executing. Command history contains only this panel's local records; selecting a record fills the input. Both toolbar actions show hints on hover and keyboard focus. New session is always available: it cancels the current request and clears local records, errors and the command draft without deleting server data. Customize its label through `labels.clear`, and other copy through `labels`.
+
+History dates use the client timestamp captured when submitting a command, displayed in the local timezone as `YYYY-MM-DD HH:mm`.
+
+`Console` fills the host width and height without imposing a panel width. Give the host an explicit height or a flexible layout. The example's 720px height is for demonstration only.
+
+## Basic usage
+
+VikingBot (`conversation`) is selected by default. Set `defaultMode="command"` to start in Terminal, or use `mode` with `onModeChange` for controlled switching.
+
+The demo uses a fixed simulated service. Try `ov ls viking://resources/demo` or `ov read viking://resources/demo/notes.md` for structured results and resource links. It does not access a real service.
+
+Conversation sessions, prompts and resource candidates use fixed demo data. The `+` action selects local files without uploading; sending is unconnected. The host supplies real conversations, streaming and persistence through `conversation`.
+
+```tsx file="../../_demos/console-basic.tsx" preview
+
+```
+
+For a real service, configure `baseURL`, credentials and identity through the host's `OpenVikingProvider`; no per-module adapter is required. Exclude `/api/v1` from `baseURL`; omission targets the same origin. Mounting does not fetch data. Requests start only when a command is explicitly submitted.
+
+## Standalone Hook
+
+`useConsole(options?: ConsoleOptions): ConsoleResult` is exported from `@openviking/react/modules/console`. It shares Provider inheritance, instance isolation and request cleanup with `Console`, without rendering a view or requiring CSS.
+
+`ConsoleOptions` accepts `mode`, `defaultMode`, `locale`, `scopeKey`, `onModeChange` and `requestOptions`. `ConsoleResult` includes `records`, `command`, `conversationDraft`, `mode`, `commands`, `isExecuting`, `error` and `failedCommand`; operations are `setMode`, `setCommand`, `setConversationDraft`, `execute`, `retry`, `cancel` and `clear`. `execute` and `retry` resolve after updating records, including failures; inspect `error` or the record status. `clear` cancels pending work and clears command records, errors and the command draft. Conversation service state remains host-owned.
+
+The example uses the same fixed offline transport and composes `Tui` independently:
+
+```tsx file="../../_demos/console-hook.tsx" preview
+
+```
+
+## Execution behavior
+
+One command runs per instance; input is disabled while a request is pending. Failures appear in the corresponding command result; submit the command again to retry. Check the server before resubmitting a write that may already have been accepted. New session aborts the HTTP request and ignores late results; it does not guarantee rollback of accepted server operations. Clearing records removes local history and errors without deleting server resources.
+
+Records and drafts stay in memory. Service/identity configuration or `scopeKey` changes clear local state and abort old requests; unmount also aborts. When stable functions supply changing identity values, update `scopeKey` or key the component by identity.
+
+## Command scope
+
+Use `ov name`, `/name`, or a bare command name. Quote arguments containing spaces with single or double quotes; backslash escapes are supported. Quote option-looking data, such as `ov write viking://resources/a.md "--heading"`, or use `--` to end options: `ov write viking://resources/a.md -- --heading`. String option values may also be quoted, for example `--description "--example"`. Arguments are parsed as data without executing a shell. Unknown or duplicate options, missing arguments and invalid URIs produce error records.
+
+| Capability | Commands                                                                                               |
+| ---------- | ------------------------------------------------------------------------------------------------------ |
+| Local      | `help`, `clear`                                                                                        |
+| Service    | `health`, `status`                                                                                     |
+| Browse     | `ls [uri]`, `tree [uri]`, `stat <uri>`                                                                 |
+| Content    | `read <uri>`, `abstract <uri>`, `overview <uri>`                                                       |
+| Search     | `find <query>`, `search <query>`, `grep <pattern>`, `glob <pattern>`                                   |
+| Write      | `mkdir <uri>`, `write <uri> <content>`, `cp <from_uri> <to_uri>`, `mv <from_uri> <to_uri>`, `rm <uri>` |
+| Tasks      | `task list`, `task status <id>`, `task cancel <id>`                                                    |
+
+See runtime `ov help` and parameter hints for all options. Option names follow native fields, such as `--target_uri` and `--case_insensitive`. `ls` / `tree` return at most 100 entries by default; page with `--limit` and `--offset`. `tree` also accepts `--level_limit`. `write` replaces content by default; use `--mode create` to create or `--mode append` to append. `task cancel` requests server-side cooperative cancellation; new session only aborts the browser's HTTP request.
+
+This is a browser-compatible native command subset. Local CLI configuration, login, uploads/downloads, resource import, sessions and compilation are outside this phase. A successful HTTP request means the endpoint returned; inspect asynchronous operations with task commands for their final result.
+
+## Props
+
+The root exports only `Console` and `ConsoleProps`. Import the mode, copy and slot types from `@openviking/react/modules/console`. The same entry exports `useConsole`, `ConsoleOptions`, `ConsoleState` and `ConsoleResult`. JavaScript does not load CSS; the composite view uses `@openviking/react/modules/console/style.css`, including Tui and VikingBot styles.
+
+| Prop                 | Type                          | Default        | Behavior                                                                                                                       |
+| -------------------- | ----------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `mode`               | `ConsoleMode`                 | —              | Controlled mode; switching reports intent                                                                                      |
+| `defaultMode`        | `ConsoleMode`                 | `conversation` | Initial uncontrolled mode                                                                                                      |
+| `locale`             | `'en' \| 'zh'`                | `en`           | Default copy, command descriptions and time language                                                                           |
+| `scopeKey`           | `string`                      | —              | Explicit isolation key for dynamic identity                                                                                    |
+| `onModeChange`       | `(mode: ConsoleMode) => void` | —              | Reports a request for a different mode; the host updates a controlled value                                                    |
+| `onOpenUri`          | `(uri: string) => void`       | —              | Reports resource-link activation; the host performs navigation                                                                 |
+| `conversation`       | `Partial<VikingBotProps>`     | —              | Conversation data, session controls, quick inputs, references and file callbacks; omitted draft props use Console local state. |
+| `slots`              | `ConsoleSlots`                | —              | `toolbar`, `conversationContext`, `commandHelp`                                                                                |
+| `labels`             | `ConsoleLabels`               | —              | Panel copy, plus `tui` and `vikingBot` view copy                                                                               |
+| `requestOptions`     | `OvRequestOptions`            | —              | Field-by-field address, identity and signal overrides over the nearest Provider                                                |
+| `className`, `style` | Standard HTML props           | —              | Root styling; other HTML attributes are forwarded too                                                                          |
+
+Hosts own authentication, permissions, account switching, page layout and resource navigation across modules.

@@ -1,0 +1,494 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+"""Durable add-resource queue consumer."""
+
+import asyncio
+import json
+from contextlib import suppress
+from copy import deepcopy
+from typing import Any, Dict, Optional
+
+from openviking.observability.context import bind_execution_context
+from openviking.server.identity import RequestContext, Role
+from openviking.service.task_domain import TaskPatch
+from openviking.service.task_tracker import TaskStatus, get_task_tracker
+from openviking.service.task_work_index import (
+    bind_task_context_from_message,
+    extract_task_metadata,
+)
+from openviking.storage.pathlock_recovery import adopt_or_reacquire, prepare_handoff_retry
+from openviking.storage.pathlock_transfer import PathLockGuard
+from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
+from openviking.storage.queuefs.named_queue import DequeueHandlerBase
+from openviking.storage.queuefs.process_result import ProcessResult
+from openviking.telemetry import (
+    OperationTelemetry,
+    bind_telemetry,
+    register_telemetry,
+    resolve_telemetry,
+    unregister_telemetry,
+)
+from openviking.telemetry.resource_summary import record_resource_queue_metrics
+from openviking.utils.log_correlation import log_correlation
+from openviking_cli.exceptions import OpenVikingError
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+class AddResourceProcessor(DequeueHandlerBase):
+    """Own an add-resource task until it reaches a terminal state and can be ACKed."""
+
+    def __init__(
+        self,
+        resource_service: Any,
+        queue_name: str,
+        viking_fs: Any,
+    ):
+        self._resource_service = resource_service
+        self._queue_name = queue_name
+        self._viking_fs = viking_fs
+
+    async def _load_lock(self, msg: AddResourceMsg, ctx: RequestContext) -> Any:
+        """Adopt a pathlock handoff ref, returning an owned lease dict."""
+        if msg.lock_handoff is None:
+            return None
+
+        async def requests():
+            return [{"path": self._viking_fs._uri_to_path(msg.root_uri, ctx=ctx), "kind": "tree"}]
+
+        return await adopt_or_reacquire(
+            self._viking_fs._async_agfs, msg.lock_handoff, ctx=ctx, fallback_requests=requests
+        )
+
+    async def _cleanup_staged_source(self, msg: AddResourceMsg, ctx: RequestContext) -> None:
+        if msg.staged_source is None:
+            return
+        from openviking.resource.staged_source import StagedSource
+
+        staged = StagedSource.from_dict(msg.staged_source)
+        await self._viking_fs.delete_temp(staged.temp_uri, ctx=ctx)
+
+    async def _cleanup_prepared_artifact(self, msg: AddResourceMsg, ctx: RequestContext) -> None:
+        if not msg.prepared or not isinstance(msg.prepared.get("artifact_ref"), dict):
+            return
+        from openviking.parse.output import ParseArtifactRef, store_for_artifact_ref
+
+        artifact_ref = ParseArtifactRef.from_dict(msg.prepared["artifact_ref"])
+        store = store_for_artifact_ref(artifact_ref, viking_fs=self._viking_fs, ctx=ctx)
+        await store.cleanup(artifact_ref)
+
+    async def _release_cancelled_resources(
+        self,
+        msg: AddResourceMsg,
+        ctx: RequestContext,
+    ) -> None:
+        if msg.lock_handoff is not None:
+            lock_guard = PathLockGuard(self._viking_fs._async_agfs)
+            try:
+                if msg.cleanup_empty_target_on_failure:
+                    await lock_guard.acquire(lambda: self._load_lock(msg, ctx))
+                else:
+                    await lock_guard.adopt(msg.lock_handoff)
+                if msg.cleanup_empty_target_on_failure:
+                    await self._resource_service._cleanup_reserved_target_if_empty(
+                        root_uri=msg.root_uri,
+                        ctx=ctx,
+                        resource_lock=lock_guard.lease,
+                    )
+            except Exception as exc:
+                logger.warning("[AddResource] Failed to release cancelled lock handoff: %s", exc)
+            finally:
+                await lock_guard.close()
+        with suppress(Exception):
+            await self._cleanup_staged_source(msg, ctx)
+        with suppress(Exception):
+            await self._cleanup_prepared_artifact(msg, ctx)
+
+    async def _record_watch_execution(
+        self,
+        msg: AddResourceMsg,
+        status: str,
+        error: Optional[str] = None,
+        result: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not msg.watch_task_id:
+            return
+        try:
+            source_checkpoint = (
+                self._resource_service._initial_source_checkpoint(
+                    result.get("meta"),
+                    instruction=msg.instruction,
+                )
+                if status == "completed" and isinstance(result, dict)
+                else None
+            )
+            kwargs = {}
+            if source_checkpoint is not None:
+                kwargs["source_checkpoint"] = source_checkpoint
+            await self._resource_service.record_watch_execution(
+                msg.watch_task_id,
+                status=status,
+                execution_task_id=msg.task_id,
+                error=error,
+                **kwargs,
+            )
+        except Exception:
+            logger.exception("[AddResource] Failed to record initial Watch execution")
+
+    async def _handle_cancelled(self, msg: AddResourceMsg, ctx: RequestContext) -> None:
+        await self._release_cancelled_resources(msg, ctx)
+        await self._record_watch_execution(msg, "cancelled")
+
+    async def _requeue_lock_handoff(self, msg: AddResourceMsg, exc: Exception) -> bool:
+        payload = await prepare_handoff_retry(msg, exc, queue="AddResource")
+        if payload is None:
+            return False
+
+        from openviking.storage.queuefs import get_queue_manager
+
+        await get_queue_manager().enqueue(self._queue_name, payload)
+        logger.warning(
+            "[AddResource] Requeued task %s after lock handoff failure: %s",
+            msg.task_id,
+            exc,
+        )
+        return True
+
+    async def _process(self, msg: AddResourceMsg, data: Dict[str, Any]) -> ProcessResult:
+        with bind_task_context_from_message(data):
+            return await self._process_bound(msg, data)
+
+    async def _process_bound(self, msg: AddResourceMsg, data: Dict[str, Any]) -> ProcessResult:
+        telemetry_id = msg.telemetry_id or ""
+        ctx = RequestContext(
+            user=UserIdentifier(msg.account_id, msg.user_id),
+            role=Role(msg.role),
+            group_ids=tuple(msg.group_ids),
+            actor_peer_id=msg.actor_peer_id,
+            bypass_acl=msg.bypass_acl,
+        )
+        tracker = get_task_tracker()
+        task = await tracker.create(
+            "add_resource",
+            resource_id=None if msg.defer_target_resolution else msg.root_uri,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            task_id=msg.task_id,
+            meta=({"internal": True} if msg.internal_task else {"source_path": msg.source_path}),
+        )
+        if task.status in (
+            TaskStatus.CANCELLING,
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+        ):
+            if task.status in (TaskStatus.CANCELLING, TaskStatus.CANCELLED):
+                await self._release_cancelled_resources(msg, ctx)
+            else:
+                with suppress(Exception):
+                    await self._cleanup_staged_source(msg, ctx)
+                with suppress(Exception):
+                    await self._cleanup_prepared_artifact(msg, ctx)
+            status = (
+                "cancelled"
+                if task.status in (TaskStatus.CANCELLING, TaskStatus.CANCELLED)
+                else task.status.value
+            )
+            await self._record_watch_execution(msg, status, getattr(task, "error", None))
+            unregister_telemetry(telemetry_id)
+            return ProcessResult.success()
+
+        replay_result = getattr(task, "result", None)
+        resource_lock = None
+        lock_guard = PathLockGuard(self._viking_fs._async_agfs)
+        if replay_result is None:
+            try:
+                await lock_guard.acquire(lambda: self._load_lock(msg, ctx))
+            except asyncio.CancelledError:
+                await lock_guard.close()
+                raise
+            except Exception as exc:
+                if await self._requeue_lock_handoff(msg, exc):
+                    return ProcessResult.requeued()
+                await tracker.fail(
+                    msg.task_id,
+                    f"Invalid lock_handoff: {exc}",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                await self._record_watch_execution(
+                    msg,
+                    "failed",
+                    f"Invalid lock_handoff: {exc}",
+                )
+                unregister_telemetry(telemetry_id)
+                with suppress(Exception):
+                    await self._cleanup_staged_source(msg, ctx)
+                with suppress(Exception):
+                    await self._cleanup_prepared_artifact(msg, ctx)
+                return ProcessResult.failed(f"Invalid lock_handoff: {exc}")
+
+        telemetry = resolve_telemetry(telemetry_id) if telemetry_id else None
+        if telemetry is None:
+            telemetry = OperationTelemetry(operation="add_resource_job", enabled=True)
+            if telemetry_id:
+                telemetry.telemetry_id = telemetry_id
+            else:
+                telemetry_id = telemetry.telemetry_id
+            register_telemetry(telemetry)
+        current_stage = "queued"
+
+        async def _set_stage(stage: str) -> None:
+            nonlocal current_stage
+            current_stage = stage
+            await tracker.patch_task(
+                msg.task_id,
+                TaskPatch(stage=stage),
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+
+        with bind_execution_context(), bind_telemetry(telemetry):
+            terminal = False
+            try:
+                queue_message_id = str(data.get("id") or "")
+                logger.info(
+                    "[AddResourceStarted] %s root=%s phase=%s",
+                    log_correlation(
+                        task_id=msg.task_id,
+                        telemetry_id=telemetry_id,
+                        message_id=queue_message_id,
+                    ),
+                    msg.root_uri,
+                    msg.job_phase.value,
+                )
+                if replay_result is None:
+                    await tracker.start(
+                        msg.task_id,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                        stage="queued",
+                    )
+                    task_auth = await tracker.get_task_auth(
+                        msg.task_id,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
+                    resource_lock = lock_guard.detach()
+                    result = await self._resource_service.execute_add_resource_job(
+                        msg,
+                        ctx=ctx,
+                        resource_lock=resource_lock,
+                        stage_callback=_set_stage,
+                        task_auth=task_auth,
+                    )
+                    if result.get("status") == "error":
+                        errors = result.get("errors") or ["resource processing failed"]
+                        error = "; ".join(str(error) for error in errors)
+                        logger.error(
+                            "[AddResourceFailed] %s root=%s task_stage=%s error=%s",
+                            log_correlation(
+                                task_id=msg.task_id,
+                                telemetry_id=telemetry_id,
+                                message_id=queue_message_id,
+                            ),
+                            msg.root_uri,
+                            current_stage,
+                            error,
+                        )
+                        code = result.get("code")
+                        failure_result = {"code": code} if isinstance(code, str) and code else {}
+                        if isinstance(result.get("details"), dict):
+                            failure_result["details"] = result["details"]
+                        await tracker.fail(
+                            msg.task_id,
+                            error,
+                            account_id=ctx.account_id,
+                            user_id=ctx.user.user_id,
+                            result=failure_result or None,
+                        )
+                        await self._record_watch_execution(msg, "failed", error)
+                        terminal = True
+                        return ProcessResult.failed("resource processing failed")
+                    if not msg.watch_task_id:
+                        await tracker.complete(
+                            msg.task_id,
+                            deepcopy(result),
+                            account_id=ctx.account_id,
+                            user_id=ctx.user.user_id,
+                            resource_id=result.get("root_uri"),
+                        )
+                else:
+                    result = deepcopy(replay_result)
+                metadata = extract_task_metadata(data)
+                await tracker.wait_for_task_work(
+                    msg.task_id,
+                    exclude_work_id=metadata.work_id if metadata is not None else None,
+                )
+                work_summary = await tracker.get_work_summary(
+                    msg.task_id,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                result["queue_status"] = tracker.format_queue_status(work_summary)
+                if replay_result is None:
+                    result["context_count"] = work_summary.context_count
+                record_resource_queue_metrics(
+                    telemetry=telemetry,
+                    telemetry_id=telemetry_id,
+                    root_uri=result.get("root_uri"),
+                    queue_timing=tracker.format_queue_timing(work_summary),
+                )
+                telemetry.set("resource.total.duration_ms", telemetry.elapsed_ms())
+
+                # Extract token usage summary from telemetry and inject into result
+                _snapshot = telemetry.finish()
+                if _snapshot is not None:
+                    result["telemetry"] = _snapshot.to_dict(include_summary=True)
+                    _tokens = _snapshot.summary.get("tokens", {})
+                    if _tokens:
+                        result.setdefault("usage", {})
+                        result["usage"]["tokens"] = _tokens
+                    resource_summary = _snapshot.summary.get("resource", {})
+                    queue_summary = _snapshot.summary.get("queue", {})
+                    logger.info(
+                        "[AddResourceCompleted] %s root=%s total_ms=%s semantic=%s embedding=%s",
+                        log_correlation(
+                            task_id=msg.task_id,
+                            telemetry_id=telemetry_id,
+                            message_id=queue_message_id,
+                        ),
+                        result.get("root_uri"),
+                        (resource_summary.get("total") or {}).get("duration_ms"),
+                        queue_summary.get("semantic", {}),
+                        queue_summary.get("embedding", {}),
+                    )
+
+                await self._resource_service._link_resource_reason_memory(
+                    result=result,
+                    ctx=ctx,
+                    reason=msg.reason,
+                    source_name=msg.source_name,
+                )
+                checkpoint = self._resource_service._initial_source_checkpoint(
+                    result.get("meta"), instruction=msg.instruction
+                )
+                if checkpoint is not None:
+                    result["source_checkpoint"] = checkpoint
+                await tracker.complete(
+                    msg.task_id,
+                    result,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    resource_id=result.get("root_uri"),
+                )
+                await self._record_watch_execution(msg, "completed")
+                terminal = True
+                return ProcessResult.success()
+            except asyncio.CancelledError:
+                latest_task = None
+                with suppress(Exception):
+                    latest_task = await tracker.get(
+                        msg.task_id,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
+                if latest_task is not None and latest_task.status in (
+                    TaskStatus.CANCELLING,
+                    TaskStatus.CANCELLED,
+                ):
+                    logger.warning(
+                        "[AddResourceCancelled] %s root=%s",
+                        log_correlation(
+                            task_id=msg.task_id,
+                            telemetry_id=telemetry_id,
+                            message_id=queue_message_id,
+                        ),
+                        msg.root_uri,
+                    )
+                    await self._record_watch_execution(msg, "cancelled")
+                    terminal = True
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "[AddResourceFailed] %s root=%s task_stage=%s error=%s",
+                    log_correlation(
+                        task_id=msg.task_id,
+                        telemetry_id=telemetry_id,
+                        message_id=queue_message_id,
+                    ),
+                    msg.root_uri,
+                    current_stage,
+                    exc,
+                )
+                failure_result = (
+                    {"code": exc.code} if isinstance(exc, OpenVikingError) and exc.code else {}
+                )
+                if isinstance(exc, OpenVikingError) and isinstance(exc.details, dict):
+                    failure_result["details"] = exc.details
+                await tracker.fail(
+                    msg.task_id,
+                    str(exc),
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    result=failure_result or None,
+                )
+                await self._record_watch_execution(
+                    msg,
+                    "failed",
+                    str(exc) or type(exc).__name__,
+                )
+                terminal = True
+                return ProcessResult.failed(str(exc))
+            finally:
+                unregister_telemetry(telemetry_id)
+                await lock_guard.close()
+                with suppress(Exception):
+                    if resource_lock is not None:
+                        cleanup_guard = PathLockGuard(
+                            self._viking_fs._async_agfs,
+                            resource_lock,
+                        )
+                        await cleanup_guard.close()
+                if terminal:
+                    with suppress(Exception):
+                        await self._cleanup_staged_source(msg, ctx)
+
+    async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
+        """Release an enqueue-time lock before ACKing cancelled work."""
+        try:
+            payload = data.get("data", data) if isinstance(data, dict) else data
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            msg = AddResourceMsg.from_dict(payload)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            return ProcessResult.failed(str(exc))
+        await self._handle_cancelled(
+            msg,
+            RequestContext(
+                user=UserIdentifier(msg.account_id, msg.user_id),
+                role=Role(msg.role),
+                group_ids=tuple(msg.group_ids),
+                actor_peer_id=msg.actor_peer_id,
+                bypass_acl=msg.bypass_acl,
+            ),
+        )
+        unregister_telemetry(msg.telemetry_id or "")
+        return ProcessResult.cancelled()
+
+    async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
+        if not data:
+            return ProcessResult.success()
+        try:
+            if not isinstance(data, dict):
+                raise ValueError("Queue message must be an object")
+            payload = data.get("data", data)
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            msg = AddResourceMsg.from_dict(payload)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            return ProcessResult.failed(str(exc))
+
+        return await self._process(msg, data)

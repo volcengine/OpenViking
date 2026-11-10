@@ -1,7 +1,11 @@
 """Base channel interface for chat platforms."""
 
+import re as _re
+
+# Bare image filenames only: no path separators, no "..", bounded length.
+_SEND_FILENAME_RE = _re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,200}")
+
 import base64
-import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Tuple
@@ -143,9 +147,9 @@ class BaseChannel(ABC):
     async def _handle_message(
         self,
         sender_id: str,
-        sender_name: str,
         chat_id: str,
         content: str,
+        sender_name: str | None = None,
         need_reply: bool = True,
         media: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
@@ -157,6 +161,8 @@ class BaseChannel(ABC):
 
         Args:
             sender_id: The sender's identifier.
+            sender_name: The sender's display name; falls back to sender_id
+                downstream when unavailable.
             chat_id: The chat/channel identifier.
             content: Message text content.
             media: Optional list of media URLs.
@@ -230,7 +236,16 @@ class BaseChannel(ABC):
 
                 return False, content
         elif data_uri.startswith("send://"):
-            path_obj = get_data_path() / "images" / data_uri.split("send://", 1)[1]
+            filename = data_uri.split("send://", 1)[1]
+            # send:// URIs come from model-authored outbound content and must
+            # never escape the images directory: a crafted remainder such as
+            # "../../secrets.txt" would otherwise read an arbitrary server file
+            # and (via channel image delivery) exfiltrate it.
+            if not _SEND_FILENAME_RE.fullmatch(filename):
+                raise ValueError(
+                    f"send:// URI must be a bare filename, got {filename!r}"
+                )
+            path_obj = get_data_path() / "images" / filename
             return False, path_obj.read_bytes()
         else:
             # Try to resolve as local file path
@@ -242,43 +257,6 @@ class BaseChannel(ABC):
                 candidate_paths.append(path_obj)
 
             return False, path_obj.read_bytes()
-
-    def _extract_images(self, content: str) -> tuple[list[str], str]:
-        """Extract image data URIs, URLs and local paths from content (support Markdown image syntax)."""
-        images = []
-        # 新增 Markdown 图片语法匹配 + 原有 Data URI/网络URL 匹配
-        # 匹配规则：
-        # 1. ![xxx](路径) 中的路径
-        # 2. data: 开头的 Data URI
-        # 3. http/https 开头的网络链接
-        pattern = r"!\[.*?\]\(([^)]+)\)|(data:[^,]+,[^\s]+|https?://[^\s]+)"
-        parts = []
-        last_end = 0
-        trailing_punctuation = ")].,!?:;'\">}`"
-
-        for m in re.finditer(pattern, content):
-            before = content[last_end : m.start()]
-            if before.strip():
-                parts.append(before)
-
-            # 优先取 Markdown 图片里的路径（第一个分组），再取 Data URI/URL（第二个分组）
-            uri = m.group(1) if m.group(1) else m.group(2)
-            if not uri:
-                last_end = m.end()
-                continue
-
-            # 清理末尾标点
-            while uri and uri[-1] in trailing_punctuation:
-                uri = uri[:-1]
-
-            images.append(uri)
-            last_end = m.end()
-
-        remaining = content[last_end:]
-        if remaining.strip():
-            parts.append(remaining)
-
-        return images, "\n".join(parts)
 
     def _is_image_data(self, data: bytes) -> bool:
         """Check if bytes represent a valid image by magic numbers."""

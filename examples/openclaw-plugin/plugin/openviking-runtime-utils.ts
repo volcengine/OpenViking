@@ -10,8 +10,10 @@ export function previewText(value: unknown, maxChars: number): string | undefine
 
 export function inferRecallResourceType(uri: string): RecallResourceType | undefined {
   if (uri.startsWith("viking://resources")) return "resource";
-  if (uri.startsWith("viking://user/skills") || uri.startsWith("viking://skills")) return "agent";
-  if (uri.startsWith("viking://user/")) return "user";
+  // viking://~ is the home alias for the caller's own user space; configured target
+  // URIs use it, while server responses come back canonical as viking://user/<uid>/...
+  if (uri.startsWith("viking://user/skills") || uri.startsWith("viking://~/skills") || uri.startsWith("viking://skills")) return "agent";
+  if (uri.startsWith("viking://user/") || uri === "viking://~" || uri.startsWith("viking://~/")) return "user";
   return undefined;
 }
 

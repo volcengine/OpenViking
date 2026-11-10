@@ -1,0 +1,655 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+"""Candidate gathering for context assembly.
+
+Generalizes the memory-only type-quota fan-out to every context category and
+keeps the peer-origin ranking rules that recall v1 established.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass, replace
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+
+from openviking.core.directories import preset_directory_uris
+from openviking.core.namespace import AGENT_SKILLS_ROOT, canonical_user_root
+from openviking.core.retrieval_targets import default_target_directories
+from openviking.core.retrieval_types import SearchType
+from openviking.retrieve.context_assembler.params import (
+    MEMORY_CATEGORIES,
+    ORIGIN_ORDER,
+    OTHER_MEMORY_CATEGORY,
+    OTHER_PEER_OVERFETCH,
+    READ_CONCURRENCY,
+    REPORTED_CATEGORY_KEYS,
+    RERANK_CANDIDATE_MULTIPLIER,
+)
+from openviking.retrieve.rerank_scoring import Reranker, RerankScores
+from openviking.retrieve.skill_results import package_abstract, skill_root_uri
+from openviking.server.identity import RequestContext
+from openviking.utils.search_filters import merge_context_type_filter
+from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.retrieve import ContextType
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+LEVEL_SUFFIXES = (".abstract.md", ".overview.md")
+
+
+@dataclass
+class Candidate:
+    """One retrieval hit, resolved enough to plan a detail tier for it."""
+
+    uri: str
+    base_uri: str
+    category: str
+    score: float
+    ranked_score: float
+    level: int
+    abstract: str
+    origin: str
+    is_directory: bool
+    read_ctx: RequestContext
+
+
+def _get_attr(obj: Any, name: str, default: Any = None) -> Any:
+    if isinstance(obj, Mapping):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def _uri(item: Any) -> str:
+    return str(_get_attr(item, "uri", "") or "")
+
+
+def _score(item: Any) -> float:
+    try:
+        return float(_get_attr(item, "score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _abstract(item: Any) -> str:
+    return str(_get_attr(item, "abstract", "") or _get_attr(item, "overview", "") or "")
+
+
+def _level(item: Any) -> int:
+    try:
+        return int(_get_attr(item, "level", 2) or 2)
+    except (TypeError, ValueError):
+        return 2
+
+
+def _extract(result: Any, bucket: str) -> List[Any]:
+    """Pull the list matching ``bucket`` out of a FindResult-shaped value."""
+    key = {"resources": "resources", "skills": "skills"}.get(bucket, "memories")
+    if result is None:
+        return []
+    if isinstance(result, Mapping):
+        return list(result.get(key) or [])
+    return list(getattr(result, key, None) or [])
+
+
+def memory_target_roots(ctx: RequestContext) -> List[str]:
+    user_root = canonical_user_root(ctx)
+    targets = [f"{user_root}/memories"]
+    if ctx.actor_peer_id:
+        targets.append(f"{user_root}/peers/{ctx.actor_peer_id}/memories")
+    return targets
+
+
+def category_targets(category: str, ctx: RequestContext) -> List[str]:
+    """Retrieval scopes owning ``category``."""
+    user_root = canonical_user_root(ctx)
+    if category == "resources":
+        targets = default_target_directories(ctx, context_type=ContextType.RESOURCE)
+        if targets:
+            return targets
+        fallback = [f"{user_root}/resources", "viking://resources"]
+        if ctx.actor_peer_id:
+            fallback.append(f"{user_root}/peers/{ctx.actor_peer_id}/resources")
+        return fallback
+    if category == "skills":
+        return default_target_directories(ctx, context_type=ContextType.SKILL) or [
+            f"{user_root}/skills",
+            AGENT_SKILLS_ROOT,
+        ]
+    return [f"{root.rstrip('/')}/{category}" for root in memory_target_roots(ctx)]
+
+
+def _is_under(uri: str, root: str) -> bool:
+    uri = uri.rstrip("/")
+    root = root.rstrip("/")
+    return uri == root or uri.startswith(f"{root}/")
+
+
+def origin_for_uri(uri: str, actor_peer_id: Optional[str], user_root: str) -> str:
+    peers_root = f"{user_root.rstrip('/')}/peers"
+    if _is_under(uri, peers_root):
+        suffix = uri[len(peers_root) :].strip("/")
+        peer_id = suffix.split("/", 1)[0] if suffix else ""
+        if actor_peer_id and peer_id == actor_peer_id:
+            return "actor_peer"
+        return "other_peer"
+    return "self"
+
+
+def strip_level_suffix(uri: str) -> Tuple[str, bool]:
+    """Return ``(node_uri, is_directory)`` for a possibly sidecar-suffixed URI."""
+    trimmed = uri.rstrip("/")
+    for suffix in LEVEL_SUFFIXES:
+        if trimmed.endswith(f"/{suffix}"):
+            return trimmed[: -(len(suffix) + 1)], True
+    return trimmed, False
+
+
+def category_for(item: Any, bucket: Optional[str]) -> str:
+    """Reported category for one hit; always one of ``REPORTED_CATEGORY_KEYS``.
+
+    Flat retrieval has no owning bucket, so it also reaches the built-in memory
+    types that own no quota bucket. Those report as ``OTHER_MEMORY_CATEGORY``
+    rather than as their directory name, which would be a value the response
+    contract does not declare and no tier or penalty table covers.
+    """
+    if bucket:
+        return bucket
+    uri = _uri(item)
+    marker = "/memories/"
+    if marker in uri:
+        segment = uri.split(marker, 1)[1].split("/", 1)[0]
+        if segment in MEMORY_CATEGORIES:
+            return segment
+        return OTHER_MEMORY_CATEGORY
+    declared = str(_get_attr(item, "category", "") or "")
+    if declared in REPORTED_CATEGORY_KEYS:
+        return declared
+    if "/skills/" in uri:
+        return "skills"
+    if "/resources/" in uri or uri.startswith("viking://resources"):
+        return "resources"
+    return OTHER_MEMORY_CATEGORY
+
+
+def dedupe_keep_best(items: Sequence[Any]) -> List[Any]:
+    """Deduplicate by URI, keeping the highest-scoring occurrence."""
+    positions: Dict[str, int] = {}
+    out: List[Any] = []
+    for item in items:
+        uri = _uri(item)
+        if not uri:
+            continue
+        if uri not in positions:
+            positions[uri] = len(out)
+            out.append(item)
+        elif _score(item) > _score(out[positions[uri]]):
+            out[positions[uri]] = item
+    return out
+
+
+async def _safe_find(service: Any, errors: List[str], method: str, **kwargs: Any) -> Any:
+    """Retrieval must never fail the whole assembly for one scope.
+
+    Failures are counted into stats rather than swallowed silently, so an empty
+    context block caused by a broken embedder is distinguishable from one caused
+    by genuinely having no relevant memories. A rejected request is not such a
+    failure: it fails every scope identically and degrading it would hide a
+    caller mistake behind a 200 with an empty block, so it propagates and gets
+    the same 400 ``mode="list"`` returns.
+    """
+    try:
+        return await getattr(service.search, method)(**kwargs)
+    except InvalidArgumentError:
+        raise
+    except Exception as exc:
+        errors.append(f"{type(exc).__name__}: {exc}"[:200])
+        return None
+
+
+async def gather_candidates(
+    *,
+    service: Any,
+    ctx: RequestContext,
+    queries: Sequence[str],
+    quotas: Optional[Mapping[str, int]],
+    limit: int,
+    score_threshold: Optional[float],
+    filter: Optional[Dict[str, Any]] = None,
+    image_url: str | list[str] | None = None,
+    events_time_decay_protection: Optional[str] = None,
+    search_type: SearchType = "semantic",
+    peer_scope: str = "all",
+    penalties: Optional[Mapping[str, float]] = None,
+    excluded: Optional[Set[str]] = None,
+    cooled: Optional[Set[str]] = None,
+    reranker: Optional[Reranker] = None,
+    rerank_query: str = "",
+) -> Tuple[List[Candidate], Dict[str, Any]]:
+    """Retrieve and rank candidates, returning ``(candidates, stats)``.
+
+    With a ``reranker``, the merged candidate pool is rescored against
+    ``rerank_query`` in one call before quotas, backfill and the flat cut run.
+    """
+    peer_scope = "actor" if peer_scope == "actor" else "all"
+    user_root = canonical_user_root(ctx)
+    open_ctx = replace(ctx, actor_peer_id=None)
+    penalties = penalties or {}
+    excluded = excluded or set()
+    cooled = cooled or set()
+    planned = [q for q in queries if q] or [""]
+    preset_dirs = preset_directory_uris(ctx)
+    # A request threshold is meant for final scores, so with a reranker it
+    # filters after reranking instead of pre-filtering vector recall.
+    recall_threshold = score_threshold if reranker is None else None
+
+    searched: Dict[str, int] = {}
+    retrieval_errors: List[str] = []
+    rerank_stats: Dict[str, Any] = {}
+    excluded_count = 0
+
+    def _build(items: Sequence[Tuple[Any, Optional[str]]]) -> List[Candidate]:
+        nonlocal excluded_count
+        built: List[Candidate] = []
+        for item, bucket in items:
+            uri = _uri(item)
+            if not uri:
+                continue
+            base_uri, is_directory = strip_level_suffix(uri)
+            if base_uri.endswith("/profile.md") or base_uri in preset_dirs:
+                continue
+            category = category_for(item, bucket)
+            abstract = _abstract(item)
+            if category == "skills":
+                # Every file and directory level of a package carries its own
+                # vector, so a hit anywhere inside one stands for the package:
+                # it becomes the package's SKILL.md before exclusion is checked,
+                # which is what lets the ledger cool a whole package for a turn.
+                root = skill_root_uri(uri)
+                if not root:
+                    continue
+                if uri != f"{root}/.abstract.md":
+                    abstract = ""
+                uri = base_uri = f"{root}/SKILL.md"
+                is_directory = False
+            # Caller exclusions cover a subtree; ledger-cooled URIs are served
+            # entries, so a cooled directory must not hide files added under it.
+            if (
+                uri in cooled
+                or base_uri in cooled
+                or any(_is_under(u, x) for u in (uri, base_uri) for x in excluded)
+            ):
+                excluded_count += 1
+                continue
+            origin = origin_for_uri(base_uri, ctx.actor_peer_id, user_root)
+            score = _score(item)
+            penalty = penalties.get(category, 0.0) if origin == "other_peer" else 0.0
+            built.append(
+                Candidate(
+                    uri=uri,
+                    base_uri=base_uri,
+                    category=category,
+                    score=score,
+                    ranked_score=score - penalty,
+                    level=_level(item),
+                    abstract=abstract,
+                    origin=origin,
+                    is_directory=is_directory,
+                    read_ctx=open_ctx if origin == "other_peer" else ctx,
+                )
+            )
+        return built
+
+    def _overfetch(want: int) -> int:
+        """Rows to request on top of ``want`` to cover post-retrieval filtering.
+
+        Cooled and caller-excluded URIs are dropped after the search returns, so
+        without this a bucket whose whole top page is cooled comes back empty
+        instead of falling through to the next-best hits.
+        """
+        return want + min(len(excluded) + len(cooled), want * 2)
+
+    def _find(
+        *,
+        query: str,
+        find_ctx: RequestContext,
+        target_uri: str,
+        find_limit: int,
+        find_filter: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        return _safe_find(
+            service,
+            retrieval_errors,
+            "find",
+            query=query,
+            ctx=find_ctx,
+            target_uri=target_uri,
+            limit=find_limit,
+            score_threshold=recall_threshold,
+            filter=find_filter if find_filter is not None else filter,
+            image_url=image_url,
+            search_type=search_type,
+            level=None,
+            events_time_decay_protection=events_time_decay_protection,
+        )
+
+    async def gather_bucket(bucket: str, quota: int, width: int) -> List[Candidate]:
+        targets = category_targets(bucket, ctx)
+        context_type = {
+            "resources": ContextType.RESOURCE,
+            "skills": ContextType.SKILL,
+        }.get(bucket, ContextType.MEMORY)
+        bucket_filter = merge_context_type_filter(filter, context_type)
+        if bucket == "skills":
+            # Package retrieval pages until it holds `limit` distinct packages
+            # and spans every root in one call, so one search per query is
+            # enough. It is a vector search though, so it needs query text. A
+            # filter-only request stays on the generic path, which answers it
+            # by scanning scalars rather than embedding an empty string, and an
+            # image-only one has nothing either path can use for this bucket.
+            searches = []
+            for query in planned:
+                if query.strip():
+                    searches.append(
+                        _safe_find(
+                            service,
+                            retrieval_errors,
+                            "find_skills",
+                            query=query,
+                            ctx=ctx,
+                            target_uri=targets,
+                            limit=_overfetch(width),
+                            score_threshold=recall_threshold,
+                            filter=bucket_filter,
+                            search_type=search_type,
+                        )
+                    )
+                elif filter:
+                    searches.extend(
+                        _find(
+                            query=query,
+                            find_ctx=ctx,
+                            target_uri=target,
+                            find_limit=_overfetch(width),
+                            find_filter=bucket_filter,
+                        )
+                        for target in targets
+                    )
+        else:
+            searches = [
+                _find(
+                    query=query,
+                    find_ctx=ctx,
+                    target_uri=target,
+                    find_limit=_overfetch(width),
+                    find_filter=bucket_filter,
+                )
+                for query in planned
+                for target in targets
+            ]
+        peer_offset = len(searches)
+        if peer_scope == "all" and bucket in MEMORY_CATEGORIES:
+            searches.extend(
+                _find(
+                    query=query,
+                    find_ctx=open_ctx,
+                    target_uri=f"{user_root}/peers",
+                    find_limit=_overfetch(max(quota * OTHER_PEER_OVERFETCH, width)),
+                    find_filter=bucket_filter,
+                )
+                for query in planned
+            )
+
+        results = await asyncio.gather(*searches)
+        found: List[Any] = []
+        for result in results[:peer_offset]:
+            found.extend(_extract(result, bucket))
+        for result in results[peer_offset:]:
+            found.extend(
+                item
+                for item in _extract(result, bucket)
+                if f"/memories/{bucket}/" in _uri(item)
+                and origin_for_uri(_uri(item), ctx.actor_peer_id, user_root) == "other_peer"
+            )
+        found = dedupe_keep_best(found)
+        searched[bucket] = len(found)
+        candidates = _build([(item, bucket) for item in found])
+        if bucket == "skills":
+            candidates = _dedupe_candidates(candidates)
+        candidates.sort(key=_rank_key, reverse=True)
+        return candidates
+
+    async def gather_flat() -> List[Candidate]:
+        nonlocal rerank_stats
+        # Rerank recalls past the cut, as search() does, so it can promote hits.
+        width = limit * RERANK_CANDIDATE_MULTIPLIER if reranker is not None else limit
+        searches = [
+            _find(
+                query=query,
+                find_ctx=ctx,
+                target_uri="",
+                find_limit=_overfetch(width),
+            )
+            for query in planned
+        ]
+        peer_offset = len(searches)
+        if peer_scope == "all":
+            searches.extend(
+                _find(
+                    query=query,
+                    find_ctx=open_ctx,
+                    target_uri=f"{user_root}/peers",
+                    find_limit=_overfetch(max(limit * OTHER_PEER_OVERFETCH, limit)),
+                )
+                for query in planned
+            )
+        results = await asyncio.gather(*searches)
+        # Keep each hit's owning bucket: inferring the category from the URI
+        # alone reads viking://resources/backup/memories/events/log.md as an
+        # event, which would lift a large resource past its tier ceiling.
+        buckets: Dict[str, Optional[str]] = {}
+        found: List[Any] = []
+        for result in results[:peer_offset]:
+            for bucket in ("memories", "resources", "skills"):
+                for item in _extract(result, bucket):
+                    buckets.setdefault(_uri(item), None if bucket == "memories" else bucket)
+                    found.append(item)
+        for result in results[peer_offset:]:
+            for item in _extract(result, "memories"):
+                if origin_for_uri(_uri(item), ctx.actor_peer_id, user_root) != "other_peer":
+                    continue
+                buckets.setdefault(_uri(item), None)
+                found.append(item)
+        found = dedupe_keep_best(found)
+        searched["all"] = len(found)
+        candidates = _build([(item, buckets.get(_uri(item))) for item in found])
+        # Only skills collapse here. Merging the other categories before the cut
+        # would hand them quota they never had in this mode.
+        skills = [c for c in candidates if c.category == "skills"]
+        if skills:
+            candidates = [c for c in candidates if c.category != "skills"]
+            candidates.extend(_dedupe_candidates(skills))
+        candidates.sort(key=_rank_key, reverse=True)
+        if reranker is not None:
+            # Several planned queries and the peer scan can return more than
+            # one search's worth; the vector-best `width` of them are reranked.
+            capped = max(0, len(candidates) - width)
+            [candidates], rerank_stats = await _rerank_groups(
+                service, reranker, rerank_query, [candidates[:width]], score_threshold
+            )
+            rerank_stats["capped"] = capped
+        return candidates[: max(0, limit)]
+
+    if quotas is None:
+        candidates = await gather_flat()
+    else:
+        active = [(bucket, quota) for bucket, quota in quotas.items() if quota > 0]
+        total = sum(quota for _, quota in active)
+
+        def width(quota: int) -> int:
+            # The quota total is already the over-fetch; a dominant bucket still
+            # needs room past its own quota for rerank to promote hits.
+            if reranker is None:
+                return total
+            return max(total, quota * RERANK_CANDIDATE_MULTIPLIER)
+
+        buckets = await asyncio.gather(*(gather_bucket(b, q, width(q)) for b, q in active))
+        if reranker is not None:
+            pool, capped = _cap_rerank_pool(active, buckets)
+            buckets, rerank_stats = await _rerank_groups(
+                service, reranker, rerank_query, pool, score_threshold
+            )
+            rerank_stats["capped"] = capped
+        # Each quota is a first-pass ceiling; slots a bucket leaves unused go to
+        # the best remaining hits of the other buckets.
+        first: List[Candidate] = []
+        spare: List[Candidate] = []
+        for (_, quota), found in zip(active, buckets, strict=True):
+            first.extend(found[:quota])
+            spare.extend(found[quota:])
+        candidates = _dedupe_candidates(first)
+        taken = {c.base_uri for c in candidates}
+        for candidate in sorted(spare, key=_rank_key, reverse=True):
+            if len(candidates) >= total:
+                break
+            if candidate.base_uri not in taken:
+                taken.add(candidate.base_uri)
+                candidates.append(candidate)
+        candidates.sort(key=_rank_key, reverse=True)
+
+    if reranker is None:
+        candidates = await _fill_skill_abstracts(service, candidates)
+
+    origins = dict.fromkeys(ORIGIN_ORDER, 0)
+    for candidate in candidates:
+        origins[candidate.origin] = origins.get(candidate.origin, 0) + 1
+
+    stats: Dict[str, Any] = {
+        "searched": searched,
+        "candidates": len(candidates),
+        "excluded": excluded_count,
+        "origins": origins,
+        "peer_scope": peer_scope,
+        "quotas": dict(quotas) if quotas is not None else None,
+    }
+    if retrieval_errors:
+        stats["retrieval_errors"] = retrieval_errors[:5]
+    if reranker is not None:
+        stats["rerank"] = rerank_stats
+    return candidates, stats
+
+
+async def _fill_skill_abstracts(service: Any, candidates: List[Candidate]) -> List[Candidate]:
+    """Describe each skill entry with its package abstract rather than the file that matched."""
+    wanted = [
+        index
+        for index, candidate in enumerate(candidates)
+        if candidate.category == "skills" and not candidate.abstract.strip()
+    ]
+    if not wanted:
+        return candidates
+    semaphore = asyncio.Semaphore(READ_CONCURRENCY)
+
+    async def read_one(index: int) -> Tuple[int, str]:
+        candidate = candidates[index]
+        async with semaphore:
+            abstract = await package_abstract(
+                service.fs, candidate.read_ctx, skill_root_uri(candidate.base_uri)
+            )
+        return index, abstract
+
+    for index, abstract in await asyncio.gather(*(read_one(index) for index in wanted)):
+        if abstract:
+            candidates[index] = replace(candidates[index], abstract=abstract)
+    return candidates
+
+
+def _cap_rerank_pool(
+    active: Sequence[Tuple[str, int]], buckets: Sequence[List[Candidate]]
+) -> Tuple[List[List[Candidate]], int]:
+    """Bound rerank input to ``RERANK_CANDIDATE_MULTIPLIER`` x quota per bucket.
+
+    Room a short bucket leaves goes to the vector-best remaining hits of the
+    others, so the pool keeps the total width backfill could reach. Returns the
+    capped buckets and how many candidates the cap left out.
+    """
+    kept = [
+        found[: quota * RERANK_CANDIDATE_MULTIPLIER]
+        for (_, quota), found in zip(active, buckets, strict=True)
+    ]
+    rest = sorted(
+        (
+            (index, candidate)
+            for index, found in enumerate(buckets)
+            for candidate in found[len(kept[index]) :]
+        ),
+        key=lambda pair: _rank_key(pair[1]),
+        reverse=True,
+    )
+    room = sum(quota for _, quota in active) * RERANK_CANDIDATE_MULTIPLIER
+    room = max(0, room - sum(len(found) for found in kept))
+    for index, candidate in rest[:room]:
+        kept[index].append(candidate)
+    return kept, max(0, len(rest) - room)
+
+
+async def _rerank_groups(
+    service: Any,
+    reranker: Reranker,
+    query: str,
+    groups: Sequence[List[Candidate]],
+    score_threshold: Optional[float],
+) -> Tuple[List[List[Candidate]], Dict[str, Any]]:
+    """Rescore every group with one rerank call over their distinct candidates.
+
+    A model score replaces the candidate's score, keeping its other-peer
+    penalty, and meets the request threshold, else ``rerank.threshold``. A
+    candidate the model did not score keeps its vector score and meets only the
+    request threshold, which recall left to this step. Each group comes back
+    re-sorted, so quotas and the flat cut apply to the new order.
+    """
+    pool: Dict[str, Candidate] = {}
+    for group in groups:
+        for candidate in group:
+            pool.setdefault(candidate.uri, candidate)
+    # Skills are scored on their package abstract, so it is read here instead
+    # of after the cut.
+    unique = await _fill_skill_abstracts(service, list(pool.values()))
+    fallback = [candidate.score for candidate in unique]
+    try:
+        result = await reranker.score(query, [c.abstract for c in unique], fallback)
+    except Exception as exc:
+        logger.warning("Context rerank failed, keeping vector scores: %s", exc)
+        result = RerankScores(fallback, [False] * len(unique))
+
+    kept: Dict[str, Candidate] = {}
+    for candidate, score, from_model in zip(unique, result.scores, result.reranked, strict=True):
+        threshold = score_threshold
+        if threshold is None:
+            threshold = reranker.threshold if from_model else 0.0
+        if score > threshold:
+            penalty = candidate.score - candidate.ranked_score
+            kept[candidate.uri] = replace(candidate, score=score, ranked_score=score - penalty)
+    rescored = [
+        sorted((kept[c.uri] for c in group if c.uri in kept), key=_rank_key, reverse=True)
+        for group in groups
+    ]
+    return rescored, {"used": result.model_used, "candidates": len(unique)}
+
+
+def _rank_key(candidate: Candidate) -> Tuple[float, int]:
+    origin_rank = {origin: index for index, origin in enumerate(ORIGIN_ORDER)}
+    return (candidate.ranked_score, -origin_rank.get(candidate.origin, len(origin_rank)))
+
+
+def _dedupe_candidates(candidates: Sequence[Candidate]) -> List[Candidate]:
+    best: Dict[str, Candidate] = {}
+    order: List[str] = []
+    for candidate in candidates:
+        existing = best.get(candidate.base_uri)
+        if existing is None:
+            best[candidate.base_uri] = candidate
+            order.append(candidate.base_uri)
+        elif candidate.score > existing.score:
+            best[candidate.base_uri] = candidate
+    return [best[key] for key in order]

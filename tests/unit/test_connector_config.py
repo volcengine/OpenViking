@@ -1,0 +1,93 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+"""Focused tests for Connector configuration."""
+
+import pytest
+
+from openviking_cli.utils.config.open_viking_config import ConnectorConfig, OpenVikingConfig
+
+
+def test_connector_config_is_opt_in_and_tos_only_by_default():
+    config = ConnectorConfig()
+
+    assert config.enable is False
+    assert config.allowed_add_types == ["tos"]
+
+
+def test_connector_config_accepts_arbitrary_add_types():
+    config = ConnectorConfig(allowed_add_types=["tos", "git", "custom"])
+
+    assert config.allowed_add_types == ["tos", "git", "custom"]
+
+
+def test_openviking_config_parses_connector_section():
+    config = OpenVikingConfig.from_dict(
+        {
+            "connector": {
+                "enable": True,
+                "connector": "https://connector.example/doc/add",
+                "tracker": "https://connector.example/task/info",
+                "timeout_seconds": 120,
+                "poll_interval_ms": 250,
+                "allowed_add_types": ["tos"],
+            }
+        }
+    )
+
+    assert config.connector.model_dump() == {
+        "enable": True,
+        "connector": "https://connector.example/doc/add",
+        "tracker": "https://connector.example/task/info",
+        "auth": "",
+        "timeout_seconds": 120,
+        "poll_interval_ms": 250,
+        "allowed_add_types": ["tos"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"enable": True}, "connector.connector is required"),
+        (
+            {
+                "enable": True,
+                "connector": "connector.example/doc/add",
+                "tracker": "https://connector.example/task/info",
+            },
+            "must be a full endpoint URL",
+        ),
+        ({"timeout_seconds": 0}, "timeout_seconds must be > 0"),
+        ({"poll_interval_ms": 0}, "poll_interval_ms must be > 0"),
+        ({"auth": "file:///tmp/auth"}, "connector.auth must be"),
+        ({"auth": "https://user:secret@connector.example/auth"}, "connector.auth must be"),
+    ],
+)
+def test_connector_config_rejects_invalid_runtime_settings(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        ConnectorConfig(**kwargs)
+
+
+def test_connector_auth_does_not_enable_ingestion_delegation():
+    config = ConnectorConfig(auth=" https://connector.example/oauth/access_token ")
+    assert config.auth == "https://connector.example/oauth/access_token"
+    assert config.enable is False
+
+
+@pytest.mark.parametrize(
+    ("auth", "expected"),
+    [
+        (
+            "https://connector.example/api/v1/inner/connector/oauth/access_token",
+            "https://connector.example/api/v1/inner/connector/credential/resolve",
+        ),
+        (
+            "https://connector.example/api/v1/inner/connector/credential/resolve",
+            "https://connector.example/api/v1/inner/connector/credential/resolve",
+        ),
+        ("", ""),
+        ("https://connector.example/some/other/path", ""),
+    ],
+)
+def test_credential_resolve_url_is_derived_from_auth(auth, expected):
+    assert ConnectorConfig(auth=auth).credential_resolve_url() == expected

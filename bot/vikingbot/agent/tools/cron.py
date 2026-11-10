@@ -2,6 +2,7 @@
 
 from typing import TYPE_CHECKING, Any
 
+from openviking.utils.time_utils import parse_iso_datetime
 from vikingbot.agent.tools.base import Tool
 from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronSchedule
@@ -47,6 +48,12 @@ class CronTool(Tool):
                     "type": "string",
                     "description": "Cron expression like '0 9 * * *' (for scheduled tasks)",
                 },
+                "timezone": {
+                    "type": "string",
+                    "description": (
+                        "IANA timezone for cron expressions, for example Asia/Shanghai"
+                    ),
+                },
                 "at": {
                     "type": "string",
                     "description": "ISO datetime for one-time execution (e.g. '2026-02-12T10:30:00')",
@@ -64,6 +71,7 @@ class CronTool(Tool):
         message: str = "",
         every_seconds: int | None = None,
         cron_expr: str | None = None,
+        timezone: str | None = None,
         at: str | None = None,
         job_id: str | None = None,
         **kwargs: Any,
@@ -74,6 +82,7 @@ class CronTool(Tool):
                 message,
                 every_seconds,
                 cron_expr,
+                timezone,
                 at,
                 tool_context.session_key,
                 self._delivery_metadata(getattr(tool_context, "channel_metadata", None)),
@@ -90,38 +99,45 @@ class CronTool(Tool):
         message: str,
         every_seconds: int | None,
         cron_expr: str | None,
+        timezone: str | None,
         at: str | None,
         session_key: "SessionKey",
         channel_metadata: dict[str, Any] | None = None,
     ) -> str:
         if not message:
             return "Error: message is required for add"
+        if timezone and not cron_expr:
+            return "Error: timezone is only supported with cron_expr"
 
         # Build schedule
         delete_after = False
         if every_seconds:
             schedule = CronSchedule(kind="every", every_ms=every_seconds * 1000)
         elif cron_expr:
-            schedule = CronSchedule(kind="cron", expr=cron_expr)
+            schedule = CronSchedule(kind="cron", expr=cron_expr, tz=timezone)
         elif at:
-            from datetime import datetime
-
-            dt = datetime.fromisoformat(at)
+            try:
+                dt = parse_iso_datetime(at)
+            except ValueError as e:
+                return f"Error: invalid at datetime: {e}"
             at_ms = int(dt.timestamp() * 1000)
             schedule = CronSchedule(kind="at", at_ms=at_ms)
             delete_after = True
         else:
             return "Error: either every_seconds, cron_expr, or at is required"
 
-        job = self._cron.add_job(
-            name=name,
-            schedule=schedule,
-            message=message,
-            deliver=True,
-            session_key=session_key,
-            channel_metadata=channel_metadata,
-            delete_after_run=delete_after,
-        )
+        try:
+            job = self._cron.add_job(
+                name=name,
+                schedule=schedule,
+                message=message,
+                deliver=True,
+                session_key=session_key,
+                channel_metadata=channel_metadata,
+                delete_after_run=delete_after,
+            )
+        except ValueError as e:
+            return f"Error: {e}"
         return f"Created job '{job.name}' (id: {job.id})"
 
     def _delivery_metadata(self, metadata: dict[str, Any] | None) -> dict[str, Any]:

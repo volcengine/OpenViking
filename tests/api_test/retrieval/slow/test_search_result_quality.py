@@ -214,7 +214,7 @@ class TestSearchResultQuality:
                 assert match["line"] >= 1, f"line number should be >= 1, got {match['line']}"
 
     def test_glob_result_structure(self, api_client):
-        glob_resp = api_client.glob(pattern="*", uri="viking://resources/")
+        glob_resp = api_client.glob(pattern="**/*", uri="viking://resources/")
         assert glob_resp.status_code == 200, f"glob should return 200, got {glob_resp.status_code}"
         data = glob_resp.json()
         assert data.get("status") == "ok"
@@ -242,7 +242,7 @@ class TestSearchResultQuality:
             if add_resp.status_code != 200:
                 return
 
-            glob_resp = api_client.glob(pattern=f"*{unique_name}*", uri="viking://resources/")
+            glob_resp = api_client.glob(pattern=f"**/*{unique_name}*", uri="viking://resources/")
             if glob_resp.status_code == 200:
                 matches = glob_resp.json().get("result", {}).get("matches", [])
                 assert len(matches) >= 1, (
@@ -277,7 +277,7 @@ class TestSearchResultQuality:
         )
 
     def test_glob_nonexistent_uri(self, api_client):
-        glob_resp = api_client.glob(pattern="*", uri="viking://resources/nonexistent_glob_uri")
+        glob_resp = api_client.glob(pattern="**/*", uri="viking://resources/nonexistent_glob_uri")
         assert glob_resp.status_code == 404, (
             f"glob on nonexistent URI should return 200/404/500, got {glob_resp.status_code}"
         )

@@ -1,9 +1,13 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 #include "index/detail/index_manager_impl.h"
+#include <algorithm>
+#include <cmath>
+#include <numeric>
 #include <stdexcept>
 #include <memory>
 #include <chrono>
+#include <limits>
 #include <thread>
 #include "spdlog/spdlog.h"
 #include "common/ann_utils.h"
@@ -17,23 +21,26 @@ namespace vectordb {
 const std::string kMetaFile = "manager_meta.json";
 const std::string kVectorIndexDir = "vector_index";
 const std::string kScalarIndexDir = "scalar_index";
+constexpr size_t kFilterTokenCacheCapacity = 32;
+constexpr uint64_t kFilterLayoutInverseMaxSpanFactor = 4;
+constexpr uint32_t kMissingFilterLayoutOffset =
+    std::numeric_limits<uint32_t>::max();
 
-IndexManagerImpl::IndexManagerImpl(const std::string& path_or_json) {
-  int ret = 0;
+IndexManagerImpl::IndexManagerImpl(const std::string& path_or_json,
+                                   bool normalize_vector) {
   std::filesystem::path dir(path_or_json);
   std::error_code ec;
   if (std::filesystem::exists(dir, ec)) {
     load_from_path(dir);
-    return;
-  }
-
-  JsonDoc json;
-  json.Parse(path_or_json.c_str());
-  if (!json.HasParseError()) {
+  } else {
+    JsonDoc json;
+    json.Parse(path_or_json.c_str());
+    if (json.HasParseError()) {
+      return;
+    }
     init_from_json(json);
-    return;
   }
-  return;
+  manager_meta_->vector_index_meta->normalize_vector = normalize_vector;
 }
 
 void IndexManagerImpl::init_from_json(const JsonDoc& json) {
@@ -203,6 +210,250 @@ int IndexManagerImpl::search(const SearchRequest& req, SearchResult& result) {
   return ret;
 }
 
+int IndexManagerImpl::search_with_filter_token(const SearchRequest& req,
+                                               uint64_t filter_token,
+                                               SearchResult& result,
+                                               bool& token_found) {
+  token_found = false;
+  if (filter_token == 0 || req.query.empty()) {
+    return 0;
+  }
+
+  std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+  BitmapPtr bitmap;
+  {
+    std::lock_guard<std::mutex> token_lock(filter_token_mutex_);
+    const auto it = filter_token_cache_.find(filter_token);
+    if (it == filter_token_cache_.end()) {
+      return 0;
+    }
+    bitmap = it->second;
+  }
+
+  token_found = true;
+  SearchContext ctx;
+  return perform_vector_recall(req, ctx, bitmap, result);
+}
+
+int IndexManagerImpl::set_filter_layout(
+    const std::vector<uint64_t>& ordered_labels) {
+  std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+  clear_filter_layout_();
+  filter_layout_offsets_.reserve(ordered_labels.size());
+  uint64_t valid_offset_count = 0;
+  uint32_t min_offset = kMissingFilterLayoutOffset;
+  uint32_t max_offset = 0;
+  for (const uint64_t label : ordered_labels) {
+    const int offset = vector_index_->get_offset_by_label(label);
+    if (offset < 0) {
+      filter_layout_offsets_.push_back(kMissingFilterLayoutOffset);
+      continue;
+    }
+    const auto logical_offset = static_cast<uint32_t>(offset);
+    filter_layout_offsets_.push_back(logical_offset);
+    ++valid_offset_count;
+    min_offset = std::min(min_offset, logical_offset);
+    max_offset = std::max(max_offset, logical_offset);
+  }
+
+  if (valid_offset_count == 0) {
+    return 0;
+  }
+  const uint64_t inverse_span =
+      static_cast<uint64_t>(max_offset) - min_offset + 1;
+  if (inverse_span >
+      kFilterLayoutInverseMaxSpanFactor * valid_offset_count) {
+    return 0;
+  }
+
+  filter_layout_rows_by_offset_.assign(
+      static_cast<size_t>(inverse_span), kMissingFilterLayoutOffset);
+  for (size_t row = 0; row < filter_layout_offsets_.size(); ++row) {
+    const uint32_t offset = filter_layout_offsets_[row];
+    if (offset == kMissingFilterLayoutOffset) {
+      continue;
+    }
+    const size_t inverse_row = static_cast<size_t>(offset - min_offset);
+    if (filter_layout_rows_by_offset_[inverse_row] !=
+        kMissingFilterLayoutOffset) {
+      filter_layout_rows_by_offset_.clear();
+      return 0;
+    }
+    filter_layout_rows_by_offset_[inverse_row] = static_cast<uint32_t>(row);
+  }
+  filter_layout_inverse_base_ = min_offset;
+  filter_layout_inverse_ready_ = true;
+  return 0;
+}
+
+int IndexManagerImpl::evaluate_filter(const std::string& dsl,
+                                      uint64_t max_cached_candidates,
+                                      FilterResult& result) {
+  SearchContext ctx;
+  if (int ret = parse_dsl_query(dsl, ctx); ret != 0) {
+    SPDLOG_ERROR("IndexManagerImpl::evaluate_filter [{}] parse failed", dsl);
+    return ret;
+  }
+
+  std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+  BitmapPtr bitmap = nullptr;
+  if (ctx.filter_op) {
+    bitmap = calculate_filter_bitmap(ctx, dsl);
+    if (!bitmap) {
+      SPDLOG_DEBUG(
+          "IndexManagerImpl::evaluate_filter calculate_filter_bitmap returned null");
+      return -1;
+    }
+  }
+
+  result.eligible_count = 0;
+  result.bitset_words.assign((filter_layout_offsets_.size() + 31) / 32, 0);
+  for (size_t row = 0; row < filter_layout_offsets_.size(); ++row) {
+    const uint32_t offset = filter_layout_offsets_[row];
+    const bool eligible = offset != std::numeric_limits<uint32_t>::max() &&
+                          (!bitmap || bitmap->Isset(offset));
+    if (!eligible) {
+      continue;
+    }
+    result.bitset_words[row / 32] |=
+        static_cast<uint32_t>(1U << (row % 32));
+    ++result.eligible_count;
+  }
+  if (bitmap && result.eligible_count > 0 &&
+      result.eligible_count <= max_cached_candidates) {
+    result.native_filter_token = cache_filter_bitmap_(bitmap);
+  }
+  return 0;
+}
+
+int IndexManagerImpl::evaluate_filter_for_routing(
+    const std::string& dsl, uint64_t native_threshold,
+    FilterResult& result) {
+  if (native_threshold == 0) {
+    return evaluate_filter(dsl, 0, result);
+  }
+
+  SearchContext ctx;
+  if (int ret = parse_dsl_query(dsl, ctx); ret != 0) {
+    SPDLOG_ERROR(
+        "IndexManagerImpl::evaluate_filter_for_routing [{}] parse failed",
+        dsl);
+    return ret;
+  }
+
+  std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+  BitmapPtr bitmap = nullptr;
+  if (ctx.filter_op) {
+    bitmap = calculate_filter_bitmap(ctx, dsl);
+    if (!bitmap) {
+      SPDLOG_DEBUG(
+          "IndexManagerImpl::evaluate_filter_for_routing "
+          "calculate_filter_bitmap returned null");
+      return -1;
+    }
+  }
+
+  result.eligible_count = 0;
+  result.bitset_words.clear();
+  result.native_filter_token = 0;
+
+  // A selective scalar bitmap can be projected through the inverse layout in
+  // O(bitmap cardinality), without scanning every external dense-index row.
+  if (bitmap && filter_layout_inverse_ready_ &&
+      bitmap->nbit() <= native_threshold) {
+    std::vector<uint32_t> eligible_offsets;
+    bitmap->get_set_list(eligible_offsets);
+    for (const uint32_t offset : eligible_offsets) {
+      if (offset < filter_layout_inverse_base_) {
+        continue;
+      }
+      const uint64_t inverse_row =
+          static_cast<uint64_t>(offset) - filter_layout_inverse_base_;
+      if (inverse_row >= filter_layout_rows_by_offset_.size() ||
+          filter_layout_rows_by_offset_[inverse_row] ==
+              kMissingFilterLayoutOffset) {
+        continue;
+      }
+      ++result.eligible_count;
+    }
+    if (result.eligible_count > 0) {
+      result.native_filter_token = cache_filter_bitmap_(bitmap);
+    }
+    return 0;
+  }
+
+  // Keep at most threshold + 1 row ids while counting. If the filter is wide,
+  // allocate the full projection only after the route decision is known.
+  std::vector<uint32_t> narrow_rows;
+  const bool cannot_exceed_threshold =
+      native_threshold >= filter_layout_offsets_.size();
+  if (!cannot_exceed_threshold) {
+    narrow_rows.reserve(static_cast<size_t>(native_threshold + 1));
+  }
+  for (size_t row = 0; row < filter_layout_offsets_.size(); ++row) {
+    const uint32_t offset = filter_layout_offsets_[row];
+    const bool eligible = offset != kMissingFilterLayoutOffset &&
+                          (!bitmap || bitmap->Isset(offset));
+    if (!eligible) {
+      continue;
+    }
+    ++result.eligible_count;
+    if (cannot_exceed_threshold) {
+      continue;
+    }
+    if (result.bitset_words.empty()) {
+      narrow_rows.push_back(static_cast<uint32_t>(row));
+      if (result.eligible_count <= native_threshold) {
+        continue;
+      }
+      result.bitset_words.assign((filter_layout_offsets_.size() + 31) / 32,
+                                 0);
+      for (const uint32_t narrow_row : narrow_rows) {
+        result.bitset_words[narrow_row / 32] |=
+            static_cast<uint32_t>(1U << (narrow_row % 32));
+      }
+      narrow_rows.clear();
+      continue;
+    }
+    result.bitset_words[row / 32] |=
+        static_cast<uint32_t>(1U << (row % 32));
+  }
+
+  if (bitmap && result.eligible_count > 0 &&
+      result.eligible_count <= native_threshold) {
+    result.native_filter_token = cache_filter_bitmap_(bitmap);
+  }
+  return 0;
+}
+
+uint64_t IndexManagerImpl::cache_filter_bitmap_(const BitmapPtr& bitmap) {
+  std::lock_guard<std::mutex> lock(filter_token_mutex_);
+  uint64_t token = next_filter_token_++;
+  if (token == 0) {
+    token = next_filter_token_++;
+  }
+  filter_token_cache_[token] = bitmap;
+  filter_token_order_.push_back(token);
+  while (filter_token_order_.size() > kFilterTokenCacheCapacity) {
+    filter_token_cache_.erase(filter_token_order_.front());
+    filter_token_order_.pop_front();
+  }
+  return token;
+}
+
+void IndexManagerImpl::clear_filter_token_cache_() {
+  std::lock_guard<std::mutex> lock(filter_token_mutex_);
+  filter_token_cache_.clear();
+  filter_token_order_.clear();
+}
+
+void IndexManagerImpl::clear_filter_layout_() {
+  filter_layout_offsets_.clear();
+  filter_layout_rows_by_offset_.clear();
+  filter_layout_inverse_base_ = 0;
+  filter_layout_inverse_ready_ = false;
+}
+
 BitmapPtr IndexManagerImpl::calculate_filter_bitmap(const SearchContext& ctx,
                                                     const std::string& dsl) {
   auto bitmap = ctx.filter_op->calc_bitmap(scalar_index_->get_field_sets(),
@@ -258,9 +509,32 @@ int IndexManagerImpl::perform_vector_recall(const SearchRequest& req,
                                             SearchContext& ctx,
                                             const BitmapPtr& bitmap,
                                             SearchResult& result) {
+  JsonDoc decay;
+  const bool apply_decay = !req.time_decay.empty();
+  if (apply_decay) {
+    decay.Parse(req.time_decay.c_str());
+    if (decay.HasParseError() || !decay.IsObject() ||
+        !decay.HasMember("field") || !decay["field"].IsString()) {
+      throw std::invalid_argument("invalid time-decay field");
+    }
+    for (const auto* key : {"origin_ms", "offset_ms", "scale_ms", "decay"}) {
+      if (!decay.HasMember(key) || !decay[key].IsNumber() ||
+          !std::isfinite(decay[key].GetDouble())) {
+        throw std::invalid_argument("invalid time-decay numeric parameter");
+      }
+    }
+    if (decay["offset_ms"].GetDouble() < 0 ||
+        decay["scale_ms"].GetDouble() <= 0 ||
+        decay["decay"].GetDouble() <= 0 || decay["decay"].GetDouble() >= 1 ||
+        req.topk > 100000) {
+      throw std::invalid_argument("invalid time-decay range or topk");
+    }
+  }
+  // The native recall owns candidate amplification; callers receive only topk.
+  const uint32_t recall_topk = apply_decay ? std::min(req.topk * 3u, 100000u) : req.topk;
   VectorRecallRequest recall_request{
       .dense_vector = req.query.data(),
-      .topk = req.topk,
+      .topk = recall_topk,
       .bitmap = bitmap.get(),
       .sparse_terms =
           req.sparse_raw_terms.empty() ? nullptr : &req.sparse_raw_terms,
@@ -274,8 +548,46 @@ int IndexManagerImpl::perform_vector_recall(const SearchRequest& req,
     return ret;
   }
 
-  std::swap(result.labels, recall_result.labels);
-  std::swap(result.scores, recall_result.scores);
+  if (!apply_decay) {
+    std::swap(result.labels, recall_result.labels);
+    std::swap(result.scores, recall_result.scores);
+    return 0;
+  }
+  const auto time_values = scalar_index_->get_field_sets()->get_rangedmap_ptr(
+      decay["field"].GetString());
+  const double origin = decay["origin_ms"].GetDouble();
+  const double protection = decay["offset_ms"].GetDouble();
+  const double rate = std::log(decay["decay"].GetDouble()) / decay["scale_ms"].GetDouble();
+  std::vector<float> fused = recall_result.scores;
+  std::vector<double> time_scores(fused.size(), std::numeric_limits<double>::quiet_NaN());
+  for (size_t i = 0; i < fused.size(); ++i) {
+    const int offset = vector_index_->get_offset_by_label(recall_result.labels[i]);
+    if (!time_values || offset < 0 || static_cast<uint32_t>(offset) >= time_values->size()) continue;
+    const double updated = time_values->get_score_by_offset(offset);
+    if (!std::isfinite(updated)) continue;
+    time_scores[i] = std::exp(rate * std::max(0.0, std::abs(origin - updated) - protection));
+    fused[i] *= time_scores[i];
+  }
+  std::vector<size_t> order(fused.size());
+  std::iota(order.begin(), order.end(), 0);
+  std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+    return fused[a] > fused[b];
+  });
+  order.resize(std::min(order.size(), static_cast<size_t>(req.topk)));
+  JsonDoc details;
+  details.SetObject();
+  auto& allocator = details.GetAllocator();
+  for (const size_t i : order) {
+    result.labels.push_back(recall_result.labels[i]);
+    result.scores.push_back(fused[i]);
+    rapidjson::Value detail(rapidjson::kObjectType);
+    detail.AddMember("origin_score", recall_result.scores[i], allocator);
+    if (std::isfinite(time_scores[i])) detail.AddMember("addition_score", time_scores[i], allocator);
+    const auto label = std::to_string(recall_result.labels[i]);
+    rapidjson::Value key(label.c_str(), allocator);
+    details.AddMember(key, detail, allocator);
+  }
+  result.extra_json = json_stringify(details);
   return 0;
 }
 
@@ -313,6 +625,8 @@ int IndexManagerImpl::add_data(const std::vector<AddDataRequest>& data_list) {
                                 parsed_old_fields_list[i]);
   }
   if (has_update) {
+    clear_filter_layout_();
+    clear_filter_token_cache_();
     auto duration = std::chrono::system_clock::now().time_since_epoch();
     manager_meta_->update_timestamp =
         std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
@@ -355,6 +669,8 @@ int IndexManagerImpl::delete_data(
     vector_index_->stream_delete_data(data.label);
   }
   if (has_update) {
+    clear_filter_layout_();
+    clear_filter_token_cache_();
     auto duration = std::chrono::system_clock::now().time_since_epoch();
     manager_meta_->update_timestamp =
         std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
@@ -366,6 +682,59 @@ int IndexManagerImpl::delete_data(
   SPDLOG_DEBUG(
       "IndexManagerImpl::delete_data finish, batch size: {}, cost: {}us",
       data_list.size(), duration_us);
+  return 0;
+}
+
+int IndexManagerImpl::rebuild_scalar_index(
+    const std::string& scalar_index_json,
+    const std::function<bool(std::vector<AddDataRequest>&)>& read_batch) {
+  JsonDoc scalar_index_doc;
+  scalar_index_doc.Parse(scalar_index_json.c_str());
+  if (scalar_index_doc.HasParseError() || !scalar_index_doc.IsArray()) {
+    throw std::invalid_argument("Invalid scalar index metadata");
+  }
+
+  auto next_meta = std::make_shared<ScalarIndexMeta>();
+  if (next_meta->init_from_json(scalar_index_doc) != 0) {
+    throw std::invalid_argument("Invalid scalar index metadata");
+  }
+
+  auto next_scalar_index = std::make_shared<ScalarIndex>(next_meta);
+  std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+  std::vector<AddDataRequest> batch;
+  while (read_batch(batch)) {
+    for (const auto& data : batch) {
+      FieldsDict fields;
+      if (fields.parse_from_json(data.fields_str) != 0) {
+        throw std::runtime_error(
+            "Failed to parse scalar fields for label=" +
+            std::to_string(data.label));
+      }
+      const int offset = vector_index_->get_offset_by_label(data.label);
+      if (offset < 0) {
+        SPDLOG_WARN("IndexManagerImpl::rebuild_scalar_index label={} not found",
+                    data.label);
+        continue;
+      }
+      if (next_scalar_index->add_row_data(offset, fields, FieldsDict{}) != 0) {
+        throw std::runtime_error(
+            "Failed to rebuild scalar fields for label=" +
+            std::to_string(data.label));
+      }
+    }
+    batch.clear();
+  }
+
+  scalar_index_ = std::move(next_scalar_index);
+  manager_meta_->scalar_index_meta = std::move(next_meta);
+  register_label_offset_converter_();
+  clear_filter_layout_();
+  clear_filter_token_cache_();
+  const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
+  manager_meta_->update_timestamp = std::max(
+      manager_meta_->update_timestamp + 1, static_cast<uint64_t>(now));
   return 0;
 }
 

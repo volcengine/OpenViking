@@ -9,9 +9,9 @@ from typing import Optional
 
 from fastapi import Request
 
-from openviking.server.api_keys import APIKeyManager
 from openviking.server.auth.plugin import AuthPlugin
 from openviking.server.identity import ResolvedIdentity, Role
+from openviking.server.store_assembly import build_api_key_manager
 from openviking_cli.exceptions import PermissionDeniedError, UnauthenticatedError
 
 _API_KEY_ROOT_ALLOWED_PATHS = {
@@ -24,8 +24,6 @@ _API_KEY_ROOT_ALLOWED_PREFIXES = (
     "/api/v1/observer",
     "/api/v1/console",
     "/api/v1/tasks",
-    "/api/v1/system/backend",
-    "/api/v1/system/sync",
 )
 
 
@@ -50,12 +48,15 @@ def _remove_header(request: Request, name: bytes) -> None:
 
 
 class ApiKeyAuthPlugin(AuthPlugin):
-    """API key mode: resolve identity via APIKeyManager.
+    """Compose credential verification and local identity resolution.
 
     Supports OAuth bearer tokens layered on top of API keys.
     """
 
     auth_mode = "api_key"
+
+    def __init__(self) -> None:
+        self._api_key_manager = None
 
     async def resolve_identity(
         self,
@@ -65,9 +66,7 @@ class ApiKeyAuthPlugin(AuthPlugin):
         x_openviking_account: Optional[str] = None,
         x_openviking_user: Optional[str] = None,
     ) -> ResolvedIdentity:
-        api_key_manager = getattr(request.app.state, "api_key_manager", None)
-        if api_key_manager is None:
-            raise RuntimeError("api_key_manager not initialized in api_key mode")
+        manager = request.app.state.api_key_manager
 
         if not api_key:
             raise UnauthenticatedError("Missing API Key when resolving identity.")
@@ -82,7 +81,7 @@ class ApiKeyAuthPlugin(AuthPlugin):
         if oauth_identity is not None:
             return oauth_identity
 
-        identity = api_key_manager.resolve(api_key)
+        identity = await manager.resolve_identity(api_key)
         identity.account_id = identity.account_id or "default"
         identity.user_id = identity.user_id or "default"
 
@@ -125,35 +124,22 @@ class ApiKeyAuthPlugin(AuthPlugin):
 
         import hmac
 
-        api_key_manager = getattr(request.app.state, "api_key_manager", None)
         recorded_fp = record.authorizing_key_fp
-        current_fp: Optional[str] = None
-        if api_key_manager is not None and hasattr(api_key_manager, "get_user_key_fingerprint"):
-            current_fp = api_key_manager.get_user_key_fingerprint(record.account_id, record.user_id)
+        manager = request.app.state.api_key_manager
+        current_fp = await manager.get_user_key_fingerprint(
+            record.account_id, record.user_id
+        )
         if not recorded_fp or not current_fp or not hmac.compare_digest(recorded_fp, current_fp):
             raise UnauthenticatedError(
                 "OAuth token's authorizing API key has been rotated or revoked; "
                 "please re-authorize the client."
             )
 
-        role = Role(record.role)
-
-        # Role downgrade protection
-        if api_key_manager is not None and hasattr(api_key_manager, "get_user_role"):
-            try:
-                current_role = Role(
-                    api_key_manager.get_user_role(record.account_id, record.user_id)
-                )
-            except Exception:
-                raise UnauthenticatedError(
-                    "OAuth token validation failed: unable to verify user's current role; "
-                    "please re-authorize the client."
-                )
-            if role.rank > current_role.rank:
-                raise UnauthenticatedError(
-                    "OAuth token's embedded role exceeds the user's current role; "
-                    "please re-authorize the client."
-                )
+        identity = await manager.resolve_oauth_identity(
+            record.account_id,
+            record.user_id,
+            Role(record.role),
+        )
 
         # Silently ignore identity assertion headers in api_key mode.
         if x_openviking_account:
@@ -161,12 +147,7 @@ class ApiKeyAuthPlugin(AuthPlugin):
         if x_openviking_user:
             _remove_header(request, b"x-openviking-user")
 
-        return ResolvedIdentity(
-            role=role,
-            account_id=record.account_id,
-            user_id=record.user_id,
-            from_oauth=True,
-        )
+        return identity
 
     def validate_config(self, config) -> None:
         if config.root_api_key and config.root_api_key != "":
@@ -196,13 +177,28 @@ class ApiKeyAuthPlugin(AuthPlugin):
     async def initialize(self, app, service, config) -> None:
         if not config.root_api_key or config.root_api_key == "":
             raise RuntimeError("api_key mode requires root_api_key")
-        api_key_manager = APIKeyManager(
+        manager = build_api_key_manager(
             root_key=config.root_api_key,
             viking_fs=service.viking_fs,
             api_key_hashing_enabled=config.api_key_hashing_enabled,
+            service_name=app.state.service_name,
+            account_store_provider=config.account_store.provider,
+            account_store_params=config.account_store.params,
+            account_store_watch_enabled=config.api_key_watch_enabled,
+            account_store_watch_interval_seconds=config.api_key_watch_interval_seconds,
+            issue_user_keys=True,
         )
-        await api_key_manager.load()
-        app.state.api_key_manager = api_key_manager
+        await manager.load()
+        self._api_key_manager = manager
+        app.state.api_key_manager = manager
+
+    async def shutdown(self) -> None:
+        manager = getattr(self, "_api_key_manager", None)
+        try:
+            if manager is not None:
+                await manager.close()
+        finally:
+            self._api_key_manager = None
 
     def get_request_context_checks(
         self,

@@ -83,6 +83,10 @@ class ImageGenerationTool(Tool):
             "required": [],
         }
 
+    @property
+    def resource_inputs(self) -> dict[str, str]:
+        return {"base_image": "local_file", "mask": "local_file"}
+
     def __init__(
         self,
         gen_image_model: str | None = None,

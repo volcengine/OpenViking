@@ -72,6 +72,7 @@ class ChannelManager:
                     channel_config,
                     self.bus,
                     workspace_path=workspace_path,
+                    bot_config=additional_deps.get("bot_config"),
                 )
 
             elif channel_config.type == ChannelType.DISCORD:
@@ -161,9 +162,7 @@ class ChannelManager:
             self.add_channel_from_config(
                 channel_config,
                 workspace_path=workspace_path,
-                groq_api_key=config.providers.groq.api_key
-                if hasattr(config.providers, "groq")
-                else None,
+                bot_config=config,
             )
 
     async def _start_channel(self, name: str, channel: BaseChannel) -> None:
@@ -190,26 +189,6 @@ class ChannelManager:
 
         # Wait for all to complete (they should run forever)
         await asyncio.gather(*tasks, return_exceptions=True)
-
-    async def stop_all(self) -> None:
-        """Stop all channels and the dispatcher."""
-        logger.info("Stopping all channels...")
-
-        # Stop dispatcher
-        if self._dispatch_task:
-            self._dispatch_task.cancel()
-            try:
-                await self._dispatch_task
-            except asyncio.CancelledError:
-                pass
-
-        # Stop all channels
-        for name, channel in self.channels.items():
-            try:
-                await channel.stop()
-                logger.info(f"Stopped {name} channel")
-            except Exception as e:
-                logger.exception(f"Error stopping {name}: {e}")
 
     async def _dispatch_outbound(self) -> None:
         """Dispatch outbound messages to the appropriate channel."""

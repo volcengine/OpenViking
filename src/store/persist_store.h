@@ -30,6 +30,10 @@ class PersistStore : public KVStore {
   std::vector<std::pair<std::string, std::string>> seek_range(
       const std::string& start_key, const std::string& end_key) override;
 
+  std::vector<std::pair<std::string, std::string>> seek_range_page(
+      const std::string& start_key, const std::string& end_key, size_t limit,
+      size_t max_bytes, bool start_exclusive) override;
+
  private:
   leveldb::DB* db_ = nullptr;
 };

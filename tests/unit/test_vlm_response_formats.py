@@ -6,7 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from openviking.models.vlm.base import VLMBase
+from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
+from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
+from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM
+from openviking.models.vlm.base import VLMBase, VLMResponse
+from openviking.telemetry import OperationTelemetry, bind_telemetry
 
 
 class TestVLMBaseResponseFormats:
@@ -57,3 +61,153 @@ class TestVLMBaseResponseFormats:
             choices=[SimpleNamespace(message=SimpleNamespace(content="standard response content"))]
         )
         assert vlm._extract_content_from_response(response) == "standard response content"
+
+
+@pytest.mark.parametrize(
+    ("vlm_type", "config"),
+    [
+        (OpenAIVLM, {"provider": "openai", "model": "gpt-5.6-terra"}),
+        (LiteLLMVLMProvider, {"provider": "litellm", "model": "gpt-5.6-terra"}),
+        (VolcEngineVLM, {"provider": "volcengine", "model": "test-model"}),
+    ],
+    ids=["openai", "litellm", "volcengine"],
+)
+def test_build_vlm_response_from_str_with_tools(vlm_type, config):
+    vlm = vlm_type(config)
+    response = vlm._build_vlm_response("plain string response", has_tools=True)
+
+    assert isinstance(response, VLMResponse)
+    assert response.content == "plain string response"
+    assert response.tool_calls == []
+    assert response.finish_reason == "stop"
+    assert response.usage == {}
+
+
+@pytest.mark.parametrize(
+    ("vlm_type", "config"),
+    [
+        (OpenAIVLM, {"provider": "openai", "model": "gpt-5.6-terra"}),
+        (LiteLLMVLMProvider, {"provider": "litellm", "model": "gpt-5.6-terra"}),
+        (VolcEngineVLM, {"provider": "volcengine", "model": "test-model"}),
+    ],
+    ids=["openai", "litellm", "volcengine"],
+)
+def test_text_request_drops_empty_assistant_but_preserves_tool_only_turn(vlm_type, config):
+    vlm = vlm_type(config)
+    tool_call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {"name": "read", "arguments": "{}"},
+    }
+    messages = [
+        {"role": "user", "content": "start"},
+        {"role": "assistant", "content": None},
+        {"role": "assistant", "content": "   "},
+        {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+        {"role": "tool", "tool_call_id": "call-1", "content": "ok"},
+    ]
+
+    kwargs = vlm._build_text_kwargs(messages=messages)
+
+    assert kwargs["messages"] == [messages[0], messages[3], messages[4]]
+    assert messages[1] == {"role": "assistant", "content": None}
+
+
+@pytest.mark.asyncio
+async def test_openai_async_completion_from_str_with_tools(monkeypatch):
+    async def create(**_kwargs):
+        return "plain string response"
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+    )
+    vlm = OpenAIVLM({"provider": "openai", "model": "gpt-5.6-terra"})
+    monkeypatch.setattr(vlm, "get_async_client", lambda: client)
+
+    response = await vlm.get_completion_async(
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "test_tool",
+                    "description": "A test tool",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+    )
+
+    assert isinstance(response, VLMResponse)
+    assert response.content == "plain string response"
+    assert response.tool_calls == []
+    assert response.finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
+    "vlm_type,provider",
+    [(OpenAIVLM, "openai"), (VolcEngineVLM, "volcengine"), (LiteLLMVLMProvider, "litellm")],
+)
+@pytest.mark.parametrize("details", ["missing", "empty", "populated"])
+@pytest.mark.asyncio
+async def test_async_completion_with_empty_tools_preserves_usage(
+    monkeypatch, vlm_type, provider, details
+):
+    prompt_details = SimpleNamespace(cached_tokens=5) if details == "populated" else None
+    completion_details = SimpleNamespace(reasoning_tokens=2) if details == "populated" else None
+    usage = SimpleNamespace(prompt_tokens=11, completion_tokens=4, total_tokens=15)
+    if details != "missing":
+        usage.prompt_tokens_details = prompt_details
+        usage.completion_tokens_details = completion_details
+    raw_response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="plain response", tool_calls=None),
+                finish_reason="stop",
+            )
+        ],
+        usage=usage,
+    )
+
+    async def create(**kwargs):
+        assert "tools" not in kwargs
+        return raw_response
+
+    async def post(path, *, body, **_kwargs):
+        assert path == "/chat/completions"
+        assert "temperature" not in body
+        return await create(**body)
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+        post=post,
+    )
+    vlm = vlm_type({"provider": provider, "model": "test-model"})
+    if provider == "litellm":
+        monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.acompletion", create)
+    else:
+        monkeypatch.setattr(vlm, "get_async_client", lambda: client)
+
+    telemetry = OperationTelemetry("vlm-response", enabled=True)
+    with bind_telemetry(telemetry):
+        response = await vlm.get_completion_async(
+            messages=[{"role": "user", "content": "hello"}],
+            tools=[],
+        )
+
+    assert isinstance(response, VLMResponse)
+    assert response.content == "plain response"
+    assert response.tool_calls == []
+    assert response.finish_reason == "stop"
+    assert response.usage == {
+        "prompt_tokens": 11,
+        "completion_tokens": 4,
+        "total_tokens": 15,
+        "prompt_tokens_details": prompt_details,
+        "completion_tokens_details": completion_details,
+    }
+
+    tokens = telemetry.finish().summary["tokens"]["llm"]
+    assert tokens["input"] == 11 and tokens["output"] == 4 and tokens["total"] == 15
+    assert tokens.get("prompt_cached", 0) == (5 if details == "populated" else 0)
+    assert tokens.get("completion_reasoning", 0) == (2 if details == "populated" else 0)

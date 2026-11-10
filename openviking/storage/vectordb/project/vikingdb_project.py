@@ -13,47 +13,6 @@ from openviking.storage.vectordb.collection.vikingdb_clients import (
 from openviking_cli.utils.logger import default_logger as logger
 
 
-def get_or_create_vikingdb_project(
-    project_name: str = "default", config: Optional[Dict[str, Any]] = None
-):
-    """
-    Get or create a VikingDB project for private deployment.
-
-    Args:
-        project_name: Project name
-        config: Configuration dict with keys:
-            - Host: VikingDB service host
-            - Headers: Custom headers for authentication/context
-            - CollectionClass: Class path for collection implementation
-            - CollectionArgs: Optional dictionary of arguments to pass to collection constructor
-
-    Returns:
-        VikingDBProject instance
-    """
-    if config is None:
-        raise ValueError("config is required")
-
-    host = config.get("Host")
-    headers = config.get("Headers")
-    collection_class_path = config.get(
-        "CollectionClass",
-        "openviking.storage.vectordb.collection.vikingdb_collection.VikingDBCollection",
-    )
-    # Extract any other arguments that might be needed for collection initialization
-    collection_args = config.get("CollectionArgs", {})
-
-    if not host:
-        raise ValueError("config must contain 'Host'")
-
-    return VikingDBProject(
-        host=host,
-        headers=headers,
-        project_name=project_name,
-        collection_class_path=collection_class_path,
-        collection_args=collection_args,
-    )
-
-
 class VikingDBProject:
     """
     VikingDB project class for private deployment.
@@ -85,6 +44,10 @@ class VikingDBProject:
         self.CollectionClass = load_collection_class(self.collection_class_path)
         self.collection_args = collection_args or {}
 
+        # One long-lived client shared by all metadata calls so its pooled
+        # keep-alive session is reused instead of rebuilt per request.
+        self._client = VikingDBClient(self.host, self.headers)
+
         logger.info(
             f"Initialized VikingDB project: {project_name} with host {host} and collection class {collection_class_path}"
         )
@@ -95,18 +58,16 @@ class VikingDBProject:
 
     def has_collection(self, collection_name: str) -> bool:
         """Check if collection exists by calling API"""
-        client = VikingDBClient(self.host, self.headers)
         path, method = VIKINGDB_APIS["GetVikingdbCollection"]
         data = {"ProjectName": self.project_name, "CollectionName": collection_name}
-        response = client.do_req(method, path=path, req_body=data)
+        response = self._client.do_req(method, path=path, req_body=data)
         return response.status_code == 200
 
     def get_collection(self, collection_name: str) -> Optional[Collection]:
         """Get collection by name by calling API"""
-        client = VikingDBClient(self.host, self.headers)
         path, method = VIKINGDB_APIS["GetVikingdbCollection"]
         data = {"ProjectName": self.project_name, "CollectionName": collection_name}
-        response = client.do_req(method, path=path, req_body=data)
+        response = self._client.do_req(method, path=path, req_body=data)
         if response.status_code != 200:
             return None
 
@@ -132,10 +93,9 @@ class VikingDBProject:
 
     def _get_collections(self) -> List[str]:
         """List all collection names from server"""
-        client = VikingDBClient(self.host, self.headers)
         path, method = VIKINGDB_APIS["ListVikingdbCollection"]
         data = {"ProjectName": self.project_name}
-        response = client.do_req(method, path=path, req_body=data)
+        response = self._client.do_req(method, path=path, req_body=data)
         if response.status_code != 200:
             logger.error(f"List collections failed: {response.text}")
             return []
@@ -174,28 +134,6 @@ class VikingDBProject:
     def create_collection(self, collection_name: str, meta_data: Dict[str, Any]) -> Collection:
         """collection should be pre-created"""
         raise NotImplementedError("collection should be pre-created")
-
-    def get_or_create_collection(
-        self, collection_name: str, meta_data: Optional[Dict[str, Any]] = None
-    ) -> Collection:
-        """
-        Get or create collection.
-
-        Args:
-            collection_name: Collection name
-            meta_data: Collection metadata (required if not exists)
-
-        Returns:
-            Collection instance
-        """
-        collection = self.get_collection(collection_name)
-        if collection:
-            return collection
-
-        if meta_data is None:
-            raise ValueError(f"meta_data is required to create collection {collection_name}")
-
-        return self.create_collection(collection_name, meta_data)
 
     def drop_collection(self, collection_name: str):
         """Drop specified collection"""

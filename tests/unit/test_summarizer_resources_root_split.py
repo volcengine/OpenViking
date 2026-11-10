@@ -7,7 +7,8 @@ from unittest.mock import patch
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.utils.summarizer import Summarizer
+from openviking.utils.ingest_options import IngestOptions
+from openviking.utils.summarizer import FileRefreshRequest, Summarizer
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -17,6 +18,11 @@ class _DummyQueue:
 
     async def enqueue(self, msg):
         self.msgs.append(msg)
+
+
+class _FailingQueue:
+    async def enqueue(self, msg):
+        raise RuntimeError("queue unavailable")
 
 
 class _DummyQueueManager:
@@ -29,17 +35,10 @@ class _DummyQueueManager:
         return self._queue
 
 
-class _DummyWaitTracker:
-    def __init__(self):
-        self.registered = []
-
-    def register_semantic_root(self, telemetry_id, msg_id):
-        self.registered.append((telemetry_id, msg_id))
-
-
 class _DummyVikingFS:
     def __init__(self, entries_by_uri):
         self.entries_by_uri = entries_by_uri
+        self._async_agfs = SimpleNamespace()
 
     async def ls(self, uri, show_all_hidden=False, ctx=None, **kwargs):
         return self.entries_by_uri.get(uri, [])
@@ -53,7 +52,7 @@ async def test_resources_root_is_split_into_children():
         {
             "viking://temp/import_root": [
                 {"name": "existing_a", "isDir": True},
-                {"name": "new_c", "isDir": True},
+                {"name": "file.txt", "isDir": False},
             ]
         }
     )
@@ -65,46 +64,6 @@ async def test_resources_root_is_split_into_children():
             "openviking.utils.summarizer.get_current_telemetry",
             return_value=SimpleNamespace(telemetry_id="tid"),
         ),
-        patch(
-            "openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()
-        ),
-        patch("openviking.utils.summarizer.get_viking_fs", return_value=vfs),
-    ):
-        summarizer = Summarizer(vlm_processor=None)
-        res = await summarizer.summarize(
-            resource_uris=["viking://resources"],
-            ctx=ctx,
-            temp_uris=["viking://temp/import_root"],
-        )
-
-    assert res["status"] == "success"
-    assert res["enqueued_count"] == 2
-    assert [m.target_uri for m in queue.msgs] == [
-        "viking://resources/existing_a",
-        "viking://resources/new_c",
-    ]
-    assert [m.uri for m in queue.msgs] == [
-        "viking://temp/import_root/existing_a",
-        "viking://temp/import_root/new_c",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_resources_root_single_file_child():
-    queue = _DummyQueue()
-    qm = _DummyQueueManager(queue)
-    vfs = _DummyVikingFS({"viking://temp/import_root": [{"name": "file.txt", "isDir": False}]})
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-
-    with (
-        patch("openviking.utils.summarizer.get_queue_manager", return_value=qm),
-        patch(
-            "openviking.utils.summarizer.get_current_telemetry",
-            return_value=SimpleNamespace(telemetry_id="tid"),
-        ),
-        patch(
-            "openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()
-        ),
         patch("openviking.utils.summarizer.get_viking_fs", return_value=vfs),
     ):
         summarizer = Summarizer(vlm_processor=None)
@@ -115,9 +74,15 @@ async def test_resources_root_single_file_child():
         )
 
     assert res["status"] == "success"
-    assert res["enqueued_count"] == 1
-    assert queue.msgs[0].target_uri == "viking://resources/file.txt"
-    assert queue.msgs[0].uri == "viking://temp/import_root/file.txt"
+    assert res["enqueued_count"] == 2
+    assert [m.target_uri for m in queue.msgs] == [
+        "viking://resources/existing_a",
+        "viking://resources/file.txt",
+    ]
+    assert [m.uri for m in queue.msgs] == [
+        "viking://temp/import_root/existing_a",
+        "viking://temp/import_root/file.txt",
+    ]
 
 
 @pytest.mark.asyncio
@@ -133,9 +98,6 @@ async def test_explicit_subpath_not_split():
             "openviking.utils.summarizer.get_current_telemetry",
             return_value=SimpleNamespace(telemetry_id="tid"),
         ),
-        patch(
-            "openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()
-        ),
         patch("openviking.utils.summarizer.get_viking_fs", return_value=vfs),
     ):
         summarizer = Summarizer(vlm_processor=None)
@@ -143,12 +105,19 @@ async def test_explicit_subpath_not_split():
             resource_uris=["viking://resources/foo"],
             ctx=ctx,
             temp_uris=["viking://temp/import_root"],
+            semantic_source={"kind": "http", "uri": "https://example.com/demo.pdf"},
+            generation_trigger="resource_ingest",
         )
 
     assert res["status"] == "success"
     assert res["enqueued_count"] == 1
     assert queue.msgs[0].target_uri == "viking://resources/foo"
     assert queue.msgs[0].uri == "viking://temp/import_root"
+    assert queue.msgs[0].source == {
+        "kind": "http",
+        "uri": "https://example.com/demo.pdf",
+    }
+    assert queue.msgs[0].generation_trigger == "resource_ingest"
 
 
 @pytest.mark.asyncio
@@ -164,9 +133,6 @@ async def test_resources_root_empty_import_is_error():
             "openviking.utils.summarizer.get_current_telemetry",
             return_value=SimpleNamespace(telemetry_id="tid"),
         ),
-        patch(
-            "openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()
-        ),
         patch("openviking.utils.summarizer.get_viking_fs", return_value=vfs),
     ):
         summarizer = Summarizer(vlm_processor=None)
@@ -178,3 +144,113 @@ async def test_resources_root_empty_import_is_error():
 
     assert res["status"] == "error"
     assert queue.msgs == []
+
+
+@pytest.mark.asyncio
+async def test_flat_file_refresh_enqueues_incremental_parent_summary():
+    queue = _DummyQueue()
+    qm = _DummyQueueManager(queue)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with (
+        patch("openviking.utils.summarizer.get_queue_manager", return_value=qm),
+        patch(
+            "openviking.utils.summarizer.get_current_telemetry",
+            return_value=SimpleNamespace(telemetry_id="tid"),
+        ),
+    ):
+        result = await Summarizer(vlm_processor=None).refresh_file_parent(
+            file_uri="viking://resources/神雕.md",
+            ctx=ctx,
+            skip_vectorization=False,
+        )
+
+    assert result == {
+        "status": "success",
+        "enqueued_count": 1,
+        "semantic_action": "refresh_now",
+    }
+    assert len(queue.msgs) == 1
+    msg = queue.msgs[0]
+    assert msg.uri == "viking://resources"
+    assert msg.recursive is False
+    assert msg.changes == {"modified": ["viking://resources/神雕.md"]}
+    assert msg.skip_vectorization is False
+    assert msg.role == Role.ROOT
+    assert msg.telemetry_id == "tid"
+
+
+@pytest.mark.asyncio
+async def test_grouped_file_refresh_coalesces_only_direct_parents():
+    queue = _DummyQueue()
+    qm = _DummyQueueManager(queue)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with (
+        patch("openviking.utils.summarizer.get_queue_manager", return_value=qm),
+        patch(
+            "openviking.utils.summarizer.get_current_telemetry",
+            return_value=SimpleNamespace(telemetry_id="tid"),
+        ),
+    ):
+        result = await Summarizer(vlm_processor=None).refresh_file_parents(
+            changes=[
+                FileRefreshRequest(
+                    "viking://resources/docs/a.md",
+                    created=True,
+                    md5="a",
+                    vector_action="upsert",
+                    ingest_options=IngestOptions(search_tags=["team=search"]),
+                ),
+                FileRefreshRequest("viking://resources/docs/b.md", md5="b"),
+                FileRefreshRequest("viking://resources/src/main.py", md5="c"),
+            ],
+            ctx=ctx,
+            generation_trigger="content_write",
+        )
+
+    assert result["enqueued_count"] == 2
+    assert result["parent_actions"] == {
+        "viking://resources/docs": "refresh_now",
+        "viking://resources/src": "refresh_now",
+    }
+    assert len(queue.msgs) == 2
+    messages = {msg.uri: msg for msg in queue.msgs}
+    assert all(msg.coalesce_key == "" for msg in messages.values())
+    assert messages["viking://resources/docs"].changes == {
+        "added": ["viking://resources/docs/a.md"],
+        "modified": ["viking://resources/docs/b.md"],
+    }
+    assert messages["viking://resources/docs"].file_md5s == {
+        "viking://resources/docs/a.md": "a",
+        "viking://resources/docs/b.md": "b",
+    }
+    assert messages["viking://resources/docs"].file_vector_actions == {
+        "viking://resources/docs/a.md": "upsert"
+    }
+    assert messages["viking://resources/docs"].file_ingest_options == {
+        "viking://resources/docs/a.md": IngestOptions(search_tags=["team=search"])
+    }
+    assert messages["viking://resources/src"].changes == {
+        "modified": ["viking://resources/src/main.py"]
+    }
+    assert messages["viking://resources/src"].file_vector_actions == {}
+
+
+@pytest.mark.asyncio
+async def test_flat_file_refresh_propagates_enqueue_failure():
+    qm = _DummyQueueManager(_FailingQueue())
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with (
+        patch("openviking.utils.summarizer.get_queue_manager", return_value=qm),
+        patch(
+            "openviking.utils.summarizer.get_current_telemetry",
+            return_value=SimpleNamespace(telemetry_id="tid"),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="queue unavailable"):
+            await Summarizer(vlm_processor=None).refresh_file_parent(
+                file_uri="viking://resources/神雕.md",
+                ctx=ctx,
+            )

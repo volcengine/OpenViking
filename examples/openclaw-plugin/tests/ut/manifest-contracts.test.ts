@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -9,15 +9,22 @@ const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const manifest = JSON.parse(
   readFileSync(resolve(pluginRoot, "openclaw.plugin.json"), "utf8"),
 ) as {
+  icon?: string;
   activation?: { onStartup?: boolean; onCapabilities?: string[] };
   contracts?: { tools?: string[] };
+  setup?: { providers?: Array<{ id?: string; envVars?: string[] }> };
   configSchema?: { properties?: Record<string, unknown> };
 };
 const packageJson = JSON.parse(
   readFileSync(resolve(pluginRoot, "package.json"), "utf8"),
 ) as {
+  engines?: { openclaw?: string };
   version?: string;
   files?: string[];
+  openclaw?: {
+    compat?: { pluginApi?: string; minGatewayVersion?: string };
+    build?: { openclawVersion?: string; pluginSdkVersion?: string };
+  };
   scripts?: Record<string, string>;
 };
 const installManifest = JSON.parse(
@@ -48,6 +55,7 @@ function collectRegisteredToolNames(): string[] {
       baseUrl: "http://127.0.0.1:1933",
       autoCapture: false,
       autoRecall: false,
+      enableAddResourceTool: true,
     },
     logger: {
       info: vi.fn(),
@@ -73,13 +81,32 @@ function collectRegisteredToolNames(): string[] {
 }
 
 describe("OpenClaw 5.2 manifest contracts", () => {
-  it("declares every runtime tool in contracts.tools", () => {
+  it("declares an optimized HTTPS catalog icon", () => {
+    expect(manifest.icon).toBe(
+      "https://raw.githubusercontent.com/volcengine/OpenViking/main/docs/images/ov-logo-icon.png",
+    );
+    expect(new URL(manifest.icon as string).protocol).toBe("https:");
+
+    const iconPath = resolve(pluginRoot, "../..", "docs/images/ov-logo-icon.png");
+    expect(existsSync(iconPath)).toBe(true);
+    expect(statSync(iconPath).size).toBeLessThan(100_000);
+  });
+
+  it("declares every registerable runtime tool in contracts.tools", () => {
     expect(manifest.contracts?.tools?.toSorted()).toEqual(collectRegisteredToolNames());
   });
 
   it("opts into startup and capability-triggered hook/tool activation", () => {
     expect(manifest.activation?.onStartup).toBe(true);
     expect(manifest.activation?.onCapabilities?.toSorted()).toEqual(["hook", "tool"]);
+  });
+
+  it("declares provider auth environment variables only in current setup metadata", () => {
+    expect(manifest).not.toHaveProperty("providerAuthEnvVars");
+    expect(manifest.setup?.providers).toContainEqual(expect.objectContaining({
+      id: "openviking",
+      envVars: ["OPENVIKING_API_KEY", "OPENVIKING_BASE_URL"],
+    }));
   });
 
   it("declares recall trace configuration schema keys", () => {
@@ -102,11 +129,30 @@ describe("OpenClaw 5.2 manifest contracts", () => {
 });
 
 describe("OpenClaw 5.5 package runtime contract", () => {
+  it("publishes sender as the canonical peer role while accepting legacy person configs", () => {
+    const peerRoleSchema = manifest.configSchema?.properties?.peer_role as {
+      enum?: string[];
+      description?: string;
+    };
+    expect(peerRoleSchema.enum).toEqual([
+      "none",
+      "assistant",
+      "sender",
+      "person",
+    ]);
+    expect(peerRoleSchema.description).toContain(
+      "person is a legacy alias for sender",
+    );
+  });
+
   it("builds and publishes compiled runtime output for TypeScript entries", () => {
     expect(packageJson.scripts?.build).toContain("rmSync('dist'");
     expect(packageJson.scripts?.build).toContain("tsc -p tsconfig.build.json");
-    expect(packageJson.scripts?.prepack).toBe("npm run build");
+    expect(packageJson.scripts?.prepack).toBe(
+      "node ../memory-plugin-shared/sync.mjs && npm run build",
+    );
     expect(packageJson.files).toContain("dist/");
+    expect(packageJson.files).toContain("shared/");
     expect(packageJson.files).toContain("install-manifest.json");
   });
 
@@ -122,20 +168,31 @@ describe("OpenClaw 5.5 package runtime contract", () => {
       "index.ts",
       "recall-trace.ts",
       "commands/setup.ts",
+      "shared/",
       "tsconfig.json",
       "tsconfig.build.json",
       "package.json",
       "openclaw.plugin.json",
     ]));
-    expect(installManifest.compatibility?.minOpenclawVersion).toBe("2026.4.8");
+    expect(installManifest.compatibility?.minOpenclawVersion).toBe("2026.5.27");
   });
 
   it("declares compatibility floors and recommended versions, and keeps version fields in sync", () => {
     expect(installManifest.compatibility).toMatchObject({
-      minOpenclawVersion: "2026.4.8",
+      minOpenclawVersion: "2026.5.27",
       recommendedOpenclawVersion: "2026.6.6",
       minOpenvikingVersion: "0.4.1",
       recommendedOpenvikingVersion: "0.4.1",
+    });
+    // OpenClaw installers read these package fields as host-version floor metadata.
+    expect(packageJson.engines?.openclaw).toBe(">=2026.5.27");
+    expect(packageJson.openclaw?.compat).toMatchObject({
+      pluginApi: ">=2026.5.27",
+      minGatewayVersion: "2026.5.27",
+    });
+    expect(packageJson.openclaw?.build).toMatchObject({
+      openclawVersion: "2026.5.27",
+      pluginSdkVersion: "2026.5.27",
     });
     // package.json version and install-manifest pluginVersion must stay identical.
     expect(installManifest.pluginVersion).toBe(packageJson.version);

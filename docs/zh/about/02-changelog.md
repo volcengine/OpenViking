@@ -3,6 +3,121 @@
 OpenViking 的所有重要变更都将记录在此文件中。
 此更新日志从 [GitHub Releases](https://github.com/volcengine/OpenViking/releases) 自动生成。
 
+> 各版本条目记录发布时的行为，其中的命令和默认值可能已变更。安装请使用当前[部署指南](../guides/03-deployment.md)。历史升级步骤如需清空 workspace，应先停止写入并做好可恢复的备份；不要把旧版本的清理步骤套用到其他升级。
+
+## 未发布
+
+- **LangGraph Store 发现错误**：非语义 `search()` 和 `list_namespaces()` 现在会传播
+  后端文件列表查询失败，包括权限和服务不可用错误。明确不存在的命名空间根路径仍返回空结果。
+- **移除旧会话迁移（不兼容变更）**：删除旧迁移实现、`ov admin migrate`（含 `--cleanup`）
+  及 Python、TypeScript、Go SDK 的对应方法。保留仅 ROOT 可调用的
+  `POST /api/v1/admin/migrate` 入口，当前返回 `400 / INVALID_ARGUMENT`，不创建任务。
+  新版本不再提供 0.3.x 遗留会话的迁移和清理工具；升级不会自动迁移或删除这些旧目录。
+  已迁移的会话和正常会话操作不受影响。
+- **网关部署与行为**：
+  - 新增独立 Helm chart `deploy/helm/openviking-gateway`：带 PVC 的单副本 SQLite，
+    或共享 Redis 的多副本部署。在包含这些功能的版本发布之前，需要显式设置 `image.tag`，
+    见[运维指南](../guides/22-gateway-operations.md#helm)。
+  - 新增可选设置：`storage`（Redis）、`management_api`、`openviking_keys`、`tenancy`、
+    `default_upstreams` 和 `default_profile`、`request_log_sink`、`capture_concurrency` 以及 `keep_alive_seconds`。
+    默认存储仍是 SQLite。
+  - 新增 `X-OpenViking-Upstream-URL` 请求头，按 Base URL 从允许的上游中选择一个，
+    见[按请求指定上游](../gateway/07-upstreams.md#upstream-url-header)。
+  - `session_ttl_seconds`（不低于 3600）取代 `session_ttl_days`，对话可以在一天内过期；
+    旧字段会被忽略并在启动时打印警告，升级时请改用新字段。
+  - 无需修改配置的行为变化：独立网关 keep-alive 从 5 秒提高到 75 秒；
+    绑定公网地址的网关在启动时遇到 OpenViking 不可达或返回 5xx 会等待并重试；
+    空闲 SSE 流每 15 秒发送一条注释心跳；OpenViking 以 402 或 403 拒绝密钥的请求会被拒绝，
+    不再转发；保存时收到 OpenViking 401、且 `/health` 也返回 401 时，会以 `gateway_key_revoked`
+    暂停保存。
+- **火山引擎 KMS `key_file`（升级需操作）**：`encryption.volcengine_kms.key_file` 现在对服务端和网关
+  都会生效；此前版本忽略该字段，根密钥始终位于 `~/.openviking/openviking-volcengine-root-key.enc`。
+  如果配置了 `key_file`，升级前把该文件移到配置的路径。配置的文件不存在而默认文件存在时，
+  启动会失败，不会生成新的根密钥。
+- **LangChain 导入迁移（不兼容变更）**：服务端不再提供
+  `openviking.integrations.langchain` 及其转发模块，旧导入会立即失败，
+  不提供弃用过渡期或兼容占位模块。请安装 `langchain-openviking`
+  （LangGraph 使用 `pip install "langchain-openviking[langgraph]"`），
+  将导入前缀 `openviking.integrations.langchain` 改为 `langchain_openviking`，
+  子模块导入也需同步修改。例如使用
+  `from langchain_openviking import OpenVikingRetriever`。维护中的包和示例迁至
+  `integrations/frameworks/`，包名和标准导入路径保持不变。
+  详见[迁移指南](../agent-integrations/07-langchain-langgraph.md)。
+- **Working Memory 默认关闭（行为变更）**：commit 仍保存原文并抽取长期记忆，默认不生成
+  WM 或 checkpoint 摘要。用户需要单独升级已安装的 agent 插件；新版默认关闭自动归档
+  摘要注入和上下文接管，由宿主管理历史与压缩。VikingBot 仍默认使用 OV 管理上下文与压缩，
+  并在会话上下文 commit 时显式请求 WM。旧版序列化会省略 WM=true，因此过去即使
+  主动开启，保存后缺少该字段的策略升级后仍会变为 false，无法自动恢复用户当时的意图。
+  已入队的旧任务保持提交时的语义。新增 `enable_working_memory` 布尔参数仅覆盖本次
+  commit 的 WM，不覆盖其他策略。无 WM 的已完成归档仍可读取原文，摘要字段为空。
+  详见[升级说明](../guides/working-memory-default-off.md)；缺少完整宿主历史的旧会话
+  应先导出原文，通过宿主支持的入口完成历史交接，再切换模式。
+- **Watch API 迁移（不兼容变更）**：使用 `watch_interval > 0` 重新导入不再更新或恢复已有 Watch。
+  原生 Watch 暂停后仍独占目标，不兼容的目标复用返回 `409 Conflict`。
+  依赖重新导入来更新 Watch 的脚本应改用 `PATCH /api/v1/watches/{task_id}`
+  （恢复时设置 `is_active: true`），或先删除旧 Watch 再创建替代任务。
+  Connector Watch 可共享目标，但重复导入相同来源和目标会创建新的独立 Watch，重试并不幂等。
+  共享目标应通过任务 ID 管理；按 URI 查询多个可访问的 Watch 时返回 409。
+  一次性 Connector 导入（`watch_interval <= 0`）不影响已有 Watch，暂停或删除请使用 watches API。
+  详见[资源任务管理](../api/02-resources.md#任务管理操作)。
+- **Session policy 兼容性**：字符串 `"false"` 现在会正确关闭对应的记忆抽取开关。
+  现有 boolean-like 值暂时保持兼容并产生弃用警告；新配置应使用 JSON 布尔值。
+- **工作区 peer 派生规则**：coding agent 插件不再按工作目录派生工作区 peer，改为按 git 派生。新的默认值 `peer.source: "git"` 取仓库归一化后的 `origin` URL（`github.com-volcengine-openviking`），其次回退到仓库根路径，因此同一个仓库的每个 clone、worktree 和子目录共用同一个 peer，而 fork 仍是独立的 peer。不在 git 仓库中的目录现在完全不发送 peer，在那里记下的内容进入用户级空间，而不是为每个目录新建一个命名空间。要让这样的目录拥有独立记忆，在其中创建 `.openviking/config.json`，写入 `{"version": 1, "peer": {"id": "my-project"}}`。无需任何迁移：此前按工作目录派生的 id 随时可以在本地重新算出，而默认的 `peer_scope: "all"` 召回本来就会扫描所有 peer，因此写在旧 id 下的记忆照常召回（`peer_scope: "actor"` 时，Claude Code、Codex、OpenCode 和 DSH 插件会额外查询该 id）。设置 `peer.source: "cwd"`（或 `OPENVIKING_PEER_SOURCE=cwd`）即可保持旧行为。
+- **pi 扩展的工具面（不兼容变更）**：pi 扩展 0.4.0 移除自己手写的 7 个 `viking_*` REST 工具，改用官方 MCP 客户端连接服务端，因此工具清单由服务端 `tools/list` 的返回决定，不再来自扩展自带的目录。每个工具的名字是 `openviking_` 加服务端的工具名（`viking_search` → `openviking_search`），不保留旧名别名期；pi 的 `--tools` 和 `--exclude-tools` 按名字精确匹配，白名单里仍写 `viking_search` 的话，对应工具会静默消失，需要手动改名。这些工具的行为与其他 MCP harness 一致：`remember` 另开一个会话并立即提交，不再追加到当前 pi 会话；`read` 返回支持按行分页的文本（`level="abstract"` 和 `level="overview"` 两档已移除，替代路径是 `openviking_search(mode="context", detail="overview")`）；`forget` 直接删除传入的 URI；`add_resource` 对本地路径返回一次性上传 URL，由模型把文件 POST 上去。root api key 在 `/mcp` 上被拒绝（403），现在会导致整个会话一个工具都没有，而此前是工具照常注册、每次调用都返回空结果，这类部署需要改用 user 或 admin key。共享开关 `mcpEnabled: false` 现在对 pi 同样生效，以这种方式关掉工具不计作故障。以上各种情况下，recall、会话采集和上下文接管都照常工作，其他 harness 不受影响。完整的改名对照和升级说明见扩展 README 的 [Upgrading from 0.3.x](https://github.com/volcengine/OpenViking/blob/main/examples/pi-coding-agent-extension/README.md#upgrading-from-03x)。
+- **外部 peer identity 迁移**：日志导入中的混合文字标识改用无损的
+  `ext-<base64>` id。`ext-` 命名空间为编码身份保留，因此原本会进入该命名空间的
+  ASCII 身份也会被编码。系统不会自动读取旧的有损 peer 目录，因为多个身份可能彼此冲突，
+  也可能与真实 ASCII peer 冲突；迁移这些归属不明确的历史数据需要运维人员明确确认归属。
+
+## v0.4.9 (2026-07-10)
+
+### 重点更新
+
+- **Agent 工作区隔离**：Codex、Claude Code、OpenCode 和 Pi 集成支持从工作区派生 peer identity，实现项目级记忆隔离，并扩展共享安装器与混合 MCP 支持。
+- **检索与记忆正确性**：新增图片搜索，正确处理 agent-only / peer-only 记忆范围，并避免生成嵌套的记忆链接。
+- **存储与安全加固**：串行化本地 collection 懒加载，按后端约束 VikingDB content 写入，并阻止 Git submodule SSRF。
+- **VikingBot 与平台修复**：新增统一 gateway 路由和 OpenViking 鉴权，并修复渠道 sender metadata、仅 VLM 配置、Windows 向量后端和 benchmark 并发问题。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.4.8...v0.4.9)
+
+## v0.4.8 (2026-07-08)
+
+### 重点更新
+
+- **NVIDIA cuVS 向量后端**：支持 opt-in 的 GPU 精确/近似检索，以及本地后端的显存感知回退。
+- **递归网页导入**：基于 Scrapy 和 trafilatura，支持深度、页数、路径和下载链接限制的同站爬取。
+- **记忆 v3 与训练**：启用 v3 抽取链路、流式 patch-merge 更新和 session train/eval。
+- **Agent 插件安装**：Codex / Claude Code 支持远程 marketplace，stdio MCP 代理与 hooks 共享 `ovcli.conf` 凭据。
+- **文件系统与 RAGFS**：支持后端分页 glob、稳定的目录优先排序和标准相对路径匹配。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.4.7...v0.4.8)
+
+## v0.4.7 (2026-07-02)
+
+### 重点更新
+
+- **MCP 本地文件链路**：compact 工具描述降低上下文开销，签名 `temp_upload` token 支持本地文件自动入库。
+- **文件系统与版本管理**：新增 filesystem attrs 和账号级 `.ovgitignore` 规则。
+- **SDK 与鉴权**：Go SDK 新增 skill scope 和 grep 深度控制，OAuth client scope 持久化，并支持 seeded API key。
+- **Studio 与初始化体验**：重做 Connection & Identity 页面，修正 assumed account，并新增 TUI 风格初始化向导。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.4.6...v0.4.7)
+
+## v0.4.6 (2026-06-29)
+
+### 重点更新
+
+- **VikingFS 快照版本管理**：HTTP、Python SDK 和 CLI 支持 Git-backed `commit`、`log`、`show`、`restore`。
+- **整站导入**：支持 sitemap、sitemap index、RSS 和 Atom，并可生成持续刷新的资源树。
+- **共享 Agent Skills**：恢复 `viking://agent/skills` 账号级共享根，用户私有 skill 仍为默认目标。
+- **VikingDB BM25 grep 与 Studio 指标**：增强关键词检索与用户可见的使用指标。
+
+### 升级说明
+
+- 从 0.3.x 升级且仍有 legacy agent/session 数据时，应先在 v0.4.5 完成迁移和 cleanup，再升级到 v0.4.6 或更高版本。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.4.5...v0.4.6)
+
 ## v0.4.5 (2026-06-24)
 
 ### 重点更新
@@ -98,7 +213,7 @@ OpenViking 的所有重要变更都将记录在此文件中。
 
 - **原生 `ov` CLI 体验重构**：`ov config` 现在是配置管理入口，可交互式添加、编辑、删除、切换配置；`ov config show`、`ov config validate`、`ov config switch` 保留为显式子命令。新增 `ov language` / `ov lang` 选择显示语言，`ov status [--verbose]` 提供聚合诊断视图，`ov health` 与错误提示改为更可读的渲染。
 - **Web Studio Playground 与身份管理**：Studio 侧边栏新增 Playground，可查看上下文树、运行 Terminal 操作并与 Agent 面板交互；Connection & Identity 页面支持保存连接、选择 account/user 身份、创建 account/user、复制或重新生成 API key。
-- **VikingBot 经验召回配置化**：新增 `bot.ov_server.recall_exp_first_round_only`、`exp_recall_limit`、`exp_recall_max_chars`，用于在单任务/评测场景中只在第一轮注入 agent experience；本地与远端模式都按传入 `agent_id` 做经验命名空间隔离。
+- **VikingBot 经验召回配置化**：新增 `bot.ov_server.exp_recall_limit`、`exp_recall_max_chars`，用于调整 agent experience 召回；本地与远端模式都按传入 `agent_id` 做经验命名空间隔离。
 - **资源 Watch 更易用**：`add_resource` 设置 `watch_interval > 0` 时不再强制要求显式 `to`；如果导入结果返回稳定 `root_uri`，watch task 会自动绑定到该 URI，CLI/MCP/文档示例同步更新。
 - **插件结构化工具结果与 CJK token 估算**：Claude Code / OpenClaw 插件改为向 OpenViking 写入结构化 tool parts，工具调用与结果不再只能内联到文本；CJK-aware token 估算覆盖 Python 与插件侧，降低中文、日文、韩文会话的预算低估风险。
 

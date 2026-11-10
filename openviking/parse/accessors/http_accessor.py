@@ -16,6 +16,7 @@ Features:
 - IANA Media Type (MIME) based content detection for URLs without file extensions
 """
 
+import socket
 import tempfile
 from enum import Enum
 from pathlib import Path
@@ -23,14 +24,28 @@ from typing import Any, Dict, Mapping, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
 from openviking.parse.base import lazy_import
+from openviking.parse.network import (
+    ParserNetworkContext,
+    ParserNetworkOperation,
+    create_parser_httpx_client,
+)
 from openviking.parse.parsers.constants import CODE_EXTENSIONS
 from openviking.parse.parsers.media.constants import (
     AUDIO_EXTENSIONS,
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
 )
+from openviking.parse.temp import get_parser_download_temp_dir
+from openviking.utils import is_code_hosting_blob_url
+from openviking.utils.exceptions import error_code_from_http_status
 from openviking.utils.network_guard import build_httpx_request_validation_hooks
-from openviking_cli.exceptions import PermissionDeniedError
+from openviking_cli.exceptions import (
+    DeadlineExceededError,
+    InvalidArgumentError,
+    OpenVikingError,
+    PermissionDeniedError,
+    UnavailableError,
+)
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
@@ -97,7 +112,6 @@ class URLTypeDetector:
         **dict.fromkeys(VIDEO_EXTENSIONS, URLType.DOWNLOAD_VIDEO),
         **dict.fromkeys(DOCUMENT_EXTENSIONS, URLType.DOWNLOAD_DOCUMENT),
     }
-
     # === IANA Media Type to URL type mapping ===
     # Maps IANA registered media types to our internal URLType
     # Patterns can be:
@@ -158,6 +172,7 @@ class URLTypeDetector:
         url: str,
         timeout: Optional[float] = None,
         request_validator=None,
+        headers: Optional[Mapping[str, str]] = None,
     ) -> Tuple[URLType, Dict[str, Any]]:
         """
         Detect URL content type using IANA standards.
@@ -205,8 +220,13 @@ class URLTypeDetector:
                 client_kwargs["event_hooks"] = event_hooks
                 client_kwargs["trust_env"] = False
 
-            async with httpx.AsyncClient(**client_kwargs) as client:
-                response = await client.head(url)
+            client = create_parser_httpx_client(
+                ParserNetworkContext(ParserNetworkOperation.HTTP_RESOURCE, url),
+                client_cls=httpx.AsyncClient,
+                **client_kwargs,
+            )
+            async with client as active_client:
+                response = await active_client.head(url, headers=headers)
 
                 meta["status_code"] = response.status_code
                 if not (200 <= response.status_code < 300):
@@ -294,9 +314,12 @@ class URLTypeDetector:
         media_type_str = content_type.lower().strip()
 
         # Handle common aliases
-        if media_type_str in MEDIA_TYPE_ALIASES:
-            meta["media_type_alias"] = media_type_str
-            media_type_str = MEDIA_TYPE_ALIASES[media_type_str]
+        media_type_token = media_type_str.split(";", 1)[0].strip()
+        if media_type_token in MEDIA_TYPE_ALIASES:
+            meta["media_type_alias"] = media_type_token
+            media_type_str = (
+                MEDIA_TYPE_ALIASES[media_type_token] + media_type_str[len(media_type_token) :]
+            )
 
         # Parse into structured IANAMediaType
         try:
@@ -429,23 +452,70 @@ class HTTPAccessor(DataAccessor):
 
     async def access(self, source: Union[str, Path], **kwargs) -> LocalResource:
         """
-        Fetch the HTTP URL to a local file.
+        Fetch the HTTP URL to a local file or directory.
 
         Args:
             source: HTTP/HTTPS URL
             **kwargs: Additional arguments (request_validator, etc.)
 
         Returns:
-            LocalResource pointing to the downloaded file
+            LocalResource pointing to the downloaded file or crawled web directory
         """
         source_str = str(source)
         request_validator = kwargs.get("request_validator")
+        tos_signature = kwargs.get("tos_signature")
+        tos_access = kwargs.get("tos_access")
 
         # Download the URL
-        temp_path, url_type, meta = await self._download_url(
-            source_str,
-            request_validator=request_validator,
-        )
+        download_kwargs = {"request_validator": request_validator}
+        if tos_signature is not None:
+            download_kwargs["tos_signature"] = tos_signature
+        if tos_access is not None:
+            download_kwargs["tos_access"] = tos_access
+        temp_path, url_type, meta = await self._download_url(source_str, **download_kwargs)
+
+        # Both an extensionless text/html page (WEBPAGE) and an explicit
+        # ``.html``/``.htm`` URL (DOWNLOAD_HTML) are webpages the user may want
+        # to crawl: route both through WebImporter so ``depth``/``max_pages``
+        # apply. A plain single-page import is just the ``depth=0`` case.
+        #
+        # Exception: a code-hosting single-file URL (GitHub/GitLab ``blob`` or
+        # GitHub ``raw``) is semantically one file, not a site. ``_download_url``
+        # already rewrote it to raw and fetched the file, so keep it on the
+        # single-file path instead of crawling the hosting UI shell.
+        if url_type in (URLType.WEBPAGE, URLType.DOWNLOAD_HTML) and not is_code_hosting_blob_url(
+            source_str
+        ):
+            from openviking.parse.accessors.web_importer import (
+                WebImporter,
+                parse_web_import_options,
+            )
+
+            try:
+                options = parse_web_import_options(kwargs)
+                result = await WebImporter().import_to_directory(
+                    root_url=source_str,
+                    options=options,
+                    request_validator=request_validator,
+                )
+            finally:
+                Path(temp_path).unlink(missing_ok=True)
+
+            meta.update(result.meta)
+            meta.update(
+                {
+                    "url": source_str,
+                    "downloaded": True,
+                    "url_type": URLType.WEBPAGE.value,
+                }
+            )
+            return LocalResource(
+                path=result.path,
+                source_type=SourceType.HTTP,
+                original_source=source_str,
+                meta=meta,
+                is_temporary=True,
+            )
 
         # Build metadata
         meta.update(
@@ -486,6 +556,8 @@ class HTTPAccessor(DataAccessor):
         self,
         url: str,
         request_validator=None,
+        tos_signature: Optional[str] = None,
+        tos_access: Optional[str] = None,
     ) -> Tuple[str, URLType, Dict[str, Any]]:
         """
         Download URL content to a temporary file.
@@ -506,6 +578,7 @@ class HTTPAccessor(DataAccessor):
         url_type, detect_meta = await self._url_detector.detect(
             url,
             request_validator=request_validator,
+            headers=self._request_headers(tos_signature, tos_access),
         )
 
         temp_path: Optional[str] = None
@@ -521,31 +594,40 @@ class HTTPAccessor(DataAccessor):
                 client_kwargs["event_hooks"] = event_hooks
                 client_kwargs["trust_env"] = False
 
-            async with httpx.AsyncClient(**client_kwargs) as client:
-                headers = {"User-Agent": self.user_agent}
+            client = create_parser_httpx_client(
+                ParserNetworkContext(ParserNetworkOperation.HTTP_RESOURCE, url),
+                client_cls=httpx.AsyncClient,
+                **client_kwargs,
+            )
+            async with client as active_client:
+                headers = self._request_headers(tos_signature, tos_access)
                 try:
-                    response = await client.get(url, headers=headers)
+                    response = await active_client.get(url, headers=headers)
                     response.raise_for_status()
                 except httpx.ConnectError as e:
-                    user_msg = "HTTP request failed: could not connect to server. Check the URL or your network."
-                    raise RuntimeError(f"{user_msg} URL: {url}. Details: {e}") from e
+                    cause: BaseException | None = e
+                    while cause is not None:
+                        if isinstance(cause, socket.gaierror) and cause.errno == socket.EAI_NONAME:
+                            raise InvalidArgumentError(
+                                f"Source URL host does not exist: {url}", details={"source": url}
+                            ) from e
+                        cause = cause.__cause__ or cause.__context__
+                    raise UnavailableError(
+                        "source URL", reason=f"Could not connect to {url}: {e}"
+                    ) from e
                 except httpx.TimeoutException as e:
-                    user_msg = "HTTP request failed: timeout. The server took too long to respond."
-                    raise RuntimeError(f"{user_msg} URL: {url}. Details: {e}") from e
+                    raise DeadlineExceededError(f"Fetch source URL {url}", self.timeout) from e
                 except httpx.HTTPStatusError as e:
-                    status_code = e.response.status_code if e.response else "unknown"
-                    if status_code == 401 or status_code == 403:
-                        user_msg = f"HTTP request failed: authentication error ({status_code}). Check your credentials or permissions."
-                    elif status_code == 404:
-                        user_msg = f"HTTP request failed: not found ({status_code}). The URL may be invalid or the resource was removed."
-                    elif 500 <= status_code < 600:
-                        user_msg = f"HTTP request failed: server error ({status_code}). The server encountered an error."
-                    else:
-                        user_msg = f"HTTP request failed: status code {status_code}."
-                    raise RuntimeError(f"{user_msg} URL: {url}. Details: {e}") from e
-                except Exception as e:
-                    user_msg = "HTTP request failed: unexpected error."
-                    raise RuntimeError(f"{user_msg} URL: {url}. Details: {e}") from e
+                    status_code = e.response.status_code
+                    raise OpenVikingError(
+                        f"Source URL returned HTTP {status_code}: {url}",
+                        code=error_code_from_http_status(status_code),
+                        details={"source": url, "upstream_status_code": status_code},
+                    ) from e
+                except httpx.InvalidURL as e:
+                    raise InvalidArgumentError(f"Invalid source URL: {url}") from e
+                except httpx.RequestError as e:
+                    raise UnavailableError("source URL", reason=str(e)) from e
 
                 meta = self._finalize_download_metadata(
                     url=url,
@@ -560,7 +642,11 @@ class HTTPAccessor(DataAccessor):
                 # Create temp file after GET headers/content have had a chance
                 # to refine detection. This avoids routing extensionless signed
                 # URLs as HTML when HEAD is rejected by object storage.
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                temp_file = tempfile.NamedTemporaryFile(
+                    delete=False,
+                    suffix=ext,
+                    dir=get_parser_download_temp_dir(),
+                )
                 temp_path = temp_file.name
                 temp_file.close()
 
@@ -578,6 +664,20 @@ class HTTPAccessor(DataAccessor):
                 except Exception:
                     pass
             raise
+
+    def _request_headers(
+        self,
+        tos_signature: Optional[str],
+        tos_access: Optional[str],
+    ) -> Dict[str, str]:
+        headers = {"User-Agent": self.user_agent}
+        if tos_signature is not None and tos_access is not None:
+            raise ValueError("tos_signature and tos_access cannot both be provided")
+        if tos_signature is not None:
+            headers["X-Tos-Signature"] = tos_signature
+        elif tos_access is not None:
+            headers["X-Tos-Access"] = tos_access
+        return headers
 
     def _finalize_download_metadata(
         self,
@@ -597,7 +697,10 @@ class HTTPAccessor(DataAccessor):
             get_meta,
             detected_by_prefix="get_",
         )
-        if get_url_type != URLType.UNKNOWN and self._should_refine_url_type(url_type, get_url_type):
+        if get_url_type != URLType.UNKNOWN and self._should_refine_url_type(
+            url_type,
+            get_url_type,
+        ):
             url_type = get_url_type
             meta.update(get_meta)
             meta["refined_by_get_headers"] = True
@@ -638,7 +741,10 @@ class HTTPAccessor(DataAccessor):
         return meta
 
     @staticmethod
-    def _should_refine_url_type(current: URLType, candidate: URLType) -> bool:
+    def _should_refine_url_type(
+        current: URLType,
+        candidate: URLType,
+    ) -> bool:
         """Only replace ambiguous/default webpage guesses with file types."""
         if candidate in (URLType.UNKNOWN, URLType.WEBPAGE):
             return False
@@ -680,6 +786,8 @@ class HTTPAccessor(DataAccessor):
                 return URLType.DOWNLOAD_VIDEO, ".avi"
         if sample.startswith(b"ID3") or sample.startswith(b"\xff\xfb"):
             return URLType.DOWNLOAD_AUDIO, ".mp3"
+        if sample.startswith(b"\x0b\x77"):
+            return URLType.DOWNLOAD_AUDIO, ".ac3"
         if len(sample) >= 12 and sample[4:8] == b"ftyp":
             brand = sample[8:12].lower()
             if brand in {b"qt  ", b"moov"}:

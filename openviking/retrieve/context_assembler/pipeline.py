@@ -1,0 +1,253 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+"""Single-request context assembly: retrieve, budget, render, optionally digest.
+
+One HTTP round trip replaces the per-type search-then-read loops each harness
+plugin used to run, so every plugin inherits budgeting, tier degradation and
+cross-turn dedup from one implementation.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, Optional
+
+from openviking.models.embedder.base import query_embed_cache_scope
+from openviking.retrieve.context_assembler.budget import (
+    oversized_abstract_needs_body,
+    per_entry_cap,
+    plan_entries,
+)
+from openviking.retrieve.context_assembler.expansion import expand_queries
+from openviking.retrieve.context_assembler.gather import gather_candidates
+from openviking.retrieve.context_assembler.ledger import RecallLedger
+from openviking.retrieve.context_assembler.models import AssembleResult
+from openviking.retrieve.context_assembler.params import (
+    AssembleParams,
+    normalize_detail,
+    normalize_exclude_uris,
+    normalize_penalties,
+    normalize_quotas,
+)
+from openviking.retrieve.context_assembler.render import render_context
+from openviking.retrieve.context_assembler.rewrite import rewrite_context, server_rewrite_enabled
+from openviking.retrieve.context_assembler.tiers import needs_content, prefetch_contents
+from openviking.retrieve.rerank_scoring import Reranker
+from openviking.server.identity import RequestContext
+from openviking.utils.time_decay import validate_event_time_decay_request
+from openviking_cli.exceptions import NotFoundError
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+async def _load_session(
+    service: Any, ctx: RequestContext, session_id: Optional[str], *, auto_create: bool
+) -> Any:
+    if not session_id:
+        return None
+    try:
+        session = await service.sessions.get(session_id, ctx, auto_create=auto_create)
+        if not await session.is_materialized():
+            return None
+        return session
+    except NotFoundError:
+        return None
+    except Exception as exc:
+        logger.info("Session %s unavailable for context assembly: %s", session_id, exc)
+        return None
+
+
+def _context_reranker(service: Any, params: AssembleParams) -> Optional[Reranker]:
+    """The server's opt-in context reranker, when it applies to this request.
+
+    Reranking scores text against text, so an image query keeps its vector
+    scores, as it does in search(); so does a filter-only one with no text.
+    """
+    if not params.query.strip() or params.image_url:
+        return None
+    factory = getattr(service.search, "context_reranker", None)
+    if not callable(factory):
+        return None
+    try:
+        return factory()
+    except Exception as exc:
+        logger.warning("Context rerank unavailable, keeping vector scores: %s", exc)
+        return None
+
+
+async def assemble_context(
+    *,
+    service: Any,
+    ctx: RequestContext,
+    params: AssembleParams,
+) -> AssembleResult:
+    """Run the full assembly pipeline for one request."""
+    validate_event_time_decay_request(params.events_time_decay_protection)
+    if params.search_type == "keywords":
+        if params.image_url:
+            from openviking_cli.exceptions import InvalidArgumentError
+
+            raise InvalidArgumentError("image_url is not supported when search_type='keywords'")
+        await service.search.ensure_keywords_search_supported(ctx)
+    quotas = normalize_quotas(params.quotas, params.purpose)
+    penalties = normalize_penalties(params.other_peer_penalty)
+
+    intent_checker = getattr(service.search, "is_intent_enabled", None)
+    intent_enabled = intent_checker() if callable(intent_checker) else True
+    expansion_mode = params.query_expansion if intent_enabled else "off"
+    needs_session = bool(params.session_id) and (expansion_mode == "auto" or params.dedup_turns > 0)
+    # Only the dedup ledger needs to persist state before the first capture.
+    session = (
+        await _load_session(service, ctx, params.session_id, auto_create=params.dedup_turns > 0)
+        if needs_session
+        else None
+    )
+    resolver = getattr(service, "vlm_resolver", None)
+
+    if expansion_mode == "auto" and session is not None:
+        if resolver is None:
+            raise RuntimeError(
+                "Context assembly requires a VLM resolver for account-owned expansion"
+            )
+        try:
+            expansion_planner = await resolver.get_query_planner(ctx.account_id)
+        except Exception as exc:
+            logger.warning("Account expansion planner unavailable: %s", exc)
+            queries, expansion_status = [params.query], "failed"
+        else:
+            queries, expansion_status = await expand_queries(
+                query=params.query,
+                session=session,
+                mode=expansion_mode,
+                planner=expansion_planner,
+            )
+    else:
+        queries, expansion_status = await expand_queries(
+            query=params.query,
+            session=session,
+            mode=expansion_mode,
+        )
+
+    ledger = await RecallLedger.load(
+        service=service,
+        ctx=ctx,
+        session=session,
+        dedup_turns=params.dedup_turns,
+    )
+    cooled = ledger.cooled_uris() if ledger else set()
+    excluded = normalize_exclude_uris(params.exclude_uris)
+    reranker = _context_reranker(service, params)
+
+    # The fan-out below embeds each planned query once per (query, target)
+    # find, so wrap it in the request-scoped query embedding cache: sibling
+    # finds share the first in-flight embed of each distinct query text.
+    async with query_embed_cache_scope():
+        candidates, gather_stats = await gather_candidates(
+            service=service,
+            ctx=ctx,
+            queries=queries,
+            quotas=quotas,
+            limit=params.limit,
+            score_threshold=params.score_threshold,
+            filter=params.filter,
+            image_url=params.image_url,
+            events_time_decay_protection=params.events_time_decay_protection,
+            search_type=params.search_type,
+            peer_scope=params.peer_scope,
+            penalties=penalties,
+            excluded=excluded,
+            cooled=cooled,
+            reranker=reranker,
+            # An anaphoric query may only name its topic through a session
+            # expansion, so the one rerank call scores against every planned query.
+            rerank_query="\n".join(queries),
+        )
+
+    # Read only the candidates whose planned tier actually needs a body: with
+    # the default tiers that is the events bucket, not every hit.
+    pins = normalize_detail(params.detail)
+    cap = per_entry_cap(params.max_tokens, len(candidates))
+    readable = [
+        c
+        for c in candidates
+        if needs_content(c, pins.for_category(c.category)) or oversized_abstract_needs_body(c, cap)
+    ]
+    contents: Dict[str, str] = {}
+    if readable:
+        contents = await prefetch_contents(service=service, candidates=readable)
+
+    plan = plan_entries(
+        candidates,
+        contents,
+        max_tokens=params.max_tokens,
+        detail=pins,
+    )
+
+    rendered = render_context(plan.entries) if params.render else ""
+
+    digest = ""
+    rewrite_status = "off"
+    rewrite_usage: Optional[Dict[str, int]] = None
+    rewrite_enabled = server_rewrite_enabled(params.rewrite)
+    if params.rewrite == "auto" and resolver is not None:
+        try:
+            rewrite_enabled = await resolver.has_dedicated_query_planner(ctx.account_id)
+        except Exception as exc:
+            logger.warning("Account rewrite planner unavailable: %s", exc)
+            rewrite_enabled = False
+            rewrite_status = "failed"
+    if plan.entries and rewrite_enabled:
+        if resolver is None:
+            raise RuntimeError(
+                "Context assembly requires a VLM resolver for account-owned rewrite"
+            )
+        try:
+            planner = await resolver.get_query_planner(ctx.account_id)
+        except Exception as exc:
+            logger.warning("Account rewrite planner unavailable: %s", exc)
+            rewrite_status = "failed"
+        else:
+            digest, rewrite_status, rewrite_usage = await rewrite_context(
+                query=params.query,
+                rendered=rendered or render_context(plan.entries),
+                max_bullets=params.rewrite_max_bullets,
+                valid_uris=[entry.uri for entry in plan.entries],
+                planner=planner,
+            )
+        if rewrite_status == "no_relevant":
+            rendered = ""
+
+    # A digest that reports no relevant memory blanks the block, so this turn
+    # served nothing: recording those URIs would cool them for `dedup_turns`
+    # turns without the reader ever having seen them, and hold them back from
+    # the later turn they are relevant to.
+    served = plan.entries if rewrite_status != "no_relevant" else []
+    if ledger and served:
+        try:
+            await ledger.record(served)
+        except Exception as exc:
+            logger.debug("Recall ledger record failed (%s); dedup stays best-effort", exc)
+
+    stats: Dict[str, Any] = {
+        **gather_stats,
+        **plan.stats,
+        "purpose": params.purpose,
+        "query_expansion": expansion_status,
+        "planned_queries": queries,
+        "score_threshold": params.score_threshold,
+        "other_peer_penalties": penalties,
+        "rewrite": rewrite_status,
+        "rewrite_usage": rewrite_usage,
+        "dedup": {
+            "turns": params.dedup_turns,
+            "status": ledger.status if ledger else "off",
+            "cooled": len(cooled),
+            "turn": ledger.turn if ledger else None,
+        },
+    }
+    return AssembleResult(
+        entries=plan.entries,
+        rendered=rendered,
+        digest=digest,
+        stats=stats,
+    )

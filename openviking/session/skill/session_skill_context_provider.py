@@ -186,9 +186,6 @@ class SessionSkillContextProvider(SessionExtractContextProvider):
     def get_tools(self) -> List[str]:
         return ["read"]
 
-    def get_schema_directories(self) -> List[str]:
-        return [str(resolve_skill_extract_templates_dir())]
-
     def _get_registry(self) -> MemoryTypeRegistry:
         if self._registry is None:
             self._registry = load_skill_extract_registry()

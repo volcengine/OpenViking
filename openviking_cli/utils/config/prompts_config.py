@@ -16,8 +16,6 @@ class PromptsConfig(BaseModel):
         ),
     )
 
-    model_config = {"extra": "forbid"}
-
     @classmethod
     def from_dict(cls, config: Dict[str, Any]) -> "PromptsConfig":
         """Create configuration from dictionary."""

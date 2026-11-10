@@ -38,7 +38,9 @@ The `setupEntry` must point at compiled JavaScript, not source TypeScript.
 
 ## Runtime Dependencies
 
-Runtime dependencies must include everything the compiled plugin imports at runtime. Development-only test/build packages belong in `devDependencies`.
+Runtime dependencies must include everything the compiled plugin imports at runtime. Development-only test/build packages belong in `devDependencies` in the source manifest.
+
+Published npm and ClawHub artifacts must remove the `devDependencies` field after `npm ci` and before `npm pack`. OpenClaw installs the extracted artifact as a project root, and `npm install --omit=dev` still resolves the root development dependency graph. Shipping that graph can therefore trigger npm Arborist peer-resolution failures even though none of those packages are needed at runtime.
 
 The package currently keeps an `axios` override to avoid installing vulnerable or incompatible transitive versions through OpenClaw packaging.
 
@@ -78,7 +80,8 @@ The package contract test should verify:
 - `openclaw.extensions` and `openclaw.setupEntry` point to `dist/*.js`,
 - package `files` include runtime assets and docs,
 - install manifest required files exist,
-- runtime dependencies and overrides are present.
+- runtime dependencies and overrides are present,
+- both release packaging paths strip `devDependencies` before `npm pack`.
 
 ## Out Of Scope
 

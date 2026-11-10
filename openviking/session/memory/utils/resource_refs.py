@@ -9,12 +9,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.utils.link_renderer import LinkRenderer
 
 RESOURCE_REF_SOURCE_CONTENT_WRITE = "content.write"
 RESOURCE_REF_SOURCE_SESSION_COMMIT = "session.commit"
 
-_RESOURCE_URI_PATH_CHARS = r"[^\s<>\]\)\"'，。；：！？、,;:!?）】》]+"
-_RESOURCE_URI_BOUNDARY = r"(?=$|[\s<>\]\)\"'，。；：！？、,;:!?.）】》])"
+_RESOURCE_URI_PATH_CHARS = r"[^\s<>\]\)\"'，。；：！？、,;:!?（）【】《》]+"
+_RESOURCE_URI_BOUNDARY = r"(?=$|[\s<>\]\)\"'，。；：！？、,;:!?.（）【】《》])"
 _RESOURCE_URI_PATTERN = (
     r"viking://(?:"
     rf"resources(?:/{_RESOURCE_URI_PATH_CHARS})?"
@@ -32,6 +33,10 @@ _INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
 _TRAILING_URI_PUNCTUATION = ".,;:!?，。；：！？、）】》"
 _SENTENCE_BOUNDARIES = "。！？.!?\n"
 _MAX_LINKIFIED_SENTENCE_CHARS = 160
+_MARKDOWN_CONTAINER_PREFIX_RE = re.compile(
+    r" {0,3}(?:>[ \t]?|(?:[-+*]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)"
+)
+_MARKDOWN_HEADING_PREFIX_RE = re.compile(r" {0,3}#{1,6}(?:[ \t]+|$)")
 
 
 def sync_memory_resource_refs(
@@ -89,13 +94,12 @@ def content_references_resource(
 
 
 def extract_resource_uris(content: str) -> List[str]:
-    """Extract visible resource URIs from markdown links or bare URI text."""
-    uris: List[str] = []
-    for match in _MARKDOWN_RESOURCE_LINK_RE.finditer(content or ""):
-        uri = _trim_resource_uri(match.group(2).strip())
-        if uri:
-            uris.append(uri)
+    """Extract literal storage URIs, decoding Markdown destinations only."""
+    refs, markdown_spans = _extract_markdown_resource_refs(content, ())
+    uris = [ref["resource_uri"] for ref in refs]
     for match in _RESOURCE_URI_RE.finditer(content or ""):
+        if _overlaps_spans(match.start(), match.end(), markdown_spans):
+            continue
         uri = _trim_resource_uri(match.group(0))
         if uri:
             uris.append(uri)
@@ -174,7 +178,9 @@ def _extract_markdown_resource_refs(
         if _overlaps_spans(match.start(), match.end(), protected_spans):
             continue
         label = match.group(1).strip()
-        resource_uri = _trim_resource_uri(match.group(2).strip())
+        resource_uri = LinkRenderer.normalize_markdown_target(
+            _trim_resource_uri(match.group(2).strip())
+        )
         link_spans.append((match.start(), match.end()))
         refs.append(
             {
@@ -193,7 +199,7 @@ def _unlink_matching_markdown_resource_links(
 ) -> str:
     def replacement(match: re.Match[str]) -> str:
         label = match.group(1).strip()
-        linked_uri = match.group(2)
+        linked_uri = LinkRenderer.normalize_markdown_target(match.group(2))
         if resource_ref_matches(linked_uri, resource_uri, recursive=recursive):
             return label
         return match.group(0)
@@ -208,7 +214,13 @@ def _remove_matching_bare_resource_uris(
     recursive: bool,
 ) -> str:
     text = content or ""
+    # Surviving Markdown destinations are encoded URLs, not bare storage URIs.
+    markdown_spans = [
+        (match.start(), match.end()) for match in _MARKDOWN_RESOURCE_LINK_RE.finditer(text)
+    ]
     for match in reversed(list(_RESOURCE_URI_RE.finditer(text))):
+        if _overlaps_spans(match.start(), match.end(), markdown_spans):
+            continue
         matched_uri = _trim_resource_uri(match.group(0))
         if not resource_ref_matches(matched_uri, resource_uri, recursive=recursive):
             continue
@@ -249,7 +261,7 @@ def _linkify_bare_resource_uris(
         if contains_resource_uri(anchor) or "](" in anchor:
             continue
         refs[-1]["match_text"] = anchor
-        replacement = f"[{anchor}]({resource_uri})"
+        replacement = f"[{anchor}]({LinkRenderer.encode_markdown_target(resource_uri)})"
         updated = updated[:anchor_start] + replacement + updated[end:]
         covered_start = anchor_start
 
@@ -264,12 +276,25 @@ def _previous_sentence_span(content: str, uri_start: int) -> Optional[tuple[int,
     if sentence_end <= 0:
         return None
 
+    line_start = content.rfind("\n", 0, sentence_end) + 1
+    sentence_start = _skip_markdown_line_prefix(content, line_start, uri_start)
+    table_start = sentence_start
+    while table_start < sentence_end and content[table_start].isspace():
+        table_start += 1
+    is_pipe_table = table_start < sentence_end and content[table_start] == "|"
     boundary_search_end = sentence_end
     if content[sentence_end - 1] in _SENTENCE_BOUNDARIES:
         boundary_search_end = sentence_end - 1
-    sentence_start = 0
-    for idx in range(boundary_search_end - 1, -1, -1):
-        if content[idx] in _SENTENCE_BOUNDARIES:
+    for idx in range(boundary_search_end - 1, sentence_start - 1, -1):
+        is_boundary = content[idx] in _SENTENCE_BOUNDARIES
+        if is_pipe_table and content[idx] == "|":
+            backslashes = 0
+            cursor = idx - 1
+            while cursor >= table_start and content[cursor] == "\\":
+                backslashes += 1
+                cursor -= 1
+            is_boundary = backslashes % 2 == 0
+        if is_boundary:
             sentence_start = idx + 1
             break
     while sentence_start < sentence_end and content[sentence_start].isspace():
@@ -279,6 +304,15 @@ def _previous_sentence_span(content: str, uri_start: int) -> Optional[tuple[int,
     if not anchor or len(anchor) > _MAX_LINKIFIED_SENTENCE_CHARS:
         return None
     return sentence_start, sentence_end
+
+
+def _skip_markdown_line_prefix(content: str, start: int, end: int) -> int:
+    position = start
+    while match := _MARKDOWN_CONTAINER_PREFIX_RE.match(content, position, end):
+        position = match.end()
+    if match := _MARKDOWN_HEADING_PREFIX_RE.match(content, position, end):
+        position = match.end()
+    return position
 
 
 def _merge_resource_refs(

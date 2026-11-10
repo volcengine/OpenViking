@@ -1,0 +1,10 @@
+.env
+.pytest_cache/
+.ruff_cache/
+.coverage
+.venv/
+uv.lock
+build/
+dist/
+__pycache__/
+*.egg-info/

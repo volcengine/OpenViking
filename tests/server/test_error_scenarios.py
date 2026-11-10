@@ -98,17 +98,16 @@ async def test_wrong_content_type(client: httpx.AsyncClient):
 
 
 async def test_invalid_uri_format(client: httpx.AsyncClient):
-    """Invalid URI format triggers unhandled FileNotFoundError.
-
-    BUG: The server should catch this and return a structured error response,
-    but currently FileNotFoundError is not mapped to OpenVikingError.
-    """
-    resp = await client.get(
-        "/api/v1/fs/ls",
-        params={"uri": "viking://"},
-    )
-    # Valid URI should work
-    assert resp.status_code == 200
+    """Public URI fields reject filesystem-like paths without a Viking scheme."""
+    for uri in ("resources", "/resources"):
+        resp = await client.get(
+            "/api/v1/fs/ls",
+            params={"uri": uri},
+        )
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["error"]["code"] == "INVALID_URI"
+        assert "viking://" in body["error"]["message"]
 
 
 async def test_export_nonexistent_uri(client: httpx.AsyncClient):

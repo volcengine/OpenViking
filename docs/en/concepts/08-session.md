@@ -6,11 +6,16 @@ Session manages conversation messages, tracks context usage, and extracts long-t
 
 **Lifecycle**: Create → Interact → Commit
 
-Getting a session by ID does not auto-create it by default. Use `client.get_session(..., auto_create=True)` when you want missing sessions to be created automatically.
+Getting a session by ID does not create it. Create the session first, then use
+`client.session(session_id=...)` to append messages or commit it.
 
 ```python
-session = client.session(session_id="chat_001")
-session.add_message("user", [TextPart("...")])
+from openviking_sdk import SyncHTTPClient
+
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+session_info = client.create_session(session_id="chat_001")
+session = client.session(session_id=session_info["session_id"])
+session.add_message(role="user", content="...")
 session.commit()
 ```
 
@@ -18,49 +23,39 @@ session.commit()
 
 | Method | Description |
 |--------|-------------|
-| `add_message(role, parts)` | Add message |
-| `used(contexts, skill)` | Record used contexts/skills |
+| `add_message(role, content=None, parts=None, options=None, peer_id=None)` | Add message |
 | `commit()` | Commit: archive (sync) + summary generation and memory extraction (async background) |
-| `get_task(task_id)` | Query background task status |
+| `client.get_task(task_id)` | Query background task status |
 
 ### add_message
 
 ```python
+from openviking_sdk import ContextPart, ImagePart, TextPart
+
 session.add_message(
-    "user",
-    [TextPart("How to configure embedding?")]
+    role="user",
+    content="How to configure embedding?",
 )
 
 session.add_message(
-    "assistant",
-    [
-        TextPart("Here's how..."),
-        ContextPart(uri="viking://user/memories/profile.md"),
+    role="assistant",
+    parts=[
+        TextPart(text="Here's how..."),
+        ContextPart(
+            uri="viking://~/memories/profile.md",
+            context_type="memory",
+            abstract="User profile",
+        ),
     ]
 )
 
 session.add_message(
-    "user",
-    [
-        TextPart("Remember this studio layout."),
+    role="user",
+    parts=[
+        TextPart(text="Remember this studio layout."),
         ImagePart(url="https://example.com/studio.png", detail="auto"),
     ]
 )
-```
-
-### used
-
-```python
-# Record used contexts
-session.used(contexts=["viking://user/memories/profile.md"])
-
-# Record used skill
-session.used(skill={
-    "uri": "viking://user/skills/code-search",
-    "input": "search config",
-    "output": "found 3 files",
-    "success": True
-})
 ```
 
 ### commit
@@ -74,10 +69,11 @@ result = session.commit()
 #   "archived": True
 # }
 
-# Poll background task progress
-task = client.get_task(result["task_id"])
-# task["status"]: "pending" | "running" | "completed" | "failed"
-# sum(task["result"]["memories_extracted"].values()): 3
+# A task is created only for an archive; no-op commits return skipped and task_id: null.
+task_id = result.get("task_id")
+if task_id:
+    task = client.get_task(task_id=task_id)
+    print(task)  # One status check does not mean the task has finished.
 ```
 
 ## Message Structure
@@ -108,18 +104,17 @@ class Message:
 
 commit() executes in two phases:
 
-**Phase 1 (synchronous, returns immediately)**:
-1. Increment compression_index
-2. Write messages to archive directory (`messages.jsonl`)
-3. Clear current messages list
-4. Return `task_id`
+**Phase 1 (archive preparation within the request)**:
+1. Allocate the archive number and split archived and retained messages under a path lock
+2. Persist archive messages (`messages.jsonl`) and enqueue processing in the durable queue
+3. Update the live message list; default commits archive all messages, while retention parameters can keep recent messages or turns
+4. Return `task_id` when an archive was created, to track background processing
 
 **Phase 2 (asynchronous background)**:
 5. Generate structured summary (LLM) → write `.abstract.md` and `.overview.md`
 6. Extract long-term memories
 7. Write `memory_diff.json` (memory change audit log) to archive directory
-8. Update active_count
-9. Write `.done` completion marker
+8. Write `.done` completion marker
 
 ### Summary Format
 
@@ -143,44 +138,29 @@ Unfinished tasks
 
 ## Memory Extraction
 
-### 8 Categories
+### Memory Types
 
-| Category | Belongs to | Description | Mergeable |
-|----------|------------|-------------|-----------|
-| **profile** | user | User identity/attributes | ✅ |
-| **preferences** | user | User preferences | ✅ |
-| **entities** | user | Entities (people/projects) | ✅ |
-| **events** | user | Events/decisions | ❌ |
-| **cases** | agent | Problem + solution | ❌ |
-| **patterns** | agent | Reusable patterns | ✅ |
-| **tools** | agent | Tool usage knowledge and best practices | ✅ |
-| **skills** | agent | Skill execution knowledge and workflow strategies | ✅ |
+After a session is committed, OpenViking uses the conversation and active memory policy to extract information that can improve future interactions. It stores the result in the current user's memory space. When a conversation involves a stable Peer, relevant memories can also be stored in that Peer's space.
+
+OpenViking includes memory types such as `profile`, `preferences`, `entities`, `events`, `identity`, `soul`, `cases`, `trajectories`, and `experiences`, and supports custom types for application-specific needs. See [Context Types](./02-context-types.md) for the complete purpose and path mapping.
+
+Within `memory_policy.memory_types`, `experiences` enables the complete Agent Evolution pipeline and automatically activates `cases` and `trajectories`. If `experiences` is absent, explicitly supplied `cases` and `trajectories` entries are ignored without an error.
+
+Agent Evolution also requires the effective `agent_evolution.enabled` switch. With `experiences` selected, the flow organizes the task as a case, records its execution as a trajectory, and derives reusable experiences. Query experience usage and execution outcome distributions through the [Agent Evolution API](../api/19-agent-evolution.md). The offline training framework under `openviking/session/train/` is an internal implementation, not a public training API.
 
 ### Extraction Flow
 
-```
-Messages → LLM Extract → Candidate Memories
-              ↓
-Vector Pre-filter → Find Similar Memories
-              ↓
-LLM Dedup Decision → candidate(skip/create/none) + item(merge/delete)
-              ↓
-Write to AGFS → Vectorize
-```
+<MemoryExtractionDiagram />
 
-### Dedup Decisions
+Existing memories inform extraction. An update can merge or edit existing files, create files, or delete them. Memory schemas, write permissions, and output validation constrain these operations; a commit does not necessarily add a memory. Subsequent training produces trajectories, experiences, or enabled session skills only when extraction yields a case.
 
-| Level | Decision | Description |
-|------|----------|-------------|
-| Candidate | `skip` | Candidate is duplicate, skip and do nothing |
-| Candidate | `create` | Create candidate memory (optionally delete conflicting existing memories first) |
-| Candidate | `none` | Do not create candidate; resolve existing memories by item decisions |
-| Per-existing item | `merge` | Merge candidate content into specified existing memory |
-| Per-existing item | `delete` | Delete specified conflicting existing memory |
+### Checking Update Results
+
+Wait for the commit task, then inspect `memory_diff.json`. Additions, updates, and deletions describe actual file changes. `skipped_operations` records proposed operations skipped by validation or policy. No-op updates are excluded from effective changes in the diff; metadata changes can still produce an update when the body is unchanged.
 
 ## Memory Diff
 
-Each `session.commit()` writes a `memory_diff.json` to the archive directory, recording all memory changes from that commit for auditing and rollback.
+Background processing writes `memory_diff.json` to the archive directory, recording memory changes for auditing and review. It may not exist when `task_id` is returned; check task completion as described in the [Sessions API](../api/05-sessions.md).
 
 ```json
 {
@@ -189,31 +169,40 @@ Each `session.commit()` writes a `memory_diff.json` to the archive directory, re
   "operations": {
     "adds": [
       {
-        "uri": "memory/user/xxx/identity.md",
+        "uri": "viking://user/alice/memories/identity.md",
         "memory_type": "identity",
         "after": "Newly created file content"
       }
     ],
     "updates": [
       {
-        "uri": "memory/user/xxx/context/project.md",
-        "memory_type": "context",
+        "uri": "viking://user/alice/memories/entities/project.md",
+        "memory_type": "entities",
         "before": "Content before modification",
         "after": "Content after modification"
       }
     ],
     "deletes": [
       {
-        "uri": "memory/user/xxx/context/old.md",
-        "memory_type": "context",
+        "uri": "viking://user/alice/memories/entities/old.md",
+        "memory_type": "entities",
         "deleted_content": "Deleted file content"
       }
     ]
   },
+  "skipped_operations": [
+    {
+      "memory_type": "events",
+      "page_id": 101,
+      "reason_code": "invalid_ranges",
+      "reason": "No valid event range could be resolved"
+    }
+  ],
   "summary": {
     "total_adds": 1,
     "total_updates": 1,
-    "total_deletes": 1
+    "total_deletes": 1,
+    "total_skipped": 1
   }
 }
 ```
@@ -225,9 +214,10 @@ Each `session.commit()` writes a `memory_diff.json` to the archive directory, re
 | `operations.adds` | New memories created (no `before`) |
 | `operations.updates` | Modified memories (with `before` and `after`) |
 | `operations.deletes` | Deleted memories (with `deleted_content`) |
+| `skipped_operations` | Intentionally skipped operations and their stable reason codes; these are not file changes |
 | `summary` | Counts per operation type |
 
-An empty `memory_diff.json` (all counts zero) is written even when no memory operations occurred.
+An empty `memory_diff.json` (all counts zero) is written when no applied or intentionally skipped operations occurred.
 
 ## Storage Structure
 
@@ -247,24 +237,23 @@ viking://user/{user_id}/sessions/{session_id}/
 └── tools/
     └── {tool_id}/tool.json
 
-viking://user/memories/
-├── profile.md                # Append-only user profile
+viking://~/memories/
+├── profile.md
+├── identity.md
+├── soul.md
 ├── preferences/
 ├── entities/
-└── events/
-
-viking://user/memories/
+├── events/
 ├── cases/
-├── patterns/
-├── tools/
-└── skills/
+├── trajectories/
+└── experiences/
 ```
 
-`viking://user/sessions/{session_id}` is accepted as a short form relative to
-the current request user and is canonicalized to
-`viking://user/{user_id}/sessions/{session_id}`. The old
-`viking://session/{session_id}` form is accepted as a backward-compatible alias
-for the same current-user session path and is not a separate storage root.
+`viking://~/sessions/{session_id}` uses the home alias and is expanded to
+`viking://user/{user_id}/sessions/{session_id}` for the authenticated caller.
+The uid-less spelling `viking://user/sessions/{session_id}` is no longer accepted
+and returns an error pointing at the `viking://~/...` form. The old
+`viking://session/{session_id}` form is also rejected.
 
 ## Related Documents
 

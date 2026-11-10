@@ -18,24 +18,6 @@ class TestProjectGroup(unittest.TestCase):
         if os.path.exists(TEST_PROJECT_ROOT):
             shutil.rmtree(TEST_PROJECT_ROOT)
 
-    def test_volatile_group(self):
-        # Path empty -> Volatile
-        group = get_or_create_project_group("")
-        self.assertTrue(group.has_project("default"))
-
-        # Create new
-        p1 = group.create_project("p1")
-        self.assertIsNotNone(p1)
-        self.assertTrue(group.has_project("p1"))
-
-        # List
-        names = group.list_projects()
-        self.assertIn("default", names)
-        self.assertIn("p1", names)
-
-        # Close
-        group.close()
-
     def test_persistent_group_lifecycle(self):
         # 1. Create and populate
         group = get_or_create_project_group(TEST_PROJECT_ROOT)

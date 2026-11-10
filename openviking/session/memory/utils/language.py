@@ -21,7 +21,12 @@ _JAPANESE_KANA_MIN_CHARS = 3
 _STRONG_DOMINANT_MIN_CHARS = 10
 _STRONG_DOMINANT_RATIO = 0.95
 _PRIMARY_LANGUAGES = {"zh-CN", "en"}
-_URI_LANGUAGE_NOISE_RE = re.compile(r"\b(?:viking|https?)://[^\s<>\]\)\"']+")
+# Bare import paths are machine tokens too: repeated .com domains otherwise
+# count as the Portuguese stopword "com" in code skeletons.
+_URI_LANGUAGE_NOISE_RE = re.compile(
+    r"\b(?:(?:viking|https?)://|(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}/)"
+    r"[^\s<>\]\)\"'`]+"
+)
 
 _LATIN_STOPWORDS = {
     "en": set(
@@ -341,33 +346,68 @@ def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
     return fallback
 
 
-def resolve_with_override(config, detect: Callable[[], str]) -> str:
+def resolve_with_override(
+    config, detect: Callable[[], str], *, output_language_override: str | None = None
+) -> str:
     """Return config override if set, else call `detect()`.
 
     The callable returns the detected output language, letting callers choose
     the detector (text vs conversation vs messages) without duplicating the
-    override resolution logic.
+    override resolution logic. An explicit string takes precedence over config;
+    ``""`` enables detection, while ``None`` retains the legacy config lookup.
     """
-    if config is None:
-        config = get_openviking_config()
-    override = (getattr(config, "output_language_override", None) or "").strip()
+    if output_language_override is None:
+        if config is None:
+            config = get_openviking_config()
+        output_language_override = getattr(config, "output_language_override", None)
+    override = (output_language_override or "").strip()
     if override:
         return override
     return detect()
 
 
+def resolve_output_language_from_text(
+    text: str,
+    config=None,
+    *,
+    fallback_language: str = "en",
+    output_language_override: str | None = None,
+) -> str:
+    """Resolve output language from text with an explicit fallback language.
+
+    Unlike ``resolve_output_language``, this helper does not consult locale or
+    timezone. Use it when an empty or low-signal text should not inherit the
+    runtime environment language.
+    """
+    fallback = (fallback_language or "en").strip() or "en"
+    return resolve_with_override(
+        config,
+        lambda: _detect_language_from_text(text, fallback),
+        output_language_override=output_language_override,
+    )
+
+
 def strip_language_detection_noise(text: str) -> str:
-    """Remove URI-like machine tokens that should not affect output language."""
+    """Remove URIs and bare domain paths that should not affect output language."""
     return _URI_LANGUAGE_NOISE_RE.sub(" ", text or "")
 
 
-def resolve_output_language(text: str, config=None) -> str:
+def resolve_output_language(
+    text: str, config=None, *, output_language_override: str | None = None
+) -> str:
     """Resolve output language from text, honoring config override before detection."""
     fallback = _resolve_system_fallback_language("en")
-    return resolve_with_override(config, lambda: _detect_language_from_text(text, fallback))
+    return resolve_output_language_from_text(
+        text,
+        config=config,
+        fallback_language=fallback,
+        output_language_override=output_language_override,
+    )
 
 
-def resolve_output_language_from_conversation(conversation: str, config=None) -> str:
+def resolve_output_language_from_conversation(
+    conversation: str, config=None, *, output_language_override: str | None = None
+) -> str:
     """Resolve output language from a conversation, honoring config override.
 
     When no override is set, uses `detect_language_from_conversation` which
@@ -375,7 +415,9 @@ def resolve_output_language_from_conversation(conversation: str, config=None) ->
     """
     fallback = _resolve_system_fallback_language("en")
     return resolve_with_override(
-        config, lambda: detect_language_from_conversation(conversation, fallback)
+        config,
+        lambda: detect_language_from_conversation(conversation, fallback),
+        output_language_override=output_language_override,
     )
 
 

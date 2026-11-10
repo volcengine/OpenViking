@@ -55,10 +55,6 @@ class MemoryTelemetryMeter:
 class TelemetryRuntime:
     meter_instance: MemoryTelemetryMeter = field(default_factory=MemoryTelemetryMeter)
 
-    def meter(self) -> MemoryTelemetryMeter:
-        return self.meter_instance
-
-
 _RUNTIME = TelemetryRuntime()
 
 

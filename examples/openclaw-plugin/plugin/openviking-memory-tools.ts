@@ -2,6 +2,10 @@ import { Type } from "@sinclair/typebox";
 
 import type { CommitSessionResult, FindResultItem } from "../client.js";
 import { clampScore, postProcessMemories } from "../memory-ranking.js";
+import {
+  resolveOpenVikingMessagePeerId,
+  type OpenVikingPeerRole,
+} from "../routing/identity-routing.js";
 import { isMemoryUri } from "../routing/memory-uri.js";
 
 export type OpenVikingMemoryToolContext = {
@@ -17,6 +21,7 @@ export type OpenVikingMemorySession = {
   sessionKey?: string;
   ovSessionId?: string;
   agentId: string;
+  actorPeerId?: string;
 };
 
 export type OpenVikingMemoryClient = {
@@ -30,7 +35,7 @@ export type OpenVikingMemoryClient = {
   ) => Promise<void>;
   commitSession: (
     sessionId: string,
-    options: { wait: true; agentId: string; keepRecentCount: number },
+    options: { wait: true; agentId?: string; keepRecentCount: number },
   ) => Promise<CommitSessionResult>;
   deleteUri: (uri: string, agentId?: string) => Promise<void>;
   find: (
@@ -45,8 +50,7 @@ export type OpenVikingMemoryToolsDeps = {
   getClient: () => Promise<OpenVikingMemoryClient>;
   normalizeSessionId: (sessionId: string) => string;
   createTempSessionId: () => string;
-  extractSenderId: (ctx?: OpenVikingMemoryToolContext) => string | undefined;
-  toRoleId: (senderId?: string) => string | undefined;
+  peerRole: OpenVikingPeerRole;
   resolvePluginSessionRouting: (ctx?: OpenVikingMemoryToolContext) => OpenVikingMemorySession;
   isBypassedSession: (ctx?: OpenVikingMemoryToolContext) => boolean;
   makeBypassedToolResult: (toolName: string) => unknown;
@@ -107,64 +111,105 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
             sessionId = deps.createTempSessionId();
             usedTempSession = true;
           }
-          const roleId = role === "user" ? deps.toRoleId(deps.extractSenderId(ctx)) : undefined;
+          const peerId = resolveOpenVikingMessagePeerId({
+            peerRole: deps.peerRole,
+            role,
+            senderPeerId: session.actorPeerId,
+            assistantPeerId: session.actorPeerId,
+          });
           await client.addSessionMessage(
             sessionId,
             role,
             [{ type: "text", text }],
-            session.agentId,
             undefined,
-            roleId,
+            undefined,
+            peerId,
           );
           const commitResult = await client.commitSession(sessionId, {
             wait: true,
-            agentId: session.agentId,
             keepRecentCount: 0,
           });
           const memoriesCount = totalCommitMemories(commitResult);
           if (commitResult.status === "failed") {
             deps.logger.warn(
-              `openviking: memory_store commit failed (sessionId=${sessionId}): ${commitResult.error ?? "unknown"}`,
+              `openviking: memory_store commit failed (sessionId=${sessionId}): ` +
+                `${commitResult.error ?? "unknown"}, trace_id=${commitResult.trace_id ?? "none"}`,
             );
             return {
-              content: [{ type: "text", text: `Memory extraction failed for session ${sessionId}: ${commitResult.error ?? "unknown"}` }],
+              content: [{
+                type: "text",
+                text: `Memory extraction failed for session ${sessionId}: ${commitResult.error ?? "unknown"}` +
+                  (commitResult.trace_id ? ` (trace_id=${commitResult.trace_id})` : ""),
+              }],
               details: {
                 action: "failed",
                 sessionId,
                 status: "failed",
                 error: commitResult.error,
+                traceId: commitResult.trace_id,
                 usedTempSession,
               },
             };
           }
           if (commitResult.status === "timeout") {
             deps.logger.warn(
-              `openviking: memory_store commit timed out (sessionId=${sessionId}), task_id=${commitResult.task_id ?? "none"}. Memories may still be extracting in background.`,
+              `openviking: memory_store commit timed out (sessionId=${sessionId}), ` +
+                `task_id=${commitResult.task_id ?? "none"}, trace_id=${commitResult.trace_id ?? "none"}. ` +
+                "Memories may still be extracting in background.",
             );
             return {
-              content: [{ type: "text", text: `Memory extraction timed out for session ${sessionId}. It may still complete in the background (task_id=${commitResult.task_id ?? "none"}).` }],
+              content: [{
+                type: "text",
+                text: `Memory extraction timed out for session ${sessionId}. ` +
+                  `It may still complete in the background (task_id=${commitResult.task_id ?? "none"}` +
+                  `${commitResult.trace_id ? `, trace_id=${commitResult.trace_id}` : ""}).`,
+              }],
               details: {
                 action: "timeout",
                 sessionId,
                 status: "timeout",
                 taskId: commitResult.task_id,
+                traceId: commitResult.trace_id,
                 usedTempSession,
               },
             };
           }
           if (memoriesCount === 0) {
             deps.logger.warn(
-              `openviking: memory_store committed but 0 memories extracted (sessionId=${sessionId}). ` +
-                "Check OpenViking server logs for embedding/extract errors (e.g. 401 API key, or extraction pipeline).",
+              `openviking: memory_store committed but 0 memories extracted (sessionId=${sessionId}), ` +
+                `trace_id=${commitResult.trace_id ?? "none"}. ` +
+                "No memory was created or updated. Check memory.extraction_enabled, VLM configuration/API keys, or whether the content is already stored.",
             );
-          } else {
-            deps.logger.info?.(`openviking: memory_store committed, memories=${memoriesCount}`);
+            return {
+              content: [{
+                type: "text",
+                text: `Memory extraction completed for session ${sessionId}, but created or updated no memory. ` +
+                  "The content may already be stored, memory extraction may be disabled, or the extractor found nothing new to store. " +
+                  "Tell the user no new memory was created." +
+                  (commitResult.trace_id ? ` (trace_id=${commitResult.trace_id})` : ""),
+              }],
+              details: {
+                action: "failed",
+                sessionId,
+                status: commitResult.status,
+                error: "no_memories_extracted",
+                memoriesCount,
+                archived: commitResult.archived ?? false,
+                traceId: commitResult.trace_id,
+                usedTempSession,
+              },
+            };
           }
+          deps.logger.info?.(
+            `openviking: memory_store committed, memories=${memoriesCount}, ` +
+              `trace_id=${commitResult.trace_id ?? "none"}`,
+          );
           return {
             content: [
               {
                 type: "text",
-                text: `Stored in OpenViking session ${sessionId} and committed ${memoriesCount} memories.`,
+                text: `Stored in OpenViking session ${sessionId} and committed ${memoriesCount} memories.` +
+                  (commitResult.trace_id ? ` (trace_id=${commitResult.trace_id})` : ""),
               },
             ],
             details: {
@@ -173,6 +218,7 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
               memoriesCount,
               status: commitResult.status,
               archived: commitResult.archived ?? false,
+              traceId: commitResult.trace_id,
               usedTempSession,
             },
           };
@@ -216,7 +262,7 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
               details: { action: "rejected", uri },
             };
           }
-          await client.deleteUri(uri, session.agentId);
+          await client.deleteUri(uri, session.actorPeerId);
           return {
             content: [{ type: "text", text: `Forgotten: ${uri}` }],
             details: { action: "deleted", uri },
@@ -252,7 +298,7 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
             limit: requestLimit,
             scoreThreshold: 0,
           },
-          session.agentId,
+          session.actorPeerId,
         );
         const candidates = postProcessMemories(result.memories ?? [], {
           limit: requestLimit,
@@ -272,7 +318,7 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
         }
         const top = candidates[0];
         if (candidates.length === 1 && clampScore(top.score) >= 0.85) {
-          await client.deleteUri(top.uri, session.agentId);
+          await client.deleteUri(top.uri, session.actorPeerId);
           return {
             content: [{ type: "text", text: `Forgotten: ${top.uri}` }],
             details: { action: "deleted", uri: top.uri, score: top.score ?? 0 },

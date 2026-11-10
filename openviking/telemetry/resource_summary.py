@@ -4,11 +4,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict
 
-from .context import get_current_telemetry
 from .operation import OperationTelemetry
-from .registry import register_telemetry, unregister_telemetry
 
 
 def _consume_semantic_request_stats(telemetry_id: str):
@@ -29,155 +27,61 @@ def _consume_embedding_request_stats(telemetry_id: str):
         return None
 
 
-def _consume_semantic_dag_stats(telemetry_id: str, root_uri: str | None):
+def _consume_semantic_tree_stats(telemetry_id: str, root_uri: str | None):
     try:
         from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
-        return SemanticProcessor.consume_dag_stats(telemetry_id=telemetry_id, uri=root_uri)
+        return SemanticProcessor.consume_tree_stats(telemetry_id=telemetry_id, uri=root_uri)
     except Exception:
         return None
 
 
-def register_wait_telemetry(wait: bool) -> str:
-    """Register current telemetry collector for async queue consumers when needed."""
-    handle = get_current_telemetry()
-    if not handle.telemetry_id:
-        return ""
-    if handle.enabled:
-        register_telemetry(handle)
-    return handle.telemetry_id
-
-
-def unregister_wait_telemetry(telemetry_id: str) -> None:
-    """Unregister request-scoped telemetry handle."""
-    unregister_telemetry(telemetry_id)
-
-
-def build_queue_status_payload(status: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """Convert queue status objects to response payload format."""
-    return {
-        name: {
-            "processed": s.processed,
-            "requeue_count": getattr(s, "requeue_count", 0),
-            "error_count": s.error_count,
-            "errors": [{"message": e.message} for e in s.errors],
-        }
-        for name, s in status.items()
-    }
-
-
-def summarize_queue_errors(queue_status: Dict[str, Any] | None) -> List[str]:
-    """Return human-readable summaries for queue groups with recorded errors."""
-    if not queue_status:
-        return []
-
-    summaries: List[str] = []
-    for name, status in queue_status.items():
-        if isinstance(status, dict):
-            raw_error_count = status.get("error_count", 0)
-            raw_errors = status.get("errors") or []
-        else:
-            raw_error_count = getattr(status, "error_count", 0)
-            raw_errors = getattr(status, "errors", []) or []
-
-        try:
-            error_count = int(raw_error_count or 0)
-        except (TypeError, ValueError):
-            error_count = 0
-        if error_count <= 0:
-            continue
-
-        messages: List[str] = []
-        for error in raw_errors[:3]:
-            if isinstance(error, dict):
-                message = error.get("message")
-            else:
-                message = getattr(error, "message", None) or str(error)
-            if message:
-                messages.append(str(message))
-
-        summary = f"{name} error_count={error_count}"
-        if messages:
-            summary = f"{summary}: {', '.join(messages)}"
-        summaries.append(summary)
-
-    return summaries
-
-
-def _resolve_queue_group(
-    *,
-    explicit_stats: Any,
-    fallback_status: Any,
-) -> Dict[str, int]:
-    if explicit_stats is not None:
-        return {
-            "processed": explicit_stats.processed,
-            "requeue_count": getattr(explicit_stats, "requeue_count", 0),
-            "error_count": explicit_stats.error_count,
-        }
-    if fallback_status is None:
+def _queue_metrics(stats: Any) -> Dict[str, int]:
+    if stats is None:
         return {"processed": 0, "requeue_count": 0, "error_count": 0}
-    if isinstance(fallback_status, dict):
-        return {
-            "processed": int(fallback_status.get("processed", 0) or 0),
-            "requeue_count": int(fallback_status.get("requeue_count", 0) or 0),
-            "error_count": int(fallback_status.get("error_count", 0) or 0),
-        }
     return {
-        "processed": fallback_status.processed,
-        "requeue_count": getattr(fallback_status, "requeue_count", 0),
-        "error_count": fallback_status.error_count,
+        "processed": stats.processed,
+        "requeue_count": stats.requeue_count,
+        "error_count": stats.error_count,
     }
 
 
-def record_resource_wait_metrics(
+def record_resource_queue_metrics(
     *,
-    telemetry: OperationTelemetry | None = None,
+    telemetry: OperationTelemetry,
     telemetry_id: str,
-    queue_status: Dict[str, Any],
     root_uri: str | None,
-) -> Dict[str, Dict[str, int]]:
-    """Apply queue and DAG metrics to a resource operation collector."""
-    telemetry = telemetry or get_current_telemetry()
+    queue_timing: Dict[str, Dict[str, float]] | None = None,
+) -> None:
+    """Apply queue and semantic-tree metrics to a resource operation collector."""
     if not telemetry.enabled:
-        return {
-            "semantic": {"processed": 0, "requeue_count": 0, "error_count": 0},
-            "embedding": {"processed": 0, "requeue_count": 0, "error_count": 0},
-        }
+        return
 
-    semantic = _resolve_queue_group(
-        explicit_stats=_consume_semantic_request_stats(telemetry_id),
-        fallback_status=queue_status.get("Semantic"),
-    )
-    embedding = _resolve_queue_group(
-        explicit_stats=_consume_embedding_request_stats(telemetry_id),
-        fallback_status=queue_status.get("Embedding"),
-    )
+    semantic = _queue_metrics(_consume_semantic_request_stats(telemetry_id))
+    embedding = _queue_metrics(_consume_embedding_request_stats(telemetry_id))
+    timing = queue_timing or {}
+    semantic_timing = timing.get("semantic", {"queue_wait_ms": 0.0, "execute_ms": 0.0})
+    embedding_timing = timing.get("embedding", {"queue_wait_ms": 0.0, "execute_ms": 0.0})
 
     telemetry.set("queue.semantic.processed", semantic["processed"])
     telemetry.set("queue.semantic.requeue_count", semantic["requeue_count"])
     telemetry.set("queue.semantic.error_count", semantic["error_count"])
+    telemetry.set("queue.semantic.queue_wait.duration_ms", semantic_timing["queue_wait_ms"])
+    telemetry.set("queue.semantic.execute.duration_ms", semantic_timing["execute_ms"])
     telemetry.set("queue.embedding.processed", embedding["processed"])
     telemetry.set("queue.embedding.requeue_count", embedding["requeue_count"])
     telemetry.set("queue.embedding.error_count", embedding["error_count"])
+    telemetry.set("queue.embedding.queue_wait.duration_ms", embedding_timing["queue_wait_ms"])
+    telemetry.set("queue.embedding.execute.duration_ms", embedding_timing["execute_ms"])
 
-    dag_stats = _consume_semantic_dag_stats(telemetry_id, root_uri)
-    if dag_stats is not None:
-        telemetry.set("semantic_nodes.total", dag_stats.total_nodes)
-        telemetry.set("semantic_nodes.done", dag_stats.done_nodes)
-        telemetry.set("semantic_nodes.pending", dag_stats.pending_nodes)
-        telemetry.set("semantic_nodes.running", dag_stats.in_progress_nodes)
-
-    return {
-        "semantic": semantic,
-        "embedding": embedding,
-    }
+    tree_stats = _consume_semantic_tree_stats(telemetry_id, root_uri)
+    if tree_stats is not None:
+        telemetry.set("semantic_nodes.total", tree_stats.total_nodes)
+        telemetry.set("semantic_nodes.done", tree_stats.done_nodes)
+        telemetry.set("semantic_nodes.pending", tree_stats.pending_nodes)
+        telemetry.set("semantic_nodes.running", tree_stats.in_progress_nodes)
 
 
 __all__ = [
-    "build_queue_status_payload",
-    "record_resource_wait_metrics",
-    "register_wait_telemetry",
-    "summarize_queue_errors",
-    "unregister_wait_telemetry",
+    "record_resource_queue_metrics",
 ]

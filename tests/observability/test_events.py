@@ -3,22 +3,25 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from openviking.metrics.datasources.base import EventMetricDataSource
 from openviking.observability.context import (
     bind_root_observability_context,
     reset_root_observability_context,
 )
 from openviking.observability.events import (
+    _GLOBAL_EVENT_BUS,
     ObservabilityEvent,
     register_event_subscriber,
-    reset_event_bus_for_tests,
     try_publish_event,
 )
+from openviking.observability.reporting.runtime import make_subscriber
 from openviking.telemetry.span_models import RootSpanAttributes
 
 
 def test_event_bus_fans_out_and_enriches_root_metadata():
-    reset_event_bus_for_tests()
+    _GLOBAL_EVENT_BUS.clear()
     seen_a: list[ObservabilityEvent] = []
     seen_b: list[ObservabilityEvent] = []
     register_event_subscriber("a", seen_a.append)
@@ -36,7 +39,7 @@ def test_event_bus_fans_out_and_enriches_root_metadata():
         try_publish_event("demo.event", {"value": 1})
     finally:
         reset_root_observability_context(token)
-        reset_event_bus_for_tests()
+        _GLOBAL_EVENT_BUS.clear()
 
     assert len(seen_a) == 1
     assert len(seen_b) == 1
@@ -48,14 +51,40 @@ def test_event_bus_fans_out_and_enriches_root_metadata():
 
 
 def test_metric_datasource_publishes_to_shared_bus_without_metrics_init():
-    reset_event_bus_for_tests()
+    _GLOBAL_EVENT_BUS.clear()
     seen: list[ObservabilityEvent] = []
+    exported = []
     register_event_subscriber("usage-audit-test", seen.append)
+    register_event_subscriber(
+        "reporting-test",
+        make_subscriber(
+            SimpleNamespace(report=exported.append),
+            {"telemetry": {"deployment": {"account_id": "cloud", "resource_id": "library"}}},
+        ),
+    )
     try:
-        EventMetricDataSource._emit("demo.metric", {"value": 3})
+        EventMetricDataSource._emit(
+            "vlm.call",
+            {
+                "account_id": "tenant",
+                "user_id": "alice",
+                "prompt_tokens": 3,
+                "cost_bearer": "customer",
+                "api_key": "private-key",
+                "prompt": "private-content",
+            },
+        )
     finally:
-        reset_event_bus_for_tests()
+        _GLOBAL_EVENT_BUS.clear()
 
     assert len(seen) == 1
-    assert seen[0].event_name == "demo.metric"
-    assert seen[0].payload == {"value": 3}
+    assert seen[0].event_name == "vlm.call"
+    assert len(exported) == 1
+    event = exported[0]
+    assert (event["account_id"], event["ov_account_id"], event["ov_user_id"]) == (
+        "cloud",
+        "tenant",
+        "alice",
+    )
+    assert event["prompt_tokens"] == 3 and event["cost_bearer"] == "customer"
+    assert "api_key" not in event and "prompt" not in event

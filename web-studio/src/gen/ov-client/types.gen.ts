@@ -49,6 +49,18 @@ export type AddMessageRequest = {
      */
     created_at?: string | null;
     /**
+     * Turn Id
+     */
+    turn_id?: string | null;
+    /**
+     * Message Kind
+     */
+    message_kind?: 'user_query' | 'assistant_step' | 'tool_transport' | 'checkpoint' | null;
+    /**
+     * Source Message Ids
+     */
+    source_message_ids?: Array<string> | null;
+    /**
      * Telemetry
      */
     telemetry?: boolean | {
@@ -77,7 +89,6 @@ export type AddMessageRequest = {
  * Provides hints for how the resource should be processed.
  * wait: Whether to wait for semantic extraction and vectorization to complete.
  * Default is False (async processing).
- * timeout: Timeout in seconds when wait=True. None means no timeout.
  * strict: Whether to use strict mode for processing. Default is True.
  * ignore_dirs: Comma-separated list of directory names to ignore during parsing.
  * include: Glob pattern for files to include during parsing.
@@ -130,10 +141,6 @@ export type AddResourceRequest = {
      */
     wait?: boolean;
     /**
-     * Timeout
-     */
-    timeout?: number | null;
-    /**
      * Strict
      */
     strict?: boolean;
@@ -183,7 +190,6 @@ export type AddResourceRequest = {
  * string values as host filesystem paths.
  * temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
  * wait: Whether to wait for skill processing to complete.
- * timeout: Timeout in seconds when wait=True.
  */
 export type AddSkillRequest = {
     /**
@@ -198,10 +204,6 @@ export type AddSkillRequest = {
      * Wait
      */
     wait?: boolean;
-    /**
-     * Timeout
-     */
-    timeout?: number | null;
     /**
      * Telemetry
      */
@@ -252,11 +254,39 @@ export type BodyTempUploadApiV1ResourcesTempUploadPost = {
  */
 export type CommitRequest = {
     /**
+     * Override only Working Memory generation for this commit; null inherits policy.
+     */
+    enable_working_memory?: boolean | null;
+    /**
      * Keep Recent Count
      *
      * Number of most-recent messages to keep live after commit. Plugin's afterTurn path typically passes its configured value (default 10); compact path passes 0 to archive everything.
      */
     keep_recent_count?: number;
+    /**
+     * Retention Mode
+     *
+     * Opt in to logical Turn retention. Omit to preserve keep_recent_count semantics.
+     */
+    retention_mode?: 'turn_budget' | null;
+    /**
+     * Keep Recent Turn Count
+     *
+     * Maximum number of newest logical user Turns to retain.
+     */
+    keep_recent_turn_count?: number | null;
+    /**
+     * Retained Message Token Budget
+     *
+     * Token budget for retained raw messages and checkpoint.
+     */
+    retained_message_token_budget?: number | null;
+    /**
+     * Min Raw Tail Steps
+     *
+     * Minimum number of latest atomic assistant Steps kept raw.
+     */
+    min_raw_tail_steps?: number | null;
     /**
      * Telemetry
      */
@@ -481,26 +511,6 @@ export type ImportRequest = {
 };
 
 /**
- * LinkRequest
- *
- * Request model for link.
- */
-export type LinkRequest = {
-    /**
-     * From Uri
-     */
-    from_uri: string;
-    /**
-     * To Uris
-     */
-    to_uris: string | Array<string>;
-    /**
-     * Reason
-     */
-    reason?: string;
-};
-
-/**
  * MkdirRequest
  *
  * Request model for mkdir.
@@ -562,6 +572,10 @@ export type ReindexRequest = {
      * Wait
      */
     wait?: boolean;
+    /**
+     * Dry Run
+     */
+    dry_run?: boolean;
 };
 
 /**
@@ -663,22 +677,6 @@ export type SetRoleRequest = {
 };
 
 /**
- * UnlinkRequest
- *
- * Request model for unlink.
- */
-export type UnlinkRequest = {
-    /**
-     * From Uri
-     */
-    from_uri: string;
-    /**
-     * To Uri
-     */
-    to_uri: string;
-};
-
-/**
  * UpsertPrivacyConfigRequest
  */
 export type UpsertPrivacyConfigRequest = {
@@ -696,24 +694,6 @@ export type UpsertPrivacyConfigRequest = {
      * Labels
      */
     labels?: {
-        [key: string]: unknown;
-    } | null;
-};
-
-/**
- * UsedRequest
- *
- * Request model for recording usage.
- */
-export type UsedRequest = {
-    /**
-     * Contexts
-     */
-    contexts?: Array<string> | null;
-    /**
-     * Skill
-     */
-    skill?: {
         [key: string]: unknown;
     } | null;
 };
@@ -747,18 +727,6 @@ export type ValidationError = {
 };
 
 /**
- * WaitRequest
- *
- * Request model for wait.
- */
-export type WaitRequest = {
-    /**
-     * Timeout
-     */
-    timeout?: number | null;
-};
-
-/**
  * WriteContentRequest
  *
  * Request to write, append, or create text content to a file.
@@ -780,10 +748,6 @@ export type WriteContentRequest = {
      * Wait
      */
     wait?: boolean;
-    /**
-     * Timeout
-     */
-    timeout?: number | null;
     /**
      * Telemetry
      */
@@ -862,7 +826,7 @@ export type GetSystemStatusResponses = {
 };
 
 export type PostSystemWaitData = {
-    body: WaitRequest;
+    body?: never;
     headers?: {
         /**
          * X-Api-Key
@@ -1070,7 +1034,7 @@ export type DeleteAdminAccountByAccountIdResponses = {
     /**
      * Successful Response
      */
-    200: unknown;
+    202: unknown;
 };
 
 export type GetAdminAccountIdUsersData = {
@@ -1537,6 +1501,18 @@ export type GetFsLsData = {
          * Alias for node_limit
          */
         limit?: number | null;
+        /**
+         * Sort By
+         *
+         * Sort directory and file groups before applying node_limit
+         */
+        sort_by?: 'name' | 'mtime' | null;
+        /**
+         * Sort Order
+         *
+         * Sort direction
+         */
+        sort_order?: 'asc' | 'desc';
     };
     url: '/api/v1/fs/ls';
 };
@@ -2513,136 +2489,6 @@ export type PostSearchGlobResponses = {
     200: unknown;
 };
 
-export type GetRelationsData = {
-    body?: never;
-    headers?: {
-        /**
-         * X-Api-Key
-         */
-        'x-api-key'?: string | null;
-        /**
-         * Authorization
-         */
-        authorization?: string | null;
-        /**
-         * X-Openviking-Account
-         */
-        'X-OpenViking-Account'?: string | null;
-        /**
-         * X-Openviking-User
-         */
-        'X-OpenViking-User'?: string | null;
-    };
-    path?: never;
-    query: {
-        /**
-         * Uri
-         *
-         * Viking URI
-         */
-        uri: string;
-    };
-    url: '/api/v1/relations';
-};
-
-export type GetRelationsErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetRelationsError = GetRelationsErrors[keyof GetRelationsErrors];
-
-export type GetRelationsResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
-export type DeleteRelationsLinkData = {
-    body: UnlinkRequest;
-    headers?: {
-        /**
-         * X-Api-Key
-         */
-        'x-api-key'?: string | null;
-        /**
-         * Authorization
-         */
-        authorization?: string | null;
-        /**
-         * X-Openviking-Account
-         */
-        'X-OpenViking-Account'?: string | null;
-        /**
-         * X-Openviking-User
-         */
-        'X-OpenViking-User'?: string | null;
-    };
-    path?: never;
-    query?: never;
-    url: '/api/v1/relations/link';
-};
-
-export type DeleteRelationsLinkErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type DeleteRelationsLinkError = DeleteRelationsLinkErrors[keyof DeleteRelationsLinkErrors];
-
-export type DeleteRelationsLinkResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
-export type PostRelationsLinkData = {
-    body: LinkRequest;
-    headers?: {
-        /**
-         * X-Api-Key
-         */
-        'x-api-key'?: string | null;
-        /**
-         * Authorization
-         */
-        authorization?: string | null;
-        /**
-         * X-Openviking-Account
-         */
-        'X-OpenViking-Account'?: string | null;
-        /**
-         * X-Openviking-User
-         */
-        'X-OpenViking-User'?: string | null;
-    };
-    path?: never;
-    query?: never;
-    url: '/api/v1/relations/link';
-};
-
-export type PostRelationsLinkErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostRelationsLinkError = PostRelationsLinkErrors[keyof PostRelationsLinkErrors];
-
-export type PostRelationsLinkResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
 export type GetPrivacyConfigsData = {
     body?: never;
     headers?: {
@@ -3350,54 +3196,6 @@ export type PostSessionIdCommitResponses = {
     200: unknown;
 };
 
-export type PostSessionIdExtractData = {
-    body?: never;
-    headers?: {
-        /**
-         * X-Api-Key
-         */
-        'x-api-key'?: string | null;
-        /**
-         * Authorization
-         */
-        authorization?: string | null;
-        /**
-         * X-Openviking-Account
-         */
-        'X-OpenViking-Account'?: string | null;
-        /**
-         * X-Openviking-User
-         */
-        'X-OpenViking-User'?: string | null;
-    };
-    path: {
-        /**
-         * Session Id
-         *
-         * Session ID
-         */
-        session_id: string;
-    };
-    query?: never;
-    url: '/api/v1/sessions/{session_id}/extract';
-};
-
-export type PostSessionIdExtractErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostSessionIdExtractError = PostSessionIdExtractErrors[keyof PostSessionIdExtractErrors];
-
-export type PostSessionIdExtractResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
 export type PostSessionIdMessagesData = {
     body: AddMessageRequest;
     headers?: {
@@ -3440,54 +3238,6 @@ export type PostSessionIdMessagesErrors = {
 export type PostSessionIdMessagesError = PostSessionIdMessagesErrors[keyof PostSessionIdMessagesErrors];
 
 export type PostSessionIdMessagesResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
-export type PostSessionIdUsedData = {
-    body: UsedRequest;
-    headers?: {
-        /**
-         * X-Api-Key
-         */
-        'x-api-key'?: string | null;
-        /**
-         * Authorization
-         */
-        authorization?: string | null;
-        /**
-         * X-Openviking-Account
-         */
-        'X-OpenViking-Account'?: string | null;
-        /**
-         * X-Openviking-User
-         */
-        'X-OpenViking-User'?: string | null;
-    };
-    path: {
-        /**
-         * Session Id
-         *
-         * Session ID
-         */
-        session_id: string;
-    };
-    query?: never;
-    url: '/api/v1/sessions/{session_id}/used';
-};
-
-export type PostSessionIdUsedErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostSessionIdUsedError = PostSessionIdUsedErrors[keyof PostSessionIdUsedErrors];
-
-export type PostSessionIdUsedResponses = {
     /**
      * Successful Response
      */
@@ -4229,7 +3979,14 @@ export type GetTaskByTaskIdData = {
          */
         task_id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Include Events
+         *
+         * Include recorded execution events
+         */
+        include_events?: boolean;
+    };
     url: '/api/v1/tasks/{task_id}';
 };
 

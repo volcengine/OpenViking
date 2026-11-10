@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
@@ -6,6 +7,7 @@ use crate::error::{Error, Result};
 const OPENVIKING_CLI_CONFIG_ENV: &str = "OPENVIKING_CLI_CONFIG_FILE";
 pub const DEFAULT_CUSTOM_PORT: &str = "1933";
 pub const DEFAULT_CUSTOM_URL: &str = "http://127.0.0.1:1933";
+pub const GATEWAY_TOKEN_HEADER: &str = "X-Gateway-Token";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadConfig {
@@ -41,9 +43,9 @@ pub struct Config {
     pub api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_api_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", alias = "account_id")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", alias = "user_id")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actor_peer_id: Option<String>,
@@ -83,8 +85,52 @@ pub struct Config {
         alias = "extra_header",
         skip_serializing_if = "Option::is_none"
     )]
-    pub extra_headers: Option<std::collections::HashMap<String, String>>,
+    pub extra_headers: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_mode: Option<String>,
+    /// LDAP username for authentication.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ldap_username: Option<String>,
+    /// LDAP password for authentication.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ldap_password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oidc_token: Option<String>,
 }
+
+/// Every top-level key `Config` models, deserialization aliases included.
+///
+/// `Config` has no catch-all, so serializing it over ovcli.conf silently drops
+/// any key it does not declare — including the `plugin` section the memory
+/// plugins read. The config writers carry the keys missing from this list over
+/// from the file they replace. `extra_header` is listed because it deserializes
+/// into `extra_headers` and is written back under the new spelling; preserving
+/// the old one would duplicate it.
+pub(crate) const KNOWN_CONFIG_KEYS: &[&str] = &[
+    "url",
+    "api_key",
+    "root_api_key",
+    "account",
+    "user",
+    "actor_peer_id",
+    "agent_id",
+    "timeout",
+    "output",
+    "echo_command",
+    "show_progress",
+    "verbose",
+    "profile",
+    "upload",
+    "extra_headers",
+    "extra_header",
+    "gateway_token",
+    "auth_mode",
+    "ldap_username",
+    "ldap_password",
+    "oidc_token",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EffectiveAuth {
@@ -99,6 +145,10 @@ fn default_url() -> String {
 
 fn default_timeout() -> f64 {
     60.0
+}
+
+pub(crate) fn timeout_is_valid(timeout: f64) -> bool {
+    timeout > 0.0 && std::time::Duration::try_from_secs_f64(timeout).is_ok()
 }
 
 fn default_output_format() -> String {
@@ -163,6 +213,11 @@ impl Default for Config {
             profile: false,
             upload: UploadConfig::default(),
             extra_headers: None,
+            gateway_token: None,
+            auth_mode: None,
+            ldap_username: None,
+            ldap_password: None,
+            oidc_token: None,
         }
     }
 }
@@ -198,26 +253,11 @@ impl Config {
     }
 
     pub fn load_required() -> Result<Self> {
-        // Resolution order: env var > default path
-        if let Ok(env_path) = std::env::var(OPENVIKING_CLI_CONFIG_ENV) {
-            return Self::load_required_from_path(&PathBuf::from(env_path));
-        }
-
-        let config_path = default_config_path()?;
-        Self::load_required_from_path(&config_path)
+        Self::load_required_from_path(&effective_config_path()?)
     }
 
     pub fn load_default() -> Result<Self> {
-        // Resolution order: env var > default path
-        if let Ok(env_path) = std::env::var(OPENVIKING_CLI_CONFIG_ENV) {
-            let p = PathBuf::from(env_path);
-            if p.exists() {
-                return Self::from_file(&p.to_string_lossy());
-            }
-        }
-
-        let config_path = default_config_path()?;
-        Self::load_default_from_path(&config_path)
+        Self::load_default_from_path(&effective_config_path()?)
     }
 
     pub fn load_required_from_path(path: &Path) -> Result<Self> {
@@ -246,7 +286,7 @@ impl Config {
     }
 
     pub fn save_default(&self) -> Result<()> {
-        let config_path = default_config_path()?;
+        let config_path = effective_config_path()?;
         if let Some(parent) = config_path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| Error::Config(format!("Failed to create config directory: {}", e)))?;
@@ -266,11 +306,55 @@ impl Config {
         self.actor_peer_id.clone().or_else(|| self.agent_id.clone())
     }
 
+    pub(crate) fn effective_gateway_token(&self) -> Option<String> {
+        self.gateway_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .map(ToString::to_string)
+            .or_else(|| {
+                self.extra_headers.as_ref().and_then(|headers| {
+                    headers
+                        .iter()
+                        .find(|(key, _)| key.eq_ignore_ascii_case(GATEWAY_TOKEN_HEADER))
+                        .map(|(_, value)| value.trim())
+                        .filter(|value| !value.is_empty())
+                        .map(ToString::to_string)
+                })
+            })
+    }
+
+    pub(crate) fn effective_extra_headers(&self) -> Option<HashMap<String, String>> {
+        let mut headers = self.extra_headers.clone().unwrap_or_default();
+        headers.retain(|key, _| !key.eq_ignore_ascii_case(GATEWAY_TOKEN_HEADER));
+        if headers.is_empty() {
+            None
+        } else {
+            Some(headers)
+        }
+    }
+
     fn validate_identity_mode(&self) -> Result<()> {
         if self.actor_peer_id.is_some() && self.agent_id.is_some() {
             return Err(Error::Config(
                 "actor_peer_id cannot be used with agent_id".to_string(),
             ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_runtime_values(&self) -> Result<()> {
+        if !timeout_is_valid(self.timeout) {
+            return Err(Error::Config(format!(
+                "Invalid timeout value {}: timeout must be a positive finite number of seconds",
+                self.timeout
+            )));
+        }
+        if !matches!(self.output.as_str(), "table" | "json") {
+            return Err(Error::Config(format!(
+                "Invalid output value {:?}: expected table or json",
+                self.output
+            )));
         }
         Ok(())
     }
@@ -285,22 +369,30 @@ impl Config {
         let api_key = if sudo {
             self.root_api_key.clone()
         } else {
-            api_key_override.or_else(|| self.api_key.clone())
+            api_key_override
+                .or_else(|| self.api_key.clone())
+                .or_else(|| self.root_api_key.clone())
         };
         let account = account_override.or_else(|| self.account.clone());
         let user = user_override.or_else(|| self.user.clone());
 
-        let send_identity = if sudo {
-            true
-        } else {
-            api_key.is_none() || api_key.as_deref() == self.root_api_key.as_deref()
-        };
-
         EffectiveAuth {
             api_key,
-            account: send_identity.then_some(account).flatten(),
-            user: send_identity.then_some(user).flatten(),
+            account,
+            user,
         }
+    }
+}
+
+/// Resolve the file used by both requests and configuration management.
+/// An explicit path stays selected even when it does not exist yet.
+pub fn effective_config_path() -> Result<PathBuf> {
+    match std::env::var_os(OPENVIKING_CLI_CONFIG_ENV) {
+        Some(path) if !path.is_empty() => Ok(PathBuf::from(path)),
+        Some(_) => Err(Error::Config(format!(
+            "{OPENVIKING_CLI_CONFIG_ENV} must not be empty"
+        ))),
+        None => default_config_path(),
     }
 }
 
@@ -311,9 +403,15 @@ pub fn default_config_path() -> Result<PathBuf> {
 }
 
 pub fn display_config_home() -> String {
-    let path = default_config_path()
-        .ok()
-        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
+    let path = effective_config_path().ok().and_then(|path| {
+        path.parent().map(|parent| {
+            if parent.as_os_str().is_empty() {
+                PathBuf::from(".")
+            } else {
+                parent.to_path_buf()
+            }
+        })
+    });
     let Some(path) = path else {
         return "~/.openviking".to_string();
     };
@@ -340,7 +438,62 @@ pub fn get_or_create_machine_id() -> Result<String> {
 mod tests {
     use crate::error::Error;
 
-    use super::{Config, merge_csv_options};
+    use super::{Config, KNOWN_CONFIG_KEYS, UploadConfig, merge_csv_options};
+
+    // A field added to `Config` but missing from KNOWN_CONFIG_KEYS would be
+    // treated as somebody else's key and restored from the file being replaced,
+    // making it impossible to clear.
+    #[test]
+    fn known_config_keys_covers_every_serialized_field() {
+        let config = Config {
+            url: "http://not-the-default".to_string(),
+            api_key: Some("k".into()),
+            root_api_key: Some("k".into()),
+            account: Some("a".into()),
+            user: Some("u".into()),
+            actor_peer_id: Some("p".into()),
+            agent_id: Some("g".into()),
+            timeout: 1.0,
+            output: "json".to_string(),
+            echo_command: false,
+            show_progress: true,
+            verbose: true,
+            profile: true,
+            upload: UploadConfig {
+                ignore_dirs: Some("d".into()),
+                include: Some("i".into()),
+                exclude: Some("e".into()),
+            },
+            extra_headers: Some(std::collections::HashMap::new()),
+            gateway_token: Some("t".into()),
+            auth_mode: Some("m".into()),
+            ldap_username: Some("n".into()),
+            ldap_password: Some("w".into()),
+            oidc_token: Some("o".into()),
+        };
+
+        let value = serde_json::to_value(&config).expect("config should serialize");
+        let serialized: Vec<&str> = value
+            .as_object()
+            .expect("config serializes to an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+
+        for key in &serialized {
+            assert!(
+                KNOWN_CONFIG_KEYS.contains(key),
+                "Config serializes `{key}` but KNOWN_CONFIG_KEYS omits it",
+            );
+        }
+        for key in KNOWN_CONFIG_KEYS {
+            // `extra_header` is a deserialization alias, never serialized.
+            assert!(
+                serialized.contains(key) || *key == "extra_header",
+                "KNOWN_CONFIG_KEYS lists `{key}` but Config never serializes it",
+            );
+        }
+    }
 
     #[test]
     fn load_required_from_path_reports_missing_cli_config() {
@@ -376,7 +529,8 @@ mod tests {
                 "api_key": "test-key",
                 "account": "acme",
                 "user": "alice",
-                "actor_peer_id": "peer-a"
+                "actor_peer_id": "peer-a",
+                "gateway_token": "gateway-secret"
             }"#,
         )
         .expect("config should deserialize");
@@ -384,6 +538,7 @@ mod tests {
         assert_eq!(config.account.as_deref(), Some("acme"));
         assert_eq!(config.user.as_deref(), Some("alice"));
         assert_eq!(config.actor_peer_id.as_deref(), Some("peer-a"));
+        assert_eq!(config.gateway_token.as_deref(), Some("gateway-secret"));
         assert!(config.upload.ignore_dirs.is_none());
         assert!(config.upload.include.is_none());
         assert!(config.upload.exclude.is_none());
@@ -428,6 +583,49 @@ mod tests {
     }
 
     #[test]
+    fn runtime_validation_rejects_invalid_timeout_values() {
+        for timeout in [-1.0, 0.0, f64::INFINITY, f64::NAN, 1e300] {
+            let config = Config {
+                timeout,
+                ..Config::default()
+            };
+            let error = config
+                .validate_runtime_values()
+                .expect_err("invalid timeout should fail runtime validation");
+            assert!(error.to_string().contains("Invalid timeout value"));
+        }
+    }
+
+    #[test]
+    fn config_file_with_invalid_timeout_still_loads_for_repair() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("ovcli.conf");
+        std::fs::write(&path, r#"{"timeout": -1}"#).expect("config file should be written");
+
+        let config =
+            Config::from_file(&path.to_string_lossy()).expect("repair commands must load the file");
+
+        assert_eq!(config.timeout, -1.0);
+        assert!(config.validate_runtime_values().is_err());
+    }
+
+    #[test]
+    fn config_file_with_invalid_output_still_loads_for_repair() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("ovcli.conf");
+        std::fs::write(&path, r#"{"output": "yaml"}"#).expect("config file should be written");
+
+        let config =
+            Config::from_file(&path.to_string_lossy()).expect("repair commands must load the file");
+
+        assert_eq!(config.output, "yaml");
+        let error = config
+            .validate_runtime_values()
+            .expect_err("normal commands must reject an invalid output format");
+        assert!(error.to_string().contains("Invalid output value \"yaml\""));
+    }
+
+    #[test]
     fn config_deserializes_root_api_key() {
         let config: Config = serde_json::from_str(
             r#"{
@@ -443,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_auth_omits_stale_identity_for_regular_user_key() {
+    fn effective_auth_forwards_explicit_identity_with_regular_user_key() {
         let config = Config {
             api_key: Some("user-key".to_string()),
             root_api_key: Some("root-key".to_string()),
@@ -455,8 +653,8 @@ mod tests {
         let auth = config.effective_auth(false);
 
         assert_eq!(auth.api_key.as_deref(), Some("user-key"));
-        assert!(auth.account.is_none());
-        assert!(auth.user.is_none());
+        assert_eq!(auth.account.as_deref(), Some("stale-account"));
+        assert_eq!(auth.user.as_deref(), Some("stale-user"));
     }
 
     #[test]
@@ -492,6 +690,54 @@ mod tests {
     }
 
     #[test]
+    fn effective_auth_sends_explicit_identity_independently_of_gateway_token() {
+        let config = Config {
+            api_key: Some("trusted-root-key".to_string()),
+            account: Some("acme".to_string()),
+            user: Some("alice".to_string()),
+            gateway_token: Some("gateway-secret".to_string()),
+            ..Config::default()
+        };
+
+        let auth = config.effective_auth(false);
+
+        assert_eq!(auth.api_key.as_deref(), Some("trusted-root-key"));
+        assert_eq!(auth.account.as_deref(), Some("acme"));
+        assert_eq!(auth.user.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn effective_auth_uses_root_key_for_trusted_identity_without_gateway_token() {
+        let config = Config {
+            root_api_key: Some("trusted-root-key".to_string()),
+            account: Some("acme".to_string()),
+            user: Some("alice".to_string()),
+            ..Config::default()
+        };
+
+        let auth = config.effective_auth(false);
+
+        assert_eq!(auth.api_key.as_deref(), Some("trusted-root-key"));
+        assert_eq!(auth.account.as_deref(), Some("acme"));
+        assert_eq!(auth.user.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn effective_auth_does_not_invent_missing_gateway_identity() {
+        let config = Config {
+            api_key: Some("trusted-root-key".to_string()),
+            gateway_token: Some("gateway-secret".to_string()),
+            ..Config::default()
+        };
+
+        let auth = config.effective_auth(false);
+
+        assert_eq!(auth.api_key.as_deref(), Some("trusted-root-key"));
+        assert_eq!(auth.account, None);
+        assert_eq!(auth.user, None);
+    }
+
+    #[test]
     fn effective_auth_uses_root_key_and_identity_for_sudo() {
         let config = Config {
             api_key: Some("user-key".to_string()),
@@ -506,21 +752,6 @@ mod tests {
         assert_eq!(auth.api_key.as_deref(), Some("root-key"));
         assert_eq!(auth.account.as_deref(), Some("acme"));
         assert_eq!(auth.user.as_deref(), Some("alice"));
-    }
-
-    #[test]
-    fn config_deserializes_account_id_and_user_id_aliases() {
-        let config: Config = serde_json::from_str(
-            r#"{
-                "url": "http://127.0.0.1:1933",
-                "account_id": "acme",
-                "user_id": "alice"
-            }"#,
-        )
-        .expect("config should deserialize aliases");
-
-        assert_eq!(config.account.as_deref(), Some("acme"));
-        assert_eq!(config.user.as_deref(), Some("alice"));
     }
 
     #[test]
@@ -667,5 +898,35 @@ mod tests {
             headers.get("Authorization"),
             Some(&"Bearer token".to_string())
         );
+    }
+
+    #[test]
+    fn gateway_token_is_kept_out_of_general_headers() {
+        let config = Config {
+            gateway_token: Some("gateway-secret".to_string()),
+            ..Config::default()
+        };
+
+        assert_eq!(
+            config.effective_gateway_token().as_deref(),
+            Some("gateway-secret")
+        );
+        assert!(config.effective_extra_headers().is_none());
+    }
+
+    #[test]
+    fn legacy_gateway_header_is_extracted_from_general_headers() {
+        let mut extra_headers = std::collections::HashMap::new();
+        extra_headers.insert("x-gateway-token".to_string(), "manual-secret".to_string());
+        let config = Config {
+            extra_headers: Some(extra_headers),
+            ..Config::default()
+        };
+
+        assert_eq!(
+            config.effective_gateway_token().as_deref(),
+            Some("manual-secret")
+        );
+        assert!(config.effective_extra_headers().is_none());
     }
 }

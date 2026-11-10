@@ -1,0 +1,58 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+"""Small shared helpers for the train pipeline."""
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from openviking.session.train.domain import Rollout, RolloutAnalysis
+
+_EXPERIENCE_NAME_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
+
+
+def experience_target_uri(root_uri: str, name: str, uri: str | None = None) -> str:
+    """Use the explicit URI or the historical experience filename fallback."""
+    if uri:
+        return uri
+    filename = _EXPERIENCE_NAME_RE.sub("_", name.strip()).strip("._-")
+    return f"{root_uri.rstrip('/')}/{filename or 'new_experience'}.md"
+
+
+def average_score(analyses: list[RolloutAnalysis | None]) -> float | None:
+    """Return the mean evaluation score across analyses, ignoring None entries."""
+    scores = [
+        float(analysis.evaluation.score)
+        for analysis in analyses
+        if analysis is not None and analysis.evaluation is not None
+    ]
+    if not scores:
+        return None
+    return sum(scores) / len(scores)
+
+
+def validate_rollouts_have_cases(rollouts: list[Rollout]) -> None:
+    """Raise ``ValueError`` if any rollout is missing its ``case``."""
+    missing = [
+        idx for idx, rollout in enumerate(rollouts) if getattr(rollout, "case", None) is None
+    ]
+    if missing:
+        raise ValueError(
+            "rollout training requires Rollout.case for all rollouts; "
+            f"missing indices={missing}"
+        )
+
+
+def safe_int(value: Any) -> int | None:
+    """Parse ``value`` as a positive integer, returning ``None`` on failure/zero."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def first_uri(uris: list[str]) -> str | None:
+    """Return the first URI from a list, or ``None`` if empty."""
+    return uris[0] if uris else None

@@ -1,1462 +1,504 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""openGauss-backed vector collection adapter.
+"""openGauss vector database adapter using psycopg2.
 
-The official openGauss container ships a native ``vector`` type and HNSW/IVFFlat
-index support.  The adapter stores one SQL table per OpenViking collection and
-keeps collection/index metadata in small sidecar tables.
+openGauss (DataVec) provides native vector types and HNSW / IVFFlat / DISKANN
+indexes. No separate pgvector extension is required on openGauss >= 6.0.3.
+
+Driver: any psycopg2-compatible driver.
+  Install: pip install "openviking[opengauss]"  (installs psycopg2-binary)
+  The openGauss-connector-python-psycopg2 package exposes the same `psycopg2`
+  module interface and works as a drop-in alternative.
 """
 
 from __future__ import annotations
 
-import datetime as dt
 import json
-import math
-import re
-import threading
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional
 
-from openviking.storage.expr import (
-    And,
-    Contains,
-    Eq,
-    FilterExpr,
-    In,
-    Or,
-    PathScope,
-    Range,
-    RawDSL,
-    TimeRange,
+from openviking.storage.expr import FilterExpr, Or
+from openviking.storage.vectordb.collection.collection import Collection
+from openviking.storage.vectordb_adapters.base import (
+    VIKINGDB_STRING_FIELD_BYTE_LIMIT,
+    VIKINGDB_TEXT_FIELD_BYTE_LIMIT,
+    CollectionAdapter,
 )
-from openviking.storage.vectordb.collection.collection import Collection, ICollection
-from openviking.storage.vectordb.collection.result import (
-    AggregateResult,
-    DataItem,
-    FetchDataInCollectionResult,
-    SearchItemResult,
-    SearchResult,
-)
-from openviking.storage.vectordb.index.index import IIndex
-from openviking.storage.vectordb.store.data import DeltaRecord
-from openviking.storage.vectordb_adapters.base import CollectionAdapter
+from openviking_cli.exceptions import UnimplementedError
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.vectordb_config import (
+    OpenGaussConfig,
+    VectorDBBackendConfig,
+)
+
+from .opengauss.catalog import (
+    _create_collection_table,
+    _ensure_meta_table,
+    _load_collection_meta,
+    _validate_distributed_environment,
+)
+from .opengauss.collection import (
+    OpenGaussCollection,
+)
+from .opengauss.connection import (
+    _create_connection_pool,
+    _PooledConnectionProxy,
+)
+from .opengauss.sql import (
+    _EMPTY_OR_FILTER,
+    _META_TABLE,
+    _VECTOR_OPS,
+    _build_where_clause,
+    _date_time_to_epoch_ms,
+    _index_access_method,
+    _index_quantization,
+    _quote_identifier,
+    _validate_identifier,
+)
 
 logger = get_logger(__name__)
 
-_COLLECTION_META_TABLE = "__openviking_opengauss_collections"
-_INDEX_META_TABLE = "__openviking_opengauss_indexes"
-_DEFAULT_SCHEMA = "public"
-_IDENT_RE = re.compile(r"[^a-zA-Z0-9_]+")
-_MAX_IDENTIFIER_BYTES = 63
 
-_FIELD_TYPE_SQL: Dict[str, str] = {
-    "string": "TEXT",
-    "path": "TEXT",
-    "int64": "BIGINT",
-    "int32": "INTEGER",
-    "float": "DOUBLE PRECISION",
-    "double": "DOUBLE PRECISION",
-    "bool": "BOOLEAN",
-    "boolean": "BOOLEAN",
-    "date_time": "TIMESTAMP WITH TIME ZONE",
-}
-
-_VECTOR_OPS: Dict[str, Dict[str, str]] = {
-    "cosine": {"operator": "<=>", "hnsw": "vector_cosine_ops"},
-    "ip": {"operator": "<#>", "hnsw": "vector_ip_ops"},
-    "l2": {"operator": "<->", "hnsw": "vector_l2_ops"},
-}
-
-
-def _import_psycopg2():
+def _save_collection_meta(conn, name: str, meta: Dict[str, Any], distributed: bool = False):
+    """Merge collection metadata under a row lock."""
+    _ensure_meta_table(conn, distributed=distributed)
+    cursor = conn.cursor()
     try:
-        import psycopg2  # type: ignore  # noqa: PLC0415
-
-        return psycopg2
-    except ImportError as exc:  # pragma: no cover - exercised only without optional driver
-        raise ImportError(
-            "The openGauss backend requires a psycopg2-compatible driver. "
-            'Install it with `pip install "openviking[opengauss]"`, or install another '
-            "psycopg2-compatible driver that can connect to openGauss."
-        ) from exc
-
-
-def _quote_ident(name: str) -> str:
-    return '"' + str(name).replace('"', '""') + '"'
-
-
-def _qualify(schema: str, name: str) -> str:
-    return f"{_quote_ident(schema)}.{_quote_ident(name)}"
-
-
-def _safe_identifier(*parts: Any, prefix: str = "ov") -> str:
-    raw = "_".join(str(part or "") for part in parts)
-    normalized = _IDENT_RE.sub("_", raw).strip("_").lower() or "default"
-    name = f"{prefix}_{normalized}"
-    encoded = name.encode("utf-8")
-    if len(encoded) <= _MAX_IDENTIFIER_BYTES:
-        return name
-    import hashlib
-
-    digest = hashlib.sha1(encoded).hexdigest()[:10]
-    keep = max(8, _MAX_IDENTIFIER_BYTES - len(prefix) - len(digest) - 3)
-    return f"{prefix}_{normalized[:keep]}_{digest}"
-
-
-def _json_default(value: Any) -> Any:
-    if isinstance(value, (dt.datetime, dt.date)):
-        return value.isoformat()
-    return str(value)
-
-
-def _json_dumps(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=_json_default)
-
-
-def _encode_scope_roots(value: Any) -> str:
-    roots = value if isinstance(value, list) else [value]
-    normalized = [str(root) for root in roots if root is not None]
-    return "\n" + "\n".join(normalized) + "\n" if normalized else "\n"
-
-
-def _vector_literal(vector: Sequence[float]) -> str:
-    values = []
-    for item in vector:
-        number = float(item)
-        if not math.isfinite(number):
-            number = 0.0
-        values.append(format(number, ".12g"))
-    return "[" + ",".join(values) + "]"
-
-
-def _normalize_distance(distance: str) -> str:
-    value = (distance or "cosine").strip().lower()
-    if value not in _VECTOR_OPS:
-        raise ValueError(
-            "openGauss vector backend supports only cosine, l2, and ip distance metrics; "
-            f"got {distance!r}"
+        cursor.execute(
+            f'SELECT meta_json FROM "{_META_TABLE}" WHERE table_name = %s FOR UPDATE',
+            (name,),
         )
-    return value
-
-
-def _coerce_sql_value(value: Any, field_type: str | None) -> Any:
-    if value is None:
-        return None
-    normalized_type = (field_type or "").lower()
-    if normalized_type == "date_time":
-        if isinstance(value, dt.datetime):
-            return value
-        if isinstance(value, dt.date):
-            return dt.datetime.combine(value, dt.time.min, tzinfo=dt.timezone.utc)
-        return str(value)
-    if normalized_type in {"int64", "int32"}:
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
-    if normalized_type in {"float", "double"}:
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return None
-        return number if math.isfinite(number) else None
-    if normalized_type in {"bool", "boolean"}:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            lowered = value.strip().lower()
-            if lowered in {"true", "t", "yes", "y", "1", "on"}:
-                return True
-            if lowered in {"false", "f", "no", "n", "0", "off"}:
-                return False
-            return None
-        return bool(value)
-    if isinstance(value, (dict, list, tuple)):
-        return _json_dumps(value)
-    return value
-
-
-def _sparse_dot(left: Optional[Dict[str, float]], right: Optional[Dict[str, float]]) -> float:
-    if not left or not right:
-        return 0.0
-    total = 0.0
-    for key, raw_value in left.items():
-        try:
-            total += float(raw_value) * float(right.get(key, 0.0))
-        except (TypeError, ValueError):
-            continue
-    return total
-
-
-class OpenGaussIndex(IIndex):
-    """Metadata-only logical index facade for openGauss."""
-
-    def __init__(
-        self, collection: "OpenGaussCollection", index_name: str, meta: Dict[str, Any]
-    ) -> None:
-        super().__init__(meta=meta)
-        self._collection = collection
-        self._index_name = index_name
-        self._meta = dict(meta)
-
-    def upsert_data(self, delta_list: List[DeltaRecord]):
-        raise NotImplementedError("OpenGaussIndex.upsert_data is managed at collection level")
-
-    def delete_data(self, delta_list: List[DeltaRecord]):
-        raise NotImplementedError("OpenGaussIndex.delete_data is managed at collection level")
-
-    def search(
-        self,
-        query_vector: Optional[List[float]],
-        limit: int = 10,
-        filters: Optional[Dict[str, Any]] = None,
-        sparse_raw_terms: Optional[List[str]] = None,
-        sparse_values: Optional[List[float]] = None,
-    ) -> Tuple[List[int], List[float]]:
-        raise NotImplementedError("OpenGaussIndex.search is not exposed via raw index interface")
-
-    def aggregate(self, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        raise NotImplementedError("OpenGaussIndex.aggregate is not exposed via raw index interface")
-
-    def update(
-        self, scalar_index: Optional[Dict[str, Any]] = None, description: Optional[str] = None
-    ):
-        self._collection.update_index(
-            index_name=self._index_name,
-            scalar_index=scalar_index,
-            description=description,
-        )
-        self._meta = self._collection.get_index_meta_data(self._index_name) or self._meta
-
-    def get_meta_data(self):
-        return dict(self._meta)
-
-    def close(self):
-        return None
-
-    def drop(self):
-        self._collection.drop_index(self._index_name)
-
-
-class OpenGaussCollection(ICollection):
-    """A single OpenViking collection stored in openGauss."""
-
-    DEFAULT_FETCH_LIMIT = 256
-    DEFAULT_SPARSE_SCAN_LIMIT = 10_000
-    INTERNAL_PATH_FIELDS = {
-        "parent_uri": "TEXT",
-        "scope_roots": "TEXT",
-        "uri_depth": "BIGINT",
-    }
-
-    def __init__(
-        self,
-        *,
-        conn: Any,
-        schema_name: str,
-        table_name: str,
-        logical_collection_name: str,
-        project_name: str,
-        dense_vector_name: str,
-        sparse_vector_name: str,
-        distance_metric: str,
-        meta: Optional[Dict[str, Any]] = None,
-        vector_dim: int = 0,
-        lock: Optional[threading.RLock] = None,
-        reconnect: Optional[Any] = None,
-    ) -> None:
-        super().__init__()
-        self._conn = conn
-        self._lock = lock or threading.RLock()
-        self._reconnect = reconnect
-        self._schema_name = (schema_name or _DEFAULT_SCHEMA).strip() or _DEFAULT_SCHEMA
-        self._table_name = table_name
-        self._logical_collection_name = logical_collection_name
-        self._project_name = project_name
-        self._dense_vector_name = dense_vector_name
-        self._sparse_vector_name = sparse_vector_name
-        self._distance_metric = _normalize_distance(distance_metric)
-        self._meta = dict(meta or {})
-        self._vector_dim = int(vector_dim or self._extract_vector_dim(self._meta) or 0)
-        self._field_types = self._build_field_type_map(self._meta)
-
-    @property
-    def collection_key(self) -> str:
-        return self._table_name
-
-    @staticmethod
-    def _extract_vector_dim(meta: Dict[str, Any]) -> int:
-        for field in meta.get("Fields", []) or []:
-            if field.get("FieldType") == "vector":
-                try:
-                    return int(field.get("Dim") or 0)
-                except (TypeError, ValueError):
-                    return 0
-        return 0
-
-    @staticmethod
-    def _build_field_type_map(meta: Dict[str, Any]) -> Dict[str, str]:
-        mapping: Dict[str, str] = {}
-        for field in meta.get("Fields", []) or []:
-            name = field.get("FieldName")
-            field_type = field.get("FieldType")
-            if name and field_type:
-                mapping[str(name)] = str(field_type)
-        mapping.setdefault("id", "string")
-        mapping.setdefault("parent_uri", "path")
-        mapping.setdefault("scope_roots", "string")
-        mapping.setdefault("uri_depth", "int64")
-        return mapping
-
-    def _ensure_connection(self) -> Any:
-        if getattr(self._conn, "closed", 0):
-            if self._reconnect is None:
-                raise RuntimeError("openGauss connection is closed")
-            self._conn = self._reconnect()
-        return self._conn
-
-    def _safe_rollback(self) -> None:
-        try:
-            if not getattr(self._conn, "closed", 1):
-                self._conn.rollback()
-        except Exception:
-            logger.debug("Failed to rollback openGauss connection", exc_info=True)
-
-    def _execute(
-        self,
-        sql: str,
-        params: Optional[Sequence[Any]] = None,
-        *,
-        fetch: bool = False,
-    ) -> List[Tuple[Any, ...]]:
-        with self._lock:
-            conn = self._ensure_connection()
-            cur = conn.cursor()
-            try:
-                cur.execute(sql, list(params or []))
-                rows = cur.fetchall() if fetch else []
-                conn.commit()
-                return rows
-            except Exception:
-                self._safe_rollback()
-                raise
-            finally:
-                cur.close()
-
-    def _table_exists(self) -> bool:
-        rows = self._execute(
-            """
-            SELECT 1
-            FROM information_schema.tables
-            WHERE table_schema = %s AND table_name = %s
-            LIMIT 1
-            """,
-            [self._schema_name, self._table_name],
-            fetch=True,
-        )
-        return bool(rows)
-
-    def create_remote_collection(self, meta_data: Dict[str, Any]) -> None:
-        self._meta = dict(meta_data)
-        self._vector_dim = self._extract_vector_dim(self._meta)
-        self._field_types = self._build_field_type_map(self._meta)
-        if self._vector_dim <= 0:
-            raise ValueError("openGauss collection requires a positive dense vector dimension")
-
-        columns = ["id TEXT PRIMARY KEY"]
-        seen = {"id"}
-        for field in meta_data.get("Fields", []) or []:
-            ddl = self._field_to_column_ddl(field)
-            field_name = field.get("FieldName")
-            if ddl and field_name not in seen:
-                columns.append(ddl)
-                seen.add(str(field_name))
-        for field_name, sql_type in self.INTERNAL_PATH_FIELDS.items():
-            if field_name not in seen:
-                columns.append(f"{_quote_ident(field_name)} {sql_type}")
-                seen.add(field_name)
-
-        self._execute(f"CREATE TABLE IF NOT EXISTS {self._table_ref()} ({', '.join(columns)})")
-        self._save_collection_meta(meta_data)
-
-    def _field_to_column_ddl(self, field: Dict[str, Any]) -> Optional[str]:
-        name = field.get("FieldName")
-        field_type = str(field.get("FieldType") or "").lower()
-        if not name or name == "id":
-            return None
-        if field_type == "vector":
-            dim = int(field.get("Dim") or self._vector_dim or 0)
-            if dim <= 0:
-                raise ValueError("openGauss vector field requires Dim")
-            return f"{_quote_ident(name)} vector({dim})"
-        if field_type == "sparse_vector":
-            return f"{_quote_ident(name)} TEXT"
-        return f"{_quote_ident(name)} {_FIELD_TYPE_SQL.get(field_type, 'TEXT')}"
-
-    def _save_collection_meta(self, meta: Dict[str, Any]) -> None:
-        self._execute(
-            f"""
-            MERGE INTO {self._meta_table_ref(_COLLECTION_META_TABLE)} target
-            USING (
-                SELECT
-                    %s AS table_name,
-                    %s AS logical_collection_name,
-                    %s AS project_name,
-                    %s AS meta_json
-            ) source
-            ON (target.table_name = source.table_name)
-            WHEN MATCHED THEN UPDATE SET
-                logical_collection_name = source.logical_collection_name,
-                project_name = source.project_name,
-                meta_json = source.meta_json,
-                updated_at = CURRENT_TIMESTAMP
-            WHEN NOT MATCHED THEN INSERT
-                (table_name, logical_collection_name, project_name, meta_json, updated_at)
-                VALUES (
-                    source.table_name,
-                    source.logical_collection_name,
-                    source.project_name,
-                    source.meta_json,
-                    CURRENT_TIMESTAMP
-                )
-            """,
-            [
-                self.collection_key,
-                self._logical_collection_name,
-                self._project_name,
-                _json_dumps(meta),
-            ],
-        )
-
-    def _save_index_meta(self, index_name: str, meta: Dict[str, Any]) -> None:
-        self._execute(
-            f"""
-            MERGE INTO {self._meta_table_ref(_INDEX_META_TABLE)} target
-            USING (
-                SELECT
-                    %s AS table_name,
-                    %s AS index_name,
-                    %s AS meta_json
-            ) source
-            ON (
-                target.table_name = source.table_name
-                AND target.index_name = source.index_name
+        row = cursor.fetchone()
+        if row is None:
+            merged = dict(meta)
+            cursor.execute(
+                f'INSERT INTO "{_META_TABLE}" (table_name, meta_json) VALUES (%s, %s)',
+                (name, json.dumps(merged)),
             )
-            WHEN MATCHED THEN UPDATE SET
-                meta_json = source.meta_json,
-                updated_at = CURRENT_TIMESTAMP
-            WHEN NOT MATCHED THEN INSERT
-                (table_name, index_name, meta_json, updated_at)
-                VALUES (
-                    source.table_name,
-                    source.index_name,
-                    source.meta_json,
-                    CURRENT_TIMESTAMP
-                )
-            """,
-            [self.collection_key, index_name, _json_dumps(meta)],
-        )
-
-    def _delete_index_meta(self, index_name: str) -> None:
-        self._execute(
-            f"DELETE FROM {self._meta_table_ref(_INDEX_META_TABLE)} "
-            "WHERE table_name = %s AND index_name = %s",
-            [self.collection_key, index_name],
-        )
-
-    def _all_columns(self) -> List[str]:
-        rows = self._execute(
-            """
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema = %s AND table_name = %s
-            ORDER BY ordinal_position
-            """,
-            [self._schema_name, self._table_name],
-            fetch=True,
-        )
-        return [str(row[0]) for row in rows]
-
-    def _table_ref(self) -> str:
-        return _qualify(self._schema_name, self._table_name)
-
-    def _meta_table_ref(self, table_name: str) -> str:
-        return _qualify(self._schema_name, table_name)
-
-    def _index_ref(self, index_name: str) -> str:
-        return _qualify(self._schema_name, index_name)
-
-    def _function_table_name(self, table_name: str) -> str:
-        return f"{_quote_ident(self._schema_name)}.{_quote_ident(table_name)}"
-
-    def _ensure_columns_for_record(self, record: Dict[str, Any]) -> None:
-        existing = set(self._all_columns())
-        for field_name in record:
-            if field_name in existing:
-                continue
-            if field_name == "id":
-                continue
-            if field_name == self._dense_vector_name:
-                sql_type = f"vector({self._vector_dim})"
-            elif field_name == self._sparse_vector_name:
-                sql_type = "TEXT"
-            elif field_name in self.INTERNAL_PATH_FIELDS:
-                sql_type = self.INTERNAL_PATH_FIELDS[field_name]
-            else:
-                field_type = self._field_types.get(field_name)
-                sql_type = _FIELD_TYPE_SQL.get(str(field_type or "").lower(), "TEXT")
-                self._field_types.setdefault(field_name, field_type or "string")
-            self._execute(
-                f"ALTER TABLE {self._table_ref()} ADD COLUMN {_quote_ident(field_name)} {sql_type}"
-            )
-            existing.add(field_name)
-
-    def _select_columns(
-        self,
-        output_fields: Optional[List[str]],
-        *,
-        include_vector: bool = False,
-        include_sparse: bool = False,
-    ) -> List[str]:
-        columns = self._all_columns()
-        wanted = ["id"]
-        if output_fields:
-            for field in output_fields:
-                if field != "id" and field in columns and field not in wanted:
-                    wanted.append(field)
         else:
-            for field in columns:
-                if field == "id":
-                    continue
-                if field == self._dense_vector_name and not include_vector:
-                    continue
-                if field == self._sparse_vector_name and not include_sparse:
-                    continue
-                wanted.append(field)
-        if (
-            include_vector
-            and self._dense_vector_name in columns
-            and self._dense_vector_name not in wanted
-        ):
-            wanted.append(self._dense_vector_name)
-        if (
-            include_sparse
-            and self._sparse_vector_name in columns
-            and self._sparse_vector_name not in wanted
-        ):
-            wanted.append(self._sparse_vector_name)
-        return wanted
-
-    def _row_to_payload(
-        self, row: Sequence[Any], columns: Sequence[str]
-    ) -> Tuple[Any, Dict[str, Any]]:
-        record = dict(zip(columns, row, strict=False))
-        record_id = record.pop("id", "")
-        record.pop(self._dense_vector_name, None)
-        sparse = record.pop(self._sparse_vector_name, None)
-        if sparse is not None and self._sparse_vector_name in columns:
-            try:
-                record[self._sparse_vector_name] = json.loads(sparse)
-            except (TypeError, ValueError):
-                record[self._sparse_vector_name] = sparse
-        return record_id, record
-
-    def _where_sql(self, filters: Optional[Dict[str, Any]]) -> Tuple[str, List[Any]]:
-        clause, params = self._compile_filter(filters or {})
-        return (f" WHERE {clause}", params) if clause else ("", [])
-
-    def _compile_filter(self, payload: Any) -> Tuple[str, List[Any]]:
-        if not payload:
-            return "", []
-        if not isinstance(payload, dict):
-            return "", []
-        op = str(payload.get("op") or "").lower()
-        if not op:
-            clauses = []
-            params: List[Any] = []
-            for key, value in payload.items():
-                clauses.append(f"{_quote_ident(str(key))} = %s")
-                params.append(value)
-            return " AND ".join(clauses), params
-        if op == "and":
-            return self._join_filter_clauses("AND", payload.get("conds", []) or [])
-        if op == "or":
-            return self._join_filter_clauses("OR", payload.get("conds", []) or [])
-        if op == "must":
-            field = str(payload.get("field") or "")
-            values = list(payload.get("conds", []) or [])
-            if not field or not values:
-                return "", []
-            return self._match_sql(field, values, negate=False)
-        if op == "must_not":
-            field = str(payload.get("field") or "")
-            values = list(payload.get("conds", []) or [])
-            if not field or not values:
-                return "", []
-            return self._match_sql(field, values, negate=True)
-        if op in {"range", "time_range"}:
-            field = str(payload.get("field") or "")
-            clauses = []
-            params = []
-            for sql_op, key in ((">=", "gte"), (">", "gt"), ("<=", "lte"), ("<", "lt")):
-                if payload.get(key) is not None:
-                    clauses.append(f"{_quote_ident(field)} {sql_op} %s")
-                    params.append(_coerce_sql_value(payload[key], self._field_types.get(field)))
-            return " AND ".join(clauses), params
-        if op == "range_out":
-            field = str(payload.get("field") or "")
-            clauses = []
-            params = []
-            if payload.get("gte") is not None:
-                clauses.append(f"{_quote_ident(field)} < %s")
-                params.append(payload["gte"])
-            if payload.get("lte") is not None:
-                clauses.append(f"{_quote_ident(field)} > %s")
-                params.append(payload["lte"])
-            return " OR ".join(clauses), params
-        if op == "contains":
-            field = str(payload.get("field") or "")
-            return f"{_quote_ident(field)} LIKE %s", [f"%{payload.get('substring', '')}%"]
-        if op == "prefix":
-            field = str(payload.get("field") or "")
-            return f"{_quote_ident(field)} LIKE %s", [f"{payload.get('prefix', '')}%"]
-        logger.warning("openGauss vector backend ignoring unsupported filter op=%r", op)
-        return "", []
-
-    def _join_filter_clauses(self, operator: str, conds: Iterable[Any]) -> Tuple[str, List[Any]]:
-        clauses = []
-        params: List[Any] = []
-        for cond in conds:
-            clause, cond_params = self._compile_filter(cond)
-            if clause:
-                clauses.append(f"({clause})")
-                params.extend(cond_params)
-        return f" {operator} ".join(clauses), params
-
-    def _match_sql(self, field: str, values: List[Any], *, negate: bool) -> Tuple[str, List[Any]]:
-        if field == "scope_roots":
-            clauses = []
-            params = []
-            for value in values:
-                clauses.append(f"{_quote_ident(field)} LIKE %s")
-                params.append(f"%\n{str(value)}\n%")
-            joined = " OR ".join(clauses)
-        elif len(values) == 1:
-            joined = f"{_quote_ident(field)} = %s"
-            params = [values[0]]
-        else:
-            joined = f"{_quote_ident(field)} IN ({', '.join(['%s'] * len(values))})"
-            params = values
-        return (f"NOT ({joined})" if negate else joined), params
-
-    # ------------------------------------------------------------------
-    # ICollection lifecycle
-    # ------------------------------------------------------------------
-    def update(self, fields: Optional[Dict[str, Any]] = None, description: Optional[str] = None):
-        meta = dict(self.get_meta_data() or {})
-        if fields is not None:
-            meta["Fields"] = fields
-        if description is not None:
-            meta["Description"] = description
-        self._meta = meta
-        self._field_types = self._build_field_type_map(meta)
-        self._save_collection_meta(meta)
-        return meta
-
-    def get_meta_data(self):
-        rows = self._execute(
-            f"SELECT meta_json FROM {self._meta_table_ref(_COLLECTION_META_TABLE)} WHERE table_name = %s",
-            [self.collection_key],
-            fetch=True,
-        )
-        if not rows:
-            return {}
-        try:
-            return json.loads(rows[0][0])
-        except (TypeError, ValueError):
-            return {}
-
-    def close(self):
-        return None
-
-    def drop(self):
-        self._execute(f"DROP TABLE IF EXISTS {self._table_ref()}")
-        self._execute(
-            f"DELETE FROM {self._meta_table_ref(_INDEX_META_TABLE)} WHERE table_name = %s",
-            [self.collection_key],
-        )
-        self._execute(
-            f"DELETE FROM {self._meta_table_ref(_COLLECTION_META_TABLE)} WHERE table_name = %s",
-            [self.collection_key],
-        )
-
-    def create_index(self, index_name: str, meta_data: Dict[str, Any]):
-        full_meta = dict(meta_data)
-        full_meta["IndexName"] = index_name
-        vector_meta = dict(full_meta.get("VectorIndex", {}) or {})
-        distance = _normalize_distance(vector_meta.get("Distance") or self._distance_metric)
-        vector_meta["IndexType"] = "hnsw"
-        full_meta["VectorIndex"] = vector_meta
-        self._create_vector_index(index_name, distance, full_meta)
-        for field_name in full_meta.get("ScalarIndex", []) or []:
-            self._create_scalar_index(index_name, str(field_name))
-        self._save_index_meta(index_name, full_meta)
-        return OpenGaussIndex(self, index_name, full_meta)
-
-    def _create_vector_index(
-        self,
-        index_name: str,
-        distance: str,
-        meta: Dict[str, Any],
-    ) -> None:
-        if self._dense_vector_name not in self._all_columns():
-            return
-        ops_class = _VECTOR_OPS[distance]["hnsw"]
-        pg_index_name = _safe_identifier(self._table_name, index_name, "vec", prefix="idx")
-        try:
-            hnsw = meta.get("VectorIndex") or {}
-            m = int(hnsw.get("M") or hnsw.get("m") or 16)
-            ef = int(hnsw.get("EfConstruction") or hnsw.get("ef_construction") or 64)
-            self._execute(
-                f"""
-                CREATE INDEX IF NOT EXISTS {_quote_ident(pg_index_name)}
-                ON {self._table_ref()}
-                USING hnsw ({_quote_ident(self._dense_vector_name)} {ops_class})
-                WITH (m = {m}, ef_construction = {ef})
-                """
+            merged = json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
+            merged.update(meta)
+            cursor.execute(
+                f'UPDATE "{_META_TABLE}" SET meta_json = %s WHERE table_name = %s',
+                (json.dumps(merged), name),
             )
-        except Exception as exc:
-            raise RuntimeError(f"Failed to create openGauss vector index {pg_index_name}") from exc
-
-    def _create_scalar_index(self, index_name: str, field_name: str) -> None:
-        if field_name not in self._all_columns():
-            return
-        pg_index_name = _safe_identifier(self._table_name, index_name, field_name, prefix="idx")
-        try:
-            self._execute(
-                f"""
-                CREATE INDEX IF NOT EXISTS {_quote_ident(pg_index_name)}
-                ON {self._table_ref()} ({_quote_ident(field_name)})
-                """
-            )
-        except Exception as exc:
-            logger.warning("Failed to create openGauss scalar index %s: %s", field_name, exc)
-
-    def has_index(self, index_name: str) -> bool:
-        return index_name in self.list_indexes()
-
-    def get_index(self, index_name: str) -> Optional[IIndex]:
-        meta = self.get_index_meta_data(index_name)
-        if not meta:
-            return None
-        return OpenGaussIndex(self, index_name, meta)
-
-    def update_index(
-        self,
-        index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
-        description: Optional[str] = None,
-    ):
-        meta = self.get_index_meta_data(index_name) or {"IndexName": index_name}
-        if scalar_index is not None:
-            meta["ScalarIndex"] = (
-                list(scalar_index.keys()) if isinstance(scalar_index, dict) else list(scalar_index)
-            )
-        if description is not None:
-            meta["Description"] = description
-        for field_name in meta.get("ScalarIndex", []) or []:
-            self._create_scalar_index(index_name, str(field_name))
-        self._save_index_meta(index_name, meta)
-        return meta
-
-    def get_index_meta_data(self, index_name: str):
-        rows = self._execute(
-            f"""
-            SELECT meta_json
-            FROM {self._meta_table_ref(_INDEX_META_TABLE)}
-            WHERE table_name = %s AND index_name = %s
-            """,
-            [self.collection_key, index_name],
-            fetch=True,
-        )
-        if not rows:
-            return None
-        try:
-            return json.loads(rows[0][0])
-        except (TypeError, ValueError):
-            return None
-
-    def list_indexes(self):
-        rows = self._execute(
-            f"SELECT index_name FROM {self._meta_table_ref(_INDEX_META_TABLE)} "
-            "WHERE table_name = %s ORDER BY index_name",
-            [self.collection_key],
-            fetch=True,
-        )
-        return [str(row[0]) for row in rows]
-
-    def drop_index(self, index_name: str):
-        meta = self.get_index_meta_data(index_name) or {}
-        pg_index_name = _safe_identifier(self._table_name, index_name, "vec", prefix="idx")
-        self._execute(f"DROP INDEX IF EXISTS {self._index_ref(pg_index_name)}")
-        for field_name in meta.get("ScalarIndex", []) or []:
-            scalar_index_name = _safe_identifier(
-                self._table_name, index_name, field_name, prefix="idx"
-            )
-            self._execute(f"DROP INDEX IF EXISTS {self._index_ref(scalar_index_name)}")
-        self._delete_index_meta(index_name)
-
-    # ------------------------------------------------------------------
-    # Search
-    # ------------------------------------------------------------------
-    def search_by_vector(
-        self,
-        index_name: str,
-        dense_vector: Optional[List[float]] = None,
-        limit: int = 10,
-        offset: int = 0,
-        filters: Optional[Dict[str, Any]] = None,
-        sparse_vector: Optional[Dict[str, float]] = None,
-        output_fields: Optional[List[str]] = None,
-    ) -> SearchResult:
-        if limit <= 0:
-            return SearchResult()
-        if dense_vector is None and sparse_vector is None:
-            return SearchResult()
-        fetch_limit = max(limit + offset, limit)
-        if dense_vector is None:
-            return self._search_by_sparse(
-                sparse_vector, fetch_limit, offset, limit, filters, output_fields
-            )
-
-        columns = self._select_columns(output_fields, include_sparse=bool(sparse_vector))
-        where_sql, params = self._where_sql(filters)
-        operator = _VECTOR_OPS[self._distance_metric]["operator"]
-        vector_text = _vector_literal(dense_vector)
-        sql = (
-            f"SELECT {', '.join(_quote_ident(col) for col in columns)}, "
-            f"{_quote_ident(self._dense_vector_name)} {operator} %s::vector AS _distance "
-            f"FROM {self._table_ref()}"
-            f"{where_sql} "
-            f"ORDER BY {_quote_ident(self._dense_vector_name)} {operator} %s::vector "
-            "LIMIT %s OFFSET %s"
-        )
-        rows = self._execute(
-            sql, [vector_text] + params + [vector_text, fetch_limit, 0], fetch=True
-        )
-        scored_items: List[SearchItemResult] = []
-        for row in rows:
-            record_id, payload = self._row_to_payload(row[:-1], columns)
-            distance = row[-1]
-            score = self._distance_to_score(distance, self._distance_metric)
-            if sparse_vector:
-                sparse_payload = payload.pop(self._sparse_vector_name, None)
-                if isinstance(sparse_payload, dict):
-                    score += _sparse_dot(sparse_vector, sparse_payload)
-            scored_items.append(SearchItemResult(id=record_id, fields=payload, score=score))
-        if sparse_vector:
-            scored_items.sort(key=lambda item: item.score or 0.0, reverse=True)
-        return SearchResult(data=scored_items[offset : offset + limit])
-
-    def _search_by_sparse(
-        self,
-        sparse_vector: Optional[Dict[str, float]],
-        fetch_limit: int,
-        offset: int,
-        limit: int,
-        filters: Optional[Dict[str, Any]],
-        output_fields: Optional[List[str]],
-    ) -> SearchResult:
-        if not sparse_vector:
-            return SearchResult()
-        columns = self._select_columns(output_fields, include_sparse=True)
-        where_sql, params = self._where_sql(filters)
-        sql = (
-            f"SELECT {', '.join(_quote_ident(col) for col in columns)} "
-            f"FROM {self._table_ref()}{where_sql} LIMIT %s"
-        )
-        rows = self._execute(
-            sql, params + [max(fetch_limit, self.DEFAULT_SPARSE_SCAN_LIMIT)], fetch=True
-        )
-        items = []
-        for row in rows:
-            record_id, payload = self._row_to_payload(row, columns)
-            sparse_payload = payload.pop(self._sparse_vector_name, None)
-            score = _sparse_dot(
-                sparse_vector, sparse_payload if isinstance(sparse_payload, dict) else None
-            )
-            if score > 0:
-                items.append(SearchItemResult(id=record_id, fields=payload, score=score))
-        items.sort(key=lambda item: item.score or 0.0, reverse=True)
-        return SearchResult(data=items[offset : offset + limit])
-
-    @staticmethod
-    def _distance_to_score(distance: Any, distance_metric: str = "cosine") -> float:
-        try:
-            value = float(distance)
-        except (TypeError, ValueError):
-            return 0.0
-        if not math.isfinite(value):
-            return 0.0
-        if distance_metric == "ip":
-            return -value
-        return 1.0 / (1.0 + max(value, 0.0))
-
-    def search_by_keywords(
-        self,
-        index_name: str,
-        keywords: Optional[List[str]] = None,
-        query: Optional[str] = None,
-        limit: int = 10,
-        offset: int = 0,
-        filters: Optional[Dict[str, Any]] = None,
-        output_fields: Optional[List[str]] = None,
-    ) -> SearchResult:
-        query_text = query or " ".join(keywords or [])
-        if not query_text.strip():
-            return SearchResult()
-        text_filter = {
-            "op": "or",
-            "conds": [
-                {"op": "contains", "field": field, "substring": query_text}
-                for field in ("name", "description", "abstract", "tags")
-                if field in self._all_columns()
-            ],
-        }
-        filters = {"op": "and", "conds": [filters, text_filter]} if filters else text_filter
-        return self.search_by_random(index_name, limit, offset, filters, output_fields)
-
-    def search_by_id(
-        self,
-        index_name: str,
-        id: Any,
-        limit: int = 10,
-        offset: int = 0,
-        filters: Optional[Dict[str, Any]] = None,
-        output_fields: Optional[List[str]] = None,
-    ) -> SearchResult:
-        columns = self._select_columns(output_fields, include_vector=True, include_sparse=True)
-        rows = self._execute(
-            f"SELECT {', '.join(_quote_ident(col) for col in columns)} "
-            f"FROM {self._table_ref()} WHERE id = %s",
-            [str(id)],
-            fetch=True,
-        )
-        if not rows:
-            return SearchResult()
-        row_payload = dict(zip(columns, rows[0], strict=False))
-        dense_vector = row_payload.get(self._dense_vector_name)
-        sparse_raw = row_payload.get(self._sparse_vector_name)
-        sparse_vector = None
-        if sparse_raw:
-            try:
-                sparse_vector = json.loads(sparse_raw)
-            except (TypeError, ValueError):
-                sparse_vector = None
-        result = self.search_by_vector(
-            index_name=index_name,
-            dense_vector=self._parse_vector_value(dense_vector),
-            sparse_vector=sparse_vector,
-            limit=limit + offset + 1,
-            filters=filters,
-            output_fields=output_fields,
-        )
-        data = [item for item in result.data if str(item.id) != str(id)]
-        return SearchResult(data=data[offset : offset + limit])
-
-    @staticmethod
-    def _parse_vector_value(value: Any) -> Optional[List[float]]:
-        if isinstance(value, list):
-            return [float(item) for item in value]
-        if not isinstance(value, str):
-            return None
-        stripped = value.strip().strip("[]")
-        if not stripped:
-            return None
-        return [float(item.strip()) for item in stripped.split(",")]
-
-    def search_by_multimodal(
-        self,
-        index_name: str,
-        text: Optional[str],
-        image: Optional[Any],
-        video: Optional[Any],
-        limit: int = 10,
-        offset: int = 0,
-        filters: Optional[Dict[str, Any]] = None,
-        output_fields: Optional[List[str]] = None,
-    ) -> SearchResult:
-        raise NotImplementedError("OpenGaussCollection.search_by_multimodal is not supported")
-
-    def search_by_random(
-        self,
-        index_name: str,
-        limit: int = 10,
-        offset: int = 0,
-        filters: Optional[Dict[str, Any]] = None,
-        output_fields: Optional[List[str]] = None,
-    ) -> SearchResult:
-        columns = self._select_columns(output_fields)
-        where_sql, params = self._where_sql(filters)
-        rows = self._execute(
-            f"SELECT {', '.join(_quote_ident(col) for col in columns)} "
-            f"FROM {self._table_ref()}{where_sql} LIMIT %s OFFSET %s",
-            params + [limit, offset],
-            fetch=True,
-        )
-        return SearchResult(
-            data=[
-                SearchItemResult(id=record_id, fields=payload, score=1.0)
-                for record_id, payload in (self._row_to_payload(row, columns) for row in rows)
-            ]
-        )
-
-    def search_by_scalar(
-        self,
-        index_name: str,
-        field: str,
-        order: Optional[str] = "desc",
-        limit: int = 10,
-        offset: int = 0,
-        filters: Optional[Dict[str, Any]] = None,
-        output_fields: Optional[List[str]] = None,
-    ) -> SearchResult:
-        columns = self._select_columns(output_fields)
-        if field not in columns:
-            columns.append(field)
-        where_sql, params = self._where_sql(filters)
-        direction = "DESC" if (order or "desc").lower() == "desc" else "ASC"
-        rows = self._execute(
-            f"SELECT {', '.join(_quote_ident(col) for col in columns)} "
-            f"FROM {self._table_ref()}{where_sql} "
-            f"ORDER BY {_quote_ident(field)} {direction} NULLS LAST LIMIT %s OFFSET %s",
-            params + [limit, offset],
-            fetch=True,
-        )
-        items = []
-        for row in rows:
-            record_id, payload = self._row_to_payload(row, columns)
-            score = (
-                payload.pop(field, None)
-                if output_fields and field not in output_fields
-                else payload.get(field)
-            )
-            items.append(
-                SearchItemResult(
-                    id=record_id,
-                    fields=payload,
-                    score=score if isinstance(score, (int, float)) else None,
-                )
-            )
-        return SearchResult(data=items)
-
-    # ------------------------------------------------------------------
-    # Data operations
-    # ------------------------------------------------------------------
-    def upsert_data(self, data_list: List[Dict[str, Any]], ttl=0):
-        if not data_list:
-            return []
-        ids = []
-        for record in data_list:
-            record_id = record.get("id")
-            if record_id is None or record_id == "":
-                raise ValueError("openGauss vector record requires id")
-            self._ensure_columns_for_record(record)
-            columns = []
-            values = []
-            for column in self._all_columns():
-                if column not in record:
-                    continue
-                columns.append(column)
-                if column == self._dense_vector_name:
-                    values.append(_vector_literal(record[column]))
-                elif column == self._sparse_vector_name:
-                    values.append(_json_dumps(record[column] or {}))
-                elif column == "scope_roots":
-                    values.append(_encode_scope_roots(record[column]))
-                else:
-                    values.append(_coerce_sql_value(record[column], self._field_types.get(column)))
-            if "id" not in columns:
-                columns.insert(0, "id")
-                values.insert(0, str(record_id))
-            self._upsert_row(columns, values)
-            ids.append(record_id)
-        return ids
-
-    def _upsert_row(self, columns: List[str], values: List[Any]) -> None:
-        id_index = columns.index("id")
-        update_columns = [column for column in columns if column != "id"]
-        update_values = [
-            value for column, value in zip(columns, values, strict=False) if column != "id"
-        ]
-        set_parts = [
-            f"{_quote_ident(column)} = {'%s::vector' if column == self._dense_vector_name else '%s'}"
-            for column in update_columns
-        ]
-        insert_placeholders = [
-            "%s::vector" if column == self._dense_vector_name else "%s" for column in columns
-        ]
-
-        with self._lock:
-            conn = self._ensure_connection()
-            cur = conn.cursor()
-            try:
-                if update_columns:
-                    cur.execute(
-                        f"UPDATE {self._table_ref()} SET {', '.join(set_parts)} WHERE id = %s",
-                        update_values + [values[id_index]],
-                    )
-                if not update_columns or cur.rowcount == 0:
-                    try:
-                        cur.execute(
-                            f"INSERT INTO {self._table_ref()} "
-                            f"({', '.join(_quote_ident(column) for column in columns)}) "
-                            f"VALUES ({', '.join(insert_placeholders)})",
-                            values,
-                        )
-                    except Exception as exc:
-                        if getattr(exc, "pgcode", None) != "23505" or not update_columns:
-                            raise
-                        self._safe_rollback()
-                        cur.close()
-                        conn = self._ensure_connection()
-                        cur = conn.cursor()
-                        cur.execute(
-                            f"UPDATE {self._table_ref()} SET {', '.join(set_parts)} WHERE id = %s",
-                            update_values + [values[id_index]],
-                        )
-                conn.commit()
-            except Exception:
-                self._safe_rollback()
-                raise
-            finally:
-                cur.close()
-
-    def fetch_data(self, primary_keys: List[Any]):
-        if not primary_keys:
-            return FetchDataInCollectionResult()
-        columns = self._select_columns(None)
-        placeholders = ", ".join(["%s"] * len(primary_keys))
-        rows = self._execute(
-            f"SELECT {', '.join(_quote_ident(col) for col in columns)} "
-            f"FROM {self._table_ref()} WHERE id IN ({placeholders})",
-            [str(pk) for pk in primary_keys],
-            fetch=True,
-        )
-        items = []
-        found_ids = set()
-        for row in rows:
-            record_id, payload = self._row_to_payload(row, columns)
-            found_ids.add(str(record_id))
-            items.append(DataItem(id=record_id, fields=payload))
-        return FetchDataInCollectionResult(
-            items=items,
-            ids_not_exist=[pk for pk in primary_keys if str(pk) not in found_ids],
-        )
-
-    def delete_data(self, primary_keys: List[Any]):
-        if not primary_keys:
-            return None
-        placeholders = ", ".join(["%s"] * len(primary_keys))
-        self._execute(
-            f"DELETE FROM {self._table_ref()} WHERE id IN ({placeholders})",
-            [str(pk) for pk in primary_keys],
-        )
-        return None
-
-    def delete_all_data(self):
-        self._execute(f"DELETE FROM {self._table_ref()}")
-
-    def aggregate_data(
-        self,
-        index_name: str,
-        op: str = "count",
-        field: Optional[str] = None,
-        filters: Optional[Dict[str, Any]] = None,
-        cond: Optional[Dict[str, Any]] = None,
-    ) -> AggregateResult:
-        if op != "count":
-            return AggregateResult(agg={}, op=op, field=field)
-        where_sql, params = self._where_sql(filters)
-        if not field:
-            rows = self._execute(
-                f"SELECT COUNT(*) FROM {self._table_ref()}{where_sql}",
-                params,
-                fetch=True,
-            )
-            return AggregateResult(
-                agg={"_total": int(rows[0][0]) if rows else 0}, op=op, field=None
-            )
-        rows = self._execute(
-            f"SELECT {_quote_ident(field)}, COUNT(*) FROM {self._table_ref()}"
-            f"{where_sql} GROUP BY {_quote_ident(field)}",
-            params,
-            fetch=True,
-        )
-        grouped = {row[0]: int(row[1]) for row in rows if row[0] is not None}
-        if cond:
-            grouped = {
-                key: value
-                for key, value in grouped.items()
-                if (cond.get("gt") is None or value > cond["gt"])
-                and (cond.get("gte") is None or value >= cond["gte"])
-                and (cond.get("lt") is None or value < cond["lt"])
-                and (cond.get("lte") is None or value <= cond["lte"])
-            }
-        return AggregateResult(agg=grouped, op=op, field=field)
+        if cursor.rowcount != 1:
+            raise RuntimeError("Collection metadata write did not affect exactly one row")
+        conn.commit()
+        return merged
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
 
 
 class OpenGaussCollectionAdapter(CollectionAdapter):
-    """CollectionAdapter backed by openGauss native vector tables."""
+    """OpenViking CollectionAdapter backed by openGauss DataVec.
+
+    Supports two deployment modes controlled by ``opengauss.mode``:
+
+    * **standalone** (default): connects to a single-node openGauss instance.
+    * **distributed**: connects to the CN node of an openGauss cluster with
+      spq_plugin_v2. Collection and metadata tables use verified distributed
+      catalog entries; metadata uses reference tables only when the CN supports them.
+
+    Index knobs follow the cuVS-style config shape:
+    ``index_type`` + ``build_params`` + ``search_params``.
+    """
 
     mode = "opengauss"
-    INTERNAL_PATH_FIELDS = ["parent_uri", "scope_roots", "uri_depth"]
 
     def __init__(
         self,
-        *,
-        host: str,
-        port: int,
-        user: str,
-        password: str,
-        db_name: str,
-        schema_name: str,
-        project_name: str,
         collection_name: str,
-        index_name: str,
-        distance_metric: str,
-        dense_vector_name: str,
-        sparse_vector_name: str,
-        connect_timeout: int,
-        mode: str,
-        shard_count: int,
-    ) -> None:
-        super().__init__(collection_name=collection_name, index_name=index_name)
-        self._host = host
-        self._port = int(port)
-        self._user = user
-        self._password = password
-        self._db_name = db_name
-        self._schema_name = (schema_name or _DEFAULT_SCHEMA).strip() or _DEFAULT_SCHEMA
-        self._project_name = project_name
-        self._distance_metric = _normalize_distance(distance_metric)
-        self._dense_vector_name = dense_vector_name
-        self._sparse_vector_name = sparse_vector_name
-        self._connect_timeout = int(connect_timeout)
-        self._deployment_mode = mode
-        self._shard_count = int(shard_count)
-        self._conn = None
-        self._lock = threading.RLock()
-
-    @classmethod
-    def from_config(cls, config: Any):
-        cfg = getattr(config, "opengauss", None)
-        params = dict(getattr(config, "custom_params", {}) or {})
-        if cfg is None:
-            raise ValueError("openGauss backend requires opengauss config")
-        return cls(
-            host=str(getattr(cfg, "host", None) or params.get("host") or "127.0.0.1"),
-            port=int(getattr(cfg, "port", None) or params.get("port") or 5432),
-            user=str(getattr(cfg, "user", None) or params.get("user") or "omm"),
-            password=str(getattr(cfg, "password", None) or params.get("password") or ""),
-            db_name=str(getattr(cfg, "db_name", None) or params.get("db_name") or "postgres"),
-            schema_name=str(
-                getattr(cfg, "schema_name", None)
-                or getattr(cfg, "schema", None)
-                or params.get("schema")
-                or _DEFAULT_SCHEMA
-            ),
-            project_name=config.project_name or "default",
-            collection_name=config.name or "context",
-            index_name=config.index_name or "default",
-            distance_metric=config.distance_metric or "cosine",
-            dense_vector_name=str(
-                getattr(cfg, "dense_vector_name", None)
-                or params.get("dense_vector_name")
-                or "vector"
-            ),
-            sparse_vector_name=str(
-                getattr(cfg, "sparse_vector_name", None)
-                or params.get("sparse_vector_name")
-                or "sparse_vector"
-            ),
-            connect_timeout=int(
-                getattr(cfg, "connect_timeout", None) or params.get("connect_timeout") or 10
-            ),
-            mode=str(getattr(cfg, "mode", None) or params.get("mode") or "standalone"),
-            shard_count=int(getattr(cfg, "shard_count", None) or params.get("shard_count") or 32),
+        config: OpenGaussConfig,
+        index_name: str = "default",
+        distance_metric: str = "cosine",
+    ):
+        super().__init__(
+            collection_name=_validate_identifier(collection_name, kind="openGauss collection name"),
+            index_name=index_name,
         )
+        validated_config = config.model_copy(deep=True)
+        validated_config.validate_capabilities(
+            distributed=config.is_distributed, distance=distance_metric
+        )
+        self._host = validated_config.host
+        self._port = validated_config.port
+        self._user = validated_config.user
+        self._password = validated_config.password
+        self._db_name = validated_config.db_name
+        self._distributed = validated_config.is_distributed
+        self._shard_count = validated_config.shard_count
+        self._distance_metric = (distance_metric or "cosine").lower()
+        self._index_type = validated_config.index_type
+        self._build_params = dict(validated_config.build_params)
+        self._parallel_workers = validated_config.parallel_workers
+        self._search_params = dict(validated_config.search_params)
+        self._maintenance_work_mem_mb = validated_config.maintenance_work_mem_mb
+        self._connection_pool_min_size = validated_config.connection_pool_min_size
+        self._connection_pool_max_size = validated_config.connection_pool_max_size
+        self._retrieval_config = {
+            "candidate_limit": validated_config.candidate_limit,
+        }
+        self._sparse_weight = 0.0
+        self._pool = None
+        self._conn = None
+        self._connect()
 
-    @property
-    def physical_table_name(self) -> str:
-        return _safe_identifier(self._project_name, self._collection_name, prefix="ov")
+    # ------------------------------------------------------------------
+    # Connection management
+    # ------------------------------------------------------------------
 
     def _connect(self):
-        if self._conn is not None and not getattr(self._conn, "closed", 0):
-            return self._conn
-        if self._conn is not None:
-            try:
-                self._conn.close()
-            except Exception:
-                logger.debug("Failed to close stale openGauss connection", exc_info=True)
-        psycopg2 = _import_psycopg2()
-        self._conn = psycopg2.connect(
+        self._pool = _create_connection_pool(
             host=self._host,
             port=self._port,
             user=self._user,
             password=self._password,
-            dbname=self._db_name,
-            connect_timeout=self._connect_timeout,
+            db_name=self._db_name,
+            min_size=self._connection_pool_min_size,
+            max_size=self._connection_pool_max_size,
         )
-        self._ensure_meta_tables()
-        return self._conn
-
-    def _ensure_meta_tables(self) -> None:
-        conn = self._conn
-        if conn is None:
-            return
-        cur = conn.cursor()
+        self._conn = _PooledConnectionProxy(self._pool)
         try:
-            cur.execute(f"CREATE SCHEMA IF NOT EXISTS {_quote_ident(self._schema_name)}")
-            cur.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {_qualify(self._schema_name, _COLLECTION_META_TABLE)} (
-                    table_name TEXT PRIMARY KEY,
-                    logical_collection_name TEXT NOT NULL,
-                    project_name TEXT NOT NULL,
-                    meta_json TEXT NOT NULL,
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-            cur.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {_qualify(self._schema_name, _INDEX_META_TABLE)} (
-                    table_name TEXT NOT NULL,
-                    index_name TEXT NOT NULL,
-                    meta_json TEXT NOT NULL,
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (table_name, index_name)
-                )
-                """
-            )
-            conn.commit()
+            if self._distributed:
+                _validate_distributed_environment(self._conn)
+            _ensure_meta_table(self._conn, distributed=self._distributed)
         except Exception:
-            conn.rollback()
+            self._conn.close()
+            self._conn = None
+            self._pool = None
             raise
-        finally:
-            cur.close()
-        if self._deployment_mode == "distributed":
-            self._try_make_reference_table(_COLLECTION_META_TABLE)
-            self._try_make_reference_table(_INDEX_META_TABLE)
-
-    def _try_make_reference_table(self, table_name: str) -> None:
-        conn = self._conn
-        if conn is None:
-            return
-        cur = conn.cursor()
-        try:
-            cur.execute(
-                "SELECT create_reference_table(%s)", [self._function_table_name(table_name)]
-            )
-            conn.commit()
-        except Exception as exc:
-            conn.rollback()
-            logger.warning(
-                "Failed to mark openGauss metadata table %s as reference table: %s",
-                self._function_table_name(table_name),
-                exc,
-            )
-        finally:
-            cur.close()
-
-    def _new_collection(self, meta: Optional[Dict[str, Any]] = None) -> OpenGaussCollection:
-        return OpenGaussCollection(
-            conn=self._connect(),
-            schema_name=self._schema_name,
-            table_name=self.physical_table_name,
-            logical_collection_name=self._collection_name,
-            project_name=self._project_name,
-            dense_vector_name=self._dense_vector_name,
-            sparse_vector_name=self._sparse_vector_name,
-            distance_metric=self._distance_metric,
-            meta=meta,
-            lock=self._lock,
-            reconnect=self._connect,
+        logger.info(
+            "opengauss_adapter: connected to %s:%s db=%s (distributed=%s)",
+            self._host,
+            self._port,
+            self._db_name,
+            self._distributed,
         )
+
+    # ------------------------------------------------------------------
+    # CollectionAdapter: required overrides
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_config(cls, config: VectorDBBackendConfig) -> "OpenGaussCollectionAdapter":
+        if config.opengauss is None:
+            raise ValueError("VectorDB opengauss backend requires 'opengauss' config")
+        adapter = cls(
+            collection_name=config.name or "context",
+            config=config.opengauss,
+            index_name=config.index_name or "default",
+            distance_metric=config.distance_metric,
+        )
+        adapter._sparse_weight = config.sparse_weight
+        return adapter
+
+    def probe_capabilities(self) -> Dict[str, Any]:
+        from .opengauss.capabilities import probe_fulltext_capabilities
+
+        return probe_fulltext_capabilities(self._conn)
+
+    USE_CONTENT_FIELD = True
+    _STRING_FIELD_BYTE_LIMIT = VIKINGDB_STRING_FIELD_BYTE_LIMIT
+    _TEXT_FIELD_BYTE_LIMIT = VIKINGDB_TEXT_FIELD_BYTE_LIMIT
+
+    def query(self, *, advance: Optional[Dict[str, Any]] = None, **kwargs):
+        from .opengauss.retrieval import _parse_time_decay, _validate_search_parameters
+
+        limit, offset = kwargs.get("limit", 10), kwargs.get("offset", 0)
+        _validate_search_parameters(limit, offset, kwargs.get("output_fields"))
+        _parse_time_decay(advance)
+        if advance is not None:
+            if self._distributed:
+                raise UnimplementedError("SPQ advanced ranking has not been certified")
+            if limit and not (kwargs.get("query_vector") or kwargs.get("sparse_query_vector")):
+                raise ValueError("openGauss advanced ranking requires a vector query")
+        if limit == 0:
+            self.get_collection().search_by_vector(
+                index_name=self._index_name,
+                dense_vector=kwargs.get("query_vector"),
+                sparse_vector=kwargs.get("sparse_query_vector"),
+                limit=limit,
+                offset=offset,
+                filters=self._compile_filter(kwargs.get("filter")),
+                output_fields=kwargs.get("output_fields"),
+                advance=advance,
+            )
+            return []
+        return super().query(advance=advance, **kwargs)
+
+    def _configure_retrieval(self, collection: OpenGaussCollection) -> None:
+        collection._retrieval_config = dict(getattr(self, "_retrieval_config", {}))
+        collection._sparse_weight = getattr(self, "_sparse_weight", 0.0)
+
+    def _compile_filter(self, expr: FilterExpr | Dict[str, Any] | None) -> Dict[str, Any]:
+        compiled = super()._compile_filter(expr)
+        # Base compile collapses empty Or to ``{}``, which this backend treats
+        # as an unfiltered scan. Vacuous OR is a contradiction; keep the DSL
+        # so ``_build_where_clause`` emits FALSE (including nested And/Or).
+        if isinstance(expr, Or) and not compiled:
+            return dict(_EMPTY_OR_FILTER)
+        return compiled
+
+    def _table_exists(self, table_name: str) -> bool:
+        """Return True if *table_name* exists in the current schema.
+
+        Backend failures propagate to the caller: reporting "does not exist"
+        on a transient error would let the creation flow reuse an existing
+        physical table with freshly rewritten metadata.
+        """
+        try:
+            cur = self._conn.cursor()
+            try:
+                cur.execute(
+                    """
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = %s AND table_schema = current_schema()
+                    """,
+                    (table_name,),
+                )
+                row = cur.fetchone()
+                self._conn.commit()
+                return row is not None
+            finally:
+                cur.close()
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def _load_existing_collection_if_needed(self) -> None:
         if self._collection is not None:
             return
-        conn = self._connect()
-        raw_collection = self._new_collection()
-        if not raw_collection._table_exists():
-            return
-        meta = raw_collection.get_meta_data()
-        if not meta:
-            raise RuntimeError(
-                "openGauss collection table exists but OpenViking metadata is missing: "
-                f"{self.physical_table_name}. Use a different project/name, restore metadata, "
-                "or drop the stale table."
-            )
-        self._collection = Collection(
-            OpenGaussCollection(
-                conn=conn,
-                schema_name=self._schema_name,
-                table_name=self.physical_table_name,
-                logical_collection_name=self._collection_name,
-                project_name=self._project_name,
-                dense_vector_name=self._dense_vector_name,
-                sparse_vector_name=self._sparse_vector_name,
-                distance_metric=self._distance_metric,
-                meta=meta,
-                lock=self._lock,
-                reconnect=self._connect,
-            )
+
+        meta = _load_collection_meta(
+            self._conn, self._collection_name, distributed=self._distributed
         )
-
-    def _create_backend_collection(self, meta: Dict[str, Any]) -> Collection:
-        raw_collection = self._new_collection(meta)
-        raw_collection.create_remote_collection(meta)
-        if self._deployment_mode == "distributed":
-            self._try_make_distributed_table(self.physical_table_name)
-        return Collection(raw_collection)
-
-    def _try_make_distributed_table(self, table_name: str) -> None:
-        conn = self._conn
-        if conn is None:
+        if meta is None:
             return
-        cur = conn.cursor()
-        try:
-            cur.execute(
-                "SELECT create_distributed_table(%s, 'id', 'hash', %s)",
-                [self._function_table_name(table_name), self._shard_count],
+
+        # Check the actual table exists
+        if not self._table_exists(self._collection_name):
+            return
+
+        dim = meta.get("_dim", 0)
+        distance = (self._distance_metric or "cosine").lower()
+        if meta.get("_distance") != distance:
+            meta = _save_collection_meta(
+                self._conn,
+                self._collection_name,
+                {"_distance": distance},
+                distributed=self._distributed,
             )
-            conn.commit()
-        except Exception as exc:
-            conn.rollback()
+        og_coll = OpenGaussCollection(
+            self._conn,
+            self._collection_name,
+            meta,
+            dim,
+            distance,
+            distributed=self._distributed,
+        )
+        og_coll._maintenance_work_mem_mb = self._maintenance_work_mem_mb
+        self._configure_retrieval(og_coll)
+        self._collection = Collection(og_coll)
+
+        if "content" not in og_coll._get_all_columns():
             logger.warning(
-                "Failed to distribute openGauss table %s with shard_count=%s: %s",
-                table_name,
-                self._shard_count,
-                exc,
+                "openGauss collection %s has no content column; keyword search is unavailable. "
+                "Existing schema is unchanged; grep engine=auto keeps the filesystem fallback.",
+                self._collection_name,
             )
-        finally:
-            cur.close()
 
-    def close(self) -> None:
-        super().close()
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
-
-    def _sanitize_scalar_index_fields(
+    def create_collection(
         self,
-        scalar_index_fields: list[str],
-        fields_meta: list[dict[str, Any]],
-    ) -> list[str]:
-        del fields_meta
-        return list(dict.fromkeys(list(scalar_index_fields) + self.INTERNAL_PATH_FIELDS))
+        name: str,
+        schema: Dict[str, Any],
+        *,
+        distance: str,
+        sparse_weight: float,
+        index_name: str,
+    ) -> bool:
+        name = _validate_identifier(name, kind="openGauss collection name")
+        if (
+            self._table_exists(name)
+            and _load_collection_meta(
+                self._conn,
+                name,
+                distributed=self._distributed,
+            )
+            is None
+        ):
+            raise RuntimeError(
+                f"openGauss table {name!r} exists without collection metadata; "
+                "refusing to adopt an unverified orphan table"
+            )
+        self._initializing_collection = None
+        try:
+            return super().create_collection(
+                name,
+                schema,
+                distance=distance,
+                sparse_weight=sparse_weight,
+                index_name=index_name,
+            )
+        except Exception:
+            partial_collection = self._initializing_collection
+            if self._collection is partial_collection:
+                self._collection = None
+            if partial_collection is not None:
+                try:
+                    partial_collection.drop()
+                except Exception:
+                    logger.exception(
+                        "opengauss_adapter: failed to clean up partially created collection %s",
+                        name,
+                    )
+            raise
+        finally:
+            self._initializing_collection = None
+
+    def drop_collection(self) -> bool:
+        if not self.collection_exists():
+            return False
+        self.get_collection().drop()
+        self._collection = None
+        return True
+
+    def delete(
+        self,
+        *,
+        ids: Optional[list[str]] = None,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        limit: Optional[int] = None,
+    ) -> int:
+        if ids is not None or filter is None:
+            return super().delete(ids=ids, filter=filter)
+        if limit is not None and limit <= 0:
+            return 0
+
+        collection = self.get_collection()
+        compiled_filter = self._compile_filter(filter)
+        collection_meta = collection.get_meta_data()
+        array_fields = {
+            field.get("FieldName") or field.get("field_name") or field.get("name", "")
+            for field in collection_meta.get("Fields", [])
+            if (field.get("FieldType") or field.get("field_type") or field.get("type"))
+            in {"list<string>", "list<int64>"}
+        }
+        date_time_fields = {
+            field.get("FieldName") or field.get("field_name") or field.get("name", "")
+            for field in collection_meta.get("Fields", [])
+            if (field.get("FieldType") or field.get("field_type") or field.get("type"))
+            == "date_time"
+        }
+
+        def normalize_date_times(condition: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+            if not condition:
+                return condition
+            normalized = dict(condition)
+            conditions = normalized.get("conds")
+            if normalized.get("op") in {"and", "or"} and isinstance(conditions, list):
+                normalized["conds"] = [normalize_date_times(item) for item in conditions]
+                return normalized
+            if normalized.get("field") not in date_time_fields:
+                return normalized
+            if isinstance(conditions, list):
+                normalized["conds"] = [_date_time_to_epoch_ms(value) for value in conditions]
+            for bound in ("gt", "gte", "lt", "lte"):
+                if normalized.get(bound) is not None:
+                    normalized[bound] = _date_time_to_epoch_ms(normalized[bound])
+            return normalized
+
+        normalized_filter = normalize_date_times(compiled_filter)
+        where_fragment, where_params = _build_where_clause(
+            normalized_filter,
+            array_fields,
+        )
+        if not where_fragment:
+            return 0
+
+        cursor = self._conn.cursor()
+        try:
+            cursor.execute(
+                f'DELETE FROM "{self._collection_name}" '
+                f"WHERE id IN ("
+                f'SELECT id FROM "{self._collection_name}" '
+                f"WHERE {where_fragment} ORDER BY id LIMIT %s"
+                f") RETURNING id",
+                where_params + [limit],
+            )
+            deleted_count = cursor.rowcount
+            deleted_ids = [row[0] for row in cursor.fetchall()]
+            raw = collection._Collection__collection
+            if raw._has_sparse_column_on_cursor(cursor):
+                raw._delete_sparse_postings_on_cursor(cursor, deleted_ids)
+            self._conn.commit()
+            return deleted_count
+        except Exception:
+            self._conn.rollback()
+            raise
+        finally:
+            cursor.close()
+
+    def update_data(self, data_list: List[Dict[str, Any]]) -> list[str]:
+        normalized_records = [self._normalize_record_for_write(record) for record in data_list]
+        result = self.get_collection().update_data(normalized_records)
+        return list(result or [])
+
+    def _existing_scalar_index_fields(self, og_coll: "OpenGaussCollection") -> list[str]:
+        for source in (
+            getattr(og_coll, "_indexes", {}).get(self._index_name),
+            getattr(og_coll, "_pending_indexes", {}).get(self._index_name),
+            getattr(og_coll, "_meta", None),
+        ):
+            if not isinstance(source, dict):
+                continue
+            fields = source.get("ScalarIndex")
+            if isinstance(fields, list) and fields:
+                return [str(field) for field in fields]
+        return []
+
+    def _ensure_vector_index_exists(self, og_coll: "OpenGaussCollection", distance: str = "cosine"):
+        """Ensure the configured vector index exists and is registered.
+
+        Presence of an arbitrary ANN index is not enough: reconnect must
+        recover the configured name, operator class, and build options, and
+        persist metadata when the physical index survived a failed catalog
+        write. A matching physical index is registered in place; only a
+        missing or conflicting index goes through create_index().
+        """
+        requested_meta = self._build_default_index_meta(
+            index_name=self._index_name,
+            distance=distance,
+            use_sparse=bool(
+                (
+                    og_coll._indexes.get(self._index_name)
+                    or og_coll._pending_indexes.get(self._index_name, {})
+                ).get("SparseIndex")
+            ),
+            sparse_weight=getattr(self, "_sparse_weight", 0.0),
+            scalar_index_fields=self._existing_scalar_index_fields(og_coll),
+        )
+        normalized_meta = og_coll._normalized_index_meta(self._index_name, requested_meta)
+        existing_definition = og_coll._physical_index_definition(normalized_meta["_pg_index_name"])
+        if existing_definition and og_coll._index_definition_matches(
+            normalized_meta, existing_definition
+        ):
+            og_coll._apply_parallel_workers(normalized_meta)
+            og_coll._persist_index_meta_and_scalar_indexes(
+                self._index_name,
+                normalized_meta,
+            )
+            og_coll._indexes[self._index_name] = normalized_meta
+            og_coll._pending_indexes.pop(self._index_name, None)
+            logger.info(
+                "opengauss_adapter: recovered configured vector index %s",
+                normalized_meta["_pg_index_name"],
+            )
+            return
+        og_coll.create_index(self._index_name, requested_meta)
+        logger.info("opengauss_adapter: vector index ensured via create_index")
 
     def _build_default_index_meta(
         self,
@@ -1467,130 +509,120 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
         sparse_weight: float,
         scalar_index_fields: list[str],
     ) -> Dict[str, Any]:
-        index_meta = super()._build_default_index_meta(
-            index_name=index_name,
-            distance=distance,
-            use_sparse=use_sparse,
-            sparse_weight=sparse_weight,
-            scalar_index_fields=scalar_index_fields,
-        )
-        index_meta["VectorIndex"]["IndexType"] = "hnsw_hybrid" if use_sparse else "hnsw"
+        if use_sparse and self._distributed:
+            raise NotImplementedError("SPQ sparse indexes have not been certified")
+        index_meta: Dict[str, Any] = {
+            "IndexName": index_name,
+            "VectorIndex": {
+                "IndexType": self._index_type,
+                "Distance": distance or self._distance_metric,
+            },
+            "ScalarIndex": scalar_index_fields,
+            "build_params": dict(self._build_params),
+            "search_params": dict(self._search_params),
+            "maintenance_work_mem_mb": self._maintenance_work_mem_mb,
+            "parallel_workers": self._parallel_workers,
+        }
+        if use_sparse:
+            index_meta["SparseIndex"] = {"implementation": "postings", "weight": sparse_weight}
         return index_meta
 
-    @staticmethod
-    def _normalize_path(path: str) -> str:
-        stripped = (path or "").strip()
-        if not stripped:
-            return "/"
-        if not stripped.startswith("/"):
-            stripped = f"/{stripped}"
-        if len(stripped) > 1:
-            stripped = stripped.rstrip("/")
-        return stripped or "/"
-
-    @classmethod
-    def _compute_parent_uri(cls, uri: str) -> str:
-        normalized = cls._normalize_path(uri)
-        if normalized == "/":
-            return "/"
-        parts = normalized.strip("/").split("/")
-        if len(parts) <= 1:
-            return "/"
-        return "/" + "/".join(parts[:-1])
-
-    @classmethod
-    def _compute_scope_roots(cls, uri: str) -> List[str]:
-        normalized = cls._normalize_path(uri)
-        if normalized == "/":
-            return ["/"]
-        parts = normalized.strip("/").split("/")
-        roots = ["/"]
-        current_parts: List[str] = []
-        for part in parts[:-1]:
-            current_parts.append(part)
-            roots.append("/" + "/".join(current_parts))
-        return roots
-
-    def _normalize_record_for_write(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        normalized = dict(super()._normalize_record_for_write(record))
-        raw_uri = normalized.get("uri")
-        if isinstance(raw_uri, str):
-            normalized_uri = self._normalize_path(raw_uri)
-            normalized["uri"] = normalized_uri
-            normalized["parent_uri"] = self._compute_parent_uri(normalized_uri)
-            normalized["scope_roots"] = self._compute_scope_roots(normalized_uri)
-            normalized["uri_depth"] = len(
-                [part for part in normalized_uri.strip("/").split("/") if part]
-            )
-        return normalized
-
-    def _normalize_record_for_read(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        normalized = super()._normalize_record_for_read(record)
-        for field_name in self.INTERNAL_PATH_FIELDS:
-            normalized.pop(field_name, None)
-        return normalized
-
-    def _coerce_datetime_value(self, value: Any) -> Any:
-        if isinstance(value, dt.datetime):
-            if value.tzinfo is None:
-                value = value.replace(tzinfo=dt.timezone.utc)
-            return value.isoformat()
-        return value
-
-    def _compile_filter(self, expr: FilterExpr | Dict[str, Any] | None) -> Dict[str, Any]:
-        if expr is None:
-            return {}
-        if isinstance(expr, dict):
-            return self._normalize_filter_payload_for_write(expr)
-        if isinstance(expr, RawDSL):
-            return self._normalize_filter_payload_for_write(expr.payload)
-        if isinstance(expr, And):
-            conds = [self._compile_filter(cond) for cond in expr.conds if cond]
-            return {"op": "and", "conds": [cond for cond in conds if cond]}
-        if isinstance(expr, Or):
-            conds = [self._compile_filter(cond) for cond in expr.conds if cond]
-            return {"op": "or", "conds": [cond for cond in conds if cond]}
-        if isinstance(expr, Eq):
-            value = expr.value
-            if expr.field in self._URI_FIELD_NAMES:
-                value = self._normalize_path(self._encode_uri_field_value(value))
-            return {"op": "must", "field": expr.field, "conds": [value]}
-        if isinstance(expr, In):
-            values = list(expr.values)
-            if expr.field in self._URI_FIELD_NAMES:
-                values = [
-                    self._normalize_path(self._encode_uri_field_value(value)) for value in values
-                ]
-            return {"op": "must", "field": expr.field, "conds": values}
-        if isinstance(expr, Range):
-            payload: Dict[str, Any] = {"op": "range", "field": expr.field}
-            for key in ("gte", "gt", "lte", "lt"):
-                value = getattr(expr, key)
-                if value is not None:
-                    payload[key] = value
-            return payload
-        if isinstance(expr, TimeRange):
-            payload: Dict[str, Any] = {"op": "range", "field": expr.field}
-            if expr.start is not None:
-                payload["gte"] = self._coerce_datetime_value(expr.start)
-            if expr.end is not None:
-                payload["lt"] = self._coerce_datetime_value(expr.end)
-            return payload
-        if isinstance(expr, Contains):
-            return {"op": "contains", "field": expr.field, "substring": expr.substring}
-        if isinstance(expr, PathScope):
-            encoded_path = (
-                self._normalize_path(self._encode_uri_field_value(expr.path))
-                if expr.field in self._URI_FIELD_NAMES
-                else expr.path
-            )
-            if expr.depth == 0:
-                return {"op": "must", "field": expr.field, "conds": [encoded_path]}
-            if expr.depth == 1:
-                return {"op": "must", "field": "parent_uri", "conds": [encoded_path]}
-            if expr.depth == -1:
-                return {"op": "must", "field": "scope_roots", "conds": [encoded_path]}
+    def _create_backend_collection(self, meta: Dict[str, Any]) -> Collection:
+        fields = meta.get("Fields", [])
+        dim = 0
+        distance = self._distance_metric or "cosine"
+        for f in fields:
+            ftype = f.get("FieldType") or f.get("field_type") or f.get("type", "")
+            if ftype == "vector":
+                # Schema may use "Dim", "dimension", or "dim"
+                dim = f.get("Dimension") or f.get("dimension") or f.get("Dim") or f.get("dim", 0)
+        access_method = _index_access_method(self._index_type)
+        if not _VECTOR_OPS.get(distance, {}).get(access_method):
             raise ValueError(
-                f"OpenGauss adapter only supports PathScope depth 0/1/-1, got {expr.depth}"
+                f"openGauss index_type={self._index_type!r} does not support distance={distance!r}"
             )
-        raise TypeError(f"Unsupported filter expr type: {type(expr)!r}")
+        if distance == "l1" and _index_quantization(self._index_type) is not None:
+            raise ValueError("openGauss distance='l1' requires plain hnsw without PQ or RabitQ")
+        meta["_dim"] = dim
+        meta["_distance"] = distance
+        meta["_index_type"] = self._index_type
+        self._collection_name = _validate_identifier(
+            self._collection_name, kind="openGauss collection name"
+        )
+
+        table_created = False
+
+        def mark_table_created() -> None:
+            nonlocal table_created
+            table_created = True
+
+        try:
+            _create_collection_table(
+                self._conn,
+                self._collection_name,
+                meta,
+                dim,
+                distributed=self._distributed,
+                shard_count=self._shard_count,
+                on_table_created=mark_table_created,
+            )
+            meta = _save_collection_meta(
+                self._conn,
+                self._collection_name,
+                meta,
+                distributed=self._distributed,
+            )
+            og_coll = OpenGaussCollection(
+                self._conn,
+                self._collection_name,
+                meta,
+                dim,
+                distance,
+                distributed=self._distributed,
+            )
+            og_coll._maintenance_work_mem_mb = self._maintenance_work_mem_mb
+            self._configure_retrieval(og_coll)
+            wrapped = Collection(og_coll)
+            self._initializing_collection = wrapped
+            return wrapped
+        except Exception:
+            if not table_created:
+                raise
+            quoted_collection_name = _quote_identifier(
+                self._collection_name,
+                kind="openGauss collection name",
+            )
+            try:
+                cursor = self._conn.cursor()
+                try:
+                    cursor.execute(f"DROP TABLE IF EXISTS {quoted_collection_name} CASCADE")
+                    cursor.execute(
+                        f'DELETE FROM "{_META_TABLE}" WHERE table_name = %s',
+                        (self._collection_name,),
+                    )
+                    self._conn.commit()
+                except Exception:
+                    self._conn.rollback()
+                    logger.exception(
+                        "opengauss_adapter: failed to clean up orphan collection %s",
+                        self._collection_name,
+                    )
+                finally:
+                    cursor.close()
+            finally:
+                raise
+
+    def begin_bulk_ingest(self) -> None:
+        self.get_collection().begin_bulk_ingest()
+
+    def end_bulk_ingest(self) -> None:
+        self.get_collection().end_bulk_ingest()
+
+    def close(self) -> None:
+        super().close()
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None

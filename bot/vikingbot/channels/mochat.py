@@ -6,7 +6,7 @@ import asyncio
 import json
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -115,7 +115,7 @@ def _make_synthetic_event(
         payload["authorInfo"] = _safe_dict(author_info)
     return {
         "type": "message.add",
-        "timestamp": timestamp or datetime.utcnow().isoformat(),
+        "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
         "payload": payload,
     }
 
@@ -847,6 +847,7 @@ class MochatChannel(BaseChannel):
         body = build_buffered_body(entries, is_group) or "[empty message]"
         await self._handle_message(
             sender_id=last.author,
+            sender_name=last.sender_name or last.sender_username or last.author,
             chat_id=target_id,
             content=body,
             metadata={
@@ -956,7 +957,7 @@ class MochatChannel(BaseChannel):
                 json.dumps(
                     {
                         "schemaVersion": 1,
-                        "updatedAt": datetime.utcnow().isoformat(),
+                        "updatedAt": datetime.now(timezone.utc).isoformat(),
                         "cursors": self._session_cursor,
                     },
                     ensure_ascii=False,

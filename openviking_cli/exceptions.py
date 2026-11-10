@@ -54,13 +54,21 @@ class UnsupportedDirectoryFilesError(InvalidArgumentError):
 class NotFoundError(OpenVikingError):
     """Resource not found."""
 
-    def __init__(self, resource: str, resource_type: str = "resource"):
+    def __init__(
+        self,
+        resource: str,
+        resource_type: str = "resource",
+        reason: Optional[str] = None,
+    ):
         details = {"type": resource_type}
         if resource:
             details["resource"] = resource
             message = f"{resource_type.capitalize()} not found: {resource}"
         else:
             message = f"{resource_type.capitalize()} not found"
+        if reason:
+            details["reason"] = reason
+            message = f"{message}. {reason}"
         super().__init__(message, code="NOT_FOUND", details=details)
 
 
@@ -147,13 +155,16 @@ class InternalError(OpenVikingError):
 class DeadlineExceededError(OpenVikingError):
     """Operation timed out."""
 
-    def __init__(self, operation: str = "operation", timeout: Optional[float] = None):
+    def __init__(
+        self,
+        operation: str = "operation",
+        timeout: Optional[float] = None,
+    ):
         message = f"{operation.capitalize()} timed out"
         if timeout:
             message += f" after {timeout}s"
-        super().__init__(
-            message, code="DEADLINE_EXCEEDED", details={"operation": operation, "timeout": timeout}
-        )
+        details = {"operation": operation, "timeout": timeout}
+        super().__init__(message, code="DEADLINE_EXCEEDED", details=details)
 
 
 class UnimplementedError(OpenVikingError):

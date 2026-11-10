@@ -203,7 +203,7 @@ fi
 echo ""
 
 echo "5.4. Glob pattern search..."
-if $OV_BIN glob "*.md" --uri "viking://resources"; then
+if $OV_BIN glob "**/*.md" --uri "viking://resources"; then
     print_success "Glob search completed"
 else
     print_error "Glob search failed"
@@ -276,43 +276,6 @@ if [ -n "$SESSION_ID" ]; then
     echo ""
 else
     print_error "Skipping session operations - no session ID available"
-    echo ""
-fi
-
-# ============================================================================
-# SCENARIO 7: Relations
-# Description: Test relation management (link, unlink, relations)
-# ============================================================================
-print_test "Scenario 7: Relations"
-echo "Description: Test relation management"
-echo ""
-
-if [ -n "$README_URI" ]; then
-    echo "7.1. Create relation link..."
-    if $OV_BIN link "$README_URI" "viking://resources/test" --reason "test relation"; then
-        print_success "Relation link created"
-    else
-        print_error "Relation link creation failed"
-    fi
-    echo ""
-
-    echo "7.2. List relations..."
-    if $OV_BIN relations "$README_URI"; then
-        print_success "Relations listed"
-    else
-        print_error "Relations listing failed"
-    fi
-    echo ""
-
-    echo "7.3. Unlink relation..."
-    if $OV_BIN unlink "$README_URI" "viking://resources/test"; then
-        print_success "Relation unlinked"
-    else
-        print_error "Relation unlink failed"
-    fi
-    echo ""
-else
-    print_error "Skipping relation operations - no resource URI available"
     echo ""
 fi
 

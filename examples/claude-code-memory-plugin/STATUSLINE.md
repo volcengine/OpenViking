@@ -1,6 +1,6 @@
 # Reading and Personalizing the OpenViking Statusline
 
-A guide for an AI assistant (or you) to read the OpenViking statusline and **customize** it beyond the defaults the installer sets up. The "What each segment means" section below is the canonical glossary; the rest covers personalization recipes that env vars don't cover. For the environment-variable reference, see `$REPO/docs/en/agent-integrations/02-claude-code.md`.
+A guide for an AI assistant (or you) to read the OpenViking statusline and **customize** it beyond the defaults the installer sets up. The "What each segment means" section below is the canonical glossary; the rest covers personalization recipes that env vars don't cover. For the environment-variable reference, see [docs/en/agent-integrations/02-claude-code.md](https://github.com/volcengine/OpenViking/blob/main/docs/en/agent-integrations/02-claude-code.md).
 
 When a user asks for something the env vars don't cover, prefer the smallest local edit over inventing a new configurable knob.
 
@@ -8,13 +8,12 @@ When a user asks for something the env vars don't cover, prefer the smallest loc
 
 ## Where everything lives
 
-The OpenViking repo and plugin code are checked out to a known location by the installer. Throughout this doc:
+The statusline runs from the plugin copy Claude Code installed. Throughout this doc:
 
-- **`$REPO`** = the OpenViking repo root. Default: `~/.openviking/openviking-repo` (override via `OPENVIKING_REPO_DIR` at install time). Verify with `ls "$REPO/examples/claude-code-memory-plugin"` — if that path is wrong, find the real one with `jq -r '.statusLine.command' ~/.claude/settings.json` (the registered command points into the plugin) or `find ~ -path '*/claude-code-memory-plugin/scripts/statusline.mjs' 2>/dev/null`.
-- **`$PLUGIN`** = `$REPO/examples/claude-code-memory-plugin`. The plugin's own root.
+- **`$PLUGIN`** = the installed plugin's root. Find it with `jq -r '.plugins["openviking-memory@openviking"][0].installPath' ~/.claude/plugins/installed_plugins.json` (under `$CLAUDE_CONFIG_DIR` when that is set). The command the installer registers looks this path up on every run, so the statusline follows plugin updates. Claude Code installs each update into a new directory, so a local edit under `$PLUGIN` lasts until the next plugin update.
 - **`$STATE`** = `~/.openviking/state` (override via `OPENVIKING_HOME`). Where hook-written JSON snapshots live.
 
-Resolve `$REPO` once before editing anything — every relative path below is anchored to it.
+Resolve `$PLUGIN` once before editing anything — every relative path below is anchored to it.
 
 | Concern                                    | File                                              |
 |--------------------------------------------|---------------------------------------------------|
@@ -41,7 +40,8 @@ The default composition runs left to right, joined by ` │ `. Segments are cond
 |               | `OV ⚠ slow`            | yellow | probe timed out (>1 s) — server may be alive but lagging                                                              |
 |               | `OV ✗ offline`         | red    | probe errored (refused, DNS fail, network down)                                                                       |
 |               | `OV ⚡ bypass`         | yellow | session matched `OPENVIKING_BYPASS_SESSION` or `*_PATTERNS`                                                           |
-| Recall        | `↩ 6 mem (0.92) · 50ms` | dim    | last user prompt actually injected memories. `(0.92)` is the top similarity score among picked items; latency is the recall round-trip |
+| Model · ctx   | `Fable 5 · ctx 42%`    | dim / by usage | always, when CC's statusline payload carries `model` / `context_window`. Registering a custom statusLine replaces CC's native context indicator, so this reproduces it: `<70%` dim, `70–89%` yellow, `≥90%` red (native thresholds). Hide with `OPENVIKING_STATUSLINE_CTX=off`. Shows in bypass mode too — it describes the CC conversation, not OV |
+| Recall        | `↩ 6 mem · 50ms`        | dim    | last user prompt actually injected memories; latency is the recall round-trip                                                    |
 | Capture       | `✎ 573/20k · 2 arch`   | dim    | tokens pending toward the next archive (sawtooth — resets on commit), `2 arch` = archives produced this session       |
 |               | `✎ committed · 2 arch` | dim    | the turn that just finished produced an archive                                                                       |
 |               | `✎ 2 arch`             | dim    | nothing pending, but archives already exist this session                                                              |
@@ -57,7 +57,9 @@ When a segment is **missing** but you'd expect it, the most common reasons are:
 - **`+N today`** — no archives committed yet today, or `daily-stats.json` is missing entirely.
 - **`↩` recall** — last prompt produced no usable memories (too-short query, score under threshold, or all results filtered out). The hook ran; it just had nothing worth showing.
 
-The whole line is hard-capped at 80 visible chars and trailing-truncated with `…` if it overflows.
+- **`ctx` percentage** — the CC build doesn't send `context_window` in the statusline payload (older versions), or `OPENVIKING_STATUSLINE_CTX=off` is set.
+
+The whole line is hard-capped at 100 visible chars and trailing-truncated with `…` if it overflows.
 
 ---
 
@@ -124,7 +126,6 @@ For an assistant adding a segment that consumes existing state. All files live u
 {
   "reason": "ok" | "bypass" | "offline" | "no_results" | "filtered_out" | "short_query" | ...,
   "count": 6,                        // memories actually injected
-  "top_score": 0.92,                 // max score among picked items
   "latency_ms": 180,
   "cc_session_id": "ff875009-...",
   "ts": 1778139288759

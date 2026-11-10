@@ -1,10 +1,13 @@
 use serde::de::DeserializeOwned;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::env;
 use std::path::Path;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+
 pub use crate::base_client::{BaseClient, FileUploader, TimeoutConfig};
 
+use crate::base_client::ProgressGuard;
 use crate::error::{Error, Result};
 
 /// Drop null-valued keys (and an empty `args` object) from a request body before
@@ -29,8 +32,53 @@ fn compact_request_body(body: &mut Value) {
                 return !map.is_empty();
             }
         }
+        if key == "processing_mode" {
+            return value != "semantic_and_vectors";
+        }
+        if key == "search_type" {
+            return value != "semantic";
+        }
         true
     });
+}
+
+fn add_resource_tag_fields(body: &mut Value, tags: &[String], tag_mode: &str) {
+    if tags.is_empty() && tag_mode != "clear" {
+        return;
+    }
+    let obj = body
+        .as_object_mut()
+        .expect("add_resource request body must be an object");
+    if !tags.is_empty() {
+        obj.insert("tags".to_string(), serde_json::json!(tags));
+    }
+    obj.insert("tag_mode".to_string(), serde_json::json!(tag_mode));
+}
+
+fn normalize_image_input(image: Option<String>) -> Result<Option<String>> {
+    let Some(value) = image else {
+        return Ok(None);
+    };
+    if value.starts_with("data:image/")
+        || value.starts_with("http://")
+        || value.starts_with("https://")
+        || value.starts_with("viking://")
+    {
+        return Ok(Some(value));
+    }
+
+    let path = Path::new(&value);
+    if path.is_file() {
+        let bytes = std::fs::read(path)?;
+        let mime = mime_guess::from_path(path).first_or_octet_stream();
+        return Ok(Some(format!(
+            "data:{};base64,{}",
+            mime,
+            BASE64_STANDARD.encode(bytes)
+        )));
+    }
+
+    Ok(Some(value))
 }
 
 #[derive(serde::Serialize)]
@@ -62,7 +110,43 @@ pub struct SnapshotRestoreReq {
 
 pub enum SnapshotShowResult {
     Metadata(Value),
-    Blob { oid: String, size: u64, bytes: Vec<u8> },
+    Blob {
+        oid: String,
+        size: u64,
+        bytes: Vec<u8>,
+    },
+}
+
+/// A Compile submission returns either an immediate task or saved target scheduling settings.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CompileAccepted {
+    /// Present only when this request submits an immediate Compile task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    pub status: String,
+    /// The saved schedule's next ISO 8601 trigger time; null when scheduling is disabled.
+    #[serde(default)]
+    pub next_run_at: Option<String>,
+    #[serde(default)]
+    pub to: Option<String>,
+    #[serde(default)]
+    pub task_type: Option<String>,
+    #[serde(default)]
+    pub stage: Option<String>,
+    #[serde(default)]
+    pub resource_id: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct CompileCreateRequest<'a> {
+    #[serde(rename = "from")]
+    from_uris: &'a [String],
+    to: &'a str,
+    skill: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instruction: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    args: Option<&'a serde_json::Map<String, Value>>,
 }
 
 // ============ HttpClient ============
@@ -98,6 +182,31 @@ impl HttpClient {
         }
     }
 
+    pub fn with_gateway_token(mut self, gateway_token: Option<String>) -> Self {
+        self.base = self.base.with_gateway_token(gateway_token);
+        self
+    }
+
+    pub fn with_auth_mode(mut self, auth_mode: Option<String>) -> Self {
+        self.base = self.base.with_auth_mode(auth_mode);
+        self
+    }
+
+    pub fn with_ldap_username(mut self, username: Option<String>) -> Self {
+        self.base = self.base.with_ldap_username(username);
+        self
+    }
+
+    pub fn with_ldap_password(mut self, password: Option<String>) -> Self {
+        self.base = self.base.with_ldap_password(password);
+        self
+    }
+
+    pub fn with_oidc_token(mut self, token: Option<String>) -> Self {
+        self.base = self.base.with_oidc_token(token);
+        self
+    }
+
     pub fn user_id(&self) -> Option<&str> {
         self.base.user_id()
     }
@@ -108,6 +217,22 @@ impl HttpClient {
 
     pub fn api_key(&self) -> Option<&str> {
         self.base.api_key()
+    }
+
+    /// Match the server's credential selection after custom headers are applied.
+    pub(crate) fn request_api_key(&self) -> Option<String> {
+        let headers = self.base.build_headers();
+        headers
+            .get("X-API-Key")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                headers
+                    .get(reqwest::header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.strip_prefix("Bearer "))
+            })
+            .map(str::to_owned)
     }
 
     fn upload_mode(&self) -> Option<String> {
@@ -224,13 +349,37 @@ impl HttpClient {
 
     // ============ Content Methods ============
 
+    pub async fn create_compile(
+        &self,
+        from_uris: &[String],
+        to: &str,
+        skill: &str,
+        instruction: Option<&str>,
+        args: Option<&serde_json::Map<String, Value>>,
+    ) -> Result<CompileAccepted> {
+        let body = CompileCreateRequest {
+            from_uris,
+            to,
+            skill,
+            instruction,
+            args,
+        };
+        self.post("/api/v1/compile", &body).await
+    }
+
     pub async fn read(&self, uri: &str) -> Result<String> {
         let params = vec![("uri".to_string(), uri.to_string())];
         self.get("/api/v1/content/read", &params).await
     }
 
-    pub async fn read_profiled(&self, uri: &str) -> Result<Value> {
-        let params = vec![("uri".to_string(), uri.to_string())];
+    /// Read content and optional profiling data, propagating HTTP errors.
+    /// `offset` is zero-based and nonnegative; `limit` is a line count or -1 for EOF.
+    pub async fn read_profiled(&self, uri: &str, offset: i64, limit: i64) -> Result<Value> {
+        let params = vec![
+            ("uri".to_string(), uri.to_string()),
+            ("offset".to_string(), offset.to_string()),
+            ("limit".to_string(), limit.to_string()),
+        ];
         self.get("/api/v1/content/read", &params).await
     }
 
@@ -260,9 +409,21 @@ impl HttpClient {
         content: &str,
         mode: &str,
         wait: bool,
-        timeout: Option<f64>,
+        processing_mode: &str,
+        tags: Vec<String>,
+        tag_mode: &str,
+        acl: Option<Value>,
+        edit_source: &str,
     ) -> Result<serde_json::Value> {
-        let body = Self::build_write_body(uri, content, mode, wait, timeout);
+        let mut body = Self::build_write_body(uri, content, mode, wait, processing_mode);
+        add_resource_tag_fields(&mut body, &tags, tag_mode);
+        if let Some(acl) = acl {
+            body["acl"] = acl;
+        }
+        // Omit the default so the request stays valid for servers without edit_source.
+        if edit_source != "manual" {
+            body["edit_source"] = Value::from(edit_source);
+        }
         self.post("/api/v1/content/write", &body).await
     }
 
@@ -282,28 +443,88 @@ impl HttpClient {
         self.post("/api/v1/fs/attrs/set_tags", &body).await
     }
 
+    pub async fn acl_get(&self, uri: &str) -> Result<Value> {
+        self.get("/api/v1/acl", &[("uri".to_string(), uri.to_string())])
+            .await
+    }
+
+    pub async fn acl_set(
+        &self,
+        uri: &str,
+        entries: Vec<Value>,
+        acl_mode: Option<String>,
+    ) -> Result<Value> {
+        let mut body = serde_json::json!({"uri": uri});
+        if !entries.is_empty() {
+            body["entries"] = serde_json::Value::Array(entries);
+        }
+        if let Some(acl_mode) = acl_mode {
+            body["acl_mode"] = serde_json::Value::String(acl_mode);
+        }
+        self.put("/api/v1/acl", &body).await
+    }
+
+    pub async fn acl_grant(&self, uri: &str, principal: &str, level: &str) -> Result<Value> {
+        self.post(
+            "/api/v1/acl/grant",
+            &serde_json::json!({"uri": uri, "principal": principal, "level": level}),
+        )
+        .await
+    }
+
+    pub async fn acl_revoke(&self, uri: &str, principal: &str) -> Result<Value> {
+        self.post(
+            "/api/v1/acl/revoke",
+            &serde_json::json!({"uri": uri, "principal": principal}),
+        )
+        .await
+    }
+
+    pub async fn acl_delete(&self, uri: &str) -> Result<Value> {
+        self.delete("/api/v1/acl", &[("uri".to_string(), uri.to_string())])
+            .await
+    }
+
     fn build_write_body(
         uri: &str,
         content: &str,
         mode: &str,
         wait: bool,
-        timeout: Option<f64>,
+        processing_mode: &str,
     ) -> Value {
-        serde_json::json!({
+        let mut body = serde_json::json!({
             "uri": uri,
             "content": content,
             "mode": mode,
             "wait": wait,
-            "timeout": timeout,
-        })
+            "processing_mode": processing_mode,
+        });
+        compact_request_body(&mut body);
+        body
     }
 
-    pub async fn reindex(&self, uri: &str, mode: &str, wait: bool) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
+    pub async fn reindex(
+        &self,
+        uri: &str,
+        mode: &str,
+        wait: bool,
+        force: bool,
+        tags: Vec<String>,
+        tag_mode: &str,
+        recursive: bool,
+    ) -> Result<serde_json::Value> {
+        let mut body = serde_json::json!({
             "uri": uri,
             "mode": mode,
             "wait": wait,
         });
+        if force {
+            body["force"] = serde_json::json!(true);
+        }
+        if !recursive {
+            body["recursive"] = serde_json::json!(false);
+        }
+        add_resource_tag_fields(&mut body, &tags, tag_mode);
         self.post("/api/v1/content/reindex", &body).await
     }
 
@@ -314,20 +535,6 @@ impl HttpClient {
         self.post("/api/v1/system/consistency", &body).await
     }
 
-    pub async fn backend_sync_status(&self, uri: &str) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "uri": uri,
-        });
-        self.post("/api/v1/system/backend/sync-status", &body).await
-    }
-
-    pub async fn backend_sync_retry(&self, uri: &str) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "uri": uri,
-        });
-        self.post("/api/v1/system/backend/sync-retry", &body).await
-    }
-
     /// Download file as raw bytes
     pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
         let url = format!("{}/api/v1/content/download", self.base.base_url);
@@ -336,49 +543,32 @@ impl HttpClient {
             ("profile".to_string(), "0".to_string()),
         ];
 
-        let response = self
+        let request = self
             .base
             .http
             .get(&url)
             .headers(self.base.build_headers())
-            .query(&params)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .query(&params);
+        let response = self
+            .base
+            .send_request(request, "HTTP request failed")
+            .await?;
 
         let status = response.status();
         if !status.is_success() {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| Error::Network(format!("Failed to read error response: {}", e)))?;
+                .map_err(|e| Error::from_reqwest("Failed to read error response", e))?;
 
-            let error_msg = match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                Ok(json) => json
-                    .get("error")
-                    .and_then(|e| e.get("message"))
-                    .and_then(|m| m.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| {
-                        json.get("detail")
-                            .and_then(|d| d.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .unwrap_or_else(|| format!("HTTP error {}", status)),
-                Err(_) => {
-                    let body_str = String::from_utf8_lossy(&bytes);
-                    format!("HTTP error {}\n\nRaw response body:\n{}", status, body_str)
-                }
-            };
-
-            return Err(Error::api(error_msg));
+            return Err(crate::base_client::api_error_from_body(&bytes, status));
         }
 
         response
             .bytes()
             .await
             .map(|b| b.to_vec())
-            .map_err(|e| Error::Network(format!("Failed to read response bytes: {}", e)))
+            .map_err(|e| Error::from_reqwest("Failed to read response bytes", e))
     }
 
     // ============ Filesystem Methods ============
@@ -390,18 +580,56 @@ impl HttpClient {
         recursive: bool,
         output: &str,
         abs_limit: i32,
+        include_abstract: Option<bool>,
+        include_overview: Option<bool>,
+        overview_limit: i32,
         show_all_hidden: bool,
         node_limit: i32,
+        offset: i32,
+        limit: Option<i32>,
+        sort_by: Option<&str>,
+        sort_order: Option<&str>,
+        extra_fields: &[String],
+        tags: &[String],
+        include_tags: bool,
     ) -> Result<serde_json::Value> {
-        let params = vec![
+        let mut params = vec![
             ("uri".to_string(), uri.to_string()),
             ("simple".to_string(), simple.to_string()),
             ("recursive".to_string(), recursive.to_string()),
             ("output".to_string(), output.to_string()),
             ("abs_limit".to_string(), abs_limit.to_string()),
+            ("overview_limit".to_string(), overview_limit.to_string()),
             ("show_all_hidden".to_string(), show_all_hidden.to_string()),
             ("node_limit".to_string(), node_limit.to_string()),
         ];
+        if let Some(value) = include_abstract {
+            params.push(("include_abstract".to_string(), value.to_string()));
+        }
+        if let Some(value) = include_overview {
+            params.push(("include_overview".to_string(), value.to_string()));
+        }
+        if offset != 0 {
+            params.push(("offset".to_string(), offset.to_string()));
+        }
+        if let Some(limit) = limit {
+            params.push(("limit".to_string(), limit.to_string()));
+        }
+        if let Some(sort_by) = sort_by {
+            params.push(("sort_by".to_string(), sort_by.to_string()));
+            if let Some(sort_order) = sort_order {
+                params.push(("sort_order".to_string(), sort_order.to_string()));
+            }
+        }
+        for field in extra_fields {
+            params.push(("extra_fields".to_string(), field.clone()));
+        }
+        for tag in tags {
+            params.push(("tags".to_string(), tag.clone()));
+        }
+        if include_tags {
+            params.push(("include_tags".to_string(), "true".to_string()));
+        }
         self.get("/api/v1/fs/ls", &params).await
     }
 
@@ -410,26 +638,68 @@ impl HttpClient {
         uri: &str,
         output: &str,
         abs_limit: i32,
+        include_abstract: Option<bool>,
+        include_overview: Option<bool>,
+        overview_limit: i32,
         show_all_hidden: bool,
+        directories_only: bool,
         node_limit: i32,
         level_limit: i32,
+        offset: i32,
+        limit: Option<i32>,
+        extra_fields: &[String],
+        tags: &[String],
+        include_tags: bool,
     ) -> Result<serde_json::Value> {
-        let params = vec![
+        let mut params = vec![
             ("uri".to_string(), uri.to_string()),
             ("output".to_string(), output.to_string()),
             ("abs_limit".to_string(), abs_limit.to_string()),
             ("show_all_hidden".to_string(), show_all_hidden.to_string()),
             ("node_limit".to_string(), node_limit.to_string()),
             ("level_limit".to_string(), level_limit.to_string()),
+            ("overview_limit".to_string(), overview_limit.to_string()),
         ];
+        if let Some(value) = include_abstract {
+            params.push(("include_abstract".to_string(), value.to_string()));
+        }
+        if let Some(value) = include_overview {
+            params.push(("include_overview".to_string(), value.to_string()));
+        }
+        if directories_only {
+            params.push(("directories_only".to_string(), "true".to_string()));
+        }
+        if offset != 0 {
+            params.push(("offset".to_string(), offset.to_string()));
+        }
+        if let Some(limit) = limit {
+            params.push(("limit".to_string(), limit.to_string()));
+        }
+        for field in extra_fields {
+            params.push(("extra_fields".to_string(), field.clone()));
+        }
+        for tag in tags {
+            params.push(("tags".to_string(), tag.clone()));
+        }
+        if include_tags {
+            params.push(("include_tags".to_string(), "true".to_string()));
+        }
         self.get("/api/v1/fs/tree", &params).await
     }
 
-    pub async fn mkdir(&self, uri: &str, description: Option<&str>) -> Result<serde_json::Value> {
-        let body = match description {
+    pub async fn mkdir(
+        &self,
+        uri: &str,
+        description: Option<&str>,
+        acl: Option<Value>,
+    ) -> Result<serde_json::Value> {
+        let mut body = match description {
             Some(description) => serde_json::json!({ "uri": uri, "description": description }),
             None => serde_json::json!({ "uri": uri }),
         };
+        if let Some(acl) = acl {
+            body["acl"] = acl;
+        }
         self.post("/api/v1/fs/mkdir", &body).await
     }
 
@@ -438,16 +708,12 @@ impl HttpClient {
         uri: &str,
         recursive: bool,
         wait: bool,
-        timeout: Option<f64>,
     ) -> Result<serde_json::Value> {
-        let mut params = vec![
+        let params = vec![
             ("uri".to_string(), uri.to_string()),
             ("recursive".to_string(), recursive.to_string()),
             ("wait".to_string(), wait.to_string()),
         ];
-        if let Some(timeout) = timeout {
-            params.push(("timeout".to_string(), timeout.to_string()));
-        }
         self.delete("/api/v1/fs", &params).await
     }
 
@@ -457,6 +723,20 @@ impl HttpClient {
             "to_uri": to_uri,
         });
         self.post("/api/v1/fs/mv", &body).await
+    }
+
+    pub async fn cp(
+        &self,
+        from_uri: &str,
+        to_uri: &str,
+        recursive: bool,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "from_uri": from_uri,
+            "to_uri": to_uri,
+            "recursive": recursive,
+        });
+        self.post("/api/v1/fs/cp", &body).await
     }
 
     pub async fn stat(&self, uri: &str) -> Result<serde_json::Value> {
@@ -475,6 +755,7 @@ impl HttpClient {
         &self,
         query: String,
         uri: String,
+        image: Option<String>,
         node_limit: i32,
         threshold: Option<f64>,
         since: Option<String>,
@@ -483,9 +764,13 @@ impl HttpClient {
         level: Option<Vec<i32>>,
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
+        read_content: bool,
+        events_time_decay_protection: Option<String>,
     ) -> Result<serde_json::Value> {
+        let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
             "query": query,
+            "image_url": image_url,
             "target_uri": uri,
             "limit": node_limit,
             "score_threshold": threshold,
@@ -495,6 +780,8 @@ impl HttpClient {
             "level": level,
             "context_type": context_type,
             "tags": tags,
+            "read_content": read_content.then_some(true),
+            "events_time_decay_protection": events_time_decay_protection,
         });
         compact_request_body(&mut body);
         self.post("/api/v1/search/find", &body).await
@@ -504,6 +791,9 @@ impl HttpClient {
         &self,
         query: String,
         uri: String,
+        image: Option<String>,
+        search_type: String,
+        mode: String,
         session_id: Option<String>,
         node_limit: i32,
         threshold: Option<f64>,
@@ -513,9 +803,16 @@ impl HttpClient {
         level: Option<Vec<i32>>,
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
+        read_content: bool,
+        events_time_decay_protection: Option<String>,
     ) -> Result<serde_json::Value> {
+        let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
             "query": query,
+            "image_url": image_url,
+            "search_type": search_type,
+            // Preserve the legacy request shape for servers without context mode.
+            "mode": (mode != "list").then_some(mode),
             "target_uri": uri,
             "session_id": session_id,
             "limit": node_limit,
@@ -526,6 +823,8 @@ impl HttpClient {
             "level": level,
             "context_type": context_type,
             "tags": tags,
+            "read_content": read_content.then_some(true),
+            "events_time_decay_protection": events_time_decay_protection,
         });
         compact_request_body(&mut body);
         self.post("/api/v1/search/search", &body).await
@@ -537,17 +836,26 @@ impl HttpClient {
         exclude_uri: Option<String>,
         pattern: &str,
         ignore_case: bool,
+        after_context: i32,
+        before_context: i32,
         node_limit: i32,
         level_limit: i32,
+        tags: &[String],
+        include_tags: bool,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "uri": uri,
             "exclude_uri": exclude_uri,
             "pattern": pattern,
             "case_insensitive": ignore_case,
+            "after_context": (after_context > 0).then_some(after_context),
+            "before_context": (before_context > 0).then_some(before_context),
             "node_limit": node_limit,
             "level_limit": level_limit,
+            "tags": (!tags.is_empty()).then(|| tags),
+            "include_tags": include_tags.then_some(true),
         });
+        compact_request_body(&mut body);
         self.post("/api/v1/search/grep", &body).await
     }
 
@@ -556,12 +864,21 @@ impl HttpClient {
         pattern: &str,
         uri: &str,
         node_limit: i32,
+        extra_fields: Option<&[String]>,
+        tags: &[String],
+        include_tags: bool,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "pattern": pattern,
             "uri": uri,
             "node_limit": node_limit,
+            "tags": (!tags.is_empty()).then(|| tags),
+            "include_tags": include_tags.then_some(true),
         });
+        if let Some(fields) = extra_fields {
+            body["extra_fields"] = serde_json::json!(fields);
+        }
+        compact_request_body(&mut body);
         self.post("/api/v1/search/glob", &body).await
     }
 
@@ -570,20 +887,24 @@ impl HttpClient {
     pub async fn add_resource(
         &self,
         path: &str,
+        add_type: Option<String>,
         to: Option<String>,
         parent: Option<String>,
         parent_auto_create: Option<String>,
         reason: &str,
         instruction: &str,
         wait: bool,
-        timeout: Option<f64>,
         strict: bool,
         ignore_dirs: Option<String>,
         include: Option<String>,
         exclude: Option<String>,
         directly_upload_media: bool,
         watch_interval: f64,
+        processing_mode: String,
         resource_args: Option<Map<String, Value>>,
+        tags: Vec<String>,
+        tag_mode: String,
+        acl: Option<Value>,
         show_progress: bool,
         verbose: bool,
     ) -> Result<serde_json::Value> {
@@ -603,6 +924,10 @@ impl HttpClient {
 
         let build_body = |base: serde_json::Value| {
             let mut body = base;
+            if let Some(acl) = &acl {
+                body["acl"] = acl.clone();
+            }
+            add_resource_tag_fields(&mut body, &tags, &tag_mode);
             if create_parent {
                 body.as_object_mut()
                     .expect("add_resource request body must be an object")
@@ -612,7 +937,9 @@ impl HttpClient {
             body
         };
 
-        if path_obj.exists() {
+        // A declared Connector add_type sends the path verbatim as a remote
+        // source; never interpret it as a local file to upload.
+        let submitted: Value = if add_type.is_none() && path_obj.exists() {
             if path_obj.is_dir() {
                 let source_name = path_obj
                     .file_name()
@@ -637,14 +964,14 @@ impl HttpClient {
                     "parent": effective_parent,
                     "reason": reason,
                     "instruction": instruction,
-                    "wait": wait,
-                    "timeout": timeout,
+                    "wait": false,
                     "strict": strict,
                     "ignore_dirs": ignore_dirs,
                     "include": include,
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "processing_mode": processing_mode.as_str(),
                     "args": args.clone(),
                 }));
 
@@ -672,14 +999,14 @@ impl HttpClient {
                     "parent": effective_parent,
                     "reason": reason,
                     "instruction": instruction,
-                    "wait": wait,
-                    "timeout": timeout,
+                    "wait": false,
                     "strict": strict,
                     "ignore_dirs": ignore_dirs,
                     "include": include,
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "processing_mode": processing_mode.as_str(),
                     "args": args.clone(),
                 }));
 
@@ -695,14 +1022,14 @@ impl HttpClient {
                     "parent": effective_parent,
                     "reason": reason,
                     "instruction": instruction,
-                    "wait": wait,
-                    "timeout": timeout,
+                    "wait": false,
                     "strict": strict,
                     "ignore_dirs": ignore_dirs,
                     "include": include,
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "processing_mode": processing_mode.as_str(),
                     "args": args.clone(),
                 }));
 
@@ -711,22 +1038,175 @@ impl HttpClient {
         } else {
             let body = build_body(serde_json::json!({
                 "path": path,
+                "add_type": add_type,
                 "to": to,
                 "parent": effective_parent,
                 "reason": reason,
                 "instruction": instruction,
-                "wait": wait,
-                "timeout": timeout,
+                "wait": false,
                 "strict": strict,
                 "ignore_dirs": ignore_dirs,
                 "include": include,
                 "exclude": exclude,
                 "directly_upload_media": directly_upload_media,
                 "watch_interval": watch_interval,
+                "processing_mode": processing_mode.as_str(),
                 "args": args,
             }));
 
             self.post("/api/v1/resources", &body).await
+        }?;
+
+        if !wait {
+            return Ok(submitted);
+        }
+        let task_id = submitted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| {
+                Error::Client(
+                    "Import response has no task_id; cannot wait for completion. \
+                     Check 'ov task list' before submitting again."
+                        .to_string(),
+                )
+            })?;
+        self.wait_for_resource_task(
+            task_id,
+            tokio::signal::ctrl_c(),
+            std::time::Duration::from_secs(1),
+        )
+        .await
+    }
+
+    /// Wait without an overall deadline. Each status GET retains the ordinary
+    /// HTTP timeout. Consecutive observation failures are bounded, and retries
+    /// never resubmit the import.
+    async fn wait_for_resource_task(
+        &self,
+        task_id: &str,
+        interrupted: impl std::future::Future<Output = std::io::Result<()>>,
+        interval: std::time::Duration,
+    ) -> Result<Value> {
+        tokio::pin!(interrupted);
+        let observation_error = |error: Error| {
+            let code = Some(error.code().to_string());
+            let (message, details, status) = match error {
+                Error::Api {
+                    message,
+                    details,
+                    status,
+                    ..
+                } => (message, details, status),
+                other => (other.to_string(), None, None),
+            };
+            Error::Api {
+                code,
+                message: format!(
+                    "{message}; task continues on the server; check with: ov task status {task_id}"
+                ),
+                details: Some(json!({"task_id": task_id, "details": details})),
+                status,
+            }
+        };
+        let poll = async {
+            let mut retry_delay = interval;
+            let mut failures = 0;
+            loop {
+                let task = match self.get_task(task_id).await {
+                    Ok(task) => {
+                        retry_delay = interval;
+                        failures = 0;
+                        task
+                    }
+                    Err(err)
+                        if matches!(
+                            err,
+                            Error::Timeout(_)
+                                | Error::Network(_)
+                                | Error::Api {
+                                    status: Some(429 | 502 | 503 | 504),
+                                    ..
+                                }
+                        ) =>
+                    {
+                        failures += 1;
+                        if failures >= 10 {
+                            return Err(observation_error(err));
+                        }
+                        tokio::time::sleep(retry_delay).await;
+                        retry_delay = (retry_delay * 2).min(interval * 5);
+                        continue;
+                    }
+                    Err(err) => return Err(observation_error(err)),
+                };
+                match task.get("status").and_then(Value::as_str) {
+                    Some("completed") => {
+                        let mut result = task.get("result").cloned().ok_or_else(|| {
+                            observation_error(Error::Parse(format!(
+                                "Completed task {task_id} has no result"
+                            )))
+                        })?;
+                        if !result.is_object() {
+                            return Err(observation_error(Error::Parse(format!(
+                                "Completed task {task_id} has an invalid result"
+                            ))));
+                        }
+                        // Return the task result plus task_id for inspection.
+                        // The server's wait=true response omits this extra field.
+                        result["task_id"] = json!(task_id);
+                        return Ok(result);
+                    }
+                    Some("cancelled") => {
+                        // 服务端取消任务时会清空 result 和 error，需显式保留取消语义。
+                        return Err(Error::Api {
+                            code: Some("CANCELLED".into()),
+                            message: format!(
+                                "Task {task_id} cancelled; check with: ov task status {task_id}"
+                            ),
+                            details: Some(json!({"task_id": task_id, "status": "cancelled"})),
+                            status: None,
+                        });
+                    }
+                    Some("failed") => {
+                        let result = &task["result"];
+                        return Err(Error::Api {
+                            code: result["code"].as_str().map(str::to_string),
+                            message: format!(
+                                "Task {task_id} failed: {}",
+                                task["error"]
+                                    .as_str()
+                                    .unwrap_or("resource processing failed")
+                            ),
+                            details: Some(json!({
+                                "task_id": task_id,
+                                "status": "failed",
+                                "details": result.get("details"),
+                            })),
+                            status: None,
+                        });
+                    }
+                    Some("pending" | "running" | "cancelling") => {}
+                    _ => {
+                        return Err(observation_error(Error::Parse(format!(
+                            "Task {task_id} returned an invalid status"
+                        ))));
+                    }
+                }
+                tokio::time::sleep(interval).await;
+            }
+        };
+        tokio::select! {
+            result = poll => result,
+            signal = &mut interrupted => {
+                signal.map_err(|error| observation_error(Error::Io(error)))?;
+                Err(Error::Api {
+                    code: Some("INTERRUPTED".into()),
+                    message: format!("Stopped waiting. The server task was not cancelled. Check progress with: ov task status {task_id}"),
+                    details: Some(json!({"task_id": task_id})),
+                    status: None,
+                })
+            }
         }
     }
 
@@ -734,94 +1214,52 @@ impl HttpClient {
         &self,
         data: &str,
         wait: bool,
-        timeout: Option<f64>,
         show_progress: bool,
         verbose: bool,
         source_metadata: Option<Value>,
         target_uri: Option<&str>,
+        skills: &[String],
+        list_only: bool,
     ) -> Result<serde_json::Value> {
-        let path_obj = Path::new(data);
-
-        if path_obj.exists() {
-            if path_obj.is_dir() {
-                let zip_file = if show_progress {
-                    self.zip_directory_with_progress(path_obj, verbose, None)?
+        let path = Path::new(data);
+        let mut body = json!({"wait": wait});
+        if !skills.is_empty() {
+            body["skills"] = json!(skills);
+        }
+        if list_only {
+            body["list_only"] = json!(true);
+        }
+        if let Some(target_uri) = target_uri {
+            body["target_uri"] = json!(target_uri);
+        }
+        if let Some(metadata) = source_metadata {
+            body["source_metadata"] = metadata;
+        } else if path.exists() {
+            body["source_metadata"] = json!({"type": "local", "source": data, "path": data});
+        }
+        if path.is_dir() || path.is_file() {
+            let archive = if path.is_dir() {
+                Some(if show_progress {
+                    self.zip_directory_with_progress(path, verbose, None)?
                 } else {
-                    self.zip_directory(path_obj, None)?
-                };
-                let temp_file_id = if show_progress {
-                    self.upload_temp_file_with_progress(zip_file.path(), verbose)
-                        .await?
-                } else {
-                    self.upload_temp_file(zip_file.path()).await?
-                };
-
-                let mut body = serde_json::json!({
-                    "temp_file_id": temp_file_id,
-                    "wait": wait,
-                    "timeout": timeout,
-                });
-                if let Some(source_metadata) = source_metadata.clone() {
-                    body["source_metadata"] = source_metadata;
-                }
-                if let Some(target_uri) = target_uri {
-                    body["target_uri"] = serde_json::Value::String(target_uri.to_string());
-                }
-                let dynamic_timeout =
-                    TimeoutConfig::for_resource_processing().calculate(zip_file.path())?;
-                self.base
-                    .post_with_timeout("/api/v1/skills", &body, dynamic_timeout)
-                    .await
-            } else if path_obj.is_file() {
-                let temp_file_id = if show_progress {
-                    self.upload_temp_file_with_progress(path_obj, verbose)
-                        .await?
-                } else {
-                    self.upload_temp_file(path_obj).await?
-                };
-
-                let mut body = serde_json::json!({
-                    "temp_file_id": temp_file_id,
-                    "wait": wait,
-                    "timeout": timeout,
-                });
-                if let Some(source_metadata) = source_metadata.clone() {
-                    body["source_metadata"] = source_metadata;
-                }
-                if let Some(target_uri) = target_uri {
-                    body["target_uri"] = serde_json::Value::String(target_uri.to_string());
-                }
-                let dynamic_timeout =
-                    TimeoutConfig::for_resource_processing().calculate(path_obj)?;
-                self.base
-                    .post_with_timeout("/api/v1/skills", &body, dynamic_timeout)
-                    .await
+                    self.zip_directory(path, None)?
+                })
             } else {
-                let mut body = serde_json::json!({
-                    "data": data,
-                    "wait": wait,
-                    "timeout": timeout,
-                });
-                if let Some(source_metadata) = source_metadata.clone() {
-                    body["source_metadata"] = source_metadata;
-                }
-                if let Some(target_uri) = target_uri {
-                    body["target_uri"] = serde_json::Value::String(target_uri.to_string());
-                }
-                self.post("/api/v1/skills", &body).await
-            }
+                None
+            };
+            let upload = archive.as_ref().map(|file| file.path()).unwrap_or(path);
+            let id = if show_progress {
+                self.upload_temp_file_with_progress(upload, verbose).await?
+            } else {
+                self.upload_temp_file(upload).await?
+            };
+            body["temp_file_id"] = json!(id);
+            let dynamic_timeout = TimeoutConfig::for_resource_processing().calculate(upload)?;
+            self.base
+                .post_with_timeout("/api/v1/skills", &body, dynamic_timeout)
+                .await
         } else {
-            let mut body = serde_json::json!({
-                "data": data,
-                "wait": wait,
-                "timeout": timeout,
-            });
-            if let Some(source_metadata) = source_metadata {
-                body["source_metadata"] = source_metadata;
-            }
-            if let Some(target_uri) = target_uri {
-                body["target_uri"] = serde_json::Value::String(target_uri.to_string());
-            }
+            body["data"] = json!(data);
             self.post("/api/v1/skills", &body).await
         }
     }
@@ -941,7 +1379,6 @@ impl HttpClient {
         name: &str,
         data: &str,
         wait: bool,
-        timeout: Option<f64>,
         show_progress: bool,
         verbose: bool,
         source_metadata: Option<Value>,
@@ -971,7 +1408,6 @@ impl HttpClient {
                 let mut body = serde_json::json!({
                     "temp_file_id": temp_file_id,
                     "wait": wait,
-                    "timeout": timeout,
                 });
                 if let Some(source_metadata) = source_metadata.clone() {
                     body["source_metadata"] = source_metadata;
@@ -988,7 +1424,6 @@ impl HttpClient {
                 let mut body = serde_json::json!({
                     "temp_file_id": temp_file_id,
                     "wait": wait,
-                    "timeout": timeout,
                 });
                 if let Some(source_metadata) = source_metadata.clone() {
                     body["source_metadata"] = source_metadata;
@@ -999,7 +1434,6 @@ impl HttpClient {
                 let mut body = serde_json::json!({
                     "data": data,
                     "wait": wait,
-                    "timeout": timeout,
                 });
                 if let Some(source_metadata) = source_metadata.clone() {
                     body["source_metadata"] = source_metadata;
@@ -1011,7 +1445,6 @@ impl HttpClient {
             let mut body = serde_json::json!({
                 "data": data,
                 "wait": wait,
-                "timeout": timeout,
             });
             if let Some(source_metadata) = source_metadata {
                 body["source_metadata"] = source_metadata;
@@ -1038,8 +1471,13 @@ impl HttpClient {
     // ============ Task Methods ============
 
     pub async fn get_task(&self, task_id: &str) -> Result<serde_json::Value> {
-        let path = format!("/api/v1/tasks/{}", task_id);
+        let path = format!("/api/v1/tasks/{task_id}");
         self.get(&path, &[]).await
+    }
+
+    pub async fn cancel_task(&self, task_id: &str) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/tasks/{task_id}/cancel");
+        self.post(&path, &serde_json::json!({})).await
     }
 
     pub async fn list_tasks(
@@ -1057,35 +1495,6 @@ impl HttpClient {
         self.get("/api/v1/tasks", &params).await
     }
 
-    // ============ Relation Methods ============
-
-    pub async fn relations(&self, uri: &str) -> Result<serde_json::Value> {
-        let params = vec![("uri".to_string(), uri.to_string())];
-        self.get("/api/v1/relations", &params).await
-    }
-
-    pub async fn link(
-        &self,
-        from_uri: &str,
-        to_uris: &[String],
-        reason: &str,
-    ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "from_uri": from_uri,
-            "to_uris": to_uris,
-            "reason": reason,
-        });
-        self.post("/api/v1/relations/link", &body).await
-    }
-
-    pub async fn unlink(&self, from_uri: &str, to_uri: &str) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "from_uri": from_uri,
-            "to_uri": to_uri,
-        });
-        self.delete_with_body("/api/v1/relations/link", &body).await
-    }
-
     // ============ Pack Methods ============
 
     async fn download_pack(
@@ -1094,51 +1503,40 @@ impl HttpClient {
         body: serde_json::Value,
         to: &str,
         default_name: &str,
+        show_progress: bool,
     ) -> Result<String> {
         let url = format!("{}{}", self.base.base_url, endpoint);
-        let response = self
+        let request = self
             .base
             .http
             .post(&url)
             .headers(self.base.build_headers())
             .json(&body)
-            .query(&[("profile", "0")])
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .query(&[("profile", "0")]);
+        let progress = show_progress.then(|| {
+            ProgressGuard::new("Preparing OVPack on server", "OVPack download failed")
+        });
+        let response = self
+            .base
+            .send_request(request, "HTTP request failed")
+            .await?;
 
         let status = response.status();
         if !status.is_success() {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| Error::Network(format!("Failed to read error response: {}", e)))?;
-
-            let error_msg = match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                Ok(json) => json
-                    .get("error")
-                    .and_then(|e| e.get("message"))
-                    .and_then(|m| m.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| {
-                        json.get("detail")
-                            .and_then(|d| d.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .unwrap_or_else(|| format!("HTTP error {}", status)),
-                Err(_) => {
-                    let body_str = String::from_utf8_lossy(&bytes);
-                    format!("HTTP error {}\n\nRaw response body:\n{}", status, body_str)
-                }
-            };
-
-            return Err(Error::api(error_msg));
+                .map_err(|e| Error::from_reqwest("Failed to read error response", e))?;
+            return Err(crate::base_client::api_error_from_body(&bytes, status));
         }
 
+        if let Some(progress) = &progress {
+            progress.set_message("Downloading OVPack");
+        }
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| Error::Network(format!("Failed to read response bytes: {}", e)))?;
+            .map_err(|e| Error::from_reqwest("Failed to read response bytes", e))?;
 
         let to_path = Path::new(to);
         let final_path = if to_path.is_dir() {
@@ -1152,10 +1550,29 @@ impl HttpClient {
         if let Some(parent) = final_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-
         std::fs::write(&final_path, bytes)?;
 
+        if let Some(progress) = progress {
+            progress.finish("OVPack download complete");
+        }
+
         Ok(final_path.to_string_lossy().to_string())
+    }
+
+    async fn post_pack_operation(
+        &self,
+        endpoint: &str,
+        body: &serde_json::Value,
+        show_progress: bool,
+        message: &str,
+    ) -> Result<serde_json::Value> {
+        let processing = show_progress
+            .then(|| ProgressGuard::new(message, "OVPack processing failed"));
+        let result = self.post(endpoint, body).await?;
+        if let Some(processing) = processing {
+            processing.finish("OVPack processing complete");
+        }
+        Ok(result)
     }
 
     pub async fn export_ovpack(
@@ -1163,6 +1580,7 @@ impl HttpClient {
         uri: &str,
         to: &str,
         include_vectors: bool,
+        show_progress: bool,
     ) -> Result<String> {
         let body = serde_json::json!({
             "uri": uri,
@@ -1173,16 +1591,22 @@ impl HttpClient {
             .split('/')
             .last()
             .unwrap_or("export");
-        self.download_pack("/api/v1/pack/export", body, to, base_name)
+        self.download_pack("/api/v1/pack/export", body, to, base_name, show_progress)
             .await
     }
 
-    pub async fn backup_ovpack(&self, to: &str, include_vectors: bool) -> Result<String> {
+    pub async fn backup_ovpack(
+        &self,
+        to: &str,
+        include_vectors: bool,
+        show_progress: bool,
+    ) -> Result<String> {
         self.download_pack(
             "/api/v1/pack/backup",
             serde_json::json!({"include_vectors": include_vectors}),
             to,
             "openviking-backup",
+            show_progress,
         )
         .await
     }
@@ -1193,6 +1617,7 @@ impl HttpClient {
         parent: &str,
         on_conflict: Option<&str>,
         vector_mode: Option<&str>,
+        show_progress: bool,
     ) -> Result<serde_json::Value> {
         let file_path_obj = Path::new(file_path);
 
@@ -1206,7 +1631,12 @@ impl HttpClient {
             return Err(Error::Client(format!("Path is not a file: {}", file_path)));
         }
 
-        let temp_file_id = self.upload_temp_file(file_path_obj).await?;
+        let temp_file_id = if show_progress {
+            self.upload_temp_file_with_progress(file_path_obj, false)
+                .await?
+        } else {
+            self.upload_temp_file(file_path_obj).await?
+        };
         let conflict_policy = on_conflict.unwrap_or("fail");
         let body = serde_json::json!({
             "temp_file_id": temp_file_id,
@@ -1214,7 +1644,13 @@ impl HttpClient {
             "on_conflict": conflict_policy,
             "vector_mode": vector_mode.unwrap_or("auto"),
         });
-        self.post("/api/v1/pack/import", &body).await
+        self.post_pack_operation(
+            "/api/v1/pack/import",
+            &body,
+            show_progress,
+            "Validating and importing OVPack on server",
+        )
+        .await
     }
 
     pub async fn restore_ovpack(
@@ -1222,6 +1658,7 @@ impl HttpClient {
         file_path: &str,
         on_conflict: Option<&str>,
         vector_mode: Option<&str>,
+        show_progress: bool,
     ) -> Result<serde_json::Value> {
         let file_path_obj = Path::new(file_path);
 
@@ -1235,14 +1672,25 @@ impl HttpClient {
             return Err(Error::Client(format!("Path is not a file: {}", file_path)));
         }
 
-        let temp_file_id = self.upload_temp_file(file_path_obj).await?;
+        let temp_file_id = if show_progress {
+            self.upload_temp_file_with_progress(file_path_obj, false)
+                .await?
+        } else {
+            self.upload_temp_file(file_path_obj).await?
+        };
         let conflict_policy = on_conflict.unwrap_or("fail");
         let body = serde_json::json!({
             "temp_file_id": temp_file_id,
             "on_conflict": conflict_policy,
             "vector_mode": vector_mode.unwrap_or("auto"),
         });
-        self.post("/api/v1/pack/restore", &body).await
+        self.post_pack_operation(
+            "/api/v1/pack/restore",
+            &body,
+            show_progress,
+            "Validating and restoring OVPack on server",
+        )
+        .await
     }
 
     // ============ Admin Methods ============
@@ -1273,13 +1721,46 @@ impl HttpClient {
             .await
     }
 
-    pub async fn admin_list_accounts(&self) -> Result<Value> {
-        self.get("/api/v1/admin/accounts", &[]).await
+    pub async fn admin_list_accounts(
+        &self,
+        name: Option<String>,
+        limit: Option<u32>,
+        page: u32,
+    ) -> Result<Value> {
+        let mut params = vec![];
+        if let Some(n) = name {
+            params.push(("name".to_string(), n));
+        }
+        if let Some(l) = limit {
+            params.push(("limit".to_string(), l.to_string()));
+            params.push(("page".to_string(), page.to_string()));
+        }
+        self.get("/api/v1/admin/accounts", &params).await
     }
 
     pub async fn admin_delete_account(&self, account_id: &str) -> Result<Value> {
         let path = format!("/api/v1/admin/accounts/{}", account_id);
         self.delete(&path, &[]).await
+    }
+
+    pub async fn admin_set_account_acl_enabled(
+        &self,
+        account_id: &str,
+        enabled: bool,
+    ) -> Result<Value> {
+        let path = format!("/api/v1/admin/accounts/{}/configuration", account_id);
+        self.patch(
+            &path,
+            &serde_json::json!({
+                "settings": {
+                    "acl": {
+                        "enabled": enabled,
+                    }
+                }
+            }),
+            &[],
+        )
+        .await
     }
 
     pub async fn admin_register_user(
@@ -1306,12 +1787,17 @@ impl HttpClient {
     pub async fn admin_list_users(
         &self,
         account_id: &str,
-        limit: u32,
+        limit: Option<u32>,
         name: Option<String>,
         role: Option<String>,
+        page: u32,
     ) -> Result<Value> {
         let path = format!("/api/v1/admin/accounts/{}/users", account_id);
-        let mut params = vec![("limit".to_string(), limit.to_string())];
+        let mut params = vec![];
+        if let Some(l) = limit {
+            params.push(("limit".to_string(), l.to_string()));
+            params.push(("page".to_string(), page.to_string()));
+        }
         if let Some(n) = name {
             params.push(("name".to_string(), n));
         }
@@ -1357,13 +1843,60 @@ impl HttpClient {
         self.post(&path, &body).await
     }
 
-    pub async fn admin_migrate(&self, cleanup: bool) -> Result<Value> {
-        let action = if cleanup { "cleanup" } else { "migrate" };
-        self.post(
-            "/api/v1/admin/migrate",
-            &serde_json::json!({ "action": action }),
-        )
-        .await
+    pub async fn admin_create_group(&self, account_id: &str, group_id: &str) -> Result<Value> {
+        let path = format!("/api/v1/admin/accounts/{}/groups", account_id);
+        self.post(&path, &serde_json::json!({"group_id": group_id}))
+            .await
+    }
+
+    pub async fn admin_list_groups(&self, account_id: &str) -> Result<Value> {
+        let path = format!("/api/v1/admin/accounts/{}/groups", account_id);
+        self.get(&path, &[]).await
+    }
+
+    pub async fn admin_delete_group(&self, account_id: &str, group_id: &str) -> Result<Value> {
+        let path = format!("/api/v1/admin/accounts/{}/groups/{}", account_id, group_id);
+        self.delete(&path, &[]).await
+    }
+
+    pub async fn admin_list_group_members(
+        &self,
+        account_id: &str,
+        group_id: &str,
+    ) -> Result<Value> {
+        let path = format!(
+            "/api/v1/admin/accounts/{}/groups/{}/members",
+            account_id, group_id
+        );
+        self.get(&path, &[]).await
+    }
+
+    pub async fn admin_add_group_member(
+        &self,
+        account_id: &str,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<Value> {
+        let path = format!(
+            "/api/v1/admin/accounts/{}/groups/{}/members",
+            account_id, group_id
+        );
+        self.put(&path, &serde_json::json!({"user_ids": [user_id]}))
+            .await
+    }
+
+    pub async fn admin_remove_group_member(
+        &self,
+        account_id: &str,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<Value> {
+        let path = format!(
+            "/api/v1/admin/accounts/{}/groups/{}/members",
+            account_id, group_id
+        );
+        self.delete_with_body(&path, &serde_json::json!({"user_ids": [user_id]}))
+            .await
     }
 
     // ============ Debug Vector Methods ============
@@ -1424,6 +1957,13 @@ impl HttpClient {
         self.get("/api/v1/privacy-configs", &[]).await
     }
 
+    pub async fn privacy_tree(&self, category: Option<&str>) -> Result<serde_json::Value> {
+        let params = category
+            .map(|value| vec![("category".to_string(), value.to_string())])
+            .unwrap_or_default();
+        self.get("/api/v1/privacy-configs/tree", &params).await
+    }
+
     pub async fn privacy_list_targets(&self, category: &str) -> Result<serde_json::Value> {
         let path = format!("/api/v1/privacy-configs/{}", category);
         self.get(&path, &[]).await
@@ -1438,6 +1978,41 @@ impl HttpClient {
         self.get(&path, &[]).await
     }
 
+    pub async fn privacy_get_field(
+        &self,
+        category: &str,
+        target_key: &str,
+        field: &str,
+        reveal: bool,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/privacy-configs/{}/{}/field", category, target_key);
+        let mut params = vec![("field".to_string(), field.to_string())];
+        if reveal {
+            params.push(("reveal".to_string(), "true".to_string()));
+        }
+        self.get(&path, &params).await
+    }
+
+    pub async fn privacy_list_fields(
+        &self,
+        category: &str,
+        target_key: &str,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/privacy-configs/{}/{}/fields", category, target_key);
+        self.get(&path, &[]).await
+    }
+
+    pub async fn privacy_resolve_selector(
+        &self,
+        selector: &str,
+    ) -> Result<serde_json::Value> {
+        self.post(
+            "/api/v1/privacy-configs/resolve",
+            &serde_json::json!({"selector": selector}),
+        )
+        .await
+    }
+
     pub async fn privacy_upsert(
         &self,
         category: &str,
@@ -1446,6 +2021,16 @@ impl HttpClient {
     ) -> Result<serde_json::Value> {
         let path = format!("/api/v1/privacy-configs/{}/{}", category, target_key);
         self.post(&path, body).await
+    }
+
+    pub async fn privacy_patch(
+        &self,
+        category: &str,
+        target_key: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/privacy-configs/{}/{}", category, target_key);
+        self.patch(&path, body, &[]).await
     }
 
     pub async fn privacy_list_versions(
@@ -1485,6 +2070,44 @@ impl HttpClient {
         );
         let body = serde_json::json!({ "version": version });
         self.post(&path, &body).await
+    }
+
+    pub async fn privacy_delete(
+        &self,
+        category: &str,
+        target_key: &str,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/privacy-configs/{}/{}", category, target_key);
+        self.delete(&path, &[]).await
+    }
+
+    pub async fn privacy_delete_field(
+        &self,
+        category: &str,
+        target_key: &str,
+        field: &str,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/privacy-configs/{}/{}/field", category, target_key);
+        self.delete(&path, &[("field".to_string(), field.to_string())])
+            .await
+    }
+
+    pub async fn privacy_delete_selector(
+        &self,
+        selector: &str,
+    ) -> Result<serde_json::Value> {
+        self.delete_with_body(
+            "/api/v1/privacy-configs/selector",
+            &serde_json::json!({"selector": selector}),
+        )
+        .await
+    }
+
+    pub async fn privacy_scan(
+        &self,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        self.post("/api/v1/privacy-configs/scan", body).await
     }
 
     // ============ Watch Management (RFC #2104) ============
@@ -1558,12 +2181,59 @@ impl HttpClient {
         self.post("/api/v1/snapshot/restore", req).await
     }
 
-    pub async fn snapshot_log(&self, branch: &str, limit: u32) -> Result<Value> {
-        let params = vec![
+    pub async fn snapshot_log(
+        &self,
+        branch: &str,
+        limit: u32,
+        paths: Option<&[String]>,
+    ) -> Result<Value> {
+        let mut params = vec![
             ("branch".to_string(), branch.to_string()),
             ("limit".to_string(), limit.to_string()),
         ];
+        if let Some(paths) = paths {
+            for path in paths {
+                params.push(("paths".to_string(), path.to_string()));
+            }
+        }
         self.get("/api/v1/snapshot/log", &params).await
+    }
+
+    pub async fn snapshot_diff(
+        &self,
+        path: &str,
+        from_ref: Option<&str>,
+        to_ref: &str,
+    ) -> Result<Value> {
+        let mut params = vec![
+            ("path".to_string(), path.to_string()),
+            ("to".to_string(), to_ref.to_string()),
+        ];
+        if let Some(from_ref) = from_ref {
+            params.push(("from".to_string(), from_ref.to_string()));
+        }
+        self.get("/api/v1/snapshot/diff", &params).await
+    }
+
+    /// Return one stable page of source-file changes; no base compares an empty tree.
+    pub async fn snapshot_diff_paths(
+        &self,
+        paths: &[String],
+        from_ref: Option<&str>,
+        to_ref: &str,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Value> {
+        let mut params = vec![
+            ("to".to_string(), to_ref.to_string()),
+            ("offset".to_string(), offset.to_string()),
+            ("limit".to_string(), limit.to_string()),
+        ];
+        params.extend(paths.iter().map(|path| ("paths".to_string(), path.clone())));
+        if let Some(from_ref) = from_ref {
+            params.push(("from".to_string(), from_ref.to_string()));
+        }
+        self.get("/api/v1/snapshot/diff-paths", &params).await
     }
 
     pub async fn snapshot_ignore_get(&self) -> Result<Value> {
@@ -1571,8 +2241,11 @@ impl HttpClient {
     }
 
     pub async fn snapshot_ignore_set(&self, content: &str) -> Result<Value> {
-        self.put("/api/v1/snapshot/ignore", &serde_json::json!({ "content": content }))
-            .await
+        self.put(
+            "/api/v1/snapshot/ignore",
+            &serde_json::json!({ "content": content }),
+        )
+        .await
     }
 
     pub async fn snapshot_ignore_delete(&self) -> Result<Value> {
@@ -1583,21 +2256,24 @@ impl HttpClient {
         &self,
         target_ref: &str,
         path: Option<&str>,
-    ) -> Result<SnapshotShowResult> {        let url = format!("{}/api/v1/snapshot/show", self.base.base_url);
-        let mut query: Vec<(String, String)> = vec![("target_ref".to_string(), target_ref.to_string())];
+    ) -> Result<SnapshotShowResult> {
+        let url = format!("{}/api/v1/snapshot/show", self.base.base_url);
+        let mut query: Vec<(String, String)> =
+            vec![("target_ref".to_string(), target_ref.to_string())];
         if let Some(p) = path {
             query.push(("path".to_string(), p.to_string()));
         }
 
-        let response = self
+        let request = self
             .base
             .http
             .get(&url)
             .headers(self.base.build_headers())
-            .query(&query)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .query(&query);
+        let response = self
+            .base
+            .send_request(request, "HTTP request failed")
+            .await?;
 
         let status = response.status();
         let content_type = response
@@ -1607,7 +2283,10 @@ impl HttpClient {
             .unwrap_or("")
             .to_string();
 
-        if path.is_some() && status.is_success() && content_type.starts_with("application/octet-stream") {
+        if path.is_some()
+            && status.is_success()
+            && content_type.starts_with("application/octet-stream")
+        {
             let oid = response
                 .headers()
                 .get("x-snapshot-oid")
@@ -1623,7 +2302,7 @@ impl HttpClient {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| Error::Network(format!("Failed to read blob bytes: {}", e)))?
+                .map_err(|e| Error::from_reqwest("Failed to read blob bytes", e))?
                 .to_vec();
             return Ok(SnapshotShowResult::Blob { oid, size, bytes });
         }
@@ -1631,30 +2310,26 @@ impl HttpClient {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| Error::Network(format!("Failed to read response body: {}", e)))?;
+            .map_err(|e| Error::from_reqwest("Failed to read response body", e))?;
+
+        if !status.is_success() {
+            return Err(crate::base_client::api_error_from_body(&bytes, status));
+        }
+
         let json: Value = match serde_json::from_slice(&bytes) {
             Ok(v) => v,
             Err(e) => {
                 let body_str = String::from_utf8_lossy(&bytes);
-                return Err(Error::Network(format!(
+                return Err(Error::Parse(format!(
                     "Failed to parse JSON response: {}\n\nRaw response body:\n{}",
                     e, body_str
                 )));
             }
         };
 
-        if !status.is_success() {
-            return Err(Error::api_with_status(
-                crate::base_client::api_error_from_envelope(&json, status),
-                status.as_u16(),
-            ));
-        }
         if let Some(error) = json.get("error") {
             if !error.is_null() {
-                return Err(Error::api_with_status(
-                    crate::base_client::api_error_from_envelope(&json, status),
-                    status.as_u16(),
-                ));
+                return Err(crate::base_client::api_error_from_envelope(&json, status));
             }
         }
 
@@ -1664,15 +2339,52 @@ impl HttpClient {
 }
 
 #[cfg(test)]
+mod resource_wait_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{BaseClient, HttpClient, TimeoutConfig};
-    use crate::base_client::api_error_from_envelope;
+    use crate::base_client::{
+        api_error_from_envelope, spawn_test_response, take_test_progress,
+    };
     use reqwest::StatusCode;
-    use serde_json::json;
+    use serde_json::{Map, json};
     use std::collections::HashMap;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
+
+    #[tokio::test]
+    async fn admin_group_members_send_singleton_json_to_collection_route() {
+        for method in ["PUT", "DELETE"] {
+            let (base_url, request_rx) = spawn_request_capture_server().await;
+            let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+            if method == "PUT" {
+                client
+                    .admin_add_group_member("acme", "engineering", "alice")
+                    .await
+            } else {
+                client
+                    .admin_remove_group_member("acme", "engineering", "alice")
+                    .await
+            }
+            .expect("membership request should succeed");
+            let request = request_rx.await.expect("request should be captured");
+            assert!(request.starts_with(&format!(
+                "{method} /api/v1/admin/accounts/acme/groups/engineering/members HTTP/1.1\r\n"
+            )));
+            let (headers, body) = request.split_once("\r\n\r\n").expect("request body");
+            assert!(
+                headers
+                    .to_ascii_lowercase()
+                    .contains("content-type: application/json")
+            );
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(body).unwrap(),
+                json!({"user_ids": ["alice"]})
+            );
+        }
+    }
 
     #[test]
     fn compact_request_body_drops_null_and_empty_args() {
@@ -1703,6 +2415,211 @@ mod tests {
         let mut body = json!({"path": "x", "args": {"feishu_access_token": "u-x"}});
         super::compact_request_body(&mut body);
         assert!(body.as_object().unwrap().contains_key("args"));
+    }
+
+    #[tokio::test]
+    async fn add_resource_sends_parse_mode_through_args() {
+        let (default_url, default_request_rx) = spawn_request_capture_server().await;
+        let default_client = HttpClient::new(default_url, None, None, None, None, 5.0, false, None);
+        default_client
+            .add_resource(
+                "https://example.com/default.md",
+                None,
+                None,
+                None,
+                None,
+                "",
+                "",
+                false,
+                false,
+                None,
+                None,
+                None,
+                true,
+                0.0,
+                "semantic_and_vectors".to_string(),
+                None,
+                Vec::new(),
+                "replace".to_string(),
+                None,
+                false,
+                false,
+            )
+            .await
+            .expect("default add-resource request should succeed");
+        let default_request = default_request_rx
+            .await
+            .expect("request should be captured");
+        assert!(!default_request.contains("parse_mode"));
+
+        let (no_split_url, no_split_request_rx) = spawn_request_capture_server().await;
+        let no_split_client =
+            HttpClient::new(no_split_url, None, None, None, None, 5.0, false, None);
+        let mut no_split_args = Map::new();
+        no_split_args.insert("parse_mode".to_string(), json!("no_split"));
+        no_split_client
+            .add_resource(
+                "https://example.com/manual.pdf",
+                None,
+                None,
+                None,
+                None,
+                "",
+                "",
+                false,
+                false,
+                None,
+                None,
+                None,
+                true,
+                0.0,
+                "semantic_and_vectors".to_string(),
+                Some(no_split_args),
+                Vec::new(),
+                "replace".to_string(),
+                None,
+                false,
+                false,
+            )
+            .await
+            .expect("no_split add-resource request should succeed");
+        let no_split_request = no_split_request_rx
+            .await
+            .expect("request should be captured");
+        assert!(no_split_request.contains(r#""args":{"parse_mode":"no_split"}"#));
+    }
+
+    #[test]
+    fn compact_request_body_drops_default_processing_mode_for_legacy_servers() {
+        let mut body = json!({
+            "path": "https://example.com/guide.md",
+            "processing_mode": "semantic_and_vectors",
+        });
+        super::compact_request_body(&mut body);
+        assert!(!body.as_object().unwrap().contains_key("processing_mode"));
+    }
+
+    #[test]
+    fn compact_request_body_keeps_non_default_processing_mode() {
+        let mut body = json!({
+            "path": "https://example.com/guide.md",
+            "processing_mode": "vectors_only",
+        });
+        super::compact_request_body(&mut body);
+        assert_eq!(body["processing_mode"], "vectors_only");
+    }
+
+    #[tokio::test]
+    async fn search_list_request_preserves_legacy_server_compatibility() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .search(
+                "OAuth token".to_string(),
+                String::new(),
+                None,
+                "semantic".to_string(),
+                "list".to_string(),
+                None,
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+                None,
+            )
+            .await
+            .expect("list search should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("POST /api/v1/search/search "));
+        let (_, body) = request.split_once("\r\n\r\n").expect("request body");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(body).unwrap(),
+            json!({"query": "OAuth token", "target_uri": "", "limit": 10})
+        );
+    }
+
+    #[tokio::test]
+    async fn search_context_request_preserves_keywords_and_session_options() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .search(
+                "OAuth token".to_string(),
+                String::new(),
+                None,
+                "keywords".to_string(),
+                "context".to_string(),
+                Some("session-1".to_string()),
+                3,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(vec!["memory".to_string()]),
+                Some(vec!["project=openviking".to_string()]),
+                false,
+                Some("7d".to_string()),
+            )
+            .await
+            .expect("context search should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("POST /api/v1/search/search "));
+        let (_, body) = request.split_once("\r\n\r\n").expect("request body");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(body).unwrap(),
+            json!({
+                "query": "OAuth token",
+                "target_uri": "",
+                "search_type": "keywords",
+                "mode": "context",
+                "session_id": "session-1",
+                "limit": 3,
+                "context_type": ["memory"],
+                "tags": ["project=openviking"],
+                "events_time_decay_protection": "7d"
+            })
+        );
+    }
+
+    #[test]
+    fn add_resource_tag_fields_adds_tags_and_tag_mode() {
+        let mut body = json!({"path": "https://example.com/demo.md"});
+        let tags = vec!["team=search".to_string(), "env=test".to_string()];
+
+        super::add_resource_tag_fields(&mut body, &tags, "append");
+
+        assert_eq!(body["tags"], json!(["team=search", "env=test"]));
+        assert_eq!(body["tag_mode"], json!("append"));
+    }
+
+    #[test]
+    fn add_resource_tag_fields_omits_empty_tags_for_compatibility() {
+        let mut body = json!({"path": "https://example.com/demo.md"});
+
+        super::add_resource_tag_fields(&mut body, &[], "replace");
+
+        let obj = body.as_object().unwrap();
+        assert!(!obj.contains_key("tags"));
+        assert!(!obj.contains_key("tag_mode"));
+    }
+
+    #[test]
+    fn add_resource_tag_fields_sends_clear_without_tags() {
+        let mut body = json!({"path": "https://example.com/demo.md"});
+
+        super::add_resource_tag_fields(&mut body, &[], "clear");
+
+        let obj = body.as_object().unwrap();
+        assert!(!obj.contains_key("tags"));
+        assert_eq!(body["tag_mode"], json!("clear"));
     }
 
     #[test]
@@ -1778,7 +2695,7 @@ mod tests {
             "updated",
             "replace",
             true,
-            Some(3.0),
+            "semantic_and_vectors",
         );
 
         assert_eq!(
@@ -1788,11 +2705,36 @@ mod tests {
                 "content": "updated",
                 "mode": "replace",
                 "wait": true,
-                "timeout": 3.0,
             })
         );
         assert!(body.get("regenerate_semantics").is_none());
         assert!(body.get("revectorize").is_none());
+    }
+
+    #[test]
+    fn build_write_body_drops_default_processing_mode_for_legacy_servers() {
+        let body = HttpClient::build_write_body(
+            "viking://resources/demo.md",
+            "updated",
+            "replace",
+            true,
+            "semantic_and_vectors",
+        );
+
+        assert!(body.get("processing_mode").is_none());
+    }
+
+    #[test]
+    fn build_write_body_keeps_vectors_only_processing_mode() {
+        let body = HttpClient::build_write_body(
+            "viking://resources/demo.md",
+            "updated",
+            "replace",
+            true,
+            "vectors_only",
+        );
+
+        assert_eq!(body["processing_mode"], "vectors_only");
     }
 
     #[tokio::test]
@@ -1801,14 +2743,207 @@ mod tests {
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
 
         client
-            .ls("viking://resources", false, false, "agent", 256, false, 1)
+            .ls(
+                "viking://resources",
+                false,
+                false,
+                "agent",
+                256,
+                Some(false),
+                Some(true),
+                512,
+                false,
+                20,
+                4,
+                Some(5),
+                Some("mtime"),
+                Some("desc"),
+                &[],
+                &[],
+                false,
+            )
             .await
             .expect("ls request should succeed");
 
         let request = request_rx.await.expect("request should be captured");
         assert!(request.starts_with("GET /api/v1/fs/ls?"));
+        assert!(request.contains("node_limit=20"));
+        assert!(request.contains("offset=4"));
+        assert!(request.contains("limit=5"));
+        assert!(request.contains("sort_by=mtime"));
+        assert!(request.contains("sort_order=desc"));
+        assert!(request.contains("include_abstract=false"));
+        assert!(request.contains("include_overview=true"));
+        assert!(request.contains("overview_limit=512"));
         assert!(!request.contains("tz="));
         assert!(!request.contains("include_mod_time_iso="));
+
+        let (default_url, default_request_rx) = spawn_request_capture_server().await;
+        let default_client = HttpClient::new(default_url, None, None, None, None, 5.0, false, None);
+        default_client
+            .ls(
+                "viking://resources",
+                false,
+                false,
+                "agent",
+                256,
+                None,
+                None,
+                4000,
+                false,
+                20,
+                0,
+                None,
+                None,
+                None,
+                &[],
+                &[],
+                false,
+            )
+            .await
+            .expect("default ls request should succeed");
+        let default_request = default_request_rx
+            .await
+            .expect("default request should be captured");
+        assert!(!default_request.contains("offset="));
+        assert!(!default_request.contains("include_abstract="));
+        assert!(!default_request.contains("include_overview="));
+        assert!(default_request.contains("overview_limit=4000"));
+        assert!(!default_request.contains("&limit="));
+        assert!(!default_request.contains("sort_by="));
+        assert!(!default_request.contains("sort_order="));
+    }
+
+    #[tokio::test]
+    async fn cp_posts_recursive_request_body() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+
+        client
+            .cp(
+                "viking://resources/source",
+                "viking://resources/target",
+                true,
+            )
+            .await
+            .expect("cp request should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("POST /api/v1/fs/cp "));
+        assert!(request.contains(r#""from_uri":"viking://resources/source""#));
+        assert!(request.contains(r#""to_uri":"viking://resources/target""#));
+        assert!(request.contains(r#""recursive":true"#));
+    }
+
+    #[tokio::test]
+    async fn gateway_token_is_not_sent_without_a_gateway_challenge() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
+            .with_gateway_token(Some("gateway-secret".to_string()));
+
+        let _: serde_json::Value = client
+            .get("/health", &[])
+            .await
+            .expect("direct OpenViking request should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(!request.to_ascii_lowercase().contains("x-gateway-token"));
+    }
+
+    #[tokio::test]
+    async fn gateway_token_is_retried_for_marked_gateway_challenge() {
+        let (base_url, requests_rx) = spawn_gateway_challenge_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
+            .with_gateway_token(Some("gateway-secret".to_string()));
+
+        let _: serde_json::Value = client
+            .get("/health", &[])
+            .await
+            .expect("gateway retry should succeed");
+
+        let requests = requests_rx.await.expect("requests should be captured");
+        assert_gateway_token_retry(&requests);
+    }
+
+    #[tokio::test]
+    async fn file_download_retries_marked_gateway_challenge() {
+        let (base_url, requests_rx) = spawn_gateway_challenge_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
+            .with_gateway_token(Some("gateway-secret".to_string()));
+
+        client
+            .get_bytes("viking://resources/file.bin")
+            .await
+            .expect("file download should retry through gateway");
+
+        let requests = requests_rx.await.expect("requests should be captured");
+        assert_gateway_token_retry(&requests);
+    }
+
+    #[tokio::test]
+    async fn pack_download_retries_marked_gateway_challenge() {
+        let (base_url, requests_rx) = spawn_gateway_challenge_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
+            .with_gateway_token(Some("gateway-secret".to_string()));
+        let output = tempfile::tempdir().expect("tempdir should be created");
+
+        client
+            .export_ovpack(
+                "viking://resources",
+                output
+                    .path()
+                    .to_str()
+                    .expect("tempdir path should be valid"),
+                false,
+                false,
+            )
+            .await
+            .expect("pack export should retry through gateway");
+
+        let requests = requests_rx.await.expect("requests should be captured");
+        assert_gateway_token_retry(&requests);
+    }
+
+    #[tokio::test]
+    async fn snapshot_show_retries_marked_gateway_challenge() {
+        let (base_url, requests_rx) = spawn_gateway_challenge_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
+            .with_gateway_token(Some("gateway-secret".to_string()));
+
+        client
+            .snapshot_show("HEAD", None)
+            .await
+            .expect("snapshot show should retry through gateway");
+
+        let requests = requests_rx.await.expect("requests should be captured");
+        assert_gateway_token_retry(&requests);
+    }
+
+    #[tokio::test]
+    async fn snapshot_diff_sends_path_and_refs() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+
+        client
+            .snapshot_diff("viking://resources/a.md", Some("old"), "new")
+            .await
+            .expect("snapshot diff should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("GET /api/v1/snapshot/diff?"));
+        assert!(request.contains("path=viking%3A%2F%2Fresources%2Fa.md"));
+        assert!(request.contains("from=old"));
+        assert!(request.contains("to=new"));
+    }
+
+    fn assert_gateway_token_retry(requests: &[String]) {
+        assert_eq!(requests.len(), 2);
+        assert!(!requests[0].to_ascii_lowercase().contains("x-gateway-token"));
+        assert!(
+            requests[1]
+                .to_ascii_lowercase()
+                .contains("x-gateway-token: gateway-secret")
+        );
     }
 
     #[tokio::test]
@@ -1817,18 +2952,283 @@ mod tests {
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
 
         client
-            .tree("viking://resources", "agent", 256, false, 1, 3)
+            .tree(
+                "viking://resources",
+                "agent",
+                256,
+                Some(false),
+                Some(true),
+                512,
+                false,
+                true,
+                20,
+                3,
+                4,
+                Some(5),
+                &[],
+                &[],
+                false,
+            )
             .await
             .expect("tree request should succeed");
 
         let request = request_rx.await.expect("request should be captured");
         assert!(request.starts_with("GET /api/v1/fs/tree?"));
+        assert!(request.contains("node_limit=20"));
+        assert!(request.contains("offset=4"));
+        assert!(request.contains("limit=5"));
+        assert!(request.contains("include_abstract=false"));
+        assert!(request.contains("include_overview=true"));
+        assert!(request.contains("overview_limit=512"));
+        assert!(request.contains("directories_only=true"));
         assert!(!request.contains("tz="));
         assert!(!request.contains("include_mod_time_iso="));
+
+        let (default_url, default_request_rx) = spawn_request_capture_server().await;
+        let default_client = HttpClient::new(default_url, None, None, None, None, 5.0, false, None);
+        default_client
+            .tree(
+                "viking://resources",
+                "agent",
+                256,
+                None,
+                None,
+                4000,
+                false,
+                false,
+                20,
+                3,
+                0,
+                None,
+                &[],
+                &[],
+                false,
+            )
+            .await
+            .expect("default tree request should succeed");
+        let default_request = default_request_rx
+            .await
+            .expect("default request should be captured");
+        assert!(!default_request.contains("offset="));
+        assert!(!default_request.contains("include_abstract="));
+        assert!(!default_request.contains("include_overview="));
+        assert!(!default_request.contains("directories_only="));
+        assert!(!default_request.contains("&limit="));
     }
 
     #[tokio::test]
-    async fn admin_seed_payloads_are_sent() {
+    async fn grep_omits_optional_tags_fields_when_not_requested() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+
+        client
+            .grep(
+                "viking://resources",
+                None,
+                "needle",
+                false,
+                0,
+                0,
+                10,
+                3,
+                &[],
+                false,
+            )
+            .await
+            .expect("plain grep request should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("POST /api/v1/search/grep "));
+        assert!(!request.contains(r#""tags""#));
+        assert!(!request.contains(r#""include_tags""#));
+        assert!(!request.contains(r#""after_context""#));
+        assert!(!request.contains(r#""before_context""#));
+    }
+
+    #[tokio::test]
+    async fn grep_sends_include_tags_only_when_requested() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+
+        client
+            .grep(
+                "viking://resources",
+                None,
+                "needle",
+                false,
+                2,
+                3,
+                10,
+                3,
+                &[],
+                true,
+            )
+            .await
+            .expect("grep tags projection request should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.contains(r#""include_tags":true"#));
+        assert!(request.contains(r#""after_context":2"#));
+        assert!(request.contains(r#""before_context":3"#));
+    }
+
+    #[tokio::test]
+    async fn glob_omits_tags_when_not_requested() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+
+        client
+            .glob("**/*.md", "viking://resources", 10, None, &[], false)
+            .await
+            .expect("plain glob request should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("POST /api/v1/search/glob "));
+        assert!(!request.contains(r#""tags"#));
+        assert!(!request.contains(r#""include_tags"#));
+    }
+
+    #[tokio::test]
+    async fn glob_sends_tags_and_projection_when_requested() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+
+        client
+            .glob(
+                "**/*.md",
+                "viking://resources",
+                10,
+                Some(&["tags".to_string()]),
+                &["team=search".to_string(), "env=prod".to_string()],
+                true,
+            )
+            .await
+            .expect("tagged glob request should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.contains(r#""tags":["team=search","env=prod"]"#));
+        assert!(request.contains(r#""include_tags":true"#));
+    }
+
+    #[tokio::test]
+    async fn compile_create_deserializes_task_and_schedule_responses() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let address = listener.local_addr().expect("listener should have address");
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("request should arrive");
+            let mut buffer = vec![0; 4096];
+            let read = stream.read(&mut buffer).await.expect("request should read");
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            assert!(request.contains(r#""skill":"viking://agent/skills/wiki""#));
+            assert!(request.contains(r#""instruction":"Keep supporting evidence.""#));
+            assert!(request.contains(r#""args":{"model_name":"endpoint-1"}"#));
+            let body = r#"{"status":"ok","result":{"task_id":"cmp_1","status":"accepted","to":"viking://resources/wiki"}}"#;
+            let response = format!(
+                "HTTP/1.1 202 Accepted\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("response should write");
+        });
+        let client = HttpClient::new(
+            format!("http://{address}"),
+            None,
+            None,
+            None,
+            None,
+            5.0,
+            false,
+            None,
+        );
+        let args = serde_json::json!({"model_name": "endpoint-1"});
+        let accepted = client
+            .create_compile(
+                &["viking://resources/source".into()],
+                "viking://resources/wiki",
+                "viking://agent/skills/wiki",
+                Some("Keep supporting evidence."),
+                args.as_object(),
+            )
+            .await
+            .expect("202 response body should deserialize");
+        assert_eq!(accepted.task_id.as_deref(), Some("cmp_1"));
+
+        let scheduled: super::CompileAccepted = serde_json::from_value(serde_json::json!({
+            "to": "viking://resources/wiki",
+            "status": "active",
+            "auto_update": true,
+            "next_run_at": "2026-10-26T00:00:00+08:00"
+        }))
+        .expect("saved Compile schedules should deserialize without a task");
+        assert!(scheduled.task_id.is_none());
+        assert_eq!(
+            scheduled.next_run_at.as_deref(),
+            Some("2026-10-26T00:00:00+08:00")
+        );
+        let output = serde_json::to_value(scheduled).expect("schedule output should serialize");
+        assert!(output.get("task_id").is_none());
+        assert_eq!(output["next_run_at"], "2026-10-26T00:00:00+08:00");
+    }
+
+    #[tokio::test]
+    async fn task_methods_use_generic_task_endpoints_for_compile_ids() {
+        let (base_url, status_request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .get_task("cmp_1")
+            .await
+            .expect("compile status request should succeed");
+        let status_request = status_request_rx
+            .await
+            .expect("status request should be captured");
+        assert!(status_request.starts_with("GET /api/v1/tasks/cmp_1 "));
+
+        let (base_url, cancel_request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .cancel_task("cmp_1")
+            .await
+            .expect("compile cancellation request should succeed");
+        let cancel_request = cancel_request_rx
+            .await
+            .expect("cancel request should be captured");
+        assert!(cancel_request.starts_with("POST /api/v1/tasks/cmp_1/cancel "));
+    }
+
+    #[tokio::test]
+    async fn ovpack_download_progress_reports_failure_for_http_error() {
+        let base_url = spawn_test_response(
+            "500 Internal Server Error",
+            r#"{"error":{"code":"INTERNAL_ERROR","message":"export failed"}}"#,
+        )
+        .await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        let destination = tempfile::tempdir().expect("download directory should be created");
+
+        let _ = take_test_progress();
+        let error = client
+            .export_ovpack(
+                "viking://resources/demo",
+                destination.path().to_str().unwrap(),
+                false,
+                true,
+            )
+            .await
+            .expect_err("HTTP error should fail download");
+        let progress = take_test_progress().expect("download progress should be recorded");
+
+        assert!(matches!(error, crate::error::Error::Api { status: Some(500), .. }));
+        assert!(progress.is_finished());
+        assert_eq!(progress.message(), "OVPack download failed");
+    }
+
+    #[tokio::test]
+    async fn admin_request_payloads_are_sent() {
         let (base_url, request_rx) = spawn_request_capture_server().await;
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
         client
@@ -1858,6 +3258,16 @@ mod tests {
         let request = request_rx.await.expect("request should be captured");
         assert!(request.starts_with("POST /api/v1/admin/accounts/acct/users/alice/key "));
         assert!(request.contains(r#""seed":"new-seed""#));
+
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .admin_set_account_acl_enabled("acct", true)
+            .await
+            .expect("set account settings should succeed");
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("PATCH /api/v1/admin/accounts/acct/configuration "));
+        assert!(request.contains(r#""settings":{"acl":{"enabled":true}}"#));
     }
 
     #[test]
@@ -1870,10 +3280,16 @@ mod tests {
             }
         });
 
-        assert_eq!(
-            api_error_from_envelope(&body, StatusCode::INTERNAL_SERVER_ERROR),
-            "[PROCESSING_ERROR] Parse error: boom"
-        );
+        let error = api_error_from_envelope(&body, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(matches!(
+            error,
+            crate::error::Error::Api {
+                code: Some(code),
+                message,
+                status: Some(500),
+                ..
+            } if code == "PROCESSING_ERROR" && message == "Parse error: boom"
+        ));
     }
 
     #[test]
@@ -1920,6 +3336,28 @@ mod tests {
         assert_eq!(result, json!("content"));
     }
 
+    #[tokio::test]
+    async fn read_profiled_sends_line_ranges() {
+        for (offset, limit) in [(0, -1), (10, 5), (10, -1), (0, 0)] {
+            let (base_url, request_rx) = spawn_request_capture_server().await;
+            let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+            client
+                .read_profiled("viking://resources/example.md", offset, limit)
+                .await
+                .expect("read request should succeed");
+            let request = request_rx.await.expect("request should be captured");
+            let target = request.split_whitespace().nth(1).expect("request target");
+            let url = url::Url::parse(&format!("http://localhost{target}")).unwrap();
+            assert_eq!(url.path(), "/api/v1/content/read");
+            let params = url
+                .query_pairs()
+                .collect::<std::collections::HashMap<_, _>>();
+            assert_eq!(params.get("uri").unwrap(), "viking://resources/example.md");
+            assert_eq!(params.get("offset").unwrap(), &offset.to_string());
+            assert_eq!(params.get("limit").unwrap(), &limit.to_string());
+        }
+    }
+
     async fn spawn_request_capture_server() -> (String, oneshot::Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -1945,6 +3383,46 @@ mod tests {
                 body
             );
             let _ = stream.write_all(response.as_bytes()).await;
+        });
+
+        (format!("http://{addr}"), request_rx)
+    }
+
+    async fn spawn_gateway_challenge_server() -> (String, oneshot::Receiver<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+        let (request_tx, request_rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for attempt in 0..2 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buffer = vec![0; 4096];
+                let Ok(read) = stream.read(&mut buffer).await else {
+                    return;
+                };
+                requests.push(String::from_utf8_lossy(&buffer[..read]).to_string());
+
+                let (status, marker, body) = if attempt == 0 {
+                    (
+                        "401 Unauthorized",
+                        "X-VikingBot-Gateway: true\r\n",
+                        r#"{"detail":"X-Gateway-Token header required"}"#,
+                    )
+                } else {
+                    ("200 OK", "", r#"{"status":"ok","result":{"ok":true}}"#)
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\n{marker}content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+            let _ = request_tx.send(requests);
         });
 
         (format!("http://{addr}"), request_rx)

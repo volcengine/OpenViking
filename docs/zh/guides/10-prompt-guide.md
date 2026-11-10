@@ -1,4 +1,4 @@
-# OpenViking Prompt 说明与自定义指南
+# 自定义处理 Prompt
 
 本文介绍 OpenViking 当前的 prompt 模板体系，重点说明：
 
@@ -18,7 +18,7 @@ OpenViking 当前的 prompt 主要分为两类：
    - 存放在 `openviking/prompts/templates/<category>/*.yaml`
    - 用于给模型下发任务，例如做图片理解、文档总结、记忆提取、检索意图分析等
 2. memory schema 模板
-   - 存放在 `openviking/prompts/templates/memory/*.yaml`
+   - 存放在 `openviking/system_assets/memory/memory_templates/builtin/*.yaml`
    - 用于定义某类记忆的字段、文件名模板、内容模板和目录规则
 
 从使用角度看，这些模板主要服务于以下处理环节：
@@ -113,6 +113,8 @@ embedding_template: |
 directory: "viking://user/{{ user_space }}/memories/..."
 enabled: true
 operation_mode: "upsert"
+stage: "user"
+peer_enabled: true
 ```
 
 字段含义：
@@ -135,6 +137,10 @@ operation_mode: "upsert"
   - 是否启用该类记忆
 - `operation_mode`
   - 该类记忆的更新模式，例如 `upsert`
+- `stage`
+  - 抽取阶段。默认是 `user`，参与会话用户记忆抽取；`agent` 用于 trajectories、experiences 这类执行派生 schema。
+- `peer_enabled`
+  - 当 `peer_id` 或消息 ranges 指向某个 peer 时，是否将该类记忆按 peer 分目录存储。默认是 `true`；如果该类记忆必须保留在当前 user 目录下，设置为 `false`。
 
 编写 memory schema 时，建议重点关注：
 
@@ -145,16 +151,31 @@ operation_mode: "upsert"
 
 ## 当前 Prompt 模板说明
 
-下面按类别列出当前全部模板。每个条目都说明它用于哪个处理环节，以及主要影响哪类对外能力。
+下面按类别说明模板用途、输入和相关处理环节。模板文件存在不代表当前请求会调用它；调用路径、模型配置与功能开关共同决定是否生效。
 
 阅读这一节时，可以用一个简单规则：
 
 - 普通 prompt 模板，重点看“作用”和“关键输入”
 - memory schema，重点看“作用”和“关键字段”
 
+### 先确认模板是否生效
+
+| 模板或类别 | 当前使用条件 |
+| --- | --- |
+| `compression.ov_wm_v2`、`compression.ov_wm_v2_update` | 会话 working memory 的首次生成与后续更新，见 `openviking/session/session.py` |
+| `retrieval.intent_analysis` | 启用意图分析且会话中有可用内容时，用于查询规划；特定 query planner 模型会选择专用模板，见下文 |
+| `retrieval.recall_rewrite` | 启用服务端 recall 压缩时，将已组装上下文改写为带来源的摘要 |
+| `semantic.*` | 语义处理队列根据文件类型或目录任务选择模板 |
+| `parsing.image_summary`、`parsing.audio_summary`、`parsing.video_summary` | 媒体摘要路径；音视频还要求启用支持对应输入的 VLM |
+| `memory/tools.yaml`、`memory/skills.yaml` | 内置 `enabled: false`，仅修改描述不会自动启用 |
+| `memory/experimental_memory/*.yaml` | 启用 `memory.experimental_memory_switch` 后加载 |
+| `skill_extract/session_skills.yaml` | Session Skill 提取使用的独立 schema，加载方式见下文 |
+
+`compression.structured_summary`、`indexing.relevance_scoring`、`parsing.chapter_analysis`、`parsing.context_generation`、`parsing.semantic_grouping`、`processing.*` 和 `test.skill_test_generation` 保留在模板目录中，但当前服务端源码未找到对应的调用入口。下文保留其输入与用途，供维护和扩展参考；不要据此判断修改它们就会改变在线结果。
+
 ### Compression
 
-这一类 prompt 主要用于 session 压缩和 working memory 更新。长期记忆抽取使用 `memory` 类别下的 v2 schema-driven memory templates。
+这一类 prompt 主要用于 session 压缩和 working memory 更新。长期记忆提取使用 `memory` 类中的 schema 定义。
 
 - `compression.ov_wm_v2`
   - 生效环节：首次 working memory 生成阶段
@@ -169,7 +190,7 @@ operation_mode: "upsert"
   - 关键输入：`previous_working_memory`、`messages`
 
 - `compression.structured_summary`
-  - 生效环节：session archive 摘要生成阶段
+  - 设计用途对应环节：session archive 摘要生成阶段
   - 影响能力：历史会话压缩摘要、后续回顾和检索效果
   - 作用：为归档后的 session 生成结构化摘要
   - 关键输入：`latest_archive_overview`、`messages`
@@ -179,20 +200,20 @@ operation_mode: "upsert"
 这一类 prompt 主要用于为检索或索引辅助流程做相关性判断。
 
 - `indexing.relevance_scoring`
-  - 生效环节：候选内容相关性评估阶段
+  - 设计用途对应环节：候选内容相关性评估阶段
   - 影响能力：检索结果排序、候选筛选质量
   - 作用：评估候选内容与用户查询之间的相关性
   - 关键输入：`query`、`candidate`
 
 ### Memory
 
-这一类 YAML 定义不同记忆类型的结构，不是单次推理 prompt。它们共同决定用户记忆和 agent 记忆如何落盘、如何更新、如何被后续检索使用。
+这一类 YAML 定义不同记忆类型的结构，不是单次推理 prompt。它们共同决定当前用户或 Peer 的记忆如何落盘、如何更新、如何被后续检索使用。
 
 - `cases`
   - 生效环节：案例型记忆落盘与更新阶段
-  - 影响能力：问题到解决方案的案例沉淀与复用
-  - 作用：定义“遇到了什么问题、如何解决”的案例型记忆
-  - 关键字段：`case_name`、`problem`、`solution`、`content`
+  - 影响能力：可训练、可评估的任务案例沉淀
+  - 作用：定义具体任务输入、评估标准和支撑证据
+  - 关键字段：`case_name`、`task_signature`、`input`、`rubric`、`evidence`
 
 - `entities`
   - 生效环节：实体型记忆落盘与更新阶段
@@ -206,17 +227,17 @@ operation_mode: "upsert"
   - 作用：定义事件摘要、目标、时间范围等结构化事件记忆
   - 关键字段：`event_name`、`goal`、`summary`、`ranges`
 
+- `experiences`
+  - 生效环节：经验型记忆落盘与更新阶段
+  - 影响能力：从任务结果中沉淀可复用指导
+  - 作用：记录持久的执行经验及其替代的旧记忆
+  - 关键字段：`experience_name`、`content`、`supersedes`（可选；不替换其他经验时可省略）
+
 - `identity`
   - 生效环节：agent identity 记忆落盘阶段
   - 影响能力：agent 身份设定的长期一致性
   - 作用：定义 agent 的名字、形象、风格、自我介绍等身份字段
-  - 关键字段：`name`、`creature`、`vibe`、`emoji`、`avatar`
-
-- `patterns`
-  - 生效环节：模式型记忆落盘与更新阶段
-  - 影响能力：可复用流程和方法的长期积累
-  - 作用：定义“在什么情况下按什么流程处理”的模式记忆
-  - 关键字段：`pattern_name`、`pattern_type`、`content`
+  - 关键字段：`name`、`creature`、`vibe`、`emoji`、`avatar`、`introduction`
 
 - `preferences`
   - 生效环节：偏好型记忆落盘与更新阶段
@@ -230,7 +251,7 @@ operation_mode: "upsert"
   - 作用：定义“用户是谁”这一类稳定信息的存储结构
   - 关键字段：`content`
 
-- `skills`
+- `skills`（默认禁用）
   - 生效环节：skill 使用记忆落盘与更新阶段
   - 影响能力：skill 使用统计、经验沉淀与推荐流程
   - 作用：定义 skill 使用次数、成功率、适用场景等信息
@@ -242,14 +263,14 @@ operation_mode: "upsert"
   - 作用：定义 agent 的核心真值、边界、风格和连续性
   - 关键字段：`core_truths`、`boundaries`、`vibe`、`continuity`
 
-- `tools`
+- `tools`（默认禁用）
   - 生效环节：工具使用记忆落盘与更新阶段
   - 影响能力：工具使用经验、最佳参数、失败模式沉淀
   - 作用：定义工具调用统计和工具使用经验的存储结构
   - 关键字段：`tool_name`、`static_desc`、`call_count`、`success_time`、`when_to_use`、`optimal_params`
 
 - `trajectories`
-  - 生效环节：agent 轨迹型记忆落盘阶段（agent_only，仅追加）
+  - 生效环节：agent 轨迹型记忆落盘阶段（`stage: agent`，仅追加）
   - 影响能力：agent 任务轨迹中可复用的操作契约沉淀——多步决策、工具调用、执行链路
   - 作用：定义"任务轨迹中提炼出哪些可复用的操作/契约"这一类轨迹型记忆
   - 关键字段：`trajectory_name`、`outcome`、`retrieval_anchor`、`content`
@@ -259,13 +280,13 @@ operation_mode: "upsert"
 这一类 prompt 主要用于把原始资源内容转成适合检索和理解的结构化节点、章节、摘要或图像概述。
 
 - `parsing.chapter_analysis`
-  - 生效环节：长文档章节划分阶段
+  - 设计用途对应环节：长文档章节划分阶段
   - 影响能力：文档章节结构、页面组织效果
   - 作用：分析文档内容并划分合理的章节结构
   - 关键输入：`start_page`、`end_page`、`total_pages`、`content`
 
 - `parsing.context_generation`
-  - 生效环节：文档节点语义生成阶段
+  - 设计用途对应环节：文档节点语义生成阶段
   - 影响能力：节点 abstract/overview 质量、后续检索匹配效果
   - 作用：为文本节点生成更短、更适合检索的语义标题、abstract 和 overview
   - 关键输入：`title`、`content`、`children_info`、`instruction`、`context_type`、`is_leaf`
@@ -277,29 +298,34 @@ operation_mode: "upsert"
   - 关键输入：`context`
 
 - `parsing.semantic_grouping`
-  - 生效环节：语义分组与切分阶段
+  - 设计用途对应环节：语义分组与切分阶段
   - 影响能力：文档节点粒度、内容块切分质量
   - 作用：根据语义决定内容应该合并还是拆分
   - 关键输入：`items`、`threshold`、`mode`
+
+- `parsing.audio_summary`、`parsing.video_summary`
+  - 生效环节：音视频内容理解，要求 VLM 支持并启用对应媒体输入
+  - 作用：生成用于语义索引的媒体概览，保留主题、事件、事实与可识别的内容
+  - 关键输入：`filename`、`fallback_language`；媒体文件通过模型输入另行传入
 
 ### Processing
 
 这一类 prompt 主要用于从交互记录、工具链和资源背景中提炼策略或经验，不直接面向单次用户问答，而是面向后处理和知识沉淀。
 
 - `processing.interaction_learning`
-  - 生效环节：交互后经验提炼阶段
+  - 设计用途对应环节：交互后经验提炼阶段
   - 影响能力：可复用交互经验、有效资源和成功 skill 的沉淀
   - 作用：从交互记录中抽取可复用经验
   - 关键输入：`interactions_summary`、`effective_resources`、`successful_skills`
 
 - `processing.strategy_extraction`
-  - 生效环节：资源添加后策略提炼阶段
+  - 设计用途对应环节：资源添加后策略提炼阶段
   - 影响能力：资源背景意图的结构化提炼和后续复用
   - 作用：从资源添加原因、指令和抽象信息中提炼使用策略
   - 关键输入：`reason`、`instruction`、`abstract`
 
 - `processing.tool_chain_analysis`
-  - 生效环节：工具链分析阶段
+  - 设计用途对应环节：工具链分析阶段
   - 影响能力：工具组合模式识别、工具经验沉淀
   - 作用：分析工具调用链并识别有价值的使用模式
   - 关键输入：`tool_calls`
@@ -314,15 +340,19 @@ operation_mode: "upsert"
   - 作用：结合压缩摘要、最近消息和当前消息生成检索计划
   - 关键输入：`compression_summary`、`recent_messages`、`current_message`、`context_type`、`target_abstract`
 
+- `retrieval.ov_intent_analysis_sft_v4`、`retrieval.ov_intent_analysis_sft_v7`
+  - 生效条件：query planner 的 `model` 分别精确匹配 `ollama/guoxuter/ov_intent_analysis_sft:v4_q8` 或 `ollama/guoxuter/ov_intent_analysis_sft:v7_q8`
+  - 作用：使用对应模型的查询规划协议；其他模型使用 `retrieval.intent_analysis`
+  - 修改默认模板前先检查模型配置，避免改到未使用的模板
+
+- `retrieval.recall_rewrite`
+  - 生效环节：服务端上下文组装后的可选压缩
+  - 作用：根据当前查询生成带来源 URI 的要点；输出需满足调用方的格式与来源校验
+  - 关键输入：`query`、`rendered`、`max_bullets`
+
 ### Semantic
 
 这一类 prompt 主要用于文件级和目录级摘要生成，是语义索引构建的重要部分。
-
-- `semantic.code_ast_summary`
-  - 生效环节：大型代码文件 AST 骨架总结阶段
-  - 影响能力：代码文件摘要、代码检索和结构理解效果
-  - 作用：基于 AST 骨架而不是完整源码生成代码摘要
-  - 关键输入：`file_name`、`skeleton`、`output_language`
 
 - `semantic.code_summary`
   - 生效环节：代码文件摘要阶段
@@ -344,7 +374,7 @@ operation_mode: "upsert"
 
 - `semantic.overview_generation`
   - 生效环节：目录级概览生成阶段
-  - 影响能力：目录 overview、层级检索与导航体验
+  - 影响能力：目录 overview、全局检索与导航体验
   - 作用：根据文件摘要和子目录 abstract 生成目录级 overview
   - 关键输入：`dir_name`、`file_summaries`、`children_abstracts`、`output_language`
 
@@ -358,12 +388,17 @@ operation_mode: "upsert"
   - 作用：从 Skill 名称、描述和正文中抽取关键检索信息
   - 关键输入：`skill_name`、`skill_description`、`skill_content`
 
+- `skill.privacy_extraction`
+  - 生效环节：Skill 隐私配置提取
+  - 作用：识别需要由用户维护的私有配置项，供占位符替换与隐私配置存储使用
+  - 关键输入：`skill_name`、`skill_description`、`skill_content`
+
 ### Test
 
 这一类 prompt 主要用于辅助生成测试样例。
 
 - `test.skill_test_generation`
-  - 生效环节：Skill 测试辅助阶段
+  - 设计用途对应环节：Skill 测试辅助阶段
   - 影响能力：Skill 场景测试设计与验证样例生成
   - 作用：根据多个 Skill 的名称和描述生成测试用例
   - 关键输入：`skills_info`
@@ -514,9 +549,11 @@ export OPENVIKING_PROMPT_TEMPLATES_DIR=/path/to/custom-prompts
 
 加载行为：
 
-- 内置 memory schema 会先加载
-- 如果配置了 `memory.custom_templates_dir`，再继续加载自定义目录中的 schema
-- 因此，memory 自定义更接近“扩展和补充”，而不是完全替换整套内置模板
+1. 先加载内置 `memory/` 目录中的 schema。
+2. 若启用 `memory.experimental_memory_switch`，再加载内置 `memory/experimental_memory/`。
+3. 若配置 `memory.custom_templates_dir`，加载该目录；否则尝试加载所选 prompt 目录下的 `memory/`。
+
+后加载的同名 `memory_type` 会替换先前定义，新的类型会追加。目录只读取直接包含的 `.yaml` 和 `.yml` 文件，不递归加载子目录。因此，自定义 schema 既能新增类型，也能覆盖内置类型；改名会创建另一种类型。加载失败会记录日志，应检查实际加载结果。
 
 示例目录：
 
@@ -551,6 +588,12 @@ custom-memory/
   - 影响用户偏好类记忆的组织方式和 recall 颗粒度
 - 修改 `tools`
   - 影响工具经验沉淀和工具使用建议结果
+
+### Session Skill Schema
+
+`skill_extract/session_skills.yaml` 使用 memory schema 格式，但由 Session Skill 提取链路单独加载。它定义用户要求记住的会话技能，与 `memory/skills.yaml` 中的技能使用统计不同。
+
+加载器直接读取所选 prompt 目录下的 `skill_extract/`，没有普通 prompt 的逐文件内置回退。使用自定义 `prompts.templates_dir` 或 `OPENVIKING_PROMPT_TEMPLATES_DIR` 且需要 Session Skill 提取时，应同时复制内置 `skill_extract/` 目录，并检查 schema 加载日志。仅复制一个 `semantic/` 文件不足以满足这条链路。
 
 ### 自定义时的高风险改动
 
@@ -600,6 +643,8 @@ custom-memory/
 - 新 schema 是否被成功加载
 - 目标记忆类型是否真的参与了提取和落盘
 
+普通模板默认会被 `PromptManager` 缓存。更改文件后，重启使用这些模板的服务进程；内嵌开发场景可清理对应 manager 的缓存并重新加载。Memory registry 也需要重新创建，不能假设已运行的进程会自动读取新的 schema。
+
 ### 再验证对外结果是否变化
 
 从使用者角度验证最有效：
@@ -607,8 +652,10 @@ custom-memory/
 - 如果改的是 `vision` 类模板，就重新解析图片、表格或扫描 PDF，看结果是否变化
 - 如果改的是 `semantic` 或 `parsing` 类模板，就重新导入文档或文件，看摘要和结构是否变化
 - 如果改的是 `retrieval` 类模板，就重新执行相关搜索，看 query 规划和召回效果是否变化
-- 如果改的是 `compression` 类模板，就重新触发 session commit 或 memory 处理流程，看记忆抽取和合并结果是否变化
+- 如果改的是 `compression` 类模板，就用新的测试会话触发对应流程，检查 working memory 与归档概览；它们不能单独证明长期记忆提取已改变
 - 如果改的是 `memory` 类 schema，就检查最终落盘的记忆文件内容、目录和字段结构是否符合预期
+
+比较修改前后的效果时，保持输入、模型和其他配置不变，使用独立测试资源或会话。至少包含一个应保留的事实、一个应忽略的无关信息，以及一个容易遗漏条件的例子。按目标检查：摘要有没有丢失关键事实，检索是否召回正确来源，记忆是否存到预期目录并正确更新已有内容。记录失败样例、耗时和模型用量；表达更顺不代表结果更准确。
 
 ### 常见排查思路
 
@@ -634,14 +681,15 @@ openviking/prompts/templates/
 
 其中：
 
-- `compression/`：压缩、提取、合并
+- `compression/`：working memory 压缩和归档摘要
 - `indexing/`：相关性评估
 - `memory/`：记忆类型定义
 - `parsing/`：结构分析与语义节点生成
 - `processing/`：经验与策略提炼
 - `retrieval/`：检索意图分析
 - `semantic/`：文件和目录摘要
-- `skill/`：Skill 摘要
+- `skill/`：Skill 摘要与隐私配置提取
+- `skill_extract/`：Session Skill schema
 - `test/`：测试样例生成
 - `vision/`：图片、页面、表格理解
 

@@ -8,7 +8,7 @@ This module wires DataSources and Collectors into a CollectorManager that is inv
 before each Prometheus scrape (`/metrics`).
 
 The registered collectors are intentionally split into two categories:
-- Per-scrape refresh (no TTL): cheap, purely in-process reads (e.g., queue/lock counters).
+- Per-scrape refresh (no TTL): cheap, purely in-process reads (e.g., queue counters).
 - TTL/SWR protected: collectors that may touch slower or less reliable subsystems
   (e.g., service/model probes, vikingdb state, aggregated model usage).
 
@@ -33,12 +33,12 @@ from openviking.metrics.collectors import (
     CollectorManager,
     EncryptionProbeCollector,
     FeedbackCollector,
-    LockCollector,
     ModelProviderProbeCollector,
     ModelUsageCollector,
     ObserverHealthCollector,
     ObserverStateCollector,
     QueueCollector,
+    RagfsMetricCollector,
     RetrievalBackendProbeCollector,
     ServiceProbeCollector,
     StorageProbeCollector,
@@ -48,7 +48,6 @@ from openviking.metrics.collectors import (
 from openviking.metrics.datasources.encryption import EncryptionProbeDataSource
 from openviking.metrics.datasources.model_usage import ModelUsageDataSource
 from openviking.metrics.datasources.observer_state import (
-    LockStateDataSource,
     ObserverStateDataSource,
     VikingDBStateDataSource,
 )
@@ -60,6 +59,7 @@ from openviking.metrics.datasources.probes import (
     StorageProbeDataSource,
 )
 from openviking.metrics.datasources.queue import QueuePipelineStateDataSource
+from openviking.metrics.datasources.ragfs import RagfsMetricDataSource
 from openviking.metrics.datasources.task import TaskStateDataSource
 from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
@@ -88,7 +88,7 @@ def create_default_collector_manager(*, app=None, service=None, config=None) -> 
         manager.register(FeedbackCollector(bot_data_path=feedback_bot_data_path))
     manager.register(ObserverHealthCollector(data_source=ObserverStateDataSource(service=service)))
     manager.register(ObserverStateCollector(data_source=ObserverStateDataSource(service=service)))
-    manager.register(LockCollector(data_source=LockStateDataSource()))
+    manager.register(RagfsMetricCollector(data_source=RagfsMetricDataSource(service=service)))
     manager.register(VikingDBCollector(data_source=VikingDBStateDataSource(service=service)))
     manager.register(
         ModelUsageCollector(

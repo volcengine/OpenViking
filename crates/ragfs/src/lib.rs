@@ -31,18 +31,28 @@
 
 #[cfg(feature = "cache")]
 pub mod cache;
+#[cfg(feature = "cache")]
+pub mod cache_runtime;
 pub mod core;
 pub mod crypto;
-pub mod multibackend;
 pub mod git;
+pub mod global_policy;
+#[cfg(feature = "cache")]
+pub mod leader;
+pub mod lock;
+pub mod metrics;
+pub mod multibackend;
 pub mod plugins;
+pub mod privacy_extractor;
+pub mod privacy_matcher;
 pub mod shape;
+pub mod write_hook;
 
 // Re-export core types for convenience
 pub use core::{
     ConfigParameter, ConfigValue, Error, FileInfo, FileSystem, FilesystemStats, FsOperation,
-    HealthStatus, MountableFS, OperationStats, OperationTimer, PluginConfig, PluginRegistry,
-    Result, ServicePlugin, StatsCollector, StatsWrappedFS, WriteFlag,
+    GlobEntry, GlobPage, HealthStatus, MountableFS, OperationStats, OperationTimer, PluginConfig,
+    PluginRegistry, Result, ServicePlugin, StatsCollector, StatsWrappedFS, WriteFlag,
 };
 
 /// Version of RAGFS

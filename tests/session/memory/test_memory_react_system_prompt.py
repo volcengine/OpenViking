@@ -4,9 +4,34 @@
 Test that provider instruction correctly instructs LLM.
 """
 
+from types import SimpleNamespace
+
+import pytest
+
 from openviking.message import ImagePart, Message, TextPart, ToolPart
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.memory.vision_message_normalizer import IMAGE_DESCRIPTION_PROMPT
+
+
+@pytest.fixture(autouse=True)
+def _runtime_config(monkeypatch):
+    config = SimpleNamespace(
+        output_language_override="",
+        language_fallback="en",
+        memory=SimpleNamespace(
+            eager_prefetch=False,
+            prefetch_search_topn=5,
+            link_enabled=False,
+        ),
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.session_extract_context_provider.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.utils.language.get_openviking_config",
+        lambda: config,
+    )
 
 
 class TestProviderInstruction:
@@ -30,6 +55,18 @@ class TestProviderInstruction:
             in instruction
         )
 
+    def test_instruction_includes_extraction_and_maintenance_objective(self):
+        provider = SessionExtractContextProvider(messages=[])
+
+        instruction = provider.instruction()
+
+        assert (
+            "You are a memory extraction and maintenance agent. Analyze the conversation "
+            "together with the pre-fetched existing memories, then produce a single atomic "
+            "plan to create, update, delete, or reorganize memories so that the final memory "
+            "collection conforms to all enabled memory schemas." in instruction
+        )
+
     def test_instruction_contains_output_language(self):
         """Test that instruction includes the output language setting."""
         mock_messages = []
@@ -47,8 +84,20 @@ class TestProviderInstruction:
         instruction = provider.instruction()
 
         assert "Peer Memory" in instruction
-        assert "profile/preferences/entities/events" in instruction
-        assert "cases/patterns/tools/skills" in instruction
+        assert "Message role is authoritative for newly extracted facts" in instruction
+        assert "attribute each fact to the speaker whose" in instruction
+        assert "follow each enabled memory type's own schema rules" in instruction
+        assert "Do not infer ownership from neighboring messages" in instruction
+        assert "Facts already stored in pre-fetched or explicitly read memories" in instruction
+        assert "remain valid sources for" in instruction
+        assert "maintenance and may be preserved" in instruction
+        assert "or moved between enabled memory" in instruction
+        assert "types when required by their schemas" in instruction
+        assert "same identity under the active memory schema" in instruction
+        assert "shared category, or an overlapping topic" in instruction
+        assert "If identity is uncertain" in instruction
+        assert "compact" in instruction.lower()
+        assert "only duplicate wording" in instruction.lower()
 
     def test_instruction_omits_resource_uri_handling_without_resource_uri(self):
         provider = SessionExtractContextProvider(
@@ -86,8 +135,8 @@ class TestProviderInstruction:
         )
 
 
-class TestSkillToolCallExposure:
-    def test_assemble_conversation_includes_skill_tool_call(self):
+class TestSessionConversationToolFiltering:
+    def test_session_conversation_omits_skill_tool_call(self):
         messages = [
             Message(
                 id="m1",
@@ -97,7 +146,7 @@ class TestSkillToolCallExposure:
                     ToolPart(
                         tool_id="tool_1",
                         tool_name="read",
-                        tool_uri="viking://session/test/tools/tool_1",
+                        tool_uri="viking://user/default/sessions/test/tools/tool_1",
                         skill_uri="viking://user/skills/create_presentation",
                         tool_input={"file_path": "/skills/ppt/SKILL.md"},
                         tool_output="ok",
@@ -111,10 +160,11 @@ class TestSkillToolCallExposure:
 
         conversation = provider._assemble_conversation(messages)
 
-        assert "[ToolCall]" in conversation
-        assert '"skill_name": "create_presentation"' in conversation
+        assert "ToolCall:" not in conversation
+        assert "create_presentation" not in conversation
+        assert "Running a skill." in conversation
 
-    def test_assemble_conversation_without_skill_tool_call_has_no_skill_name(self):
+    def test_session_conversation_omits_regular_tool_call(self):
         messages = [
             Message(
                 id="m1",
@@ -124,7 +174,7 @@ class TestSkillToolCallExposure:
                     ToolPart(
                         tool_id="tool_1",
                         tool_name="read",
-                        tool_uri="viking://session/test/tools/tool_1",
+                        tool_uri="viking://user/default/sessions/test/tools/tool_1",
                         tool_input={"file_path": "README.md"},
                         tool_output="ok",
                         tool_status="completed",
@@ -137,9 +187,38 @@ class TestSkillToolCallExposure:
 
         conversation = provider._assemble_conversation(messages)
 
-        assert "[ToolCall]" in conversation
-        assert '"tool_name": "read"' in conversation
-        assert '"skill_name":' not in conversation
+        assert "ToolCall:" not in conversation
+        assert "tool_name=read" not in conversation
+        assert "Running a tool." in conversation
+
+    def test_agent_provider_conversation_includes_tool_call_evidence(self):
+        from openviking.session.memory.agent_trajectory_context_provider import (
+            AgentTrajectoryContextProvider,
+        )
+
+        messages = [
+            Message(
+                id="m1",
+                role="assistant",
+                parts=[
+                    TextPart("Checking the reservation."),
+                    ToolPart(
+                        tool_id="tool_1",
+                        tool_name="get_reservation_details",
+                        tool_input={"reservation_id": "EHGLP3"},
+                        tool_output="available",
+                        tool_status="completed",
+                    ),
+                ],
+            )
+        ]
+        provider = AgentTrajectoryContextProvider(messages=messages)
+
+        conversation = provider._assemble_conversation(messages)
+
+        assert "ToolCall: tool_name=get_reservation_details" in conversation
+        assert "input={'reservation_id': 'EHGLP3'}" in conversation
+        assert "output=available" in conversation
 
     def test_assemble_conversation_uses_peer_id_when_present(self):
         messages = [
@@ -171,7 +250,7 @@ class TestSkillToolCallExposure:
                     ToolPart(
                         tool_id="tool_1",
                         tool_name="read",
-                        tool_uri="viking://session/test/tools/tool_1",
+                        tool_uri="viking://user/default/sessions/test/tools/tool_1",
                         tool_input={"file_path": "README.md"},
                         tool_output="这是中文工具输出",
                         tool_status="completed",
@@ -207,6 +286,9 @@ class TestSkillToolCallExposure:
             def __init__(self):
                 self.messages = None
 
+            def is_available(self):
+                return True
+
             async def get_vision_completion_async(self, **kwargs):
                 self.messages = kwargs.get("messages")
                 return "A high level image description."
@@ -221,11 +303,15 @@ class TestSkillToolCallExposure:
                 ],
             )
         ]
-        provider = SessionExtractContextProvider(messages=messages)
         fake_vlm = FakeVisionVLM()
-        provider._vision_vlm = fake_vlm
+        provider = SessionExtractContextProvider(
+            messages=messages,
+            vlm_config=fake_vlm,
+            output_language_override="zh-CN",
+        )
 
         await provider.prepare_extraction_messages()
+        assert provider.get_output_language() == "zh-CN"
         prompt_message = provider._build_conversation_message()
 
         assert "Please remember this image." in prompt_message["content"]
@@ -259,8 +345,10 @@ class TestSkillToolCallExposure:
                 parts=[ImagePart(url="https://example.com/private-family-photo.png")],
             )
         ]
-        provider = SessionExtractContextProvider(messages=messages)
-        provider._vision_vlm = None
+        provider = SessionExtractContextProvider(
+            messages=messages,
+            vlm_config=SimpleNamespace(is_available=lambda: False),
+        )
 
         await provider.prepare_extraction_messages()
         prompt_message = provider._build_conversation_message()
@@ -279,8 +367,10 @@ class TestSkillToolCallExposure:
                 ],
             )
         ]
-        provider = SessionExtractContextProvider(messages=messages)
-        provider._vision_vlm = None
+        provider = SessionExtractContextProvider(
+            messages=messages,
+            vlm_config=SimpleNamespace(is_available=lambda: False),
+        )
 
         await provider.prepare_extraction_messages()
         prompt_message = provider._build_conversation_message()
@@ -300,11 +390,20 @@ class TestSkillToolCallExposure:
                 ],
             )
         ]
-        provider = SessionExtractContextProvider(messages=messages)
-        provider._vision_vlm = None
+        provider = SessionExtractContextProvider(
+            messages=messages,
+            vlm_config=SimpleNamespace(is_available=lambda: False),
+        )
 
         await provider.prepare_extraction_messages()
 
         assert len(messages) == 1
         assert any(isinstance(part, ImagePart) for part in messages[0].parts)
         assert provider.messages is not messages
+
+
+def test_session_provider_empty_messages_still_uses_environment_fallback(monkeypatch):
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
+    provider = SessionExtractContextProvider(messages=[])
+
+    assert provider.get_output_language() == "zh-CN"

@@ -104,6 +104,38 @@ impl ObjectStore for LocalObjectStore {
         }
     }
 
+    async fn get_limited(
+        &self,
+        account: &str,
+        oid: &ObjectId,
+        max_bytes: u64,
+    ) -> Result<Bytes, ObjectStoreError> {
+        let path = self.object_path(account, oid);
+        let size = match tokio::fs::metadata(&path).await {
+            Ok(metadata) => metadata.len(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(ObjectStoreError::NotFound(*oid));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        if size > max_bytes {
+            return Err(ObjectStoreError::ReadLimitExceeded {
+                size,
+                limit: max_bytes,
+            });
+        }
+
+        let bytes = tokio::fs::read(&path).await?;
+        let size = bytes.len() as u64;
+        if size > max_bytes {
+            return Err(ObjectStoreError::ReadLimitExceeded {
+                size,
+                limit: max_bytes,
+            });
+        }
+        Ok(Bytes::from(bytes))
+    }
+
     async fn exists(&self, account: &str, oid: &ObjectId) -> Result<bool, ObjectStoreError> {
         let path = self.object_path(account, oid);
         tokio::fs::try_exists(&path)

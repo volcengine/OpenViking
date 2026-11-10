@@ -102,7 +102,7 @@ openviking:
     vlm:
       api_key: "your-api-key-here"
       api_base: "https://ark.cn-beijing.volces.com/api/v3"
-      model: "doubao-seed-2-0-pro-260215"
+      model: "doubao-seed-2-0-lite-260428"
 ```
 
 ## Storage
@@ -208,12 +208,12 @@ openviking health
 ### Python Client
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
 # Get service endpoint
 # kubectl get svc openviking
 
-client = ov.OpenViking(url="http://<load-balancer-ip>:1933", api_key="your-key")
+client = SyncHTTPClient(url="http://<load-balancer-ip>:1933", api_key="your-key")
 client.initialize()
 
 # Add a resource

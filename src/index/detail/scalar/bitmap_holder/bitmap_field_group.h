@@ -137,14 +137,12 @@ class FieldBitmapGroup : public BitmapGroupBase {
       for (auto& key_i : keys) {
         const std::string norm_key =
             dir_index_ ? normalize_path_key(key_i) : key_i;
-        if (!exist_bitmap(norm_key)) {
-          if (dir_index_) {
-            dir_index_->add_key(norm_key);
-          }
-        }
-
+        const bool is_new_bitmap = !exist_bitmap(norm_key);
         Bitmap* temp_p = get_editable_bitmap(norm_key);
         if (temp_p) {
+          if (dir_index_ && is_new_bitmap) {
+            dir_index_->add_key(norm_key, temp_p);
+          }
           temp_p->Set(offset);
         }
       }
@@ -152,13 +150,12 @@ class FieldBitmapGroup : public BitmapGroupBase {
     } else {
       const std::string norm_key =
           dir_index_ ? normalize_path_key(field_str) : field_str;
-      if (!exist_bitmap(norm_key)) {
-        if (dir_index_) {
-          dir_index_->add_key(norm_key);
-        }
-      }
+      const bool is_new_bitmap = !exist_bitmap(norm_key);
       Bitmap* temp_p = get_editable_bitmap(norm_key);
       if (temp_p) {
+        if (dir_index_ && is_new_bitmap) {
+          dir_index_->add_key(norm_key, temp_p);
+        }
         temp_p->Set(offset);
       }
     }
@@ -468,7 +465,11 @@ class FieldBitmapGroupSet {
   }
 
   const Bitmap* get_bitmap(const std::string& field, const std::string key) {
-    return get_editable_bitmap(field, key);
+    auto itr = field_bitmap_groups_map_.find(field);
+    if (itr == field_bitmap_groups_map_.end()) {
+      return nullptr;
+    }
+    return itr->second->get_bitmap(key);
   }
 
   Bitmap* get_editable_bitmap(const std::string& field, const std::string key) {

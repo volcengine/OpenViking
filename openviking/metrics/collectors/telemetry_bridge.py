@@ -96,6 +96,11 @@ class TelemetryBridgeCollector(EventMetricCollector):
     MEMORY_EXTRACTED_TOTAL: ClassVar[str] = MetricCollector.metric_name(
         DOMAIN_MEMORY, "extracted", unit="total"
     )
+    # rule: <METRICS_NAMESPACE>_<DOMAIN_MEMORY>_operations_total
+    # e.g.: openviking_memory_operations_total
+    MEMORY_OPERATIONS_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN_MEMORY, "operations", unit="total"
+    )
     # rule: <METRICS_NAMESPACE>_<DOMAIN_RESOURCE>_stage_total
     # e.g.: openviking_resource_stage_total
     RESOURCE_STAGE_TOTAL: ClassVar[str] = MetricCollector.metric_name(
@@ -252,13 +257,84 @@ class TelemetryBridgeCollector(EventMetricCollector):
 
         memory = summary.get("memory") or {}
         extracted = int(memory.get("extracted", 0) or 0)
-        if extracted > 0:
+        extract = memory.get("extract") or {}
+        actions_by_type = extract.get("actions_by_type") or {}
+        if isinstance(actions_by_type, Mapping) and actions_by_type:
+            for memory_type, type_actions in actions_by_type.items():
+                if not isinstance(type_actions, Mapping):
+                    continue
+                created = int(type_actions.get("created", 0) or 0)
+                merged = int(type_actions.get("merged", 0) or 0)
+                deleted = int(type_actions.get("deleted", 0) or 0)
+                # ``memory.extracted`` historically counts every returned
+                # memory context, including successful deletions. Keep the
+                # type breakdown additive with that established total.
+                extracted_for_type = created + merged + deleted
+                if extracted_for_type > 0:
+                    registry.inc_counter(
+                        self.MEMORY_EXTRACTED_TOTAL,
+                        labels={"operation": operation, "memory_type": str(memory_type)},
+                        label_names=("operation", "memory_type"),
+                        amount=extracted_for_type,
+                    )
+        elif extracted > 0:
             registry.inc_counter(
                 self.MEMORY_EXTRACTED_TOTAL,
-                labels={"operation": operation},
-                label_names=("operation",),
+                labels={"operation": operation, "memory_type": "unknown"},
+                label_names=("operation", "memory_type"),
                 amount=extracted,
             )
+
+        actions = extract.get("actions") or {}
+        if isinstance(actions_by_type, Mapping) and actions_by_type:
+            for memory_type, type_actions in actions_by_type.items():
+                if not isinstance(type_actions, Mapping):
+                    continue
+                for action, result in (
+                    ("created", "success"),
+                    ("merged", "success"),
+                    ("deleted", "success"),
+                    ("skipped", "skipped"),
+                    ("failed", "failed"),
+                ):
+                    value = int(type_actions.get(action, 0) or 0)
+                    if value <= 0:
+                        continue
+                    metric_action = "updated" if action == "merged" else action
+                    registry.inc_counter(
+                        self.MEMORY_OPERATIONS_TOTAL,
+                        labels={
+                            "operation": operation,
+                            "memory_type": str(memory_type),
+                            "action": metric_action,
+                            "result": result,
+                        },
+                        label_names=("operation", "memory_type", "action", "result"),
+                        amount=value,
+                    )
+        elif isinstance(actions, Mapping):
+            for action, result in (
+                ("created", "success"),
+                ("merged", "success"),
+                ("deleted", "success"),
+                ("skipped", "skipped"),
+                ("failed", "failed"),
+            ):
+                value = int(actions.get(action, 0) or 0)
+                if value <= 0:
+                    continue
+                metric_action = "updated" if action == "merged" else action
+                registry.inc_counter(
+                    self.MEMORY_OPERATIONS_TOTAL,
+                    labels={
+                        "operation": operation,
+                        "memory_type": "unknown",
+                        "action": metric_action,
+                        "result": result,
+                    },
+                    label_names=("operation", "memory_type", "action", "result"),
+                    amount=value,
+                )
 
         resource = summary.get("resource") or {}
         if resource:

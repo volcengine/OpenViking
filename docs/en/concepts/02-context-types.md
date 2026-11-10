@@ -1,14 +1,40 @@
 # Context Types
 
-Based on a simplified mapping of human cognitive patterns and engineering considerations, OpenViking abstracts context into **three basic types: Resource, Memory, and Skill**, each serving different purposes in Agent applications.
+OpenViking resources provide reference material, memories retain information from interactions, and skills describe how to carry out tasks. [Rules (Beta)](./17-rule-scenarios.md) are a separate type of mandatory constraint that an Agent must follow when its conditions hold.
 
 ## Overview
 
 | Type | Purpose | Lifecycle | Initiative |
 |------|---------|-----------|------------|
-| **Resource** | Knowledge and rules | Long-term, relatively static | User adds |
-| **Memory** | Agent's cognition | Long-term, dynamically updated | Agent records |
-| **Skill** | Declarable agent capability configuration (AgentDefinedContextType) | Long-term, static | User or system adds |
+| **Resource** | Source knowledge and reference material | Retained until updated or deleted | User adds |
+| **Memory** | Preferences, facts, and task experience | Long-term, dynamically updated | Extracted from sessions or recorded explicitly |
+| **Skill** | Task instructions and supporting resources | Long-term, updatable | User or system adds |
+| **Rule (Beta)** | Durable, executable mandatory constraints | active / paused / archived | Explicit compilation and on-demand recall |
+
+## Example Setup
+
+The examples below use the synchronous Python SDK and an existing server. `add_resource` and `add_skill` take `wait=True` to block until processing finishes. Session commits return before memory extraction finishes and have no built-in wait, so this helper polls the commit task before dependent searches. A polling timeout does not cancel the server task.
+
+```python
+import time
+from openviking_sdk import SyncHTTPClient
+
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+
+
+def wait_for_task(task_id):
+    deadline = time.monotonic() + 300
+    while time.monotonic() < deadline:
+        task = client.get_task(task_id)
+        if task is None:
+            raise RuntimeError(f"Task {task_id} not found")
+        if task["status"] == "completed":
+            return task
+        if task["status"] in {"failed", "cancelled"}:
+            raise RuntimeError(task)
+        time.sleep(1)
+    raise TimeoutError(f"Task {task_id} is still running")
+```
 
 ## Resource
 
@@ -17,7 +43,7 @@ Resources are external knowledge that Agents can reference.
 ### Characteristics
 
 - **User-driven**: Resource information actively added by users to supplement LLM knowledge, such as product manuals and code repositories
-- **Static content**: Content rarely changes after addition, usually modified by users
+- **Explicit updates**: Re-import changed content, or use a Watch to refresh supported remote sources
 - **Structured storage**: Organized by project or topic in directory hierarchy, with multi-layer information extraction
 
 ### Examples
@@ -31,20 +57,22 @@ Resources are external knowledge that Agents can reference.
 ```python
 # Add resource
 client.add_resource(
-    "https://docs.example.com/api.pdf",
-    reason="API documentation"
+    path="https://docs.example.com/api.pdf",
+    options={"reason": "API documentation"},
+    wait=True,
+    timeout=300,
 )
 
 # Search resources
 results = client.find(
-    "authentication methods",
-    target_uri="viking://resources/"
+    query="authentication methods",
+    target_uri="viking://resources/",
 )
 ```
 
 ## Memory
 
-Memories are divided into user memories and Agent memories, representing learned knowledge about users and the world.
+Memories are durable knowledge learned from interactions and task execution. They are stored in the current User or Peer namespace, not in a separate `viking://agent/memories` directory.
 
 ### Characteristics
 
@@ -52,62 +80,76 @@ Memories are divided into user memories and Agent memories, representing learned
 - **Dynamic updates**: Continuously updated from interactions by Agent
 - **Personalized**: Learned for specific users and stable peers
 
-### 8 Categories
+### Built-in Memory Types
 
-| Category | Location | Description | Update Strategy |
-|----------|----------|-------------|-----------------|
-| **profile** | `user/memories/profile.md` | User basic info | ✅ Merge into one file |
-| **preferences** | `user/memories/preferences/` | User preferences by topic | ✅ Appendable |
-| **entities** | `user/memories/entities/` | Entity memories (people, projects) | ✅ Appendable |
-| **events** | `user/memories/events/` | Event records (decisions, milestones) | ❌ No update |
-| **trajectories** | `user/memories/trajectories/` | Reusable operation contracts | ❌ No update |
-| **experiences** | `user/memories/experiences/` | Reusable execution insights | ✅ Mergeable |
-| **tools** | `user/memories/tools/` | Tool usage knowledge and best practices | ✅ Mergeable |
-| **skills** | `user/memories/skills/` | Skill execution knowledge and workflow strategies | ✅ Mergeable |
+| Type | Default location | Description |
+|------|------------------|-------------|
+| **profile** | `~/memories/profile.md` | Basic user information |
+| **preferences** | `~/memories/preferences/` | User preferences organized by topic |
+| **entities** | `~/memories/entities/` | Knowledge about people, projects, organizations, and other entities |
+| **events** | `~/memories/events/` | Decisions, milestones, and other event records |
+| **identity** | `~/memories/identity.md` | Assistant name, persona, temperament, and self-introduction |
+| **soul** | `~/memories/soul.md` | Assistant principles, boundaries, style, and continuity |
+| **cases** | `~/memories/cases/` | Task cases used for training and evaluation |
+| **trajectories** | `~/memories/trajectories/` | Reusable task-execution trajectories |
+| **experiences** | `~/memories/experiences/` | Reusable experience distilled from execution outcomes |
+
+The `~/...` entries above use the home alias `viking://~`, which the server expands to `viking://user/{user_id}/...` for the authenticated caller. When the memory policy permits Peer memory, supported types may instead be written under `viking://user/{user_id}/peers/{peer_id}/memories/...`. Applications can extend or adjust memory types with custom templates.
+
+The schema-defined `memories/tools/` and `memories/skills/` types are disabled. They are separate from standalone Skills stored under `viking://user/{user_id}/skills/{skill_name}/SKILL.md`, which remain supported.
 
 ### Usage
 
 ```python
+from openviking_sdk import TextPart
+
 # Memories are auto-extracted from sessions
-session = client.session()
-await session.add_message("user", [{"type": "text", "text": "I prefer dark mode"}])
-commit = await session.commit()  # Starts background memory extraction
-task = await client.get_task(commit["task_id"])  # Poll until task["status"] == "completed"
+session_info = client.create_session()
+session = client.session(session_id=session_info["session_id"])
+session.add_message(
+    role="user",
+    parts=[TextPart(text="I prefer dark mode")],
+)
+commit = session.commit()  # Starts background memory extraction
+if commit.get("task_id"):
+    wait_for_task(commit["task_id"])
 
 # Search memories
-results = await client.find(
-    "UI preferences",
-    target_uri="viking://user/memories/"
+results = client.find(
+    query="UI preferences",
+    target_uri="viking://~/memories/"
 )
 ```
 
 ## Skill (Capabilities / AgentDefinedContextType)
 
-Skills are capabilities that Agents can invoke, belonging to the **AgentDefinedContextType** category. This includes traditional workflow definitions, communication endpoints, tool configurations, and payment capabilities. Their common characteristic is that they **define how an agent interacts with external systems**, with relatively static runtime definitions, but invocation experiences are updated in Memory.
+A Skill uses `SKILL.md` and supporting files to describe a task’s steps, constraints, and resources. An agent reads the Skill and carries out the task using its own tools. Execution experience can be stored separately as memory.
 
 ### Characteristics
 
-- **Defined capabilities**: Tool definitions for completing specific tasks
-- **Relatively static**: Skill definitions don't change at runtime, but usage memories related to tools are updated in memory
-- **Callable**: Agent decides when to use which skill
+- **Task instructions**: Steps and constraints for completing a type of work
+- **Maintainable**: Skill content can be updated; execution experience is stored separately
+- **Read on demand**: The agent selects skills for its current task
 
 ### Storage Location
 
 ```
-viking://user/skills/{skill-name}/     # Default storage path
+viking://~/skills/{skill-name}/     # Default storage path
 ├── .abstract.md          # L0: Short description
-├── SKILL.md              # L1: Detailed overview
-└── scripts               # L2: Full definition
+├── .overview.md          # L1: Directory overview (after generation)
+├── SKILL.md              # L2: Skill definition
+└── scripts               # L2: Supporting implementation
 
-viking://agent/skills/{skill-name}/    # Override via --uri, public/shared (account global)
+viking://agent/skills/{skill-name}/    # Override via -p/--parent-auto-create, public/shared (account global)
 ├── .abstract.md          # L0: Short description
-├── SKILL.md              # L1: Detailed overview
-└── scripts               # L2: Full definition
+├── .overview.md          # L1: Directory overview (after generation)
+├── SKILL.md              # L2: Skill definition
+└── scripts               # L2: Supporting implementation
 ```
 
 ### AgentDefinedContextType Subtypes
 
-AgentDefinedContextType includes the following subtypes, all stored under the `viking://agent/` scope:
+The table below lists the design categories for shared capabilities. Skills are supported and installed in the user-private directory by default, with an option to use `viking://agent/skills/`. The other categories are planned and do not imply available APIs:
 
 | Subtype | Location | Description |
 |---------|----------|-------------|
@@ -119,43 +161,59 @@ AgentDefinedContextType includes the following subtypes, all stored under the `v
 ### Usage
 
 ```python
-# Add skill (defaults to viking://user/skills/)
-await client.add_skill({
-    "name": "search-web",
-    "description": "Search the web for information",
-    "content": "# search-web\n..."
-})
-
-# Write to global agent skills root (public/shared) via -p override
-ov skills add search-web -p viking://agent/skills
+# Add skill (defaults to viking://~/skills/)
+client.add_skill(
+    data={
+        "name": "search-web",
+        "description": "Search the web for information",
+        "content": "# search-web\n...",
+    },
+    wait=True,
+    timeout=300,
+)
 
 # Search user skills
-results = await client.find(
-    "web search",
-    target_uri="viking://user/skills/"
+results = client.find(
+    query="web search",
+    target_uri="viking://~/skills/"
 )
 
 # Search global agent skills
-results = await client.find(
-    "web search",
-    target_uri="viking://agent/skills/"
+results = client.find(
+    query="web search",
+    target_uri="viking://agent/skills/",
 )
+```
+
+Install into the account-shared skills directory with the CLI (requires write access to that path):
+
+```bash
+ov skills add ./skills/search-web -p viking://agent/skills
 ```
 
 ## Unified Search
 
-Based on Agent's needs, supports unified search across all three context types, providing comprehensive information:
+A single retrieval can return resources, memories, and skills within its search scope. The default includes the current user's space and shared resources; add `viking://agent/skills` explicitly to include shared Skills:
 
 ```python
 # Search across all context types
-results = await client.find("user authentication")
+results = client.find(
+    query="user authentication",
+    target_uri=["viking://~", "viking://resources", "viking://agent/skills"],
+)
 
-for ctx in results.memories:
-    print(f"Memory: {ctx.uri}")
-for ctx in results.resources:
-    print(f"Resource: {ctx.uri}")
-for ctx in results.skills:
-    print(f"Skill: {ctx.uri}")
+for context in results.get("memories", []):
+    print(f"Memory: {context['uri']}")
+for context in results.get("resources", []):
+    print(f"Resource: {context['uri']}")
+for context in results.get("skills", []):
+    print(f"Skill: {context['uri']}")
+```
+
+Close the client when these operations are finished:
+
+```python
+client.close()
 ```
 
 ## Related Documents

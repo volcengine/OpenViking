@@ -4,7 +4,7 @@ use clap::{Arg, ArgAction, Command, CommandFactory};
 use colored::Colorize;
 
 use crate::{
-    Cli,
+    cli::Cli,
     cli_arg_scan::ValueOptions,
     i18n::{Language, copy},
     terminal_ui::{
@@ -64,6 +64,7 @@ const CORE_WORKFLOW: &[HelpCommand] = help_commands![
     "add-resource",
     "add-skill",
     "skills",
+    "mcps",
     "find",
     "read",
     "write",
@@ -71,8 +72,9 @@ const CORE_WORKFLOW: &[HelpCommand] = help_commands![
     "set-tags",
 ];
 
-const FILESYSTEM: &[HelpCommand] =
-    help_commands!["ls", "tree", "mkdir", "rm", "mv", "stat", "attrs", "get"];
+const FILESYSTEM: &[HelpCommand] = help_commands![
+    "ls", "tree", "mkdir", "rm", "cp", "mv", "stat", "attrs", "acl", "get"
+];
 
 const SEARCH_CONTEXT: &[HelpCommand] = help_commands![
     "find", "search", "grep", "glob", "abstract", "overview", "read"
@@ -89,12 +91,10 @@ const IMPORT_EXPORT_SESSIONS: &[HelpCommand] = help_commands![
 const INTERACTIVE_ADMIN: &[HelpCommand] = help_commands![
     "tui",
     "chat",
+    "compile",
     "admin",
     "system",
     "reindex",
-    "relations",
-    "link",
-    "unlink"
 ];
 
 const HELP_SECTIONS: &[HelpSection] = &[
@@ -140,6 +140,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov add-resource https://example.com/sitemap.xml --watch-interval 1440",
                 description: "Import a whole site via sitemap/RSS and refresh it daily.",
+            },
+            HelpItem {
+                label: "ov add-resource tos://bucket/docs/ --add-type tos --to viking://resources/docs",
+                description: "Declare the Connector source type explicitly (Connector integration must be enabled).",
             },
         ],
         next_steps: &[
@@ -204,6 +208,28 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Import a new skill.",
             },
         ],
+    },
+    CommandHelpSpec {
+        path: &["mcps"],
+        purpose: "Manage remote MCP servers, tools, and live context mounts.",
+        examples: &[
+            HelpItem {
+                label: "ov mcps add '{\"mcpServers\":{\"weather\":{\"url\":\"https://example.com/mcp\"}}}'",
+                description: "Register servers from standard MCP configuration JSON.",
+            },
+            HelpItem {
+                label: "ov mcps find \"current weather\"",
+                description: "Find a tool in registered catalogs.",
+            },
+            HelpItem {
+                label: "ov mcps mount viking://agent/tools/weather/current.json viking://resources/demo/weather.md --title \"Beijing Weather\" --description \"Current weather in Beijing\" --timeout-seconds 120 --args '{\"city\":\"Beijing\"}'",
+                description: "Mount a tool as a live context node.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov mcps <subcommand> --help",
+            description: "Show exact arguments for an MCP operation.",
+        }],
     },
     CommandHelpSpec {
         path: &["ls"],
@@ -288,6 +314,30 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         ],
     },
     CommandHelpSpec {
+        path: &["cp"],
+        purpose: "Copy a file or directory without reparsing or regenerating vectors.",
+        examples: &[
+            HelpItem {
+                label: "ov cp viking://resources/notes/draft.md viking://resources/notes/draft-copy.md",
+                description: "Copy one file and its vector records.",
+            },
+            HelpItem {
+                label: "ov cp -r viking://resources/projects/source viking://resources/projects/backup",
+                description: "Recursively copy a directory and all vector records.",
+            },
+        ],
+        next_steps: &[
+            HelpItem {
+                label: "ov stat <target-uri>",
+                description: "Confirm the copied resource metadata.",
+            },
+            HelpItem {
+                label: "ov read <target-uri>",
+                description: "Read the copied resource.",
+            },
+        ],
+    },
+    CommandHelpSpec {
         path: &["mv"],
         purpose: "Move or rename a resource.",
         examples: &[HelpItem {
@@ -317,10 +367,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov read <uri>",
                 description: "Read the resource content.",
             },
-            HelpItem {
-                label: "ov relations <uri>",
-                description: "Inspect related resources.",
-            },
         ],
     },
     CommandHelpSpec {
@@ -348,12 +394,40 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         ],
     },
     CommandHelpSpec {
+        path: &["acl"],
+        purpose: "Get or update access permissions for a resource.",
+        examples: &[
+            HelpItem {
+                label: "ov acl get viking://resources/project-a",
+                description: "Show direct and effective permissions.",
+            },
+            HelpItem {
+                label: "ov acl grant viking://resources/project-a --principal user:bob --level read",
+                description: "Grant read access to a user.",
+            },
+            HelpItem {
+                label: "ov acl set viking://resources/project-a --acl-mode restricted",
+                description: "Ignore inherited permissions without deleting them.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov find \"query\" -u <uri>",
+            description: "Search within the permitted resource tree.",
+        }],
+    },
+    CommandHelpSpec {
         path: &["read"],
         purpose: "Read exact Level 2 file content from a Viking URI.",
-        examples: &[HelpItem {
-            label: "ov read viking://projects/acme/spec.md",
-            description: "Print exact file content.",
-        }],
+        examples: &[
+            HelpItem {
+                label: "ov read viking://projects/acme/spec.md",
+                description: "Print exact file content.",
+            },
+            HelpItem {
+                label: "ov read viking://projects/acme/spec.md --offset 10 --limit 5",
+                description: "Read lines 11 through 15 (offset is zero-based).",
+            },
+        ],
         next_steps: &[
             HelpItem {
                 label: "ov write <uri> --content \"...\"",
@@ -455,6 +529,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov find \"auth flow\" -u viking://projects/acme -L 1,2",
                 description: "Search a subtree and include overview/file results.",
             },
+            HelpItem {
+                label: "ov find --image ./query.png -u viking://resources/images",
+                description: "Search by image with a local file or image URI.",
+            },
         ],
         next_steps: &[
             HelpItem {
@@ -470,10 +548,16 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["search"],
         purpose: "Run experimental context-aware retrieval, optionally scoped to a session.",
-        examples: &[HelpItem {
-            label: "ov search \"what changed last time?\" --session-id abc123",
-            description: "Search with session context.",
-        }],
+        examples: &[
+            HelpItem {
+                label: "ov search \"what changed last time?\" --session-id abc123",
+                description: "Search with session context.",
+            },
+            HelpItem {
+                label: "ov search \"recent decisions\" --mode context",
+                description: "Assemble context ready to inject into a model.",
+            },
+        ],
         next_steps: &[HelpItem {
             label: "ov session get-session-context <id>",
             description: "Inspect the session context directly.",
@@ -523,18 +607,22 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     },
     CommandHelpSpec {
         path: &["snapshot"],
-        purpose: "Manage workspace snapshots: commit, restore, show, and walk history.",
+        purpose: "Manage workspace snapshots: commit, restore, show, compare files or directories, and walk history.",
         examples: &[
             HelpItem {
-                label: "ov snapshot commit -m \"checkpoint before refactor\"",
-                description: "Commit the current workspace state.",
+                label: "ov snapshot commit -m \"checkpoint before refactor\" --paths viking://resources/my_project",
+                description: "Commit a project directory for which you have write access.",
             },
             HelpItem {
                 label: "ov snapshot log --branch main",
                 description: "Walk commit history, newest first.",
             },
             HelpItem {
-                label: "ov snapshot restore viking://projects/acme <commit> --dry-run",
+                label: "ov snapshot diff viking://docs/spec.md --from <old> --to <new>",
+                description: "Compare one file between two snapshots.",
+            },
+            HelpItem {
+                label: "ov snapshot restore <commit> viking://projects/acme --dry-run",
                 description: "Preview restoring a directory to a past snapshot.",
             },
         ],
@@ -548,11 +636,11 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         purpose: "Commit the current workspace state as a new snapshot.",
         examples: &[
             HelpItem {
-                label: "ov snapshot commit -m \"checkpoint before refactor\"",
-                description: "Commit the full workspace on the main branch.",
+                label: "ov snapshot commit -m \"checkpoint before refactor\" --paths viking://resources/my_project",
+                description: "Commit a writable project directory on the main branch. Omit --paths only in local ROOT mode.",
             },
             HelpItem {
-                label: "ov snapshot commit -m \"docs only\" --paths viking://docs",
+                label: "ov snapshot commit -m \"docs only\" --paths viking://resources/docs",
                 description: "Commit only the given viking:// URIs. Directories are expanded recursively (with snapshot pruning rules applied).",
             },
         ],
@@ -572,11 +660,11 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         purpose: "Restore a project directory to a past snapshot via a forward commit.",
         examples: &[
             HelpItem {
-                label: "ov snapshot restore viking://projects/acme <commit> --dry-run",
+                label: "ov snapshot restore <commit> viking://projects/acme --dry-run",
                 description: "Preview which files would change.",
             },
             HelpItem {
-                label: "ov snapshot restore viking://projects/acme <commit> -m \"rollback\"",
+                label: "ov snapshot restore <commit> viking://projects/acme -m \"rollback\"",
                 description: "Apply the restore as a new commit.",
             },
         ],
@@ -622,6 +710,42 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         }],
     },
     CommandHelpSpec {
+        path: &["snapshot", "diff"],
+        purpose: "Compare one file between two snapshots as a unified diff.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot diff viking://docs/spec.md --from <old> --to <new>",
+                description: "Compare the file contents at two commits.",
+            },
+            HelpItem {
+                label: "ov snapshot diff viking://docs/spec.md --to <commit>",
+                description: "Compare an empty file with the file at a commit.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot log --paths viking://docs/spec.md",
+            description: "Find commits that changed this file.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "diff-paths"],
+        purpose: "List changed source files under directories between two snapshots, one page at a time.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot diff-paths --paths viking://resources/docs --from <old> --to <new> -o json",
+                description: "List added, modified, and deleted source files.",
+            },
+            HelpItem {
+                label: "ov snapshot diff-paths --paths viking://resources/docs --to <commit> --offset 100 --limit 100 -o json",
+                description: "List the next page against an empty tree; use next_offset until has_more is false.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot diff <file-uri> --from <old> --to <new>",
+            description: "Read a changed file's text diff.",
+        }],
+    },
+    CommandHelpSpec {
         path: &["snapshot", "ignore-get"],
         purpose: "Show the account-level .ovgitignore content.",
         examples: &[
@@ -653,7 +777,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             },
         ],
         next_steps: &[HelpItem {
-            label: "ov snapshot commit -m \"with ignore\"",
+            label: "ov snapshot commit -m \"with ignore\" --paths viking://resources/my_project",
             description: "Commit; matching files are excluded (see the `ignored` count).",
         }],
     },
@@ -689,8 +813,12 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     },
     CommandHelpSpec {
         path: &["privacy"],
-        purpose: "Manage privacy config categories, targets, versions, and activation.",
+        purpose: "Manage privacy targets, field references, values, versions, and cleanup.",
         examples: &[
+            HelpItem {
+                label: "ov privacy tree [--category <category>] [--references]",
+                description: "List current targets and fields without revealing values.",
+            },
             HelpItem {
                 label: "ov privacy categories",
                 description: "List privacy categories.",
@@ -699,52 +827,26 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov privacy get <category> <target>",
                 description: "Show active values for one target.",
             },
+            HelpItem {
+                label: "ov privacy reference <category> <target> [field]",
+                description: "Show a reference; infer the field only when exactly one exists.",
+            },
+            HelpItem {
+                label: "ov privacy resolve <category> <target> [field]",
+                description: "Reveal a field; infer it only when exactly one exists.",
+            },
+            HelpItem {
+                label: "ov privacy upsert <category> <target> --field-<name> <value>",
+                description: "Update one field; --key and --key-<name> remain compatible.",
+            },
+            HelpItem {
+                label: "ov privacy scan --uri <viking-uri>",
+                description: "Dry-run one explicit URI under strict server resource limits.",
+            },
         ],
         next_steps: &[HelpItem {
             label: "ov privacy <subcommand> --help",
             description: "Show exact arguments for a privacy operation.",
-        }],
-    },
-    CommandHelpSpec {
-        path: &["relations"],
-        purpose: "List relation links for one resource. Experimental.",
-        examples: &[HelpItem {
-            label: "ov relations viking://projects/acme/spec.md",
-            description: "Inspect linked resources.",
-        }],
-        next_steps: &[
-            HelpItem {
-                label: "ov link <from-uri> <to-uri>",
-                description: "Create a relation.",
-            },
-            HelpItem {
-                label: "ov unlink <from-uri> <to-uri>",
-                description: "Remove a relation.",
-            },
-        ],
-    },
-    CommandHelpSpec {
-        path: &["link"],
-        purpose: "Create one or more relation links between resources. Experimental.",
-        examples: &[HelpItem {
-            label: "ov link viking://a.md viking://b.md --reason \"related design\"",
-            description: "Link two resources with a reason.",
-        }],
-        next_steps: &[HelpItem {
-            label: "ov relations <from-uri>",
-            description: "Confirm the relation.",
-        }],
-    },
-    CommandHelpSpec {
-        path: &["unlink"],
-        purpose: "Remove one relation link between resources. Experimental.",
-        examples: &[HelpItem {
-            label: "ov unlink viking://a.md viking://b.md",
-            description: "Remove a relation.",
-        }],
-        next_steps: &[HelpItem {
-            label: "ov relations <from-uri>",
-            description: "Confirm the relation is gone.",
         }],
     },
     CommandHelpSpec {
@@ -838,11 +940,43 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         }],
     },
     CommandHelpSpec {
+        path: &["compile"],
+        purpose: "Use a VikingBot Skill to transform materials into reports, JSON, Wiki pages or other Skill-defined files, or `ov compile memory` to consolidate existing memories in place.",
+        examples: &[
+            HelpItem {
+                label: "ov compile --from viking://resources/weekly --to viking://resources/wiki --skill viking://agent/skills/monthly_wiki",
+                description: "Compile one source directory into Wiki pages.",
+            },
+            HelpItem {
+                label: "ov compile --from viking://resources/weekly --to viking://agent/skills --skill viking://agent/skills/skill-creator",
+                description: "Generate or update one shared Skill package.",
+            },
+            HelpItem {
+                label: "ov compile memory",
+                description: "Consolidate memories in place under viking://~/memories; takes no --from.",
+            },
+        ],
+        next_steps: &[
+            HelpItem {
+                label: "ov task status <cmp-task-id>",
+                description: "Inspect the Compile task.",
+            },
+            HelpItem {
+                label: "ov task cancel <cmp-task-id>",
+                description: "Cancel the Compile task.",
+            },
+            HelpItem {
+                label: "ov tree <target-uri>",
+                description: "Inspect the generated output.",
+            },
+        ],
+    },
+    CommandHelpSpec {
         path: &["wait"],
         purpose: "Wait for queued async processing to complete.",
         examples: &[HelpItem {
-            label: "ov wait --timeout 120",
-            description: "Wait up to two minutes.",
+            label: "ov wait",
+            description: "Wait for queued processing to complete.",
         }],
         next_steps: &[
             HelpItem {
@@ -866,6 +1000,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov task status <task-id>",
                 description: "Inspect one task.",
+            },
+            HelpItem {
+                label: "ov task cancel <task-id>",
+                description: "Cancel one task, including a cmp_ Compile task.",
             },
         ],
         next_steps: &[HelpItem {
@@ -1247,14 +1385,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov admin regenerate-key <account> <user> --seed <seed>",
                 description: "Regenerate a predictable API key from a seed.",
             },
-            HelpItem {
-                label: "ov admin migrate --sudo",
-                description: "Start legacy agent/session migration.",
-            },
-            HelpItem {
-                label: "ov admin migrate --cleanup --sudo",
-                description: "Remove legacy agent/session directories after verifying migration.",
-            },
         ],
         next_steps: &[
             HelpItem {
@@ -1269,7 +1399,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     },
     CommandHelpSpec {
         path: &["system"],
-        purpose: "Run server utility, health, consistency, backend sync, and crypto commands.",
+        purpose: "Run server utility, health, consistency, and crypto commands.",
         examples: &[
             HelpItem {
                 label: "ov system health",
@@ -1279,32 +1409,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov system consistency viking://projects/acme",
                 description: "Check filesystem/vector consistency.",
             },
-            HelpItem {
-                label: "ov system backend sync-status viking://projects/acme",
-                description: "Inspect multi-write backend sync lag.",
-            },
         ],
         next_steps: &[HelpItem {
             label: "ov status",
             description: "Use the standard status view.",
-        }],
-    },
-    CommandHelpSpec {
-        path: &["system", "backend"],
-        purpose: "Inspect and repair multi-write backend sync state.",
-        examples: &[
-            HelpItem {
-                label: "ov system backend sync-status viking://resources",
-                description: "Show pending and acknowledged backend sync state.",
-            },
-            HelpItem {
-                label: "ov system backend sync-retry viking://resources",
-                description: "Retry lagging backend sync targets.",
-            },
-        ],
-        next_steps: &[HelpItem {
-            label: "ov system backend sync-status <uri>",
-            description: "Inspect the subtree again after retry.",
         }],
     },
     CommandHelpSpec {
@@ -1318,6 +1426,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov reindex viking://projects/acme --mode semantic_and_vectors --wait true",
                 description: "Regenerate semantic artifacts, then vectors.",
+            },
+            HelpItem {
+                label: "ov reindex viking://projects/acme --mode semantic_and_vectors --recursive=false",
+                description: "Refresh only the target directory semantics and vectors, without sub-directory.",
             },
         ],
         next_steps: &[
@@ -1857,11 +1969,13 @@ fn localized_command_purpose(spec: &CommandHelpSpec, language: Language) -> &str
         ["health"] => "快速检查服务器是否可连接。",
         ["status"] => "查看 OpenViking 服务器诊断状态。",
         ["language"] => "选择 OpenViking CLI 显示语言。",
-        ["snapshot"] => "管理工作区快照：提交、恢复、查看，以及遍历历史。",
+        ["snapshot"] => "管理工作区快照：提交、恢复、查看、对比，以及遍历历史。",
         ["snapshot", "commit"] => "将当前工作区状态提交为新的快照。",
         ["snapshot", "restore"] => "通过一次前向提交，将项目目录恢复到历史快照。",
         ["snapshot", "show"] => "查看某次提交的元数据，或指定路径下的单个文件内容。",
         ["snapshot", "log"] => "按分支遍历提交历史，最新的在前。",
+        ["snapshot", "diff"] => "对比指定文件在两个快照中的内容差异。",
+        ["snapshot", "diff-paths"] => "分页列出目录中两个快照之间新增、修改和删除的源文件。",
         _ => spec.purpose,
     }
 }
@@ -2298,15 +2412,13 @@ fn localized_command_description<'a>(
         "rm" => "删除资源",
         "mv" => "移动或重命名资源",
         "stat" => "查看资源元数据",
+        "acl" => "管理资源访问权限",
         "get" => "下载文件",
         "search" => "上下文感知检索",
         "grep" => "模式搜索",
         "glob" => "Glob 路径搜索",
         "overview" => "生成资源概览",
         "abstract" => "生成资源摘要",
-        "relations" => "列出资源关系",
-        "link" => "创建关系链接",
-        "unlink" => "删除关系链接",
         "config" => "添加、编辑、删除或切换配置",
         "config show" => "显示当前配置",
         "config validate" => "验证当前配置",
@@ -2541,7 +2653,17 @@ fn version() -> String {
 fn is_bare_group_help_command(command: &str) -> bool {
     matches!(
         command,
-        "task" | "skills" | "session" | "snapshot" | "privacy" | "admin" | "system" | "observer"
+        "task"
+            | "compile"
+            | "skills"
+            | "mcps"
+            | "session"
+            | "snapshot"
+            | "privacy"
+            | "acl"
+            | "admin"
+            | "system"
+            | "observer"
     )
 }
 
@@ -2602,7 +2724,7 @@ mod tests {
         render_top_level_help_with_language_and_width,
     };
     use super::{command_spec, is_top_level_help_request};
-    use crate::Cli;
+    use crate::cli::Cli;
     use crate::i18n::Language;
     use clap::CommandFactory;
     use std::ffi::OsString;
@@ -2686,6 +2808,13 @@ mod tests {
         assert!(rendered.contains("experimental"));
         assert!(rendered.contains("ov <command> --help"));
         assert!(!rendered.contains("Commands:\n  add-resource"));
+        assert!(rendered.contains("cp"));
+        let cp = command_spec(&["cp".to_string()]).expect("cp command help");
+        assert!(
+            cp.examples
+                .iter()
+                .any(|item| item.label.contains("ov cp -r"))
+        );
     }
 
     #[test]
@@ -2818,7 +2947,7 @@ mod tests {
         );
 
         assert!(rendered.contains("OpenViking v"));
-        assert!(rendered.contains("ov find [OPTIONS] <query>"));
+        assert!(rendered.contains("ov find [OPTIONS] [query]"));
         assert!(rendered.contains("Examples"));
         assert!(rendered.contains("Common options"));
         assert!(rendered.contains("Next"));
@@ -2860,6 +2989,8 @@ mod tests {
         assert!(find_help.contains("Maximum final results returned"));
         assert!(search_help.contains("Maximum results per search pass."));
         assert!(search_help.contains("Search may merge multiple passes"));
+        assert!(search_help.contains("--mode <list|context>"));
+        assert!(search_help.contains("ignored in context mode"));
     }
 
     #[test]
@@ -2870,6 +3001,8 @@ mod tests {
         );
 
         assert!(rendered.contains("--mode <vectors_only|semantic_and_vectors>"));
+        assert!(rendered.contains("--force"));
+        assert!(rendered.contains("--recursive <true|false>"));
         assert!(rendered.contains("Regenerate semantic artifacts, then vectors."));
     }
 
@@ -2881,7 +3014,7 @@ mod tests {
         );
 
         assert!(rendered.contains("OpenViking v"));
-        assert!(rendered.contains("ov find [OPTIONS] <query>"));
+        assert!(rendered.contains("ov find [OPTIONS] [query]"));
         assert!(rendered.contains("Usage:"));
     }
 
@@ -2895,28 +3028,6 @@ mod tests {
         assert!(rendered.contains("ov status [OPTIONS]"));
         assert!(rendered.contains("ov status --verbose"));
         assert!(rendered.contains("Show full component tables"));
-    }
-
-    #[test]
-    fn curated_help_lists_timeout_for_waiting_commands() {
-        for args in [
-            ["ov", "add-resource", "--help"],
-            ["ov", "add-skill", "--help"],
-            ["ov", "rm", "--help"],
-            ["ov", "write", "--help"],
-        ] {
-            let rendered = strip_ansi(
-                &render_command_help_request(&os_args(&args)).expect("help should render"),
-            );
-            assert!(
-                rendered.contains("--timeout <seconds>"),
-                "missing timeout option in:\n{rendered}"
-            );
-            assert!(
-                rendered.contains("seconds"),
-                "missing timeout description in:\n{rendered}"
-            );
-        }
     }
 
     #[test]
@@ -3064,6 +3175,7 @@ mod tests {
                 .expect("task help should render"),
         );
         assert!(task.contains("status <task-id>"));
+        assert!(task.contains("cancel <task-id>"));
         assert!(task.contains("list"));
     }
 
@@ -3117,12 +3229,12 @@ mod tests {
             ),
             (
                 "privacy",
-                "Manage privacy config categories, targets, versions, and activation.",
+                "Manage privacy targets, field references, values, versions, and cleanup.",
             ),
             ("admin", "Manage accounts, users, roles, and API keys."),
             (
                 "system",
-                "Run server utility, health, consistency, backend sync, and crypto commands.",
+                "Run server utility, health, consistency, and crypto commands.",
             ),
             ("observer", "Inspect specific OpenViking server subsystems."),
         ] {
@@ -3164,6 +3276,7 @@ mod tests {
     #[test]
     fn unsupported_nested_prefixed_help_falls_back_to_clap() {
         for args in [
+            ["ov", "compile", "memory", "--help"],
             ["ov", "task", "list", "--help"],
             ["ov", "session", "add-message", "--help"],
             ["ov", "privacy", "upsert", "--help"],
@@ -3187,20 +3300,6 @@ mod tests {
             .is_none(),
             "--compact without a value should not hide the privacy command from help detection"
         );
-    }
-
-    #[test]
-    fn supported_nested_curated_help_still_renders() {
-        let rendered = strip_ansi(
-            &render_command_help_request(&os_args(&["ov", "system", "backend", "--help"]))
-                .expect("system backend help should render curated nested help"),
-        );
-
-        assert!(rendered.contains("ov system backend"));
-        assert!(rendered.contains("sync-status"));
-        assert!(rendered.contains("sync-retry"));
-        assert!(!rendered.contains("help                               Print this message"));
-        assert!(rendered.contains("--sudo"));
     }
 
     #[test]

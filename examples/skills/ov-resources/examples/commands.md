@@ -178,17 +178,3 @@ ov find "authentication" --uri "viking://resources/project-A"
 ov overview viking://resources/project-A/backend
 ov read viking://resources/project-A/backend/auth.md
 ```
-
-## Relations
-
-```bash
-# Link resources
-ov link viking://resources/docs/auth/ viking://resources/docs/security/ \
-  --reason "Security best practices"
-
-# List relations
-ov relations viking://resources/docs/auth/
-
-# Unlink
-ov unlink viking://resources/docs/auth/ viking://resources/docs/security/
-```

@@ -33,19 +33,6 @@ def format_iso8601(dt: datetime) -> str:
     return dt.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def format_simplified(dt: datetime, now: datetime) -> str:
-    """
-    Format datetime in UTC: HH:MM:SS if same UTC date as *now*, else YYYY-MM-DD.
-    """
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc)
-    if now.tzinfo is not None:
-        now = now.astimezone(timezone.utc)
-    if dt.date() == now.date():
-        return dt.strftime("%H:%M:%S")
-    return dt.strftime("%Y-%m-%d")
-
-
 def get_current_timestamp() -> str:
     """
     Get current timestamp in ISO 8601 format compatible with VikingDB.

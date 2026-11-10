@@ -8,6 +8,7 @@ use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::config::Region;
 use bytes::Bytes;
 use gix_hash::ObjectId;
+use tokio::io::AsyncReadExt;
 
 use crate::git::error::{ObjectStoreError, RefStoreError};
 use crate::git::index_store::{
@@ -185,6 +186,65 @@ impl ObjectStore for S3ObjectStore {
                 }
             }
         }
+    }
+
+    async fn get_limited(
+        &self,
+        account: &str,
+        oid: &ObjectId,
+        max_bytes: u64,
+    ) -> Result<Bytes, ObjectStoreError> {
+        let key = self.object_key(account, oid);
+        let resp = match self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(&key)
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(err) => {
+                let err_str = format!("{:?}", err);
+                if err_str.to_lowercase().contains("no_such_key")
+                    || err_str.to_lowercase().contains("404")
+                {
+                    return Err(ObjectStoreError::NotFound(*oid));
+                }
+                return Err(ObjectStoreError::Backend(format!("S3 get error: {:?}", err)));
+            }
+        };
+
+        let content_length = resp.content_length();
+        if let Some(size) = content_length.filter(|size| *size >= 0) {
+            let size = size as u64;
+            if size > max_bytes {
+                return Err(ObjectStoreError::ReadLimitExceeded {
+                    size,
+                    limit: max_bytes,
+                });
+            }
+        }
+
+        let mut reader = resp.body.into_async_read().take(max_bytes.saturating_add(1));
+        let mut bytes = Vec::with_capacity(
+            content_length
+                .and_then(|size| usize::try_from(size).ok())
+                .unwrap_or(0)
+                .min(usize::try_from(max_bytes).unwrap_or(usize::MAX)),
+        );
+        reader
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|e| ObjectStoreError::Backend(format!("S3 read body error: {:?}", e)))?;
+        let size = bytes.len() as u64;
+        if size > max_bytes {
+            return Err(ObjectStoreError::ReadLimitExceeded {
+                size,
+                limit: max_bytes,
+            });
+        }
+        Ok(Bytes::from(bytes))
     }
 
     async fn exists(&self, account: &str, oid: &ObjectId) -> Result<bool, ObjectStoreError> {

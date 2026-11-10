@@ -3,23 +3,15 @@
 #
 # 详细文档请参考: deploy/vke/README.md
 
-# ── 火山引擎凭证 ──────────────────────────────────────────────────────────────
+# ── 火山引擎配置 ──────────────────────────────────────────────────────────────
 #
-# 获取方式：
+# AK/SK 仅在 storage_type=tos 且实际执行部署时需要。获取方式：
 #   1. 登录火山引擎控制台 https://console.volcengine.com/
 #   2. 右上角头像 → API 访问密钥 → 新建密钥
 #
-volcengine_access_key: AKLTxxxxxxxxxx
-volcengine_secret_key: xxxxxxxxxx
+volcengine_access_key: ""
+volcengine_secret_key: ""
 volcengine_region: cn-beijing
-
-# ── VKE 集群信息 ────────────────────────────────────────────────────────────
-#
-# 获取方式：
-#   1. 进入容器服务 VKE → 集群
-#   2. 找到你的集群，集群 ID 形如 "ccxxxxxxxxxx"
-#
-vke_cluster_id: ccxxxxxxxxxx
 
 # ── 镜像仓库配置 ──────────────────────────────────────────────────────────────
 #

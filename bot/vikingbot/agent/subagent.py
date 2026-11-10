@@ -2,9 +2,12 @@
 
 import asyncio
 import json
+import time as _time
 import uuid
+from collections.abc import Awaitable, Callable
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -16,6 +19,9 @@ from vikingbot.providers.base import LLMProvider
 from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.utils.helpers import ensure_non_empty_assistant_content
 
+if TYPE_CHECKING:
+    from vikingbot.config.schema import Config
+
 
 class SubagentManager:
     """
@@ -23,7 +29,9 @@ class SubagentManager:
 
     Subagents are lightweight agent instances that run in the background
     to handle specific tasks. They share the same LLM provider but have
-    isolated context and a focused system prompt.
+    isolated context and a focused system prompt. A request-owned task_runner
+    can supply its own execution loop and collect results with wait() instead
+    of publishing chat notifications.
     """
 
     def __init__(
@@ -33,11 +41,9 @@ class SubagentManager:
         bus: MessageBus,
         config: "Config",
         model: str | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         sandbox_manager: "SandboxManager | None" = None,
     ):
-        from vikingbot.config.schema import ExecToolConfig
-
         self.provider = provider
         self.workspace = workspace
         self.bus = bus
@@ -46,40 +52,161 @@ class SubagentManager:
         self.temperature = temperature
         self.sandbox_manager = sandbox_manager
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
+        self._max_concurrency = getattr(
+            getattr(config, "agents", None), "subagent_max_concurrency", 8
+        )
+        self._worker_slots = asyncio.Semaphore(self._max_concurrency)
+        self._active_tasks: set[str] = set()
+        # A request-owned runner returns compact results to wait(), without chat notifications.
+        self.task_runner: Callable[[str, str, SessionKey], Awaitable[dict[str, Any]]] | None = None
+        self._completed_results: dict[str, dict[str, Any]] = {}
+        self._closed = False
+
+    def set_max_concurrency(self, limit: int) -> None:
+        """Replace worker and queue capacity with a positive limit at an idle phase boundary.
+
+        Raise ValueError for a nonpositive limit or pending work/uncollected results;
+        existing tasks must finish before the worker semaphore can be replaced.
+        """
+        if limit < 1:
+            raise ValueError("Subagent concurrency must be positive")
+        if any(not task.done() for task in self._running_tasks.values()) or self._completed_results:
+            raise ValueError("Collect all subagent results before changing concurrency")
+        self._max_concurrency = limit
+        self._worker_slots = asyncio.Semaphore(limit)
 
     async def spawn(
         self,
         task: str,
         session_key: SessionKey,
         label: str | None = None,
+        channel_metadata: dict[str, Any] | None = None,
+        openviking_connection: dict[str, Any] | None = None,
     ) -> str:
         """
         Spawn a subagent to execute a task in the background.
 
         Args:
             task: The task description for the subagent.
+            session_key: Parent session used for workspace access and result routing.
             label: Optional human-readable label for the task.
-            origin_channel: The channel to announce results to.
-            origin_chat_id: The chat ID to announce results to.
+            channel_metadata: Delivery metadata for chat notifications.
+            openviking_connection: Request-scoped identity for child tools.
 
         Returns:
-            Status message indicating the subagent was started.
+            A started or queued message with the task ID, or an error when spawning is closed
+            or capacity is exhausted. Managed tasks queue up to twice the worker count,
+            including uncollected results; chat tasks start immediately or return an error.
         """
+        if self._closed:
+            return "Error: Subagent spawning is closed for this task."
+        if self.task_runner is not None:
+            outstanding = sum(not task.done() for task in self._running_tasks.values())
+            if outstanding + len(self._completed_results) >= 2 * self._max_concurrency:
+                return "Error: Subagent queue is full. Call wait_subagents, then spawn the remaining assignments."
+        elif self.get_running_count() >= self._max_concurrency:
+            return f"Error: Subagent concurrency limit reached ({self._max_concurrency})"
+
         task_id = str(uuid.uuid4())[:8]
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
 
         # Create background task
-        bg_task = asyncio.create_task(self._run_subagent(task_id, task, display_label, session_key))
+        run = (
+            self._run_managed_subagent(task_id, task, display_label, session_key)
+            if self.task_runner is not None
+            else self._run_subagent(
+                task_id,
+                task,
+                display_label,
+                session_key,
+                dict(channel_metadata or {}),
+                openviking_connection,
+            )
+        )
+        bg_task = asyncio.create_task(run)
         self._running_tasks[task_id] = bg_task
 
         # Cleanup when done
         bg_task.add_done_callback(lambda _: self._running_tasks.pop(task_id, None))
 
         logger.info(f"Spawned subagent [{task_id}]: {display_label}")
+        if self.task_runner is not None:
+            return f"Subagent accepted (id: {task_id})."
         return f"Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
 
-    async def _run_subagent(
+    async def _run_managed_subagent(
         self, task_id: str, task: str, label: str, session_key: SessionKey
+    ) -> None:
+        """Run a request-owned child and retain its outcome until the parent collects it."""
+        result: dict[str, Any] = {"task_id": task_id, "label": label}
+        try:
+            async with self._worker_slots:
+                self._active_tasks.add(task_id)
+                assert self.task_runner is not None
+                result.update(await self.task_runner(task_id, task, session_key))
+                result["status"] = "completed"
+        except asyncio.CancelledError:
+            result["status"] = "cancelled"
+            raise
+        except Exception as exc:
+            result.update(status="failed", error=str(exc)[:1500])
+            logger.exception("Subagent [{}] failed", task_id)
+        finally:
+            self._active_tasks.discard(task_id)
+            self._completed_results[task_id] = result
+
+    async def wait(self, *, block: bool = True) -> dict[str, Any]:
+        """Collect new outcomes, waiting for a child to finish unless block is false.
+
+        Blocking waits return when results exist or no children remain, and propagate cancellation.
+        Return active/queued IDs, worker limits and free slots after draining results.
+        queue_capacity counts additional admissions; capacity is its compatibility alias.
+        Completed results are delivered once; unfinished children keep running.
+        """
+        while block and not self._completed_results:
+            running = [task for task in self._running_tasks.values() if not task.done()]
+            if not running:
+                break
+            await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
+        results = list(self._completed_results.values())
+        self._completed_results.clear()
+        pending = [key for key, task in self._running_tasks.items() if not task.done()]
+        queue_capacity = max(0, 2 * self._max_concurrency - len(pending))
+        return {
+            "results": results,
+            "running": [key for key in pending if key in self._active_tasks],
+            "queued": [key for key in pending if key not in self._active_tasks],
+            "max_concurrency": self._max_concurrency,
+            "free_worker_slots": max(0, self._max_concurrency - len(self._active_tasks)),
+            "queue_capacity": queue_capacity,
+            "capacity": queue_capacity,
+        }
+
+    def begin_submission(self, finalize: bool = False) -> str | None:
+        """Reject uncollected child work; seal spawning when validated output is finalized."""
+        if any(not task.done() for task in self._running_tasks.values()) or self._completed_results:
+            return "Error: Call wait_subagents to collect all child results and merge their drafts before submitting."
+        if finalize:
+            self._closed = True
+        return None
+
+    async def cancel_all(self) -> None:
+        """Stop accepting children and await cancellation before their workspace is removed."""
+        self._closed = True
+        tasks = list(self._running_tasks.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _run_subagent(
+        self,
+        task_id: str,
+        task: str,
+        label: str,
+        session_key: SessionKey,
+        channel_metadata: dict[str, Any] | None = None,
+        openviking_connection: dict[str, Any] | None = None,
     ) -> None:
         """Execute the subagent task and announce the result."""
         logger.info(f"Subagent [{task_id}] starting task: {label}")
@@ -88,7 +215,7 @@ class SubagentManager:
             # Build subagent tools (no message tool, no spawn tool)
             from vikingbot.agent.tools import register_subagent_tools
 
-            tools = ToolRegistry()
+            tools = ToolRegistry(config=self.config)
             register_subagent_tools(
                 registry=tools,
                 config=self.config,
@@ -98,14 +225,19 @@ class SubagentManager:
             task_content = task
             try:
                 from vikingbot.agent.memory import MemoryStore
-                memory_store = MemoryStore(self.workspace)
+
+                if not self.config.ov_server.is_available():
+                    raise RuntimeError("OpenViking is unavailable")
+                memory_store = MemoryStore(self.workspace, config=self.config)
                 workspace_id = (
                     self.sandbox_manager.to_workspace_id(session_key)
                     if self.sandbox_manager
                     else "shared"
                 )
                 exp_memory = await memory_store.get_viking_experience_context(
-                    query=task, workspace_id=workspace_id
+                    query=task,
+                    workspace_id=workspace_id,
+                    openviking_connection=openviking_connection,
                 )
                 if exp_memory:
                     task_content = f"## Agent Experience (relevant to this task)\n{exp_memory}\n\n---\n\n{task}"
@@ -113,7 +245,8 @@ class SubagentManager:
                 logger.warning(f"Subagent [{task_id}] failed to load experience memory: {e}")
 
             # Build messages with subagent-specific prompt
-            system_prompt = self._build_subagent_prompt(task)
+            prompt_workspace = await self._get_session_workspace(session_key)
+            system_prompt = self._build_subagent_prompt(task, workspace=prompt_workspace)
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": task_content},
@@ -142,7 +275,8 @@ class SubagentManager:
                             "type": "function",
                             "function": {
                                 "name": tc.name,
-                                "arguments": json.dumps(tc.arguments),
+                                # Keep Unicode readable in model-facing tool history.
+                                "arguments": json.dumps(tc.arguments, ensure_ascii=False),
                             },
                         }
                         for tc in response.tool_calls
@@ -166,6 +300,7 @@ class SubagentManager:
                             tool_call.arguments,
                             session_key=session_key,
                             sandbox_manager=self.sandbox_manager,
+                            openviking_connection=openviking_connection,
                         )
                         messages.append(
                             {
@@ -178,17 +313,54 @@ class SubagentManager:
                 else:
                     final_result = response.content
                     break
+            else:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Tool-use iteration limit reached. Do not call any more tools. "
+                            "Answer the original task using only the conversation and tool "
+                            "results above. If the information is incomplete, give the "
+                            "best-known answer and clearly note what remains uncertain."
+                        ),
+                    }
+                )
+                final_response = await self.provider.chat(
+                    messages=messages,
+                    tools=[],
+                    model=self.model,
+                    temperature=self.temperature,
+                )
+                final_result = final_response.content
 
-            if final_result is None:
+            if final_result is None or not final_result.strip():
                 final_result = "Task completed but no final response was generated."
 
             logger.info(f"Subagent [{task_id}] completed successfully")
-            await self._announce_result(task_id, label, task, final_result, session_key, "ok")
+            await self._announce_result(
+                task_id,
+                label,
+                task,
+                final_result,
+                session_key,
+                "ok",
+                channel_metadata,
+                openviking_connection,
+            )
 
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             logger.exception(f"Subagent [{task_id}] failed: {e}")
-            await self._announce_result(task_id, label, task, error_msg, session_key, "error")
+            await self._announce_result(
+                task_id,
+                label,
+                task,
+                error_msg,
+                session_key,
+                "error",
+                channel_metadata,
+                openviking_connection,
+            )
 
     async def _announce_result(
         self,
@@ -198,6 +370,8 @@ class SubagentManager:
         result: str,
         session_key: SessionKey,
         status: str,
+        channel_metadata: dict[str, Any] | None = None,
+        openviking_connection: dict[str, Any] | None = None,
     ) -> None:
         """Announce the subagent result to the main agent via the message bus."""
         status_text = "completed successfully" if status == "ok" else "failed"
@@ -216,20 +390,29 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
             sender_id="subagent",
             session_key=session_key,
             content=announce_content,
+            metadata=dict(channel_metadata or {}),
+            openviking_connection=openviking_connection,
         )
 
         await self.bus.publish_inbound(msg)
         logger.debug(f"Subagent [{task_id}] announced result to {session_key}")
 
-    def _build_subagent_prompt(self, task: str) -> str:
-        """Build a focused system prompt for the subagent."""
-        from datetime import datetime
-        import time as _time
+    async def _get_session_workspace(self, session_key: SessionKey) -> Path:
+        """Return the workspace path used by tools for this subagent session."""
+        if not self.sandbox_manager:
+            return self.workspace
 
+        await self.sandbox_manager.get_sandbox(session_key)
+        return self.sandbox_manager.get_workspace_path(session_key)
+
+    def _build_subagent_prompt(self, task: str, workspace: Path | None = None) -> str:
+        """Build a focused system prompt for the subagent."""
+        workspace = workspace or self.workspace
         now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
         tz = _time.strftime("%Z") or "UTC"
+        skills_context = self._build_subagent_skills_context(workspace)
 
-        return f"""# Subagent
+        prompt = f"""# Subagent
 
 ## Current Time
 {now} ({tz})
@@ -254,11 +437,57 @@ You are a subagent spawned by the main agent to complete a specific task.
 - Access the main agent's conversation history
 
 ## Workspace
-Your workspace is at: {self.workspace}
-Skills are available at: {self.workspace}/skills/ (read SKILL.md files as needed)
+Your workspace is at: {workspace}
+Skills are available at: {workspace}/skills/ (read SKILL.md files as needed)
 
 When you have completed the task, provide a clear summary of your findings or actions."""
+        if skills_context:
+            prompt = f"{prompt}\n\n{skills_context}"
+        return prompt
+
+    def _build_subagent_skills_context(self, workspace: Path | None = None) -> str:
+        """Build the same local skills context format used by the main agent."""
+        try:
+            from vikingbot.agent.skills import SkillsLoader
+
+            workspace = workspace or self.workspace
+            skills = SkillsLoader(workspace)
+            parts: list[str] = []
+
+            always_skills = skills.get_always_skills()
+            if always_skills:
+                always_content = skills.load_skills_for_context(always_skills)
+                if always_content:
+                    parts.append(f"# Active Skills\n\n{always_content}")
+
+            skills_summary = skills.build_skills_summary()
+            if skills_summary:
+                required_skill_note = ""
+                required_skill_candidates = [
+                    "skills/experience_loader/SKILL.md",
+                    "skills/task_case_experience/SKILL.md",
+                ]
+                for skill_path in required_skill_candidates:
+                    if (workspace / skill_path).exists():
+                        required_skill_note = (
+                            "\nRequired skill: before taking any task action, you MUST read "
+                            f"`{skill_path}` and apply its instructions.\n"
+                        )
+                        break
+                parts.append(f"""# Skills
+
+The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
+Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
+{required_skill_note}
+{skills_summary}""")
+
+            return "\n\n".join(parts)
+        except Exception as e:
+            logger.warning(f"Failed to build subagent skills context: {e}")
+            return ""
 
     def get_running_count(self) -> int:
         """Return the number of currently running subagents."""
-        return len(self._running_tasks)
+        if self.task_runner is not None:
+            return len(self._active_tasks)
+        return sum(not task.done() for task in self._running_tasks.values())

@@ -134,7 +134,6 @@ async def create_collection(request: CollectionCreateRequest, req: Request):
     project_name = request.ProjectName or "default"
     description = request.Description or ""
     fields = data_utils.convert_dict(request.Fields)
-    vectorize = data_utils.convert_dict(request.Vectorize)
 
     project = get_project(project_name)
 
@@ -146,7 +145,6 @@ async def create_collection(request: CollectionCreateRequest, req: Request):
         "CollectionName": collection_name,
         "Description": description,
         "Fields": fields,
-        "Vectorize": vectorize,
     }
 
     logger.info(f"Creating collection: {collection_name} in project: {project_name}")
@@ -339,7 +337,15 @@ async def update_index(request: IndexUpdateRequest, req: Request):
         if not index_name:
             return error_response("index name is empty", ErrorCode.INVALID_PARAM.value, request=req)
 
-        scalar_index = data_utils.convert_dict(request.ScalarIndex)
+        scalar_index = (
+            None
+            if request.ScalarIndex is None
+            else (
+                request.ScalarIndex
+                if isinstance(request.ScalarIndex, list)
+                else data_utils.convert_dict(request.ScalarIndex)
+            )
+        )
         description = request.Description
 
         collection.update_index(index_name, scalar_index, description)
@@ -425,6 +431,8 @@ async def search_by_vector(request: SearchByVectorRequest, req: Request):
             filters=filters,
             sparse_vector=sparse_vector,
             output_fields=output_fields,
+            advance=request.advance,
+            return_detail_info=request.return_detail_info,
         )
         return success_response("search success", asdict(result), request=req)
     except VikingDBException as e:
@@ -584,6 +592,7 @@ async def search_by_random(request: SearchByRandomRequest, req: Request):
 
         filters = data_utils.convert_dict(request.filter)
         output_fields = data_utils.convert_dict(request.output_fields)
+        advance = data_utils.convert_dict(request.advance) if request.advance else None
         limit = request.limit or 10
         if limit <= 0:
             return error_response(
@@ -603,6 +612,7 @@ async def search_by_random(request: SearchByRandomRequest, req: Request):
             offset=offset,
             filters=filters,
             output_fields=output_fields,
+            advance=advance,
         )
         return success_response("search success", asdict(result), request=req)
     except VikingDBException as e:
@@ -649,6 +659,12 @@ async def search_by_keywords(request: SearchByKeywordsRequest, req: Request):
                 index_name=index_name,
                 keywords=keywords,
                 query=query,
+                mode=request.mode,
+                fields=(
+                    data_utils.convert_dict(request.fields)
+                    if request.fields is not None
+                    else None
+                ),
                 limit=limit,
                 offset=offset,
                 filters=filters,

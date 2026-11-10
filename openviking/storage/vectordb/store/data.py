@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass, field
 from typing import List
 
+from openviking.storage.vectordb.store.bytes_row import FieldType
 from openviking.storage.vectordb.store.serializable import serializable
 
 
@@ -14,7 +15,9 @@ class CandidateData:
     vector: List[float] = field(default_factory=list)
     sparse_raw_terms: List[str] = field(default_factory=list)
     sparse_values: List[float] = field(default_factory=list)
-    fields: str = ""
+    fields: str = field(
+        default="", metadata={"field_type": FieldType.text, "legacy_field_type": FieldType.string}
+    )
     expire_ns_ts: int = 0
 
     def __str__(self):
@@ -44,8 +47,12 @@ class DeltaRecord:
     vector: List[float] = field(default_factory=list)
     sparse_raw_terms: List[str] = field(default_factory=list)
     sparse_values: List[float] = field(default_factory=list)
-    fields: str = ""
-    old_fields: str = ""
+    fields: str = field(
+        default="", metadata={"field_type": FieldType.text, "legacy_field_type": FieldType.string}
+    )
+    old_fields: str = field(
+        default="", metadata={"field_type": FieldType.text, "legacy_field_type": FieldType.string}
+    )
 
     def __str__(self):
         data_dict = {

@@ -5,6 +5,7 @@ export type OpenVikingQueryToolContext = {
   sessionId?: string;
   agentId?: string;
   senderId?: string;
+  requesterSenderId?: string;
 };
 
 export type OpenVikingQuerySession = {
@@ -12,6 +13,7 @@ export type OpenVikingQuerySession = {
   sessionKey?: string;
   ovSessionId?: string;
   agentId: string;
+  actorPeerId?: string;
 };
 
 export type OVSearchInput = {
@@ -74,7 +76,7 @@ export function registerOpenVikingQueryTools(deps: OpenVikingQueryToolsDeps): vo
           query: String((params as { query?: unknown }).query ?? ""),
           uri: typeof params.uri === "string" ? params.uri : undefined,
           limit: typeof params.limit === "number" ? params.limit : undefined,
-        }, session.agentId, session);
+        }, session.actorPeerId, session);
       },
     }),
     { name: "ov_search" },
@@ -99,7 +101,7 @@ export function registerOpenVikingQueryTools(deps: OpenVikingQueryToolsDeps): vo
         const session = deps.resolvePluginSessionRouting(ctx);
         return deps.readOpenVikingContent({
           uri: String((params as { uri?: unknown }).uri ?? ""),
-        }, session.agentId);
+        }, session.actorPeerId);
       },
     }),
     { name: "ov_read" },
@@ -125,7 +127,7 @@ export function registerOpenVikingQueryTools(deps: OpenVikingQueryToolsDeps): vo
         const uris = Array.isArray((params as { uris?: unknown }).uris)
           ? (params as { uris: unknown[] }).uris.map((uri) => String(uri))
           : [];
-        return deps.multiReadOpenVikingContent({ uris }, session.agentId);
+        return deps.multiReadOpenVikingContent({ uris }, session.actorPeerId);
       },
     }),
     { name: "ov_multi_read" },
@@ -153,7 +155,7 @@ export function registerOpenVikingQueryTools(deps: OpenVikingQueryToolsDeps): vo
           recursive: typeof params.recursive === "boolean" ? params.recursive : undefined,
           simple: typeof params.simple === "boolean" ? params.simple : undefined,
           limit: typeof params.limit === "number" ? params.limit : undefined,
-        }, session.agentId);
+        }, session.actorPeerId);
       },
     }),
     { name: "ov_list" },

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
-    pass
+    from openviking.parse.output import ParseArtifactRef
 
 # ============================================================================
 # Common utility functions
@@ -54,18 +54,23 @@ def format_table_to_markdown(rows: List[List[str]], has_header: bool = True) -> 
     if not rows:
         return ""
 
-    # Calculate maximum width for each column
+    # Escape pipes and fold line breaks so each cell stays inside its column and row
+    rows = [
+        ["<br>".join(str(cell).replace("|", "\\|").splitlines()) for cell in row] for row in rows
+    ]
+
+    # Calculate maximum width for each column; a delimiter cell needs at least "---"
     col_count = max(len(row) for row in rows)
-    col_widths = [0] * col_count
+    col_widths = [3] * col_count
     for row in rows:
         for i, cell in enumerate(row):
-            col_widths[i] = max(col_widths[i], len(str(cell)))
+            col_widths[i] = max(col_widths[i], len(cell))
 
     lines = []
     for row_idx, row in enumerate(rows):
         # Pad missing columns
-        padded_row = list(row) + [""] * (col_count - len(row))
-        cells = [str(cell).ljust(col_widths[i]) for i, cell in enumerate(padded_row)]
+        padded_row = row + [""] * (col_count - len(row))
+        cells = [cell.ljust(col_widths[i]) for i, cell in enumerate(padded_row)]
         lines.append("| " + " | ".join(cells) + " |")
 
         # Add separator row after header
@@ -254,69 +259,6 @@ class ResourceNode:
                 texts.append(child.get_text(include_children=True))
         return "\n".join(texts)
 
-    def get_abstract(self, max_length: int = 256) -> str:
-        """
-        Generate L0 abstract for this node.
-
-        Args:
-            max_length: Maximum character length
-
-        Returns:
-            Abstract text
-        """
-        if "abstract" in self.meta:
-            return self.meta["abstract"]
-        if self.title:
-            abstract = self.title
-        else:
-            content = self.get_content()
-            abstract = content[:max_length] if content else ""
-
-        if len(abstract) > max_length:
-            abstract = abstract[: max_length - 3] + "..."
-
-        return abstract
-
-    def get_overview(self, max_length: int = 4000) -> str:
-        """
-        Generate L1 overview for this node.
-
-        Args:
-            max_length: Maximum character length
-
-        Returns:
-            Overview text including structure summary
-        """
-        if "overview" in self.meta:
-            return self.meta["overview"]
-        # Default overview generation
-        parts = []
-        if self.title:
-            parts.append(f"**{self.title}**")
-
-        # Add content preview
-        content = self.get_content()
-        if content:
-            content_preview = content[:1000]
-            if len(content) > 1000:
-                content_preview += "..."
-            parts.append(content_preview)
-
-        # Add children summary
-        if self.children:
-            parts.append(f"\n[Contains {len(self.children)} sub-sections]")
-            for child in self.children[:5]:  # First 5 children
-                child_abstract = child.get_abstract(max_length=100)
-                parts.append(f"  - {child_abstract}")
-            if len(self.children) > 5:
-                parts.append(f"  ... and {len(self.children) - 5} more")
-
-        overview = "\n".join(parts)
-        if len(overview) > max_length:
-            overview = overview[: max_length - 3] + "..."
-
-        return overview
-
     def to_dict(self) -> Dict[str, Any]:
         """Convert node to dictionary."""
         return {
@@ -354,6 +296,10 @@ class ParseResult:
     # Temporary directory path (for v4.0 architecture)
     temp_dir_path: Optional[str] = None  # e.g., "/tmp/openviking_parse_a1b2c3d4"
 
+    # Serializable handle to the artifact backing ``temp_dir_path``. New parsers
+    # set it explicitly; legacy AGFS-only results may derive it from their temp URI.
+    artifact_ref: Optional["ParseArtifactRef"] = None
+
     # Core metadata fields
     source_format: Optional[str] = None  # File format (e.g., "pdf", "markdown")
     parser_name: Optional[str] = None  # Parser name (e.g., "PDFParser")
@@ -368,6 +314,27 @@ class ParseResult:
     def success(self) -> bool:
         """Check if parsing was successful."""
         return len(self.warnings) == 0
+
+    def ensure_artifact_ref(self) -> Optional["ParseArtifactRef"]:
+        """Return the artifact ref, deriving an AGFS one from ``temp_dir_path``.
+
+        Legacy parsers may still record an AGFS temp URI without a ref. A local
+        filesystem path is ambiguous and must always carry an explicit ref.
+        """
+        if self.artifact_ref is not None:
+            return self.artifact_ref
+        if not self.temp_dir_path:
+            return None
+        if not self.temp_dir_path.startswith("viking://temp/"):
+            raise ValueError("parse result with a non-AGFS temp path must provide artifact_ref")
+        from openviking.parse.output import ParseArtifactRef
+
+        self.artifact_ref = ParseArtifactRef(
+            backend="agfs",
+            root=self.temp_dir_path,
+            root_type="dir",
+        )
+        return self.artifact_ref
 
     def get_all_nodes(self) -> List[ResourceNode]:
         """Get all nodes in the tree (flattened)."""

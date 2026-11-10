@@ -27,13 +27,13 @@ openclaw plugins install clawhub:@openviking/openclaw-plugin
 | 组件 | 要求 |
 | --- | --- |
 | Node.js | >= 22 |
-| OpenClaw | >= 2026.4.8 |
+| OpenClaw | >= 2026.5.27 |
 
 插件以远程模式连接到已有的 OpenViking 服务。它不会帮你启动 OpenViking server。需要先启动 OpenViking，并保持服务运行，再把插件的 `baseUrl` 指向这个 HTTP 服务。默认本地地址是 `http://127.0.0.1:1933`。
 
 OpenClaw 插件包版本边界：
 
-- `2026.4.8` 是当前插件支持的最低 OpenClaw 版本。
+- `2026.5.27` 是当前插件支持的最低 OpenClaw 版本。这个版本下限包含 2026 年 7 月 2 日 OpenClaw 安全公告批次的修复，包括 GHSA-8wg3-5mcm-fjq8 和 GHSA-83w9-h5wv-j9xm。
 - `2026.5.3` 开始，OpenClaw 在安装包时会校验 TypeScript 插件入口是否有编译后的 JavaScript 产物。
 - `2026.5.4` 及之后，已安装/全局插件如果缺少编译后的 JavaScript，运行时不再回退加载 `.ts` 源码，插件可能被跳过。
 - 推荐的 `openclaw plugins install clawhub:@openviking/openclaw-plugin` 会安装已经发布并包含 `dist/*.js` 的插件包，普通用户不需要本地编译。
@@ -197,11 +197,68 @@ openclaw openviking setup \
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --force-slot --json
 ```
 
-如需给默认 assistant peer 路由增加前缀，可以额外传：
+根据 OpenViking user 代表谁来选择 `--peer-role`：
+
+| 值 | 存储示例 | 适用场景 |
+| --- | --- | --- |
+| `none`（默认） | `viking://user/alice/memories/...` | 该 OpenViking 用户下的所有对话共享 user-level 记忆，不使用具体 peer 的记忆子树。 |
+| `assistant` | `viking://user/alice/peers/main/memories/...` | OpenViking user 代表人，并希望把 assistant 归因的 peer 记忆按不同 OpenClaw 助手分开。 |
+| `sender` | `viking://user/support-agent/peers/customer-42/memories/...` | OpenViking user 代表 agent，并希望把 sender 归因的 peer 记忆按不同发送者分开。 |
+
+安装和 setup 只接受 `sender`；已有配置里的 `person` 仍按 `sender` 生效。
+
+例如，让每个助手使用独立的 peer 记忆，并可选给 assistant id 加前缀：
 
 ```bash
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role assistant --peer-prefix <PREFIX> --json
 ```
+
+如果 OpenViking user 是 agent，按给它发消息的 sender 分开 peer 记忆：
+
+```bash
+openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role sender --json
+```
+
+OpenViking 会为每个用户初始化受管的 `peers/` 容器。`none` 表示插件不创建、也不路由到具体的 `peers/<peer_id>/memories` 子树。Actor-peer 召回同时包含用户共享记忆和当前 peer 记忆；切换配置不会搬迁已有记忆。
+
+#### 无法执行 CLI 时直接配置文件
+
+如果容器内无法执行 `openclaw` CLI，可以把以下字段合并到 OpenClaw 实际读取的配置文件。设置了 `OPENCLAW_CONFIG_PATH` 时使用该路径；否则通常是 `$OPENCLAW_STATE_DIR/openclaw.json`（默认 `~/.openclaw/openclaw.json`）。
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "openviking": {
+        "enabled": true,
+        "config": {
+          "mode": "remote",
+          "baseUrl": "http://openviking:1933",
+          "apiKey": "<API_KEY>",
+          "peer_role": "assistant"
+        }
+      }
+    },
+    "slots": {
+      "contextEngine": "openviking"
+    }
+  }
+}
+```
+
+- 插件必须已经安装；编辑前请备份配置，并把以上字段合并到现有 `plugins` 配置。
+- 如果配置中已有 `plugins.allow`，把 `openviking` 追加进去；如果没有，不要仅为本插件新建 allowlist。
+- `contextEngine` 是独占 slot；若已有其他 context engine，只有确认替换后再修改该字段。使用 root API key 时，还需在 `config` 中设置 `accountId` 和 `userId`。
+- 容器连接其他服务时，`baseUrl` 应使用容器内可访问的服务地址，而不是 `127.0.0.1`。
+- 推荐使用 `SecretRef` 对象作为 `apiKey`（而不是明文字符串），避免密钥直接落盘写入 `openclaw.json`。支持的形式与 OpenClaw 核心中 LLM/TTS/MCP 等 provider 配置使用的标准 `SecretRef` 一致：
+
+  | 类型 | 示例 | 说明 |
+  | --- | --- | --- |
+  | `env` | `{ "source": "env", "id": "OPENVIKING_API_KEY" }` | 启动时读取同名环境变量。 |
+  | `file` | `{ "source": "file", "id": "/etc/secrets/openviking.key" }` | 以 UTF-8 读取并去除首尾空白；`~` 可展开，适配 Kubernetes `secretKeyRef` 卷挂载、0600 权限文件。 |
+  | `exec` | 打包版插件不支持（应用市场安装扫描会拦截子进程执行） | 改用命令包一层环境变量：`OPENVIKING_API_KEY=$(op read op://vault/openviking/credential)`，然后配 `env`。 |
+
+  仍可使用纯字符串形式（含 `${ENV_VAR}` 插值）作为向后兼容路径；此时请限制文件权限或通过受控 Secret 卷提供，并在修改后重启 Gateway、容器或 Pod。
 
 ### 3. 重启 OpenClaw Gateway
 
@@ -261,7 +318,7 @@ plugins.entries.openviking.config
 | `mode` | `remote` | 兼容旧配置的字段。当前只支持 remote。 |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking HTTP 地址 |
 | `apiKey` | 空 | OpenViking API key |
-| `peer_role` | `assistant` | Peer 身份模式：`none`、`assistant` 或 `person`。Session message 使用 body `peer_id`；数据面 recall/search 使用 `X-OpenViking-Actor-Peer`。 |
+| `peer_role` | `none` | 记忆归属：`none`（共享 `viking://user/<user_id>/memories`）、`assistant`（`.../peers/<assistant_id>/memories`）或 `sender`（`.../peers/<sender_id>/memories`）。旧值 `person` 作为 `sender` 的别名兼容。Session message 使用 body `peer_id`；数据面 recall/search 使用 `X-OpenViking-Actor-Peer`。 |
 | `peer_prefix` | 空 | `peer_role=assistant` 时 assistant `peer_id` / actor peer 值的可选前缀。 |
 | `accountId` | 空 | 使用 root API key 时需要 |
 | `userId` | 空 | 使用 root API key 时需要 |
@@ -286,7 +343,7 @@ openclaw config get plugins.entries.openviking.config
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:1933` | 远端 OpenViking 服务地址 |
 | `apiKey` | 空 | 远端 OpenViking API Key；服务端未开启认证时可不填 |
-| `peer_role` | `assistant` | Peer 身份模式：`none`、`assistant` 或 `person`；session message 使用 body `peer_id`，数据面 recall/search 使用 `X-OpenViking-Actor-Peer` |
+| `peer_role` | `none` | 记忆归属：`none`、`assistant` 或 `sender`；旧值 `person` 作为 `sender` 的别名兼容。Session message 使用 body `peer_id`，数据面 recall/search 使用 `X-OpenViking-Actor-Peer` |
 | `peer_prefix` | 空 | `peer_role=assistant` 时 assistant `peer_id` / actor peer 值的可选前缀 |
 
 常见设置：
@@ -348,7 +405,7 @@ ov-install
 | `--current-version` | 查看 helper 记录的当前版本 |
 | `--base-url URL` | OpenViking 服务器地址（启用非交互模式） |
 | `--api-key KEY` | OpenViking API key |
-| `--peer-role ROLE` | Peer role：`none`、`assistant` 或 `person` |
+| `--peer-role ROLE` | 记忆归属：`none`、`assistant` 或 `sender` |
 | `--peer-prefix PREFIX` | assistant `peer_id` / actor peer 值的前缀 |
 | `--update` | 更新 helper 管理的安装 |
 

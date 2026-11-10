@@ -8,13 +8,15 @@ import json
 import zipfile
 from typing import Any
 
-from openviking.core.namespace import uri_leaf_name
+from openviking.core.identifiers import validate_user_id
+from openviking.core.namespace import owner_fields_for_uri, uri_leaf_name
 from openviking.storage.ovpack.format import (
     OVPACK_DENSE_PATH,
     OVPACK_FORMAT_VERSION,
     OVPACK_INDEX_RECORDS_PATH,
     OVPACK_KIND,
     OVPACK_MANIFEST_ZIP_LEAF,
+    join_uri,
     normalize_sha256,
     validate_ovpack_rel_path,
 )
@@ -120,6 +122,47 @@ def validate_manifest_root_matches_zip(manifest: dict[str, Any], base_name: str)
             details={"manifest_root_name": root_name, "root_uri": root_uri},
         )
 
+    expected_user_id = owner_fields_for_uri(root_uri).get("owner_user_id")
+    declared_user_id = root.get("user_id")
+    if declared_user_id is not None and declared_user_id != expected_user_id:
+        raise InvalidArgumentError(
+            "ovpack manifest root user_id does not match root uri",
+            details={"user_id": declared_user_id, "root_uri": root_uri},
+        )
+    if expected_user_id:
+        root["user_id"] = expected_user_id
+
+
+def _entry_user_id(manifest: dict[str, Any], rel_path: str) -> str | None:
+    root_uri = manifest_root_uri(manifest)
+    if not root_uri:
+        return None
+    target_uri = join_uri(root_uri, rel_path) if rel_path else root_uri
+    return owner_fields_for_uri(target_uri).get("owner_user_id")
+
+
+def manifest_entry_target_uri(
+    root_uri: str,
+    rel_path: str,
+    entry: dict[str, Any],
+) -> str:
+    """Map one validated manifest entry to its canonical restore target URI."""
+    parts = rel_path.split("/") if rel_path else []
+    if root_uri != "viking://" or not parts or parts[0] != "user":
+        return join_uri(root_uri, rel_path)
+    if len(parts) == 1:
+        return "viking://user"
+
+    user_id = entry.get("user_id")
+    if not isinstance(user_id, str) or not user_id:
+        raise InvalidArgumentError(
+            "Missing ovpack manifest user_id for user data",
+            details={"path": rel_path},
+        )
+    suffix = "/".join(parts[2:])
+    user_root = f"viking://user/{user_id}"
+    return join_uri(user_root, suffix) if suffix else user_root
+
 
 def manifest_entries_by_path(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     if not isinstance(manifest, dict) or "entries" not in manifest:
@@ -155,6 +198,21 @@ def manifest_entries_by_path(manifest: dict[str, Any]) -> dict[str, dict[str, An
                 "Duplicate ovpack manifest entry",
                 details={"path": rel_path},
             )
+        expected_user_id = _entry_user_id(manifest, rel_path)
+        declared_user_id = entry.get("user_id")
+        if declared_user_id is not None and declared_user_id != expected_user_id:
+            raise InvalidArgumentError(
+                "ovpack manifest entry user_id does not match path",
+                details={"path": rel_path, "user_id": declared_user_id},
+            )
+        if expected_user_id:
+            validation_error = validate_user_id(expected_user_id)
+            if validation_error:
+                raise InvalidArgumentError(
+                    f"Invalid ovpack manifest user_id: {validation_error}",
+                    details={"path": rel_path, "user_id": expected_user_id},
+                )
+            entry["user_id"] = expected_user_id
         by_path[rel_path] = entry
 
     return by_path

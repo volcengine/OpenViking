@@ -1,122 +1,9 @@
 import fs from "fs"
 import path from "path"
-import { homedir } from "os"
 
-export const DEFAULT_CONFIG = {
-  endpoint: "http://localhost:1933",
-  apiKey: "",
-  account: "",
-  user: "",
-  peerId: "",
-  enabled: true,
-  timeoutMs: 30000,
-  runtime: {
-    dataDir: "",
-  },
-  repoContext: {
-    enabled: true,
-    cacheTtlMs: 60000,
-  },
-  autoRecall: {
-    enabled: true,
-    limit: 6,
-    scoreThreshold: 0.15,
-    maxContentChars: 500,
-    preferAbstract: true,
-    tokenBudget: 2000,
-  },
-}
+import { createOvHttp } from "./shared/ov-http.mjs"
 
 let logFilePath = null
-
-function cloneDefaultConfig() {
-  return JSON.parse(JSON.stringify(DEFAULT_CONFIG))
-}
-
-function mergeConfig(fileConfig = {}) {
-  const config = cloneDefaultConfig()
-  for (const key of ["endpoint", "apiKey", "account", "user", "peerId", "enabled", "timeoutMs"]) {
-    if (fileConfig[key] !== undefined) config[key] = fileConfig[key]
-  }
-  config.runtime = {
-    ...DEFAULT_CONFIG.runtime,
-    dataDir: fileConfig.runtime?.dataDir ?? DEFAULT_CONFIG.runtime.dataDir,
-  }
-  config.repoContext = { ...DEFAULT_CONFIG.repoContext, ...(fileConfig.repoContext ?? {}) }
-  config.autoRecall = { ...DEFAULT_CONFIG.autoRecall, ...(fileConfig.autoRecall ?? {}) }
-
-  if (process.env.OPENVIKING_API_KEY) {
-    config.apiKey = process.env.OPENVIKING_API_KEY
-  }
-  if (process.env.OPENVIKING_ACCOUNT) {
-    config.account = process.env.OPENVIKING_ACCOUNT
-  }
-  if (process.env.OPENVIKING_USER) {
-    config.user = process.env.OPENVIKING_USER
-  }
-  if (process.env.OPENVIKING_PEER_ID) {
-    config.peerId = process.env.OPENVIKING_PEER_ID
-  }
-
-  config.timeoutMs = normalizeNumber(config.timeoutMs, DEFAULT_CONFIG.timeoutMs, 1000, 300000)
-  config.repoContext.cacheTtlMs = normalizeNumber(
-    config.repoContext.cacheTtlMs,
-    DEFAULT_CONFIG.repoContext.cacheTtlMs,
-    1000,
-    60 * 60 * 1000,
-  )
-  clampRecallConfig(config.autoRecall)
-  return config
-}
-
-function normalizeNumber(value, fallback, min, max) {
-  const next = Number(value)
-  if (!Number.isFinite(next)) return fallback
-  return Math.max(min, Math.min(max, next))
-}
-
-function clampRecallConfig(recall) {
-  recall.limit = Math.max(1, Math.min(50, Math.round(Number(recall.limit) || 6)))
-  recall.scoreThreshold = Math.max(0, Math.min(1, Number(recall.scoreThreshold) || 0))
-  recall.maxContentChars = Math.max(100, Math.min(5000, Math.round(Number(recall.maxContentChars) || 500)))
-  recall.tokenBudget = Math.max(100, Math.min(10000, Math.round(Number(recall.tokenBudget) || 2000)))
-}
-
-export function loadConfig(pluginRoot, projectDirectory) {
-  for (const configPath of getConfigPaths(pluginRoot, projectDirectory)) {
-    try {
-      if (fs.existsSync(configPath)) {
-        const fileConfig = JSON.parse(fs.readFileSync(configPath, "utf8"))
-        return mergeConfig(fileConfig)
-      }
-    } catch (error) {
-      console.warn(`Failed to load OpenViking config from ${configPath}:`, error)
-    }
-  }
-  return mergeConfig()
-}
-
-function getConfigPaths(pluginRoot, projectDirectory) {
-  const paths = []
-  if (process.env.OPENVIKING_PLUGIN_CONFIG) paths.push(expandHome(process.env.OPENVIKING_PLUGIN_CONFIG))
-  if (projectDirectory) paths.push(path.join(projectDirectory, ".opencode", "openviking-config.json"))
-  paths.push(path.join(homedir(), ".config", "opencode", "openviking-config.json"))
-  paths.push(path.join(pluginRoot, "openviking-config.json"))
-  return paths
-}
-
-export function resolveDataDir(pluginRoot, config) {
-  const configured = config.runtime?.dataDir
-  if (configured) return expandHome(configured)
-  return path.join(homedir(), ".config", "opencode", "openviking")
-}
-
-function expandHome(value) {
-  if (!value || typeof value !== "string") return value
-  if (value === "~") return homedir()
-  if (value.startsWith("~/") || value.startsWith("~\\")) return path.join(homedir(), value.slice(2))
-  return value
-}
 
 export function initLogger(dataDir) {
   fs.mkdirSync(dataDir, { recursive: true })
@@ -169,10 +56,12 @@ export function log(level, toolName, message, data) {
 }
 
 export function makeToast(client) {
-  return (message, variant = "warning") =>
-    client?.tui?.showToast?.({
+  return (message, variant = "warning") => {
+    const request = client?.tui?.showToast?.({
       body: { title: "OpenViking", message, variant, duration: 8000 },
-    }).catch(() => {})
+    })
+    return request?.catch?.(() => {})
+  }
 }
 
 export function normalizeEndpoint(endpoint) {
@@ -180,162 +69,56 @@ export function normalizeEndpoint(endpoint) {
 }
 
 export function effectivePeerId(config) {
-  return String(config.peerId || "").trim() || null
+  return String(config.effectivePeer?.peerId || config.peerId || "").trim() || null
 }
 
-export async function makeRequest(config, options) {
-  const url = `${normalizeEndpoint(config.endpoint)}${options.endpoint}`
-  const headers = makeAuthHeaders(
-    config,
-    { "Content-Type": "application/json", ...(options.headers ?? {}) },
-    options.actorPeerId,
+// The config travels with every call here, so the client is built per call —
+// a closure next to a network round-trip costs nothing.
+function ovHttp(config) {
+  return createOvHttp(
+    { ...config, baseUrl: normalizeEndpoint(config.endpoint) },
+    { defaultTimeoutMs: config.timeoutMs },
   )
+}
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? config.timeoutMs)
-  let onAbort = null
+export async function fetchJSON(config, endpoint, init = {}, options = {}) {
+  return ovHttp(config)(endpoint, init, options)
+}
 
-  if (options.abortSignal) {
-    if (options.abortSignal.aborted) controller.abort()
-    onAbort = () => controller.abort()
-    options.abortSignal.addEventListener("abort", onAbort, { once: true })
-  }
+/**
+ * `fetchJSON` for the callers that would rather catch than branch: it resolves
+ * to the unwrapped result and turns every failure into an Error whose message
+ * is what the user can act on.
+ */
+export async function makeRequest(config, options) {
+  const timeoutMs = options.timeoutMs ?? config.timeoutMs
+  const response = await fetchJSON(config, options.endpoint, {
+    method: options.method,
+    headers: options.headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  }, { timeoutMs, actorPeerId: options.actorPeerId })
+  if (response.ok) return response.result
 
-  try {
-    const response = await fetch(url, {
-      method: options.method,
-      headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
-      signal: controller.signal,
-    })
-
-    const text = await response.text()
-    const payload = text ? parseJsonOrText(text) : {}
-
-    if (!response.ok) {
-      const rawError = typeof payload === "object" ? payload.error ?? payload.message : payload
-      const errorMessage = typeof rawError === "string" ? rawError : JSON.stringify(rawError)
-      if (response.status === 401 || response.status === 403) {
-        throw new Error("Authentication failed. Please check apiKey/account/user in openviking-config.json or OPENVIKING_* environment variables.")
-      }
-      throw new Error(`Request failed (${response.status}): ${errorMessage}`)
+  const message = getResponseErrorMessage(response.error)
+  // Status 0 is the transport: nothing answered, so the message is ours, not
+  // the server's, and it says what the user has to go fix.
+  if (response.status === 0) {
+    if (response.error?.aborted) {
+      throw new Error(`Request timeout after ${timeoutMs}ms`)
     }
-
-    return payload
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      throw new Error(`Request timeout after ${options.timeoutMs ?? config.timeoutMs}ms`)
-    }
-    if (error?.message?.includes("fetch failed") || error?.code === "ECONNREFUSED") {
+    if (message.includes("fetch failed") || message.includes("ECONNREFUSED")) {
       throw new Error(`OpenViking service unavailable at ${config.endpoint}. Start it with: openviking-server --config ~/.openviking/ov.conf`)
     }
-    throw error
-  } finally {
-    clearTimeout(timeout)
-    if (options.abortSignal && onAbort) {
-      options.abortSignal.removeEventListener("abort", onAbort)
-    }
+    throw new Error(message)
   }
-}
-
-export async function makeMultipartRequest(config, options) {
-  const url = `${normalizeEndpoint(config.endpoint)}${options.endpoint}`
-  const headers = makeAuthHeaders(config, options.headers ?? {}, options.actorPeerId)
-
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? config.timeoutMs)
-  let onAbort = null
-
-  if (options.abortSignal) {
-    if (options.abortSignal.aborted) controller.abort()
-    onAbort = () => controller.abort()
-    options.abortSignal.addEventListener("abort", onAbort, { once: true })
+  if (response.status === 401 || response.status === 403) {
+    throw new Error("Authentication failed. Check api_key/account/user in ~/.openviking/ovcli.conf, or the OPENVIKING_* environment variables.")
   }
-
-  try {
-    const response = await fetch(url, {
-      method: options.method,
-      headers,
-      body: options.body,
-      signal: controller.signal,
-    })
-
-    const text = await response.text()
-    const payload = text ? parseJsonOrText(text) : {}
-
-    if (!response.ok) {
-      const rawError = typeof payload === "object" ? payload.error ?? payload.message : payload
-      const errorMessage = typeof rawError === "string" ? rawError : JSON.stringify(rawError)
-      if (response.status === 401 || response.status === 403) {
-        throw new Error("Authentication failed. Please check apiKey/account/user in openviking-config.json or OPENVIKING_* environment variables.")
-      }
-      throw new Error(`Request failed (${response.status}): ${errorMessage}`)
-    }
-
-    return payload
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      throw new Error(`Request timeout after ${options.timeoutMs ?? config.timeoutMs}ms`)
-    }
-    if (error?.message?.includes("fetch failed") || error?.code === "ECONNREFUSED") {
-      throw new Error(`OpenViking service unavailable at ${config.endpoint}. Start it with: openviking-server --config ~/.openviking/ov.conf`)
-    }
-    throw error
-  } finally {
-    clearTimeout(timeout)
-    if (options.abortSignal && onAbort) {
-      options.abortSignal.removeEventListener("abort", onAbort)
-    }
-  }
-}
-
-function makeAuthHeaders(config, headers = {}, actorPeerId = "") {
-  const result = { ...headers }
-  if (config.apiKey) result["X-API-Key"] = config.apiKey
-  if (config.account) result["X-OpenViking-Account"] = config.account
-  if (config.user) result["X-OpenViking-User"] = config.user
-  const peerId = String(actorPeerId || "").trim()
-  if (peerId) result["X-OpenViking-Actor-Peer"] = peerId
-  return result
-}
-
-function parseJsonOrText(text) {
-  try {
-    return JSON.parse(text)
-  } catch {
-    return text
-  }
+  throw new Error(`Request failed (${response.status}): ${message}`)
 }
 
 export function getResponseErrorMessage(error) {
   if (!error) return "Unknown OpenViking error"
   if (typeof error === "string") return error
   return error.message || error.code || "Unknown OpenViking error"
-}
-
-export function unwrapResponse(response) {
-  if (!response || typeof response !== "object") {
-    throw new Error("OpenViking returned an invalid response")
-  }
-  if (response.status && response.status !== "ok") {
-    throw new Error(getResponseErrorMessage(response.error))
-  }
-  return response.result
-}
-
-export function validateVikingUri(uri, toolName = "tool") {
-  if (typeof uri !== "string" || !uri.startsWith("viking://")) {
-    log("ERROR", toolName, "Invalid Viking URI", { uri })
-    return 'Error: Invalid URI format. Must start with "viking://".'
-  }
-  return null
-}
-
-export function ensureRemoteUrl(value) {
-  try {
-    const url = new URL(value)
-    return url.protocol === "http:" || url.protocol === "https:"
-  } catch {
-    return false
-  }
 }

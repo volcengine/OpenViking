@@ -44,19 +44,5 @@ class TestPydanticValidation(unittest.TestCase):
         fields_meta = {}
         self.assertTrue(validation.is_valid_index_meta_data(meta, fields_meta))
 
-    def test_fix_collection_meta(self):
-        meta = {"CollectionName": "test", "Fields": [{"FieldName": "text", "FieldType": "string"}]}
-        fixed = validation.fix_collection_meta(meta)
-
-        # Check if AUTO_ID was added
-        has_auto_id = any(
-            f["FieldName"] == "AUTO_ID" and f["IsPrimaryKey"] for f in fixed["Fields"]
-        )
-        self.assertTrue(has_auto_id)
-
-        # Check _FieldID assignment
-        self.assertIn("_FieldID", fixed["Fields"][0])
-
-
 if __name__ == "__main__":
     unittest.main()

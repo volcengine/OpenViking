@@ -831,34 +831,24 @@ BitmapPtr MustNotOp::calc_self_bitmap(
 BitmapPtr MustNotOp::calc_bitmap(FieldBitmapGroupSetPtr field_group_set_ptr,
                                  BitmapPtr pres, const std::string on_res_op) {
   if (!pres) {
-    pres = calc_self_bitmap(field_group_set_ptr);
-  } else {
-    // has pres
-    if (on_res_op == "and") {
-      if (type_conds_.size() == 1) {
-        const Bitmap* temp_p =
-            field_group_set_ptr->get_bitmap(fields_[0], type_conds_[0]);
-        if (temp_p) {
-          pres->Exclude(temp_p);
-        }
+    return calc_self_bitmap(field_group_set_ptr);
+  }
 
-      } else if (type_conds_.size() > 1) {
-        BitmapPtr temp =
-            field_group_set_ptr->make_field_copy(fields_[0], type_conds_);
-        if (temp) {
-          pres->Exclude(temp.get());
-        }
-      }
-    } else if (on_res_op == "or") {
-      BitmapPtr temp = calc_self_bitmap(field_group_set_ptr);
-      if (temp) {
-        // or 计算一个空条件，返回原结果
-        pres->Union(temp.get());
-      }
-    } else {
+  if (on_res_op == "and") {
+    BitmapPtr temp = calc_self_bitmap(field_group_set_ptr);
+    if (!temp) {
       return nullptr;
     }
+    pres->Intersect(temp.get());
+  } else if (on_res_op == "or") {
+    BitmapPtr temp = calc_self_bitmap(field_group_set_ptr);
+    if (temp) {
+      pres->Union(temp.get());
+    }
+  } else {
+    return nullptr;
   }
+
   return pres;
 }
 

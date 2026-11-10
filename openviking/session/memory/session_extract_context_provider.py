@@ -6,13 +6,10 @@ Session Extract Context Provider - 会话提取 Provider 实现
 从会话消息中提取记忆的实现。
 """
 
-import json
-import os
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.message.part import TextPart, ToolPart
-from openviking.prompts.manager import PromptManager
 from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.core import ExtractContextProvider
 from openviking.session.memory.dataclass import MemoryFile
@@ -23,8 +20,9 @@ from openviking.session.memory.memory_isolation_handler import (
 )
 from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
-    resolve_memory_templates_dir,
+    get_default_registry,
 )
+from openviking.session.memory.merge_policy import MEMORY_MERGE_POLICY
 from openviking.session.memory.tools import (
     add_tool_call_pair_to_messages,
     get_tool,
@@ -41,6 +39,7 @@ from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 if TYPE_CHECKING:
+    from openviking.config.vlm import VLMHandle
     from openviking.session.memory.memory_updater import ExtractContext
 
 logger = get_logger(__name__)
@@ -57,6 +56,9 @@ _RESOURCE_REASON_LANGUAGE_RE = re.compile(
 class SessionExtractContextProvider(ExtractContextProvider):
     """会话提取 Provider - 从会话消息中提取记忆"""
 
+    include_tool_parts_in_conversation: bool = False
+    split_long_text_messages_for_extraction: bool = True
+
     def __init__(
         self,
         messages: Any,
@@ -65,11 +67,24 @@ class SessionExtractContextProvider(ExtractContextProvider):
         ctx: RequestContext = None,
         viking_fs: VikingFS = None,
         transaction_handle=None,
+        memory_registry: MemoryTypeRegistry | None = None,
+        vlm_config: Optional["VLMHandle"] = None,
+        *,
+        source_archive_uri: str = "",
+        extraction_scope: str = "",
+        output_language_override: str | None = None,
     ):
         self.messages = list(messages) if isinstance(messages, list) else messages
         self.latest_archive_overview = latest_archive_overview
+        self._source_archive_uri = source_archive_uri
+        self._extraction_scope = extraction_scope
+        self._output_language_override = (
+            get_openviking_config().output_language_override
+            if output_language_override is None
+            else output_language_override
+        )
         self._output_language = self._detect_language()
-        self._registry = None  # 延迟加载
+        self._registry = memory_registry  # Lazy defaults if no account snapshot was supplied.
         self._schema_directories = None
         self._extract_context = None  # 缓存 ExtractContext 实例
         self._isolation_handler = isolation_handler
@@ -81,6 +96,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._ctx = ctx
         self._viking_fs = viking_fs
         self._transaction_handle = transaction_handle
+        self._vlm_config = vlm_config
         self._link_enabled = config.memory.link_enabled if config.memory else False
         self._vision_messages_prepared = False
         self._vision_vlm = None
@@ -108,7 +124,10 @@ class SessionExtractContextProvider(ExtractContextProvider):
 
         if self._extract_context is None:
             self._extract_context = ExtractContext(
-                self.messages if isinstance(self.messages, list) else []
+                self.messages if isinstance(self.messages, list) else [],
+                split_long_text_messages=self.split_long_text_messages_for_extraction,
+                source_archive_uri=self._source_archive_uri,
+                extraction_scope=self._extraction_scope,
             )
         return self._extract_context
 
@@ -129,10 +148,15 @@ class SessionExtractContextProvider(ExtractContextProvider):
     def _get_vision_vlm(self):
         if self._vision_vlm is not None:
             return self._vision_vlm
-        vlm_config = get_openviking_config().vlm
+        vlm_config = self._vlm_config
+        if vlm_config is None:
+            raise RuntimeError(
+                "SessionExtractContextProvider requires an explicitly resolved "
+                "VLM for vision processing"
+            )
         if not (vlm_config and vlm_config.is_available()):
             return None
-        self._vision_vlm = vlm_config.get_vlm_instance()
+        self._vision_vlm = vlm_config
         return self._vision_vlm
 
     def _detect_language(self) -> str:
@@ -156,7 +180,9 @@ class SessionExtractContextProvider(ExtractContextProvider):
                         user_text_parts.append(text)
 
         text_parts = user_text_parts or all_text_parts
-        return resolve_output_language("\n".join(text_parts))
+        return resolve_output_language(
+            "\n".join(text_parts), output_language_override=self._output_language_override
+        )
 
     @staticmethod
     def _language_signal_text(text: str, *, strip_language_detection_noise) -> str:
@@ -191,7 +217,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
             """
 
 ## Resource URI Handling
-- If the conversation contains a resource URI (`viking://resources/...`, `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources/...`) and the user says a durable fact, judgment, preference, or event about it, extract that memory into the appropriate normal memory type such as entities, events, or preferences.
+- If the conversation contains a resource URI (`viking://resources/...`, `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources/...`) and the user says a durable fact, judgment, preference, or event about it, extract that memory into whichever enabled memory type its schema best fits.
 - Preserve resource references as markdown links in visible memory content when useful. Example: user said "The user saved a Ryoma Echizen photo viking://resources/images/ryoma" -> write "The user saved a [Ryoma Echizen photo](viking://resources/images/ryoma)".
 - For `## Resource Addition` blocks, use `User reason` as the user's intent and `Resource abstract` only as optional context. Do not copy raw fields such as `Resource URI`, `Added at`, `Resource abstract`, or `User reason` into visible memory content.
 - For `## Resource Deletion` blocks, update existing mutable memories that mention or depend on the deleted resource. Do not create a new event solely for this maintenance action.
@@ -207,7 +233,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
             if contains_resource_uri
             else ""
         )
-        goal = f"""You are a memory extraction agent. Your task is to analyze conversations and update memories.
+        goal = f"""You are a memory extraction and maintenance agent. Analyze the conversation together with the pre-fetched existing memories, then produce a single atomic plan to create, update, delete, or reorganize memories so that the final memory collection conforms to all enabled memory schemas.
 
 ## Workflow
 1. Analyze the conversation and pre-fetched context
@@ -230,10 +256,15 @@ The system automatically generates URIs based on memory_type and fields. Just pr
 When a memory item describes the current user, omit peer_id.
 When a memory item describes a peer, set peer_id to one of the peer_id values allowed by
 the output schema. Do not invent peer_id values.
-For events with ranges, the system derives self/peer targets from the message range.
-Message role is authoritative: user-role content is the source for profile/preferences/entities/events,
-and assistant-role content is the source for cases/patterns/tools/skills. Do not infer ownership
-from neighboring messages.
+For memory items that carry a message-range field, the system derives self/peer targets from that range.
+Message role is authoritative for newly extracted facts: attribute each fact to the speaker whose
+message states it, and follow each enabled memory type's own schema rules for which role its content
+comes from. Do not infer ownership from neighboring messages.
+Facts already stored in pre-fetched or explicitly read memories remain valid sources for
+maintenance and may be preserved, normalized, merged, split, or moved between enabled memory
+types when required by their schemas.
+
+{MEMORY_MERGE_POLICY}
 """
 
         return goal
@@ -293,36 +324,48 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         conversation_sections: List[str] = []
 
         def format_message_with_parts(msg: Message) -> str:
-            """Format message with text parts and ToolCall details."""
+            """Format message parts for extraction.
+
+            By default this provider extracts user/session memories, so tool
+            calls/results are omitted: they are execution evidence rather than
+            user utterances and can leak environment/database state into user
+            memories. Agent-scope providers enable tool evidence explicitly.
+            """
+
             parts = getattr(msg, "parts", [])
             formatted_parts: List[str] = []
             for part in parts:
                 if hasattr(part, "text") and part.text:
                     formatted_parts.append(part.text)
-                elif isinstance(part, ToolPart):
-                    tool_info = {
-                        "type": "tool_call",
-                        "tool_name": part.tool_name,
-                        "tool_input": part.tool_input,
-                        "tool_output": part.tool_output[:500] if part.tool_output else "",
-                        "tool_status": part.tool_status,
-                        "duration_ms": part.duration_ms,
-                    }
+                elif self.include_tool_parts_in_conversation and isinstance(part, ToolPart):
+                    fields = [f"tool_name={part.tool_name}"]
+                    if part.tool_status:
+                        fields.append(f"status={part.tool_status}")
+                    if part.tool_input:
+                        fields.append(f"input={part.tool_input}")
+                    if part.tool_output:
+                        fields.append(f"output={part.tool_output[:500]}")
+                    if part.duration_ms is not None:
+                        fields.append(f"duration_ms={part.duration_ms}")
                     if part.skill_uri:
-                        tool_info["skill_name"] = part.skill_uri.rstrip("/").split("/")[-1]
-                    formatted_parts.append(
-                        f"[ToolCall] {json.dumps(tool_info, ensure_ascii=False)}"
-                    )
-            return "\n".join(formatted_parts) if formatted_parts else msg.content
+                        fields.append(f"skill={part.skill_uri.rstrip('/').split('/')[-1]}")
+                    formatted_parts.append("ToolCall: " + "; ".join(fields))
+            return "\n".join(formatted_parts)
 
-        def format_message_header(msg: Message, idx: int) -> str:
+        def format_message_header(msg: Message, idx: int) -> str | None:
             """Format message header with role and stable interaction peer when present."""
+            body = format_message_with_parts(msg)
+            if not body.strip():
+                return None
             speaker = msg.peer_id or msg.role
-            return f"[{idx}][{msg.role}][{speaker}]: {format_message_with_parts(msg)}"
+            return f"[{idx}][{msg.role}][{speaker}]: {body}"
 
-        conversation_sections.append(
-            "\n".join([format_message_header(msg, idx) for idx, msg in enumerate(messages)])
-        )
+        formatted_messages = [
+            formatted
+            for idx, msg in enumerate(messages)
+            if (formatted := format_message_header(msg, idx)) is not None
+        ]
+        conversation_sections.append("\n".join(formatted_messages))
 
         return "\n\n".join(section for section in conversation_sections if section)
 
@@ -331,33 +374,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         if len(normalized) <= max_chars:
             return normalized
         return normalized[: max_chars - 3].rstrip() + "..."
-
-    def _format_tool_part_for_search(self, part: ToolPart) -> str:
-        fields = []
-        if part.tool_name:
-            fields.append(f"tool_name={part.tool_name}")
-        if part.skill_uri:
-            skill_name = part.skill_uri.rstrip("/").split("/")[-1]
-            fields.append(f"skill_name={skill_name}")
-        if part.tool_status:
-            fields.append(f"status={part.tool_status}")
-        if part.tool_input:
-            fields.append(
-                "input="
-                + self._truncate_prefetch_query_text(
-                    json.dumps(part.tool_input, ensure_ascii=False),
-                    _PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS,
-                )
-            )
-        if part.tool_output and part.tool_status == "error":
-            fields.append(
-                "error="
-                + self._truncate_prefetch_query_text(
-                    part.tool_output,
-                    _PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS,
-                )
-            )
-        return "ToolCall: " + "; ".join(fields)
 
     def _build_prefetch_search_query(self) -> str:
         """Build a compact semantic query from raw conversation messages.
@@ -378,7 +394,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             parts = getattr(msg, "parts", [])
 
             text_parts: List[str] = []
-            tool_parts: List[str] = []
 
             for part in parts:
                 if hasattr(part, "text") and part.text:
@@ -388,20 +403,12 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                         else _PREFETCH_SEARCH_ASSISTANT_TEXT_PART_MAX_CHARS
                     )
                     text_parts.append(self._truncate_prefetch_query_text(part.text, limit))
-                elif isinstance(part, ToolPart):
-                    tool_part = self._format_tool_part_for_search(part)
-                    if tool_part != "ToolCall: ":
-                        tool_parts.append(tool_part)
-
             if text_parts:
                 section = f"{speaker}: " + "\n".join(text_parts)
                 if role == "user":
                     primary_sections.append(section)
                 else:
                     supporting_sections.append(section)
-
-            if tool_parts:
-                supporting_sections.append(f"{speaker}: " + "\n".join(tool_parts))
 
         query = "\n\n".join(primary_sections + supporting_sections)
         if not query.strip():
@@ -421,6 +428,13 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         )
         return tool_ctx
 
+    @staticmethod
+    def _is_expected_read_not_found(error: Any) -> bool:
+        if not error:
+            return False
+        error_text = str(error)
+        return error_text == "not_found" or error_text.startswith("File not found")
+
     async def read_file(self, uri: str) -> Optional[Dict]:
         """Read a file via MemoryReadTool (auto-registers page_id, fills read_file_contents)."""
         read_tool = get_tool("read")
@@ -429,11 +443,13 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         try:
             result = await read_tool.execute(self.create_tool_context(), uri=uri)
             if isinstance(result, dict) and "error" in result:
-                tracer.info(f"Failed to read {uri}: {result['error']}")
+                if not self._is_expected_read_not_found(result["error"]):
+                    tracer.info(f"Failed to read {uri}: {result['error']}")
                 return None
             return result
         except Exception as e:
-            tracer.error(f"Failed to read {uri}: {e}")
+            if not self._is_expected_read_not_found(e):
+                tracer.error(f"Failed to read {uri}: {e}")
             return None
 
     async def search_files(
@@ -494,11 +510,11 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         pre_fetch_messages = []
         pre_fetch_messages.append(self._build_conversation_message())
 
-        # 触发 registry 加载，过滤掉 agent_only 的 schema（trajectory/experience 由执行提取处理）
+        # 触发 registry 加载，过滤掉 agent stage 的 schema（trajectory/experience 由执行提取处理）
         schemas = [
             s
             for s in self._get_registry().list_all(include_disabled=False)
-            if not getattr(s, "agent_only", False)
+            if getattr(s, "stage", "user") == "user"
         ]
         if self._isolation_handler:
             schemas = [s for s in schemas if self._isolation_handler.allows_schema(s)]
@@ -559,6 +575,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             search_uris = await self.search_files(
                 query=search_query,
                 search_uris=dir_list,
+                limit=max(5, self._prefetch_search_topn),
             )
             result_value = search_uris
             if self._eager_prefetch:
@@ -595,7 +612,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         return pre_fetch_messages
 
-    @tracer("execute_tool", ignore_result=False)
     async def execute_tool(
         self,
         tool_call,
@@ -603,8 +619,15 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         tool = get_tool(tool_call.name)
         if not tool:
             return {"error": f"Unknown tool: {tool_call.name}"}
-        tracer.info(f"tool_call.arguments={tool_call.arguments}")
         result = await tool.execute(self.create_tool_context(), **tool_call.arguments)
+        is_expected_read_not_found = (
+            tool_call.name == "read"
+            and isinstance(result, dict)
+            and result.get("error")
+            and self._is_expected_read_not_found(result["error"])
+        )
+        if not is_expected_read_not_found:
+            tracer.info(f"tool_call.arguments={tool_call.arguments}")
         return result
 
     def get_tools(self) -> List[str]:
@@ -619,38 +642,14 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         schemas = [
             s
             for s in self._get_registry().list_all(include_disabled=False)
-            if not getattr(s, "agent_only", False)
+            if getattr(s, "stage", "user") == "user"
         ]
         if self._isolation_handler:
             schemas = [s for s in schemas if self._isolation_handler.allows_schema(s)]
         return schemas
 
-    def get_schema_directories(self) -> List[str]:
-        """返回需要加载的 schema 目录"""
-        if self._schema_directories is None:
-            memory_templates_dir = str(PromptManager._get_bundled_templates_dir() / "memory")
-            config = get_openviking_config()
-            custom_dir = config.memory.custom_templates_dir
-            self._schema_directories = [memory_templates_dir]
-            if getattr(config.memory, "experimental_memory_switch", False):
-                experimental_memory_dir = os.path.join(memory_templates_dir, "experimental_memory")
-                if os.path.exists(experimental_memory_dir):
-                    self._schema_directories.append(experimental_memory_dir)
-            if custom_dir:
-                custom_dir_expanded = os.path.expanduser(custom_dir)
-                if os.path.exists(custom_dir_expanded):
-                    self._schema_directories.append(custom_dir_expanded)
-            else:
-                memory_templates_dir = str(resolve_memory_templates_dir())
-                if memory_templates_dir != str(
-                    PromptManager._get_bundled_templates_dir() / "memory"
-                ) and os.path.exists(memory_templates_dir):
-                    self._schema_directories.append(memory_templates_dir)
-        return self._schema_directories
-
     def _get_registry(self) -> MemoryTypeRegistry:
-        """内部获取 registry（自动在初始化时加载）"""
+        """获取共享的默认记忆 registry。"""
         if self._registry is None:
-            # MemoryTypeRegistry 在 __init__ 时自动加载 schemas
-            self._registry = MemoryTypeRegistry(load_schemas=True)
+            self._registry = get_default_registry()
         return self._registry

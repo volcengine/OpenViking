@@ -78,7 +78,7 @@ class TestMarkdownSourceNameLayout:
         layout = await parser._compute_layout(
             "echo hello\n",
             "viking://temp/test",
-            source_name="script.sh",
+            source_name="script.css",
         )
 
         assert layout.root_dir == "viking://temp/test/script"

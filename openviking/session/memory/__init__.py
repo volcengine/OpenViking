@@ -7,6 +7,10 @@ This module provides a YAML-configurable memory templating system with
 ReAct (Reasoning + Action) pattern for memory updates.
 """
 
+from openviking.session.memory.consolidation_context_provider import (
+    ConsolidationExtractContextProvider,
+    build_consolidation_isolation_handler,
+)
 from openviking.session.memory.dataclass import (
     MemoryData,
     MemoryField,
@@ -20,7 +24,20 @@ from openviking.session.memory.extract_loop import (
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import MemoryUpdater, MemoryUpdateResult
 from openviking.session.memory.merge_op import FieldType, MergeOp
+from openviking.session.memory.patch_merge_context_provider import (
+    PatchMergeContextProvider,
+    PatchMergePatch,
+)
 from openviking.session.memory.schema_model_generator import SchemaModelGenerator
+from openviking.session.memory.streaming_memory_updater import (
+    MemoryUpdateRequest,
+    StreamingMemoryUpdater,
+    StreamingMemoryUpdaterConfig,
+    StreamingMemoryUpdateResult,
+    StreamingMemoryUpdaterKey,
+    get_streaming_memory_updater,
+    make_streaming_memory_updater_key,
+)
 from openviking.session.memory.tools import (
     MemoryLsTool,
     MemoryReadTool,
@@ -33,7 +50,6 @@ from openviking.session.memory.tools import (
 from openviking.session.memory.utils import (
     detect_language_from_conversation,
     generate_uri,
-    is_uri_allowed,
     pretty_print_messages,
     validate_uri_template,
 )
@@ -48,6 +64,10 @@ __all__ = [
     # Operations
     "MemoryOperations",
     "StructuredMemoryOperations",
+    "PatchMergeContextProvider",
+    "PatchMergePatch",
+    "ConsolidationExtractContextProvider",
+    "build_consolidation_isolation_handler",
     # Registry
     "MemoryTypeRegistry",
     # Schema models
@@ -55,6 +75,13 @@ __all__ = [
     # Updater
     "MemoryUpdater",
     "MemoryUpdateResult",
+    "MemoryUpdateRequest",
+    "StreamingMemoryUpdater",
+    "StreamingMemoryUpdaterConfig",
+    "StreamingMemoryUpdaterKey",
+    "StreamingMemoryUpdateResult",
+    "get_streaming_memory_updater",
+    "make_streaming_memory_updater_key",
     # ExtractLoop
     "ExtractLoop",
     # Tools (Tool implementations)
@@ -64,8 +91,6 @@ __all__ = [
     "MemoryLsTool",
     "register_tool",
     "get_tool",
-    "get_tool_schemas",
-    "list_tools",
     "add_tool_call_pair_to_messages",
     # Language utilities and helpers
     "detect_language_from_conversation",
@@ -73,5 +98,4 @@ __all__ = [
     # URI utilities
     "generate_uri",
     "validate_uri_template",
-    "is_uri_allowed",
 ]

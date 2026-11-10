@@ -1,11 +1,13 @@
 """Spawn tool for creating background subagents."""
 
-from typing import Any, TYPE_CHECKING
-
-from vikingbot.agent.tools.base import Tool
-
+import json
+from typing import TYPE_CHECKING, Any
 
 from vikingbot.agent.subagent import SubagentManager
+from vikingbot.agent.tools.base import Tool
+
+if TYPE_CHECKING:
+    from vikingbot.agent.tools.base import ToolContext
 
 
 class SpawnTool(Tool):
@@ -56,4 +58,72 @@ class SpawnTool(Tool):
             task=task,
             label=label,
             session_key=tool_context.session_key,
+            channel_metadata=tool_context.channel_metadata,
+            openviking_connection=tool_context.openviking_connection,
         )
+
+
+class WaitSubagentsTool(Tool):
+    """Collect compact results from the current task's children without importing their histories."""
+
+    def __init__(
+        self,
+        manager: SubagentManager,
+    ):
+        """Collect child outcomes and retain failures after result inventories are drained."""
+        self._manager = manager
+        # Retain failed child IDs after their result inventories are drained.
+        self.failures: list[str] = []
+
+    @property
+    def name(self) -> str:
+        return "wait_subagents"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Collect child results, running/queued IDs and available capacity. "
+            "Collect all children before submission."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "block": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Wait for new results; false returns the current status immediately.",
+                },
+                "wait_all": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "With block=true, wait for all admitted children and return all their results together.",
+                },
+            },
+            "additionalProperties": False,
+        }
+
+    async def execute(
+        self, tool_context: "ToolContext", block: bool = True, wait_all: bool = False, **kwargs: Any
+    ) -> str:
+        """Return one completion or all admitted work, including failures, without model polling.
+
+        wait_all requires blocking mode and accumulates inventories until both active
+        and queued work finish. Cancellation propagates to the caller.
+        """
+        if wait_all and not block:
+            return "Error: wait_all=true requires block=true."
+        report = await self._manager.wait(block=block)
+        results = list(report["results"])
+        while wait_all and (report["running"] or report["queued"]):
+            report = await self._manager.wait(block=True)
+            results.extend(report["results"])
+        report["results"] = results
+        self.failures.extend(
+            f"Child {result['task_id']}: {result.get('error') or result['status']}"
+            for result in results
+            if result.get("status") in {"failed", "cancelled"}
+        )
+        return json.dumps(report, ensure_ascii=False)

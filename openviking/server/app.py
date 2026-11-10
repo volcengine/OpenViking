@@ -3,10 +3,9 @@
 """FastAPI application for OpenViking HTTP Server."""
 
 import asyncio
-import logging
 import os
-import time
-from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -15,7 +14,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.exceptions import ExceptionMiddleware
 
+from openviking.observability.http_error_context import capture_public_http_error
 from openviking.server.config import (
     ServerConfig,
     load_bot_gateway_token,
@@ -24,23 +25,30 @@ from openviking.server.config import (
 )
 from openviking.server.dependencies import set_server_config, set_service
 from openviking.server.error_mapping import map_exception
+from openviking.server.gateway_host import ScopedRoute, create_embedded_gateway
 from openviking.server.identity import Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
-from openviking.server.profile_middleware import create_profile_http_middleware
+from openviking.server.profile_middleware import ProfileMiddleware
+from openviking.server.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
 from openviking.server.routers import (
+    acl_router,
     admin_router,
+    agent_evolution_router,
     bot_router,
-    code_router,
+    bot_studio_router,
+    compile_router,
     console_router,
     content_router,
     debug_router,
     filesystem_router,
+    mcps_router,
     metrics_router,
     observer_router,
+    openviking_assets_router,
     pack_router,
     privacy_configs_router,
-    relations_router,
     resources_router,
+    rules_router,
     search_router,
     sessions_router,
     skills_router,
@@ -52,30 +60,67 @@ from openviking.server.routers import (
     watches_router,
     webdav_router,
 )
+from openviking.server.timing_middleware import RequestTimingMiddleware
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.config import (
+    DEFAULT_OV_CONF,
+    OPENVIKING_CONFIG_ENV,
+    get_openviking_config,
+    resolve_config_path,
+)
 from openviking_cli.utils.logger import init_otel_log_handler_from_server_config
+from openviking_gateway.config import MOUNT_PATH as GATEWAY_MOUNT_PATH
 
 logger = get_logger(__name__)
 
+WORKER_HOST_ENV = "OPENVIKING_WORKER_HOST"
+WORKER_PORT_ENV = "OPENVIKING_WORKER_PORT"
+WORKER_WITH_BOT_ENV = "OPENVIKING_WORKER_WITH_BOT"
+WORKER_BOT_API_URL_ENV = "OPENVIKING_WORKER_BOT_API_URL"
 
-def _on_deferred_init_done(task):
-    if task.cancelled():
-        logger.warning("Deferred initialization cancelled")
+
+def _configure_default_executor(config: ServerConfig) -> None:
+    """Apply the configured asyncio default executor to the current worker loop.
+
+    The event loop owns the executor after ``set_default_executor`` and shuts it
+    down when the loop closes. This must run before service initialization,
+    because initialization itself can submit work through ``asyncio.to_thread``.
+    """
+    max_workers = config.executor_threads
+    if max_workers == 0:
         return
 
-    exc = task.exception()
-    if exc is None:
-        return
-
-    logger.error(
-        "Deferred initialization failed, exiting",
-        exc_info=(type(exc), exc, exc.__traceback__),
+    executor = ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="openviking-asyncio",
     )
-    os._exit(1)
+    asyncio.get_running_loop().set_default_executor(executor)
+    logger.info("Configured asyncio default executor: max_workers=%d", max_workers)
+
+
+def create_worker_app() -> FastAPI:
+    """Load file config and replay parent-process Bot CLI overrides."""
+    resolved_config_path = resolve_config_path(
+        None,
+        OPENVIKING_CONFIG_ENV,
+        DEFAULT_OV_CONF,
+    )
+    config_path = str(resolved_config_path) if resolved_config_path is not None else None
+    config = load_server_config(config_path)
+    with_bot = os.environ.get(WORKER_WITH_BOT_ENV)
+    if with_bot is not None:
+        config.with_bot = with_bot == "1"
+    bot_api_url = os.environ.get(WORKER_BOT_API_URL_ENV)
+    if bot_api_url is not None:
+        config.bot_api_url = bot_api_url
+    if WORKER_HOST_ENV in os.environ:
+        config.host = os.environ[WORKER_HOST_ENV] or None
+    if WORKER_PORT_ENV in os.environ:
+        config.port = int(os.environ[WORKER_PORT_ENV])
+    return create_app(config, config_path=config_path)
 
 
 async def _initialize_auth_plugin(
@@ -118,14 +163,71 @@ async def _initialize_auth_plugin(
     logger.info("Auth plugin initialized: %s", effective_auth_mode)
 
 
+async def _initialize_ttl_adapter(
+    app: FastAPI,
+    service: OpenVikingService,
+    config: ServerConfig,
+) -> None:
+    """Wire built-in Redis TTL when explicitly enabled.
+
+    The default configuration installs no hook, starts no TTL worker and leaves
+    the internal TTL routes unregistered.
+    """
+    from openviking.ttl.wiring import build_ttl_adapter, install_ttl_hook, set_ttl_adapter
+
+    adapter = build_ttl_adapter(config.ttl_adapter)
+    set_ttl_adapter(adapter)
+    app.state.ttl_adapter = adapter
+    if adapter is None:
+        return
+    adapter.bind_runtime(service, app.state.api_key_manager)
+    service.configure_ttl(adapter)
+    viking_fs = service.viking_fs
+    if viking_fs is not None:
+        install_ttl_hook(viking_fs, adapter)
+    if not getattr(app.state, "ttl_routes_registered", False):
+        from openviking.ttl.internal import router as ttl_internal_router
+
+        app.include_router(ttl_internal_router)
+        app.state.ttl_routes_registered = True
+    logger.info("TTL adapter initialized")
+
+
 async def _initialize_runtime_state(
     app: FastAPI,
     service: OpenVikingService,
     config: ServerConfig,
 ) -> None:
     """Initialize service and auth dependencies before traffic is accepted."""
-    await service.initialize()
-    await _initialize_auth_plugin(app, service, config)
+
+    async def install_write_guards():
+        await _initialize_auth_plugin(app, service, config)
+        await _initialize_ttl_adapter(app, service, config)
+        from openviking.service.deletion import setup_deletion
+
+        app.state.deletion_service = await setup_deletion(
+            service=service,
+            manager=app.state.api_key_manager,
+            oauth_store=getattr(app.state, "oauth_store", None),
+            usage_audit_runtime=getattr(app.state, "usage_audit_runtime", None),
+            gateway_app=getattr(app.state, "gateway_app", None),
+            require_registered_identity=config.get_effective_auth_mode() == "api_key",
+        )
+
+    await service.initialize(before_background_start=install_write_guards)
+    await service.apply_agent_evolution_config()
+    manager = getattr(app.state, "api_key_manager", None)
+    if manager is not None:
+        service.compile.lifecycle.resolve_groups = manager.get_user_group_ids
+    if manager is not None and get_openviking_config().reconcile_system_assets_on_startup:
+        account_count = await service.reconcile_system_assets(manager)
+        logger.info("Reconciled system assets for %d active accounts", account_count)
+    compile_scheduler = getattr(service, "compile_scheduler", None)
+    if manager is not None and compile_scheduler is not None:
+        # Scheduled Compile re-verifies its saved key before every submission.
+        compile_scheduler.set_identity_resolver(
+            manager.resolve_identity, manager.get_user_group_ids
+        )
     logger.info("OpenVikingService initialization complete")
 
 
@@ -202,44 +304,93 @@ def _message_from_http_detail(detail: object) -> str:
 def create_app(
     config: Optional[ServerConfig] = None,
     service: Optional[OpenVikingService] = None,
+    config_path: Optional[str] = None,
+    server_overrides: Optional[dict] = None,
 ) -> FastAPI:
     """Create FastAPI application.
 
     Args:
         config: Server configuration. If None, loads from default location.
         service: Pre-initialized OpenVikingService (optional).
+        config_path: Resolved ov.conf path used for startup configuration.
+        server_overrides: CLI arguments reapplied when loading the startup file.
 
     Returns:
         FastAPI application instance
     """
+    resolved_config_path = (
+        resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+        if config_path is not None or config is None
+        else None
+    )
     if config is None:
-        config = load_server_config()
+        config = load_server_config(
+            str(resolved_config_path) if resolved_config_path is not None else config_path
+        )
 
     validate_server_config(config)
 
-    def _configure_session_tool_outputs(service_obj) -> None:  # noqa: ANN001
+    usage_reporter_unset = object()
+    usage_reporter = usage_reporter_unset
+
+    def _get_usage_reporter():  # noqa: ANN202
+        nonlocal usage_reporter
+        if usage_reporter is usage_reporter_unset:
+            from openviking.usage_reporter.config import build_usage_reporter
+
+            usage_reporter = build_usage_reporter(config.usage_reporter)
+        return usage_reporter
+
+    def _configure_session_runtime(service_obj) -> None:  # noqa: ANN001
         sessions = getattr(service_obj, "sessions", None)
-        setter = getattr(sessions, "set_tool_output_externalization_config", None)
-        if callable(setter):
-            setter(config.tool_output_externalization)
+        tool_output_setter = getattr(sessions, "set_tool_output_externalization_config", None)
+        if callable(tool_output_setter):
+            tool_output_setter(config.tool_output_externalization)
+
+        usage_reporter_setter = getattr(sessions, "set_usage_reporter", None)
+        if callable(usage_reporter_setter):
+            usage_reporter_setter(_get_usage_reporter())
+
+        agent_evolution_setter = getattr(service_obj, "set_agent_evolution_config", None)
+        if not callable(agent_evolution_setter):
+            agent_evolution_setter = getattr(sessions, "set_agent_evolution_config", None)
+        if callable(agent_evolution_setter):
+            agent_evolution_setter(config.agent_evolution)
+
+        user_memory_policy_setter = getattr(
+            sessions,
+            "set_default_user_memory_policy",
+            None,
+        )
+        if callable(user_memory_policy_setter):
+            user_memory_policy_setter(config.user_config_defaults.memory_policy)
+
+        auto_commit_setter = getattr(sessions, "set_default_user_auto_commit_policy", None)
+        if callable(auto_commit_setter):
+            auto_commit_setter(config.user_config_defaults.auto_commit_policy)
 
     if service is not None:
-        _configure_session_tool_outputs(service)
+        _configure_session_runtime(service)
 
-    async def _deferred_init(service, app, config):
-        """Retained for tests that validate deferred-init callback behavior."""
-        await _initialize_runtime_state(app, service, config)
+    bot_gateway_token = load_bot_gateway_token() if config.with_bot else ""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Application lifespan handler."""
         nonlocal service
+        _configure_default_executor(config)
+        if config.observability.metrics.enabled:
+            from openviking.metrics.core.runtime import install_executor_monitor
+
+            install_executor_monitor()
         owns_service = service is None
         if owns_service:
             service = OpenVikingService()
 
         assert service is not None
-        _configure_session_tool_outputs(service)
+        if config.with_bot:
+            service.compile.configure_local_backend(config.bot_api_url, bot_gateway_token)
+        _configure_session_runtime(service)
         set_service(service)
 
         from openviking.metrics.global_api import (
@@ -251,6 +402,9 @@ def create_app(
         if config.observability.metrics.enabled:
             logger.info("Prometheus metrics enabled at /metrics")
         await init_usage_audit_from_server_config(config, app=app, service=service)
+        from openviking.observability.reporting import start_reporting
+
+        app.state.event_reporter = await start_reporting(config.observability.reporting)
 
         # Initialize OAuth 2.1 store + provider when enabled in OpenViking config.
         # The store + provider instances were already constructed at app
@@ -288,9 +442,18 @@ def create_app(
         # Start MCP session manager (must be active before /mcp requests)
         from openviking.server.mcp_endpoint import mcp_lifespan
 
-        async with mcp_lifespan():
+        gateway = app.state.gateway_app
+        async with AsyncExitStack() as stack:
+            await stack.enter_async_context(mcp_lifespan())
+            # Deletion setup receives the gateway, so it must be running first.
+            if gateway is not None:
+                await stack.enter_async_context(gateway.router.lifespan_context(gateway))
             if service is not None:
                 await _initialize_runtime_state(app, service, config)
+            if gateway is not None and config.get_effective_auth_mode() == "dev":
+                from openviking_gateway.app import seed_defaults
+
+                await seed_defaults(gateway, "default")
             yield
 
         # Cleanup
@@ -299,6 +462,10 @@ def create_app(
 
         await shutdown_usage_audit(app=app)
         await shutdown_metrics_async(app=app)
+        if config.observability.metrics.enabled:
+            from openviking.metrics.core.runtime import uninstall_executor_monitor
+
+            uninstall_executor_monitor()
         task_tracker.stop_cleanup_loop()
         if oauth_gc_task is not None:
             oauth_gc_task.cancel()
@@ -312,14 +479,29 @@ def create_app(
                 await oauth_store_state.close()
             except Exception as e:  # noqa: BLE001
                 logger.warning("OAuth store close failed: %s", e)
+        service_closed = not owns_service
         if owns_service and service:
             try:
                 await service.close()
+                service_closed = True
                 logger.info("OpenVikingService closed")
             except asyncio.CancelledError as e:
                 logger.warning(f"OpenVikingService close cancelled during shutdown: {e}")
             except Exception as e:
                 logger.warning(f"OpenVikingService close failed during shutdown: {e}")
+        # Draining workers still check identity/deletion state through the
+        # auth plugin's account store. Retain it if service shutdown failed.
+        auth_plugin_state = getattr(app.state, "auth_plugin", None)
+        if service_closed and auth_plugin_state is not None:
+            try:
+                await auth_plugin_state.shutdown()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Auth plugin shutdown failed: %s", e)
+        if usage_reporter is not usage_reporter_unset and usage_reporter is not None:
+            await usage_reporter.close()
+        from openviking.observability.reporting import stop_reporting
+
+        await stop_reporting()
 
     app = FastAPI(
         title="OpenViking API",
@@ -329,17 +511,14 @@ def create_app(
     )
 
     app.state.config = config
-    app.state.api_key_manager = None
-    set_server_config(config)
+    app.state.service_name = get_openviking_config().service_name
+    app.state.server_config_overrides = server_overrides or {}
+    from openviking.server.restart import RestartController
 
-    # Add CORS middleware
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=config.cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    app.state.restart_controller = RestartController()
+    app.state.api_key_manager = None
+    app.state.deletion_service = None
+    set_server_config(config)
 
     # Body dump middleware must be registered BEFORE observability so it ends up
     # nested inside the trace span (in Starlette, middleware added later wraps
@@ -355,6 +534,8 @@ def create_app(
 
         @app.middleware("http")
         async def dump_http_body(request: Request, call_next: Callable):
+            if request.url.path.startswith(GATEWAY_MOUNT_PATH + "/"):
+                return await call_next(request)
             return await _dump_body_fn(request, call_next)
 
         logger.info(
@@ -364,67 +545,22 @@ def create_app(
             config.observability.dump_body.max_bytes,
         )
 
-    # Add HTTP observability middleware (metrics, tracing).
-    # Note: In FastAPI/Starlette, middleware added later executes first (outer layer).
-    # We want timing to be the outermost layer to measure the full request duration.
+    # Later registrations wrap earlier ones: timing/header logging -> profile ->
+    # observability -> optional body dump -> routes. Native ASGI middleware keeps
+    # response streams and request execution on the downstream application's path.
     from openviking.observability.http_observability_middleware import (
-        create_http_observability_middleware,
+        HTTPObservabilityMiddleware,
     )
 
-    http_observability_middleware = create_http_observability_middleware()
-    profile_http_middleware = create_profile_http_middleware()
-
-    @app.middleware("http")
-    async def add_http_observability(request: Request, call_next: Callable):
-        return await http_observability_middleware(request, call_next)
-
-    @app.middleware("http")
-    async def add_profile_output(request: Request, call_next: Callable):
-        return await profile_http_middleware(request, call_next)
-
-    # Add request timing middleware last (so it executes first as the outermost layer)
-    # This ensures X-Process-Time includes the full request duration including
-    # observability middleware overhead.
-    # Add request header logging middleware (for debug)
-    @app.middleware("http")
-    async def log_request_headers(request: Request, call_next: Callable):
-        access_logger = logging.getLogger("uvicorn.access")
-        if access_logger.isEnabledFor(logging.DEBUG):
-            headers = dict(request.headers)
-            header_names = ", ".join(sorted(headers.keys()))
-            access_logger.debug(
-                f"Request headers for {request.method} {request.url.path}: {header_names}"
-            )
-        response = await call_next(request)
-        return response
-
-    # Add request timing middleware
-    @app.middleware("http")
-    async def add_timing(request: Request, call_next: Callable):
-        """
-        Middleware to measure request processing time.
-
-        This middleware is added last so it executes as the outermost layer,
-        ensuring X-Process-Time includes the full request duration including
-        all other middleware overhead.
-
-        Args:
-            request: The incoming HTTP request.
-            call_next: The next middleware/handler in the chain.
-
-        Returns:
-            The response with X-Process-Time header added.
-        """
-        start_time = time.perf_counter()
-        response = await call_next(request)
-        process_time = time.perf_counter() - start_time
-        response.headers["X-Process-Time"] = str(process_time)
-        return response
+    app.add_middleware(HTTPObservabilityMiddleware)
+    app.add_middleware(ProfileMiddleware)
+    app.add_middleware(RequestTimingMiddleware)
 
     # Add exception handler for OpenVikingError
     @app.exception_handler(OpenVikingError)
     async def openviking_error_handler(request: Request, exc: OpenVikingError):
         http_status = ERROR_CODE_TO_HTTP_STATUS.get(exc.code, 500)
+        capture_public_http_error(code=exc.code, message=exc.message, details=exc.details)
         return JSONResponse(
             status_code=http_status,
             content=Response(
@@ -441,14 +577,21 @@ def create_app(
     async def request_validation_error_handler(request: Request, exc: RequestValidationError):
         errors = [_normalize_validation_error(error) for error in exc.errors()]
         code = "INVALID_ARGUMENT"
+        message = _validation_error_message(errors)
+        details = {"validation_errors": errors}
+        capture_public_http_error(
+            code=code,
+            message=message,
+            details=details,
+        )
         return JSONResponse(
             status_code=ERROR_CODE_TO_HTTP_STATUS[code],
             content=Response(
                 status="error",
                 error=ErrorInfo(
                     code=code,
-                    message=_validation_error_message(errors),
-                    details={"validation_errors": errors},
+                    message=message,
+                    details=details,
                 ),
             ).model_dump(exclude_none=True),
         )
@@ -462,6 +605,8 @@ def create_app(
         details = None
         if exc.status_code != response_status:
             details = {"original_http_status_code": exc.status_code}
+        message = _message_from_http_detail(exc.detail)
+        capture_public_http_error(code=code, message=message, details=details)
         return JSONResponse(
             status_code=response_status,
             headers=exc.headers,
@@ -469,15 +614,14 @@ def create_app(
                 status="error",
                 error=ErrorInfo(
                     code=code,
-                    message=_message_from_http_detail(exc.detail),
+                    message=message,
                     details=details,
                 ),
             ).model_dump(exclude_none=True),
         )
 
     # Catch-all for unhandled exceptions so clients always get JSON
-    @app.exception_handler(Exception)
-    async def general_error_handler(request: Request, exc: Exception):
+    async def general_error_handler(_request: Request, exc: Exception):
         mapped = map_exception(exc)
         if mapped is not None:
             http_status = ERROR_CODE_TO_HTTP_STATUS.get(mapped.code, 500)
@@ -510,26 +654,42 @@ def create_app(
             ).model_dump(),
         )
 
+    # Keep exception rendering inside the request-ID and CORS layers. This lets
+    # those middleware own their response headers without special error paths.
+    app.add_middleware(ExceptionMiddleware, handlers={Exception: general_error_handler})
+    app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=config.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=[REQUEST_ID_HEADER],
+    )
+
     # Configure Bot API if --with-bot is enabled
     if config.with_bot:
         import openviking.server.routers.bot as bot_module
 
         bot_module.set_bot_api_url(config.bot_api_url)
-        bot_module.set_bot_api_key(load_bot_gateway_token())
+        bot_module.set_bot_api_key(bot_gateway_token)
         logger.info(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
     else:
         logger.info("Bot API proxy disabled (use --with-bot to enable)")
 
     # Register routers
     app.include_router(system_router)
+    app.include_router(acl_router)
     app.include_router(admin_router)
+    app.include_router(agent_evolution_router)
+    app.include_router(compile_router)
     app.include_router(resources_router)
+    app.include_router(rules_router)
     app.include_router(filesystem_router)
+    app.include_router(mcps_router)
     app.include_router(content_router)
     app.include_router(console_router)
     app.include_router(search_router)
-    app.include_router(code_router)
-    app.include_router(relations_router)
     app.include_router(privacy_configs_router)
     app.include_router(skills_router)
     app.include_router(sessions_router)
@@ -538,12 +698,14 @@ def create_app(
     app.include_router(pack_router)
     app.include_router(debug_router)
     app.include_router(observer_router)
+    app.include_router(openviking_assets_router)
     app.include_router(metrics_router)
     app.include_router(tasks_router)
     app.include_router(user_settings_router)
     app.include_router(watches_router)
     app.include_router(webdav_router)
     app.include_router(bot_router, prefix="/bot/v1")
+    app.include_router(bot_studio_router)
 
     # OAuth 2.1: when enabled, mount the official MCP SDK auth routes
     # (DCR / authorize / token / metadata) plus our authorize page + consent /
@@ -587,14 +749,11 @@ def create_app(
                 or "http://127.0.0.1:1933"
             )
 
-            # Late-binding role resolver: app.state.api_key_manager is wired
-            # during lifespan, after the provider is constructed. Lambda
-            # closes over `app` and looks up at call time.
-            def _current_role(account_id: str, user_id: str) -> Role:
-                mgr = getattr(app.state, "api_key_manager", None)
-                if mgr is None or not hasattr(mgr, "get_user_role"):
-                    return Role.USER
-                return mgr.get_user_role(account_id, user_id)
+            async def _registered_account_role(account_id: str, user_id: str) -> Role | None:
+                manager = getattr(app.state, "api_key_manager", None)
+                if manager is None:
+                    return None
+                return await manager.get_registered_user_role(account_id, user_id)
 
             _route_provider = OpenVikingOAuthProvider(
                 store=_route_store,
@@ -602,17 +761,28 @@ def create_app(
                 access_token_ttl_seconds=ov_cfg.oauth.access_token_ttl_seconds,
                 refresh_token_ttl_seconds=ov_cfg.oauth.refresh_token_ttl_seconds,
                 auth_code_ttl_seconds=ov_cfg.oauth.auth_code_ttl_seconds,
-                role_resolver=_current_role,
+                role_resolver=_registered_account_role,
             )
             # Stash the route-time instances; the lifespan replaces these with
             # initialized copies before the first request lands.
             app.state.oauth_store = _route_store
             app.state.oauth_provider = _route_provider
 
+            from openviking.server.oauth.provider import MCP_SCOPE
+
             sdk_routes = create_auth_routes(
                 provider=_route_provider,
                 issuer_url=AnyHttpUrl(_route_issuer),
-                client_registration_options=ClientRegistrationOptions(enabled=True),
+                # default_scopes covers clients whose DCR omits `scope`
+                # (ChatGPT does): without it they register scope-less and then
+                # fail /authorize with invalid_scope when they request the
+                # "mcp" scope advertised in the PRM document. valid_scopes is
+                # deliberately NOT set — the SDK would 400 any DCR that carries
+                # a scope outside the list, and clients like Claude register
+                # with their own scope strings.
+                client_registration_options=ClientRegistrationOptions(
+                    enabled=True, default_scopes=[MCP_SCOPE]
+                ),
                 revocation_options=RevocationOptions(enabled=True),
             )
             app.routes.extend(sdk_routes)
@@ -700,12 +870,20 @@ def create_app(
     else:
         logger.info("Web Studio bundle not found at %s; skipping /studio mount", _studio_dir)
 
-    # MCP endpoint — serves 5 tools (search, read, store, forget, health)
-    # via streamable HTTP for Claude Code and other MCP clients.
-    from starlette.routing import Route
-
+    # MCP endpoint — serves 16 tools (find, search, read, write, edit,
+    # list, tree, remember, add_resource, add_skill, list_watches, cancel_watch,
+    # grep, glob, forget, health) via streamable HTTP for MCP clients.
     from openviking.server.mcp_endpoint import create_mcp_app
 
-    app.routes.append(Route("/mcp", endpoint=create_mcp_app(), methods=["GET", "POST", "DELETE"]))
+    app.routes.append(
+        ScopedRoute("/mcp", endpoint=create_mcp_app(), methods=["GET", "POST", "DELETE"])
+    )
+
+    app.state.gateway_app = create_embedded_gateway(
+        get_openviking_config(), config, lambda: service
+    )
+    if app.state.gateway_app is not None:
+        # The gateway answers every method and its own WebSocket upgrades below this prefix.
+        app.mount(GATEWAY_MOUNT_PATH, app.state.gateway_app)
 
     return app

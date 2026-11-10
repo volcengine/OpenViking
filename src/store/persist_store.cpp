@@ -4,9 +4,30 @@
 #include "spdlog/spdlog.h"
 #include <stdexcept>
 #include <filesystem>
+#include <memory>
 #include "leveldb/write_batch.h"
 
 namespace vectordb {
+namespace {
+
+std::string summarize_leveldb_status(const leveldb::Status& status) {
+  // POSIX errors are formatted as "type: file context: system reason".
+  // Keep the actionable ends while leaving the full context in server logs.
+  const std::string message = status.ToString();
+  const size_t type_separator = message.find(": ");
+  if (type_separator == std::string::npos) {
+    return "LevelDB error";
+  }
+
+  const size_t reason_separator = message.rfind(": ");
+  if (reason_separator == type_separator) {
+    return message.substr(0, type_separator);
+  }
+  return message.substr(0, type_separator + 2) +
+         message.substr(reason_separator + 2);
+}
+
+}  // namespace
 
 PersistStore::PersistStore(const std::string& path) {
   leveldb::Options options;
@@ -112,6 +133,43 @@ std::vector<std::pair<std::string, std::string>> PersistStore::seek_range(
   return key_values;
 }
 
+std::vector<std::pair<std::string, std::string>>
+PersistStore::seek_range_page(const std::string& start_key,
+                              const std::string& end_key, size_t limit,
+                              size_t max_bytes, bool start_exclusive) {
+  std::vector<std::pair<std::string, std::string>> key_values;
+  if (limit == 0 || max_bytes == 0) {
+    return key_values;
+  }
+  size_t page_bytes = 0;
+  std::unique_ptr<leveldb::Iterator> it(
+      db_->NewIterator(leveldb::ReadOptions()));
+  it->Seek(start_key);
+  if (start_exclusive && it->Valid() && it->key().ToString() == start_key) {
+    it->Next();
+  }
+  for (; it->Valid() && it->key().ToString() < end_key &&
+         key_values.size() < limit;
+       it->Next()) {
+    const auto key = it->key();
+    const auto value = it->value();
+    const size_t item_bytes = key.size() + value.size();
+    // Always admit one oversized row so pagination can make progress. Every
+    // additional row must fit within the encoded-byte budget.
+    if (!key_values.empty() &&
+        (page_bytes >= max_bytes || item_bytes > max_bytes - page_bytes)) {
+      break;
+    }
+    key_values.push_back({key.ToString(), value.ToString()});
+    page_bytes += item_bytes;
+  }
+  if (!it->status().ok()) {
+    throw std::runtime_error("PersistStore::seek_range_page iterate error: " +
+                             it->status().ToString());
+  }
+  return key_values;
+}
+
 int PersistStore::exec_op(const std::vector<StorageOp>& ops) {
   leveldb::WriteBatch batch;
   for (const auto& op : ops) {
@@ -129,7 +187,8 @@ int PersistStore::exec_op(const std::vector<StorageOp>& ops) {
   auto status = db_->Write(write_options, &batch);
   if (!status.ok()) {
     SPDLOG_WARN("Failed to exec op data db: {}", status.ToString());
-    return -1;
+    throw std::runtime_error("PersistStore::exec_op failed: " +
+                             summarize_leveldb_status(status));
   }
   return 0;
 }

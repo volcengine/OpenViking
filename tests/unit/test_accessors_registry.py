@@ -43,15 +43,6 @@ class TestAccessorRegistry:
         """Create a fresh registry (without default accessors)."""
         return AccessorRegistry(register_default=False)
 
-    def test_register_and_list(self, registry: AccessorRegistry) -> None:
-        """Register an accessor and list it."""
-        accessor = TestAccessor("test", "test:", 50)
-        registry.register(accessor)
-
-        accessors = registry.list_accessors()
-        assert len(accessors) == 1
-        assert accessors[0] == accessor
-
     def test_get_accessor(self, registry: AccessorRegistry) -> None:
         """Get an accessor that can handle a source."""
         accessor1 = TestAccessor("test1", "test1:", 50)
@@ -67,57 +58,6 @@ class TestAccessorRegistry:
 
         result = registry.get_accessor("unknown:source")
         assert result is None
-
-    def test_priority_ordering(self, registry: AccessorRegistry) -> None:
-        """Accessors are ordered by priority (descending)."""
-        low_prio = TestAccessor("low", "common:", 10)
-        mid_prio = TestAccessor("mid", "common:", 50)
-        high_prio = TestAccessor("high", "common:", 100)
-
-        # Register in random order
-        registry.register(low_prio)
-        registry.register(high_prio)
-        registry.register(mid_prio)
-
-        accessors = registry.list_accessors()
-        assert [a.name for a in accessors] == ["high", "mid", "low"]
-
-        # Highest priority should be selected
-        result = registry.get_accessor("common:source")
-        assert result is high_prio
-
-    def test_list_accessors_with_filter(self, registry: AccessorRegistry) -> None:
-        """list_accessors filters by source capability."""
-        accessor1 = TestAccessor("a", "a:", 50)
-        accessor2 = TestAccessor("b", "b:", 50)
-        accessor3 = TestAccessor("both", "a:", 50)  # also handles "a:"
-        registry.register(accessor1)
-        registry.register(accessor2)
-        registry.register(accessor3)
-
-        filtered = registry.list_accessors("a:source")
-        assert len(filtered) == 2
-        names = {a.name for a in filtered}
-        assert names == {"a", "both"}
-
-    def test_unregister(self, registry: AccessorRegistry) -> None:
-        """Unregister removes accessor by name."""
-        accessor = TestAccessor("test", "test:", 50)
-        registry.register(accessor)
-
-        assert registry.unregister("TestAccessor") is True
-        assert len(registry.list_accessors()) == 0
-
-        assert registry.unregister("NotFound") is False
-
-    def test_clear(self, registry: AccessorRegistry) -> None:
-        """Clear removes all accessors."""
-        registry.register(TestAccessor("a", "a:", 50))
-        registry.register(TestAccessor("b", "b:", 50))
-
-        assert len(registry.list_accessors()) == 2
-        registry.clear()
-        assert len(registry.list_accessors()) == 0
 
     @pytest.mark.asyncio
     async def test_access_fallback_to_local(

@@ -1,25 +1,68 @@
-## Step 1: Install OpenViking
+## Step 1: Install
 
-On the terminal of the machine running OpenClaw, run the following command to install the OpenViking plugin:
+1. Install the OpenViking plugin:
 
-```bash
-openclaw plugins install clawhub:@openviking/openclaw-plugin && openclaw openviking setup
-```
+   ```bash
+   openclaw plugins install clawhub:@openviking/openclaw-plugin
+   ```
 
-## Step 2: Copy the Base URL and API Key
+2. Run the setup wizard. Enter `{{OPENVIKING_BASE_URL}}` as the service URL and the API key provided on this page:
 
-After running the install command, the setup flow prompts for the Base URL and API Key. Copy them and paste them into your agent terminal:
+   ```bash
+   openclaw openviking setup
+   ```
 
-- Base URL: Copy the following Base URL into your agent terminal
-```text
-https://api.vikingdb.cn-beijing.volces.com/openviking
-```
-- API Key: Copy the API Key shown on the page into your agent terminal
+   Or configure it in one step, with the key in `OPENVIKING_API_KEY`:
 
-## Step 3: Restart OpenClaw
+   ```bash
+   openclaw openviking setup --base-url {{OPENVIKING_BASE_URL}} --api-key "$OPENVIKING_API_KEY"
+   ```
 
-Copy the following command into the agent terminal to restart OpenClaw. After restart, the console automatically detects the agent connection status.
+3. Configure `peer_role`: `peer_role` identifies the type of conversation participant. It is not a permission role. `assistant` represents agents, tools, or models; `sender` represents message senders (the legacy value `person` remains an alias). After the setup above, `peer_role` defaults to `none`. To change `peer_role`, run:
 
-```bash
-openclaw gateway restart
-```
+   ```bash
+   openclaw openviking setup --reconfigure
+   ```
+
+4. Restart the Gateway to apply the configuration:
+
+   ```bash
+   openclaw gateway restart
+   ```
+
+## Step 2: Verify
+
+1. Check the integration status in your terminal:
+
+   ```bash
+   openclaw openviking status
+   ```
+
+2. A result similar to the following means the integration is successful:
+
+   ```text
+   🦣 OpenViking Plugin Status
+
+     Status: Configured
+     mode:      remote
+     baseUrl:   `https://api.vikingdb.cn-beijing.volces.com/openviking`
+     apiKey:    set
+     peer_role: none
+     accountId: not set
+     userId:    not set
+     slot:      active
+
+     ✓ Server reachable (version: v0.x.xx.x)
+   ```
+
+## Troubleshoot
+
+| Problem | Fix |
+|---|---|
+| Plugin not active | Re-run Install, then `openclaw gateway restart` |
+| 401 / 403 | Refresh credentials |
+
+## Reference
+
+- Docs on Manual Settings: [OpenClaw](https://docs.openviking.net/en/agent-integrations/03-openclaw)
+- Code: [examples/openclaw-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin)

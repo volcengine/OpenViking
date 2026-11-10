@@ -25,7 +25,7 @@ class SumOp(MergeOpBase):
     def get_output_schema_description(self, field_description: str) -> str:
         return f"add for '{field_description}'"
 
-    def apply(self, current_value: Any, patch_value: Any) -> Any:
+    async def apply(self, current_value: Any, patch_value: Any) -> Any:
         # None 或空值保留原值
         if patch_value is None or patch_value == "":
             return current_value

@@ -277,6 +277,7 @@ class OpenVikingAPIClient:
         parent: Optional[str] = None,
         instruction: Optional[str] = None,
         wait: bool = False,
+        processing_mode: Optional[str] = None,
     ) -> requests.Response:
         endpoint = "/api/v1/resources"
         url = self._build_url(self.server_url, endpoint)
@@ -299,6 +300,8 @@ class OpenVikingAPIClient:
             payload["instruction"] = instruction
         if wait:
             payload["wait"] = wait
+        if processing_mode:
+            payload["processing_mode"] = processing_mode
         try:
             return self._request_with_retry("POST", url, json=payload)
         finally:
@@ -391,7 +394,6 @@ class OpenVikingAPIClient:
         content: str,
         mode: str = "replace",
         wait: bool = False,
-        timeout: Optional[float] = None,
     ) -> requests.Response:
         endpoint = "/api/v1/content/write"
         url = self._build_url(self.server_url, endpoint)
@@ -401,8 +403,6 @@ class OpenVikingAPIClient:
             "mode": mode,
             "wait": wait,
         }
-        if timeout is not None:
-            payload["timeout"] = timeout
         return self._request_with_retry("POST", url, json=payload)
 
     def fs_rm(self, uri: str, recursive: bool = False) -> requests.Response:
@@ -473,38 +473,22 @@ class OpenVikingAPIClient:
         url = self._build_url(self.server_url, endpoint)
         return self.session.post(url, json={"from_uri": from_uri, "to_uri": to_uri})
 
-    def link(self, from_uri: str, to_uris: Any, reason: str = "") -> requests.Response:
-        endpoint = "/api/v1/relations/link"
+    def fs_cp(
+        self,
+        from_uri: str,
+        to_uri: str,
+        recursive: bool = False,
+    ) -> requests.Response:
+        endpoint = "/api/v1/fs/cp"
         url = self._build_url(self.server_url, endpoint)
         return self.session.post(
-            url, json={"from_uri": from_uri, "to_uris": to_uris, "reason": reason}
+            url,
+            json={
+                "from_uri": from_uri,
+                "to_uri": to_uri,
+                "recursive": recursive,
+            },
         )
-
-    def relations(self, uri: str) -> requests.Response:
-        endpoint = "/api/v1/relations"
-        params = {"uri": uri}
-        url = self._build_url(self.server_url, endpoint, params)
-        return self.session.get(url)
-
-    def unlink(self, from_uri: str, to_uri: str) -> requests.Response:
-        endpoint = "/api/v1/relations/link"
-        url = self._build_url(self.server_url, endpoint)
-        return self.session.delete(url, json={"from_uri": from_uri, "to_uri": to_uri})
-
-    def session_used(
-        self,
-        session_id: str,
-        contexts: Optional[list] = None,
-        skill: Optional[Dict[str, Any]] = None,
-    ) -> requests.Response:
-        endpoint = f"/api/v1/sessions/{session_id}/used"
-        url = self._build_url(self.server_url, endpoint)
-        payload = {}
-        if contexts:
-            payload["contexts"] = contexts
-        if skill:
-            payload["skill"] = skill
-        return self.session.post(url, json=payload)
 
     def session_commit(self, session_id: str) -> requests.Response:
         endpoint = f"/api/v1/sessions/{session_id}/commit"
@@ -516,12 +500,10 @@ class OpenVikingAPIClient:
         url = self._build_url(self.server_url, endpoint)
         return self._request_with_retry("GET", url)
 
-    def system_wait(self, timeout: Optional[float] = None) -> requests.Response:
+    def system_wait(self) -> requests.Response:
         endpoint = "/api/v1/system/wait"
         url = self._build_url(self.server_url, endpoint)
         payload = {}
-        if timeout is not None:
-            payload["timeout"] = timeout
         return self._request_with_retry("POST", url, json=payload)
 
     def observer_queue(self) -> requests.Response:
@@ -623,16 +605,12 @@ class OpenVikingAPIClient:
         url = self._build_url(self.server_url, endpoint)
         return self._request_with_retry("POST", url, json={}, headers=self._admin_headers())
 
-    def add_skill(
-        self, data: Any, wait: bool = False, timeout: Optional[float] = None
-    ) -> requests.Response:
+    def add_skill(self, data: Any, wait: bool = False) -> requests.Response:
         endpoint = "/api/v1/skills"
         url = self._build_url(self.server_url, endpoint)
         payload = {"data": data}
         if wait:
             payload["wait"] = wait
-        if timeout is not None:
-            payload["timeout"] = timeout
         return self._request_with_retry("POST", url, json=payload)
 
     def content_reindex(

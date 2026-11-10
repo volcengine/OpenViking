@@ -39,15 +39,18 @@ template: |
   - Highlight key sections, headings, and their relationships
   - Mention any important concepts, definitions, or explanations
   - Note the document type (tutorial, reference, guide, API docs, etc.)
-  - Describe the target audience and prerequisite knowledge if apparent
-  - Include relevant keywords for semantic search
+  - Describe the target audience and prerequisite knowledge if apparent from the file content
+  - Include relevant keywords from the file content for semantic search
   - Output plain text directly, no markdown format
+  Faithfulness rules:
+  - Describe only what the file content states; do not invent entities, facts, or relationships not present in it.
+  - Do not introduce entity names not present in the file content (such as names of people, organizations, companies, products, projects, brands, or places); omit unstated entity relationships rather than guessing.
 
   Structure your summary with:
   1. One sentence describing the document's primary purpose
   2. Main sections or topics covered
   3. Key information or takeaways
-  4. Intended audience or use case context
+  4. Intended audience or use case context, if apparent from the file content
 
   Special considerations:
   - For Markdown files: pay attention to heading hierarchy

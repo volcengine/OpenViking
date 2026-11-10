@@ -1,20 +1,12 @@
 # Observability & Diagnostics
 
-This guide collects the current OpenViking observability entry points in one place, including:
-
-- service health and component status
-- request-level `telemetry`
-- terminal-side `ov tui`
-- web-side `Web Studio` (served by the OV server at `/studio`)
-- `/metrics` time-series metrics
-
-If you just want to know where to look first, start with the table below.
+Choose an entry point based on the question you need to answer: service readiness, stored data, a single request, or a trend over time.
 
 ## Choose the right entry point
 
 | Entry point | Best for | Typical use case |
 | --- | --- | --- |
-| `/health`, `observer/*` | service health, queue backlog, VikingDB and VLM status | deployment validation, on-call checks |
+| `/health`, `/ready`, `observer/*` | service health, queue backlog, VikingDB and VLM status | deployment validation, on-call checks |
 | `ov tui` | `viking://` trees, directory summaries, file content, vector records, image preview for supported image files | development debugging, verifying that data actually landed |
 | `Web Studio` (`/studio`) | same-origin web UI on the OV server: Home shows token / retrieval / context-commit trends; Resources browses URIs; Retrieval runs find; Request Logs shows audit | interactive investigation without typing every command |
 | `telemetry` | per-request duration, token usage, vector retrieval, ingestion stages | debugging one specific slow or unexpected call |
@@ -24,19 +16,19 @@ If you just want to know where to look first, start with the table below.
 
 ### Health check
 
-`/health` provides a simple liveness check and does not require authentication.
+`/health` provides a simple liveness check and does not require authentication. The following response is an excerpt. Use `/ready` for readiness checks. Model observer health alone does not verify provider credentials or request success; see [System Status](../api/07-system.md).
 
 ```bash
 curl http://localhost:1933/health
 ```
 
 ```json
-{"status": "ok"}
+{"status": "ok", "healthy": true}
 ```
 
 ### Overall system status
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK (`SyncHTTPClient`)**
 
 ```python
 status = client.get_status()
@@ -58,9 +50,12 @@ curl http://localhost:1933/api/v1/observer/system \
     "is_healthy": true,
     "errors": [],
     "components": {
-      "queue": {"name": "queue", "is_healthy": true, "has_errors": false},
-      "vikingdb": {"name": "vikingdb", "is_healthy": true, "has_errors": false},
-      "vlm": {"name": "vlm", "is_healthy": true, "has_errors": false}
+      "queue": {"name": "queue", "is_healthy": true, "has_errors": false, "status": "..."},
+      "vikingdb": {"name": "vikingdb", "is_healthy": true, "has_errors": false, "status": "..."},
+      "models": {"name": "models", "is_healthy": true, "has_errors": false, "status": "..."},
+      "lock": {"name": "lock", "is_healthy": true, "has_errors": false, "status": "..."},
+      "retrieval": {"name": "retrieval", "is_healthy": true, "has_errors": false, "status": "..."},
+      "filesystem": {"name": "filesystem", "is_healthy": true, "has_errors": false, "status": "..."}
     }
   }
 }
@@ -72,7 +67,10 @@ curl http://localhost:1933/api/v1/observer/system \
 | --- | --- | --- |
 | `GET /api/v1/observer/queue` | Queue | Processing queue status |
 | `GET /api/v1/observer/vikingdb` | VikingDB | Vector database status |
-| `GET /api/v1/observer/vlm` | VLM | Vision Language Model status |
+| `GET /api/v1/observer/models` | Models | VLM, embedding, and rerank model status |
+| `GET /api/v1/observer/lock` | Lock | Lock and transaction status |
+| `GET /api/v1/observer/retrieval` | Retrieval | Retrieval counts and latency; not a relevance evaluation |
+| `GET /api/v1/observer/filesystem` | Filesystem | Filesystem operation metrics |
 
 For example:
 
@@ -83,7 +81,7 @@ curl http://localhost:1933/api/v1/observer/queue \
 
 ### Quick health check
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK (`SyncHTTPClient`)**
 
 ```python
 if client.is_healthy():
@@ -103,11 +101,11 @@ curl http://localhost:1933/api/v1/debug/health \
 
 ### Response time
 
-Every API response includes an `X-Process-Time` header with the server-side processing time in seconds:
+`X-Process-Time` reports seconds from request entry to response-header emission. For streamed responses, it does not include the time needed to send the full body:
 
 ```bash
 curl -v http://localhost:1933/api/v1/fs/ls?uri=viking:// \
-  -H "X-API-Key: your-key" 2>&1 | grep X-Process-Time
+  -H "X-API-Key: your-key" 2>&1 | grep -i X-Process-Time
 # < X-Process-Time: 0.0023
 ```
 
@@ -179,7 +177,7 @@ The most useful pages for observability are:
 
 Write operations (`Add Resource`, `Add Memory`, tenant/user administration) are gated by the API key currently signed in — there's no separate `--write-enabled` switch.
 
-From an observability standpoint, Studio talks to the same `/api/v1/console/*` BFF (dashboard summary, token series, context commits, audit logs) the old standalone console used — only the UI changed. For operations such as `find`, `add-resource`, and `session commit`, you can expand the result panel to inspect `telemetry.summary`.
+From an observability standpoint, Studio reads dashboard summaries, token series, context commits, and audit logs through `/api/v1/console/*`. To inspect `telemetry.summary` for operations such as `find`, `add-resource`, and `session commit`, read the complete HTTP response as shown in [Operation Telemetry](07-operation-telemetry.md).
 
 Studio is best for interactive click-through debugging. If you need to feed observability data into your own logs or automation, prefer the HTTP API or SDK and request telemetry explicitly.
 
@@ -216,6 +214,149 @@ For the full field reference, supported operations, and more examples, see:
 
 - [Operation Telemetry Reference](07-operation-telemetry.md)
 
+## Generate a local trace and submit it for troubleshooting
+
+If `telemetry.summary` in the response is not enough to diagnose a problem, you can ask OpenViking to write OpenTelemetry traces to a local JSONL file. The user submits the JSONL file and the problematic `trace_id` to an administrator/support engineer, and the administrator uploads it to the troubleshooting environment for analysis. This is useful for offline customer environments, environments that cannot directly reach an OTLP backend, or cases where support needs the exact reproduction trace.
+
+### 1. Enable local trace output
+
+On the machine running OpenViking Server, edit `~/.openviking/ov.conf` (or the config file passed with `--config`) and add or adjust:
+
+```json
+{
+  "server": {
+    "observability": {
+      "traces": {
+        "enabled": true,
+        "protocol": "local",
+        "service_name": "openviking-server",
+        "local_path": "~/.openviking/logs/traces.jsonl",
+        "local_rotation_mb": 40,
+        "local_backup_count": 2
+      }
+    }
+  }
+}
+```
+
+Restart OpenViking Server after editing the config. The default local trace file is:
+
+```text
+~/.openviking/logs/traces.jsonl
+```
+
+When the file reaches `local_rotation_mb`, it rotates like this:
+
+```text
+~/.openviking/logs/traces.jsonl.2
+~/.openviking/logs/traces.jsonl.1
+~/.openviking/logs/traces.jsonl
+```
+
+### 2. Reproduce the issue and confirm that traces were written
+
+After restarting the server, run the operation that reproduces the issue, such as `find`, resource ingestion, `session commit`, or an agent call. When the operation finishes, wait a few seconds, or gracefully stop the server so the batch exporter can flush, then check the file:
+
+```bash
+ls -lh ~/.openviking/logs/traces.jsonl*
+tail -n 3 ~/.openviking/logs/traces.jsonl
+```
+
+If no file is created or the file is empty, check:
+
+- the server was restarted and loaded the updated `ov.conf`
+- `server.observability.traces.enabled` is `true`
+- `server.observability.traces.protocol` is `"local"`
+- the process can write to `~/.openviking/logs`
+
+### 3. Submit the trace file to an administrator
+
+This step is normally split between the **user who submits the evidence** and the **administrator/support engineer who uploads and investigates it**:
+
+1. The user does not need to upload directly to the troubleshooting backend. Submit the local JSONL file to the administrator/support engineer.
+2. If you already know the problematic `trace_id`, submit it together with the JSONL file.
+3. If you do not know the exact `trace_id`, provide the reproduction time window, steps, and related request/error logs so the administrator can locate it in the file.
+
+Submit the current file and rotated files when available:
+
+```text
+~/.openviking/logs/traces.jsonl
+~/.openviking/logs/traces.jsonl.1
+~/.openviking/logs/traces.jsonl.2
+```
+
+You can also package them first:
+
+```bash
+cd ~/.openviking/logs
+tar czf /tmp/openviking-traces.tgz traces.jsonl*
+```
+
+Include the following for the administrator/support engineer:
+
+- the `traces.jsonl*` files, or the packaged `openviking-traces.tgz`
+- the problematic `trace_id`, if known
+- the time window and steps used to reproduce the issue
+- OpenViking version/commit, startup command, and relevant config with secrets removed
+- related error logs or request IDs, if available
+
+#### Administrator upload reference
+
+From the repository root on a machine with the OpenViking source checkout and access to the remote OTLP troubleshooting environment, the administrator runs:
+
+```bash
+python tests/upload_offline_trace.py \
+  --file /path/to/traces.jsonl
+```
+
+The upload tool reads the current environment's `ov.conf` as the **upload target configuration**, so that config must use a remote OTLP trace exporter, for example:
+
+```json
+{
+  "server": {
+    "observability": {
+      "traces": {
+        "enabled": true,
+        "protocol": "grpc",
+        "tls": {
+          "insecure": true
+        },
+        "endpoint": "otel-collector:4317",
+        "service_name": "openviking-server",
+        "headers": {}
+      }
+    }
+  }
+}
+```
+
+If the current `ov.conf` is not the upload target config, prepare a separate upload config and pass it with `--config`:
+
+```bash
+python tests/upload_offline_trace.py \
+  --file /path/to/traces.jsonl \
+  --config /path/to/upload-ov.conf
+```
+
+By default, rotated files are uploaded from old to new, for example `traces.jsonl.2`, `traces.jsonl.1`, and `traces.jsonl`. To upload only the current file:
+
+```bash
+python tests/upload_offline_trace.py \
+  --file /path/to/traces.jsonl \
+  --no-include-rotated
+```
+
+After a successful upload, the tool prints the uploaded trace IDs. The administrator can continue troubleshooting with the `trace_id` submitted by the user or with the reproduction time window:
+
+```text
+Uploaded:
+  batches: 12
+  spans: 345
+  trace_ids: 3
+    0123456789abcdef0123456789abcdef
+    ...
+```
+
 ## Use `/metrics` for time-series observability
 
 `/metrics` is OpenViking's time-series metrics endpoint for the Prometheus scraping model. It is well suited for questions like:
@@ -232,7 +373,7 @@ Compared with `telemetry`, `/metrics` focuses on **aggregated time series**, whi
 
 ### Enable metrics quickly
 
-`/metrics` may be disabled by default. When the metrics subsystem is not enabled, the endpoint returns `404` with the message `Prometheus metrics are disabled.`.
+`/metrics` is disabled by default. When the metrics subsystem is not enabled, the endpoint returns `404` with the message `Prometheus metrics are disabled.`.
 
 You do not need the full configuration to get started. Enabling the master switch under the `server` section is enough.
 
@@ -336,7 +477,7 @@ For full fields, supported ranges, and more examples, see:
 
 ### Access `/metrics` directly
 
-In the current implementation, `/metrics` is not wired to `get_request_context` or other auth dependencies, so from the code-path perspective it currently behaves as a public scrape endpoint:
+When enabled, `/metrics` is an unauthenticated scrape endpoint:
 
 ```bash
 curl http://localhost:1933/metrics
@@ -366,7 +507,7 @@ Before importing the dashboard, make sure the Prometheus data source can already
 
 - run `openviking_http_requests_total` in the Prometheus UI
 - or run `openviking_service_readiness`
-- if either query returns time series, Grafana should be able to render panels afterwards
+- if either query returns time series, scraping works; each dashboard panel still needs its own metric samples and matching filters
 
 If there is no data yet, go back to the Prometheus scrape configuration above and verify `targets`, `metrics_path`, and network connectivity first.
 
@@ -411,7 +552,7 @@ A beginner-friendly viewing order is:
 
 After a successful import, you should see a dashboard centered on OpenViking requests, queues, probes, model calls, and overall system state. For a visual reference, see:
 
-- [grafana-demo-dashboard.png](../../images/grafana-demo-dashboard.png)
+- [grafana-demo-dashboard.png](/grafana-demo-dashboard.png)
 
 This screenshot helps you quickly verify whether the imported layout looks correct. If the dashboard structure matches but some panels are empty, it usually means the corresponding metrics have not produced samples yet, or the filters do not match the current traffic.
 
@@ -430,6 +571,51 @@ The most common labels you will use while investigating dashboards are:
 - To verify whether resources really landed and vectors were actually written, use `ov tui`
 - To inspect why one specific request was slow, where tokens went, or which stage blocked resource processing, use `telemetry`
 - To inspect whether request volume, error rates, or latency are degrading over time, use `/metrics`
+
+## Optional Kafka event reporting
+
+Install `openviking[reporting]` and enable `server.observability.reporting.enabled`
+to read Kafka connection, authentication and topic settings from an external JSON
+file (`NACOS_CONFIG_FILE`) or the configured Nacos service. Reporting is disabled
+by default and export failures do not interrupt business requests.
+
+The exporter uses an in-memory queue; `telemetry.queue_capacity` must be a positive
+integer (default `1024`). Full queues, exhausted delivery retries and process
+termination can lose events. Delivery failures and dropped events produce sampled
+warnings containing counts only. This exporter is suitable for best-effort analytics;
+it does not provide a durable audit or billing ledger. Allow a graceful shutdown to
+drain the queue before stopping the process.
+
+Deployments may bind an outer account and instance with `OV_METRICS_ACCOUNT_ID`
+and `OV_RESOURCE_ID`; original space and member identities remain in
+`ov_account_id` and `ov_user_id`. Set `OV_MODEL_COST_BEARER` to `customer` or `ov`
+only when the deployment knows who owns its model credentials. Otherwise the
+owner stays `unknown`. For mixed credentials, trusted provisioning should set
+`cost_bearer` (`ov`, `customer`, or `unknown`) on each VLM or embedding credential.
+The selected credential's metadata follows successful and failed calls, including
+failover candidates. An explicit `unknown` remains unknown; endpoint rules or a
+deployment default cannot relabel it. Only legacy calls without credential metadata
+use precise `telemetry.model_cost_bearers` rules and then the deployment default;
+conflicting rules stay `unknown`. Events exclude document content, prompts and API keys.
+
+Shared memory batches derive reporting ownership from the current input requests,
+not the long-lived timer's inherited request context. A model call shared by several
+commits is exported once with `source_task_ids` listing the known input Tasks;
+`task_id` and `request_id` are empty when there is no single confirmed owner. Do
+not fan out that call or charge its full token usage to every listed Task. File
+changes recover their trusted operation source when it is unambiguous; a write
+that actually combines multiple Tasks uses the same multi-source representation.
+Space/member identity still comes from the batch's request context. Incremental
+resource re-imports also emit a deletion event after each planned deletion succeeds.
+
+When ROOT provisions or rotates account model credentials through the configuration API,
+`cost_bearer` is persisted with each credential and reaches the selected VLM or embedding
+client. Model sections remain ROOT-only; account admins and members cannot set billing
+ownership through the configuration API.
+
+The optional Nacos reporter uses explicitly configured `nacos_namespace`,
+`nacos_data_id` and `nacos_group` first, then `NACOS_NAMESPACE`, `NACOS_DATA_ID`
+and `NACOS_GROUP`, with defaults `public`, `global_configs` and `DEFAULT_GROUP`.
 
 ## Related Documentation
 

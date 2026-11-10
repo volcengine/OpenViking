@@ -1,188 +1,194 @@
 # Context Layers (L0/L1/L2)
 
-OpenViking uses a three-layer information model to balance retrieval efficiency and content completeness.
+OpenViking uses abstracts and overviews to locate content, then loads the body when more detail is needed. These three layers are called L0, L1, and L2.
 
 ## Overview
 
-| Layer | Name | File | Token Limit | Purpose |
-|-------|------|------|-------------|---------|
-| **L0** | Abstract | `.abstract.md` | ~100 tokens | Vector search, quick filtering |
-| **L1** | Overview | `.overview.md` | ~2k tokens | Rerank, content navigation |
-| **L2** | Detail | Original files/subdirs | Unlimited | Full content, on-demand loading |
+| Layer | Name | Storage | Default generated-body budget | Purpose |
+| --- | --- | --- | --- | --- |
+| **L0** | Abstract | `.abstract.md` in a directory | 256 characters | Vector retrieval, quick filtering |
+| **L1** | Overview | `.overview.md` in a directory | 4000 characters | Rerank, content navigation |
+| **L2** | Detail | Original files and subdirectories | No uniform limit | Full content, on-demand loading |
+
+L0 and L1 are **directory-level semantic sidecars**. They describe a directory; OpenViking does not create a matching L0/L1 sidecar for every ordinary file. File summaries are inputs aggregated into the containing directory's L1.
+
+L0 and L1 are normally generated together, but either one may exist independently. For example, `mkdir()` initially creates only L0: it uses the directory name as the default body when `description` is omitted, or the provided description otherwise. A directory with `.abstract.md` but no `.overview.md` is therefore valid. Reads and vector rebuilds process only the levels that actually exist.
+
+For resource-directory summary generation, `semantic.abstract_max_chars` and `semantic.overview_max_chars` set character budgets; the table shows their defaults. The budgets apply to the generated Markdown body. Sidecar metadata is excluded.
+
+Truncation prefers complete sentences. If no sentence ends within the budget, it can retain the first complete sentence even when that sentence is longer. These settings therefore do not impose hard size limits on stored sidecars.
 
 ## L0: Abstract
 
-The most concise representation of content, used for vector retrieval and quick filtering.
-
-### Characteristics
-
-- **Ultra-short**: Max ~100 tokens
-- **Quick perception**: Allows Agent to quickly perceive content
-
-### Example
+L0 is the shortest representation of a directory, used for vector retrieval and quick relevance decisions.
 
 ```markdown
 API authentication guide covering OAuth 2.0, JWT tokens, and API keys for secure access.
 ```
 
-### API
+Semantic accessors return only the visible body:
 
 ```python
-abstract = client.abstract("viking://resources/docs/auth")
+abstract = client.abstract(uri="viking://resources/docs/auth")
 ```
 
 ## L1: Overview
 
-Comprehensive summary with navigation guidance, used for Rerank and understanding access methods.
-
-### Characteristics
-
-- **Moderate length**: ~1k tokens
-- **Navigation guide**: Tells Agent how to access detailed content
-
-### Example
+L1 provides a broader directory summary and navigation, supporting rerank and the decision to load L2.
 
 ```markdown
-# Authentication Guide Overview
+# Authentication Guide
 
-This guide covers three authentication methods for the API:
+This directory covers the primary API authentication methods.
 
-## Sections
-- **OAuth 2.0** (L2: oauth.md): Complete OAuth flow with code examples
-- **JWT Tokens** (L2: jwt.md): Token generation and validation
-- **API Keys** (L2: api-keys.md): Simple key-based authentication
+## Quick Navigation
 
-## Key Points
-- OAuth 2.0 recommended for user-facing applications
-- JWT for service-to-service communication
-
-## Access
-Use `read("viking://resources/docs/auth/oauth.md")` for full documentation.
+- `oauth.md`: OAuth 2.0 flow and examples
+- `jwt.md`: token generation and validation
+- `api-keys.md`: API key authentication
 ```
-
-### API
 
 ```python
-overview = client.overview("viking://resources/docs/auth")
+overview = client.overview(uri="viking://resources/docs/auth")
 ```
+
+When generating resource-directory summaries, L0 is extracted from the L1 body: the Brief Description paragraph after the H1 title and before the first `##` heading. YAML frontmatter is not part of this extraction.
 
 ## L2: Detail
 
-Complete original content, loaded only when needed.
-
-### Characteristics
-
-- **Full content**: No token limit
-- **On-demand loading**: Read only when confirmed necessary
-- **Original format**: Preserves source structure
-
-### API
+L2 is the original file or parsed body, loaded as needed. Its format depends on ingestion: a PDF may become Markdown, for example, so the source format is not necessarily preserved.
 
 ```python
-content = client.read("viking://resources/docs/auth/oauth.md")
+content = client.read(uri="viking://resources/docs/auth/oauth.md")
 ```
-
-## Generation Mechanism
-
-### When Generated
-
-- **When adding resources**: After Parser parsing, SemanticQueue generates asynchronously
-- **When archiving sessions**: L0/L1 generated for history segments during compression
-
-### Who Generates
-
-| Component | Responsibility |
-|-----------|----------------|
-| **SemanticProcessor** | Traverses directories bottom-up, generates L0/L1 for each |
-| **SessionCompressor** | Generates L0/L1 for archived session history |
-
-### Generation Order
-
-```
-Leaf nodes → Parent directories → Root (bottom-up)
-```
-
-Child directory L0s are aggregated into parent L1, forming hierarchical navigation.
 
 ## Directory Structure
 
-Each directory follows a unified file structure:
+A semantically processed directory commonly looks like this:
 
-```
+```text
 viking://resources/docs/auth/
-├── .abstract.md          # L0: ~100 tokens
-├── .overview.md          # L1: ~1k tokens
-├── .relations.json       # Related resources
-├── oauth.md              # L2: Full content
-├── jwt.md                # L2: Full content
-└── api-keys.md           # L2: Full content
+├── .abstract.md          # L0, hidden directory sidecar
+├── .overview.md          # L1, hidden directory sidecar
+├── oauth.md              # L2, full content
+├── jwt.md                # L2, full content
+└── api-keys.md           # L2, full content
 ```
 
-## Multimodal Support
+Normal `ls` hides `.abstract.md` and `.overview.md`. The two files are not guaranteed to coexist, so callers should not assume every directory always has both sidecars.
 
-- **L0/L1**: Always text (Markdown)
-- **L2**: Can be any format (text, image, video, audio)
+## OKF Sidecar Format
 
-For binary content, L0/L1 describe in text:
+New L0/L1 files use minimal OKF Markdown: YAML frontmatter followed by the visible Markdown body.
 
 ```markdown
-# Image L0
-Product screenshot showing login page with OAuth buttons.
+---
+directory: viking://resources/docs/auth/
+source:
+  kind: http
+  uri: https://example.com/auth.pdf
+generated_by:
+  component: SemanticProcessor
+  trigger: resource_ingest
+freshness:
+  total_entries: 3
+  sampled_entries: 3
+  unsampled_entries: 0
+  pending_child_changes: 0
+---
 
-# Image L1
-## Image: Login Page Screenshot
-
-This screenshot shows the application's login page with:
-- Google OAuth button (top)
-- GitHub OAuth button (middle)
-- Email/password form (bottom)
-
-Dimensions: 1920x1080, Format: PNG
+API authentication guide covering OAuth 2.0, JWT tokens, and API keys.
 ```
 
-Directory Structure
+The initial metadata fields are:
 
+| Field | Meaning |
+| --- | --- |
+| `directory` | URI of the directory represented by the sidecar |
+| `source` | Optional import source, normally stored only on the import root |
+| `generated_by` | Generator component and coarse trigger |
+| `freshness` | Direct-child coverage and known pending changes |
+
+Known fields are schema-validated. Unknown top-level fields and unknown nested keys inside known objects are silently dropped; they do not enter previews, embeddings, canonical writeback, or metadata-protection comparisons. Existing sidecars without frontmatter remain valid legacy Markdown. Malformed YAML, a missing required `directory`, or an invalid known-field type still fails explicitly.
+
+## Behavior Across Read Surfaces
+
+The same sidecar has different views depending on the access surface:
+
+| Access | Returned content |
+| --- | --- |
+| `abstract()` / `overview()` | Markdown body only |
+| `find` and search/rerank previews | Markdown body only |
+| `ls output=agent` and tree agent output | Markdown body only |
+| Direct `read(".../.abstract.md")` | Raw frontmatter and body |
+| Normal `ls` | Hidden sidecars are omitted |
+
+Parent-summary generation also consumes only child L0 bodies. `source`, `generated_by`, and `freshness` are not included in summarization prompts.
+
+## Embedding Metadata Whitelist
+
+L0/L1 embedding input contains the body plus explicitly whitelisted metadata. The initial whitelist contains only `directory`:
+
+```markdown
+---
+directory: viking://resources/docs/auth/
+---
+
+API authentication guide covering OAuth 2.0, JWT tokens, and API keys.
 ```
-...
-└── Chapter 3 Developer Notes/
-    ├── .abstract.md
-    ├── .overview.md
-    ├── content.md
-    └── Video Attachment 1 - Developer Notes/              ← Recursive expansion of attachment info
-        ├── .abstract.md
-        ├── .overview.md
-        ├── audio_and_subtitles.md
-        ├── developer_training.mp4
-        └── video_segments/
-            ├── developer_training_0s-30s.mp4
-            └── developer_training_30s-60s.mp4
+
+`source`, `generated_by`, `freshness`, and unknown fields are excluded. Normal vectorization and admin `vectors_only` reindex use the same policy so rebuilding the index does not change retrieval input. The L1 rerank scalar remains the plain L1 body.
+
+## Freshness and Stable Sampling
+
+`freshness` counts a directory's **direct children**, not its entire recursive subtree:
+
+- `total_entries`: total direct files and direct subdirectories contributing to directory semantics.
+- `sampled_entries`: direct entries used for this summary.
+- `unsampled_entries`: direct entries not sampled, with `sampled + unsampled = total`.
+- `pending_child_changes`: direct-child change events not yet reflected in the current body (repeated changes to one child count separately).
+
+Summary generation collects all direct-child summaries without a count cap. The existing overview budget remains 60000 characters by default; oversized summary inputs are batched or truncated. `semantic.overview_sample_limit` remains only a small-directory threshold for freshness scheduling.
+
+`pending_child_changes > 0` means the body is still readable but is known to lag behind lower-level changes. A successful parent refresh resets the value to 0 as part of the new coverage metadata.
+
+Resource/skill parent refreshes are freshness-aware. An unchanged child L0 body does not trigger propagation. A changed body triggers an immediate refresh when the parent has no freshness baseline, or its direct-entry count is at most `semantic.overview_sample_limit`. Larger directories accumulate `pending_child_changes` and refresh when its ratio to `total_entries` reaches `semantic.freshness_refresh_ratio` (default `0.10`). Manual refresh/import bypasses the threshold for its requested root, not every ancestor. Propagation stops at the namespace-root boundary. Below the threshold, the parent stays readable but pending; the threshold policy does not promise a timed refresh.
+
+## Write Protection
+
+L0/L1 bodies can be updated through public `write` / `batch_write`, while metadata remains protected:
+
+- The target sidecar must already exist; public APIs cannot directly create a new `.abstract.md` or `.overview.md`.
+- A body-only request inherits the stored metadata and writes canonical OKF.
+- A full-OKF request must preserve all known metadata; changing a protected field fails.
+- Unknown metadata fields are silently dropped.
+- `append` appends only to the body, never to frontmatter.
+- A body update rebuilds only the directory levels that currently exist and does not regenerate semantics, preventing the newly written body from being overwritten.
+
+## Generation
+
+SemanticProcessor processes directories bottom-up:
+
+```text
+file summaries → leaf L1 → leaf L0 → parent directories → namespace boundary
 ```
 
-
+Child-directory L0 bodies are aggregated into the parent L1. Memory directories use the same SemanticProcessor entry point, although the current parent-bubbling path applies only to resource/skill. Multimodal files first produce text summaries, which contribute to the containing directory's L0/L1 like other file summaries; OpenViking does not create per-file L0/L1 sidecars for each image, audio file, or video.
 
 ## Best Practices
 
-| Scenario | Recommended Layer |
-|----------|-------------------|
+| Scenario | Recommended layer |
+| --- | --- |
 | Quick relevance check | L0 |
-| Understand content scope | L1 |
+| Understand a directory's scope | L1 |
 | Detailed information extraction | L2 |
-| Building context for LLM | L1 (usually sufficient) |
-
-### Token Budget Management
-
-```python
-# Use L1 first, load L2 only when needed
-overview = client.overview(uri)
-
-if needs_more_detail(overview):
-    content = client.read(uri)
-```
+| Build initial LLM context | L1, then load L2 when needed |
+| Inspect sidecar source or freshness | Read the raw sidecar directly |
 
 ## Related Documents
 
 - [Architecture Overview](./01-architecture.md) - System architecture
-- [Context Types](./02-context-types.md) - Three context types
+- [Context Types](./02-context-types.md) - Context types
 - [Viking URI](./04-viking-uri.md) - URI specification
-- [Retrieval Mechanism](./07-retrieval.md) - Retrieval process details
-- [Context Extraction](./06-extraction.md) - L0/L1 generation details
+- [Context Extraction](./06-extraction.md) - L0/L1 generation flow
+- [Retrieval Mechanism](./07-retrieval.md) - Retrieval details

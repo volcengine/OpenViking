@@ -119,38 +119,6 @@ def _fill_telemetry_summary_to_span(snapshot, span):
         logger.debug("failed to fill telemetry summary into span", exc_info=True)
 
 
-def _fill_operation_context_from_snapshot(
-    operation_attrs: OperationSpanAttributes,
-    snapshot: Optional[TelemetrySnapshot],
-) -> OperationSpanAttributes:
-    """
-    Update the bound operation context from a finished telemetry snapshot.
-
-    Returns a new OperationSpanAttributes instance with the updated fields,
-    rather than modifying the input object in place. This avoids unintended
-    side effects when the same object is referenced elsewhere.
-
-    Args:
-        operation_attrs: The original operation attributes.
-        snapshot: The telemetry snapshot (optional).
-
-    Returns:
-        A new OperationSpanAttributes instance with updated fields, or the original
-        instance if snapshot is None.
-    """
-    if snapshot is None:
-        return operation_attrs
-
-    # Create a new instance from the snapshot
-    updated = OperationSpanAttributes.from_telemetry_snapshot(
-        operation=operation_attrs.operation,
-        telemetry_id=snapshot.telemetry_id,
-        status=snapshot.summary.get("status"),
-        summary=snapshot.summary,
-    )
-
-    return updated
-
 
 async def run_with_telemetry(
     *,

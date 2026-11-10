@@ -1,0 +1,96 @@
+import test from "node:test"
+import assert from "node:assert/strict"
+import { readFile } from "node:fs/promises"
+import { fileURLToPath } from "node:url"
+import { dirname, join, resolve } from "node:path"
+import { createOpenVikingMcpConfig, createOpenVikingV2McpConfig, injectOpenVikingMcpConfig, injectOpenVikingSkillPaths } from "../lib/mcp-config.mjs"
+
+const testDir = dirname(fileURLToPath(import.meta.url))
+
+test("injectOpenVikingMcpConfig registers a local stdio MCP server", () => {
+  const config = {}
+
+  assert.equal(injectOpenVikingMcpConfig(config, "/tmp/openviking-plugin"), true)
+  assert.deepEqual(config.mcp.openviking, {
+    type: "local",
+    command: ["node", resolve("/tmp/openviking-plugin", "servers", "mcp-proxy.mjs")],
+    enabled: true,
+    timeout: 15000,
+  })
+})
+
+test("injectOpenVikingMcpConfig respects explicit disabled MCP server", () => {
+  const config = { mcp: { openviking: { enabled: false } } }
+
+  assert.equal(injectOpenVikingMcpConfig(config, "/tmp/openviking-plugin"), false)
+  assert.deepEqual(config.mcp.openviking, { enabled: false })
+})
+
+test("injectOpenVikingMcpConfig leaves OpenCode MCP config untouched in hook-only mode", () => {
+  const config = { mcp: { external: { type: "remote", url: "https://example.com/mcp" } } }
+
+  assert.equal(injectOpenVikingMcpConfig(config, "/tmp/openviking-plugin", false), false)
+  assert.deepEqual(config, {
+    mcp: { external: { type: "remote", url: "https://example.com/mcp" } },
+  })
+})
+
+test("injectOpenVikingSkillPaths appends the bundled skills directory once", () => {
+  const config = { skills: { paths: [".opencode/skills"] } }
+
+  assert.equal(injectOpenVikingSkillPaths(config, "/tmp/openviking-plugin"), true)
+  injectOpenVikingSkillPaths(config, "/tmp/openviking-plugin")
+  assert.deepEqual(config.skills.paths, [".opencode/skills", resolve("/tmp/openviking-plugin", "skills")])
+})
+
+test("OpenCode plugin adds its skills only after registering the MCP server", async () => {
+  const source = await readFile(join(testDir, "../index.mjs"), "utf8")
+
+  assert.match(source, /if \(injected\) injectOpenVikingSkillPaths\(opencodeConfig, pluginRoot\)/)
+})
+
+test("OpenCode plugin keeps tools on MCP rather than native tool hook", async () => {
+  const source = await readFile(join(testDir, "../index.mjs"), "utf8")
+
+  assert.match(source, /injectOpenVikingMcpConfig/)
+  assert.match(source, /injectOpenVikingMcpConfig\(opencodeConfig, pluginRoot, config\.mcp\.enabled\)/)
+  assert.doesNotMatch(source, /createMemoryTools/)
+  assert.doesNotMatch(source, /createCodeTools/)
+  assert.doesNotMatch(source, /\btool:\s*\{/)
+})
+
+test("OpenCode plugin uses real lifecycle hooks for capture flushing", async () => {
+  const source = await readFile(join(testDir, "../index.mjs"), "utf8")
+
+  assert.doesNotMatch(source, /"session\.idle":/)
+  assert.doesNotMatch(source, /\bstop:\s*async/)
+  assert.match(source, /\bdispose:\s*async/)
+})
+
+test("OpenCode MCP config points to the proxy entrypoint", () => {
+  const entry = createOpenVikingMcpConfig("/tmp/ov")
+
+  assert.equal(entry.type, "local")
+  assert.equal(entry.command[0], "node")
+  assert.match(entry.command[1], /servers[\\/]mcp-proxy\.mjs$/)
+})
+
+test("OpenCode v2 MCP config uses the local server schema", () => {
+  const entry = createOpenVikingV2McpConfig("/tmp/ov")
+
+  assert.equal(entry.type, "local")
+  assert.equal(entry.command[0], "node")
+  assert.match(entry.command[1], /servers[\\/]mcp-proxy\.mjs$/)
+  assert.equal(entry.enabled, undefined)
+  assert.equal(entry.codemode, false)
+  assert.deepEqual(entry.timeout, { startup: 15000, catalog: 15000, execution: 15000 })
+})
+
+test("OpenCode plugin exports a v2 setup without importing @opencode/plugin", async () => {
+  const source = await readFile(join(testDir, "../index.mjs"), "utf8")
+
+  assert.match(source, /id:\s*"openviking"/)
+  assert.match(source, /async setup\(ctx\)/)
+  assert.match(source, /async server\(input\)/)
+  assert.doesNotMatch(source, /@opencode\/plugin/)
+})

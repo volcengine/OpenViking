@@ -2,10 +2,25 @@
 # SPDX-License-Identifier: AGPL-3.0
 """End-to-end tests for /api/v1/snapshot/*."""
 
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import httpx
 import pytest
 import pytest_asyncio
 
-import httpx
+import openviking.service.reindex_executor as reindex_mod
+from openviking.server.app import create_app
+from openviking.server.auth import get_request_context
+from openviking.server.config import ServerConfig
+from openviking.server.identity import RequestContext, Role
+from openviking_cli.exceptions import (
+    InvalidArgumentError,
+    InvalidURIError,
+    PermissionDeniedError,
+)
+from openviking_cli.session.user_id import UserIdentifier
 
 pytestmark = pytest.mark.asyncio
 
@@ -21,6 +36,24 @@ async def client_with_no_repo(app):
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
         yield c
+
+
+@pytest_asyncio.fixture(scope="function")
+async def snapshot_router_client():
+    """Production app without running its service-initializing lifespan."""
+    app = create_app(
+        config=ServerConfig(),
+        service=SimpleNamespace(sessions=None),
+    )
+
+    async def request_context_override():
+        return RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    app.dependency_overrides[get_request_context] = request_context_override
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        yield client
 
 
 async def test_commit_creates_snapshot(client_with_resource):
@@ -58,6 +91,84 @@ async def test_log_empty_repo_returns_404(client_with_no_repo):
     assert resp.json()["status"] == "error"
 
 
+async def test_log_value_error_is_mapped(monkeypatch):
+    from openviking.server.routers import snapshot
+
+    fake_service = SimpleNamespace(
+        fs=SimpleNamespace(
+            log=AsyncMock(
+                side_effect=ValueError("git tree path cannot be the account root: 'viking://'")
+            )
+        )
+    )
+    monkeypatch.setattr(snapshot, "get_service", lambda: fake_service)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with pytest.raises((InvalidArgumentError, InvalidURIError)):
+        await snapshot.log(branch="main", limit=5, paths=["viking://"], _ctx=ctx)
+
+
+async def test_log_rejects_more_than_32_raw_path_parameters(snapshot_router_client, monkeypatch):
+    from openviking.server.routers import snapshot
+
+    log_mock = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        snapshot,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(log=log_mock)),
+    )
+    params = [("paths", "viking://resources/a.md")] * 33
+
+    response = await snapshot_router_client.get("/api/v1/snapshot/log", params=params)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+    log_mock.assert_not_awaited()
+
+
+async def test_log_accepts_32_raw_path_parameters(snapshot_router_client, monkeypatch):
+    from openviking.server.routers import snapshot
+
+    log_mock = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        snapshot,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(log=log_mock)),
+    )
+    params = [("paths", f"viking://resources/{index}.md") for index in range(32)]
+
+    response = await snapshot_router_client.get("/api/v1/snapshot/log", params=params)
+
+    assert response.status_code == 200
+    forwarded_paths = log_mock.await_args.kwargs["paths"]
+    assert len(forwarded_paths) == 32
+
+
+async def test_log_scan_limit_error_maps_to_invalid_argument(monkeypatch):
+    from openviking.pyagfs.exceptions import AGFSInvalidOperationError
+    from openviking.server.routers import snapshot
+
+    fake_service = SimpleNamespace(
+        fs=SimpleNamespace(
+            log=AsyncMock(
+                side_effect=AGFSInvalidOperationError(
+                    "snapshot log scan limit exceeded: scanned 1000/1000 commits"
+                )
+            )
+        )
+    )
+    monkeypatch.setattr(snapshot, "get_service", lambda: fake_service)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with pytest.raises(InvalidArgumentError, match="scan limit exceeded"):
+        await snapshot.log(
+            branch="main",
+            limit=1,
+            paths=["viking://resources/missing.md"],
+            _ctx=ctx,
+        )
+
+
 @pytest_asyncio.fixture(scope="function")
 async def client_with_resource_and_blob(client_with_resource, service):
     """client_with_resource + a known blob written via VikingFS.write_file, then committed."""
@@ -81,29 +192,128 @@ async def client_with_resource_and_blob(client_with_resource, service):
     yield client, commit_oid, blob_uri, expected_bytes
 
 
-async def test_restore_dry_run_does_not_mutate(client_with_resource):
-    client, _root = client_with_resource
-    v1 = (await client.post("/api/v1/snapshot/commit", json={"message": "v1"})).json()["result"]
-
-    resp = await client.post(
-        "/api/v1/snapshot/restore",
-        json={
-            "project_dir": "viking://resources",
-            "source_commit": v1["commit_oid"],
-            "dry_run": True,
-        },
+async def test_restore_acl_and_reindex_identity(client_with_resource, service, monkeypatch):
+    _, _root = client_with_resource
+    admin = RequestContext(user=service.user, role=Role.ADMIN)
+    await service.runtime_config_manager.patch_account(admin.account_id, {"acl": {"enabled": True}})
+    writer = RequestContext(
+        user=UserIdentifier(admin.account_id, "snapshot_writer"),
+        role=Role.USER,
+        group_ids=("engineering",),
+        actor_peer_id="snapshot-peer",
     )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["status"] == "ok"
-    result = body["result"]
-    # Per VikingFS.restore contract, dry_run responses carry 'diff'.
-    assert "diff" in result or result.get("result") == "noop"
+    reader = RequestContext(
+        user=UserIdentifier(admin.account_id, "snapshot_reader"),
+        role=Role.USER,
+    )
+    root = "viking://resources/snapshot_acl_restore"
+    file_uri = f"{root}/document.md"
+    extra_uri = f"{root}/remove.md"
+
+    await service.fs.mkdir(root, ctx=admin)
+    assert await service.vikingdb_manager.upsert(
+        {
+            "id": "snapshot-acl-restore-root",
+            "uri": root,
+            "account_id": admin.account_id,
+            "context_type": "resource",
+            "level": 0,
+            "vector": [0.1] * service.vikingdb_manager.vector_dim,
+        },
+        ctx=admin,
+    )
+    await service.fs.set_acl(
+        root,
+        [
+            {"principal": "user:snapshot_writer", "level": "write"},
+            {"principal": "user:snapshot_reader", "level": "read"},
+        ],
+        ctx=admin,
+    )
+    await service.fs.write(file_uri, content="v1", mode="create", wait=True, ctx=admin)
+    v1 = await service.fs.commit(message="acl restore v1", paths=[root], ctx=writer)
+
+    assert await service.fs.show(v1["commit_oid"], path=file_uri, ctx=reader)
+    assert await service.fs.log(paths=[root], ctx=reader)
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.commit(message="reader cannot commit", paths=[root], ctx=reader)
+
+    await service.fs.write(file_uri, content="v2", mode="replace", wait=True, ctx=writer)
+    await service.fs.commit(message="acl restore v2", paths=[root], ctx=writer)
+
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.restore(
+            project_dir=root,
+            source_commit=v1["commit_oid"],
+            dry_run=True,
+            ctx=reader,
+        )
+
+    write_plan = await service.fs.restore(
+        project_dir=root,
+        source_commit=v1["commit_oid"],
+        dry_run=True,
+        ctx=writer,
+    )
+    assert [item["path"] for item in write_plan["diff"]["to_write"]] == ["document.md"]
+
+    await service.fs.write(extra_uri, content="remove", mode="create", wait=True, ctx=admin)
+    await service.fs.commit(message="acl restore delete", paths=[root], ctx=admin)
+    delete_plan = await service.fs.restore(
+        project_dir=root,
+        source_commit=v1["commit_oid"],
+        dry_run=True,
+        ctx=writer,
+    )
+    assert delete_plan["diff"]["to_delete"] == ["remove.md"]
+    assert await service.fs.read(file_uri, ctx=writer) == "v2"
+
+    reindex_contexts: list[RequestContext] = []
+
+    class _SpyExecutor:
+        async def execute(self, *, uri, mode, wait, ctx):
+            reindex_contexts.append(ctx)
+            return {"ok": True}
+
+        async def execute_in_current_task(self, *, uri, mode, ctx):
+            reindex_contexts.append(ctx)
+            return {"ok": True}
+
+        async def reindex_directory_marker(self, *, dir_uri, level, ctx):
+            reindex_contexts.append(ctx)
+
+        async def delete_uri_level(self, *, uri, level, ctx):
+            reindex_contexts.append(ctx)
+            return 0
+
+    def factory():
+        return _SpyExecutor()
+
+    monkeypatch.setattr(reindex_mod, "ReindexExecutor", factory)
+    result = await service.fs.restore(
+        project_dir=root,
+        source_commit=v1["commit_oid"],
+        ctx=writer,
+    )
+    assert result["result"] == "applied"
+
+    for _ in range(100):
+        if reindex_contexts:
+            break
+        await asyncio.sleep(0.02)
+
+    assert reindex_contexts
+    assert all(ctx.role == Role.USER for ctx in reindex_contexts)
+    assert all(ctx.group_ids == ("engineering",) for ctx in reindex_contexts)
+    assert all(ctx.actor_peer_id == "snapshot-peer" for ctx in reindex_contexts)
+    assert all(ctx.bypass_acl for ctx in reindex_contexts)
 
 
 async def test_show_commit_metadata(client_with_resource):
     client, _ = client_with_resource
-    commit = (await client.post("/api/v1/snapshot/commit", json={"message": "meta"})).json()["result"]
+    commit = (await client.post("/api/v1/snapshot/commit", json={"message": "meta"})).json()[
+        "result"
+    ]
     resp = await client.get(
         "/api/v1/snapshot/show",
         params={"target_ref": commit["commit_oid"]},
@@ -131,15 +341,215 @@ async def test_show_blob_returns_binary_with_headers(client_with_resource_and_bl
     assert resp.content == expected_bytes
 
 
+async def test_show_blob_can_hide_memory_fields(snapshot_router_client, monkeypatch):
+    from openviking.server.routers import snapshot
+
+    stored = b'visible content\n\n<!-- MEMORY_FIELDS\n{"version": 2}\n-->'
+    show_mock = AsyncMock(return_value={"oid": "a" * 40, "size": len(stored), "bytes": stored})
+    monkeypatch.setattr(
+        snapshot,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(show_blob_raw=show_mock)),
+    )
+
+    response = await snapshot_router_client.get(
+        "/api/v1/snapshot/show",
+        params={
+            "target_ref": "a" * 40,
+            "path": "viking://user/default/memories/experiences/example.md",
+            "raw": "false",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.content == b"visible content"
+    assert response.headers["x-snapshot-size"] == str(len(response.content))
+
+
 async def test_show_path_not_found_returns_404(client_with_resource):
     client, _ = client_with_resource
-    commit = (await client.post("/api/v1/snapshot/commit", json={"message": "for 404"})).json()["result"]
+    commit = (await client.post("/api/v1/snapshot/commit", json={"message": "for 404"})).json()[
+        "result"
+    ]
     resp = await client.get(
         "/api/v1/snapshot/show",
-        params={"target_ref": commit["commit_oid"], "path": "viking://resources/does_not_exist.txt"},
+        params={
+            "target_ref": commit["commit_oid"],
+            "path": "viking://resources/does_not_exist.txt",
+        },
     )
     assert resp.status_code == 404
     assert resp.json()["status"] == "error"
+
+
+async def test_diff_returns_unified_diff_for_path(client_with_resource, service):
+    client, _ = client_with_resource
+    path = "viking://resources/snapshot_diff_fixture.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    await service.viking_fs.write_file(path, b"# Title\n\nold line\n", ctx=ctx)
+    from_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff v1", "paths": [path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    await service.viking_fs.write_file(path, b"# Title\n\nnew line\n", ctx=ctx)
+    to_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff v2", "paths": [path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    response = await client.get(
+        "/api/v1/snapshot/diff",
+        params={"path": path, "from": from_commit, "to": to_commit},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["path"] == path
+    assert result["from_commit"] == from_commit
+    assert result["to_commit"] == to_commit
+    assert result["change_type"] == "modified"
+    assert "-old line" in result["diff_text"]
+    assert "+new line" in result["diff_text"]
+
+    response = await client.get(
+        "/api/v1/snapshot/diff-paths",
+        params={"paths": "viking://resources", "from": from_commit, "to": to_commit, "limit": 1},
+    )
+    assert response.status_code == 200, response.text
+    page = response.json()["result"]
+    assert page["changes"] == [{"uri": path, "change_type": "modified"}]
+    assert page["total"] == 1 and page["has_more"] is False
+
+
+async def test_diff_supports_first_version_without_from_commit(client_with_resource, service):
+    client, _ = client_with_resource
+    path = "viking://resources/snapshot_diff_added_fixture.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    await service.viking_fs.write_file(path, b"first version\n", ctx=ctx)
+    to_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff added", "paths": [path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    response = await client.get(
+        "/api/v1/snapshot/diff",
+        params={"path": path, "to": to_commit},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["from_commit"] == ""
+    assert result["to_commit"] == to_commit
+    assert result["change_type"] == "added"
+    assert "+first version" in result["diff_text"]
+
+
+async def test_diff_reports_missing_final_newline(client_with_resource, service):
+    client, _ = client_with_resource
+    path = "viking://resources/snapshot_diff_newline_fixture.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    await service.viking_fs.write_file(path, b"same line\n", ctx=ctx)
+    from_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff newline v1", "paths": [path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    await service.viking_fs.write_file(path, b"same line", ctx=ctx)
+    to_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff newline v2", "paths": [path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    response = await client.get(
+        "/api/v1/snapshot/diff",
+        params={"path": path, "from": from_commit, "to": to_commit},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["change_type"] == "modified"
+    assert "-same line" in result["diff_text"]
+    assert "+same line" in result["diff_text"]
+    assert "\\ No newline at end of file" in result["diff_text"]
+
+
+async def test_diff_reports_deleted_path(client_with_resource, service):
+    client, _ = client_with_resource
+    path = "viking://resources/snapshot_diff_deleted_fixture.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    await service.viking_fs.write_file(path, b"deleted content\n", ctx=ctx)
+    from_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff deleted v1", "paths": [path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    await service.viking_fs.rm(path, ctx=ctx)
+    to_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff deleted v2", "paths": [path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    response = await client.get(
+        "/api/v1/snapshot/diff",
+        params={"path": path, "from": from_commit, "to": to_commit},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["change_type"] == "deleted"
+    assert "-deleted content" in result["diff_text"]
+
+
+async def test_diff_reports_unchanged_path(client_with_resource, service):
+    client, _ = client_with_resource
+    path = "viking://resources/snapshot_diff_unchanged_fixture.md"
+    other_path = "viking://resources/snapshot_diff_other_fixture.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    await service.viking_fs.write_file(path, b"unchanged content\n", ctx=ctx)
+    from_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff unchanged v1", "paths": [path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    await service.viking_fs.write_file(other_path, b"advance snapshot\n", ctx=ctx)
+    to_commit = (
+        await client.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "snapshot diff unchanged v2", "paths": [other_path]},
+        )
+    ).json()["result"]["commit_oid"]
+
+    response = await client.get(
+        "/api/v1/snapshot/diff",
+        params={"path": path, "from": from_commit, "to": to_commit},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["change_type"] == "unchanged"
+    assert result["diff_text"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +557,9 @@ async def test_show_path_not_found_returns_404(client_with_resource):
 # ---------------------------------------------------------------------------
 
 
-async def test_restore_apply_advances_head_with_forward_commit(client_with_resource_and_blob, service):
+async def test_restore_apply_advances_head_with_forward_commit(
+    client_with_resource_and_blob, service
+):
     """End-to-end restore (dry_run=False) over HTTP: verify forward-commit
     semantics — the new commit's parent is the previous HEAD, NOT the source
     commit, and the workspace bytes match the source.
@@ -201,7 +613,9 @@ async def test_restore_apply_advances_head_with_forward_commit(client_with_resou
     assert show_resp.content == v1_bytes
 
 
-async def test_restore_without_project_dir_restores_full_account_tree(client_with_resource_and_blob, service):
+async def test_restore_without_project_dir_restores_full_account_tree(
+    client_with_resource_and_blob, service
+):
     from openviking.server.identity import RequestContext, Role
     from openviking_cli.session.user_id import UserIdentifier
 
@@ -211,7 +625,9 @@ async def test_restore_without_project_dir_restores_full_account_tree(client_wit
 
     await service.viking_fs.write_file(blob_uri, b"v2 modified content\n", ctx=ctx)
     await service.viking_fs.write_file(extra_uri, b"new at v2\n", ctx=ctx)
-    c2_resp = await client.post("/api/v1/snapshot/commit", json={"message": "v2 full restore setup"})
+    c2_resp = await client.post(
+        "/api/v1/snapshot/commit", json={"message": "v2 full restore setup"}
+    )
     assert c2_resp.status_code == 200, c2_resp.text
     c2_oid = c2_resp.json()["result"]["commit_oid"]
 
@@ -241,14 +657,12 @@ async def test_restore_without_project_dir_restores_full_account_tree(client_wit
     assert missing_resp.status_code == 404
 
 
-async def test_restore_apply_triggers_reindex_hook(client_with_resource_and_blob, service, monkeypatch):
+async def test_restore_apply_triggers_reindex_hook(
+    client_with_resource_and_blob, service, monkeypatch
+):
     """Verify the HTTP restore path actually invokes the vector-reindex
     scheduler — protects the chain router -> viking_fs.restore -> _schedule_vector_rebuild.
     """
-    from openviking.server.identity import RequestContext, Role
-    from openviking_cli.session.user_id import UserIdentifier
-    import openviking.service.reindex_executor as reindex_mod
-
     client, c1_oid, blob_uri, _v1 = client_with_resource_and_blob
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 
@@ -259,7 +673,14 @@ async def test_restore_apply_triggers_reindex_hook(client_with_resource_and_blob
             calls.append(uri)
             return {"ok": True}
 
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: _SpyExecutor())
+        async def execute_in_current_task(self, *, uri, mode, ctx):
+            calls.append(uri)
+            return {"ok": True}
+
+    def factory():
+        return _SpyExecutor()
+
+    monkeypatch.setattr(reindex_mod, "ReindexExecutor", factory)
 
     # Mutate, commit v2, then restore back to c1 — must produce a reindex call.
     await service.viking_fs.write_file(blob_uri, b"v2-bytes\n", ctx=ctx)
@@ -275,6 +696,7 @@ async def test_restore_apply_triggers_reindex_hook(client_with_resource_and_blob
     # The restore reindex now runs in a tracked background task; poll a little
     # to let start() + the gathered rebuild coroutines flush.
     import asyncio
+
     for _ in range(100):
         if calls:
             break
@@ -283,7 +705,9 @@ async def test_restore_apply_triggers_reindex_hook(client_with_resource_and_blob
     assert calls, "expected at least one reindex call after restore apply"
 
 
-async def test_restore_delete_removes_orphaned_vectors(client_with_resource_and_blob, service, monkeypatch):
+async def test_restore_delete_removes_orphaned_vectors(
+    client_with_resource_and_blob, service, monkeypatch
+):
     """Restoring to a revision that predates a file must purge that file's
     vectors, not merely skip them.
 
@@ -292,10 +716,6 @@ async def test_restore_delete_removes_orphaned_vectors(client_with_resource_and_
     viking_fs.restore must route deleted source paths to the executor's
     level-precise delete (DETAIL).
     """
-    from openviking.server.identity import RequestContext, Role
-    from openviking_cli.session.user_id import UserIdentifier
-    import openviking.service.reindex_executor as reindex_mod
-
     client, c1_oid, _blob_uri, _v1 = client_with_resource_and_blob
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 
@@ -305,6 +725,9 @@ async def test_restore_delete_removes_orphaned_vectors(client_with_resource_and_
         async def execute(self, *, uri, mode, wait, ctx):
             return {"ok": True}
 
+        async def execute_in_current_task(self, *, uri, mode, ctx):
+            return {"ok": True}
+
         async def reindex_directory_marker(self, *, dir_uri, level, ctx):
             return None
 
@@ -312,7 +735,10 @@ async def test_restore_delete_removes_orphaned_vectors(client_with_resource_and_
             deleted_calls.append((uri, int(level)))
             return 0
 
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: _SpyExecutor())
+    def factory():
+        return _SpyExecutor()
+
+    monkeypatch.setattr(reindex_mod, "ReindexExecutor", factory)
 
     # Add a brand-new file that does not exist at c1, then commit v2.
     new_uri = "viking://resources/restore_delete_fixture.txt"
@@ -328,6 +754,7 @@ async def test_restore_delete_removes_orphaned_vectors(client_with_resource_and_
     assert restore_resp.json()["result"]["result"] == "applied"
 
     import asyncio
+
     for _ in range(100):
         if (new_uri, 2) in deleted_calls:
             break
@@ -338,8 +765,9 @@ async def test_restore_delete_removes_orphaned_vectors(client_with_resource_and_
     )
 
 
-
-async def test_restore_concurrent_commit_returns_409(client_with_resource_and_blob, service, monkeypatch):
+async def test_restore_concurrent_commit_returns_409(
+    client_with_resource_and_blob, service, monkeypatch
+):
     """Force the underlying git CAS swap to raise GitConcurrentCommitError
     and verify the HTTP layer maps it to 409 with CONFLICT code.
     """

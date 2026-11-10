@@ -15,6 +15,8 @@ class HookContext:
     session_key: SessionKey = None
     metadata: Dict[str, Any] = None
     timestamp: datetime = None
+    config: Any = None
+    openviking_connection: Dict[str, Any] | None = None
 
     def __post_init__(self):
         if self.metadata is None:

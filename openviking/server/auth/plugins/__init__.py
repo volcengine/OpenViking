@@ -13,8 +13,28 @@ _registry.register(DevAuthPlugin)
 _registry.register(ApiKeyAuthPlugin)
 _registry.register(TrustedAuthPlugin)
 
+# Try to register OIDC and LDAP plugins if dependencies are available
+try:
+    from openviking.server.auth.plugins.oidc import OIDCAuthPlugin
+    _registry.register(OIDCAuthPlugin)
+    _has_oidc = True
+except ImportError:
+    _has_oidc = False
+
+try:
+    from openviking.server.auth.plugins.ldap import LDAPAuthPlugin
+    _registry.register(LDAPAuthPlugin)
+    _has_ldap = True
+except ImportError:
+    _has_ldap = False
+
 __all__ = [
     "DevAuthPlugin",
     "ApiKeyAuthPlugin",
     "TrustedAuthPlugin",
 ]
+
+if _has_oidc:
+    __all__.append("OIDCAuthPlugin")
+if _has_ldap:
+    __all__.append("LDAPAuthPlugin")

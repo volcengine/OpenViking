@@ -1,6 +1,6 @@
 # Admin (Multi-tenant)
 
-The Admin API manages accounts and users in a multi-tenant environment. It covers workspace (account) creation/deletion, user registration/removal, role changes, and API key regeneration.
+The Admin API manages accounts, users, and groups in a multi-tenant environment. It covers workspace (account) creation/deletion, user registration/removal, group membership, role changes, and API key regeneration.
 
 This API is available in both `api_key` and `trusted` deployments:
 - In `api_key` mode, the effective role is always derived from the presented API key.
@@ -15,15 +15,22 @@ For `/api/v1/admin/*`, `trusted` mode permits requests with no explicit identity
 | ROOT | System administrator with full access |
 | ADMIN | Workspace administrator, manages users within their account |
 | USER | Regular user |
+| GLOBAL | Account-scoped data-plane identity, typically used by agents; only ROOT may create, destroy, or modify it, while other roles may only observe its existence |
 
-| Operation | ROOT | ADMIN | USER |
-|-----------|------|-------|------|
-| Create/delete workspace | Y | N | N |
-| List workspaces | Y | N | N |
-| Register/remove users | Y | Y (own account) | N |
-| List agents (deprecated, returns empty list) | Y | Y (own account) | N |
-| Regenerate user key | Y | Y (own account) | N |
-| Change user role | Y | N | N |
+| Operation | ROOT | ADMIN | USER | GLOBAL |
+|-----------|------|-------|------|--------|
+| Create/delete workspace | Y | N | N | N |
+| List workspaces | Y | N | N | N |
+| List users | Y | Y (own account) | Y (own account) | N |
+| Register/remove users | Y | Y (own account) | N | N |
+| Create GLOBAL identity | Y | N | N | N |
+| Observe GLOBAL identity existence | Y | Y (own account) | Y (own account) | Y (self) |
+| Destroy/rotate GLOBAL or change its group membership | Y | N | N | N |
+| Change an existing role to or from GLOBAL | N | N | N | N |
+| Manage groups and membership | Y | Y (own account) | N | N |
+| Read/update User settings | Y | Y (own account, non-GLOBAL) | Y (self) | N |
+| Regenerate user key (API Key mode only) | Y | Y (own account) | Y (own key) | N |
+| Change user role between USER and ADMIN | Y | Y (own account) | N | N |
 
 ## CLI `--sudo` Option
 
@@ -37,8 +44,7 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 {
   "url": "http://localhost:1933",
   "api_key": "alice-user-key",
-  "root_api_key": "your-root-api-key",
-  ...
+  "root_api_key": "your-root-api-key"
 }
 ```
 
@@ -47,15 +53,1077 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 - `ov --sudo admin` - Account and user management
 - `ov --sudo system` - System utility commands
 - `ov --sudo reindex` - Rebuild indexes
-- `ov --sudo admin migrate` - Legacy agent/session migration and cleanup
-- `ov --sudo task status/list` - Query root/system background tasks, such as migration tasks
+- `ov --sudo task status/list` - Query root/system background tasks, such as account deletion tasks
 
 ### Usage Limitations
 
 - `--sudo` only works with the commands above - using it with regular data commands will error
 - Must have `root_api_key` configured to use `--sudo`
 
+## Groups
+
+A group belongs to one account and lets one ACL principal grant access to multiple users. Its caller-supplied `group_id` follows the same identifier rules as `user_id` and is the account-unique, stable identifier; there is no separate group name. Only existing users from the same account can be members, and groups cannot be nested.
+
+The server adds memberships to `RequestContext.group_ids` for each request. Adding or removing a member takes effect on the next request without rewriting resource ACL or context records. Removing a user also removes all memberships. Groups can be deleted whether empty or non-empty. Deleting a group removes all its memberships, preserves users and their credentials, and does not rewrite resource ACL or context records.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/admin/accounts/{account_id}/groups` | Create an empty group with `{"group_id":"engineering"}` |
+| GET | `/api/v1/admin/accounts/{account_id}/groups` | List groups |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete a group and all its memberships, including when the group is non-empty |
+| GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List members |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Add members from a JSON body `{"user_ids": [...]}` (1–1000 existing users) atomically; users who are already members are skipped, and the result is `added=true` |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Remove members atomically using a JSON body `{"user_ids": [...]}` (1–1000 user IDs); `removed=true` if any membership was removed, otherwise `removed=false` |
+
+```bash
+ov --sudo admin create-group acme engineering
+ov --sudo admin add-group-member acme engineering alice
+ov acl grant viking://resources/project-a \
+  --principal group:engineering --level read
+ov --sudo admin remove-group-member acme engineering alice
+ov --sudo admin delete-group acme engineering
+```
+
+To remove members over HTTP, include their user IDs in the request body:
+
+```bash
+curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/groups/engineering/members \
+  -H "X-API-Key: your-admin-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"user_ids": ["alice", "bob"]}'
+```
+
+To delete a group that still has members, call `DELETE /api/v1/admin/accounts/acme/groups/engineering`.
+
+The Python SDK exposes `admin_create_group`, `admin_list_groups`, `admin_list_group_members`, `admin_add_group_member`, `admin_remove_group_member`, and `admin_delete_group`. The Go SDK uses matching PascalCase method names.
+
 ## API Reference
+
+### account / user existence queries
+
+Before creating an Account/User, use these exact existence probes instead of
+"list then compare locally". Both hit the in-memory registry in O(1) and return
+only credential-free information. With `server.api_key_watch_enabled` enabled
+they read memory directly; otherwise they fall back to reading the persisted
+registry.
+
+**Fetch one Account (ROOT only)**
+
+```
+GET /api/v1/admin/accounts/{account_id}
+```
+
+Returns the account's credential-free metadata on hit, or 404 if absent.
+
+```bash
+curl "http://localhost:1933/api/v1/admin/accounts/team-a" \
+  -H "X-API-Key: <root-key>"
+```
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "account_id": "team-a",
+    "created_at": "2026-10-20T03:00:00Z",
+    "user_count": 2,
+    "status": "active"
+  }
+}
+```
+
+When `status` is `deleting`, a `task_id` is included. The response never
+contains `api_key`, `user_key`, `key_prefix`, or `seed`.
+
+**Get one user's membership info (ROOT or the account's ADMIN)**
+
+```
+GET /api/v1/admin/accounts/{account_id}/users/{user_id}
+```
+
+Point-reads a single user and returns only credential-free membership info,
+deliberately not reusing any user-read shape that could return credentials:
+
+```bash
+curl "http://localhost:1933/api/v1/admin/accounts/team-a/users/alice" \
+  -H "X-API-Key: <root-key>"
+```
+
+```json
+{ "status": "ok", "result": { "user_id": "alice", "role": "admin" } }
+```
+
+The response contains only `user_id` and `role`; it never includes `api_key`
+or `key_prefix`. A missing user returns 404. An ADMIN may only query its own
+account; cross-account access returns 403. This can back a pre-create check;
+concurrent uniqueness is still guaranteed by the create-time write conflict
+(`ALREADY_EXISTS`).
+
+### get_agent_evolution_status
+
+Return the effective Agent Evolution switch for the caller's account. ROOT
+operates on the configured default account; ADMIN operates on its own account.
+
+**HTTP API**
+
+```
+GET /api/v1/admin/agent-evolution
+```
+
+```bash
+curl http://localhost:1933/api/v1/admin/agent-evolution \
+  -H "X-API-Key: <root-key>"
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "enabled": false,
+    "account_id": "default"
+  }
+}
+```
+
+`enabled` resolves the Account runtime override, Cluster runtime override, then
+the startup value from `server.agent_evolution.enabled`.
+
+The endpoint remains as a deprecated compatibility adapter in this release and
+is scheduled for removal in the next release. New callers use Account
+configuration; the SDKs no longer expose methods for this legacy endpoint.
+
+```http
+PUT /api/v1/admin/agent-evolution
+Content-Type: application/json
+
+{"enabled": true}
+```
+
+### account_settings
+
+This endpoint is deprecated and remains compatible for this release, with
+removal planned for the next release. ROOT can manage any account and ADMIN can
+manage only its own account. It preserves the original ACL and Agent Evolution request
+and response semantics:
+
+```http
+GET /api/v1/admin/accounts/{account_id}/settings
+PATCH /api/v1/admin/accounts/{account_id}/settings
+Content-Type: application/json
+
+{
+  "agent_evolution": {"enabled": true},
+  "acl": {"enabled": true}
+}
+```
+
+Missing and `null` sections are no-ops. A present object replaces that legacy
+section; an empty ACL object means `enabled=false`. New integrations should use
+the configuration endpoints below.
+
+`acl.enabled` defaults to `false`. While disabled, shared resources use the
+original public behavior and ACL authorization is skipped. When enabled, newly
+created shared resources receive ACL fields and ACL-protected shared resources
+are authorized against them. Existing content without an ACL is not migrated or
+modified. Disabling the setting also stops enforcing existing ACLs.
+
+The CLI now calls Account configuration:
+
+```bash
+ov --sudo admin set-account-settings acme --acl-enabled true
+```
+
+Before an existing setting is replaced, it is backed up to
+`/local/{account_id}/_system/setting.backup.json`.
+
+### account_memory_templates
+
+ROOT can manage any Account; ADMIN can manage only its own Account. Ordinary
+Users cannot use these endpoints. Authorization is role-based, not based on
+whether the User is named `default`.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | List the six editable templates, full defaults and effective values |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Read one template |
+| PUT | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Complete and publish one template |
+| DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Remove that override and restore deployment defaults |
+
+To update a template while keeping existing customizations:
+
+1. GET the template and copy its `effective` object.
+2. Edit the permitted descriptions or `content_template`, then PUT the complete object. Omitted values revert to deployment defaults.
+3. Check the returned `status` and `effective` values. New extractions use the published template; existing memories are not immediately rewritten.
+
+Use DELETE to restore deployment defaults for that type.
+
+The kernel accepts the existing memory YAML structure as a JSON object and enforces
+the following editing allowlist at the API boundary. Only these six types are
+exposed. Experience, Cases, Trajectories and other types are not exposed for reading
+or editing. These APIs cannot create, delete or rename Memory Types; DELETE removes
+only the Account override.
+
+| Type | Editable configuration |
+|------|------------------------|
+| `profile` | `description`; `fields.content.description` |
+| `events` | `description`; `fields.event_name.description`, `fields.summary.description`; `content_template` |
+| `preferences` | `description`; `fields.topic.description`, `fields.content.description` |
+| `entities` | `description`; `fields.category.description`, `fields.name.description`, `fields.content.description` |
+| `soul` | `description`; `fields.core_truths.description`, `fields.boundaries.description`, `fields.vibe.description`, `fields.continuity.description`; `content_template` |
+| `identity` | `description`; `fields.creature.description`, `fields.name.description`, `fields.vibe.description`, `fields.avatar.description`, `fields.emoji.description`, `fields.introduction.description`; `content_template` |
+
+Here `fields.<name>.description` selects an existing entry in the `fields` array
+by `name`; it does not replace that field. JSON keys are case-sensitive: use
+`description`, not `Description`. Profile's `content` field permits only its
+description to change.
+
+All other configuration stays locked to deployment defaults: `memory_type`,
+`enabled`, `operation_mode`, `stage`, `peer_enabled`, `directory`,
+`filename_template`, field names/types/merge operations/initial values,
+`embedding_template`, `overview_template`, and unlisted field descriptions.
+Profile keeps `profile.md` and content's `merge_op=patch`; Events keeps
+`add_only` and the descriptions of `goal` and `ranges`; Identity keeps Name's
+immutable merge rule. Profile, Preferences and Entities cannot edit
+`content_template`. Changing topic/category/name/event_name instructions can
+still indirectly affect future paths/names, without changing their templates.
+
+Example: change only the type description:
+
+```bash
+curl -X PUT "$OV_ENDPOINT/api/v1/admin/accounts/acme/memory-templates/profile" \
+  -H "X-API-Key: $OV_ADMIN_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"description":"Remember business facts in concise English."}'
+```
+
+PUT completes omitted values from **deployment defaults**, not the previous
+Account override, and persists a **complete YAML template**. `fields` updates
+existing entries by name, replacing only permitted descriptions; all omitted
+fields and attributes retain default values. Fields cannot be added, removed or
+renamed, and an empty list does not remove any fields. Full GET `effective`
+objects can be submitted unchanged: locked values matching defaults are accepted.
+Changed locked values, unknown keys/fields and duplicate field names return
+`INVALID_ARGUMENT` without modifying the active file. To edit one description while
+preserving all other customizations, GET `effective`, modify that object, then
+PUT it. If the completed, validated configuration exactly matches deployment
+defaults (before publication metadata is added), PUT removes that type's override
+and returns `status=system_default`, `updated_at=null`. This includes an empty
+object, an unchanged default form, or saving after restoring all edited fields
+to their defaults. Any remaining difference keeps the template `custom`;
+whitespace and newline differences in descriptions or bodies are not ignored.
+Once the override is removed, subsequent extractions follow deployment defaults;
+previously captured extraction snapshots are unchanged. DELETE always removes
+the type's override. Repeated default PUTs and DELETEs are idempotent.
+
+Results contain `memory_type`, `status` (`system_default` or `custom`),
+`updated_at` (UTC publication time or null), and full `defaults` / `effective`
+objects using YAML field names such as `fields[].type`. List returns
+`result.account_id` and `result.templates`; single-template operations return
+`result.account_id` plus the template result.
+
+::: details Publication, storage, and concurrent extraction
+
+Storage is per Account and per type:
+
+```text
+viking://system/memory/memory_templates/custom/
+  profile.yaml
+  preferences.yaml
+  events.yaml
+  ...
+```
+
+Only published overrides create files. Each file contains the complete schema
+and an internal `_updated_at` timestamp; no `memory_templates.json` is used.
+Updates and resets do not create visible backups and remove legacy
+`{type}.yaml.backup` files. Access goes through
+AGFS, preserving the deployment's encryption/storage configuration. Do not edit
+encrypted backing files directly. `setting.json` and User `user_config.json`
+are unchanged. Personal deployments use the default Account; enterprise
+deployments use the target Account, with no separate kernel storage layout.
+
+Reads prefer the new path above and only fall back to
+`/local/{account_id}/_system/memory_templates/{type}.yaml` when the new file is
+absent. Reads never migrate or rewrite files. If the higher-priority file is
+damaged, the server reports an error instead of silently falling back to the
+lower-priority file or deployment defaults.
+
+Template reads do not acquire locks. Publication writes a unique staging file in
+the same directory, then switches the active path through AGFS: LocalFS uses a
+file rename; S3 copies the complete object over the destination before deleting
+the staging object, without deleting the destination first. Readers may see the
+complete old or new version, or deployment defaults before the first publication
+and after DELETE. This is per-file publication, not a transaction across an
+entire template listing or registry snapshot.
+Writers/DELETE still use cross-process locks; publication locks cover the new,
+legacy, obsolete backup, and staging paths. PUT publishes only to the new path
+and removes the legacy file after publication succeeds. DELETE removes the
+legacy file before the new file so that an old override cannot become active
+again. Explicit PUT/DELETE requests may replace or remove damaged content. Contention uses
+zero-wait attempts with asynchronous
+backoff for up to 10 seconds, leaving executor threads available for I/O/release.
+A failed staging write leaves the active file unchanged. Post-publication staging
+cleanup errors only produce warnings, never an in-place rollback. If the move reports an
+error, the destination is checked: a verified publication is retained; an
+unverifiable outcome returns an error without blindly restoring the old version.
+Use GET to confirm its state. Cancellation stops lock retries, but already
+submitted native I/O is drained and locks released before cancellation propagates;
+cancelling an in-progress publication does not guarantee that it is undone.
+Process crashes or cleanup failures can leave `.tmp` files, which readers ignore.
+
+The ordinary Session memory extraction pipeline loads Account templates before
+schema filtering and initial-file generation. The resulting registry snapshot is
+used for extraction, patch merging, and memory-file updates. A later publication
+does not change an in-flight extraction's snapshot. Streaming updates compare the
+current memory type's schema values (including the rendering mode), not the whole
+registry: changes to unrelated types do not split a batch. Different schemas are
+merged/rendered separately. If those groups target the same file, before or after
+patch merging, the updater raises a conflict before applying any memory operations
+in that merge batch. Re-extract with current templates and file contents before
+retrying; replaying the old patches is not a fix. This is fail-fast conflict
+handling, not automatic rebasing or an atomic transaction across a whole Commit;
+other memory-type groups or append-only writes may already have completed.
+Work queued before publication
+uses the configuration at **extraction start**, not at HTTP Commit acceptance.
+All eligible Users/Peers in that Account share the templates; no shared deployment
+registry is mutated. Publishing/resetting does not proactively rewrite existing
+memories; subsequent commits can update them according to the effective rules.
+
+:::
+
+Editable descriptions and content templates must be nonempty strings;
+each serialized file is limited to 1 MiB. Descriptions (both type-level and
+`fields[].description`) share one restricted Jinja contract, whether they come
+from deployment defaults or an Account override. Editing a description does not
+disable rendering, and no description provenance flag is stored or checked.
+Only the existing `language` context variable is available; body fields,
+`extract_context`, and arbitrary objects are not exposed. The syntax subset is
+the same as the restricted bodies below: conditionals, local variables, bounded
+literal loops, safe string methods, approved string filters and tests, but no arbitrary calls.
+For example, <code v-pre>Use {{ language.upper() }}.</code> renders as `Use EN.` when the existing
+schema-rendering context supplies `language=en`. Rendering uses the language supplied by the calling path; both Python and JSON protocols render field descriptions with that context. Missing language retains the previous undefined/empty-output behavior;
+use `language or 'English'` for a fallback. Context values are not recursively
+evaluated as Jinja. Invalid custom expressions are rejected before publication,
+and persisted overrides are revalidated before extraction. Deployment descriptions
+also use the restricted renderer, so deployment-specific unsupported syntax must
+be migrated rather than receiving a trust exemption. Descriptions are limited to
+2048 AST nodes and 1 MiB rendered output. `content_template` keeps its separate
+variable/source-size contract and inherited-body compatibility below.
+Each editable `description`
+(type-level or `fields[].description`) is limited to 50,000 Unicode code points,
+including whitespace and template-like text. This is a per-field source-character limit,
+not a UTF-8 byte, rendered-output or combined-description limit. Oversized updates
+return 400 without modifying the active configuration. Publication does not invoke
+an LLM. Storage failures/corrupt files
+are reported, not silently treated as defaults. These endpoints have no SDK/CLI wrappers. Use the HTTP API to read, publish, or reset templates.
+
+#### Managed content-template contract
+
+The restricted contract below applies only when the Account body differs from the
+current deployment default. At publication and extraction load, the server compares
+the complete `content_template` string against its own deployment registry. An exact
+match uses the existing deployment renderer, including its filters and helpers;
+there is no client-supplied trust flag. This includes description-only PUT, empty
+PUT, and GET `effective` → PUT when the body is unchanged. The override can still
+have `status=custom` even though its body is inherited. The bundled Events YAML and
+its existing date expression are unchanged.
+
+Equality is exact, including whitespace. A modified body must pass the restricted
+contract even if it was based on a deployment template. If deployment defaults
+later change, the stored body is compared again on the next extraction load; a
+previous match does not grant permanent trust. A nonmatching body outside the
+allowlist must be replaced/reset before extraction can use it. Already-started
+extractions retain their resolved snapshot.
+
+`content_template` formats extracted/merged fields into Markdown. Administrators
+may change headings, order, fixed text and conditional visibility, including
+omitting fields or the Events ChatLog/resource-event branch. Omission does not
+disable extraction, remove stored field metadata or delete Session messages.
+Events' default embedding template consumes the body, so these edits can affect
+retrieval input. Paths, field definitions and merge rules remain locked.
+
+| Type | Content variables |
+| --- | --- |
+| events | event_name, goal, summary, ranges |
+| soul | core_truths, boundaries, vibe, continuity |
+| identity | name, creature, vibe, emoji, avatar, introduction |
+
+`language` is a description variable, not a content variable. Only Events
+may call these read-only `extract_context` helpers with positional arguments:
+`get_resource_event_content(ranges, summary)`,
+`get_first_message_time_from_ranges(ranges)`,
+`get_first_message_time_with_weekday_from_ranges(ranges)`,
+`get_event_content(ranges, summary[, ratio_threshold])`,
+`get_year(ranges)`, `get_month(ranges)`, `get_day(ranges)`.
+The first argument may use any expression allowed by the same syntax sandbox,
+including local aliases, conditionals and approved filter chains. Immediately
+before each helper call, its evaluated value must be a plain string exactly equal
+to the current memory's original `ranges`, or an empty string (no source messages).
+For example, `ranges | default('') | trim` works when it leaves the value unchanged;
+`{% set selected = ranges %}` can be followed by `get_year(selected)`.
+No normalization is performed when comparing ranges. Missing field values are
+already supplied as empty strings. Publication checks syntax without executing
+helpers; a changed or non-string range value fails at rendering with
+`content_template: invalid_ranges`, before the helper reads any messages, and stops
+that memory file write. An explicit ratio must be a numeric
+literal from 0 to 1 (omitted: 0.2; built-in: 0).
+
+Supported Jinja: `if/elif/else`, comparisons/boolean expressions, local `set`, and
+non-nested/non-recursive `for` over an explicit list/tuple of at most 32 items
+(including title/value pairs). `loop.index/index0/first/last/length` are available.
+String methods: `.upper()`, `.lower()`, `.strip()`, with no positional or keyword
+arguments. These use the same method-call syntax as deployment templates; Account
+templates allow only these methods on plain strings. The receiver type is checked
+before attribute lookup, so same-named methods/properties on other objects (including
+string subclasses) are not allowed. Methods can be chained or used on string fields,
+locals, literals, and string results of approved Events helpers. Method references
+cannot be stored or accessed without calling them.
+
+String filters: `| upper`, `| lower`, and `| trim`, equivalent to `.upper()`,
+`.lower()`, and `.strip()`. Like the methods, they accept only plain strings and
+no positional or keyword arguments. They can be chained or mixed with methods,
+for example `summary | trim | upper` or `summary.strip() | upper`.
+The `default` filter accepts no argument or one literal string, for example
+`| default` / `| default()` / `| default('N/A')`. It replaces only undefined values;
+empty strings and `None` remain unchanged, matching the built-in Events template.
+It accepts only plain strings, `None` or undefined values without object coercion.
+The boolean argument, keyword arguments and expanded/dynamic arguments are not
+supported. Use `summary or 'pending'` or an explicit conditional for empty-value
+fallbacks. Other filters, including `| length`, `| d(...)` and `| attr(...)`, remain
+unsupported.
+Tests: `defined`, `undefined`, `none`, `string` remain supported.
+Built-in field/context names cannot be overwritten. Imports,
+inheritance, macros, arbitrary calls/attributes, subscripts, arithmetic/string
+multiplication/concatenation and reserved `MEMORY_FIELDS` comments are not allowed.
+
+Limits: 64 KiB UTF-8 source, 2048 AST nodes, 1 MiB rendered body excluding system
+metadata. Nonmatching Account bodies are checked at publication and extraction load,
+then rendered with a restricted Jinja environment and only approved fields/helpers.
+The built-in Events, Soul and Identity bodies also pass this restricted syntax,
+including after edits to headings, trailing newlines or CRLF line endings. These
+edits do not bypass validation or mark the edited body as deployment-owned.
+Runtime failures on this restricted path stop that file write instead of falling
+back to an empty body. Exact inherited bodies keep the deployment renderer's
+existing behavior, including its error/fallback semantics; they are not subject to
+the restricted renderer's source/AST/output limits. The complete Account YAML file
+is still limited to 1 MiB.
+These guards do not replace Worker resource quotas, evaluate extraction quality or sanitize
+Markdown/HTML for UI display. Descriptions and restricted content templates share
+the syntax sandbox, but expose different variables and use different source limits.
+
+Publication validation failures return `INVALID_ARGUMENT` with `error.details`:
+`field=description`, `fields.<name>.description`, or `content_template`, a controlled
+`reason`, and `line` when available. The
+active configuration remains unchanged. Structurally valid older overrides using
+unsupported Jinja can still be read, replaced or reset, but extraction refuses to
+execute them unchecked. Corrupt YAML remains an explicit error.
+
+For example, this `events` PUT body shows only the event name and summary, without ChatLog:
+
+```json
+{"content_template": "# {{ event_name.strip() }}\n\n## Summary\n{{ summary.strip() or 'Pending' }}"}
+```
+
+### Runtime Configuration
+
+ROOT can manage Cluster configuration and any Account configuration. ADMIN can
+manage only its own Account layer.
+
+```http
+GET /api/v1/admin/configuration
+PATCH /api/v1/admin/configuration
+
+GET /api/v1/admin/accounts/{account_id}/configuration
+PATCH /api/v1/admin/accounts/{account_id}/configuration
+Content-Type: application/json
+
+{"settings": {"agent_evolution": {"enabled": true}}}
+```
+
+Cluster `settings` contains explicit runtime values. Account GET/PATCH responses
+also always include `settings.agent_evolution.enabled`, resolved from the Account
+override, Cluster runtime override, then startup default. Other fields remain
+explicit values; reads never persist defaults. PATCH is three-state: an absent
+key is unchanged, `null` removes that layer's value, and a concrete value updates
+it. Removing the Account `agent_evolution` override returns the newly resolved
+switch value in the response.
+
+The Cluster runtime surface currently contains `agent_evolution`. The Account
+surface contains `output_language_override`, `memory`, `feishu`, `parser_api`, `agent_evolution`, `github`, `acl`, `vlm`, and
+`query_planner`, all of which are dynamic. Account `vlm` and `query_planner`
+are visible and writable only to ROOT. Each configured section is complete:
+`model` and a non-empty `credentials` array are required, while `timeout` is
+optional. ADMIN responses omit both sections, and ADMIN PATCH requests
+containing either section are rejected. Account `memory` exposes only
+`extraction_enabled`. Account `embedding` and `vectordb` are also ROOT-only, including reads.
+Account `parser_api` is ROOT-only and requires a nonblank `api_key`. ADMIN responses
+omit it, and ADMIN PATCH requests touching it, including `null`, are rejected.
+`vectordb` can only be supplied in Account creation `settings`; subsequent additions,
+changes and resets are rejected, including ROOT requests. Cluster
+`embedding`, `vlm`, `query_planner`, `memory`, `feishu`, storage, parser, and
+retrieval fields are startup-only because they are not declared as runtime
+fields.
+
+Account `embedding` and `vectordb` use dedicated allowlist schemas. Account and
+Cluster settings are published independently; the vector resolver applies
+domain-specific Cluster defaults. Provider connection fields are accepted only
+inside `credentials`, which replaces the complete provider binding. Each
+credential must independently supply its provider and required connection and
+authentication parameters. A credential may use the effective outer model.
+VectorDB does not expose local paths, cuVS tuning, or custom adapter parameters.
+
+Existing Accounts may PATCH complete embedding credential/deployment bindings,
+retry/concurrency, failback and circuit-breaker settings. Setting an optional
+runtime field such as `max_retries` to `null` removes the Account value, after
+which the vector resolver applies its Cluster default. Required credentials
+cannot be removed from a configured model mode. Outer model identity, mode, dimension, input, query/document parameters,
+version, text source and input token limit are create-only. Provider fields outside
+`credentials`, batch size, encoding format, extra body, local model paths,
+fusion/video settings and metadata override are not on the Account API surface.
+Every change validates the effective Embedding/VectorDB pair before persistence.
+
+An explicit `embedding: {}` is valid and declares no Account model mode or runtime
+policy. As a PATCH, `{}` merges with existing settings and does not clear them.
+When no Account model mode is configured, Cluster model bindings are used.
+An explicit Account VectorDB connection replaces Cluster connection and
+authentication fields even when the backend type is unchanged; only remote
+backends `http`, `volcengine` and `vikingdb` are accepted.
+
+```json
+{"settings":{"embedding":{"dense":{"credentials":[{"provider":"openai","model":"compatible-deployment","api_base":"https://embedding.example/v1","api_key":"account-key"}]}}}}
+```
+
+Queries, indexing, reindexing and OVPack use the target Account, including ROOT
+requests. Endpoint updates apply to subsequent embedding calls; in-flight calls finish.
+The caller must ensure semantic model compatibility: equal dimension does not prove
+equal model weights. No automatic historical-vector migration is performed. Remote
+collections/indexes and authorization must be provisioned externally; runtime errors
+never select another Account's or Cluster's database.
+
+Account and Cluster settings are stored independently. Agent Evolution retains
+deprecated whole-section Cluster fallback solely for compatibility. Account
+Feishu defaults are resolved by Feishu business code: when its Account section
+is absent it uses the complete Cluster section; once present, `app_id`,
+`app_secret`, `max_rows_per_sheet`,
+`max_records_per_table`, `download_images`, and `request_timeout` come from the
+Account section or their Feishu defaults; only `domain` remains Cluster-owned.
+GitHub and ACL have no Cluster fallback.
+
+VLM business resolution uses Cluster VLM when an Account has no VLM section.
+Once the Account section exists, its model-service identity fields come
+exclusively from Account settings, while selected runtime behavior is composed
+with Cluster settings. Account `timeout` overrides Cluster `timeout` when set;
+omitting or resetting it uses Cluster `timeout`. Query Planner precedence is
+Account `query_planner`, Account `vlm`, Cluster `query_planner`, then Cluster `vlm`.
+These are VLM business rules, not generic configuration inheritance.
+
+The PATCH is validated structurally before the merged configuration is built:
+unknown paths and fields outside the runtime surface are rejected. Objects merge
+recursively; arrays replace wholesale. A nested null removes only that leaf. To
+remove a whole object override, send null at the parent path; an empty object
+remains an explicit empty object.
+
+Both GET endpoints return only values persisted at the addressed scope. They do
+not return business-resolved defaults. After persistence, the new
+configuration is published and matching in-process consumers are awaited.
+Consumer failures are logged without rolling back the persisted override, so
+a successful response confirms the configuration update but does not certify
+that every derived client has applied it. See [runtime configuration source and reload behavior](../guides/01-configuration.md#runtime-configuration-source).
+
+File-mode saves require the complete `content` and the previous `revision`.
+Draft previews (`source=file&dry_run=true`) accept optional VLM/Embedding form `settings`;
+other sections remain editable through the complete file.
+File reads and previews return `form_readonly: true` when the document contains dollar signs, Windows `%VAR%` references, or escaped dollar/percent signs. Model form data is omitted and form patches are rejected. Use file mode to edit the original text, including quoted and unquoted environment references. Validation follows startup expansion of the original text; saves do not serialize the document. CLI startup arguments are reapplied during validation, as during restart.
+
+#### Draft Model Connection Test
+
+ROOT can test a draft VLM or Embedding connection without saving or publishing
+the submitted settings. This private Studio endpoint is intentionally hidden
+from the generated OpenAPI schema and always returns `Cache-Control: no-store`.
+
+```http
+POST /api/v1/admin/configuration/test-model
+Content-Type: application/json
+X-API-Key: <root-api-key>
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `kind` | string | Yes | - | `vlm` or `embedding` |
+| `config` | object | Yes | - | Draft provider credential or endpoint fields to test |
+| `fallback` | object | No | `{}` | Existing effective configuration used for omitted non-secret fields |
+| `thinking` | boolean | No | `null` | VLM thinking-mode override for the probe |
+| `mode` | string | No | `dense` | Embedding mode: `dense`, `sparse`, or `hybrid` |
+
+```bash
+curl -X POST http://localhost:1933/api/v1/admin/configuration/test-model \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-api-key>" \
+  -d '{
+    "kind": "vlm",
+    "config": {
+      "provider": "openai",
+      "api_key": "draft-key"
+    },
+    "fallback": {
+      "model": "gpt-4.1"
+    }
+  }'
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "ok": true,
+    "ms": 120
+  }
+}
+```
+
+The endpoint redacts provider errors and does not persist the submitted draft.
+
+#### Server Restart
+
+Only ROOT can restart a single-worker `openviking-server` CLI process.
+Multi-worker and embedded ASGI launch modes do not support remote restart.
+
+```http
+POST /api/v1/admin/restart
+Content-Type: application/json
+X-API-Key: <root-api-key>
+
+{"revision": "<saved-file-revision>"}
+```
+
+`revision` is a required, non-empty string. Obtain the current file revision and
+restart capability from `GET /api/v1/admin/configuration?source=file`;
+`result.restart` contains `supported`, `instance_id`, and `restarting`.
+The restart endpoint does not save configuration. Save any changes first using
+`PATCH /api/v1/admin/configuration?source=file`, with `content` and the previous
+`revision`, then submit the returned revision to the restart endpoint.
+
+The server checks the current file revision and validates the configuration before
+accepting the restart. A stale revision or invalid file returns `INVALID_ARGUMENT`;
+an unsupported launch mode or unreadable file returns `FAILED_PRECONDITION`.
+No restart is requested when these checks fail.
+
+An accepted request returns **HTTP 202**, before graceful shutdown:
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "supported": true,
+    "instance_id": "current-instance-id",
+    "restarting": true
+  }
+}
+```
+
+The CLI drains active requests, stops its managed Bot, and replaces the process
+with the original interpreter, arguments, environment, and working directory.
+File saves are rejected once restart has been requested. HTTP 202 confirms
+acceptance, not successful recovery: poll the file configuration endpoint until
+`instance_id` changes and `restarting` is false. External dependencies may still
+prevent startup. If the address, port, or ROOT credential changes, update the
+client connection before polling. See [server configuration](../configuration/01-server.md).
+
+Before accepting a restart, the CLI saves the exact file bytes loaded by the
+running process in a separate private recovery backup (0600, containing sensitive
+configuration). If the new process fails while loading configuration, starting
+the Bot, initializing the application, or binding its port, it atomically restores
+the previous running configuration and starts again once. The recovered instance
+returns `result.restart.rolled_back: true`; Studio reports the rollback.
+The recovery backup is deleted after application startup and socket binding succeed.
+Subsequent runtime failures do not trigger rollback. Remote restart cannot switch
+to multiple workers; use the deployment platform for that change.
+
+This recovery backup differs from `.studio.bak`, which only contains the file
+before the most recent save and may never have started successfully. Recovery
+only restores the configuration file, not storage or external side effects.
+It does not handle stalled startup, forced process termination, or machine failure.
+External file changes after restart prevent automatic restoration. If the restored
+configuration also fails to start, no further retry occurs; an administrator must
+recover the service on the server.
+
+#### Account Configuration Reference
+
+Initialize Account configuration through `settings` on the create endpoint,
+then read and update it through the configuration endpoints:
+
+| Method | Path | Authorization | Return value |
+| --- | --- | --- | --- |
+| `POST` | `/api/v1/admin/accounts` | ROOT | New Account; accepts create-time `settings` |
+| `GET` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT, or the target Account's ADMIN | Explicit Account `settings` plus effective `agent_evolution.enabled` |
+| `PATCH` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT, or the target Account's ADMIN | Updated `settings` plus effective `agent_evolution.enabled` |
+
+`vlm`, `query_planner`, `embedding`, `vectordb`, and `parser_api` are sensitive
+infrastructure settings. Only ROOT can create, read, or modify them. An ADMIN
+GET response for its own Account removes those sections; a PATCH body containing
+any of them immediately returns `403 PERMISSION_DENIED`. ADMIN cannot manage a
+different Account. Structural and semantic validation errors return
+`400 INVALID_ARGUMENT`; an unknown Account returns `404 NOT_FOUND`.
+
+Create-only fields can be supplied only through `settings` on
+`POST /api/v1/admin/accounts`. A later PATCH that touches one, including a
+parent-object `null`, returns `400 INVALID_ARGUMENT` and persists no partial
+update. Account creation validates `settings` before creating the Account
+directory. A later PATCH first merges the current explicit Account values, then
+validates the complete effective configuration.
+
+**Account Parser Credential**
+
+`settings.parser_api` is dynamic and contains only a required nonblank `api_key`.
+Only ROOT can read, update or reset it:
+
+```json
+{"settings": {"parser_api": {"api_key": "<account-parser-key>"}}}
+```
+
+The external parser uses this key for the owning Account's uploads, submission,
+polling and recovery; operational settings remain in Cluster `parser_api`.
+An absent Account section retains the legacy Cluster key. Queues carry owner and
+remote IDs, without credentials. A running call retains its acquired key;
+the next execution or recovery reads the current key. Rotation must preserve
+access to existing IDs under the same remote identity. Remote errors do not trigger
+credential fallback or resubmission. Account settings use the existing configuration
+source and AGFS file encryption when enabled; this does not encrypt `ov.conf`.
+
+**Other Account Configuration Sections**
+
+In addition to model, vector and parser settings, the following `settings` objects are
+dynamic and both ROOT and the target Account's ADMIN can read and write them:
+
+| Path | Type and constraints | Meaning |
+| --- | --- | --- |
+| `acl.enabled` | Boolean, default `false` | Whether ACL is enabled for this Account |
+| `output_language_override` | Optional string | Output language for generation; absent or `null` uses Cluster, `""` enables automatic detection |
+| `memory.extraction_enabled` | Boolean, default `true` within a configured section | SessionCommit long-term extraction switch; absent or `null` `memory` uses Cluster, a present empty section uses `true` |
+| `agent_evolution.enabled` | Boolean, default `false` | Whether Agent Evolution is enabled; when the Account omits the whole section, the complete Cluster `agent_evolution` section is used for legacy compatibility |
+| `github.token` | String, default empty string | GitHub access token; an empty string means the Account provides no token |
+| `feishu.app_id` | String, optional | Account Feishu App ID |
+| `feishu.app_secret` | String, optional | Account Feishu App Secret |
+| `feishu.max_rows_per_sheet` | Integer, `> 0`, optional | Maximum rows read from one Sheet |
+| `feishu.max_records_per_table` | Integer, `> 0`, optional | Maximum records read from one Base table |
+| `feishu.download_images` | Boolean, optional | Whether to download images from Feishu documents |
+| `feishu.request_timeout` | Number, `> 0`, optional | Feishu request timeout in seconds |
+
+`feishu.domain` is not part of the Account API; Cluster always owns it. When
+the Account omits the entire `feishu` section, it uses the complete Cluster
+Feishu configuration. Once configured, the fields above use explicit Account
+values or Feishu defaults, while only `domain` still comes from Cluster.
+`github` and `acl` do not fall back to Cluster.
+
+**Read explicit Account configuration**
+
+```bash
+curl http://localhost:1933/api/v1/admin/accounts/acme/configuration \
+  -H "X-API-Key: <root-key>"
+```
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "account_id": "acme",
+    "settings": {
+      "embedding": {
+        "max_retries": 5
+      },
+      "agent_evolution": {
+        "enabled": false
+      }
+    }
+  }
+}
+```
+
+Except for the Agent Evolution switch, the response does not expand Cluster
+values, defaults, or the effective Embedding/VectorDB composition. For example, when the response above has no
+Account model binding, actual calls still use the Cluster model binding.
+
+**Update dynamic Account configuration**
+
+This example assumes the Account declared a `dense` binding with `model` and
+`dimension` at creation. The PATCH only rotates its credentials and updates
+dynamic runtime values.
+
+```bash
+curl -X PATCH http://localhost:1933/api/v1/admin/accounts/acme/configuration \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-key>" \
+  -d '{
+    "settings": {
+      "embedding": {
+        "max_retries": 5,
+        "dense": {
+          "credentials": [{
+            "id": "primary",
+            "provider": "openai",
+            "model": "embed-deployment-v2",
+            "api_key": "<new-api-key>",
+            "api_base": "https://embedding.example/v1"
+          }]
+        }
+      }
+    }
+  }'
+```
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "account_id": "acme",
+    "settings": {
+      "embedding": {
+        "max_retries": 5,
+        "dense": {
+          "model": "text-embedding-3-large",
+          "dimension": 3072,
+          "credentials": [{
+            "id": "primary",
+            "provider": "openai",
+            "model": "embed-deployment-v2",
+            "api_key": "<new-api-key>",
+            "api_base": "https://embedding.example/v1"
+          }]
+        }
+      }
+    }
+  }
+}
+```
+
+Objects merge recursively and arrays replace wholesale. The example therefore
+replaces the full `dense.credentials` failover chain rather than merging by
+`id`. Set a dynamic leaf to `null` to remove its Account value, for example
+`{"settings":{"embedding":{"max_retries":null}}}`. The vector resolver then
+uses the corresponding Cluster value. An empty object does not clear an
+existing object.
+
+**Account VLM and Query Planner Fields**
+
+`vlm` and `query_planner` use the same dynamic schema:
+
+| Path | Type and constraints | Meaning |
+| --- | --- | --- |
+| `*.model` | Non-empty string, required | Default model name |
+| `*.credentials` | Non-empty array, required; replaces as a whole | Provider/failover bindings in call order |
+| `*.timeout` | Number, `> 0`, optional | Account request timeout in seconds; reset it to use Cluster timeout |
+| `*.credentials[].id` | String, optional | Credential identifier |
+| `*.credentials[].provider` | String, required | `volcengine`, `openai`, `azure`, `kimi`, `glm`, `litellm`, or `openai-codex` |
+| `*.credentials[].model` | String, optional | Overrides the outer `model`; can be an endpoint/deployment ID |
+| `*.credentials[].api_key` | String, optional | Provider API key; normally required except for `litellm`; `openai-codex` may use local Codex OAuth |
+| `*.credentials[].api_base` | String, optional | API endpoint |
+| `*.credentials[].api_version` | String, optional | API version for Azure and similar APIs |
+| `*.credentials[].forward_api_key` | Boolean, optional | Whether to forward the API key to LiteLLM |
+| `*.credentials[].extra_headers` | `map<string, string>`, optional | Additional HTTP request headers; map keys are header names and values are header values |
+| `*.credentials[].extra_request_body` | `map<string, JSON value>`, optional | Provider extensions appended unchanged to an OpenAI-compatible completion request body; a top-level `stream` key is not allowed |
+| `*.credentials[].reasoning_effort` | String, optional | OpenAI-compatible reasoning effort |
+| `*.credentials[].keepalive_expiry` | Number, `>= 0`, optional | Idle HTTP connection lifetime in seconds |
+| `*.credentials[].max_tokens` | Integer, `> 0`, optional | Overrides the outer completion token limit |
+
+When an Account has no `vlm`, it uses the Cluster VLM. Once `vlm` is configured,
+the model, provider, endpoint, and credentials come exclusively from Account
+settings; Cluster provides only general runtime behavior not owned by the
+Account. Query Planner precedence is Account `query_planner`, Account `vlm`,
+Cluster `query_planner`, then Cluster `vlm`.
+
+The keys inside `extra_headers` and `extra_request_body` are not enumerated by
+OpenViking; they must follow the target provider's API contract. They belong
+only to that credential and do not merge with a same-named Cluster object or
+another credential. `extra_request_body` cannot set `stream` because
+OpenViking VLM APIs return complete responses only.
+
+**Account Embedding Fields**
+
+Unset values are not persisted on the Account. At runtime, the vector resolver
+uses the corresponding Cluster value. If Account creation declares `dense`,
+`sparse`, or `hybrid`, that mode must be a complete Account binding. `hybrid`
+cannot be combined with `dense` or `sparse`.
+
+| Path | Lifecycle | Type and constraints | Meaning |
+| --- | --- | --- | --- |
+| `embedding.dense` / `sparse` / `hybrid` | Mode existence is create-only | Object/null | Three model output modes; cannot be added, removed, or switched after creation |
+| `embedding.max_concurrent` | Dynamic | Integer, `>= 1` | Document embedding concurrency limit for this Account; retrieval query embeddings bypass this limit |
+| `embedding.max_retries` | Dynamic | Integer, `>= 0` | Retry count for transient provider failures |
+| `embedding.circuit_breaker.failure_threshold` | Dynamic | Integer, `>= 1` | Consecutive failures before opening the circuit |
+| `embedding.circuit_breaker.reset_timeout` | Dynamic | Number, `> 0` | Base circuit recovery wait in seconds |
+| `embedding.circuit_breaker.max_reset_timeout` | Dynamic | Number, `> 0` | Maximum circuit recovery wait in seconds |
+| `embedding.text_source` | Create-only | `content_only` / `summary_first` | Text source used when writing vectors |
+| `embedding.max_input_tokens` | Create-only | Integer, `>= 100` | Input token limit for one embedding call |
+| `embedding.*.model` | Create-only | Non-empty string, required when first declaring a mode | Model identity |
+| `embedding.*.dimension` | Create-only | Integer, `> 0`, required when first declaring a mode | Vector dimension; must match the effective VectorDB |
+| `embedding.*.input` | Create-only | `text` / `multimodal`, optional | Input mode |
+| `embedding.*.query_param` / `document_param` | Create-only | String, optional | Query/document parameters for asymmetric retrieval |
+| `embedding.*.version` | Create-only | String, optional | Model version |
+| `embedding.*.credentials` | Dynamic | Non-empty array; replaces as a whole | Account provider/failover binding |
+| `embedding.*.failback_timeout_seconds` | Dynamic | Number, `> 0` | Wait before trying to fail back to the primary credential |
+| `embedding.*.failback_request_count` | Dynamic | Integer, `>= 1` | Backup requests before attempting failback |
+
+`embedding.*.credentials` is an ordered array. Its first item has priority;
+later credentials are attempted in array order after a failure. Each item has
+this schema:
+
+| Field | Type and constraints | Meaning |
+| --- | --- | --- |
+| `id` | String, optional | Stable credential identifier; when omitted, runtime identifies it from its array index |
+| `provider` | String, required | Lowercase provider name: `openai`, `azure`, `volcengine`, `vikingdb`, `jina`, `ollama`, `gemini`, `voyage`, `dashscope`, `minimax`, `cohere`, `litellm`, or `local` |
+| `model` | Non-empty string, optional | Overrides the outer model for the mode; when absent, uses the outer model and is commonly an endpoint/deployment ID |
+| `api_key` | String, optional | API key. Provider-specific requirements appear below |
+| `api_base` | String, optional | OpenAI-compatible or Azure endpoint |
+| `api_version` | String, optional | API version for Azure and similar APIs |
+| `ak` | String, optional | Access Key for the VikingDB Embedding provider |
+| `sk` | String, optional | Secret Key for the VikingDB Embedding provider |
+| `region` | String, optional | Region for the VikingDB Embedding provider |
+| `host` | String, optional | Provider endpoint or routing host |
+| `extra_headers` | `map<string, string>`, optional | Additional HTTP headers sent to the provider |
+
+Each credential must independently satisfy its provider's connection and
+authentication requirements. It cannot borrow values from Cluster configuration
+or another credential in the array:
+
+| Provider | Required or alternative fields | Notes |
+| --- | --- | --- |
+| `openai` | `api_key` or `api_base` | `api_base` supports local OpenAI-compatible services that do not require an API key |
+| `azure` | `api_key` and `api_base` | Add `api_version` when required by the Azure endpoint |
+| `volcengine`, `jina`, `gemini`, `voyage`, `dashscope`, `minimax`, `cohere` | `api_key` | Other connection fields are provider-specific options |
+| `vikingdb` | `ak`, `sk`, and `region` | All three are required together |
+| `ollama`, `litellm`, `local` | No mandatory authentication field | An outer or credential `model` is still required; the provider handles endpoint, environment, or local-model requirements |
+
+A credential may omit `model` to use the outer model for its mode. Once the
+credential array is supplied, it does not compose with Cluster provider,
+endpoint, credential, or provider-specific fields. `batch_size`,
+`encoding_format`, `extra_body`, `model_path`, `cache_dir`, fusion/video
+parameters, `allow_metadata_override`, and provider/auth fields outside
+`credentials` are not on the Account API surface.
+
+Existing Accounts can update dynamic runtime values, but cannot create a model
+mode for the first time through PATCH because `model`, `dimension`, and the mode
+combination are create-time contracts. `embedding: {}` is valid and means that
+the Account has no Embedding override; submitted through PATCH, it only merges
+and does not clear existing settings.
+
+**Account VectorDB Fields**
+
+Supply `vectordb` only as `settings.vectordb` in the Account creation request.
+Every field is create-only. When omitted, the Account uses the Cluster
+VectorDB. When supplied, Account connection and authentication completely
+replace Cluster connection and authentication even if both choose the same
+backend type.
+
+| Path | Type and constraints | Meaning |
+| --- | --- | --- |
+| `vectordb.backend` | Required: `http`, `volcengine`, or `vikingdb` | Account supports remote backends only |
+| `vectordb.name` | Non-empty string, required | Collection name |
+| `vectordb.url` | String; required for `http` | HTTP backend endpoint |
+| `vectordb.project` | Non-empty string, default `default` | Project name; `project_name` is the internal field name |
+| `vectordb.index_name` | Non-empty string, required | Index name |
+| `vectordb.distance_metric` | `cosine`, `l2`, or `ip`; default `cosine` | Distance metric |
+| `vectordb.dimension` | Integer, `> 0`, required | Must equal the effective Embedding dimension |
+| `vectordb.sparse_weight` | Number, `>= 0`; default `0` | Sparse/hybrid retrieval weight |
+
+VectorDB subobjects are also entirely create-only:
+
+| Path | Type and constraints | Meaning |
+| --- | --- | --- |
+| `vectordb.volcengine.ak` | String, optional | Access Key for AK/SK authentication; required in that mode |
+| `vectordb.volcengine.sk` | String, optional | Secret Key for AK/SK authentication; required in that mode |
+| `vectordb.volcengine.api_key` | String, optional | Data API key authentication; when set, AK/SK are not required |
+| `vectordb.volcengine.session_token` | String, optional | Optional STS temporary-credential token for AK/SK authentication |
+| `vectordb.volcengine.region` | String, optional | Required in AK/SK mode; API-key mode requires this or `host` |
+| `vectordb.volcengine.host` | String, optional | Data-plane endpoint for API-key mode; API-key mode requires this or `region` |
+| `vectordb.vikingdb.host` | Non-empty string; required for `vikingdb` | Private-deployment VikingDB endpoint |
+| `vectordb.vikingdb.headers` | `map<string, string>`, optional | Private-deployment request headers; map keys are header names and values are header values |
+
+Account `local`, `cuvs`, `path`, cuVS tuning, and `custom_params` are not
+supported. External control-plane tooling must create remote collections,
+indexes, schemas, and authorization before configuration. The API validates the
+local Embedding/VectorDB contract but does not probe remote resources. After
+configuration becomes effective, queries, indexing, queue writes, reindexing,
+and OVPack route by the target Account. ROOT follows the same routing when
+acting for an Account.
+
+Every Embedding creation or update validates the effective
+Embedding/VectorDB pair, including vector dimension, output mode, sparse
+weight, distance metric, provider configuration, and credential completeness.
+On validation failure, no new configuration is published. Runtime connection or
+authentication errors, absent collections/indexes, and schema drift fail only
+the current Account operation and never fall back to another Account or the
+Cluster VectorDB. Dynamic credential or endpoint updates affect subsequent
+calls; in-flight calls complete. OpenViking does not migrate or rebuild
+historical vectors automatically, so callers must ensure semantic model
+compatibility.
+
+### user_settings
+
+ROOT can read and update any User's settings. ADMIN can read and update non-GLOBAL
+Users in its own account. USER callers can read and update only their own settings:
+both `account_id` and `user_id` in the URL must match the authenticated identity.
+The endpoint accepts `add_targets`, `memory_policy`, and `ttl`. The shared top-level
+`memory_types` filter controls which memory schemas may be extracted.
+User memories are routed to Self or Peer according to each message's `peer_id`;
+Agent memory types remain Self-only.
+
+```http
+GET /api/v1/admin/accounts/{account_id}/users/{user_id}/settings
+PATCH /api/v1/admin/accounts/{account_id}/users/{user_id}/settings
+Content-Type: application/json
+
+{
+  "memory_policy": {
+    "memory_types": ["profile", "preferences", "events", "entities", "experiences"]
+  }
+}
+```
+
+The response contains the User-level `memory_policy`, expanded with its default
+memory types and Agent-memory dependencies. `experiences` expands to
+`cases`, `trajectories`, and `experiences`. The policy is independent of the
+account-level Agent Evolution switch, which is managed through Account
+configuration. Updates are backed up to the User's
+`settings/user_config.backup.json` before replacement. A Session without an
+explicit policy reads the latest User policy when it is committed; if the User
+has no override, it falls back to `server.user_config_defaults.memory_policy`
+and then to the kernel default. To clear a persisted User override and resume
+inheriting these defaults, PATCH `{"memory_policy": null}`. An empty object
+`{"memory_policy": {}}` is an explicit policy and does not clear the override.
+
+GET/PATCH responses include the User's effective `add_targets`. Each unset User
+field uses `server.user_config_defaults.add_targets`; `viking://~` resolves for
+the managed User. A field is `null` when neither layer sets it, leaving the add
+operation's own target defaults in control. Explicit `add_resource.to` / `parent`
+and `add_skill.target_uri` still take precedence.
+
+```http
+PATCH /api/v1/admin/accounts/acme/users/alice/settings
+Content-Type: application/json
+
+{"add_targets": {"resource_uri": "viking://~/resources/project-a", "skill_uri": "viking://~/skills"}}
+```
+
+`add_targets` supports sparse updates: omitted fields remain unchanged, a null
+field restores its default, and `add_targets: null` removes all User add-target
+overrides. Resolved defaults are never persisted. New callers use this endpoint;
+USER callers must target their own `account_id` and `user_id`. The following legacy
+endpoints continue to let ordinary users manage their own targets in this release.
+They are deprecated and scheduled for removal in the next release:
+
+```http
+GET /api/v1/user-settings/add-locations
+PATCH /api/v1/user-settings/add-locations
+DELETE /api/v1/user-settings/add-locations
+```
+
+`ttl` still returns explicit User values without filling defaults from other layers.
+
+---
 
 ### create_account
 
@@ -73,8 +1141,8 @@ Create a new workspace with its first admin user.
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:create_account` - HTTP route
-- `openviking/server/api_keys/new.py:APIKeyManager.create_account` - Core implementation
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_create_account` - Python SDK
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.create_account` - Core implementation
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_create_account` - Python SDK
 
 #### 2. Interface and Parameters
 
@@ -82,17 +1150,21 @@ Create a new workspace with its first admin user.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| account_id | str | Yes | - | Workspace ID |
+| account_id | str | Yes | - | Workspace ID; at most 255 UTF-8 bytes for new file-backed accounts |
 | admin_user_id | str | Yes | - | First admin user ID |
 | seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
-| user_config | object | No | `null` | Initial config for the first admin user. Currently supports `add_targets.resource_uri` and `add_targets.skill_uri` |
+| user_config | object | No | `null` | Initial config for the first admin user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
+| settings | object | No | `null` | Initial Account runtime configuration. ROOT-only; supports `feishu`, `github`, `acl`, `agent_evolution`, `vlm`, `query_planner`, `embedding`, and `vectordb`. `vectordb` and Embedding create-only fields can only be set here |
 
 **Notes:**
-- In `trusted` mode, `user_key` is omitted from the response
-- Omit `seed` for the default random API key. Treat seed values as secret material; short seeds can make the key guessable.
+- File-backed account creation rejects an `account_id` over 255 UTF-8 bytes with `INVALID_ARGUMENT` before writing the account registry. Newly persisted user IDs are limited to 255 characters across account-store providers. Trusted mode rejects an oversized new user or a new oversized account before enqueueing auto-registration, so invalid identities cannot block other identities from registering. Existing oversized File users and accounts remain readable.
+- In `trusted` mode, only identity and role are created: no personal key, hash, or key index is generated. The response omits `user_key`, and `seed` is unused.
+- Omit `seed` for the default random API key. Set `OV_KEY_SEED` to a securely generated secret before running a deterministic example; the Go example also requires `import "os"`. Short or predictable seeds make the key guessable.
+- `settings` receives structural and effective Embedding/VectorDB pair validation before the Account and its directories are created. A failed validation leaves no Account, user, or configuration file.
+- Account `vlm`, `query_planner`, `embedding`, and `vectordb` are ROOT-only. See [Account Configuration Reference](#account-configuration-reference) above for their schema, lifecycle, and validation. The current Python SDK, CLI, and other SDK Account-creation wrappers do not expose a `settings` argument; use the HTTP API for this capability.
 - Account-level namespace isolation settings are no longer supported. User memory uses user-scoped namespaces, and one-to-many external participants are represented with `peer_id`.
-- `user_config.add_targets.resource_uri` must be a writable resource directory URI: `viking://resources` or `viking://resources/...`, `viking://user/resources` or `viking://user/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`.
-- `user_config.add_targets.skill_uri` must be `viking://user/skills` or `viking://agent/skills`. Explicit `viking://user/{user_id}/skills` is not accepted in v1.
+- `user_config.add_targets.resource_uri` must be a resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://~/peers/{peer_id}/resources` or `viking://~/peers/{peer_id}/resources/...`.
+- `user_config.add_targets.skill_uri` must be `viking://~/skills` or `viking://agent/skills`.
 
 #### 3. Usage Examples
 
@@ -108,42 +1180,46 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: <root-key>" \
   -d '{
     "account_id": "acme",
-    "admin_user_id": "alice",
-    "seed": "alice-seed"
-  }'
-```
-
-**Trusted mode (registered gateway user)**
-
-```bash
-# First, register the gateway admin user in api_key mode
-curl -X POST http://localhost:1933/api/v1/admin/accounts \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-key>" \
-  -d '{
-    "account_id": "platform",
-    "admin_user_id": "gateway-admin"
-  }'
-
-# Then promote it to root for cross-account admin operations
-curl -X PUT http://localhost:1933/api/v1/admin/accounts/platform/users/gateway-admin/role \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-key>" \
-  -d '{"role": "root"}'
-
-# Then use in trusted mode
-curl -X POST http://localhost:1933/api/v1/admin/accounts \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-key>" \
-  -H "X-OpenViking-Account: platform" \
-  -H "X-OpenViking-User: gateway-admin" \
-  -d '{
-    "account_id": "acme",
     "admin_user_id": "alice"
   }'
 ```
 
-**Trusted mode (root fallback without identity headers)**
+**Create an Account with dedicated Embedding and VectorDB**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-key>" \
+  -d '{
+    "account_id": "acme-isolated",
+    "admin_user_id": "alice",
+    "settings": {
+      "embedding": {
+        "dense": {
+          "model": "text-embedding-3-large",
+          "dimension": 3072,
+          "credentials": [{
+            "provider": "openai",
+            "api_key": "<embedding-api-key>"
+          }]
+        }
+      },
+      "vectordb": {
+        "backend": "vikingdb",
+        "name": "acme_context",
+        "index_name": "default",
+        "dimension": 3072,
+        "vikingdb": {
+          "host": "https://vikingdb.example"
+        }
+      }
+    }
+  }'
+```
+
+**Trusted mode**
+
+With `server.root_api_key` configured, use the root key for Admin API requests. No gateway-user registration or switch to `api_key` mode is required. Omit identity headers for these requests to avoid a mismatch with the target account or user in the URL.
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/admin/accounts \
@@ -158,26 +1234,35 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
-result = client.admin_create_account("acme", "alice", seed="alice-seed")
+result = client.admin_create_account(
+    account_id="acme",
+    admin_user_id="alice",
+)
 print(f"Account created: {result['account_id']}")
 print(f"Admin user: {result['admin_user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
 
 result = client.admin_create_account(
-    "acme-private",
-    "alice",
+    account_id="acme-private",
+    admin_user_id="alice",
     user_config={
         "add_targets": {
-            "resource_uri": "viking://user/resources",
-            "skill_uri": "viking://user/skills",
+            "resource_uri": "viking://~/resources",
+            "skill_uri": "viking://~/skills",
         }
     },
 )
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.adminCreateAccount("account-id", "admin-user-id"));
 ```
 
 **Go SDK**
@@ -189,13 +1274,13 @@ if err != nil {
 }
 fmt.Println(result["account_id"])
 
-seed := "alice-seed"
+seed := os.Getenv("OV_KEY_SEED")
 result, err = client.AdminCreateAccountWithOptions(ctx, "acme-private", "alice", &openviking.AdminCreateAccountOptions{
     Seed: &seed,
     UserConfig: map[string]any{
         "add_targets": map[string]any{
-            "resource_uri": "viking://user/resources",
-            "skill_uri":    "viking://user/skills",
+            "resource_uri": "viking://~/resources",
+            "skill_uri":    "viking://~/skills",
         },
     },
 })
@@ -206,10 +1291,10 @@ result, err = client.AdminCreateAccountWithOptions(ctx, "acme-private", "alice",
 ```bash
 # Requires ROOT privileges, use --sudo
 ov --sudo admin create-account acme --admin alice
-ov --sudo admin create-account acme --admin alice --seed alice-seed
+ov --sudo admin create-account acme --admin alice --seed "$OV_KEY_SEED"
 
 ov --sudo admin create-account acme-private --admin alice \
-  --user-config-json '{"add_targets":{"resource_uri":"viking://user/resources","skill_uri":"viking://user/skills"}}'
+  --user-config-json '{"add_targets":{"resource_uri":"viking://~/resources","skill_uri":"viking://~/skills"}}'
 ```
 
 **Response Example**
@@ -221,8 +1306,7 @@ ov --sudo admin create-account acme-private --admin alice \
     "account_id": "acme",
     "admin_user_id": "alice",
     "user_key": "7f3a9c1e..."
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -238,17 +1322,26 @@ List all workspaces (ROOT only).
 
 **Processing Flow:**
 1. Verify requester has ROOT privileges
-2. Call API Key Manager to get all accounts
-3. Return list with account ID, creation time, and user count
+2. Call API Key Manager to get all accounts (in creation order)
+3. Apply optional `name` filter
+4. Apply optional `limit`/`page` pagination
+5. Return list with account ID, creation time, and user count
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:list_accounts` - HTTP route
-- `openviking/server/api_keys/new.py:APIKeyManager.get_accounts` - Core implementation
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_list_accounts` - Python SDK
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.get_accounts` - Core implementation
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_list_accounts` - Python SDK
 
 #### 2. Interface and Parameters
 
-No parameters.
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| name | str | No | null | Filter by account ID (wildcard `*` and `?` matching) |
+| limit | int | No | null | Page size (≥1). Omit to return all matches |
+| page | int | No | 1 | 1-based page number; only applies when `limit` is set |
+| query | str | No | null | Case-insensitive substring match on the account ID |
+
+Results are returned in creation order.
 
 #### 3. Usage Examples
 
@@ -259,21 +1352,40 @@ GET /api/v1/admin/accounts
 ```
 
 ```bash
+# List all accounts
 curl -X GET http://localhost:1933/api/v1/admin/accounts \
+  -H "X-API-Key: <root-key>"
+
+# With filter (wildcard name matching)
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?name=*acme*" \
+  -H "X-API-Key: <root-key>"
+
+# With case-insensitive substring search
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?query=acme" \
+  -H "X-API-Key: <root-key>"
+
+# Paginated (second page of 50)
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?limit=50&page=2" \
   -H "X-API-Key: <root-key>"
 ```
 
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
-accounts = client.admin_list_accounts()
+accounts = client.admin_list_accounts(name="*acme*", limit=50, page=1)
 for account in accounts:
     print(f"Account: {account['account_id']}, created: {account['created_at']}, users: {account['user_count']}")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.adminListAccounts({ name: "*acme*", limit: 50, page: 1 }));
 ```
 
 **Go SDK**
@@ -291,6 +1403,12 @@ fmt.Println(accounts)
 ```bash
 # Requires ROOT privileges, use --sudo
 ov --sudo admin list-accounts
+
+# Filter by wildcard name
+ov --sudo admin list-accounts --name '*acme*'
+
+# Paginated
+ov --sudo admin list-accounts --limit 50 --page 2
 ```
 
 **Response Example**
@@ -301,8 +1419,7 @@ ov --sudo admin list-accounts
   "result": [
     {"account_id": "default", "created_at": "2026-02-12T10:00:00Z", "user_count": 1},
     {"account_id": "acme", "created_at": "2026-02-13T08:00:00Z", "user_count": 2}
-  ],
-  "time": 0.1
+  ]
 }
 ```
 
@@ -312,18 +1429,19 @@ ov --sudo admin list-accounts
 
 #### 1. API Implementation Overview
 
-Delete a workspace and all associated users and data (ROOT only).
+Asynchronously delete a workspace and all associated users and data (ROOT only). The endpoint returns HTTP `202` and a `task_id` without waiting for data cleanup.
 
 **Processing Flow:**
-1. Verify requester has ROOT privileges
-2. Cascade delete all AGFS data for the account (`user/` and `resources/`; sessions live under `user/`)
-3. Cascade delete all vector DB records for the account
-4. Finally delete account metadata and all user keys
+1. Verify ROOT privileges and persist the account deletion fence, immediately rejecting its keys and ordinary requests; persist a system-owned `account_delete` Task and queued work, then return `status=deleting` and `task_id`
+2. Stop account watches and business tasks, then remove vectors, OAuth grants, usage/audit data, and the entire account AGFS directory, including account-owned task records
+3. Remove the account registry entry and complete the Task only after cleanup succeeds
+
+Account and user cleanup share one queue with a single consumer. Account tasks clean the entire account directly. Later user cleanup tasks complete without further cleanup if their target was deleted. Old tasks also skip accounts or users recreated with the same IDs. Account-owned task records are deleted with the account and are not recreated by late deliveries; system-owned cleanup Tasks remain queryable.
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:delete_account` - HTTP route
-- `openviking/server/api_keys/new.py:APIKeyManager.delete_account` - Core implementation
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_delete_account` - Python SDK
+- `openviking/service/deletion.py:DeletionService.delete` - Core implementation
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_delete_account` - Python SDK
 
 #### 2. Interface and Parameters
 
@@ -335,7 +1453,13 @@ Delete a workspace and all associated users and data (ROOT only).
 
 **Notes:**
 - Delete operation is irreversible and cascades to all account data
-- If some data fails to delete, warnings are logged and deletion continues
+- Cleanup failure marks the Task as `failed` and records the error; the account remains `deleting`
+- Repeated requests during cleanup return the same Task; requesting deletion after failure creates a retry Task for remaining data
+- Unfinished work is recovered on restart; the account cannot be recreated or re-enabled during cleanup
+- Vector IDs are enumerated by account before deletion is submitted in batches of at most 100 records, without the former 100,000-record total ceiling
+- Vector deletion succeeds when the delete requests succeed; it does not require an immediate zero count or empty read-back. Remote indexes may briefly return stale data even after the Task completes
+- Account listings expose `status=active|deleting` and the cleanup `task_id` when deleting
+- Query `GET /api/v1/tasks/{task_id}` as ROOT for status and errors; cleanup uses only `pending`, `running`, `completed`, and `failed`, without separate cleanup stages. Only `completed` confirms cleanup finished
 
 #### 3. Usage Examples
 
@@ -353,13 +1477,19 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
-result = client.admin_delete_account("acme")
-print(f"Account deleted: {result['deleted']}")
+result = client.admin_delete_account(account_id="acme")
+print(f"Cleanup task: {result['task_id']}")
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.adminDeleteAccount("account-id");
 ```
 
 **Go SDK**
@@ -369,7 +1499,7 @@ result, err := client.AdminDeleteAccount(ctx, "acme")
 if err != nil {
     return err
 }
-fmt.Println(result["deleted"])
+fmt.Println(result["task_id"])
 ```
 
 **CLI**
@@ -377,6 +1507,7 @@ fmt.Println(result["deleted"])
 ```bash
 # Requires ROOT privileges, use --sudo
 ov --sudo admin delete-account acme
+ov --sudo task status <task_id>
 ```
 
 **Response Example**
@@ -385,9 +1516,10 @@ ov --sudo admin delete-account acme
 {
   "status": "ok",
   "result": {
-    "deleted": true
-  },
-  "time": 0.1
+    "account_id": "acme",
+    "status": "deleting",
+    "task_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
 }
 ```
 
@@ -408,8 +1540,8 @@ Register a new user in a workspace.
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:register_user` - HTTP route
-- `openviking/server/api_keys/new.py:APIKeyManager.register_user` - Core implementation
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_register_user` - Python SDK
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.register_user` - Core implementation
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_register_user` - Python SDK
 
 #### 2. Interface and Parameters
 
@@ -419,17 +1551,18 @@ Register a new user in a workspace.
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | user_id | str | Yes | - | User ID |
-| role | str | No | "user" | Role to assign. `ROOT` and same-account `ADMIN` may register `"user"` or `"admin"`. `"root"` must be assigned through the dedicated role-change endpoint. |
+| role | str | No | "user" | Role to assign. `ROOT` and same-account `ADMIN` may register `"user"` or `"admin"`; only `ROOT` may register `"global"`. ROOT identity comes only from `server.root_api_key`. |
 | seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
-| user_config | object | No | `null` | Initial config for the new user. Currently supports `add_targets.resource_uri` and `add_targets.skill_uri` |
+| user_config | object | No | `null` | Initial config for the new user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
 
 **Notes:**
-- In `trusted` mode, `user_key` is omitted from the response
-- Omit `seed` for the default random API key. Treat seed values as secret material; short seeds can make the key guessable.
+- In `trusted` mode, only identity and role are created: no personal key, hash, or key index is generated. The response omits `user_key`, and `seed` is unused.
+- Omit `seed` for the default random API key. Set `OV_KEY_SEED` to a securely generated secret before running a deterministic example; the Go example also requires `import "os"`. Short or predictable seeds make the key guessable.
 - ADMIN can only register users in their own account
+- `"global"` is creation-only. Only ROOT can create, delete, rotate, or modify group membership for a GLOBAL identity. No identity, including ROOT, can change an existing role to or from GLOBAL; delete and recreate instead. ADMIN and USER can observe that a GLOBAL identity exists in user listings, but never receive its credentials or management controls.
 - The `"root"` role cannot be minted through user registration
-- `user_config.add_targets.resource_uri` must be a writable resource directory URI: `viking://resources` or `viking://resources/...`, `viking://user/resources` or `viking://user/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`.
-- `user_config.add_targets.skill_uri` must be `viking://user/skills` or `viking://agent/skills`. Explicit `viking://user/{user_id}/skills` is not accepted in v1.
+- `user_config.add_targets.resource_uri` must be a resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://~/peers/{peer_id}/resources` or `viking://~/peers/{peer_id}/resources/...`.
+- `user_config.add_targets.skill_uri` must be `viking://~/skills` or `viking://agent/skills`.
 
 #### 3. Usage Examples
 
@@ -445,29 +1578,38 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "X-API-Key: <root-or-admin-key>" \
   -d '{
     "user_id": "bob",
-    "role": "user",
-    "seed": "bob-seed"
+    "role": "user"
   }'
 ```
 
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
-result = client.admin_register_user("acme", "bob", role="user", seed="bob-seed")
+result = client.admin_register_user(
+    account_id="acme",
+    user_id="bob",
+    role="user",
+)
 print(f"User registered: {result['user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
 
 result = client.admin_register_user(
-    "acme",
-    "bob-private",
+    account_id="acme",
+    user_id="bob-private",
     role="user",
-    user_config={"add_targets": {"resource_uri": "viking://user/resources/project-a"}},
+    user_config={"add_targets": {"resource_uri": "viking://~/resources/project-a"}},
 )
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.adminRegisterUser("account-id", "user-id", "user"));
 ```
 
 **Go SDK**
@@ -479,11 +1621,11 @@ if err != nil {
 }
 fmt.Println(result["user_id"])
 
-seed := "bob-seed"
+seed := os.Getenv("OV_KEY_SEED")
 result, err = client.AdminRegisterUserWithOptions(ctx, "acme", "bob-private", "user", &openviking.AdminRegisterUserOptions{
     Seed: &seed,
     UserConfig: map[string]any{
-        "add_targets": map[string]any{"resource_uri": "viking://user/resources/project-a"},
+        "add_targets": map[string]any{"resource_uri": "viking://~/resources/project-a"},
     },
 })
 ```
@@ -494,12 +1636,12 @@ result, err = client.AdminRegisterUserWithOptions(ctx, "acme", "bob-private", "u
 # Either ROOT or account ADMIN can execute
 # If using regular user's api_key who is an ADMIN of acme:
 ov admin register-user acme bob --role user
-ov admin register-user acme bob --role user --seed bob-seed
+ov admin register-user acme bob --role user --seed "$OV_KEY_SEED"
 # If using root_api_key (--sudo):
 ov --sudo admin register-user acme bob --role user
 
 ov admin register-user acme bob-private --role user \
-  --user-config-json '{"add_targets":{"resource_uri":"viking://user/resources/project-a"}}'
+  --user-config-json '{"add_targets":{"resource_uri":"viking://~/resources/project-a"}}'
 ```
 
 **Response Example**
@@ -511,8 +1653,7 @@ ov admin register-user acme bob-private --role user \
     "account_id": "acme",
     "user_id": "bob",
     "user_key": "d91f5b2a..."
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -522,18 +1663,19 @@ ov admin register-user acme bob-private --role user \
 
 #### 1. API Implementation Overview
 
-List all users in a workspace.
+List active users in a workspace. Users with deletion in progress are omitted.
 
 **Processing Flow:**
-1. Verify requester has ROOT privileges or is an ADMIN of the account
-2. Call API Key Manager to get users list
-3. Apply optional filters (name, role) and pagination limit
-4. Return users list (trusted mode omits user_key)
+1. Verify requester has ROOT privileges or is an ADMIN/USER of the account
+2. Call API Key Manager to get active users list (in creation order)
+3. Apply optional filters (name, role)
+4. Apply optional `limit`/`page` pagination
+5. Return users list with role-based credential visibility (trusted mode omits credentials)
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:list_users` - HTTP route
-- `openviking/server/api_keys/new.py:APIKeyManager.get_users` - Core implementation
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_list_users` - Python SDK
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.get_users` - Core implementation
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_list_users` - Python SDK
 
 #### 2. Interface and Parameters
 
@@ -542,13 +1684,32 @@ List all users in a workspace.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
-| limit | int | No | 100 | Maximum number of users to return |
-| name | str | No | null | Filter by user ID (prefix match) |
+| name | str | No | null | Filter by user ID (wildcard `*` and `?` matching) |
 | role | str | No | null | Filter by role |
+| query | str | No | null | HTTP-only, case-insensitive literal substring match on user IDs |
+| include_summary | bool | No | false | HTTP-only, return paginated users and account statistics in an object |
+| include_credentials | bool | No | true | HTTP-only. ROOT receives all available plaintext keys; ADMIN receives its own plaintext key and masked prefixes for other users, while GLOBAL identities report only `api_key_available`; USER receives only its own key. Set false to return `user_id`, `role`, and `api_key_available` without credentials or key prefixes. USER receives availability only for its own row. Availability is true only when the server can read the complete key for a server-side binding; hash-only credentials return false. |
+| limit | int | No | null | Page size (≥1). Omit to return all matches |
+| page | int | No | 1 | 1-based page number; only applies when `limit` is set |
 
 **Notes:**
-- ADMIN can only list users in their own account
-- In `trusted` mode, `user_key` is omitted from the response
+- Results are returned in creation order
+- ADMIN and USER can only list users in their own account.
+- ROOT receives every stored key as plaintext in `api_key`. ADMIN receives its own plaintext key and a masked `key_prefix` for every other user. USER authenticated with a personal API key receives only its own stored key; other rows omit both `api_key` and `key_prefix`. OAuth and other authentication methods do not grant USER access to stored credentials. Self-matching is strict: the listing account, the row's user ID, and the account/user segments embedded in the three-segment key must all equal the caller's authenticated identity. A mismatched key is masked for ADMIN and omitted for USER.
+- ADMIN masking retains the first two key segments and only the last four characters of the secret; every preceding secret character is replaced by `*`. Secrets of four characters or fewer and malformed keys are completely hidden. Hash-only credentials cannot be recovered as plaintext; their existing prefix is visible to ROOT/ADMIN and to the owning USER only.
+- Masking is enforced by the server for HTTP and MCP `list_users(include_credentials=true)`, so it also applies to CLI/SDK JSON output. Clients must treat `key_prefix` as display-only and require a supplied key to switch identities.
+- `ov admin list-users` additionally masks the plaintext `api_key` rows client-side by default, in both table and JSON output, and prints a notice on stderr. Pass `--reveal-api-keys` to emit plaintext: ROOT then shows every key, while ADMIN/USER still sees only its own key. Other rows remain masked for ADMIN and contain no key or prefix for USER. The flag affects CLI rendering only and does not change the server response. In table output the server's `api_key` (plaintext or client-masked) and `key_prefix` fields are merged into a single `api_key` column; JSON output keeps the server field names.
+- Registration and key regeneration still return the newly issued key to ROOT or ADMIN. USER may regenerate only its own key using personal API key authentication.
+- In `trusted` mode, both `api_key` and `key_prefix` are omitted from the response
+- Users whose deletion has started are no longer returned
+
+**Summary responses (HTTP):** Set `include_summary=true` to return an object in `result` with `users` (the current page), `total` (matching users), `account_total`, `manager_count` (admin/root), and `key_count` (users with a visible key or prefix). USER responses omit `key_count`. Account statistics ignore search/role filters and exclude deleting users; `key_count` is zero when key exposure is disabled. The default remains a user array for existing callers.
+
+`query` performs a trimmed, case-insensitive literal substring match on user IDs. It combines with the existing `name` wildcard and `role` filters. For example:
+
+```text
+GET /api/v1/admin/accounts/acme/users?limit=20&page=1&query=alice&include_summary=true
+```
 
 #### 3. Usage Examples
 
@@ -563,22 +1724,32 @@ GET /api/v1/admin/accounts/{account_id}/users
 curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "X-API-Key: <root-or-admin-key>"
 
-# With filters
-curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?role=admin&limit=50" \
+# With filters (wildcard name matching)
+curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?name=*ali*&role=admin" \
+  -H "X-API-Key: <root-or-admin-key>"
+
+# Paginated (second page of 50)
+curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?limit=50&page=2" \
   -H "X-API-Key: <root-or-admin-key>"
 ```
 
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
-users = client.admin_list_users("acme")
+users = client.admin_list_users(account_id="acme", name="*ali*", limit=50, page=1)
 for user in users:
     print(f"User: {user['user_id']}, role: {user['role']}")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.adminListUsers("account-id", { name: "*ali*", limit: 50, page: 1 }));
 ```
 
 **Go SDK**
@@ -594,11 +1765,18 @@ fmt.Println(users)
 **CLI**
 
 ```bash
-# Either ROOT or account ADMIN can execute
-# If using regular user's api_key who is an ADMIN of acme:
+# ROOT or an ADMIN/USER in acme can execute
 ov admin list-users acme
+# Reveal your own key (other users' credentials remain hidden for USER)
+ov admin list-users acme --reveal-api-keys
 # If using root_api_key (--sudo):
 ov --sudo admin list-users acme
+# ROOT can reveal all available plaintext keys
+ov --sudo admin list-users acme --reveal-api-keys
+# Filter by wildcard name
+ov admin list-users acme --name '*ali*'
+# Paginated
+ov admin list-users acme --limit 50 --page 2
 ```
 
 **Response Example**
@@ -609,8 +1787,7 @@ ov --sudo admin list-users acme
   "result": [
     {"user_id": "alice", "role": "admin"},
     {"user_id": "bob", "role": "user"}
-  ],
-  "time": 0.1
+  ]
 }
 ```
 
@@ -621,17 +1798,18 @@ ov --sudo admin list-users acme
 
 #### 1. API Implementation Overview
 
-Remove a user from a workspace. The user's API key is deleted immediately.
+Remove a user from a workspace. The user's API key is revoked immediately, and owned data cleanup runs asynchronously.
 
 **Processing Flow:**
 1. Verify requester has ROOT privileges or is an ADMIN of the account
-2. Call API Key Manager to delete user and their API key
-3. Return deletion confirmation
+2. Write a deletion fence and revoke the user's API key
+3. Enqueue a durable cleanup task for the user's owned data
+4. Return the deletion task ID
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:remove_user` - HTTP route
-- `openviking/server/api_keys/new.py:APIKeyManager.remove_user` - Core implementation
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_remove_user` - Python SDK
+- `openviking/service/deletion.py:DeletionService.delete` - Core implementation
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_remove_user` - Python SDK
 
 #### 2. Interface and Parameters
 
@@ -645,6 +1823,8 @@ Remove a user from a workspace. The user's API key is deleted immediately.
 **Notes:**
 - ADMIN can only remove users in their own account
 - Cannot delete the last admin user of an account
+- After deletion starts, the user key is invalid and list_users omits the user
+- Vector deletion succeeds when the delete requests succeed, without waiting for remote index synchronization; counts and queries may briefly lag after the Task completes
 
 #### 3. Usage Examples
 
@@ -662,13 +1842,19 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/users/bob \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
 result = client.admin_remove_user("acme", "bob")
-print(f"User deleted: {result['deleted']}")
+print(f"User deletion task: {result['task_id']}")
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.adminRemoveUser("account-id", "user-id");
 ```
 
 **Go SDK**
@@ -678,7 +1864,7 @@ result, err := client.AdminRemoveUser(ctx, "acme", "bob")
 if err != nil {
     return err
 }
-fmt.Println(result["deleted"])
+fmt.Println(result["task_id"])
 ```
 
 **CLI**
@@ -697,9 +1883,11 @@ ov --sudo admin remove-user acme bob
 {
   "status": "ok",
   "result": {
-    "deleted": true
-  },
-  "time": 0.1
+    "account_id": "acme",
+    "user_id": "bob",
+    "status": "deleting",
+    "task_id": "..."
+  }
 }
 ```
 
@@ -709,17 +1897,17 @@ ov --sudo admin remove-user acme bob
 
 #### 1. API Implementation Overview
 
-Change a user's role (ROOT only).
+Change an account user's role between USER and ADMIN, including promotion and demotion. This endpoint is only for identity management operations. ROOT may operate on any account; ADMIN is limited to its own account.
 
 **Processing Flow:**
-1. Verify requester has ROOT privileges
+1. Verify the requester has ROOT or ADMIN privileges and keep ADMIN within its own account
 2. Call API Key Manager to update user role
 3. Return updated user info
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:set_user_role` - HTTP route
-- `openviking/server/api_keys/new.py:APIKeyManager.set_role` - Core implementation
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_set_role` - Python SDK
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.set_role` - Core implementation
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_set_role` - Python SDK
 
 #### 2. Interface and Parameters
 
@@ -729,11 +1917,12 @@ Change a user's role (ROOT only).
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | user_id | str | Yes | - | User ID |
-| role | str | Yes | - | New role: "admin", "user", or "root" |
+| role | str | Yes | - | New role: "admin" or "user" (case-insensitive) |
 
 **Notes:**
-- Only ROOT can change user roles
-- Role can be set to "admin", "user", or "root"
+- ROOT and ADMIN can promote users to ADMIN or demote them to USER; ADMIN is limited to its own account
+- This endpoint only accepts "user" and "admin"; ROOT comes only from `server.root_api_key`
+- Role input is case-insensitive: `user`/`User`/`USER` and `admin`/`Admin`/`ADMIN` are equivalent. Stored roles and response values are always lowercase.
 
 #### 3. Usage Examples
 
@@ -753,13 +1942,19 @@ curl -X PUT http://localhost:1933/api/v1/admin/accounts/acme/users/bob/role \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
-result = client.admin_set_role("acme", "bob", "admin")
+result = client.admin_set_role(account_id="acme", user_id="bob", role="admin")
 print(f"User: {result['user_id']}, new role: {result['role']}")
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.adminSetRole("account-id", "user-id", "admin");
 ```
 
 **Go SDK**
@@ -775,8 +1970,11 @@ fmt.Println(result["role"])
 **CLI**
 
 ```bash
-# Requires ROOT privileges, use --sudo
+# ROOT example; an acme ADMIN can use `ov admin set-role` without --sudo
 ov --sudo admin set-role acme bob admin
+
+# Demote bob to USER
+ov --sudo admin set-role acme bob user
 ```
 
 **Response Example**
@@ -788,8 +1986,7 @@ ov --sudo admin set-role acme bob admin
     "account_id": "acme",
     "user_id": "bob",
     "role": "admin"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -799,18 +1996,18 @@ ov --sudo admin set-role acme bob admin
 
 #### 1. API Implementation Overview
 
-Regenerate a user's API key. The old key is immediately invalidated.
+Generate and store a user API key. With the default random generation, the old key stops working after a successful update. Reusing the same account, user, and seed reproduces the same key; choose a new seed or omit it when rotating credentials.
 
 **Processing Flow:**
-1. Verify requester has ROOT privileges or is an ADMIN of the account
+1. Verify requester has ROOT privileges, is an ADMIN of the account, or is the target USER authenticated with a personal API key
 2. Call API Key Manager to regenerate user key
-3. Old key is immediately invalidated
+3. With random generation or a new seed, the old key stops working immediately
 4. Return new user key
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:regenerate_key` - HTTP route
-- `openviking/server/api_keys/new.py:APIKeyManager.regenerate_key` - Core implementation
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_regenerate_key` - Python SDK
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.regenerate_key` - Core implementation
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_regenerate_key` - Python SDK
 
 #### 2. Interface and Parameters
 
@@ -823,9 +2020,11 @@ Regenerate a user's API key. The old key is immediately invalidated.
 | seed | str | No | `null` | Optional deterministic API key seed in the JSON request body. When set, the key secret is `sha256(user_id + "\0" + seed)` |
 
 **Notes:**
+- In `trusted` mode, ROOT/ADMIN requests receive HTTP 412 (`FAILED_PRECONDITION`); USER self-service requests receive HTTP 403. No credentials are generated or modified.
 - ADMIN can only regenerate keys for users in their own account
-- Old key is immediately invalidated, clients using it need to be updated
-- Omit `seed` for the default random regenerated key.
+- USER can only regenerate its own key in its own account, authenticated with a personal API key. OAuth, trusted, OIDC, and LDAP identities cannot use USER self-service rotation.
+- With random generation or a new seed, the old key stops working immediately; update clients that use it
+- Omit `seed` for the default random regenerated key. Deterministic examples use `OV_KEY_SEED` or `OV_NEW_KEY_SEED`; set these to a securely generated secret before use. In Go, import `os`. Do not use the example variable names as seed values.
 
 #### 3. Usage Examples
 
@@ -839,19 +2038,28 @@ POST /api/v1/admin/accounts/{account_id}/users/{user_id}/key
 curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users/bob/key \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <root-or-admin-key>" \
-  -d '{"seed": "bob-new-seed"}'
+  -d '{}'
 ```
 
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
-result = client.admin_regenerate_key("acme", "bob", seed="bob-new-seed")
+result = client.admin_regenerate_key(
+    account_id="acme",
+    user_id="bob",
+)
 print(f"New user key: {result['user_key']}")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.adminRegenerateKey("account-id", "user-id"));
 ```
 
 **Go SDK**
@@ -863,7 +2071,7 @@ if err != nil {
 }
 fmt.Println(result["user_key"])
 
-seed := "bob-new-seed"
+seed := os.Getenv("OV_NEW_KEY_SEED")
 result, err = client.AdminRegenerateKeyWithOptions(ctx, "acme", "bob", &openviking.AdminRegenerateKeyOptions{
     Seed: &seed,
 })
@@ -875,10 +2083,29 @@ result, err = client.AdminRegenerateKeyWithOptions(ctx, "acme", "bob", &openviki
 # Either ROOT or account ADMIN can execute
 # If using regular user's api_key who is an ADMIN of acme:
 ov admin regenerate-key acme bob
-ov admin regenerate-key acme bob --seed bob-new-seed
+ov admin regenerate-key acme bob --seed "$OV_NEW_KEY_SEED"
 # If using root_api_key (--sudo):
 ov --sudo admin regenerate-key acme bob
 ```
+
+For a USER authenticated as `acme/alice`:
+
+```bash
+ov admin list-users acme --reveal-api-keys
+ov admin regenerate-key acme alice
+```
+
+When the target matches the personal `api_key` in the active configuration, the CLI
+automatically updates that file's `api_key`, preserving other settings. It uses
+`OPENVIKING_CLI_CONFIG_FILE` when set, otherwise `~/.openviking/ovcli.conf`.
+Before requesting rotation it prints the destination path to stderr; after saving,
+it confirms the update and reminds you to update other clients. JSON stdout remains
+machine-readable. `--sudo` and rotation of another user's key do not update the local key.
+
+The CLI checks that a replacement file can be prepared before requesting rotation.
+If saving fails after the server rotates the key, or the configuration changes while
+the request is in progress, the command exits with an error and keeps the returned
+`user_key` in stdout for manual recovery. Save that key to the indicated configuration.
 
 **Response Example**
 
@@ -887,160 +2114,39 @@ ov --sudo admin regenerate-key acme bob
   "status": "ok",
   "result": {
     "user_key": "e82d4e0f..."
-  },
-  "time": 0.1
+  }
 }
 ```
 
 ---
 
-### migrate_legacy_data
+### Reserved migration endpoint
 
-#### 1. API Implementation Overview
+`POST /api/v1/admin/migrate` is reserved for future migration operations. It requires
+ROOT authentication and currently returns `400 Bad Request` with error code
+`INVALID_ARGUMENT` and message `Data migration is not currently supported.`
 
-Migrate 0.3.x legacy `viking://agent/...` / `viking://session/...` data into the 0.4.0 user / peer namespace, or clean up old namespaces after migration has been verified. This endpoint is ROOT-only and runs as a background task.
-
-**Processing Flow:**
-1. Verify requester has ROOT privileges
-2. For `action=migrate`, run preflight checks for account registry, session owner metadata, and other prerequisites
-3. Create a root-level background task
-4. During migration, copy files and existing vector records; during cleanup, delete old vector records before deleting old AGFS directories
-
-Migration does not automatically call `reindex`. If retrieval after migration is not as expected, users should manually reindex the new paths.
-
-**Code Entry Points:**
-- `openviking/server/routers/admin.py:migrate_legacy_data` - HTTP route
-- `openviking/service/legacy_migration.py:LegacyDataMigration` - Migration implementation
-
-#### 2. Interface and Parameters
-
-**HTTP API**
-
-```
-POST /api/v1/admin/migrate
-```
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| action | str | No | migrate | `migrate` runs migration; `cleanup` removes old namespaces |
-
-**Migration result fields**
-
-| Field | Description |
-|-------|-------------|
-| migrated.files / migrated.directories | Number of files and directories copied |
-| migrated.vector_records | Number of existing vector records copied |
-| migrated.skipped_vector_records | Number of old records skipped because they had no vector payload |
-| migrated.operations | Operation counts grouped by migration category |
-| skipped / warnings / created_users | Skipped items, warnings, and users created automatically |
-
-**Cleanup result fields**
-
-| Field | Description |
-|-------|-------------|
-| cleanup.directories | Number of legacy directories deleted |
-| cleanup.vector_records | Number of old vector records deleted |
-| cleanup.targets | Legacy scopes that were cleaned |
-| skipped / warnings | Skipped items and warnings |
-
-#### 3. Usage Examples
-
-**Run migration**
+No migration parameters are currently supported. Sending the previous
+`{"action":"migrate"}` or `{"action":"cleanup"}` body also returns this error.
+The endpoint does not create a task or modify migration data. Unauthenticated
+requests return `401`; authenticated ADMIN or USER requests return `403`.
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/admin/migrate \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-key>" \
-  -d '{"action": "migrate"}'
+  -H "X-API-Key: <root-key>"
 ```
 
-**Clean old namespaces**
-
-```bash
-curl -X POST http://localhost:1933/api/v1/admin/migrate \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-key>" \
-  -d '{"action": "cleanup"}'
-```
-
-**Go SDK**
-
-```go
-result, err := client.AdminMigrate(ctx, &openviking.AdminMigrateOptions{
-    Cleanup: false,
-})
-if err != nil {
-    return err
-}
-fmt.Println(result["task_id"])
-```
-
-**CLI**
-
-```bash
-ov --sudo admin migrate --output json
-ov --sudo admin migrate --cleanup --output json
-```
-
-**Response Example**
-
-```json
-{
-  "task_id": "legacy_migration_..."
-}
-```
+The old `ov admin migrate` command and corresponding SDK methods have been removed.
 
 ---
 
-### user add-location settings
-
-Per-user add defaults are stored as user config under
-`viking://user/{user_id}/settings/user_config.json`. They affect add calls that
-omit explicit targets:
-
-1. `add_resource`: explicit `to` / `parent` wins, then user
-   `add_targets.resource_uri`, then
-   `server.user_config_defaults.add_targets.resource_uri`, then legacy behavior.
-2. `add_skill`: explicit `target_uri` wins, then user
-   `add_targets.skill_uri`, then
-   `server.user_config_defaults.add_targets.skill_uri`, then legacy behavior.
-
-#### HTTP API
-
-```
-GET /api/v1/user-settings/add-locations
-PATCH /api/v1/user-settings/add-locations
-DELETE /api/v1/user-settings/add-locations
-```
-
-`PATCH` accepts the add-target fields directly. Passing `null` clears one field;
-deleting the settings clears the whole per-user override.
-
-```bash
-curl -X PATCH http://localhost:1933/api/v1/user-settings/add-locations \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <user-key>" \
-  -d '{"resource_uri": "viking://user/resources/project-a"}'
-```
-
-`resource_uri` must be a writable resource directory URI:
-`viking://resources` or `viking://resources/...`,
-`viking://user/resources` or `viking://user/resources/...`,
-`viking://user/{user_id}/resources` or
-`viking://user/{user_id}/resources/...`, or
-`viking://user/{user_id}/peers/{peer_id}/resources` or
-`viking://user/{user_id}/peers/{peer_id}/resources/...`. `skill_uri` must be
-`viking://user/skills` or `viking://agent/skills`; explicit
-`viking://user/{user_id}/skills` is not accepted in v1. Invalid configured
-values are rejected; OpenViking does not silently fall back to another target.
-
----
+<a id="user-add-location-settings"></a>
 
 ## Full Example
 
 ### Typical Admin Workflow
+
+This example includes user and account deletion. Run it only against a disposable workspace; omit the deletion steps when onboarding real users.
 
 ```bash
 # Step 1: ROOT creates workspace with alice as first admin (requires --sudo)
@@ -1088,10 +2194,10 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
 curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "X-API-Key: <alice-key>"
 
-# Step 4: Change role (requires ROOT key)
+# Step 4: Promote the user to admin
 curl -X PUT http://localhost:1933/api/v1/admin/accounts/acme/users/bob/role \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-key>" \
+  -H "X-API-Key: <alice-key>" \
   -d '{"role": "admin"}'
 
 # Step 5: Regenerate key

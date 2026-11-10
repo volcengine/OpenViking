@@ -10,8 +10,10 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    CliContext, ConfigAddCustomArgs, ConfigAddOvServiceArgs, ConfigAddTarget, ConfigDeleteArgs,
-    ConfigEditArgs,
+    CliContext,
+    cli::{
+        ConfigAddCustomArgs, ConfigAddOvServiceArgs, ConfigAddTarget, ConfigDeleteArgs, ConfigEditArgs,
+    },
     config::{Config, DEFAULT_CUSTOM_URL},
     config_wizard::{
         ApiKeyRole, ConfigKind, ConfigStore, OPENVIKING_SERVICE_URL, configs_equivalent,
@@ -207,6 +209,12 @@ fn delete_saved_config(store: &ConfigStore, args: ConfigDeleteArgs) -> AgentResu
             deleted: false,
             already_absent: true,
         }));
+    }
+
+    if store.selected_config_name() == Some(args.name.as_str()) {
+        return Err(AgentError::refused(
+            "Cannot delete the file selected by OPENVIKING_CLI_CONFIG_FILE. Change the environment variable first.",
+        ));
     }
 
     match store.load_saved_config(&args.name) {
@@ -675,6 +683,11 @@ fn save_edited_config(
 ) -> AgentResult<AddEditResult> {
     let old_config = store.load_saved_config(old_name).map_err(config_error)?;
     let renamed = old_name != new_name;
+    if renamed && store.selected_config_name() == Some(old_name) {
+        return Err(AgentError::refused(
+            "Cannot rename the file selected by OPENVIKING_CLI_CONFIG_FILE. Change the environment variable first.",
+        ));
+    }
     let new_path = store.saved_config_path(new_name).map_err(config_error)?;
     if renamed && new_path.exists() {
         let existing_new = store.load_saved_config(new_name).map_err(config_error)?;
@@ -918,15 +931,15 @@ fn validate_optional_actor_peer_id(actor_peer_id: Option<&str>) -> AgentResult<(
 }
 
 fn validation_error(kind: ConfigKind, error: Error) -> AgentError {
+    if error.code() == "UNAUTHENTICATED" {
+        if let Error::Api { message, .. } = error {
+            return AgentError::auth(message);
+        }
+    }
+
     match error {
-        Error::Api { message, .. } => AgentError::auth(format!(
-            "{} {message}",
-            match kind {
-                ConfigKind::OpenVikingService => "Check the API key.",
-                ConfigKind::Custom => "Check the API key, account, and user.",
-            }
-        )),
-        Error::Network(message) => AgentError::validation(format!(
+        Error::Api { message, .. } => AgentError::validation(message),
+        Error::Network(message) | Error::Timeout(message) => AgentError::validation(format!(
             "{} {message}",
             match kind {
                 ConfigKind::OpenVikingService => "Could not reach OpenViking Service.",
@@ -1024,7 +1037,7 @@ mod tests {
             .expect("test server should bind");
         let addr = listener.local_addr().expect("test server should have addr");
         tokio::spawn(async move {
-            for _ in 0..6 {
+            for _ in 0..12 {
                 let Ok((mut stream, _)) = listener.accept().await else {
                     return;
                 };

@@ -1,4 +1,4 @@
-# Agent Integrations Overview
+# Choose an agent integration
 
 OpenViking can act as the long-term memory and context backend for many agent runtimes. Pick the integration that matches your agent.
 
@@ -8,22 +8,35 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 |-------------|----------|
 | **Claude Code** | [Claude Code Memory Plugin](./02-claude-code.md) — auto-recall + auto-capture via hooks |
 | **OpenClaw** | [OpenClaw Plugin](./03-openclaw.md) — context-engine with full lifecycle integration |
-| **Codex** | [Codex Memory Plugin](./04-codex.md) — lifecycle hooks for auto-recall and incremental capture |
-| **Hermes Agent** | [Hermes Agent](./05-hermes.md) — built-in OpenViking memory provider, no plugin install needed |
+| **Codex / TraeCode CLI 2.0** | [Codex Memory Plugin](./04-codex.md) — lifecycle hooks for auto-recall and incremental capture |
+| **Cursor** | [Cursor Memory Integration](./12-cursor.md) — one command installs lifecycle hooks, MCP tools, rules, and skills |
+| **TRAE / TRAE CN** | [TRAE Memory Integration](./13-trae.md) — one installer configures prompt-time recall, turn capture, and OpenViking tools |
+| **DeepSeek Harness (`dsh`) / DeepSeek Harness Desktop** | [DeepSeek Harness Memory Bundle](./17-dsh.md) — in-process Cordis plugin with pre-step recall, event capture, and the OpenViking MCP tools |
+| **Hermes Agent** | [Hermes Agent](./05-hermes.md). Memory plugin with automatic capture and recall. Older releases include a built-in provider. |
+| **OpenCode** | [OpenCode Plugin](./10-opencode.md) — MCP tools plus lifecycle hooks for repo context, auto-recall, and capture |
+| **pi** | [pi Coding Agent Extension](./11-pi.md) — native extension with auto-recall, turn capture, threshold commit, and the server's MCP tools registered as native pi tools |
 | **LangChain / LangGraph** | [LangChain and LangGraph](./07-langchain-langgraph.md) — retriever, tools, context backend, store, and middleware |
-| **Cursor / Trae / Manus / Claude Desktop / ChatGPT / …** | [MCP Clients](./06-mcp-clients.md) — point any MCP-compatible client at the built-in `/mcp` endpoint |
-| **AstrBot / OpenCode / …** | [Community Plugins](./08-community-plugins.md) — community-maintained integrations for various runtimes |
+| **VikingBot** | [VikingBot Installation and Configuration](../guides/17-vikingbot.md) — built-in Agent with the `openviking_rule_search` tool (Beta) |
+| **Multiple local coding agents / a desktop UI** | [OpenViking Helper](./14-openviking-helper.md) — visual agent setup, session inspection, and memory management |
+| **Any Agent Plugins 1.0 client** | [Agent Plugins 1.0 Package](./15-agent-plugins.md) — one portable package: `openviking-memory` skill plus the OpenViking MCP tools |
+| **Manus / Claude Desktop / ChatGPT / other MCP clients** | [MCP Clients](./06-mcp-clients.md) — point any MCP-compatible client at the built-in `/mcp` endpoint |
+| **Chat clients / SDK and API apps / other clients without a plugin** | [OpenViking Gateway](../guides/15-gateway.md) — point any client that takes a base URL and an API key at the gateway; it recalls memory and saves conversations with nothing to install in the client |
+| **ZCode / CodeBuddy Code / AstrBot / …** | [Community Plugins](./08-community-plugins.md) — community-maintained integrations for various runtimes |
 
-## Integration depths
+Some agents, such as Claude Code, Codex, OpenCode, pi and DSH, can use either their plugin or OpenViking Gateway. To decide between them, see [Gateway or plugin?](../guides/15-gateway.md#gateway-or-plugin).
 
-Some integrations go beyond what a generic MCP client can do:
+## Compare integrations side by side
 
-- **Generic MCP clients** call OpenViking on demand through tools the model decides to invoke. Setup is one config snippet.
-- **Hooks-based / native plugins** (Claude Code, Codex, OpenClaw, Hermes Agent, AstrBot) drive recall and capture from runtime lifecycle events — every prompt, every turn, session start/end, compact, subagent spawn. The model doesn't need to "remember to recall."
-- **SDK integrations** (LangChain/LangGraph) wire OpenViking into framework-native abstractions such as retrievers, tools, chat history, stores, and middleware.
+For the concrete differences between integrations — tool surface, automatic recall, session and commit behaviour, compaction takeover, degradation and fault tolerance — see the [Capability Reference](./16-capability-reference.md), a cross-integration comparison matrix.
 
-For agents whose runtime exposes hooks, middleware, or a context-engine slot, the native integration path is usually the better default.
+## Developing and maintaining plugins
+
+To add or maintain an integration, follow the [Hook + MCP Agent Plugin Development and Maintenance Standard](./18-plugin-development.md). When using VibeCoding, require your coding agent to read and follow it before making changes, using Claude Code, Codex, and other existing plugins as implementation references.
 
 ## Prerequisite for all integrations
 
 Every integration on this page connects to a running OpenViking server. If you don't have one yet, follow the [Quickstart Guide](../getting-started/02-quickstart.md). The default endpoint is `http://localhost:1933`; remote use requires an API key (see [Authentication](../guides/04-authentication.md)).
+
+## Low-latency recall
+
+After verifying the integration, use [Tune recall latency](19-recall-tuning.md) to configure query expansion, result compression and timeouts.

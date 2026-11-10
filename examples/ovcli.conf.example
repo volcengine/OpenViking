@@ -2,10 +2,20 @@
   "url": "http://localhost:1933",
   "api_key": null,
   "root_api_key": null,
+  "gateway_token": null,
   "account": null,
   "user": null,
   "timeout": 60.0,
   "output": "table",
   "echo_command": true,
-  "extra_headers": null
+  "extra_headers": null,
+
+  "plugin": {
+    "recallCompress": "auto",
+
+    "peerSource": "git",
+
+    "claude_code": {},
+    "codex": {}
+  }
 }

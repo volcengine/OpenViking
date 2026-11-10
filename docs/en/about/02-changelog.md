@@ -3,6 +3,136 @@
 All notable changes to OpenViking will be documented in this file.
 This changelog is automatically generated from [GitHub Releases](https://github.com/volcengine/OpenViking/releases).
 
+> Release entries describe behavior at that version, including commands and defaults that may since have changed. Use the current [deployment guide](../guides/03-deployment.md) for installation. Before any historical upgrade step that clears a workspace, stop writes and make a restorable backup; never apply those cleanup instructions to an unrelated upgrade.
+
+## Unreleased
+
+- **LangGraph Store discovery errors**: Non-semantic `search()` and
+  `list_namespaces()` now propagate backend listing failures, including permission
+  and availability errors. Explicitly missing namespace roots still return empty results.
+- **Legacy session migration removed (breaking change)**: Removed the legacy
+  implementation, `ov admin migrate` (including `--cleanup`), and the corresponding
+  Python, TypeScript, and Go SDK methods. The ROOT-only `POST /api/v1/admin/migrate`
+  endpoint remains reserved and currently returns `400 / INVALID_ARGUMENT` without
+  creating a task. New releases no longer
+  provide migration or cleanup of legacy 0.3.x sessions; upgrading does not move or
+  delete those old directories. Migrated sessions and normal session operations
+  are unaffected.
+- **Gateway deployment and behavior**:
+  - New standalone Helm chart, `deploy/helm/openviking-gateway`: one SQLite replica with a
+    PVC, or several replicas sharing Redis. Until a release includes these features, set
+    `image.tag` explicitly; see the [operations guide](../guides/22-gateway-operations.md#helm).
+  - New opt-in settings: `storage` (Redis), `management_api`, `openviking_keys`, `tenancy`,
+    `default_upstreams` and `default_profile`, `request_log_sink`, `capture_concurrency` and `keep_alive_seconds`.
+    SQLite remains the default storage.
+  - New `X-OpenViking-Upstream-URL` request header picks one of the allowed upstreams by its
+    Base URL; see [Pick the upstream per request](../gateway/07-upstreams.md#upstream-url-header).
+  - `session_ttl_days` is replaced by `session_ttl_seconds` (at least 3600), so sessions can
+    expire in under a day. The old setting is ignored with a startup warning; set the new one
+    when upgrading.
+  - Behavior changes with no configuration change: standalone keep-alive rises from 5 to 75
+    seconds; a gateway bound to a public address waits and retries at startup while
+    OpenViking is unreachable or returns 5xx; idle SSE streams carry a comment heartbeat every
+    15 seconds; a request whose key OpenViking refuses with 402 or 403 is rejected instead of
+    forwarded; and an OpenViking 401 while saving, once `/health` also returns 401, pauses
+    saving with `gateway_key_revoked`.
+- **Volcengine KMS `key_file` (upgrade action)**: `encryption.volcengine_kms.key_file` now takes
+  effect for the server and the gateway; earlier releases ignored it and kept the root key at
+  `~/.openviking/openviking-volcengine-root-key.enc`. If you set `key_file`, move that file to
+  the configured path before upgrading. While the configured file is missing and the default
+  one exists, startup fails instead of creating a new root key.
+- **LangChain import migration (breaking change)**: The server no longer ships
+  `openviking.integrations.langchain` or its forwarding modules. Old imports fail
+  immediately; there is no deprecation period or compatibility stub. Install
+  `langchain-openviking` (or `pip install "langchain-openviking[langgraph]"` for
+  LangGraph) and replace the `openviking.integrations.langchain` prefix with
+  `langchain_openviking`, including submodule imports. For example, use
+  `from langchain_openviking import OpenVikingRetriever`. The maintained packages
+  and examples now live under `integrations/frameworks/`; package names and
+  canonical imports are unchanged. See the [migration guide](../agent-integrations/07-langchain-langgraph.md).
+- **Working Memory defaults off (behavior change)**: Commits continue to archive raw messages
+  and extract long-term memories, but generate no WM/checkpoint summaries by default.
+  Update installed agent plugins separately: automatic archive injection and takeover now
+  default off, and host history/compaction stays in use. VikingBot retains OV-managed
+  context and compaction and explicitly requests WM on session-context commits.
+  The old serializer omitted WM=true,
+  so previously saved policies without that field now become false even if true was once
+  chosen explicitly. Already-queued legacy tasks retain their submission-time semantics.
+  A new per-commit `enable_working_memory` boolean can opt in without replacing other
+  policy fields. Completed WM-off archives remain readable as raw messages with empty
+  summary fields. See the [upgrade guide](../guides/working-memory-default-off.md), including
+  handoffs for old conversations that no longer have complete host history.
+- **Watch API migration (breaking change)**: Re-importing with `watch_interval > 0`
+  no longer updates or reactivates an existing Watch. Native Watches retain exclusive
+  ownership while paused, and incompatible target reuse returns `409 Conflict`.
+  Replace scripts that re-import to update a Watch with `PATCH /api/v1/watches/{task_id}`
+  (use `is_active: true` to resume), or delete the old Watch before creating its replacement.
+  Connector Watches may share targets; repeating the same source and target creates a new
+  independent Watch, so retries are not idempotent. Use task IDs to manage shared targets;
+  URI lookups with multiple accessible Watches return 409. One-off Connector imports
+  (`watch_interval <= 0`) leave existing Watches untouched; pause or delete them through
+  the watches API. See [resource task management](../api/02-resources.md#task-management-operations).
+- **Session policy compatibility**: String `"false"` memory-policy switches now disable
+  extraction correctly. Existing boolean-like values remain temporarily compatible and
+  emit deprecation warnings; use JSON booleans for new configurations.
+- **Workspace peer derivation**: The coding-agent plugins now derive a workspace's peer from git instead of from the working directory. The new default, `peer.source: "git"`, uses the repository's normalized `origin` URL (`github.com-volcengine-openviking`), falling back to the repository root path, so every clone, worktree, and subdirectory of one repository shares a single peer while a fork keeps its own. A directory that is not a git repository now gets no peer at all, and what is remembered there goes to the user-level space instead of a fresh namespace per folder. Give such a directory a memory of its own by creating `.openviking/config.json` with `{"version": 1, "peer": {"id": "my-project"}}`. No migration is required: the previous cwd-derived id can always be recomputed locally, and the default `peer_scope: "all"` recall already sweeps every peer, so memories written under it keep coming back (with `peer_scope: "actor"`, the Claude Code, Codex, OpenCode, and DSH plugins query that id as well). Set `peer.source: "cwd"` — or `OPENVIKING_PEER_SOURCE=cwd` — to keep the old behavior.
+- **Pi extension tool surface (breaking change)**: The pi extension 0.4.0 replaces its seven hand-written `viking_*` REST tools with the server's own MCP tools through the official MCP client, so the tool list now follows whatever the server's `tools/list` returns instead of a catalogue shipped with the extension. Every tool is `openviking_` plus the server's name (`viking_search` → `openviking_search`), with no alias period, and pi matches `--tools` and `--exclude-tools` entries by exact name, so an allowlist that still says `viking_search` loses that tool silently and has to be renamed by hand. The tools now behave as they do on every other MCP harness: `remember` commits a session of its own rather than appending to the live pi session, `read` returns text with line-based pagination (the `level="abstract"` and `level="overview"` tiers are gone — `openviking_search(mode="context", detail="overview")` is the substitute), `forget` deletes the URI it is handed, and `add_resource` answers a local path with a one-time upload URL to POST the file to. A root api key is refused on `/mcp` with 403 and now leaves the session with no tools at all, where before the tools registered and every call came back empty; create a user or admin key for it. The shared `mcpEnabled: false` switch now takes effect for pi as well, and tools turned off that way are not reported as a failure. Recall, session capture, and context takeover keep working in all of these cases, and no other harness is affected. The extension README's [Upgrading from 0.3.x](https://github.com/volcengine/OpenViking/blob/main/examples/pi-coding-agent-extension/README.md#upgrading-from-03x) has the full list.
+- **External peer identity migration**: Mixed-script log-ingestion identities now use
+  lossless `ext-<base64>` ids. The `ext-` namespace is reserved, so ASCII identities that
+  would otherwise enter it are encoded as well. Older lossy peer directories are not read
+  automatically because multiple identities may have collided with each other or with a
+  real ASCII peer; migrating that ambiguous history requires an operator-controlled
+  ownership decision.
+
+## v0.4.9 (2026-07-10)
+
+### Highlights
+
+- **Agent workspace isolation**: Codex, Claude Code, OpenCode, and Pi integrations gain workspace-derived peer identity for per-project memory, together with broader shared installer and hybrid MCP support.
+- **Retrieval and memory correctness**: image search is supported, agent-only and peer-only memory scopes are respected, and nested rendered memory links are avoided.
+- **Storage and security hardening**: local collection loading is serialized, VikingDB content writes are backend-aware, and Git submodule ingestion blocks SSRF targets.
+- **VikingBot and platform fixes**: unified gateway routing and OpenViking authentication were added, with fixes for channel sender metadata, VLM-only configurations, Windows vector backends, and benchmark concurrency.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.8...v0.4.9)
+
+## v0.4.8 (2026-07-08)
+
+### Highlights
+
+- **NVIDIA cuVS vector backend**: opt-in exact and approximate GPU retrieval, plus memory-aware fallback from the local backend.
+- **Recursive web ingestion**: bounded same-site crawling with depth, page, path, and download-link controls, backed by Scrapy and trafilatura.
+- **Memory v3 and training**: v3 extraction is the active pipeline, with streaming patch-merge updates and session train/eval support.
+- **Agent plugin installation**: Codex and Claude Code support remote marketplaces and a stdio MCP proxy that shares `ovcli.conf` credentials with hooks.
+- **Filesystem and RAGFS improvements**: backend-paged glob, stable directory-first ordering, and standard relative-path matching.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.7...v0.4.8)
+
+## v0.4.7 (2026-07-02)
+
+### Highlights
+
+- **MCP local-file flow**: compact tool descriptions reduce context usage, while signed `temp_upload` tokens automatically ingest local uploads.
+- **Filesystem and versioning**: filesystem attrs and account-level `.ovgitignore` rules expand metadata and snapshot controls.
+- **SDK and authentication**: the Go SDK adds skill scoping and grep depth controls; OAuth client scopes are persisted and seeded API keys are supported.
+- **Studio and setup UX**: Connection & Identity was redesigned, assumed accounts are pinned correctly, and initialization gains a TUI-style setup wizard.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.6...v0.4.7)
+
+## v0.4.6 (2026-06-29)
+
+### Highlights
+
+- **VikingFS snapshot versioning**: Git-backed `commit`, `log`, `show`, and `restore` across HTTP, Python SDK, and CLI surfaces.
+- **Whole-site ingestion**: sitemap, sitemap-index, RSS, and Atom imports produce watchable resource trees.
+- **Shared Agent Skills**: `viking://agent/skills` is restored as the account-shared skill root, while user-private skills remain the default.
+- **VikingDB BM25 grep and Studio metrics**: keyword retrieval and user-visible usage dashboards expand search and observability.
+
+### Upgrade Notes
+
+- Deployments upgrading from 0.3.x with legacy agent/session data should migrate and clean up on v0.4.5 before upgrading to v0.4.6 or later.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.5...v0.4.6)
+
 ## v0.4.5 (2026-06-24)
 
 ### Highlights
@@ -98,7 +228,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 
 - **Native `ov` CLI refresh**: `ov config` is now the interactive configuration manager for adding, editing, deleting, and switching saved configs, while `ov config show`, `ov config validate`, and `ov config switch` remain explicit subcommands. New `ov language` / `ov lang` selects the display language, `ov status [--verbose]` provides aggregated diagnostics, and `ov health` plus runtime errors render with clearer guidance.
 - **Web Studio Playground and identity management**: Studio adds a Playground with a context tree, Terminal, and Agent panel, plus a Connection & Identity page that can save connection state, select account/user identity, create accounts and users, and copy or regenerate API keys.
-- **Config-driven VikingBot experience recall**: New `bot.ov_server.recall_exp_first_round_only`, `exp_recall_limit`, and `exp_recall_max_chars` inject agent experience only on the first turn, and both local and remote modes isolate experience namespaces by incoming `agent_id`.
+- **Config-driven VikingBot experience recall**: New `bot.ov_server.exp_recall_limit` and `exp_recall_max_chars` tune agent experience recall, and both local and remote modes isolate experience namespaces by incoming `agent_id`.
 - **Simpler resource watches**: `add_resource` no longer requires an explicit `to` when `watch_interval > 0`; when the import returns a stable `root_uri`, the watch task binds to it automatically, with CLI, MCP, and docs examples updated to match.
 - **Structured plugin tool results and CJK token estimation**: Claude Code and OpenClaw plugins now write structured tool parts instead of flattening calls and results into text only, and CJK-aware token estimation is shared across Python and plugin code to reduce budget underestimation for Chinese, Japanese, and Korean sessions.
 
@@ -155,7 +285,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 - **Request-scoped HTTP profiling**: Servers can enable `server.profile_enabled`; requests with `profile=1` then run `cProfile` for only that HTTP request and append `profile` lines to JSON responses. The `ov` CLI can enable and display this with `--profile`.
 - **Batch Session message ingestion**: Added `POST /api/v1/sessions/{session_id}/messages/batch` plus Python HTTP client and Session wrapper support via `batch_add_messages` (up to 100 messages per request), reducing HTTP round trips for LangChain/LangGraph-style integrations.
 - **Memory embedding templates**: Memory schemas now support a top-level `embedding_template`, replacing field-level `searchable` flags. The built-in `entities`, `events`, and `preferences` templates include key fields plus final content in embedding input.
-- **Semantic indexing reliability**: Resource processing now syncs temp source trees into the target before running the semantic DAG (diff results use target URIs); stale semantic lock handoffs can be recovered by reacquiring tree locks, and lock acquisition failures requeue work instead of tripping the API circuit breaker.
+- **Semantic indexing reliability**: Resource processing now syncs temp source trees into the target before running the semantic tree (diff results use target URIs); stale semantic lock handoffs can be recovered by reacquiring tree locks, and lock acquisition failures requeue work instead of tripping the API circuit breaker.
 - **Embedding input guardrails**: Embedding queue input is truncated according to `embedding.max_input_tokens`, and oversized-input errors are classified as `input_too_large` to avoid repeated retries for unrecoverable payloads.
 
 ### Upgrade Notes

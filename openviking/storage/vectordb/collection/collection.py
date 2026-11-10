@@ -38,6 +38,12 @@ class ICollection(ABC):
     def drop(self):
         raise NotImplementedError
 
+    def begin_bulk_ingest(self) -> None:
+        """Suspend optional derived-index maintenance across a bulk write scope."""
+
+    def end_bulk_ingest(self) -> None:
+        """Resume optional derived-index maintenance after a bulk write scope."""
+
     @abstractmethod
     def create_index(self, index_name: str, meta_data: Dict[str, Any]) -> IIndex:
         raise NotImplementedError
@@ -60,6 +66,8 @@ class ICollection(ABC):
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
+        return_detail_info: bool = False,
     ) -> SearchResult:
         raise NotImplementedError
 
@@ -73,6 +81,8 @@ class ICollection(ABC):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[List[str]] = None,
     ) -> SearchResult:
         raise NotImplementedError
 
@@ -110,6 +120,7 @@ class ICollection(ABC):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         raise NotImplementedError
 
@@ -130,7 +141,7 @@ class ICollection(ABC):
     def update_index(
         self,
         index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
+        scalar_index: Optional[List[str]] = None,
         description: Optional[str] = None,
     ):
         raise NotImplementedError
@@ -244,7 +255,23 @@ class Collection:
             raise RuntimeError("Collection is closed")
         return self.__collection.drop()
 
-    def get_meta_data(self) -> Dict[str, Any]:
+    def begin_bulk_ingest(self) -> None:
+        """Coalesce derived-index maintenance across multiple write calls.
+
+        This is a maintenance hint, not a transaction or atomicity boundary.
+        Backends that do not maintain derived indexes may treat it as a no-op.
+        """
+        if self.__collection is None:
+            raise RuntimeError("Collection is closed")
+        self.__collection.begin_bulk_ingest()
+
+    def end_bulk_ingest(self) -> None:
+        """End a matching :meth:`begin_bulk_ingest` scope."""
+        if self.__collection is None:
+            raise RuntimeError("Collection is closed")
+        self.__collection.end_bulk_ingest()
+
+    def get_meta_data(self, *, raise_on_error: bool = False) -> Dict[str, Any]:
         """
         Retrieve the full metadata of the collection.
 
@@ -254,6 +281,8 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
+        if raise_on_error:
+            return self.__collection.get_meta_data(raise_on_error=True)
         return self.__collection.get_meta_data()
 
     def get_meta(self) -> Dict[str, Any]:
@@ -320,6 +349,8 @@ class Collection:
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
+        return_detail_info: bool = False,
     ):
         """Perform vector similarity search on the specified index.
 
@@ -339,8 +370,20 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
+        detail_options: Dict[str, Any] = {}
+        if advance is not None:
+            detail_options["advance"] = advance
+        if return_detail_info:
+            detail_options["return_detail_info"] = True
         return self.__collection.search_by_vector(
-            index_name, dense_vector, limit, offset, filters, sparse_vector, output_fields
+            index_name,
+            dense_vector,
+            limit,
+            offset,
+            filters,
+            sparse_vector,
+            output_fields,
+            **detail_options,
         )
 
     def search_by_keywords(
@@ -352,6 +395,8 @@ class Collection:
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[List[str]] = None,
     ):
         """Search by keywords or query string using vectorization.
 
@@ -375,7 +420,15 @@ class Collection:
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
         return self.__collection.search_by_keywords(
-            index_name, keywords, query, limit, offset, filters, output_fields
+            index_name=index_name,
+            keywords=keywords,
+            query=query,
+            mode=mode,
+            fields=fields,
+            limit=limit,
+            offset=offset,
+            filters=filters,
+            output_fields=output_fields,
         )
 
     def search_by_id(
@@ -453,6 +506,7 @@ class Collection:
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ):
         """Retrieve random documents from the index.
 
@@ -472,7 +526,14 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
-        return self.__collection.search_by_random(index_name, limit, offset, filters, output_fields)
+        return self.__collection.search_by_random(
+            index_name=index_name,
+            limit=limit,
+            offset=offset,
+            filters=filters,
+            output_fields=output_fields,
+            advance=advance,
+        )
 
     def search_by_scalar(
         self,
@@ -513,7 +574,7 @@ class Collection:
     def update_index(
         self,
         index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
+        scalar_index: Optional[List[str]] = None,
         description: Optional[str] = None,
     ):
         """
@@ -521,7 +582,7 @@ class Collection:
 
         Args:
             index_name (str): Name of the index to update.
-            scalar_index (Optional[Dict[str, Any]]): Updated configuration for scalar indexes.
+            scalar_index (Optional[List[str]]): Complete list of scalar-indexed fields.
                 Defaults to None.
             description (Optional[str]): New description for the index. Defaults to None.
         """

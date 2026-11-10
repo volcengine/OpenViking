@@ -1,0 +1,30 @@
+/* Identical language control geometry across Docs and Blog. Theme tokens are adapters. */
+.ov-language { position: relative; flex: 0 0 auto; color: var(--ov-header-ink); }
+.ov-language > summary { display: flex; align-items: center; justify-content: center; gap: 6px; height: 36px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; list-style: none; font: 400 12px/20px var(--ov-header-font); letter-spacing: .02em; white-space: nowrap; }
+.ov-language > summary::-webkit-details-marker { display: none; }
+.ov-language > summary::marker { content: ''; }
+.ov-language > summary svg { flex-shrink: 0; }
+.ov-language .ov-language-chevron { color: var(--ov-header-muted); transition: transform 150ms ease-out; }
+.ov-language[open] .ov-language-chevron { transform: rotate(180deg); }
+.ov-language[open] > summary { background: var(--ov-header-soft); }
+.ov-language-options { position: absolute; right: 0; top: calc(100% + 8px); z-index: 110; width: 192px; padding: 5px; border: 1px solid var(--ov-header-line); border-radius: 8px; background: var(--ov-header-bg); box-shadow: 0 8px 24px #00000014, 0 2px 6px #00000008; }
+.ov-language-options::before { content: ''; position: absolute; inset: -9px 0 auto; height: 9px; }
+.ov-language-options button { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 36px; padding: 8px 10px; border: 0; border-radius: 4px; background: transparent; color: var(--ov-header-ink); font: 400 13px/20px var(--ov-header-font); letter-spacing: 0; text-align: left; cursor: pointer; }
+.ov-language-options button[aria-pressed=true] { background: var(--ov-header-soft); }
+.ov-language-options button svg { visibility: hidden; flex-shrink: 0; color: var(--ov-header-muted); }
+.ov-language-options button[aria-pressed=true] svg { visibility: visible; }
+.ov-language-options button:first-child { margin-bottom: 5px; }
+.ov-language-options button:first-child::after { content: ''; position: absolute; top: 46px; left: 10px; right: 10px; border-top: 1px solid var(--ov-header-line); }
+.ov-language :focus-visible { outline: 2px solid var(--ov-header-focus); outline-offset: 2px; }
+@media (hover: hover) and (pointer: fine) {
+  .ov-language > summary:hover, .ov-language-options button:hover { background: var(--ov-header-soft); }
+}
+@media (max-width: 720px) {
+  .ov-language > summary { height: 36px; padding-inline: 6px; }
+  .ov-language-options button { min-height: 44px; }
+  .ov-language-options button:first-child::after { top: 54px; }
+}
+@media (prefers-reduced-motion: reduce) { .ov-language .ov-language-chevron { transition: none; } }
+
+@media (max-width: 374px) { .ov-language > summary > svg:first-child { display: none; } }
+@media (max-width: 374px) { .ov-language > summary { padding-inline: 4px; } }

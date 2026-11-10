@@ -2,10 +2,11 @@
 
 from vikingbot.sandbox.base import (
     SandboxBackend,
-    SandboxError,
-    SandboxNotStartedError,
     SandboxDisabledError,
+    SandboxError,
     SandboxExecutionError,
+    SandboxFileInfo,
+    SandboxNotStartedError,
     UnsupportedBackendError,
 )
 from vikingbot.sandbox.manager import SandboxManager
@@ -17,5 +18,6 @@ __all__ = [
     "SandboxNotStartedError",
     "SandboxDisabledError",
     "SandboxExecutionError",
+    "SandboxFileInfo",
     "UnsupportedBackendError",
 ]

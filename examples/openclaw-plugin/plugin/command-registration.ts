@@ -5,6 +5,8 @@ export type PluginCommandContext = {
   sessionId?: string;
   agentId?: string;
   ovSessionId?: string;
+  senderId?: string;
+  requesterSenderId?: string;
 };
 
 export type CommandResult = {

@@ -1,33 +1,63 @@
+# 为 Hermes 配置 OpenViking Service
 
-[Hermes Agent](https://hermes-agent.nousresearch.com/) (Nous Research) 内置 OpenViking 记忆提供方。无需安装插件——把 Hermes 指向你的 OpenViking 服务即可，记忆存储、召回和抽取均原生支持。
+[OpenViking Service](https://www.volcengine.com/product/openviking-service) 是
+火山引擎托管和运营的 OpenViking 云服务，无需安装服务端或配置本地模型。
+在 [OpenViking 控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing)
+开通服务，然后从**用户管理**的 **API Key** 中创建密钥。
 
-## 步骤 1：运行 Hermes 记忆配置向导：
+## 安装和配置
+
+在要使用的 Hermes profile 中运行：
 
 ```bash
-hermes memory setup
+hermes plugins install openviking --enable
+hermes memory setup openviking
 ```
 
-## 步骤 2：复制 Base URL 和 API Key
-执行 setup 命令后会依次提示输入 Base URL 和 API Key，可复制后粘贴到你的 Hermes：
+安装时接受依赖安装提示。如果当前 Hermes 版本已内置 OpenViking，请跳过安装命令。
 
-- Base URL: 复制以下 Base URL 到你的 Hermes：
-```text
-https://api.vikingdb.cn-beijing.volces.com/openviking
+在向导中：
+
+1. 选择 **Personal Agent** 可召回公共记忆和当前发送者的记忆，并保留现有历史设置。
+   选择 **Shared Agent** 可在每个群组或话题内共享历史，召回同一 OpenViking 用户
+   下所有发送者的记忆。Shared Agent 会要求确认。
+2. 若出现配置来源选项，选择 **Create new OpenViking profile**。也可以复用已保存的
+   `ovcli.conf`。
+3. 选择 **OpenViking Service (VolcEngine Cloud)**。
+4. 输入服务 API Key。
+5. 选择保存位置。**Keep in Hermes only** 保存到 Hermes 的 `.env`。
+   **Mirror to OpenViking store** 保存到本地 `ovcli.conf.<name>` 并关联到 Hermes。
+   两种方式都会将凭据保存在当前电脑。
+6. 保存 OpenViking profile 时，填写名称，例如 `hermes`。这只是本地配置名称，
+   不会创建用户或改变访问权限。
+
+然后启动新的 Hermes 会话：
+
+```bash
+hermes
 ```
-- API Key: 复制页面中展示的 API Key 到你的 Hermes 终端
-- 租户 account / user / agent ID：多租户部署时使用
 
-配置保存在 Hermes 的 `config.yaml` 和 `.env` 文件中。
+外部插件还提供 **Quick Local**，可复用受支持的 Hermes LLM，安装本地服务和
+embedding 模型。要求和已知问题见[插件指南](https://hermes-agent.nousresearch.com/docs/plugins/openviking)。
 
-
-## 步骤 3：验证 Hermes 记忆状态
+## 查看状态
 
 ```bash
 hermes memory status
 ```
 
-配置完成后，Hermes 自动使用 OpenViking 作为长期记忆——`viking_remember`、`viking_recall` 等记忆工具即刻可用。
+确认 provider 为 `openviking`，状态为 `available`。这只表示配置已保存，
+不代表服务健康或记忆抽取成功。
 
-## 参考文档
+## 故障排查
 
-- [Hermes — OpenViking memory provider 文档](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking) — 完整配置指南
+| 问题 | 处理 |
+|------|------|
+| 插件未安装 | 在该 profile 中运行 `hermes plugins install openviking --enable`。 |
+| 使用了其他 provider | 重新运行 `hermes memory setup openviking`。 |
+| 状态不是 available | 检查保存的连接设置和关联的 `ovcli.conf`。 |
+
+## 更多信息
+
+- [Hermes 集成](https://docs.openviking.net/zh/agent-integrations/05-hermes)
+- [插件指南](https://hermes-agent.nousresearch.com/docs/plugins/openviking)

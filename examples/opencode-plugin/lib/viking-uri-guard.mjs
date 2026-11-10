@@ -1,52 +1,56 @@
 import { log } from "./utils.mjs"
+import { evaluateUriGuard, evaluateUriNotice, findVikingUri, normalizeToolName } from "./shared/uri-guard.mjs"
 
 const FILESYSTEM_TOOL_HINTS = {
   read: {
-    replacement: "memread",
-    example: (uri) => `memread(uri="${uri}", level="auto")`,
+    tool: "openviking_read",
+    example: (uri) => `openviking_read(uris=["${uri}"])`,
   },
   glob: {
-    replacement: "membrowse",
-    example: (uri) => `membrowse(uri="${uri}", view="list", recursive=true)`,
+    tool: "openviking_glob",
+    example: (uri) => `openviking_glob(uri="${uri}", pattern="**/*")`,
   },
   grep: {
-    replacement: "memsearch",
-    example: (uri, args) => `memsearch(query="${String(args.pattern ?? "").replaceAll('"', '\\"')}", target_uri="${uri}")`,
+    tool: "openviking_search",
+    example: (uri, args = {}) => `openviking_search(query="${String(args.pattern ?? "").replaceAll('"', '\\"')}", target_uri="${uri}")`,
+  },
+  bash: {
+    tool: "openviking_read or openviking_search",
+    example: (uri) => `openviking_read(uris=["${uri}"])`,
+  },
+  shell: {
+    tool: "openviking_read or openviking_search",
+    example: (uri) => `openviking_read(uris=["${uri}"])`,
   },
 }
 
 export function createVikingUriGuard() {
   return async (input, output) => {
     const toolName = normalizeToolName(input?.tool ?? input?.name)
-    const hint = FILESYSTEM_TOOL_HINTS[toolName]
-    if (!hint) return
-
     const args = output?.args ?? input?.args ?? {}
-    const uri = findVikingUri(args)
-    if (!uri) return
+    const decision = evaluateUriGuard(toolName, args, { hints: FILESYSTEM_TOOL_HINTS })
+    if (!decision) return
 
     log("INFO", "viking-uri-guard", "Blocked filesystem tool for viking URI", {
       tool: toolName,
-      uri,
+      uri: decision.uri,
     })
-    throw new Error(
-      [
-        "viking:// URIs are OpenViking virtual paths, not local filesystem paths.",
-        `Use ${hint.replacement} instead.`,
-        `Example: ${hint.example(uri, args)}`,
-      ].join("\n"),
-    )
+    throw new Error(decision.reason)
   }
 }
 
-export function findVikingUri(args = {}) {
-  for (const key of ["filePath", "path", "uri"]) {
-    const value = args[key]
-    if (typeof value === "string" && value.startsWith("viking://")) return value
+export function createVikingUriNotice() {
+  return async (input, output) => {
+    const toolName = normalizeToolName(input?.tool ?? input?.name)
+    const notice = evaluateUriNotice(toolName, input?.args ?? {}, { hints: FILESYSTEM_TOOL_HINTS })
+    if (!notice || !output) return
+
+    log("INFO", "viking-uri-guard", "Attached viking URI notice to shell tool output", {
+      tool: toolName,
+      uri: notice.uri,
+    })
+    output.output = output.output ? `${output.output}\n\n${notice.reason}` : notice.reason
   }
-  return null
 }
 
-function normalizeToolName(value) {
-  return String(value || "").trim().toLowerCase()
-}
+export { findVikingUri, normalizeToolName }

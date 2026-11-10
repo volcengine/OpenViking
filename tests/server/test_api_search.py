@@ -3,7 +3,9 @@
 
 """Tests for search endpoints: find, search, grep, glob."""
 
+import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -11,9 +13,11 @@ import pytest
 from openviking.models.embedder.base import EmbedResult
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
+from openviking.server.routers import search as search_router
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.retrieve import ContextType, FindResult, MatchedContext
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -55,6 +59,183 @@ async def test_find_basic(client_with_resource):
     assert "telemetry" not in body
 
 
+async def test_search_forwards_keywords_search_type(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    captured = {}
+
+    async def fake_search(**kwargs):
+        captured.update(kwargs)
+        return FindResult(memories=[], resources=[], skills=[])
+
+    monkeypatch.setattr(service.search, "search", fake_search)
+
+    response = await client.post(
+        "/api/v1/search/search",
+        json={"query": "OAuth token", "search_type": "keywords"},
+    )
+
+    assert response.status_code == 200
+    assert captured["search_type"] == "keywords"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"query": "", "search_type": "keywords"},
+        {
+            "query": "OAuth token",
+            "image_url": "https://example.com/image.png",
+            "search_type": "keywords",
+        },
+    ],
+)
+async def test_search_rejects_invalid_keywords_inputs(client: httpx.AsyncClient, payload):
+    response = await client.post("/api/v1/search/search", json=payload)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
+@pytest.mark.parametrize("endpoint", ["/api/v1/search/find", "/api/v1/search/search"])
+async def test_search_endpoints_inline_visible_content_when_requested(
+    client: httpx.AsyncClient, service, monkeypatch, endpoint: str
+):
+    async def fake_read_visible(uri, *, ctx):
+        assert ctx is not None
+        return f"visible content for {uri}"
+
+    async def fake_search(**kwargs):
+        del kwargs
+        return FindResult(
+            memories=[],
+            resources=[
+                MatchedContext(
+                    uri="viking://resources/visible.md",
+                    context_type=ContextType.RESOURCE,
+                )
+            ],
+            skills=[],
+        )
+
+    monkeypatch.setattr(service.fs, "read_visible", fake_read_visible)
+    monkeypatch.setattr(
+        service.search, "find" if endpoint.endswith("/find") else "search", fake_search
+    )
+
+    response = await client.post(endpoint, json={"query": "visible", "read_content": True})
+
+    assert response.status_code == 200
+    assert response.json()["result"]["resources"][0]["content"] == (
+        "visible content for viking://resources/visible.md"
+    )
+
+
+async def test_find_omits_content_when_read_is_not_requested(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    async def fake_search(**kwargs):
+        del kwargs
+        return FindResult(
+            memories=[],
+            resources=[
+                MatchedContext(
+                    uri="viking://resources/visible.md",
+                    context_type=ContextType.RESOURCE,
+                )
+            ],
+            skills=[],
+        )
+
+    monkeypatch.setattr(service.search, "find", fake_search)
+    monkeypatch.setattr(
+        service.fs,
+        "read_visible",
+        lambda *args, **kwargs: pytest.fail("read_visible must not be called"),
+    )
+
+    response = await client.post("/api/v1/search/find", json={"query": "visible"})
+
+    assert response.status_code == 200
+    assert "content" not in response.json()["result"]["resources"][0]
+
+
+async def test_find_keeps_hit_without_content_when_read_fails(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    async def fake_read_visible(uri, *, ctx):
+        del uri, ctx
+        raise RuntimeError("unavailable")
+
+    async def fake_find(**kwargs):
+        del kwargs
+        return FindResult(
+            memories=[],
+            resources=[
+                MatchedContext(
+                    uri="viking://resources/unavailable.md",
+                    context_type=ContextType.RESOURCE,
+                )
+            ],
+            skills=[],
+        )
+
+    monkeypatch.setattr(service.fs, "read_visible", fake_read_visible)
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    response = await client.post(
+        "/api/v1/search/find", json={"query": "unavailable", "read_content": True}
+    )
+
+    assert response.status_code == 200
+    assert "content" not in response.json()["result"]["resources"][0]
+
+
+async def test_search_context_rejects_read_content(client: httpx.AsyncClient):
+    response = await client.post(
+        "/api/v1/search/search",
+        json={"query": "visible", "mode": "context", "read_content": True},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "service_method"),
+    [
+        ("/api/v1/search/find", "find"),
+        ("/api/v1/search/search", "search"),
+    ],
+)
+async def test_search_endpoints_filter_invalid_result_tags(
+    client: httpx.AsyncClient, service, monkeypatch, endpoint: str, service_method: str
+):
+    async def fake_search(**kwargs):
+        del kwargs
+        return FindResult(
+            memories=[],
+            resources=[
+                MatchedContext(
+                    uri="viking://resources/legacy-tags.md",
+                    context_type=ContextType.RESOURCE,
+                    search_tags=["default", "team=infra", "bad=", "project=viking"],
+                )
+            ],
+            skills=[],
+        )
+
+    monkeypatch.setattr(service.search, service_method, fake_search)
+
+    response = await client.post(endpoint, json={"query": "legacy tags"})
+
+    assert response.status_code == 200
+    assert response.json()["result"]["resources"][0]["tags"] == [
+        "team=infra",
+        "project=viking",
+    ]
+
+
 @pytest.mark.parametrize("endpoint", ["/api/v1/search/find", "/api/v1/search/search"])
 async def test_search_endpoints_reject_unknown_request_fields(
     client: httpx.AsyncClient,
@@ -78,32 +259,38 @@ async def test_find_with_target_uri(client_with_resource):
     assert resp.json()["status"] == "ok"
 
 
-async def test_find_with_target_uri_and_tags_after_set_tags(client_with_resource):
-    client, uri = client_with_resource
+async def test_find_with_target_uri_and_tags_passes_target_and_filter(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    captured = {}
 
-    set_tags_resp = await client.post(
-        "/api/v1/fs/attrs/set_tags",
-        json={"uri": uri, "tags": ["team=search"]},
-    )
-    assert set_tags_resp.status_code == 200
-    assert set_tags_resp.json()["status"] == "ok"
+    async def fake_find(*, target_uri=None, filter=None, **kwargs):
+        captured["target_uri"] = target_uri
+        captured["filter"] = filter
+        return {"items": []}
 
-    untagged_resp = await client.post(
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    resp = await client.post(
         "/api/v1/search/find",
-        json={"query": "sample", "target_uri": uri, "limit": 10},
+        json={
+            "query": "sample",
+            "target_uri": "viking://resources/sample",
+            "tags": ["team=search", "env=prod"],
+            "limit": 10,
+        },
     )
-    assert untagged_resp.status_code == 200
-    assert untagged_resp.json()["status"] == "ok"
-    untagged_total = untagged_resp.json()["result"]["total"]
-    assert untagged_total > 0
 
-    tagged_resp = await client.post(
-        "/api/v1/search/find",
-        json={"query": "sample", "target_uri": uri, "tags": ["team=search"], "limit": 10},
-    )
-    assert tagged_resp.status_code == 200
-    assert tagged_resp.json()["status"] == "ok"
-    assert tagged_resp.json()["result"]["total"] > 0
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["target_uri"] == "viking://resources/sample"
+    assert captured["filter"] == {
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
+            {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
+        ],
+    }
 
 
 async def test_find_with_level_passes_to_service(client: httpx.AsyncClient, service, monkeypatch):
@@ -411,50 +598,38 @@ async def test_find_no_results(client: httpx.AsyncClient):
     assert resp.json()["status"] == "ok"
 
 
-@pytest.mark.parametrize("query", ["", "   \t\n"])
-async def test_find_rejects_empty_query(client: httpx.AsyncClient, service, query: str):
+@pytest.mark.parametrize("endpoint", ["find", "search"])
+@pytest.mark.parametrize(
+    ("query", "message"),
+    [
+        ("", "must not be empty"),
+        ("   \t\n", "must not be empty"),
+        ("broken\ud8b7", "valid Unicode"),
+    ],
+)
+async def test_search_rejects_invalid_query(
+    client: httpx.AsyncClient, service, endpoint, query, message
+):
     class RaisingEmbedder:
         def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-            raise AssertionError("empty query should not be embedded")
+            raise AssertionError("invalid query should not be embedded")
 
         async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
-            raise AssertionError("empty query should not be embedded")
+            raise AssertionError("invalid query should not be embedded")
 
     service.viking_fs.query_embedder = RaisingEmbedder()
 
     resp = await client.post(
-        "/api/v1/search/find",
-        json={"query": query},
+        f"/api/v1/search/{endpoint}",
+        content=json.dumps({"query": query}),
+        headers={"Content-Type": "application/json"},
     )
 
     assert resp.status_code == 400
     body = resp.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "INVALID_ARGUMENT"
-    assert "must not be empty" in body["error"]["message"]
-
-
-@pytest.mark.parametrize("query", ["", "   \t\n"])
-async def test_search_rejects_empty_query(client: httpx.AsyncClient, service, query: str):
-    class RaisingEmbedder:
-        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-            raise AssertionError("empty query should not be embedded")
-
-        async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
-            raise AssertionError("empty query should not be embedded")
-
-    service.viking_fs.query_embedder = RaisingEmbedder()
-
-    resp = await client.post(
-        "/api/v1/search/search",
-        json={"query": query},
-    )
-
-    assert resp.status_code == 400
-    body = resp.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "INVALID_ARGUMENT"
-    assert "must not be empty" in body["error"]["message"]
+    assert message in body["error"]["message"]
 
 
 @pytest.mark.parametrize("method_name", ["find", "search"])
@@ -563,7 +738,7 @@ async def test_find_combines_tags_with_existing_filter(
         json={
             "query": "sample",
             "filter": {"op": "must", "field": "kind", "conds": ["email"]},
-            "tags": ["Env=Prod", " env=prod "],
+            "tags": ["Env=Prod", " env=prod ", "team=Search"],
         },
     )
 
@@ -574,6 +749,7 @@ async def test_find_combines_tags_with_existing_filter(
         "conds": [
             {"op": "must", "field": "kind", "conds": ["email"]},
             {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
         ],
     }
 
@@ -620,15 +796,17 @@ async def test_search_compiles_tags_only_filter(client: httpx.AsyncClient, servi
 
     resp = await client.post(
         "/api/v1/search/search",
-        json={"query": "sample", "tags": ["Team=Search"]},
+        json={"query": "sample", "tags": ["Team=Search", "env=prod"]},
     )
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
     assert captured["filter"] == {
-        "op": "must",
-        "field": "search_tags",
-        "conds": ["team=search"],
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
+            {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
+        ],
     }
 
 
@@ -670,10 +848,22 @@ async def test_find_with_invalid_time_returns_invalid_argument(client: httpx.Asy
     assert body["error"]["message"]
 
 
-async def test_find_with_invalid_time_field_returns_invalid_argument(client: httpx.AsyncClient):
+@pytest.mark.parametrize("endpoint", ["/api/v1/search/find", "/api/v1/search/search"])
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"time_field": "published_at", "since": "2h"},
+        {"limit": 0},
+        {"limit": -1},
+        {"node_limit": 0},
+        {"node_limit": -1},
+        {"limit": 0, "node_limit": 5},
+    ],
+)
+async def test_search_rejects_invalid_request_fields(client: httpx.AsyncClient, endpoint, fields):
     resp = await client.post(
-        "/api/v1/search/find",
-        json={"query": "sample", "time_field": "published_at", "since": "2h"},
+        endpoint,
+        json={"query": "sample", **fields},
     )
 
     assert resp.status_code == 400
@@ -681,6 +871,7 @@ async def test_find_with_invalid_time_field_returns_invalid_argument(client: htt
     assert body["status"] == "error"
     assert body["error"]["code"] == "INVALID_ARGUMENT"
     assert body["error"]["message"]
+    assert body["error"]["details"]["validation_errors"]
 
 
 async def test_find_with_inverted_mixed_time_range_returns_invalid_argument(
@@ -843,10 +1034,97 @@ async def test_grep(client_with_resource):
     parent_uri = "/".join(uri.split("/")[:-1]) + "/"
     resp = await client.post(
         "/api/v1/search/grep",
-        json={"uri": parent_uri, "pattern": "Sample"},
+        json={
+            "uri": parent_uri,
+            "pattern": "Introduction",
+            "before_context": 1,
+            "after_context": 1,
+        },
     )
     assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
+    body = resp.json()
+    assert body["status"] == "ok"
+    match = body["result"]["matches"][0]
+    assert match["before_context"] == [{"line": 2, "content": ""}]
+    assert match["after_context"] == [
+        {"line": 4, "content": "This is a sample markdown document for server testing."}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_grep_forwards_tags_to_filesystem_service(monkeypatch):
+    seen = {}
+
+    async def fake_grep(uri, pattern, **kwargs):
+        seen.update(uri=uri, pattern=pattern, **kwargs)
+        return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+
+    monkeypatch.setattr(
+        search_router,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(grep=fake_grep)),
+    )
+
+    await search_router.grep(
+        search_router.GrepRequest(
+            uri="viking://resources", pattern="OpenViking", tags=["team=search", "env=prod"]
+        ),
+        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+    )
+
+    assert seen["tags"] == ["team=search", "env=prod"]
+
+
+@pytest.mark.asyncio
+async def test_grep_forwards_include_tags_to_filesystem_service(monkeypatch):
+    seen = {}
+
+    async def fake_grep(uri, pattern, **kwargs):
+        seen.update(uri=uri, pattern=pattern, **kwargs)
+        return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+
+    monkeypatch.setattr(
+        search_router,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(grep=fake_grep)),
+    )
+
+    await search_router.grep(
+        search_router.GrepRequest(
+            uri="viking://resources", pattern="OpenViking", include_tags=True
+        ),
+        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+    )
+
+    assert seen["include_tags"] is True
+
+
+@pytest.mark.asyncio
+async def test_grep_forwards_context_to_filesystem_service(monkeypatch):
+    seen = {}
+
+    async def fake_grep(uri, pattern, **kwargs):
+        seen.update(uri=uri, pattern=pattern, **kwargs)
+        return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+
+    monkeypatch.setattr(
+        search_router,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(grep=fake_grep)),
+    )
+
+    await search_router.grep(
+        search_router.GrepRequest(
+            uri="viking://resources",
+            pattern="OpenViking",
+            before_context=2,
+            after_context=3,
+        ),
+        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+    )
+
+    assert seen["before_context"] == 2
+    assert seen["after_context"] == 3
 
 
 async def test_grep_case_insensitive(client_with_resource):
@@ -1007,7 +1285,88 @@ async def test_glob(client_with_resource):
     client, _ = client_with_resource
     resp = await client.post(
         "/api/v1/search/glob",
-        json={"pattern": "*.md"},
+        json={"pattern": "**/*.md"},
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+    assert all(isinstance(match, str) for match in resp.json()["result"]["matches"])
+
+
+async def test_glob_explicit_empty_extra_fields_returns_entry_objects(client_with_resource):
+    client, _ = client_with_resource
+    resp = await client.post(
+        "/api/v1/search/glob",
+        json={"pattern": "**/*.md", "extra_fields": []},
+    )
+
+    assert resp.status_code == 200
+    matches = resp.json()["result"]["matches"]
+    assert matches
+    assert all(isinstance(match, dict) for match in matches)
+    assert all("uri" in match and "isDir" in match for match in matches)
+
+
+@pytest.mark.asyncio
+async def test_glob_forwards_tags_and_tag_projection_to_filesystem_service(monkeypatch):
+    seen = {}
+
+    async def fake_glob(pattern, **kwargs):
+        seen.update(pattern=pattern, **kwargs)
+        return {"matches": [], "count": 0}
+
+    monkeypatch.setattr(
+        search_router,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(glob=fake_glob)),
+    )
+
+    await search_router.glob(
+        search_router.GlobRequest(
+            pattern="**/*.md", tags=["env=prod"], include_tags=True
+        ),
+        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+    )
+
+    assert seen["tags"] == ["env=prod"]
+    assert seen["include_tags"] is True
+
+
+@pytest.mark.parametrize("multimodal", [True, False])
+async def test_find_image_query_uses_account_embedder_capability(
+    client: httpx.AsyncClient, service, monkeypatch, multimodal: bool
+):
+    from openviking.models.embedder.base import DenseEmbedderBase
+    from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+
+    seen = []
+
+    class ImageEmbedder(DenseEmbedderBase):
+        def __init__(self, dimension: int):
+            super().__init__(model_name="test-image-embedder")
+            self._dimension = dimension
+
+        @property
+        def supports_multimodal(self) -> bool:
+            return multimodal
+
+        def embed(self, content, is_query: bool = False) -> EmbedResult:
+            if is_query:
+                seen.append(content)
+            return EmbedResult(dense_vector=[0.1] * self._dimension)
+
+        def get_dimension(self) -> int:
+            return self._dimension
+
+    monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda self: ImageEmbedder(self.dimension))
+    await service.embedding_provider.invalidate(UserIdentifier.the_default_user().account_id)
+    image_url = "data:image/png;base64,iVBORw0KGgo="
+
+    response = await client.post("/api/v1/search/find", json={"query": "", "image_url": image_url})
+
+    if multimodal:
+        assert response.status_code == 200, response.text
+        assert seen and seen[-1][-1] == {"type": "image_url", "image_url": {"url": image_url}}
+    else:
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+        assert not seen

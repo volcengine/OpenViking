@@ -1,6 +1,6 @@
 {
   "manifestVersion": "1.0",
-  "pluginVersion": "2026.6.18",
+  "pluginVersion": "2026.11.3",
   "plugin": {
     "id": "openviking",
     "kind": "context-engine",
@@ -20,11 +20,13 @@
       "tool-call-id.ts",
       "session-transcript-repair.ts",
       "runtime-utils.ts",
+      "request-headers.ts",
       "recall-trace.ts",
       "query-config.ts",
       "adapters/",
       "registries/",
       "routing/",
+      "shared/",
       "plugin/",
       "services/",
       "commands/setup.ts",
@@ -40,6 +42,8 @@
       ".gitignore",
       "skills/install-openviking-memory/SKILL.md",
       "skills/openviking-context-database/SKILL.md",
+      "skills/ov-experience-memory/SKILL.md",
+      "skills/openviking-rule-search/SKILL.md",
       "INSTALL-AGENT.md"
     ]
   },
@@ -52,7 +56,7 @@
     "pruneAfterBuild": true
   },
   "compatibility": {
-    "minOpenclawVersion": "2026.4.8",
+    "minOpenclawVersion": "2026.5.27",
     "recommendedOpenclawVersion": "2026.6.6",
     "minOpenvikingVersion": "0.4.1",
     "recommendedOpenvikingVersion": "0.4.1"

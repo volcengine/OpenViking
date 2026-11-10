@@ -1,0 +1,94 @@
+import assert from "node:assert/strict";
+import { afterEach, test } from "node:test";
+import { OpenVikingClient } from "./client.mjs";
+
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
+
+test("client sends OpenViking identity headers and preserves response trace ids", async () => {
+  let seen;
+  globalThis.fetch = async (url, init) => {
+    seen = { url, init };
+    return new Response(JSON.stringify({
+      status: "ok",
+      result: { trace_id: "trace-123", archive_uri: "viking://user/default/sessions/x" },
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  const client = new OpenVikingClient({
+    endpoint: "http://127.0.0.1:1933",
+    apiKey: "secret",
+    account: "account-a",
+    user: "user-a",
+    sendIdentityHeaders: true,
+    peerId: "peer-a",
+    userAgent: "openviking-memory-dsh/0.1.0",
+    requestTimeoutMs: 1000,
+    commitKeepRecentCount: 10,
+  });
+  const response = await client.commitSession("dsh-1");
+
+  assert.equal(response.ok, true);
+  assert.equal(response.traceId, "trace-123");
+  assert.equal(seen.url, "http://127.0.0.1:1933/api/v1/sessions/dsh-1/commit");
+  assert.deepEqual(JSON.parse(seen.init.body), { keep_recent_count: 0 });
+  assert.equal(seen.init.headers.Authorization, "Bearer secret");
+  assert.equal(seen.init.headers["X-OpenViking-Account"], "account-a");
+  assert.equal(seen.init.headers["X-OpenViking-User"], "user-a");
+  assert.equal(seen.init.headers["X-OpenViking-Actor-Peer"], "peer-a");
+});
+
+test("per-session actor peer overrides the process default", async () => {
+  let headers;
+  globalThis.fetch = async (_url, init) => {
+    headers = init.headers;
+    return new Response(JSON.stringify({ status: "ok", result: {} }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  const client = new OpenVikingClient({
+    endpoint: "http://127.0.0.1:1933",
+    apiKey: "",
+    account: "",
+    user: "",
+    peerId: "process-peer",
+    userAgent: "",
+    requestTimeoutMs: 1000,
+  });
+
+  await client.ensureSessionResult("dsh-2", "workspace-peer");
+  assert.equal(headers["X-OpenViking-Actor-Peer"], "workspace-peer");
+});
+
+test("client normalizes non-2xx OpenViking envelopes", async () => {
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    status: "error",
+    error: { code: "FAILED", message: "nope", trace_id: "trace-error" },
+  }), {
+    status: 503,
+    headers: { "Content-Type": "application/json" },
+  });
+
+  const client = new OpenVikingClient({
+    endpoint: "http://127.0.0.1:1933",
+    apiKey: "",
+    account: "",
+    user: "",
+    peerId: "",
+    userAgent: "",
+    requestTimeoutMs: 1000,
+  });
+  const response = await client.fetchJSON("/probe");
+
+  assert.equal(response.ok, false);
+  assert.equal(response.status, 503);
+  assert.equal(response.error.code, "FAILED");
+  assert.equal(response.traceId, "trace-error");
+});

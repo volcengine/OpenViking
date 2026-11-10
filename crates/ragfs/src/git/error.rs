@@ -27,6 +27,15 @@ pub enum ObjectStoreError {
     /// Backend-specific error
     #[error("backend error: {0}")]
     Backend(String),
+
+    /// Object retrieval exceeded the caller-provided byte budget.
+    #[error("object read limit exceeded: {size} bytes exceeds limit {limit} bytes")]
+    ReadLimitExceeded {
+        /// Number of bytes observed or declared by the object.
+        size: u64,
+        /// Maximum number of bytes permitted by the caller.
+        limit: u64,
+    },
 }
 
 /// Errors from RefStore operations
@@ -133,6 +142,29 @@ pub enum GitError {
     /// Too many files in commit
     #[error("too many files: {count} exceeds limit {limit}")]
     TooManyFiles { count: usize, limit: usize },
+
+    /// Too many unique paths in a filtered log request.
+    #[error("too many log filter paths: {count} exceeds limit {limit}")]
+    TooManyLogPaths { count: usize, limit: usize },
+
+    /// A filtered log path has too many tree components.
+    #[error("log filter path {path:?} has depth {depth}, exceeds limit {limit}")]
+    LogPathTooDeep {
+        path: String,
+        depth: usize,
+        limit: usize,
+    },
+
+    /// Filtered history still has uninspected commits after its scan budget.
+    #[error(
+        "snapshot log scan limit exceeded: scanned {scanned}/{max_scanned} commits, matched {matched}/{requested}"
+    )]
+    LogScanLimitExceeded {
+        scanned: usize,
+        max_scanned: usize,
+        matched: usize,
+        requested: usize,
+    },
 
     /// `.ovgitignore` exceeds the configured size limit.
     #[error("ignore file too large: {path} is {size} bytes, limit {max} bytes")]

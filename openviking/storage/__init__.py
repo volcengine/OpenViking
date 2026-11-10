@@ -17,6 +17,7 @@ from openviking.storage.errors import (
     RecordNotFoundError,
     SchemaError,
     StorageException,
+    VikingDBException,
 )
 
 if TYPE_CHECKING:
@@ -55,6 +56,7 @@ def __getattr__(name: str):
 
 __all__ = [
     # Exceptions
+    "VikingDBException",
     "StorageException",
     "CollectionNotFoundError",
     "RecordNotFoundError",

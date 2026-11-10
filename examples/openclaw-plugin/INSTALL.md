@@ -27,13 +27,13 @@ openclaw plugins install clawhub:@openviking/openclaw-plugin
 | Component | Required |
 | --- | --- |
 | Node.js | >= 22 |
-| OpenClaw | >= 2026.4.8 |
+| OpenClaw | >= 2026.5.27 |
 
 The plugin connects to an existing OpenViking server. It does not start the OpenViking server for you. Start OpenViking first, keep it running, then point the plugin `baseUrl` at that HTTP service. The default local URL is `http://127.0.0.1:1933`.
 
 OpenClaw plugin package boundaries:
 
-- `2026.4.8` is the minimum supported OpenClaw version for the current plugin.
+- `2026.5.27` is the minimum supported OpenClaw version for the current plugin. This floor includes the July 2, 2026 OpenClaw advisory batch fixes, including GHSA-8wg3-5mcm-fjq8 and GHSA-83w9-h5wv-j9xm.
 - `2026.5.3` starts validating package installs so TypeScript plugin entries need compiled JavaScript output.
 - `2026.5.4` and later stop falling back to `.ts` source for installed/global plugin runtime loading when compiled JavaScript is missing.
 - The recommended `openclaw plugins install clawhub:@openviking/openclaw-plugin` path installs a published package that already includes `dist/*.js`.
@@ -141,11 +141,68 @@ If another context engine already owns the slot, setup will not replace it by de
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --force-slot --json
 ```
 
-If you want assistant messages to carry a prefixed `peer_id` and data-plane recall/search requests to use the matching actor peer view, pass a prefix explicitly:
+Choose `--peer-role` from what the OpenViking user represents:
+
+| Value | Storage example | Use when |
+| --- | --- | --- |
+| `none` (default) | `viking://user/alice/memories/...` | All conversations for this OpenViking user share user-level memory. No peer-specific memory subtree is used. |
+| `assistant` | `viking://user/alice/peers/main/memories/...` | The OpenViking user is a human and assistant-attributed peer memory should be separated by OpenClaw assistant. |
+| `sender` | `viking://user/support-agent/peers/customer-42/memories/...` | The OpenViking user is an agent and sender-attributed peer memory should be separated by human sender. |
+
+Setup and the installer accept only `sender`. An existing config that still says `person` keeps working as `sender`.
+
+For example, give each assistant its own peer memory and optionally namespace the assistant id:
 
 ```bash
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role assistant --peer-prefix <PREFIX> --json
 ```
+
+Or scope peer memory by the sender talking to an agent:
+
+```bash
+openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role sender --json
+```
+
+OpenViking initializes the managed `peers/` container for every user. `none` means the plugin does not create or route into a concrete `peers/<peer_id>/memories` subtree. Actor-peer recall includes shared user memory plus the current peer memory, and changing the setting does not move existing memories.
+
+#### Configure The File Directly When The CLI Is Unavailable
+
+If the `openclaw` CLI cannot run inside the container, merge the following fields into the config file that OpenClaw actually reads. Use `OPENCLAW_CONFIG_PATH` when it is set; otherwise the file is usually `$OPENCLAW_STATE_DIR/openclaw.json` (default: `~/.openclaw/openclaw.json`).
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "openviking": {
+        "enabled": true,
+        "config": {
+          "mode": "remote",
+          "baseUrl": "http://openviking:1933",
+          "apiKey": "<API_KEY>",
+          "peer_role": "assistant"
+        }
+      }
+    },
+    "slots": {
+      "contextEngine": "openviking"
+    }
+  }
+}
+```
+
+- The plugin must already be installed. Back up the file and merge these fields into the existing `plugins` config.
+- If `plugins.allow` already exists, append `openviking`; otherwise, do not create an allowlist only for this plugin.
+- `contextEngine` is an exclusive slot. If another context engine is configured, change it only after confirming the replacement. Root API keys also require `accountId` and `userId` in `config`.
+- When connecting to another service from a container, use a `baseUrl` that is reachable from the container rather than `127.0.0.1`.
+- Prefer a `SecretRef` for `apiKey` instead of a plaintext string so the key is never stored inside `openclaw.json`. Supported shapes match OpenClaw's standard `SecretRef` used by LLM/TTS/MCP provider configs:
+
+  | Shape | Example | Notes |
+  | --- | --- | --- |
+  | `env` | `{ "source": "env", "id": "OPENVIKING_API_KEY" }` | Reads the named env var at plugin load time. |
+  | `file` | `{ "source": "file", "id": "/etc/secrets/openviking.key" }` | Reads UTF-8, trims whitespace. `~` is expanded; ideal for Kubernetes `secretKeyRef` volumes and 0600-managed files. |
+  | `exec` | not supported in the packaged plugin (marketplace install scanners block subprocess execution) | Wrap the CLI instead: `OPENVIKING_API_KEY=$(op read op://vault/openviking/credential)` and use `env`. |
+
+  A plain `string` (including `${ENV_VAR}` interpolation) is still accepted, but only as a backward-compatibility path; in that case, restrict file permissions or provide the file through a managed Secret volume, then restart the Gateway, container, or Pod.
 
 ### 3. Restart OpenClaw Gateway
 
@@ -205,7 +262,7 @@ Core fields:
 | `mode` | `remote` | Legacy compatibility field. Only remote mode is supported. |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking HTTP endpoint |
 | `apiKey` | empty | OpenViking API key |
-| `peer_role` | `assistant` | Peer identity mode: `none`, `assistant`, or `person`. Session messages use body `peer_id`; data-plane recall/search uses `X-OpenViking-Actor-Peer`. |
+| `peer_role` | `none` | Memory scope: `none` (shared `viking://user/<user_id>/memories`), `assistant` (`.../peers/<assistant_id>/memories`), or `sender` (`.../peers/<sender_id>/memories`). Legacy `person` is accepted as `sender`. Session messages use body `peer_id`; data-plane recall/search uses `X-OpenViking-Actor-Peer`. |
 | `peer_prefix` | empty | Optional prefix for assistant `peer_id` / actor peer values when `peer_role=assistant`. |
 | `accountId` | empty | Required when using a root API key |
 | `userId` | empty | Required when using a root API key |
@@ -272,7 +329,7 @@ Useful backup/source flags:
 | `--current-version` | Print the version tracked by the helper |
 | `--base-url URL` | OpenViking server URL (enables non-interactive mode) |
 | `--api-key KEY` | OpenViking API key |
-| `--peer-role ROLE` | Peer role: `none`, `assistant`, or `person` |
+| `--peer-role ROLE` | Memory scope: `none`, `assistant`, or `sender` |
 | `--peer-prefix PREFIX` | Prefix for assistant `peer_id` / actor peer values |
 | `--update` | Update an existing helper-managed install |
 
@@ -317,7 +374,7 @@ The plugin connects to an existing remote OpenViking server.
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:1933` | Remote OpenViking HTTP endpoint |
 | `apiKey` | empty | Optional OpenViking API key |
-| `peer_role` | `assistant` | Peer identity mode: `none`, `assistant`, or `person`; session messages use body `peer_id`, while data-plane recall/search uses `X-OpenViking-Actor-Peer` |
+| `peer_role` | `none` | Memory scope: `none`, `assistant`, or `sender`; legacy `person` is accepted as `sender`. Session messages use body `peer_id`, while data-plane recall/search uses `X-OpenViking-Actor-Peer` |
 | `peer_prefix` | empty | Optional prefix for assistant `peer_id` / actor peer values when `peer_role=assistant` |
 
 Common settings:

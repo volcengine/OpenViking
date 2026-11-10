@@ -4,7 +4,11 @@
 """Shared token estimation tests."""
 
 from openviking.message import Message, TextPart
-from openviking.session import Session
+from openviking.session.archive_store import ArchiveStore
+from openviking.utils.token_estimation import (
+    estimate_text_tokens,
+    truncate_text_to_token_budget,
+)
 
 
 def test_message_estimated_tokens_is_cjk_aware():
@@ -12,6 +16,18 @@ def test_message_estimated_tokens_is_cjk_aware():
     msg = Message(id="msg-cjk", role="user", parts=[TextPart("\u4f60\u597d\u4e16\u754c")])
 
     assert msg.estimated_tokens == 6
+    assert estimate_text_tokens("abcd") == 1
+    assert estimate_text_tokens("\U0001f600") == 2
+
+
+def test_truncate_text_to_token_budget_preserves_head_and_tail():
+    text = "summary-start " + ("填充内容" * 100) + " relevant-tail"
+
+    truncated = truncate_text_to_token_budget(text, 32)
+
+    assert estimate_text_tokens(truncated) <= 32
+    assert truncated.startswith("summary-start")
+    assert truncated.endswith("relevant-tail")
 
 
 async def test_archive_overview_tokens_do_not_trust_stale_low_metadata():
@@ -20,11 +36,10 @@ async def test_archive_overview_tokens_do_not_trust_stale_low_metadata():
             del uri, ctx
             return '{"overview_tokens": 1}'
 
-    fake_session = type("FakeSession", (), {"_viking_fs": FakeFS(), "ctx": None})()
+    store = ArchiveStore(FakeFS(), None, "viking://user/default/sessions/test")
 
-    tokens = await Session._read_archive_overview_tokens(
-        fake_session,
-        "viking://session/test/history/archive_001",
+    tokens = await store.read_overview_tokens(
+        "viking://user/default/sessions/test/history/archive_001",
         "\u4f60\u597d\u4e16\u754c",
     )
 
@@ -37,11 +52,10 @@ async def test_archive_overview_tokens_keep_higher_metadata_estimate():
             del uri, ctx
             return '{"overview_tokens": 5}'
 
-    fake_session = type("FakeSession", (), {"_viking_fs": FakeFS(), "ctx": None})()
+    store = ArchiveStore(FakeFS(), None, "viking://user/default/sessions/test")
 
-    tokens = await Session._read_archive_overview_tokens(
-        fake_session,
-        "viking://session/test/history/archive_001",
+    tokens = await store.read_overview_tokens(
+        "viking://user/default/sessions/test/history/archive_001",
         "abcd",
     )
 

@@ -25,6 +25,7 @@ import { registerOpenVikingLifecycleHooks } from "./plugin/openviking-lifecycle-
 import { registerOpenVikingMemoryRecallTools } from "./plugin/openviking-memory-recall-tools.js";
 import { registerOpenVikingMemoryTools } from "./plugin/openviking-memory-tools.js";
 import { registerOpenVikingQueryTools } from "./plugin/openviking-query-tools.js";
+import { registerOpenVikingRuleTools } from "./plugin/openviking-rule-tools.js";
 import { registerOpenVikingRecallTraceTools } from "./plugin/openviking-recall-trace-tools.js";
 import { createOpenVikingRuntimeState } from "./plugin/openviking-runtime-state.js";
 import { createOpenVikingSessionRoutingRuntime } from "./plugin/openviking-session-routing-runtime.js";
@@ -41,7 +42,7 @@ import {
 import type { CommandDefinition } from "./plugin/command-registration.js";
 
 import type { HttpTransport } from "./adapters/http-transport.js";
-import { formatMessageFaithful, toRoleId } from "./services/context-message-adapter.js";
+import { formatMessageFaithful } from "./services/context-message-adapter.js";
 import {
   clampScore,
   postProcessMemories,
@@ -95,6 +96,7 @@ type ToolContext = {
 };
 
 type OpenClawPluginApi = {
+  runtime?: { version?: string };
   pluginConfig?: unknown;
   openVikingTransport?: HttpTransport;
   logger: PluginLogger;
@@ -212,6 +214,7 @@ const contextEnginePlugin = {
       resolvePluginSessionRouting,
       toQueryConfigContext,
     } = createOpenVikingSessionRoutingRuntime({
+      peerRole: cfg.peer_role,
       peerPrefix: cfg.peer_prefix,
       logFindRequests: cfg.logFindRequests,
       logger: api.logger,
@@ -279,6 +282,14 @@ const contextEnginePlugin = {
       makeBypassedToolResult,
     });
 
+    registerOpenVikingRuleTools({
+      registerTool: registerOpenVikingTool,
+      getClient,
+      resolvePluginSessionRouting,
+      isBypassedSession,
+      makeBypassedToolResult,
+    });
+
     registerOpenVikingMemoryRecallTools({
       registerTool: registerOpenVikingTool,
       getClient,
@@ -329,8 +340,7 @@ const contextEnginePlugin = {
       getClient,
       normalizeSessionId: openClawSessionRefToOvStorageId,
       createTempSessionId: createMemoryStoreTempSessionId,
-      extractSenderId: extractToolSenderId,
-      toRoleId,
+      peerRole: cfg.peer_role,
       resolvePluginSessionRouting,
       isBypassedSession,
       makeBypassedToolResult,

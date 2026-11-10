@@ -2,11 +2,7 @@
 
 OpenViking 提供 `/metrics` 端点，用于向 Prometheus、Grafana Agent 等监控系统导出运行时指标。
 
-与 `/api/v1/observer/*` 和 `/api/v1/stats/*` 不同，`/metrics` 的定位是：
-
-- 面向机器抓取，而不是面向人工阅读
-- 返回 Prometheus exposition 文本，而不是统一 JSON 包装
-- 偏系统运行态与服务运行质量，不承担业务分析接口职责
+该端点返回供监控系统定时抓取的 Prometheus 文本，内容是系统运行状态和服务质量信号，不用于业务分析。需要组件状态的 JSON 快照时，使用 `/api/v1/observer/*`。
 
 ## API 参考
 
@@ -18,9 +14,7 @@ OpenViking 提供 `/metrics` 端点，用于向 Prometheus、Grafana Agent 等�
 
 **认证**
 
-- 当前实现中，`/metrics` 未接入 `get_request_context` 等鉴权依赖，因此可直接访问。
-- 也就是说，从代码实现角度看，`/metrics` 当前等价于公开抓取端点。
-- 如果后续通过网关、反向代理或服务端策略收紧访问控制，应以实际部署配置为准。
+服务端不对 `/metrics` 请求鉴权。若网关或反向代理限制访问，抓取任务需使用该层要求的凭据。
 
 **HTTP API**
 
@@ -77,14 +71,13 @@ scrape_configs:
 **注意事项**
 
 - `/metrics` 适合高频抓取，因此其中的指标应保持低基数、低成本。
-- `/metrics` 返回的是 Prometheus 文本，不是标准 OpenViking API 的 `{status, result, time}` JSON 结构。
-- 业务分析类统计（如 memory health、staleness、session extraction）应继续使用 `/api/v1/stats/*`，而不是迁移到 `/metrics`。
+- `/metrics` 返回的是 Prometheus 文本，不是标准 OpenViking API 的 `{status, result}` JSON 结构。
 - 人工查看组件瞬时状态更适合使用 `/api/v1/observer/*`。
 - `/metrics` 现在也包含 VikingBot feedback observability 指标，这些指标来自对持久化 session 数据的 scrape-time 聚合；具体指标族与示例可参见 Metrics 概念文档中的 feedback 章节。
 
 ## 相关文档
 
 - [指标与 Metrics](../concepts/12-metrics.md) - 指标族、标签、feedback 指标与 PromQL 示例
-- [VikingBot 问答效果反馈观测方案设计](https://github.com/volcengine/OpenViking/blob/main/bot/docs/vikingbot-feedback-observability-design.md) - feedback 指标与阶段性落地背景
+- [VikingBot 问答效果反馈观测方案设计](https://github.com/volcengine/OpenViking/blob/main/bot/docs/zh/design/vikingbot-feedback-observability-design.md) - feedback 指标与阶段性落地背景
 - [系统与监控](07-system.md) - 健康检查、系统状态与 Observer API
 - [API 概览](01-overview.md) - 所有 API 端点共享约定

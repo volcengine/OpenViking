@@ -12,13 +12,13 @@ from openviking.session.memory.utils.json_parser import (
     extract_json_content,
     parse_json_with_stability,
     parse_value_with_tolerance,
-    remove_json_trailing_content,
     value_fault_tolerance,
 )
 from openviking.session.memory.utils.language import (
     detect_language_from_conversation,
     resolve_output_language,
     resolve_output_language_from_conversation,
+    resolve_output_language_from_text,
     resolve_with_override,
     strip_language_detection_noise,
 )
@@ -47,6 +47,7 @@ __all__ = [
     "detect_language_from_conversation",
     "resolve_output_language",
     "resolve_output_language_from_conversation",
+    "resolve_output_language_from_text",
     "resolve_with_override",
     "strip_language_detection_noise",
     "add_line_numbers",
@@ -62,10 +63,8 @@ __all__ = [
     # URI
     "generate_uri",
     "validate_uri_template",
-    "is_uri_allowed",
     # JSON Parser
     "extract_json_content",
-    "remove_json_trailing_content",
     "parse_json_with_stability",
     "value_fault_tolerance",
     "parse_value_with_tolerance",
@@ -84,16 +83,14 @@ def __getattr__(name: str):
         from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
         return MemoryFileUtils
-    if name in {"generate_uri", "is_uri_allowed", "validate_uri_template"}:
+    if name in {"generate_uri", "validate_uri_template"}:
         from openviking.session.memory.utils.uri import (
             generate_uri,
-            is_uri_allowed,
             validate_uri_template,
         )
 
         return {
             "generate_uri": generate_uri,
-            "is_uri_allowed": is_uri_allowed,
             "validate_uri_template": validate_uri_template,
         }[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

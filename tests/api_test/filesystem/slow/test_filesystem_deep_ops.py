@@ -112,7 +112,7 @@ class TestFilesystemDeep:
         finally:
             api_client.fs_rm(file_uri)
 
-    def test_rm_directory_nonrecursive_returns_412(self, api_client):
+    def test_rm_directory_nonrecursive_returns_400(self, api_client):
         dir_uri = f"viking://resources/rm_nonrec_{uuid.uuid4().hex[:8]}"
         try:
             mkdir_resp = api_client.fs_mkdir(dir_uri)
@@ -121,8 +121,8 @@ class TestFilesystemDeep:
             api_client.fs_write(f"{dir_uri}/child.md", "child", mode="create", wait=True)
 
             rm_resp = api_client.fs_rm(dir_uri, recursive=False)
-            assert rm_resp.status_code == 412, (
-                f"non-recursive rm on non-empty dir should return 412 Precondition Failed, got {rm_resp.status_code}: {rm_resp.text[:200]}"
+            assert rm_resp.status_code == 400, (
+                f"non-recursive rm on non-empty dir should return 400 Invalid Argument, got {rm_resp.status_code}: {rm_resp.text[:200]}"
             )
         finally:
             api_client.fs_rm(dir_uri, recursive=True)

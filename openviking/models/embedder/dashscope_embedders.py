@@ -13,9 +13,11 @@ import openai
 
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
+    EmbeddingInput,
     EmbedResult,
     truncate_and_normalize,
 )
+from openviking.models.model_error import model_error_boundary
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import default_logger as logger
@@ -88,6 +90,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
         self._openai_client = openai.OpenAI(
             api_key=self.api_key,
             base_url=f"{self.api_base}/compatible-mode/v1",
+            max_retries=0,
         )
         # Multimodal mode: httpx
         self._httpx_client = httpx.Client(
@@ -147,6 +150,34 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # Multimodal helpers
     # ------------------------------------------------------------------
 
+    @property
+    def supports_multimodal(self) -> bool:
+        return self._input_type == "multimodal" and self.model_name.startswith(
+            ("qwen3-vl-embedding", "qwen2.5-vl-embedding")
+        )
+
+    @staticmethod
+    def _to_dashscope_contents(content: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+        contents = []
+        for part in content:
+            if part.get("type") == "text":
+                contents.append({"text": str(part.get("text", ""))})
+            elif part.get("type") == "image_url":
+                image_url = part.get("image_url")
+                url = image_url.get("url") if isinstance(image_url, dict) else image_url
+                if url:
+                    contents.append({"image": str(url)})
+        return contents
+
+    def _standard_input_fusion(self, contents: List[Dict[str, str]]) -> Optional[bool]:
+        if len(contents) <= 1:
+            return None
+        if self.model_name.startswith("qwen3-vl-embedding"):
+            return True
+        if self.model_name.startswith("qwen2.5-vl-embedding"):
+            return None
+        raise ValueError(f"{self.model_name} cannot fuse multiple multimodal input parts")
+
     def _multimodal_params(self) -> Dict[str, Any]:
         """Build parameters dict for multimodal requests, excluding None values."""
         return {
@@ -179,6 +210,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
             lambda: openai.AsyncOpenAI(
                 api_key=self.api_key,
                 base_url=f"{self.api_base}/compatible-mode/v1",
+                max_retries=0,
             )
         )
 
@@ -194,7 +226,12 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # embed
     # ------------------------------------------------------------------
 
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+    @model_error_boundary
+    def embed(self, text: EmbeddingInput, is_query: bool = False) -> EmbedResult:
+        if isinstance(text, list):
+            contents = self._to_dashscope_contents(text)
+            return self.embed_content(contents, enable_fusion=self._standard_input_fusion(contents))
+
         def _call() -> EmbedResult:
             if self._input_type == "text":
                 response = self._openai_client.embeddings.create(
@@ -213,7 +250,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=truncate_and_normalize(vector, self._dimension))
 
         try:
-            return self._run_with_retry(_call, logger=logger, operation_name="DashScope embedding")
+            return self._run_once(_call, logger=logger, operation_name="DashScope embedding")
         except Exception as e:
             raise RuntimeError(f"DashScope embedding failed: {e}") from e
 
@@ -221,7 +258,16 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # embed_async
     # ------------------------------------------------------------------
 
-    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+    @model_error_boundary
+    async def embed_async(self, text: EmbeddingInput, is_query: bool = False) -> EmbedResult:
+        if isinstance(text, list):
+            contents = self._to_dashscope_contents(text)
+            return await self.embed_content_async(
+                contents,
+                enable_fusion=self._standard_input_fusion(contents),
+                is_query=is_query,
+            )
+
         async def _call() -> EmbedResult:
             if self._input_type == "text":
                 client = self._get_async_openai_client()
@@ -240,113 +286,20 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=truncate_and_normalize(vector, self._dimension))
 
         try:
-            return await self._run_with_async_retry(
-                _call, logger=logger, operation_name="DashScope async embedding"
+            return await self._run_once_async(
+                _call, is_query=is_query, logger=logger, operation_name="DashScope async embedding"
             )
         except Exception as e:
             raise RuntimeError(f"DashScope embedding failed: {e}") from e
 
     # ------------------------------------------------------------------
-    # embed_batch — text mode chunks by 10 (DashScope text API limit)
-    # ------------------------------------------------------------------
-
-    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
-        if not texts:
-            return []
-
-        def _call() -> List[EmbedResult]:
-            results: List[EmbedResult] = []
-            if self._input_type == "text":
-                for i in range(0, len(texts), 10):
-                    batch = texts[i : i + 10]
-                    response = self._openai_client.embeddings.create(
-                        input=batch, model=self.model_name, dimensions=self._dimension
-                    )
-                    self._update_telemetry_token_usage(response)
-                    for item in response.data:
-                        results.append(
-                            EmbedResult(
-                                dense_vector=truncate_and_normalize(item.embedding, self._dimension)
-                            )
-                        )
-            else:
-                for text in texts:
-                    resp = self._httpx_client.post(
-                        self._multimodal_url, json=self._multimodal_body(text)
-                    )
-                    resp.raise_for_status()
-                    self._update_telemetry_token_usage(resp)
-                    vector = resp.json()["output"]["embeddings"][0]["embedding"]
-                    results.append(
-                        EmbedResult(dense_vector=truncate_and_normalize(vector, self._dimension))
-                    )
-            return results
-
-        try:
-            return self._run_with_retry(
-                _call, logger=logger, operation_name="DashScope batch embedding"
-            )
-        except Exception as e:
-            logger.error(
-                f"DashScope batch embedding failed, texts length: {len(texts)}, "
-                f"input_type: {self._input_type}, model_name: {self.model_name}"
-            )
-            raise RuntimeError(f"DashScope batch embedding failed: {e}") from e
-
-    # ------------------------------------------------------------------
-    # embed_batch_async
-    # ------------------------------------------------------------------
-
-    async def embed_batch_async(
-        self, texts: List[str], is_query: bool = False
-    ) -> List[EmbedResult]:
-        if not texts:
-            return []
-
-        async def _call() -> List[EmbedResult]:
-            results: List[EmbedResult] = []
-            if self._input_type == "text":
-                client = self._get_async_openai_client()
-                for i in range(0, len(texts), 10):
-                    batch = texts[i : i + 10]
-                    response = await client.embeddings.create(
-                        input=batch, model=self.model_name, dimensions=self._dimension
-                    )
-                    self._update_telemetry_token_usage(response)
-                    for item in response.data:
-                        results.append(
-                            EmbedResult(
-                                dense_vector=truncate_and_normalize(item.embedding, self._dimension)
-                            )
-                        )
-            else:
-                client = self._get_async_httpx_client()
-                for text in texts:
-                    resp = await client.post(self._multimodal_url, json=self._multimodal_body(text))
-                    resp.raise_for_status()
-                    self._update_telemetry_token_usage(resp)
-                    vector = resp.json()["output"]["embeddings"][0]["embedding"]
-                    results.append(
-                        EmbedResult(dense_vector=truncate_and_normalize(vector, self._dimension))
-                    )
-            return results
-
-        try:
-            return await self._run_with_async_retry(
-                _call, logger=logger, operation_name="DashScope async batch embedding"
-            )
-        except Exception as e:
-            logger.error(
-                f"DashScope async batch embedding failed, texts length: {len(texts)}, "
-                f"input_type: {self._input_type}, model_name: {self.model_name}"
-            )
-            raise RuntimeError(f"DashScope batch embedding failed: {e}") from e
-
-    # ------------------------------------------------------------------
     # embed_content — multimodal content (text + image URLs)
     # ------------------------------------------------------------------
 
-    def embed_content(self, contents: List[Dict[str, str]]) -> EmbedResult:
+    @model_error_boundary
+    def embed_content(
+        self, contents: List[Dict[str, str]], *, enable_fusion: Optional[bool] = None
+    ) -> EmbedResult:
         """Embed multimodal content (text + image URLs) via native DashScope API.
 
         Args:
@@ -362,6 +315,8 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
                 "input": {"contents": contents},
             }
             params = self._multimodal_params()
+            if enable_fusion is not None:
+                params["enable_fusion"] = enable_fusion
             if params:
                 body["parameters"] = params
             resp = self._httpx_client.post(self._multimodal_url, json=body)
@@ -371,13 +326,20 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=truncate_and_normalize(vector, self._dimension))
 
         try:
-            return self._run_with_retry(
+            return self._run_once(
                 _call, logger=logger, operation_name="DashScope content embedding"
             )
         except Exception as e:
             raise RuntimeError(f"DashScope content embedding failed: {e}") from e
 
-    async def embed_content_async(self, contents: List[Dict[str, str]]) -> EmbedResult:
+    @model_error_boundary
+    async def embed_content_async(
+        self,
+        contents: List[Dict[str, str]],
+        *,
+        enable_fusion: Optional[bool] = None,
+        is_query: bool = False,
+    ) -> EmbedResult:
         """Async version of embed_content."""
 
         client = self._get_async_httpx_client()
@@ -388,6 +350,8 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
                 "input": {"contents": contents},
             }
             params = self._multimodal_params()
+            if enable_fusion is not None:
+                params["enable_fusion"] = enable_fusion
             if params:
                 body["parameters"] = params
             resp = await client.post(self._multimodal_url, json=body)
@@ -397,8 +361,11 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=truncate_and_normalize(vector, self._dimension))
 
         try:
-            return await self._run_with_async_retry(
-                _call, logger=logger, operation_name="DashScope async content embedding"
+            return await self._run_once_async(
+                _call,
+                is_query=is_query,
+                logger=logger,
+                operation_name="DashScope async content embedding",
             )
         except Exception as e:
             raise RuntimeError(f"DashScope content embedding failed: {e}") from e

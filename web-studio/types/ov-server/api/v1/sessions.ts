@@ -12,6 +12,7 @@ export type TokenUsage = {
 
 export type SessionListItem = {
   is_dir: boolean
+  mod_time: string
   session_id: string
   uri: string
 }
@@ -28,12 +29,21 @@ export type SessionDetail = {
   message_count: number
   pending_tokens: number
   session_id: string
+  total_message_count?: number
   updated_at: string
+  uri?: string
   user: UserIdentifier
 }
 
 export type SessionContextResult = {
   messages?: unknown[]
+}
+
+export type SessionArchiveResult = {
+  abstract?: string
+  archive_id: string
+  messages?: unknown[]
+  overview?: string
 }
 
 export type SessionCreatedResult = {
@@ -62,4 +72,11 @@ export type SessionMeta = SessionDetail
 export type CreateSessionResult = SessionCreatedResult
 export type DeleteSessionResult = SessionDeletedResult
 export type AddMessageResult = MessageAddedResult
-export type CommitSessionResult = CommitResult
+export type CommitSessionResult = Omit<
+  CommitResult,
+  'archive_uri' | 'task_id'
+> & {
+  archive_uri: string | null
+  task_id: string | null
+  reason?: string
+}

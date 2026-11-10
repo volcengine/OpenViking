@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Annotated, Any, Dict, List, Optional, Tuple, Type
 
@@ -21,6 +22,8 @@ from openviking.storage.vectordb.utils.json_safety import (
     safe_json_dumps,
     sanitize_unicode_for_json,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def get_pydantic_type(field_type: str) -> Type:
@@ -260,10 +263,10 @@ class DataProcessor:
             lat = float(parts[1].strip())
         except ValueError as exc:
             raise ValueError("geo_point lon/lat must be float") from exc
-        if not (-180.0 < lon < 180.0):
-            raise ValueError("geo_point longitude out of range (-180, 180)")
-        if not (-90.0 < lat < 90.0):
-            raise ValueError("geo_point latitude out of range (-90, 90)")
+        if not (-180.0 <= lon <= 180.0):
+            raise ValueError("geo_point longitude out of range [-180, 180]")
+        if not (-90.0 <= lat <= 90.0):
+            raise ValueError("geo_point latitude out of range [-90, 90]")
         return lon, lat
 
     def parse_radius(self, value: Any) -> float:
@@ -338,7 +341,16 @@ class DataProcessor:
     def convert_fields_for_index(self, fields_json: str) -> str:
         if not fields_json:
             return fields_json
-        data = sanitize_unicode_for_json(json.loads(fields_json))
+        try:
+            parsed = json.loads(fields_json)
+        except json.JSONDecodeError:
+            logger.warning(
+                "convert_fields_for_index: skipping corrupted JSON payload "
+                "(%d chars) and returning raw value",
+                len(fields_json),
+            )
+            return fields_json
+        data = sanitize_unicode_for_json(parsed)
         converted = self.convert_fields_dict_for_index(data)
         return safe_json_dumps(converted, ensure_ascii=False)
 

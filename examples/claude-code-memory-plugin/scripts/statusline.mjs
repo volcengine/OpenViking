@@ -24,7 +24,7 @@ import { probeServer } from "./lib/server-probe.mjs";
 
 const STATE_MAX_AGE_MS = 30 * 60_000;        // 30 min — older = "idle"
 const SESSION_EVENT_MAX_AGE_MS = 60_000;     // 1 min — "🔗 resumed" fades
-const MAX_WIDTH = 80;
+const MAX_WIDTH = 100;
 const ESC = "\x1b[";
 
 function colorEnabled() {
@@ -48,6 +48,47 @@ function human(n) {
   if (n < 1000) return String(n);
   if (n < 10_000) return (n / 1000).toFixed(1) + "k";
   return Math.round(n / 1000) + "k";
+}
+
+function num(v) {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+// Context usage straight from CC's statusline payload. Registering a custom
+// statusLine replaces CC's native line — and with it the built-in context
+// indicator — so we have to reproduce it. Color thresholds mirror native CC:
+// <70% dim, 70–89% yellow, >=90% red.
+function ctxSegment(stdin) {
+  if ((process.env.OPENVIKING_STATUSLINE_CTX || "").toLowerCase() === "off") return null;
+  const cw = stdin.context_window;
+  if (!cw || typeof cw !== "object") return null;
+  let pct = num(cw.used_percentage);
+  if (pct === null) {
+    const remaining = num(cw.remaining_percentage);
+    if (remaining !== null) pct = 100 - remaining;
+  }
+  if (pct === null) {
+    const used = num(cw.total_input_tokens);
+    const size = num(cw.context_window_size);
+    if (used !== null && size !== null && size > 0) pct = (used / size) * 100;
+  }
+  if (pct === null) return null;
+  const rounded = Math.min(100, Math.max(0, Math.round(pct)));
+  const seg = `ctx ${rounded}%`;
+  if (rounded >= 90) return red(seg);
+  if (rounded >= 70) return yellow(seg);
+  return dim(seg);
+}
+
+// Model + context cluster, one segment: "Fable 5 · ctx 42%". The model name
+// rarely changes but anchors the fast-moving percentage next to it.
+function modelCtxSegment(stdin) {
+  const name = typeof stdin.model?.display_name === "string" ? stdin.model.display_name.trim() : "";
+  const ctx = ctxSegment(stdin);
+  if (name && ctx) return `${dim(name)}${dim(" · ")}${ctx}`;
+  if (ctx) return ctx;
+  if (name) return dim(name);
+  return null;
 }
 
 async function readStdin() {
@@ -107,15 +148,20 @@ async function main() {
   if (process.env.OPENVIKING_STATUSLINE === "off") return;
   if (!isPluginEnabled()) return;
 
-  const cfg = loadConfig();
   const stdin = await readStdin();
   const sessionId = stdin.session_id;
   const cwd = stdin.cwd;
+  // The workspace layer belongs to the session's directory, not this process's.
+  const cfg = loadConfig(cwd);
 
   // Bypass shortcut: don't even probe the server when the user has opted
-  // this session out of OV.
+  // this session out of OV. The context indicator stays — it describes the
+  // CC conversation, not OV, and this line is all the user gets.
   if (isBypassed(cfg, { sessionId, cwd })) {
-    process.stdout.write(yellow("OV ⚡ bypass"));
+    const bypassParts = [yellow("OV ⚡ bypass")];
+    const modelCtx = modelCtxSegment(stdin);
+    if (modelCtx) bypassParts.push(modelCtx);
+    process.stdout.write(truncate(bypassParts.join(dim(" │ "))));
     return;
   }
 
@@ -139,18 +185,14 @@ async function main() {
     parts.push(red("OV ✗ offline"));
   }
 
+  const modelCtx = modelCtxSegment(stdin);
+  if (modelCtx) parts.push(modelCtx);
+
   // Recall summary: only meaningful when we actually injected memories this
   // turn. Skip the segment for empty/bypass/no-results reasons to keep the
-  // line tight. The (0.92) trailing parens is the top score among picked
-  // items — quality hint without an extra segment. Token/char count is
-  // omitted: the only number we have is a chars/4 heuristic, which is
-  // misleading enough on CJK text that displaying it does more harm than
-  // good. Count + score + latency convey the relevant signal.
+  // line tight. Count confirms the injection; latency shows its round-trip cost.
   if (recall && recall.reason === "ok" && recall.count > 0) {
-    const top = typeof recall.top_score === "number" && recall.top_score > 0
-      ? ` (${recall.top_score.toFixed(2)})`
-      : "";
-    const seg = `↩ ${recall.count} mem${top}`
+    const seg = `↩ ${recall.count} mem`
       + (typeof recall.latency_ms === "number" ? ` · ${recall.latency_ms}ms` : "");
     parts.push(dim(seg));
   }

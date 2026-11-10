@@ -112,7 +112,7 @@ class DingTalkChannel(BaseChannel):
         try:
             if not DINGTALK_AVAILABLE:
                 logger.exception(
-                    "DingTalk Stream SDK not installed. Install with: uv pip install 'openviking[bot-dingtalk]' (or uv pip install -e \".[bot-dingtalk]\" for local dev)"
+                    "DingTalk Stream SDK not installed. Install with: uv pip install dingtalk-stream>=0.4.0"
                 )
                 return
 
@@ -238,6 +238,7 @@ class DingTalkChannel(BaseChannel):
             logger.info(f"DingTalk inbound: {content} from {sender_name}")
             await self._handle_message(
                 sender_id=sender_id,
+                sender_name=sender_name or sender_id,
                 chat_id=sender_id,  # For private chat, chat_id == sender_id
                 content=str(content),
                 metadata={

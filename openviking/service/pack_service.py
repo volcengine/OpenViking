@@ -8,14 +8,13 @@ Provides ovpack export/import and backup/restore operations.
 
 from typing import Optional
 
-from openviking.core.uri_validation import validate_viking_uri
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.storage.ovpack.operations import backup_ovpack as local_backup_ovpack
 from openviking.storage.ovpack.operations import export_ovpack as local_export_ovpack
 from openviking.storage.ovpack.operations import import_ovpack as local_import_ovpack
 from openviking.storage.ovpack.operations import restore_ovpack as local_restore_ovpack
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import NotInitializedError
+from openviking_cli.exceptions import NotInitializedError, PermissionDeniedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -24,24 +23,50 @@ logger = get_logger(__name__)
 class PackService:
     """OVPack export/import and backup/restore service."""
 
-    def __init__(self, viking_fs: Optional[VikingFS] = None, vector_store=None):
+    def __init__(
+        self,
+        viking_fs: Optional[VikingFS] = None,
+        vector_store=None,
+        vector_config_resolver=None,
+    ):
         self._viking_fs = viking_fs
         self._vector_store = vector_store
+        self._vector_config_resolver = vector_config_resolver
 
     def set_viking_fs(self, viking_fs: VikingFS) -> None:
         """Set VikingFS instance (for deferred initialization)."""
         self._viking_fs = viking_fs
 
-    def set_dependencies(self, viking_fs: VikingFS, vector_store=None) -> None:
+    def set_dependencies(
+        self,
+        viking_fs: VikingFS,
+        vector_store=None,
+        vector_config_resolver=None,
+    ) -> None:
         """Set pack service dependencies."""
         self._viking_fs = viking_fs
         self._vector_store = vector_store
+        self._vector_config_resolver = vector_config_resolver
 
     def _ensure_initialized(self) -> VikingFS:
         """Ensure VikingFS is initialized."""
         if not self._viking_fs:
             raise NotInitializedError("VikingFS")
         return self._viking_fs
+
+    @staticmethod
+    def _account_maintenance_ctx(ctx: RequestContext) -> RequestContext:
+        """Use account-wide authority for backup/restore without changing URI ownership."""
+        if ctx.role not in {Role.ROOT, Role.ADMIN}:
+            raise PermissionDeniedError("OVPack backup and restore require ROOT or ADMIN role")
+        return RequestContext(
+            user=ctx.user,
+            role=Role.ROOT,
+            from_oauth=ctx.from_oauth,
+            # ROOT opens user namespaces but does not inherit ADMIN's resource
+            # ACL authority. Account maintenance must include restricted resources.
+            bypass_acl=True,
+        )
 
     async def export_ovpack(
         self,
@@ -60,13 +85,13 @@ class PackService:
             Exported file path
         """
         viking_fs = self._ensure_initialized()
-        uri = validate_viking_uri(uri)
         return await local_export_ovpack(
             viking_fs,
             uri,
             to,
             ctx=ctx,
             vector_store=self._vector_store,
+            vector_config_resolver=self._vector_config_resolver,
             include_vectors=include_vectors,
         )
 
@@ -78,11 +103,13 @@ class PackService:
     ) -> str:
         """Back up all public OpenViking scopes as a restore-only .ovpack file."""
         viking_fs = self._ensure_initialized()
+        maintenance_ctx = self._account_maintenance_ctx(ctx)
         return await local_backup_ovpack(
             viking_fs,
             to,
-            ctx=ctx,
+            ctx=maintenance_ctx,
             vector_store=self._vector_store,
+            vector_config_resolver=self._vector_config_resolver,
             include_vectors=include_vectors,
         )
 
@@ -105,7 +132,6 @@ class PackService:
             Imported root resource URI
         """
         viking_fs = self._ensure_initialized()
-        parent = validate_viking_uri(parent, field_name="parent")
         return await local_import_ovpack(
             viking_fs,
             file_path,
@@ -113,6 +139,7 @@ class PackService:
             on_conflict=on_conflict,
             vector_mode=vector_mode,
             vector_store=self._vector_store,
+            vector_config_resolver=self._vector_config_resolver,
             ctx=ctx,
         )
 
@@ -125,11 +152,13 @@ class PackService:
     ) -> str:
         """Restore a backup .ovpack file to its original public scope roots."""
         viking_fs = self._ensure_initialized()
+        maintenance_ctx = self._account_maintenance_ctx(ctx)
         return await local_restore_ovpack(
             viking_fs,
             file_path,
-            ctx=ctx,
+            ctx=maintenance_ctx,
             on_conflict=on_conflict,
             vector_mode=vector_mode,
             vector_store=self._vector_store,
+            vector_config_resolver=self._vector_config_resolver,
         )

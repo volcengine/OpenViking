@@ -3,15 +3,26 @@
 """
 Search Service for OpenViking.
 
-Provides semantic search operations: search, find.
+Provides search operations: search, find.
 """
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.core.uri_validation import validate_optional_viking_uris
+from openviking.core.namespace_policy import is_system_uri
+from openviking.core.retrieval_types import SearchType
+from openviking.models.rerank import RerankClient
+from openviking.retrieve.rerank_scoring import Reranker
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
+from openviking.utils.image_search import (
+    image_bytes_to_data_uri,
+    is_data_image_uri,
+    is_http_url,
+    is_viking_uri,
+)
+from openviking.utils.model_retry import model_retry_scope
 from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
+from openviking_cli.retrieve import ContextType
 from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
@@ -20,13 +31,38 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def _ensure_non_empty_query(query: str) -> None:
-    if not query.strip():
-        raise InvalidArgumentError("Search query must not be empty.")
+def _reject_system_targets(target_uri: Union[str, List[str]]) -> None:
+    targets = [target_uri] if isinstance(target_uri, str) else target_uri
+    for uri in targets:
+        if uri and is_system_uri(uri):
+            raise InvalidArgumentError(f"search is not supported for namespace: {uri}")
+
+
+def _validate_query(
+    query: str,
+    image_url: str | list[str] | None = None,
+    filter: Optional[Dict] = None,
+) -> None:
+    """Reject malformed query text or a request with nothing to search for.
+
+    A filter is an acceptable substitute for a query: the result set is then
+    fully determined by the filter, which is exactly what an exact-match lookup
+    (e.g. by a tag carrying an external id) needs. Without either one the call
+    would return an arbitrary slice of the whole store.
+    """
+    try:
+        query.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise InvalidArgumentError("Search query must contain valid Unicode text.") from exc
+    if query.strip() or image_url or filter:
+        return
+    raise InvalidArgumentError(
+        "Search query or image_url must not be empty unless a filter is provided."
+    )
 
 
 class SearchService:
-    """Semantic search service."""
+    """Search service."""
 
     def __init__(self, viking_fs: Optional[VikingFS] = None):
         self._viking_fs = viking_fs
@@ -41,6 +77,75 @@ class SearchService:
             raise NotInitializedError("VikingFS")
         return self._viking_fs
 
+    def is_intent_enabled(self) -> bool:
+        """Whether search uses session context for LLM intent analysis.
+
+        When false, callers should skip session.load / get_context_for_search:
+        VikingFS.search ignores session_info and searches with the raw query.
+        Default is True (matches RetrievalConfig) when config is unset.
+        """
+        if not self._viking_fs or self._viking_fs.retrieval_config is None:
+            return True
+        return bool(self._viking_fs.retrieval_config.enable_intent)
+
+    def context_reranker(self) -> Optional[Reranker]:
+        """The reranker context assembly applies to its merged candidates, if any.
+
+        None unless ``retrieval.apply_rerank_to_context`` is on and ``rerank`` has
+        a usable provider config. Off by default, so context mode keeps vector
+        scores, as find() does.
+        """
+        if not self._viking_fs or self._viking_fs.retrieval_config is None:
+            return None
+        if not self._viking_fs.retrieval_config.apply_rerank_to_context:
+            return None
+        rerank_config = self._viking_fs.rerank_config
+        if not rerank_config or not rerank_config.is_available():
+            return None
+        client = RerankClient.from_config(rerank_config)
+        if client is None:
+            return None
+        return Reranker(
+            client=client,
+            threshold=rerank_config.threshold,
+            max_input_tokens=rerank_config.max_input_tokens,
+        )
+
+    async def ensure_keywords_search_supported(self, ctx: RequestContext) -> None:
+        """Validate keyword-search support at the top-level request boundary."""
+        viking_fs = self._ensure_initialized()
+        vector_store = viking_fs._get_vector_store()
+        if not vector_store or not await viking_fs._collection_has_fulltext(
+            vector_store,
+            ctx,
+            supported_modes=("volcengine", "vikingdb", "opengauss"),
+            raise_on_error=True,
+        ):
+            raise InvalidArgumentError(
+                "Keyword search is not supported by the configured vector backend, or full-text "
+                "indexing is not enabled for the content field."
+            )
+
+    async def _resolve_image_url(
+        self,
+        image_url: str | list[str] | None,
+        ctx: RequestContext,
+    ) -> str | list[str] | None:
+        if isinstance(image_url, list):
+            return [await self._resolve_image_url(url, ctx) for url in image_url]
+        if not image_url:
+            return None
+        if is_viking_uri(image_url):
+            viking_fs = self._ensure_initialized()
+            content = await viking_fs.read_file_bytes(image_url, ctx=ctx)
+            return image_bytes_to_data_uri(content, image_url)
+        if is_data_image_uri(image_url) or is_http_url(image_url):
+            return image_url
+        raise InvalidArgumentError(
+            "image_url must be a data:image base64 URI, http(s) URL, or viking:// URI."
+        )
+
+    @model_retry_scope(0)
     async def search(
         self,
         query: str,
@@ -51,8 +156,12 @@ class SearchService:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         level: Optional[List[int]] = None,
+        image_url: str | list[str] | None = None,
+        events_time_decay_protection: Optional[str] = None,
+        search_type: SearchType = "semantic",
+        context_types: Optional[List[ContextType]] = None,
     ) -> Any:
-        """Complex search with session context.
+        """Search with session context.
 
         Args:
             query: Query string
@@ -66,12 +175,18 @@ class SearchService:
         Returns:
             FindResult
         """
-        _ensure_non_empty_query(query)
-        target_uri = validate_optional_viking_uris(target_uri, field_name="target_uri")
+        if search_type == "keywords" and image_url:
+            raise InvalidArgumentError("image_url is not supported when search_type='keywords'")
+        resolved_image_url = await self._resolve_image_url(image_url, ctx)
+        _validate_query(query, resolved_image_url)
+        _reject_system_targets(target_uri)
+        if search_type == "keywords":
+            await self.ensure_keywords_search_supported(ctx)
         viking_fs = self._ensure_initialized()
 
         session_info = None
-        if session:
+        # Intent off: session_info is unused by VikingFS — skip the archive/message scan.
+        if session is not None and self.is_intent_enabled() and not resolved_image_url:
             session_info = await session.get_context_for_search(query)
 
         result = await viking_fs.search(
@@ -83,9 +198,14 @@ class SearchService:
             score_threshold=score_threshold,
             filter=filter,
             level=level,
+            image_url=resolved_image_url,
+            events_time_decay_protection=events_time_decay_protection,
+            search_type=search_type,
+            context_types=context_types,
         )
         return result
 
+    @model_retry_scope(0)
     async def find(
         self,
         query: str,
@@ -95,8 +215,11 @@ class SearchService:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         level: Optional[List[int]] = None,
+        image_url: str | list[str] | None = None,
+        events_time_decay_protection: Optional[str] = None,
+        search_type: SearchType = "semantic",
     ) -> Any:
-        """Semantic search without session context.
+        """Search without session context.
 
         Args:
             query: Query string
@@ -109,8 +232,11 @@ class SearchService:
         Returns:
             FindResult
         """
-        _ensure_non_empty_query(query)
-        target_uri = validate_optional_viking_uris(target_uri, field_name="target_uri")
+        if search_type == "keywords" and image_url:
+            raise InvalidArgumentError("image_url is not supported when search_type='keywords'")
+        resolved_image_url = await self._resolve_image_url(image_url, ctx)
+        _validate_query(query, resolved_image_url, filter)
+        _reject_system_targets(target_uri)
         viking_fs = self._ensure_initialized()
         result = await viking_fs.find(
             query=query,
@@ -120,5 +246,49 @@ class SearchService:
             score_threshold=score_threshold,
             filter=filter,
             level=level,
+            image_url=resolved_image_url,
+            events_time_decay_protection=events_time_decay_protection,
+            search_type=search_type,
         )
         return result
+
+    async def find_skills(
+        self,
+        query: str,
+        ctx: RequestContext,
+        target_uri: Union[str, List[str]],
+        limit: int = 10,
+        score_threshold: Optional[float] = None,
+        level: Optional[List[int]] = None,
+        filter: Optional[Dict] = None,
+        search_type: SearchType = "semantic",
+    ) -> Any:
+        """Find distinct packages; general find/search stay item-based."""
+        from openviking.core.retrieval_targets import resolve_retrieval_targets
+        from openviking.retrieve.skill_package_retriever import SkillPackageRetriever
+        from openviking.retrieve.skill_results import SkillResultResolver
+        from openviking_cli.retrieve import ContextType, FindResult, TypedQuery
+
+        _validate_query(query)
+        _reject_system_targets(target_uri)
+        fs = self._ensure_initialized()
+        targets = resolve_retrieval_targets(target_uri, ctx).target_directories
+        for target in targets:
+            await fs._ensure_retrieval_scope(target, ctx)
+        storage, embedder = fs._get_vector_store(), fs._get_embedder(ctx)
+        if not storage:
+            raise RuntimeError("Vector store not initialized. Call OpenViking.initialize() first.")
+        if search_type == "semantic" and not embedder:
+            raise RuntimeError("Embedder not configured.")
+        retriever = SkillPackageRetriever(storage=storage, embedder=embedder)
+        result = await retriever.retrieve_skills(
+            TypedQuery(query, ContextType.SKILL, "", target_directories=targets),
+            ctx,
+            skill_resolver=SkillResultResolver(fs, ctx),
+            limit=limit,
+            score_threshold=score_threshold,
+            level=level,
+            scope_dsl=filter,
+            search_type=search_type,
+        )
+        return FindResult(memories=[], resources=[], skills=result.matched_contexts)

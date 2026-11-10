@@ -25,6 +25,7 @@ except ImportError:  # pragma: no cover - OTel optional
 _SKIP_CONTENT_TYPE_PREFIXES = (
     "multipart/form-data",
     "application/octet-stream",
+    "application/zip",
     "text/event-stream",
     "audio/",
     "video/",

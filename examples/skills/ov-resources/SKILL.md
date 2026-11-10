@@ -19,14 +19,13 @@ Guide an agent to correctly invoke resource and filesystem commands without gues
 - User explicitly requests resource operations: `ov add-resource`, `ov task watch`, `ov export`, `ov import`, `ov backup`, `ov restore`.
 - User asks to browse, read, write, create, move, or delete files under `viking://resources/`.
 - User asks to search for context: `ov find`, `ov search`, `ov grep`, `ov glob`.
-- User asks to create or manage relations between resources (`ov link`, `ov relations`, `ov unlink`).
 - Agent needs to list, inspect, or search the resource tree to find context.
 
 ## Inputs
 
 | Name | Required | Description |
 |---|---|---|
-| `subcommand` | yes | Resource command: `add-resource`, `task watch`, `export`, `import`, `backup`, `restore`, filesystem command: `ls`, `tree`, `read`, `write`, `mkdir`, `rm`, `mv`, `grep`, `glob`, `link`, `relations`, `unlink`, or search command: `find`, `search` |
+| `subcommand` | yes | Resource command: `add-resource`, `task watch`, `export`, `import`, `backup`, `restore`, filesystem command: `ls`, `tree`, `read`, `write`, `mkdir`, `rm`, `mv`, `grep`, `glob`, or search command: `find`, `search` |
 | `target` | conditional | File path, URL, Viking URI, or query string |
 | `flags` | no | Command-specific flags like `--wait`, `--to`, `--parent`, `--recursive`, `--watch-interval` |
 
@@ -66,7 +65,7 @@ Guide an agent to correctly invoke resource and filesystem commands without gues
 ## Runtime Resources
 
 - `docs/add-resource.md` — detailed resource ingestion docs, source types, and async processing.
-- `docs/filesystem.md` — filesystem operations reference (ls, tree, read, write, mkdir, rm, mv, grep, glob, link, relations, unlink).
+- `docs/filesystem.md` — filesystem operations reference (ls, tree, read, write, mkdir, rm, mv, grep, glob).
 - `docs/search.md` — semantic search (`ov find`, `ov search`) and search combination strategies.
 - `docs/watch-management.md` — watch task lifecycle (create, pause, resume, trigger, update, remove).
 - `docs/ovpack.md` — ovpack export/import/backup/restore reference.

@@ -10,10 +10,13 @@
 //!
 //! The free functions are invoked from thin `#[pymethods]` wrappers in `lib.rs`.
 
+use std::io::{self, Write};
 use std::sync::Arc;
+use std::time::Duration;
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use similar::{Algorithm, TextDiff};
 
 use ragfs::core::FileSystem;
 use ragfs::git::{
@@ -159,44 +162,79 @@ fn build_s3_service(
     Ok((object_store, ref_store, index_store))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GitErrorMapping {
+    PythonException(&'static str),
+    RestoreWritebackPartial,
+    RuntimeFallback,
+}
+
+fn classify_git_error(e: &ragfs::git::GitError) -> GitErrorMapping {
+    use ragfs::git::{GitError, ObjectStoreError, RefStoreError};
+
+    match e {
+        GitError::FeatureDisabled => GitErrorMapping::PythonException("AGFSNotSupportedError"),
+        GitError::ConcurrentCommit { .. } => {
+            GitErrorMapping::PythonException("GitConcurrentCommitError")
+        }
+        GitError::PathNotFound(_) => GitErrorMapping::PythonException("AGFSPathNotFoundError"),
+        GitError::PathIsDirectory(_) => {
+            GitErrorMapping::PythonException("AGFSInvalidOperationError")
+        }
+        GitError::SubtreeNotFoundInCommit { .. } => {
+            GitErrorMapping::PythonException("AGFSNotFoundError")
+        }
+        GitError::InvalidAccountId(_)
+        | GitError::InvalidProjectDir(_)
+        | GitError::InvalidPath(_) => GitErrorMapping::PythonException("AGFSInvalidPathError"),
+        GitError::BlobTooLarge { .. } => {
+            GitErrorMapping::PythonException("AGFSResourceExhaustedError")
+        }
+        GitError::TooManyFiles { .. }
+        | GitError::TooManyLogPaths { .. }
+        | GitError::LogPathTooDeep { .. }
+        | GitError::LogScanLimitExceeded { .. }
+        | GitError::IgnoreFileTooLarge { .. }
+        | GitError::InvalidIgnoreFile { .. }
+        | GitError::AmbiguousOid { .. } => {
+            GitErrorMapping::PythonException("AGFSInvalidOperationError")
+        }
+        GitError::CorruptedObject(_) => GitErrorMapping::PythonException("AGFSInternalError"),
+        GitError::RefStore(RefStoreError::NotFound(_))
+        | GitError::OidPrefixNotFound { .. }
+        | GitError::ObjectStore(ObjectStoreError::NotFound(_)) => {
+            GitErrorMapping::PythonException("AGFSNotFoundError")
+        }
+        GitError::RefStore(RefStoreError::Conflict { .. }) => {
+            GitErrorMapping::PythonException("GitConcurrentCommitError")
+        }
+        GitError::RefStore(RefStoreError::InvalidName(_)) => {
+            GitErrorMapping::PythonException("AGFSInvalidOperationError")
+        }
+        GitError::RestoreWritebackPartial(_) => GitErrorMapping::RestoreWritebackPartial,
+        GitError::ObjectStore(_)
+        | GitError::RefStore(_)
+        | GitError::Vfs(_)
+        | GitError::Other(_) => GitErrorMapping::RuntimeFallback,
+    }
+}
+
 /// Map a `GitError` to the appropriate Python exception.
 ///
 /// Loads exception classes from the `openviking.pyagfs` module. When the
 /// module is not importable (e.g. during unit tests), falls back to
 /// `PyRuntimeError` with the same message.
 pub fn map_git_error(py: Python<'_>, e: ragfs::git::GitError) -> PyErr {
-    use ragfs::git::{GitError, ObjectStoreError, RefStoreError};
     let msg = e.to_string();
-    match e {
-        GitError::FeatureDisabled => new_py_err_pub(py, "AGFSNotSupportedError", msg),
-        GitError::ConcurrentCommit { .. } => new_py_err_pub(py, "GitConcurrentCommitError", msg),
-        GitError::PathNotFound(_) => new_py_err_pub(py, "AGFSNotFoundError", msg),
-        GitError::PathIsDirectory(_) => new_py_err_pub(py, "AGFSInvalidOperationError", msg),
-        GitError::SubtreeNotFoundInCommit { .. } => new_py_err_pub(py, "AGFSNotFoundError", msg),
-        GitError::InvalidAccountId(_) => new_py_err_pub(py, "AGFSInvalidPathError", msg),
-        GitError::InvalidProjectDir(_) => new_py_err_pub(py, "AGFSInvalidPathError", msg),
-        GitError::InvalidPath(_) => new_py_err_pub(py, "AGFSInvalidPathError", msg),
-        GitError::BlobTooLarge { .. } => new_py_err_pub(py, "AGFSInvalidOperationError", msg),
-        GitError::TooManyFiles { .. } => new_py_err_pub(py, "AGFSInvalidOperationError", msg),
-        GitError::IgnoreFileTooLarge { .. } => new_py_err_pub(py, "AGFSInvalidOperationError", msg),
-        GitError::InvalidIgnoreFile { .. } => new_py_err_pub(py, "AGFSInvalidOperationError", msg),
-        GitError::CorruptedObject(_) => new_py_err_pub(py, "AGFSInternalError", msg),
-        GitError::RefStore(RefStoreError::NotFound(_)) => {
-            new_py_err_pub(py, "AGFSNotFoundError", msg)
+    match classify_git_error(&e) {
+        GitErrorMapping::PythonException(class_name) => new_py_err_pub(py, class_name, msg),
+        GitErrorMapping::RestoreWritebackPartial => {
+            let ragfs::git::GitError::RestoreWritebackPartial(payload) = e else {
+                unreachable!("restore classification must carry a restore payload")
+            };
+            writeback_partial_to_pyerr(py, *payload, msg)
         }
-        GitError::RefStore(RefStoreError::Conflict { .. }) => {
-            new_py_err_pub(py, "GitConcurrentCommitError", msg)
-        }
-        GitError::OidPrefixNotFound { .. } => new_py_err_pub(py, "AGFSNotFoundError", msg),
-        GitError::AmbiguousOid { .. } => new_py_err_pub(py, "AGFSInvalidOperationError", msg),
-        GitError::ObjectStore(ObjectStoreError::NotFound(_)) => {
-            new_py_err_pub(py, "AGFSNotFoundError", msg)
-        }
-        GitError::RestoreWritebackPartial(p) => writeback_partial_to_pyerr(py, *p, msg),
-        GitError::ObjectStore(_)
-        | GitError::RefStore(_)
-        | GitError::Vfs(_)
-        | GitError::Other(_) => PyRuntimeError::new_err(msg),
+        GitErrorMapping::RuntimeFallback => PyRuntimeError::new_err(msg),
     }
 }
 
@@ -263,9 +301,74 @@ pub fn new_py_err_pub(py: Python<'_>, name: &str, msg: String) -> PyErr {
 
 use pyo3::types::{PyBytes, PyDict, PyList};
 use ragfs::git::{
-    Actor, CommitRequest, CommitResponse, RestoreDiff, RestoreRequest, RestoreResponse,
-    RestoreWritebackPartial, ShowRequest, ShowResponse,
+    Actor, CommitRequest, CommitResponse, LogEntry, LogRequest, RestoreDiff, RestoreRequest,
+    RestoreResponse, RestoreWritebackPartial, ShowRequest, ShowResponse,
 };
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum BoundedDiffError {
+    OutputTooLarge { limit: usize },
+    Render(String),
+}
+
+struct LimitedWriter {
+    bytes: Vec<u8>,
+    limit: usize,
+    exceeded: bool,
+}
+
+impl LimitedWriter {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+            exceeded: false,
+        }
+    }
+}
+
+impl Write for LimitedWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if buf.len() > self.limit.saturating_sub(self.bytes.len()) {
+            self.exceeded = true;
+            return Err(io::Error::other("snapshot diff output size limit exceeded"));
+        }
+        self.bytes.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+pub fn build_bounded_unified_diff(
+    before: &str,
+    after: &str,
+    fromfile: &str,
+    tofile: &str,
+    timeout_ms: u64,
+    max_output_bytes: usize,
+) -> Result<String, BoundedDiffError> {
+    let mut config = TextDiff::configure();
+    config
+        .algorithm(Algorithm::Myers)
+        .timeout(Duration::from_millis(timeout_ms));
+    let diff = config.diff_lines(before, after);
+    let mut writer = LimitedWriter::new(max_output_bytes);
+    let result = diff
+        .unified_diff()
+        .header(fromfile, tofile)
+        .to_writer(&mut writer);
+
+    if writer.exceeded {
+        return Err(BoundedDiffError::OutputTooLarge {
+            limit: max_output_bytes,
+        });
+    }
+    result.map_err(|err| BoundedDiffError::Render(err.to_string()))?;
+    String::from_utf8(writer.bytes).map_err(|err| BoundedDiffError::Render(err.to_string()))
+}
 
 // ---------- request parsers ----------
 
@@ -296,6 +399,15 @@ fn optional_bool(kwargs: &Bound<PyDict>, key: &str, default: bool) -> PyResult<b
     }
 }
 
+fn optional_usize(kwargs: &Bound<PyDict>, key: &str, default: usize) -> PyResult<usize> {
+    match kwargs.get_item(key)? {
+        Some(v) if !v.is_none() => v
+            .extract::<usize>()
+            .map_err(|_| PyValueError::new_err(format!("kwarg {} must be a non-negative integer", key))),
+        _ => Ok(default),
+    }
+}
+
 fn optional_string_list(kwargs: &Bound<PyDict>, key: &str) -> PyResult<Option<Vec<String>>> {
     match kwargs.get_item(key)? {
         Some(v) if !v.is_none() => v
@@ -304,6 +416,26 @@ fn optional_string_list(kwargs: &Bound<PyDict>, key: &str) -> PyResult<Option<Ve
             .map_err(|_| PyValueError::new_err(format!("kwarg {} must be a list of strings", key))),
         _ => Ok(None),
     }
+}
+
+pub struct DiffTextRequest {
+    pub before: String,
+    pub after: String,
+    pub fromfile: String,
+    pub tofile: String,
+    pub timeout_ms: u64,
+    pub max_output_bytes: usize,
+}
+
+pub fn parse_diff_text_request(kwargs: &Bound<PyDict>) -> PyResult<DiffTextRequest> {
+    Ok(DiffTextRequest {
+        before: require_str(kwargs, "before")?,
+        after: require_str(kwargs, "after")?,
+        fromfile: require_str(kwargs, "fromfile")?,
+        tofile: require_str(kwargs, "tofile")?,
+        timeout_ms: optional_usize(kwargs, "timeout_ms", 500)? as u64,
+        max_output_bytes: optional_usize(kwargs, "max_output_bytes", 20 * 1024 * 1024)?,
+    })
 }
 
 pub fn parse_commit_request(kwargs: &Bound<PyDict>) -> PyResult<CommitRequest> {
@@ -335,6 +467,40 @@ pub fn parse_show_request(kwargs: &Bound<PyDict>) -> PyResult<ShowRequest> {
         account: require_str(kwargs, "account")?,
         target_ref: require_str(kwargs, "target_ref")?,
         path: optional_str(kwargs, "path")?,
+    })
+}
+
+pub fn parse_show_max_blob_bytes(kwargs: &Bound<PyDict>) -> PyResult<Option<u64>> {
+    match kwargs.get_item("max_blob_bytes")? {
+        Some(value) if !value.is_none() => value.extract::<u64>().map(Some).map_err(|_| {
+            PyValueError::new_err("kwarg max_blob_bytes must be a non-negative integer")
+        }),
+        _ => Ok(None),
+    }
+}
+
+pub struct DiffPathsRequest {
+    pub account: String,
+    pub base: Option<String>,
+    pub head: String,
+    pub paths: Vec<String>,
+}
+
+pub fn parse_diff_paths_request(kwargs: &Bound<PyDict>) -> PyResult<DiffPathsRequest> {
+    Ok(DiffPathsRequest {
+        account: require_str(kwargs, "account")?,
+        base: optional_str(kwargs, "base")?,
+        head: require_str(kwargs, "head")?,
+        paths: optional_string_list(kwargs, "paths")?.unwrap_or_default(),
+    })
+}
+
+pub fn parse_log_request(kwargs: &Bound<PyDict>) -> PyResult<LogRequest> {
+    Ok(LogRequest {
+        account: require_str(kwargs, "account")?,
+        branch: require_str(kwargs, "branch")?,
+        limit: optional_usize(kwargs, "limit", 20)?,
+        paths: optional_string_list(kwargs, "paths")?,
     })
 }
 
@@ -462,11 +628,30 @@ pub fn show_response_to_pydict(py: Python<'_>, resp: ShowResponse) -> PyResult<P
     Ok(d.into_any().unbind())
 }
 
+pub fn log_entries_to_pylist(py: Python<'_>, entries: Vec<LogEntry>) -> PyResult<Py<PyAny>> {
+    let list = PyList::empty(py);
+    for entry in entries {
+        let d = PyDict::new(py);
+        d.set_item("oid", oid_hex(&entry.oid))?;
+        d.set_item("tree", oid_hex(&entry.tree))?;
+        let parents = PyList::empty(py);
+        for parent in &entry.parents {
+            parents.append(oid_hex(parent))?;
+        }
+        d.set_item("parents", parents)?;
+        d.set_item("author", actor_to_dict(py, &entry.author)?)?;
+        d.set_item("committer", actor_to_dict(py, &entry.committer)?)?;
+        d.set_item("message", entry.message)?;
+        list.append(d)?;
+    }
+    Ok(list.into_any().unbind())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ragfs::core::MountableFS;
-    use ragfs::git::GitError;
+    use ragfs::git::{GitError, RefStoreError};
     use std::sync::Arc;
 
     fn local_cfg(base_dir: &str) -> ragfs::git::GitConfig {
@@ -607,6 +792,71 @@ mod tests {
     }
 
     #[test]
+    fn path_and_object_not_found_have_distinct_python_mappings() {
+        let oid = gix_hash::ObjectId::null(gix_hash::Kind::Sha1);
+        assert_eq!(
+            classify_git_error(&GitError::PathNotFound("foo/bar".into())),
+            GitErrorMapping::PythonException("AGFSPathNotFoundError")
+        );
+        assert_eq!(
+            classify_git_error(&GitError::ObjectStore(
+                ragfs::git::ObjectStoreError::NotFound(oid),
+            )),
+            GitErrorMapping::PythonException("AGFSNotFoundError")
+        );
+    }
+
+    #[test]
+    fn bounded_unified_diff_returns_valid_output_for_adversarial_input() {
+        let before = (0..20_000)
+            .map(|i| format!("before-{i}\n"))
+            .collect::<String>();
+        let after = (0..20_000)
+            .map(|i| format!("after-{i}\n"))
+            .collect::<String>();
+
+        let output = build_bounded_unified_diff(
+            &before,
+            &after,
+            "file@old",
+            "file@new",
+            5,
+            2 * 1024 * 1024,
+        )
+        .expect("deadline should produce an approximate diff");
+
+        assert!(output.starts_with("--- file@old\n+++ file@new\n"));
+        assert!(output.contains("-before-0\n"));
+        assert!(output.contains("+after-0\n"));
+    }
+
+    #[test]
+    fn bounded_unified_diff_enforces_output_limit() {
+        assert_eq!(
+            build_bounded_unified_diff("old\n", "new\n", "old", "new", 500, 8),
+            Err(BoundedDiffError::OutputTooLarge { limit: 8 })
+        );
+    }
+
+    #[test]
+    fn bounded_unified_diff_marks_missing_final_newline() {
+        let output = build_bounded_unified_diff(
+            "old without newline",
+            "new without newline",
+            "old",
+            "new",
+            500,
+            1024,
+        )
+        .expect("small text diff should succeed");
+
+        assert_eq!(
+            output.matches("\\ No newline at end of file").count(),
+            2
+        );
+    }
+
+    #[test]
     fn map_git_error_invalid_account() {
         pyo3::prepare_freethreaded_python();
         Python::attach(|py| {
@@ -628,6 +878,96 @@ mod tests {
             );
             assert!(err.to_string().contains("200"));
         });
+    }
+
+    #[test]
+    fn blob_too_large_maps_to_resource_exhausted() {
+        let error = GitError::BlobTooLarge {
+            size: 200,
+            limit: 100,
+        };
+        assert_eq!(
+            classify_git_error(&error),
+            GitErrorMapping::PythonException("AGFSResourceExhaustedError")
+        );
+    }
+
+    #[test]
+    fn map_git_error_log_budgets_preserve_messages() {
+        pyo3::prepare_freethreaded_python();
+        Python::attach(|py| {
+            let cases = [
+                GitError::TooManyLogPaths {
+                    count: 33,
+                    limit: 32,
+                },
+                GitError::LogPathTooDeep {
+                    path: "resources/deep".into(),
+                    depth: 65,
+                    limit: 64,
+                },
+                GitError::LogScanLimitExceeded {
+                    scanned: 1_000,
+                    max_scanned: 1_000,
+                    matched: 0,
+                    requested: 1,
+                },
+            ];
+
+            for case in cases {
+                let expected = case.to_string();
+                let mapped = map_git_error(py, case);
+                assert!(mapped.to_string().contains(&expected));
+            }
+        });
+    }
+
+    #[test]
+    fn map_git_error_log_too_many_paths_classification() {
+        let error = GitError::TooManyLogPaths {
+            count: 33,
+            limit: 32,
+        };
+        assert_eq!(
+            classify_git_error(&error),
+            GitErrorMapping::PythonException("AGFSInvalidOperationError")
+        );
+    }
+
+    #[test]
+    fn map_git_error_log_path_too_deep_classification() {
+        let error = GitError::LogPathTooDeep {
+            path: "resources/docs/deep.md".into(),
+            depth: 65,
+            limit: 64,
+        };
+        assert_eq!(
+            classify_git_error(&error),
+            GitErrorMapping::PythonException("AGFSInvalidOperationError")
+        );
+    }
+
+    #[test]
+    fn map_git_error_log_scan_limit_exceeded_classification() {
+        let error = GitError::LogScanLimitExceeded {
+            scanned: 1_000,
+            max_scanned: 1_000,
+            matched: 3,
+            requested: 10,
+        };
+        assert_eq!(
+            classify_git_error(&error),
+            GitErrorMapping::PythonException("AGFSInvalidOperationError")
+        );
+    }
+
+    #[test]
+    fn map_git_error_invalid_ref_name_classification() {
+        let error = GitError::RefStore(RefStoreError::InvalidName("bad ref".into()));
+        assert_eq!(
+            classify_git_error(&error),
+            GitErrorMapping::PythonException("AGFSInvalidOperationError")
+        );
     }
 
     use pyo3::types::PyDict;
@@ -755,6 +1095,28 @@ mod tests {
     }
 
     #[test]
+    fn parse_log_request_with_paths() {
+        pyo3::prepare_freethreaded_python();
+        Python::attach(|py| {
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("account", "a").unwrap();
+            kwargs.set_item("branch", "main").unwrap();
+            kwargs.set_item("limit", 10).unwrap();
+            kwargs
+                .set_item("paths", vec!["resources/a.md", "resources/docs"])
+                .unwrap();
+            let req = parse_log_request(&kwargs).expect("parses");
+            assert_eq!(req.account, "a");
+            assert_eq!(req.branch, "main");
+            assert_eq!(req.limit, 10);
+            assert_eq!(
+                req.paths.as_ref().unwrap(),
+                &vec!["resources/a.md".to_string(), "resources/docs".to_string()]
+            );
+        });
+    }
+
+    #[test]
     fn commit_response_created_to_dict() {
         pyo3::prepare_freethreaded_python();
         Python::attach(|py| {
@@ -787,6 +1149,43 @@ mod tests {
             assert_eq!(d.get_item("result").unwrap().unwrap().extract::<String>().unwrap(), "noop");
             assert_eq!(d.get_item("commit_oid").unwrap().unwrap().extract::<String>().unwrap(), oid.to_hex().to_string());
             assert_eq!(d.get_item("ignored").unwrap().unwrap().extract::<usize>().unwrap(), 4);
+        });
+    }
+
+    #[test]
+    fn log_entries_to_pylist_includes_commit_metadata() {
+        pyo3::prepare_freethreaded_python();
+        Python::attach(|py| {
+            let oid = gix_hash::ObjectId::null(gix_hash::Kind::Sha1);
+            let actor = ragfs::git::Actor {
+                name: "alice".to_string(),
+                email: "alice@example.com".to_string(),
+                time_seconds: 1,
+                tz_offset_seconds: 0,
+            };
+            let entries = vec![ragfs::git::LogEntry {
+                oid,
+                tree: oid,
+                parents: vec![oid],
+                author: actor.clone(),
+                committer: actor,
+                message: "subject\n\nbody".to_string(),
+            }];
+            let obj = log_entries_to_pylist(py, entries).expect("converts");
+            let list = obj.bind(py).downcast::<PyList>().unwrap();
+            assert_eq!(list.len(), 1);
+            let first = list.get_item(0).unwrap();
+            let d = first.downcast::<PyDict>().unwrap();
+            assert_eq!(
+                d.get_item("oid").unwrap().unwrap().extract::<String>().unwrap(),
+                oid.to_hex().to_string()
+            );
+            assert_eq!(
+                d.get_item("message").unwrap().unwrap().extract::<String>().unwrap(),
+                "subject\n\nbody"
+            );
+            let parents = d.get_item("parents").unwrap().unwrap();
+            assert_eq!(parents.downcast::<PyList>().unwrap().len(), 1);
         });
     }
 

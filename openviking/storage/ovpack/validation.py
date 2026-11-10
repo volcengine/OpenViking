@@ -195,6 +195,16 @@ def _validate_index_record(
             details={"index": index, "path": rel_path},
         )
 
+    expected_user_id = manifest_entries[rel_path].get("user_id")
+    declared_user_id = record.get("user_id")
+    if declared_user_id is not None and declared_user_id != expected_user_id:
+        raise InvalidArgumentError(
+            "ovpack index record user_id does not match manifest entry",
+            details={"index": index, "path": rel_path, "user_id": declared_user_id},
+        )
+    if expected_user_id:
+        record["user_id"] = expected_user_id
+
 
 def _validate_dense_references(
     dense_info: dict[str, Any] | None,

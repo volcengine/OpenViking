@@ -1,49 +1,56 @@
 # 检索
 
-OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带会话上下文的智能检索、正则表达式匹配搜索和文件模式匹配。
+OpenViking 提供多种检索方法，包括简单的向量相似度搜索、关键词搜索、带会话上下文的智能检索、正则表达式匹配搜索和文件模式匹配。
 
 ## find 与 search 对比
 
 | 方面 | find | search |
 |------|------|--------|
-| 意图分析 | 否 | 是 |
-| 会话上下文 | 否 | 是 |
-| 查询扩展 | 否 | 是 |
-| 默认结果数 | 10 | 10 |
+| 意图分析 | 否 | 有会话内容且 `retrieval.enable_intent=true` 时执行 |
+| 会话上下文 | 不使用 | 可选 |
+| 查询扩展 | 否 | 意图分析启用且有会话内容时执行 |
+| 重排序 | 从不使用 | `mode="list"`：配置了重排序模型时用于文本查询。`mode="context"`：仅在开启 `retrieval.apply_rerank_to_context` 时使用 |
+| 默认结果数 | 10 | 每条规划查询最多 10 条 |
 | 使用场景 | 简单查询 | 对话式搜索 |
+
+各路径的 Rerank 情况：
+
+- `find()` 从不执行 Rerank，始终使用向量分数。
+- `search(mode="list")` 在配置了可用的 `rerank` 时对文本查询执行 Rerank。
+- `search(mode="context")` 仅在服务端设置 `retrieval.apply_rerank_to_context=true`（默认 `false`）且 `rerank` 配置可用时执行 Rerank：每次组装在配额和 token 预算之前对合并后的候选统一重排一次，仅限文本查询，Rerank 调用失败时回退到向量分数。
+
+分数阈值遵循同一规则：请求中的 `score_threshold` 优先，过滤该路径产出的任何分数；未指定时，`rerank.threshold`（默认 `0.1`）只过滤 Reranker 产出的分数，仅用向量分数的路径（包括 `find()` 和 Rerank 失败后的回退）默认阈值为 `0`。
 
 ## 检索流程
 
 检索的核心流程如下：
 
 ```
-查询 → 意图分析（仅search）→ 向量搜索（L0）→ 重排序（L1）→ 结果
+查询 → 意图分析（仅 search，可选）→ 全局向量搜索 → 重排序（仅 search，可选）→ 结果
 ```
 
 1. **意图分析**（仅 search）：理解查询意图，扩展查询
 2. **向量搜索**：使用 Embedding 查找候选项
-3. **重排序**：使用内容重新评分以提高准确性
+3. **重排序**：THINKING 模式且配置了可用的 Rerank 时，对全局召回的 `2 × limit` 个候选统一精排一次；否则只召回 `limit` 条
 4. **结果**：返回 top-k 上下文
 
 ## API 参考
 
 ### find()
 
-基本向量相似度搜索，无需会话上下文。
+按查询检索相关内容，不使用会话上下文。
 
 #### 1. API 实现介绍
 
-`find()` 方法执行纯向量相似度搜索，适用于简单的查询场景。它使用分层检索器（HierarchicalRetriever）在 L0 摘要层进行初步搜索，然后在 L1/L2 层进行详细匹配。
+`find()` 方法使用 QUICK 模式执行一次全局向量相似度搜索，适用于简单的查询场景。候选数为 `limit`，可通过 `level` 限定 L0/L1/L2。
 
 **处理流程**：
 1. 将查询文本转换为向量
 2. 在指定的目标 URI 范围内执行全局向量搜索
-3. 使用分层检索策略递归搜索相关目录和文件
-4. 可选：使用重排序模型优化结果排序
-5. 返回匹配的上下文列表
+3. 按分数阈值筛选，返回匹配的上下文列表；不执行 Rerank
 
 **代码入口**：
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.find()` - Python SDK 入口（HTTP）
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.find()` - Python SDK 入口（HTTP）
 - `openviking/retrieve/hierarchical_retriever.py:HierarchicalRetriever.retrieve()` - 核心检索实现
 - `openviking/server/routers/search.py:find()` - HTTP 路由
 - `crates/ov_cli/src/commands/search.rs:find()` - Rust CLI 命令
@@ -54,9 +61,12 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| query | str | 是 | - | 搜索查询字符串 |
+| query | str | 否 | "" | 查询文本；图片查询或仅按过滤条件查询时可省略 |
+| image_url | str 或 list[str] | 否 | None | 单个图片 URI 或有序图片 URI 数组，每项支持 `data:image/...;base64,...`、`http(s)://` 或 `viking://` URI；需要 multimodal embedding 模型 |
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
+| events_time_decay_protection | str \| null | 否 | null | 不传或传 `null` 关闭衰减；传 `"0"` 立即衰减；传 `"7d"` 等时长则在保护期内保持原分，之后衰减。支持非负整数 `Xm`/`Xh`/`Xd` |
 | context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
+| tags | List[str] | 否 | None | 显式检索标签，必须是严格的 `k=v` 格式。多个 tags 之间是 AND 关系，结果必须同时包含所有请求的标签 |
 | limit | int | 否 | 10 | 最大返回结果数 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
@@ -64,16 +74,24 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 | since | str | 否 | None | 时间下界，支持 `2h` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--after` 会映射到这个字段 |
 | until | str | 否 | None | 时间上界，支持 `30m` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--before` 会映射到这个字段 |
 | time_field | "updated_at" \| "created_at" | 否 | "updated_at" | since/until 使用的元数据时间字段 |
-| level | str | 否 | None | 限定结果的层级范围，例如 `0`、`1`、`2` 或 `0,1,2`。CLI `--level`/`-L` 会映射到这个字段 |
+| level | int \| str \| List[int] | 否 | None | 限定结果的层级范围，例如 `0`、`1`、`2` 或 `0,1,2`。CLI `--level`/`-L` 会映射到这个字段 |
 | include_provenance | bool | 否 | False | 在序列化结果中附带 provenance / query-plan 细节 |
+| read_content | bool | 否 | False | 按可见内容 read 语义读取每个最终命中的 URI，并以内联 `content` 返回。单个读取失败时保留原命中，不附加内容。 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
 **目标解析说明**：
 - `target_uri` 为空时，非 ROOT 检索默认搜索当前用户根 `viking://user/{user}` 和公共 `viking://resources`。
 - 如需在文件系统和检索操作中把当前用户的 peer 集合过滤到某一个 peer，发送 `X-OpenViking-Actor-Peer: <peer_id>`，或用 SDK/CLI client 的 `actor_peer_id` 初始化。见 [多租户：Peer 集合过滤](../concepts/11-multi-tenant.md#peer-restricted-view)。
-- `viking://user/memories`、`viking://user/resources`、`viking://user/skills` 等当前用户短写 target URI 会按认证请求身份 canonicalize。
+- `viking://~/memories`、`viking://~/resources`、`viking://~/skills` 等家目录别名 target URI 会按认证请求身份展开为 canonical 路径。无 uid 的写法 `viking://user/memories`（以及 `resources`、`skills`、`peers`、`privacy`、`sessions` 的同类写法）会被拒绝，并提示改用 `viking://~/...`。
+
+**图片搜索说明**：
+- 图片查询会以图片向量作为 query，默认检索目标范围内的 L2 resource 叶子节点；结果不限于图片文件，图片与文本/图片资源的相似度由 multimodal embedding 模型决定。
+- 纯文本 embedding 模型仍会索引图片 summary，但会拒绝图片查询输入。
+- 已有图片资源保持现有向量不变；图片向量召回只作用于开启该能力后向量化的图片，或之后手动 reindex 的图片。
 
 **FindResult 结构**
+
+设置 `read_content=true` 后，每个成功读取的命中都会额外包含 `content`。这是完整文件读取，请用 `limit` 控制响应大小。`search(mode="context")` 会拒绝该参数，因为 context 组装已有自己的 token 预算。
 
 ```python
 class FindResult:
@@ -95,10 +113,11 @@ class MatchedContext:
     abstract: str                    # L0 内容
     overview: Optional[str]          # L1 概览（非叶子节点时可选）
     category: str                    # 分类
-    score: float                     # 相关性分数 (0-1)
+    score: float                     # 相关性分数，尺度取决于检索流程
     match_reason: str                # 匹配原因
-    relations: List[RelatedContext]  # 关联上下文
 ```
+
+`score` 并非总在 `[0, 1]` 内，其尺度取决于后端、metric 和后处理。运行时 metric、纯 dense 尺度及其适用范围见 [observer.vikingdb](18-observer.md#observer-vikingdb)。
 
 #### 3. 使用示例
 
@@ -141,41 +160,79 @@ curl -X POST http://localhost:1933/api/v1/search/find \
     -d '{
         "query": "authentication",
         "context_type": ["memory", "resource"]
+}'
+```
+
+**图片搜索**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/search/find \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: your-key" \
+    -d '{
+        "image_url": "viking://resources/images/cat.png",
+        "limit": 10
     }'
 ```
+
+**按显式检索标签搜索**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/search/find \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: your-key" \
+    -d '{
+        "query": "rollback runbook",
+        "tags": ["env=prod", "team=search"]
+    }'
+```
+
+Tags 必须使用严格的 `k=v` 字符串。传入多个 tags 时，`find()` 会要求全部命中；上面的例子只返回显式检索标签同时包含 `env=prod` 和 `team=search` 的上下文。
+
+完整索引记录写回或显式标签字段更新时，会丢弃存储中的遗留非法标签。读取只过滤非法标签，不修改存储。如需修复已知受影响的文件或目录，同时保留合法标签且不重新生成向量，可调用 `POST /api/v1/content/set_tags`，请求体为 `{"uri": "<affected-uri>", "tags": [], "mode": "append"}`。仅在需要同时修复目录后代时添加 `"recursive": true`。`default` 等裸值会被移除，不会通过猜测键名进行转换。
 
 **Python SDK**
 
 ```python
-import openviking as ov
-from openviking.retrieve import ContextType
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # 基础搜索
-results = client.find("how to authenticate users")
+results = client.find(query="how to authenticate users")
 
 # 带过滤和时间范围的搜索
 recent_emails = client.find(
-    "invoice",
+    query="invoice",
     target_uri="viking://resources/email",
-    since="7d",
-    time_field="created_at",
+    options={
+        "since": "7d",
+        "time_field": "created_at",
+    },
 )
 
 # 仅搜索 memories 和 resources
 typed_results = client.find(
-    "authentication",
-    context_type=[ContextType.MEMORY, ContextType.RESOURCE],
+    query="authentication",
+    options={"context_type": ["memory", "resource"]},
+)
+
+# 按本地图片、bytes、data URI、HTTP URL 或 viking:// URI 搜索
+image_results = client.find(query="", image="/path/to/photo.png")
+
+# 按显式检索标签搜索。多个 tags 之间是 AND 关系。
+tagged_results = client.find(
+    query="rollback runbook",
+    options={"tags": ["env=prod", "team=search"]},
 )
 
 # 遍历结果
-for ctx in results.resources:
-    print(f"URI: {ctx.uri}")
-    print(f"Score: {ctx.score:.3f}")
-    print(f"Type: {ctx.context_type}")
-    print(f"Abstract: {ctx.abstract[:100]}...")
+for context in results.get("resources", []):
+    print(f"URI: {context['uri']}")
+    print(f"Score: {context.get('score', 0.0):.3f}")
+    print(f"Type: {context.get('context_type')}")
+    print(f"Abstract: {context.get('abstract', '')[:100]}...")
     print("---")
 ```
 
@@ -184,20 +241,20 @@ for ctx in results.resources:
 ```python
 # 仅在资源中搜索
 results = client.find(
-    "authentication",
-    target_uri="viking://resources"
+    query="authentication",
+    target_uri="viking://resources",
 )
 
 # 仅在用户记忆中搜索
 results = client.find(
-    "preferences",
-    target_uri="viking://user/memories"
+    query="preferences",
+    target_uri="viking://~/memories"
 )
 
 # 仅在当前用户资源中搜索
 results = client.find(
-    "private docs",
-    target_uri="viking://user/resources"
+    query="private docs",
+    target_uri="viking://~/resources"
 )
 
 # 检索时把 peer 集合过滤到一个 peer
@@ -206,19 +263,25 @@ peer_client = ov.SyncHTTPClient(
     api_key="your-key",
     actor_peer_id="web-visitor-alice",
 )
-peer_results = peer_client.find("invoice follow-up")
+peer_results = peer_client.find(query="invoice follow-up")
 
 # 仅在技能中搜索
 results = client.find(
-    "web search",
-    target_uri="viking://user/skills"
+    query="web search",
+    target_uri="viking://~/skills"
 )
 
 # 在特定项目中搜索
 results = client.find(
-    "API endpoints",
-    target_uri="viking://resources/my-project"
+    query="API endpoints",
+    target_uri="viking://resources/my-project",
 )
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.find("authentication", { targetUri: "viking://resources/docs/" }));
 ```
 
 **Go SDK**
@@ -241,25 +304,37 @@ for _, item := range result.Resources {
 
 ```bash
 # 基础搜索
-openviking find "how to authenticate users"
+ov find "how to authenticate users"
 
 # 指定 URI 范围
-openviking find "how to authenticate users" --uri "viking://resources"
+ov find "how to authenticate users" --uri "viking://resources"
 
 # 限定上下文类型
-openviking find "authentication" --context-type memory,resource
+ov find "authentication" --context-type memory,resource
 
 # 带时间过滤
-openviking find "invoice" --after 7d
+ov find "invoice" --after 7d
 
 # 带限制数量
-openviking find "how to authenticate users" --limit 20
+ov find "how to authenticate users" --limit 20
 
 # 限定层级范围 (仅 L0)
-openviking find "how to authenticate users" --level 0
+ov find "how to authenticate users" --level 0
 
 # 限定层级范围 (L1 和 L2)，使用短选项
-openviking find "how to authenticate users" -L 1,2
+ov find "how to authenticate users" -L 1,2
+
+# 图片查询统一使用 --image；可传本地路径、viking://、http(s):// 或 data:image URI
+ov find --image ./query.png --uri "viking://resources/images" --limit 5
+
+# 使用已入库图片搜索
+ov find --image "viking://resources/images/cat.png" --uri "viking://resources/images" --limit 5
+
+# 使用公网图片 URL 搜索
+ov find --image "https://example.com/images/cat.png" --uri "viking://resources/images" --limit 5
+
+# 图文联合检索
+ov find "红色海报风格" --image ./poster.png --uri "viking://resources/images"
 ```
 
 **响应示例**
@@ -277,7 +352,6 @@ openviking find "how to authenticate users" -L 1,2
                 "score": 0.12808319406977778,
                 "category": "",
                 "match_reason": "",
-                "relations": [],
                 "abstract": "This document is an API documentation reading plan that outlines the structure of subsequent API reference materials organized by functional module. Main sections or topics covered include resource management API, search API, file system operations, ses...",
                 "overview": null
             },
@@ -288,7 +362,6 @@ openviking find "how to authenticate users" -L 1,2
                 "score": 0.12054087276495282,
                 "category": "",
                 "match_reason": "",
-                "relations": [],
                 "abstract": "This directory contains structured API reference documentation for the OpenViking platform, compiling detailed HTTP endpoint specifications for core and extended platform capabilities. It covers functional modules including system health checks, semanti...",
                 "overview": null
             }
@@ -303,21 +376,21 @@ openviking find "how to authenticate users" -L 1,2
 
 ### search()
 
-带会话上下文和意图分析的智能检索。
+可结合会话上下文规划查询的语义检索。
 
 #### 1. API 实现介绍
 
-`search()` 方法在 `find()` 的基础上增加了会话上下文理解和意图分析能力。它可以根据历史对话更好地理解用户查询意图，执行查询扩展，提供更相关的搜索结果。
+`search()` 可根据会话规划查询。仅当 `retrieval.enable_intent=true` 且会话有摘要或消息时，才调用 LLM 分析意图；未传会话、会话为空或关闭意图分析时，使用原始查询。图片查询跳过会话规划。
 
 **处理流程**：
 1. 加载会话上下文（如果提供了 session_id）
 2. 分析查询意图，结合对话历史理解真实需求
 3. 扩展查询以提高召回率
-4. 执行与 `find()` 相同的分层检索流程
+4. 每条查询分别执行一次全局检索；配置了可用的 Rerank 时召回 `2 × limit` 个候选，统一精排后返回最多 `limit` 条，否则直接召回 `limit` 条
 5. 返回带查询计划的搜索结果
 
 **代码入口**：
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.search()` - Python SDK 入口（HTTP）
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.search()` - Python SDK 入口（HTTP）
 - `openviking/retrieve/hierarchical_retriever.py:HierarchicalRetriever.retrieve()` - 核心检索实现
 - `openviking/server/routers/search.py:search()` - HTTP 路由
 - `crates/ov_cli/src/commands/search.rs:search()` - Rust CLI 命令
@@ -328,23 +401,39 @@ openviking find "how to authenticate users" -L 1,2
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| query | str | 是 | - | 搜索查询字符串 |
+| query | str | 否 | "" | 搜索查询字符串；未提供 `image_url` 时必填 |
+| image_url | str 或 list[str] | 否 | None | 单个图片 URI 或有序图片 URI 数组，每项支持 `data:image/...;base64,...`、`http(s)://` 或 `viking://` URI；需要 multimodal embedding 模型 |
+| search_type | `"semantic"` \| `"keywords"` | 否 | `"semantic"` | 检索类型。`semantic` 使用 Embedding 和向量召回；`keywords` 使用 BM25 关键词召回 |
+| mode | `"list"` \| `"context"` | 否 | `"list"` | 返回排序命中列表或组装好的上下文。CLI `--mode` 会映射到这个字段；context 专用参数见下文 |
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
 | session | Session | 否 | None | 用于上下文感知搜索的会话（SDK）|
 | session_id | str | 否 | None | 用于上下文感知搜索的会话 ID（HTTP）|
+| events_time_decay_protection | str \| null | 否 | null | 不传或传 `null` 关闭衰减；传 `"0"` 立即衰减；传 `"7d"` 等时长则在保护期内保持原分，之后衰减。支持非负整数 `Xm`/`Xh`/`Xd` |
 | context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
-| limit | int | 否 | 10 | 最大返回结果数 |
+| tags | List[str] | 否 | None | 显式检索标签，必须是严格的 `k=v` 格式。多个 tags 之间是 AND 关系，结果必须同时包含所有请求的标签 |
+| limit | int | 否 | 10 | 每条规划查询的结果上限；list 模式直接汇总各查询结果，总数可能超过此值 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
 | filter | Dict | 否 | None | 元数据过滤器 |
 | since | str | 否 | None | 时间下界，支持 `2h` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--after` 会映射到这个字段 |
 | until | str | 否 | None | 时间上界，支持 `30m` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--before` 会映射到这个字段 |
 | time_field | "updated_at" \| "created_at" | 否 | "updated_at" | since/until 使用的元数据时间字段 |
-| level | str | 否 | None | 限定结果的层级范围，例如 `0`、`1`、`2` 或 `0,1,2`。CLI `--level`/`-L` 会映射到这个字段 |
+| level | int \| str \| List[int] | 否 | None | 限定结果的层级范围，例如 `0`、`1`、`2` 或 `0,1,2`。CLI `--level`/`-L` 会映射到这个字段 |
 | include_provenance | bool | 否 | False | 在序列化结果中附带 provenance / query-plan 细节 |
+| read_content | bool | 否 | False | 按可见内容 read 语义读取每个最终命中的 URI，并以内联 `content` 返回。单个读取失败时保留原命中，不附加内容；仅支持 `mode="list"`。 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
-`search()` 使用和 `find()` 相同的目标解析规则，包括由 `X-OpenViking-Actor-Peer` 或 SDK `actor_peer_id` 选择的 peer 集合过滤。
+`search()` 使用和 `find()` 相同的目标解析和显式标签过滤规则，包括由 `X-OpenViking-Actor-Peer` 或 SDK `actor_peer_id` 选择的 peer 集合过滤。提供 `image_url` 时，`search()` 会直接执行图片检索并跳过会话 query planning。`keywords` 要求非空文本 query，不支持图片，且需要远程 VikingDB 配置全文索引。
+
+事件时间衰减作用于语义 `find()`、`search(mode="list")` 和 `search(mode="context")` 中带 `memory_type=events` 标签的结果。记忆提取流程将该标签写入 user / peer 事件的 L2 记录；检索按标签判断，不从 URI 或层级推断事件类型。无事件标签的结果、无 query 的纯过滤 `find()`、`recall`、`grep` 和 `glob` 不受影响。事件召回阶段由向量引擎将原向量分乘以 `time_score`；响应中的 `score` 是最终检索分数，开启模型 rerank 时使用模型分。context 模式默认按向量分组装候选，开启 `retrieval.apply_rerank_to_context` 后按模型分组装。保护期内 `time_score` 为 1，原分不变；时间距离与 VikingDB 指数衰减算子一致，取时间戳与请求时间的绝对差。list 响应中的 event 结果额外返回 `origin_score` 和 `time_score`，CLI 分别展示为 semantic、time 和 final 分。时间取自已有索引的 `updated_at` 字段，无需重新索引或改写时间戳；本地计算遇到缺失或非法时间时保持原分；云端使用索引中的日期时间字段和后处理算子。衰减曲线由服务端内部维护，调用方只需按请求传入保护期，无需修改 `ov.conf` 或 `ovcli.conf`。
+
+由记忆提取流程新生成或更新的记忆会自动写入 `memory_type=<类型>` 检索标签。启用衰减时，本地和云端均将按是否带 `memory_type=events` 标签拆成互斥且完整覆盖原范围的两路，再合并排序；两路均保留原 scope 的权限、目录和 level 限制，无需指定 peer id。存量数据不补标签，无标签记忆保持原分。直接内容刷新和普通标签更新保留已有类型，不从 URI 推断或重设类型。
+
+本地向量引擎按所需 event 条数在内部最多放大 3 倍候选（上限 100,000），在 C++ 中计算衰减并排序，截取 top-k 后才读取摘要等字段。这是有界候选近似，不能保证将语义候选窗口以外的事件提升进结果。HTTP 向量服务透传同一规则；云端 Adapter 使用 VikingDB 分数融合，仅请求 limit + offset，不设置固定 100,000 条输入预算。cuVS 集合的衰减请求使用其原生标量/向量索引。openGauss 接收透传参数但不执行时间衰减，保留普通向量分数。
+
+启用模型 rerank 时，两路各请求 `2 × limit` 条结果。事件分支在召回时已完成衰减：云端由 VikingDB 计算，开源本地由 C++ 引擎计算。两路按召回分合并，取前 `2 × limit` 条统一执行一次模型 rerank，再按模型分排序、过滤阈值并取最终结果，模型后不再衰减。模型失败时使用已经衰减过的召回分。`origin_score` 和 `time_score` 始终描述召回阶段的原向量分与时间因子，因此二者乘积不一定等于成功 rerank 后的模型分。最终分数不混入父目录分数或热度分。
+
+本地引擎的 3 倍扩召作用于事件分支请求窗口，模型的 2 倍候选窗口是另一层限制。例如最终 `limit=10` 时，两路各返回最多 20 条；本地事件引擎内部最多考虑 60 条向量候选，合并后最多 20 条进入模型。
 
 #### 3. 使用示例
 
@@ -361,14 +450,15 @@ curl -X POST http://localhost:1933/api/v1/search/search \
     -d '{
         "query": "best practices",
         "session_id": "abc123",
-        "context_type": "skill",
+        "context_type": "memory",
         "since": "2h",
         "time_field": "updated_at",
+        "events_time_decay_protection": "1d",
         "limit": 10
     }'
 ```
 
-**不带会话的搜索（仍会进行意图分析）**
+**不带会话的搜索（使用原始查询）**
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/search/search \
@@ -376,52 +466,97 @@ curl -X POST http://localhost:1933/api/v1/search/search \
     -H "X-API-Key: your-key" \
     -d '{
         "query": "how to implement OAuth 2.0 authorization code flow"
+}'
+```
+
+**关键词检索**
+```bash
+curl -X POST http://localhost:1933/api/v1/search/search \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: your-key" \
+    -d '{
+        "query": "hnsw",
+        "search_type": "keywords",
+        "target_uri": "viking://resources/docs",
+        "limit": 10
+    }'
+```
+
+**图片搜索**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/search/search \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: your-key" \
+    -d '{
+        "query": "similar poster",
+        "image_url": "data:image/png;base64,...",
+        "limit": 10
     }'
 ```
 
 **Python SDK**
 
 ```python
-import openviking as ov
-from openviking.retrieve import ContextType
-from openviking.message import TextPart
+import openviking_sdk as ov
+from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # 创建带对话上下文的会话
-session = client.session()
-session.add_message("user", [
-    TextPart(text="I'm building a login page with OAuth")
-])
-session.add_message("assistant", [
-    TextPart(text="I can help you with OAuth implementation.")
-])
+session_info = client.create_session()
+session = client.session(session_id=session_info["session_id"])
+session.add_message(
+    role="user",
+    parts=[TextPart(text="I'm building a login page with OAuth")],
+)
+session.add_message(
+    role="assistant",
+    parts=[TextPart(text="I can help you with OAuth implementation.")],
+)
 
 # 搜索能够理解对话上下文
 results = client.search(
-    "best practices",
-    session=session,
-    context_type=ContextType.SKILL,
-    since="2h"
+    query="best practices",
+    session_id=session.session_id,
+    options={
+        "context_type": "resource",
+        "since": "2h",
+    },
 )
 
-for ctx in results.resources:
-    print(f"Found: {ctx.uri}")
-    print(f"Abstract: {ctx.abstract[:200]}...")
+for context in results.get("resources", []):
+    print(f"Found: {context['uri']}")
+    print(f"Abstract: {context.get('abstract', '')[:200]}...")
 ```
 
 **不使用会话的搜索**
 
 ```python
 # search 也可以在没有会话的情况下使用
-# 它仍然会对查询进行意图分析
+# 没有会话内容时使用原始查询，不调用意图分析
 results = client.search(
-    "how to implement OAuth 2.0 authorization code flow"
+    query="how to implement OAuth 2.0 authorization code flow"
 )
 
-for ctx in results.resources:
-    print(f"Found: {ctx.uri} (score: {ctx.score:.3f})")
+for context in results.get("resources", []):
+    print(f"Found: {context['uri']} (score: {context.get('score', 0.0):.3f})")
+```
+
+**图片搜索**
+
+```python
+results = client.search(
+    query="similar poster",
+    image="/path/to/poster.png",
+)
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.search("authentication", { targetUri: "viking://resources/docs/" }));
 ```
 
 **Go SDK**
@@ -429,7 +564,7 @@ for ctx in results.resources:
 ```go
 result, err := client.Search(ctx, "best practices", &openviking.SearchOptions{
     SessionID:   "abc123",
-    ContextType: "skill",
+    ContextType: "resource",
     Limit:       10,
 })
 if err != nil {
@@ -442,23 +577,41 @@ fmt.Println(result.Total)
 
 ```bash
 # 带会话 ID 的搜索
-openviking search "best practices" --session-id abc123
+ov search "best practices" --session-id abc123
+
+# 按服务端默认配置组装上下文，并启用事件时间衰减
+ov search "recent decisions" --mode context --events-time-decay-protection 7d
+
+# 以 JSON 返回完整的 context 结果
+ov -o json search "best practices" --mode context
 
 # 限定上下文类型
-openviking search "best practices" --context-type skill
+ov search "best practices" --context-type skill
 
 # 带时间过滤的搜索
-openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-20
+ov search "watch vs scheduled" --after 2026-03-15 --before 2026-03-20
 
-# 不带会话的搜索（仍进行意图分析）
-openviking search "how to implement OAuth 2.0 authorization code flow"
+# 对 user 和 peer 的事件记忆启用时间衰减排序
+ov search "recent decisions" --context-type memory --level 2 \
+    --events-time-decay-protection 1d
+
+# 不带会话的搜索（使用原始查询）
+ov search "how to implement OAuth 2.0 authorization code flow"
+
+# BM25 关键词检索
+ov search "SearchByKeywords" --search-type keywords --uri "viking://resources/docs"
 
 # 限定层级范围（仅 L0）
-openviking search "best practices" --level 0
+ov search "best practices" --level 0
 
 # 限定层级范围（L1 和 L2），使用短选项
-openviking search "how to implement OAuth" -L 1,2
+ov search "how to implement OAuth" -L 1,2
+
+# 图片查询同样使用 --image；会直接检索并跳过 session planning
+ov search "similar poster" --image ./poster.png --uri "viking://resources/images"
 ```
+
+`ov search --mode list` 为默认行为，返回常规命中列表。使用 `--mode context` 时，默认终端输出展示组装后的 `rendered` 文本（返回非空 `digest` 时优先展示摘要）；`-o json` 保留完整结果，包括 `entries`、`rendered`、`digest` 和 `stats`。CLI 暂未提供 `max_tokens`、`detail`、`rewrite` 等 context 专用选项，使用服务端默认值。context 模式拒绝 `--uri` 和 `--read-content`；服务端会忽略 `--level`，由组装流程选择内容档位。
 
 **响应示例**
 
@@ -470,12 +623,11 @@ openviking search "how to implement OAuth" -L 1,2
         "resources": [
             {
                 "context_type": "resource",
-                "uri": "viking://resources/docs/oauth-best-practices",
+                "uri": "viking://resources/docs/oauth-best-practices/.overview.md",
                 "level": 1,
                 "score": 0.95,
                 "category": "",
                 "match_reason": "Context-aware match: OAuth login best practices",
-                "relations": [],
                 "abstract": "OAuth 2.0 best practices for login pages...",
                 "overview": "This guide covers OAuth 2.0 best practices including secure token handling, redirect URI validation, and state parameter usage..."
             }
@@ -505,6 +657,184 @@ openviking search "how to implement OAuth" -L 1,2
 
 ---
 
+### search(mode="context")
+
+把检索结果直接组装成可注入的上下文块。`mode="list"`（默认）返回排序命中列表，行为与旧版 `search()` 完全一致；`mode="context"` 在一次服务端请求中按 token 预算选择内容层级、跨轮去重，并可生成 LLM 摘要。
+
+#### 1. API 实现介绍
+
+Agent 插件每轮注入上下文时，过去需要按类型逐个检索、再逐条回读全文，在客户端拼装。组装收敛到服务端后，插件只发一次请求，所有 Harness 插件共享同一套预算、降级与去重实现。
+
+**处理流程**：
+1. **L1 查询理解**：可选，结合 Session 最近消息做有界意图扩展（最多 3 条查询，超时熔断，失败回退原查询）
+2. **L0 检索**：按 `quotas` 分桶独立检索，或不设配额时全域检索一次。命中使用与 `find()` 相同的向量分数；服务端开启 `retrieval.apply_rerank_to_context` 且 `rerank` 配置可用时，合并后的候选会在配额和预算之前用原始查询及其扩展查询统一重排一次（见下文）
+3. **L2 组装**：token 预算内填充档位（全员先落到各自类别的默认档，再用剩余预算按分数序加深），超限退档不截断
+4. **L3 重写**：可选，把组装结果压成带 URI 引用的 digest（超时熔断，失败仍返回未重写的 `rendered`；精确返回 `NO_RELEVANT_MEMORY` 时记为 `stats.rewrite="no_relevant"`，Coding Agent 客户端不会再回退注入 `rendered`）
+
+**代码入口**：
+- `openviking/server/routers/search.py:_search_context()` - HTTP 路由分支
+- `openviking/retrieve/context_assembler/pipeline.py:assemble_context()` - 组装编排
+- `openviking/retrieve/context_assembler/budget.py:plan_entries()` - 预算与档位填充
+- `openviking/retrieve/context_assembler/tiers.py` - 各来源类型的概览档提取
+
+#### 2. 接口和参数说明
+
+**L0 检索域**：`query`、`image_url`、`context_type`、`limit`、`score_threshold`、`filter`、`tags`、`since`/`until` 以及可选的 `events_time_decay_protection` 与 list 模式一致。`limit` 只约束 quota-free 检索；一旦 `purpose` 或显式 `quotas` 启用分桶检索，各分类配额之和就是候选上限。`target_uri` 在 context 模式下暂不支持（返回 400）；`level` 被忽略，档位由 `detail` 决定。
+
+**可选 Rerank**：开启 `retrieval.apply_rerank_to_context` 且 `rerank` 配置可用时，文本查询每个请求对合并、去重后的候选执行一次 Rerank，以原始 `query` 与各条扩展查询拼接后的文本打分，只由扩展查询召回的命中也按该扩展点明的主题评判。不设配额时为此召回 `2 × limit` 条候选；分桶检索每桶最多重排 `2 × quota` 条，候选不足的桶留出的名额让给其他桶。Skill 以其包摘要参与打分。参与重排的候选 `score` 变为 Rerank 分数，`other_peer_penalty` 仍在其上生效。`score_threshold` 随之改为过滤最终分数而非召回；未指定时，`rerank.threshold` 只过滤模型分数。模型未打分的候选（文本为空或 Rerank 调用失败）保留向量分数。图像查询不执行 Rerank。`stats.rerank` 报告 `used`、`candidates`（送入模型的数量）和 `capped`（被每桶上限排除的数量）
+
+**L1 查询理解**
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `session_id` | str | None | 提供后才能启用查询扩展与服务端去重 |
+| `query_expansion` | `off` \| `auto` | `auto` | `auto` 时结合 Session 做有界扩展；无 session 或失败时自动回退为原查询 |
+
+**L2 组装**
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `limit` | int | 10 | 仅作为 quota-free 检索的候选条目上限；`purpose` 或 `quotas` 启用分桶后被忽略 |
+| `max_tokens` | int | 1600 | 唯一的预算参数，采用感知 CJK 的启发式估算（codepoint ≥ 0x3000 记 1.5 token/字，其余按 chars/4） |
+| `quotas` | object | None | 各桶首轮条数上限，总和即候选上限；某个桶用不满的名额会让给其他桶剩余的最佳命中，`0` 表示关闭该桶。键取 `events`/`entities`/`preferences`/`experiences`/`resources`/`skills`。显式传入后忽略 `limit` |
+| `purpose` | `chat` \| `coding` | None | 按下表的分类配额启用六域分桶采样；仅在未显式传 `quotas` 时生效 |
+| `detail` | `abstract` \| `overview` \| `full` \| object | None | 为每条结果请求同一个起始档和最高档；请求档不可用或装不进预算时仍逐档退档而不截断。省略时按类别取默认档（见下）。也可传按类别的对象，如 `{"events":"overview","preferences":"abstract"}`，未列出的类别仍取默认档。`"auto"` 是已废弃的写法，等价于省略 |
+| `dedup_turns` | int | 0 | 跨轮冷却轮数，需要 `session_id`；账本存在 `{session_uri}/.recall_log.json` |
+| `exclude_uris` | string[] | [] | 无状态去重兜底，最多 200 条，与 `dedup_turns` 取并集。目录 URI 会排除整棵子树；只想排除已返回的目录节点本身时，回传它的 `.abstract.md` 和 `.overview.md` URI；`dedup_turns` 只冷却原样返回过的 URI |
+| `peer_scope` | `actor` \| `all` | `all` | `actor` 排除其他 peer，但仍保留全局、User 自有和当前 Actor Peer 内容 |
+| `other_peer_penalty` | number \| object | 按类型默认值 | 对其他 peer 结果施加的分数折损 |
+
+**L3 重写**
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `rewrite` | bool \| `auto` | `false` | 服务端 digest 重写；`auto` 时仅在配置了 query_planner 模型时启用 |
+| `rewrite_max_bullets` | int | 6 | digest 条数上限（1–20） |
+
+**档位规则**
+
+- **Purpose 预设**：`chat` 使用 `events:3, entities:3, preferences:1, experiences:1, resources:1, skills:1`；`coding` 使用 `events:1, entities:2, preferences:1, experiences:1, resources:3, skills:2`。每个桶先按自己的配额取条目；某个桶命中不足时，空出的名额让给其他桶剩余的最佳命中，总数（两个预设都是 10）不会超出。各桶结果汇总后仍会去重并全局排序，但不会再被第二个全局 `limit` 截断
+- **按类别的默认档**：省略 `detail` 时，各类别落在下表的档位；文件条目中只有 `events` 的默认档需要回读正文；目录命中会读取 `.overview.md`。预置的作用域目录（`viking://resources`、`viking://agent` 及其预置子目录、用户根目录及其一级目录）只用于导航，不会作为条目返回，即使它们的 `.overview.md` 已按内容重新生成也一样
+
+  | 类别 | 默认档 | 剩余预算可加深到 | 原因 |
+  |------|--------|------------------|------|
+  | `events` | 概览档 | 全文档 | 唯一正文足够长、`# Summary` 抽取能真正压缩的类型 |
+  | `entities` / `preferences` / `experiences` | 摘要档 | 摘要档 | 正文本身很短，且写入侧把整篇正文存进了摘要标量，摘要档即完整内容 |
+  | `resources` / `skills` | 摘要档 | 摘要档 | 资源取语义处理生成的 256 字符摘要，skill 取 `SKILL.md` frontmatter 生成的 name/description；正文可能很大或含凭据，加深需显式指定 |
+  | `memories` | 摘要档 | 摘要档 | 四个具名类型之外的内置记忆类型——`cases`、`patterns`、`tools`、`trajectories`、技能使用记忆。只有 quota-free 检索会命中它们；它们没有自己的检索桶，`quotas` 不能指定，但 `detail` 和 `other_peer_penalty` 可以 |
+  | 目录命中 | 概览档 | 概览档 | 目录条目读取 `.overview.md`，不展开整个子树。skill 包命中除外：它们归一到 `<包根>/SKILL.md`，按上面的文件档位处理 |
+
+- **Skill 包**：一个包的每个文件、每层目录各存一条向量记录，它们在配额生效之前先合并成一条——不管命中的是包里哪个文件，每个包只出一条 entry、只占一个名额。这条 entry 的 `uri` 是 `<包根>/SKILL.md`，和 `/skills/find` 返回的 `skill_md_uri` 是同一条路径，正文是包自己的摘要；包的摘要还没生成时退成裸 `uri`，不拿命中的那个文件的摘要顶替。因此 `dedup_turns` 是按包冷却的：某个包以摘要档或更深的档位注入过之后，冷却窗口内命中包里任何文件都会被排除
+- **保底**：每条结果至少给出 `uri`。记忆类摘要缺失或超出单条上限时回落到概览档：写入侧把整篇正文存进了摘要标量，所以对记忆类别而言概览档在内容阶梯上位于摘要档*之下*，这次替换披露得更少。而 `resources` / `skills` 的摘要是语义处理生成的短摘要，同样的替换会去读调用方没有请求的正文，因此这两类直接退成裸 `uri`，不向上加深
+- **显式 `detail`**：把该档作为全部结果请求的起点和上限；装不下的条目仍逐档退档而不截断。上述记忆类概览档替换是实际档位唯一可能高于指定档的情况，且仅因为它比指定档携带的内容更少
+- **概览档按来源取骨架**：记忆文件取开头的 `# Summary` 段，代码文件取函数与类签名（复用 `code_outline`），长文档取标题树加首段
+- **单条上限**：`max_tokens ÷ 候选条数 × 2`，对除裸 `uri` 外的所有档位一律生效；某一档超出该上限时退回上一档，不做截断。预算仍有剩余时，最后一轮加深不受该上限约束，只受 `max_tokens` 约束
+
+#### 3. 使用示例
+
+**HTTP API**
+
+```bash
+# 基础上下文组装
+curl -X POST http://localhost:1933/api/v1/search/search \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENVIKING_API_KEY" \
+  -d '{"query":"这个分支改了什么","mode":"context","max_tokens":1600}'
+
+# 会话感知：查询扩展 + 跨轮去重
+curl -X POST http://localhost:1933/api/v1/search/search \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENVIKING_API_KEY" \
+  -d '{
+    "query":"继续刚才的重构",
+    "mode":"context",
+    "session_id":"cc-1a2b3c",
+    "query_expansion":"auto",
+    "dedup_turns":5,
+    "purpose":"coding",
+    "max_tokens":3000
+  }'
+
+# 开启服务端 digest 重写
+curl -X POST http://localhost:1933/api/v1/search/search \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENVIKING_API_KEY" \
+  -d '{"query":"档位设计","mode":"context","max_tokens":3000,"rewrite":true}'
+```
+
+**响应节选**
+
+下例缩短了 `entries`、正文和 `rendered`；统计字段对应完整的 13 条结果。
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "entries": [
+      {
+        "uri": "viking://user/default/memories/events/2026/07/14/tier_design.md",
+        "category": "events",
+        "score": 0.45,
+        "detail": "full",
+        "text": "# Summary\n档位模型改为按类别定义默认档\n...",
+        "origin": "self"
+      },
+      {
+        "uri": "viking://user/default/memories/entities/software/openviking_fs.md",
+        "category": "entities",
+        "score": 0.43,
+        "detail": "abstract",
+        "text": "OpenViking FS 存储层……",
+        "origin": "self"
+      }
+    ],
+    "rendered": "<memory uri=\"viking://user/default/memories/events/2026/07/14/tier_design.md\" type=\"events\" score=\"0.45\" detail=\"full\">\n# Summary\n...\n</memory>",
+    "digest": "",
+    "stats": {
+      "candidates": 13,
+      "returned": 13,
+      "dropped": 0,
+      "deduped": 0,
+      "max_tokens": 3000,
+      "used_tokens": 2510,
+      "per_entry_cap": 462,
+      "detail": null,
+      "tier_counts": {"full": 4, "overview": 2, "abstract": 7},
+      "fill": {"floor_tokens": 1890, "overview_upgrades": 0, "full_upgrades": 4, "spare_upgrades": 0},
+      "query_expansion": "used",
+      "rewrite": "off",
+      "rewrite_usage": null,
+      "excluded": 0,
+      "dedup": {"turns": 5, "status": "ok", "cooled": 2, "turn": 34}
+    }
+  }
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `entries[].uri` | string | 条目 URI，任何档位都必然存在，可用 MCP `read` 下钻 |
+| `entries[].category` | string | `events`/`entities`/`preferences`/`experiences`/`resources`/`skills`，或 `memories`（四个具名类型之外的内置记忆类型） |
+| `entries[].detail` | string | 实际档位：`full`、`overview`、`abstract` 或 `uri` |
+| `entries[].text` | string | 该档位的正文；`uri` 档为空 |
+| `rendered` | string | 扁平 XML 上下文块，可直接注入；重写返回 `no_relevant` 时为空 |
+| `digest` | string | 重写成功时的摘要；失败或压缩器判定无相关记忆时为空字符串 |
+| `stats` | object | 预算用量、档位分布、扩展与重写状态（`off`、`ok`、`no_relevant`、`failed` 或 `timeout`）、去重账本状态；某个检索域失败时附带 `retrieval_errors`，用于区分「检索坏了」和「确实没有相关记忆」；请求应用了 context Rerank 时附带 `rerank` |
+
+当 `stats.rewrite` 为 `no_relevant` 时，响应仍保留 `entries` 供检查，但 `digest` 和
+`rendered` 都为空字符串。这样即使客户端尚未识别新状态，也不会回退注入原文。本轮
+没有交付任何内容，因此这些 URI 也不会进入 `dedup_turns` 账本，之后真正相关的那一轮
+仍能召回它们。
+
+**校验规则**
+
+- `mode="list"` 下显式携带任何 context 专用参数 → 400
+- `mode="context"` 下传 `target_uri` → 400
+- `quotas` 出现未知键 → 400
+- context 模式下被忽略的字段（`level`、`purpose` 或显式配额生效时的 `limit`）会记录在 `stats.ignored`
+
+---
+
 ### grep()
 
 通过模式（正则表达式）搜索内容。
@@ -516,11 +846,11 @@ openviking search "how to implement OAuth" -L 1,2
 **处理流程**：
 1. 从指定 URI 开始遍历文件系统
 2. 对每个文件内容进行正则表达式匹配
-3. 收集匹配的行和位置信息
+3. 收集匹配行、位置信息及可选的前后文
 4. 返回匹配结果列表
 
 **代码入口**：
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.grep()` - Python SDK 入口（HTTP）
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.grep()` - Python SDK 入口（HTTP）
 - `openviking/server/routers/search.py:grep()` - HTTP 路由
 - `crates/ov_cli/src/commands/search.rs:grep()` - Rust CLI 命令
 
@@ -533,9 +863,17 @@ openviking search "how to implement OAuth" -L 1,2
 | uri | str | 是 | - | 要搜索的 Viking URI |
 | pattern | str | 是 | - | 搜索模式（正则表达式）|
 | case_insensitive | bool | 否 | False | 忽略大小写 |
-| node_limit | int | 否 | None | 最大返回节点数 |
+| node_limit | int | 否 | 256 | 最大返回节点数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 | exclude_uri | str | 否 | None | 要排除在搜索之外的 URI 前缀 |
-| level_limit | int | 否 | Python SDK: 5；HTTP API / CLI / Go SDK: 10 | 最大目录遍历深度。Go SDK 当前使用 HTTP API 默认值。 |
+| level_limit | int | 否 | 10 | 最大目录遍历深度。HTTP SDK 未指定时使用服务端默认值。 |
+| tags | string[] | 否 | 未设置 | 仅搜索同时匹配全部 `k=v` 检索标签的文件 |
+| include_tags | bool | 否 | `false` | 不过滤时也在每条命中中返回检索标签 |
+| before_context | int | 否 | 0 | 每条匹配行之前返回的上下文行数；仅 HTTP API 和 CLI 支持 |
+| after_context | int | 否 | 0 | 每条匹配行之后返回的上下文行数；仅 HTTP API 和 CLI 支持 |
+
+`tags` 使用 AND 语义，并在内容匹配与 `node_limit` 截断之前过滤候选文件。例如 `["team=search", "env=prod"]` 只匹配同时具有两个标签的文件。
+
+使用 `tags` 过滤或传 `include_tags=true` 时，`matches` 中的命中会返回文件的 `tags`；没有检索标签的文件返回空数组 `[]`。普通 grep 会省略 `tags`，避免不必要的 VectorDB 读取。
 
 #### 3. 使用示例
 
@@ -552,22 +890,27 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
     -d '{
         "uri": "viking://resources",
         "pattern": "authentication",
-        "case_insensitive": true
+        "case_insensitive": true,
+        "before_context": 1,
+        "after_context": 1,
+        "tags": ["team=search", "env=prod"]
     }'
 ```
 
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 results = client.grep(
-    "viking://resources",
-    "authentication",
-    case_insensitive=True
+    uri="viking://resources",
+    pattern="authentication",
+    case_insensitive=True,
+    node_limit=1024,
+    tags=["team=search", "env=prod"],
 )
 
 print(f"Found {results['count']} matches")
@@ -576,11 +919,22 @@ for match in results['matches']:
     print(f"    {match['content']}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.grep("viking://resources/docs/", "authentication", {
+  tags: ["team=search", "env=prod"],
+}));
+```
+
 **Go SDK**
 
 ```go
+nodeLimit := 1024
 result, err := client.Grep(ctx, "viking://resources", "authentication", &openviking.GrepOptions{
     CaseInsensitive: true,
+    NodeLimit:       &nodeLimit,
+    Tags:            []string{"team=search", "env=prod"},
 })
 if err != nil {
     return err
@@ -592,31 +946,57 @@ fmt.Println(result["count"])
 
 ```bash
 # 基础搜索
-openviking grep "authentication" --uri viking://resources
+ov grep "authentication" --uri viking://resources
 
 # 忽略大小写
-openviking grep "authentication" --uri viking://resources --ignore-case
+ov grep "authentication" --uri viking://resources --ignore-case
 
 # 指定深度限制
-openviking grep "TODO" --uri viking://resources --level-limit 3
+ov grep "TODO" --uri viking://resources --level-limit 3
+
+# 返回匹配行前后各 2 行上下文
+ov grep "authentication" --uri viking://resources -b 2 -a 2
+
+# 只搜索同时匹配所有 tags 的文件
+ov grep "TODO" --uri viking://resources --tags team=search,env=prod
+
+# 不过滤、但在人类可读结果中显示 tags
+ov grep "TODO" --uri viking://resources --fields tags
 ```
+
+HTTP `POST /api/v1/search/grep` 在不做过滤时可传 `include_tags: true` 返回 tags；传入 `tags` 过滤时会始终返回命中文件的 tags。
 
 **响应示例**
 
 ```json
 {
-    "status": "ok",
-    "result": {
-        "matches": [
-            {
-                "uri": "viking://resources/docs/auth.md",
-                "line": 15,
-                "content": "User authentication is handled by..."
-            }
+  "status": "ok",
+  "result": {
+    "matches": [
+      {
+        "uri": "viking://resources/docs/auth.md",
+        "line": 15,
+        "content": "User authentication is handled by...",
+        "before_context": [
+          {
+            "line": 14,
+            "content": "## Authentication"
+          }
         ],
-        "count": 1
-    },
-    "time": 0.1
+        "after_context": [
+          {
+            "line": 16,
+            "content": "Configure an API key before sending requests."
+          }
+        ],
+        "tags": [
+          "team=search",
+          "env=prod"
+        ]
+      }
+    ],
+    "count": 1
+  }
 }
 ```
 
@@ -637,7 +1017,7 @@ openviking grep "TODO" --uri viking://resources --level-limit 3
 - `[]` 匹配字符范围
 
 **代码入口**：
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.glob()` - Python SDK 入口（HTTP）
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.glob()` - Python SDK 入口（HTTP）
 - `openviking/server/routers/search.py:glob()` - HTTP 路由
 - `crates/ov_cli/src/commands/search.rs:glob()` - Rust CLI 命令
 
@@ -649,7 +1029,12 @@ openviking grep "TODO" --uri viking://resources --level-limit 3
 |------|------|------|--------|------|
 | pattern | str | 是 | - | Glob 模式（例如 `**/*.md`）|
 | uri | str | 否 | "viking://" | 起始 URI |
-| node_limit | int | 否 | None | 最大返回匹配数 |
+| node_limit | int | 否 | 256 | 最大返回匹配数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
+| extra_fields | list[str] | 否 | None | 每条命中的额外字段。省略时返回 URI 字符串；提供后 `result.matches` 返回条目对象 |
+| tags | string[] | 否 | 未设置 | 仅保留同时匹配全部 `k=v` 检索标签的结果 |
+| include_tags | bool | 否 | `false` | 不过滤时也在每条命中中返回检索标签 |
+
+`tags` 使用 AND 语义，并在 `node_limit` 截断前应用。传入 `tags` 或 `include_tags=true` 时，响应返回带 `tags` 数组的条目对象；普通 glob 继续返回 URI 字符串，且不会为了 tags 读取 VectorDB。
 
 #### 3. 使用示例
 
@@ -665,33 +1050,50 @@ curl -X POST http://localhost:1933/api/v1/search/glob \
     -H "X-API-Key: your-key" \
     -d '{
         "pattern": "**/*.md",
-        "uri": "viking://resources"
+        "uri": "viking://resources",
+        "tags": ["team=search", "env=prod"],
+        "include_tags": true
     }'
 ```
 
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
-# 查找所有 markdown 文件
-results = client.glob("**/*.md", "viking://resources")
+# 查找所有 markdown 文件（默认最多返回 256 条）
+results = client.glob(pattern="**/*.md", uri="viking://resources")
 print(f"Found {results['count']} markdown files:")
 for uri in results['matches']:
     print(f"  {uri}")
 
-# 查找所有 Python 文件
-results = client.glob("**/*.py", "viking://resources")
-print(f"Found {results['count']} Python files")
+# 查找同时匹配全部 tags 的 Markdown 文件
+results = client.glob(
+    pattern="**/*.md",
+    uri="viking://resources",
+    tags=["team=search", "env=prod"],
+)
+print(f"Found {results['count']} tagged markdown files")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.glob("**/*.md", "viking://resources/docs/", {
+  tags: ["team=search", "env=prod"],
+}));
 ```
 
 **Go SDK**
 
 ```go
-result, err := client.Glob(ctx, "**/*.md", "viking://resources")
+result, err := client.Glob(ctx, "**/*.md", "viking://resources", &openviking.GlobOptions{
+    NodeLimit: openviking.Int(1024),
+    Tags:      []string{"team=search", "env=prod"},
+})
 if err != nil {
     return err
 }
@@ -702,25 +1104,28 @@ fmt.Println(result["count"])
 
 ```bash
 # 查找所有 markdown 文件
-openviking glob "**/*.md" --uri viking://resources
+ov glob "**/*.md" --uri viking://resources
 
 # 查找所有 Python 文件
-openviking glob "**/*.py"
+ov glob "**/*.py"
+
+# 按全部 tags 过滤，或只返回 tags
+ov glob "**/*.md" --tags team=search,env=prod
+ov glob "**/*.md" -f tags
 ```
 
 **响应示例**
 
 ```json
 {
-    "status": "ok",
-    "result": {
-        "matches": [
-            "viking://resources/docs/api.md",
-            "viking://resources/docs/guide.md"
-        ],
-        "count": 2
-    },
-    "time": 0.1
+  "status": "ok",
+  "result": {
+    "matches": [
+      "viking://resources/docs/api.md",
+      "viking://resources/docs/guide.md"
+    ],
+    "count": 2
+  }
 }
 ```
 
@@ -730,29 +1135,30 @@ openviking glob "**/*.py"
 
 ### 渐进式读取内容
 
-检索结果通常只包含 L0 摘要，你可以根据需要渐进式加载更多详细内容。
+结果包含摘要和命中 URI。语义检索的 L0/L1 命中指向 `.abstract.md` 或 `.overview.md`，调用 `overview()` 时需传入其父目录；L2 命中指向文件，可直接用 `read()` 读取。
 
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
-results = client.find("authentication")
+results = client.find(query="authentication")
 
-for ctx in results.resources:
-    # 从 L0（摘要）开始 - 已包含在 ctx.abstract 中
-    print(f"Abstract: {ctx.abstract}")
+for context in results.get("resources", []):
+    # 从 L0（摘要）开始 - 已包含在 context["abstract"] 中
+    print(f"Abstract: {context.get('abstract', '')}")
 
-    if ctx.level < 2:
+    if context.get("level", 0) < 2:
         # 获取 L1（概览）用于目录
-        overview = client.overview(ctx.uri)
+        directory_uri = context["uri"].rsplit("/", 1)[0]
+        overview = client.overview(uri=directory_uri)
         print(f"Overview: {overview[:500]}...")
     else:
         # 加载 L2（内容）用于文件
-        content = client.read(ctx.uri)
+        content = client.read(uri=context["uri"])
         print(f"File content: {content}")
 ```
 
@@ -774,84 +1180,60 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/do
     -H "X-API-Key: your-key"
 ```
 
-### 获取关联资源
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-client.initialize()
-
-results = client.find("OAuth implementation")
-
-for ctx in results.resources:
-    print(f"Found: {ctx.uri}")
-
-    # 获取关联资源
-    relations = client.relations(ctx.uri)
-    for rel in relations:
-        print(f"  Related: {rel['uri']} - {rel['reason']}")
-```
-
-**HTTP API**
-
-```bash
-# 获取资源的关联关系
-curl -X GET "http://localhost:1933/api/v1/relations?uri=viking://resources/docs/auth" \
-    -H "X-API-Key: your-key"
-```
-
 ## 最佳实践
 
 ### 使用具体的查询
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # 好 - 具体的查询
-results = client.find("OAuth 2.0 authorization code flow implementation")
+results = client.find(query="OAuth 2.0 authorization code flow implementation")
 
 # 效果较差 - 过于宽泛
-results = client.find("auth")
+results = client.find(query="auth")
 ```
 
 ### 限定搜索范围
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # 在相关范围内搜索以获得更好的结果
 results = client.find(
-    "error handling",
-    target_uri="viking://resources/my-project"
+    query="error handling",
+    target_uri="viking://resources/my-project",
 )
 ```
 
 ### 在对话中使用会话上下文
 
 ```python
-import openviking as ov
-from openviking.message import TextPart
+import openviking_sdk as ov
+from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # 对于对话式搜索，使用会话
-session = client.session()
-session.add_message("user", [
-    TextPart(text="I'm building a login page")
-])
+session_info = client.create_session()
+session = client.session(session_id=session_info["session_id"])
+session.add_message(
+    role="user",
+    parts=[TextPart(text="I'm building a login page")],
+)
 
 # 搜索能够理解上下文
-results = client.search("best practices", session=session)
+results = client.search(
+    query="best practices",
+    session_id=session.session_id,
+)
 ```
 
 ## 相关文档

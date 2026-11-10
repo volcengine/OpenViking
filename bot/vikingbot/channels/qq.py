@@ -60,7 +60,7 @@ class QQChannel(BaseChannel):
         """Start the QQ bot."""
         if not QQ_AVAILABLE:
             logger.exception(
-                "QQ SDK not installed. Install with: uv pip install 'openviking[bot-qq]' (or uv pip install -e \".[bot-qq]\" for local dev)"
+                "QQ SDK not installed. Install with: uv pip install qq-botpy>=1.0.0"
             )
             return
 
@@ -131,6 +131,11 @@ class QQChannel(BaseChannel):
 
             await self._handle_message(
                 sender_id=user_id,
+                sender_name=str(
+                    getattr(author, "username", None)
+                    or getattr(author, "name", None)
+                    or user_id
+                ),
                 chat_id=user_id,
                 content=content,
                 metadata={"message_id": data.id},

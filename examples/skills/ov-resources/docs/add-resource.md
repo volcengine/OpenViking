@@ -43,7 +43,7 @@ ov add-resource ./docs --to "viking://resources/2026/2026-01-01/"
 ov add-resource ./docs --parent "viking://resources/docs/"
 
 # Place under the current user's private resource root
-ov add-resource ./docs --parent "viking://user/resources/docs/"
+ov add-resource ./docs --parent "viking://~/resources/docs/"
 
 # Place under a specific peer's private resource root
 ov add-resource ./docs --parent "viking://user/alice/peers/web-visitor-alice/resources/docs/"
@@ -53,7 +53,7 @@ ov add-resource ./docs --parent-auto-create "viking://resources/docs/2026/05/07"
 ov add-resource ./docs -p "viking://resources/docs/{calendar:today}"
 ```
 
-`viking://user/resources/...` is current-user shorthand and resolves to `viking://user/{user_id}/resources/...`. `peer_id` path segments must be safe single-segment identifiers such as `web-visitor-alice`; values with `:`, `+`, `.`, `..`, or path separators are rejected.
+`viking://~/resources/...` is the home alias and expands to `viking://user/{user_id}/resources/...` for the authenticated caller. The uid-less spelling `viking://user/resources/...` is no longer accepted and returns an error pointing at the `viking://~/...` form. `peer_id` path segments must be safe single-segment identifiers such as `web-visitor-alice`; values with `:`, `+`, `.`, `..`, or path separators are rejected.
 
 ## Async Processing Control
 
@@ -62,9 +62,6 @@ Semantic processing runs asynchronously. Use `--wait` to block until complete:
 ```bash
 # Wait for completion
 ov add-resource ./docs --wait
-
-# Wait with timeout
-ov add-resource ./docs --wait --timeout 60
 
 # Fire and forget (default)
 ov add-resource ./docs
@@ -145,7 +142,6 @@ With `--wait`, the response includes `queue_status` with `pending`, `processing`
 | `--reason` | Reason for adding (experimental) |
 | `--instruction` | Processing instructions (experimental) |
 | `--wait` | Block until semantic processing completes |
-| `--timeout` | Timeout in seconds when `--wait` is used |
 | `--strict` | Use strict mode |
 | `--ignore-dirs` | Directory names to ignore (comma-separated) |
 | `--include` | File patterns to include (glob) |

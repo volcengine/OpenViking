@@ -7,12 +7,14 @@ Data Accessors are responsible for fetching data from remote sources
 or special paths and making them available as local files/directories.
 """
 
-import os
 import shutil
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+
+if TYPE_CHECKING:
+    from openviking.parse.feishu_import import FeishuImportPlan
 
 
 class SourceType:
@@ -59,6 +61,8 @@ class LocalResource:
     is_temporary: bool = True
     """Whether this is a temporary resource that can be cleaned up after parsing."""
 
+    feishu_plan: Optional["FeishuImportPlan"] = None
+
     def cleanup(self) -> None:
         """
         Clean up the local resource if it's temporary.
@@ -68,19 +72,22 @@ class LocalResource:
         if not self.is_temporary:
             return
 
-        if not self.path.exists():
+        cleanup_path_value = self.meta.get("_cleanup_path")
+        cleanup_path = Path(cleanup_path_value) if cleanup_path_value else self.path
+
+        if not cleanup_path.exists():
             return
 
         try:
-            if self.path.is_dir():
-                shutil.rmtree(self.path, ignore_errors=True)
+            if cleanup_path.is_dir():
+                shutil.rmtree(cleanup_path, ignore_errors=True)
             else:
-                self.path.unlink(missing_ok=True)
+                cleanup_path.unlink(missing_ok=True)
         except Exception as e:
             from openviking_cli.utils.logger import get_logger
 
             logger = get_logger(__name__)
-            logger.warning(f"[LocalResource] Failed to cleanup resource {self.path}: {e}")
+            logger.warning(f"[LocalResource] Failed to cleanup resource {cleanup_path}: {e}")
 
     def __enter__(self) -> "LocalResource":
         """Support context manager protocol."""
@@ -94,6 +101,11 @@ class LocalResource:
 class DataAccessor(ABC):
     """
     Abstract base class for data accessors.
+
+    Registry-owned accessor instances may be shared by concurrent requests.
+    Implementations must therefore be reentrant: constructor state must be
+    immutable or concurrency-safe, and request-scoped mutable state must live
+    in local variables or in an operation object created by ``access()``.
 
     Data Accessors are responsible for:
     - Detecting if they can handle a given source
@@ -122,6 +134,11 @@ class DataAccessor(ABC):
     async def access(self, source: Union[str, Path], **kwargs) -> LocalResource:
         """
         Fetch the source and make it available locally.
+
+        The same accessor instance may execute this method concurrently. Do not
+        store request-specific credentials, configuration, clients, temporary
+        paths, or progress on ``self``. If an implementation needs shared state
+        within one access operation, create a request-scoped operation object.
 
         Args:
             source: Source string (URL, path, etc.) or Path object
@@ -160,35 +177,3 @@ class DataAccessor(ABC):
             resource: The LocalResource to clean up
         """
         resource.cleanup()
-
-    def _create_temp_dir(self, prefix: str = "ov_accessor_") -> Path:
-        """
-        Create a temporary directory for this accessor.
-
-        Args:
-            prefix: Prefix for the temporary directory name
-
-        Returns:
-            Path to the created temporary directory
-        """
-        import tempfile
-
-        temp_dir = tempfile.mkdtemp(prefix=prefix)
-        return Path(temp_dir)
-
-    def _create_temp_file(self, suffix: str = "", prefix: str = "ov_accessor_") -> Path:
-        """
-        Create a temporary file for this accessor.
-
-        Args:
-            suffix: Suffix for the temporary file name
-            prefix: Prefix for the temporary file name
-
-        Returns:
-            Path to the created temporary file
-        """
-        import tempfile
-
-        fd, temp_path = tempfile.mkstemp(suffix=suffix, prefix=prefix)
-        os.close(fd)
-        return Path(temp_path)

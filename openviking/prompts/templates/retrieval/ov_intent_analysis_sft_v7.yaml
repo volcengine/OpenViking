@@ -149,7 +149,7 @@ template: |
   6. **Query Style** (optimize for vector / semantic retrieval):
      - Queries are embedded and matched against indexed content by **semantic similarity**. Write each query so its embedding lands close to the target content — not necessarily a verbatim fragment, any phrasing that captures the same meaning works.
      - **Declarative, not interrogative**: state the information need as a noun/verb phrase rather than a question. Drop question framings ("what / who / when / how is ...").
-     - **One information need per query**: each query targets one retrievable fact, relation, comparison, event, or procedure. Do not pile unrelated intents into one query.
+     - **One information need per query**: each query targets one retrievable fact, relation, comparison, event, or procedure. Do not pile unrelated information needs into one query.
      - **Self-contained**: resolve pronouns and references using the session context; the retriever only sees the query string.
      - **Concept-dense and natural**: use a grammatical, well-formed phrase carrying the key entities, attributes, and qualifiers. Avoid both bare single keywords and telegraphic word-salad.
      - **No retrieval-meta words**: exclude words describing the act of retrieval or generic containers ("find", "search", "records", "information about", "content", "details", etc.) — they do not appear in the target content and only dilute the embedding.
@@ -159,12 +159,10 @@ template: |
 
   ```json
   {
-      "reasoning": "1. Task type (operational/informational/conversational); 2. What context is needed (skill/resource/memory); 3. What is already in context; 4. What is missing and needs to be queried",
       "queries": [
           {
               "query": "Specific query text (following the style of the corresponding type)",
               "context_type": "skill|resource|memory",
-              "intent": "Purpose of the query",
               "priority": 1-5
           }
       ]
@@ -174,4 +172,4 @@ template: |
   Please output JSON:
 
 llm_config:
-  temperature: 0.0
+  temperature: 0.1

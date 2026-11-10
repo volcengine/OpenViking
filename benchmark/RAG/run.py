@@ -88,7 +88,7 @@ def main():
         'retrieval_topk': retrieval_topk
     }
     
-    path_keys = ['dataset_path', 'output_dir', 'vector_store', 'log_file', 'doc_output_dir']
+    path_keys = ['dataset_path', 'output_dir', 'log_file', 'doc_output_dir']
     for key in path_keys:
         if key in config.get('paths', {}):
             original = config['paths'][key]
@@ -122,7 +122,7 @@ def main():
             raise e
         
         # 2. Vector Store
-        vector_store = VikingStoreWrapper(store_path=config['paths']['vector_store'])
+        vector_store = VikingStoreWrapper()
         
         # 3. LLM Client
         api_key = os.environ.get(

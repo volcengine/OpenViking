@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 
 from openviking.utils.time_utils import (
     format_iso8601,
-    format_simplified,
     get_current_timestamp,
     parse_iso_datetime,
 )
@@ -143,54 +142,6 @@ class TestFormatIso8601:
 
 class TestFormatSimplified:
     """Test format_simplified function."""
-
-    def test_format_same_day_shows_time(self):
-        """Test formatting shows time for same day."""
-        now = datetime(2026, 3, 26, 15, 0, 0)
-        dt = datetime(2026, 3, 26, 10, 30, 0)
-
-        formatted = format_simplified(dt, now)
-
-        assert formatted == "10:30:00"
-
-    def test_format_different_day_shows_date(self):
-        """Test formatting shows date for different day."""
-        now = datetime(2026, 3, 26, 15, 0, 0)
-        dt = datetime(2026, 3, 25, 10, 30, 0)
-
-        formatted = format_simplified(dt, now)
-
-        assert formatted == "2026-03-25"
-
-    def test_format_older_date_shows_date(self):
-        """Test formatting shows date for older dates."""
-        now = datetime(2026, 3, 26, 15, 0, 0)
-        dt = datetime(2025, 12, 1, 10, 30, 0)
-
-        formatted = format_simplified(dt, now)
-
-        assert formatted == "2025-12-01"
-
-    def test_format_just_under_24h_shows_time(self):
-        """Test formatting shows time for just under 24 hours."""
-        now = datetime(2026, 3, 26, 15, 0, 0)
-        dt = datetime(2026, 3, 25, 16, 0, 0)
-
-        formatted = format_simplified(dt, now)
-
-        # 16:00 is less than 24 hours ago
-        assert formatted == "16:00:00"
-
-    def test_format_just_over_24h_shows_date(self):
-        """Test formatting shows date for just over 24 hours."""
-        now = datetime(2026, 3, 26, 15, 0, 0)
-        dt = datetime(2026, 3, 25, 14, 0, 0)
-
-        formatted = format_simplified(dt, now)
-
-        # 14:00 is more than 24 hours ago
-        assert formatted == "2026-03-25"
-
 
 class TestGetCurrentTimestamp:
     """Test get_current_timestamp function."""

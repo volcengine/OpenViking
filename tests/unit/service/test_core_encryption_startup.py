@@ -4,31 +4,44 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.service.core import OpenVikingService
 from openviking.utils.agfs_utils import RagfsBindingConfig
+from openviking.utils.process_lock import LOCK_FILENAME
+from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
 class _FakeCacheConfig:
     def model_dump(self, mode: str) -> dict:
         assert mode == "json"
-        return {"enabled": False, "provider": "memory"}
+        return {"provider": "redis", "params": {}}
 
 
 class _FakeConfig:
     """Minimal config object exposing the service-facing to_dict API."""
 
+    service_name = "test-core-encryption"
     storage = SimpleNamespace(
         agfs=SimpleNamespace(
             path="/tmp/ov-test",
             backend="local",
-            cache=_FakeCacheConfig(),
+            cachefs=SimpleNamespace(backend="local"),
+            pathlock=SimpleNamespace(
+                model_dump=lambda mode, exclude_none=False: {
+                    "provider": "filesystem",
+                    "lock_timeout_secs": 0.0,
+                    "lock_expire_secs": 30.0,
+                }
+            ),
         ),
         skip_process_lock=False,
     )
+    cache = _FakeCacheConfig()
 
     def to_dict(self) -> dict:
         return {"encryption": {"enabled": True, "provider": "local"}}
@@ -50,6 +63,21 @@ class _FakeEncryptor:
         self.provider = _FakeProvider()
 
 
+def _service_for_close(monkeypatch) -> OpenVikingService:
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._watch_runtime = None
+    service._watch_manager = None
+    service._compile_scheduler = None
+    service._ttl_adapter = None
+    service._expiry_runtime = None
+    service._runtime_config_manager = None
+    service._session_auto_commit_scheduler = None
+    monkeypatch.setattr(
+        "openviking.service.core.get_task_tracker", lambda: SimpleNamespace(close=AsyncMock())
+    )
+    return service
+
+
 @pytest.mark.asyncio
 async def test_build_ragfs_binding_config_works_inside_running_event_loop(monkeypatch):
     """Build the single binding config from async bootstrap while already in an event loop."""
@@ -68,10 +96,18 @@ async def test_build_ragfs_binding_config_works_inside_running_event_loop(monkey
     assert isinstance(ragfs_config, RagfsBindingConfig)
     assert ragfs_config.agfs is service._config.storage.agfs
     assert ragfs_config.to_binding_dict() == {
+        "service_name": "test-core-encryption",
         "cache": {
             "enabled": False,
-            "provider": "memory",
+            "runtime_enabled": False,
+            "provider": "redis",
         },
+        "pathlock": {
+            "provider": "filesystem",
+            "lock_timeout_secs": 0.0,
+            "lock_expire_secs": 30.0,
+        },
+        "log": {"level": "INFO", "output": "stdout"},
         "encryption": {
             "root_key": b"k" * 32,
             "provider_type": 1,
@@ -80,45 +116,131 @@ async def test_build_ragfs_binding_config_works_inside_running_event_loop(monkey
     assert isinstance(service._encryptor, _FakeEncryptor)
 
 
-def test_ensure_data_dir_lock_acquired_once(monkeypatch, tmp_path):
+@pytest.mark.parametrize("backend", ["local", "cuvs"])
+def test_ensure_data_dir_lock_acquired_once(monkeypatch, tmp_path, backend):
     """Acquire the data-dir lock once before startup encryption bootstrap."""
 
     calls = []
 
     def _acquire(path: str) -> str:
         calls.append(path)
-        return str(tmp_path / ".openviking.pid")
+        return str(tmp_path / LOCK_FILENAME)
 
     monkeypatch.setattr("openviking.utils.process_lock.acquire_data_dir_lock", _acquire)
     service = OpenVikingService.__new__(OpenVikingService)
     service._config = SimpleNamespace(
-        storage=SimpleNamespace(workspace=str(tmp_path), skip_process_lock=False)
+        storage=SimpleNamespace(
+            workspace=str(tmp_path),
+            skip_process_lock=False,
+            vectordb=SimpleNamespace(backend=backend),
+        )
     )
     service._data_dir_lock_acquired = False
+    service._data_dir_lock_path = None
 
     service._ensure_data_dir_lock_acquired()
     service._ensure_data_dir_lock_acquired()
 
     assert calls == [str(tmp_path)]
+    assert service._data_dir_lock_path == str(tmp_path / LOCK_FILENAME)
 
 
-def test_ensure_data_dir_lock_respects_skip_process_lock(monkeypatch, tmp_path):
-    """Skip lock acquisition entirely when storage.skip_process_lock is enabled."""
-
-    calls = []
+@pytest.mark.parametrize(
+    "backend,skip_process_lock",
+    [("local", True), ("cuvs", True), ("http", False), ("volcengine", False), ("vikingdb", False)],
+)
+def test_ensure_data_dir_lock_skips_shared_backends_and_explicit_opt_out(
+    monkeypatch, tmp_path, backend, skip_process_lock
+):
+    """Shared backends and explicit opt-out must never attempt a workspace lock."""
 
     def _acquire(path: str) -> str:
-        calls.append(path)
-        return str(tmp_path / ".openviking.pid")
+        pytest.fail("Shared backends and explicit opt-out must not access the workspace lock")
 
     monkeypatch.setattr("openviking.utils.process_lock.acquire_data_dir_lock", _acquire)
     service = OpenVikingService.__new__(OpenVikingService)
     service._config = SimpleNamespace(
-        storage=SimpleNamespace(workspace=str(tmp_path), skip_process_lock=True)
+        storage=SimpleNamespace(
+            workspace=str(tmp_path),
+            skip_process_lock=skip_process_lock,
+            vectordb=SimpleNamespace(backend=backend),
+        )
     )
     service._data_dir_lock_acquired = False
+    service._data_dir_lock_path = None
 
     service._ensure_data_dir_lock_acquired()
 
-    assert calls == []
-    assert service._data_dir_lock_acquired is True
+    assert service._data_dir_lock_path is None
+
+
+def test_release_data_dir_lock_resets_service_state(monkeypatch, tmp_path):
+    calls = []
+    lock_path = str(tmp_path / LOCK_FILENAME)
+    monkeypatch.setattr("openviking.utils.process_lock.release_data_dir_lock", calls.append)
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._data_dir_lock_acquired = True
+    service._data_dir_lock_path = lock_path
+
+    service._release_data_dir_lock()
+
+    assert calls == [lock_path]
+    assert service._data_dir_lock_acquired is False
+    assert service._data_dir_lock_path is None
+
+
+@pytest.mark.asyncio
+async def test_close_preserves_data_dir_lock_when_resource_cleanup_fails(monkeypatch):
+    class _FailingResourceService:
+        async def close_background_tasks(self) -> None:
+            raise RuntimeError("cleanup failed")
+
+    released = []
+    service = _service_for_close(monkeypatch)
+    service._resource_service = _FailingResourceService()
+    monkeypatch.setattr(service, "_release_data_dir_lock", lambda: released.append(True))
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        await service.close()
+
+    assert released == []
+
+
+@pytest.mark.asyncio
+async def test_close_preserves_data_dir_lock_when_resource_cleanup_is_cancelled(monkeypatch):
+    class _CancelledResourceService:
+        async def close_background_tasks(self) -> None:
+            raise asyncio.CancelledError
+
+    released = []
+    service = _service_for_close(monkeypatch)
+    service._resource_service = _CancelledResourceService()
+    monkeypatch.setattr(service, "_release_data_dir_lock", lambda: released.append(True))
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.close()
+
+    assert released == []
+
+
+@pytest.mark.asyncio
+async def test_close_releases_data_dir_lock_after_successful_cleanup(monkeypatch):
+    class _ResourceService:
+        async def close_background_tasks(self) -> None:
+            return None
+
+    released = []
+    service = _service_for_close(monkeypatch)
+    service._resource_service = _ResourceService()
+    service._config = SimpleNamespace(vlm=VLMConfig())
+    service._queue_manager = None
+    service._lock_manager = None
+    service._vikingdb_manager = None
+    service._agfs_client = None
+    service._initialized = True
+    monkeypatch.setattr(service, "_release_data_dir_lock", lambda: released.append(True))
+
+    await service.close()
+
+    assert service._initialized is False
+    assert released == [True]

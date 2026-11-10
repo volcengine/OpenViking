@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from openviking.observability.events import ObservabilityEvent
+from openviking.observability.usage_audit import sqlite_store as sqlite_store_module
 from openviking.observability.usage_audit.sqlite_store import SQLiteUsageAuditStore
 
 UTC = ZoneInfo("UTC")
@@ -37,6 +38,11 @@ def _create_legacy_usage_audit_db(db_path) -> None:
     try:
         conn.executescript(
             """
+            CREATE TABLE _schema_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            INSERT INTO _schema_meta (key, value) VALUES ('version', '3');
             CREATE TABLE usage_token_daily (
                 account_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
@@ -92,6 +98,98 @@ def _create_legacy_usage_audit_db(db_path) -> None:
                 'legacy-req', 'acct-1', 'user-1', 'GET',
                 '/api/v1/system/status', 'system', 200, 1.0,
                 '2026-05-11T00:00:00+08:00'
+            );
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _create_v4_usage_audit_db(db_path) -> None:
+    """Create and populate the exact compatible layout shipped by schema v4."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE _schema_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            INSERT INTO _schema_meta (key, value) VALUES ('version', '4');
+
+            CREATE TABLE usage_token_hourly (
+                account_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                date_utc TEXT NOT NULL,
+                hour_utc INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                token_type TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                token_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (
+                    account_id, user_id, date_utc, hour_utc,
+                    source, token_type, provider, model_name
+                )
+            );
+            CREATE TABLE usage_retrieval_hourly (
+                account_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                date_utc TEXT NOT NULL,
+                hour_utc INTEGER NOT NULL,
+                operation TEXT NOT NULL,
+                status TEXT NOT NULL,
+                request_count INTEGER NOT NULL DEFAULT 0,
+                result_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (
+                    account_id, user_id, date_utc, hour_utc, operation, status
+                )
+            );
+            CREATE TABLE usage_context_write_bucket (
+                account_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                date_utc TEXT NOT NULL,
+                hour_utc INTEGER NOT NULL,
+                operation TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (account_id, user_id, date_utc, hour_utc, operation)
+            );
+            CREATE TABLE request_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id TEXT,
+                account_id TEXT NOT NULL,
+                user_id TEXT,
+                method TEXT NOT NULL,
+                route TEXT NOT NULL,
+                api_type TEXT NOT NULL,
+                status_code INTEGER NOT NULL,
+                duration_ms REAL NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            INSERT INTO usage_token_hourly VALUES (
+                'acct-1', 'user-1', '2026-05-12', 1,
+                'vlm', 'input', 'p', 'm', 11, '2026-05-12T01:02:03+00:00'
+            );
+            INSERT INTO usage_retrieval_hourly VALUES (
+                'acct-1', 'user-1', '2026-05-12', 1,
+                'find', 'success', 2, 0, '2026-05-12T01:02:03+00:00'
+            );
+            INSERT INTO usage_context_write_bucket VALUES (
+                'acct-1', 'user-1', '2026-05-12', 1,
+                'session.commit', 3, '2026-05-12T01:02:03+00:00'
+            );
+            INSERT INTO request_audit (
+                request_id, account_id, user_id, method, route,
+                api_type, status_code, duration_ms, created_at
+            ) VALUES (
+                'v4-request', 'acct-1', 'user-1', 'GET',
+                '/api/v1/system/status', 'system', 200, 1.0,
+                '2026-05-12T01:02:03+00:00'
             );
             """
         )
@@ -346,9 +444,152 @@ async def test_sqlite_usage_audit_store_resets_incompatible_legacy_schema(tmp_pa
         assert "hour_utc" in context_columns
         assert "hour_bucket" not in context_columns
         version = conn.execute("SELECT value FROM _schema_meta WHERE key = 'version'").fetchone()
-        assert version == ("4",)
+        assert version == ("5",)
     finally:
         conn.close()
+
+
+@pytest.mark.asyncio
+async def test_sqlite_usage_audit_store_migrates_v4_without_losing_rows(tmp_path):
+    db_path = tmp_path / "usage.sqlite3"
+    _create_v4_usage_audit_db(db_path)
+
+    store = SQLiteUsageAuditStore(db_path)
+    await store.initialize()
+    try:
+        tokens = await store.get_today_tokens(
+            account_id="acct-1",
+            user_id="user-1",
+            user_date="2026-05-12",
+            tz=UTC,
+        )
+        retrievals = await store.get_today_retrievals(
+            account_id="acct-1",
+            user_id="user-1",
+            user_date="2026-05-12",
+            tz=UTC,
+        )
+        commits = await store.get_context_commit_heatmap(
+            account_id="acct-1",
+            user_id="user-1",
+            start_user_date="2026-05-12",
+            end_user_date="2026-05-12",
+            bucket="hour",
+            tz=UTC,
+        )
+        before = await store.query_audit_logs(account_id="acct-1", page_size=10)
+
+        assert tokens["vlm_input"] == 11
+        assert retrievals["find"] == 2
+        assert any(row["session_commit"] == 3 for row in commits)
+        assert before["items"][0]["request_id"] == "v4-request"
+        assert before["items"][0]["error_code"] is None
+        assert before["items"][0]["error_message"] is None
+        assert before["items"][0]["error_details"] is None
+
+        await store.record_batch(
+            [
+                _event(
+                    "http.request",
+                    {
+                        "request_id": "new-error",
+                        "method": "GET",
+                        "route": "/api/v1/tasks/{task_id}",
+                        "status": "404",
+                        "duration_seconds": 0.01,
+                        "error_code": "NOT_FOUND",
+                        "error_message": "Task was not found",
+                        "error_details": {"task_id": "missing"},
+                    },
+                )
+            ]
+        )
+        after = await store.query_audit_logs(account_id="acct-1", page_size=10)
+        inserted = next(item for item in after["items"] if item["request_id"] == "new-error")
+        assert inserted["error_code"] == "NOT_FOUND"
+        assert inserted["error_message"] == "Task was not found"
+        assert inserted["error_details"] == {"task_id": "missing"}
+        assert {item["request_id"] for item in after["items"]} == {
+            "v4-request",
+            "new-error",
+        }
+    finally:
+        await store.close()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(request_audit)")}
+        assert {"error_code", "error_message", "error_details"} <= columns
+        version = conn.execute("SELECT value FROM _schema_meta WHERE key = 'version'").fetchone()
+        assert version == ("5",)
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_sqlite_usage_audit_store_rejects_unhandled_future_migration_without_data_loss(
+    tmp_path, monkeypatch
+):
+    db_path = tmp_path / "usage.sqlite3"
+    _create_v4_usage_audit_db(db_path)
+
+    store = SQLiteUsageAuditStore(db_path)
+    await store.initialize()
+    await store.close()
+
+    monkeypatch.setattr(sqlite_store_module, "SCHEMA_VERSION", 6)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="No usage/audit schema migration path from version 5 to 6",
+        ):
+            SQLiteUsageAuditStore._migrate_legacy_sync(conn)
+
+        assert conn.execute("SELECT COUNT(*) FROM request_audit").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM usage_token_hourly").fetchone()[0] == 1
+        version = conn.execute("SELECT value FROM _schema_meta WHERE key = 'version'").fetchone()
+        assert version[0] == "5"
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_sqlite_usage_audit_store_handles_malformed_error_details(tmp_path):
+    db_path = tmp_path / "usage.sqlite3"
+    store = SQLiteUsageAuditStore(db_path)
+    await store.initialize()
+    try:
+        assert store._conn is not None
+        store._conn.execute(
+            """
+            INSERT INTO request_audit (
+                request_id, account_id, user_id, method, route, api_type,
+                status_code, duration_ms, error_code, error_message,
+                error_details, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "malformed",
+                "acct-1",
+                "user-1",
+                "GET",
+                "/api/v1/tasks/{task_id}",
+                "tasks",
+                404,
+                1.0,
+                "NOT_FOUND",
+                "Task was not found",
+                "not-json",
+                "2026-05-12T01:02:03+00:00",
+            ),
+        )
+
+        audit = await store.query_audit_logs(account_id="acct-1")
+        assert audit["items"][0]["error_details"] is None
+    finally:
+        await store.close()
 
 
 @pytest.mark.asyncio

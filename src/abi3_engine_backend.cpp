@@ -241,6 +241,31 @@ bool py_to_int64_vector(PyObject* obj, std::vector<int64_t>* out) {
   return true;
 }
 
+bool py_to_uint64_vector(PyObject* obj, std::vector<uint64_t>* out) {
+  const Py_ssize_t size = PySequence_Size(obj);
+  if (size < 0) {
+    raise_type_error("Expected a sequence of unsigned integers");
+    return false;
+  }
+
+  out->clear();
+  out->reserve(static_cast<size_t>(size));
+  for (Py_ssize_t i = 0; i < size; ++i) {
+    PyObject* item = PySequence_GetItem(obj, i);
+    if (item == nullptr) {
+      return false;
+    }
+    uint64_t value = 0;
+    const bool ok = py_to_uint64(item, &value);
+    Py_DECREF(item);
+    if (!ok) {
+      return false;
+    }
+    out->push_back(value);
+  }
+  return true;
+}
+
 PyObject* float_vector_to_py(const std::vector<float>& values) {
   PyObject* list = PyList_New(static_cast<Py_ssize_t>(values.size()));
   if (list == nullptr) {
@@ -292,6 +317,22 @@ PyObject* uint64_vector_to_py(const std::vector<uint64_t>& values) {
   return list;
 }
 
+PyObject* uint32_vector_to_py(const std::vector<uint32_t>& values) {
+  PyObject* list = PyList_New(static_cast<Py_ssize_t>(values.size()));
+  if (list == nullptr) {
+    return nullptr;
+  }
+  for (Py_ssize_t i = 0; i < static_cast<Py_ssize_t>(values.size()); ++i) {
+    PyObject* item = PyLong_FromUnsignedLong(values[static_cast<size_t>(i)]);
+    if (item == nullptr) {
+      Py_DECREF(list);
+      return nullptr;
+    }
+    PyList_SetItem(list, i, item);
+  }
+  return list;
+}
+
 PyObject* value_to_py(const vdb::Value& value, vdb::FieldType field_type) {
   switch (field_type) {
     case vdb::FieldType::INT64:
@@ -318,6 +359,13 @@ PyObject* value_to_py(const vdb::Value& value, vdb::FieldType field_type) {
       }
       break;
     case vdb::FieldType::STRING:
+      if (std::holds_alternative<std::string>(value)) {
+        const auto& text = std::get<std::string>(value);
+        return PyUnicode_FromStringAndSize(
+            text.data(), static_cast<Py_ssize_t>(text.size()));
+      }
+      break;
+    case vdb::FieldType::TEXT:
       if (std::holds_alternative<std::string>(value)) {
         const auto& text = std::get<std::string>(value);
         return PyUnicode_FromStringAndSize(
@@ -392,7 +440,8 @@ bool py_to_field_value(PyObject* obj, vdb::FieldType data_type,
       return true;
     }
     case vdb::FieldType::STRING:
-    case vdb::FieldType::BINARY: {
+    case vdb::FieldType::BINARY:
+    case vdb::FieldType::TEXT: {
       std::string value;
       if (!py_to_string(obj, &value, true)) {
         return false;
@@ -505,6 +554,9 @@ bool py_to_field_type(PyObject* obj, vdb::FieldType* out) {
     case 8:
       *out = vdb::FieldType::LIST_FLOAT32;
       return true;
+    case 9:
+      *out = vdb::FieldType::TEXT;
+      return true;
     default:
       raise_value_error("Unsupported field type");
       return false;
@@ -548,6 +600,16 @@ bool parse_schema_fields(PyObject* fields_obj,
         !py_to_field_type(type_obj, &field.data_type)) {
       Py_DECREF(item);
       return false;
+    }
+
+    PyObject* legacy_type_obj = PyDict_GetItemString(item, "legacy_data_type");
+    if (legacy_type_obj != nullptr) {
+      vdb::FieldType legacy_type;
+      if (!py_to_field_type(legacy_type_obj, &legacy_type)) {
+        Py_DECREF(item);
+        return false;
+      }
+      field.legacy_data_type = legacy_type;
     }
 
     const long field_id = PyLong_AsLong(id_obj);
@@ -737,6 +799,14 @@ bool parse_search_request(PyObject* obj, vdb::SearchRequest* request) {
   }
   Py_XDECREF(value);
 
+  if (!get_named_value(obj, "time_decay", &value, &found)) {
+    return false;
+  }
+  if (found && !py_to_string(value, &request->time_decay, false)) {
+    Py_DECREF(value);
+    return false;
+  }
+  Py_XDECREF(value);
   return true;
 }
 
@@ -1001,10 +1071,13 @@ PyObject* py_bytes_row_deserialize(PyObject*, PyObject* args) {
     return nullptr;
   }
 
-  std::string payload;
-  if (!py_to_string(payload_obj, &payload, true)) {
+  char* payload_data = nullptr;
+  Py_ssize_t payload_size = 0;
+  if (PyBytes_AsStringAndSize(payload_obj, &payload_data, &payload_size) < 0) {
     return nullptr;
   }
+  // The call arguments keep these immutable bytes alive while the GIL is released.
+  const std::string_view payload(payload_data, static_cast<size_t>(payload_size));
 
   PyObject* result = PyDict_New();
   if (result == nullptr) {
@@ -1054,10 +1127,12 @@ PyObject* py_bytes_row_deserialize_field(PyObject*, PyObject* args) {
     return nullptr;
   }
 
-  std::string payload;
-  if (!py_to_string(payload_obj, &payload, true)) {
+  char* payload_data = nullptr;
+  Py_ssize_t payload_size = 0;
+  if (PyBytes_AsStringAndSize(payload_obj, &payload_data, &payload_size) < 0) {
     return nullptr;
   }
+  const std::string_view payload(payload_data, static_cast<size_t>(payload_size));
 
   const auto* meta = handle->schema->get_field_meta(field_name);
   if (meta == nullptr) {
@@ -1109,6 +1184,108 @@ PyObject* build_search_result(const vdb::SearchResult& result) {
   return payload;
 }
 
+PyObject* build_filter_result(const vdb::FilterResult& result) {
+  PyObject* payload = PyDict_New();
+  if (payload == nullptr) {
+    return nullptr;
+  }
+
+  PyObject* eligible_count =
+      PyLong_FromUnsignedLongLong(result.eligible_count);
+  PyObject* bitset_words = uint32_vector_to_py(result.bitset_words);
+  PyObject* native_filter_token =
+      PyLong_FromUnsignedLongLong(result.native_filter_token);
+  if (eligible_count == nullptr || bitset_words == nullptr ||
+      native_filter_token == nullptr) {
+    Py_XDECREF(eligible_count);
+    Py_XDECREF(bitset_words);
+    Py_XDECREF(native_filter_token);
+    Py_DECREF(payload);
+    return nullptr;
+  }
+
+  PyDict_SetItemString(payload, "eligible_count", eligible_count);
+  PyDict_SetItemString(payload, "bitset_words", bitset_words);
+  PyDict_SetItemString(payload, "native_filter_token", native_filter_token);
+  Py_DECREF(eligible_count);
+  Py_DECREF(bitset_words);
+  Py_DECREF(native_filter_token);
+  return payload;
+}
+
+PyObject* build_packed_filter_result(const vdb::FilterResult& result) {
+  PyObject* payload = PyDict_New();
+  if (payload == nullptr) {
+    return nullptr;
+  }
+
+  if (result.bitset_words.size() >
+      static_cast<size_t>(PY_SSIZE_T_MAX) / sizeof(uint32_t)) {
+    Py_DECREF(payload);
+    PyErr_SetString(PyExc_OverflowError, "Packed filter bitmap is too large");
+    return nullptr;
+  }
+
+  // Encode explicitly instead of exposing the host byte order. This ABI is
+  // consumed with NumPy dtype "<u4" before the bitmap is copied to a device.
+  const Py_ssize_t packed_size = static_cast<Py_ssize_t>(
+      result.bitset_words.size() * sizeof(uint32_t));
+  PyObject* bitset_words_le =
+      PyBytes_FromStringAndSize(nullptr, packed_size);
+  if (bitset_words_le == nullptr) {
+    Py_DECREF(payload);
+    return nullptr;
+  }
+  char* packed_words = PyBytes_AsString(bitset_words_le);
+  if (packed_words == nullptr) {
+    Py_DECREF(bitset_words_le);
+    Py_DECREF(payload);
+    return nullptr;
+  }
+  auto pack_words = [&]() {
+    for (size_t index = 0; index < result.bitset_words.size(); ++index) {
+      const uint32_t word = result.bitset_words[index];
+      const size_t offset = index * sizeof(uint32_t);
+      packed_words[offset] = static_cast<char>(word & 0xffU);
+      packed_words[offset + 1] = static_cast<char>((word >> 8U) & 0xffU);
+      packed_words[offset + 2] = static_cast<char>((word >> 16U) & 0xffU);
+      packed_words[offset + 3] = static_cast<char>((word >> 24U) & 0xffU);
+    }
+  };
+  if (result.bitset_words.size() >= 256) {
+    call_without_gil(pack_words);
+  } else {
+    pack_words();
+  }
+
+  PyObject* eligible_count =
+      PyLong_FromUnsignedLongLong(result.eligible_count);
+  PyObject* native_filter_token =
+      PyLong_FromUnsignedLongLong(result.native_filter_token);
+  if (eligible_count == nullptr || native_filter_token == nullptr) {
+    Py_XDECREF(eligible_count);
+    Py_DECREF(bitset_words_le);
+    Py_XDECREF(native_filter_token);
+    Py_DECREF(payload);
+    return nullptr;
+  }
+
+  if (PyDict_SetItemString(payload, "eligible_count", eligible_count) < 0 ||
+      PyDict_SetItemString(payload, "bitset_words_le", bitset_words_le) < 0 ||
+      PyDict_SetItemString(payload, "native_filter_token",
+                           native_filter_token) < 0) {
+    Py_DECREF(eligible_count);
+    Py_DECREF(bitset_words_le);
+    Py_DECREF(native_filter_token);
+    Py_DECREF(payload);
+    return nullptr;
+  }
+  Py_DECREF(eligible_count);
+  Py_DECREF(bitset_words_le);
+  Py_DECREF(native_filter_token);
+  return payload;
+}
+
 PyObject* build_state_result(const vdb::StateResult& result) {
   PyObject* payload = PyDict_New();
   if (payload == nullptr) {
@@ -1156,13 +1333,14 @@ PyObject* py_init_logging(PyObject*, PyObject* args, PyObject* kwargs) {
 
 PyObject* py_new_index_engine(PyObject*, PyObject* args) {
   const char* path_or_json = nullptr;
-  if (!PyArg_ParseTuple(args, "s", &path_or_json)) {
+  int normalize_vector = 0;
+  if (!PyArg_ParseTuple(args, "s|p", &path_or_json, &normalize_vector)) {
     return nullptr;
   }
 
   try {
-    return PyCapsule_New(new vdb::IndexEngine(path_or_json), kIndexCapsuleName,
-                         index_capsule_destructor);
+    return PyCapsule_New(new vdb::IndexEngine(path_or_json, normalize_vector != 0),
+                         kIndexCapsuleName, index_capsule_destructor);
   } catch (const std::exception& exc) {
     raise_runtime_error(exc.what());
     return nullptr;
@@ -1223,6 +1401,70 @@ PyObject* py_index_engine_delete_data(PyObject*, PyObject* args) {
   }
 }
 
+PyObject* py_index_engine_rebuild_scalar_index(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* scalar_index_json = nullptr;
+  PyObject* items = nullptr;
+  if (!PyArg_ParseTuple(args, "OsO", &capsule, &scalar_index_json, &items)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  std::unique_ptr<PyObject, decltype(&Py_DecRef)> iterator(PyObject_GetIter(items),
+                                                        Py_DecRef);
+  if (!iterator) {
+    return nullptr;
+  }
+
+  try {
+    // Bound the native input independently of the Store's encoded page size.
+    // A single oversized row is allowed so every nonempty batch makes progress.
+    auto read_batch = [&](std::vector<vdb::AddDataRequest>& batch) {
+      constexpr size_t kMaxRows = 1024;
+      constexpr size_t kMaxBytes = 1024 * 1024;
+      const auto gil = PyGILState_Ensure();
+      try {
+        batch.clear();
+        size_t bytes = 0;
+        while (batch.size() < kMaxRows && bytes < kMaxBytes) {
+          std::unique_ptr<PyObject, decltype(&Py_DecRef)> item(
+              PyIter_Next(iterator.get()), Py_DecRef);
+          if (!item) {
+            if (PyErr_Occurred()) {
+              throw std::runtime_error("Failed to read scalar index rows");
+            }
+            break;
+          }
+          vdb::AddDataRequest request;
+          if (!parse_add_request(item.get(), &request)) {
+            throw std::runtime_error("Invalid scalar index row");
+          }
+          bytes += request.fields_str.size();
+          batch.push_back(std::move(request));
+        }
+      } catch (...) {
+        PyGILState_Release(gil);
+        throw;
+      }
+      PyGILState_Release(gil);
+      return !batch.empty();
+    };
+    const int result = call_without_gil([&]() {
+      return engine->rebuild_scalar_index(scalar_index_json, read_batch);
+    });
+    return PyLong_FromLong(result);
+  } catch (const std::exception& exc) {
+    if (!PyErr_Occurred()) {
+      raise_runtime_error(exc.what());
+    }
+    return nullptr;
+  }
+}
+
 PyObject* py_index_engine_search(PyObject*, PyObject* args) {
   PyObject* capsule = nullptr;
   PyObject* request_obj = nullptr;
@@ -1244,6 +1486,216 @@ PyObject* py_index_engine_search(PyObject*, PyObject* args) {
     const vdb::SearchResult result =
         call_without_gil([&]() { return engine->search(request); });
     return build_search_result(result);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
+PyObject* py_index_engine_search_with_filter_token(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  PyObject* request_obj = nullptr;
+  unsigned long long filter_token = 0;
+  if (!PyArg_ParseTuple(args, "OOK", &capsule, &request_obj,
+                        &filter_token)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  vdb::SearchRequest request;
+  if (!parse_search_request(request_obj, &request)) {
+    return nullptr;
+  }
+
+  try {
+    const auto result = call_without_gil([&]() {
+      return engine->search_with_filter_token(
+          request, static_cast<uint64_t>(filter_token));
+    });
+    if (!result.has_value()) {
+      Py_RETURN_NONE;
+    }
+    return build_search_result(*result);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
+PyObject* py_index_engine_set_filter_layout(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  PyObject* labels_obj = nullptr;
+  if (!PyArg_ParseTuple(args, "OO", &capsule, &labels_obj)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  std::vector<uint64_t> ordered_labels;
+  if (!py_to_uint64_vector(labels_obj, &ordered_labels)) {
+    return nullptr;
+  }
+
+  try {
+    const int result = call_without_gil(
+        [&]() { return engine->set_filter_layout(ordered_labels); });
+    return PyLong_FromLong(result);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
+PyObject* py_index_engine_evaluate_filter(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* dsl = nullptr;
+  if (!PyArg_ParseTuple(args, "Os", &capsule, &dsl)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  try {
+    const vdb::FilterResult result =
+        call_without_gil([&]() { return engine->evaluate_filter(dsl); });
+    return build_filter_result(result);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
+PyObject* py_index_engine_evaluate_filter_packed(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* dsl = nullptr;
+  if (!PyArg_ParseTuple(args, "Os", &capsule, &dsl)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  try {
+    const vdb::FilterResult result =
+        call_without_gil([&]() { return engine->evaluate_filter(dsl); });
+    return build_packed_filter_result(result);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
+PyObject* py_index_engine_evaluate_filter_cached(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* dsl = nullptr;
+  unsigned long long max_cached_candidates = 0;
+  if (!PyArg_ParseTuple(args, "OsK", &capsule, &dsl,
+                        &max_cached_candidates)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  try {
+    const vdb::FilterResult result = call_without_gil([&]() {
+      return engine->evaluate_filter(
+          dsl, static_cast<uint64_t>(max_cached_candidates));
+    });
+    return build_filter_result(result);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
+PyObject* py_index_engine_evaluate_filter_cached_packed(PyObject*,
+                                                        PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* dsl = nullptr;
+  unsigned long long max_cached_candidates = 0;
+  if (!PyArg_ParseTuple(args, "OsK", &capsule, &dsl,
+                        &max_cached_candidates)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  try {
+    const vdb::FilterResult result = call_without_gil([&]() {
+      return engine->evaluate_filter(
+          dsl, static_cast<uint64_t>(max_cached_candidates));
+    });
+    return build_packed_filter_result(result);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
+PyObject* py_index_engine_evaluate_filter_for_routing(PyObject*,
+                                                      PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* dsl = nullptr;
+  unsigned long long native_threshold = 0;
+  if (!PyArg_ParseTuple(args, "OsK", &capsule, &dsl, &native_threshold)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  try {
+    const vdb::FilterResult result = call_without_gil([&]() {
+      return engine->evaluate_filter_for_routing(
+          dsl, static_cast<uint64_t>(native_threshold));
+    });
+    return build_filter_result(result);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
+PyObject* py_index_engine_evaluate_filter_for_routing_packed(
+    PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* dsl = nullptr;
+  unsigned long long native_threshold = 0;
+  if (!PyArg_ParseTuple(args, "OsK", &capsule, &dsl, &native_threshold)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  try {
+    const vdb::FilterResult result = call_without_gil([&]() {
+      return engine->evaluate_filter_for_routing(
+          dsl, static_cast<uint64_t>(native_threshold));
+    });
+    return build_packed_filter_result(result);
   } catch (const std::exception& exc) {
     raise_runtime_error(exc.what());
     return nullptr;
@@ -1466,6 +1918,33 @@ PyObject* py_store_clear_data(PyObject*, PyObject* args) {
   }
 }
 
+PyObject* store_items_to_python(
+    const std::vector<std::pair<std::string, std::string>>& items) {
+  PyObject* list = PyList_New(static_cast<Py_ssize_t>(items.size()));
+  if (list == nullptr) {
+    return nullptr;
+  }
+  for (Py_ssize_t i = 0; i < static_cast<Py_ssize_t>(items.size()); ++i) {
+    const auto& item = items[static_cast<size_t>(i)];
+    PyObject* tuple = PyTuple_New(2);
+    PyObject* key = PyUnicode_FromStringAndSize(
+        item.first.data(), static_cast<Py_ssize_t>(item.first.size()));
+    PyObject* value = PyBytes_FromStringAndSize(
+        item.second.data(), static_cast<Py_ssize_t>(item.second.size()));
+    if (tuple == nullptr || key == nullptr || value == nullptr) {
+      Py_XDECREF(tuple);
+      Py_XDECREF(key);
+      Py_XDECREF(value);
+      Py_DECREF(list);
+      return nullptr;
+    }
+    PyTuple_SetItem(tuple, 0, key);
+    PyTuple_SetItem(tuple, 1, value);
+    PyList_SetItem(list, i, tuple);
+  }
+  return list;
+}
+
 PyObject* py_store_seek_range(PyObject*, PyObject* args) {
   PyObject* capsule = nullptr;
   const char* start_key = nullptr;
@@ -1482,29 +1961,46 @@ PyObject* py_store_seek_range(PyObject*, PyObject* args) {
   try {
     const auto items = call_without_gil(
         [&]() { return store->seek_range(start_key, end_key); });
-    PyObject* list = PyList_New(static_cast<Py_ssize_t>(items.size()));
-    if (list == nullptr) {
-      return nullptr;
-    }
-    for (Py_ssize_t i = 0; i < static_cast<Py_ssize_t>(items.size()); ++i) {
-      const auto& item = items[static_cast<size_t>(i)];
-      PyObject* tuple = PyTuple_New(2);
-      PyObject* key = PyUnicode_FromStringAndSize(
-          item.first.data(), static_cast<Py_ssize_t>(item.first.size()));
-      PyObject* value = PyBytes_FromStringAndSize(
-          item.second.data(), static_cast<Py_ssize_t>(item.second.size()));
-      if (tuple == nullptr || key == nullptr || value == nullptr) {
-        Py_XDECREF(tuple);
-        Py_XDECREF(key);
-        Py_XDECREF(value);
-        Py_DECREF(list);
-        return nullptr;
-      }
-      PyTuple_SetItem(tuple, 0, key);
-      PyTuple_SetItem(tuple, 1, value);
-      PyList_SetItem(list, i, tuple);
-    }
-    return list;
+    return store_items_to_python(items);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
+PyObject* py_store_seek_range_page(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* start_key = nullptr;
+  const char* end_key = nullptr;
+  Py_ssize_t limit = 0;
+  Py_ssize_t max_bytes = 0;
+  int start_exclusive = 0;
+  if (!PyArg_ParseTuple(args, "Ossnnp", &capsule, &start_key, &end_key,
+                        &limit, &max_bytes, &start_exclusive)) {
+    return nullptr;
+  }
+  if (limit <= 0) {
+    raise_value_error("seek_range_page limit must be positive");
+    return nullptr;
+  }
+  if (max_bytes <= 0) {
+    raise_value_error("seek_range_page max_bytes must be positive");
+    return nullptr;
+  }
+
+  auto* store = capsule_to_ptr<vdb::KVStore>(capsule, kStoreCapsuleName);
+  if (store == nullptr) {
+    return nullptr;
+  }
+
+  try {
+    const auto items = call_without_gil([&]() {
+      return store->seek_range_page(start_key, end_key,
+                                    static_cast<size_t>(limit),
+                                    static_cast<size_t>(max_bytes),
+                                    start_exclusive != 0);
+    });
+    return store_items_to_python(items);
   } catch (const std::exception& exc) {
     raise_runtime_error(exc.what());
     return nullptr;
@@ -1534,8 +2030,33 @@ PyMethodDef kModuleMethods[] = {
      "Add data to the index engine."},
     {"_index_engine_delete_data", py_index_engine_delete_data, METH_VARARGS,
      "Delete data from the index engine."},
+    {"_index_engine_rebuild_scalar_index",
+     py_index_engine_rebuild_scalar_index, METH_VARARGS,
+     "Rebuild scalar fields without rebuilding the vector index."},
     {"_index_engine_search", py_index_engine_search, METH_VARARGS,
      "Search the index engine."},
+    {"_index_engine_search_with_filter_token",
+     py_index_engine_search_with_filter_token, METH_VARARGS,
+     "Search using a retained native scalar filter bitmap."},
+    {"_index_engine_set_filter_layout", py_index_engine_set_filter_layout,
+     METH_VARARGS, "Register an external label order for scalar filters."},
+    {"_index_engine_evaluate_filter", py_index_engine_evaluate_filter,
+     METH_VARARGS, "Evaluate a scalar filter in an external label order."},
+    {"_index_engine_evaluate_filter_packed",
+     py_index_engine_evaluate_filter_packed, METH_VARARGS,
+     "Evaluate a scalar filter and return little-endian packed words."},
+    {"_index_engine_evaluate_filter_cached",
+     py_index_engine_evaluate_filter_cached, METH_VARARGS,
+     "Evaluate and optionally retain a native scalar filter bitmap."},
+    {"_index_engine_evaluate_filter_cached_packed",
+     py_index_engine_evaluate_filter_cached_packed, METH_VARARGS,
+     "Evaluate and retain a filter while returning packed words."},
+    {"_index_engine_evaluate_filter_for_routing",
+     py_index_engine_evaluate_filter_for_routing, METH_VARARGS,
+     "Evaluate a scalar filter for an adaptive native/GPU route decision."},
+    {"_index_engine_evaluate_filter_for_routing_packed",
+     py_index_engine_evaluate_filter_for_routing_packed, METH_VARARGS,
+     "Route a scalar filter while returning little-endian packed words."},
     {"_index_engine_dump", py_index_engine_dump, METH_VARARGS,
      "Dump index state to disk."},
     {"_index_engine_get_state", py_index_engine_get_state, METH_VARARGS,
@@ -1556,6 +2077,8 @@ PyMethodDef kModuleMethods[] = {
      "Clear the store."},
     {"_store_seek_range", py_store_seek_range, METH_VARARGS,
      "Read a key range from the store."},
+    {"_store_seek_range_page", py_store_seek_range_page, METH_VARARGS,
+     "Read a bounded page from a key range."},
     {nullptr, nullptr, 0, nullptr},
 };
 

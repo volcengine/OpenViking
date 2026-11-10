@@ -1,7 +1,7 @@
 """openviking-server init - interactive setup wizard for OpenViking.
 
 Guides users through model selection and configuration, with a focus on
-local deployment via Ollama or llama.cpp for macOS / Apple Silicon beginners.
+local deployment via Ollama for macOS / Apple Silicon beginners.
 """
 
 from __future__ import annotations
@@ -9,11 +9,17 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import re
+import secrets
+import select
+import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from openviking_cli.utils.config.consts import DEFAULT_CONFIG_DIR, OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.ollama import (
@@ -29,9 +35,31 @@ from openviking_cli.utils.ollama import (
 _DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 _DEFAULT_KIMI_BASE_URL = "https://api.kimi.com/coding"
 _DEFAULT_GLM_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
-_DEFAULT_CODEX_MODEL = "gpt-5.4"
+_DEFAULT_CODEX_MODEL = "gpt-5.6-terra"
 _DEFAULT_KIMI_MODEL = "kimi-code"
 _DEFAULT_GLM_MODEL = "glm-4.6v"
+
+# Sentinel returned by flows that hand the user off to manual config editing;
+# distinguishes "handled elsewhere" from "cancelled" (None).
+_CUSTOM_SETUP = object()
+
+# Sentinel for "user chose to skip the VLM" (embedding-only setup).
+_SKIP_VLM = object()
+
+# Sentinel for "user navigated back to the previous step" (← key / [0] Back).
+_GO_BACK = object()
+
+# Free-text equivalent of ← / [0] Back inside prompts that take typed input.
+_BACK_TOKEN = "!back"
+
+# rich ships with typer (a core dependency); degrade gracefully without it.
+try:
+    from rich.console import Console as _RichConsole
+    from rich.panel import Panel as _RichPanel
+
+    _console: Any = _RichConsole(highlight=False)
+except ImportError:  # pragma: no cover
+    _console = None
 
 # ---------------------------------------------------------------------------
 # ANSI helpers (same pattern as doctor.py)
@@ -69,8 +97,42 @@ def _cyan(t: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _prompt_choice(prompt: str, options: list[tuple[str, str]], default: int = 1) -> int:
-    """Display numbered options and return 1-based selection index."""
+def _prompt_choice(
+    prompt: str,
+    options: list[tuple[str, str]],
+    default: int = 1,
+    *,
+    allow_back: bool = False,
+) -> int:
+    """Display a selectable option list and return the 1-based selection index.
+
+    On an interactive TTY this renders an arrow-key menu (↑/↓ or j/k to move,
+    digits to jump, Enter or → to confirm, ← to go back when *allow_back* is
+    set). Anywhere else (pipes, tests, dumb terminals) it falls back to the
+    classic numbered prompt, where ``0`` means back.
+
+    Returns 0 when *allow_back* is set and the user navigated back.
+    """
+    if _stdin_stdout_tty() and os.environ.get("TERM", "") != "dumb":
+        try:
+            import termios
+        except ImportError:
+            return _prompt_choice_numbered(prompt, options, default, allow_back=allow_back)
+        try:
+            return _prompt_choice_interactive(prompt, options, default, allow_back=allow_back)
+        except (OSError, termios.error):
+            pass
+    return _prompt_choice_numbered(prompt, options, default, allow_back=allow_back)
+
+
+def _prompt_choice_numbered(
+    prompt: str,
+    options: list[tuple[str, str]],
+    default: int = 1,
+    *,
+    allow_back: bool = False,
+) -> int:
+    """Numbered fallback selector (non-TTY, pipes, tests)."""
     print(f"\n  {_bold(prompt)}\n")
     for i, (label, desc) in enumerate(options, 1):
         marker = "  "
@@ -78,21 +140,117 @@ def _prompt_choice(prompt: str, options: list[tuple[str, str]], default: int = 1
         if desc:
             line += f"  {_dim(desc)}"
         print(line)
+    if allow_back:
+        print(f"    [0] Back  {_dim('(previous step)')}")
 
     while True:
         try:
             raw = input(f"\n  Select [{default}]: ").strip()
-        except EOFError:
+        except (EOFError, OSError):
             return default
         if not raw:
             return default
         try:
             choice = int(raw)
+            if allow_back and choice == 0:
+                return 0
             if 1 <= choice <= len(options):
                 return choice
         except ValueError:
             pass
-        print(f"  {_red('Please enter a number between 1 and ' + str(len(options)))}")
+        low = "0" if allow_back else "1"
+        print(f"  {_red('Please enter a number between ' + low + ' and ' + str(len(options)))}")
+
+
+def _read_menu_key(fd: int) -> str:
+    """Read one key press from *fd*, decoding arrow-key escape sequences.
+
+    Reads at the file-descriptor level (``os.read``) — ``sys.stdin`` is
+    buffered and its readahead would consume escape-sequence bytes behind
+    ``select``'s back.
+    """
+    data = os.read(fd, 1)
+    if data != b"\x1b":
+        return data.decode("utf-8", errors="ignore")
+    if not select.select([fd], [], [], 0.05)[0]:
+        return "\x1b"
+    if os.read(fd, 1) != b"[":
+        return "\x1b"
+    if not select.select([fd], [], [], 0.05)[0]:
+        return "\x1b"
+    return "\x1b[" + os.read(fd, 1).decode("utf-8", errors="ignore")
+
+
+def _prompt_choice_interactive(
+    prompt: str,
+    options: list[tuple[str, str]],
+    default: int = 1,
+    *,
+    allow_back: bool = False,
+) -> int:
+    """Arrow-key menu: ↑/↓/j/k move, digits jump, Enter/→ confirm, ← back."""
+    import termios
+    import tty
+
+    n = len(options)
+    idx = max(0, min(n - 1, default - 1))
+    out = sys.stdout
+    went_back = False
+
+    def render(first: bool) -> None:
+        if not first:
+            out.write(f"\x1b[{n}A")
+        for i, (label, desc) in enumerate(options):
+            out.write("\x1b[2K")
+            if i == idx:
+                line = f"  \x1b[1;36m❯ {label}\x1b[0m"
+            else:
+                line = f"    {label}"
+            if desc:
+                line += f"  \x1b[2m{desc}\x1b[0m"
+            out.write(line + "\n")
+        out.flush()
+
+    hint = "↑/↓ move · enter select"
+    if allow_back:
+        hint += " · ← back"
+    print(f"\n  {_bold(prompt)}  {_dim(hint)}\n")
+    render(True)
+
+    fd = sys.stdin.fileno()
+    old_attrs = termios.tcgetattr(fd)
+    while True:
+        tty.setraw(fd)
+        try:
+            key = _read_menu_key(fd)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
+        if key in ("\r", "\n", "\x04", "\x1b[C"):  # Enter / Ctrl-D / → confirm
+            break
+        if key == "\x03":
+            raise KeyboardInterrupt
+        if allow_back and key == "\x1b[D":  # ← back to previous step
+            went_back = True
+            break
+        if key in ("\x1b[A", "k"):
+            idx = (idx - 1) % n
+        elif key in ("\x1b[B", "j", "\t"):
+            idx = (idx + 1) % n
+        elif key.isdigit():
+            jump = 9 if key == "0" else int(key) - 1
+            if jump < n:
+                idx = jump
+        render(False)
+
+    # Collapse the menu into a single confirmation line.
+    out.write(f"\x1b[{n}A\x1b[0J")
+    if went_back:
+        out.write("  \x1b[2m← back\x1b[0m\n")
+        out.flush()
+        return 0
+    out.write(f"  \x1b[1;36m❯\x1b[0m {options[idx][0]}\n")
+    out.flush()
+    return idx + 1
 
 
 def _mask_secret(value: str, prefix: int = 7, suffix: int = 4) -> str:
@@ -162,15 +320,20 @@ def _masked_input(prompt: str) -> str:
     return value
 
 
-def _prompt_required_input(prompt: str, default: str | None = None, *, mask: bool = False) -> str:
-    """Prompt for a required free-text value. When ``mask`` is True, echo ``*`` per char."""
+def _prompt_required_input(
+    prompt: str, default: str | None = None, *, mask: bool = False, allow_back: bool = False
+) -> str | object:
+    """Prompt for a required free-text value. When ``mask`` is True, echo ``*``
+    per char. With ``allow_back``, typing ``!back`` returns ``_GO_BACK``."""
     reader = _masked_input if mask else input
     while True:
         try:
             prompt_text = f"  {prompt} [{default}]: " if default is not None else f"  {prompt}: "
             raw = reader(prompt_text).strip()
-        except EOFError:
+        except (EOFError, OSError):
             return default or ""
+        if allow_back and raw == _BACK_TOKEN:
+            return _GO_BACK
         if not raw and default is not None:
             return default
         if raw:
@@ -178,19 +341,58 @@ def _prompt_required_input(prompt: str, default: str | None = None, *, mask: boo
         print(f"  {_red(prompt + ' is required')}")
 
 
-def _prompt_api_key(prompt: str = "API Key") -> str:
+def _prompt_api_key(prompt: str = "API Key", *, allow_back: bool = False) -> str | object:
     """Prompt for an API key with inline masked echo (no extra confirmation line)."""
-    return _prompt_required_input(prompt, mask=True)
+    return _prompt_required_input(prompt, mask=True, allow_back=allow_back)
 
 
-def _prompt_required_int(prompt: str, default: int | None = None) -> int | None:
-    """Prompt for a required integer value."""
+def _stdin_stdout_tty() -> bool:
+    """True when both stdin and stdout are interactive TTYs."""
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+# Environment variables that commonly carry each provider's API key, keyed by
+# the internal provider string (BytePlus shares "volcengine").
+_PROVIDER_ENV_KEYS: dict[str, list[str]] = {
+    "volcengine": ["ARK_API_KEY"],
+    "openai": ["OPENAI_API_KEY"],
+    "kimi": ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+    "glm": ["GLM_API_KEY", "ZHIPUAI_API_KEY"],
+}
+
+
+def _prompt_api_key_with_env(
+    env_vars: list[str] | None, prompt: str = "API Key", *, allow_back: bool = False
+) -> str | object:
+    """Prompt for an API key, offering any matching environment variable first.
+
+    Only engages the env-var shortcut on interactive TTYs so scripted or
+    piped runs keep the plain prompt behavior.
+    """
+    if env_vars and _stdin_stdout_tty():
+        for var in env_vars:
+            value = os.environ.get(var, "").strip()
+            if value and _prompt_confirm(f"Found ${var} ({_mask_secret(value)}). Use it?"):
+                return value
+    return _prompt_api_key(prompt, allow_back=allow_back)
+
+
+def _prompt_required_int(
+    prompt: str, default: int | None = None, *, allow_back: bool = False
+) -> int | None | object:
+    """Prompt for a required integer value. With ``allow_back``, typing
+    ``!back`` returns ``_GO_BACK``."""
     while True:
         try:
             prompt_text = f"  {prompt} [{default}]: " if default is not None else f"  {prompt}: "
             raw = input(prompt_text).strip()
-        except EOFError:
+        except (EOFError, OSError):
             return default
+        if allow_back and raw == _BACK_TOKEN:
+            return _GO_BACK
         if not raw:
             if default is not None:
                 return default
@@ -207,16 +409,37 @@ def _prompt_confirm(prompt: str, default: bool = True) -> bool:
     hint = "Y/n" if default else "y/N"
     try:
         raw = input(f"  {prompt} [{hint}]: ").strip().lower()
-    except EOFError:
+    except (EOFError, OSError):
         return default
     if not raw:
         return default
     return raw in ("y", "yes")
 
 
-def _configured_hint(enabled: bool) -> str:
-    """Return a non-sensitive summary label for setup output."""
-    return "configured" if enabled else _dim("(not configured)")
+def _rule(title: str) -> None:
+    """Print a section rule (rich when available, plain bold header otherwise)."""
+    if _console is not None:
+        _console.print()
+        _console.rule(f"[bold cyan]{title}[/bold cyan]", style="dim cyan")
+    else:
+        print(f"\n  {_bold(title)}")
+
+
+def _print_banner() -> None:
+    """Print the wizard banner."""
+    if _console is not None:
+        _console.print()
+        _console.print(
+            _RichPanel.fit(
+                "[bold cyan]OpenViking[/bold cyan] [bold]Setup[/bold]\n"
+                "[dim]Context database for AI agents — data in, context out[/dim]",
+                border_style="cyan",
+                padding=(0, 2),
+            )
+        )
+    else:
+        print(f"\n  {_bold('OpenViking Setup')}")
+        print(f"  {'=' * 16}")
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +480,35 @@ def _get_system_ram_gb() -> int:
         return stat.ullTotalPhys // (1024**3)
     except Exception:
         return 0
+
+
+def _parse_size_gb(size_hint: str) -> float:
+    """Parse a human size hint like ``~4.7 GB`` or ``~639 MB`` into GB."""
+    match = re.search(r"([\d.]+)\s*(GB|MB)", size_hint, re.IGNORECASE)
+    if not match:
+        return 0.0
+    value = float(match.group(1))
+    return value / 1024 if match.group(2).upper() == "MB" else value
+
+
+def _check_disk_before_pull(required_gb: float) -> bool:
+    """Return True when there is enough free disk for a download of *required_gb*.
+
+    When space looks too tight (less than the download plus a 5 GB margin),
+    warn and let the user decide.
+    """
+    if required_gb <= 0:
+        return True
+    try:
+        free_gb = shutil.disk_usage(Path.home()).free / (1024**3)
+    except OSError:
+        return True
+    if free_gb >= required_gb + 5:
+        return True
+    print(
+        f"  {_yellow(f'Low disk space: {free_gb:.0f} GB free, download needs ~{required_gb:.0f} GB.')}"
+    )
+    return _prompt_confirm("Continue anyway?", default=False)
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +555,33 @@ def _ensure_ollama() -> bool:
         msg = result.stderr_output or result.message
         print(_yellow(f"failed ({msg})"))
     return result.success
+
+
+def _ensure_model_pulled(
+    model: str,
+    size_hint: str,
+    ollama_running: bool,
+    available_models: list[str],
+    *,
+    ask: bool = True,
+) -> None:
+    """Pull *model* via Ollama when missing.
+
+    With ``ask=True`` the user confirms each pull (with a disk-space check);
+    ``ask=False`` is for flows where the user already approved the batch.
+    """
+    if not ollama_running or is_model_available(model, available_models):
+        return
+    if ask:
+        if not _prompt_confirm(f"'{model}' not found locally. Pull now? ({size_hint})"):
+            return
+        if not _check_disk_before_pull(_parse_size_gb(size_hint)):
+            return
+    print()
+    if not ollama_pull_model(model):
+        print(f"  {_yellow('Pull failed. You can pull it later: ollama pull ' + model)}")
+    else:
+        print(f"  {_green('OK')} {model} pulled successfully")
 
 
 def _ensure_codex_auth() -> bool:
@@ -388,11 +667,10 @@ EMBEDDING_PRESETS: list[EmbeddingPreset] = [
 ]
 
 VLM_PRESETS: list[VLMPreset] = [
-    VLMPreset("Qwen 3.5 2B", "qwen3.5:2b", "ollama/qwen3.5:2b", "~2.7 GB", 4),
     VLMPreset("Qwen 3.5 4B", "qwen3.5:4b", "ollama/qwen3.5:4b", "~3.4 GB", 8),
     VLMPreset("Qwen 3.5 9B", "qwen3.5:9b", "ollama/qwen3.5:9b", "~6.6 GB", 16),
-    VLMPreset("Qwen 3.5 27B", "qwen3.5:27b", "ollama/qwen3.5:27b", "~17 GB", 32),
-    VLMPreset("Qwen 3.5 35B", "qwen3.5:35b", "ollama/qwen3.5:35b", "~24 GB", 48),
+    VLMPreset("Qwen 3.6 27B", "qwen3.6:27b", "ollama/qwen3.6:27b", "~17 GB, 256K ctx", 32),
+    VLMPreset("Qwen 3.6 35B", "qwen3.6:35b", "ollama/qwen3.6:35b", "~24 GB, 256K ctx", 48),
     VLMPreset("Qwen 3.5 122B", "qwen3.5:122b", "ollama/qwen3.5:122b", "~81 GB", 128),
     VLMPreset("Gemma 4 E2B", "gemma4:e2b", "ollama/gemma4:e2b", "~7.2 GB", 16),
     VLMPreset("Gemma 4 E4B", "gemma4:e4b", "ollama/gemma4:e4b", "~9.6 GB", 16),
@@ -418,16 +696,22 @@ QUERY_PLANNER_PRESETS: list[QueryPlannerPreset] = [
     ),
 ]
 
-# Recommended defaults indexed by RAM tier
+# Approximate download size of the q8 query-planner models (size_hint above
+# carries the parameter count, not the artifact size).
+_QUERY_PLANNER_DOWNLOAD_GB = 0.9
+
+# Recommended defaults indexed by RAM tier. qwen3.5:4b is the smallest VLM we
+# recommend — smaller models fail OV's memory extraction (they copy the prompt's
+# few-shot examples into fabricated memories), so there is no sub-4B tier.
 _RAM_TIERS: list[tuple[int, int, int]] = [
     # (max_ram_gb, embedding_preset_index, vlm_preset_index)
-    (8, 0, 0),  # ≤8 GB: qwen3-embedding:0.6b + qwen3.5:2b
-    (16, 0, 1),  # 8-16 GB: qwen3-embedding:0.6b + qwen3.5:4b
-    (32, 2, 2),  # 16-32 GB: qwen3-embedding:8b + qwen3.5:9b
-    (64, 2, 7),  # 32-64 GB: qwen3-embedding:8b + gemma4:e4b
+    (8, 0, 0),  # ≤8 GB: qwen3-embedding:0.6b + qwen3.5:4b
+    (16, 0, 0),  # 8-16 GB: qwen3-embedding:0.6b + qwen3.5:4b
+    (32, 2, 1),  # 16-32 GB: qwen3-embedding:8b + qwen3.5:9b
+    (64, 2, 6),  # 32-64 GB: qwen3-embedding:8b + gemma4:e4b
 ]
 _RAM_DEFAULT_EMBED = 2  # ≥64 GB: qwen3-embedding:8b
-_RAM_DEFAULT_VLM = 3  # ≥64 GB: qwen3.5:27b
+_RAM_DEFAULT_VLM = 2  # ≥64 GB: qwen3.6:27b
 
 
 def _get_recommended_indices(ram_gb: int) -> tuple[int, int]:
@@ -460,7 +744,7 @@ CLOUD_PROVIDERS: list[CloudProvider] = [
         "https://ark.cn-beijing.volces.com/api/v3",
         "doubao-embedding-vision-251215",
         1024,
-        "doubao-seed-2-0-code-preview-260215",
+        "doubao-seed-2-1-lite-260915",
     ),
     CloudProvider(
         "BytePlus",
@@ -468,7 +752,7 @@ CLOUD_PROVIDERS: list[CloudProvider] = [
         "https://ark.ap-southeast.bytepluses.com/api/v3",
         "skylark-embedding-vision-251215",
         1024,
-        "doubao-seed-2-0-code-preview-260215",
+        "seed-2-0-lite-260428",
     ),
     CloudProvider(
         "OpenAI",
@@ -481,11 +765,131 @@ CLOUD_PROVIDERS: list[CloudProvider] = [
 ]
 
 
-def _get_cloud_provider_by_label(label: str) -> CloudProvider:
-    for provider in CLOUD_PROVIDERS:
-        if provider.label == label:
-            return provider
-    raise ValueError(f"Unknown cloud provider: {label}")
+@dataclass
+class AccessPlan:
+    label: str
+    api_base: str
+    default_embedding_model: str
+    default_embedding_dim: int
+    default_vlm_model: str
+    desc: str
+
+
+# VolcEngine Ark access tiers. The two subscription plans share the same
+# default models; pay-as-you-go uses the versioned model IDs.
+VOLCENGINE_PLANS: list[AccessPlan] = [
+    AccessPlan(
+        "Agent Plan",
+        "https://ark.cn-beijing.volces.com/api/plan/v3",
+        "doubao-embedding-vision",
+        1024,
+        "doubao-seed-2.1-lite",
+        "(subscription — agent workloads)",
+    ),
+    AccessPlan(
+        "Coding Plan",
+        "https://ark.cn-beijing.volces.com/api/coding/v3",
+        "doubao-embedding-vision",
+        1024,
+        "doubao-seed-2.1-lite",
+        "(subscription — coding assistants)",
+    ),
+    AccessPlan(
+        "Pay-as-you-go API",
+        "https://ark.cn-beijing.volces.com/api/v3",
+        "doubao-embedding-vision-251215",
+        1024,
+        "doubao-seed-2-1-lite-260915",
+        "(billed by API usage)",
+    ),
+]
+
+# BytePlus ModelArk access tiers.
+BYTEPLUS_PLANS: list[AccessPlan] = [
+    AccessPlan(
+        "ModelArk Coding Plan",
+        "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+        "skylark-embedding-vision",
+        1024,
+        "dola-seed-2.0-lite",
+        "(subscription — coding assistants)",
+    ),
+    AccessPlan(
+        "Pay-as-you-go API",
+        "https://ark.ap-southeast.bytepluses.com/api/v3",
+        "skylark-embedding-vision-251215",
+        1024,
+        "seed-2-0-lite-260428",
+        "(billed by API usage)",
+    ),
+]
+
+# Cloud providers with a plan submenu, keyed by CLOUD_PROVIDERS label; the
+# domain identifies the provider's own endpoints (both share the "volcengine"
+# provider string, so the domain is what tells them apart).
+_PLAN_MENUS: dict[str, tuple[str, list[AccessPlan]]] = {
+    "VolcEngine (火山引擎)": ("volces.com", VOLCENGINE_PLANS),
+    "BytePlus": ("bytepluses.com", BYTEPLUS_PLANS),
+}
+
+
+def _plan_seed_for(current: dict[str, Any], domain: str) -> str | None:
+    """api_base worth seeding a plan menu with — only an existing endpoint on
+    the same domain, never another provider's."""
+    api_base = str(current.get("api_base") or "")
+    if current.get("provider") == "volcengine" and domain in api_base:
+        return api_base
+    return None
+
+
+def _plan_index_for(plans: list[AccessPlan], api_base: str) -> int | None:
+    """0-based *plans* index matching *api_base*, or None."""
+    for i, plan in enumerate(plans):
+        if plan.api_base == api_base:
+            return i
+    return None
+
+
+def _select_access_plan(
+    provider_label: str,
+    plans: list[AccessPlan],
+    current_api_base: str | None = None,
+    *,
+    allow_back: bool = False,
+) -> AccessPlan | object:
+    """Plan submenu. ``_GO_BACK`` when the user navigated back.
+
+    *current_api_base* seeds the default; a current endpoint that matches no
+    plan (e.g. a proxy) is offered as an extra "keep" option that preserves
+    the endpoint with the pay-as-you-go default models.
+    """
+    options = [(p.label, p.desc) for p in plans]
+    current_idx = _plan_index_for(plans, current_api_base or "")
+    keep_custom = bool(current_api_base) and current_idx is None
+    if keep_custom:
+        options.append(("Custom endpoint", f"(keep current: {current_api_base})"))
+    if current_idx is not None:
+        default = current_idx + 1
+    elif keep_custom:
+        default = len(options)
+    else:
+        default = 1
+    choice = _prompt_choice(
+        f"{provider_label} access:", options, default=default, allow_back=allow_back
+    )
+    if choice == 0:
+        return _GO_BACK
+    if keep_custom and choice == len(options):
+        payg = plans[-1]
+        return AccessPlan(
+            "Custom endpoint",
+            str(current_api_base),
+            payg.default_embedding_model,
+            payg.default_embedding_dim,
+            payg.default_vlm_model,
+            "",
+        )
+    return plans[choice - 1]
 
 
 _WIZARD_VLM_OPTIONS: list[tuple[str, str]] = [
@@ -496,7 +900,11 @@ _WIZARD_VLM_OPTIONS: list[tuple[str, str]] = [
     ("Kimi", "(Subscription API Key)"),
     ("GLM", "(Subscription API Key)"),
     ("Custom (OpenAI-compatible)", "(Any OpenAI-compatible endpoint)"),
+    ("Local via Ollama", "(no API key, runs on this machine)"),
 ]
+
+_WIZARD_VLM_OLLAMA_CHOICE = 8  # index of "Local via Ollama" in _WIZARD_VLM_OPTIONS
+_WIZARD_VLM_CUSTOM_CHOICE = 7  # index of "Custom (OpenAI-compatible)" in _WIZARD_VLM_OPTIONS
 
 
 # ---------------------------------------------------------------------------
@@ -572,89 +980,39 @@ def _build_ollama_config(
     return {
         "storage": {"workspace": workspace},
         "embedding": {
-            "dense": {
-                "provider": "ollama",
-                "model": embedding.model,
-                "api_base": "http://localhost:11434/v1",
-                "dimension": embedding.dimension,
-                "input": "text",
-            },
+            "dense": _ollama_dense_config(embedding),
         },
-        "vlm": {
-            "provider": "litellm",
-            "model": vlm.litellm_model,
-            "api_key": "no-key",
-            "api_base": "http://localhost:11434",
-            "temperature": 0.0,
-            "max_retries": 2,
-        },
+        "vlm": _ollama_vlm_config(vlm),
     }
 
 
-def _build_local_config(
-    model_name: str,
-    dimension: int,
-    workspace: str,
-    model_path: str | None = None,
-    cache_dir: str | None = None,
-    vlm_config: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Build ov.conf dict for llama.cpp local embedding setup."""
-    embedding_dense: dict[str, Any] = {
-        "provider": "local",
-        "model": model_name,
-        "dimension": dimension,
+def _ollama_dense_config(embedding: EmbeddingPreset) -> dict[str, Any]:
+    """Build the dense-embedding config block for an Ollama-served model."""
+    return {
+        "provider": "ollama",
+        "model": embedding.model,
+        "api_base": "http://localhost:11434/v1",
+        "dimension": embedding.dimension,
+        "input": "text",
     }
-    if model_path:
-        embedding_dense["model_path"] = model_path
-    if cache_dir:
-        embedding_dense["cache_dir"] = cache_dir
-
-    config: dict[str, Any] = {
-        "storage": {"workspace": workspace},
-        "embedding": {"dense": embedding_dense},
-    }
-    if vlm_config:
-        config["vlm"] = vlm_config
-    return config
 
 
-def _build_cloud_config(
-    provider: CloudProvider,
-    embedding_api_key: str,
-    embedding_model: str,
-    embedding_dim: int,
-    vlm_model: str,
-    workspace: str,
-    embedding_api_base: str | None = None,
-    vlm_provider: str | None = None,
-    vlm_api_key: str | None = None,
-    vlm_api_base: str | None = None,
-) -> dict[str, Any]:
-    resolved_vlm_provider = vlm_provider or provider.provider
-    resolved_vlm_api_base = vlm_api_base or provider.default_api_base
-    vlm_config: dict[str, Any] = {
-        "provider": resolved_vlm_provider,
-        "model": vlm_model,
-        "api_base": resolved_vlm_api_base,
+def _ollama_vlm_config(vlm: VLMPreset) -> dict[str, Any]:
+    """Build the VLM config block for an Ollama-served model.
+
+    ``extra_request_body`` raises Ollama's context window past its 4096-token
+    default (OV's memory-extraction prompt alone is ~5k tokens, so the default
+    silently truncates the conversation) and disables thinking, which otherwise
+    makes thinking models emit only reasoning and stall.
+    """
+    return {
+        "provider": "litellm",
+        "model": vlm.litellm_model,
+        "api_key": "no-key",
+        "api_base": "http://localhost:11434",
         "temperature": 0.0,
         "max_retries": 2,
-    }
-    if vlm_api_key:
-        vlm_config["api_key"] = vlm_api_key
-
-    return {
-        "storage": {"workspace": workspace},
-        "embedding": {
-            "dense": {
-                "provider": provider.provider,
-                "model": embedding_model,
-                "api_key": embedding_api_key,
-                "api_base": embedding_api_base or provider.default_api_base,
-                "dimension": embedding_dim,
-            },
-        },
-        "vlm": vlm_config,
+        "extra_request_body": {"num_ctx": 16384, "think": False},
     }
 
 
@@ -709,56 +1067,67 @@ def _next_backup_path(config_path: Path) -> Path:
         i += 1
 
 
+def _write_secure_backup(config_path: Path, backup: Path) -> None:
+    fd, raw_temp_path = tempfile.mkstemp(prefix=f".{backup.name}.", dir=backup.parent)
+    temp_path = Path(raw_temp_path)
+    try:
+        with os.fdopen(fd, "wb") as target, config_path.open("rb") as source:
+            shutil.copyfileobj(source, target)
+            target.flush()
+            os.fsync(target.fileno())
+        os.chmod(temp_path, 0o600)
+        os.replace(temp_path, backup)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
 def _write_config(config_dict: dict[str, Any], config_path: Path) -> bool:
     """Write config dict as JSON. Backs up existing file as .bak (rotates on conflict)."""
+    temp_path: Path | None = None
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, raw_temp_path = tempfile.mkstemp(prefix=f".{config_path.name}.", dir=config_path.parent)
+        temp_path = Path(raw_temp_path)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(config_dict, indent=2, ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temp_path, 0o600)
         if config_path.exists():
             backup = _next_backup_path(config_path)
-            config_path.rename(backup)
+            os.chmod(config_path, 0o600)
+            _write_secure_backup(config_path, backup)
             print(f"  {_dim('Existing config backed up to ' + str(backup))}")
-        config_path.write_text(
-            json.dumps(config_dict, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
+        os.replace(temp_path, config_path)
+        temp_path = None
+        os.chmod(config_path, 0o600)
         return True
     except OSError as exc:
         print(f"  {_red(f'Failed to write config: {exc}')}")
         return False
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
-# Wizard flows
+# Shared selection helpers
 # ---------------------------------------------------------------------------
 
 
-def _wizard_ollama() -> tuple[dict[str, Any] | None, bool]:
-    """Ollama-based local model setup flow.
-
-    Returns ``(config, ollama_running)`` so later steps (e.g. the query planner)
-    can reuse the Ollama state instead of re-running the install flow.
-    """
-    # Ensure Ollama is installed and running
-    ollama_running = _ensure_ollama()
-
-    if not ollama_running:
-        if not _prompt_confirm(
-            "Continue without Ollama? (config will be generated but models won't be pulled)",
-            default=False,
-        ):
-            return None, ollama_running
-
-    available_models = get_ollama_models() if ollama_running else []
-
-    # System RAM
-    ram_gb = _get_system_ram_gb()
-    rec_embed_idx, rec_vlm_idx = _get_recommended_indices(ram_gb)
-    if ram_gb > 0:
-        print(f"\n  {_dim(f'Detected {ram_gb} GB RAM')}")
-
-    # --- Embedding selection ---
+def _select_embedding_preset(
+    ollama_running: bool,
+    available_models: list[str],
+    rec_idx: int,
+    *,
+    allow_back: bool = False,
+) -> EmbeddingPreset | None:
+    """Interactive Ollama embedding preset selection. None when the user went back."""
     embed_options: list[tuple[str, str]] = []
     for i, p in enumerate(EMBEDDING_PRESETS):
-        rec = " *" if i == rec_embed_idx else ""
+        rec = " *" if i == rec_idx else ""
         avail = ""
         if ollama_running and is_model_available(p.model, available_models):
             avail = _green(" [downloaded]")
@@ -769,63 +1138,486 @@ def _wizard_ollama() -> tuple[dict[str, Any] | None, bool]:
             )
         )
 
-    embed_choice = _prompt_choice("Embedding model:", embed_options, default=rec_embed_idx + 1)
-    embedding = EMBEDDING_PRESETS[embed_choice - 1]
+    choice = _prompt_choice(
+        "Embedding model — powers semantic search:",
+        embed_options,
+        default=rec_idx + 1,
+        allow_back=allow_back,
+    )
+    if choice == 0:
+        return None
+    return EMBEDDING_PRESETS[choice - 1]
 
-    # Pull embedding model
-    if ollama_running and not is_model_available(embedding.model, available_models):
-        if _prompt_confirm(f"'{embedding.model}' not found locally. Pull now?"):
-            print()
-            if not ollama_pull_model(embedding.model):
-                print(
-                    f"  {_yellow('Pull failed. You can pull it later: ollama pull ' + embedding.model)}"
-                )
-            else:
-                print(f"  {_green('OK')} {embedding.model} pulled successfully")
 
-    # --- VLM selection ---
+def _select_vlm_preset(
+    ollama_running: bool,
+    available_models: list[str],
+    rec_idx: int,
+    *,
+    allow_back: bool = False,
+) -> VLMPreset | None:
+    """Interactive Ollama VLM preset selection. None when the user went back."""
     vlm_options: list[tuple[str, str]] = []
     for i, p in enumerate(VLM_PRESETS):
-        rec = " *" if i == rec_vlm_idx else ""
+        rec = " *" if i == rec_idx else ""
         avail = ""
         if ollama_running and is_model_available(p.ollama_model, available_models):
             avail = _green(" [downloaded]")
-        vlm_options.append(
-            (
-                f"{p.label}",
-                f"({p.size_hint}){avail}{rec}",
-            )
+        vlm_options.append((f"{p.label}", f"({p.size_hint}){avail}{rec}"))
+
+    choice = _prompt_choice(
+        "Vision-language model (VLM) — parses documents & images:",
+        vlm_options,
+        default=rec_idx + 1,
+        allow_back=allow_back,
+    )
+    if choice == 0:
+        return None
+    return VLM_PRESETS[choice - 1]
+
+
+def _prompt_ollama_vlm(
+    *, allow_back: bool = False, current_litellm_model: str | None = None
+) -> tuple[dict[str, Any] | None | object, bool | None]:
+    """Ollama VLM selection: ensure Ollama, pick a preset, pull it.
+
+    Returns ``(vlm_config, ollama_running)``; ``vlm_config`` is None on cancel
+    or ``_GO_BACK`` when the user navigated back from the preset list.
+    *current_litellm_model* seeds the preset default when it matches one.
+    """
+    ollama_running = _ensure_ollama()
+    if not ollama_running:
+        if not _prompt_confirm("Continue without Ollama?", default=False):
+            return None, ollama_running
+
+    available_models = get_ollama_models() if ollama_running else []
+    ram_gb = _get_system_ram_gb()
+    _, rec_vlm_idx = _get_recommended_indices(ram_gb)
+    if current_litellm_model:
+        for i, p in enumerate(VLM_PRESETS):
+            if p.litellm_model == current_litellm_model:
+                rec_vlm_idx = i  # default to the currently configured model
+                break
+
+    vlm = _select_vlm_preset(ollama_running, available_models, rec_vlm_idx, allow_back=allow_back)
+    if vlm is None:
+        return _GO_BACK, ollama_running
+    _ensure_model_pulled(vlm.ollama_model, vlm.size_hint, ollama_running, available_models)
+
+    return _ollama_vlm_config(vlm), ollama_running
+
+
+def _prompt_vlm_api_key(
+    provider: str,
+    reuse_key: tuple[str, str] | None,
+    reuse_prompt: str = "Reuse the embedding API key for the VLM?",
+    *,
+    allow_back: bool = False,
+) -> str | object:
+    """Get a VLM API key: offer same-provider reuse first, then env vars, then prompt."""
+    if reuse_key and reuse_key[0] == provider and reuse_key[1]:
+        if _prompt_confirm(reuse_prompt):
+            return reuse_key[1]
+    return _prompt_api_key_with_env(_PROVIDER_ENV_KEYS.get(provider), allow_back=allow_back)
+
+
+def _vlm_option_index_for(current: dict[str, Any]) -> int:
+    """1-based ``_WIZARD_VLM_OPTIONS`` index matching an existing VLM config."""
+    provider = str(current.get("provider") or "")
+    api_base = str(current.get("api_base") or "")
+    model = str(current.get("model") or "")
+    if provider == "volcengine":
+        return 2 if "bytepluses" in api_base else 1
+    if provider == "openai-codex":
+        return 4
+    if provider == "kimi":
+        return 5
+    if provider == "glm":
+        return 6
+    if provider == "litellm" and model.startswith("ollama/"):
+        return _WIZARD_VLM_OLLAMA_CHOICE
+    if provider == "openai":
+        return 3 if "api.openai.com" in api_base else 7
+    return 1
+
+
+def _prompt_custom_vlm(
+    current: dict[str, Any],
+    reuse_key: tuple[str, str] | None,
+    reuse_prompt: str,
+) -> dict[str, Any] | None | object:
+    """Custom OpenAI-compatible VLM setup.
+
+    Returns the VLM config dict or ``_GO_BACK`` when the user types ``!back``
+    at any prompt.
+    """
+    print(f"\n  {_bold('Custom OpenAI-compatible VLM configuration')}")
+    print(f"  {_dim(f'Type {_BACK_TOKEN} at any prompt to return to the provider menu.')}")
+    same_openai = current.get("provider") == "openai"
+    vlm_api_base = _prompt_required_input(
+        "API Base URL",
+        default=str(current["api_base"]) if same_openai and current.get("api_base") else None,
+        allow_back=True,
+    )
+    if vlm_api_base is _GO_BACK:
+        return _GO_BACK
+    vlm_api_key = _prompt_vlm_api_key("openai", reuse_key, reuse_prompt, allow_back=True)
+    if vlm_api_key is _GO_BACK:
+        return _GO_BACK
+    vlm_model = _prompt_required_input(
+        "Model",
+        default=str(current["model"]) if same_openai and current.get("model") else None,
+        allow_back=True,
+    )
+    if vlm_model is _GO_BACK:
+        return _GO_BACK
+
+    vlm_config: dict[str, Any] = {
+        "provider": "openai",
+        "model": vlm_model,
+        "api_base": vlm_api_base,
+        "temperature": 0.0,
+        "max_retries": 2,
+    }
+    if vlm_api_key:
+        vlm_config["api_key"] = vlm_api_key
+    return vlm_config
+
+
+def _prompt_cloud_vlm(
+    allow_skip: bool = False,
+    reuse_key: tuple[str, str] | None = None,
+    allow_back: bool = False,
+    current: dict[str, Any] | None = None,
+    plan_seed: str | None = None,
+) -> tuple[dict[str, Any] | None | object, bool | None]:
+    """VLM provider selection (cloud APIs, subscriptions, or local Ollama).
+
+    Returns ``(vlm_config, ollama_running)``; ``vlm_config`` is None on cancel,
+    the ``_SKIP_VLM`` sentinel when *allow_skip* is set and taken, or
+    ``_GO_BACK`` when *allow_back* is set and the user navigated back.
+    ``ollama_running`` is only set when the local Ollama option was taken.
+    *reuse_key* is an optional ``(provider, api_key)`` from the embedding step,
+    offered for reuse when the VLM provider matches. *current* (the existing
+    VLM config, if any) seeds the menu position, model default, and offers to
+    keep the existing API key. *plan_seed* is a VolcEngine api_base from the
+    embedding step, used to default the plan menu to the same tier.
+    """
+    current = current or {}
+    options = list(_WIZARD_VLM_OPTIONS)
+    if allow_skip:
+        options.append(("Skip for now", "(embedding only — add a VLM later)"))
+    default_idx = _vlm_option_index_for(current) if current else 1
+
+    # An existing same-provider key takes priority as the reuse candidate.
+    if current.get("api_key") and current.get("provider"):
+        reuse_key = (str(current["provider"]), str(current["api_key"]))
+        reuse_prompt = f"Keep the existing API key ({_mask_secret(str(current['api_key']))})?"
+    else:
+        reuse_prompt = "Reuse the embedding API key for the VLM?"
+
+    def _default_model(branch_provider: str, fallback: str) -> str:
+        if current.get("model") and current.get("provider") == branch_provider:
+            return str(current["model"])
+        return fallback
+
+    cloud_plan: AccessPlan | None = None
+    while True:
+        vlm_mode = _prompt_choice(
+            "VLM provider:", options, default=default_idx, allow_back=allow_back
         )
 
-    vlm_choice = _prompt_choice("Language model (VLM):", vlm_options, default=rec_vlm_idx + 1)
-    vlm = VLM_PRESETS[vlm_choice - 1]
+        if vlm_mode == 0:
+            return _GO_BACK, None
 
-    # Pull VLM model
-    if ollama_running and not is_model_available(vlm.ollama_model, available_models):
-        if _prompt_confirm(f"'{vlm.ollama_model}' not found locally. Pull now?"):
-            print()
-            if not ollama_pull_model(vlm.ollama_model):
-                print(
-                    f"  {_yellow('Pull failed. You can pull it later: ollama pull ' + vlm.ollama_model)}"
+        if allow_skip and vlm_mode == len(options):
+            return _SKIP_VLM, None
+
+        if vlm_mode == _WIZARD_VLM_OLLAMA_CHOICE:
+            current_ollama_model = (
+                str(current["model"])
+                if current.get("provider") == "litellm"
+                and str(current.get("model", "")).startswith("ollama/")
+                else None
+            )
+            vlm_config, ollama_running = _prompt_ollama_vlm(
+                allow_back=True, current_litellm_model=current_ollama_model
+            )
+            if vlm_config is _GO_BACK:
+                continue  # back to the provider menu
+            return vlm_config, ollama_running
+
+        if vlm_mode == _WIZARD_VLM_CUSTOM_CHOICE:
+            custom = _prompt_custom_vlm(current, reuse_key, reuse_prompt)
+            if custom is _GO_BACK:
+                continue  # back to the provider menu
+            if custom is None:
+                return None, None
+            return custom, None
+
+        if vlm_mode <= len(CLOUD_PROVIDERS):
+            menu = _PLAN_MENUS.get(CLOUD_PROVIDERS[vlm_mode - 1].label)
+            if menu:  # pick plan / pay-as-you-go first
+                domain, plans = menu
+                seed = _plan_seed_for(current, domain) or (
+                    plan_seed if plan_seed and domain in plan_seed else None
                 )
-            else:
-                print(f"  {_green('OK')} {vlm.ollama_model} pulled successfully")
+                selected = _select_access_plan(
+                    CLOUD_PROVIDERS[vlm_mode - 1].label, plans, seed, allow_back=True
+                )
+                if selected is _GO_BACK:
+                    continue  # back to the provider menu
+                cloud_plan = selected
 
-    return _build_ollama_config(embedding, vlm, _workspace_path()), ollama_running
+        break
+
+    if vlm_mode in (1, 2, 3):  # VolcEngine / BytePlus / OpenAI — same order as CLOUD_PROVIDERS
+        vlm_choice = CLOUD_PROVIDERS[vlm_mode - 1]
+        print(f"\n  {_bold(f'{vlm_choice.label} VLM configuration')}")
+        vlm_api_key = _prompt_vlm_api_key(vlm_choice.provider, reuse_key, reuse_prompt)
+        if not vlm_api_key:
+            print(f"  {_red('API key is required')}")
+            return None, None
+        default_vlm_model = (
+            cloud_plan.default_vlm_model if cloud_plan else vlm_choice.default_vlm_model
+        )
+        vlm_model = _prompt_required_input(
+            "Model", default=_default_model(vlm_choice.provider, default_vlm_model)
+        )
+        vlm_api_base = cloud_plan.api_base if cloud_plan else vlm_choice.default_api_base
+        vlm_provider = vlm_choice.provider
+    elif vlm_mode == 4:
+        _ensure_codex_auth()
+        print(f"\n  {_bold('Codex VLM configuration')}")
+        vlm_model = _prompt_required_input(
+            "Model", default=_default_model("openai-codex", _DEFAULT_CODEX_MODEL)
+        )
+        vlm_api_base = _DEFAULT_CODEX_BASE_URL
+        vlm_api_key = None
+        vlm_provider = "openai-codex"
+    elif vlm_mode == 5:
+        print(f"\n  {_bold('Kimi VLM configuration')}")
+        vlm_api_key = _prompt_vlm_api_key("kimi", reuse_key, reuse_prompt)
+        if not vlm_api_key:
+            print(f"  {_red('API key is required')}")
+            return None, None
+        vlm_model = _prompt_required_input(
+            "Model", default=_default_model("kimi", _DEFAULT_KIMI_MODEL)
+        )
+        vlm_api_base = _DEFAULT_KIMI_BASE_URL
+        vlm_provider = "kimi"
+    elif vlm_mode == 6:
+        print(f"\n  {_bold('GLM VLM configuration')}")
+        vlm_api_key = _prompt_vlm_api_key("glm", reuse_key, reuse_prompt)
+        if not vlm_api_key:
+            print(f"  {_red('API key is required')}")
+            return None, None
+        vlm_model = _prompt_required_input(
+            "Model", default=_default_model("glm", _DEFAULT_GLM_MODEL)
+        )
+        vlm_api_base = _DEFAULT_GLM_BASE_URL
+        vlm_provider = "glm"
+
+    vlm_config: dict[str, Any] = {
+        "provider": vlm_provider,
+        "model": vlm_model,
+        "api_base": vlm_api_base,
+        "temperature": 0.0,
+        "max_retries": 2,
+    }
+    if vlm_api_key:
+        vlm_config["api_key"] = vlm_api_key
+    return vlm_config, None
 
 
-def _wizard_llamacpp() -> tuple[dict[str, Any] | None, bool | None]:
-    """llama.cpp local embedding setup flow.
+def _cloud_provider_index_for(section: dict[str, Any]) -> int:
+    """1-based CLOUD_PROVIDERS index matching an existing config section."""
+    provider = str(section.get("provider") or "")
+    api_base = str(section.get("api_base") or "")
+    for i, p in enumerate(CLOUD_PROVIDERS, 1):
+        if p.provider == provider and p.default_api_base == api_base:
+            return i
+    # Same provider + same endpoint domain — covers plan endpoints, which
+    # never equal default_api_base (VolcEngine and BytePlus share the
+    # "volcengine" provider string, so the domain is the disambiguator).
+    for i, p in enumerate(CLOUD_PROVIDERS, 1):
+        menu = _PLAN_MENUS.get(p.label)
+        if p.provider == provider and menu and menu[0] in api_base:
+            return i
+    for i, p in enumerate(CLOUD_PROVIDERS, 1):
+        if p.provider == provider:
+            return i
+    return 1
 
-    Returns ``(config, ollama_running)``. ``ollama_running`` is ``None`` when the
-    flow never touched Ollama (cloud or skipped VLM), so the query-planner step
-    knows it still has to run the install flow itself.
+
+def _prompt_cloud_embedding(
+    *, allow_back: bool = False, current: dict[str, Any] | None = None
+) -> dict[str, Any] | None | object:
+    """Cloud embedding provider selection.
+
+    Returns the dense-embedding config dict, ``None`` on cancel,
+    ``_CUSTOM_SETUP`` when the user picked manual configuration, or
+    ``_GO_BACK`` when *allow_back* is set and the user navigated back.
+    *current* (the existing dense config, if any) seeds every default so an
+    update run can keep values by just pressing Enter.
     """
-    # Ollama is only involved if the user picks an Ollama VLM below; None means
-    # "not handled yet" so downstream steps can decide whether to ensure it.
-    ollama_running: bool | None = None
+    current = current or {}
+    provider_options = [(p.label, "") for p in CLOUD_PROVIDERS]
+    provider_options.append(("Custom / manual", "(OpenAI-compatible endpoint, or edit ov.conf)"))
+    default_idx = _cloud_provider_index_for(current) if current else 1
 
-    # --- Step 1: check / install llama-cpp-python ---
+    provider: CloudProvider | None = None
+    plan: AccessPlan | None = None
+    while True:
+        choice = _prompt_choice(
+            "Embedding provider:", provider_options, default=default_idx, allow_back=allow_back
+        )
+
+        if choice == 0:
+            return _GO_BACK
+
+        if choice > len(CLOUD_PROVIDERS):
+            custom = _prompt_custom_embedding(current)
+            if custom is _GO_BACK:
+                continue  # back to the provider menu
+            return custom
+
+        provider = CLOUD_PROVIDERS[choice - 1]
+        menu = _PLAN_MENUS.get(provider.label)
+        if menu:
+            domain, plans = menu
+            selected = _select_access_plan(
+                provider.label, plans, _plan_seed_for(current, domain), allow_back=True
+            )
+            if selected is _GO_BACK:
+                continue  # back to the provider menu
+            plan = selected
+        break
+
+    assert provider is not None
+    same_provider = bool(current) and current.get("provider") == provider.provider
+
+    api_base = plan.api_base if plan else provider.default_api_base
+    default_embedding_model = (
+        plan.default_embedding_model if plan else provider.default_embedding_model
+    )
+    default_embedding_dim = plan.default_embedding_dim if plan else provider.default_embedding_dim
+
+    print(f"\n  {_bold('Embedding configuration')}")
+    embedding_api_key = ""
+    if same_provider and current.get("api_key"):
+        masked = _mask_secret(str(current["api_key"]))
+        if _prompt_confirm(f"Keep the existing API key ({masked})?"):
+            embedding_api_key = str(current["api_key"])
+    if not embedding_api_key:
+        embedding_api_key = _prompt_api_key_with_env(_PROVIDER_ENV_KEYS.get(provider.provider))
+    if not embedding_api_key:
+        print(f"  {_red('API key is required')}")
+        return None
+
+    default_model = (
+        str(current["model"]) if same_provider and current.get("model") else default_embedding_model
+    )
+    embedding_model = _prompt_required_input("Model", default=default_model)
+    if (
+        same_provider
+        and embedding_model == current.get("model")
+        and isinstance(current.get("dimension"), int)
+    ):
+        embedding_dim = current["dimension"]
+        print(f"  {_dim(f'Dimension: {embedding_dim} (kept from current config)')}")
+    elif embedding_model == default_embedding_model:
+        embedding_dim = default_embedding_dim
+        print(f"  {_dim(f'Dimension: {embedding_dim} (auto-filled for {embedding_model})')}")
+    else:
+        embedding_dim = _prompt_required_int("Dimension", default=default_embedding_dim)
+        if embedding_dim is None:
+            print(f"  {_red('Dimension is required')}")
+            return None
+
+    return {
+        "provider": provider.provider,
+        "model": embedding_model,
+        "api_key": embedding_api_key,
+        "api_base": api_base,
+        "dimension": embedding_dim,
+    }
+
+
+def _prompt_custom_embedding(current: dict[str, Any]) -> dict[str, Any] | None | object:
+    """Custom embedding: interactive OpenAI-compatible prompts or manual editing.
+
+    Returns the dense-embedding config dict, ``None`` on cancel,
+    ``_CUSTOM_SETUP`` when the user chose to edit ov.conf directly, or
+    ``_GO_BACK`` to return to the provider menu.
+    """
+    choice = _prompt_choice(
+        "Custom embedding setup:",
+        [
+            ("Interactive (OpenAI-compatible)", "(enter API base URL, key, model, dimension)"),
+            ("Edit ov.conf manually", "(opens $EDITOR with the example config)"),
+        ],
+        default=1,
+        allow_back=True,
+    )
+    if choice == 0:
+        return _GO_BACK
+    if choice == 2:
+        _wizard_custom()
+        return _CUSTOM_SETUP
+
+    same_openai = current.get("provider") == "openai"
+
+    def _current_value(key: str) -> str | None:
+        return str(current[key]) if same_openai and current.get(key) else None
+
+    print(f"\n  {_bold('Custom OpenAI-compatible embedding configuration')}")
+    print(f"  {_dim(f'Type {_BACK_TOKEN} at any prompt to return to the provider menu.')}")
+    api_base = _prompt_required_input(
+        "API Base URL", default=_current_value("api_base"), allow_back=True
+    )
+    if api_base is _GO_BACK:
+        return _GO_BACK
+
+    api_key: str | object = ""
+    if _current_value("api_key"):
+        masked = _mask_secret(str(current["api_key"]))
+        if _prompt_confirm(f"Keep the existing API key ({masked})?"):
+            api_key = str(current["api_key"])
+    if not api_key:
+        api_key = _prompt_api_key_with_env(_PROVIDER_ENV_KEYS.get("openai"), allow_back=True)
+        if api_key is _GO_BACK:
+            return _GO_BACK
+    if not api_key:
+        print(f"  {_red('API key is required')}")
+        return None
+
+    model = _prompt_required_input("Model", default=_current_value("model"), allow_back=True)
+    if model is _GO_BACK:
+        return _GO_BACK
+    current_dim = current.get("dimension") if same_openai else None
+    dimension = _prompt_required_int(
+        "Dimension",
+        default=current_dim if isinstance(current_dim, int) else None,
+        allow_back=True,
+    )
+    if dimension is _GO_BACK:
+        return _GO_BACK
+    if dimension is None:
+        print(f"  {_red('Dimension is required')}")
+        return None
+
+    return {
+        "provider": "openai",
+        "model": model,
+        "api_key": api_key,
+        "api_base": api_base,
+        "dimension": dimension,
+    }
+
+
+def _prompt_llamacpp_embedding() -> LocalGGUFPreset | None:
+    """llama.cpp embedding setup: ensure runtime, pick a GGUF preset, download it."""
     print("\n  Checking llama-cpp-python...", end=" ", flush=True)
 
     if _is_llamacpp_installed():
@@ -843,13 +1635,12 @@ def _wizard_llamacpp() -> tuple[dict[str, Any] | None, bool | None]:
                 if not _prompt_confirm(
                     "Continue anyway? (config will be generated)", default=False
                 ):
-                    return None, ollama_running
+                    return None
         else:
             print(f"\n  {_dim('Install later: ' + _PIP_LOCAL_EMBED)}")
             if not _prompt_confirm("Continue anyway? (config will be generated)", default=False):
-                return None, ollama_running
+                return None
 
-    # --- Step 2: select embedding model ---
     model_options: list[tuple[str, str]] = []
     for p in LOCAL_GGUF_PRESETS:
         cached = ""
@@ -866,17 +1657,13 @@ def _wizard_llamacpp() -> tuple[dict[str, Any] | None, bool | None]:
         )
 
     model_choice = _prompt_choice("Embedding model:", model_options, default=1)
-
     preset = LOCAL_GGUF_PRESETS[model_choice - 1]
-    model_name = preset.model_name
-    dimension = preset.dimension
-    custom_model_path: str | None = None
 
     # Download if not cached
     try:
-        if not _check_gguf_model_cached(model_name):
+        if not _check_gguf_model_cached(preset.model_name):
             if _prompt_confirm(
-                f"Model '{model_name}' not downloaded yet. Download now? ({preset.size_hint})"
+                f"Model '{preset.model_name}' not downloaded yet. Download now? ({preset.size_hint})"
             ):
                 print(f"\n  {_dim('Downloading...')}", end=" ", flush=True)
                 try:
@@ -887,8 +1674,8 @@ def _wizard_llamacpp() -> tuple[dict[str, Any] | None, bool | None]:
                         get_local_model_spec,
                     )
 
-                    spec = get_local_model_spec(model_name)
-                    target = get_local_model_cache_path(model_name)
+                    spec = get_local_model_spec(preset.model_name)
+                    target = get_local_model_cache_path(preset.model_name)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     tmp = target.with_suffix(target.suffix + ".part")
                     with requests.get(spec.download_url, stream=True, timeout=(10, 300)) as resp:
@@ -917,237 +1704,477 @@ def _wizard_llamacpp() -> tuple[dict[str, Any] | None, bool | None]:
     except Exception:
         pass
 
-    # --- Step 3: VLM selection ---
-    print()
-    vlm_mode = _prompt_choice(
-        "VLM (language model) setup:",
-        [
-            ("Use Ollama for VLM", _dim("(requires Ollama installed)")),
-            ("Use Cloud API for VLM", _dim("(VolcEngine, BytePlus, OpenAI, etc.)")),
-            ("Skip VLM", _dim("(embedding only, add VLM later)")),
-        ],
-        default=1,
+    return preset
+
+
+# ---------------------------------------------------------------------------
+# Wizard flows
+# ---------------------------------------------------------------------------
+
+
+def _wizard_ollama() -> tuple[dict[str, Any] | None, bool | None]:
+    """Ollama-based local model setup flow.
+
+    Returns ``(config, ollama_running)`` so later steps (e.g. the query planner)
+    can reuse the Ollama state instead of re-running the install flow.
+    """
+    # Ensure Ollama is installed and running
+    ollama_running = _ensure_ollama()
+
+    if not ollama_running:
+        if not _prompt_confirm(
+            "Continue without Ollama? (config will be generated but models won't be pulled)",
+            default=False,
+        ):
+            return None, ollama_running
+
+    available_models = get_ollama_models() if ollama_running else []
+
+    # System RAM
+    ram_gb = _get_system_ram_gb()
+    rec_embed_idx, rec_vlm_idx = _get_recommended_indices(ram_gb)
+    if ram_gb > 0:
+        print(f"\n  {_dim(f'Detected {ram_gb} GB RAM')}")
+
+    # --- Recommended one-shot setup ---
+    rec_embed = EMBEDDING_PRESETS[rec_embed_idx]
+    rec_vlm = VLM_PRESETS[rec_vlm_idx]
+    rec_planner = QUERY_PLANNER_PRESETS[0]
+    total_gb = (
+        _parse_size_gb(rec_embed.size_hint)
+        + _parse_size_gb(rec_vlm.size_hint)
+        + _QUERY_PLANNER_DOWNLOAD_GB
     )
 
-    vlm_config: dict[str, Any] | None = None
+    ram_note = f" (for {ram_gb} GB RAM)" if ram_gb > 0 else ""
+    print(f"\n  {_bold('Recommended local setup' + ram_note)}")
+    print(f"    Embedding      {rec_embed.model}  {_dim('(' + rec_embed.size_hint + ')')}")
+    print(f"    VLM            {rec_vlm.ollama_model}  {_dim('(' + rec_vlm.size_hint + ')')}")
+    print(f"    Query planner  {rec_planner.ollama_model}  {_dim('(~0.9 GB)')}")
+    print(
+        f"    {_dim(f'Total download ~{total_gb:.0f} GB — already-downloaded models are skipped')}"
+    )
 
-    if vlm_mode == 1:
-        # Ollama VLM
-        ollama_running = _ensure_ollama()
-        if not ollama_running:
-            if not _prompt_confirm("Continue without Ollama?", default=False):
-                return None, ollama_running
+    if _prompt_confirm("Use this recommended setup?"):
+        if _check_disk_before_pull(total_gb):
+            for model, hint in (
+                (rec_embed.model, rec_embed.size_hint),
+                (rec_vlm.ollama_model, rec_vlm.size_hint),
+                (rec_planner.ollama_model, f"~{_QUERY_PLANNER_DOWNLOAD_GB} GB"),
+            ):
+                _ensure_model_pulled(model, hint, ollama_running, available_models, ask=False)
+            config = _build_ollama_config(rec_embed, rec_vlm, _workspace_path())
+            config["query_planner"] = _build_query_planner_config(rec_planner)
+            return config, ollama_running
+        print(f"  {_dim('Pick smaller models below instead.')}")
 
-        available_models = get_ollama_models() if ollama_running else []
-        ram_gb = _get_system_ram_gb()
-        _, rec_vlm_idx = _get_recommended_indices(ram_gb)
+    # --- Per-model selection ---
+    embedding = _select_embedding_preset(ollama_running, available_models, rec_embed_idx)
+    _ensure_model_pulled(embedding.model, embedding.size_hint, ollama_running, available_models)
 
-        vlm_options: list[tuple[str, str]] = []
-        for i, p in enumerate(VLM_PRESETS):
-            rec = " *" if i == rec_vlm_idx else ""
-            avail = ""
-            if ollama_running and is_model_available(p.ollama_model, available_models):
-                avail = _green(" [downloaded]")
-            vlm_options.append((f"{p.label}", f"({p.size_hint}){avail}{rec}"))
+    vlm = _select_vlm_preset(ollama_running, available_models, rec_vlm_idx)
+    _ensure_model_pulled(vlm.ollama_model, vlm.size_hint, ollama_running, available_models)
 
-        vlm_choice = _prompt_choice("Language model (VLM):", vlm_options, default=rec_vlm_idx + 1)
-        vlm = VLM_PRESETS[vlm_choice - 1]
+    return _build_ollama_config(embedding, vlm, _workspace_path()), ollama_running
 
-        if ollama_running and not is_model_available(vlm.ollama_model, available_models):
-            if _prompt_confirm(f"'{vlm.ollama_model}' not found locally. Pull now?"):
-                print()
-                if not ollama_pull_model(vlm.ollama_model):
-                    print(
-                        f"  {_yellow('Pull failed. You can pull it later: ollama pull ' + vlm.ollama_model)}"
-                    )
-                else:
-                    print(f"  {_green('OK')} {vlm.ollama_model} pulled successfully")
 
-        vlm_config = {
-            "provider": "litellm",
-            "model": vlm.litellm_model,
-            "api_key": "no-key",
-            "api_base": "http://localhost:11434",
-            "temperature": 0.0,
-            "max_retries": 2,
-        }
+def _wizard_two_step() -> tuple[dict[str, Any] | None | object, bool | None]:
+    """Step-by-step setup: embedding first, then VLM — each cloud or local.
 
-    elif vlm_mode == 2:
-        # Cloud VLM
-        provider_options = [(p.label, "") for p in CLOUD_PROVIDERS]
-        provider_options.append(("Custom (OpenAI-compatible)", ""))
-        choice = _prompt_choice("Cloud provider for VLM:", provider_options, default=1)
+    Returns ``(config, ollama_running)``. ``config`` may also be the
+    ``_CUSTOM_SETUP`` sentinel when the user was routed to manual editing, or
+    ``_GO_BACK`` when the user backed out to the mode menu.
+    """
+    while True:
+        _rule("Step 1/2 · Embedding — powers semantic search")
+        dense, ollama_running = _prompt_embedding_flow(allow_back=True)
+        if dense is _GO_BACK:
+            return _GO_BACK, None
+        if dense is _CUSTOM_SETUP:
+            return _CUSTOM_SETUP, None
+        if dense is None:
+            return None, ollama_running
+        print(f"\n  {_green('✓')} Embedding: {_summarize_model(dense)}")
 
-        if choice > len(CLOUD_PROVIDERS):
-            print(f"\n  {_bold('Custom OpenAI-compatible VLM configuration')}")
-            vlm_api_base = _prompt_required_input("API Base URL")
-            vlm_api_key = _prompt_api_key("VLM API Key")
-            vlm_model = _prompt_required_input("Vision Model")
-            vlm_provider = "openai"
+        _rule("Step 2/2 · VLM — parses documents & extracts memories")
+        reuse_key = None
+        if isinstance(dense, dict) and dense.get("api_key"):
+            reuse_key = (dense["provider"], dense["api_key"])
+        plan_seed = None
+        if dense.get("provider") == "volcengine" and dense.get("api_base"):
+            plan_seed = str(dense["api_base"])
+        vlm_config, vlm_ollama = _prompt_cloud_vlm(
+            allow_skip=True, reuse_key=reuse_key, allow_back=True, plan_seed=plan_seed
+        )
+        if vlm_config is _GO_BACK:
+            continue  # back to Step 1
+        if vlm_config is None:
+            return None, ollama_running
+        if vlm_ollama is not None:
+            ollama_running = vlm_ollama
+
+        if vlm_config is _SKIP_VLM:
+            print(f"\n  {_green('✓')} VLM: {_dim('skipped — add one later with init')}")
         else:
-            provider = CLOUD_PROVIDERS[choice - 1]
-            vlm_api_key = _prompt_api_key("VLM API Key")
-            if not vlm_api_key:
-                print(f"  {_red('API key is required')}")
-                return None, ollama_running
-            vlm_model = _prompt_required_input("Vision Model")
-            vlm_api_base = provider.default_api_base
-            vlm_provider = provider.provider
+            print(f"\n  {_green('✓')} VLM: {_summarize_model(vlm_config)}")
 
-        vlm_config = {
-            "provider": vlm_provider,
-            "model": vlm_model,
-            "api_base": vlm_api_base,
-            "temperature": 0.0,
-            "max_retries": 2,
+        config: dict[str, Any] = {
+            "storage": {"workspace": _workspace_path()},
+            "embedding": {"dense": dense},
         }
-        if vlm_api_key:
-            vlm_config["api_key"] = vlm_api_key
+        if vlm_config is not _SKIP_VLM:
+            config["vlm"] = vlm_config
+        return config, ollama_running
 
-    return (
-        _build_local_config(
-            model_name=model_name,
-            dimension=dimension,
-            workspace=_workspace_path(),
-            model_path=custom_model_path,
-            vlm_config=vlm_config,
-        ),
-        ollama_running,
+
+def _open_setup_browser(url: str) -> None:
+    """Keep setup usable when the browser must be opened manually."""
+    import webbrowser
+
+    try:
+        opened = webbrowser.open(url)
+    except webbrowser.Error:
+        opened = False
+    if not opened:
+        print(f"  Open this link in your browser: {url}")
+
+
+def _wizard_volcengine() -> dict[str, Any] | object:
+    """Authorize directly in the browser and configure both models."""
+    from openviking_cli.volcengine_setup import (
+        ArkSetupError,
+        VolcengineSetup,
+        activated_models,
+        fetch_models,
+        probe_models,
     )
 
+    _rule("VolcEngine account setup · 火山账号授权配置")
+    print("  Sign in to VolcEngine in your browser to configure VLM and embedding.")
+    print("  Model activation, real-name verification and billing remain with VolcEngine.")
+    try:
+        if not _stdin_stdout_tty():
+            print(f"  {_yellow('Run this setup in an interactive terminal for browser login.')}")
+            return _GO_BACK
+        plan = _select_access_plan("VolcEngine", VOLCENGINE_PLANS, allow_back=True)
+        if plan is _GO_BACK:
+            return _GO_BACK
+        print(f"  Selected: {plan.label} · {plan.api_base}")
+        scene = "RealAgentPlanPersonal" if "/api/plan/" in plan.api_base else None
+        with VolcengineSetup() as account:
+            authorization = account.start_authorization()
+            browser_url = (
+                authorization.get("verification_uri_complete") or authorization["verification_uri"]
+            )
+            print(f"\n  Authorize OpenViking: {browser_url}")
+            print(f"  Device code: {authorization['user_code']}")
+            print("  Waiting for browser authorization... (Ctrl-C to cancel)", flush=True)
+            _open_setup_browser(browser_url)
+            account.wait_for_authorization(authorization)
+            print(f"  {_green('Authorized. Fetching ' + plan.label + ' API keys...')}")
+            project = "default"
+            while True:
+                try:
+                    keys = account.list_keys(project, scene=scene)
+                    if not keys:
+                        print(f"  No active {plan.label} API key in project {project}.")
+                        console_url = (
+                            "https://ark.volcengine.com/region:cn-beijing/openManagement?advancedActiveKey=agentPlan"
+                            if scene
+                            else "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey"
+                        )
+                        print(f"  Create a key in the Ark console: {console_url}")
+                        action = _prompt_choice(
+                            "No API keys found. What next?",
+                            [
+                                ("Create a key in the console", ""),
+                                ("Use another project", ""),
+                                ("Return to setup menu", ""),
+                            ],
+                        )
+                        if action == 3:
+                            return _GO_BACK
+                        if action == 2:
+                            project = _prompt_required_input("Project name", default=project)
+                            if not project:
+                                return _GO_BACK
+                            continue
+                        _open_setup_browser(console_url)
+                        if not _prompt_confirm("Created the key? Fetch it automatically now?"):
+                            return _GO_BACK
+                        continue
+                    if len(keys) == 1:
+                        selected = keys[0]
+                        print(f"  Using API key: {selected.get('Name') or selected['Id']}")
+                    else:
+                        choice = _prompt_choice(
+                            "Choose a model API key:",
+                            [
+                                (str(row.get("Name") or row["Id"]), f"project: {project}")
+                                for row in keys
+                            ],
+                            allow_back=True,
+                        )
+                        if choice == 0:
+                            return _GO_BACK
+                        selected = keys[choice - 1]
+                    key = account.api_key(selected)
+                    break
+                except ArkSetupError as exc:
+                    print(f"  {_yellow(str(exc))}")
+                    retry = _prompt_choice(
+                        "Browser authorization is complete. What next?",
+                        [
+                            ("Retry fetching API keys", "(keeps this authorization session)"),
+                            ("Use another project", ""),
+                            ("Return to setup menu", ""),
+                        ],
+                        default=1,
+                    )
+                    if retry == 3:
+                        return _GO_BACK
+                    if retry == 2:
+                        project = _prompt_required_input("Project name", default=project)
+                        if not project:
+                            return _GO_BACK
+            preset = plan
+            while True:
+                try:
+                    models = (
+                        account.agent_plan_models()
+                        if scene == "RealAgentPlanPersonal"
+                        else fetch_models(plan.api_base, key)
+                    )
+                    if "/api/v3" in plan.api_base:
+                        models = activated_models(models, account.model_activations())
+                        print("  Showing only models confirmed activated for this account.")
+                except ArkSetupError as exc:
+                    print(f"  {_yellow(str(exc))}")
+                    if _prompt_confirm("Retry fetching models?", default=False):
+                        continue
+                    return _GO_BACK
+                if not all(
+                    any(m.get("domain") in domains for m in models)
+                    for domains in ({"VLM"}, {"Embedding"})
+                ):
+                    print("  No confirmed usable VLM and Embedding pair in this catalog.")
+                    print("  Models with unknown capabilities or activation are excluded.")
+                    console_url = "https://console.volcengine.com/ark/region:ark+cn-beijing/model"
+                    print(f"  Check model activation in the Ark console: {console_url}")
+                    if _prompt_confirm(
+                        "Open the console to review model activation?", default=False
+                    ):
+                        _open_setup_browser(console_url)
+                        if _prompt_confirm(
+                            "Refresh models after reviewing activation?", default=False
+                        ):
+                            continue
+                    return _GO_BACK
+                selected_models = []
+                for label, domains, recommended in (
+                    ("VLM", {"VLM"}, preset.default_vlm_model),
+                    ("Embedding", {"Embedding"}, preset.default_embedding_model),
+                ):
+                    candidates = [m for m in models if m.get("domain") in domains]
+                    if not candidates:
+                        print(f"  {_yellow('No ' + label + ' models in the selected catalog.')}")
+                        return _GO_BACK
+                    choice = _prompt_choice(
+                        label + " model:",
+                        [
+                            (m["id"], str(m.get("domain") or "capabilities not reported"))
+                            for m in candidates
+                        ],
+                        default=next(
+                            (i for i, m in enumerate(candidates, 1) if m["id"] == recommended), 1
+                        ),
+                        allow_back=True,
+                    )
+                    if choice == 0:
+                        return _GO_BACK
+                    selected_models.append(candidates[choice - 1])
+                vlm_model, embedding_model = (m["id"] for m in selected_models)
+                embedding_input = selected_models[1].get("input")
+                if embedding_input not in ("text", "multimodal"):
+                    if embedding_model == preset.default_embedding_model:
+                        embedding_input = "multimodal"
+                    else:
+                        choice = _prompt_choice(
+                            "Embedding API protocol (check the model documentation):",
+                            [
+                                ("Multimodal", "embeddings/multimodal"),
+                                ("Text", "embeddings"),
+                            ],
+                            allow_back=True,
+                        )
+                        if choice == 0:
+                            return _GO_BACK
+                        embedding_input = "multimodal" if choice == 1 else "text"
+                if embedding_model == preset.default_embedding_model:
+                    dimension = preset.default_embedding_dim
+                    print(f"  Dimension: {dimension} (auto-filled)")
+                else:
+                    while True:
+                        dimension = _prompt_required_int(
+                            "Embedding dimension", default=preset.default_embedding_dim
+                        )
+                        if dimension is None:
+                            return _GO_BACK
+                        if dimension > 0:
+                            break
+                        print(f"  {_red('Embedding dimension must be positive')}")
+                common = {"provider": "volcengine", "api_base": plan.api_base, "api_key": key}
+                config = {
+                    "storage": {"workspace": _workspace_path()},
+                    "embedding": {
+                        "dense": {
+                            **common,
+                            "model": embedding_model,
+                            "dimension": dimension,
+                            "input": embedding_input,
+                        }
+                    },
+                    "vlm": {**common, "model": vlm_model, "max_retries": 2},
+                }
+                if not _prompt_confirm("Test both models now? (two small requests, billed by Ark)"):
+                    print("  Model access has not been verified. You can run doctor after saving.")
+                    return config
+                results = probe_models(config)
+                for label, ok, detail in results:
+                    print(f"  {label}: {detail}" if ok else f"  {_yellow(label + ': ' + detail)}")
+                if all(ok for _, ok, _ in results):
+                    return config
+                print(
+                    "  Check the selected project's key permissions, model activation and balance:"
+                )
+                print("  https://console.volcengine.com/ark/region:ark+cn-beijing/model")
+                if not _prompt_confirm("Retry model selection and verification?", default=False):
+                    return _GO_BACK
+    except ArkSetupError as exc:
+        print(f"  {_yellow(str(exc))}")
+        return _GO_BACK
 
-def _wizard_cloud() -> dict[str, Any] | None:
-    """Cloud API model setup flow."""
-    # Provider selection
-    provider_options = [(p.label, "") for p in CLOUD_PROVIDERS]
-    provider_options.append(("Other (manual)", ""))
-    choice = _prompt_choice("Embedding provider:", provider_options, default=1)
 
-    if choice > len(CLOUD_PROVIDERS):
-        # Manual / Other
-        print(f"\n  See example config: {_cyan('examples/ov.conf.example')}")
-        print(f"  Edit {_cyan(str(_config_path()))} manually.\n")
-        return None
+def _wizard_server(current: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Prompt for server binding, port, and auth (root API key when remote).
 
-    provider = CLOUD_PROVIDERS[choice - 1]
-    workspace = _workspace_path()
+    Auth mode is auto-detected by the server from ``root_api_key``: setting a
+    key switches to ``api_key`` mode, no key means ``dev`` mode (which the
+    server only permits on localhost) — so this step never writes
+    ``auth_mode`` explicitly. *current* (the existing server config, if any)
+    seeds all defaults so an update run can keep values by pressing Enter.
+    """
+    current = current or {}
+    _rule("Server & auth")
+    if current:
+        print(f"  {_dim('Current: ' + _summarize_server(current))}")
+    print(f"  {_dim('Local: only this machine can reach the server (no auth, dev mode).')}")
+    print(f"  {_dim('Remote: bind to 0.0.0.0 for Docker / LAN access — requires API-key auth.')}")
 
-    # Embedding config
-    print(f"\n  {_bold('Embedding configuration')}")
-    embedding_api_key = _prompt_api_key("API Key")
-    if not embedding_api_key:
-        print(f"  {_red('API key is required')}")
-        return None
-    embedding_model = _prompt_required_input("Model", default=provider.default_embedding_model)
-    embedding_dim = _prompt_required_int("Dimension", default=provider.default_embedding_dim)
-    if embedding_dim is None:
-        print(f"  {_red('Dimension is required')}")
-        return None
-    embedding_api_base = provider.default_api_base
-
-    vlm_mode = _prompt_choice("VLM provider:", _WIZARD_VLM_OPTIONS, default=1)
-
-    if vlm_mode == 1:
-        vlm_choice = _get_cloud_provider_by_label("VolcEngine (火山引擎)")
-        print(f"\n  {_bold('VolcEngine VLM configuration')}")
-        vlm_api_key = _prompt_api_key("API Key")
-        if not vlm_api_key:
-            print(f"  {_red('API key is required')}")
-            return None
-        vlm_model = _prompt_required_input("Model", default=vlm_choice.default_vlm_model)
-        vlm_api_base = vlm_choice.default_api_base
-        vlm_provider = vlm_choice.provider
-    elif vlm_mode == 2:
-        vlm_choice = _get_cloud_provider_by_label("BytePlus")
-        print(f"\n  {_bold('BytePlus VLM configuration')}")
-        vlm_api_key = _prompt_api_key("API Key")
-        if not vlm_api_key:
-            print(f"  {_red('API key is required')}")
-            return None
-        vlm_model = _prompt_required_input("Model", default=vlm_choice.default_vlm_model)
-        vlm_api_base = vlm_choice.default_api_base
-        vlm_provider = vlm_choice.provider
-    elif vlm_mode == 3:
-        vlm_choice = _get_cloud_provider_by_label("OpenAI")
-        print(f"\n  {_bold('OpenAI VLM configuration')}")
-        vlm_api_key = _prompt_api_key("API Key")
-        if not vlm_api_key:
-            print(f"  {_red('API key is required')}")
-            return None
-        vlm_model = _prompt_required_input("Model", default=vlm_choice.default_vlm_model)
-        vlm_api_base = vlm_choice.default_api_base
-        vlm_provider = vlm_choice.provider
-    elif vlm_mode == 4:
-        _ensure_codex_auth()
-        print(f"\n  {_bold('Codex VLM configuration')}")
-        vlm_model = _prompt_required_input("Model", default=_DEFAULT_CODEX_MODEL)
-        vlm_api_base = _DEFAULT_CODEX_BASE_URL
-        vlm_api_key = None
-        vlm_provider = "openai-codex"
-    elif vlm_mode == 5:
-        print(f"\n  {_bold('Kimi VLM configuration')}")
-        vlm_api_key = _prompt_api_key("API Key")
-        if not vlm_api_key:
-            print(f"  {_red('API key is required')}")
-            return None
-        vlm_model = _prompt_required_input("Model", default=_DEFAULT_KIMI_MODEL)
-        vlm_api_base = _DEFAULT_KIMI_BASE_URL
-        vlm_provider = "kimi"
-    elif vlm_mode == 6:
-        print(f"\n  {_bold('GLM VLM configuration')}")
-        vlm_api_key = _prompt_api_key("API Key")
-        if not vlm_api_key:
-            print(f"  {_red('API key is required')}")
-            return None
-        vlm_model = _prompt_required_input("Model", default=_DEFAULT_GLM_MODEL)
-        vlm_api_base = _DEFAULT_GLM_BASE_URL
-        vlm_provider = "glm"
-    else:
-        print(f"\n  {_bold('Custom OpenAI-compatible VLM configuration')}")
-        vlm_api_base = _prompt_required_input("API Base URL")
-        vlm_api_key = _prompt_api_key("API Key")
-        vlm_model = _prompt_required_input("Model")
-        vlm_provider = "openai"
-
-    return _build_cloud_config(
-        provider,
-        embedding_api_key,
-        embedding_model,
-        embedding_dim,
-        vlm_model,
-        workspace,
-        embedding_api_base=embedding_api_base,
-        vlm_provider=vlm_provider,
-        vlm_api_key=vlm_api_key,
-        vlm_api_base=vlm_api_base,
+    is_remote_now = str(current.get("host") or "127.0.0.1") not in (
+        "127.0.0.1",
+        "localhost",
+        "::1",
     )
-
-
-def _wizard_server() -> dict[str, Any] | None:
-    """Prompt for server host binding and root_api_key (when remote)."""
-    print(f"\n  {_bold('Server binding')}")
-    print(f"  {_dim('Local: only this machine can reach the server.')}")
-    print(f"  {_dim('Remote: bind to 0.0.0.0 — required for Docker / LAN access.')}")
-
     mode = _prompt_choice(
         "Bind server host to:",
         [
-            ("Local (127.0.0.1)", _dim("(default, safer)")),
-            ("Remote (0.0.0.0)", _dim("(required for Docker / remote access)")),
+            ("Local (127.0.0.1)", "(default, safer — no auth needed)"),
+            ("Remote (0.0.0.0)", "(Docker / remote access — root API key required)"),
         ],
-        default=1,
+        default=2 if is_remote_now else 1,
     )
 
-    if mode == 1:
-        return {"host": "127.0.0.1"}
+    try:
+        port_default = int(current.get("port") or 1933)
+    except (TypeError, ValueError):
+        port_default = 1933
+    port = _prompt_required_int("Port", default=port_default)
+    if port is None:
+        port = port_default
 
-    print(f"\n  {_bold('Remote binding requires a root API key.')}")
-    print(f"  {_dim('Clients must send this key as a Bearer token to authenticate.')}")
-    root_api_key = _prompt_api_key("Root API Key")
-    if not root_api_key:
-        print(f"  {_red('Root API key is required for remote binding')}")
-        return None
-    return {"host": "0.0.0.0", "root_api_key": root_api_key}
+    if mode == 1:
+        return {"host": "127.0.0.1", "port": port}
+
+    print(f"\n  {_dim('Non-local binding switches auth to api_key mode: every client must send')}")
+    print(f"  {_dim('the root API key as a Bearer token (Authorization: Bearer <key>).')}")
+
+    existing_key = str(current.get("root_api_key") or "")
+    key_options: list[tuple[str, str]] = []
+    if existing_key:
+        key_options.append(("Keep existing key", f"({_mask_secret(existing_key)})"))
+    key_options.append(
+        ("Generate one for me", "(recommended — 64-char random key, shown once below)")
+    )
+    key_options.append(("Enter my own", ""))
+
+    key_source = _prompt_choice("Root API key:", key_options, default=1)
+    offset = 1 if existing_key else 0
+
+    if existing_key and key_source == 1:
+        root_api_key = existing_key
+    elif key_source == 1 + offset:
+        root_api_key = secrets.token_hex(32)
+        print(f"\n  {_green('Generated root API key — copy it now, clients need it:')}")
+        print(f"\n    {_bold(root_api_key)}\n")
+        print(f"  {_dim('It is also saved in ov.conf (server.root_api_key).')}")
+        print(f"  {_dim('Clients authenticate with: Authorization: Bearer <this key>')}")
+    else:
+        root_api_key = _prompt_api_key("Root API Key")
+        if not root_api_key:
+            print(f"  {_red('Root API key is required for remote binding')}")
+            return None
+
+    return {"host": "0.0.0.0", "port": port, "root_api_key": root_api_key}
+
+
+def _wizard_gateway(
+    server: dict[str, Any], current: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Enable the gateway on the server port and choose who may configure it."""
+    from openviking_gateway.config import EmbeddedGatewayConfig
+
+    # Settings the embedded gateway no longer reads are dropped on save.
+    removed = EmbeddedGatewayConfig.removed_fields
+    gateway = {k: v for k, v in (current or {}).items() if k not in removed}
+    _rule("OpenViking Gateway")
+    gateway["enabled"] = _prompt_confirm(
+        "Enable OpenViking Gateway on the same port?", default=gateway.get("enabled", False)
+    )
+    if gateway["enabled"]:
+        _check_gateway_public_url(server, gateway)
+        _prompt_gateway_access(server, gateway)
+    return gateway
+
+
+def _check_gateway_public_url(server: dict[str, Any], gateway: dict[str, Any]) -> None:
+    """Offer to clear a public_url left over from the old 1935 gateway port."""
+    public_url = str(gateway.get("public_url") or "")
+    port = urlsplit(public_url).port
+    server_port = int(server.get("port") or 1933)
+    if port is None or port == server_port:
+        return
+    print(f"\n  {_yellow(f'gateway.public_url points at port {port}:')} {public_url}")
+    print(f"  {_dim(f'The gateway now serves on the server port ({server_port}).')}")
+    if _prompt_confirm("Clear gateway.public_url?", default=port == 1935):
+        gateway.pop("public_url")
+
+
+def _prompt_gateway_access(server: dict[str, Any], gateway: dict[str, Any]) -> None:
+    """Remote servers choose whether users may configure upstreams themselves."""
+    if not (server.get("root_api_key") or server.get("auth_mode") == "api_key"):
+        return
+    allow_users = _prompt_confirm(
+        "Allow users to configure their own gateway upstreams?",
+        default=not bool(gateway.get("management_key")),
+    )
+    if allow_users:
+        gateway.pop("management_key", None)
+    elif not gateway.get("management_key"):
+        gateway["management_key"] = "ovgm_" + secrets.token_urlsafe(32)
+        print(f"\n  {_green('Generated gateway management key — copy it to unlock editing:')}")
+        print(f"\n    {_bold(gateway['management_key'])}\n")
+        print(f"  {_dim('Saved in ov.conf (gateway.management_key).')}")
 
 
 def _wizard_query_planner(config_dict: dict[str, Any], ollama_running: bool | None = None) -> None:
@@ -1162,7 +2189,10 @@ def _wizard_query_planner(config_dict: dict[str, Any], ollama_running: bool | No
     Mutates *config_dict* in place to add ``query_planner``. Prompt selection is
     resolved at retrieval time from the configured model name.
     """
-    print(f"\n  {_bold('Query planner (optional)')}")
+    if "query_planner" in config_dict:
+        return  # already configured (e.g. by the recommended Ollama setup)
+
+    _rule("Query planner (optional)")
     print(f"  {_dim('A small local model that plans retrieval before search — skips')}")
     print(f"  {_dim('lookups for small talk and emits focused queries otherwise, saving tokens.')}")
 
@@ -1191,14 +2221,12 @@ def _wizard_query_planner(config_dict: dict[str, Any], ollama_running: bool | No
     choice = _prompt_choice("Query planner model:", options, default=1)
     preset = QUERY_PLANNER_PRESETS[choice - 1]
 
-    if ollama_running and not is_model_available(preset.ollama_model, available_models):
-        if _prompt_confirm(f"'{preset.ollama_model}' not found locally. Pull now?"):
-            print()
-            if not ollama_pull_model(preset.ollama_model):
-                pull_hint = "Pull failed. You can pull it later: ollama pull "
-                print(f"  {_yellow(pull_hint + preset.ollama_model)}")
-            else:
-                print(f"  {_green('OK')} {preset.ollama_model} pulled successfully")
+    _ensure_model_pulled(
+        preset.ollama_model,
+        f"~{_QUERY_PLANNER_DOWNLOAD_GB} GB",
+        bool(ollama_running),
+        available_models,
+    )
 
     config_dict["query_planner"] = _build_query_planner_config(preset)
 
@@ -1228,8 +2256,249 @@ def _wizard_custom() -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
+# Partial reconfiguration of an existing ov.conf
+# ---------------------------------------------------------------------------
+
+
+def _prompt_embedding_flow(
+    *, allow_back: bool = False, current: dict[str, Any] | None = None
+) -> tuple[dict[str, Any] | None | object, bool | None]:
+    """Embedding selection across all backends (main flow and section updates).
+
+    Returns ``(dense_config, ollama_running)``; ``dense_config`` is None on
+    cancel, the ``_CUSTOM_SETUP`` sentinel for manual editing, or ``_GO_BACK``
+    when *allow_back* is set and the user backed out of the backend menu.
+    *current* (the existing dense config, if any) seeds all defaults.
+    """
+    current = current or {}
+    backend_default = {"ollama": 2, "local": 3}.get(str(current.get("provider") or ""), 1)
+    while True:
+        choice = _prompt_choice(
+            "Embedding setup:",
+            [
+                ("Cloud API", "(VolcEngine, BytePlus, OpenAI)"),
+                ("Local via Ollama", "(no API key, runs on this machine)"),
+                ("Lightweight CPU embedding", "(llama.cpp, ~24 MB, no Ollama needed)"),
+            ],
+            default=backend_default,
+            allow_back=allow_back,
+        )
+
+        if choice == 0:
+            return _GO_BACK, None
+
+        if choice == 1:
+            dense = _prompt_cloud_embedding(allow_back=True, current=current)
+            if dense is _GO_BACK:
+                continue  # back to the backend menu
+            return dense, None
+
+        if choice == 2:
+            ollama_running = _ensure_ollama()
+            if not ollama_running:
+                if not _prompt_confirm("Continue without Ollama?", default=False):
+                    return None, ollama_running
+            available_models = get_ollama_models() if ollama_running else []
+            ram_gb = _get_system_ram_gb()
+            rec_idx, _ = _get_recommended_indices(ram_gb)
+            if current.get("provider") == "ollama":
+                for i, p in enumerate(EMBEDDING_PRESETS):
+                    if p.model == current.get("model"):
+                        rec_idx = i  # default to the currently configured model
+                        break
+            preset = _select_embedding_preset(
+                ollama_running, available_models, rec_idx, allow_back=True
+            )
+            if preset is None:
+                continue  # back to the backend menu
+            _ensure_model_pulled(preset.model, preset.size_hint, ollama_running, available_models)
+            return _ollama_dense_config(preset), ollama_running
+
+        gguf = _prompt_llamacpp_embedding()
+        if gguf is None:
+            return None, None
+        return {
+            "provider": "local",
+            "model": gguf.model_name,
+            "dimension": gguf.dimension,
+        }, None
+
+
+def _update_existing_config(config_path: Path, section: str) -> int:
+    """Update a single section of an existing ov.conf."""
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        print(f"  {_red(f'Cannot read existing config: {exc}')}")
+        print(f"  {_dim('Fix or remove the file, then re-run `openviking-server init`.')}")
+        return 1
+    if not isinstance(data, dict):
+        print(f"  {_red('Existing config is not a JSON object; cannot update in place.')}")
+        return 1
+
+    if section == "vlm":
+        current_vlm = _config_section(data, "vlm")
+        print(f"\n  Current VLM: {_summarize_model(current_vlm)}")
+        vlm_config, _ = _prompt_cloud_vlm(current=current_vlm)
+        if vlm_config is None:
+            print("\n  Setup cancelled.\n")
+            return 0
+        old_summary, new_summary = _summarize_model(current_vlm), _summarize_model(vlm_config)
+        data["vlm"] = vlm_config
+    elif section == "embedding":
+        old_dense = _config_section(data, "embedding", "dense")
+        old_dim = old_dense.get("dimension")
+        print(f"\n  Current embedding: {_summarize_model(old_dense)}")
+        dense, _ = _prompt_embedding_flow(current=old_dense)
+        if dense is _CUSTOM_SETUP:
+            return 0
+        if dense is None:
+            print("\n  Setup cancelled.\n")
+            return 0
+        if old_dim and dense.get("dimension") != old_dim:
+            print(
+                f"\n  {_yellow('Embedding dimension changes from ' + str(old_dim) + ' to ' + str(dense.get('dimension')) + '.')}"
+            )
+            print(
+                f"  {_yellow('Existing vector indexes become unusable — data must be re-ingested.')}"
+            )
+            if not _prompt_confirm("Continue?", default=False):
+                print("\n  Setup cancelled.\n")
+                return 0
+        old_summary, new_summary = _summarize_model(old_dense), _summarize_model(dense)
+        data.setdefault("embedding", {})["dense"] = dense
+    elif section == "gateway":
+        current_gateway = _config_section(data, "gateway")
+        gateway = _wizard_gateway(_config_section(data, "server"), current_gateway)
+        old_summary, new_summary = (
+            _summarize_gateway(current_gateway),
+            _summarize_gateway(gateway),
+        )
+        data["gateway"] = gateway
+    else:  # server
+        current_server = _config_section(data, "server")
+        server_dict = _wizard_server(current=current_server)
+        if server_dict is None:
+            print("\n  Setup cancelled.\n")
+            return 0
+        old_summary, new_summary = (
+            _summarize_server(current_server),
+            _summarize_server(server_dict),
+        )
+        updated_server = {**current_server, **server_dict}
+        if server_dict.get("host") == "127.0.0.1":
+            updated_server.pop("auth_mode", None)
+            updated_server.pop("root_api_key", None)
+        data["server"] = updated_server
+        gateway = _config_section(data, "gateway")
+        if gateway.get("enabled"):
+            # Local dev has no restricted configuration; remote asks who may configure.
+            if server_dict.get("host") == "127.0.0.1":
+                gateway.pop("management_key", None)
+            else:
+                _prompt_gateway_access(updated_server, gateway)
+            data["gateway"] = gateway
+
+    print(f"\n  {_bold('Change:')} {old_summary}")
+    print(f"      {_cyan('→')}    {new_summary}")
+
+    if not _prompt_confirm("\n  Save configuration?"):
+        print("\n  Setup cancelled.\n")
+        return 0
+    if not _write_config(data, config_path):
+        return 1
+
+    print(f"  {_green('OK')} Configuration updated\n")
+    _post_save_actions()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Post-save actions
+# ---------------------------------------------------------------------------
+
+
+def _post_save_actions() -> None:
+    """Offer to validate the fresh config and start the server right away."""
+    if _prompt_confirm("Validate the setup now? (runs `openviking-server doctor`)"):
+        try:
+            from openviking_cli.doctor import run_doctor
+
+            run_doctor()
+        except Exception as exc:
+            print(f"  {_yellow(f'doctor failed to run: {exc}')}")
+
+    if _prompt_confirm("Start the server now?", default=False):
+        # Replace the wizard process with the server so Ctrl-C etc. behave
+        # exactly as a direct `openviking-server` invocation.
+        os.execv(sys.executable, [sys.executable, "-m", "openviking_cli.server_bootstrap"])
+
+
+# ---------------------------------------------------------------------------
 # Main orchestrator
 # ---------------------------------------------------------------------------
+
+
+def _summarize_model(section: dict[str, Any]) -> str:
+    """One-line, secret-free description of a model config block."""
+    if not section:
+        return _dim("(not configured)")
+    provider = section.get("provider", "?")
+    model = section.get("model", "?")
+    text = f"{provider} · {model}"
+    api_base = str(section.get("api_base") or "")
+    if api_base:
+        # The endpoint distinguishes e.g. VolcEngine plans from pay-as-you-go.
+        text += f" @ {api_base.removeprefix('https://').removeprefix('http://')}"
+    if section.get("dimension"):
+        text += f" ({section['dimension']}d)"
+    return text
+
+
+def _summarize_server(server: dict[str, Any]) -> str:
+    """One-line, secret-free description of the server config block."""
+    if not server:
+        return _dim("(defaults: 127.0.0.1:1933 · auth dev)")
+    host = server.get("host", "127.0.0.1")
+    port = server.get("port", 1933)
+    auth = "api_key (root key set)" if server.get("root_api_key") else "dev (no auth)"
+    return f"{host}:{port} · auth {auth}"
+
+
+def _summarize_gateway(gateway: dict[str, Any]) -> str:
+    if not gateway.get("enabled"):
+        return "disabled"
+    access = "management key required" if gateway.get("management_key") else "users can configure"
+    return f"enabled on server port · {access}"
+
+
+def _config_section(data: dict[str, Any], *keys: str) -> dict[str, Any]:
+    """Safely walk nested dict keys, returning {} on any non-dict hop."""
+    node: Any = data
+    for key in keys:
+        if not isinstance(node, dict):
+            return {}
+        node = node.get(key)
+    return node if isinstance(node, dict) else {}
+
+
+def _load_config_data(config_path: Path) -> dict[str, Any] | None:
+    """Best-effort read of the existing ov.conf; None when unreadable."""
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _print_current_config(data: dict[str, Any]) -> None:
+    """Show the non-secret parts of the existing configuration."""
+    print(f"\n  {_bold('Current configuration')}")
+    print(f"    Embedding:     {_summarize_model(_config_section(data, 'embedding', 'dense'))}")
+    print(f"    VLM:           {_summarize_model(_config_section(data, 'vlm'))}")
+    print(f"    Query planner: {_summarize_model(_config_section(data, 'query_planner'))}")
+    print(f"    Server:        {_summarize_server(_config_section(data, 'server'))}")
+    print(f"    Gateway:       {_summarize_gateway(_config_section(data, 'gateway'))}")
 
 
 def run_init() -> int:
@@ -1237,28 +2506,39 @@ def run_init() -> int:
     config_path = _config_path()
     workspace = _workspace_path()
 
-    print(f"\n  {_bold('OpenViking Setup')}")
-    print(f"  {'=' * 16}\n")
+    _print_banner()
     print(f"  {_dim(f'Data will be stored under {workspace} unless you edit ov.conf later.')}\n")
 
-    # Check for existing config
+    # Existing config: show what is configured and offer section-level updates
+    # instead of forcing a redo.
     if config_path.exists():
         print(f"  {_yellow('Existing config found:')} {config_path}")
-        if not _prompt_confirm("Overwrite? (current config will be backed up as .bak)"):
+        data = _load_config_data(config_path)
+        vlm_now = emb_now = server_now = gateway_now = ""
+        if data is not None:
+            _print_current_config(data)
+            vlm_now = f"(now: {_summarize_model(_config_section(data, 'vlm'))})"
+            emb_now = f"(now: {_summarize_model(_config_section(data, 'embedding', 'dense'))})"
+            server_now = f"(now: {_summarize_server(_config_section(data, 'server'))})"
+            gateway_now = f"(now: {_summarize_gateway(_config_section(data, 'gateway'))})"
+        action = _prompt_choice(
+            "What would you like to do?",
+            [
+                ("Start over", "(full setup, current config backed up as .bak)"),
+                ("Update VLM", vlm_now),
+                ("Update embedding", emb_now),
+                ("Update server & auth", server_now),
+                ("Update gateway", gateway_now),
+                ("Cancel", ""),
+            ],
+            default=1,
+        )
+        if action == 6:
             print("  Setup cancelled.\n")
             return 0
-
-    # Deployment mode
-    mode = _prompt_choice(
-        "Choose setup mode:",
-        [
-            ("Cloud API", "(VolcEngine, BytePlus, OpenAI, etc.)"),
-            ("Local embedding via llama.cpp", "(CPU embedding, no GPU required)"),
-            ("Local models via Ollama", "(recommended for macOS / Apple Silicon)"),
-            ("Custom", "(manual editing)"),
-        ],
-        default=1,
-    )
+        if action in (2, 3, 4, 5):
+            section = {2: "vlm", 3: "embedding", 4: "server", 5: "gateway"}[action]
+            return _update_existing_config(config_path, section)
 
     config_dict: dict[str, Any] | None = None
     # Tracks whether Ollama was already set up by the chosen mode, so the query
@@ -1266,15 +2546,43 @@ def run_init() -> int:
     # means the mode never touched Ollama (e.g. Cloud).
     ollama_running: bool | None = None
 
-    if mode == 1:
-        config_dict = _wizard_cloud()
-    elif mode == 2:
-        config_dict, ollama_running = _wizard_llamacpp()
-    elif mode == 3:
-        config_dict, ollama_running = _wizard_ollama()
-    else:
-        _wizard_custom()
-        return 0
+    # Setup mode; ← inside step-by-step returns here.
+    while True:
+        mode = _prompt_choice(
+            "Choose setup mode:",
+            [
+                (
+                    "Step-by-step setup",
+                    "(pick embedding & VLM separately — cloud, local, or mixed)",
+                ),
+                ("Recommended local setup", "(all-Ollama, sized to your RAM, one confirm)"),
+                ("Manual", "(edit ov.conf directly)"),
+                (
+                    "VolcEngine account setup (火山账号授权配置)",
+                    "(sign in once for VLM & embedding)",
+                ),
+            ],
+            default=1,
+        )
+
+        if mode == 1:
+            result, ollama_running = _wizard_two_step()
+            if result is _GO_BACK:
+                continue  # back to the mode menu
+            if result is _CUSTOM_SETUP:
+                return 0
+            config_dict = result  # type: ignore[assignment]
+        elif mode == 2:
+            config_dict, ollama_running = _wizard_ollama()
+        elif mode == 4:
+            result = _wizard_volcengine()
+            if result is _GO_BACK:
+                continue
+            config_dict = result  # type: ignore[assignment]
+        else:
+            _wizard_custom()
+            return 0
+        break
 
     if config_dict is None:
         print("\n  Setup cancelled.\n")
@@ -1287,19 +2595,21 @@ def run_init() -> int:
         print("\n  Setup cancelled.\n")
         return 0
     config_dict["server"] = server_dict
+    config_dict["gateway"] = _wizard_gateway(server_dict)
 
-    # Summary
+    # Summary — providers/models/dimensions are shown, secrets never are.
     emb = config_dict.get("embedding", {}).get("dense", {})
     vlm = config_dict.get("vlm", {})
 
-    print(f"\n  {_bold('Summary:')}")
-    print(f"    Embedding:  {_configured_hint(bool(emb))}")
+    _rule("Summary")
+    print(f"    Embedding:     {_summarize_model(emb)}")
     if emb.get("model_path"):
         print("    Model path: custom local model (hidden)")
-    vlm_summary = _configured_hint(bool(vlm))
-    print(f"    VLM:        {vlm_summary}")
-    print(f"    Query planner: {_configured_hint(bool(config_dict.get('query_planner')))}")
-    print(f"    Server:     bound to {server_dict['host']}")
+    print(f"    VLM:           {_summarize_model(vlm)}")
+    planner = config_dict.get("query_planner", {})
+    print(f"    Query planner: {_summarize_model(planner)}")
+    print(f"    Server:        {_summarize_server(server_dict)}")
+    print(f"    Gateway:       {_summarize_gateway(config_dict['gateway'])}")
     if server_dict.get("root_api_key"):
         print("    Root API key: configured (hidden)")
     print("    Workspace:  configured (hidden)")
@@ -1322,6 +2632,8 @@ def run_init() -> int:
     print(f"    Start the server:  {_cyan('openviking-server')}")
     print(f"    Validate setup:    {_cyan('openviking-server doctor')}")
     print()
+
+    _post_save_actions()
 
     return 0
 

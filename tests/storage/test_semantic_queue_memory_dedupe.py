@@ -2,15 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for memory-context semantic enqueue deduplication (#769)."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
 
+from openviking.storage.abstract_overview import (
+    AbstractOverviewWriteResult,
+    parse_abstract_overview,
+)
 from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.queuefs.semantic_queue import SemanticQueue, is_semantic_msg_stale
+
+
+def _processor(**kwargs):
+    resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace()))
+    return SemanticProcessor(vlm_resolver=resolver, **kwargs)
 
 
 @pytest.mark.asyncio
@@ -39,6 +49,62 @@ async def test_memory_semantic_enqueue_deduped_within_window():
         assert r1 == "queued-id"
         assert r2 == "deduplicated"
         assert named_enqueue.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_memory_semantic_worker_retry_bypasses_dedupe_window():
+    mock_agfs = MagicMock()
+    with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock) as named_enqueue:
+        named_enqueue.return_value = "queued-id"
+        q = SemanticQueue(mock_agfs, "/queue", "semantic")
+        msg = SemanticMsg(
+            uri="viking://user/default/memories/entities",
+            context_type="memory",
+            account_id="acc",
+            user_id="u1",
+            peer_id="p1",
+        )
+
+        await q.enqueue(msg)
+        retry = await q.enqueue(msg, deduplicate_memory=False)
+
+        assert retry == "queued-id"
+        assert named_enqueue.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_worker_without_lock_does_not_dedupe_a_memory_retry(monkeypatch):
+    """The circuit-breaker requeue runs before a lease is acquired.
+
+    That is the branch `SemanticMessageWork` takes when it owns no lock, so the
+    worker itself - not just the queue API - has to bypass the memory window.
+    """
+    from openviking.storage.queuefs.semantic_work import SemanticMessageWork
+
+    processor = _processor()
+    with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock) as named_enqueue:
+        named_enqueue.return_value = "queued-id"
+        queue = SemanticQueue(MagicMock(), "/queue", "semantic")
+        msg = SemanticMsg(
+            uri="viking://user/default/memories/entities",
+            context_type="memory",
+            account_id="acc",
+            user_id="u1",
+            peer_id="p1",
+        )
+        assert await queue.enqueue(msg) == "queued-id"
+
+        monkeypatch.setattr(
+            "openviking.storage.queuefs.get_queue_manager",
+            lambda: SimpleNamespace(SEMANTIC="semantic", get_queue=lambda _: queue),
+        )
+
+        work = SemanticMessageWork(processor, msg, None)
+        await work.reenqueue()
+
+        # Without the flag the retry would be coalesced against the enqueue it
+        # is retrying, and the delivery would be ACKed with no replacement.
+        assert named_enqueue.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -101,46 +167,32 @@ async def test_coalesced_semantic_messages_mark_old_version_stale():
         assert not is_semantic_msg_stale(second)
 
 
-class _FakeHandle:
-    def __init__(self):
-        self.id = "lock-1"
-        self.locks = []
+class _FakePathLock:
+    """Mock for _async_agfs pathlock operations."""
 
-
-class _FakeLockManager:
     def __init__(self):
         self.acquired_batches = []
         self.release_calls = []
 
-    def create_handle(self):
-        return _FakeHandle()
-
-    def get_handle(self, handle_id):
-        del handle_id
-        return None
-
-    async def acquire_exact_path_batch(self, handle, paths):
+    async def pathlock_acquire_exact_batch(self, paths):
         self.acquired_batches.append(paths)
-        handle.locks.extend(paths)
-        return True
+        return {"id": "lock-1"}
 
-    async def release(self, handle):
-        self.release_calls.append(handle.id)
-
-    async def release_selected(self, handle, lock_paths):
-        del handle, lock_paths
+    async def pathlock_release(self, lease):
+        self.release_calls.append(lease["id"])
 
 
 class _FakeVikingFS:
-    def __init__(self):
+    def __init__(self, pathlock=None):
+        self._async_agfs = pathlock or _FakePathLock()
         self.writes = []
 
     def _uri_to_path(self, uri, ctx=None):
         del ctx
         return f"/fake/{uri.replace('://', '/').strip('/')}"
 
-    async def write_file(self, uri, content, ctx=None):
-        del ctx
+    async def write_file(self, uri, content, ctx=None, lease_ref=None):
+        del ctx, lease_ref
         self.writes.append((uri, content))
 
 
@@ -153,26 +205,18 @@ class _FakeMemoryDirFS:
         ]
 
 
-class _FakeMemoryParentDirFS:
-    async def ls(self, uri, node_limit=None, ctx=None):
-        del uri, node_limit, ctx
-        return [
-            {"name": "2026", "isDir": True},
-            {"name": "empty", "isDir": True},
-        ]
-
-    async def abstract(self, uri, ctx=None):
-        del ctx
-        if uri.endswith("/2026"):
-            return "# 2026\n\nrolled up event summaries"
-        return f"# {uri} [Directory abstract is not ready]"
+def _patch_semantic_config(monkeypatch, *, overview_sample_limit=32):
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=overview_sample_limit)),
+    )
 
 
 @pytest.mark.asyncio
-async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
-    lock_manager = _FakeLockManager()
-    viking_fs = _FakeVikingFS()
-    processor = SemanticProcessor()
+async def test_stale_memory_semantic_write_is_success(monkeypatch):
+    pathlock = _FakePathLock()
+    viking_fs = _FakeVikingFS(pathlock)
+    processor = _processor()
     coalesce_key = f"memory|acc|u|p|viking://user/default/memories/preferences/{uuid4().hex}"
 
     with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock):
@@ -189,8 +233,6 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
         )
         await q.enqueue(first)
         await q.enqueue(latest)
-
-    monkeypatch.setattr("openviking.storage.transaction.get_lock_manager", lambda: lock_manager)
 
     wrote_first = await processor._write_memory_directory_semantics(
         msg=first,
@@ -211,21 +253,25 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
 
     assert not wrote_first
     assert wrote_latest
-    assert lock_manager.acquired_batches == [
+    assert pathlock.acquired_batches == [
         [
             "/fake/viking/user/default/memories/preferences/.overview.md",
             "/fake/viking/user/default/memories/preferences/.abstract.md",
         ]
     ]
-    assert viking_fs.writes == [
-        ("viking://user/default/memories/preferences/.overview.md", "latest overview"),
-        ("viking://user/default/memories/preferences/.abstract.md", "latest abstract"),
+    assert [uri for uri, _ in viking_fs.writes] == [
+        "viking://user/default/memories/preferences/.overview.md",
+        "viking://user/default/memories/preferences/.abstract.md",
+    ]
+    assert [parse_abstract_overview(raw).body.strip() for _, raw in viking_fs.writes] == [
+        "latest overview",
+        "latest abstract",
     ]
 
 
 @pytest.mark.asyncio
 async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
-    processor = SemanticProcessor(max_concurrent_llm=4)
+    processor = _processor(max_concurrent_llm=4)
     summaries = []
 
     async def generate_file_summary(file_path, llm_sem=None, ctx=None):
@@ -233,19 +279,24 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
         name = file_path.rsplit("/", 1)[-1]
         return {"name": name, "summary": f"summary:{name}"}
 
-    async def generate_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
-        del dir_uri, children_abstracts, llm_sem
+    async def generate_overview(
+        dir_uri, file_summaries, children_abstracts, llm_sem=None, **kwargs
+    ):
+        del dir_uri, children_abstracts, llm_sem, kwargs
         summaries.extend(file_summaries)
         return "overview"
 
     async def write_semantics(**kwargs):
         del kwargs
-        return True
+        return AbstractOverviewWriteResult(
+            wrote=True, overview_body_changed=True, abstract_body_changed=True
+        )
 
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: _FakeMemoryDirFS(),
     )
+    _patch_semantic_config(monkeypatch)
     monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
     monkeypatch.setattr(processor, "_generate_overview", generate_overview)
     monkeypatch.setattr(
@@ -267,56 +318,8 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_memory_directory_rolls_up_child_abstracts_without_direct_files(monkeypatch):
-    processor = SemanticProcessor(max_concurrent_llm=4)
-    dir_uri = "viking://user/default/memories/events"
-    captured_children = []
-    captured_directory_vectorize = []
-
-    async def generate_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
-        del dir_uri, file_summaries, llm_sem
-        captured_children.extend(children_abstracts)
-        return "overview"
-
-    async def write_semantics(**kwargs):
-        del kwargs
-        return True
-
-    async def vectorize_directory(**kwargs):
-        captured_directory_vectorize.append(kwargs)
-
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
-        lambda: _FakeMemoryParentDirFS(),
-    )
-    monkeypatch.setattr(processor, "_generate_overview", generate_overview)
-    monkeypatch.setattr(
-        processor,
-        "_normalize_overview_generation",
-        lambda overview: (overview, "abstract"),
-    )
-    monkeypatch.setattr(processor, "_write_memory_directory_semantics", write_semantics)
-    monkeypatch.setattr(processor, "_vectorize_directory", vectorize_directory)
-
-    await processor._process_memory_directory(
-        SemanticMsg(
-            uri=dir_uri,
-            context_type="memory",
-        )
-    )
-
-    assert captured_children == [
-        {"name": "2026", "abstract": "# 2026\n\nrolled up event summaries"}
-    ]
-    assert len(captured_directory_vectorize) == 1
-    assert captured_directory_vectorize[0]["uri"] == dir_uri
-    assert captured_directory_vectorize[0]["abstract"] == "abstract"
-    assert captured_directory_vectorize[0]["overview"] == "overview"
-
-
-@pytest.mark.asyncio
 async def test_memory_directory_vectorizes_changed_files_with_generated_summary(monkeypatch):
-    processor = SemanticProcessor(max_concurrent_llm=4)
+    processor = _processor(max_concurrent_llm=4)
     dir_uri = "viking://user/default/memories/preferences"
     changed_uri = f"{dir_uri}/first.md"
     captured_file_vectorize = []
@@ -325,15 +328,21 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
     async def generate_file_summary(file_path, llm_sem=None, ctx=None):
         del llm_sem, ctx
         name = file_path.rsplit("/", 1)[-1]
-        return {"name": name, "summary": f"summary:{name}"}
+        return {"name": name, "summary": f"summary:{name}", "content": "raw content"}
 
-    async def generate_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
-        del dir_uri, file_summaries, children_abstracts, llm_sem
+    async def generate_overview(
+        dir_uri, file_summaries, children_abstracts, llm_sem=None, **kwargs
+    ):
+        del dir_uri, children_abstracts, llm_sem, kwargs
+        assert len(captured_file_vectorize) == 1
+        assert all("content" not in summary for summary in file_summaries)
         return "overview"
 
     async def write_semantics(**kwargs):
         del kwargs
-        return True
+        return AbstractOverviewWriteResult(
+            wrote=True, overview_body_changed=True, abstract_body_changed=True
+        )
 
     async def vectorize_single_file(**kwargs):
         captured_file_vectorize.append(kwargs)
@@ -345,6 +354,7 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: _FakeMemoryDirFS(),
     )
+    _patch_semantic_config(monkeypatch)
     monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
     monkeypatch.setattr(processor, "_generate_overview", generate_overview)
     monkeypatch.setattr(
@@ -371,7 +381,49 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
     assert captured_file_vectorize[0]["summary_dict"] == {
         "name": "first.md",
         "summary": "summary:first.md",
+        "content": "raw content",
     }
     assert captured_file_vectorize[0]["preserve_existing_created_at"] is True
     assert len(captured_directory_vectorize) == 1
     assert captured_directory_vectorize[0]["uri"] == dir_uri
+
+
+@pytest.mark.asyncio
+async def test_memory_directory_skips_vectorization_when_visible_semantics_are_unchanged(
+    monkeypatch,
+):
+    processor = _processor(max_concurrent_llm=4)
+    vectorize_directory = AsyncMock()
+    vectorize_file = AsyncMock()
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: _FakeMemoryDirFS(),
+    )
+    _patch_semantic_config(monkeypatch)
+    monkeypatch.setattr(
+        processor,
+        "_generate_single_file_summary",
+        AsyncMock(return_value={"name": "file.md", "summary": "summary"}),
+    )
+    monkeypatch.setattr(processor, "_generate_overview", AsyncMock(return_value="overview"))
+    monkeypatch.setattr(
+        processor, "_normalize_overview_generation", lambda overview: (overview, "abstract")
+    )
+    monkeypatch.setattr(
+        processor,
+        "_write_memory_directory_semantics",
+        AsyncMock(return_value=AbstractOverviewWriteResult(wrote=True)),
+    )
+    monkeypatch.setattr(processor, "_vectorize_single_file", vectorize_file)
+    monkeypatch.setattr(processor, "_vectorize_directory", vectorize_directory)
+
+    await processor._process_memory_directory(
+        SemanticMsg(
+            uri="viking://user/default/memories/preferences",
+            context_type="memory",
+        )
+    )
+
+    assert vectorize_file.await_count == 2
+    vectorize_directory.assert_not_awaited()

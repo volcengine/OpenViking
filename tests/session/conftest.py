@@ -4,52 +4,101 @@
 """Session test fixtures"""
 
 import asyncio
+from functools import partial
 from typing import AsyncGenerator
 
 import pytest_asyncio
 
-from openviking import AsyncOpenViking
 from openviking.message import TextPart, ToolPart
-from openviking.service.task_tracker import TaskStatus, get_task_tracker, reset_task_tracker
+from openviking.server.identity import RequestContext
+from openviking.service.core import OpenVikingService
+from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking.storage.queuefs import QueueManager, SessionCommitMsg, get_queue_manager
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def _drain_background_tasks(client: AsyncOpenViking):
-    """Wait for background commit tasks to finish before client teardown."""
-    yield
-    # Drain asyncio.create_task() background tasks BEFORE client.close()
+@pytest_asyncio.fixture(scope="function")
+async def client(
+    service: OpenVikingService,
+    request_context: RequestContext,
+    monkeypatch,
+) -> partial:
+    """Bind the shared service's session factory to the test request context."""
+
+    queue_manager = get_queue_manager()
+    original_enqueue = queue_manager.enqueue
+    commit_tasks = []
+    queued_commit_tasks: set[str] = set()
     tracker = get_task_tracker()
-    for _ in range(100):  # up to 10s
-        pending = [
-            t
-            for t in await tracker.list_tasks()
-            if t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
-        ]
-        if not pending:
-            break
-        await asyncio.sleep(0.1)
-    reset_task_tracker()
+    original_has_work = tracker.has_work
+
+    async def has_work(task_id, **kwargs):
+        return task_id in queued_commit_tasks or await original_has_work(task_id, **kwargs)
+
+    monkeypatch.setattr(
+        tracker,
+        "has_work",
+        has_work,
+    )
+
+    async def enqueue_with_session_commit_fallback(queue_name, data):
+        if queue_name != QueueManager.SESSION_COMMIT:
+            return await original_enqueue(queue_name, data)
+
+        queued_commit_tasks.add(data["task_id"])
+
+        async def process_commit():
+            message = SessionCommitMsg(**data)
+            queued_session = service.sessions.session(
+                request_context,
+                session_id=message.session_id,
+                session_uri=message.session_uri,
+            )
+            while True:
+                phase1 = await queued_session._read_phase1_meta(message.archive_uri)
+                if phase1.get("status") == "ready" or await queued_session._archive_file_exists(
+                    message.archive_uri,
+                    ".failed.json",
+                ):
+                    break
+                await asyncio.sleep(0)
+            try:
+                while not await queued_session.resume_queued_commit(message):
+                    await asyncio.sleep(0)
+            finally:
+                queued_commit_tasks.discard(message.task_id)
+
+        commit_tasks.append(asyncio.create_task(process_commit()))
+        return data["task_id"]
+
+    monkeypatch.setattr(queue_manager, "enqueue", enqueue_with_session_commit_fallback)
+    yield partial(service.sessions.session, request_context)
+    if commit_tasks:
+        await asyncio.gather(*commit_tasks, return_exceptions=True)
 
 
 @pytest_asyncio.fixture(scope="function")
-async def session(client: AsyncOpenViking) -> AsyncGenerator[Session, None]:
+async def session(
+    client,
+    service: OpenVikingService,
+    request_context: RequestContext,
+) -> AsyncGenerator[Session, None]:
     """Create new Session"""
-    session = client.session()
+    session = await service.sessions.create(request_context)
     yield session
 
 
 @pytest_asyncio.fixture(scope="function")
-async def session_with_id(client: AsyncOpenViking) -> AsyncGenerator[Session, None]:
-    """Create Session with specified ID"""
-    session = client.session(session_id="test_session_001")
-    yield session
-
-
-@pytest_asyncio.fixture(scope="function")
-async def session_with_messages(client: AsyncOpenViking) -> AsyncGenerator[Session, None]:
+async def session_with_messages(
+    client,
+    service: OpenVikingService,
+    request_context: RequestContext,
+) -> AsyncGenerator[Session, None]:
     """Create Session with existing messages"""
-    session = client.session(session_id="test_session_with_messages")
+    session = await service.sessions.create(
+        request_context,
+        session_id="test_session_with_messages",
+    )
 
     session.add_message("user", [TextPart("Hello, this is a test message.")])
     session.add_message("assistant", [TextPart("Hello! How can I help you today?")])
@@ -61,10 +110,15 @@ async def session_with_messages(client: AsyncOpenViking) -> AsyncGenerator[Sessi
 
 @pytest_asyncio.fixture(scope="function")
 async def session_with_tool_call(
-    client: AsyncOpenViking,
+    client,
+    service: OpenVikingService,
+    request_context: RequestContext,
 ) -> AsyncGenerator[tuple[Session, str, str], None]:
     """Create Session with tool call"""
-    session = client.session(session_id="test_session_with_tool")
+    session = await service.sessions.create(
+        request_context,
+        session_id="test_session_with_tool",
+    )
 
     tool_id = "test_tool_001"
     tool_part = ToolPart(
@@ -79,3 +133,16 @@ async def session_with_tool_call(
     msg = session.add_message("assistant", [TextPart("Executing tool..."), tool_part])
 
     yield session, msg.id, tool_id
+
+
+@pytest_asyncio.fixture
+async def wm_session_with_messages(client, service, request_context, working_memory_policy):
+    session = await service.sessions.create(request_context, memory_policy=working_memory_policy)
+    for role, text in [
+        ("user", "Hello, this is a test message."),
+        ("assistant", "Hello! How can I help you today?"),
+        ("user", "I need help with testing."),
+        ("assistant", "I can help you with testing."),
+    ]:
+        await session.add_message_async(role, [TextPart(text)])
+    yield session

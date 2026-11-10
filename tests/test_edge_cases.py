@@ -24,11 +24,11 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from openviking.parse.parsers.upload_utils import (  # noqa: I001
-    _sanitize_rel_path,
     detect_and_convert_encoding,
     is_text_file,
     upload_directory,
 )
+from openviking.utils.path_safety import sanitize_relative_viking_path
 from openviking_cli.utils.uri import VikingURI
 
 
@@ -96,7 +96,7 @@ class TestLongFilenames:
         assert len(filename.encode("utf-8")) == 255
 
         # Test sanitization doesn't break at exact boundary
-        sanitized = _sanitize_rel_path(filename)
+        sanitized = sanitize_relative_viking_path(filename)
         assert sanitized is not None
         assert len(sanitized) > 0
 
@@ -108,7 +108,7 @@ class TestLongFilenames:
 
         assert len(filename.encode("utf-8")) == 256
 
-        sanitized = _sanitize_rel_path(filename)
+        sanitized = sanitize_relative_viking_path(filename)
         # Should be handled gracefully (truncated or rejected)
         assert sanitized is not None
 
@@ -120,7 +120,7 @@ class TestLongFilenames:
 
         assert len(filename.encode("utf-8")) > 400
 
-        sanitized = _sanitize_rel_path(filename)
+        sanitized = sanitize_relative_viking_path(filename)
         assert sanitized is not None
         # Should handle or truncate appropriately
 
@@ -128,7 +128,7 @@ class TestLongFilenames:
         """Test filename composed entirely of special characters."""
         special_filename = "!@#$%^&*()_+-={}[]|\\:;\"'<>,.?/~`" + ".txt"
 
-        sanitized = _sanitize_rel_path(special_filename)
+        sanitized = sanitize_relative_viking_path(special_filename)
         # Should sanitize dangerous characters while preserving valid ones
         assert sanitized is not None
         assert ".txt" in sanitized  # Extension should be preserved
@@ -144,7 +144,7 @@ class TestLongFilenames:
 
         for filename in dangerous_filenames:
             with pytest.raises(ValueError, match="Unsafe relative path rejected"):
-                _sanitize_rel_path(filename)
+                sanitize_relative_viking_path(filename)
 
 
 class TestSearchByIdEdgeCases:
@@ -218,30 +218,11 @@ class TestSearchByIdEdgeCases:
 class TestDuplicateFilenameHandling:
     """Test duplicate filename handling and case sensitivity."""
 
-    @pytest.mark.asyncio
-    async def test_upload_same_file_multiple_times(self, tmp_path):
-        """Test uploading the same file 10 times - should handle duplicates gracefully."""
-        # Create test file
-        test_file = tmp_path / "duplicate_test.txt"
-        test_file.write_text("This is a test file for duplicate testing.")
-
-        # Mock VikingFS
-        mock_fs = MagicMock()
-        mock_fs.write_file_bytes = AsyncMock()
-        mock_fs.mkdir = AsyncMock()
-
-        # Upload the same file 10 times
-        for _ in range(10):
-            await upload_text_files([str(test_file)], "viking://test/", mock_fs)
-
-        # Should handle duplicates without crashing
-        assert mock_fs.write_file_bytes.call_count == 10
-
     def test_case_sensitivity_filenames(self):
         """Test filenames that differ only in case."""
         filenames = ["TestFile.txt", "testfile.txt", "TESTFILE.TXT", "TestFile.TXT"]
 
-        sanitized_names = [_sanitize_rel_path(name) for name in filenames]
+        sanitized_names = [sanitize_relative_viking_path(name) for name in filenames]
 
         # All should be valid but may be treated differently on case-insensitive systems
         for name in sanitized_names:
@@ -258,8 +239,8 @@ class TestDuplicateFilenameHandling:
         assert filename_nfc != filename_nfd
         assert unicodedata.normalize("NFC", filename_nfd) == filename_nfc
 
-        sanitized_nfc = _sanitize_rel_path(filename_nfc)
-        sanitized_nfd = _sanitize_rel_path(filename_nfd)
+        sanitized_nfc = sanitize_relative_viking_path(filename_nfc)
+        sanitized_nfd = sanitize_relative_viking_path(filename_nfd)
 
         assert sanitized_nfc is not None
         assert sanitized_nfd is not None
@@ -351,7 +332,7 @@ class TestUnicodeEdgeCases:
         # Zero-width characters that might cause issues
         filename = "test\u200b\u200c\u200d\ufefffile.txt"  # ZWSP, ZWNJ, ZWJ, BOM
 
-        sanitized = _sanitize_rel_path(filename)
+        sanitized = sanitize_relative_viking_path(filename)
         assert sanitized is not None
 
         # Zero-width characters should ideally be stripped
@@ -362,7 +343,7 @@ class TestUnicodeEdgeCases:
         # Arabic/Hebrew filename
         rtl_filename = "ملف_اختبار.txt"  # Arabic for "test file"
 
-        sanitized = _sanitize_rel_path(rtl_filename)
+        sanitized = sanitize_relative_viking_path(rtl_filename)
         assert sanitized is not None
         assert len(sanitized) > 0
 
@@ -374,7 +355,7 @@ class TestUnicodeEdgeCases:
         # Base character + multiple combining marks
         filename = "e\u0301\u0302\u0303\u0304.txt"  # e + acute + circumflex + tilde + macron
 
-        sanitized = _sanitize_rel_path(filename)
+        sanitized = sanitize_relative_viking_path(filename)
         assert sanitized is not None
         assert len(sanitized) > 0
 
@@ -383,7 +364,7 @@ class TestUnicodeEdgeCases:
         # Emoji that require surrogate pairs in UTF-16
         filename = "test🏴󠁧󠁢󠁥󠁮󠁧󠁿🧑‍💻👨‍👩‍👧‍👦.txt"  # Flag, person, family
 
-        sanitized = _sanitize_rel_path(filename)
+        sanitized = sanitize_relative_viking_path(filename)
         assert sanitized is not None
         assert len(sanitized) > 0
 

@@ -1,18 +1,12 @@
 # Context Extraction
 
-OpenViking uses a three-layer async architecture for document parsing and context extraction.
+Resource ingestion proceeds through parsing, target-path resolution, content persistence, semantic generation, and embedding. Memories and skills have their own entry points and also use semantic processing and vector indexes.
 
 ## Overview
 
-```
-Input File → Parser → TreeBuilder → SemanticQueue → Vector Index
-              ↓           ↓              ↓
-          Parse &     Move Files     L0/L1 Generation
-          Convert     Queue Semantic  (LLM Async)
-          (No LLM)
-```
+<IngestionPipelineDiagram />
 
-**Design Principle**: Parsing and semantics are separated. Parser doesn't call LLM; semantic generation is async.
+Parsing and directory-summary generation are separate stages. Individual parsers may call models or external parsing services, so parsing is not universally LLM-free. Import APIs normally return a task ID before processing finishes; wait for that task before dependent searches. See [Task Management](../api/17-tasks.md).
 
 ## Parser
 
@@ -27,70 +21,40 @@ Parser handles document format conversion and structuring, creating file structu
 | PDF | PDFParser | .pdf | Supported |
 | HTML | HTMLParser | .html, .htm | Supported |
 | Code | CodeRepositoryParser | .py, .js, .go, etc. | Respects `.gitignore` and ignores common non-code directories |
-| Image | ImageParser | .png, .jpg, etc. |  |
-| Video | VideoParser | .mp4, .avi, etc. |  |
-| Audio | AudioParser | .mp3, .wav, etc. |  |
+| Image | ImageParser | .png, .jpg, etc. | Supported; depends on media configuration |
+| Video | VideoParser | .mp4, .avi, .mov, .mkv, .webm, .flv, .wmv, .ts (MPEG-TS content only) | Supported; depends on media configuration |
+| Audio | AudioParser | .mp3, .wav, .ogg, .flac, .aac, .m4a, .opus, .ac3 | Supported; depends on media configuration |
 
-### Core Flow (Document Example)
+### Parse Artifacts
 
-```python
-# 1. Parse file
-parse_result = registry.parse("/path/to/doc.md")
+The internal `registry.parse()` interface is asynchronous and returns a `ParseResult`. Artifacts can live in a local temporary directory or AGFS; `temp_dir_path` is not necessarily a Viking URI, and `artifact_ref` identifies the storage backend. These are server internals; clients should use the resource import API.
 
-# 2. Returns temp directory URI
-parse_result.temp_dir_path  # viking://temp/abc123
-```
+| Field | Meaning |
+| --- | --- |
+| `root` | Root of the parsed resource tree |
+| `temp_dir_path` | Temporary artifact location |
+| `artifact_ref` | Artifact backend and root path |
+| `source_format` / `parser_name` | Source format and parser name |
+| `parse_time` | Parsing duration in seconds |
+| `meta` / `warnings` | Metadata and parsing warnings |
 
-### Smart Splitting
+### Document Splitting
 
-```
-If document_tokens <= 1024:
-    → Save as single file
-Else:
-    → Split by headers
-    → Section < 512 tokens → Merge
-    → Section > 1024 tokens → Create subdirectory
-```
+The Markdown parser organizes sections by headings and character count. The default `max_section_chars` is 2000; `max_section_size` and `section_size_flexibility` remain accepted for configuration compatibility but do not control splitting. Ordinary text obeys the character limit; an oversized table row remains intact. Explicit `no_split` mode preserves the entire body.
 
-### Return Result
-
-```python
-ParseResult(
-    temp_dir_path: str,    # Temp directory URI
-    source_format: str,    # pdf/markdown/html
-    parser_name: str,      # Parser name
-    parse_time: float,     # Duration (seconds)
-    meta: Dict,            # Metadata
-)
-```
+Behavior varies by parser and `parse_mode`. Use `parse_mode="no_split"` for supported imports when a single file is needed; see [Resource Management](../api/02-resources.md).
 
 ## TreeBuilder
 
-TreeBuilder moves temp directory to AGFS and queues semantic processing.
+`TreeBuilder.finalize_from_temp()` inspects parse artifacts and resolves the final URI, returning a `BuildingTree` with root and temporary-location metadata. It does not copy files, clean up artifacts, or enqueue semantic work itself.
 
-### Core Flow
+### Subsequent Ingestion Steps
 
-```python
-building_tree = tree_builder.finalize_from_temp(
-    temp_dir_path="viking://temp/abc123",
-    scope="resources",  # resources/user
-)
-```
+1. Resolve and validate the target URI from the artifact and `to` or `parent`.
+2. The ingestion processor persists content, handles resource locks, and updates existing content.
+3. It schedules semantic processing and embedding, and cleans up temporary data through the artifact's backend.
 
-### 5-Phase Processing
-
-1. **Find document root**: Ensure exactly 1 subdirectory in temp
-2. **Determine target URI**: Map base URI by scope
-3. **Recursively move directory tree**: Copy all files to AGFS
-4. **Clean up temp directory**: Delete temp files
-5. **Queue semantic generation**: Submit SemanticMsg to queue
-
-### URI Mapping
-
-| scope | Base URI |
-|-------|----------|
-| resources | `viking://resources` |
-| user | `viking://user` |
+The default resource root is `viking://resources`. For personal resources, explicitly target `viking://~/resources/...`; `viking://user` is a container of user spaces, not your resource root.
 
 ## SemanticQueue
 
@@ -98,14 +62,16 @@ SemanticQueue handles async L0/L1 generation and vectorization.
 
 ### Message Structure
 
-```python
-SemanticMsg(
-    id: str,           # UUID
-    uri: str,          # Directory URI
-    context_type: str, # resource/memory/skill
-    status: str,       # pending/processing/completed
-)
-```
+Selected internal message fields follow; this is not a client request format:
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Message UUID |
+| `uri` | Directory to process |
+| `context_type` | resource, memory, skill, or session |
+| `status` | Queue processing status |
+| `recursive` | Whether to process child directories |
+| `propagate_to_parent` | Whether completion may schedule a parent refresh |
 
 ### Processing Flow (Bottom-up)
 
@@ -115,76 +81,45 @@ Leaf directories → Parent directories → Root
 
 ### Single Directory Processing Steps
 
-1. **Concurrent file summary generation**: Limited to 10 concurrent
+1. **Concurrent file summary generation**: Concurrency is limited by `vlm.max_concurrent`
 2. **Collect child directory abstracts**: Read generated .abstract.md
 3. **Generate .overview.md**: LLM generates L1 overview
 4. **Extract .abstract.md**: Extract L0 from overview
-5. **Write files**: Save to AGFS
+5. **Write files**: Store the body and protected metadata as OKF Markdown
 6. **Vectorize**: Create Context and queue to EmbeddingQueue
 
-### Configuration Parameters
+L0/L1 are directory sidecars, not per-file sidecars. Parent-summary generation consumes only child L0 bodies; OKF frontmatter is excluded from prompts. Embedding input contains the body and the whitelisted `directory`; `source`, `generated_by`, and `freshness` are excluded.
+
+### Freshness, Sampling, and Parent Refresh
+
+Each generation collects all direct-child summaries without a 32-entry sample cap. The existing `semantic.max_overview_prompt_chars` budget (60000 characters by default) and batching/truncation behavior are unchanged. Resource/skill parent refreshes depend on child L0 body changes and freshness thresholds; unchanged L0 bodies do not propagate. `pending_child_changes` counts change events awaiting refresh, including repeated changes to the same child. See [Context Layers](03-context-layers.md#freshness-and-stable-sampling) for thresholds, manual refresh behavior, and deferred updates.
+
+### Processing Limits
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `max_concurrent_llm` | 10 | Concurrent LLM calls |
-| `max_images_per_call` | 10 | Max images per VLM call |
-| `max_sections_per_call` | 20 | Max sections per VLM call |
+| `vlm.max_concurrent` | 32 | Semantic-processing concurrency, passed to `SemanticProcessor.max_concurrent_llm` |
+| `max_images_per_call` | 10 | `VLMProcessor` constructor parameter: images per call; not an `ov.conf` field |
+| `max_sections_per_call` | 20 | `VLMProcessor` constructor parameter: sections per call; not an `ov.conf` field |
+| `semantic.overview_sample_limit` | 32 | Small-directory threshold for freshness scheduling, not a summary input count cap |
 
-## Code Skeleton Extraction (AST Mode)
+## Code Skeleton Extraction
 
-For code files, OpenViking supports AST-based skeleton extraction via tree-sitter as a lightweight alternative to LLM summarization, significantly reducing processing cost.
+For code files, OpenViking uses a fixed skeleton extraction route. This route is built into the code summary pipeline and is not selected or tuned by per-language parser settings.
 
-### Modes
+### What Skeleton Extraction Includes
 
-Controlled by `code_summary_mode` in `ov.conf` (see [Configuration](../guides/01-configuration.md#code)):
+The skeleton can include imports, classes, methods, functions, and other language-level symbols. Exact output depends on the maintained query or generic parser result for that language, but the route itself is fixed.
 
-| Mode | Description |
-|------|-------------|
-| `"ast"` | Extract structural skeleton for files ≥100 lines, skip LLM calls (**default**) |
-| `"llm"` | Always use LLM for summarization (original behavior) |
-| `"ast_llm"` | Extract AST skeleton first, then pass it as context to LLM for summarization |
+### Extraction Route
 
-### What AST Extracts
+Code skeleton extraction follows this fixed order:
 
-The skeleton includes:
+1. Use a maintained `tags.scm` query when one exists for the language.
+2. If no corresponding `tags.scm` exists, use `tree-sitter-language-pack.process()`.
+3. Invoke `semantic.code_summary` only as fallback when the extraction route produces no useful skeleton.
 
-- Module-level docstring (first line)
-- Import statement list
-- Class names, base classes, and method signatures (`ast` mode: first-line docstrings only; `ast_llm` mode: full docstrings)
-- Top-level function signatures
-
-### Supported Languages
-
-The following languages have dedicated extractors built on tree-sitter:
-
-| Language | Status |
-|----------|--------|
-| Python | Supported |
-| JavaScript / TypeScript | Supported |
-| Rust | Supported |
-| Go | Supported |
-| Java | Supported |
-| C / C++ | Supported |
-
-Other languages automatically fall back to LLM.
-
-### Fallback Behavior
-
-The following conditions trigger automatic fallback to LLM, with the reason logged. The overall pipeline is unaffected:
-
-- Language not in the supported list
-- File has fewer than 100 lines
-- AST parse error
-- Extraction produces an empty skeleton
-
-### File Structure
-
-```
-openviking/parse/parsers/code/ast/
-├── extractor.py      # Language detection and dispatch
-├── skeleton.py       # CodeSkeleton / FunctionSig / ClassSkeleton data structures
-└── languages/        # Per-language extractors
-```
+This routing applies to short and long code files alike.
 
 ## Three Context Types Extraction
 
@@ -192,18 +127,19 @@ openviking/parse/parsers/code/ast/
 
 | Phase | Resource | Memory | Skill |
 |-------|----------|--------|-------|
-| **Parser** | Common flow | Common flow | Common flow |
-| **Base URI** | `viking://resources` | `viking://user/memories` | `viking://user/skills` |
-| **TreeBuilder scope** | resources | user | user |
+| **Entry point** | Resource parser | Session extraction and memory updates | Skill import |
+| **Base URI** | `viking://resources` | `viking://~/memories` | `viking://~/skills` |
 | **SemanticMsg type** | resource | memory | skill |
+
+The examples below use a configured synchronous Python SDK client named `client`.
 
 ### Resource Extraction
 
 ```python
 # Add resource
-await client.add_resource(
-    "/path/to/doc.pdf",
-    reason="API documentation"
+client.add_resource(
+    path="/path/to/doc.pdf",
+    options={"reason": "API documentation"},
 )
 
 # Flow: Parser → TreeBuilder(scope=resources) → SemanticQueue
@@ -213,22 +149,29 @@ await client.add_resource(
 
 ```python
 # Add skill
-await client.add_skill({
-    "name": "search-web",
-    "content": "# search-web\\n..."
-})
+client.add_skill(
+    data={
+        "name": "search-web",
+        "content": "# search-web\n...",
+    },
+)
 
-# Flow: Direct write to viking://user/skills/{name}/ → SemanticQueue
+# Flow: Direct write to viking://~/skills/{name}/ → SemanticQueue
 ```
 
 ### Memory Extraction
 
 ```python
 # Memory auto-extracted from session
-await session.commit()
+client.commit_session(session_id)
 
-# Flow: SessionCompressorV2 → ExtractLoop → MemoryUpdater → SemanticQueue
+# Flow: SessionCompressorV3 → ExtractLoop → MemoryUpdater → SemanticQueue
 ```
+
+V3 has one extraction entry. It first extracts enabled user-memory schemas,
+including `cases`. Trajectory, experience, and optional executable session-skill
+training runs only when that extraction produces at least one case. A session
+with no case therefore produces none of those execution-derived artifacts.
 
 ## Related Documents
 

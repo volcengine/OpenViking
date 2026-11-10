@@ -1,4 +1,7 @@
 {
+  "modules": [
+    "../mods/usage/register.tsx"
+  ],
   "hooks": {
     "SessionStart": [
       {
@@ -18,7 +21,31 @@
           {
             "type": "command",
             "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/auto-recall.mjs",
-            "timeout": 8
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/skill-experience.mjs",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Read|Glob|Grep|Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/uri-guard.mjs",
+            "timeout": 5
           }
         ]
       }

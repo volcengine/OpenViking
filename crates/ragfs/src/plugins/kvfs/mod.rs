@@ -193,6 +193,9 @@ impl FileSystem for KVFileSystem {
                     WriteFlag::Create | WriteFlag::Truncate => {
                         entry.value = data.to_vec();
                     }
+                    WriteFlag::CreateNew => {
+                        return Err(Error::AlreadyExists(key));
+                    }
                     WriteFlag::Append => {
                         entry.value.extend_from_slice(data);
                     }
@@ -211,7 +214,7 @@ impl FileSystem for KVFileSystem {
                 Ok(data.len() as u64)
             }
             None => {
-                if matches!(flags, WriteFlag::Create) {
+                if matches!(flags, WriteFlag::Create | WriteFlag::CreateNew) {
                     store.insert(key, KVEntry::new(data.to_vec()));
                     Ok(data.len() as u64)
                 } else {
@@ -221,7 +224,46 @@ impl FileSystem for KVFileSystem {
         }
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+    async fn compare_and_write(
+        &self,
+        path: &str,
+        expected: &[u8],
+        new_data: &[u8],
+    ) -> Result<bool> {
+        let key = Self::path_to_key(path);
+        let mut store = self.store.write().await;
+
+        match store.get_mut(&key) {
+            Some(entry) if entry.value.as_slice() == expected => {
+                entry.value = new_data.to_vec();
+                entry.touch();
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    async fn compare_and_remove(&self, path: &str, expected: &[u8]) -> Result<bool> {
+        let key = Self::path_to_key(path);
+        let mut store = self.store.write().await;
+
+        match store.get(&key) {
+            Some(entry) if entry.value.as_slice() == expected => {
+                store.remove(&key);
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
         let key = Self::path_to_key(path);
         let store = self.store.read().await;
 
@@ -246,7 +288,9 @@ impl FileSystem for KVFileSystem {
             }
         }
 
-        Ok(result)
+        Ok(crate::core::filesystem::apply_read_dir_options(
+            result, offset, limit, sort_by, sort_order,
+        ))
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -482,7 +526,7 @@ mod tests {
         write_key(&fs, "/key2", b"val2").await;
         write_key(&fs, "/key3", b"val3").await;
 
-        let entries = fs.read_dir("/").await.unwrap();
+        let entries = fs.read_dir("/", None, None, None, None).await.unwrap();
         assert_eq!(entries.len(), 3);
     }
 
@@ -496,7 +540,7 @@ mod tests {
         write_key(&fs, "/user/123", b"alice").await;
         write_key(&fs, "/user/456", b"bob").await;
 
-        let entries = fs.read_dir("/user").await.unwrap();
+        let entries = fs.read_dir("/user", None, None, None, None).await.unwrap();
         assert_eq!(entries.len(), 2);
     }
 

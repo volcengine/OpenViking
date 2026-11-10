@@ -38,6 +38,7 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
             {
                 "url": "http://config-host:1933",
                 "api_key": "config-key",
+                "gateway_token": "gateway-secret",
                 "account": "config-account",
                 "user": "config-user",
                 "actor_peer_id": "config-actor",
@@ -52,6 +53,8 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
 
     assert client._url == "http://explicit-host:1933"
     assert client._api_key == "config-key"
+    assert client._gateway_token == "gateway-secret"
+    assert client._extra_headers["X-Gateway-Token"] == "gateway-secret"
     assert client._account == "config-account"
     assert client._user_id == "config-user"
     assert client._actor_peer_id == "config-actor"
@@ -135,7 +138,7 @@ async def test_async_http_client_omits_identity_headers_when_unconfigured(tmp_pa
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr("openviking_cli.client.http.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("openviking_sdk.client.httpx.AsyncClient", FakeAsyncClient)
 
     client = AsyncHTTPClient(
         url="http://explicit-host:1933",
@@ -162,7 +165,7 @@ async def test_async_http_client_sends_configured_identity_headers(tmp_path, mon
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr("openviking_cli.client.http.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("openviking_sdk.client.httpx.AsyncClient", FakeAsyncClient)
 
     client = AsyncHTTPClient(
         url="http://explicit-host:1933",
@@ -208,6 +211,39 @@ async def test_async_http_client_sends_agent_id_as_actor_peer_header(tmp_path, m
 
     assert captured["headers"]["X-OpenViking-Actor-Peer"] == "legacy-agent"
     assert "X-OpenViking-Agent" not in captured["headers"]
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_uses_sdk_initialize_with_compat_limits(tmp_path, monkeypatch):
+    captured: dict[str, object] = {}
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text("{}")
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    async def hook(response):
+        return response
+
+    monkeypatch.setattr("openviking_sdk.client.httpx.AsyncClient", FakeAsyncClient)
+
+    client = AsyncHTTPClient(
+        url="http://explicit-host:1933",
+        auth_mode="oidc",
+        oidc_token="header.payload.signature",
+        event_hooks={"response": [hook]},
+        timeout=33.0,
+        extra_headers={},
+    )
+    await client.initialize()
+
+    assert captured["headers"]["Authorization"] == "Bearer header.payload.signature"
+    assert captured["event_hooks"] == {"response": [hook]}
+    limits_repr = repr(captured["limits"])
+    assert "max_connections=512" in limits_repr
+    assert "max_keepalive_connections=128" in limits_repr
 
 
 def test_async_http_client_rejects_unknown_ovcli_field(tmp_path, monkeypatch):
@@ -386,9 +422,6 @@ async def test_async_http_client_find_does_not_send_peer_id(tmp_path, monkeypatc
                 "query": "invoice",
                 "target_uri": "viking://user/memories",
                 "limit": 10,
-                "score_threshold": None,
-                "filter": None,
-                "context_type": None,
                 "telemetry": False,
             },
         )
@@ -442,9 +475,6 @@ async def test_async_http_client_search_does_not_send_peer_id(tmp_path, monkeypa
                 "target_uri": "viking://user/memories",
                 "session_id": "session-1",
                 "limit": 10,
-                "score_threshold": None,
-                "filter": None,
-                "context_type": None,
                 "telemetry": False,
             },
         )
@@ -532,8 +562,6 @@ async def test_async_http_client_find_sends_context_type(tmp_path, monkeypatch):
                 "query": "invoice",
                 "target_uri": "",
                 "limit": 10,
-                "score_threshold": None,
-                "filter": None,
                 "context_type": ["memory", "resource"],
                 "telemetry": False,
             },
@@ -562,10 +590,7 @@ async def test_async_http_client_search_sends_context_type(tmp_path, monkeypatch
             {
                 "query": "invoice",
                 "target_uri": "",
-                "session_id": None,
                 "limit": 10,
-                "score_threshold": None,
-                "filter": None,
                 "context_type": "skill",
                 "telemetry": False,
             },

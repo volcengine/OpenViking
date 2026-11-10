@@ -5,6 +5,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Literal
 
+import json_repair
+
+from openviking.models.model_error import ModelErrorKind
+
 
 @dataclass
 class ToolCallRequest:
@@ -25,6 +29,7 @@ class LLMResponse:
     finish_reason: str = "stop"
     usage: dict[str, int] = field(default_factory=dict)
     reasoning_content: str | None = None  # Kimi, DeepSeek-R1 etc.
+    error_kind: ModelErrorKind | None = None
 
     @property
     def has_tool_calls(self) -> bool:
@@ -72,6 +77,27 @@ def merge_stream_tool_call_delta(
         entry["arguments"] += arguments
 
 
+def parse_tool_arguments(raw_arguments: Any) -> dict[str, Any]:
+    """Parse provider tool arguments, repairing only complete JSON objects."""
+    if isinstance(raw_arguments, dict):
+        return raw_arguments
+    if not isinstance(raw_arguments, str) or not raw_arguments:
+        return {}
+    try:
+        parsed = json.loads(raw_arguments)
+    except json.JSONDecodeError:
+        stripped = raw_arguments.strip()
+        if not (stripped.startswith("{") and stripped.endswith("}")):
+            return {"raw": raw_arguments}
+        try:
+            parsed = json_repair.loads(raw_arguments, stream_stable=True)
+        except (ValueError, TypeError, RecursionError):
+            return {"raw": raw_arguments}
+        if not isinstance(parsed, dict):
+            return {"raw": raw_arguments}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def build_stream_response(
     *,
     content: str,
@@ -88,15 +114,7 @@ def build_stream_response(
         if not name:
             continue
         raw_arguments = str(raw_tool_call.get("arguments") or "")
-        arguments: dict[str, Any]
-        if raw_arguments:
-            try:
-                parsed_arguments = json.loads(raw_arguments)
-                arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
-            except json.JSONDecodeError:
-                arguments = {"raw": raw_arguments}
-        else:
-            arguments = {}
+        arguments = parse_tool_arguments(raw_arguments)
         tokens = token_counter(name, raw_arguments) if token_counter else 0
         tool_calls.append(
             ToolCallRequest(
@@ -134,9 +152,11 @@ class LLMProvider(ABC):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
-        temperature: float = 0.7,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
         session_id: str | None = None,
+        thinking: bool | None = None,
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request.
@@ -145,9 +165,11 @@ class LLMProvider(ABC):
             messages: List of message dicts with 'role' and 'content'.
             tools: Optional list of tool definitions.
             model: Model identifier (provider-specific).
-            max_tokens: Maximum tokens in response.
+            max_tokens: Maximum tokens in response. None uses the model provider default.
             temperature: Sampling temperature.
             session_id: Optional session ID for tracing.
+            thinking: Optional per-call reasoning mode; None preserves provider configuration.
+            reasoning_effort: Optional per-call effort override for supported backends.
 
         Returns:
             LLMResponse with content and/or tool calls.
@@ -159,8 +181,8 @@ class LLMProvider(ABC):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
-        temperature: float = 0.7,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
         session_id: str | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:
         """Stream a chat completion request.
@@ -176,6 +198,14 @@ class LLMProvider(ABC):
             session_id=session_id,
         )
         yield LLMStreamEvent(type="response", response=response)
+
+    def supports_tool_result_media(self, model: str | None = None) -> bool:
+        """Whether this provider can deliver media returned by a tool to the model."""
+        return False
+
+    def should_inline_tool_result_media(self, model: str | None = None) -> bool:
+        """Agent Loop policy; scoped providers can opt into adapted image delivery."""
+        return self.supports_tool_result_media(model)
 
     @abstractmethod
     def get_default_model(self) -> str:

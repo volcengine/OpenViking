@@ -26,8 +26,8 @@ def main():
     parser = argparse.ArgumentParser(description="Statistics for judge result csv")
     parser.add_argument(
         "--input",
-        default="./result/locomo_qa_result_only_sys_memory.csv",
-        help="Path to judge result csv file, default: ./result/judge_result.csv",
+        default="./result/locomo/locomo_qa_result_only_sys_memory.csv",
+        help="Path to judge result csv file, default: ./result/locomo/judge_result.csv",
     )
     args = parser.parse_args()
 

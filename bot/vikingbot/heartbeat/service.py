@@ -9,6 +9,7 @@ from loguru import logger
 
 from vikingbot.config.schema import SessionKey
 from vikingbot.session.manager import SessionManager
+from vikingbot.utils.session_paths import resolve_workspace_path
 
 # Default interval: 30 minutes
 DEFAULT_HEARTBEAT_INTERVAL_S = 30 * 60
@@ -131,7 +132,11 @@ class HeartbeatService:
             if self.sandbox_mode == "shared":
                 sandbox_workspace = self.workspace / "shared"
             else:
-                sandbox_workspace = self.workspace / session_key.safe_name()
+                sandbox_workspace = resolve_workspace_path(
+                    self.workspace,
+                    session_key,
+                    self.sandbox_mode,
+                )
             workspaces.setdefault(sandbox_workspace, []).append(session_key)
         return workspaces
 

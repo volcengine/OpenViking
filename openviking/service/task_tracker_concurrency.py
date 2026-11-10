@@ -1,0 +1,222 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+
+"""Concurrency primitives used by the task tracker."""
+
+import asyncio
+import threading
+from concurrent.futures import Future as ConcurrentFuture
+from concurrent.futures import InvalidStateError
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from typing import Any, AsyncIterator, Awaitable, Callable, Coroutine, Generic, TypeVar
+
+from openviking.concurrency import AsyncSemaphore
+
+_KeyT = TypeVar("_KeyT")
+_ResultT = TypeVar("_ResultT")
+
+
+async def run_to_completion(
+    factory: Callable[[], Awaitable[_ResultT]],
+) -> _ResultT:
+    """Finish started work before propagating caller cancellation.
+
+    ``asyncio.to_thread`` cancellation cannot stop the underlying synchronous
+    call. Waiting for the work to settle keeps lock and concurrency accounting
+    aligned with the physical I/O lifetime. Only cancellation received during
+    this call overrides a work failure.
+    """
+    caller: Any = asyncio.current_task()
+    initial_cancelling = (
+        caller.cancelling() if caller is not None and hasattr(caller, "cancelling") else 0
+    )
+    work: asyncio.Future[_ResultT] | None = None
+    cancellation: asyncio.CancelledError | None = None
+    try:
+        work = asyncio.ensure_future(factory())
+        while not work.done():
+            try:
+                await asyncio.shield(work)
+            except asyncio.CancelledError as exc:
+                if work.cancelled():
+                    raise
+                cancellation = exc
+            except BaseException:
+                # A work failure can race with a new cancellation; historical
+                # requests do not suppress errors from cancellation cleanup.
+                if cancellation is None and (
+                    caller is None
+                    or not hasattr(caller, "cancelling")
+                    or caller.cancelling() <= initial_cancelling
+                ):
+                    raise
+                cancellation = cancellation or asyncio.CancelledError()
+
+        if cancellation is not None:
+            if not work.cancelled():
+                # Caller cancellation wins once it has been observed. Consume a
+                # later work failure so asyncio does not report it as unhandled.
+                work.exception()
+            raise cancellation
+        return work.result()
+    finally:
+        # Propagated exceptions retain this frame. Keeping either task here
+        # creates a traceback cycle that also retains the finished request.
+        del work, caller, cancellation
+
+
+class OwnerLoopDispatcher:
+    """Run coroutine factories on one event loop, including foreign callers."""
+
+    def __init__(self, owner_loop: asyncio.AbstractEventLoop | None = None) -> None:
+        self._owner_loop = owner_loop
+        self._bind_lock = threading.Lock()
+
+    def bind_current_loop(self) -> asyncio.AbstractEventLoop:
+        current_loop = asyncio.get_running_loop()
+        with self._bind_lock:
+            if self._owner_loop is None:
+                self._owner_loop = current_loop
+            elif self._owner_loop is not current_loop:
+                raise RuntimeError("owner event loop is already bound")
+            return self._owner_loop
+
+    async def run(
+        self,
+        factory: Callable[[], Coroutine[Any, Any, _ResultT]],
+    ) -> _ResultT:
+        current_loop = asyncio.get_running_loop()
+        with self._bind_lock:
+            owner_loop = self._owner_loop
+            if owner_loop is None:
+                self._owner_loop = current_loop
+                owner_loop = current_loop
+
+        if owner_loop.is_closed():
+            raise RuntimeError("owner event loop is closed")
+        if current_loop is owner_loop:
+            return await factory()
+        if not owner_loop.is_running():
+            raise RuntimeError("owner event loop is not running")
+
+        future: ConcurrentFuture[_ResultT] = ConcurrentFuture()
+        owner_task: list[asyncio.Task[_ResultT]] = []
+
+        def transfer_result(task: asyncio.Task[_ResultT]) -> None:
+            if future.cancelled():
+                if not task.cancelled():
+                    task.exception()
+                return
+            try:
+                if task.cancelled():
+                    future.cancel()
+                elif (error := task.exception()) is not None:
+                    future.set_exception(error)
+                else:
+                    future.set_result(task.result())
+            except InvalidStateError:
+                pass
+
+        def submit_to_owner() -> None:
+            if future.cancelled():
+                return
+            try:
+                task = owner_loop.create_task(factory())
+            except BaseException as exc:
+                try:
+                    future.set_exception(exc)
+                except InvalidStateError:
+                    pass
+                return
+            owner_task.append(task)
+            task.add_done_callback(transfer_result)
+
+        def cancel_owner_task() -> None:
+            if owner_task:
+                owner_task[0].cancel()
+
+        def propagate_cancellation(completed: ConcurrentFuture[_ResultT]) -> None:
+            if not completed.cancelled():
+                return
+            try:
+                owner_loop.call_soon_threadsafe(cancel_owner_task)
+            except RuntimeError:
+                pass
+
+        future.add_done_callback(propagate_cancellation)
+        try:
+            owner_loop.call_soon_threadsafe(submit_to_owner)
+        except BaseException:
+            future.cancel()
+            raise
+        wrapped = asyncio.wrap_future(future)
+        cancellation: asyncio.CancelledError | None = None
+        while True:
+            try:
+                done, _ = await asyncio.wait((wrapped,), timeout=0.1)
+            except asyncio.CancelledError as exc:
+                cancellation = cancellation or exc
+                try:
+                    owner_loop.call_soon_threadsafe(cancel_owner_task)
+                except RuntimeError:
+                    pass
+                continue
+            if done:
+                if cancellation is not None:
+                    if not wrapped.cancelled():
+                        wrapped.exception()
+                    raise cancellation
+                return wrapped.result()
+            if not owner_loop.is_running():
+                if owner_task and owner_task[0].done():
+                    try:
+                        return owner_task[0].result()
+                    finally:
+                        future.cancel()
+                if future.cancel():
+                    if owner_task and owner_task[0].done():
+                        return owner_task[0].result()
+                    raise RuntimeError("owner event loop stopped while dispatch was pending")
+                return future.result()
+
+
+@dataclass
+class _LockEntry:
+    lock: AsyncSemaphore
+    users: int = 0
+
+
+class KeyedAsyncLockPool(Generic[_KeyT]):
+    """Serialize work by key without retaining idle lock objects."""
+
+    def __init__(self) -> None:
+        self._entries: dict[_KeyT, _LockEntry] = {}
+        self._lock = threading.Lock()
+
+    @property
+    def entry_count(self) -> int:
+        with self._lock:
+            return len(self._entries)
+
+    @asynccontextmanager
+    async def acquire(self, key: _KeyT) -> AsyncIterator[None]:
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                entry = _LockEntry(lock=AsyncSemaphore())
+                self._entries[key] = entry
+            entry.users += 1
+
+        acquired = False
+        try:
+            await entry.lock.acquire()
+            acquired = True
+            yield
+        finally:
+            if acquired:
+                entry.lock.release()
+            with self._lock:
+                entry.users -= 1
+                if entry.users == 0:
+                    del self._entries[key]

@@ -277,7 +277,6 @@ RAG 使用 YAML 配置文件来控制评估过程。每个数据集在 `config/`
 4. **路径配置**：
    - `dataset_dir`：数据集文件或目录的路径
    - `doc_output_dir`：处理文档的目录
-   - `vector_store`：向量索引存储的目录
    - `output_dir`：评估结果的目录
    - `log_file`：日志文件的路径
 5. **LLM 配置**：
@@ -330,12 +329,8 @@ Output/
         └── benchmark.log                 # 日志文件
 ```
 
-**向量存储数据库位置：**
-向量索引（文档数据库）存储在配置文件中 `vector_store` 指定的路径中。默认情况下，这是：
-
-```
-datasets/{dataset_name}/viking_store_index_dir
-```
+**OpenViking 存储：**
+Benchmark 使用 Python HTTP SDK 所配置的 OpenViking Server。内容和向量索引的存储位置由 Server 管理，而不是由 Benchmark 进程管理。
 
 #### 文件描述和示例
 
@@ -638,8 +633,8 @@ FinanceBench 有 3 种问题类型：
 
 本项目通过以下方式与 OpenViking 集成：
 
-- 使用 `openviking` 客户端进行数据摄取和检索
-- 通过 `ov.conf` 配置 OpenViking 连接
+- 使用 OpenViking Python HTTP SDK 进行数据摄取和检索
+- 通过 `ovcli.conf` 或 SDK 环境变量配置 OpenViking 连接
 - 支持动态加载 OpenViking 的最新功能
 
 ### 常见问题（FAQ）

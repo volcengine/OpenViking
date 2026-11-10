@@ -147,8 +147,6 @@ class StatsAggregator:
             "session_id": session_id,
             "total_turns": stats.total_turns,
             "memories_extracted": stats.memories_extracted,
-            "contexts_used": stats.contexts_used,
-            "skills_used": stats.skills_used,
         }
 
     async def _query_all_memories(
