@@ -10,6 +10,7 @@ import asyncio
 from datetime import timezone
 
 import httpx
+import pytest
 
 from openviking.core.namespace import canonical_session_uri
 from openviking.server.identity import RequestContext, Role
@@ -50,6 +51,37 @@ async def test_session_listing_reports_the_matched_timestamps(client: httpx.Asyn
     matched = next(item for item in response.json()["result"] if item["session_id"] == session_id)
     assert matched["created_at"]
     assert matched["updated_at"]
+
+
+async def test_session_listing_keeps_a_session_inside_a_sub_second_window(
+    client: httpx.AsyncClient,
+):
+    # The listing truncates the directory modification time to whole seconds
+    # while the session metadata keeps the sub-second precision, so a lower
+    # bound inside the same second must not drop the session.
+    session_ids = [
+        await _create_session(client, f"time-filter-sub-second-{index}") for index in range(5)
+    ]
+
+    listing = await client.get("/api/v1/sessions", params={"since": "2000-01-01"})
+    assert listing.status_code == 200
+    matched = {item["session_id"]: item for item in listing.json()["result"]}
+
+    for session_id in session_ids:
+        updated_at = parse_iso_datetime(matched[session_id]["updated_at"])
+        milliseconds = updated_at.microsecond / 1000
+        if not milliseconds:
+            continue
+        since = updated_at.replace(microsecond=int(milliseconds / 2 * 1000))
+        response = await client.get(
+            "/api/v1/sessions",
+            params={"since": since.isoformat().replace("+00:00", "Z")},
+        )
+        assert response.status_code == 200
+        assert session_id in {item["session_id"] for item in response.json()["result"]}
+        return
+
+    pytest.skip("no session carried a sub-second timestamp")
 
 
 async def test_session_listing_rejects_an_unknown_time_field(client: httpx.AsyncClient):

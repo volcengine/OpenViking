@@ -242,7 +242,7 @@ def test_the_mcp_and_rest_surfaces_build_the_same_time_filter():
 # --------------------------------------------------------------------------
 
 
-def _session_service(session_meta):
+def _session_service(session_meta, directory_time=None):
     viking_fs = MagicMock()
     viking_fs.ls = AsyncMock(
         side_effect=_fake_ls(
@@ -251,8 +251,10 @@ def _session_service(session_meta):
                     "name": session_id,
                     "isDir": True,
                     # The directory modification time tracks the last write of
-                    # the session, so it mirrors the metadata timestamp.
-                    "modTime": meta.get("updated_at")
+                    # the session, so it mirrors the metadata timestamp. The
+                    # listing truncates it to whole seconds.
+                    "modTime": directory_time
+                    or meta.get("updated_at")
                     or meta.get("created_at")
                     or "2026-03-11T10:00:00Z",
                     "uri": f"viking://user/user/sessions/{session_id}",
@@ -309,10 +311,9 @@ async def test_sessions_exposes_the_resolved_timestamps():
     assert sessions[0]["last_message_at"] == "2026-03-11T10:05:00Z"
 
 
-async def test_sessions_rejects_on_the_directory_time_without_reading_the_metadata():
-    # The listing already carries the directory modification time, and it is at
-    # least the session's last write. A session whose directory is older than
-    # the lower bound is out of the window, so its metadata is never read.
+async def test_sessions_reads_the_metadata_of_every_candidate():
+    # The listing truncates the directory modification time to whole seconds,
+    # so it cannot rule a session out before its metadata is read.
     service = _session_service(
         {
             "old": {"created_at": "2026-03-01T10:00:00Z", "updated_at": "2026-03-01T10:00:00Z"},
@@ -334,7 +335,47 @@ async def test_sessions_rejects_on_the_directory_time_without_reading_the_metada
     sessions = await service.sessions(_ctx(), since="2026-03-10")
 
     assert [session["session_id"] for session in sessions] == ["inside"]
-    assert read_uris == ["viking://user/user/sessions/inside/.meta.json"]
+    assert read_uris == [
+        "viking://user/user/sessions/old/.meta.json",
+        "viking://user/user/sessions/inside/.meta.json",
+    ]
+
+
+async def test_sessions_keeps_a_session_inside_a_sub_second_window():
+    # The listing truncates the directory modification time to whole seconds
+    # while the metadata keeps the sub-second precision, so a lower bound
+    # inside the same second must not drop the session.
+    service = _session_service(
+        {
+            "sub-second": {
+                "created_at": "2026-03-11T10:00:00.400Z",
+                "updated_at": "2026-03-11T10:00:00.500Z",
+                "last_message_at": "2026-03-11T10:00:00.500Z",
+            }
+        },
+        directory_time="2026-03-11T10:00:00Z",
+    )
+
+    sessions = await service.sessions(_ctx(), since="2026-03-11T10:00:00.450Z")
+
+    assert [session["session_id"] for session in sessions] == ["sub-second"]
+
+
+async def test_sessions_drops_a_session_outside_a_sub_second_window():
+    service = _session_service(
+        {
+            "sub-second": {
+                "created_at": "2026-03-11T10:00:00.400Z",
+                "updated_at": "2026-03-11T10:00:00.500Z",
+                "last_message_at": "2026-03-11T10:00:00.500Z",
+            }
+        },
+        directory_time="2026-03-11T10:00:00Z",
+    )
+
+    sessions = await service.sessions(_ctx(), since="2026-03-11T10:00:00.600Z")
+
+    assert sessions == []
 
 
 async def test_sessions_filters_on_the_requested_time_field():

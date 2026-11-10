@@ -459,12 +459,18 @@ class SessionService:
     ) -> List[Dict[str, Any]]:
         """Keep the sessions whose timestamp falls inside the resolved bounds.
 
-        The session directory modification time is the timestamp the listing
-        already carries, and it is at least the session's last write. It is
-        therefore enough to reject a session on the lower bound, and only the
-        sessions that survive that check need their metadata read. The reads
-        run concurrently with a bounded fan-out to keep the listing latency
-        close to a single pass over the session directory.
+        The metadata path always reads the session metadata and compares the
+        requested field with the bounds. The directory modification time that
+        the listing carries is deliberately not used to prescreen candidates:
+        the listing truncates it to whole seconds, so a sub-second lower bound
+        would drop sessions whose metadata is inside the window, and the
+        directory time is not guaranteed to be an upper bound of the metadata
+        timestamp in the first place. The reads run concurrently with a
+        bounded fan-out to keep the listing latency close to a single pass
+        over the session directory.
+
+        ``time_field=mod_time`` answers from the listing alone and therefore
+        reads no metadata at all.
         """
         if time_field == "mod_time":
             return [
@@ -476,15 +482,6 @@ class SessionService:
                     until,
                 )
             ]
-
-        survivors = []
-        for candidate in candidates:
-            directory_time = parse_timestamp_value(candidate.get("mod_time", ""))
-            if since is not None and directory_time is not None and directory_time < since:
-                # The directory was not touched since the lower bound, so the
-                # session cannot be inside the window either.
-                continue
-            survivors.append(candidate)
 
         semaphore = asyncio.Semaphore(SESSION_META_READ_CONCURRENCY)
 
@@ -505,7 +502,7 @@ class SessionService:
                     enriched[key] = value
             return enriched
 
-        resolved = await asyncio.gather(*(resolve(candidate) for candidate in survivors))
+        resolved = await asyncio.gather(*(resolve(candidate) for candidate in candidates))
         return [item for item in resolved if item is not None]
 
     async def _session_timestamp(
