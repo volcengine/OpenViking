@@ -22,6 +22,7 @@ from openviking.storage.queuefs.queue_manager import get_queue_manager
 from openviking.system_assets import builtin_memory_templates_dir
 from openviking_cli.exceptions import InvalidURIError
 from openviking_cli.session.user_id import UserIdentifier
+from tests.utils.watch_fixtures import local_viking_fs
 
 
 @pytest.mark.asyncio
@@ -571,3 +572,41 @@ async def test_ls_and_tree_forward_pagination_to_filesystem_service(monkeypatch)
     assert ls_response.has_more is True
     assert tree_response.result == [{"name": "b.md"}]
     assert tree_response.has_more is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("recursive", "level_limit", "expected_count"),
+    [(True, None, 3), (True, 1, 1), (True, 10, 5), (False, 10, 1)],
+)
+async def test_http_ls_respects_recursive_depth(
+    monkeypatch, tmp_path, recursive, level_limit, expected_count
+):
+    fs = local_viking_fs(tmp_path / "agfs")
+    ctx = RequestContext(user=UserIdentifier.the_default_user("u"), role=Role(Role.ROOT))
+    root = "viking://user/u/memories"
+    event_uri = f"{root}/events/2026/11/09/event.md"
+    await fs.mkdir(event_uri.rsplit("/", 1)[0], ctx=ctx)
+    await fs.write_file(event_uri, "Synthetic event", ctx=ctx)
+    monkeypatch.setattr(filesystem, "get_service", lambda: SimpleNamespace(fs=FSService(fs)))
+
+    app = FastAPI()
+    app.include_router(filesystem.router)
+    app.dependency_overrides[get_request_context] = lambda: ctx
+    params: dict[str, str | bool | int] = {
+        "uri": root,
+        "recursive": recursive,
+        "output": "original",
+    }
+    if level_limit is not None:
+        params["level_limit"] = level_limit
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get("/api/v1/fs/ls", params=params)
+
+    assert response.status_code == 200, response.text
+    page = response.json()
+    assert len(page["result"]) == expected_count
+    assert (event_uri in {entry["uri"] for entry in page["result"]}) == (expected_count == 5)
+    assert page["has_more"] is False
