@@ -26,7 +26,9 @@ async def test_extraction_applies_memory_changes_and_preserves_agent_files(tmp_p
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
     root = "viking://user/alice/memories"
     profile_uri = f"{root}/profile.md"
-    protected = {f"{root}/{name}.md": f"# Custom {name}" for name in ("AGENT", "soul", "identity")}
+    protected = {
+        f"{root}/{name}.md": f"# Custom {name.casefold()}" for name in ("SOUL", "soul", "identity")
+    }
     for uri, content in protected.items():
         await fs.write_file(uri, content, ctx=ctx)
     await fs.write_file(profile_uri, "Obsolete profile", ctx=ctx)

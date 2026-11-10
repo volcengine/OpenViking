@@ -402,11 +402,11 @@ IMPORTANT:
             )
             # Bootstrap reads must not hold up a turn when the upstream is unavailable.
             content = await asyncio.wait_for(
-                client.read_raw("viking://~/memories/AGENT.md"), timeout=5.0
+                client.read_raw("viking://~/memories/SOUL.md"), timeout=5.0
             )
             return content if content.strip() else ""
         except Exception as exc:
-            logger.debug("OpenViking AGENT.md unavailable; using local SOUL.md: {}", exc)
+            logger.debug("OpenViking SOUL.md unavailable; using local SOUL.md: {}", exc)
             return ""
         finally:
             if client is not None:
@@ -421,7 +421,7 @@ IMPORTANT:
 
         for filename in self.BOOTSTRAP_FILES:
             if filename == "SOUL.md" and agent_instructions:
-                parts.append(f"## viking://~/memories/AGENT.md\n\n{agent_instructions}")
+                parts.append(f"## viking://~/memories/SOUL.md\n\n{agent_instructions}")
                 continue
             file_path = self.workspace / filename
             if file_path.exists():

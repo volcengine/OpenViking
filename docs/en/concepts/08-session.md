@@ -239,7 +239,7 @@ viking://user/{user_id}/sessions/{session_id}/
 
 viking://~/memories/
 ├── profile.md
-├── AGENT.md
+├── SOUL.md
 ├── preferences/
 ├── entities/
 ├── events/
