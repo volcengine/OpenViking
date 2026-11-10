@@ -267,7 +267,7 @@ class TestGeminiErrorMessages:
         [
             ("QUOTA_EXCEEDED", ModelErrorKind.QUOTA_EXHAUSTED),
             ("RATE_LIMIT_EXCEEDED", ModelErrorKind.RATE_LIMIT_ERROR),
-            (None, ModelErrorKind.UNKNOWN),
+            (None, ModelErrorKind.RATE_LIMIT_ERROR),
         ],
     )
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
