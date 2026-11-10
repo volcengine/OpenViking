@@ -23,6 +23,96 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.asyncio
+async def test_set_tags_batch_normalizes_deduplicates_and_collects_failures(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from openviking.service.fs_service import FSService
+
+    ctx = RequestContext(user=UserIdentifier("test", "alice"), role=Role.USER)
+    fs = FSService()
+    good = "viking://user/alice/resources/demo/a.md"
+    denied = "viking://user/bob/resources/demo/private.md"
+    skipped = "viking://user/alice/resources/demo/skipped.md"
+
+    async def update(uri, tags, mode, recursive, passed_ctx, **kwargs):
+        assert passed_ctx is ctx
+        assert (tags, mode, recursive) == (["used_count=1"], "increase", False)
+        assert kwargs == {"include_updated_tags": True}
+        if uri == denied:
+            raise PermissionDeniedError("denied")
+        return {"uri": uri, "tags_updated": uri != skipped, "updated_tags": []}
+
+    single = AsyncMock(side_effect=update)
+    monkeypatch.setattr(fs, "set_tags", single)
+    result = await fs.set_tags_batch(
+        [good + "/", denied, good, skipped, "invalid"],
+        ["used_count=1"],
+        "increase",
+        False,
+        ctx,
+    )
+    assert [item["uri"] for item in result["items"]] == [good]
+    assert [item["uri"] for item in result["failed"]] == [denied, skipped, "invalid"]
+    assert [item["error"]["code"] for item in result["failed"]] == [
+        "PERMISSION_DENIED",
+        "FAILED_PRECONDITION",
+        "INVALID_URI",
+    ]
+    assert single.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_set_tags_batch_bounds_concurrency_and_preserves_order(monkeypatch):
+    import asyncio
+
+    from openviking.service.fs_service import FSService
+
+    fs = FSService()
+    ctx = RequestContext(user=UserIdentifier("test", "alice"), role=Role.USER)
+    uris = [f"viking://user/alice/resources/demo/{index}.md" for index in range(50)]
+    release = asyncio.Event()
+    active = peak = 0
+
+    async def update(uri, *args, **kwargs):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        if active == 8:
+            release.set()
+        await release.wait()
+        active -= 1
+        return {"uri": uri, "tags_updated": True, "updated_tags": []}
+
+    monkeypatch.setattr(fs, "set_tags", update)
+    result = await asyncio.wait_for(
+        fs.set_tags_batch(uris, ["used_count=1"], "increase", False, ctx), timeout=5
+    )
+    assert peak == 8
+    assert [item["uri"] for item in result["items"]] == uris
+    assert result["failed"] == []
+
+
+@pytest.mark.asyncio
+async def test_set_tags_batch_propagates_cancellation(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from openviking.service.fs_service import FSService
+
+    fs = FSService()
+    ctx = RequestContext(user=UserIdentifier("test", "alice"), role=Role.USER)
+    monkeypatch.setattr(fs, "set_tags", AsyncMock(side_effect=asyncio.CancelledError))
+    with pytest.raises(asyncio.CancelledError):
+        await fs.set_tags_batch(
+            ["viking://user/alice/resources/demo/a.md"],
+            ["used_count=1"],
+            "increase",
+            False,
+            ctx,
+        )
+
+
+@pytest.mark.asyncio
 async def test_write_updates_memory_file_and_parent_overview(service, monkeypatch):
     from openviking.observability.events import get_event_bus
     from openviking.observability.reporting import runtime
@@ -859,6 +949,40 @@ async def test_set_tags_increase_forwards_mode_without_discarding_invalid_tags()
     with pytest.raises(InvalidArgumentError):
         await coordinator.set_tags(uri=file_uri, tags=["used_count"], mode="increase", ctx=ctx)
     fake_vfs.vector_store.update_search_tags.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sidecar", [None, ".abstract.md", ".overview.md"])
+async def test_set_tags_batch_returns_directory_levels_without_extra_reads(sidecar):
+    from unittest.mock import AsyncMock
+
+    from openviking.service.fs_service import FSService
+
+    root = "viking://resources/demo"
+    uri = f"{root}/{sidecar}" if sidecar else root
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    vfs = _FakeVikingFS(file_uri=f"{root}/file.md", root_uri=root)
+    if sidecar:
+        vfs.content[uri] = "summary"
+    levels = [0, 1] if sidecar is None else [0 if sidecar == ".abstract.md" else 1]
+    records = [
+        {"uri": root, "level": level, "search_tags": [f"used_count={level + 6}"]}
+        for level in levels
+    ]
+    update = AsyncMock(return_value=records)
+    vfs.vector_store = SimpleNamespace(update_search_tags=update)
+    fs = FSService(viking_fs=vfs)
+
+    result = await fs.set_tags_batch([uri], ["used_count=1"], "increase", False, ctx)
+
+    assert result["failed"] == []
+    assert result["items"][0]["updated_tags"] == [
+        {"uri": root, "level": level, "tags": [f"used_count={level + 6}"]} for level in levels
+    ]
+    update.assert_awaited_once_with(root, ["used_count=1"], mode="increase", levels=levels, ctx=ctx)
+    single = await fs.set_tags(uri, ["used_count=1"], "increase", False, ctx)
+    assert "updated_tags" not in single
+    assert single["tags"] == ["used_count=1"]
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Content endpoints for OpenViking HTTP Server."""
 
+from functools import partial
 from typing import Literal, Optional
 from urllib.parse import quote
 
@@ -113,11 +114,18 @@ class SetTagsRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    uri: str
+    uri: str | None = None
+    uris: list[str] | None = Field(default=None, min_length=1, max_length=50)
     tags: list[str] | None = None
     mode: str = "replace"
     recursive: bool = False
     telemetry: TelemetryRequest = False
+
+    @model_validator(mode="after")
+    def validate_targets(self) -> "SetTagsRequest":
+        if (self.uri is None) == (self.uris is None):
+            raise ValueError("exactly one of uri or uris is required")
+        return self
 
 
 class EnsureDirectoryIndexRequest(BaseModel):
@@ -358,18 +366,30 @@ async def set_tags(
 ):
     """Set explicit k=v retrieval tags metadata for a file or directory."""
     service = get_service()
-    uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     tags = [] if request.mode == "clear" else request.tags or []
-    execution = await run_operation(
-        operation="content.set_tags",
-        telemetry=request.telemetry,
-        fn=lambda: service.fs.set_tags(
+    if request.uris is not None:
+        fn = partial(
+            service.fs.set_tags_batch,
+            uris=request.uris,
+            tags=tags,
+            mode=request.mode,
+            recursive=request.recursive,
+            ctx=_ctx,
+        )
+    else:
+        uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
+        fn = partial(
+            service.fs.set_tags,
             uri=uri,
             tags=tags,
             mode=request.mode,
             recursive=request.recursive,
             ctx=_ctx,
-        ),
+        )
+    execution = await run_operation(
+        operation="content.set_tags",
+        telemetry=request.telemetry,
+        fn=fn,
     )
     return Response(
         status="ok",

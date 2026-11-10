@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional, Sequence
 
+from openviking.concurrency import bounded_map
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
     canonical_session_root,
@@ -27,12 +28,14 @@ from openviking.core.namespace_policy import (
     NamespaceProcessingMode,
     namespace_policy_for_uri,
 )
+from openviking.core.path_variables import resolve_path_variables
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.session_restore import get_session_id_from_uri, restore_session_content
 from openviking.privacy.skill_restore import get_skill_name_from_uri, restore_skill_content
 from openviking.resource.watch_storage import is_watch_task_control_uri
-from openviking.server.error_mapping import is_not_found_error
+from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import TaskStatus, get_task_tracker, run_tracked_operation
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -1877,6 +1880,8 @@ class FSService:
         mode: str,
         recursive: bool,
         ctx: RequestContext,
+        *,
+        include_updated_tags: bool = False,
     ) -> Dict[str, Any]:
         """Set explicit retrieval tags for a file or directory semantic nodes."""
         viking_fs = self._ensure_initialized()
@@ -1890,7 +1895,57 @@ class FSService:
             mode=mode,
             recursive=recursive,
             ctx=ctx,
+            include_updated_tags=include_updated_tags,
         )
+
+    async def set_tags_batch(
+        self,
+        uris: list[str],
+        tags: list[str],
+        mode: str,
+        recursive: bool,
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """规范化并去重目标，复用单 URI 写入，按输入顺序汇总成功和失败项。"""
+        if not 1 <= len(uris) <= 50:
+            raise InvalidArgumentError("uris must contain between 1 and 50 items")
+        targets: dict[str, Exception | None] = {}
+        for uri in uris:
+            try:
+                uri = validate_safe_viking_uri_path(
+                    validate_request_viking_uri(resolve_path_variables(uri), ctx)
+                )
+                targets.setdefault(uri, None)
+            except Exception as exc:
+                targets.setdefault(uri, exc)
+
+        async def update(uri: str) -> tuple[bool, Dict[str, Any]]:
+            try:
+                if targets[uri] is not None:
+                    raise targets[uri]
+                result = await self.set_tags(
+                    uri, tags, mode, recursive, ctx, include_updated_tags=True
+                )
+                if not result["tags_updated"]:
+                    raise OpenVikingError(
+                        "No semantic record was updated", code="FAILED_PRECONDITION"
+                    )
+                return True, result
+            except Exception as exc:
+                error = map_exception(exc, resource=uri)
+                if error is None:
+                    logger.exception("Batch tag update failed for %s", uri)
+                    error = OpenVikingError("Tag update failed", code="INTERNAL")
+                return False, {
+                    "uri": uri,
+                    "error": {"code": error.code, "message": error.message},
+                }
+
+        results = await bounded_map(targets, update, concurrency=8)
+        return {
+            "items": [result for success, result in results if success],
+            "failed": [result for success, result in results if not success],
+        }
 
     async def _directory_index_records(self, uri: str, ctx: RequestContext) -> List[Dict[str, Any]]:
         """Read L0/L1 records and tags; propagate store errors."""

@@ -14,12 +14,51 @@ from openviking.server.routers.content import (
     BatchWriteOperation,
     BatchWriteRequest,
     ReindexRequest,
+    SetTagsRequest,
     WriteContentRequest,
     batch_write,
     reindex,
 )
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
+
+
+@pytest.mark.parametrize(
+    "targets",
+    [
+        {},
+        {"uri": "viking://resources/a.md", "uris": ["viking://resources/b.md"]},
+        {"uris": []},
+        {"uris": ["viking://resources/a.md"] * 51},
+    ],
+)
+def test_set_tags_request_rejects_invalid_targets(targets):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        SetTagsRequest(**targets)
+
+
+@pytest.mark.parametrize("size", [1, 50])
+def test_set_tags_request_accepts_batch_boundaries(size):
+    request = SetTagsRequest(uris=["viking://resources/a.md"] * size)
+    assert request.uri is None
+    assert len(request.uris) == size
+
+
+@pytest.mark.parametrize(
+    "targets",
+    [
+        {},
+        {"uri": "viking://resources/a.md", "uris": ["viking://resources/b.md"]},
+        {"uris": []},
+        {"uris": ["viking://resources/a.md"] * 51},
+    ],
+)
+async def test_set_tags_batch_invalid_request_http(client, targets):
+    response = await client.post("/api/v1/fs/attrs/set_tags", json=targets)
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
 
 
 def test_write_content_request_accepts_processing_mode():
@@ -399,6 +438,84 @@ async def test_set_tags_increase_http_persists_usage_and_preserves_resource(clie
     assert stored["abstract"] == "original content"
     assert stored["vector"] == original_record["vector"]
     assert await service.viking_fs.read_file(uri, ctx=ctx) == "original content"
+
+
+@pytest.mark.parametrize("endpoint", ["/api/v1/content/set_tags", "/api/v1/fs/attrs/set_tags"])
+async def test_set_tags_batch_http_persists_actual_values(client, service, endpoint):
+    from openviking.storage.vector_ids import vector_record_id
+    from openviking.utils.time_utils import get_current_timestamp
+
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    root = "viking://resources/batch-usage"
+    uris = [f"{root}/a.md", f"{root}/b.md"]
+    await service.viking_fs.mkdir(root, ctx=ctx)
+    timestamp = get_current_timestamp()
+    for uri in uris:
+        await service.viking_fs.write_file(uri, "original content", ctx=ctx)
+        await service.vikingdb_manager.upsert(
+            {
+                "id": vector_record_id(ctx.account_id, uri, 2),
+                "uri": uri,
+                "context_type": "resource",
+                "level": 2,
+                "abstract": "original content",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "vector": [0.1] * service.vikingdb_manager.vector_dim,
+                "search_tags": ["team=search", "used_count=5"],
+            },
+            ctx=ctx,
+        )
+    unindexed = f"{root}/unindexed.md"
+    await service.viking_fs.write_file(unindexed, "no index", ctx=ctx)
+    missing = f"{root}/missing.md"
+    for count in (6, 7):
+        response = await client.post(
+            endpoint,
+            json={
+                "uris": [uris[0], missing, uris[0] + "/", uris[1], unindexed, "invalid"],
+                "tags": ["used_count=1"],
+                "mode": "increase",
+            },
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()["result"]
+        assert [item["uri"] for item in result["items"]] == uris
+        assert [item["uri"] for item in result["failed"]] == [missing, unindexed, "invalid"]
+        assert [item["error"]["code"] for item in result["failed"]] == [
+            "NOT_FOUND",
+            "FAILED_PRECONDITION",
+            "INVALID_URI",
+        ]
+        for item in result["items"]:
+            updated = item["updated_tags"]
+            assert len(updated) == 1
+            assert updated[0]["level"] == 2
+            values = dict(tag.split("=", 1) for tag in updated[0]["tags"])
+            assert values["used_count"] == str(count)
+            assert values["team"] == "search"
+            assert int(values["last_used_at"]) > 0
+            attrs = await client.get("/api/v1/fs/attrs", params={"uri": item["uri"]})
+            assert attrs.json()["result"]["attrs"]["tags"] == updated[0]["tags"]
+
+    response = await client.post(
+        endpoint,
+        json={"uris": uris, "tags": ["used_count=0", "last_used_at=0"], "mode": "append"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["failed"] == []
+    for item in response.json()["result"]["items"]:
+        assert set(item["updated_tags"][0]["tags"]) == {
+            "team=search",
+            "used_count=0",
+            "last_used_at=0",
+        }
+        uri = item["uri"]
+        record_id = vector_record_id(ctx.account_id, uri, 2)
+        record = (await service.vikingdb_manager.get_strict([record_id], ctx=ctx))[0]
+        assert set(record["search_tags"]) == set(item["updated_tags"][0]["tags"])
+        assert record["updated_at"] == timestamp
+        assert await service.viking_fs.read_file(uri, ctx=ctx) == "original content"
 
 
 async def test_overview_missing_uri_returns_not_found(client):
