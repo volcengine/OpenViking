@@ -81,6 +81,19 @@ def _parse_conflict_records(payload: str) -> list[dict]:
     return records
 
 
+def conflict_tags_from_content(content: str) -> list[str]:
+    """Return Markdown conflict tags (zero if absent); invalid metadata raises InvalidArgumentError."""
+    if re.search(r"<!--\s*CONFLICTS_CONTENT\b", _CONFLICT_BLOCK.sub("", content)):
+        raise InvalidArgumentError("CONFLICTS_CONTENT comment must be closed")
+    unfixed = 0
+    for match in _CONFLICT_BLOCK.finditer(content):
+        for record in _parse_conflict_records(match.group(1)):
+            if record.get("state") not in ("fixed", "unfixed"):
+                raise InvalidArgumentError("conflict state must be fixed or unfixed")
+            unfixed += record["state"] == "unfixed"
+    return [f"has_conflict={'true' if unfixed else 'false'}", f"conflict_num={unfixed}"]
+
+
 def resolve_manual_conflicts(
     previous: str, edited: str, user_id: str
 ) -> tuple[str, list[str] | None]:

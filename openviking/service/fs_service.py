@@ -63,6 +63,7 @@ from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
 from openviking.storage.index_action import FieldPatch
 from openviking.storage.internal_names import is_storage_internal_name
+from openviking.storage.manual_conflicts import conflict_tags_from_content
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
@@ -2485,7 +2486,7 @@ class FSService:
         *,
         dry_run: bool = False,
     ) -> Dict[str, Any]:
-        """Restore historical file content, checking the last file commit only when supplied."""
+        """Restore content and conflict tags; check the last file commit only when supplied."""
         viking_fs = self._ensure_initialized()
         await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
 
@@ -2507,6 +2508,18 @@ class FSService:
             if is_not_found_error(exc):
                 raise NotFoundError(f"{restore_commit_id}:{uri}", "snapshot file") from exc
             raise
+        try:
+            content = content.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+        conflict_tags = None
+        if (
+            isinstance(content, str)
+            and namespace_policy_for_uri(uri).supports_tags
+            and uri.lower().endswith(".md")
+            and not is_abstract_overview_uri(uri)
+        ):
+            conflict_tags = conflict_tags_from_content(content)
         if dry_run:
             return {"uri": uri, "snapshot_id": current_commit_id, "result": "dry_run"}
         result = {}
@@ -2523,15 +2536,19 @@ class FSService:
             result.update(uri=uri, snapshot_id=snapshot["commit_oid"], result=snapshot["result"])
             return written
 
-        try:
-            content = content.decode("utf-8")
-        except UnicodeDecodeError:
-            pass
         if isinstance(content, str) and classify_uri(uri).is_memory:
             from openviking.session.memory.utils.memory_fields import strip_memory_fields_trailer
 
             content = strip_memory_fields_trailer(content)
-        await self.write(uri, content, ctx, mode="replace", commit_content=commit_restore)
+        await self.write(
+            uri,
+            content,
+            ctx,
+            mode="replace",
+            commit_content=commit_restore,
+            tags=conflict_tags,
+            tag_mode="append",
+        )
         return result
 
     async def show(

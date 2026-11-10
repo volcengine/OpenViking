@@ -101,15 +101,24 @@ async def test_native_versions_page_without_global_metadata_access(snapshot_serv
     vfs.show.assert_not_awaited()
 
 
+@pytest.mark.parametrize("state,count", [("unfixed", 1), ("fixed", 0), (None, 0)])
 @pytest.mark.parametrize("stale", [False, True])
-async def test_file_restore_rechecks_commit_under_content_lock(snapshot_service, stale):
+async def test_file_restore_rechecks_commit_under_content_lock(
+    snapshot_service, stale, state, count
+):
     service, vfs, ctx = snapshot_service
     uri = "viking://resources/ordinary.md"
     vfs.log.side_effect = [[{"oid": "a" * 40}], [{"oid": ("c" if stale else "a") * 40}]]
     write = AsyncMock()
+    expected_content = "restored content"
+    if state:
+        expected_content += f'<!-- CONFLICTS_CONTENT {{"state":"{state}","match_text":"x"}} -->'
+    vfs.show.return_value = expected_content.encode()
 
-    async def locked_write(uri, content, ctx, *, mode, commit_content):
-        assert mode == "replace" and content == "restored content"
+    async def locked_write(uri, content, ctx, *, mode, commit_content, tags, tag_mode):
+        assert mode == "replace" and content == expected_content
+        assert tags == [f"has_conflict={str(bool(count)).lower()}", f"conflict_num={count}"]
+        assert tag_mode == "append"
         return await commit_content([uri], lease_ref={"owner": "restore"}, write=write)
 
     service.write = locked_write
@@ -133,6 +142,19 @@ async def test_file_restore_dry_run_does_not_write(snapshot_service):
         "viking://resources/ordinary.md", "f" * 40, "a" * 40, ctx, dry_run=True
     )
     assert result["result"] == "dry_run"
+    service.write.assert_not_awaited()
+    vfs.commit.assert_not_awaited()
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+async def test_file_restore_rejects_invalid_conflict_state(snapshot_service, dry_run):
+    service, vfs, ctx = snapshot_service
+    vfs.show.return_value = b'<!-- CONFLICTS_CONTENT {"state":"unknown"} -->'
+    service.write = AsyncMock()
+    with pytest.raises(InvalidArgumentError):
+        await service.restore_file_version(
+            "viking://resources/page.md", "f" * 40, None, ctx, dry_run=dry_run
+        )
     service.write.assert_not_awaited()
     vfs.commit.assert_not_awaited()
 
