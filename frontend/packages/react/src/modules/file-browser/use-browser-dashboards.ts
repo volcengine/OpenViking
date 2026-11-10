@@ -3,7 +3,7 @@ import type { FileBrowserDashboardLabels } from './types.js';
 import { readCompileTargets } from './dashboard-data.js';
 import { type ReactNode, createElement, useCallback, useState } from 'react';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { OV_PATHS } from '../../client/paths.js';
+import { readDashboardHint } from './dashboard-resource.js';
 import { isOvClientError } from '../../client/errors.js';
 import type { FileTreeRow } from '../../components/file-tree/index.js';
 import type { FilePreviewTab } from '../../components/file-preview/index.js';
@@ -57,15 +57,8 @@ export function useBrowserDashboards({
     generation,
   );
   const loadHint = useCallback(
-    async (client: OvClient, options: OvRequestOptions) => {
-      const result = await client.request<{ attrs?: { tags?: string[] } }>({
-        method: 'GET',
-        path: OV_PATHS.fsAttrs,
-        query: { uri },
-        options,
-      });
-      return result?.attrs?.tags ?? [];
-    },
+    async (client: OvClient, options: OvRequestOptions) =>
+      uri ? readDashboardHint(client, uri, options) : undefined,
     [uri],
   );
   const hint = useDashboardQuery(
@@ -74,18 +67,19 @@ export function useBrowserDashboards({
     wikiEnabled && Boolean(uri),
     generation,
   );
+  const canonicalUri = hint.data?.uri ?? uri;
   const knownRows: readonly FileTreeRow[] =
-    uri && hint.data?.includes('compile_target=true')
+    canonicalUri && hint.data?.tags.includes('compile_target=true')
       ? [
           ...metadataRows,
           {
             kind: 'entry',
-            uri,
-            id: uri,
-            name: uri,
+            uri: canonicalUri,
+            id: canonicalUri,
+            name: canonicalUri,
             depth: 0,
             type: 'directory',
-            tags: hint.data,
+            tags: hint.data.tags,
           } as FileTreeRow,
         ]
       : metadataRows;
@@ -93,11 +87,19 @@ export function useBrowserDashboards({
   const unsupported =
     isOvClientError(catalog.error) && catalog.error.statusCode === 404;
   const targets = catalog.data ?? [];
+  const resolve = (target: string) => {
+    const match = resolveDashboard(
+      target === uri ? (canonicalUri ?? target) : target,
+      knownRows,
+      targets,
+    );
+    return match ? { ...match, uri: target } : undefined;
+  };
   const dashboards = new Map(
     rows
       .filter((row) => row.kind === 'entry')
       .flatMap((row) => {
-        const dashboard = resolveDashboard(row.uri, knownRows, targets);
+        const dashboard = resolve(row.uri);
         return dashboard &&
           (dashboardKinds === undefined ||
             dashboardKinds.includes(dashboard.kind))
@@ -105,7 +107,7 @@ export function useBrowserDashboards({
           : [];
       }),
   );
-  const resolved = uri ? resolveDashboard(uri, knownRows, targets) : undefined;
+  const resolved = uri ? resolve(uri) : undefined;
   const current =
     resolved &&
     (dashboardKinds === undefined || dashboardKinds.includes(resolved.kind))
@@ -150,7 +152,7 @@ export function useBrowserDashboards({
                   kind: knownRows.some(
                     (row) =>
                       row.kind === 'entry' &&
-                      row.uri === uri &&
+                      row.uri === canonicalUri &&
                       row.type === 'file',
                   )
                     ? 'file'

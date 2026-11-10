@@ -1,6 +1,7 @@
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { OV_PATHS } from '../../client/paths.js';
 import { within } from './dashboard-model.js';
+import { resolveDashboardUri } from './dashboard-resource.js';
 
 interface CompileTarget {
   to: string;
@@ -14,6 +15,7 @@ export async function readCompileTargets(
   rootUri: string,
   options: OvRequestOptions,
 ) {
+  rootUri = await resolveDashboardUri(client, rootUri, options);
   const targets: CompileTarget[] = [];
   let cursor: string | undefined;
   const seen = new Set<string>();

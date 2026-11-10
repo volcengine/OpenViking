@@ -122,6 +122,8 @@ import '@openviking/react/modules/file-browser/style.css';
 
 用户的 `memories/experiences` 目录与直接 `.md` 文件自动提供经验看板；Wiki 根据编译配置或 `compile_target=true` 资源标记识别，后代文件与目录复用 Wiki 看板。标记优先，不因配置列表缺失而隐藏。普通资源没有 Wiki 页签；已识别的 Wiki 在零冲突时仍保留看板。
 
+发现和配置匹配使用原生接口在当前身份下解析的 URI，支持 `viking://~/...` 根目录及 Wiki 子文件别名；宿主收到的看板 URI 与回调仍保留原始写法。示例底部可切换规范 URI 与 `~` 别名验证同一文件。
+
 文件树图标直接打开看板，预览页签可切回正文。看板样式已包含在 FileBrowser 的 `style.css` 内。查看独立 [WikiDashboard](../components/wiki-dashboard) 和 [ExperienceDashboard](../components/experience-dashboard) 的接口范围与宿主数据用法。
 
 `dashboardKinds?: readonly ('wiki' | 'experience')[]` 默认启用两类，传空数组禁用发现和入口。宿主据产品权限筛选类型；例如 `dashboardKinds={['experience']}` 关闭 Wiki 入口与编译配置查询。服务端仍执行资源权限。

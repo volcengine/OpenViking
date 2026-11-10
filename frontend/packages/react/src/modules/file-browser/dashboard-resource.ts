@@ -36,3 +36,19 @@ export async function resolveDashboardUri(
     ? (await readDashboardStat(client, uri, options)).uri
     : uri;
 }
+
+/** Keep native identity and tags together in the query's authenticated scope. */
+export async function readDashboardHint(
+  client: OvClient,
+  uri: string,
+  options: OvRequestOptions,
+) {
+  const result = await client.request<{
+    uri?: string;
+    attrs?: { tags?: string[] };
+  }>({ method: 'GET', path: OV_PATHS.fsAttrs, query: { uri }, options });
+  return {
+    uri: await resolveDashboardUri(client, result?.uri ?? uri, options),
+    tags: result?.attrs?.tags ?? [],
+  };
+}

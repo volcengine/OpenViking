@@ -113,6 +113,8 @@ The module loads its own data through `useFileBrowser`, so the host supplies no 
 
 ## Built-in dashboards
 
+Discovery and configuration matching use URIs resolved by the native API in the current authenticated scope, including `viking://~/...` roots and Wiki child-file aliases. Dashboard URIs and host callbacks keep the supplied spelling. The example controls switch between canonical and `~` URIs for the same file.
+
 User `memories/experiences` directories and their direct Markdown files expose the experience dashboard. Wiki detection uses compile configurations or the `compile_target=true` resource marker, including descendant files/directories. Resource metadata wins over a missing registry. Ordinary resources have no Wiki tab; an identified Wiki retains its board when it has zero conflicts.
 
 Tree indicators open the board directly; preview tabs return to file content. FileBrowser's `style.css` includes both boards. See [WikiDashboard](../components/wiki-dashboard) and [ExperienceDashboard](../components/experience-dashboard) for native coverage and host data integration.
