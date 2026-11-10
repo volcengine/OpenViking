@@ -70,4 +70,4 @@ Use `width`, `height`, `className`, or `style` to size and position the icon. Fi
 }
 ```
 
-The baseline's `--ov-ui-library-swatch-1-default` … `-5-default` are the private defaults, shared by both themes — they are the design's identity colours and do not follow the theme. When no library stylesheet is loaded the component still paints the same values from its literal fallbacks.
+The baseline's `--ov-ui-library-swatch-1-default` … `-5-default` are the private defaults, shared by both themes — they are the design's identity colours and do not follow the theme. With no library stylesheet loaded the component still paints the same palette: colours live only in `packages/icons/library-swatches.json`, and the CSS side is generated from it by `npm run sync:swatches`, so the two paths cannot drift.

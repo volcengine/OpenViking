@@ -75,4 +75,4 @@ export default function Example() {
 }
 ```
 
-基线里的 `--ov-ui-library-swatch-1-default` … `-5-default` 是私有默认值，亮暗主题共用同一套——它们是设计稿的身份色，不随主题变化。宿主未加载库样式表时，组件仍用同值的兜底字面值绘制。
+基线里的 `--ov-ui-library-swatch-1-default` … `-5-default` 是私有默认值，亮暗主题共用同一套——它们是设计稿的身份色，不随主题变化。宿主未加载库样式表时，组件仍用同一份调色板绘制：颜色只维护在 `packages/icons/library-swatches.json`，CSS 侧由 `npm run sync:swatches` 从它生成，因此两条路径不会出现配色差异。

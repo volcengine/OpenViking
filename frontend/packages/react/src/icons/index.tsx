@@ -9,6 +9,7 @@ import FolderOpenSvg from '../../../icons/svg/folder-open.svg?react';
 import PdfSvg from '../../../icons/svg/pdf.svg?react';
 import SpaceSvg from '../../../icons/svg/scope-switcher/space.svg?react';
 import UserSvg from '../../../icons/svg/scope-switcher/user.svg?react';
+import { swatches } from '../../../icons/library-swatches.json';
 import PptSvg from '../../../icons/svg/ppt.svg?react';
 import VideoSvg from '../../../icons/svg/video.svg?react';
 import WordSvg from '../../../icons/svg/word.svg?react';
@@ -94,19 +95,18 @@ export const UserIcon = createIcon(UserSvg, 'UserIcon');
  * colours and do not follow the theme.
  */
 /**
- * 兜底色值。主题基线里同名私有变量的最终回落值，与 `theme.css` 的
- * `--ov-ui-library-swatch-N-default` 保持一致；不加载任何 CSS 时仍能画出图标。
+ * 兜底色值，与 CSS 侧同源：调色板只维护在 `packages/icons/library-swatches.json`，
+ * 这里直接导入，`theme.css` 的 `--ov-ui-library-swatch-N-default` 由
+ * `scripts/sync-library-swatches.mjs` 从同一份 JSON 生成。只改一处颜色即可同时
+ * 更新「加载样式表」与「不加载样式表」两条路径。
  *
- * Last-resort values, matching `--ov-ui-library-swatch-N-default` in
- * `theme.css`, so the icon still paints when no stylesheet is loaded.
+ * Last-resort values, same source as the CSS side: the palette lives only in
+ * `packages/icons/library-swatches.json` and is imported here, while
+ * `scripts/sync-library-swatches.mjs` generates `theme.css`'s
+ * `--ov-ui-library-swatch-N-default` from that same JSON. Editing one colour
+ * updates both the "stylesheet loaded" and "no stylesheet" paths.
  */
-const LIBRARY_FALLBACKS = [
-  'linear-gradient(145deg, #ffd8ec 8%, #ffabc8 46%, #d8cbff 100%)',
-  'linear-gradient(145deg, #d9e8ff 8%, #b8a6ff 52%, #f3d6ff 100%)',
-  'linear-gradient(145deg, #ffe6bc 8%, #ffaf96 48%, #ff8bc5 100%)',
-  'linear-gradient(145deg, #eaf7ba 8%, #b5efb8 52%, #73d9c6 100%)',
-  'linear-gradient(145deg, #fff1ba 8%, #ffc776 52%, #bd9cff 100%)',
-];
+const LIBRARY_FALLBACKS: readonly string[] = swatches;
 
 /** 用名字算出稳定的渐变下标。Derives a stable gradient index from the name. */
 function gradientOf(name: string) {

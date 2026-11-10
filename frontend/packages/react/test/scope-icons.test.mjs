@@ -2,8 +2,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { readFileSync } from 'node:fs';
 import { LibraryIcon, SpaceIcon, UserIcon } from '@openviking/react/icons';
 import { ScopeCascade } from '@openviking/react/modules/scope-cascade';
+
+const palette = JSON.parse(
+  readFileSync(
+    new URL('../../icons/library-swatches.json', import.meta.url),
+    'utf8',
+  ),
+);
+const themeCss = readFileSync(
+  new URL('../src/theme.css', import.meta.url),
+  'utf8',
+);
 
 /** A controller stand-in: the view only reads snapshots and subscribes. */
 const level = (options, selected) => {
@@ -49,6 +61,31 @@ test('the level icons are public and render without a host theme', () => {
     assert.match(html, /<svg/);
     assert.match(html, /currentColor/);
     assert.match(html, /aria-hidden="true"/);
+  }
+});
+
+test('the JS fallbacks and the CSS defaults share one palette', () => {
+  // A single source of truth: the component imports the palette JSON and
+  // theme.css is generated from it. If either side drifts, a host that loads the
+  // stylesheet and one that does not would paint different colours.
+  for (const [index, gradient] of palette.swatches.entries()) {
+    const css = themeCss.match(
+      new RegExp(`--ov-ui-library-swatch-${index + 1}-default:\\s*([^;]+);`),
+    );
+    assert.ok(css, `theme.css is missing swatch ${index + 1}`);
+    // Compare with whitespace normalised: the CSS side is wrapped across lines by
+    // Prettier, and `linear-gradient( 145deg, … )` is the same value as the
+    // single-line form the palette stores.
+    const normalise = (value) =>
+      value
+        .replaceAll(/\s+/g, ' ')
+        .replaceAll(/\s*([(),])\s*/g, '$1')
+        .trim();
+    assert.equal(
+      normalise(css[1]),
+      normalise(gradient),
+      `swatch ${index + 1} differs between the palette and theme.css`,
+    );
   }
 });
 
