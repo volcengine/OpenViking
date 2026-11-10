@@ -19,6 +19,17 @@ Bot identity
 
 Workspace bootstrap files provide a stable identity and operating rules. Images and other media are converted into multimodal content blocks supported by the Provider.
 
+## Session Commands
+
+Send a session command as a standalone message. VikingBot handles it before invoking the model.
+
+| Command | Effect |
+|---------|--------|
+| `/new` | Clear the current session history and start a new conversation without consolidating it into memory. |
+| `/compact` | Consolidate the current conversation into memory, clear the session history, and start a new conversation. |
+| `/remember` | Submit the current conversation to memory and keep the session active. |
+| `/help` | Show the available session commands. |
+
 ## Skills and Tools
 
 | Concept | Purpose | Form |
