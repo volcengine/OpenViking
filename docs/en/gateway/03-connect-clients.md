@@ -44,14 +44,26 @@ A conversation keeps the settings it started with, so a changed header takes eff
 
 When one key serves several counterparts, such as a bot that talks to many people as one OpenViking user, the client can name the counterpart of each request with an `X-OpenViking-Actor-Peer` header, for example `X-OpenViking-Actor-Peer: review-agent`. The value is an OpenViking [Peer](../getting-started/20-peers.md) ID, and the header has the same name as in OpenViking's own API and SDKs. With a peer, the gateway:
 
-- recalls with that peer: recall adds that peer's memories to the user's own. Other peers' memories can still be recalled, with a small score penalty, because the gateway keeps OpenViking's default `peer_scope` of `all`. OpenViking tools are not narrowed by the peer;
+- recalls with that peer: recall adds that peer's memories to the user's own. By default, other peers' memories can still be recalled with a small score penalty, and OpenViking tools are not narrowed by the peer; [Recall only the current peer](#peer-scope) changes both;
 - saves the request's user message with that `peer_id`, so OpenViking can extract memories about the peer when it commits the session. Assistant replies are saved without a peer.
 
 The peer belongs to each request, not to the conversation, and conversations are [recognized](#how-conversations-are-recognized) the same way with or without one. One conversation, such as a group chat a bot takes part in, can hold user messages from several peers: each message keeps the peer of the request that first sent it to the gateway, even after the client edits or drops earlier messages, and each request recalls with its own peer.
 
 A request without the header uses the key's [default peer](09-gateway-keys.md#default-peer), if the key has one; with neither, nothing changes. A blank header also falls back to the default. The value must be one path segment of letters, digits, `_`, `.` and `-`, with at most one `@`. Any other value gets 400 `peer_invalid` before the request reaches the provider. Like every `X-OpenViking-*` header, it is not forwarded to the provider.
 
-A peer is not an access boundary: whoever holds the key can name any peer, or none. Give people who need their own memory their own key; see [One key per person](09-gateway-keys.md#one-key-per-person).
+### Recall only the current peer {#peer-scope}
+
+When recall for one counterpart should not bring up another's memories, set **Peer scope** in the context profile's [Recall memory](08-context-profiles.md#recall-memory) section (under **Advanced settings**) to **Current peer only** (`recall_peer_scope: "actor"`). The default is **All peers, current peer first** (`all`), described above. With **Current peer only**:
+
+- recall returns only the user's own memories and the request's peer's;
+- OpenViking tools the gateway runs for the model carry the request's peer, so they do not find or read other peers' memories either;
+- a request with no peer, neither from the header nor from the key's default, recalls only the user's own memories, and its tool calls are not narrowed.
+
+To use it for one conversation without changing the profile, send `X-OpenViking-Context: {"recall_peer_scope":"actor"}` (see [Override profile settings](#override-profile-settings)); with **Let clients override settings** off, clients cannot change it.
+
+Like every profile setting, it is fixed when a conversation starts, while the peer still comes from each request. It narrows what each request recalls, not what a conversation already holds: memory recalled for one peer stays in the history that later requests from other peers send, and the conversations saved to the user's OpenViking sessions hold every peer's messages, which OpenViking tools such as `openviking_grep` and `openviking_read` can still read.
+
+So even with **Current peer only**, a peer is not an access boundary: whoever holds the key can name any peer, or none. Give people who need their own memory their own key; see [One key per person](09-gateway-keys.md#one-key-per-person).
 
 ## Add a header to a client {#add-a-header}
 

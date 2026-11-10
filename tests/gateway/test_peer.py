@@ -3,7 +3,9 @@
 import asyncio
 from unittest.mock import AsyncMock
 
+import orjson
 import pytest
+from conftest import TEXT, mcp_tool
 
 from openviking_gateway.storage import digest
 from openviking_gateway.tool_executor import ToolExecutor
@@ -80,8 +82,8 @@ async def test_header_reaches_recall_and_names_the_captured_user(running_gateway
     calls = observe(app)
     await two_turns(client, key["key"], {PEER: " review-agent "})
     assert calls["search"] and all(header(h) == "review-agent" for h in calls["search"])
-    # Like the memory plugins by default, the peer goes only in the header, so the
-    # server's default peer_scope "all" still returns other peers' memories, with a penalty.
+    # By default the peer goes only in the header, so the server's default peer_scope
+    # "all" still returns other peers' memories, with a penalty.
     assert all("peer_scope" not in body for body in calls["search_body"])
     # The model upstream never sees the header.
     assert seen and all(header(h) is None for _, _, h in seen)
@@ -340,6 +342,83 @@ async def test_gateway_tool_calls_do_not_carry_the_peer(setup_kernel, credential
         result = await ToolExecutor(viking, store, prepared, credential, "", 1024).execute(call)
         assert not result["failed"]
         calls.append(viking.mcp.call_args.kwargs)
-    # Like the memory plugins' MCP proxy by default, tools are not narrowed to the peer.
+    # By default tools are not narrowed to the peer.
     assert calls == [{}, {}]
     assert viking.recall_peers == ["review-agent", None]
+
+
+ACTOR = {"X-OpenViking-Context": '{"recall_peer_scope": "actor"}'}
+
+
+@pytest.mark.parametrize("via", ["profile", "override"])
+async def test_actor_scope_narrows_recall_to_the_peer(running_gateway, via):
+    app, client, admin, key, _, _ = running_gateway
+    headers = {PEER: "review-agent"}
+    if via == "profile":
+        response = await client.put(
+            "/admin/policies/default",
+            headers=admin,
+            json={"name": "Default", "gateway_tools": False, "recall_peer_scope": "actor"},
+        )
+        assert response.status_code == 200, response.text
+    else:
+        headers.update(ACTOR)
+    calls = observe(app)
+    await two_turns(client, key["key"], headers)
+    assert calls["search"] and all(header(h) == "review-agent" for h in calls["search"])
+    for body in calls["search_body"]:
+        assert body["peer_scope"] == "actor"
+        assert "viking://user/alice/peers" not in body["exclude_uris"]
+
+
+async def test_actor_scope_without_a_peer_excludes_every_peer(running_gateway):
+    app, client, _, key, _, _ = running_gateway
+    calls = observe(app)
+    await two_turns(client, key["key"], ACTOR)
+    assert calls["search"] and all(header(h) is None for h in calls["search"])
+    for body in calls["search_body"]:
+        assert body["peer_scope"] == "actor"
+        # Last, so the client's cap on the list never drops it.
+        assert body["exclude_uris"][-1] == "viking://user/alice/peers"
+
+
+async def test_actor_scope_gives_tool_calls_the_peer(setup_kernel, credential, policy):
+    kernel, store, viking, _ = setup_kernel
+    policy.update(gateway_tools=True, recall_peer_scope="actor")
+    properties = {"query": TEXT, "mode": TEXT, "peer_scope": TEXT}
+    viking.catalog = [mcp_tool("find", {"query": TEXT}), mcp_tool("search", properties)]
+    prepared = await kernel.prepare(
+        {"messages": [{"role": "user", "content": "Find the deploy notes"}]},
+        "chat",
+        {"x-openviking-session": "tools"},
+        credential,
+        {"id": "u"},
+        policy,
+        peer="review-agent",
+    )
+    viking.mcp = AsyncMock(return_value={"content": [{"type": "text", "text": "found"}]})
+    executor = ToolExecutor(viking, store, prepared, credential, "", 1024)
+    sent = []
+    for index, (name, arguments) in enumerate(
+        [
+            ("find", {"query": "deploy"}),
+            ("search", {"query": "deploy", "mode": "context", "peer_scope": "all"}),
+            ("search", {"query": "deploy", "mode": "list"}),
+        ]
+    ):
+        call = {
+            "id": f"call-{index}",
+            "function": {
+                "name": "openviking_" + name,
+                "arguments": orjson.dumps(arguments).decode(),
+            },
+        }
+        assert not (await executor.execute(call))["failed"]
+        assert viking.mcp.call_args.kwargs == {"peer": "review-agent"}
+        sent.append(viking.mcp.call_args.args[2]["arguments"])
+    # Context search sweeps other peers unless told; list mode rejects peer_scope.
+    assert sent == [
+        {"query": "deploy"},
+        {"query": "deploy", "mode": "context", "peer_scope": "actor"},
+        {"query": "deploy", "mode": "list"},
+    ]

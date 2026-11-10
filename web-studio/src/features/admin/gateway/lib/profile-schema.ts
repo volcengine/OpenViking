@@ -3,6 +3,7 @@ import type {
   Profile,
   ProfileSettings,
   QuotaBucket,
+  RecallPeerScope,
 } from '#/features/admin/gateway/lib/api'
 import { QUOTA_BUCKETS } from '#/features/admin/gateway/lib/api'
 import type {
@@ -27,6 +28,8 @@ export const WRITE_TOOLS = [
   'cancel_watch',
 ]
 
+export const RECALL_PEER_SCOPES: RecallPeerScope[] = ['all', 'actor']
+
 /** Recommended settings; identical to the gateway's own defaults. */
 export const PROFILE_DEFAULTS: ProfileSettings = {
   name: 'Default',
@@ -41,6 +44,7 @@ export const PROFILE_DEFAULTS: ProfileSettings = {
   score_threshold: 0.35,
   recall_timeout: 2,
   query_max_chars: 8000,
+  recall_peer_scope: 'all',
   show_recall: false,
   commit_tokens: 20000,
   keep_recent_messages: 10,

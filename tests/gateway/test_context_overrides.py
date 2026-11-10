@@ -81,6 +81,7 @@ async def test_empty_disabled_tools_offers_write_tools(running_gateway):
         '{"session_max_tokens": NaN}',
         {"commit_tokens": 10**30},
         {"quotas": {"events": -1}},
+        {"recall_peer_scope": "none"},
     ],
 )
 async def test_invalid_override_is_rejected(running_gateway, context):

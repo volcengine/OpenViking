@@ -53,6 +53,7 @@ The **Recall memory** section (on by default) controls [recall](../guides/15-gat
 | **Relevance threshold** | 0.35 | Only results scoring at least this much, from 0 to 1, are added. Higher means fewer but closer matches. |
 | **Time limit** | 2 s | How long the search may take. |
 | **Query length** (under **Advanced settings**) | 8,000 characters | How much of the message is used as the search query. |
+| **Peer scope** (under **Advanced settings**) | All peers, current peer first | Which peers' memories recall and OpenViking tools can see besides the user's own. |
 | **Limit by category** (under **Advanced settings**) | Off | The most entries each category may add. |
 
 How the settings work together:
@@ -63,6 +64,7 @@ How the settings work together:
 - **Budgets.** Each message gets at most the smaller of **Budget per message** and what is left of **Budget per context window**. With less than 64 tokens left, the search is skipped. The budget per context window starts over whenever the conversation is compacted, by the gateway or by the client. These token counts are conservative estimates, not the provider's billing counts.
 - **Turning recall off.** Setting **Budget per context window** to 0 turns recall off; **Budget per message** is at least 64.
 - **Time limit.** If OpenViking does not answer within the **Time limit**, the message goes to the model without memory and does not get it later, even if the client retries.
+- **Peer scope.** It matters mainly for keys whose requests name a [peer](03-connect-clients.md#peer). **All peers, current peer first** adds the request's peer's memories to the user's own and can still bring back other peers' with a small score penalty. **Current peer only** keeps other peers' memories out of recall and out of OpenViking tools, and a request without a peer then recalls only the user's own memories; see [Recall only the current peer](03-connect-clients.md#peer-scope).
 - **Limit by category.** It sets a maximum number of entries for each of six categories: events, entities, preferences, experiences, resources and skills. Only categories above 0 are searched. When it is off, all sources are ranked together.
 
 ### Recall summary {#recall-summary}

@@ -188,6 +188,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | 相关度阈值 | `score_threshold` | `0.35` | 0–1 | 接受的最低相关度分数。 |
 | 超时时间 | `recall_timeout` | `2`（秒） | 大于 0，最多 30 | 检索最多等多久，超时后消息不带记忆继续发送。 |
 | 检索文本长度 | `query_max_chars` | `8000` | 3–32,000 | 取消息的多少个字符作为检索文本。 |
+| Peer 范围 | `recall_peer_scope` | `all` | `all`、`actor` | `all`：当前请求的 Peer 优先，其他 Peer 的记忆仍可能被召回。`actor`：召回和 OpenViking 工具只能查到、读到用户自己的记忆和当前请求的 Peer 的记忆，见[只召回当前 Peer](03-connect-clients.md#peer-scope)。 |
 | 按分类限量 | `quotas` | `{}`（关闭） | 键：`events`、`entities`、`preferences`、`experiences`、`resources`、`skills`；设置时至少一项大于 0（仅 Studio 校验） | 每个分类最多取的条数；只检索大于 0 的分类。 |
 
 管理 API 保存 `context_types` 和 `quotas` 的键时不做校验。`quotas` 里出现未知的键时，OpenViking 会拒绝检索请求，导致每次召回都失败。

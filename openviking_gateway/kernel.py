@@ -497,6 +497,10 @@ class MemoryKernel:
                 )
             )
         )
+        # Without a peer OpenViking searches every peer whatever peer_scope says. Last, since
+        # the client keeps only the tail of the list.
+        if policy.recall_peer_scope == "actor" and not request.peer:
+            exclude.append(f"viking://user/{credential['user_id']}/peers")
         budget = min(policy.max_tokens, policy.session_max_tokens - used)
         query = clean_text(unwrap_client(text_content(request.messages[request.anchor])))[
             : policy.query_max_chars

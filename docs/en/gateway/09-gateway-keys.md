@@ -82,7 +82,7 @@ A [gateway key](#gateway-keys) is fixed once issued, but the conversations it st
 
 ### One key per person {#one-key-per-person}
 
-Memory belongs to the OpenViking user behind a [gateway key](#gateway-keys), so everyone who shares a key shares that user's memory. Issue one key per person. Also issue separate keys per client if you want different context profiles, or want to revoke each client on its own. A [peer](03-connect-clients.md#peer) tells one user's counterparts apart within that memory, but other peers' memories can still be recalled and anyone holding the key can choose the peer, so it does not replace separate keys.
+Memory belongs to the OpenViking user behind a [gateway key](#gateway-keys), so everyone who shares a key shares that user's memory. Issue one key per person. Also issue separate keys per client if you want different context profiles, or want to revoke each client on its own. A [peer](03-connect-clients.md#peer) tells one user's counterparts apart within that memory, but other peers' memories can still be recalled unless the profile is set to [Current peer only](03-connect-clients.md#peer-scope), and anyone holding the key can choose the peer, so it does not replace separate keys.
 
 ### When the user's OpenViking API key changes {#when-the-openviking-key-changes}
 
