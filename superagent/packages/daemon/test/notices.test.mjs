@@ -174,7 +174,7 @@ describe('failure notice mute', () => {
     assert.equal(replies.length, 1);
   });
 
-  it('stays muted when a later failed message mentions the bot', async () => {
+  it('always notifies when a later failed message mentions the bot', async () => {
     const rows = {
       1: inbound(1),
       2: inbound(2, { mentions: [{ key: '@_user_1', name: 'Alpha', id: 'ou_bot123456' }] }),
@@ -183,7 +183,7 @@ describe('failure notice mute', () => {
     const { policy, replies } = makePolicy(rows, { mentionTarget });
     await policy.notifyTurnFailure({ inboundSeqs: [1], error: 'model exploded' });
     await policy.notifyTurnFailure({ inboundSeqs: [2], error: 'model exploded' });
-    assert.equal(replies.length, 1);
+    assert.equal(replies.length, 2);
   });
 
   it('treats threads of the same group as one chat', async () => {

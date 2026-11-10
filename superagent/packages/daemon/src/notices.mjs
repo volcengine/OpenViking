@@ -32,10 +32,11 @@ export class FailurePolicy {
     this.isOwner = isOwner;
     this.mentionTarget = mentionTarget;
     this.isStopping = isStopping;
-    // In-memory: chatId (or scope for non-chat events) -> { summary, atMs } of the delivered failure notice.
-    // A chat that was told once stays quiet, whatever the error or
-    // mention, until any turn succeeds (see onTurnSucceeded). Not persisted: a
-    // restart may report once more.
+    // In-memory: chatId (or scope for non-chat events) -> { summary, atMs } of
+    // the delivered failure notice. A chat that was told once stays quiet,
+    // whatever the error, until any turn succeeds (see onTurnSucceeded); an
+    // @-mention of the bot still gets a notice. Not persisted: a restart may
+    // report once more.
     this.failureNoticeMutes = new Map();
     // Automatic claude → codex fallback state (see tryModelFallback).
     this.fallbackInProgress = false;
@@ -133,9 +134,17 @@ export class FailurePolicy {
     const seq = seqs.at(-1) ?? null;
     const inbound = seq === null || seq === undefined ? null : this.store.inboundBySeq(seq);
     const errorSummary = safeError(error);
+    // Mention bypass: an inbound of the failed turn that @-mentions the bot
+    // always gets the notice. When the Connector does not know the bot's id,
+    // any @-mention counts.
+    const mentioned = seqs.some((itemSeq) => {
+      const row = itemSeq === seq ? inbound : this.store.inboundBySeq(itemSeq);
+      const target = row ? this.mentionTarget(row) : null;
+      return target ? target !== 'other' : Array.isArray(row?.mentions) && row.mentions.length > 0;
+    });
     // Keyed by chat, not by thread: one notice per group (or direct chat).
     const scopeKey = inbound?.chatId ?? inbound?.scopeKey ?? inbound?.conversationKey;
-    if (scopeKey && this.failureNoticeMutes.has(scopeKey)) {
+    if (scopeKey && !mentioned && this.failureNoticeMutes.has(scopeKey)) {
       this.recordActivity('agent.failure_notice', {
         summary: errorSummary,
         status: 'MUTED',
