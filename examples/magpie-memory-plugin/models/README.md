@@ -4,7 +4,7 @@ Manage the models **OpenViking and VikingBot themselves use** from Magpie's **Ag
 
 [中文说明](README_CN.md)
 
-This is the model-management module inside `@openviking/magpie-plugin`, not a separate installation. See [the unified README](../README.md) for installation and migration. Run `node cli.mjs ...` below from `models/`. Isolated model switching, automatic restart and restoration were verified with official Linux Magpie 0.1.3502; Windows is unverified.
+This is the model-management module inside `@openviking/magpie-plugin`, not a separate installation. See [the unified README](../README.md) for installation and migration. Run `node cli.mjs ...` below from `models/`. Isolated model switching, automatic restart and restoration were verified with official Linux Magpie 0.1.3528; Windows is unverified.
 
 ## Connection
 
@@ -29,11 +29,15 @@ The adapter invokes `ov config show -o json` for current CLI connection discover
 | Option | Behavior |
 | --- | --- |
 | `manageVlm: true` (default) | Manage startup `vlm` service binding |
+| `queryMode: "preserve"` (default) | Leave Query Planner unchanged |
+| `queryMode: "follow"` | Remove the optional `query_planner` section to restore OV's native VLM fallback; requires `manageVlm` |
+| `queryMode: "independent"` | Use a separate Magpie connection for Query Planner |
+| `queryModel` | Full `provider/model` or `group/name`; empty means the Agent model in independent mode |
 | `botMode: "preserve"` (default) | Keep explicit Bot settings; a Bot already inheriting root VLM continues to inherit after reload |
 | `botMode: "follow"` | Remove explicit Bot model/credentials so it inherits full root VLM; requires `manageVlm` |
 | `botMode: "independent"` | Give Bot its own Magpie connection, using the Agent row's model unless `botModel` is set |
 | `botModel` | Full `provider/model` or `group/name` for independent Bot mode |
-| `manageVlm: false` with independent mode | Manage only VikingBot |
+| `manageVlm: false` | Keep root VLM unchanged; independent Query and/or Bot management remain available |
 | `ovcliConfig` | Explicit client configuration file for resolving the server URL and Root credentials |
 | `restartOnChange` | Default true; restart and verify after model changes/restoration |
 | `pollMs` | Polling interval, 500–60000 ms; default 2000 |
@@ -50,11 +54,28 @@ For an independent Bot model:
 
 The Agent module writes a private selection file; a Bun bridge validates the model catalog and synchronizes through OV's revision-checked configuration API. It replaces legacy service bindings, including credential chains and backups, while preserving other settings. Released roles restore their original fields. Known Bot context-window metadata is synchronized; unknown values remain unchanged.
 
+### Separate VLM, Query and Bot models
+
+Keep the VLM model picker in **Agents → OpenViking**. In **Plugins → OpenViking → Options**, merge the following keys into existing options (retain connection settings and feature switches):
+
+```json
+{
+  "queryMode": "independent",
+  "queryModel": "your-provider/your-query-model",
+  "queryParameters": { "max_tokens": 2048, "timeout": 90 },
+  "botMode": "preserve"
+}
+```
+
+Use an exact model ID offered by Magpie, including `group/name` for a route group. There is no additional page/panel or native multi-picker tier UI. `queryMode: "preserve"` releases Query ownership and restores its original configuration; `"follow"` removes the entire optional section so it inherits VLM, including generation parameters. `queryParameters` applies only in independent mode. The Query section is journaled atomically: manual changes anywhere in an owned section block restoration rather than being overwritten. Original null/absent sections restore exactly. Defaults do not enable Bot or modify Query.
+
+Query-only changes also restart and verify OV using the existing lifecycle. Account overrides remain outside scope: an account's explicit Query Planner can override startup settings, and an account VLM can take precedence over startup Query Planner when the account has no explicit Query configuration. Do not infer effective models from the startup file alone.
+
 ### Generation parameters
 
 This plugin provides only Agent model selection and automatic restart verification, with no configuration page or panel and no host modifications. Unspecified model parameters retain their existing values; output budgets are still checked against known model limits.
 
-Use `vlmParameters` and `botParameters` in Options or `adapter.json`:
+Use `vlmParameters`, `queryParameters` (independent Query only) and `botParameters` in Options or `adapter.json`:
 
 ```json
 {
@@ -73,7 +94,7 @@ When catalog metadata explicitly disables temperature, inherited sampling values
 
 Bot management first detects `/bot/v1/health`. A disabled or undetected Bot is never configured, launched or enabled; explicitly requesting Bot management in that state fails. A standalone Bot remains outside OV's restart lifecycle.
 
-Embedding, Rerank, explicit Query Planner, Bot channels, tools and image-generation models remain configured as before. An unset Query Planner follows VLM according to OV's own rules. Cluster runtime VLM overrides block file management; Account model overrides are outside scope.
+Embedding, Rerank, Bot channels, tools and image-generation models remain configured as before. Query Planner remains unchanged unless explicitly managed. Cluster runtime overrides of a managed VLM or Query role block file management (`runtime_vlm_override` / `runtime_query_override`); Account model overrides are outside scope.
 
 ## Remote servers
 

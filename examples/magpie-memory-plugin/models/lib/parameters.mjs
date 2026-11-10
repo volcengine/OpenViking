@@ -24,7 +24,9 @@ const positive = (v) => Number.isSafeInteger(v) && v > 0;
 // larger model can recover the user's requested budget and disconnect restores it.
 export function modelParameters(document, records, desired, selection, config) {
   const adjustments = [], warnings = [];
-  const original = (key) => records[key]?.before || at(document, key);
+  const original = (key) => key.startsWith("query_planner.") && records.query_planner
+    ? at({ query_planner: records.query_planner.before.value }, key)
+    : records[key]?.before || at(document, key);
   function role(prefix, parameters, metadata) {
     const bot = prefix === "bot.agents";
     const spelling = (name) => bot && name === "max_tokens" ? "maxTokens" : name;
@@ -70,6 +72,7 @@ export function modelParameters(document, records, desired, selection, config) {
     if (valueFor("thinking").value === true) warnings.push(`${prefix}:verify_thinking_support`);
   }
   if (config.manageVlm) role("vlm", validateParameters(config.vlmParameters), selection.vlmMetadata);
+  if (config.queryMode === "independent") role("query_planner", validateParameters(config.queryParameters), selection.queryMetadata);
   const explicitBot = document.bot?.agents || {};
   const botInherited = !explicitBot.model && !explicitBot.credentials?.length;
   if (config.botEnabled !== false && (config.botMode !== "preserve" || (config.manageVlm && botInherited))) {

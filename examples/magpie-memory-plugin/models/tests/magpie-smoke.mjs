@@ -84,7 +84,7 @@ try {
   for (const file of ["package.json", "index.mjs", "hooks.mjs", "runtime.mjs", "config.mjs", "http.mjs", "conversation.mjs", "recall-ledger.mjs", "private-state.mjs", "scope.mjs", "capture.mjs", "capture-messages.mjs", "capture-history.mjs", "capture-worker.mjs", "shared", "models"]) await fs.cp(join(source, file), join(plugin, file), { recursive: true });
   const adapterDirectory = join(env.XDG_CONFIG_HOME, "magpie-openviking-models");
   await fs.mkdir(adapterDirectory, { recursive: true, mode: 0o700 });
-  await fs.writeFile(join(adapterDirectory, "adapter.json"), JSON.stringify({ serverUrl: backendURL, pollMs: 500, botMode: "follow" }));
+  await fs.writeFile(join(adapterDirectory, "adapter.json"), JSON.stringify({ serverUrl: backendURL, pollMs: 500, botMode: "follow", queryMode: "independent", queryModel: "smoke/one" }));
   console.log((await command("--version")).trim());
   const manifest = JSON.parse(await fs.readFile(join(plugin, "package.json"), "utf8"));
   manifest.magpie.options.memoryEnabled = false;
@@ -107,6 +107,8 @@ try {
   await command("openviking-models", "smoke/one");
   await until(() => document.vlm.model === "smoke/one", "first synchronization");
   await until(() => restarts === 1 && appliedRevision === revision, "first automatic restart");
+  assert.equal(document.query_planner.model, "smoke/one");
+  assert.equal(document.query_planner.api_base.endsWith("/v1"), true);
   assert.equal(document.vlm.max_concurrent, 3); assert.equal(document.vlm.timeout, 600);
   assert.equal(document.bot.agents.model, undefined);
   assert.equal(document.bot.agents.contextWindowTokens, 64000);
@@ -114,12 +116,13 @@ try {
   await command("openviking-models", "smoke/two");
   await until(() => document.vlm.model === "smoke/two", "model change");
   await until(() => restarts === 2 && appliedRevision === revision, "model-change automatic restart");
+  assert.equal(document.query_planner.model, "smoke/one", "Query stays independent of the main model");
   await command("openviking-models", "default");
   await until(() => document.vlm.model === "original", "disconnect restoration");
   await until(() => restarts === 3 && appliedRevision === revision, "restoration automatic restart");
   assert.deepEqual(document, initial);
   assert.equal(inferenceCalls, 0);
-  console.log("PASS: actual Magpie Agent registration, Bun bridge, catalog, Bot inheritance, model change, automatic restart verification and restoration; existing parameters preserved; zero inference calls.");
+  console.log("PASS: actual Magpie Agent registration, Bun bridge, catalog, Bot inheritance, independent Query Planner, model change, automatic restart verification and restoration; existing parameters preserved; zero inference calls.");
 } finally {
   if (service && service.exitCode === null) {
     await new Promise((done) => {

@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { settings } from "./config.mjs";
 import { readJSON, writeJSON, withLock, AdapterError } from "./files.mjs";
 import { createAPI, validateSelection, detectBot } from "./api.mjs";
-import { acknowledge, desiredSettings, equal, plan } from "./plan.mjs";
+import { acknowledge, desiredSettings, equal, ownQuerySection, plan } from "./plan.mjs";
 import { modelParameters } from "./parameters.mjs";
 import { activate } from "./activation.mjs";
 
@@ -51,6 +51,7 @@ export async function synchronize(config, { restore = false, resume = false, fet
     if (state && state.filePath !== current.file_path) throw new AdapterError("recovery_target_changed");
     const blocked = current.overrides?.cluster || [];
     if (!restoring && config.manageVlm && blocked.includes("vlm")) throw new AdapterError("runtime_vlm_override");
+    if (!restoring && ["follow", "independent"].includes(config.queryMode) && blocked.includes("query_planner")) throw new AdapterError("runtime_query_override");
     let document;
     try { document = JSON.parse(current.content.replace(/^\uFEFF/, "")); }
     catch { throw new AdapterError("invalid_server_config"); }
@@ -69,7 +70,10 @@ export async function synchronize(config, { restore = false, resume = false, fet
     const desired = desiredSettings(selection, effectiveConfig);
     const parameters = selection ? modelParameters(document, state?.records || {}, desired, selection, effectiveConfig) : { adjustments: [], warnings: [] };
     const oldRecords = state?.records || {};
+    ownQuerySection(document, oldRecords, desired);
     const vlmManaged = Object.keys({ ...oldRecords, ...desired }).some((key) => key.startsWith("vlm."));
+    const queryManaged = Object.hasOwn(oldRecords, "query_planner") || Object.hasOwn(desired, "query_planner");
+    const ovManaged = vlmManaged || queryManaged;
     const botManaged = Object.keys({ ...oldRecords, ...desired }).some((key) => key.startsWith("bot.agents."));
     const botInherits = !document.bot?.agents?.model && !document.bot?.agents?.credentials?.length;
     const botAffected = bot.enabled && (botManaged || (vlmManaged && botInherits));
@@ -114,9 +118,9 @@ export async function synchronize(config, { restore = false, resume = false, fet
       revision: current.revision,
       ...(savedRevision ? { savedRevision } : {}),
       restartRequired: changed || current.restart_required === true || (verified && botAffected && !activation.botVerified),
-      ovRuntime: vlmManaged ? (verified ? "applied" : changed || current.restart_required ? "restart_required" : "startup_file_matches") : "not_managed",
+      ovRuntime: ovManaged ? (verified ? "applied" : changed || current.restart_required ? "restart_required" : "startup_file_matches") : "not_managed",
       botRuntime: botAffected ? (verified && activation.botVerified ? "managed_restart_verified" : "restart_or_verify_required") : "not_managed",
-      ...(restoring ? {} : { botMode: config.botMode }),
+      ...(restoring ? {} : { botMode: config.botMode, queryMode: config.queryMode || "preserve" }),
       accountOverrides: "not_managed",
       capabilityCheck: "catalog_only",
       botDetection: bot.state,

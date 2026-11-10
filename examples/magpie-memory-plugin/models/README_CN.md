@@ -4,7 +4,7 @@
 
 在 Magpie 的 **Agents → OpenViking** 中选择模型，让 OpenViking 与 VikingBot 使用 Magpie 的供应商、账号和路由。供应商密钥留在 Magpie，OV 保存网关地址、网关 Key 和完整模型 ID。
 
-这是统一插件 `@openviking/magpie-plugin` 的模型管理模块，不再作为独立插件安装。安装和迁移见 [统一插件说明](../README_CN.md)。本文的 `node cli.mjs ...` 在 `models/` 目录执行。已用官方 Linux Magpie 0.1.3502 完成隔离模型切换、自动重启和恢复验证，Windows 尚未验证。
+这是统一插件 `@openviking/magpie-plugin` 的模型管理模块，不再作为独立插件安装。安装和迁移见 [统一插件说明](../README_CN.md)。本文的 `node cli.mjs ...` 在 `models/` 目录执行。已用官方 Linux Magpie 0.1.3528 完成隔离模型切换、自动重启和恢复验证，Windows 尚未验证。
 
 ## 连接和管理范围
 
@@ -29,11 +29,15 @@
 | 设置 | 行为 |
 | --- | --- |
 | `manageVlm: true`（默认） | 接管启动文件的 `vlm` 模型服务绑定 |
+| `queryMode: "preserve"`（默认） | 保留 Query Planner 原配置 |
+| `queryMode: "follow"` | 移除可选的 `query_planner` 配置，恢复 OV 原生的 VLM 回退；需要开启 `manageVlm` |
+| `queryMode: "independent"` | 给 Query Planner 指定独立的 Magpie 模型连接 |
+| `queryModel` | 独立模式下的完整 `provider/model` 或 `group/name`；留空使用 Agent 选择的模型 |
 | `botMode: "preserve"`（默认） | 保留 Bot 现有配置；原本继承 VLM 的 Bot 会在重新加载后继续继承 |
 | `botMode: "follow"` | 删除 Bot 显式模型和凭据绑定，恢复继承完整根 VLM；需要开启 `manageVlm` |
 | `botMode: "independent"` | 给 Bot 写入独立的 Magpie 连接；默认使用 Agents 中选择的模型 |
 | `botModel` | 独立模式下，可指定另外一个完整的 `provider/model` 或 `group/name` |
-| `manageVlm: false` + 独立模式 | 只管理 VikingBot |
+| `manageVlm: false` | 保留根 VLM；仍可独立管理 Query 和／或 Bot |
 | `ovcliConfig` | 显式指定用于解析服务地址和 Root 凭据的 `ovcli.conf` |
 | `restartOnChange` | 默认 true；切换模型或恢复配置后自动重启并验证新实例 |
 | `pollMs` | 同步间隔，500–60000 毫秒；默认 2000 |
@@ -50,11 +54,28 @@
 
 插件通过 `/bot/v1/health` 检测原本是否启用受管 Bot。未启用或未检测到时不会创建 Bot 配置、修改启动参数或开启 Bot；显式选择 Bot 管理模式会报错。独立 Bot 不在 OV 的重启生命周期中，插件不会为它擅自启动新进程。修改角色范围时，会先恢复不再接管的字段。Bot 的上下文窗口会使用所选模型目录中的已知值；未知时保留原值，需要自行核对。
 
+### 分别选择 VLM、Query 与 Bot 模型
+
+VLM 继续在 **Agents → OpenViking** 选择。在 **Plugins → OpenViking → Options** 中将以下字段合并到现有选项，保留原有连接配置和功能开关：
+
+```json
+{
+  "queryMode": "independent",
+  "queryModel": "your-provider/your-query-model",
+  "queryParameters": { "max_tokens": 2048, "timeout": 90 },
+  "botMode": "preserve"
+}
+```
+
+模型 ID 须来自 Magpie 模型目录，也可以填写路由组 `group/name`。不新增页面或面板，也没有原生多档位下拉界面。`queryMode: "preserve"` 会释放 Query 接管并恢复原配置；`"follow"` 移除整个可选配置，继承 VLM 模型及生成参数。`queryParameters` 仅在独立模式生效。Query 配置段整体保存恢复记录：接管期间手动修改其中任意字段都会阻止恢复，不会覆盖用户修改。原本为 `null` 或不存在的配置段也会准确还原。默认不启用 Bot，不改变 Query。
+
+仅修改 Query 同样通过现有生命周期重启并验证 OV。账号覆盖不在管理范围：账号显式 Query 配置可覆盖启动配置；账号未配置 Query、但有自己的 VLM 时，账号 VLM 也可能优先于服务端 Query。不能仅凭启动文件判断所有账号的实际模型。
+
 ### 输出预算和生成参数
 
 本插件仅提供 Agent 模型切换和自动重启验证，不提供配置页面或设置面板，不修改 Magpie 宿主。未指定的模型参数沿用现有配置；输出预算仍按所选模型的已知上限校验。
 
-Options / `adapter.json` 中对应 `vlmParameters` 与 `botParameters`，使用统一的 snake_case 字段：
+Options / `adapter.json` 中对应 `vlmParameters`、`queryParameters`（仅独立 Query）与 `botParameters`，使用统一的 snake_case 字段：
 
 ```json
 {
@@ -71,7 +92,7 @@ Options / `adapter.json` 中对应 `vlmParameters` 与 `botParameters`，使用�
 
 若目录明确标识不支持 temperature，会清除原采样值；用户显式请求不支持的 temperature 则停止同步。`thinking` 保留用户选择并提示验证协议兼容性。重试策略保持原设置；仅在参数选项显式指定时调整 timeout 和 VLM 的 max_concurrent。配置保存仍需相应进程重启后生效。
 
-Embedding、Rerank、显式 Query Planner、Bot 渠道、工具、生图模型等保持原配置。未显式配置的 Query Planner 按 OV 规则跟随 VLM。本版本只管理启动文件；遇到 Cluster VLM 运行覆盖时停止接管，不会声称文件修改已影响实际模型。Account 模型覆盖不在本插件管理范围内。
+Embedding、Rerank、Bot 渠道、工具、生图模型等保持原配置。Query 默认保持不变，显式设置后才接管。本版本只管理启动文件；遇到受管 VLM 或 Query 的 Cluster 运行覆盖时停止接管，不会声称文件修改已影响实际模型。Account 模型覆盖不在本插件管理范围内。
 
 ## 远程和容器
 
@@ -157,6 +178,7 @@ MAGPIE_BIN=/path/to/magpie node models/tests/magpie-smoke.mjs
 | --- | --- |
 | `root_authentication_required` / `root_permission_required` | 核对当前 CLI 配置的 Root Key 或 `rootApiKeyFile`，普通记忆访问 Key 不具备模型管理权限 |
 | `bot_not_enabled_or_detected` | Bot 未启用或未检测到；选择保留 Bot 配置，或先按原部署方式启用 Bot |
+| `runtime_query_override` | 存在 Cluster Query Planner 运行覆盖；先明确实际配置来源 |
 | `runtime_vlm_override` | 存在 Cluster VLM 运行覆盖；先明确实际配置来源，不能仅靠修改启动文件判断生效 |
 | `adapter_locked` | 其他同步或重启正在持锁。若进程在过期锁回收期间崩溃，先停用适配器及 CLI，检查 `adapter.lock.reclaim` 中的 PID；确认该进程已退出后才移除回收锁，保留恢复记录 |
 | `server_restart_unsupported` | 当前启动方式不支持重启 API，使用原来的 systemd / Docker / 进程管理方式重启 |

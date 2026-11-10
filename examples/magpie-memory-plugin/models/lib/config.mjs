@@ -45,18 +45,22 @@ export async function settings(options = {}, env = process.env) {
   if (config.rootApiKeyFile) apiKey = (await fs.readFile(expand(config.rootApiKeyFile), "utf8")).trim();
   const botMode = config.botMode ?? "preserve";
   if (!["preserve", "follow", "independent"].includes(botMode)) throw new AdapterError("invalid_bot_mode");
+  const queryMode = config.queryMode ?? "preserve";
+  if (!["preserve", "follow", "independent"].includes(queryMode)) throw new AdapterError("invalid_query_mode");
   const manageVlm = config.manageVlm ?? true;
-  if (typeof manageVlm !== "boolean" || (!manageVlm && botMode === "follow")) throw new AdapterError("invalid_model_roles");
+  if (typeof manageVlm !== "boolean" || (!manageVlm && (botMode === "follow" || queryMode === "follow"))) throw new AdapterError("invalid_model_roles");
   // Native forms retain inactive fields. Only consume the model in independent
   // mode; an empty field means the Agent selection, as the UI promises.
   if (botMode === "independent" && config.botModel != null && typeof config.botModel !== "string") throw new AdapterError("invalid_bot_model");
   const botModel = botMode === "independent" ? config.botModel?.trim() || undefined : undefined;
+  if (queryMode === "independent" && config.queryModel != null && typeof config.queryModel !== "string") throw new AdapterError("invalid_query_model");
+  const queryModel = queryMode === "independent" ? config.queryModel?.trim() || undefined : undefined;
   const pollMs = config.pollMs ?? 2000;
   if (!Number.isSafeInteger(pollMs) || pollMs < 500 || pollMs > 60000) throw new AdapterError("invalid_poll_interval");
   const restartOnChange = config.restartOnChange ?? true;
   if (typeof restartOnChange !== "boolean") throw new AdapterError("invalid_restart_policy");
   return { directory, selectionFile: join(directory, "selection.json"), stateFile: join(directory, "state.json"),
-    statusFile: join(directory, "status.json"), serverUrl, apiKey, manageVlm, botMode, botModel,
-    vlmParameters: validateParameters(config.vlmParameters), botParameters: validateParameters(config.botParameters, "bot"),
+    statusFile: join(directory, "status.json"), serverUrl, apiKey, manageVlm, botMode, botModel, queryMode, queryModel,
+    vlmParameters: validateParameters(config.vlmParameters), queryParameters: validateParameters(config.queryParameters), botParameters: validateParameters(config.botParameters, "bot"),
     restartOnChange, pollMs, timeoutMs: 10000 };
 }

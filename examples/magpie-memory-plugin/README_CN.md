@@ -3,7 +3,7 @@
 一个插件提供两项可独立控制的能力：
 
 - **记忆**：为经过 Magpie 的模型请求召回 OpenViking 上下文，按需采集对话并提供记忆工具。
-- **模型管理**：在 **Agents → OpenViking** 切换 OV/VikingBot 使用的模型，自动保存配置、重启并验证生效。
+- **模型管理**：在 **Agents → OpenViking** 切换 OV/VikingBot 使用的模型，自动保存配置、重启并验证生效。Query Planner 可通过插件 Options 的 `queryMode` / `queryModel` 单独指定模型，默认保留现有 Query 配置。
 
 市场展示名称为 **OpenViking**，统一 npm 包名为 `@openviking/magpie-plugin`。发现页归为「网关中间件」；已安装页可同时识别 Agent 与请求 Hook。没有额外页面或设置面板，不修改 Magpie 宿主。
 

@@ -51,7 +51,7 @@ export async function validateSelection(selection, config, fetcher = fetch) {
   let catalog;
   try { catalog = await response.json(); } catch { throw new AdapterError("invalid_catalog"); }
   if (!Array.isArray(catalog?.data)) throw new AdapterError("invalid_catalog");
-  for (const id of [selection.model, ...(config.botMode === "independent" ? [config.botModel || selection.model] : [])]) {
+  for (const id of [selection.model, ...(config.botMode === "independent" ? [config.botModel || selection.model] : []), ...(config.queryMode === "independent" ? [config.queryModel || selection.model] : [])]) {
     const model = catalog.data.find((entry) => entry.id === id);
     if (!model) throw new AdapterError("model_not_available");
     const endpoints = model.native_endpoints;
@@ -61,6 +61,7 @@ export async function validateSelection(selection, config, fetcher = fetch) {
   }
   const bot = catalog.data.find((entry) => entry.id === (config.botModel || selection.model));
   const vlm = catalog.data.find((entry) => entry.id === selection.model);
+  const query = catalog.data.find((entry) => entry.id === (config.queryModel || selection.model));
   const metadata = (entry, fallback = {}) => ({
     context: entry?.context_window ?? fallback.context,
     output: entry?.max_output_tokens ?? fallback.output,
@@ -68,5 +69,6 @@ export async function validateSelection(selection, config, fetcher = fetch) {
   });
   return { ...selection, gateway: { baseURL, key: selection.gateway.key },
     vlmMetadata: metadata(vlm, selection.metadata),
+    queryMetadata: metadata(query, config.queryModel ? {} : selection.metadata),
     botMetadata: metadata(bot, config.botModel ? {} : selection.metadata) };
 }

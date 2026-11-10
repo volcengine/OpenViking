@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { activate } from "../lib/activation.mjs";
 import { synchronize, status } from "../lib/runtime.mjs";
 import { settings, normalizeURL } from "../lib/config.mjs";
 import { readJSON, withLock } from "../lib/files.mjs";
@@ -33,7 +34,7 @@ async function fixture(t, document = original) {
     async fetcher(url, init) {
       requests.push({ url, init });
       if (url.endsWith("/bot/v1/health")) return Response.json({ status: "healthy" }, { status: backend.botStatus });
-      if (url.endsWith("/models")) return Response.json({ data: [{ id: selection.model, context_window: 64000, max_output_tokens: backend.output }, { id: "vendor/bot", context_window: 32000, max_output_tokens: 4096 }] });
+      if (url.endsWith("/models")) return Response.json({ data: backend.catalog || [{ id: selection.model, context_window: 64000, max_output_tokens: backend.output }, { id: "vendor/bot", context_window: 32000, max_output_tokens: 4096 }] });
       assert.equal(init.headers["X-API-Key"], "root-secret");
       if (init.method === "GET") return Response.json({ status: "ok", result: { content: JSON.stringify(current), revision: String(revision), file_path: "/server/ov.conf", writable: true, restart_required: restart, overrides: { cluster: backend.overrides } } });
       const body = JSON.parse(init.body);
@@ -424,4 +425,116 @@ test("a newer selection may replace the plugin's own pending revision", async (t
   const changed = await f.run();
   assert.equal(changed.status, "saved"); assert.notEqual(changed.savedRevision, first.savedRevision);
   assert.equal(f.backend.document.vlm.model, "vendor/bot");
+});
+
+test("independent Query Planner preserves generation settings, validates its own budget and restores exactly", async (t) => {
+  const document = { ...original, query_planner: { model: "old-query", provider: "volcengine", credentials: [{ model: "old-endpoint", api_key: "query-secret", max_tokens: 8000 }], max_tokens: 16000, temperature: 0.3, timeout: 77, thinking: false } };
+  const f = await fixture(t, document);
+  Object.assign(f.config, { queryMode: "independent", queryModel: "vendor/bot" });
+  const saved = await f.run();
+  assert.equal(f.backend.document.vlm.model, "vendor/chat");
+  assert.deepEqual(f.backend.document.query_planner, { model: "vendor/bot", provider: "openai", api_key: selection.gateway.key, api_base: selection.gateway.baseURL, max_tokens: 4096, temperature: 0.3, timeout: 77, thinking: false });
+  assert.ok(saved.adjustments.some((x) => x.field === "query_planner.max_tokens" && x.requested === 8000));
+  f.config.queryModel = "vendor/chat"; f.backend.output = 32000;
+  await f.run();
+  assert.equal(f.backend.document.query_planner.max_tokens, 8000);
+  f.config.queryParameters = { max_tokens: 2000, timeout: 100, thinking: true, temperature: 0.5 };
+  assert.ok((await f.run()).warnings.includes("query_planner:verify_thinking_support"));
+  assert.equal(f.backend.document.query_planner.max_tokens, 2000);
+  assert.equal(f.backend.document.query_planner.timeout, 100);
+  await f.run({ restore: true });
+  assert.deepEqual(f.backend.document, document);
+});
+test("Query follow removes the optional section and switching modes retains its original snapshot", async (t) => {
+  const f = await fixture(t);
+  Object.assign(f.config, { queryMode: "follow", queryModel: "stale/ignored" });
+  await f.run();
+  assert.equal(Object.hasOwn(f.backend.document, "query_planner"), false);
+  f.config.queryMode = "independent"; f.config.queryModel = "vendor/bot";
+  await f.run();
+  assert.equal(f.backend.document.query_planner.model, "vendor/bot");
+  f.config.queryMode = "preserve";
+  await f.run();
+  assert.deepEqual(f.backend.document.query_planner, original.query_planner);
+  assert.equal(Object.hasOwn((await readJSON(f.config.stateFile)).records, "query_planner"), false);
+  await f.run({ restore: true });
+  assert.deepEqual(f.backend.document, original);
+});
+test("Query restoration retains original null or absence and recovers ambiguous saves", async (t) => {
+  for (const query of [null, undefined]) {
+    const document = { vlm: original.vlm, ...(query === null ? { query_planner: null } : {}) };
+    const f = await fixture(t, document);
+    Object.assign(f.config, { queryMode: "independent", queryModel: "vendor/bot" });
+    f.backend.lostResponse = true;
+    await assert.rejects(f.run(), /server_unreachable/);
+    await f.run();
+    await f.run({ restore: true });
+    assert.deepEqual(f.backend.document, document);
+  }
+});
+test("unavailable or non-chat Query models are refused before configuration writes", async (t) => {
+  const f = await fixture(t);
+  Object.assign(f.config, { queryMode: "independent", queryModel: "missing/model" });
+  await assert.rejects(f.run(), /model_not_available/);
+  f.backend.catalog = [{ id: selection.model }, { id: "missing/model", native_endpoints: ["/v1/embeddings"] }];
+  await assert.rejects(f.run(), /chat_model_required/);
+  assert.equal(f.requests.some((r) => r.init.method === "PATCH"), false);
+  assert.equal(await readJSON(f.config.stateFile), null);
+});
+test("Query runtime overrides block management while account overrides remain out of scope", async (t) => {
+  const f = await fixture(t); f.backend.overrides = ["query_planner"];
+  Object.assign(f.config, { queryMode: "follow" });
+  await assert.rejects(f.run(), /runtime_query_override/);
+  f.config.queryMode = "independent";
+  await assert.rejects(f.run(), /runtime_query_override/);
+  assert.equal(f.requests.some((r) => r.init.method === "PATCH"), false);
+  f.config.queryMode = "preserve";
+  assert.equal((await f.run()).status, "saved");
+  assert.deepEqual(f.backend.document.query_planner, original.query_planner);
+});
+test("manual edits to the owned Query section block restoration without disclosing credentials", async (t) => {
+  const f = await fixture(t);
+  Object.assign(f.config, { queryMode: "independent", queryModel: "vendor/bot" });
+  await f.run();
+  f.backend.edit((doc) => { doc.query_planner.api_key = "manual-query-secret"; });
+  f.backend.markApplied();
+  const result = await f.run({ restore: true });
+  assert.equal(result.status, "conflict");
+  assert.deepEqual(result.conflicts, ["query_planner"]);
+  assert.doesNotMatch(JSON.stringify(result), /manual-query-secret/);
+  assert.equal(f.backend.document.query_planner.api_key, "manual-query-secret");
+});
+test("Query-only management restarts OV without touching VLM or enabling Bot", async (t) => {
+  const f = await fixture(t, { vlm: original.vlm });
+  Object.assign(f.config, { manageVlm: false, queryMode: "independent", queryModel: "vendor/bot" });
+  f.backend.botStatus = 503;
+  assert.equal((await f.run()).ovRuntime, "restart_required");
+  assert.deepEqual(f.backend.document.vlm, original.vlm);
+  assert.equal(f.backend.document.bot, undefined);
+  let posts = 0, instance = 1;
+  const fetcher = async (url, init) => {
+    if (init.method === "POST") { posts++; instance++; f.backend.markApplied(); return Response.json({ status: "ok", result: { restarting: true } }); }
+    const response = await f.backend.fetcher(url, init);
+    if (url.includes("/admin/configuration")) {
+      const body = await response.json();
+      body.result.restart = { supported: true, instance_id: String(instance) };
+      return Response.json(body);
+    }
+    return response;
+  };
+  const result = await activate(f.config, { fetcher, automatic: true });
+  assert.equal(result.status, "applied");
+  assert.equal(result.restartRequired, false);
+  assert.equal(result.botRuntime, "not_managed");
+  assert.equal(posts, 1);
+});
+test("Query option validation defaults to preservation and ignores inactive model IDs", async (t) => {
+  const f = await fixture(t);
+  const env = { PATH: "", OPENVIKING_MAGPIE_MODELS_DIR: f.config.directory, OPENVIKING_CLI_CONFIG_FILE: join(f.config.directory, "missing-client") };
+  assert.equal((await settings({}, env)).queryMode, "preserve");
+  assert.equal((await settings({ queryModel: 123 }, env)).queryModel, undefined);
+  await assert.rejects(settings({ queryMode: "bad" }, env), /invalid_query_mode/);
+  await assert.rejects(settings({ queryMode: "follow", manageVlm: false }, env), /invalid_model_roles/);
+  await assert.rejects(settings({ queryMode: "independent", queryModel: 123 }, env), /invalid_query_model/);
+  await assert.rejects(settings({ queryParameters: { max_tokens: -1 } }, env), /invalid_model_parameters/);
 });

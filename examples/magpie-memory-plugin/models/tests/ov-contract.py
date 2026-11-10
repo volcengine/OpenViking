@@ -35,4 +35,18 @@ document["bot"]["agents"].update(
 bot = check(document)
 assert not bot.inherits_root_vlm()
 assert bot.agents.model == "smoke/bot"
-print("PASS: real OV startup validation, full Magpie IDs, Bot follow and independent selection")
+document["query_planner"] = {
+    "model": "smoke/query", "provider": "openai", "api_key": "fake",
+    "api_base": "http://127.0.0.1:3425/v1", "max_tokens": 2048, "timeout": 90,
+}
+config = _validate(json.dumps(document))
+assert config.get_query_planner().model == "smoke/query"
+assert config.get_query_planner().max_tokens == 2048
+for query in (None, {}):
+    document["query_planner"] = query
+    config = _validate(json.dumps(document))
+    assert config.get_query_planner() is config.vlm
+del document["query_planner"]
+config = _validate(json.dumps(document))
+assert config.get_query_planner() is config.vlm
+print("PASS: real OV startup validation, Bot follow/independent, Query independent/fallback")

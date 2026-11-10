@@ -3,7 +3,7 @@
 One OpenViking plugin provides two independently controlled capabilities:
 
 - **Memory:** context recall, optional conversation capture, and memory tools for requests through Magpie.
-- **Model management:** select OV/VikingBot models in **Agents → OpenViking**, then automatically save, restart and verify activation.
+- **Model management:** select OV/VikingBot models in **Agents → OpenViking**, then automatically save, restart and verify activation. Query Planner can use a separate model through plugin Options (`queryMode` / `queryModel`); existing Query settings are preserved by default.
 
 The package remains `@openviking/magpie-plugin`. Discovery uses the middleware category; Installed recognizes both Agent and request-hook capabilities. No extra page, settings panel or Magpie host modification is required.
 
