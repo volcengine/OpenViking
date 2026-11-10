@@ -597,6 +597,30 @@ def _resolve_context_type_filter(
         raise InvalidArgumentError(str(exc)) from exc
 
 
+def _resolve_mcp_search_filter(
+    context_type: Optional[SearchContextTypeInput],
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    time_field: Optional[Literal["updated_at", "created_at"]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Build the metadata filter for an MCP retrieval call.
+
+    The time bounds are compiled into a metadata predicate instead of being
+    left to the query text, so a caller can express "last 7 days" without a
+    model round-trip and without spending recall on loosely worded queries.
+    """
+    try:
+        return merge_search_filter(
+            None,
+            context_type=context_type,
+            since=since,
+            until=until,
+            time_field=time_field,
+        )
+    except ValueError as exc:
+        raise InvalidArgumentError(str(exc)) from exc
+
+
 @_mcp_error_results()
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def find(
@@ -606,17 +630,20 @@ async def find(
     min_score: float = 0.35,
     level: Optional[List[int]] = None,
     context_type: Optional[Union[str, List[str]]] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    time_field: Optional[Literal["updated_at", "created_at"]] = None,
     read_content: bool = False,
     events_time_decay_protection: Optional[str] = None,
 ) -> str:
-    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills.  read_content only expands stored content; use read explicitly to execute a Live Context node."""
+    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills.  since/until restrict the hits to a time window (relative such as 7d, or an absolute date) and are applied as a metadata filter, so prefer them over phrasing the window into the query. time_field selects which index timestamp the window applies to. read_content only expands stored content; use read explicitly to execute a Live Context node."""
     try:
         validate_event_time_decay_request(events_time_decay_protection)
     except ValueError as exc:
         raise InvalidArgumentError(str(exc)) from exc
     service = get_service()
     ctx = _get_ctx()
-    context_filter = _resolve_context_type_filter(context_type)
+    context_filter = _resolve_mcp_search_filter(context_type, since, until, time_field)
     skill_only = resolve_context_types(context_type) == [ContextType.SKILL.value]
     if target_uri:
         target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)
@@ -634,6 +661,7 @@ async def find(
             limit=limit,
             score_threshold=min_score,
             level=level,
+            filter=context_filter,
         )
     else:
         result = await service.search.find(
@@ -676,6 +704,9 @@ async def search(
     detail: Literal["auto", "abstract", "overview", "full"] = "auto",
     detail_by_category: Optional[Dict[str, str]] = None,
     dedup_turns: Annotated[int, Field(ge=0, le=100)] = 0,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    time_field: Optional[Literal["updated_at", "created_at"]] = None,
     exclude_uris: Annotated[Optional[List[str]], Field(max_length=MAX_EXCLUDE_URIS)] = None,
     peer_scope: Literal["actor", "all"] = "all",
     other_peer_penalty: Optional[float] = None,
@@ -691,8 +722,12 @@ async def search(
     abstract, and score. ``mode="context"`` returns an injection-ready,
     token-budgeted context block and supports category quotas, purpose presets,
     detail tiers, cross-turn deduplication, peer scoping, and optional rewriting.
-    ``target_uri`` is only supported in list mode. ``read_content`` only expands
-    stored content; use ``read`` explicitly to execute a Live Context node.
+    ``target_uri`` is only supported in list mode. ``since``/``until`` restrict
+    the hits to a time window (relative such as 7d, or an absolute date) and
+    are applied as a metadata filter; prefer them over phrasing the window into
+    the query. ``time_field`` selects which index timestamp the window applies
+    to. ``read_content`` only expands stored content; use ``read`` explicitly to
+    execute a Live Context node.
     """
     try:
         validate_event_time_decay_request(events_time_decay_protection)
@@ -702,7 +737,7 @@ async def search(
     ctx = _get_ctx()
     if search_type == "keywords" and not query.strip():
         raise InvalidArgumentError("query must not be empty when search_type='keywords'")
-    context_filter = _resolve_context_type_filter(context_type)
+    context_filter = _resolve_mcp_search_filter(context_type, since, until, time_field)
     if mode == "context":
         if read_content:
             raise InvalidArgumentError("read_content is only supported in mode='list'")
@@ -1325,6 +1360,8 @@ async def ls(
     limit: int | None = None,
     sort_by: Literal["name", "mtime"] | None = None,
     sort_order: Literal["asc", "desc"] = "asc",
+    since: str | None = None,
+    until: str | None = None,
 ) -> str:
     """List one sorted page under a viking:// directory URI.
 
@@ -1335,6 +1372,8 @@ async def ls(
         limit: Optional maximum number of entries.
         sort_by: Optional name or modification-time ordering.
         sort_order: Ascending or descending order.
+        since: Optional lower bound on the entry modification time.
+        until: Optional upper bound on the entry modification time.
 
     Returns:
         A line-oriented directory listing.
@@ -1360,6 +1399,10 @@ async def ls(
     if sort_by is not None:
         options["sort_by"] = sort_by
         options["sort_order"] = sort_order
+    if since is not None:
+        options["since"] = since
+    if until is not None:
+        options["until"] = until
     page = await service.fs.ls(resolved_uri, **options)
     entries = page.entries
     if not entries:

@@ -7,6 +7,7 @@ Provides session management operations: session, sessions, add_message, commit, 
 """
 
 import asyncio
+import json
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -36,10 +37,16 @@ from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManager
+from openviking.utils.search_filters import (
+    matches_time_bounds,
+    parse_timestamp_value,
+    resolve_time_bounds,
+)
 from openviking.utils.tags import normalize_search_tags
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import (
     AlreadyExistsError,
+    InvalidArgumentError,
     NotFoundError,
     NotInitializedError,
 )
@@ -48,6 +55,11 @@ from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionCon
 from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 
 logger = get_logger(__name__)
+
+# Timestamps a session listing can be filtered on.
+SESSION_TIME_FIELDS = ("updated_at", "created_at", "last_message_at", "mod_time")
+# Upper bound for the concurrent metadata reads a filtered listing performs.
+SESSION_META_READ_CONCURRENCY = 16
 
 
 def _parse_utc_timestamp(value: str) -> datetime:
@@ -358,13 +370,47 @@ class SessionService:
             self._record_lifecycle_metric("get", "error")
             raise
 
-    async def sessions(self, ctx: RequestContext) -> List[Dict[str, Any]]:
+    async def sessions(
+        self,
+        ctx: RequestContext,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: str = "updated_at",
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
         """Get all sessions for the current user.
+
+        The listing keeps the newest sessions first and is capped by the
+        storage listing limit, so `offset` and `limit` page within that
+        window rather than reaching past it.
+
+        Args:
+            ctx: Request identity.
+            since: Optional lower bound on the session timestamp. Accepts a
+                relative duration such as "7d" or an absolute date/timestamp.
+            until: Optional upper bound on the session timestamp.
+            time_field: Which session timestamp the bounds apply to.
+            limit: Maximum number of sessions to return.
+            offset: Number of matched sessions to skip.
 
         Returns:
             List of session info dicts
         """
         self._ensure_initialized()
+        if time_field not in SESSION_TIME_FIELDS:
+            raise InvalidArgumentError(
+                f"time_field must be one of: {', '.join(SESSION_TIME_FIELDS)}"
+            )
+        if offset < 0:
+            raise InvalidArgumentError("offset must be greater than or equal to 0")
+        if limit is not None and limit < 0:
+            raise InvalidArgumentError("limit must be greater than or equal to 0")
+        try:
+            since_dt, until_dt = resolve_time_bounds(since=since, until=until)
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
+
         session_base_uri = canonical_session_uri(ctx)
         sessions_by_id: Dict[str, Dict[str, Any]] = {}
 
@@ -388,7 +434,85 @@ class SessionService:
         except Exception:
             logger.debug("Failed to list sessions", exc_info=True)
 
-        return list(sessions_by_id.values())
+        matched = list(sessions_by_id.values())
+        if since_dt is not None or until_dt is not None:
+            matched = await self._filter_sessions_by_time(
+                matched,
+                since_dt,
+                until_dt,
+                time_field,
+                ctx,
+            )
+        if offset:
+            matched = matched[offset:]
+        if limit is not None:
+            matched = matched[:limit]
+        return matched
+
+    async def _filter_sessions_by_time(
+        self,
+        candidates: List[Dict[str, Any]],
+        since: Optional[datetime],
+        until: Optional[datetime],
+        time_field: str,
+        ctx: RequestContext,
+    ) -> List[Dict[str, Any]]:
+        """Keep the sessions whose timestamp falls inside the resolved bounds.
+
+        Session timestamps live in the per-session metadata file, so the
+        metadata is read for the candidates only when a window is requested.
+        The reads run concurrently with a bounded fan-out to keep the listing
+        latency close to a single pass over the session directory.
+        """
+        semaphore = asyncio.Semaphore(SESSION_META_READ_CONCURRENCY)
+
+        async def resolve(candidate: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            async with semaphore:
+                timestamp, meta = await self._session_timestamp(
+                    candidate["uri"],
+                    time_field,
+                    candidate.get("mod_time", ""),
+                    ctx,
+                )
+            if not matches_time_bounds(timestamp, since, until):
+                return None
+            enriched = dict(candidate)
+            for key in ("created_at", "updated_at", "last_message_at"):
+                value = meta.get(key)
+                if value:
+                    enriched[key] = value
+            return enriched
+
+        resolved = await asyncio.gather(*(resolve(candidate) for candidate in candidates))
+        return [item for item in resolved if item is not None]
+
+    async def _session_timestamp(
+        self,
+        session_uri: str,
+        time_field: str,
+        fallback: str,
+        ctx: RequestContext,
+    ) -> tuple[Optional[datetime], Dict[str, Any]]:
+        """Resolve one session timestamp and the metadata it came from."""
+        if time_field == "mod_time":
+            return parse_timestamp_value(fallback), {}
+        try:
+            raw = await self._viking_fs.read_file(f"{session_uri}/.meta.json", ctx=ctx)
+            meta = json.loads(raw)
+        except Exception:
+            logger.debug("Failed to read session metadata for %s", session_uri, exc_info=True)
+            return parse_timestamp_value(fallback), {}
+        if not isinstance(meta, dict):
+            return parse_timestamp_value(fallback), {}
+        timestamp = parse_timestamp_value(meta.get(time_field))
+        if timestamp is None and time_field == "last_message_at":
+            timestamp = parse_timestamp_value(meta.get("updated_at"))
+        if timestamp is None:
+            # A session written before the field existed falls back to the
+            # directory modification time instead of dropping out of the
+            # listing.
+            timestamp = parse_timestamp_value(fallback)
+        return timestamp, meta
 
     async def delete(self, session_id: str, ctx: RequestContext) -> bool:
         """Delete a session.

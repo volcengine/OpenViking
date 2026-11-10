@@ -29,6 +29,7 @@ import type {
   JsonObject,
   ListPage,
   ListOptions,
+  ListSessionsOptions,
   GetSkillOptions,
   GrepOptions,
   GlobOptions,
@@ -683,6 +684,8 @@ export class OpenVikingClient {
           extra_fields: options.extraFields,
           tags: options.tags,
           include_tags: options.includeTags || undefined,
+          since: options.since,
+          until: options.until,
         },
       },
     );
@@ -954,8 +957,16 @@ export class OpenVikingClient {
     });
   }
   /** List sessions visible to the caller. */
-  listSessions(): Promise<unknown[]> {
-    return this.request("GET", "/api/v1/sessions");
+  listSessions(options: ListSessionsOptions = {}): Promise<unknown[]> {
+    return this.request("GET", "/api/v1/sessions", {
+      query: {
+        since: options.since,
+        until: options.until,
+        time_field: options.timeField,
+        limit: options.limit,
+        offset: options.offset,
+      },
+    });
   }
   /** Get one session. */
   getSession(sessionId: string, autoCreate = false): Promise<JsonObject> {

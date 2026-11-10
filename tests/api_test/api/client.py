@@ -321,9 +321,9 @@ class OpenVikingAPIClient:
             payload["session_id"] = session_id
         return self._request_with_retry("POST", url, json=payload)
 
-    def list_sessions(self) -> requests.Response:
+    def list_sessions(self, **params) -> requests.Response:
         endpoint = "/api/v1/sessions"
-        url = self._build_url(self.server_url, endpoint)
+        url = self._build_url(self.server_url, endpoint, params)
         return self._request_with_retry("GET", url)
 
     def get_session(self, session_id: str) -> requests.Response:
@@ -356,10 +356,11 @@ class OpenVikingAPIClient:
             payload["peer_id"] = peer_id
         return self._request_with_retry("POST", url, json=payload)
 
-    def fs_ls(self, uri: str, simple: bool = False, recursive: bool = False) -> requests.Response:
+    def fs_ls(self, uri: str, simple: bool = False, recursive: bool = False, **params) -> requests.Response:
         endpoint = "/api/v1/fs/ls"
-        params = {"uri": uri, "simple": simple, "recursive": recursive}
-        url = self._build_url(self.server_url, endpoint, params)
+        query = {"uri": uri, "simple": simple, "recursive": recursive}
+        query.update(params)
+        url = self._build_url(self.server_url, endpoint, query)
         return self._request_with_retry("GET", url)
 
     def fs_tree(self, uri: str) -> requests.Response:

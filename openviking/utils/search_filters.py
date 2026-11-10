@@ -250,6 +250,52 @@ def matches_time_bounds(
     return True
 
 
+def parse_timestamp_value(value: Any) -> Optional[datetime]:
+    """Parse an ISO 8601 timestamp into a timezone-aware UTC datetime.
+
+    Returns ``None`` when the value is missing or cannot be parsed, so callers
+    decide explicitly how to treat records without a usable timestamp instead
+    of silently comparing ``None`` against the window bounds.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return normalize_datetime_for_comparison(value)
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return normalize_datetime_for_comparison(parse_iso_datetime(text))
+    except ValueError:
+        return None
+
+
+def filter_entries_by_time(
+    entries: List[Dict[str, Any]],
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+    field: str = "modTime",
+) -> List[Dict[str, Any]]:
+    """Keep only the entries whose timestamp falls inside the resolved bounds.
+
+    Entries without a parseable timestamp are dropped: a time window can only
+    be honoured for entries that carry a usable timestamp, and keeping them
+    would silently widen the window the caller asked for.
+    """
+    if since is None and until is None:
+        return entries
+    kept: List[Dict[str, Any]] = []
+    for entry in entries:
+        timestamp = parse_timestamp_value(entry.get(field))
+        if timestamp is None:
+            continue
+        if matches_time_bounds(timestamp, since, until):
+            kept.append(entry)
+    return kept
+
+
 def _parse_time_value(value: str, now: datetime, *, is_upper_bound: bool) -> datetime:
     relative_match = _RELATIVE_RE.fullmatch(value)
     if relative_match:

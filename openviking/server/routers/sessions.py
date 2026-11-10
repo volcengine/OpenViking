@@ -343,11 +343,32 @@ async def create_session(
 
 @router.get("")
 async def list_sessions(
+    since: Optional[str] = Query(
+        None,
+        description="Lower bound on the session timestamp, such as 7d or 2026-03-01",
+    ),
+    until: Optional[str] = Query(
+        None,
+        description="Upper bound on the session timestamp",
+    ),
+    time_field: Literal["updated_at", "created_at", "last_message_at", "mod_time"] = Query(
+        "updated_at",
+        description="Which session timestamp the time bounds apply to",
+    ),
+    limit: Optional[int] = Query(None, ge=0, description="Maximum number of sessions to return"),
+    offset: int = Query(0, ge=0, description="Number of matched sessions to skip"),
     _ctx: RequestContext = Depends(get_session_request_context),
 ):
-    """List all sessions."""
+    """List all sessions, optionally restricted to a time window."""
     service = get_service()
-    result = await service.sessions.sessions(_ctx)
+    result = await service.sessions.sessions(
+        _ctx,
+        since=since,
+        until=until,
+        time_field=time_field,
+        limit=limit,
+        offset=offset,
+    )
     return Response(status="ok", result=result)
 
 

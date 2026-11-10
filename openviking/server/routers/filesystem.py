@@ -108,6 +108,12 @@ async def ls(
     ),
     tags: list[str] | None = Query(None, description="Only include entries matching all k=v tags"),
     include_tags: bool = Query(False, description="Include tags in each entry"),
+    since: Optional[str] = Query(
+        None, description="Only include entries modified at or after this time"
+    ),
+    until: Optional[str] = Query(
+        None, description="Only include entries modified at or before this time"
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List directory contents."""
@@ -134,6 +140,8 @@ async def ls(
             extra_fields=extra_fields,
             tags=tags,
             include_tags=include_tags,
+            since=since,
+            until=until,
         )
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -167,6 +175,12 @@ async def tree(
     ),
     tags: list[str] | None = Query(None, description="Only include entries matching all k=v tags"),
     include_tags: bool = Query(False, description="Include tags in each entry"),
+    since: Optional[str] = Query(
+        None, description="Only include entries modified at or after this time"
+    ),
+    until: Optional[str] = Query(
+        None, description="Only include entries modified at or before this time"
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get directory tree."""
@@ -191,6 +205,8 @@ async def tree(
             extra_fields=extra_fields,
             tags=tags,
             include_tags=include_tags,
+            since=since,
+            until=until,
         )
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
