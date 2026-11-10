@@ -852,6 +852,34 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             request_failed_message = error_msg
                             return self._embedding_failed(embedding_msg, error_msg, kind=kind)
 
+                        if kind in {
+                            ModelErrorKind.RATE_LIMIT_ERROR,
+                            ModelErrorKind.QUOTA_EXHAUSTED,
+                        }:
+                            # Transient provider throttling (RPM/TPM quota): the same
+                            # request can succeed once the quota window rolls over.
+                            # Drop-to-failed would permanently acknowledge the
+                            # message as terminal, losing embedding work that the
+                            # breaker path would otherwise retry. Requeue through
+                            # the same path so a burst that slips between breaker
+                            # states is not silently discarded.
+                            execute_status = "requeued"
+                            self._log_embedding_error(
+                                logging.WARNING, error_msg, embedding_msg
+                            )
+                            self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+                            if self._vikingdb.has_queue_manager:
+                                wait = getattr(embed_err, "retry_after", 0)
+                                if wait > 0:
+                                    await asyncio.sleep(min(wait, 30))
+                                await self._reenqueue_embedding_msg(embedding_msg)
+                                self._merge_request_stats(
+                                    embedding_msg.telemetry_id, requeue_count=1
+                                )
+                                return ProcessResult.requeued()
+                            request_failed_message = error_msg
+                            return self._embedding_failed(embedding_msg, error_msg, kind=kind)
+
                         self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                         execute_status = "error"
                         self._log_embedding_error(logging.ERROR, error_msg, embedding_msg)

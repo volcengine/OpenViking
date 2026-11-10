@@ -3376,3 +3376,116 @@ async def test_single_account_backend_query_runs_adapter_in_threadpool(monkeypat
     assert isinstance(query_filter, Eq)
     assert query_filter.field == "account_id"
     assert query_filter.value == "acc1"
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_requeues_rate_limit_quota_errors(monkeypatch):
+    """A 429 quota/rate-limit response must re-enqueue, not fail permanently.
+
+    These errors are transient: the same request succeeds once the provider's
+    quota window rolls over. The breaker path already re-enqueues when it is
+    open; a burst that lands between breaker states must not be silently
+    acknowledged as terminal.
+    """
+    import httpx
+    import openai
+
+    class _RequeueTrackingVikingDB:
+        is_closing = False
+        has_queue_manager = True
+
+        def __init__(self):
+            self.reenqueued = []
+
+        async def enqueue_embedding_msg(self, msg):
+            self.reenqueued.append(msg)
+
+        async def upsert(self, records, ctx=None):
+            raise AssertionError("upsert must not run for a failed embed")
+
+    class _QuotaEmbedder:
+        def prepare_embedding_input(self, content):
+            return content
+
+        async def embed_async(self, text, is_query=False):
+            request = httpx.Request("POST", "https://api.example.test/embeddings")
+            response = httpx.Response(
+                429,
+                request=request,
+                json={
+                    "error": {
+                        "message": "You exceeded your current quota",
+                        "type": "insufficient_quota",
+                    }
+                },
+            )
+            raise openai.APIStatusError(
+                "Error code: 429 - exceeded quota", response=response, body=None
+            )
+
+        def close(self):
+            pass
+
+    vikingdb = _RequeueTrackingVikingDB()
+    embedder = _QuotaEmbedder()
+    config = _DummyConfig(embedder)  # noqa: F841 - read via get_openviking_config
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    handler = TextEmbeddingHandler(vikingdb)
+    result = await handler.on_dequeue(_build_queue_payload())
+
+    assert result.outcome is ProcessOutcome.REQUEUED
+    assert len(vikingdb.reenqueued) == 1
+    assert vikingdb.reenqueued[0].id
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_requeues_rate_limit_without_retry_after(monkeypatch):
+    """Without a retry_after hint the requeue still happens immediately."""
+    import httpx
+    import openai
+
+    class _RequeueTrackingVikingDB:
+        is_closing = False
+        has_queue_manager = True
+
+        def __init__(self):
+            self.reenqueued = []
+
+        async def enqueue_embedding_msg(self, msg):
+            self.reenqueued.append(msg)
+
+    class _QuotaEmbedder:
+        def prepare_embedding_input(self, content):
+            return content
+
+        async def embed_async(self, text, is_query=False):
+            request = httpx.Request("POST", "https://api.example.test/embeddings")
+            response = httpx.Response(
+                429,
+                request=request,
+                json={"error": {"message": "Requests rate limit exceeded"}},
+            )
+            raise openai.APIStatusError(
+                "Error code: 429 - rate limited", response=response, body=None
+            )
+
+        def close(self):
+            pass
+
+    vikingdb = _RequeueTrackingVikingDB()
+    embedder = _QuotaEmbedder()
+    config = _DummyConfig(embedder)  # noqa: F841
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    handler = TextEmbeddingHandler(vikingdb)
+    result = await handler.on_dequeue(_build_queue_payload())
+
+    assert result.outcome is ProcessOutcome.REQUEUED
+    assert len(vikingdb.reenqueued) == 1
