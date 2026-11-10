@@ -3379,13 +3379,23 @@ async def test_single_account_backend_query_runs_adapter_in_threadpool(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_requeues_rate_limit_quota_errors(monkeypatch):
-    """A 429 quota/rate-limit response must re-enqueue, not fail permanently.
+@pytest.mark.parametrize(
+    "provider_code, provider_type",
+    [
+        # RPM/TPM window throttle: heals when the window rolls over.
+        ("ModelAccountTpmRateLimitExceeded", None),
+        # Gemini reports its window quota as HTTP 429 QUOTA_EXCEEDED.
+        ("QuotaExceeded", None),
+    ],
+)
+async def test_embedding_handler_requeues_transient_throttle(
+    monkeypatch, provider_code, provider_type
+):
+    """A transient throttle must re-enqueue, not fail permanently.
 
-    These errors are transient: the same request succeeds once the provider's
-    quota window rolls over. The breaker path already re-enqueues when it is
-    open; a burst that lands between breaker states must not be silently
-    acknowledged as terminal.
+    The same request succeeds once the provider's window rolls over. The breaker
+    path already re-enqueues when it is open; a burst that lands between breaker
+    states must not be silently acknowledged as terminal.
     """
     import httpx
     import openai
@@ -3403,32 +3413,25 @@ async def test_embedding_handler_requeues_rate_limit_quota_errors(monkeypatch):
         async def upsert(self, records, ctx=None):
             raise AssertionError("upsert must not run for a failed embed")
 
-    class _QuotaEmbedder:
+    class _ThrottleEmbedder:
         def prepare_embedding_input(self, content):
             return content
 
         async def embed_async(self, text, is_query=False):
+            error = {"message": "Requests rate limit exceeded", "code": provider_code}
+            if provider_type:
+                error["type"] = provider_type
             request = httpx.Request("POST", "https://api.example.test/embeddings")
-            response = httpx.Response(
-                429,
-                request=request,
-                json={
-                    "error": {
-                        "message": "You exceeded your current quota",
-                        "type": "insufficient_quota",
-                    }
-                },
-            )
+            response = httpx.Response(429, request=request, json={"error": error})
             raise openai.APIStatusError(
-                "Error code: 429 - exceeded quota", response=response, body=None
+                f"Error code: 429 - {provider_code}", response=response, body=None
             )
 
         def close(self):
             pass
 
     vikingdb = _RequeueTrackingVikingDB()
-    embedder = _QuotaEmbedder()
-    config = _DummyConfig(embedder)  # noqa: F841 - read via get_openviking_config
+    config = _DummyConfig(_ThrottleEmbedder())
     monkeypatch.setattr(
         "openviking_cli.utils.config.get_openviking_config",
         lambda: config,
@@ -3439,12 +3442,30 @@ async def test_embedding_handler_requeues_rate_limit_quota_errors(monkeypatch):
 
     assert result.outcome is ProcessOutcome.REQUEUED
     assert len(vikingdb.reenqueued) == 1
-    assert vikingdb.reenqueued[0].id
+    replacement = vikingdb.reenqueued[0]
+    assert replacement.id
+    # The retry counter rides along in the replacement message so the bound is
+    # enforced across deliveries.
+    assert replacement.failure_requeue_count == 1
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_requeues_rate_limit_without_retry_after(monkeypatch):
-    """Without a retry_after hint the requeue still happens immediately."""
+@pytest.mark.parametrize(
+    "provider_code",
+    [
+        "insufficient_quota",
+        "billing_hard_limit_reached",
+        "account_overdue",
+    ],
+)
+async def test_embedding_handler_fails_terminally_on_billing_exhaustion(monkeypatch, provider_code):
+    """Billing exhaustion must keep the existing terminal failure.
+
+    An unfunded account, a hard spend cap or an overdue account does not recover
+    when an RPM/TPM window rolls over; it needs an operator recharge. Re-enqueueing
+    it would cycle forever and hold this resource's tree lock and add-resource
+    --wait open (see #2916), so it must not be treated as transient.
+    """
     import httpx
     import openai
 
@@ -3458,7 +3479,10 @@ async def test_embedding_handler_requeues_rate_limit_without_retry_after(monkeyp
         async def enqueue_embedding_msg(self, msg):
             self.reenqueued.append(msg)
 
-    class _QuotaEmbedder:
+        async def upsert(self, records, ctx=None):
+            raise AssertionError("upsert must not run for a failed embed")
+
+    class _BillingEmbedder:
         def prepare_embedding_input(self, content):
             return content
 
@@ -3467,18 +3491,23 @@ async def test_embedding_handler_requeues_rate_limit_without_retry_after(monkeyp
             response = httpx.Response(
                 429,
                 request=request,
-                json={"error": {"message": "Requests rate limit exceeded"}},
+                json={
+                    "error": {
+                        "message": "Billing quota exhausted",
+                        "code": provider_code,
+                        "type": provider_code,
+                    }
+                },
             )
             raise openai.APIStatusError(
-                "Error code: 429 - rate limited", response=response, body=None
+                f"Error code: 429 - {provider_code}", response=response, body=None
             )
 
         def close(self):
             pass
 
     vikingdb = _RequeueTrackingVikingDB()
-    embedder = _QuotaEmbedder()
-    config = _DummyConfig(embedder)  # noqa: F841
+    config = _DummyConfig(_BillingEmbedder())
     monkeypatch.setattr(
         "openviking_cli.utils.config.get_openviking_config",
         lambda: config,
@@ -3487,5 +3516,75 @@ async def test_embedding_handler_requeues_rate_limit_without_retry_after(monkeyp
     handler = TextEmbeddingHandler(vikingdb)
     result = await handler.on_dequeue(_build_queue_payload())
 
-    assert result.outcome is ProcessOutcome.REQUEUED
-    assert len(vikingdb.reenqueued) == 1
+    assert result.outcome is ProcessOutcome.FAILED
+    assert vikingdb.reenqueued == []
+    # The actionable quota brief must survive: this is what makes the failure
+    # understandable to an operator who has to top the account up.
+    assert result.errors
+    assert brief_for(ModelErrorKind.QUOTA_EXHAUSTED) in json.dumps(result.errors)
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_stops_requeue_after_limit(monkeypatch):
+    """A provider that keeps throttling must not pin the resource forever."""
+    import httpx
+    import openai
+
+    from openviking.storage import collection_schemas as collection_schemas_module
+
+    class _RequeueTrackingVikingDB:
+        is_closing = False
+        has_queue_manager = True
+
+        def __init__(self):
+            self.reenqueued = []
+
+        async def enqueue_embedding_msg(self, msg):
+            self.reenqueued.append(msg)
+
+    class _AlwaysThrottledEmbedder:
+        def prepare_embedding_input(self, content):
+            return content
+
+        async def embed_async(self, text, is_query=False):
+            request = httpx.Request("POST", "https://api.example.test/embeddings")
+            response = httpx.Response(
+                429,
+                request=request,
+                json={
+                    "error": {
+                        "message": "TPM limit",
+                        "code": "ModelAccountTpmRateLimitExceeded",
+                    }
+                },
+            )
+            raise openai.APIStatusError("Error code: 429 - TPM", response=response, body=None)
+
+        def close(self):
+            pass
+
+    vikingdb = _RequeueTrackingVikingDB()
+    config = _DummyConfig(_AlwaysThrottledEmbedder())
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    handler = TextEmbeddingHandler(vikingdb)
+
+    # Drive the counter to the limit, then assert the next delivery is terminal.
+    limit = collection_schemas_module._EMBEDDING_TRANSIENT_REQUEUE_LIMIT
+    msg = EmbeddingMsg(
+        message="hello",
+        context_data={
+            "id": "id-1",
+            "uri": "viking://resources/sample",
+            "account_id": "default",
+            "abstract": "sample",
+        },
+        failure_requeue_count=limit,
+    )
+    result = await handler.on_dequeue({"data": json.dumps(msg.to_dict())})
+
+    assert result.outcome is ProcessOutcome.FAILED
+    assert vikingdb.reenqueued == []

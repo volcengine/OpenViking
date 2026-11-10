@@ -86,6 +86,41 @@ _CODE_KINDS = {
 _TRANSIENT_SERVICE_STATUS = {409, 500, 502, 503}
 _TRANSIENT_NETWORK_STATUS = {408, 504}
 
+# Billing states that do not heal when an RPM/TPM window rolls over. They need
+# an operator recharge or a raised spend limit, so queue work must keep failing
+# terminally instead of being re-enqueued forever.
+_TERMINAL_BILLING_CODES = frozenset(
+    {
+        "INSUFFICIENTQUOTA",
+        "BILLINGHARDLIMITREACHED",
+        "BILLINGDISABLED",
+        "ACCOUNTOVERDUE",
+    }
+)
+
+
+def is_terminal_billing_error(error: BaseException) -> bool:
+    """Return True when the failure is an unfunded or hard-capped billing state.
+
+    ``QUOTA_EXHAUSTED`` aggregates two very different conditions: a spend limit
+    that needs an operator recharge (``insufficient_quota``, hard billing caps,
+    overdue accounts) and a provider window quota that heals on its own (Gemini
+    reports HTTP 429 ``QUOTA_EXCEEDED`` for "wait and retry"). Only the former is
+    terminal: re-enqueueing it would cycle forever against an account that cannot
+    pay, so callers must keep failing it instead of treating it as transient.
+    """
+    for item in _exception_chain(error):
+        codes: set[str] = set()
+        normalized = _normalized_code(_error_code(item))
+        if normalized:
+            codes.add(normalized)
+        # Gemini carries its structured reason under ``details`` rather than a
+        # top-level code, so classification reads that path too.
+        codes |= _structured_reasons(getattr(item, "details", None))
+        if codes & _TERMINAL_BILLING_CODES:
+            return True
+    return False
+
 
 def _exception_chain(error: BaseException) -> list[BaseException]:
     chain: list[BaseException] = []
