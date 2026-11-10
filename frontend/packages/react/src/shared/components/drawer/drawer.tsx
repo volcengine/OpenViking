@@ -25,6 +25,48 @@ export interface DrawerProps {
   onClose: () => void;
 }
 
+interface BodyScrollLock {
+  owners: Set<symbol>;
+  overflow: string;
+  paddingRight: string;
+}
+
+// Body is a shared browser resource; each drawer owns a separate release token.
+const scrollLocks = new WeakMap<HTMLElement, BodyScrollLock>();
+
+function lockBodyScroll(body: HTMLElement) {
+  const existing = scrollLocks.get(body);
+  const lock = existing ?? {
+    owners: new Set<symbol>(),
+    overflow: body.style.overflow,
+    paddingRight: body.style.paddingRight,
+  };
+  if (!existing) {
+    scrollLocks.set(body, lock);
+    if (lock.overflow !== 'hidden') {
+      const doc = body.ownerDocument;
+      const view = doc.defaultView;
+      const scrollbar =
+        (view?.innerWidth ?? 0) - doc.documentElement.clientWidth;
+      if (view && scrollbar > 0) {
+        const padding =
+          Number.parseFloat(view.getComputedStyle(body).paddingRight) || 0;
+        body.style.paddingRight = `${padding + scrollbar}px`;
+      }
+      body.style.overflow = 'hidden';
+    }
+  }
+  const owner = Symbol();
+  lock.owners.add(owner);
+  return () => {
+    if (!lock.owners.delete(owner) || lock.owners.size > 0) return;
+    scrollLocks.delete(body);
+    if (lock.overflow === 'hidden') return;
+    body.style.overflow = lock.overflow;
+    body.style.paddingRight = lock.paddingRight;
+  };
+}
+
 const ENTER = 'ov-drawer--enter';
 const ENTER_ACTIVE = 'ov-drawer--enter-active';
 const MOTION = {
@@ -52,48 +94,30 @@ export function Drawer({
   const [layer, setLayer] = useState<HTMLDivElement | null>(null);
   usePortalTheme(Boolean(layer), triggerRef, layer);
 
-  // useEffect 必要性：Portal 存在期间同步浏览器 body 的滚动状态；退出动画完成
-  // 才移除节点，不能只随 open 提前解锁。卸载时恢复宿主原样式和滚动条占位。
+  // useEffect 必要性：Portal 存在期间持有浏览器 body 的滚动锁；仅随 open 处理会
+  // 在退出动画结束前解锁。Portal 移除时释放自己的锁，最后一个持有者恢复宿主样式。
   useEffect(() => {
-    if (!layer) return;
-    const body = document.body;
-    if (body.style.overflow === 'hidden') return;
-    const { overflow, paddingRight } = body.style;
-    const scrollbar = window.innerWidth - document.documentElement.clientWidth;
-    if (scrollbar > 0) {
-      const padding =
-        Number.parseFloat(window.getComputedStyle(body).paddingRight) || 0;
-      body.style.paddingRight = `${padding + scrollbar}px`;
-    }
-    body.style.overflow = 'hidden';
-    return () => {
-      body.style.overflow = overflow;
-      body.style.paddingRight = paddingRight;
-    };
+    if (layer) return lockBodyScroll(layer.ownerDocument.body);
   }, [layer]);
-
-  // useEffect 必要性：监听当前 Portal 内冒泡的浏览器键盘事件；包含嵌套控件的
-  // Esc 行为不能依赖触发按钮。节点更换、回调变化或卸载时移除监听。
-  useEffect(() => {
-    if (!layer) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return;
-      if (!(event.target instanceof Node) || !layer.contains(event.target))
-        return;
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
-    };
-    layer.addEventListener('keydown', onKeyDown);
-    return () => layer.removeEventListener('keydown', onKeyDown);
-  }, [layer, onClose]);
 
   if (typeof document === 'undefined' || (!open && !present)) return null;
   return createPortal(
     <div
       ref={setLayer}
+      role="presentation"
       className={['ov-drawer', className].filter(Boolean).join(' ')}
       lang={lang}
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape' || event.defaultPrevented) return;
+        if (
+          !(event.target instanceof Node) ||
+          !event.currentTarget.contains(event.target)
+        )
+          return;
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+      }}
     >
       <CSSTransition
         nodeRef={maskRef}

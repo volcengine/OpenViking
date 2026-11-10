@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
 import { act, createElement, StrictMode } from 'react';
-import { mount } from './helpers/module-dom.mjs';
+import { mount, ok } from './helpers/module-dom.mjs';
 import { FileBrowserEntries } from '@openviking/react/components/file-browser-entries';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import { OpenVikingProvider } from '@openviking/react/client';
 
 for (const name of ['MutationObserver', 'HTMLIFrameElement', 'SVGElement'])
   globalThis[name] = window[name];
@@ -18,6 +20,18 @@ const click = async (element) => {
   });
 };
 const finishTransition = () => act(() => delay(350));
+const entry = (props = {}) =>
+  createElement(FileBrowserEntries, {
+    agentConnect: { apiKey: 'drawer-demo-key', locale: 'en', ...props },
+  });
+const moduleEntry = () =>
+  createElement(
+    OpenVikingProvider,
+    { fetch: () => ok([]) },
+    createElement(FileBrowser, {
+      agentConnect: { apiKey: 'drawer-demo-key', locale: 'en' },
+    }),
+  );
 
 test('the connection drawer exits before releasing scroll and follows scoped host themes', async () => {
   const host = await mount(
@@ -91,4 +105,98 @@ test('the connection drawer exits before releasing scroll and follows scoped hos
   }
   assert.equal(drawer(), null);
   assert.equal(document.body.style.overflow, initialOverflow);
+});
+
+for (const first of [0, 1]) {
+  for (const firstAction of ['close', 'unmount']) {
+    for (const lastAction of ['close', 'unmount']) {
+      test(`overlapping drawers: release ${first} by ${firstAction}, then ${1 - first} by ${lastAction}`, async () => {
+        const body = document.body;
+        const original = body.style.cssText;
+        body.style.overflow = 'scroll';
+        body.style.paddingRight = '7px';
+        const hosts = [await mount(entry()), await mount(moduleEntry())];
+        const panels = [];
+        const unmounted = new Set();
+        const release = async (index, action) => {
+          if (action === 'unmount') {
+            await hosts[index].unmount();
+            unmounted.add(index);
+          } else {
+            await click(panels[index].querySelector('.ov-drawer__close'));
+            assert.equal(body.style.overflow, 'hidden');
+            await finishTransition();
+          }
+        };
+        try {
+          await click(hosts[0].container.querySelector('button'));
+          panels.push(drawer());
+          const lockedPadding = body.style.paddingRight;
+          await click(hosts[1].container.querySelector('button'));
+          panels.push(document.querySelectorAll('[role="dialog"]')[1]);
+          assert.equal(body.style.paddingRight, lockedPadding);
+          await release(first, firstAction);
+          assert.equal(document.querySelectorAll('[role="dialog"]').length, 1);
+          assert.equal(body.style.overflow, 'hidden');
+          assert.equal(body.style.paddingRight, lockedPadding);
+          await release(1 - first, lastAction);
+          assert.equal(drawer(), null);
+          assert.equal(body.style.overflow, 'scroll');
+          assert.equal(body.style.paddingRight, '7px');
+        } finally {
+          for (const index of [0, 1]) {
+            if (!unmounted.has(index)) await hosts[index].unmount();
+          }
+          body.style.cssText = original;
+        }
+      });
+    }
+  }
+}
+
+for (const handling of ['preventDefault', 'stopPropagation', 'unhandled']) {
+  test(`descendant Escape handler runs before the drawer: ${handling}`, async () => {
+    let calls = 0;
+    const host = await mount(
+      entry({
+        onKeyDown(event) {
+          calls++;
+          if (handling !== 'unhandled') event[handling]();
+        },
+      }),
+    );
+    try {
+      await click(host.container.querySelector('button'));
+      await act(() =>
+        document.querySelector('.ov-agent-connect button').dispatchEvent(
+          new window.KeyboardEvent('keydown', {
+            key: 'Escape',
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
+      await finishTransition();
+      assert.equal(calls, 1);
+      assert.equal(Boolean(drawer()), handling !== 'unhandled');
+    } finally {
+      await host.unmount();
+    }
+  });
+}
+
+test('a pre-existing host scroll lock is preserved', async () => {
+  const original = document.body.style.cssText;
+  document.body.style.overflow = 'hidden';
+  document.body.style.paddingRight = '13px';
+  const host = await mount(entry());
+  try {
+    await click(host.container.querySelector('button'));
+    assert.equal(document.body.style.paddingRight, '13px');
+  } finally {
+    await host.unmount();
+  }
+  assert.equal(document.body.style.overflow, 'hidden');
+  assert.equal(document.body.style.paddingRight, '13px');
+  document.body.style.cssText = original;
 });
