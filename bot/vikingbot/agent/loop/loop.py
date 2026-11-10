@@ -769,11 +769,11 @@ class AgentLoop(LoopToolMixin, LoopEventMixin, LoopSessionMixin, LoopCompactionM
                     event_type=OutboundEventType.NO_REPLY,
                 )
 
-            await self._evaluate_previous_response_outcome(session, msg)
+            outcome_update = await self._evaluate_previous_response_outcome(session, msg)
 
             session_policy = self._get_session_policy()
             if not self._eval:
-                await session_policy.before_turn(session, msg)
+                await session_policy.before_turn(session, msg, outcome_update=outcome_update)
 
             if self.sandbox_manager:
                 message_workspace = self.sandbox_manager.get_workspace_path(session_key)

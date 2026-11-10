@@ -1856,8 +1856,12 @@ async def test_local_compaction_clears_history_after_saving_memory(make_loop, te
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("manual", [True, False])
-async def test_local_compaction_preserves_concurrently_saved_messages(make_loop, temp_dir, manual):
+@pytest.mark.parametrize(
+    "manual, concurrent_feedback", [(True, False), (False, False), (False, True)]
+)
+async def test_local_compaction_preserves_concurrently_saved_messages(
+    make_loop, temp_dir, monkeypatch, manual, concurrent_feedback
+):
     config = Config(storage_workspace=str(temp_dir), use_local_memory=True)
     provider = _RecordingProvider()
     loop = make_loop(config=config, provider=provider, memory_window=3)
@@ -1865,7 +1869,13 @@ async def test_local_compaction_preserves_concurrently_saved_messages(make_loop,
     session = loop.sessions.get_or_create(key, skip_heartbeat=True)
     for i in range(4):
         session.add_message("user" if i % 2 == 0 else "assistant", f"old {i}")
+    session.messages[-1].update(response_id="resp-123", timestamp="2026-04-30T00:00:00")
+    session.metadata["response_outcomes"] = {"existing-response": {"outcome_label": "resolved"}}
     await loop.sessions.save(session)
+    monkeypatch.setattr(
+        "vikingbot.agent.loop.LangfuseClient.get_instance",
+        staticmethod(lambda: _FakeLangfuseClient()),
+    )
     started = asyncio.Event()
     release = asyncio.Event()
 
@@ -1880,7 +1890,10 @@ async def test_local_compaction_preserves_concurrently_saved_messages(make_loop,
     task = asyncio.create_task(
         loop._process_message(
             InboundMessage(
-                session_key=key, sender_id="user", content="/compact" if manual else "next"
+                session_key=key,
+                sender_id="user",
+                content="/compact" if manual else "that did not help",
+                timestamp=datetime.fromisoformat("2026-04-30T00:05:00"),
             )
         )
     )
@@ -1891,6 +1904,14 @@ async def test_local_compaction_preserves_concurrently_saved_messages(make_loop,
         concurrent.add_message("user", "scheduled reminder")
         concurrent.add_message("assistant", "reminder delivered")
         concurrent.metadata["feedback"] = {"saved": True}
+        concurrent.metadata["response_outcomes"] = {
+            "existing-response": {"outcome_label": "positive_feedback"},
+            "concurrent-response": {"outcome_label": "resolved"},
+        }
+        if concurrent_feedback:
+            concurrent.metadata["response_outcomes"]["resp-123"] = {
+                "outcome_label": "positive_feedback"
+            }
         await concurrent_manager.save(concurrent)
     finally:
         release.set()
@@ -1898,13 +1919,25 @@ async def test_local_compaction_preserves_concurrently_saved_messages(make_loop,
 
     expected = ["scheduled reminder", "reminder delivered"]
     if not manual:
-        expected = ["old 2", "old 3", *expected, "next", "reply"]
+        expected = ["old 2", "old 3", *expected, "that did not help", "reply"]
     persisted = loop.sessions._load(key)
     assert [m["content"] for m in persisted.messages] == expected
     assert session.messages == persisted.messages
     assert persisted.metadata["feedback"] == {"saved": True}
+    outcomes = persisted.metadata["response_outcomes"]
+    assert outcomes["existing-response"]["outcome_label"] == "positive_feedback"
+    assert outcomes["concurrent-response"]["outcome_label"] == "resolved"
     if manual:
         assert "Memory consolidated" in response.content
+    else:
+        outcome_event = await loop.bus.consume_outbound()
+        assert outcome_event.event_type == OutboundEventType.RESPONSE_OUTCOME_EVALUATED
+        assert outcome_event.response_id == "resp-123"
+        assert outcome_event.metadata["response_outcome_evaluated"]["outcome_label"] == "reasked"
+        if concurrent_feedback:
+            assert outcomes["resp-123"]["outcome_label"] == "positive_feedback"
+        else:
+            assert outcomes["resp-123"] == outcome_event.metadata["response_outcome_evaluated"]
 
 
 @pytest.mark.asyncio

@@ -29,6 +29,7 @@ from vikingbot.utils.helpers import cal_str_tokens, ensure_non_empty_assistant_c
 
 if TYPE_CHECKING:
     from vikingbot.agent.loop.loop import AgentLoop
+    from vikingbot.agent.loop.loop_events import _ResponseOutcomeUpdate
 
 
 @dataclass(frozen=True)
@@ -84,7 +85,13 @@ class LocalSessionPolicy:
     def __init__(self, loop: AgentLoop):
         self.loop = loop
 
-    async def before_turn(self, session: Session, msg: InboundMessage) -> None:
+    async def before_turn(
+        self,
+        session: Session,
+        msg: InboundMessage,
+        *,
+        outcome_update: _ResponseOutcomeUpdate | None = None,
+    ) -> None:
         loop = self.loop
         if len(session.messages) <= loop.memory_window:
             return
@@ -96,7 +103,9 @@ class LocalSessionPolicy:
             openviking_connection=msg.openviking_connection,
         )
         if consolidated:
-            await loop._trim_consolidated_history(session, snapshot, keep_count=keep_count)
+            await loop._trim_consolidated_history(
+                session, snapshot, keep_count=keep_count, outcome_update=outcome_update
+            )
 
     async def build_history(
         self,
@@ -155,7 +164,13 @@ class LegacyOpenVikingSessionPolicy(LocalSessionPolicy):
 
 
 class WorkingMemorySessionPolicy(LegacyOpenVikingSessionPolicy):
-    async def before_turn(self, session: Session, msg: InboundMessage) -> None:
+    async def before_turn(
+        self,
+        session: Session,
+        msg: InboundMessage,
+        *,
+        outcome_update: _ResponseOutcomeUpdate | None = None,
+    ) -> None:
         await self.loop._maybe_commit_openviking_before_turn(session, msg)
 
     async def build_history(
@@ -880,12 +895,23 @@ Respond with ONLY valid JSON, no markdown fences."""
             return False
 
     async def _trim_consolidated_history(
-        self, session: Session, snapshot: Session, *, keep_count: int
+        self,
+        session: Session,
+        snapshot: Session,
+        *,
+        keep_count: int,
+        outcome_update: _ResponseOutcomeUpdate | None = None,
     ) -> bool:
         """Remove only archived snapshot messages, keeping concurrent session updates."""
         remove_count = max(0, len(snapshot.messages) - keep_count)
 
         def trim(current: Session) -> bool:
+            # Merge the unsaved outcome unless a concurrent writer has updated it.
+            if outcome_update is not None:
+                outcomes = current.metadata.setdefault("response_outcomes", {})
+                response_id = outcome_update.payload["response_id"]
+                if outcomes.get(response_id) == outcome_update.previous:
+                    outcomes[response_id] = outcome_update.payload
             if current.messages[: len(snapshot.messages)] != snapshot.messages:
                 return False
             current.messages = current.messages[remove_count:]

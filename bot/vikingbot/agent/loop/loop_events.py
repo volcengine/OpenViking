@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from contextlib import aclosing
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -14,6 +15,12 @@ from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.observability.outcome import evaluate_response_outcome, should_update_outcome
 from vikingbot.session.manager import Session
 from vikingbot.utils.helpers import cal_str_tokens
+
+
+@dataclass(frozen=True)
+class _ResponseOutcomeUpdate:
+    previous: dict[str, Any] | None
+    payload: dict[str, Any]
 
 
 class LoopEventMixin:
@@ -154,8 +161,8 @@ class LoopEventMixin:
 
     async def _evaluate_previous_response_outcome(
         self, session: Session, msg: InboundMessage
-    ) -> None:
-        """Evaluate the latest assistant response before appending a new user turn."""
+    ) -> _ResponseOutcomeUpdate | None:
+        """Evaluate the previous response and return only this turn's changed outcome."""
         if msg.metadata.get(HEARTBEAT_METADATA_KEY):
             return
 
@@ -202,3 +209,4 @@ class LoopEventMixin:
                 metadata={"response_outcome_evaluated": outcome_payload},
             )
         )
+        return _ResponseOutcomeUpdate(previous=previous, payload=outcome_payload)
