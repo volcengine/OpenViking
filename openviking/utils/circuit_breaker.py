@@ -100,15 +100,19 @@ class CircuitBreaker:
         """Record a failed API call. May trip the breaker."""
         kind = model_error_kind(error)
         legacy_class = classify_api_error(error) if kind is None else None
-        if kind in {
-            ModelErrorKind.AUTHENTICATION_ERROR,
-            ModelErrorKind.PERMISSION_DENIED,
-            ModelErrorKind.MODEL_NOT_FOUND,
-            ModelErrorKind.UNSUPPORTED,
-            ModelErrorKind.INVALID_REQUEST,
-            ModelErrorKind.INPUT_TOO_LARGE,
-            ModelErrorKind.CONTENT_SAFETY,
-        } or legacy_class == ERROR_CLASS_INPUT_TOO_LARGE:
+        if (
+            kind
+            in {
+                ModelErrorKind.AUTHENTICATION_ERROR,
+                ModelErrorKind.PERMISSION_DENIED,
+                ModelErrorKind.MODEL_NOT_FOUND,
+                ModelErrorKind.UNSUPPORTED,
+                ModelErrorKind.INVALID_REQUEST,
+                ModelErrorKind.INPUT_TOO_LARGE,
+                ModelErrorKind.CONTENT_SAFETY,
+            }
+            or legacy_class == ERROR_CLASS_INPUT_TOO_LARGE
+        ):
             label = kind.value if kind is not None else legacy_class
             logger.info("Circuit breaker ignoring %s error: %s", label, error)
             return
