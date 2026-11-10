@@ -28,6 +28,7 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
+from openviking.server.routers.search import FiniteSearchThreshold
 from openviking.server.skill_package_update import (
     clear_skill_package_contents,
     transfer_skill_package,
@@ -93,7 +94,7 @@ class FindSkillsRequest(BaseModel):
 
     query: str
     limit: int = 10
-    score_threshold: Optional[float] = None
+    score_threshold: Optional[FiniteSearchThreshold] = None
     level: Optional[list[int]] = None
     telemetry: TelemetryRequest = False
     target_uri: Optional[str] = None

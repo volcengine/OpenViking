@@ -4,7 +4,7 @@
 
 import asyncio
 import math
-from typing import Any, Dict, List, Literal, Optional, Sequence, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Sequence, Union
 
 from fastapi import APIRouter, Depends, Request
 from fastapi import Response as FastAPIResponse
@@ -65,6 +65,7 @@ def _sanitize_floats(obj: Any) -> Any:
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
 TimeField = Literal["updated_at", "created_at"]
+FiniteSearchThreshold = Annotated[float, Field(allow_inf_nan=False)]
 
 
 def _resolve_search_limit(limit: int, node_limit: Optional[int]) -> int:
@@ -136,7 +137,7 @@ class FindRequest(BaseModel):
     context_type: Optional[Union[str, List[str]]] = None
     limit: int = Field(default=DEFAULT_LIMIT, ge=1)
     node_limit: Optional[int] = Field(default=None, ge=1)
-    score_threshold: Optional[float] = None
+    score_threshold: Optional[FiniteSearchThreshold] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
     tags: Optional[List[str]] = None
@@ -230,7 +231,7 @@ class SearchRequest(BaseModel):
     session_id: Optional[str] = None
     limit: int = Field(default=DEFAULT_LIMIT, ge=1)
     node_limit: Optional[int] = Field(default=None, ge=1)
-    score_threshold: Optional[float] = None
+    score_threshold: Optional[FiniteSearchThreshold] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
     tags: Optional[List[str]] = None
@@ -321,7 +322,7 @@ class RecallRequest(BaseModel):
     query: str
     quotas: Optional[Dict[str, int]] = None
     max_chars: int = DEFAULT_MAX_CHARS
-    min_score: float = DEFAULT_MIN_SCORE
+    min_score: FiniteSearchThreshold = DEFAULT_MIN_SCORE
     peer_scope: Literal["actor", "all"] = "all"
     other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None
     render: Union[bool, Literal["full", "compact"]] = True
@@ -332,7 +333,7 @@ class RecallRequest(BaseModel):
     max_tokens: Optional[int] = Field(default=None, ge=64, le=32000)
     purpose: Optional[Literal["chat", "coding"]] = None
     detail: Optional[DetailRequest] = None
-    score_threshold: Optional[float] = None
+    score_threshold: Optional[FiniteSearchThreshold] = None
     dedup_turns: Optional[int] = Field(default=None, ge=0, le=100)
     exclude_uris: List[str] = Field(default_factory=list, max_length=MAX_EXCLUDE_URIS)
     rewrite: Union[bool, Literal["auto"]] = False
