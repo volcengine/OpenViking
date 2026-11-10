@@ -778,12 +778,14 @@ class SemanticTreeExecutor:
             )
             if reuse_pending:
                 self._pending_abstract_dirs.add(dir_uri)
-            if reuse_pending and not self._skip_vectorization:
-                # Reuse existing sibling summaries without replacing changed file work.
+            directory_only = self._generation_trigger == "parent_refresh"
+            if (reuse_pending or directory_only) and not self._skip_vectorization:
+                # Directory-only work also reuses the changed files' committed abstracts.
                 missing_abstracts = required_file_paths - {
                     uri for uri, abstract in self._file_abstracts.items() if abstract.strip()
                 }
-                missing_abstracts -= self._changed_paths
+                if not directory_only:
+                    missing_abstracts -= self._changed_paths
                 if missing_abstracts:
                     try:
                         abstracts = await self._processor._load_transfer_file_summaries(
@@ -1227,7 +1229,8 @@ class SemanticTreeExecutor:
         """Generate file summary and notify parent completion."""
 
         file_name = file_path.split("/")[-1]
-        need_vectorize = True
+        directory_only = self._generation_trigger == "parent_refresh"
+        need_vectorize = not directory_only
         semantic_succeeded = True
         file_content = None
         try:
@@ -1244,9 +1247,11 @@ class SemanticTreeExecutor:
                     and file_path in node.sampled_file_paths
                 )
 
-                reuse_pending = parent_uri in self._pending_abstract_dirs
-                if not content_changed and (not regenerate_sampled_summary or reuse_pending):
-                    if reuse_pending:
+                reuse_existing = directory_only or parent_uri in self._pending_abstract_dirs
+                if (not content_changed or directory_only) and (
+                    not regenerate_sampled_summary or reuse_existing
+                ):
+                    if reuse_existing:
                         summary_dict = await self._read_existing_summary(
                             file_path, require_nonempty=True
                         )
@@ -1259,7 +1264,7 @@ class SemanticTreeExecutor:
                             parent_uri,
                             file_path,
                             "abstract"
-                            if (vector_abstract.strip() if reuse_pending else vector_abstract)
+                            if (vector_abstract.strip() if reuse_existing else vector_abstract)
                             else "overview",
                         )
                     elif regenerate_sampled_summary:
