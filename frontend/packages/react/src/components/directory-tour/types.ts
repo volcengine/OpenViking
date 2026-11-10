@@ -15,7 +15,30 @@ export interface DirectoryTourStep {
   title: ReactNode;
   description: ReactNode;
   illustration?: ReactNode;
+  /** Card width in CSS pixels; defaults to 270 and is viewport-constrained. */
+  cardWidth?: number;
   nextLabel?: string;
+}
+
+/** The first element positions the card; all connected rows define the highlight. */
+export type DirectoryTourAnchor = HTMLElement | readonly HTMLElement[];
+
+export interface DirectoryTourContentContext {
+  step: DirectoryTourStep;
+  index: number;
+  total: number;
+  complete: () => void;
+  close: () => void;
+}
+
+export interface DirectoryTourIntroProps {
+  locale: Locale;
+  title: ReactNode;
+  description: ReactNode;
+  features?: readonly ReactNode[];
+  media?: ReactNode;
+  onDone?: () => void;
+  labels?: Pick<DirectoryTourLabels, 'done'>;
 }
 
 export interface DirectoryTourResult {
@@ -48,9 +71,11 @@ export interface DirectoryTourProps {
   locateTarget?: (
     target: string,
     signal: AbortSignal,
-  ) => Promise<HTMLElement | null>;
+  ) => Promise<DirectoryTourAnchor | null>;
   onStepChange?: (index: number) => void;
   onClose?: () => void;
   onComplete?: (result: DirectoryTourResult) => void;
+  /** Replaces ready-state card contents; loading and recovery stay built in. */
+  renderContent?: (context: DirectoryTourContentContext) => ReactNode;
   labels?: DirectoryTourLabels;
 }

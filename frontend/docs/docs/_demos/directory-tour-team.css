@@ -1,0 +1,44 @@
+.ov-directory-tour .ov-directory-tour-team__video {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  line-height: 0;
+}
+.ov-directory-tour-team__video img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.ov-directory-tour-team__folder {
+  display: inline-block;
+  width: 11.2px;
+  height: 11.2px;
+  vertical-align: -1px;
+}
+.ov-directory-tour-team__term {
+  color: var(--ov-ui-directory-tour-secondary);
+}
+.ov-directory-tour .ov-directory-tour-team__edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ov-ui-directory-tour-primary);
+  font-size: 12px;
+  line-height: 20px;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.ov-directory-tour-team__edit img {
+  width: 12px;
+  height: 12px;
+}
+
+.ov-directory-tour-team__rules:lang(zh-CN) {
+  white-space: nowrap;
+}

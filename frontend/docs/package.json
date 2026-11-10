@@ -30,6 +30,8 @@
     "#file-tree-console-data": "./docs/_demos/file-tree-console-data.ts",
     "#file-tree-console.css": "./docs/_demos/file-tree-console.css",
     "#file-preview-console-data": "./docs/_demos/file-preview-console-data.ts",
-    "#directory-tour-basic.css": "./docs/_demos/directory-tour-basic.css"
+    "#directory-tour-basic.css": "./docs/_demos/directory-tour-basic.css",
+    "#directory-tour-team.css": "./docs/_demos/directory-tour-team.css",
+    "#directory-tour-team-content": "./docs/_demos/directory-tour-team-content.tsx"
   }
 }

@@ -4,9 +4,7 @@ import type { DirectoryTourProps, DirectoryTourStep } from './types.js';
 import { useTourAnchor } from './use-tour-anchor.js';
 import { useTourPosition } from './use-tour-position.js';
 import { useTourTheme } from './use-tour-theme.js';
-import { resolveLocale } from '../../shared/locale.js';
-import enUS from './locales/en-US.js';
-import zhCN from './locales/zh-CN.js';
+import { TourCard } from './tour-card.js';
 
 /** Data-free directory guidance. Unmounting a closed session resets its steps. */
 export function DirectoryTour(props: DirectoryTourProps) {
@@ -57,21 +55,21 @@ function TourStep({
   locale,
   className,
   style,
+  renderContent,
 }: DirectoryTourProps & {
   step: DirectoryTourStep;
   index: number;
   advance: (skip: boolean) => void;
 }) {
-  const text = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale, labels);
   const [attempt, retry] = useState(0);
   const [surface, setSurface] = useState<HTMLDivElement | null>(null);
-  const { anchor, failed } = useTourAnchor(
+  const { anchor, elements, failed } = useTourAnchor(
     step.target,
     locateTarget,
     locateTimeout,
     attempt,
   );
-  const position = useTourPosition(anchor, surface, placement);
+  const position = useTourPosition(anchor, surface, placement, elements);
   useTourTheme(anchor, surface);
   const titleId = useId();
   const bodyId = useId();
@@ -117,6 +115,7 @@ function TourStep({
         tabIndex={-1}
         className={['ov-directory-tour', className].filter(Boolean).join(' ')}
         style={{
+          width: step.cardWidth ?? 270,
           ...style,
           maxWidth: position?.maxWidth,
           maxHeight: position?.maxHeight,
@@ -127,7 +126,11 @@ function TourStep({
       >
         {anchor && !unavailable && position?.visible && (
           <div
-            className="ov-directory-tour__highlight"
+            className={
+              elements.length > 1
+                ? 'ov-directory-tour__highlight ov-directory-tour__highlight--group'
+                : 'ov-directory-tour__highlight'
+            }
             aria-hidden="true"
             style={{
               top: position.targetTop,
@@ -137,65 +140,21 @@ function TourStep({
             }}
           />
         )}
-        <div className="ov-directory-tour__card">
-          {onClose && (
-            <button
-              className="ov-directory-tour__close"
-              type="button"
-              aria-label={text.close}
-              onClick={onClose}
-            >
-              ×
-            </button>
-          )}
-          {!locating && !unavailable && step.illustration && (
-            <div className="ov-directory-tour__illustration">
-              {step.illustration}
-            </div>
-          )}
-          <h2 id={titleId} className="ov-directory-tour__title">
-            {step.title}
-          </h2>
-          <div
-            id={bodyId}
-            className="ov-directory-tour__description"
-            role={unavailable ? 'alert' : undefined}
-          >
-            {unavailable
-              ? text.unavailable
-              : locating
-                ? text.locating
-                : step.description}
-          </div>
-          <footer className="ov-directory-tour__actions">
-            <span className="ov-directory-tour__progress" aria-live="polite">
-              {text.progress(index + 1, steps.length)}
-            </span>
-            {unavailable ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => retry((value) => value + 1)}
-                >
-                  {text.retry}
-                </button>
-                <button type="button" onClick={() => advance(true)}>
-                  {text.skip}
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                className="ov-directory-tour__primary"
-                disabled={locating}
-                onClick={() => advance(false)}
-              >
-                {step.nextLabel ??
-                  (index === steps.length - 1 ? text.done : text.next)}
-              </button>
-            )}
-          </footer>
-        </div>
+        <TourCard
+          step={step}
+          index={index}
+          total={steps.length}
+          locale={locale}
+          labels={labels}
+          titleId={titleId}
+          bodyId={bodyId}
+          locating={locating}
+          unavailable={Boolean(unavailable)}
+          onClose={onClose}
+          retry={() => retry((value) => value + 1)}
+          advance={advance}
+          renderContent={renderContent}
+        />
       </div>
     </div>,
     document.body,
