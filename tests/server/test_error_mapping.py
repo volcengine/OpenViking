@@ -563,6 +563,9 @@ def test_git_auth_failure_remains_a_client_error():
     assert error.code == GIT_AUTH_FAILED
     assert ERROR_CODE_TO_HTTP_STATUS.get(error.code, 500) == 400
     assert error_response(error.code, error.message).status_code == 400
-    assert response_from_result(
-        {"status": "error", "code": error.code, "errors": [error.message]}
-    ).status_code == 400
+    assert (
+        response_from_result(
+            {"status": "error", "code": error.code, "errors": [error.message]}
+        ).status_code
+        == 400
+    )
