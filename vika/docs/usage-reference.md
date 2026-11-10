@@ -136,7 +136,7 @@ Slack-only instances use `"channel": "slack"`, `"connectors": ["slack"]`, and no
 
 ### QQ over OneBot
 
-The `onebot` Connector speaks through an ordinary QQ account driven by a OneBot v11 implementation (written against the NapCat source and tested against a simulated OneBot server, not a live QQ login; LLOneBot and Lagrange.OneBot differ in a few features). Unlike the official QQ bot above, it can join groups and read history. QQ may restrict an account driven by a third-party client: use one you can afford to lose. Vika is the client of the implementation's WebSocket server and needs no public address.
+The `onebot` Connector speaks through an ordinary QQ account driven by a OneBot v11 implementation (written against the NapCat source, tested against a simulated OneBot server and run against a live NapCat account; LLOneBot and Lagrange.OneBot differ in a few features and have not been run live). Unlike the official QQ bot above, it can join groups and read history. QQ may restrict an account driven by a third-party client: use one you can afford to lose. Vika is the client of the implementation's WebSocket server and needs no public address.
 
 1. Add a WebSocket server with a token to the implementation (NapCat: `websocketServers`, `messagePostFormat: array`), reachable only from your machine or private network.
 2. Select OneBot in setup and enter the address and the access token (hidden input; required).
@@ -147,7 +147,7 @@ Only listed groups and your private chat are connected (`"private": "friends"` c
 
 Text is plain, up to 4,000 characters. Files are up to 20 MiB; images are sent as images. Quoted replies, @mentions by name in groups, reactions on group messages (NapCat and LLOneBot), retraction of the agent's own messages, attachment downloads (a forwarded chat as a text transcript), `list_chats` for connected groups, and the newest page of `list_chat_messages` are supported. Threads, cards, search, member lists, and @全体成员 are not. Messages that arrive while Vika is disconnected are not delivered later; the agent can read them with `list_chat_messages`.
 
-A OneBot-only instance uses `"channel": "onebot"`, `"connectors": ["onebot"]`, and no `profile`; Codex, TraeX, Claude, Pi, DSH, and OpenCode are supported. It can be the primary channel. The address, token, owner, routes, and lines waiting for delivery live in `<dataDir>/onebot/state.sqlite3` (0600, parent 0700), not manifest/logs; media lives in `<dataDir>/onebot/media` with retention cleanup. Every member of a connected group can talk to an agent that runs commands in its workspace: connect only trusted groups and run the instance isolated. OneBot has no idempotency key: a failed send, whether or not it reached the server, is not retried automatically.
+A OneBot-only instance uses `"channel": "onebot"`, `"connectors": ["onebot"]`, and no `profile`; Codex, TraeX, Claude, Pi, DSH, OpenCode, and Antigravity are supported. It can be the primary channel. The address, token, owner, routes, and lines waiting for delivery live in `<dataDir>/onebot/state.sqlite3` (0600, parent 0700), not manifest/logs; media lives in `<dataDir>/onebot/media` with retention cleanup. Every member of a connected group can talk to an agent that runs commands in its workspace: connect only trusted groups and run the instance isolated. OneBot has no idempotency key: a failed send, whether or not it reached the server, is not retried automatically.
 
 ### Email
 

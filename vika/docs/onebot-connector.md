@@ -5,9 +5,9 @@
 The `onebot` Connector lets an instance speak through an ordinary QQ account. It is a protocol-neutral
 [OneBot v11](https://github.com/botuniverse/onebot-11) client: a OneBot implementation logs in to QQ and
 serves a WebSocket, and Vika connects to it. It is written against the source of
-[NapCat](https://github.com/NapNeko/NapCatQQ) and tested against a simulated OneBot server, not a live QQ login;
-LLOneBot and Lagrange.OneBot speak the same protocol with the differences listed under
-[Implementations](#implementations). The code is in `packages/daemon/src/onebot/`.
+[NapCat](https://github.com/NapNeko/NapCatQQ), tested against a simulated OneBot server, and has run against a
+live NapCat account. LLOneBot and Lagrange.OneBot speak the same protocol with the differences listed under
+[Implementations](#implementations); neither has been run live. The code is in `packages/daemon/src/onebot/`.
 What the model is told about it is in `packages/daemon/agent/connectors/onebot.md`.
 
 It is a different Connector from `qq`. The `qq` Connector uses Tencent's official Bot API: a registered bot, the
@@ -96,7 +96,7 @@ Rebinding the same account keeps that time. Binding a different account clears t
 sent ids and waiting lines.
 
 A OneBot-only instance uses `"channel": "onebot"`, `"connectors": ["onebot"]` and no `profile`. It can also share
-an instance with Feishu, WeChat, Telegram, Slack, QQ and email. Codex, TraeX, Claude, Pi, DSH and OpenCode are
+an instance with Feishu, WeChat, Telegram, Slack, QQ and email. Codex, TraeX, Claude, Pi, DSH, OpenCode and Antigravity are
 supported; Ark is not. The owner's private chat can be the primary channel: `notify_owner`, numbered email
 approvals (`发送 N`) and `/primary` work there. `/primary status` shows it as `QQ（onebot）`.
 
@@ -183,7 +183,7 @@ again, and each answer would be stale before it went out. So the Connector holds
 - **Grace.** After a release, more ambient lines wait until 20 s after that release, so that chatter does not make
   the answer stale while the model is still writing it. The grace ends early at the agent's first send to that
   chat written after that release; an answer to an earlier batch that is still on its way does not end it. This
-  matters most for runtimes that hold new input until the next turn (OpenCode).
+  matters most for runtimes that hold new input until the next turn (OpenCode, Antigravity).
 - **context** never makes a chat due. It goes out with the chat's next release. Each chat keeps at most its newest
   30 context lines, none older than 6 hours; older ones are deleted unseen.
 
