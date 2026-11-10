@@ -44,7 +44,7 @@ API 不允许写入、追加、删除、移动或覆盖复制，也不能通过�
 | since | str | 否 | None | 条目修改时间的下界，接受 `2h`/`7d` 或 ISO 8601 / `YYYY-MM-DD`。无时区的值按 UTC 解释 |
 | until | str | 否 | None | 条目修改时间的上界，接受 `30m` 或 ISO 8601 / `YYYY-MM-DD`。无时区的值按 UTC 解释 |
 
-`tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。`since` 与 `until` 把结果限制在 `modTime` 落在该时间窗口内的条目上；它们同样先于 `offset` 和 `limit` 求值，因此即使命中条目位于原始分页之后，时间窗口很窄时依然能返回结果。给定时间窗口时，无法解析修改时间的条目会被忽略。按 `mtime` 排序的列表在越过时间窗口后即可停止扫描，因此在大目录上时间窗口依然保持较低开销。L0/L1 内容只附加到分页选中的目录节点，不占用 `node_limit`。显式传入 `include_abstract=true|false` 会覆盖 `output` 隐含的旧行为。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true`（CLI：`-f tags`）才返回它们。HTTP 的 `simple=true` 保持仅返回路径；CLI 同时指定 `--simple` 和 `--fields` 时会获取条目对象，再按指定列输出。
+`tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。`since` 与 `until` 把结果限制在 `modTime` 落在该时间窗口内的条目上；它们同样先于 `offset` 和 `limit` 求值，因此即使命中条目位于原始分页之后，时间窗口很窄时依然能返回结果。给定时间窗口时，无法解析修改时间的条目会被忽略。按 `mtime` 排序的列表在越过时间窗口后即可停止扫描，因此在大目录上时间窗口依然保持较低开销。这类列表的顺序是「先目录、后文件」，因此只有在目录组被消费完之后才能停止扫描；提前停止会跳过文件组，而落在时间窗口内的条目可能就在其中。L0/L1 内容只附加到分页选中的目录节点，不占用 `node_limit`。显式传入 `include_abstract=true|false` 会覆盖 `output` 隐含的旧行为。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true`（CLI：`-f tags`）才返回它们。HTTP 的 `simple=true` 保持仅返回路径；CLI 同时指定 `--simple` 和 `--fields` 时会获取条目对象，再按指定列输出。
 
 **条目结构**
 

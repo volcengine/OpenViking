@@ -355,7 +355,7 @@ async def list_sessions(
         "updated_at",
         description="Which session timestamp the time bounds apply to",
     ),
-    limit: Optional[int] = Query(None, ge=0, description="Maximum number of sessions to return"),
+    limit: Optional[int] = Query(None, ge=1, description="Maximum number of sessions to return"),
     offset: int = Query(0, ge=0, description="Number of matched sessions to skip"),
     _ctx: RequestContext = Depends(get_session_request_context),
 ):

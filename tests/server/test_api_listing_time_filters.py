@@ -6,10 +6,14 @@ The filters have to survive the whole request path: query parameter parsing,
 service dispatch, and the metadata lookup that decides the match.
 """
 
+import asyncio
+from datetime import timezone
+
 import httpx
 
 from openviking.core.namespace import canonical_session_uri
 from openviking.server.identity import RequestContext, Role
+from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.session.user_id import UserIdentifier
 
 DEFAULT_USER = UserIdentifier.the_default_user()
@@ -86,21 +90,24 @@ async def test_directory_listing_keeps_only_entries_inside_the_window(
         ctx=ctx,
     )
 
-    unfiltered = await client.get("/api/v1/fs/ls", params={"uri": memories_uri})
+    unfiltered = await client.get(
+        "/api/v1/fs/ls",
+        params={"uri": memories_uri, "output": "original"},
+    )
     assert unfiltered.status_code == 200
     names = {entry["name"] for entry in unfiltered.json()["result"]}
     assert "time-filter-memory.md" in names
 
     inside = await client.get(
         "/api/v1/fs/ls",
-        params={"uri": memories_uri, "since": "2000-01-01"},
+        params={"uri": memories_uri, "output": "original", "since": "2000-01-01"},
     )
     assert inside.status_code == 200
     assert "time-filter-memory.md" in {entry["name"] for entry in inside.json()["result"]}
 
     outside = await client.get(
         "/api/v1/fs/ls",
-        params={"uri": memories_uri, "since": "2099-01-01"},
+        params={"uri": memories_uri, "output": "original", "since": "2099-01-01"},
     )
     assert outside.status_code == 200
     assert "time-filter-memory.md" not in {entry["name"] for entry in outside.json()["result"]}
@@ -122,13 +129,137 @@ async def test_session_directory_can_be_listed_by_time(client: httpx.AsyncClient
     session_id = await _create_session(client, "time-filter-session-dir")
     sessions_uri = canonical_session_uri(RequestContext(user=DEFAULT_USER, role=Role.ROOT))
 
-    unfiltered = await client.get("/api/v1/fs/ls", params={"uri": sessions_uri})
+    unfiltered = await client.get(
+        "/api/v1/fs/ls",
+        params={"uri": sessions_uri, "output": "original"},
+    )
     assert unfiltered.status_code == 200
     assert session_id in {entry["name"] for entry in unfiltered.json()["result"]}
 
     outside = await client.get(
         "/api/v1/fs/ls",
-        params={"uri": sessions_uri, "since": "2099-01-01"},
+        params={"uri": sessions_uri, "output": "original", "since": "2099-01-01"},
     )
     assert outside.status_code == 200
     assert session_id not in {entry["name"] for entry in outside.json()["result"]}
+
+
+def _midpoint(earlier: str, later: str) -> str:
+    """Return an ISO timestamp between two listing timestamps."""
+    earlier_dt = parse_iso_datetime(earlier)
+    later_dt = parse_iso_datetime(later)
+    middle = earlier_dt + (later_dt - earlier_dt) / 2
+    return middle.astimezone(timezone.utc).isoformat(timespec="milliseconds")
+
+
+async def test_directory_listing_keeps_matching_files_behind_the_directory_group(
+    client: httpx.AsyncClient,
+    service,
+):
+    """A descending listing must not stop inside the directory group.
+
+    A listing is ordered "directories first, then files", each group sorted by
+    modification time. The first raw page therefore holds directories only, and
+    a scan that stops there would skip the file group further down - where a
+    file that belongs inside the window can sit.
+    """
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+    root_uri = f"viking://user/{DEFAULT_USER.user_id}/memories/mixed-group-desc"
+    await service.viking_fs.mkdir(root_uri, exist_ok=True, ctx=ctx)
+
+    # More directories than fit into the first raw page (256 entries).
+    for index in range(260):
+        await service.viking_fs.mkdir(f"{root_uri}/dir-{index:04d}", ctx=ctx)
+    await asyncio.sleep(1.1)
+    await service.viking_fs.write_file(
+        f"{root_uri}/matching.md",
+        "# Matching\n\nWritten after the directories.\n",
+        ctx=ctx,
+    )
+
+    cutoff = await _cutoff_between(client, root_uri, newer="file")
+    response = await client.get(
+        "/api/v1/fs/ls",
+        params={
+            "uri": root_uri,
+            "output": "original",
+            "limit": 1,
+            "sort_by": "mtime",
+            "sort_order": "desc",
+            "since": cutoff,
+        },
+    )
+
+    assert response.status_code == 200
+    names = {entry["name"] for entry in response.json()["result"]}
+    assert "matching.md" in names, "the file inside the window was dropped"
+
+
+async def test_directory_listing_keeps_matching_files_behind_the_directory_group_ascending(
+    client: httpx.AsyncClient,
+    service,
+):
+    """An ascending listing must not stop inside the directory group either.
+
+    The mirror image of the descending case: the directories are newer than the
+    upper bound and the file is older, so the file is the one that belongs
+    inside the window and it sits behind the directory group.
+    """
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+    root_uri = f"viking://user/{DEFAULT_USER.user_id}/memories/mixed-group-asc"
+    await service.viking_fs.mkdir(root_uri, exist_ok=True, ctx=ctx)
+
+    await service.viking_fs.write_file(
+        f"{root_uri}/matching.md",
+        "# Matching\n\nWritten before the directories.\n",
+        ctx=ctx,
+    )
+    await asyncio.sleep(1.1)
+    for index in range(260):
+        await service.viking_fs.mkdir(f"{root_uri}/dir-{index:04d}", ctx=ctx)
+
+    cutoff = await _cutoff_between(client, root_uri, newer="directory")
+    response = await client.get(
+        "/api/v1/fs/ls",
+        params={
+            "uri": root_uri,
+            "output": "original",
+            "limit": 1,
+            "sort_by": "mtime",
+            "sort_order": "asc",
+            "until": cutoff,
+        },
+    )
+
+    assert response.status_code == 200
+    names = {entry["name"] for entry in response.json()["result"]}
+    assert "matching.md" in names, "the file inside the window was dropped"
+
+
+async def _cutoff_between(
+    client: httpx.AsyncClient,
+    root_uri: str,
+    *,
+    newer: str,
+) -> str:
+    """Return a timestamp between the file and the directories of a listing.
+
+    ``newer`` names the group whose timestamps sit above the cutoff.
+    """
+    listing = await client.get(
+        "/api/v1/fs/ls",
+        params={"uri": root_uri, "output": "original"},
+    )
+    assert listing.status_code == 200
+    entries = listing.json()["result"]
+
+    file_times = [entry["modTime"] for entry in entries if not entry.get("isDir")]
+    directory_times = [entry["modTime"] for entry in entries if entry.get("isDir")]
+    assert file_times and directory_times
+
+    if newer == "file":
+        earlier, later = max(directory_times), min(file_times)
+    else:
+        earlier, later = min(file_times), max(directory_times)
+    assert earlier < later, "the listing does not have two distinct timestamps"
+    return _midpoint(earlier, later)

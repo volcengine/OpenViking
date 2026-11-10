@@ -136,6 +136,37 @@ async def test_ls_stops_scanning_once_the_window_is_exceeded(fs_service):
     assert fs_service._viking_fs.ls.await_count == 1
 
 
+async def test_ls_keeps_scanning_while_the_batch_is_still_in_the_directory_group(fs_service):
+    # A listing is ordered "directories first, then files". Stopping the scan
+    # while it is still inside the directory group would skip the file group
+    # further down, and the files there can be inside the window.
+    directories = [_entry(f"dir-{index}", "2026-03-01T10:00:00Z") for index in range(300)]
+    for entry in directories:
+        entry["isDir"] = True
+    files = [_entry("inside.md", "2026-03-11T10:00:00Z")]
+    pages = [directories, files]
+    calls = []
+
+    async def fetch_page(uri, ctx=None, offset=0, node_limit=None, **kwargs):
+        calls.append(offset)
+        index = len(calls) - 1
+        return pages[index] if index < len(pages) else []
+
+    fs_service._viking_fs.ls = AsyncMock(side_effect=fetch_page)
+
+    page = await fs_service.ls(
+        "viking://user/user/memories",
+        ctx=_ctx(),
+        since="2026-03-10",
+        sort_by="mtime",
+        sort_order="desc",
+        node_limit=10,
+    )
+
+    assert [entry["name"] for entry in page.entries] == ["inside.md"]
+    assert len(calls) == 2, "the scan must continue past the directory group"
+
+
 async def test_ls_stops_scanning_an_ascending_listing_at_the_upper_bound(fs_service):
     entries = [_entry(f"inside-{index}", "2026-03-05T10:00:00Z") for index in range(2)]
     entries += [_entry(f"new-{index}", "2027-01-01T10:00:00Z") for index in range(5000)]
@@ -178,6 +209,34 @@ async def test_ls_without_a_window_keeps_the_previous_behaviour(fs_service):
     assert [entry["name"] for entry in page.entries] == ["old", "new"]
 
 
+def test_the_mcp_and_rest_surfaces_build_the_same_time_filter():
+    """Both retrieval surfaces have to compile the same metadata filter.
+
+    The MCP tools and the REST routes are separate entry points, and a window
+    that selects different records depending on which one the caller used
+    would make the feature unusable for an agent.
+    """
+    from openviking.server.mcp_endpoint import _resolve_mcp_search_filter
+    from openviking.server.routers.search import _resolve_search_filter
+
+    for bounds in (
+        {"since": "2026-03-01"},
+        {"until": "2026-03-02"},
+        {"since": "2026-03-01", "until": "2026-03-02"},
+        {"since": "2026-03-01", "until": "2026-03-02", "time_field": "created_at"},
+    ):
+        mcp_filter = _resolve_mcp_search_filter(None, **bounds)
+        rest_filter = _resolve_search_filter(
+            None,
+            None,
+            bounds.get("since"),
+            bounds.get("until"),
+            bounds.get("time_field"),
+            None,
+        )
+        assert mcp_filter == rest_filter, bounds
+
+
 # --------------------------------------------------------------------------
 # Session listings
 # --------------------------------------------------------------------------
@@ -191,10 +250,14 @@ def _session_service(session_meta):
                 {
                     "name": session_id,
                     "isDir": True,
-                    "modTime": "2026-03-11T10:00:00Z",
+                    # The directory modification time tracks the last write of
+                    # the session, so it mirrors the metadata timestamp.
+                    "modTime": meta.get("updated_at")
+                    or meta.get("created_at")
+                    or "2026-03-11T10:00:00Z",
                     "uri": f"viking://user/user/sessions/{session_id}",
                 }
-                for session_id in session_meta
+                for session_id, meta in session_meta.items()
             ]
         )
     )
@@ -244,6 +307,34 @@ async def test_sessions_exposes_the_resolved_timestamps():
     assert sessions[0]["created_at"] == "2026-03-11T09:00:00Z"
     assert sessions[0]["updated_at"] == "2026-03-11T10:00:00Z"
     assert sessions[0]["last_message_at"] == "2026-03-11T10:05:00Z"
+
+
+async def test_sessions_rejects_on_the_directory_time_without_reading_the_metadata():
+    # The listing already carries the directory modification time, and it is at
+    # least the session's last write. A session whose directory is older than
+    # the lower bound is out of the window, so its metadata is never read.
+    service = _session_service(
+        {
+            "old": {"created_at": "2026-03-01T10:00:00Z", "updated_at": "2026-03-01T10:00:00Z"},
+            "inside": {
+                "created_at": "2026-03-11T09:00:00Z",
+                "updated_at": "2026-03-11T10:00:00Z",
+            },
+        }
+    )
+    read_file = service._viking_fs.read_file
+    read_uris = []
+
+    async def tracking_read_file(uri, ctx=None, **kwargs):
+        read_uris.append(uri)
+        return await read_file(uri, ctx=ctx, **kwargs)
+
+    service._viking_fs.read_file = tracking_read_file
+
+    sessions = await service.sessions(_ctx(), since="2026-03-10")
+
+    assert [session["session_id"] for session in sessions] == ["inside"]
+    assert read_uris == ["viking://user/user/sessions/inside/.meta.json"]
 
 
 async def test_sessions_filters_on_the_requested_time_field():

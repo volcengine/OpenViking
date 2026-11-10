@@ -336,8 +336,17 @@ class FSService:
         lower bound; an ascending listing ends with the newest entries, so it
         is exhausted once the last entry is newer than the upper bound. Name
         ordered listings have to be scanned to the end.
+
+        A listing is ordered as "directories first, then files", each group
+        sorted by modification time. The tail of a batch is therefore the
+        oldest *file* only once the scan has moved past the directory group;
+        before that the next batch can still hold directories, and further
+        down the listing files, that belong inside the window. Stopping there
+        would drop entries that are inside the window.
         """
         if sort_by != "mtime" or not entries:
+            return False
+        if not any(not entry.get("isDir") for entry in entries):
             return False
         timestamp = parse_timestamp_value(entries[-1].get("modTime"))
         if timestamp is None:

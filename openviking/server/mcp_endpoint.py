@@ -654,15 +654,20 @@ async def find(
     if skill_only and query.strip():
         # A skill is indexed as a whole package, so an item-level find returns one hit per
         # file. find_skills collapses those to the best hit per package.
-        result = await service.search.find_skills(
-            query=query,
-            ctx=ctx,
-            target_uri=target_uri,
-            limit=limit,
-            score_threshold=min_score,
-            level=level,
-            filter=context_filter,
-        )
+        skill_options = {
+            "query": query,
+            "ctx": ctx,
+            "target_uri": target_uri,
+            "limit": limit,
+            "score_threshold": min_score,
+            "level": level,
+        }
+        # The skill path restricts by context type itself, so only the time
+        # window is forwarded to it.
+        time_filter = _resolve_mcp_search_filter(None, since, until, time_field)
+        if time_filter:
+            skill_options["filter"] = time_filter
+        result = await service.search.find_skills(**skill_options)
     else:
         result = await service.search.find(
             query=query,
