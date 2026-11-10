@@ -12,26 +12,31 @@ Agent 接入视图。内置中英文接入内容与图标。调用方必须提�
 
 「接入主流 Agent」展示 Codex、Claude Code、豆包工作、WorkBuddy、TRAE、Cursor、OpenClaw、Hermes Agent、OpenCode、DeepSeek Harness、DeerFlow、pi、ZCode、Kimi Code，共十四项。「开发自己的 Agent」展示 MCP、CLI、API、SDK，使用同一列表与详情布局。
 
-Codex、Claude Code、Cursor、OpenClaw、Hermes Agent、OpenCode、pi 的详情保留原接入标签并增加「境外」标签。DeerFlow 详情支持 MemoryManager 和 MCP 两种说明切换，复制当前说明；默认选中 MemoryManager。
+「境外」标签默认不展示；传入 `showOverseasTag={true}` 后，Codex、Claude Code、Cursor、OpenClaw、Hermes Agent、OpenCode、pi 的详情保留原接入标签并增加「境外」标签。DeerFlow 详情支持 MemoryManager 和 MCP 两种说明切换，复制当前说明；默认选中 MemoryManager。
 
 CLI 详情提供「手动终端安装」「通过 AI Agent 安装」两个内部页签，默认手动安装；分别展示本地 CLI 操作步骤和发送给 AI Agent 的安装配置提示词。页签采用参考组件的下划线样式，复制当前页签正文，切换后复制反馈重置。
 
 切换条目会更新说明、标签与正文。内容来自组件内置的本地文档快照，不在运行时加载远端 JSON 或 Markdown。安装器提示通过 `--harness` 指定当前 Agent 和 `cli`，服务地址与密钥采用 Shell 字面值转义；TRAE 对应国际版。自定义 Hermes 地址使用 Custom 配置步骤。文档外链仅供用户或其 Agent 阅读，组件不执行安装命令。
 
+指南支持 Markdown 和白名单 HTML 标签，例如 `<strong>`、`<br>`、`<details>`、`<summary>` 及表格。渲染时过滤脚本、事件属性和不安全链接；代码内标签保持原样，不加载指南图片。复制仍保留原始 Markdown。
+
+每个代码块均支持独立复制，包括安装器命令。API Key 默认脱敏，可通过代码块上的「显示 API Key」「隐藏 API Key」切换，同一指南最多显示一个代码块的密钥。无论显示状态如何，复制均使用原始密钥；切换指南或凭据后恢复脱敏。
+
 ## 属性
 
-| 属性           | 类型                                 | 默认值                                                  | 说明                                                                                 |
-| -------------- | ------------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `apiKey`       | `string`                             | 必填                                                    | 调用方提供的 API Key；展示脱敏，复制使用原值。                                       |
-| `locale`       | `'zh-CN' \| 'en-US'`                 | 必填                                                    | 标题、页签、目录、正文和反馈的语言。                                                 |
-| `baseUrl`      | `string`                             | `https://api.vikingdb.cn-beijing.volces.com/openviking` | 接入服务地址；拼接子路径及 API 示例变量时移除末尾斜杠，安装命令与独立地址保留原值。  |
-| `agreementUrl` | `string`                             | —                                                       | 宿主协议链接；提供时显示可访问的协议引用，未提供时仅显示数据访问提示。               |
-| `activeTabId`  | `'mainstream' \| 'custom'`           | `mainstream`                                            | 可选受控页签；未传时由组件维护。                                                     |
-| `selectedId`   | `string`                             | 当前分组首项                                            | 可选受控条目；主流首项为 `codex`，开发首项为 `mcp`。不属于当前分组时显示该分组首项。 |
-| `onTabChange`  | `(tabId: AgentConnectTabId) => void` | —                                                       | 页签选择通知，方向键、Home、End 也会触发。                                           |
-| `onSelect`     | `(item: AgentConnectItem) => void`   | —                                                       | 返回内置条目的 `id` 与当前语言的 `name`。                                            |
-| `onCopy`       | `(text: string) => void`             | —                                                       | 复制成功后返回含原始密钥的完整正文；组件负责剪贴板写入。                             |
-| 其余属性       | `HTMLAttributes<HTMLDivElement>`     | —                                                       | 标准 div 属性；不接收 `children`。                                                   |
+| 属性              | 类型                                 | 默认值                                                  | 说明                                                                                 |
+| ----------------- | ------------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `apiKey`          | `string`                             | 必填                                                    | 调用方提供的 API Key；展示脱敏，复制使用原值。                                       |
+| `locale`          | `'zh-CN' \| 'en-US'`                 | 必填                                                    | 标题、页签、目录、正文和反馈的语言。                                                 |
+| `baseUrl`         | `string`                             | `https://api.vikingdb.cn-beijing.volces.com/openviking` | 接入服务地址；拼接子路径及 API 示例变量时移除末尾斜杠，安装命令与独立地址保留原值。  |
+| `agreementUrl`    | `string`                             | —                                                       | 宿主协议链接；提供时显示可访问的协议引用，未提供时仅显示数据访问提示。               |
+| `showOverseasTag` | `boolean`                            | `false`                                                 | 是否展示适用 Agent 的「境外」标签。                                                  |
+| `activeTabId`     | `'mainstream' \| 'custom'`           | `mainstream`                                            | 可选受控页签；未传时由组件维护。                                                     |
+| `selectedId`      | `string`                             | 当前分组首项                                            | 可选受控条目；主流首项为 `codex`，开发首项为 `mcp`。不属于当前分组时显示该分组首项。 |
+| `onTabChange`     | `(tabId: AgentConnectTabId) => void` | —                                                       | 页签选择通知，方向键、Home、End 也会触发。                                           |
+| `onSelect`        | `(item: AgentConnectItem) => void`   | —                                                       | 返回内置条目的 `id` 与当前语言的 `name`。                                            |
+| `onCopy`          | `(text: string) => void`             | —                                                       | 复制成功后返回实际复制的代码块或完整正文；组件负责剪贴板写入。                       |
+| 其余属性          | `HTMLAttributes<HTMLDivElement>`     | —                                                       | 标准 div 属性；不接收 `children`。                                                   |
 
 主流条目 ID：`codex`、`claude-code`、`doubao`、`workbuddy`、`trae`、`cursor`、`openclaw`、`hermes`、`opencode`、`deepseek-harness`、`deerflow`、`pi`、`zcode`、`kimi-code`。开发条目 ID：`mcp`、`cli`、`api`、`sdk`。非受控实例分别记住两个分组的选择。
 

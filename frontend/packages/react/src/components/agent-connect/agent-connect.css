@@ -1,3 +1,5 @@
+@import './agent-connect-code-block.css';
+
 .ov-agent-connect {
   --ov-ui-agent-connect-text: var(
     --ov-ui-color-text-1,
@@ -351,7 +353,8 @@
 .ov-agent-connect__markdown {
   white-space: normal;
 }
-.ov-agent-connect__markdown :where(p, pre, h5, table) {
+.ov-agent-connect__markdown
+  :where(p, pre, h5, table, ul, ol, blockquote, details) {
   margin: 0 0 12px;
 }
 .ov-agent-connect__markdown > :last-child {
@@ -359,6 +362,27 @@
 }
 .ov-agent-connect__markdown p {
   white-space: pre-wrap;
+}
+.ov-agent-connect__markdown :where(ul, ol) {
+  padding-left: 24px;
+}
+.ov-agent-connect__markdown ul {
+  list-style-type: disc;
+}
+.ov-agent-connect__markdown ol {
+  list-style-type: decimal;
+}
+.ov-agent-connect__markdown blockquote {
+  margin-left: 0;
+  padding-left: 12px;
+  border-left: 2px solid var(--ov-ui-agent-connect-border);
+}
+.ov-agent-connect__markdown summary {
+  cursor: pointer;
+}
+.ov-agent-connect__markdown summary:focus-visible {
+  outline: 2px solid var(--ov-ui-agent-connect-primary);
+  outline-offset: 2px;
 }
 .ov-agent-connect__markdown h5 {
   color: var(--ov-ui-agent-connect-text);
