@@ -2151,6 +2151,22 @@ class AsyncHTTPClient:
         )
         return self._handle_response_data(response).get("result", {})
 
+    def _save_ovpack_response(self, response: httpx.Response, to_path: Path) -> str:
+        content = response.content
+        # A gateway can return an error envelope with a binary content type.
+        looks_like_json_object = content.lstrip().startswith(b"{")
+        if not response.is_success or looks_like_json_object:
+            self._handle_response(response)
+
+        media_type = response.headers.get("content-type", "").partition(";")[0].strip().lower()
+        if looks_like_json_object or media_type.endswith(("/json", "+json")):
+            raise OpenVikingError(
+                "Expected an OVPack download, received a JSON response", code="INTERNAL"
+            )
+
+        _atomic_write_bytes(to_path, content)
+        return str(to_path)
+
     async def export_ovpack(
         self,
         uri: str,
@@ -2170,10 +2186,7 @@ class AsyncHTTPClient:
             "/api/v1/pack/export",
             json={"uri": uri, "include_vectors": include_vectors},
         )
-        if not response.is_success:
-            self._handle_response(response)
-        _atomic_write_bytes(to_path, response.content)
-        return str(to_path)
+        return self._save_ovpack_response(response, to_path)
 
     async def backup_ovpack(self, to: str, include_vectors: bool = False) -> str:
         to_path = Path(to)
@@ -2185,10 +2198,7 @@ class AsyncHTTPClient:
         response = await self._request(
             "POST", "/api/v1/pack/backup", json={"include_vectors": include_vectors}
         )
-        if not response.is_success:
-            self._handle_response(response)
-        _atomic_write_bytes(to_path, response.content)
-        return str(to_path)
+        return self._save_ovpack_response(response, to_path)
 
     async def import_ovpack(
         self,
