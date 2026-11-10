@@ -276,17 +276,6 @@ class ContentWriteCoordinator:
         if self._privacy_sanitizer is None:
             return content
         result = await self._privacy_sanitizer.sanitize(content, ctx=ctx, uri=uri)
-        if result.ambiguous_references:
-            raise InvalidArgumentError(
-                "Content contains a Privacy value mapped to multiple fields; "
-                "remove the duplicate mapping or insert the intended reference explicitly",
-                details={
-                    "uri": uri,
-                    "candidate_references": [
-                        list(candidates) for candidates in result.ambiguous_references
-                    ],
-                },
-            )
         return result.content
 
     async def _sanitize_batch_operations(

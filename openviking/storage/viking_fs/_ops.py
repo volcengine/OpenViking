@@ -2054,17 +2054,6 @@ class _OpsMixin:
             sanitizer = getattr(self, "_privacy_sanitizer", None)
             if sanitizer is not None and ctx is not None:
                 result = await sanitizer.sanitize(content, ctx=ctx, uri=uri)
-                if result.ambiguous_references:
-                    raise InvalidArgumentError(
-                        "Content contains a Privacy value mapped to multiple fields; "
-                        "insert the intended owner-bound reference explicitly",
-                        details={
-                            "uri": uri,
-                            "candidate_references": [
-                                list(candidates) for candidates in result.ambiguous_references
-                            ],
-                        },
-                    )
                 content = result.content
             content = content.encode("utf-8")
 

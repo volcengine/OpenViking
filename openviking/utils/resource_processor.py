@@ -148,7 +148,6 @@ class ResourceProcessor:
             return
         from openviking.parse.output import read_artifact_manifest, write_artifact_manifest
         from openviking.utils.content_hash import content_md5
-        from openviking_cli.exceptions import InvalidArgumentError
 
         base = (doc_rel or "").strip("/")
         prefix = f"{base}/" if base else ""
@@ -168,17 +167,6 @@ class ResourceProcessor:
                 else f"{target_root_uri.rstrip('/')}/{relative}"
             )
             result = await self._privacy_sanitizer.sanitize(content, ctx=ctx, uri=uri)
-            if result.ambiguous_references:
-                raise InvalidArgumentError(
-                    "Resource content contains a Privacy value mapped to multiple fields; "
-                    "insert the intended owner-bound reference explicitly",
-                    details={
-                        "uri": uri,
-                        "candidate_references": [
-                            list(candidates) for candidates in result.ambiguous_references
-                        ],
-                    },
-                )
             if result.content == content:
                 return
             final_bytes = result.content.encode("utf-8")

@@ -3,6 +3,7 @@
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -16,7 +17,7 @@ from openviking.privacy.reference import (
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import ResolvedPrivacyConfig
-from openviking_cli.exceptions import ResourceExhaustedError
+from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -284,6 +285,36 @@ async def test_prepared_matcher_rejects_unpaired_surrogates():
         find("invalid \ud800")
 
 
+async def test_canonical_reference_is_stable_strict_and_tracks_independent_rotation(
+    monkeypatch,
+):
+    warning = Mock()
+    monkeypatch.setattr("openviking.privacy.sanitizer.logger.warning", warning)
+    secret = "AKLT" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    catalog = _PrivacyCatalog(
+        {
+            "credential": {"managed": {"b": secret, "a": secret}},
+        }
+    )
+    sanitizer = PrivacySanitizer(catalog)
+    chosen = build_privacy_field_reference("alice", "credential", "managed", "a")
+    other = build_privacy_field_reference("alice", "credential", "managed", "b")
+    result = await sanitizer.sanitize(f"{secret} {secret}", ctx=_ctx())
+    assert result.content == f"{chosen} {chosen}"
+    assert len(result.ambiguous_references) == 1
+    warning.assert_called()
+    assert secret not in str(warning.call_args)
+    query = await sanitizer.prepare_matcher(_ctx())
+    monkeypatch.setenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "1")
+    with pytest.raises(InvalidArgumentError, match="multiple fields"):
+        await asyncio.to_thread(query, secret)
+    monkeypatch.delenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT")
+    catalog.configs["credential"]["managed"]["a"] = "rotated-secret"
+    catalog.revision += 1
+    result = await sanitizer.sanitize(f"{secret} rotated-secret", ctx=_ctx())
+    assert result.content == f"{other} {chosen}"
+
+
 async def test_never_mask_refreshes_cached_matching():
     catalog = _PrivacyCatalog({"credential": {"service": {"key": "managed-secret"}}})
     sanitizer = PrivacySanitizer(catalog)
@@ -294,6 +325,61 @@ async def test_never_mask_refreshes_cached_matching():
     assert result.content == "managed-secret"
     catalog.settings = ResolvedPrivacyConfig(mode="registered")
     assert (await sanitizer.sanitize("managed-secret", ctx=_ctx())).changed
+
+
+@pytest.mark.parametrize("category", ["session", "skill"])
+async def test_scope_precedes_ambiguity_and_never_rebinds_explicit_references(
+    category, monkeypatch
+):
+    secret = "AKLT" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    catalog = _PrivacyCatalog(
+        {
+            "credential": {"managed": {"key": secret}},
+            category: {
+                "current": {"local001": secret, "local002": secret},
+                "other": {"other001": secret},
+            },
+            "custom": {"legacy": {"key": secret}},
+        }
+    )
+    monkeypatch.setenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "1")
+    sanitizer = PrivacySanitizer(catalog)
+    uri = (
+        "viking://user/alice/sessions/current/tool-results/job/output.txt"
+        if category == "session"
+        else "viking://user/alice/skills/current/assets/settings.env"
+    )
+    explicit = build_privacy_field_reference("alice", category, "other", "other001")
+    managed = build_privacy_field_reference("alice", "credential", "managed", "key")
+    result = await sanitizer.sanitize(secret + " " + explicit, ctx=_ctx(), uri=uri)
+    assert result.content == managed + " " + explicit
+    assert not result.ambiguous_references
+
+    del catalog.configs["credential"]
+    catalog.revision += 1
+    with pytest.raises(InvalidArgumentError, match="multiple fields"):
+        await sanitizer.sanitize(secret, ctx=_ctx(), uri=uri)
+    monkeypatch.delenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT")
+    local = build_privacy_field_reference("alice", category, "current", "local001")
+    result = await sanitizer.sanitize(secret, ctx=_ctx(), uri=uri)
+    assert result.content == local
+    assert result.ambiguous_references == (
+        (local, build_privacy_field_reference("alice", category, "current", "local002")),
+    )
+    alias = uri.replace("viking://user/alice/", "viking://~/")
+    assert (await sanitizer.sanitize(secret, ctx=_ctx(), uri=alias)).content == local
+    if category == "skill":
+        shared = "viking://agent/skills/current/SKILL.md"
+        assert (await sanitizer.sanitize(secret, ctx=_ctx(), uri=shared)).content == local
+    for outside in (
+        uri.replace("/alice/", "/bob/"),
+        uri.replace("viking://user/alice/", "viking://resources/"),
+    ):
+        assert (await sanitizer.sanitize(secret, ctx=_ctx(), uri=outside)).content == secret
+
+    del catalog.configs[category]["current"]
+    catalog.revision += 1
+    assert (await sanitizer.sanitize(secret, ctx=_ctx(), uri=uri)).content == secret
 
 
 async def test_word_boundaries_preserve_identifiers_and_allow_shorter_valid_overlap():

@@ -260,7 +260,7 @@ async def _scan_privacy_content(
                 len(candidates) > PRIVACY_SCAN_MAX_REFERENCE_DETAILS_PER_FILE
                 for candidates in all_ambiguous
             ),
-            "fixable": not result.ambiguous_references,
+            "fixable": True,
             "fixed": False,
         }
         if fix and item["fixable"]:

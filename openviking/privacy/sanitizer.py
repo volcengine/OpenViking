@@ -7,8 +7,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass
+from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable
 
 from openviking.core.namespace import (
@@ -24,9 +27,12 @@ from openviking.pyagfs import get_privacy_matcher_class
 from openviking.server.identity import RequestContext
 from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
+from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
     from openviking.privacy.service import UserPrivacyConfigService
+
+logger = get_logger(__name__)
 
 _AMBIGUOUS_PLACEHOLDER = "{{ov_privacy:ambiguous}}"
 DEFAULT_MATCHER_CACHE_TTL_SECONDS = 3600.0
@@ -51,6 +57,12 @@ class PrivacySanitizationResult:
     @property
     def changed(self) -> bool:
         return bool(self.replacements)
+
+
+@dataclass(frozen=True)
+class _PreparedMatcher:
+    native: Any
+    ambiguous: dict[str, tuple[str, ...]]
 
 
 class PrivacySanitizer:
@@ -80,9 +92,11 @@ class PrivacySanitizer:
         self._matcher_class = matcher_class
         self._cache: dict[
             tuple[str, str, int, str, tuple[str, str] | None, int, str],
-            tuple[float, Any],
+            tuple[float, _PreparedMatcher],
         ] = {}
         self._cache_lock = asyncio.Lock()
+        self._ambiguous_matches = 0
+        self._ambiguity_lock = Lock()
 
     @property
     def max_content_bytes(self) -> int:
@@ -92,6 +106,11 @@ class PrivacySanitizer:
     @property
     def max_replacements(self) -> int:
         return self._max_replacements
+
+    @property
+    def ambiguous_matches(self) -> int:
+        """Number of ambiguous occurrences observed by this sanitizer instance."""
+        return self._ambiguous_matches
 
     async def prepare_matcher(
         self,
@@ -114,23 +133,19 @@ class PrivacySanitizer:
 
         def find(content: str) -> list[PrivacyReplacement]:
             try:
-                replacements, ambiguous, exceeded = matcher.find_limited(
+                replacements, _, exceeded = matcher.native.find_limited(
                     content, self._max_replacements, self._max_content_bytes
                 )
             except OverflowError:
                 raise ResourceExhaustedError(
                     "Content exceeds the Privacy sanitizer size limit"
                 ) from None
-            if ambiguous:
-                raise InvalidArgumentError(
-                    "Content contains a Privacy value mapped to multiple fields; "
-                    "insert the intended owner-bound reference explicitly"
-                )
             if exceeded:
                 raise ResourceExhaustedError(
                     "Content exceeds the Privacy sanitizer replacement limit"
                 )
             matches = [PrivacyReplacement(*item) for item in replacements]
+            self._check_ambiguity(matcher, matches, uri=uri)
             return matches
 
         return find
@@ -181,9 +196,9 @@ class PrivacySanitizer:
         (
             rewritten,
             raw_replacements,
-            raw_ambiguous,
+            _,
             match_limit_exceeded,
-        ) = matcher.sanitize_limited(content[content_start:], effective_max_replacements)
+        ) = matcher.native.sanitize_limited(content[content_start:], effective_max_replacements)
         if match_limit_exceeded and fail_on_match_limit:
             raise ResourceExhaustedError(
                 "Content exceeds the Privacy sanitizer replacement limit",
@@ -201,7 +216,7 @@ class PrivacySanitizer:
         return PrivacySanitizationResult(
             content=content[:content_start] + rewritten,
             replacements=replacements,
-            ambiguous_references=tuple(tuple(items) for items in raw_ambiguous),
+            ambiguous_references=self._check_ambiguity(matcher, replacements, uri=uri),
             match_limit_exceeded=match_limit_exceeded,
         )
 
@@ -211,7 +226,7 @@ class PrivacySanitizer:
         *,
         scope: tuple[str, str] | None = None,
         settings: ResolvedPrivacyConfig,
-    ) -> Any:
+    ) -> _PreparedMatcher:
         settings_hash = hashlib.sha256(
             json.dumps(asdict(settings), sort_keys=True).encode("utf-8")
         ).hexdigest()
@@ -266,7 +281,7 @@ class PrivacySanitizer:
         scope: tuple[str, str] | None,
         current: UserPrivacyConfigVersion | None,
         settings: ResolvedPrivacyConfig,
-    ) -> Any:
+    ) -> _PreparedMatcher:
         from openviking.privacy.rules import prepare_privacy_extractor
 
         discover = prepare_privacy_extractor(settings=settings)
@@ -296,6 +311,7 @@ class PrivacySanitizer:
                 )
 
         targets: dict[str, list[str]] = {}
+        ambiguous = {}
         for secret, candidates in references.items():
             credentials = [item for item in candidates if item.category == "credential"]
             ordered = sorted(
@@ -303,8 +319,51 @@ class PrivacySanitizer:
                 key=lambda item: (item.category, item.target_key, item.field),
             )
             selected = tuple(item.render() for item in ordered)
-            targets[secret] = list(selected)
-        return self._matcher_class(targets, _AMBIGUOUS_PLACEHOLDER)
+            targets[secret] = [selected[0]]
+            if len(selected) > 1:
+                ambiguous[selected[0]] = selected
+        return _PreparedMatcher(self._matcher_class(targets, _AMBIGUOUS_PLACEHOLDER), ambiguous)
+
+    def _check_ambiguity(
+        self,
+        matcher: _PreparedMatcher,
+        replacements: tuple[PrivacyReplacement, ...] | list[PrivacyReplacement],
+        *,
+        uri: str = "",
+    ) -> tuple[tuple[str, ...], ...]:
+        if not matcher.ambiguous:
+            return ()
+        counts = Counter(
+            matcher.ambiguous[item.reference]
+            for item in replacements
+            if item.reference in matcher.ambiguous
+        )
+        if not counts:
+            return ()
+        ambiguous = tuple(counts)
+        occurrences = sum(counts.values())
+        with self._ambiguity_lock:
+            self._ambiguous_matches += occurrences
+        strict = os.environ.get("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        logger.warning(
+            "Privacy ambiguous_matches=%d strict=%s uri=%s canonical_references=%s",
+            occurrences,
+            strict,
+            uri,
+            tuple(items[0] for items in ambiguous),
+        )
+        if strict:
+            raise InvalidArgumentError(
+                "Content contains a Privacy value mapped to multiple fields; "
+                "insert the intended owner-bound reference explicitly",
+                details={"uri": uri, "candidate_references": [list(items) for items in ambiguous]},
+            )
+        return ambiguous
 
     @staticmethod
     def _scope_from_uri(uri: str, ctx: RequestContext) -> tuple[str, str] | None:

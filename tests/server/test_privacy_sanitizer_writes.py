@@ -8,6 +8,7 @@ import pytest
 from openviking.privacy.reference import build_privacy_field_reference
 from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import patch_user_config
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -161,6 +162,46 @@ async def test_resource_artifact_sanitizes_user_dotfiles_but_skips_internal_side
         )
         in rewritten
     )
+
+
+async def test_content_write_and_legacy_reads_reject_ambiguity_in_strict_mode(service, monkeypatch):
+    monkeypatch.setenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "1")
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    duplicate = "same-registered-value"
+    await service.privacy_configs.upsert(
+        ctx,
+        "credential",
+        "first",
+        {"key": duplicate},
+        updated_by=ctx.user.user_id,
+    )
+    await service.privacy_configs.upsert(
+        ctx,
+        "credential",
+        "second",
+        {"key": duplicate},
+        updated_by=ctx.user.user_id,
+    )
+
+    with pytest.raises(InvalidArgumentError, match="mapped to multiple fields") as exc_info:
+        await service.fs.write(
+            f"viking://user/{ctx.user.user_id}/ambiguous.md",
+            duplicate,
+            ctx=ctx,
+            wait=False,
+        )
+    details = exc_info.value.details
+    assert details is not None
+    assert len(details["candidate_references"][0]) == 2
+    assert duplicate not in str(details)
+
+    # Legacy content may predate write-time sanitization. The visible read path
+    # must fail closed without choosing either field or returning the value.
+    legacy_uri = f"viking://user/{ctx.user.user_id}/legacy-ambiguous.md"
+    legacy_path = service.viking_fs._uri_to_path(legacy_uri, ctx=ctx)
+    await service.viking_fs._async_agfs.write(legacy_path, duplicate.encode("utf-8"))
+    with pytest.raises(InvalidArgumentError, match="mapped to multiple fields"):
+        await service.fs.read_visible(legacy_uri, ctx=ctx)
 
 
 async def test_sanitizer_uses_only_the_writing_users_privacy_catalog(service):

@@ -237,6 +237,39 @@ async def test_markdown_restatement_reuses_references_without_new_versions(servi
     ]
 
 
+@pytest.mark.parametrize("entrypoint", ["session", "skill"])
+@pytest.mark.parametrize("strict", [False, True])
+async def test_session_and_skill_choose_canonical_reference_or_reject_strictly(
+    service, ctx, entrypoint, strict, monkeypatch
+):
+    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": "registered"}})
+    if strict:
+        monkeypatch.setenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "1")
+    else:
+        monkeypatch.delenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", raising=False)
+    await service.privacy_configs.upsert(
+        ctx, "credential", "ambiguous", {"b": "same-registered-value", "a": "same-registered-value"}
+    )
+    reference = build_privacy_field_reference(ctx.user.user_id, "credential", "ambiguous", "a")
+
+    async def write():
+        if entrypoint == "skill":
+            prepared = await service._skill_processor.sanitize_skill_privacy(
+                {"name": "ambiguous", "content": "password=same-registered-value"}, ctx
+            )
+            return prepared["content"]
+        session = await service.sessions.create(ctx, "ambiguous")
+        await session.add_message_async("user", [TextPart("password=same-registered-value")])
+        stored = await service.viking_fs.read_file(session.uri + "/messages.jsonl", ctx=ctx)
+        return json.loads(stored)["parts"][0]["text"]
+
+    if strict:
+        with pytest.raises(InvalidArgumentError, match="mapped to multiple fields"):
+            await write()
+    else:
+        assert await write() == "password=" + reference
+
+
 @pytest.mark.usefixtures("auto_privacy")
 async def test_batch_discovery_protects_all_payloads_without_mutating_inputs(service, ctx):
     await service.privacy_configs.upsert(ctx, "credential", "github", {"pat": "registered-value"})
