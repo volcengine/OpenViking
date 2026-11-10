@@ -129,6 +129,15 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.equal('ovRemember' in getConfig(), false);
     setEnv('VIKA_OV_AUTO_RECALL', undefined);
   });
+  it('hands OV to the gateway only on an instance that opts in', () => {
+    setEnv('VIKA_OV_VIA_GATEWAY', undefined);
+    assert.equal(getConfig().ovViaGateway, false);
+    setEnv('VIKA_OV_VIA_GATEWAY', 'true');
+    assert.equal(getConfig().ovViaGateway, true);
+    setEnv('VIKA_OV_VIA_GATEWAY', 'sometimes');
+    assert.throws(() => getConfig(), /VIKA_OV_VIA_GATEWAY must be a boolean/);
+    setEnv('VIKA_OV_VIA_GATEWAY', undefined);
+  });
   it('reads Lark messages with the owner\'s visibility unless the instance keeps to the bot\'s chats', () => {
     setEnv('VIKA_LARK_MESSAGE_ACCESS', undefined);
     assert.equal(getConfig().larkMessageAccess, 'owner');
@@ -287,6 +296,66 @@ describe('configuration safety', { concurrency: false }, () => {
   it('rejects a non-HTTPS managed-agent endpoint', () => {
     setEnv('VIKA_VOLC_BASE_URL', 'http://ark.example.test/api/v3');
     assert.throws(() => getConfig(), /valid HTTPS URL/);
+  });
+
+  function setByokEnv(overrides = {}) {
+    for (const [name, value] of Object.entries({
+      VIKA_VOLC_MODEL: 'gateway-model',
+      VIKA_VOLC_MODEL_PROVIDER: 'openviking-gateway',
+      VIKA_VOLC_MODEL_BASE_URL: 'https://gateway.example.test/gateway/api/v3/chat/completions',
+      VIKA_VOLC_MODEL_PROTOCOL: undefined,
+      VIKA_VOLC_MODEL_CONTEXT_WINDOW: '128000',
+      VIKA_VOLC_MODEL_MAX_INPUT_TOKENS: '120000',
+      VIKA_VOLC_MODEL_MAX_OUTPUT_TOKENS: '8000',
+      VIKA_VOLC_MODEL_API_KEY: 'model-test-key',
+      ...overrides,
+    })) setEnv(name, value);
+  }
+
+  it('leaves the MA model as before without a BYOK provider', () => {
+    setByokEnv({ VIKA_VOLC_MODEL_PROVIDER: undefined, VIKA_VOLC_MODEL_BASE_URL: 'not a url' });
+    const config = getConfig();
+    assert.equal(config.volcModel, 'gateway-model');
+    assert.equal(config.volcModelByok, null);
+    setEnv('VIKA_VOLC_MODEL', undefined);
+    assert.equal(getConfig().volcModel, '');
+  });
+
+  it('parses a BYOK model and keeps its key out of the model block', () => {
+    setByokEnv();
+    const config = getConfig();
+    assert.deepEqual(config.volcModelByok, {
+      provider: 'openviking-gateway',
+      baseUrl: 'https://gateway.example.test/gateway/api/v3/chat/completions',
+      protocol: 'openai_chat_completions',
+      tokenLimits: { context_window: 128000, max_input_token_length: 120000, max_output_token_length: 8000 },
+    });
+    assert.equal(config.volcModelApiKey, 'model-test-key');
+    assert.doesNotMatch(JSON.stringify(config.volcModelByok), /model-test-key/);
+    setEnv('VIKA_VOLC_MODEL_PROTOCOL', 'anthropic_messages');
+    assert.equal(getConfig().volcModelByok.protocol, 'anthropic_messages');
+    // MA gets the parsed URL that was validated, not a raw form the parser fixed up.
+    setEnv('VIKA_VOLC_MODEL_BASE_URL', 'https:gateway.example.test/gateway/api/v3/chat/completions');
+    assert.equal(getConfig().volcModelByok.baseUrl, 'https://gateway.example.test/gateway/api/v3/chat/completions');
+  });
+
+  it('rejects an incomplete or unsafe BYOK model', () => {
+    for (const [overrides, error] of [
+      [{ VIKA_VOLC_MODEL: undefined }, /VIKA_VOLC_MODEL is required when VIKA_VOLC_MODEL_PROVIDER is set/],
+      [{ VIKA_VOLC_MODEL_BASE_URL: undefined }, /VIKA_VOLC_MODEL_BASE_URL must be the full HTTPS endpoint URL/],
+      [{ VIKA_VOLC_MODEL_BASE_URL: 'http://gateway.example.test/v3/chat/completions' }, /VIKA_VOLC_MODEL_BASE_URL/],
+      [{ VIKA_VOLC_MODEL_BASE_URL: 'https://user:pass@gateway.example.test/v3/chat/completions' }, /VIKA_VOLC_MODEL_BASE_URL/],
+      [{ VIKA_VOLC_MODEL_BASE_URL: 'https://gateway.example.test/v3/chat/completions?key=x' }, /VIKA_VOLC_MODEL_BASE_URL/],
+      [{ VIKA_VOLC_MODEL_BASE_URL: 'https://gateway.example.test/v3/chat/completions#x' }, /VIKA_VOLC_MODEL_BASE_URL/],
+      [{ VIKA_VOLC_MODEL_BASE_URL: 'https://gateway.example.test' }, /VIKA_VOLC_MODEL_BASE_URL/],
+      [{ VIKA_VOLC_MODEL_PROTOCOL: 'openai_responses' }, /VIKA_VOLC_MODEL_PROTOCOL must be one of/],
+      [{ VIKA_VOLC_MODEL_CONTEXT_WINDOW: undefined }, /VIKA_VOLC_MODEL_CONTEXT_WINDOW must be a positive integer/],
+      [{ VIKA_VOLC_MODEL_MAX_INPUT_TOKENS: '0' }, /VIKA_VOLC_MODEL_MAX_INPUT_TOKENS must be a positive integer/],
+      [{ VIKA_VOLC_MODEL_MAX_OUTPUT_TOKENS: '8k' }, /VIKA_VOLC_MODEL_MAX_OUTPUT_TOKENS must be a positive integer/],
+    ]) {
+      setByokEnv(overrides);
+      assert.throws(() => getConfig(), error, JSON.stringify(overrides));
+    }
   });
 });
 

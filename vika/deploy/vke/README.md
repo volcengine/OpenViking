@@ -48,6 +48,45 @@ path; for a local instance without OV, put `{"url":"http://127.0.0.1:1"}` there,
 set `VIKA_TIMER_STORAGE=sqlite`, and leave recall off. Startup degrades gracefully;
 OV context tools report unavailable until a real isolated config is supplied.
 
+## BYOK model through the OpenViking gateway
+
+MA can call a registered "Direct" (BYOK) model provider instead of a built-in
+model, for example the OpenViking gateway (with `agents[].ovViaGateway`). BYOK
+is on iff `VIKA_VOLC_MODEL_PROVIDER` is set. Put these in the manifest `env`
+(`config.example.json` shows only `VIKA_VOLC_MODEL`; add the others to enable BYOK):
+
+| Key | Value |
+| --- | --- |
+| `VIKA_VOLC_MODEL` | Model id (required with BYOK; otherwise the built-in model, default `doubao-seed-2-1-turbo-260628`) |
+| `VIKA_VOLC_MODEL_PROVIDER` | Provider name registered in MA |
+| `VIKA_VOLC_MODEL_BASE_URL` | The **full** endpoint URL, path included, e.g. `https://GATEWAY_HOST/gateway/api/v3/chat/completions` |
+| `VIKA_VOLC_MODEL_PROTOCOL` | `openai_chat_completions` (default) or `anthropic_messages` |
+| `VIKA_VOLC_MODEL_CONTEXT_WINDOW` | Positive integer |
+| `VIKA_VOLC_MODEL_MAX_INPUT_TOKENS` | Positive integer |
+| `VIKA_VOLC_MODEL_MAX_OUTPUT_TOKENS` | Positive integer |
+
+`VIKA_VOLC_MODEL_BASE_URL` must be HTTPS without credentials, query or fragment.
+The model key is a secret: set `VIKA_VOLC_MODEL_API_KEY` in the operator
+environment or `~/.vika/secrets.env` (`VIKA_SECRETS_FILE`), never in the manifest
+(a manifest value is ignored with a warning). On VKE, add it to the
+`vika-credentials` Secret; `statefulset.yaml` exposes it through an optional
+`secretKeyRef`, as it does `ARK_MA_API_KEY`. It is never stored in the MA Agent
+or session: the daemon sends it as `X-User-Model-Header-Authorization: Bearer
+<key>` on each `POST /sessions/{id}/events` only, and strips it from every child
+process. With BYOK on, startup fails when any of the keys above or the model key
+is missing or invalid; with it off, the Agent body and requests are unchanged.
+With `agents[].ovViaGateway` as well, the same POSTs carry
+`X-User-Model-Header-X-OpenViking-Context`, the gateway tools to hide (see
+[usage-reference.md](../../docs/usage-reference.md#openviking-through-the-gateway-ma-cloudark)).
+
+Re-run `node scripts/volc-sync-agent.mjs` after changing any of these keys: it
+writes the model block (`id`, `provider`, `base_url`, `protocol`,
+`token_limits`) to the dedicated `vika-channel-*` agent, so an existing agent
+migrates to BYOK (or back off it), and copy the new template session ID into the
+manifest. `VIKA_VOLC_AGENT_SYNC=update` at daemon startup syncs tools only, not
+the model; startup fails when the template session's Agent model does not match
+the BYOK config.
+
 ## Recovery and media
 
 `ma_tool_calls` journals each `(session_id, tool_use_id)` with its turn fence,
@@ -153,6 +192,15 @@ boundary, until a later custom result. There is no verified public priority or
 force-steer switch: immediate in-task responsiveness is a remaining MA platform
 requirement. HTTP acceptance is never reported as proof of model processing. Other event scopes
 remain locally queued so their authority cannot mix with the active task.
+
+While MA waits on Core custom tool results (`requires_action`), it rejects a
+`user.message` with 400 `RequiresActionRejected`. Input arriving from an
+`agent.custom_tool_use` until MA echoes its `user.custom_tool_result` is held in
+the local queue and steered after the echo. A steer that still races into that
+window and gets `RequiresActionRejected` was definitely not accepted: its
+journal entry is dropped, it goes back to the head of the queue and is posted
+again after the results, without quarantining the session. Any other steer POST
+failure is still ambiguous and quarantines it.
 See the official [Send Event API](https://docs.volcengine.com/docs/ark/send-event-api?lang=en)
 and [Session Event Stream](https://docs.volcengine.com/docs/ark/session-event-stream?lang=en).
 

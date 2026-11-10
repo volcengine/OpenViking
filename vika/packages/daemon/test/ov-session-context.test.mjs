@@ -196,6 +196,10 @@ test('OV HTTP client pins auth, disables auto commits, retains a token tail, and
   });
   // Extraction never writes the agent's own soul or identity.
   assert.deepEqual(JSON.parse(request.options.body).memory_policy, { memory_types: ['profile', 'entities', 'events'] });
+  // Under the OpenViking gateway, which extracts itself, the session is a transcript.
+  const transcript = new OVSessionClient(config, { transcriptOnly: true, fetch: client.fetch });
+  await transcript.create('test');
+  assert.deepEqual(JSON.parse(request.options.body).memory_policy, { self: { enabled: false }, peer: { enabled: false } });
   await client.commit('test');
   assert.deepEqual(JSON.parse(request.options.body), {
     retention_mode: 'turn_budget', keep_recent_turn_count: 10_000, retained_message_token_budget: 24_000,

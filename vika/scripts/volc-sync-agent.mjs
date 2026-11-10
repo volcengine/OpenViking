@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { getConfig } from '../packages/daemon/src/config.mjs';
 import { ActionService } from '../packages/daemon/src/actions/service.mjs';
 import { getConnectorManifest } from '../packages/daemon/src/connectors/catalog.mjs';
-import { maTools, maToolsHash, canonicalJson } from '../packages/daemon/src/volc-tools.mjs';
+import { maTools, maToolsHash, canonicalJson, maAgentModel, maAgentModelChanged } from '../packages/daemon/src/volc-tools.mjs';
 import { assembleVolcCloudConversationPolicy } from '../packages/daemon/src/conversation-policy.mjs';
 
 if (process.env.VIKA_CONFIG) {
@@ -38,7 +38,7 @@ if (process.argv.includes('--socket')) {
     meetingEnabled: config.connectors.includes('lark'), timers: {},
   });
 }
-const custom = maTools(actions);
+const custom = maTools(actions, { viaGateway: config.ovViaGateway });
 async function api(resource, body) {
   const response = await fetch(`${config.volcBaseUrl}${resource}`, { method: body ? 'POST' : 'GET',
     headers: { Authorization: `Bearer ${config.volcApiKey}`, 'Content-Type': 'application/json' },
@@ -53,14 +53,17 @@ const save = () => fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)
 state.name ||= `vika-channel-${randomUUID().slice(0, 8)}`;
 save();
 const builtin = { type: 'agent_toolset_20260916', default_config: { enabled: true, permission_policy: { type: 'always_allow' } } };
-const body = { model: { id: process.env.VIKA_VOLC_MODEL || 'doubao-seed-2-1-turbo-260628' },
+// BYOK (VIKA_VOLC_MODEL_PROVIDER) points the model at the provider endpoint;
+// its key is never part of the Agent.
+const body = { model: maAgentModel(config),
   system: assembleVolcCloudConversationPolicy(config), tools: [builtin, ...custom] };
 let agent;
 const agentId = process.env.VIKA_VOLC_AGENT_ID || state.agentId;
 if (agentId) {
   agent = await api(`/agents/${encodeURIComponent(agentId)}`);
   if (!agent.name?.startsWith('vika-channel-')) throw new Error('Refusing to update a non-Vika Agent');
-  if (maToolsHash(agent.tools ?? []) !== maToolsHash(custom) || agent.system !== body.system || canonicalJson(agent.tools?.filter(t => t.type !== 'custom')) !== canonicalJson([builtin])) {
+  if (maToolsHash(agent.tools ?? []) !== maToolsHash(custom) || agent.system !== body.system || canonicalJson(agent.tools?.filter(t => t.type !== 'custom')) !== canonicalJson([builtin])
+    || maAgentModelChanged(agent.model, body.model)) {
     agent = await api(`/agents/${encodeURIComponent(agentId)}`, { ...body, version: agent.version });
   }
 } else {

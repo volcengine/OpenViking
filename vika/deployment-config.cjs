@@ -57,6 +57,14 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'VIKA_VOLC_STREAM_IDLE_TIMEOUT_MS',
   'VIKA_VOLC_AGENT_SYNC',
   'VIKA_VOLC_FILES',
+  // The MA Agent's model; BYOK when VIKA_VOLC_MODEL_PROVIDER is set.
+  'VIKA_VOLC_MODEL',
+  'VIKA_VOLC_MODEL_PROVIDER',
+  'VIKA_VOLC_MODEL_BASE_URL',
+  'VIKA_VOLC_MODEL_PROTOCOL',
+  'VIKA_VOLC_MODEL_CONTEXT_WINDOW',
+  'VIKA_VOLC_MODEL_MAX_INPUT_TOKENS',
+  'VIKA_VOLC_MODEL_MAX_OUTPUT_TOKENS',
   'FALLBACK_MODEL',
   'VIKA_HISTORY_LIMIT',
 ]);
@@ -65,6 +73,8 @@ const DAEMON_ENV_FIELDS = Object.freeze([
 const DAEMON_SECRET_ENV_FIELDS = Object.freeze([
   'ARK_API_KEY',
   'ARK_MA_API_KEY',
+  // The BYOK model key of the MA runtime, sent per events POST, never stored in MA.
+  'VIKA_VOLC_MODEL_API_KEY',
   // Providers of the durable runtime (pi-ai) read their key from the child
   // environment. They may come from the operator environment or ~/.vika/secrets
   // but never from the deployment manifest.
@@ -95,6 +105,7 @@ const AGENT_FIELDS = Object.freeze([
   'workspace',
   'ovConfig',
   'ovAutoRecall',
+  'ovViaGateway',
   'explicitSilence',
   'stagedReplies',
   'role',
@@ -289,6 +300,9 @@ function parseAgent(value, index, ignored) {
   if (value.ovAutoRecall !== undefined && typeof value.ovAutoRecall !== 'boolean') {
     throw new Error(`${label}.ovAutoRecall must be a boolean`);
   }
+  if (value.ovViaGateway !== undefined && typeof value.ovViaGateway !== 'boolean') {
+    throw new Error(`${label}.ovViaGateway must be a boolean`);
+  }
   if (value.explicitSilence !== undefined && typeof value.explicitSilence !== 'boolean') {
     throw new Error(`${label}.explicitSilence must be a boolean`);
   }
@@ -317,6 +331,7 @@ function parseAgent(value, index, ignored) {
     workspace: manifestAbsolutePath(value.workspace, `${label}.workspace`),
     ovConfig: manifestAbsolutePath(value.ovConfig, `${label}.ovConfig`),
     ovAutoRecall: value.ovAutoRecall ?? false,
+    ovViaGateway: value.ovViaGateway ?? false,
 // Every runtime now uses Core tools; an explicit false opts out.
     explicitSilence: value.explicitSilence ?? true,
     stagedReplies: value.stagedReplies ?? false,
@@ -544,6 +559,7 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
   Object.assign(env, openVikingAgentEnv(agent));
   // Always set, so neither the shell nor another instance's value leaks in.
   env.VIKA_OV_AUTO_RECALL = agent.ovAutoRecall ? 'true' : 'false';
+  env.VIKA_OV_VIA_GATEWAY = agent.ovViaGateway ? 'true' : 'false';
   env.VIKA_EXPLICIT_SILENCE = agent.explicitSilence ? 'true' : 'false';
   env.VIKA_NATURAL_WRITING = agent.naturalWriting ? 'true' : 'false';
   env.VIKA_STAGED_REPLIES = agent.stagedReplies ? 'true' : 'false';

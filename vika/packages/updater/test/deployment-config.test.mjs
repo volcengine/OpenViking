@@ -230,6 +230,43 @@ test('the secrets file can carry a durable runtime provider key', () => {
   });
 });
 
+test('the MA BYOK model comes from the manifest and its key only from the secrets file', () => {
+  const manifest = validManifest();
+  Object.assign(manifest.env, {
+    VIKA_VOLC_MODEL: 'gateway-model',
+    VIKA_VOLC_MODEL_PROVIDER: 'openviking-gateway',
+    VIKA_VOLC_MODEL_BASE_URL: 'https://gateway.example.test/gateway/api/v3/chat/completions',
+    VIKA_VOLC_MODEL_PROTOCOL: 'openai_chat_completions',
+    VIKA_VOLC_MODEL_CONTEXT_WINDOW: '128000',
+    VIKA_VOLC_MODEL_MAX_INPUT_TOKENS: '120000',
+    VIKA_VOLC_MODEL_MAX_OUTPUT_TOKENS: '8000',
+    VIKA_VOLC_MODEL_API_KEY: 'manifest-model-key',
+  });
+  withManifest(manifest, (manifestPath) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-secrets-'));
+    const secretsPath = path.join(directory, 'secrets.env');
+    try {
+      const env = { HOME: '/Users/test', VIKA_CONFIG: manifestPath, VIKA_SECRETS_FILE: secretsPath };
+      const deployment = loadDeploymentManifest(env);
+      assert.deepEqual(deployment.ignoredFields, ['env.VIKA_VOLC_MODEL_API_KEY']);
+      assert.equal(deployment.env.VIKA_VOLC_MODEL_API_KEY, undefined);
+      applyDeploymentDaemonEnv(env, deployment);
+      assert.equal(env.VIKA_VOLC_MODEL_PROVIDER, 'openviking-gateway');
+      assert.equal(env.VIKA_VOLC_MODEL_MAX_OUTPUT_TOKENS, '8000');
+      assert.equal(env.VIKA_VOLC_MODEL, 'gateway-model');
+      assert.equal(env.VIKA_VOLC_MODEL_API_KEY, undefined);
+
+      fs.writeFileSync(secretsPath, 'VIKA_VOLC_MODEL_API_KEY=from-file-model-key\n');
+      const withSecret = { HOME: '/Users/test', VIKA_CONFIG: manifestPath, VIKA_SECRETS_FILE: secretsPath };
+      applyDeploymentDaemonEnv(withSecret, deployment);
+      assert.equal(withSecret.VIKA_VOLC_MODEL_API_KEY, 'from-file-model-key');
+      assert.equal(deploymentDaemonEnvOverrides(withSecret).VIKA_VOLC_MODEL_API_KEY, 'from-file-model-key');
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
 test('the environment still wins over the secrets file', () => {
   withManifest(validManifest(), (manifestPath) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-secrets-'));
@@ -435,6 +472,7 @@ test('connects mailboxes only together with the email connector, each account fi
 test('OV memory is the daemon\'s; per-line search is opt-in; any OV plugin that loads stays inert; no Lark profile for Weixin', () => {
   const manifest = validManifest();
   manifest.agents[1].ovAutoRecall = true;
+  manifest.agents[1].ovViaGateway = true;
   // Retired options: ignored, never an error.
   manifest.agents[1].ovRecallScope = 'actor';
   manifest.agents[1].ovRemember = true;
@@ -450,11 +488,13 @@ test('OV memory is the daemon\'s; per-line search is opt-in; any OV plugin that 
     };
     const deployment = loadDeploymentManifest(env);
     assert.equal(selectDeploymentAgent(deployment, 'alpha').ovAutoRecall, false);
+    assert.equal(selectDeploymentAgent(deployment, 'alpha').ovViaGateway, false);
     applyDeploymentAgentEnv(env, deployment, 'alpha');
     assert.equal(env.OPENVIKING_CLI_CONFIG_FILE, '/srv/vika/ov/alpha.json');
     assert.equal(env.OPENVIKING_MEMORY_ENABLED, '0');
     assert.equal(env.OPENVIKING_AUTO_RECALL, '0');
     assert.equal(env.VIKA_OV_AUTO_RECALL, 'false');
+    assert.equal(env.VIKA_OV_VIA_GATEWAY, 'false');
     assert.equal(env.VIKA_OV_RECALL_SCOPE, undefined);
     assert.equal(env.VIKA_OV_REMEMBER, undefined);
     // Vika owns OV: a plugin that loads anyway writes and recalls nothing.
@@ -476,6 +516,7 @@ test('OV memory is the daemon\'s; per-line search is opt-in; any OV plugin that 
     // Search on: the daemon searches (ov-recall.mjs); the plugins' own stays off.
     assert.equal(env.OPENVIKING_AUTO_RECALL, '0');
     assert.equal(env.VIKA_OV_AUTO_RECALL, 'true');
+    assert.equal(env.VIKA_OV_VIA_GATEWAY, 'true');
     assert.equal(selectDeploymentAgent(deployment, 'beta').ovRecallScope, undefined);
     assert.equal(env.OPENVIKING_PENDING_DIR, '/srv/vika/data/beta/openviking/pending');
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'cli_beta');
@@ -645,6 +686,11 @@ test('rejects missing and invalid manifest fields instead of guessing', () => {
       name: 'recall must be a JSON boolean',
       mutate: (manifest) => { manifest.agents[0].ovAutoRecall = 'true'; },
       error: /agents\[0\]\.ovAutoRecall must be a boolean/,
+    },
+    {
+      name: 'the gateway switch must be a JSON boolean',
+      mutate: (manifest) => { manifest.agents[0].ovViaGateway = 'true'; },
+      error: /agents\[0\]\.ovViaGateway must be a boolean/,
     },
     {
       name: 'missing daemon env',

@@ -4,7 +4,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { assembleVolcCloudConversationPolicy } from './conversation-policy.mjs';
-import { MAToolExecutor, maTools, maToolsHash } from './volc-tools.mjs';
+import { MAToolExecutor, maTools, maToolsHash, maAgentModel, maAgentModelChanged, gatewayContextHeader } from './volc-tools.mjs';
 import { MAFiles } from './volc-files.mjs';
 import { safeError as safe } from './logger.mjs';
 import { activityPayload } from './activity.mjs';
@@ -15,13 +15,24 @@ const RECONNECT_BASE_MS = 500;
 const RECONNECT_CAP_MS = 5_000;
 const MAX_EVENT_BYTES = 5_000_000;
 class VolcApiError extends Error {
-  constructor(status, requestId = '') {
-    super(`Volc API request failed (${status})${requestId ? `, request_id=${requestId}` : ''}`);
+  constructor(status, requestId = '', { code = '', waitingOn = [] } = {}) {
+    super(`Volc API request failed (${status})${code ? ` ${code}` : ''}${requestId ? `, request_id=${requestId}` : ''}`);
     this.name = 'VolcApiError';
     this.status = status;
+    this.code = code;
+    // RequiresActionRejected names the events MA still waits on.
+    this.waitingOn = waitingOn;
     this.retryable = status === 429 || status >= 500;
   }
 }
+
+// MA refuses a user.message while the session waits on tool results, and says
+// so before accepting anything: a definite rejection, safe to send again.
+const REQUIRES_ACTION_REJECTED = 'RequiresActionRejected';
+const requiresActionRejected = (error) => error instanceof VolcApiError
+  && error.status === 400 && error.code === REQUIRES_ACTION_REJECTED;
+// Held steers wait on this when MA did not say which events it waits on.
+const UNKNOWN_CUSTOM_TOOL = Symbol('unknown custom tool');
 
 const VOLC_RUNTIME = getRuntimeDefinition('volc');
 
@@ -36,6 +47,21 @@ function textContent(event) {
     .map((block) => block.text)
     .join('')
     .trim();
+}
+
+// Under the OpenViking gateway (ovViaGateway), what the daemon adds to a
+// user.message is wrapped as a system-reminder, which the gateway leaves out
+// of its recall query and capture. Untrusted text keeps no tag that would
+// open or close that wrapper or mark a client memory plugin (which turns the
+// gateway off for the session): their "<" becomes "&lt;".
+const RESERVED_TAG = /<(?=\/?(?:system-reminder|openviking-context|relevant-memories|relevant-memory|memory-context)(?![\w-]))/gi;
+const neutralizeReservedTags = (text) => String(text).replace(RESERVED_TAG, '&lt;');
+const systemReminder = (text) => `<system-reminder>\n${text}\n</system-reminder>`;
+// An input is one line (runtime-input.mjs); what follows it, such as the
+// daemon recall block, is the daemon's.
+function gatewayItemText(text) {
+  const [line, ...daemon] = neutralizeReservedTags(text).split('\n');
+  return daemon.length ? `${line}\n${systemReminder(daemon.join('\n'))}` : line;
 }
 
 function parseSseFrames(buffer, onEvent) {
@@ -72,6 +98,9 @@ export class VolcAgent {
     this.steers = [];
     this.steerDeferredEvents = [];
     this.customBatches = new Set();
+    // Custom tool uses of this turn whose result MA has not yet echoed. MA
+    // rejects a user.message while it waits on one, so steering waits too.
+    this._resetCustomPending();
     this.onTurnFailed = options.onTurnFailed ?? null;
     this.onTurnSucceeded = options.onTurnSucceeded ?? null;
     this.environmentId = config.volcEnvironmentId ?? '';
@@ -95,6 +124,17 @@ export class VolcAgent {
 
     this.baseUrl = String(config.volcBaseUrl ?? 'https://ark.cn-beijing.volces.com/api/v3').replace(/\/+$/, '');
     this.apiKey = config.volcApiKey ?? '';
+    // BYOK model key: MA strips the X-User-Model-Header- prefix and forwards
+    // Authorization to the provider. Sent on events POSTs only, never stored.
+    this.byok = Boolean(config.volcModelByok);
+    this.modelApiKey = this.byok ? String(config.volcModelApiKey ?? '').trim() : '';
+    // A BYOK model through the OpenViking gateway: MA forwards
+    // X-User-Model-Header-X-OpenViking-Context to it as X-OpenViking-Context.
+    // A blacklist, so every gateway tool but the ones Vika offers itself
+    // (which would clash and close them all) reaches the model.
+    this.gatewayContext = this.byok && config.ovViaGateway && this.actions
+      ? gatewayContextHeader(maTools(this.actions, { viaGateway: true }))
+      : null;
     this.templateSessionId = config.volcSessionId ?? '';
     this.requestTimeoutMs = config.volcRequestTimeoutMs ?? 30_000;
     this.streamIdleTimeoutMs = config.volcStreamIdleTimeoutMs ?? 900_000;
@@ -159,6 +199,9 @@ export class VolcAgent {
   async start() {
     if (typeof this.fetch !== 'function') throw new Error('Volc managed-agent runtime requires fetch');
     if (!this.apiKey) throw new Error('ARK_API_KEY is required for the Volc managed-agent runtime');
+    if (this.byok && !this.modelApiKey) {
+      throw new Error('VIKA_VOLC_MODEL_API_KEY is required when VIKA_VOLC_MODEL_PROVIDER is set');
+    }
     if (!this.templateSessionId) {
       throw new Error('VIKA_VOLC_SESSION_ID (or SESSION_ID) is required for the Volc managed-agent runtime');
     }
@@ -179,13 +222,17 @@ export class VolcAgent {
     if (this.template.vault_ids?.length) {
       this.logger.warn('volc_template_vaults_attached', { count: this.template.vault_ids.length, message: 'Keep connector credentials on Channel; review template Vault contents.' });
     }
-    this.policyHashValue = createHash('sha256')
+    const policyHash = createHash('sha256')
       .update('volc-managed-agent-v3').update('\0').update('cloud').update('\0').update(this.toolsHash).update('\0')
       .update(this.baseUrl).update('\0')
       .update(String(this.template.agent.id)).update('\0')
       .update(String(this.template.agent.version ?? '')).update('\0')
       .update(String(this.template.environment_id)).update('\0')
-      .update(this.transportPolicy).digest('hex');
+      .update(this.transportPolicy);
+    // The gateway freezes a session's policy at its first request, so a
+    // changed gateway context needs a fresh session to take effect.
+    if (this.gatewayContext) policyHash.update('\0').update(this.gatewayContext);
+    this.policyHashValue = policyHash.digest('hex');
 
     const global = this.store.getGlobalSession?.() ?? {};
     const resumable = this.allowResume
@@ -273,6 +320,7 @@ export class VolcAgent {
     }
     this.activeItems = seqs.map((seq) => ({ text: '', seq }));
     this.steers = (pending.steers ?? []).map((item) => ({ ...item, processed: false }));
+    this._resetCustomPending();
     this.activeConversationKey = conversationKey;
     this.turnActive = true;
     this.turnCompleting = false;
@@ -312,7 +360,7 @@ export class VolcAgent {
 
   async _validateTools() {
     if (!this.actions || !this.store.getMAToolCall) throw new Error('Volc cloud requires ActionService and the persistent MA tool journal');
-    const desired = maTools(this.actions);
+    const desired = maTools(this.actions, { viaGateway: this.config.ovViaGateway });
     this.toolsHash = maToolsHash(desired);
     const agentPath = `/agents/${encodeURIComponent(this.template.agent.id)}`;
     let remote = await this._json(`${agentPath}${Number.isInteger(this.template.agent.version) ? `?version=${this.template.agent.version}` : ''}`);
@@ -324,6 +372,11 @@ export class VolcAgent {
       remote = await this._json(agentPath, { method: 'POST', body: { version: latest.version,
         tools: [...(latest.tools ?? []).filter((tool) => tool.type !== 'custom'), ...desired] } });
       if (maToolsHash(remote.tools ?? []) !== this.toolsHash) throw new Error('MA did not preserve the Core tool schemas');
+    }
+    // The model key header only works against the BYOK model block, and a BYOK
+    // Agent fails without it. VIKA_VOLC_AGENT_SYNC=update never syncs the model.
+    if (this.byok ? maAgentModelChanged(remote.model, maAgentModel(this.config)) : remote.model?.base_url != null) {
+      throw new Error(`MA Agent model does not match ${this.byok ? 'the BYOK' : 'the non-BYOK'} config: run scripts/volc-sync-agent.mjs and update VIKA_VOLC_SESSION_ID`);
     }
     this.template.agent = { ...this.template.agent, version: remote.version };
   }
@@ -416,14 +469,14 @@ export class VolcAgent {
     };
   }
 
-  async _request(path, { method = 'GET', body = null, accept = 'application/json', signal = null } = {}) {
+  async _request(path, { method = 'GET', body = null, accept = 'application/json', signal = null, headers: extraHeaders = null } = {}) {
     const controller = signal ? null : new AbortController();
     const timer = controller
       ? setTimeout(() => controller.abort(new Error('request timed out')), this.requestTimeoutMs)
       : null;
     timer?.unref?.();
     try {
-      const headers = this._headers(accept);
+      const headers = { ...this._headers(accept), ...extraHeaders };
       if (body !== null) headers['Content-Type'] = 'application/json';
       const response = await this.fetch(`${this.baseUrl}${path}`, {
         method,
@@ -435,11 +488,18 @@ export class VolcAgent {
         let requestId = response.headers.get('x-request-id')
           ?? response.headers.get('x-tt-logid')
           ?? '';
+        let code = '';
+        let waitingOn = [];
         try {
           const detail = JSON.parse(await response.text());
           requestId ||= String(detail?.request_id ?? detail?.requestId ?? '');
+          code = String(detail?.error?.code ?? '').replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64);
+          const waiting = code === REQUIRES_ACTION_REJECTED
+            ? String(detail?.error?.message ?? '').match(/waiting on responses to events \[([^\]]*)\]/)
+            : null;
+          if (waiting) waitingOn = waiting[1].split(/[\s,]+/).filter((id) => /^[\w-]{1,128}$/.test(id));
         } catch {}
-        throw new VolcApiError(response.status, requestId.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 128));
+        throw new VolcApiError(response.status, requestId.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 128), { code, waitingOn });
       }
       return response;
     } finally {
@@ -515,6 +575,7 @@ export class VolcAgent {
     return typeof this.store.beginManagedSteer === 'function'
       && this.connected && this.turnActive && !this.turnCompleting && !this.stopping
       && !this.steerPosting && !this.sessionPoisoned && !this.rotationPending
+      && this.customPending.size === 0
       && this.expectedUserEventId && this.turnFenceSeen && this.queue.length === 0
       && this._conversationKey(items) === this.activeConversationKey;
   }
@@ -565,13 +626,59 @@ export class VolcAgent {
           }
         }
       } catch (error) {
-        this.steerPosting = false; this.steerDeferredEvents = [];
-        if (sessionId === this.sessionId && this.turnActive && this.expectedUserEventId === rootFence) {
+        this.steerPosting = false;
+        const current = sessionId === this.sessionId && this.turnActive && this.expectedUserEventId === rootFence;
+        if (current && requiresActionRejected(error) && this._holdRejectedSteer(id, items, error)) return;
+        this.steerDeferredEvents = [];
+        if (current) {
           this._poisonSession();
           await this._completeTurn(new Error(`MA steer acceptance uncertain; not resent: ${safe(error)}`));
         }
       } finally { this._maybeSteerQueued(); }
     })();
+  }
+
+  // MA refused the steer before accepting it: the session waits on custom tool
+  // results. Undo its admission, put it back at the head of the queue and
+  // replay what arrived meanwhile; it is steered once MA echoes those results,
+  // or starts the next turn. False when it cannot be undone.
+  _holdRejectedSteer(id, items, error) {
+    try { this.store.rejectManagedSteer(this.runtime, this.sessionId, id); } catch { return false; }
+    this.steers = this.steers.filter((steer) => steer.id !== id);
+    this.activeItems = this.activeItems.filter((item) => !items.includes(item));
+    this.queue.unshift(items);
+    // Until MA echoes each result, even one already posted: MA said it waits.
+    // A result already echoed cannot clear again; if MA named only those, it
+    // is still switching state, so try again shortly, a few times per turn.
+    const waiting = error.waitingOn.filter((toolId) => !this.customEchoed.has(toolId));
+    for (const toolId of waiting) this.customPending.add(toolId);
+    this.customPending.add(UNKNOWN_CUSTOM_TOOL);
+    if (waiting.length) this.customPending.delete(UNKNOWN_CUSTOM_TOOL);
+    else if (error.waitingOn.length && this.steerHeldRetries < 5) {
+      const retry = ++this.steerHeldRetries;
+      const sessionId = this.sessionId;
+      const rootFence = this.expectedUserEventId;
+      setTimeout(() => {
+        if (this.turnActive && this.sessionId === sessionId && this.expectedUserEventId === rootFence) {
+          this._customResolved(UNKNOWN_CUSTOM_TOOL);
+        }
+      }, this.reconnectBaseMs * retry).unref?.();
+    }
+    this.logger.info('volc_steer_held', { waitingOn: error.waitingOn.length });
+    for (const event of this.steerDeferredEvents.splice(0)) this._handleEvent(event);
+    return true;
+  }
+
+  _resetCustomPending() {
+    this.customPending = new Set();
+    this.customEchoed = new Set();
+    this.steerHeldRetries = 0;
+  }
+
+  _customResolved(toolUseId) {
+    if (typeof toolUseId === 'string') this.customEchoed.add(toolUseId);
+    const had = [this.customPending.delete(toolUseId), this.customPending.delete(UNKNOWN_CUSTOM_TOOL)].some(Boolean);
+    if (had && this.customPending.size === 0 && this.queue.length > 0) queueMicrotask(() => this._maybeSteerQueued());
   }
 
   tryStartBatch(items) {
@@ -592,7 +699,8 @@ export class VolcAgent {
     const seqs = items.map((item) => item.seq).filter((seq) => seq != null);
     const beforeSeq = seqs.length > 0 ? Math.min(...seqs) : null;
     const throughSeq = this.store.cognitionJournalBeforeInbound?.(beforeSeq, this.cognitionEpoch) ?? 0;
-    let body = items.map((item) => item.text).join('\n');
+    const viaGateway = Boolean(this.config.ovViaGateway);
+    let body = items.map((item) => (viaGateway ? gatewayItemText(item.text) : item.text)).join('\n');
     let deliveredThroughSeq = this.deliveredThroughSeq;
     if (throughSeq > this.deliveredThroughSeq) {
       const catchup = cognitionHistoryPrefix(
@@ -602,7 +710,8 @@ export class VolcAgent {
         this.deliveredThroughSeq,
       );
       deliveredThroughSeq = catchup.throughSeq;
-      body = `${catchup.text}\n${body}`;
+      const history = viaGateway && catchup.text ? systemReminder(neutralizeReservedTags(catchup.text)) : catchup.text;
+      body = `${history}\n${body}`;
     }
     for (const seq of seqs) {
       deliveredThroughSeq = Math.max(
@@ -629,6 +738,7 @@ export class VolcAgent {
     this.activeItems = [...items];
     this.steers = [];
     this.steerDeferredEvents = [];
+    this._resetCustomPending();
     this.activeConversationKey = conversationKey;
     this.turnActive = true;
     this.turnCompleting = false;
@@ -704,6 +814,10 @@ export class VolcAgent {
     return await this._json(`/sessions/${encodeURIComponent(this.sessionId)}/events`, {
       method: 'POST',
       body: { events },
+      headers: this.modelApiKey ? {
+        'X-User-Model-Header-Authorization': /^Bearer\s/i.test(this.modelApiKey) ? this.modelApiKey : `Bearer ${this.modelApiKey}`,
+        ...(this.gatewayContext ? { 'X-User-Model-Header-X-OpenViking-Context': this.gatewayContext } : {}),
+      } : null,
     });
   }
 
@@ -749,7 +863,7 @@ export class VolcAgent {
             // user.message text itself instead.
             const messageText = this.transportPolicyInjected
               ? prepared.body
-              : `${this.transportPolicy}\n\n${prepared.body}`;
+              : `${this.config.ovViaGateway ? systemReminder(this.transportPolicy) : this.transportPolicy}\n\n${prepared.body}`;
             const events = [{
               type: 'user.message',
               content: [{ type: 'text', text: messageText }],
@@ -914,12 +1028,15 @@ export class VolcAgent {
     }
     const inboundSeq = this.activeItems.map((item) => item.seq).filter((seq) => seq != null).at(-1) ?? null;
     if (event.type === 'agent.custom_tool_use') {
-      try { this.customExecutor.see(event, this._customTurn()); }
-      catch (error) { this._poisonSession(); void this._completeTurn(error); }
+      try {
+        // A history replay of a call already answered does not hold steering.
+        if (this.customExecutor.see(event, this._customTurn())?.status !== 'POSTED') this.customPending.add(event.id);
+      } catch (error) { this._poisonSession(); void this._completeTurn(error); }
       this.modelWorking = false; this.modelStartedAtMs = null;
     } else if (event.type === 'user.custom_tool_result') {
       const row = this.store.getMAToolCall(this.sessionId, event.custom_tool_use_id);
       if (row && row.fence_id === this.expectedUserEventId) this.store.updateMAToolCall(this.sessionId, event.custom_tool_use_id, 'POSTED');
+      this._customResolved(event.custom_tool_use_id);
     } else if (event.type === 'agent.message') {
       const text = textContent(event);
       if (text) {
@@ -1012,6 +1129,7 @@ export class VolcAgent {
     const items = this.activeItems.splice(0);
     const seqs = [...new Set(items.map((item) => item.seq).filter((seq) => seq != null))];
     const receipts = receiptIds(items);
+    this._resetCustomPending();
     this.activeConversationKey = null;
     const turnStartedAtMs = this.turnStartedAtMs;
     this.turnStartedAtMs = null;
@@ -1114,6 +1232,7 @@ export class VolcAgent {
     this.abortController = null;
     this.streamAbortController?.abort();
     this.streamAbortController = null;
+    this._resetCustomPending();
     this.activeConversationKey = null;
     this.turnStartedAtMs = null;
     this.modelWorking = false;

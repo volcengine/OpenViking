@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { Store } from '../src/store.mjs';
 import { ActionService } from '../src/actions/service.mjs';
 import { TOOLS, publicTool } from '../src/actions/tools.mjs';
-import { MAToolExecutor, maTools, maToolsHash, maInputSchema } from '../src/volc-tools.mjs';
+import { MAToolExecutor, maTools, maToolsHash, maInputSchema, maAgentModel, maAgentModelChanged, MA_DEFAULT_MODEL, gatewayDisabledTools } from '../src/volc-tools.mjs';
 import { MAFiles, outputRelative } from '../src/volc-files.mjs';
 import { VolcAgent } from '../src/volc.mjs';
 import { InstanceLock, sameProcess } from '../src/lock.mjs';
@@ -50,6 +50,37 @@ test('every available Core tool maps without dropping schema fields and round-tr
   assert.equal(calls.length, TOOLS.length);
   assert.ok(calls.every((call) => call.context.authority === 'token' && call.context.via === 'ma'));
   assert.equal(maToolsHash(schemas), maToolsHash([...schemas].reverse()));
+});
+
+test('under the OpenViking gateway, MA leaves the OV read tools to it and keeps the daemon\'s own', () => {
+  const actions = { tools: () => TOOLS.map(publicTool) };
+  const names = (tools) => tools.map((tool) => tool.name);
+  assert.deepEqual(names(maTools(actions, { viaGateway: false })), names(maTools(actions)));
+  const gateway = names(maTools(actions, { viaGateway: true }));
+  assert.deepEqual(names(maTools(actions)).filter((name) => !gateway.includes(name)),
+    ['openviking_find', 'openviking_search', 'openviking_read', 'openviking_list']);
+  for (const kept of ['openviking_remember', 'openviking_add_resource', 'read_openviking_session_context']) {
+    assert.ok(gateway.includes(kept), kept);
+  }
+});
+
+test('under the gateway, the hidden OV tools are exactly those whose names Vika\'s own tools would clash with', () => {
+  const tools = maTools({ tools: () => TOOLS.map(publicTool) }, { viaGateway: true });
+  const disabled = gatewayDisabledTools(tools);
+  assert.deepEqual(disabled, ['add_resource', 'remember']);
+  // The OpenViking MCP tools (openviking/server/mcp_endpoint.py) and the
+  // gateway's clash rule (openviking_gateway/protocols.py client_openviking_tools):
+  // a client tool named like openviking or mentioning viking:// that ends in
+  // _<name> of an offered tool turns the gateway's tools off.
+  const ov = ['add_resource', 'add_skill', 'cancel_watch', 'download', 'edit', 'find', 'forget', 'get_acl', 'glob',
+    'grep', 'health', 'list', 'list_groups', 'list_users', 'list_watches', 'privacy_resolve', 'privacy_tree',
+    'privacy_upsert', 'read', 'remember', 'search', 'set_acl', 'tree', 'write'];
+  const offered = ov.filter((name) => !disabled.includes(name));
+  const ending = new RegExp(`[^a-z0-9](?:${offered.join('|')})$`, 'i');
+  const clashes = tools.filter((tool) => ending.test(tool.name) && (/(?<![a-z0-9])openviking(?![a-z0-9])/i.test(tool.name)
+    || JSON.stringify(tool).toLowerCase().includes('viking://')));
+  assert.deepEqual(clashes.map((tool) => tool.name), []);
+  assert.ok(offered.every((name) => !tools.some((tool) => tool.name === `openviking_${name}`)));
 });
 
 test('real Core outbox sends once; DONE result survives restart and POSTED skips execution', async (t) => {
@@ -320,6 +351,144 @@ test('ambiguous steer HTTP failure quarantines the session and settles both admi
   assert.equal(store.getManagedTurn('volc'), null);
 });
 
+function steeringAgent(t, options = {}) {
+  const ctx = setup(t);
+  const { store, config, actions, inbound, turn } = ctx;
+  store.setGlobalSession(turn.sessionId, 'test-policy', { runtime: 'volc', epoch: turn.epoch });
+  store.beginManagedTurn({ runtime: 'volc', authorityToken: 'token', sessionId: turn.sessionId,
+    epoch: turn.epoch, inboundSeqs: [inbound.seq], conversationKey: turn.conversationKey, deliveredThroughSeq: 3 });
+  store.acceptManagedTurn('volc', turn.sessionId, turn.fenceId);
+  const agent = new VolcAgent(config, store, quiet, { actions, files: noFiles, ...options });
+  Object.assign(agent, { sessionId: turn.sessionId, connected: true, turnActive: true,
+    expectedUserEventId: turn.fenceId, turnFenceSeen: true,
+    activeConversationKey: turn.conversationKey, activeItems: [{ text: 'old', seq: inbound.seq }] });
+  agent._history = async () => [];
+  agent._persistSession = () => {};
+  agent._bodyFor = (items) => ({ body: items.map((item) => item.text).join('\n'), seqs: items.map((item) => item.seq), deliveredThroughSeq: 9 });
+  const newer = store.ingest(chatEvent({ messageId: 'om_steerhold1234', chatId: inbound.chatId })).inbound;
+  const toolUse = { id: 'tool-1', type: 'agent.custom_tool_use', name: 'get_time', input: {} };
+  const echo = { id: 'result-echo', type: 'user.custom_tool_result', custom_tool_use_id: 'tool-1' };
+  return { ...ctx, agent, newer, toolUse, echo };
+}
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+test('input arriving while a custom tool result is pending is steered only after MA echoes the result', async (t) => {
+  const { agent, store, inbound, newer, toolUse, echo } = steeringAgent(t);
+  const posted = [];
+  agent._postEvents = async (events) => { posted.push(...events); return { data: [{ id: 'user-steer', type: 'user.message' }] }; };
+  agent._handleEvent(toolUse);
+  assert.equal(agent.deliver('new input', newer.seq), true);
+  await flush();
+  assert.deepEqual(posted, []);
+  assert.equal(agent.queue.length, 1);
+  assert.equal(store.getManagedTurn('volc').steers, undefined);
+  assert.deepEqual(agent._customTurn().inboundSeqs, [inbound.seq]);
+  agent._handleEvent(echo);
+  await flush(); await agent.steerWork;
+  assert.deepEqual(posted.map((event) => [event.type, event.content[0].text]), [['user.message', 'new input']]);
+  assert.equal(agent.queue.length, 0);
+  assert.equal(store.getManagedTurn('volc').steers[0].status, 'ACCEPTED');
+});
+
+test('a restart replaying an already answered custom call from history does not hold steering', async (t) => {
+  const { agent, store, toolUse, config, actions, turn } = steeringAgent(t);
+  agent._handleEvent(toolUse);
+  store.updateMAToolCall(turn.sessionId, 'tool-1', 'POSTED');
+  // A fresh adapter (restart): no seen event IDs, the journal row is POSTED.
+  const replay = new VolcAgent(config, store, quiet, { actions, files: noFiles });
+  Object.assign(replay, { sessionId: turn.sessionId, connected: true, turnActive: true,
+    expectedUserEventId: turn.fenceId, turnFenceSeen: true,
+    activeConversationKey: turn.conversationKey, activeItems: [...agent.activeItems] });
+  replay._handleEvent(toolUse);
+  assert.equal(replay.customPending.size, 0);
+  replay._handleEvent({ ...toolUse, id: 'tool-2' });
+  assert.deepEqual([...replay.customPending], ['tool-2']);
+});
+
+test('a RequiresActionRejected naming only results already echoed retries shortly instead of holding to turn end', async (t) => {
+  const requests = [];
+  const responses = [];
+  const fetch = (url, options) => { requests.push(JSON.parse(options.body)); return new Promise((resolve) => responses.push(resolve)); };
+  const { agent, newer, toolUse, echo } = steeringAgent(t, { fetch, reconnectBaseMs: 1 });
+  agent._handleEvent(toolUse);
+  agent._handleEvent(echo);
+  assert.equal(agent.customPending.size, 0);
+  agent.deliver('new input', newer.seq);
+  responses.shift()(new Response(JSON.stringify({ error: { code: 'RequiresActionRejected',
+    message: 'Invalid user.message event at events[0]: waiting on responses to events [tool-1]; only ...' } }), { status: 400 }));
+  await agent.steerWork;
+  assert.equal(agent.sessionPoisoned, false);
+  assert.equal(agent.queue.length, 1);
+  assert.equal(requests.length, 1, 'not resent at once');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1].events.map((event) => event.content[0].text), ['new input']);
+  responses.shift()(Response.json({ data: [{ id: 'user-steer', type: 'user.message' }] }));
+  await agent.steerWork;
+  assert.equal(agent.queue.length, 0);
+});
+
+test('a steer MA rejects with RequiresActionRejected is held, not poisoned, and sent once after the tool result', async (t) => {
+  const responses = [];
+  const requests = [];
+  const fetch = (url, options) => {
+    requests.push(JSON.parse(options.body));
+    return new Promise((resolve) => responses.push(resolve));
+  };
+  const { agent, store, inbound, newer, toolUse, echo } = steeringAgent(t, { fetch });
+  let failed = null;
+  agent.onTurnFailed = (event) => { failed = event; };
+  assert.equal(agent.deliver('new input', newer.seq), true);
+  assert.equal(store.getManagedTurn('volc').steers[0].status, 'POSTING');
+  // The tool call MA emitted just before the steer reached it.
+  agent._handleEvent(toolUse);
+  agent._handleEvent({ id: 'waiting', type: 'session.status_idle', stop_reason: { type: 'requires_action', event_ids: ['tool-1'] } });
+  const later = store.ingest(chatEvent({ messageId: 'om_steerlater123', chatId: inbound.chatId })).inbound;
+  assert.equal(agent.deliver('later input', later.seq), true);
+  responses.shift()(new Response(JSON.stringify({ error: { code: 'RequiresActionRejected', type: 'Bad Request',
+    message: "Invalid user.message event at events[0]: waiting on responses to events [tool-1]; only 'user.tool_confirmation', 'user.tool_result', 'user.custom_tool_result', or 'user.interrupt' may be sent" } }), { status: 400 }));
+  await agent.steerWork;
+  assert.equal(failed, null);
+  assert.equal(agent.sessionPoisoned, false);
+  assert.equal(agent.turnActive, true);
+  assert.deepEqual(agent.queue.map((batch) => batch.map((item) => item.text)), [['new input'], ['later input']]);
+  const durable = store.getManagedTurn('volc');
+  assert.deepEqual(durable.steers, []);
+  assert.deepEqual(durable.inboundSeqs, [inbound.seq]);
+  assert.equal(durable.deliveredThroughSeq, 3);
+  assert.deepEqual(agent._customTurn().inboundSeqs, [inbound.seq]);
+  // The deferred requires_action was replayed: Core runs the tool and posts its result.
+  await flush();
+  assert.deepEqual(requests.at(-1).events.map((event) => event.type), ['user.custom_tool_result']);
+  responses.shift()(Response.json({ data: [{ id: 'result-echo', type: 'user.custom_tool_result' }] }));
+  await agent.customWork;
+  assert.equal(requests.length, 2, 'nothing is steered before MA echoes the result');
+  agent._handleEvent(echo);
+  await flush();
+  assert.deepEqual(requests.at(-1).events.map((event) => [event.type, event.content[0].text]), [['user.message', 'new input']]);
+  responses.shift()(Response.json({ data: [{ id: 'user-steer', type: 'user.message' }] }));
+  await agent.steerWork; await flush();
+  assert.deepEqual(requests.at(-1).events.map((event) => event.content?.[0].text), ['later input']);
+  responses.shift()(Response.json({ data: [{ id: 'user-steer-2', type: 'user.message' }] }));
+  await agent.steerWork;
+  assert.equal(requests.length, 4);
+  assert.deepEqual(store.getManagedTurn('volc').steers.map((steer) => [steer.status, steer.inboundSeqs]),
+    [['ACCEPTED', [newer.seq]], ['ACCEPTED', [later.seq]]]);
+  assert.equal(agent.queue.length, 0);
+});
+
+test('a steer rejected for another 400 still quarantines the session', async (t) => {
+  const fetch = async () => new Response(JSON.stringify({ error: { code: 'InvalidPayload', message: 'bad' } }), { status: 400 });
+  const { agent, newer } = steeringAgent(t, { fetch });
+  let failed = null;
+  agent.onTurnFailed = (event) => { failed = event; };
+  agent._ensureFreshSession = async () => {};
+  agent.deliver('new input', newer.seq);
+  await agent.steerWork;
+  assert.equal(agent.sessionPoisoned, true);
+  assert.match(failed.error, /steer acceptance uncertain/);
+});
+
 test('download preparation resumes under recovered authority before Core starts, but RUNNING does not', async (t) => {
   const { store, turn, event, executor } = setup(t);
   executor.see(event(), turn); store.prepareMAToolCall(turn.sessionId, 'tool-1');
@@ -347,4 +516,37 @@ test('preparation migration preserves an existing tool journal and defaults old 
     assert.equal(row.status, 'SEEN'); assert.equal(row.preparing, 0);
     assert.equal(row.authority_token, turn.authorityToken);
   } finally { migrated.close(); }
+});
+
+test('sync-agent model block: built-in by default, BYOK without the key, update on any sent field change', () => {
+  assert.deepEqual(maAgentModel({}), { id: MA_DEFAULT_MODEL });
+  assert.deepEqual(maAgentModel({ volcModel: 'custom-model', volcModelApiKey: 'model-secret' }), { id: 'custom-model' });
+  const byok = {
+    provider: 'openviking-gateway',
+    baseUrl: 'https://gateway.example.test/gateway/api/v3/chat/completions',
+    protocol: 'openai_chat_completions',
+    tokenLimits: { context_window: 128000, max_input_token_length: 120000, max_output_token_length: 8000 },
+  };
+  const desired = maAgentModel({ volcModel: 'gateway-model', volcModelByok: byok, volcModelApiKey: 'model-secret' });
+  assert.deepEqual(desired, {
+    id: 'gateway-model',
+    provider: 'openviking-gateway',
+    base_url: 'https://gateway.example.test/gateway/api/v3/chat/completions',
+    protocol: 'openai_chat_completions',
+    token_limits: { context_window: 128000, max_input_token_length: 120000, max_output_token_length: 8000 },
+  });
+  assert.doesNotMatch(JSON.stringify(desired), /model-secret/);
+  // An existing built-in Agent migrates to BYOK; one already on it does not
+  // churn, even when MA echoes fields it was not sent.
+  assert.equal(maAgentModelChanged({ id: 'gateway-model' }, desired), true);
+  assert.equal(maAgentModelChanged(undefined, desired), true);
+  const echoed = { ...desired, type: 'direct', token_limits: { ...desired.token_limits, reserved: 1 } };
+  assert.equal(maAgentModelChanged(echoed, desired), false);
+  assert.equal(maAgentModelChanged({ ...echoed, base_url: 'https://other.example.test/v3/chat/completions' }, desired), true);
+  assert.equal(maAgentModelChanged({ ...echoed, token_limits: { ...desired.token_limits, max_output_token_length: 4000 } }, desired), true);
+  assert.equal(maAgentModelChanged({ id: MA_DEFAULT_MODEL, provider: 'volcengine' }, { id: MA_DEFAULT_MODEL }), false);
+  assert.equal(maAgentModelChanged({ id: 'other-model' }, { id: MA_DEFAULT_MODEL }), true);
+  // Rolling BYOK back: an Agent still on the Direct provider must be updated.
+  assert.equal(maAgentModelChanged(echoed, { id: 'gateway-model' }), true);
+  assert.equal(maAgentModelChanged({ id: 'gateway-model', provider: 'openviking-gateway', base_url: desired.base_url }, { id: 'gateway-model' }), true);
 });

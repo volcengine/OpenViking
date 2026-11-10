@@ -96,6 +96,45 @@ function jsonStringArrayEnv(name, fallback = []) {
   return value;
 }
 
+function positiveIntEnv(name) {
+  const raw = (process.env[name] ?? '').trim();
+  if (!/^[1-9][0-9]*$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+    throw new Error(`${name} must be a positive integer when VIKA_VOLC_MODEL_PROVIDER is set`);
+  }
+  return Number(raw);
+}
+
+// BYOK ("Direct") model of the MA runtime, on iff VIKA_VOLC_MODEL_PROVIDER is
+// set: MA calls this registered provider at base_url instead of a built-in
+// model. The model key (VIKA_VOLC_MODEL_API_KEY, a secret) never goes into the
+// Agent; volc.mjs sends it on every events POST.
+function volcModelByokEnv() {
+  const provider = (process.env.VIKA_VOLC_MODEL_PROVIDER ?? '').trim();
+  if (!provider) return null;
+  if (!(process.env.VIKA_VOLC_MODEL ?? '').trim()) {
+    throw new Error('VIKA_VOLC_MODEL is required when VIKA_VOLC_MODEL_PROVIDER is set');
+  }
+  const rawBaseUrl = (process.env.VIKA_VOLC_MODEL_BASE_URL ?? '').trim();
+  const baseUrlError = 'VIKA_VOLC_MODEL_BASE_URL must be the full HTTPS endpoint URL (with its path, without credentials, query or fragment) when VIKA_VOLC_MODEL_PROVIDER is set';
+  let baseUrl;
+  try { baseUrl = new URL(rawBaseUrl); } catch { throw new Error(baseUrlError); }
+  if (baseUrl.protocol !== 'https:' || baseUrl.username || baseUrl.password
+    || rawBaseUrl.includes('?') || rawBaseUrl.includes('#') || baseUrl.pathname === '/') {
+    throw new Error(baseUrlError);
+  }
+  return Object.freeze({
+    provider,
+    // The parsed form, so MA gets exactly the URL that was validated.
+    baseUrl: baseUrl.href,
+    protocol: enumEnv('VIKA_VOLC_MODEL_PROTOCOL', 'openai_chat_completions', ['openai_chat_completions', 'anthropic_messages']),
+    tokenLimits: Object.freeze({
+      context_window: positiveIntEnv('VIKA_VOLC_MODEL_CONTEXT_WINDOW'),
+      max_input_token_length: positiveIntEnv('VIKA_VOLC_MODEL_MAX_INPUT_TOKENS'),
+      max_output_token_length: positiveIntEnv('VIKA_VOLC_MODEL_MAX_OUTPUT_TOKENS'),
+    }),
+  });
+}
+
 function assertLoopbackHost(host) {
   if (!['127.0.0.1', '::1', 'localhost'].includes(host)) {
     throw new Error('VIKA_HOST must be a loopback address');
@@ -213,6 +252,15 @@ export function getConfig() {
     // the preferences it always shows, the daemon runs one OV search per line
     // someone sends (ov-recall.mjs).
     ovAutoRecall: boolEnv('VIKA_OV_AUTO_RECALL', false),
+    // Opt-in per instance (agents[].ovViaGateway, config file only), for an
+    // instance on the MA (ark) runtime whose model calls the deployment owner
+    // sends through the OpenViking gateway, which then recalls, offers the OV
+    // read tools and extracts memory. Under MA the daemon drops its own
+    // find/search/read/list tools and marks the text it adds as
+    // <system-reminder> (volc.mjs). For the whole instance, whatever the
+    // runtime, it wins over ovAutoRecall and the journal session extracts
+    // nothing (ov-session-context.mjs).
+    ovViaGateway: boolEnv('VIKA_OV_VIA_GATEWAY', false),
     // One OpenViking tool request, bounded for the model-facing tools (the
     // faster read/list paths get half of it).
     openVikingToolTimeoutMs: intEnv('VIKA_OV_TOOL_TIMEOUT_MS', 20_000, { min: 1_000, max: 120_000 }),
@@ -259,6 +307,10 @@ export function getConfig() {
     ),
     opencodeModel: process.env.VIKA_OPENCODE_MODEL || '',
     volcApiKey: process.env.ARK_MA_API_KEY || process.env.ARK_API_KEY || '',
+    // The MA Agent's model (scripts/volc-sync-agent.mjs); empty keeps its default.
+    volcModel: (process.env.VIKA_VOLC_MODEL || '').trim(),
+    volcModelByok: volcModelByokEnv(),
+    volcModelApiKey: process.env.VIKA_VOLC_MODEL_API_KEY || '',
     volcAgentSync: enumEnv('VIKA_VOLC_AGENT_SYNC', 'check', ['check', 'update']),
     volcFiles: enumEnv('VIKA_VOLC_FILES', 'on', ['on', 'off']),
     volcSessionId: process.env.VIKA_VOLC_SESSION_ID

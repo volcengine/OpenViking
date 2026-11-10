@@ -101,6 +101,8 @@ Native reasoning and arbitrary tool results are not session archives.
 An outbound row still `PENDING` holds the sync cursor until it settles; a
 handoff prepared meanwhile carries the rows before it.
 
+With `agents[].ovViaGateway`, for an MA Cloud/Ark instance whose model calls go through the OpenViking gateway, the gateway recalls, offers the OV read tools and extracts memory from what it captures. The daemon then runs no per-line search, even with `ovAutoRecall`, and creates each epoch's session with `memory_policy` `{"self": {"enabled": false}, "peer": {"enabled": false}}`: commits still archive the messages, so `/context`, the fresh-session history and `read_openviking_session_context` are unchanged, but extract nothing. A session keeps the policy it was created with, so the current epoch changes policy at `/new`. Preferences stay the daemon's: the recall block above and `openviking_remember`.
+
 `ov_session_sync` binds each epoch's session to the namespace the connection
 writes to (server, and the account and user OV authenticated; rotating a key
 for the same user keeps it), and persists the acknowledged sequence, uncertain

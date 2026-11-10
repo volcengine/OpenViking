@@ -134,7 +134,8 @@ export class PersonalAgentDaemon {
     this.lock.acquire();
     try {
       this.store = new Store(this.config.databasePath, this.logger.child({ component: 'store' }));
-      const ovClient = this.ovClient ?? new OVSessionClient(this.config.openVikingConfigPath);
+      const ovClient = this.ovClient
+        ?? new OVSessionClient(this.config.openVikingConfigPath, { transcriptOnly: this.config.ovViaGateway });
       this.ovContext = new OVSessionContext(this.store, ovClient, this.logger);
       this.recordSystemActivity('system.starting', {
         summary: `本机 Personal Agent 正在启动（${this.connectorIds.join('、')}）`,
@@ -296,9 +297,11 @@ export class PersonalAgentDaemon {
         runtime: this.agentRuntime,
         roster: this.roster,
         liveness: this.liveness,
-        // Preferences are always shown; the per-line search only with ovAutoRecall.
+        // Preferences are always shown; the per-line search only with
+        // ovAutoRecall, and never when the gateway recalls (ovViaGateway).
         recall: this.config.openVikingConfigPath
-          ? new OVRecall({ configPath: this.config.openVikingConfigPath, autoRecall: this.config.ovAutoRecall,
+          ? new OVRecall({ configPath: this.config.openVikingConfigPath,
+            autoRecall: this.config.ovAutoRecall && !this.config.ovViaGateway,
             store: this.store, logger: this.logger.child({ component: 'ov-recall' }) })
           : null,
         prepareEvent: (event) => event.source === 'lark' && event.kind === 'message.action'
