@@ -169,7 +169,13 @@ export function ExperienceDetail({
   }
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-6">
+    <div
+      className={
+        embedded
+          ? 'h-full min-h-0 w-full min-w-0 overflow-y-auto'
+          : 'flex w-full min-w-0 flex-col gap-6'
+      }
+    >
       {!embedded ? (
         <header className="grid gap-3">
           <div>
@@ -243,32 +249,38 @@ export function ExperienceDetail({
       >
         <Card
           size="sm"
-          className="gap-0 bg-background shadow-none ring-border/70"
+          className={
+            embedded
+              ? 'gap-0 rounded-none bg-background shadow-none ring-0 data-[size=sm]:py-0'
+              : 'gap-0 bg-background shadow-none ring-border/70'
+          }
         >
-          <CardHeader className="border-b border-border/60">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <FileTextIcon className="size-4 shrink-0 text-muted-foreground" />
-                <CardTitle className="truncate text-base">
-                  {t('detail.contentTitle')}
-                </CardTitle>
+          {!embedded ? (
+            <CardHeader className="border-b border-border/60">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <FileTextIcon className="size-4 shrink-0 text-muted-foreground" />
+                  <CardTitle className="truncate text-base">
+                    {t('detail.contentTitle')}
+                  </CardTitle>
+                </div>
+                <Button
+                  type="button"
+                  aria-label={t('refresh')}
+                  size="icon-xs"
+                  variant="ghost"
+                  disabled={contentQuery.isFetching}
+                  onClick={() => void contentQuery.refetch()}
+                >
+                  <RefreshCwIcon
+                    className={
+                      contentQuery.isFetching ? 'animate-spin' : undefined
+                    }
+                  />
+                </Button>
               </div>
-              <Button
-                type="button"
-                aria-label={t('refresh')}
-                size="icon-xs"
-                variant="ghost"
-                disabled={contentQuery.isFetching}
-                onClick={() => void contentQuery.refetch()}
-              >
-                <RefreshCwIcon
-                  className={
-                    contentQuery.isFetching ? 'animate-spin' : undefined
-                  }
-                />
-              </Button>
-            </div>
-          </CardHeader>
+            </CardHeader>
+          ) : null}
           <CardContent className="px-0">
             {contentQuery.isLoading ? (
               <div className="flex min-h-64 items-center justify-center gap-2 px-6 text-sm text-muted-foreground">
@@ -291,7 +303,13 @@ export function ExperienceDetail({
                 </Button>
               </div>
             ) : (
-              <div className="max-h-[75vh] overflow-y-auto px-6 py-6 sm:px-8">
+              <div
+                className={
+                  embedded
+                    ? 'px-6 py-6 sm:px-8'
+                    : 'max-h-[75vh] overflow-y-auto px-6 py-6 sm:px-8'
+                }
+              >
                 <div className="prose prose-sm max-w-none break-words prose-headings:font-semibold prose-headings:tracking-tight prose-h2:text-lg prose-p:leading-7 prose-li:leading-7 prose-hr:border-border dark:prose-invert dark:prose-pre:bg-muted/40">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
                     {contentQuery.data || ''}
