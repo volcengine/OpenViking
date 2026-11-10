@@ -3236,6 +3236,123 @@ async def test_update_search_tags_rejects_invalid_mode_before_fetch():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("levels", [None, [0], [0, 1]])
+@pytest.mark.parametrize("delta,counts", [("1", ["1", "2"]), ("0.5", ["0.5", "1.0"])])
+async def test_update_search_tags_increase_counts_and_time_without_changing_content(
+    monkeypatch, levels, delta, counts
+):
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    uri = "viking://resources/demo"
+    records = {
+        str(level): {
+            "id": str(level),
+            "uri": uri,
+            "level": level,
+            "context_type": "memory",
+            "search_tags": ["team=search", "memory_type=preferences"],
+            "abstract": "unchanged content",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "vector": [0.1, 0.2],
+        }
+        for level in (levels or [2])
+    }
+    backend = object.__new__(VikingVectorIndexBackend)
+    backend.fetch_by_uri = AsyncMock(return_value=next(iter(records.values())))
+    backend.filter = AsyncMock(return_value=list(records.values()))
+
+    async def get_strict(ids, *, ctx):
+        assert ctx.account_id == "default"
+        return [dict(records[record_id]) for record_id in ids]
+
+    async def upsert(data, *, ctx):
+        records[data["id"]] = dict(data)
+        return data["id"]
+
+    backend.get_strict = AsyncMock(side_effect=get_strict)
+    backend.get = AsyncMock(side_effect=AssertionError("increase must use strict reads"))
+    backend.upsert = AsyncMock(side_effect=upsert)
+    monkeypatch.setattr("openviking.storage.viking_vector_index_backend.time.time", lambda: 1000.25)
+
+    for count in counts:
+        updated = await backend.update_search_tags(
+            uri, [f"used_count={delta}"], mode="increase", levels=levels, ctx=ctx
+        )
+        assert len(updated) == len(records)
+        for record in updated:
+            assert set(record["search_tags"]) == {
+                "team=search",
+                "memory_type=preferences",
+                f"used_count={count}",
+                "last_used_at=1000250",
+            }
+            assert record["abstract"] == "unchanged content"
+            assert record["updated_at"] == "2026-01-01T00:00:00Z"
+            assert record["vector"] == [0.1, 0.2]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tags", [["used_count=0"], ["used_count=-1"], ["used_count=-0.5"], ["retrieved_count=1"]]
+)
+async def test_update_search_tags_increase_only_positive_usage_updates_time(tags):
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    uri = "viking://resources/demo/file.md"
+    record = {"id": "r1", "uri": uri, "search_tags": ["used_count=2", "last_used_at=123"]}
+    backend = object.__new__(VikingVectorIndexBackend)
+    backend.fetch_by_uri = AsyncMock(return_value=record)
+    backend.get_strict = AsyncMock(return_value=[record])
+    backend.upsert = AsyncMock(return_value="r1")
+
+    updated = await backend.update_search_tags(uri, tags, mode="increase", ctx=ctx)
+
+    assert "last_used_at=123" in updated[0]["search_tags"]
+    backend.upsert.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_tags,tags",
+    [
+        (["used_count=unknown"], ["used_count=1"]),
+        (["used_count=0"], ["used_count=-1"]),
+        (["used_count=2"], ["used_count=NaN"]),
+        (["used_count=0.2"], ["used_count=-0.3"]),
+    ],
+)
+async def test_update_search_tags_increase_validation_error_does_not_write(stored_tags, tags):
+    from openviking_cli.exceptions import InvalidArgumentError
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    uri = "viking://resources/demo/file.md"
+    record = {"id": "r1", "uri": uri, "search_tags": stored_tags}
+    backend = object.__new__(VikingVectorIndexBackend)
+    backend.fetch_by_uri = AsyncMock(return_value=record)
+    backend.get_strict = AsyncMock(return_value=[record])
+    backend.upsert = AsyncMock()
+
+    with pytest.raises(InvalidArgumentError):
+        await backend.update_search_tags(uri, tags, mode="increase", ctx=ctx)
+
+    backend.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_search_tags_increase_read_failure_is_not_a_zero_count():
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    backend = object.__new__(VikingVectorIndexBackend)
+    backend.fetch_by_uri = AsyncMock(return_value={"id": "r1"})
+    backend.get_strict = AsyncMock(side_effect=RuntimeError("storage unavailable"))
+    backend.upsert = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="storage unavailable"):
+        await backend.update_search_tags(
+            "viking://resources/demo/file.md", ["used_count=1"], mode="increase", ctx=ctx
+        )
+
+    backend.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_update_search_tags_with_levels_rejects_invalid_mode_before_filter():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)

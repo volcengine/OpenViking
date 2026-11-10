@@ -9,6 +9,7 @@ from openviking.server.routers.search import _resolve_search_filter
 from openviking.utils import tags as tags_module
 from openviking.utils.tags import (
     build_search_tags_filter,
+    increase_search_tags,
     merge_search_tags,
     normalize_search_tag,
     normalize_search_tags,
@@ -106,6 +107,43 @@ def test_merge_search_tags_discards_invalid_existing_tags(caplog):
     warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
     assert len(warnings) == 1
     assert warnings[0].invalid_tags == ["bad-existing"]
+
+
+def test_increase_search_tags_adds_deltas_and_preserves_other_keys():
+    assert increase_search_tags(
+        ["team=search", "count=10", "other=4"],
+        ["count=-2", "new_count=3", "other=0"],
+    ) == ["team=search", "count=8", "other=4", "new_count=3"]
+
+
+@pytest.mark.parametrize(
+    "existing,incoming,expected",
+    [
+        (["score=0.1"], ["score=0.2"], ["score=0.3"]),
+        (["score=1.5"], ["score=-0.25"], ["score=1.25"]),
+        ([], ["score=1.5"], ["score=1.5"]),
+        ([], ["count=1e3"], ["count=1000"]),
+    ],
+)
+def test_increase_search_tags_supports_decimal_values(existing, incoming, expected):
+    assert increase_search_tags(existing, incoming) == expected
+
+
+@pytest.mark.parametrize(
+    "existing,incoming",
+    [
+        (["count=unknown"], ["count=1"]),
+        (["count="], ["count=1"]),
+        ([], ["count"]),
+        ([], ["count=NaN"]),
+        ([], ["count=Infinity"]),
+        (["count=-Infinity"], ["count=1"]),
+        (["count=sNaN"], ["count=1"]),
+    ],
+)
+def test_increase_search_tags_rejects_invalid_input_without_resetting_counts(existing, incoming):
+    with pytest.raises(InvalidArgumentError):
+        increase_search_tags(existing, incoming)
 
 
 def test_find_tags_filter_requires_all_tags():

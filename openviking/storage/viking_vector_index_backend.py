@@ -5,13 +5,14 @@
 from __future__ import annotations
 
 import asyncio
-import time
 import re
 import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal
 from functools import wraps
 from typing import Any, AsyncIterator, Awaitable, Callable, Container, Dict, List, Mapping, Optional
 
@@ -45,6 +46,7 @@ from openviking.storage.vectordb.collection.result import UpdateResult
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vectordb_adapters import create_collection_adapter
 from openviking.utils.tags import (
+    increase_search_tags,
     merge_search_tags,
     normalize_search_tags,
     preserve_memory_type_tag,
@@ -1562,18 +1564,43 @@ class VikingVectorIndexBackend:
         levels: Optional[List[int]] = None,
         ctx: RequestContext,
     ) -> List[Dict[str, Any]]:
-        """Update search tags for the exact indexed record or directory summary records."""
-        if mode not in {"replace", "append"}:
+        """Update tags for an exact record or directory summary records.
+
+        increase adds decimal deltas and timestamps positive used_count updates.
+        Like append, it is a read-modify-write operation, not an atomic increment.
+        """
+        if mode not in {"replace", "append", "increase"}:
             raise ValueError(f"unsupported tag mode: {mode}")
 
-        from openviking.utils.tags import merge_search_tags
+        def resolve_tags(record: Dict[str, Any]) -> List[str]:
+            """根据更新模式和已有记录，计算最终标签列表。"""
+            if mode == "increase":
+                resolved = increase_search_tags(record.get("search_tags"), tags)
+                deltas = dict(tag.split("=", 1) for tag in normalize_search_tags(tags))
+                if "used_count" in deltas:
+                    values = dict(tag.split("=", 1) for tag in resolved)
+                    if Decimal(values["used_count"]) < 0:
+                        raise InvalidArgumentError("used_count cannot be negative")
+                    if Decimal(deltas["used_count"]) > 0:
+                        resolved = merge_search_tags(
+                            resolved, [f"last_used_at={int(time.time() * 1000)}"]
+                        )
+            elif mode == "append":
+                resolved = merge_search_tags(record.get("search_tags"), tags)
+            else:
+                resolved = list(tags)
+            if record.get("context_type") == "memory":
+                resolved = preserve_memory_type_tag(record.get("search_tags"), resolved)
+            return resolved
+
+        get_records = self.get_strict if mode == "increase" else self.get
 
         if levels is None:
             record = await self.fetch_by_uri(uri, ctx=ctx)
             if not record or not record.get("id"):
                 return []
 
-            full_records = await self.get([str(record["id"])], ctx=ctx)
+            full_records = await get_records([str(record["id"])], ctx=ctx)
             if not full_records:
                 logger.warning(
                     "update_search_tags failed to fetch full exact record uri=%s account_id=%s id=%s",
@@ -1585,18 +1612,10 @@ class VikingVectorIndexBackend:
 
             updated_record = dict(full_records[0])
             try:
-                if mode == "append":
-                    updated_record["search_tags"] = merge_search_tags(
-                        updated_record.get("search_tags"), tags
-                    )
-                else:
-                    updated_record["search_tags"] = list(tags)
-                if updated_record.get("context_type") == "memory":
-                    updated_record["search_tags"] = preserve_memory_type_tag(
-                        full_records[0].get("search_tags"),
-                        updated_record["search_tags"],
-                    )
+                updated_record["search_tags"] = resolve_tags(updated_record)
             except Exception as exc:
+                if mode == "increase":
+                    raise
                 logger.warning(
                     "update_search_tags failed to merge exact record tags uri=%s "
                     "account_id=%s existing_tags=%s incoming_tags=%s error=%s",
@@ -1624,7 +1643,7 @@ class VikingVectorIndexBackend:
         record_ids = [str(record["id"]) for record in records if record.get("id")]
         if not record_ids:
             return []
-        full_records = await self.get(record_ids, ctx=ctx)
+        full_records = await get_records(record_ids, ctx=ctx)
         full_records_by_id = {
             str(record["id"]): record for record in full_records if record.get("id") is not None
         }
@@ -1645,18 +1664,10 @@ class VikingVectorIndexBackend:
                 continue
             updated_record = dict(full_record)
             try:
-                if mode == "append":
-                    updated_record["search_tags"] = merge_search_tags(
-                        updated_record.get("search_tags"), tags
-                    )
-                else:
-                    updated_record["search_tags"] = list(tags)
-                if updated_record.get("context_type") == "memory":
-                    updated_record["search_tags"] = preserve_memory_type_tag(
-                        full_record.get("search_tags"),
-                        updated_record["search_tags"],
-                    )
+                updated_record["search_tags"] = resolve_tags(updated_record)
             except Exception as exc:
+                if mode == "increase":
+                    raise
                 logger.warning(
                     "update_search_tags failed to merge leveled record tags uri=%s "
                     "account_id=%s level=%s existing_tags=%s incoming_tags=%s error=%s",

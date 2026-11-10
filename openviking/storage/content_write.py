@@ -1453,7 +1453,9 @@ class ContentWriteCoordinator:
         normalized_uri = self._validate_uri_path(uri, field_name="uri")
         requested_mode = mode
         normalized_tags = (
-            [] if requested_mode == "clear" else normalize_search_tags(tags, discard_invalid=True)
+            []
+            if requested_mode == "clear"
+            else normalize_search_tags(tags, discard_invalid=requested_mode != "increase")
         )
         if not namespace_policy_for_uri(normalized_uri).supports_tags:
             raise InvalidArgumentError(f"tags are not supported for namespace: {normalized_uri}")
@@ -2293,7 +2295,7 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(f"unsupported batch-write mode: {mode}")
 
     def _validate_tag_mode(self, mode: str) -> None:
-        if mode not in {"replace", "append", "clear"}:
+        if mode not in {"replace", "append", "clear", "increase"}:
             raise InvalidArgumentError(f"unsupported tag mode: {mode}")
 
     def _ensure_content_write_policy(self, uri: str) -> None:

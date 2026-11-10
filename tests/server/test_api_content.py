@@ -333,6 +333,74 @@ async def test_ls_file_uri_returns_invalid_argument(client, service):
     assert "not a directory" in body["error"]["message"]
 
 
+async def test_set_tags_increase_http_persists_usage_and_preserves_resource(client, service):
+    import time
+
+    from openviking.storage.vector_ids import vector_record_id
+    from openviking.utils.time_utils import get_current_timestamp
+
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    uri = "viking://resources/usage-test/file.md"
+    await service.viking_fs.mkdir("viking://resources/usage-test", ctx=ctx)
+    await service.viking_fs.write_file(uri, "original content", ctx=ctx)
+    record_id = vector_record_id(ctx.account_id, uri, 2)
+    timestamp = get_current_timestamp()
+    vector = [0.1] * service.vikingdb_manager.vector_dim
+    await service.vikingdb_manager.upsert(
+        {
+            "id": record_id,
+            "uri": uri,
+            "context_type": "resource",
+            "level": 2,
+            "abstract": "original content",
+            "created_at": timestamp,
+            "updated_at": timestamp,
+            "vector": vector,
+            "search_tags": ["team=search", "score=0.1"],
+        },
+        ctx=ctx,
+    )
+    original_record = (await service.vikingdb_manager.get_strict([record_id], ctx=ctx))[0]
+
+    for count in (1, 2):
+        before = int(time.time() * 1000)
+        response = await client.post(
+            "/api/v1/fs/attrs/set_tags",
+            json={"uri": uri, "tags": ["used_count=1"], "mode": "increase"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["result"]["success_count"] == 1
+        attrs = await client.get("/api/v1/fs/attrs", params={"uri": uri})
+        assert attrs.status_code == 200, attrs.text
+        values = dict(tag.split("=", 1) for tag in attrs.json()["result"]["attrs"]["tags"])
+        assert values["team"] == "search"
+        assert int(values["used_count"]) == count
+        assert before <= int(values["last_used_at"]) <= int(time.time() * 1000)
+
+    response = await client.post(
+        "/api/v1/fs/attrs/set_tags",
+        json={"uri": uri, "tags": ["score=0.2"], "mode": "increase"},
+    )
+    assert response.status_code == 200, response.text
+    before_score = (await service.vikingdb_manager.get_strict([record_id], ctx=ctx))[0]
+    assert "score=0.3" in before_score["search_tags"]
+    assert f"last_used_at={values['last_used_at']}" in before_score["search_tags"]
+
+    for invalid in ("used_count", "used_count=bad", "used_count=NaN", "used_count=Infinity"):
+        response = await client.post(
+            "/api/v1/fs/attrs/set_tags",
+            json={"uri": uri, "tags": [invalid], "mode": "increase"},
+        )
+        assert response.status_code == 400, response.text
+
+    stored = (await service.vikingdb_manager.get_strict([record_id], ctx=ctx))[0]
+    assert "used_count=2" in stored["search_tags"]
+    assert stored["updated_at"] == timestamp
+    assert stored["abstract"] == "original content"
+    assert stored["vector"] == original_record["vector"]
+    assert await service.viking_fs.read_file(uri, ctx=ctx) == "original content"
+
+
 async def test_overview_missing_uri_returns_not_found(client):
     resp = await client.get(
         "/api/v1/content/overview",

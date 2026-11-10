@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 from collections import OrderedDict
+from decimal import Decimal, DecimalException
 from typing import Any, Iterable
 
 from openviking_cli.exceptions import InvalidArgumentError
@@ -96,6 +97,27 @@ def merge_search_tags(existing: Iterable[str] | None, incoming: Iterable[str] | 
         ordered[key] = value
 
     return [f"{key}={value}" for key, value in ordered.items()]
+
+
+def increase_search_tags(
+    existing: Iterable[str] | None, incoming: Iterable[str] | None
+) -> list[str]:
+    """Add finite decimal deltas by key, preserving unrelated tags."""
+    existing_tags = normalize_search_tags(existing)
+    values = dict(tag.split("=", 1) for tag in existing_tags)
+    updates: list[str] = []
+    for tag in normalize_search_tags(incoming):
+        key, delta = tag.split("=", 1)
+        current = values.get(key, "0")
+        try:
+            current_number, delta_number = Decimal(current), Decimal(delta)
+            if not current_number.is_finite() or not delta_number.is_finite():
+                raise InvalidArgumentError(f"increase requires finite values for tag '{key}'")
+            value = current_number + delta_number
+        except DecimalException as exc:
+            raise InvalidArgumentError(f"invalid numeric value for tag '{key}'") from exc
+        updates.append(f"{key}={value}")
+    return merge_search_tags(existing_tags, updates)
 
 
 def preserve_memory_type_tag(

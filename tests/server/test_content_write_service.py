@@ -834,6 +834,34 @@ async def test_set_tags_uses_store_update_api_without_fetch(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_set_tags_increase_forwards_mode_without_discarding_invalid_tags():
+    from unittest.mock import AsyncMock
+
+    file_uri = "viking://resources/demo/doc.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    fake_vfs = _FakeVikingFS(file_uri=file_uri, root_uri="viking://resources/demo")
+    fake_vfs.vector_store = SimpleNamespace(
+        update_search_tags=AsyncMock(return_value=[{"uri": file_uri}])
+    )
+    coordinator = ContentWriteCoordinator(viking_fs=fake_vfs)
+
+    result = await coordinator.set_tags(
+        uri=file_uri, tags=["Used_Count=1"], mode="increase", ctx=ctx
+    )
+
+    assert result["mode"] == "increase"
+    assert result["success_count"] == 1
+    fake_vfs.vector_store.update_search_tags.assert_awaited_once_with(
+        file_uri, ["used_count=1"], mode="increase", ctx=ctx
+    )
+
+    fake_vfs.vector_store.update_search_tags.reset_mock()
+    with pytest.raises(InvalidArgumentError):
+        await coordinator.set_tags(uri=file_uri, tags=["used_count"], mode="increase", ctx=ctx)
+    fake_vfs.vector_store.update_search_tags.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_set_tags_user_scope_resource_leaf_returns_parent_root_uri(monkeypatch):
     file_uri = "viking://user/default/resources/demo/doc.md"
     root_uri = "viking://user/default/resources/demo"
