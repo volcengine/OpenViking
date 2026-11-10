@@ -2003,6 +2003,9 @@ class ContentWriteCoordinator:
                     target=prepared.target,
                 ),
             )
+            if resolve_conflicts and not final_bytes.strip() and conflict_tags is not None:
+                # Empty bodies can skip vector upserts, leaving stale tags.
+                await self._upsert_uri_tags(uri=uri, tags=conflict_tags, mode="append", ctx=ctx)
             has_async_work = bool(
                 prepared.plan.direct_index_actions or prepared.plan.file_refresh is not None
             )
