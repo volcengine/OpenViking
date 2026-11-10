@@ -957,11 +957,7 @@ async def update_skill(
                 await run_to_completion(back_up_package)
                 # All synchronous configuration changes must finish before the
                 # package can produce background summary or embedding work.
-                if (
-                    privacy is not None
-                    and previous_privacy is not None
-                    and not preparation.privacy_values
-                ):
+                if privacy is not None and previous_privacy is not None:
                     privacy_root = privacy.get_config_root(_ctx, "skill", skill_name)
                     privacy_paths = [".meta.json", "current.json"]
                     privacy_paths.extend(
@@ -973,10 +969,10 @@ async def update_skill(
                         for path in privacy_paths
                     }
                 privacy_update_attempted = True
-                await run_to_completion(
+                preparation.skill_dict = await run_to_completion(
                     lambda: service.resources._skill_processor.apply_skill_privacy(  # noqa: SLF001
                         preparation.skill_dict,
-                        preparation.privacy_values,
+                        preparation.privacy,
                         _ctx,
                         change_reason="auto-extracted from update_skill",
                         delete_if_empty=True,

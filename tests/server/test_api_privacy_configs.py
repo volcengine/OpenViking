@@ -402,6 +402,8 @@ async def test_privacy_scan_is_dry_run_by_default_and_fix_rewrites_content(
     client: httpx.AsyncClient,
     service,
 ):
+    response = await client.patch("/api/v1/user-settings/privacy", json={"mode": "registered"})
+    assert response.status_code == 200, response.text
     secret = "legacy-value-to-repair"
     created = await client.post(
         "/api/v1/privacy-configs/credential/legacy-service",
@@ -454,6 +456,8 @@ async def test_privacy_scan_fix_repairs_skill_and_reindexes_package(
     client: httpx.AsyncClient,
     service,
 ):
+    response = await client.patch("/api/v1/user-settings/privacy", json={"mode": "registered"})
+    assert response.status_code == 200, response.text
     secret = "legacy-skill-registered-value"
     created = await client.post(
         "/api/v1/privacy-configs/credential/legacy-skill-service",

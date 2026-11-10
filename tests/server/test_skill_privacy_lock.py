@@ -9,9 +9,9 @@ import threading
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.server.user_config import patch_user_config
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
-from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.session.user_id import UserIdentifier
 from tests.server.test_api_skills import _add_skill, _skill_md
 from tests.server.test_api_skills import _stub_mcp_endpoint as _stub_mcp_endpoint
@@ -67,28 +67,30 @@ async def test_update_rollback_preserves_waiting_privacy_save(
         assert seeded.status_code == 200, seeded.text
     _, _, old_history = await _privacy_snapshot(client, endpoint)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": "auto"}})
     privacy = service.privacy_configs
     root = privacy.get_config_root(ctx, "skill", name)
     paused = asyncio.Event()
     resume = asyncio.Event()
     save_started = _observe_save_start(privacy, monkeypatch)
 
-    async def prepare_privacy(self, skill_dict, ctx):
-        return skill_dict, {"api_key": "replacement-value"}
-
     async def fail_metadata(*args, **kwargs):
         paused.set()
         await resume.wait()
         raise RuntimeError("injected metadata failure after configuration change")
 
-    monkeypatch.setattr(SkillProcessor, "prepare_skill_privacy", prepare_privacy)
     monkeypatch.setattr(
         "openviking.server.skill_source_metadata.write_skill_source_metadata", fail_metadata
     )
     updating = asyncio.create_task(
         client.put(
             f"/api/v1/skills/{name}",
-            json={"data": _skill_md(name, "Failed replacement"), "wait": True},
+            json={
+                "data": _skill_md(
+                    name, "Failed replacement", "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+                ),
+                "wait": True,
+            },
         )
     )
     saving = None
@@ -131,14 +133,12 @@ async def test_update_cancellation_restores_privacy_and_releases_both_locks(
     _, _, old_history = await _privacy_snapshot(client, endpoint)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     fs = service.viking_fs
+    await patch_user_config(fs, ctx, {"privacy": {"mode": "auto"}})
     privacy_root = service.privacy_configs.get_config_root(ctx, "skill", name)
     started = threading.Event()
     cancelled = threading.Event()
     resume = threading.Event()
     original_summary = SemanticProcessor._generate_single_file_summary
-
-    async def replacement_privacy(self, skill_dict, ctx):
-        return skill_dict, {"api_key": "replacement-value"}
 
     async def hold_summary(self, *args, **kwargs):
         started.set()
@@ -150,12 +150,16 @@ async def test_update_cancellation_restores_privacy_and_releases_both_locks(
             raise
         return await original_summary(self, *args, **kwargs)
 
-    monkeypatch.setattr(SkillProcessor, "prepare_skill_privacy", replacement_privacy)
     monkeypatch.setattr(SemanticProcessor, "_generate_single_file_summary", hold_summary)
     updating = asyncio.create_task(
         client.put(
             f"/api/v1/skills/{name}",
-            json={"data": _skill_md(name, "Cancelled replacement"), "wait": True},
+            json={
+                "data": _skill_md(
+                    name, "Cancelled replacement", "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+                ),
+                "wait": True,
+            },
         )
     )
     try:

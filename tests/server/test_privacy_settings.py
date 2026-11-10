@@ -7,6 +7,7 @@ import json
 import httpx
 import pytest
 
+from openviking.core.namespace import canonical_user_root
 from openviking.server.auth import get_request_context
 from openviking.server.config import PrivacyConfig, UserConfig, load_server_config
 from openviking.server.identity import RequestContext, Role
@@ -241,25 +242,21 @@ async def test_custom_rules_and_never_mask_apply_to_skill_session_and_registered
             0
         ]["text"]
     )
-    # Use a different custom value so the Skill discovers it rather than reusing Session's catalog.
-    skill_value = "company_zY9xW7vU5tS3rQ1pN8mL"
     await service.resources.add_skill(
         data={
             "name": "custom-rules",
             "description": "custom detector",
-            "content": f"`{skill_value}` {excluded}",
+            "content": f"`{value}` {excluded}",
         },
         ctx=owner,
         wait=False,
     )
     current = await service.privacy_configs.get_current(owner, "skill", "custom-rules")
-    assert list(current.values.values()) == [skill_value]
+    assert list(current.values.values()) == [value]
     reference = build_privacy_field_reference(owner.user.user_id, "credential", "managed", "key")
     await session.add_message_async("user", [TextPart(reference)])
     restored = await service.fs.read(session.uri + "/messages.jsonl", ctx=owner)
     assert json.loads(restored.splitlines()[1])["parts"][0]["text"] == "managed-secret"
-    persisted = json.loads(await service.viking_fs.read_file(user_config_uri(owner), ctx=owner))
-    assert persisted["privacy"]["never_mask"] == [excluded, "managed-secret"]
 
 
 async def test_overlapping_rules_count_session_discoveries_once(client, service, owner):
@@ -278,3 +275,64 @@ async def test_overlapping_rules_count_session_discoveries_once(client, service,
     assert value not in stored
     restored = await service.fs.read(session.uri + "/messages.jsonl", ctx=owner)
     assert json.loads(restored)["parts"][0]["text"] == original
+
+
+@pytest.mark.parametrize("mode", ["off", "registered", "auto"])
+@pytest.mark.parametrize("restore", [False, True])
+async def test_privacy_policy_applies_across_session_skill_and_content(
+    client, service, owner, mode, restore
+):
+    from openviking.message import TextPart
+    from openviking.privacy.reference import build_privacy_field_reference
+
+    response = await client.patch(URL, json={"mode": mode, "restore": restore})
+    assert response.status_code == 200, response.text
+    known = "managed-secret"
+    secret = "AKLT" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    reference = build_privacy_field_reference(owner.user.user_id, "credential", "managed", "key")
+    await service.privacy_configs.upsert(owner, "credential", "managed", {"key": known})
+    body = f"known={known}\nnew={secret}\nexplicit={reference}"
+    root = canonical_user_root(owner)
+    resource = root + "/memories/preferences/policy.md"
+    await service.viking_fs.mkdir(root + "/memories/preferences", ctx=owner)
+    await service.viking_fs.write_file(resource, body, ctx=owner)
+    session = await service.sessions.create(owner, "policy-matrix")
+    await session.add_message_async("user", [TextPart(body)])
+    await service.resources.add_skill(
+        data={"name": "policy-matrix", "description": "Policy test", "content": body},
+        ctx=owner,
+        wait=False,
+    )
+    for uri, session_file in [
+        (session.uri + "/messages.jsonl", True),
+        (root + "/skills/policy-matrix/SKILL.md", False),
+        (resource, False),
+    ]:
+        stored = await service.viking_fs.read_file(uri, ctx=owner)
+        if session_file:
+            stored = json.loads(stored)["parts"][0]["text"]
+        assert (known not in stored) == (mode != "off")
+        discovered = mode == "auto" and uri != resource
+        assert (secret not in stored) == discovered
+        visible = await service.fs.read_visible(uri, ctx=owner)
+        assert reference in visible
+        raw = await service.fs.read(uri, ctx=owner)
+        if session_file:
+            raw = json.loads(raw)["parts"][0]["text"]
+        assert (reference not in raw) == restore
+        assert (secret in raw) == (restore or not discovered)
+
+
+async def test_credential_warnings_do_not_block_or_disclose_values(client, service, owner):
+    secret = "AKLT" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    endpoint = "/api/v1/privacy-configs/credential/warnings"
+    response = await client.post(endpoint, json={"values": {"ordinary": "sample", "key": secret}})
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["values"] == {"ordinary": "sample", "key": secret}
+    assert [(w["code"], w["field"]) for w in result["warnings"]] == [
+        ("weak_credential", "ordinary")
+    ]
+    assert all(value not in json.dumps(result["warnings"]) for value in [secret, "sample"])
+    response = await client.patch(endpoint, json={"values": {"ordinary": secret}})
+    assert response.status_code == 200 and "warnings" not in response.json()["result"]

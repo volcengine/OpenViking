@@ -375,9 +375,14 @@ async def test_skills_api_update_restores_previous_privacy_on_failure(client, mo
     assert privacy_response.json()["result"]["current"]["values"]["api_key"] == "secret-old"
 
 
-async def test_skills_api_update_restores_previous_privacy_after_privacy_write(client, monkeypatch):
+async def test_skills_api_update_restores_previous_privacy_after_privacy_write(
+    client, service, monkeypatch
+):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.server.user_config import patch_user_config
     from openviking.storage.queuefs import get_queue_manager
     from openviking.utils.skill_processor import SkillProcessor
+    from openviking_cli.session.user_id import UserIdentifier
 
     await _add_skill(client, "rollback-privacy-after-write-skill", "Original description")
     queue_manager = get_queue_manager()
@@ -394,18 +399,18 @@ async def test_skills_api_update_restores_previous_privacy_after_privacy_write(c
     before = (await client.get("/api/v1/skills/rollback-privacy-after-write-skill")).json()[
         "result"
     ]
-    original_prepare = SkillProcessor.prepare_skill_privacy
+    await patch_user_config(
+        service.viking_fs,
+        RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
+        {"privacy": {"mode": "auto"}},
+    )
+    secret = "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
     original_apply = SkillProcessor.apply_skill_privacy
-
-    async def _prepare_new_privacy(self, skill_dict, ctx):
-        if skill_dict.get("name") == "rollback-privacy-after-write-skill":
-            return skill_dict, {"api_key": "secret-new"}
-        return await original_prepare(self, skill_dict, ctx)
 
     async def _apply_then_fail(
         self,
         skill_dict,
-        privacy_values,
+        preparation,
         ctx,
         *,
         change_reason,
@@ -415,17 +420,20 @@ async def test_skills_api_update_restores_previous_privacy_after_privacy_write(c
         result = await original_apply(
             self,
             skill_dict,
-            privacy_values,
+            preparation,
             ctx,
             change_reason=change_reason,
             delete_if_empty=delete_if_empty,
             owner_lease_ref=owner_lease_ref,
         )
         if skill_dict.get("name") == "rollback-privacy-after-write-skill":
+            current = await self._privacy_config_service.get_current(
+                ctx, "skill", skill_dict["name"]
+            )
+            assert set(current.values.values()) == {secret}
             raise RuntimeError("privacy post-write failure")
         return result
 
-    monkeypatch.setattr(SkillProcessor, "prepare_skill_privacy", _prepare_new_privacy)
     monkeypatch.setattr(SkillProcessor, "apply_skill_privacy", _apply_then_fail)
 
     response = await client.put(
@@ -434,7 +442,7 @@ async def test_skills_api_update_restores_previous_privacy_after_privacy_write(c
             "data": _skill_md(
                 "rollback-privacy-after-write-skill",
                 "Updated description",
-                'api_key: "secret-new"\n',
+                f'api_key: "{secret}"\n',
             ),
             "wait": True,
         },

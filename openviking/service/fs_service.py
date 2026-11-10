@@ -27,6 +27,7 @@ from openviking.core.namespace_policy import (
     NamespaceProcessingMode,
     namespace_policy_for_uri,
 )
+from openviking.privacy.restore import PrivacyRestorer
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.session_restore import get_session_id_from_uri, restore_session_content
@@ -34,6 +35,7 @@ from openviking.privacy.skill_restore import get_skill_name_from_uri, restore_sk
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext
+from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking.service.task_tracker import TaskStatus, get_task_tracker, run_tracked_operation
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import (
@@ -1519,11 +1521,15 @@ class FSService:
         return resolved_uri, content
 
     async def read(self, uri: str, ctx: RequestContext, offset: int = 0, limit: int = -1) -> str:
-        """Read file content, restoring Privacy references for Skills and Sessions."""
+        """Read file content, restoring the owner's Privacy references when enabled."""
         uri = await self._resolve_uri(uri, ctx)
         ctx = self._ensure_initialized().authorize_read(ctx, [uri])
         resolved_uri, content = await self._read_content(uri, ctx)
-        if self._privacy_config_service is not None and ctx.data_access is None:
+        if (
+            self._privacy_config_service is not None
+            and ctx.data_access is None
+            and (await self._privacy_config_service.get_settings(ctx)).restore
+        ):
             skill_name = get_skill_name_from_uri(resolved_uri)
             session_id = get_session_id_from_uri(resolved_uri, canonical_session_root(ctx))
             if skill_name is not None:
@@ -1541,6 +1547,11 @@ class FSService:
                     session_id=session_id,
                     jsonl=resolved_uri.endswith("/messages.jsonl"),
                 )
+            else:
+                restorer = PrivacyRestorer(self._privacy_config_service, ctx)
+                restorer.collect_text(content)
+                await restorer.load_values()
+                content = restorer.restore_text(content)
 
         if offset == 0 and limit == -1:
             return content
@@ -1562,9 +1573,16 @@ class FSService:
         # a real viking:// URI.
         resolved_uri = await self._resolve_uri(uri, ctx)
         ctx = self._ensure_initialized().authorize_read(ctx, [resolved_uri])
+        settings = (
+            await self._privacy_config_service.get_settings(ctx)
+            if self._privacy_config_service is not None and ctx.data_access is None
+            else None
+        )
         max_bytes = (
             self._privacy_sanitizer.max_content_bytes
             if self._privacy_sanitizer is not None
+            and ctx.data_access is None
+            and (settings is None or settings.mode != "off")
             else None
         )
         try:
@@ -1576,14 +1594,21 @@ class FSService:
                 "File exceeds the Privacy visible-read size limit",
                 details={**exc.details, "reason": "privacy_visible_read_limit_exceeded"},
             ) from exc
-        content = await self._make_content_visible(resolved_uri, content, ctx)
+        content = await self._make_content_visible(resolved_uri, content, ctx, settings=settings)
         if offset == 0 and limit == -1:
             return content
         lines = content.splitlines(keepends=True)
         sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
         return "".join(sliced)
 
-    async def _make_content_visible(self, uri: str, content: str, ctx: RequestContext) -> str:
+    async def _make_content_visible(
+        self,
+        uri: str,
+        content: str,
+        ctx: RequestContext,
+        *,
+        settings: ResolvedPrivacyConfig | None = None,
+    ) -> str:
         """Hide memory metadata and sanitize private values in already-read text."""
         if classify_uri(uri).is_memory:
             content = visible_content(content, uri=uri)
@@ -1593,9 +1618,7 @@ class FSService:
                     content,
                     ctx=ctx,
                     uri=uri,
-                    prefer_credentials=(
-                        get_session_id_from_uri(uri, canonical_session_root(ctx)) is not None
-                    ),
+                    settings=settings,
                 )
             ).content
         return content

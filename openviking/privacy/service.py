@@ -4,6 +4,7 @@
 
 import json
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import Any, AsyncIterator, Optional
 
 from openviking.core.namespace import canonical_user_root
@@ -36,7 +37,7 @@ from openviking.server.user_config import (
 )
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.time_utils import get_current_timestamp
-from openviking_cli.exceptions import AlreadyExistsError, NotFoundError
+from openviking_cli.exceptions import AlreadyExistsError, InvalidArgumentError, NotFoundError
 
 
 class UserPrivacyConfigService:
@@ -321,6 +322,33 @@ class UserPrivacyConfigService:
                 current=current,
             )
 
+    async def credential_warnings(
+        self, ctx: RequestContext, values: dict[str, Any]
+    ) -> list[dict[str, str]]:
+        """Warn about unrecognized credential formats without exposing values."""
+        from openviking.privacy.rules import prepare_privacy_extractor
+
+        settings = await self.get_settings(ctx)
+        discover = prepare_privacy_extractor(settings=replace(settings, never_mask=[]))
+        warnings = []
+        for field, value in values.items():
+            if not isinstance(value, str):
+                continue
+            try:
+                matches = discover(value)
+            except InvalidArgumentError:
+                matches = []
+            if len(matches) == 1 and matches[0].start == 0 and matches[0].end == len(value):
+                continue
+            warnings.append(
+                {
+                    "code": "weak_credential",
+                    "field": field,
+                    "reason": "Unrecognized credential format; automatic matching may mask ordinary text",
+                }
+            )
+        return warnings
+
     async def insert_values(
         self,
         ctx: RequestContext,
@@ -330,9 +358,13 @@ class UserPrivacyConfigService:
         updated_by: str = "",
         change_reason: str = "",
         labels: Optional[dict[str, Any]] = None,
+        *,
+        owner_lease_ref: Optional[dict[str, Any]] = None,
     ) -> UserPrivacyConfigVersion:
         """Atomically add new fields; labels apply only when creating the target."""
-        async with self._config_lock(ctx, category, target_key) as lease:
+        async with self._config_lock(
+            ctx, category, target_key, owner_lease_ref=owner_lease_ref
+        ) as lease:
             current = await self.get_current(ctx, category, target_key)
             values = dict(current.values) if current is not None else {}
             if not values.keys().isdisjoint(updates):

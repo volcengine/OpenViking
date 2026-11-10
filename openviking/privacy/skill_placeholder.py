@@ -3,6 +3,7 @@
 """Placeholder helpers for skill privacy values."""
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 
@@ -18,31 +19,25 @@ def build_placeholder(skill_name: str, field_name: str) -> str:
     return f"{{{{ov_privacy:skill:{skill_name}:{field_name}}}}}"
 
 
-def _replace_structured_value(content: str, raw_value: str, placeholder: str) -> tuple[str, bool]:
-    replacements = (
-        (f'"{raw_value}"', f'"{placeholder}"'),
-        (f"'{raw_value}'", f"'{placeholder}'"),
-    )
-
-    replaced = False
-    for old, new in replacements:
-        if old in content:
-            content = content.replace(old, new)
-            replaced = True
-
-    bare_value_pattern = re.compile(
-        rf"(?P<separator>[:=])(?P<leading>[ \t]*){re.escape(raw_value)}"
-        r"(?P<trailing>[ \t]*)(?=\r?$)",
+def find_structured_value_spans(content: str, raw_value: str) -> Iterator[tuple[int, int]]:
+    value = re.escape(raw_value)
+    pattern = re.compile(
+        rf"(?P<quote>[\"'])(?P<quoted>{value})(?P=quote)"
+        rf"|[:=][ \t]*(?P<bare>{value})[ \t]*(?=\r?$)",
         re.MULTILINE,
     )
-    content, bare_replacement_count = bare_value_pattern.subn(
-        lambda match: (
-            f"{match.group('separator')}{match.group('leading')}"
-            f"{placeholder}{match.group('trailing')}"
-        ),
-        content,
-    )
-    return content, replaced or bare_replacement_count > 0
+    for match in pattern.finditer(content):
+        yield match.span("quoted" if match.group("quoted") is not None else "bare")
+
+
+def _replace_structured_value(content: str, raw_value: str, placeholder: str) -> tuple[str, bool]:
+    chunks: list[str] = []
+    cursor = 0
+    for start, end in find_structured_value_spans(content, raw_value):
+        chunks.extend((content[cursor:start], placeholder))
+        cursor = end
+    chunks.append(content[cursor:])
+    return "".join(chunks), cursor != 0
 
 
 def placeholderize_skill_content_with_blocks(

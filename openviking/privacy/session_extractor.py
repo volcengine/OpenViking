@@ -6,6 +6,8 @@ import asyncio
 import hashlib
 import re
 from collections.abc import Callable, Iterable, Iterator
+from contextlib import nullcontext
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from secrets import token_urlsafe
 from typing import Any, TypeVar
@@ -48,36 +50,44 @@ async def extract_and_store_session_privacy(
     target_key = session_privacy_target(session_id)
     labels = None if target_key == session_id else {"session_id": session_id}
     settings = await privacy.get_settings(ctx)
-    matcher = await _prepare_session_matcher(sanitizer, ctx, target_key, settings=settings)
-    for _ in range(MAX_FIELD_ID_ATTEMPTS):
-        sanitized, added = await asyncio.to_thread(
-            extract_session_privacy_values,
-            target_key,
-            messages_spec,
-            match_registered=matcher,
-            settings=settings,
-        )
-        if not added:
-            return sanitized
-        try:
-            await privacy.insert_values(
-                ctx,
-                "session",
+    if settings.mode == "off":
+        return await asyncio.to_thread(deepcopy, messages_spec)
+    async with (
+        privacy._config_lock(ctx, "session", target_key)
+        if settings.mode == "auto"
+        else nullcontext()
+    ) as lease:
+        matcher = await _prepare_session_matcher(sanitizer, ctx, target_key, settings=settings)
+        for _ in range(MAX_FIELD_ID_ATTEMPTS):
+            sanitized, added = await asyncio.to_thread(
+                extract_session_privacy_values,
                 target_key,
-                added,
-                updated_by=ctx.user.user_id,
-                change_reason="Session message extraction",
-                labels=labels,
+                messages_spec,
+                match_registered=matcher,
+                settings=settings,
             )
-        except AlreadyExistsError:
-            continue
-        break
-    else:
-        raise ResourceExhaustedError("Could not allocate unique Session privacy field IDs")
-    # Refresh the matcher to include newly saved values.
-    matcher = await _prepare_session_matcher(sanitizer, ctx, target_key, settings=settings)
-    rewriter = _SessionReferenceRewriter(matcher)
-    return await asyncio.to_thread(rewriter.transform_messages, sanitized)
+            if not added:
+                return sanitized
+            try:
+                await privacy.insert_values(
+                    ctx,
+                    "session",
+                    target_key,
+                    added,
+                    updated_by=ctx.user.user_id,
+                    change_reason="Session message extraction",
+                    labels=labels,
+                    **({"owner_lease_ref": lease} if lease is not None else {}),
+                )
+            except AlreadyExistsError:
+                continue
+            break
+        else:
+            raise ResourceExhaustedError("Could not allocate unique Session privacy field IDs")
+        # Refresh the matcher to include newly saved values.
+        matcher = await _prepare_session_matcher(sanitizer, ctx, target_key, settings=settings)
+        rewriter = _SessionReferenceRewriter(matcher)
+        return await asyncio.to_thread(rewriter.transform_messages, sanitized)
 
 
 def extract_session_privacy_values(
@@ -118,7 +128,7 @@ async def _prepare_session_matcher(
     """Use Session placeholders for matching eight-character fields in this Session."""
     if sanitizer is None:
         return lambda _: []
-    matcher = await sanitizer.prepare_matcher(ctx, prefer_credentials=True, settings=settings)
+    matcher = await sanitizer.prepare_matcher(ctx, scope=("session", target_key), settings=settings)
 
     def find(text: str) -> list[PrivacyReplacement]:
         matches: list[PrivacyReplacement] = []

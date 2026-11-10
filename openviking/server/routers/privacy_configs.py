@@ -390,7 +390,12 @@ async def upsert_privacy_config(
             change_reason=request.change_reason,
             labels=request.labels,
         )
-    return Response(status="ok", result=None if result is None else result.to_dict())
+    payload = None if result is None else result.to_dict()
+    if privacy is not None and payload is not None and category == "credential":
+        warnings = await privacy.credential_warnings(_ctx, request.values)
+        if warnings:
+            payload["warnings"] = warnings
+    return Response(status="ok", result=payload)
 
 
 @router.patch("/{category}/{target_key}")
@@ -414,7 +419,12 @@ async def patch_privacy_config(
             change_reason=request.change_reason,
             labels=request.labels,
         )
-    return Response(status="ok", result=None if result is None else result.to_dict())
+    payload = None if result is None else result.to_dict()
+    if privacy is not None and payload is not None and category == "credential":
+        warnings = await privacy.credential_warnings(_ctx, request.values)
+        if warnings:
+            payload["warnings"] = warnings
+    return Response(status="ok", result=payload)
 
 
 @router.delete("/{category}/{target_key}")

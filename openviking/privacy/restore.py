@@ -23,16 +23,20 @@ class PrivacyRestorer:
         privacy: UserPrivacyConfigService,
         ctx: RequestContext,
         *,
-        category: Literal["skill", "session"],
-        target_key: str,
+        category: Literal["skill", "session"] | None = None,
+        target_key: str = "",
     ):
         self._privacy = privacy
         self._ctx = ctx
-        self._category = category
+        self._category = category or ""
         self._target_key = target_key
         field = r"([^}:]+)" if category == "skill" else r"([A-Za-z0-9_-]{8})"
-        self._placeholder = re.compile(
-            r"\{\{ov_privacy:" + category + ":" + re.escape(target_key) + ":" + field + r"\}\}"
+        self._placeholder = (
+            re.compile(
+                r"\{\{ov_privacy:" + category + ":" + re.escape(target_key) + ":" + field + r"\}\}"
+            )
+            if category
+            else None
         )
         self._configs: dict[tuple[str, str], UserPrivacyConfigVersion | None] = {}
         self._targets: set[tuple[str, str]] = set()
@@ -50,7 +54,7 @@ class PrivacyRestorer:
             if placeholder not in self.fields:
                 location = parse_privacy_field_reference(placeholder)
                 if location is None:
-                    own = self._placeholder.fullmatch(placeholder)
+                    own = self._placeholder.fullmatch(placeholder) if self._placeholder else None
                     if own is not None:
                         location = PrivacyFieldReference(
                             self._ctx.user.user_id, self._category, self._target_key, own[1]

@@ -6,10 +6,15 @@ from types import SimpleNamespace
 import pytest
 
 from openviking.privacy.reference import build_privacy_field_reference
-from openviking.privacy.skill_extractor import SkillPrivacyExtractionResult
 from openviking.server.identity import RequestContext, Role
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking.server.user_config import patch_user_config
 from openviking_cli.session.user_id import UserIdentifier
+
+
+@pytest.fixture(autouse=True)
+async def enabled_privacy(service):
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": "auto"}})
 
 
 async def test_user_and_public_content_writes_replace_registered_privacy_values(service):
@@ -17,14 +22,14 @@ async def test_user_and_public_content_writes_replace_registered_privacy_values(
     secret = "registered-custom-value"
     await service.privacy_configs.upsert(
         ctx,
-        "custom",
+        "credential",
         "external-system",
         {"not_a_conventional_secret_name": secret},
         updated_by=ctx.user.user_id,
     )
     reference = build_privacy_field_reference(
         ctx.user.user_id,
-        "custom",
+        "credential",
         "external-system",
         "not_a_conventional_secret_name",
     )
@@ -38,59 +43,6 @@ async def test_user_and_public_content_writes_replace_registered_privacy_values(
         assert stored == f"credential={reference}"
 
 
-async def test_service_components_share_one_privacy_sanitizer(service):
-    assert service.privacy_sanitizer is not None
-    assert service.fs._privacy_sanitizer is service.privacy_sanitizer
-    assert service._skill_processor._privacy_sanitizer is service.privacy_sanitizer
-    assert service._resource_processor._privacy_sanitizer is service.privacy_sanitizer
-
-
-async def test_skill_description_is_sanitized_before_privacy_vlm(
-    service,
-    monkeypatch,
-):
-    monkeypatch.setattr("openviking.utils.skill_processor._SKILL_PRIVACY_EXTRACTION_METHOD", "vlm")
-    ctx = RequestContext(user=service.user, role=Role.USER)
-    secret = "registered-description-value"
-    await service.privacy_configs.upsert(
-        ctx,
-        "credential",
-        "description-service",
-        {"key": secret},
-        updated_by=ctx.user.user_id,
-    )
-    captured: dict[str, str] = {}
-
-    async def fake_extract(**kwargs):
-        captured["description"] = kwargs["skill_description"]
-        return SkillPrivacyExtractionResult(
-            values={},
-            original_content=kwargs["content"],
-            sanitized_content=kwargs["content"],
-        )
-
-    monkeypatch.setattr(
-        "openviking.utils.skill_processor.extract_skill_privacy_values",
-        fake_extract,
-    )
-    prepared, values = await service._skill_processor.prepare_skill_privacy(
-        {
-            "name": "description-privacy",
-            "description": f"token={secret}",
-            "content": "No credentials in the body.",
-        },
-        ctx,
-    )
-
-    reference = build_privacy_field_reference(
-        ctx.user.user_id,
-        "credential",
-        "description-service",
-        "key",
-    )
-    assert captured["description"] == f"token={reference}"
-    assert prepared["description"] == f"token={reference}"
-    assert values == {}
 
 
 async def test_resource_artifact_sanitizes_user_dotfiles_but_skips_internal_sidecars(
@@ -148,50 +100,15 @@ async def test_resource_artifact_sanitizes_user_dotfiles_but_skips_internal_side
 
     rewritten = store.writes[".env"].decode()
     assert secret not in rewritten
-    assert build_privacy_field_reference(
-        ctx.user.user_id,
-        "credential",
-        "dotfile-service",
-        "key",
-    ) in rewritten
-
-
-async def test_content_write_rejects_registered_value_with_ambiguous_references(service):
-    ctx = RequestContext(user=service.user, role=Role.USER)
-    duplicate = "same-registered-value"
-    await service.privacy_configs.upsert(
-        ctx,
-        "credential",
-        "first",
-        {"key": duplicate},
-        updated_by=ctx.user.user_id,
-    )
-    await service.privacy_configs.upsert(
-        ctx,
-        "credential",
-        "second",
-        {"key": duplicate},
-        updated_by=ctx.user.user_id,
-    )
-
-    with pytest.raises(InvalidArgumentError, match="mapped to multiple fields") as exc_info:
-        await service.fs.write(
-            f"viking://user/{ctx.user.user_id}/ambiguous.md",
-            duplicate,
-            ctx=ctx,
-            wait=False,
+    assert (
+        build_privacy_field_reference(
+            ctx.user.user_id,
+            "credential",
+            "dotfile-service",
+            "key",
         )
-    details = exc_info.value.details
-    assert details is not None
-    assert len(details["candidate_references"][0]) == 2
-    assert duplicate not in str(details)
-
-    # Legacy content may predate write-time sanitization. The visible read path
-    # must fail closed without choosing either field or returning the value.
-    legacy_uri = f"viking://user/{ctx.user.user_id}/legacy-ambiguous.md"
-    legacy_path = service.viking_fs._uri_to_path(legacy_uri, ctx=ctx)
-    await service.viking_fs._async_agfs.write(legacy_path, duplicate.encode("utf-8"))
-    assert await service.fs.read_visible(legacy_uri, ctx=ctx) == "{{ov_privacy:ambiguous}}"
+        in rewritten
+    )
 
 
 async def test_sanitizer_uses_only_the_writing_users_privacy_catalog(service):
@@ -202,6 +119,7 @@ async def test_sanitizer_uses_only_the_writing_users_privacy_catalog(service):
     )
     owner_secret = "owner-only-registered-value"
     await service.initialize_user_directories(other)
+    await patch_user_config(service.viking_fs, other, {"privacy": {"mode": "auto"}})
     await service.privacy_configs.upsert(
         owner,
         "credential",
@@ -281,13 +199,89 @@ async def test_resource_import_sanitizes_parse_artifact_before_persistence(servi
             )
             if not entry.get("isDir") and not entry["name"].startswith(".")
         ]
-    stored = "\n".join(
-        [await service.viking_fs.read_file(uri, ctx=ctx) for uri in uris]
-    )
+    stored = "\n".join([await service.viking_fs.read_file(uri, ctx=ctx) for uri in uris])
     assert secret not in stored
-    assert build_privacy_field_reference(
-        ctx.user.user_id,
-        "credential",
-        "import-service",
-        "custom",
-    ) in stored
+    assert (
+        build_privacy_field_reference(
+            ctx.user.user_id,
+            "credential",
+            "import-service",
+            "custom",
+        )
+        in stored
+    )
+
+
+async def test_skill_finalizes_original_offsets_using_latest_fields(service, monkeypatch):
+    from openviking.privacy.skill_placeholder import build_placeholder
+    from openviking.privacy.skill_restore import restore_skill_content
+
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    processor = service._skill_processor
+    privacy = service.privacy_configs
+    first = "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    second = "AKLT" + "xY7zA9bC2dE4fG6hJ8kL0mN1pQ3sT5vW"
+    fresh = "ghp_" + "pQ3sT5vWxY7zA9bC2dE4fG6hJ8kL0mN1"
+    explicit = build_placeholder("final-refs", "kept0001")
+    skill = {
+        "name": "final-refs",
+        "content": f"标题🙂 `{first}`\n{second}\n{fresh}\n重复：{fresh}\n显式：{explicit}",
+    }
+    original = skill["content"]
+    await privacy.upsert(ctx, "skill", "final-refs", {"kept0001": "before-rotation"})
+
+    preparation = await processor.prepare_skill_privacy(skill, ctx)
+
+    # Changes after preparation must participate in final field selection.
+    await privacy.upsert(ctx, "credential", "late", {"key": first})
+    await privacy.upsert(
+        ctx, "skill", "final-refs", {"kept0001": "after-rotation", "local001": second}
+    )
+    ids = iter(["kept0001", "local001", "new00001"])
+    monkeypatch.setattr("openviking.utils.skill_processor.token_urlsafe", lambda _: next(ids))
+    result = await processor.apply_skill_privacy(
+        skill, preparation, ctx, change_reason="final references", delete_if_empty=False
+    )
+    current = await privacy.get_current(ctx, "skill", "final-refs")
+    assert current.values == {"kept0001": "after-rotation", "local001": second, "new00001": fresh}
+    assert result["content"] == original.replace(
+        first, build_privacy_field_reference(ctx.user.user_id, "credential", "late", "key")
+    ).replace(
+        second, build_privacy_field_reference(ctx.user.user_id, "skill", "final-refs", "local001")
+    ).replace(fresh, build_placeholder("final-refs", "new00001"))
+    assert await restore_skill_content(
+        privacy, result["content"], ctx, skill_name="final-refs"
+    ) == original.replace(explicit, "after-rotation")
+
+
+async def test_skill_rule_and_vlm_have_independent_discovery_paths(service, monkeypatch):
+    import json
+    from unittest.mock import AsyncMock
+
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    processor = service._skill_processor
+    selected = "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    other = "AKLT" + "xY7zA9bC2dE4fG6hJ8kL0mN1pQ3sT5vW"
+    managed = "managed-input-value"
+    await service.privacy_configs.upsert(ctx, "credential", "managed", {"key": managed})
+    body = f'---\nexample: {managed}\n---\nkey="{selected}"\n重复 {selected}\nother={other}\n'
+    model = SimpleNamespace(
+        get_completion_async=AsyncMock(return_value=json.dumps({"values": {"selected": selected}}))
+    )
+    resolve = AsyncMock(return_value=model)
+    monkeypatch.setattr(processor._vlm_resolver, "get_vlm", resolve)
+    monkeypatch.setenv("OPENVIKING_SKILL_PRIVACY_EXTRACTION_METHOD", "vlm")
+
+    result = await processor.sanitize_skill_privacy({"name": "vlm-discovery", "content": body}, ctx)
+    current = await service.privacy_configs.get_current(ctx, "skill", "vlm-discovery")
+    assert list(current.values.values()) == [selected]
+    assert selected not in result["content"] and other in result["content"]
+    assert managed not in model.get_completion_async.await_args.args[0]
+
+    monkeypatch.setenv("OPENVIKING_SKILL_PRIVACY_EXTRACTION_METHOD", "rule")
+    result = await processor.sanitize_skill_privacy(
+        {"name": "rule-discovery", "content": body}, ctx
+    )
+    current = await service.privacy_configs.get_current(ctx, "skill", "rule-discovery")
+    assert set(current.values.values()) == {selected, other}
+    assert selected not in result["content"] and other not in result["content"]

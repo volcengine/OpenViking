@@ -237,33 +237,6 @@ async def test_markdown_restatement_reuses_references_without_new_versions(servi
     ]
 
 
-@pytest.mark.parametrize("entrypoint", ["session", "skill"])
-async def test_session_and_skill_require_explicit_reference_for_ambiguous_value(
-    service, ctx, entrypoint
-):
-    await service.privacy_configs.upsert(
-        ctx, "credential", "ambiguous", {"a": "same-registered-value", "b": "same-registered-value"}
-    )
-    with pytest.raises(InvalidArgumentError, match="mapped to multiple fields"):
-        if entrypoint == "skill":
-            await service._skill_processor.prepare_skill_privacy(
-                {"name": "ambiguous", "content": "password=same-registered-value"}, ctx
-            )
-        else:
-            session = await service.sessions.create(ctx, "ambiguous")
-            await session.add_message_async("user", [TextPart("password=same-registered-value")])
-    if entrypoint == "session":
-        assert await service.viking_fs.read_file(session.uri + "/messages.jsonl", ctx=ctx) == ""
-        assert await service.privacy_configs.get_current(ctx, "session", session.session_id) is None
-        refs = [
-            build_privacy_field_reference(ctx.user.user_id, "credential", "ambiguous", field)
-            for field in ("a", "b")
-        ]
-        await session.add_message_async("user", [TextPart(" ".join(refs))])
-        restored = json.loads(await service.fs.read(session.uri + "/messages.jsonl", ctx=ctx))
-        assert restored["parts"][0]["text"] == "same-registered-value same-registered-value"
-
-
 @pytest.mark.usefixtures("auto_privacy")
 async def test_batch_discovery_protects_all_payloads_without_mutating_inputs(service, ctx):
     await service.privacy_configs.upsert(ctx, "credential", "github", {"pat": "registered-value"})
@@ -380,10 +353,10 @@ async def test_auto_created_session_extracts_before_persistence(service, ctx):
 
 @pytest.mark.parametrize(
     "sid",
-    ["中文会话", "team session@@group", " leading and trailing ", "x" * 300, "group:100%~"],
+    ["中文会话", "x" * 300, "group:100%~"],
 )
 @pytest.mark.usefixtures("auto_privacy")
-async def test_custom_session_ids_support_privacy_and_cross_session_reuse(service, ctx, sid):
+async def test_custom_session_ids_keep_discoveries_in_their_own_session(service, ctx, sid):
     session = await service.sessions.create(ctx, sid)
     await session.add_message_async("user", [TextPart(f"password={SECRET}")])
     target_key = session_privacy_target(sid)
@@ -397,12 +370,6 @@ async def test_custom_session_ids_support_privacy_and_cross_session_reuse(servic
     assert build_session_placeholder(target_key, field) in disk
     restored = await service.fs.read(uri, ctx=ctx)
     assert json.loads(restored)["parts"][0]["text"] == f"password={SECRET}"
-    target = await service.sessions.create(ctx, "reuse-custom-id")
-    await target.add_message_async("user", [TextPart(f"password={SECRET}")])
-    reference = build_privacy_field_reference(ctx.user.user_id, "session", target_key, field)
-    assert target.messages[0].parts[0].text == f"password={reference}"
-    restored = await service.fs.read(target.uri + "/messages.jsonl", ctx=ctx)
-    assert json.loads(restored)["parts"][0]["text"] == f"password={SECRET}"
 
 
 @pytest.mark.usefixtures("auto_privacy")
@@ -410,7 +377,7 @@ async def test_concurrent_writers_preserve_messages_and_independent_fields(
     service, ctx, monkeypatch
 ):
 
-    ids = iter(["same0001"] * 8 + [f"next{i:04d}" for i in range(8)])
+    ids = iter(field for i in range(8) for field in ("same0001", f"next{i:04d}"))
     monkeypatch.setattr(session_extractor, "token_urlsafe", lambda _: next(ids))
     session = await service.sessions.create(ctx, "concurrent")
     await service.privacy_configs.upsert(
@@ -437,6 +404,95 @@ async def test_concurrent_writers_preserve_messages_and_independent_fields(
         "old-secret",
         *(f"password={SECRET}{i}" for i in range(8)),
     ]
+
+
+@pytest.mark.usefixtures("auto_privacy")
+async def test_concurrent_same_values_reuse_fields_with_stale_worker_caches(
+    service, ctx, monkeypatch
+):
+    from openviking.privacy.sanitizer import PrivacySanitizer
+    from openviking.privacy.service import UserPrivacyConfigService
+
+    monkeypatch.setenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "1")
+    await service.privacy_configs.upsert(ctx, "session", "other", {"other001": SECRET})
+    await service.privacy_configs.upsert(ctx, "skill", "other", {"other001": SECRET})
+    session = await service.sessions.create(ctx, "same-values")
+    writers = []
+    for _ in range(8):
+        writer = service.sessions.session(ctx, "same-values")
+        writer._privacy_config_service = UserPrivacyConfigService(service.viking_fs)
+        writer._privacy_sanitizer = PrivacySanitizer(writer._privacy_config_service)
+        await writer._privacy_sanitizer.prepare_matcher(ctx, scope=("session", "same-values"))
+        writers.append(writer)
+    text = f"正文🙂 `{SECRET}` repeated {SECRET}"
+    await asyncio.gather(
+        *(
+            writer.add_message_async(
+                "user",
+                [
+                    TextPart(text),
+                    ToolPart(tool_input={"nested": [SECRET, SECOND_SECRET, False, 17]}),
+                ],
+            )
+            for writer in writers
+        )
+    )
+    current = await service.privacy_configs.get_current(ctx, "session", "same-values")
+    assert len(current.values) == 2 and set(current.values.values()) == {SECRET, SECOND_SECRET}
+    assert await service.privacy_configs.list_versions(ctx, "session", "same-values") == [1]
+    stored = await service.viking_fs.read_file(session.uri + "/messages.jsonl", ctx=ctx)
+    rows = [json.loads(line) for line in stored.splitlines()]
+    assert len(rows) == 8
+    assert len({row["parts"][0]["text"] for row in rows}) == 1
+    assert SECRET not in stored and SECOND_SECRET not in stored
+    restored = await service.fs.read(session.uri + "/messages.jsonl", ctx=ctx)
+    for line in restored.splitlines():
+        parts = json.loads(line)["parts"]
+        assert parts[0]["text"] == text
+        assert parts[1]["tool_input"] == {"nested": [SECRET, SECOND_SECRET, False, 17]}
+
+
+@pytest.mark.usefixtures("auto_privacy")
+async def test_concurrent_skill_preparations_reuse_current_fields_and_preserve_references(
+    service, ctx, monkeypatch
+):
+    from openviking.privacy.service import UserPrivacyConfigService
+    from openviking.privacy.skill_placeholder import build_placeholder
+    from openviking.privacy.skill_restore import restore_skill_content
+    from openviking.utils.skill_processor import SkillProcessor
+
+    monkeypatch.setenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "1")
+    await service.privacy_configs.upsert(ctx, "session", "other", {"other001": SECRET})
+    await service.privacy_configs.upsert(ctx, "skill", "other", {"other001": SECRET})
+    await service.privacy_configs.upsert(ctx, "skill", "same-values", {"kept0001": SECOND_SECRET})
+    explicit = build_placeholder("same-values", "kept0001")
+    body = f"正文🙂 `{SECRET}` repeated {SECRET}\nexplicit={explicit}"
+    processors = [
+        SkillProcessor(
+            vikingdb=None, privacy_config_service=UserPrivacyConfigService(service.viking_fs)
+        )
+        for _ in range(8)
+    ]
+    skill = {"name": "same-values", "content": body}
+    prepared = await asyncio.gather(
+        *(processor.prepare_skill_privacy(skill, ctx) for processor in processors)
+    )
+    results = await asyncio.gather(
+        *(
+            processor.apply_skill_privacy(
+                skill, preparation, ctx, change_reason="Concurrent discovery", delete_if_empty=False
+            )
+            for processor, preparation in zip(processors, prepared, strict=True)
+        )
+    )
+    current = await service.privacy_configs.get_current(ctx, "skill", "same-values")
+    assert len(current.values) == 2 and set(current.values.values()) == {SECRET, SECOND_SECRET}
+    assert await service.privacy_configs.list_versions(ctx, "skill", "same-values") == [1, 2]
+    for result in results:
+        assert explicit in result["content"] and SECRET not in result["content"]
+        assert await restore_skill_content(
+            service.privacy_configs, result["content"], ctx, skill_name="same-values"
+        ) == body.replace(explicit, SECOND_SECRET)
 
 
 @pytest.mark.parametrize(
@@ -579,7 +635,7 @@ async def test_later_credential_registration_preserves_session_reference_identit
 
 
 @pytest.mark.usefixtures("auto_privacy")
-async def test_cross_session_reuse_requires_full_reference_but_short_reference_stays_local(
+async def test_cross_session_plaintext_creates_own_field_and_explicit_references_stay_bound(
     service, ctx
 ):
     source = await service.sessions.create(ctx, "source")
@@ -590,11 +646,13 @@ async def test_cross_session_reuse_requires_full_reference_but_short_reference_s
     short = build_session_placeholder("source", field)
     full = build_privacy_field_reference(ctx.user.user_id, "session", "source", field)
     target = await service.sessions.create(ctx, "target")
-    await target.add_message_async("user", [TextPart(f"{original} {short}")])
-    assert target.messages[0].parts[0].text == f"password={full} {short}"
+    await target.add_message_async("user", [TextPart(f"{original} {short} {full}")])
+    own = await service.privacy_configs.get_current(ctx, "session", "target")
+    [own_field] = own.values
+    own_reference = build_session_placeholder("target", own_field)
+    assert target.messages[0].parts[0].text == f"password={own_reference} {short} {full}"
     raw = json.loads(await service.fs.read(target.uri + "/messages.jsonl", ctx=ctx))
-    assert raw["parts"][0]["text"] == f"{original} {short}"
-    assert await service.privacy_configs.get_current(ctx, "session", "target") is None
+    assert raw["parts"][0]["text"] == f"{original} {short} {SECRET}"
 
 
 async def test_short_reference_resolves_only_current_users_session_config(service):

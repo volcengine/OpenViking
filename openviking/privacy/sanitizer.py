@@ -11,8 +11,14 @@ import time
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
-from openviking.core.namespace import canonical_user_root
-from openviking.privacy.reference import build_privacy_field_reference
+from openviking.core.namespace import (
+    canonical_user_root,
+    classify_uri,
+    is_session_uri,
+    resolve_request_uri,
+)
+from openviking.privacy.models import UserPrivacyConfigVersion
+from openviking.privacy.reference import PrivacyFieldReference
 from openviking.pyagfs import get_privacy_matcher_class
 from openviking.server.identity import RequestContext
 from openviking.server.user_config import ResolvedPrivacyConfig
@@ -22,7 +28,6 @@ if TYPE_CHECKING:
     from openviking.privacy.service import UserPrivacyConfigService
 
 _AMBIGUOUS_PLACEHOLDER = "{{ov_privacy:ambiguous}}"
-MIN_PROTECTED_VALUE_CHARS = 6
 DEFAULT_MATCHER_CACHE_TTL_SECONDS = 3600.0
 DEFAULT_SANITIZER_MAX_CONTENT_BYTES = 16 * 1024 * 1024
 DEFAULT_SANITIZER_MAX_REPLACEMENTS = 10000
@@ -72,7 +77,10 @@ class PrivacySanitizer:
         self._monotonic_clock = monotonic_clock
         matcher_class: Any = get_privacy_matcher_class()
         self._matcher_class = matcher_class
-        self._cache: dict[tuple[str, str, int, str, bool], tuple[float, Any]] = {}
+        self._cache: dict[
+            tuple[str, str, int, str, tuple[str, str] | None, int, str],
+            tuple[float, Any],
+        ] = {}
         self._cache_lock = asyncio.Lock()
 
     @property
@@ -88,15 +96,20 @@ class PrivacySanitizer:
         self,
         ctx: RequestContext,
         *,
-        prefer_credentials: bool = False,
+        scope: tuple[str, str] | None = None,
         settings: ResolvedPrivacyConfig | None = None,
+        uri: str = "",
     ) -> Callable[[str], list[PrivacyReplacement]]:
         """Prepare a cached, bounded match query for a batch of original texts.
 
         The callable may run in a worker thread. It returns positions and existing
         references so rule extraction can combine hits before rewriting content.
         """
-        matcher = await self._matcher(ctx, prefer_credentials=prefer_credentials, settings=settings)
+        if settings is None:
+            settings = await self._privacy.get_settings(ctx)
+        if settings.mode == "off":
+            return lambda _: []
+        matcher = await self._matcher(ctx, scope=scope, settings=settings)
 
         def find(content: str) -> list[PrivacyReplacement]:
             try:
@@ -116,7 +129,8 @@ class PrivacySanitizer:
                 raise ResourceExhaustedError(
                     "Content exceeds the Privacy sanitizer replacement limit"
                 )
-            return [PrivacyReplacement(*item) for item in replacements]
+            matches = [PrivacyReplacement(*item) for item in replacements]
+            return matches
 
         return find
 
@@ -128,9 +142,13 @@ class PrivacySanitizer:
         uri: str = "",
         max_replacements: int | None = None,
         fail_on_match_limit: bool = True,
-        prefer_credentials: bool = False,
+        settings: ResolvedPrivacyConfig | None = None,
     ) -> PrivacySanitizationResult:
         if not content or self._is_privacy_storage_uri(uri, ctx):
+            return PrivacySanitizationResult(content=content)
+        if settings is None:
+            settings = await self._privacy.get_settings(ctx)
+        if settings.mode == "off":
             return PrivacySanitizationResult(content=content)
         content_bytes = len(content.encode("utf-8"))
         if content_bytes > self._max_content_bytes:
@@ -142,7 +160,8 @@ class PrivacySanitizer:
                     "max_bytes": self._max_content_bytes,
                 },
             )
-        matcher = await self._matcher(ctx, prefer_credentials=prefer_credentials)
+        scope = self._scope_from_uri(uri, ctx)
+        matcher = await self._matcher(ctx, scope=scope, settings=settings)
         effective_max_replacements = (
             self._max_replacements if max_replacements is None else max_replacements
         )
@@ -163,7 +182,9 @@ class PrivacySanitizer:
                 },
             )
         replacements = tuple(
-            PrivacyReplacement(start=start, end=end, reference=reference)
+            PrivacyReplacement(
+                start=start, end=end, reference=reference
+            )
             for start, end, reference in raw_replacements
         )
         return PrivacySanitizationResult(
@@ -177,95 +198,122 @@ class PrivacySanitizer:
         self,
         ctx: RequestContext,
         *,
-        prefer_credentials: bool = False,
-        settings: ResolvedPrivacyConfig | None = None,
+        scope: tuple[str, str] | None = None,
+        settings: ResolvedPrivacyConfig,
     ) -> Any:
-        if settings is None:
-            settings = await self._privacy.get_settings(ctx)
         settings_hash = hashlib.sha256(
             json.dumps(asdict(settings), sort_keys=True).encode("utf-8")
         ).hexdigest()
-        revision = self._privacy.catalog_revision(ctx)
-        cache_key = (
-            ctx.account_id,
-            ctx.user.user_id,
-            revision,
-            settings_hash,
-            prefer_credentials,
-        )
+        cache_key, current = await self._matcher_state(ctx, scope, settings_hash)
         now = self._monotonic_clock()
         cached = self._cache.get(cache_key)
         if cached is not None and now - cached[0] < self._cache_ttl_seconds:
             return cached[1]
         async with self._cache_lock:
-            cache_key = (
-                ctx.account_id,
-                ctx.user.user_id,
-                self._privacy.catalog_revision(ctx),
-                settings_hash,
-                prefer_credentials,
-            )
+            cache_key, current = await self._matcher_state(ctx, scope, settings_hash)
             now = self._monotonic_clock()
-            self._cache = {
-                key: item
-                for key, item in self._cache.items()
-                if now - item[0] < self._cache_ttl_seconds
-            }
             cached = self._cache.get(cache_key)
             if cached is not None and now - cached[0] < self._cache_ttl_seconds:
                 return cached[1]
             matcher = await self._build_matcher(
-                ctx, prefer_credentials=prefer_credentials, settings=settings
+                ctx, scope=scope, current=current, settings=settings
             )
             owner_key = cache_key[:2]
             self._cache = {
                 key: item
                 for key, item in self._cache.items()
-                if key[:2] != owner_key or key[2:4] == cache_key[2:4]
+                if now - item[0] < self._cache_ttl_seconds
+                and (key[:2] != owner_key or (key[2:4] == cache_key[2:4] and key[4] != scope))
             }
             self._cache[cache_key] = (now, matcher)
             return matcher
+
+    async def _matcher_state(
+        self, ctx: RequestContext, scope: tuple[str, str] | None, settings_hash: str
+    ) -> tuple[
+        tuple[str, str, int, str, tuple[str, str] | None, int, str],
+        UserPrivacyConfigVersion | None,
+    ]:
+        current = await self._privacy.get_current(ctx, *scope) if scope else None
+        return (
+            (
+                ctx.account_id,
+                ctx.user.user_id,
+                self._privacy.catalog_revision(ctx),
+                settings_hash,
+                scope,
+                current.version if current else 0,
+                current.created_at if current else "",
+            ),
+            current,
+        )
 
     async def _build_matcher(
         self,
         ctx: RequestContext,
         *,
-        prefer_credentials: bool = False,
-        settings: ResolvedPrivacyConfig | None = None,
+        scope: tuple[str, str] | None,
+        current: UserPrivacyConfigVersion | None,
+        settings: ResolvedPrivacyConfig,
     ) -> Any:
-        never_mask = set(settings.never_mask) if settings is not None else set()
-        references: dict[str, list[str]] = {}
-        credentials: dict[str, list[str]] = {}
-        for category in await self._privacy.list_categories(ctx):
-            for target_key in await self._privacy.list_targets(ctx, category):
-                current = await self._privacy.get_current(ctx, category, target_key)
-                if current is None:
+        from openviking.privacy.rules import prepare_privacy_extractor
+
+        discover = prepare_privacy_extractor(settings=settings)
+        never_mask = set(settings.never_mask)
+        references: dict[str, list[PrivacyFieldReference]] = {}
+        configs = [
+            ("credential", target, await self._privacy.get_current(ctx, "credential", target))
+            for target in await self._privacy.list_targets(ctx, "credential")
+        ]
+        if scope and current is not None:
+            configs.append((*scope, current))
+        for category, target_key, config in configs:
+            if config is None:
+                continue
+            for field_name, value in config.values.items():
+                if not isinstance(value, str) or not value or value in never_mask:
                     continue
-                for field_name, value in current.values.items():
-                    # Privacy is the explicit protection boundary. Do not infer
-                    # sensitivity from field names. Very short values are not
-                    # safe for global substring replacement because ordinary
-                    # prose would produce excessive false positives.
-                    if (
-                        not isinstance(value, str)
-                        or len(value) < MIN_PROTECTED_VALUE_CHARS
-                        or value in never_mask
-                    ):
+                if category != "credential":
+                    try:
+                        matches = discover(value)
+                    except InvalidArgumentError:
                         continue
-                    reference = build_privacy_field_reference(
-                        ctx.user.user_id,
-                        category,
-                        target_key,
-                        field_name,
-                    )
-                    references.setdefault(value, []).append(reference)
-                    if prefer_credentials and category == "credential":
-                        credentials.setdefault(value, []).append(reference)
+                    if len(matches) != 1 or matches[0].start != 0 or matches[0].end != len(value):
+                        continue
+                references.setdefault(value, []).append(
+                    PrivacyFieldReference(ctx.user.user_id, category, target_key, field_name)
+                )
 
         targets: dict[str, list[str]] = {}
         for secret, candidates in references.items():
-            targets[secret] = sorted(set(credentials.get(secret, candidates)))
+            credentials = [item for item in candidates if item.category == "credential"]
+            ordered = sorted(
+                set(credentials or candidates),
+                key=lambda item: (item.category, item.target_key, item.field),
+            )
+            selected = tuple(item.render() for item in ordered)
+            targets[secret] = list(selected)
         return self._matcher_class(targets, _AMBIGUOUS_PLACEHOLDER)
+
+    @staticmethod
+    def _scope_from_uri(uri: str, ctx: RequestContext) -> tuple[str, str] | None:
+        if not uri:
+            return None
+        classification = classify_uri(uri)
+        if classification.scope == "~":
+            uri = resolve_request_uri(uri, ctx)
+            classification = classify_uri(uri)
+        parts = classification.parts
+        if classification.scope == "user" and parts[1:2] != (ctx.user.user_id,):
+            return None
+        index = classification.content_index
+        if classification.is_skill and index is not None and len(parts) > index + 1:
+            return "skill", parts[index + 1]
+        if is_session_uri(uri) and len(parts) > 3:
+            from openviking.privacy.session_extractor import session_privacy_target
+
+            return "session", session_privacy_target(parts[3])
+        return None
 
     @staticmethod
     def _is_privacy_storage_uri(uri: str, ctx: RequestContext) -> bool:

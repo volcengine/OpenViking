@@ -380,37 +380,20 @@ tags:
     viking_fs._async_agfs.pathlock_acquire_tree = AsyncMock(return_value={"lease_ref": "test"})
     viking_fs._async_agfs.pathlock_release = AsyncMock()
 
-    async def _fake_extract_skill_privacy_values(
-        *, skill_name, skill_description, content, vlm
-    ):
-        assert vlm is account_vlm
-        assert skill_name == "code-review"
-        assert skill_description == "Review code from evidence"
-        assert "api_key=secret-xyz" in content
-        return SimpleNamespace(
-            values={"api_key": "secret-xyz"},
-            sanitized_content=content.replace(
-                "api_key=secret-xyz",
-                "api_key={{ov_privacy:skill:code-review:api_key}}",
-            ),
-        )
+    from openviking.privacy.service import UserPrivacyConfigService
+    from openviking.server.user_config import ResolvedPrivacyConfig
+    from tests.server.test_privacy_config_service import _MemoryPrivacyStorage
 
+    secret = "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    privacy_config_service = UserPrivacyConfigService(_MemoryPrivacyStorage())
     monkeypatch.setattr(
-        "openviking.utils.skill_processor.extract_skill_privacy_values",
-        _fake_extract_skill_privacy_values,
+        privacy_config_service,
+        "get_settings",
+        AsyncMock(return_value=ResolvedPrivacyConfig(mode="auto")),
     )
-
-    privacy_config_service = MagicMock()
-    privacy_config_service.upsert = AsyncMock()
     vikingdb = MagicMock()
     vikingdb.enqueue_embedding_msg = AsyncMock(return_value=True)
-    account_vlm = object()
-    vlm_resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=account_vlm))
-    processor = SkillProcessor(
-        vikingdb=vikingdb,
-        privacy_config_service=privacy_config_service,
-        vlm_resolver=vlm_resolver,
-    )
+    processor = SkillProcessor(vikingdb=vikingdb, privacy_config_service=privacy_config_service)
     processor._write_skill_content = AsyncMock()
     processor._enqueue_skill_package = AsyncMock()
     updater = SkillOperationUpdater(
@@ -430,7 +413,7 @@ tags:
                         "blocks": [
                             {
                                 "search": "- 先读文件",
-                                "replace": "- 先读文件\napi_key=secret-xyz",
+                                "replace": "- 先读文件\napi_key=" + secret,
                             }
                         ]
                     },
@@ -451,16 +434,10 @@ tags:
     assert result.operation_results[0]["action"] == "update"
     written = processor._write_skill_content.await_args.kwargs
     assert written["skill_dir_uri"] == "viking://user/default/skills/code-review"
-    assert "secret-xyz" not in written["skill_dict"]["content"]
-    assert "{{ov_privacy:skill:code-review:api_key}}" in written["skill_dict"]["content"]
-    privacy_config_service.upsert.assert_awaited_once_with(
-        ctx=ctx,
-        category="skill",
-        target_key="code-review",
-        values={"api_key": "secret-xyz"},
-        updated_by=ctx.user.user_id,
-        change_reason="auto-extracted from add_skill",
-    )
+    current = await privacy_config_service.get_current(ctx, "skill", "code-review")
+    assert list(current.values.values()) == [secret]
+    assert secret not in written["skill_dict"]["content"]
+    assert "{{ov_privacy:skill:code-review:" in written["skill_dict"]["content"]
 
 
 def test_skill_loader_to_skill_md_round_trip_with_lists():
