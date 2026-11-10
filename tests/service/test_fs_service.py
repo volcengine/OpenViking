@@ -18,7 +18,12 @@ from openviking.storage.abstract_overview import body_for_preview
 from openviking.storage.acl import AclAction
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
+from openviking_cli.exceptions import (
+    InvalidArgumentError,
+    NotFoundError,
+    PermissionDeniedError,
+    ResourceExhaustedError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -103,6 +108,71 @@ async def test_stat_forwards_optional_fields_without_changing_defaults(request_c
         "skip_count": False,
         "include_lock_status": False,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resolved_uri",
+    [
+        "viking://user/default/memories/notes.md",
+        "viking://system/memory/memory_templates/custom/demo.md",
+    ],
+)
+async def test_stat_resolves_record_id_before_namespace_policy(request_context, resolved_uri):
+    record_id = "0123456789abcdef0123456789abcdef"
+    metadata = {"uri": resolved_uri, "isDir": False}
+    viking_fs = SimpleNamespace(
+        resolve_uri=AsyncMock(return_value=resolved_uri),
+        stat=AsyncMock(return_value=metadata),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    result = await service.stat(record_id, request_context, include_lock_status=True)
+
+    assert result == metadata
+    viking_fs.resolve_uri.assert_awaited_once_with(record_id, ctx=request_context)
+    kwargs = {"ctx": request_context, "skip_count": False, "include_lock_status": True}
+    if resolved_uri.startswith("viking://system/"):
+        kwargs.update(skip_count=True, include_vector_fields=False)
+    viking_fs.stat.assert_awaited_once_with(resolved_uri, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_stat_missing_record_id_preserves_not_found(request_context):
+    record_id = "0123456789abcdef0123456789abcdef"
+    error = NotFoundError(record_id, "file")
+    viking_fs = SimpleNamespace(
+        resolve_uri=AsyncMock(side_effect=error),
+        stat=AsyncMock(),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(NotFoundError) as exc_info:
+        await service.stat(record_id, request_context)
+
+    assert exc_info.value is error
+    viking_fs.resolve_uri.assert_awaited_once_with(record_id, ctx=request_context)
+    viking_fs.stat.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stat_by_record_id_preserves_access_denial(request_context):
+    record_id = "0123456789abcdef0123456789abcdef"
+    resolved_uri = "viking://user/other/memories/private.md"
+    error = PermissionDeniedError("Access denied")
+    viking_fs = SimpleNamespace(
+        resolve_uri=AsyncMock(return_value=resolved_uri),
+        stat=AsyncMock(side_effect=error),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(PermissionDeniedError) as exc_info:
+        await service.stat(record_id, request_context)
+
+    assert exc_info.value is error
+    viking_fs.stat.assert_awaited_once_with(
+        resolved_uri, ctx=request_context, skip_count=False, include_lock_status=False
+    )
 
 
 class _FakeMutationCoordinator:
