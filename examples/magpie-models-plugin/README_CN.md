@@ -16,19 +16,19 @@
 magpie plugin add /absolute/path/to/OpenViking/examples/magpie-models-plugin
 ```
 
-也可以在 Magpie 的 Plugins → Add plugin 中选择该目录。需要 Magpie Agent 插件、Bun 插件宿主以及 OV 启动配置文件 API。已在 macOS Magpie **0.1.2818** 验证隔离宿主流程，并在 Linux Magpie **0.1.3356** 验证安装与重启；Windows 尚未验证。OV 和 Magpie 都需要保持运行。以下 `node cli.mjs ...` 命令均在插件目录执行。
+也可以在 Magpie 的 Plugins → Add plugin 中选择该目录。需要 Magpie Agent 插件、Bun 插件宿主以及 OV 启动配置文件 API。已在 macOS Magpie **0.1.2818** 验证隔离宿主流程，并在 Linux Magpie **0.1.3502** 验证安装与重启；Windows 尚未验证。OV 和 Magpie 都需要保持运行。以下 `node cli.mjs ...` 命令均在插件目录执行。
 
 1. 配置 OV 服务地址和 Root 凭据，见下文。
-2. 在插件的 **OpenViking 模型** 页面选择管理范围并保存。
-3. 在 Agents → OpenViking 中选择一个支持所需能力的聊天模型。
+2. 在 Agents → OpenViking 中选择一个支持所需能力的聊天模型。
+3. 插件自动同步启动配置、调用重启 API 并验证新实例生效。
 4. 查看 Magpie 插件日志或运行 `node cli.mjs status`：`saved` 表示已保存，`applied` 表示已执行生效检查；确认没有冲突或错误。
 5. 未开启自动重启时，执行 `node cli.mjs apply` 或通过原服务管理方式重启。使用 `openviking-server --with-bot` 时，受管 Bot 随 OV 重启。
 
-默认只保存配置；可在页面开启“保存模型后自动重启并验证”（`restartOnChange: true`），或执行 `node cli.mjs apply`。插件调用现有 Root 重启 API，等待实例 ID 变化、目标文件版本一致且无需再重启，再报告生效；失败或服务回滚会明确报错，不会循环重启。`saved` 表示配置已保存，不能据此认定运行中的进程已经切换。OV VLM 改动需要重启 OV；Bot 自身配置改变或它继承的 VLM 改变，需要重启 Bot。仅管理 Bot 独立配置时，OV 模型不变。状态分别提供 `ovRuntime` 与 `botRuntime`；启动文件匹配不代表独立 Bot 进程已重载，恢复原配置后也保留重启提示。插件不执行付费推理探测，只检查模型目录。使用前验证 VLM 的图片能力，以及 Bot 的流式输出、工具调用和输入预算。
+默认在切换模型后自动重启并验证（`restartOnChange: true`）；也可执行 `node cli.mjs apply` 重试。插件调用现有 Root 重启 API，等待实例 ID 变化、目标文件版本一致且无需再重启，再报告生效；失败或服务回滚会明确报错，不会循环重启。`saved` 表示配置已保存，不能据此认定运行中的进程已经切换。OV VLM 改动需要重启 OV；Bot 自身配置改变或它继承的 VLM 改变，需要重启 Bot。仅管理 Bot 独立配置时，OV 模型不变。状态分别提供 `ovRuntime` 与 `botRuntime`；启动文件匹配不代表独立 Bot 进程已重载，恢复原配置后也保留重启提示。插件不执行付费推理探测，只检查模型目录。使用前验证 VLM 的图片能力，以及 Bot 的流式输出、工具调用和输入预算。
 
 ## 连接和管理范围
 
-插件页面、Plugins → Options，或以下本地文件都可以配置。插件 Options 优先于本地文件。
+高级选项可通过 Plugins → Options 或以下本地文件配置。日常使用只需在 Agent 行切换模型。插件 Options 优先于本地文件。
 
 `~/.config/magpie-openviking-models/adapter.json`：
 
@@ -55,7 +55,7 @@ magpie plugin add /absolute/path/to/OpenViking/examples/magpie-models-plugin
 | `botModel` | 独立模式下，可指定另外一个完整的 `provider/model` 或 `group/name` |
 | `manageVlm: false` + 独立模式 | 只管理 VikingBot |
 | `ovcliConfig` | 显式指定用于解析服务地址和 Root 凭据的 `ovcli.conf` |
-| `restartOnChange` | 默认 false；开启后保存或恢复配置会自动调用重启 API，并等待新实例验证 |
+| `restartOnChange` | 默认 true；切换模型或恢复配置后自动重启并验证新实例 |
 | `pollMs` | 同步间隔，500–60000 毫秒；默认 2000 |
 
 独立 Bot 示例：
@@ -72,9 +72,7 @@ magpie plugin add /absolute/path/to/OpenViking/examples/magpie-models-plugin
 
 ### 输出预算和生成参数
 
-在 **Agents → OpenViking** 选择模型，在侧栏 **OpenViking 模型** 插件页面配置 VLM、VikingBot、生成参数和并发。选择“沿用现有配置”不接管该参数；“模型默认”对应空值。
-
-插件只使用已发布的 Magpie 扩展接口，不修改或替换 Magpie 应用。原版 Agent 展开区域没有向外部插件开放自定义设置控件，参数设置保留在插件自己的页面中。
+本插件仅提供 Agent 模型切换和自动重启验证，不提供配置页面或设置面板，不修改 Magpie 宿主。未指定的模型参数沿用现有配置；输出预算仍按所选模型的已知上限校验。
 
 Options / `adapter.json` 中对应 `vlmParameters` 与 `botParameters`，使用统一的 snake_case 字段：
 
@@ -148,7 +146,6 @@ MAGPIE_BIN=/path/to/magpie node tests/magpie-smoke.mjs
 
 发布和市场登记尚未执行。市场条目草稿见 `marketplace.json`。
 
-可选的 `npm run test:ui` 使用 Playwright（Chromium、WebKit）在沙箱中检查参数表单，不修改真实配置。Playwright 安装在包外时通过 `NODE_PATH` 指定；使用系统 Chrome 可设置 `BROWSER=chromium PLAYWRIGHT_CHANNEL=chrome`。
 
 ## 配置文件与状态说明
 

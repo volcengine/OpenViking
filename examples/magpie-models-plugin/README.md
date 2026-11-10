@@ -16,15 +16,15 @@ The package is not published yet. Add the complete directory, including its Bun 
 magpie plugin add /absolute/path/to/OpenViking/examples/magpie-models-plugin
 ```
 
-Or select the directory in Plugins → Add plugin. Requires Magpie Agent plugins, its Bun host, and OV's startup configuration API. The isolated host flow was tested with **Magpie 0.1.2818 on macOS**, and installation/restart with **0.1.3356 on Linux**. Windows is unverified. Keep Magpie and OV running. Run the `node cli.mjs ...` commands below from the plugin directory.
+Or select the directory in Plugins → Add plugin. Requires Magpie Agent plugins, its Bun host, and OV's startup configuration API. The isolated host flow was tested with **Magpie 0.1.2818 on macOS**, and installation/restart with **0.1.3502 on Linux**. Windows is unverified. Keep Magpie and OV running. Run the `node cli.mjs ...` commands below from the plugin directory.
 
-Configure the connection, choose management scope on the plugin's **OpenViking models** page, and pick a chat model on its Agent row. Check adapter logs or `node cli.mjs status`: `saved` means saved configuration, while `applied` means activation checks ran; check for conflicts/errors too. If automatic restart is off, run `node cli.mjs apply` or restart through the original service manager. With `openviking-server --with-bot`, the managed Bot restarts with OV.
+Configure the connection and pick a chat model in **Agents → OpenViking**. The adapter automatically saves, restarts and verifies activation. Check adapter logs or `node cli.mjs status`: `saved` means saved configuration, while `applied` means activation checks ran; check for conflicts/errors too. If automatic restart is off, run `node cli.mjs apply` or restart through the original service manager. With `openviking-server --with-bot`, the managed Bot restarts with OV.
 
-`saved` means the startup file was saved, not that a running process switched models. VLM changes require an OV restart; Bot configuration changes, including changes to its inherited VLM, require a Bot restart. Managing only an independent Bot does not change OV's model. `ovRuntime` and `botRuntime` report these separately; a matching startup file cannot prove a standalone Bot reloaded. Restart reminders survive disconnect/restoration. Enable `restartOnChange: true` on the page to restart and verify automatically, or run `node cli.mjs apply` explicitly. The existing Root restart API is called with the saved revision; success requires a new instance, matching file revision, and no pending restart. Failures/rollback are visible and never trigger a restart loop. There is no paid inference probe. Verify VLM image support and Bot streaming, tool execution and input budgets before use.
+`saved` means the startup file was saved, not that a running process switched models. VLM changes require an OV restart; Bot configuration changes, including changes to its inherited VLM, require a Bot restart. Managing only an independent Bot does not change OV's model. `ovRuntime` and `botRuntime` report these separately; a matching startup file cannot prove a standalone Bot reloaded. Restart reminders survive disconnect/restoration. `restartOnChange` defaults to true to restart and verify automatically, or run `node cli.mjs apply` explicitly. The existing Root restart API is called with the saved revision; success requires a new instance, matching file revision, and no pending restart. Failures/rollback are visible and never trigger a restart loop. There is no paid inference probe. Verify VLM image support and Bot streaming, tool execution and input budgets before use.
 
 ## Connection
 
-Set options in the plugin page, Plugins → Options, or `~/.config/magpie-openviking-models/adapter.json`. Plugin options override that file:
+Set advanced options in Plugins → Options or `~/.config/magpie-openviking-models/adapter.json`. Plugin options override that file:
 
 ```json
 {
@@ -51,7 +51,7 @@ The adapter invokes `ov config show -o json` for current CLI connection discover
 | `botModel` | Full `provider/model` or `group/name` for independent Bot mode |
 | `manageVlm: false` with independent mode | Manage only VikingBot |
 | `ovcliConfig` | Explicit client configuration file for resolving the server URL and Root credentials |
-| `restartOnChange` | Default false; restart through OV's API after saving/restoring and verify the new instance |
+| `restartOnChange` | Default true; restart and verify after model changes/restoration |
 | `pollMs` | Polling interval, 500–60000 ms; default 2000 |
 
 For an independent Bot model:
@@ -68,9 +68,7 @@ The Agent module writes a private selection file; a Bun bridge validates the mod
 
 ### Generation parameters
 
-Choose the model in **Agents → OpenViking**. Configure VLM, VikingBot, generation parameters and concurrency in the **OpenViking models** plugin page. “Keep existing” leaves a parameter unmanaged; “Model default” writes null.
-
-This plugin uses released Magpie APIs only. It does not modify or replace the Magpie application. The Agent row does not expose custom settings controls to external plugins, so configuration stays in the plugin's own page.
+This plugin provides only Agent model selection and automatic restart verification, with no configuration page or panel and no host modifications. Unspecified model parameters retain their existing values; output budgets are still checked against known model limits.
 
 Use `vlmParameters` and `botParameters` in Options or `adapter.json`:
 
@@ -142,7 +140,6 @@ The opt-in actual-host smoke uses temporary child-process HOME/XDG directories a
 
 No npm publication or marketplace registration has been performed. `marketplace.json` contains a proposed entry.
 
-The optional `npm run test:ui` checks the parameter forms inside a sandbox with Playwright (Chromium and WebKit); no live configuration is changed. Set `NODE_PATH` when Playwright is installed outside this package. Use `BROWSER=chromium PLAYWRIGHT_CHANNEL=chrome` to use installed Chrome.
 
 ## Configuration files and status
 

@@ -53,7 +53,7 @@ export async function settings(options = {}, env = process.env) {
   const botModel = botMode === "independent" ? config.botModel?.trim() || undefined : undefined;
   const pollMs = config.pollMs ?? 2000;
   if (!Number.isSafeInteger(pollMs) || pollMs < 500 || pollMs > 60000) throw new AdapterError("invalid_poll_interval");
-  const restartOnChange = config.restartOnChange ?? false;
+  const restartOnChange = config.restartOnChange ?? true;
   if (typeof restartOnChange !== "boolean") throw new AdapterError("invalid_restart_policy");
   return { directory, selectionFile: join(directory, "selection.json"), stateFile: join(directory, "state.json"),
     statusFile: join(directory, "status.json"), serverUrl, apiKey, manageVlm, botMode, botModel,

@@ -24,10 +24,10 @@ const env = {
   MAGPIE_NO_ACCOUNTS: "1", DO_NOT_TRACK: "1",
   ...(process.env.MAGPIE_BUN ? { MAGPIE_BUN: process.env.MAGPIE_BUN } : {}),
 };
-const initial = { vlm: { provider: "openai", model: "original", api_key: "fake-original" },
+const initial = { vlm: { max_concurrent: 3, timeout: 600, provider: "openai", model: "original", api_key: "fake-original" },
   embedding: { dense: { provider: "openai", model: "fixed-embedding", dimension: 1536 } },
   bot: { agents: { model: "old-bot", provider: "openai", apiKey: "fake-bot" } } };
-let document = structuredClone(initial), revision = 0, inferenceCalls = 0, service;
+let document = structuredClone(initial), revision = 0, appliedRevision = 0, instance = 1, restarts = 0, inferenceCalls = 0, service;
 let logs = "";
 const backend = createServer(async (req, res) => {
   res.setHeader("Content-Type", "application/json");
@@ -35,11 +35,16 @@ const backend = createServer(async (req, res) => {
   const body = raw ? JSON.parse(raw) : null;
   if (req.url === "/bot/v1/health") return res.end(JSON.stringify({ status: "healthy" }));
   if (req.url === "/v1/models") return res.end(JSON.stringify({ data: ["one", "two"].map((id) => ({ id, context_window: 64000 })) }));
+  if (req.url === "/api/v1/admin/restart") {
+    assert.equal(req.method, "POST"); assert.equal(body.revision, String(revision));
+    restarts++; instance++; appliedRevision = revision;
+    return res.end(JSON.stringify({ status: "ok", result: { restarting: true } }));
+  }
   if (!req.url.startsWith("/api/v1/admin/configuration")) {
     inferenceCalls++; res.statusCode = 500; return res.end("{}");
   }
   if (req.method === "GET") return res.end(JSON.stringify({ status: "ok", result: {
-    content: JSON.stringify(document), revision: String(revision), writable: true, file_path: "/fake/ov.conf", overrides: { cluster: [] }, restart_required: revision > 0,
+    content: JSON.stringify(document), revision: String(revision), writable: true, file_path: "/fake/ov.conf", overrides: { cluster: [] }, restart_required: revision !== appliedRevision, restart: { supported: true, instance_id: String(instance) },
   } }));
   if (!req.url.includes("dry_run=true")) {
     if (body.revision !== String(revision)) { res.statusCode = 400; return res.end("{}"); }
@@ -76,7 +81,7 @@ try {
   const plugin = join(root, "plugin");
   await fs.mkdir(plugin);
   const source = dirname(dirname(fileURLToPath(import.meta.url)));
-  for (const file of ["package.json", "index.mjs", "openviking.agent.js", "lib", "page"]) await fs.cp(join(source, file), join(plugin, file), { recursive: true });
+  for (const file of ["package.json", "index.mjs", "openviking.agent.js", "lib"]) await fs.cp(join(source, file), join(plugin, file), { recursive: true });
   const adapterDirectory = join(env.XDG_CONFIG_HOME, "magpie-openviking-models");
   await fs.mkdir(adapterDirectory, { recursive: true, mode: 0o700 });
   await fs.writeFile(join(adapterDirectory, "adapter.json"), JSON.stringify({ serverUrl: backendURL, pollMs: 500, botMode: "follow" }));
@@ -94,16 +99,20 @@ try {
   service.stderr.on("data", (chunk) => { logs += chunk; });
   await command("openviking-models", "smoke/one");
   await until(() => document.vlm.model === "smoke/one", "first synchronization");
+  await until(() => restarts === 1 && appliedRevision === revision, "first automatic restart");
+  assert.equal(document.vlm.max_concurrent, 3); assert.equal(document.vlm.timeout, 600);
   assert.equal(document.bot.agents.model, undefined);
   assert.equal(document.bot.agents.contextWindowTokens, 64000);
   assert.deepEqual(document.embedding, initial.embedding);
   await command("openviking-models", "smoke/two");
   await until(() => document.vlm.model === "smoke/two", "model change");
+  await until(() => restarts === 2 && appliedRevision === revision, "model-change automatic restart");
   await command("openviking-models", "default");
   await until(() => document.vlm.model === "original", "disconnect restoration");
+  await until(() => restarts === 3 && appliedRevision === revision, "restoration automatic restart");
   assert.deepEqual(document, initial);
   assert.equal(inferenceCalls, 0);
-  console.log("PASS: actual Magpie Agent registration, Bun bridge, catalog, Bot inheritance, model change and restoration; zero inference calls.");
+  console.log("PASS: actual Magpie Agent registration, Bun bridge, catalog, Bot inheritance, model change, automatic restart verification and restoration; existing parameters preserved; zero inference calls.");
 } finally {
   if (service && service.exitCode === null) {
     await new Promise((done) => {

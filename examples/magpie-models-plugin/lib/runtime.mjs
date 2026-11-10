@@ -148,7 +148,10 @@ export function startAdapter(input, options = {}) {
     } catch (error) {
       const code = error instanceof AdapterError ? error.code : "adapter_unavailable";
       log(code);
-      try { const config = await settings(options); await withLock(config.directory, () => publish(config, { status: "error", code })); } catch {}
+      try {
+        const config = await settings(options);
+        await withLock(config.directory, () => publish(config, { status: "error", code }));
+      } catch {}
     } finally {
       if (!stopped) { timer = setTimeout(tick, delay); timer.unref?.(); }
     }

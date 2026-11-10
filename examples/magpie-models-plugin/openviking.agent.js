@@ -10,7 +10,7 @@ export const agent = {
   format: "json",
   model: "model",
   ua: ["openviking", "vikingbot"],
-  notice: "Check the adapter status, then restart OpenViking and VikingBot to apply saved settings. Disconnect before uninstalling. 请检查适配器状态，保存后重启 OV 和 VikingBot；卸载前先断开。",
+  notice: "Model changes automatically restart OpenViking and its managed VikingBot; check adapter status for activation failures. Disconnect before uninstalling. 切换模型后自动重启 OV 和受管 VikingBot；生效失败请检查适配器状态，卸载前先断开。",
 };
 
 export function connect({ gateway, model }) {
