@@ -314,7 +314,10 @@ class MemoryTypeRegistry:
 
             # Write the file
             try:
-                await viking_fs.write_file(file_uri, full_content, ctx=ctx)
+                from openviking.observability.reporting.facts import bind_memory_type
+
+                with bind_memory_type(schema.memory_type):
+                    await viking_fs.write_file(file_uri, full_content, ctx=ctx)
                 logger.info(f"[MemoryTypeRegistry] Initialized memory file: {file_uri}")
             except Exception:
                 pass

@@ -19,7 +19,7 @@ class TestUserIdentifier:
         u2 = UserIdentifier("acct", "beta")
         assert u1.user_space_name() != u2.user_space_name()
 
-    @pytest.mark.parametrize("user_id", [".", "..", "team:alice"])
+    @pytest.mark.parametrize("user_id", [".", "..", "team:alice", "alice\n"])
     def test_user_id_rejects_unsafe_path_segments(self, user_id):
         with pytest.raises(ValueError):
             UserIdentifier("acct", user_id)

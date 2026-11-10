@@ -1,1 +1,5 @@
+@import '../../theme.css';
+@import '../../shared/components/tooltip/tooltip.css';
 @import './file-preview.css';
+@import '@ark-design/ui/file-viewer/style/index.css';
+@import '@ark-design/ui/markdown-renderer/style/index.css';

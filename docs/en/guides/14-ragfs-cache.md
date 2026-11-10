@@ -155,6 +155,9 @@ The top-level `cache` section is a sibling of `storage`:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `backend` | str | `"local"` | `local` preserves existing behavior; `cache` enables CachedFileSystem |
+| `shared_redis_ttl_seconds` | int | `0` | TTL override for every query bucket when CacheFS shares a Redis service with QueueFS, cache-backed PathLock, or the expiry scheduler; `0` keeps the provider default |
+
+`shared_redis_ttl_seconds` applies uniformly to `stat`, `read_dir`, `tree_directory`, `glob_directory`, and `grep` buckets. It does not encode a per-file priority: after the query-driven CacheFS refactor, cached objects are query results rather than file bodies or directory entries. Set it lower than the provider's `default_ttl_seconds` to bound cache retention when stateful modules share the service. OpenViking ignores the option when CacheFS uses an isolated Redis service.
 
 `storage.agfs.pathlock` controls PathLock storage:
 
@@ -329,6 +332,15 @@ Recommended signals to watch:
 - provider get / put / delete latency
 - cache set / delete failures
 - backend fallbacks
+
+## Shared Redis Deployments
+
+CacheFS query buckets can share one Redis service with QueueFS, a cache-backed PathLock, and the expiry scheduler. Redis applies `maxmemory` and eviction policy to the whole service, so `shared_redis_ttl_seconds` is a retention bound rather than a capacity reservation or a survival guarantee for stateful keys.
+
+- Set `shared_redis_ttl_seconds` below `cache.redis.default_ttl_seconds` when cache retention should yield to stateful workloads.
+- Keep `shared_redis_ttl_seconds` at `0` to retain the provider default.
+- For a hard capacity boundary, use a dedicated Redis service. A logical database index does not isolate `maxmemory` or eviction policy.
+- When sharing a service, monitor `used_memory`, `evicted_keys`, and cache hit/miss metrics together.
 
 ## Recommended Rollout
 

@@ -7,47 +7,67 @@ import {
   resolveIdentityLayer,
   resolveRequestOptions,
 } from './options.js';
+import {
+  normalizeTransportError,
+  parseJson,
+  readBlob,
+  readText,
+  readEnvelope,
+  throwIfErrorEnvelope,
+  toClientError,
+} from './response.js';
+import { openStream } from './stream.js';
 import type {
   OvClient,
   OvClientOptions,
-  OvErrorEnvelope,
+  OvRequestOptions,
   OvRequestSpec,
-  OvSuccessEnvelope,
+  OvResolvedOptions,
+  OvResponseEnvelope,
+  OvStream,
+  OvStreamSpec,
 } from './types.js';
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function readEnvelope(value: unknown): OvErrorEnvelope & OvSuccessEnvelope {
-  return isRecord(value) ? value : {};
-}
-
-/** 请求被调用方主动取消时保留 `AbortError` 语义，便于调用方区分。 */
-function isAbortError(error: unknown): boolean {
-  return (
-    isRecord(error) &&
-    (error.name === 'AbortError' || error.code === 'ABORT_ERR')
+/**
+ * 逐字段解析本次请求生效的配置。身份层每次请求只求值一次，父层与请求覆盖共用
+ * 同一份结果，避免重复刷新凭证。
+ *
+ * Resolves the configuration in effect for one request field by field. The
+ * identity layer is evaluated once per request and shared by the parent and the
+ * override, so a credential is not refreshed twice.
+ */
+async function resolveFor(
+  defaults: OvClientOptions,
+  override: OvRequestOptions | undefined,
+): Promise<OvResolvedOptions> {
+  const baseLayer = await resolveIdentityLayer(defaults);
+  const localLayer = await resolveIdentityLayer(override);
+  const parent = resolveClientOptions(defaults, baseLayer);
+  return resolveRequestOptions(
+    override,
+    parent,
+    mergeIdentityLayers(baseLayer, localLayer),
   );
 }
 
-/**
- * 把传输层的拒绝归一成 {@link OvClientError}。调用方主动取消时保留原始错误，
- * 以便按 `AbortError` 判断；其余网络失败带上原始错误作为 cause。
- *
- * Normalises a transport rejection into {@link OvClientError}. A caller-requested
- * abort keeps the original error so it can be recognised as an `AbortError`;
- * every other network failure carries the original error as its cause.
- */
-function normalizeTransportError(error: unknown, signal?: AbortSignal): never {
-  if (isAbortError(error) || signal?.aborted) {
-    throw error;
-  }
-  throw new OvClientError({
-    code: 'NETWORK_ERROR',
-    message: error instanceof Error ? error.message : 'Network request failed',
-    cause: error,
-  });
+/** 组装请求地址与初始化参数。Builds the request URL and init. */
+function buildRequest(
+  effective: OvResolvedOptions,
+  spec: Pick<OvRequestSpec, 'method' | 'path' | 'query' | 'body'>,
+  headers: Record<string, string>,
+): { url: string; init: RequestInit } {
+  const hasBody = spec.body !== undefined;
+  return {
+    url: joinUrl(effective.baseURL, spec.path) + buildQuery(spec.query),
+    init: {
+      method: spec.method,
+      headers: hasBody
+        ? { 'content-type': 'application/json', ...headers }
+        : headers,
+      body: hasBody ? JSON.stringify(spec.body) : undefined,
+      credentials: effective.credentials,
+    },
+  };
 }
 
 /**
@@ -72,89 +92,107 @@ export function createOvClient(options: OvClientOptions = {}): OvClient {
   // 结果。
   const defaults = options;
 
+  async function send(
+    spec: OvRequestSpec | OvStreamSpec,
+    headers?: Record<string, string>,
+    signal?: AbortSignal,
+    /**
+     * 已经解析好的配置。流式请求要先解析一次用于接上调用方 signal，再交给这里发
+     * 送；不复用就会把身份字段求值两遍——函数形式的凭证因此可能被刷新两次，第二
+     * 次甚至可能失败。
+     *
+     * Configuration already resolved. A streaming request resolves it once to link
+     * the caller's signal and then hands it here; without reuse the identity fields
+     * are evaluated twice, so a function-valued credential may refresh twice and the
+     * second evaluation can even fail.
+     */
+    resolved?: OvResolvedOptions,
+  ): Promise<{ response: Response; effective: OvResolvedOptions }> {
+    const effective = resolved ?? (await resolveFor(defaults, spec.options));
+    const { url, init } = buildRequest(effective, spec, {
+      ...headers,
+      ...effective.headers,
+    });
+    const active = signal ?? effective.signal;
+    try {
+      return {
+        response: await fetchImpl(url, { ...init, signal: active }),
+        effective,
+      };
+    } catch (error) {
+      normalizeTransportError(error, active);
+    }
+  }
+
+  /** 发一次 JSON 请求，返回 `result` 与外壳里的分页标记。 */
+  async function requestJson<TResult>(
+    spec: OvRequestSpec,
+  ): Promise<OvResponseEnvelope<TResult>> {
+    const { response, effective } = await send(spec);
+
+    // 先读文本再解析：读取失败是传输失败（含取消），必须上报；只有解析失败
+    // 才是「响应不是 JSON」，此时按原文返回。
+    //
+    // `parseJson` 用 `undefined` 表示「不是 JSON」，合法的 `null` 要保留：
+    // 否则响应体为 `null` 时会被替换成字符串 `"null"`，调用方拿到的类型就变了。
+    //
+    // Read the text before parsing: a read failure is a transport failure (including
+    // an abort) and must surface, while only a parse failure means "not JSON", in
+    // which case the raw text is returned.
+    //
+    // `parseJson` reports "not JSON" with `undefined`, so a legitimate `null` is
+    // kept: otherwise a `null` body becomes the string `"null"` and the caller's
+    // type is silently different.
+    const raw = await readText(response, effective.signal);
+    const parsed = parseJson(raw);
+    const body = parsed !== undefined ? parsed : raw.trim() ? raw : undefined;
+
+    if (!response.ok) throw toClientError(response, body);
+    throwIfErrorEnvelope(response, body);
+
+    const envelope = readEnvelope(body);
+    return {
+      result: ('result' in envelope ? envelope.result : body) as TResult,
+      hasMore: envelope.has_more === true,
+    };
+  }
+
   const client: OvClient = {
     get baseURL() {
       return defaults.baseURL ?? '';
     },
 
     async request<TResult>(spec: OvRequestSpec): Promise<TResult> {
-      // 默认身份层每次请求只求值一次，父层配置与请求覆盖共用这一份结果。
-      const baseLayer = await resolveIdentityLayer(defaults);
-      const localLayer = await resolveIdentityLayer(spec.options);
-      const parent = resolveClientOptions(defaults, baseLayer);
-      const effective = resolveRequestOptions(
-        spec.options,
-        parent,
-        mergeIdentityLayers(baseLayer, localLayer),
-      );
-
-      const url =
-        joinUrl(effective.baseURL, spec.path) + buildQuery(spec.query);
-
-      const hasBody = spec.body !== undefined;
-      const headers = hasBody
-        ? { 'content-type': 'application/json', ...effective.headers }
-        : effective.headers;
-
-      let response: Response;
-      try {
-        response = await fetchImpl(url, {
-          method: spec.method,
-          headers,
-          body: hasBody ? JSON.stringify(spec.body) : undefined,
-          credentials: effective.credentials,
-          signal: effective.signal,
-        });
-      } catch (error) {
-        normalizeTransportError(error, effective.signal);
-      }
-
-      // 先读文本再解析：读取失败是传输失败（含取消），必须上报；只有解析失败
-      // 才是「响应不是 JSON」，此时按无正文处理。
-      let raw: string;
-      try {
-        raw = await response.text();
-      } catch (error) {
-        normalizeTransportError(error, effective.signal);
-      }
-
-      let body: unknown;
-      if (raw.trim()) {
-        try {
-          body = JSON.parse(raw);
-        } catch {
-          // 不是 JSON 就按原文返回，不把二进制或纯文本响应强转成对象。
-          body = raw;
+      if (spec.responseType === 'blob') {
+        const { response, effective } = await send(spec);
+        if (!response.ok) {
+          // 失败响应仍是 JSON 外壳，先解析才能保留服务端的错误码。
+          const raw = await readText(response, effective.signal);
+          throw toClientError(response, parseJson(raw) ?? raw);
         }
+        return (await readBlob(response, effective.signal)) as TResult;
       }
 
-      const envelope = readEnvelope(body);
-      const requestId = response.headers.get('x-request-id') ?? undefined;
+      const { result } = await requestJson<TResult>(spec);
+      return result;
+    },
 
-      if (!response.ok) {
-        throw new OvClientError({
-          code: envelope.error?.code ?? `HTTP_${response.status}`,
-          message: envelope.error?.message ?? response.statusText,
-          statusCode: response.status,
-          details: envelope.error?.details,
-          requestId,
-          responseBody: body,
-        });
+    requestEnvelope<TResult>(
+      spec: OvRequestSpec,
+    ): Promise<OvResponseEnvelope<TResult>> {
+      if (spec.responseType === 'blob') {
+        return Promise.reject(
+          new OvClientError({
+            code: 'INVALID_REQUEST',
+            message: 'requestEnvelope does not support responseType: blob',
+          }),
+        );
       }
+      return requestJson<TResult>(spec);
+    },
 
-      // 原生接口在 HTTP 200 里用 status: 'error' 表达业务失败。
-      if (envelope.status === 'error') {
-        throw new OvClientError({
-          code: envelope.error?.code ?? 'UNKNOWN',
-          message: envelope.error?.message ?? 'Request failed',
-          statusCode: response.status,
-          details: envelope.error?.details,
-          requestId,
-          responseBody: body,
-        });
-      }
-
-      return ('result' in envelope ? envelope.result : body) as TResult;
+    stream(spec: OvStreamSpec): Promise<OvStream> {
+      return openStream(spec, { send, resolveFor, defaults });
     },
   };
 

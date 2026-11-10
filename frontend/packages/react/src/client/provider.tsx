@@ -29,7 +29,7 @@ export interface OpenVikingProviderProps extends OvClientOptions {
  * 配置一次服务地址与身份字段，不必自己组装请求头。
  *
  * 开源版传 `apiKey`、`accountId`、`userId`；商业版由浏览器 Cookie 鉴权，只传
- * `accountId`、`userId`、`resourceId`，并按需把 `credentials` 设为 `include`。
+ * `accountId`、`userId`、`resourceId`。`credentials` 默认 `include`，无需显式传入。
  *
  * 嵌套时内层只覆盖自己声明的字段，其余继承外层：外层配好服务地址与凭证后，
  * 内层可以只改 `userId`。显式传空字符串表示清除继承到的值。
@@ -43,8 +43,8 @@ export interface OpenVikingProviderProps extends OvClientOptions {
  *
  * The open-source edition passes `apiKey`, `accountId` and `userId`; the
  * commercial edition authenticates with a browser cookie, so it passes
- * `accountId`, `userId` and `resourceId`, and sets `credentials` to `include`
- * where needed.
+ * `accountId`, `userId` and `resourceId`. `credentials` defaults to `include`
+ * and can be omitted.
  *
  * Nesting overrides only the fields the inner Provider declares and inherits the
  * rest, so an outer Provider can own the service address and credential while an
@@ -119,4 +119,9 @@ export function OpenVikingProvider({
  */
 export function useOvClient(): OvClient | null {
   return useContext(OvClientContext)?.client ?? null;
+}
+
+/** Internal: modules compose their request lifetime with the inherited signal. */
+export function useOvSignal(): AbortSignal | undefined {
+  return useContext(OvClientContext)?.base.signal;
 }

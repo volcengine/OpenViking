@@ -1,44 +1,81 @@
 # Console 交互面板
 
-对话视图与 TUI 合并为一个面板，内部协调模式切换、工具栏与资源上下文。模块自己取数，宿主提供配置、受控模式、插槽与文案。
+`Console` 组合 `Tui` 与 `VikingBot`，管理原生 API 命令、执行记录和两种模式的草稿。切换模式保留记录和草稿。
 
-组件当前是占位实现：只展示模块名称与占位文案。下面的 props 已定型，接入方可以先完成容器与状态接入；组合视图与 `useConsole` 随后补充。
+命令侧已接通原生 API。对话侧按火山版 `release/openviking/2026-11-12` 提供会话操作区、新版欢迎空态、快捷输入、附件和引用选择；通过 `conversation` 传入 VikingBot 的数据与回调。真实对话、流式回复、上传及会话持久化由宿主接入。
+
+面板沿用火山版的胶囊模式切换、图标工具栏和终端快速体验布局。快捷项填入命令并聚焦输入框，不自动执行；命令历史只包含当前面板的本地记录，点击可重新填入。历史与新建按钮支持悬停和键盘聚焦提示；新建会话始终可用，会取消当前请求并清空本地记录、错误和命令草稿，不删除服务端数据。新建按钮文案通过 `labels.clear` 替换；其他默认文案也可通过 `labels` 定制。
+
+历史日期取自提交命令时的前端时间戳，按本地时区以 `YYYY-MM-DD HH:mm` 展示。
+
+`Console` 默认撑满宿主的宽高，不限制面板宽度；宿主需提供明确高度或可伸展的 flex 布局。示例的 720px 高度仅用于演示。
 
 ## 基础用法
 
-```tsx file="../../_demos/console-placeholder.tsx" preview
+默认选中 VikingBot（`conversation`）。宿主可通过 `defaultMode="command"` 改为初始选中终端；需要受控切换时，使用 `mode` 与 `onModeChange`。
+
+示例使用固定模拟服务。输入 `ov ls viking://resources/demo` 或 `ov read viking://resources/demo/notes.md` 体验结果与资源链接，不访问真实服务。
+
+对话示例使用固定会话、快捷输入和资源候选；`+` 仅在浏览器内选择附件，不上传，发送未接入。真实会话、流式回复和持久化由宿主通过 `conversation` 接入。
+
+```tsx file="../../_demos/console-basic.tsx" preview
 
 ```
 
-## 模块负责什么
+真实接入时，在宿主通过 `OpenVikingProvider` 配置 `baseURL`、凭证和身份；无需逐模块提供 Adapter。`baseURL` 不包含 `/api/v1`，未配置时使用同源地址。模块挂载不请求，显式提交命令才访问服务。
 
-- 当前模式、公共工具栏与内容区域，操作按当前模式分发。
-- 对话的会话、消息流、附件与记忆提交；命令的定义、执行、取消与记录。
-- 两种模式各自保留状态，切换时互不影响。
+## 独立 Hook
 
-## 宿主负责什么
+`@openviking/react/modules/console` 同时导出 `useConsole(options?: ConsoleOptions): ConsoleResult`。它与 `Console` 使用相同的 Provider 继承、实例隔离和请求清理，不渲染视图，也不需要 CSS。
 
-- 通过 Provider 提供请求配置，模块可用 `requestOptions` 逐字段覆盖。
-- 登录、身份切换、路由与权限。
-- 打开资源：模块通过 `onOpenUri` 上报，不直接操作其他模块的私有状态。
-- 输入区上方与工具栏中的入口，通过 `slots` 注入。
+`ConsoleOptions` 接受 `mode`、`defaultMode`、`locale`、`scopeKey`、`onModeChange` 和 `requestOptions`。`ConsoleResult` 提供 `records`、`command`、`conversationDraft`、`mode`、`commands`、`isExecuting`、`error` 和 `failedCommand`；操作包括 `setMode`、`setCommand`、`setConversationDraft`、`execute`、`retry`、`cancel` 和 `clear`。`execute` 与 `retry` 在更新记录后完成，失败也通过 `error` 或记录状态表达，不抛出请求错误。`clear` 中止当前请求，并清空命令记录、错误和命令草稿；对话服务状态仍由宿主管理。
+
+以下示例复用固定离线服务，独立组合 `Tui`：
+
+```tsx file="../../_demos/console-hook.tsx" preview
+
+```
+
+## 执行行为
+
+同一实例同时执行一条命令，等待请求期间禁用输入。失败信息显示在对应的命令结果中，可重新提交命令；写入失败可能已被服务端接受，重新提交前先核查结果。新建会话会中止 HTTP 请求并忽略迟到结果，不保证撤销服务端已接受的操作。清空记录只移除本地历史和错误，不删除服务端资源。
+
+记录与草稿只在内存中保存。服务、身份配置或 `scopeKey` 变化时清空状态、取消旧请求；卸载同样取消。若身份由稳定函数动态返回，宿主须同步更新 `scopeKey`，或用身份作为组件 `key`。
+
+## 命令范围
+
+命令可使用 `ov name`、`/name` 或裸名称。带空格的参数使用单引号或双引号，支持反斜线转义。以 `--` 开头的正文应加引号，如 `ov write viking://resources/a.md "--heading"`；也可通过 `--` 结束选项解析：`ov write viking://resources/a.md -- --heading`。字符串选项值同样支持引号，如 `--description "--example"`。参数按数据解析，不执行 Shell；未知选项、重复选项、缺失参数和无效 URI 会生成失败记录。
+
+| 能力 | 命令                                                                                                   |
+| ---- | ------------------------------------------------------------------------------------------------------ |
+| 本地 | `help`、`clear`                                                                                        |
+| 服务 | `health`、`status`                                                                                     |
+| 浏览 | `ls [uri]`、`tree [uri]`、`stat <uri>`                                                                 |
+| 内容 | `read <uri>`、`abstract <uri>`、`overview <uri>`                                                       |
+| 检索 | `find <query>`、`search <query>`、`grep <pattern>`、`glob <pattern>`                                   |
+| 写入 | `mkdir <uri>`、`write <uri> <content>`、`cp <from_uri> <to_uri>`、`mv <from_uri> <to_uri>`、`rm <uri>` |
+| 任务 | `task list`、`task status <id>`、`task cancel <id>`                                                    |
+
+完整选项见运行时 `ov help` 和输入区参数提示。选项名沿用原生字段，例如 `--target_uri`、`--case_insensitive`。`ls` / `tree` 默认返回至多 100 条；通过 `--limit` 和 `--offset` 分页，`tree` 另支持 `--level_limit`。`write` 默认覆盖，使用 `--mode create` 创建，或 `--mode append` 追加。`task cancel` 请求服务端协作取消；新建会话只中止浏览器的 HTTP 请求。
+
+这是浏览器可用的原生命令子集。CLI 本机配置、登录、上传下载、资源导入、会话和编译命令不在本期范围内。完成 HTTP 请求表示接口已返回，异步操作的最终结果须通过任务命令查询。
 
 ## 属性
 
-模块从子路径和根入口导出 `ConsoleProps`，`ConsoleMode`、`ConsoleLabels` 与 `ConsoleSlots` 只从子路径导出。
+根入口只导出 `Console` 与 `ConsoleProps`。模式、文案和插槽类型从 `@openviking/react/modules/console` 导出，同一模块入口还导出 `useConsole`、`ConsoleOptions`、`ConsoleState` 与 `ConsoleResult`。JS 不加载 CSS；组合视图使用 `@openviking/react/modules/console/style.css`，已包含 Tui 与 VikingBot 所需样式。
 
-| 属性             | 类型                          | 默认值         | 说明                                                                                                       |
-| ---------------- | ----------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------- |
-| `requestOptions` | `OvRequestOptions`            | —              | 请求配置覆盖，逐字段覆盖最近的 Provider。                                                                  |
-| `mode`           | `'conversation' \| 'command'` | —              | 受控的当前模式。传入时由宿主决定模式，模块只上报切换意图。                                                 |
-| `defaultMode`    | `'conversation' \| 'command'` | `conversation` | 非受控时的初始模式。                                                                                       |
-| `onModeChange`   | `(mode: ConsoleMode) => void` | —              | 模式变化后触发。                                                                                           |
-| `onOpenUri`      | `(uri: string) => void`       | —              | 资源成功打开后触发；失败时不触发。                                                                         |
-| `slots`          | `ConsoleSlots`                | —              | `toolbar`、`conversationContext` 与 `commandHelp`。                                                        |
-| `labels`         | `ConsoleLabels`               | —              | 可替换文案：`conversation`、`command`、`error`、`retry` 与占位说明 `description`。未提供时沿用英文默认值。 |
-| `className`      | `string`                      | —              | 容器附加类名。                                                                                             |
-| `style`          | `CSSProperties`               | —              | 容器样式覆盖。                                                                                             |
+| 属性                 | 类型                          | 默认值         | 说明                                                                                    |
+| -------------------- | ----------------------------- | -------------- | --------------------------------------------------------------------------------------- |
+| `mode`               | `ConsoleMode`                 | —              | 受控模式，只通过回调上报切换意图                                                        |
+| `defaultMode`        | `ConsoleMode`                 | `conversation` | 非受控初始模式                                                                          |
+| `locale`             | `'en' \| 'zh'`                | `en`           | 默认文案、命令说明和时间语言                                                            |
+| `scopeKey`           | `string`                      | —              | 动态身份的显式隔离标识                                                                  |
+| `onModeChange`       | `(mode: ConsoleMode) => void` | —              | 用户请求不同模式时触发；受控值仍由宿主更新                                              |
+| `onOpenUri`          | `(uri: string) => void`       | —              | 资源链接激活时上报打开意图，宿主负责实际导航                                            |
+| `conversation`       | `Partial<VikingBotProps>`     | —              | 对话数据、会话操作、快捷输入、引用与附件回调；省略草稿属性时使用 Console 的实例内草稿。 |
+| `slots`              | `ConsoleSlots`                | —              | `toolbar`、`conversationContext`、`commandHelp`                                         |
+| `labels`             | `ConsoleLabels`               | —              | 面板文案；`tui` 与 `vikingBot` 继续定制内部视图文案                                     |
+| `requestOptions`     | `OvRequestOptions`            | —              | 逐字段覆盖最近 Provider 的地址、身份和信号                                              |
+| `className`、`style` | 标准 HTML 属性                | —              | 根容器样式，其余 HTML 属性也透传                                                        |
 
-文案为纯文本，宿主可将自身的翻译结果映射到这些属性。props 里没有数据字段——数据由模块自己加载。
-
-占位组件当前只消费 `className`、`style`、`labels.conversation` 与 `labels.description`。
+认证、权限、账号切换、页面布局与跨模块资源导航由宿主负责。
