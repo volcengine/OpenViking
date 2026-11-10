@@ -89,8 +89,7 @@ const childrenOf = (uri: string) => BY_URI.get(uri)?.children ?? [];
 
 /** Row-end indicator: the Agent experience board, or a Wiki root with its conflict state. */
 type Indicator =
-  | { kind: 'experience' }
-  | { kind: 'wiki'; pendingConflicts: boolean };
+  { kind: 'experience' } | { kind: 'wiki'; pendingConflicts: boolean };
 
 const INDICATORS: Record<string, Indicator> = {
   [`${MEMORIES}/experiences`]: { kind: 'experience' },
