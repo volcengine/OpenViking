@@ -1,17 +1,15 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { t } from './i18n.mjs';
 import { PALETTE, RESET, bgCode, colorDepth, fgCode, mix, scale, styler, width } from './ui.mjs';
 
 // The OpenViking SuperAgent banner: a small spaced "O P E N V I K I N G" over
-// a big 5x7 pixel "SUPERAGENT" in the sunset gradient, then the tagline and
+// a big 5x7 pixel "SUPERAGENT" in the sunset gradient, then the
 // version. 69 columns wide; on anything narrower, without colour, or in CI it
 // is a single title line instead.
 
 const PRODUCT_NAME = 'OpenViking SuperAgent';
 const LABEL = 'O P E N V I K I N G';
-const tagline = () => t('把本机的 coding agent 带上船', 'Bring your coding agent aboard');
 
 // 5 wide x 7 tall glyphs; '#' is on.
 const FONT = {
@@ -81,9 +79,7 @@ function render(rows, depth) {
 // The full banner's rows, coloured for `depth`.
 export function bannerLines({ depth = 24, version = '' } = {}) {
   const versionText = version ? `v${version}` : '';
-  const footer = [...blank(1), ...text(tagline())];
-  const used = width(tagline()) + versionText.length;
-  footer.push(...blank(WORD_WIDTH - used), ...text(versionText, () => PALETTE.dim));
+  const footer = [...blank(1 + WORD_WIDTH - versionText.length), ...text(versionText, () => PALETTE.dim)];
   return render([
     [...blank(1), ...text(LABEL, (x) => scale(sunset(x, LABEL.length), 0.95))],
     ...wordCells().map((row) => [...blank(1), ...row]),
@@ -93,17 +89,11 @@ export function bannerLines({ depth = 24, version = '' } = {}) {
 
 export const BANNER_ROWS = 6;
 
-// The one-line title: `▲ OpenViking SuperAgent  vX  tagline`, the tagline
-// only when it fits.
-export function titleLine({ output = process.stdout, env = process.env, version = '', columns = output.columns ?? 80 } = {}) {
+// The one-line title: `▲ OpenViking SuperAgent  vX`.
+export function titleLine({ output = process.stdout, env = process.env, version = '' } = {}) {
   const s = styler(output, env);
   let line = `${s.paint('▲', PALETTE.sunset[2])} ${s.bold(s.gradient(PRODUCT_NAME, PALETTE.sunset))}`;
-  let used = 2 + PRODUCT_NAME.length;
-  if (version) {
-    line += s.gray(`  v${version}`);
-    used += 3 + version.length;
-  }
-  if (columns >= 65 && used + 2 + width(tagline()) < columns) line += `  ${tagline()}`;
+  if (version) line += s.gray(`  v${version}`);
   return line;
 }
 

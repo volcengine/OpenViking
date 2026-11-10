@@ -54,8 +54,7 @@ async function usage(stream) {
     return;
   }
   const { releaseInfo } = await import('../src/version.mjs');
-  const tagline = t('把本机的 coding agent 带上船', 'Bring your coding agent aboard');
-  const lines = [`\n  ${s.bold(s.gradient('OpenViking SuperAgent', PALETTE.sunset))}  ${s.gray(`${releaseInfo().version} · ${tagline}`)}\n`,
+  const lines = [`\n  ${s.bold(s.gradient('OpenViking SuperAgent', PALETTE.sunset))}  ${s.gray(releaseInfo().version)}\n`,
     `  ${t('用法', 'Usage')}  ${s.accent('ovsa')} ${s.gray(t('<命令>', '<command>'))}`];
   for (const [group, rows] of groups) {
     lines.push('', `  ${s.violet(group)}`);

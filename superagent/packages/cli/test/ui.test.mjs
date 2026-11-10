@@ -71,7 +71,7 @@ test('the banner fits 80 columns and spells OpenViking SuperAgent, never VIKA', 
   }
 });
 
-test('the full banner is drawn once at 80 columns; its tagline uses the default foreground', async () => {
+test('the full banner is drawn once at 80 columns with no tagline', async () => {
   const { output, written } = screen({ columns: 80, rows: 30 });
   const banner = await openingBanner({ output, input: new PassThrough(), env: {}, version: '1.0.0' });
   assert.equal(banner.top(), null);
@@ -79,13 +79,13 @@ test('the full banner is drawn once at 80 columns; its tagline uses the default 
   assert.match(plain, /O P E N V I K I N G/);
   assert.ok(plain.split('\n').every((line) => width(line) <= 80));
   assert.match(written(), /\x1b\[38;2;/);
-  const footer = written().split('\n').find((line) => line.includes('aboard') || line.includes('带上船'));
-  assert.ok(footer.startsWith(' ') && !footer.slice(0, 3).includes('\x1b'), JSON.stringify(footer));
+  assert.doesNotMatch(plain, /aboard|带上船/);
+  assert.match(plain, /v1\.0\.0/);
   assert.doesNotMatch(written(), /VIKA/);
 });
 
 test('narrow, colourless, CI and short terminals get one title line', async () => {
-  const expected = (tag) => `▲ OpenViking SuperAgent  v1.0.0${tag ? '  把本机的 coding agent 带上船' : ''}`;
+  const expected = () => '▲ OpenViking SuperAgent  v1.0.0';
   for (const [size, env, tag] of [
     [{ columns: 40 }, {}, false],
     [{ columns: 64 }, {}, false],
