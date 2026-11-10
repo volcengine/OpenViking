@@ -146,6 +146,7 @@ function flatten(nodes: Node[], depth: number, s: State): FileTreeRow[] {
       ...node,
       kind: 'entry',
       id: node.uri,
+      levelLabel: isDir ? undefined : 'L0',
       depth,
       expanded: isOpen,
       hasChildren: isDir,

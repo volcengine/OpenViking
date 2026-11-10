@@ -66,6 +66,7 @@ export function Popover({
   children,
   content,
   placement = 'right',
+  anchorRef,
   trigger = 'hover',
   delay = 300,
   open: controlledOpen,
@@ -83,7 +84,12 @@ export function Popover({
   // ref 变化不会触发重渲染，effect 便看不到它。
   const [surfaceNode, setSurfaceNode] = useState<HTMLDivElement | null>(null);
   const id = useId();
-  const position = useOverlayPosition(open, triggerRef, surfaceNode, placement);
+  const position = useOverlayPosition(
+    open,
+    anchorRef ?? triggerRef,
+    surfaceNode,
+    placement,
+  );
 
   const change = useCallback(
     (next: boolean) => {
