@@ -153,79 +153,55 @@ describe('failure notice mute', () => {
     ...overrides,
   });
 
-  it('mutes a repeat of the same error in the same conversation', async () => {
-    const { policy, replies, activities } = makePolicy({ 1: inbound(1), 2: inbound(2) });
+  it('notifies a conversation once and mutes every later failure there', async () => {
+    const { policy, replies, activities } = makePolicy({ 1: inbound(1), 2: inbound(2), 3: inbound(3) });
     await policy.notifyTurnFailure({ inboundSeqs: [1], error: 'model exploded' });
     await policy.notifyTurnFailure({ inboundSeqs: [2], error: 'model exploded' });
+    await policy.notifyTurnFailure({ inboundSeqs: [3], error: 'quota exceeded' });
     assert.equal(replies.length, 1);
     assert.match(replies[0].text, /处理失败/);
     const notices = activities.filter((entry) => entry.kind === 'agent.failure_notice');
-    assert.deepEqual(notices.map((entry) => entry.status), ['NOTIFYING', 'MUTED']);
+    assert.deepEqual(notices.map((entry) => entry.status), ['NOTIFYING', 'MUTED', 'MUTED']);
   });
 
-  it('notifies again when the error summary changes', async () => {
-    const { policy, replies } = makePolicy({ 1: inbound(1), 2: inbound(2), 3: inbound(3) });
-    await policy.notifyTurnFailure({ inboundSeqs: [1], error: 'model exploded' });
-    await policy.notifyTurnFailure({ inboundSeqs: [2], error: 'quota exceeded' });
-    assert.equal(replies.length, 2);
-    assert.match(replies[1].text, /quota exceeded/);
-    // The stored summary was updated: repeating the new error is now muted.
-    await policy.notifyTurnFailure({ inboundSeqs: [3], error: 'quota exceeded' });
-    assert.equal(replies.length, 2);
-  });
-
-  it('re-notifies a persistent identical failure after the mute TTL expires', async () => {
+  it('stays muted however long the failure lasts', async () => {
     const { policy, replies } = makePolicy({ 1: inbound(1), 2: inbound(2) });
     await policy.notifyTurnFailure({ inboundSeqs: [1], error: 'model exploded' });
-    assert.equal(replies.length, 1);
-    // Age the delivered mute past the 10-minute TTL.
     const key = inbound(1).conversationKey;
     const mute = policy.failureNoticeMutes.get(key);
-    policy.failureNoticeMutes.set(key, { ...mute, atMs: mute.atMs - 11 * 60 * 1_000 });
+    policy.failureNoticeMutes.set(key, { ...mute, atMs: mute.atMs - 24 * 60 * 60 * 1_000 });
     await policy.notifyTurnFailure({ inboundSeqs: [2], error: 'model exploded' });
-    assert.equal(replies.length, 2);
-  });
-
-  it('resets the mute after a successful turn for that conversation', async () => {
-    const { policy, replies } = makePolicy({ 1: inbound(1), 2: inbound(2), 3: inbound(3) });
-    await policy.notifyTurnFailure({ inboundSeqs: [1], error: 'model exploded' });
-    policy.onTurnSucceeded({ inboundSeqs: [2] });
-    await policy.notifyTurnFailure({ inboundSeqs: [3], error: 'model exploded' });
-    assert.equal(replies.length, 2);
-  });
-
-  it('keeps the mute when the successful turn belongs to another conversation', async () => {
-    const other = inbound(2, { chatId: 'oc_other' });
-    const { policy, replies } = makePolicy({ 1: inbound(1), 2: other, 3: inbound(3) });
-    await policy.notifyTurnFailure({ inboundSeqs: [1], error: 'model exploded' });
-    policy.onTurnSucceeded({ inboundSeqs: [2] });
-    await policy.notifyTurnFailure({ inboundSeqs: [3], error: 'model exploded' });
     assert.equal(replies.length, 1);
   });
 
-  it('always notifies when an inbound message of the failed turn mentions the bot', async () => {
+  it('stays muted when a later failed message mentions the bot', async () => {
     const rows = {
       1: inbound(1),
       2: inbound(2, { mentions: [{ key: '@_user_1', name: 'Alpha', id: 'ou_bot123456' }] }),
     };
-    const { policy, replies, activities } = makePolicy(rows);
+    const mentionTarget = (row) => mentionTargetOf(row.mentions, 'ou_bot123456');
+    const { policy, replies } = makePolicy(rows, { mentionTarget });
+    await policy.notifyTurnFailure({ inboundSeqs: [1], error: 'model exploded' });
+    await policy.notifyTurnFailure({ inboundSeqs: [2], error: 'model exploded' });
+    assert.equal(replies.length, 1);
+  });
+
+  it('still notifies a different conversation once', async () => {
+    const other = inbound(2, { chatId: 'oc_other', conversationKey: 'profile:tenant:oc_other:main' });
+    const { policy, replies } = makePolicy({ 1: inbound(1), 2: other });
     await policy.notifyTurnFailure({ inboundSeqs: [1], error: 'model exploded' });
     await policy.notifyTurnFailure({ inboundSeqs: [2], error: 'model exploded' });
     assert.equal(replies.length, 2);
-    const notices = activities.filter((entry) => entry.kind === 'agent.failure_notice');
-    assert.deepEqual(notices.map((entry) => entry.status), ['NOTIFYING', 'NOTIFYING']);
   });
 
-  it('keeps the mute for a message that only mentions someone else, once the bot knows its id', async () => {
-    const rows = {
-      1: inbound(1),
-      2: inbound(2, { mentions: [{ key: '@_user_1', name: 'Alpha', id: 'ou_other123456' }] }),
-      3: inbound(3, { mentions: [{ key: '@_user_1', name: 'Alpha', id: 'ou_bot123456' }] }),
-    };
-    const mentionTarget = (row) => mentionTargetOf(row.mentions, 'ou_bot123456');
-    const { policy, activities } = makePolicy(rows, { mentionTarget });
-    for (const seq of [1, 2, 3]) await policy.notifyTurnFailure({ inboundSeqs: [seq], error: 'model exploded' });
-    const notices = activities.filter((entry) => entry.kind === 'agent.failure_notice');
-    assert.deepEqual(notices.map((entry) => entry.status), ['NOTIFYING', 'MUTED', 'NOTIFYING']);
+  it('clears every mute when any turn succeeds', async () => {
+    const other = inbound(2, { chatId: 'oc_other', conversationKey: 'profile:tenant:oc_other:main' });
+    const { policy, replies } = makePolicy({ 1: inbound(1), 2: other, 3: inbound(3) });
+    await policy.notifyTurnFailure({ inboundSeqs: [1], error: 'model exploded' });
+    // Recovery seen in another conversation: the runtime works again.
+    policy.onTurnSucceeded({ inboundSeqs: [2] });
+    assert.equal(policy.failureNoticeMutes.size, 0);
+    await policy.notifyTurnFailure({ inboundSeqs: [3], error: 'model exploded' });
+    assert.equal(replies.length, 2);
   });
 });
