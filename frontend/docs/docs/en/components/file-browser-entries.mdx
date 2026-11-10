@@ -75,4 +75,4 @@ The runnable example uses a `span` as a host wrapper. Click Import to verify tha
 
 ## Relation to the module
 
-`FileBrowser`'s `toolbarActions` accepts any node. Passing this component there makes the entry row match the rest of the module. The host provides connection credentials and handles resource imports. For a custom connection flow, use `onConnectAgent` without `agentConnect`.
+`FileBrowser` includes this component internally. Pass `agentConnect`, `onImportResources` and optional `renderImportResources` directly to the module and replace copy through `labels.entries`. This component remains available for independently assembled views.

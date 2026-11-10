@@ -50,17 +50,7 @@ Both labels are replaceable and default to English:
 
 ## Relation to the module
 
-`FileBrowser`'s `toolbarActions` accepts any node. Passing this component there makes the entry row match the rest of the module:
-
-```tsx
-<FileBrowser locale="en-US"
-  toolbarActions={
-    <FileBrowserEntries locale="en-US" onConnectAgent={connect} onImportResources={import} />
-  }
-/>;
-```
-
-The host provides connection credentials and handles resource imports. For a custom connection flow, use `onConnectAgent` without `agentConnect`.
+`FileBrowser` includes this component internally. Pass `agentConnect`, `onImportResources` and optional `renderImportResources` directly to the module and replace copy through `labels.entries`. This component remains available for independently assembled views.
 
 ## Custom import trigger
 

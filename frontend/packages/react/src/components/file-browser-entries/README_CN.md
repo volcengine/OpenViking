@@ -51,17 +51,7 @@ import '@openviking/react/components/file-browser-entries/style.css';
 
 ## 与模块的关系
 
-`FileBrowser` 的 `toolbarActions` 接受任意节点。用本组件放进去，入口条的外观就与模块其余部分一致：
-
-```tsx
-<FileBrowser locale="zh-CN"
-  toolbarActions={
-    <FileBrowserEntries locale="zh-CN" onConnectAgent={connect} onImportResources={import} />
-  }
-/>;
-```
-
-宿主提供接入凭证并处理资源导入。需要自定义接入流程时，仅传入 `onConnectAgent`，不传 `agentConnect`。
+`FileBrowser` 已内置本组件，宿主直接在模块上传入 `agentConnect`、`onImportResources` 与可选的 `renderImportResources`，并通过 `labels.entries` 定制文案。独立组装视图时仍可单独使用本组件。
 
 ## 自定义导入入口
 

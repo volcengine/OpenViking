@@ -9,56 +9,114 @@ import {
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { mount } from './helpers/module-dom.mjs';
+import { mount, ok } from './helpers/module-dom.mjs';
 import { FileBrowserEntries } from '@openviking/react/components/file-browser-entries';
+import { OpenVikingProvider } from '@openviking/react/client';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
 
-test('a host popover receives the native button, ref and original click handler', async () => {
-  const anchor = createRef();
-  const clicks = { entry: 0, host: 0 };
-  function HostPopover({ children }) {
-    const [open, setOpen] = useState(false);
-    return createElement(
-      Fragment,
-      null,
-      cloneElement(children, {
-        ref: anchor,
-        onClick(event) {
-          children.props.onClick?.(event);
-          clicks.host++;
-          setOpen(!open);
-        },
-      }),
-      open
-        ? createPortal(
-            createElement('div', { role: 'dialog' }, 'Host import'),
-            document.body,
-          )
-        : null,
-    );
-  }
-  const host = await mount(
-    createElement(FileBrowserEntries, {
+const emptyFetch = () => ok([]);
+const renderModule = (props) =>
+  createElement(
+    OpenVikingProvider,
+    { baseURL: 'https://ov.test', fetch: emptyFetch },
+    createElement(FileBrowser, props),
+  );
+
+for (const module of [false, true]) {
+  test(`a host popover receives the native button and ref from ${module ? 'FileBrowser' : 'FileBrowserEntries'}`, async () => {
+    const anchor = createRef();
+    const clicks = { entry: 0, host: 0 };
+    function HostPopover({ children }) {
+      const [open, setOpen] = useState(false);
+      return createElement(
+        Fragment,
+        null,
+        cloneElement(children, {
+          ref: anchor,
+          onClick(event) {
+            children.props.onClick?.(event);
+            clicks.host++;
+            setOpen(!open);
+          },
+        }),
+        open
+          ? createPortal(
+              createElement('div', { role: 'dialog' }, 'Host import'),
+              document.body,
+            )
+          : null,
+      );
+    }
+    const props = {
       onImportResources: () => clicks.entry++,
       renderImportResources: (trigger) =>
         createElement(HostPopover, null, trigger),
       labels: { importResources: 'Import with host' },
-    }),
-  );
+    };
+    const host = await mount(
+      module
+        ? renderModule({ ...props, labels: { entries: props.labels } })
+        : createElement(FileBrowserEntries, props),
+    );
+    try {
+      const button = host.container.querySelector('button');
+      assert.equal(anchor.current, button);
+      assert.equal(button.type, 'button');
+      assert.equal(button.textContent, 'Import with host');
+      assert.ok(button.classList.contains('ov-file-browser-entries__entry'));
+      await act(() => button.click());
+      assert.deepEqual(clicks, { entry: 1, host: 1 });
+      const panel = document.querySelector('[role="dialog"]');
+      assert.equal(panel.textContent, 'Host import');
+      assert.ok(!host.container.contains(panel));
+    } finally {
+      await host.unmount();
+    }
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+  });
+}
+
+test('FileBrowser owns entry visibility and passes localized entry copy', async () => {
+  let imports = 0;
+  const host = await mount(renderModule({}));
+  const entries = () =>
+    host.container.querySelector('.ov-file-browser-entries');
   try {
-    const button = host.container.querySelector('button');
-    assert.equal(anchor.current, button);
-    assert.equal(button.type, 'button');
-    assert.equal(button.textContent, 'Import with host');
-    assert.ok(button.classList.contains('ov-file-browser-entries__entry'));
+    assert.equal(entries(), null);
+    await host.render(
+      renderModule({
+        onImportResources: () => imports++,
+        labels: { entries: { importResources: '点击导入' } },
+      }),
+    );
+    const button = entries().querySelector('button');
+    assert.equal(button.textContent, '点击导入');
     await act(() => button.click());
-    assert.deepEqual(clicks, { entry: 1, host: 1 });
-    const panel = document.querySelector('[role="dialog"]');
-    assert.equal(panel.textContent, 'Host import');
-    assert.ok(!host.container.contains(panel));
+    assert.equal(imports, 1);
+    await host.render(
+      renderModule({
+        agentConnect: { apiKey: 'demo-api-key', locale: 'en' },
+        renderImportResources: () => null,
+        labels: { entries: { connectAgent: '连接我的 Agent' } },
+      }),
+    );
+    assert.equal(
+      entries().querySelector('button').textContent,
+      '连接我的 Agent',
+    );
+    assert.equal(entries().querySelectorAll('button').length, 1);
+    assert.equal(entries().querySelector('.ov-divider'), null);
+    await host.render(
+      renderModule({
+        onImportResources: () => imports++,
+        renderImportResources: () => null,
+      }),
+    );
+    assert.equal(entries(), null);
+    assert.ok(host.container.querySelector('input[type="search"]'));
   } finally {
     await host.unmount();
   }
-  assert.equal(document.querySelector('[role="dialog"]'), null);
 });
 
 test('renderer-only imports are visible, and null removes the entry and divider', async () => {
