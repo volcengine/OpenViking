@@ -85,11 +85,8 @@ async def test_initialize_account_workspace_batches_preset_directories(monkeypat
     viking_fs.files.update(legacy_files)
 
     account_count, user_count = await initializer.initialize_account_workspace(ctx)
-    assert viking_fs.files == {
-        **legacy_files,
-        f"{memory_root}/SOUL.md": (SYSTEM_ASSETS_DIR / "memory" / "SOUL.md").read_text(),
-    }
-    viking_fs.files[f"{memory_root}/SOUL.md"] = "Custom agent instructions"
+    assert viking_fs.files == legacy_files
+    viking_fs.files[f"{memory_root}/soul.md"] = "Custom agent instructions"
 
     user_root = canonical_user_root(ctx)
     expected_user_uris = {
@@ -136,7 +133,7 @@ async def test_initialize_account_workspace_batches_preset_directories(monkeypat
     assert (second_account_count, second_user_count) == (0, 0)
     assert viking_fs.files == {
         **legacy_files,
-        f"{memory_root}/SOUL.md": "Custom agent instructions",
+        f"{memory_root}/soul.md": "Custom agent instructions",
     }
     assert viking_fs.contexts["viking://resources"]["abstract"] == malformed_abstract
     assert set(viking_fs.contexts) == expected_uris
@@ -189,7 +186,10 @@ async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_st
         f"{uri.removeprefix(user_root + '/')}/{filename}" if uri != user_root else filename
         for uri in expected_uris
         for filename in (".abstract.md", ".overview.md")
-    } | {"memories/SOUL.md"}
+    } | {"memories/soul.md"}
+    assert (root_path / "memories/soul.md").read_text() == (
+        SYSTEM_ASSETS_DIR / "memory" / "soul.md"
+    ).read_text()
     assert "Sanitized scope." in (root_path / ".abstract.md").read_text()
 
     with pytest.raises(PermissionDeniedError):

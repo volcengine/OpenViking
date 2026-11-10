@@ -96,7 +96,7 @@ The `~/...` entries above use the home alias `viking://~`, which the server expa
 
 The schema-defined `memories/tools/` and `memories/skills/` types are disabled. They are separate from standalone Skills stored under `viking://user/{user_id}/skills/{skill_name}/SKILL.md`, which remain supported.
 
-`memories/SOUL.md` contains static agent instructions, initialized with the former Soul defaults when the user workspace is created. It is editable through the file APIs and is not extracted or merged on session commit. For existing users, initialization or the next self-memory commit creates a missing `SOUL.md` from these defaults. Existing `SOUL.md`, `soul.md`, and `identity.md` files are left unchanged.
+`memories/soul.md` contains static agent instructions, initialized with the former Soul defaults when the user workspace is created. It is editable through the file APIs and is not extracted or merged on session commit. For existing users, initialization or the next self-memory commit creates a missing `soul.md` from these defaults. Existing `soul.md` and `identity.md` files are left unchanged.
 
 ### Usage
 

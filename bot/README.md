@@ -373,11 +373,11 @@ For example, the default local Soul file is `~/.openviking/data/bot/workspace/sh
 
 When an active Workspace is first used, VikingBot copies initial files from the built-in `bot/workspace` template. The main customization points are:
 
-When OpenViking is configured, VikingBot reads the current user's `viking://~/memories/SOUL.md` on each turn and uses it in place of local `SOUL.md`. If the file is missing, empty, unreadable, or the read exceeds 5 seconds, it falls back to local `SOUL.md`. Without OpenViking, it uses local `SOUL.md` directly.
+When OpenViking is configured, VikingBot reads the current user's `viking://~/memories/soul.md` on each turn and uses it in place of local `SOUL.md`. If the file is missing, empty, unreadable, or the read exceeds 5 seconds, it falls back to local `SOUL.md`. Without OpenViking, it uses local `SOUL.md` directly.
 
 | File or directory | Purpose | How it is loaded |
 |-------------------|---------|------------------|
-| OpenViking `memories/SOUL.md` | Agent instructions | Preferred over local `SOUL.md` on every turn |
+| OpenViking `memories/soul.md` | Agent instructions | Preferred over local `SOUL.md` on every turn |
 | `SOUL.md` | Personality, values, and communication style | Local fallback when OpenViking Agent instructions are unavailable |
 | `AGENTS.md` | Global working rules and task constraints; create it when needed | Added to the system prompt on every turn |
 | `IDENTITY.md` | Agent name, role, and identity background; create it when needed | Added to the system prompt on every turn |
@@ -398,7 +398,7 @@ You are the team's engineering assistant.
 - State assumptions clearly and never invent results
 ```
 
-Changes to the selected instruction file normally take effect on the next Agent turn without restarting the Gateway. When OpenViking `SOUL.md` is in use, edit that remote file; local `SOUL.md` is not added alongside it. These instructions change prompt behavior only; they cannot bypass Channel permissions, tool visibility, or Sandbox restrictions.
+Changes to the selected instruction file normally take effect on the next Agent turn without restarting the Gateway. When OpenViking `soul.md` is in use, edit that remote file; local `SOUL.md` is not added alongside it. These instructions change prompt behavior only; they cannot bypass Channel permissions, tool visibility, or Sandbox restrictions.
 
 > [!NOTE]
 > Edit files in the active Workspace. `bot/workspace` in the repository or installed package is an initialization template and does not overwrite an existing Workspace. Never store API Keys or other secrets in bootstrap files.

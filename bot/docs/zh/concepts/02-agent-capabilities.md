@@ -121,12 +121,12 @@ ContextBuilder 实际读取按 `sandbox.mode` 选择的活动 Workspace：
 
 ContextBuilder 在每轮构建系统提示时，按本地 `AGENTS.md`、Agent 指令、本地 `TOOLS.md`、本地 `IDENTITY.md` 的顺序读取存在且非空的文件。
 
-配置 OpenViking 且当前用户的 `viking://~/memories/SOUL.md` 可读取、非空时，Agent 指令优先使用该文件；否则使用本地 `SOUL.md`。远端读取超时为 5 秒，文件缺失或读取失败也会回退本地。每轮只注入这两个文件中的一个，下一轮重新读取并选择。
+配置 OpenViking 且当前用户的 `viking://~/memories/soul.md` 可读取、非空时，Agent 指令优先使用该文件；否则使用本地 `SOUL.md`。远端读取超时为 5 秒，文件缺失或读取失败也会回退本地。每轮只注入这两个文件中的一个，下一轮重新读取并选择。
 
 | 文件 | 适合定义的内容 |
 |------|----------------|
 | `AGENTS.md` | 全局工作方式、任务流程、输出约束和必须遵守的项目规则 |
-| OpenViking `memories/SOUL.md`，本地 `SOUL.md` 兜底 | 人格、价值观、语气、回答风格和默认行为偏好 |
+| OpenViking `memories/soul.md`，本地 `SOUL.md` 兜底 | 人格、价值观、语气、回答风格和默认行为偏好 |
 | `TOOLS.md` | 工具选择原则、调用顺序、副作用确认和安全边界 |
 | `IDENTITY.md` | Agent 名称、角色、职责范围和身份背景 |
 
@@ -144,7 +144,7 @@ ContextBuilder 在每轮构建系统提示时，按本地 `AGENTS.md`、Agent �
 
 首次使用活动 Workspace 时，VikingBot 从安装包中的 `bot/workspace` 复制启动文件、内置 Skill 模板和辅助目录。模板初始化不会覆盖已有的启动文件定制。
 
-应修改当前选用的指令来源：OpenViking `SOUL.md` 可用时编辑该远端文件，本地兜底则编辑活动 Workspace 中的 `SOUL.md`。ContextBuilder 每轮重新读取启动文件，因此保存当前指令文件、`AGENTS.md`、`TOOLS.md` 或 `IDENTITY.md` 后，通常下一轮对话即可生效，无需重启 Gateway。修改安装包或仓库中的 `bot/workspace` 只影响以后创建的新 Workspace。
+应修改当前选用的指令来源：OpenViking `soul.md` 可用时编辑该远端文件，本地兜底则编辑活动 Workspace 中的 `SOUL.md`。ContextBuilder 每轮重新读取启动文件，因此保存当前指令文件、`AGENTS.md`、`TOOLS.md` 或 `IDENTITY.md` 后，通常下一轮对话即可生效，无需重启 Gateway。修改安装包或仓库中的 `bot/workspace` 只影响以后创建的新 Workspace。
 
 启动文件等同于系统级提示的一部分，应限制写权限，并且不要存放 API Key、Token 或其他秘密。
 

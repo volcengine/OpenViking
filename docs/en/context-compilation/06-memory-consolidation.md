@@ -40,7 +40,7 @@ ov compile memory \
   --instruction "Consolidate existing memories without losing facts; keep distinct objects separate"
 ```
 
-Root-level `profile.md` is included when present. Static `SOUL.md` instructions are not consolidated. Disabled and unregistered types are skipped. The user's root does not include `peers/*/memories`; target a peer's memories root explicitly to consolidate that space.
+Root-level `profile.md` is included when present. Static `soul.md` instructions are not consolidated. Disabled and unregistered types are skipped. The user's root does not include `peers/*/memories`; target a peer's memories root explicitly to consolidate that space.
 
 The command returns a task ID immediately. Use `ov task status <id>` to check the result and `ov task cancel <id>` to stop it.
 

@@ -432,12 +432,12 @@ async def test_context_prefers_openviking_agent_and_falls_back_to_local_soul(tem
     assert "Remote Agent instructions" in prompt
     assert "Local Soul instructions" not in prompt
     assert "Local working rules" in prompt
-    client.read_raw.assert_awaited_once_with("viking://~/memories/SOUL.md", offset=0, limit=-1)
+    client.read_raw.assert_awaited_once_with("viking://~/memories/soul.md", offset=0, limit=-1)
     assert http_client.call_args.kwargs["api_key"] == "request-key"
     assert http_client.call_args.kwargs["user"] == "alice"
     assert http_client.call_args.kwargs["actor_peer_id"] == "sender-1"
 
-    for failure in (NotFoundError("SOUL.md"), TimeoutError("OpenViking unavailable")):
+    for failure in (NotFoundError("soul.md"), TimeoutError("OpenViking unavailable")):
         client.read_raw.side_effect = failure
         prompt = await system_prompt()
         assert "Local Soul instructions" in prompt

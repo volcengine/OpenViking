@@ -22,7 +22,7 @@ def is_static_agent_memory(uri: str) -> bool:
 
 async def ensure_agent_file(viking_fs: Any, ctx: RequestContext, *, lease_ref: Any = None) -> None:
     root = f"{canonical_user_root(ctx)}/memories"
-    uri = f"{root}/SOUL.md"
+    uri = f"{root}/soul.md"
     try:
         await viking_fs.read_file(uri, ctx=ctx)
     except (FileNotFoundError, NotFoundError):
@@ -42,5 +42,5 @@ async def ensure_agent_file(viking_fs: Any, ctx: RequestContext, *, lease_ref: A
             await guard.close()
         return
 
-    content = (SYSTEM_ASSETS_DIR / "memory" / "SOUL.md").read_text(encoding="utf-8")
+    content = (SYSTEM_ASSETS_DIR / "memory" / "soul.md").read_text(encoding="utf-8")
     await viking_fs.write_file(uri, content, ctx=ctx, lease_ref=lease_ref)

@@ -31,7 +31,7 @@ const SPEC: Spec = {
   [`${USER}/`]: {
     'memories/': {
       'profile.md': null,
-      'SOUL.md': null,
+      'soul.md': null,
       'preferences/': {},
       'entities/': {},
       'events/': {},
