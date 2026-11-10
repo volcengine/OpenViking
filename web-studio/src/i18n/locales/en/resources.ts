@@ -420,6 +420,7 @@ const resources = {
       },
     },
     filePreview: {
+      viewMode: 'View mode',
       editFailed: 'Unable to load the complete file for editing.',
       saveFailed: 'Unable to save the file.',
       directoryLevels: {

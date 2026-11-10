@@ -39,17 +39,81 @@
   border-radius: 0 12px 12px 0;
   margin-left: -8px;
 }
+.previewActions {
+  --studio-preview-control-bg: #f7f7f9;
+  --studio-preview-control-border: #edeef2;
+  --studio-preview-control-text: #0b0b0f;
+  --studio-preview-control-muted: #787c91;
+  --studio-preview-control-icon: #3f3f51;
+  --studio-preview-control-selected: #ffffff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-family:
+    'PingFang SC',
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.003em;
+}
+.previewModeSwitch {
+  display: flex;
+  flex-shrink: 0;
+  height: 28px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--studio-preview-control-bg);
+}
+.previewModeSwitch .previewModeButton {
+  box-sizing: border-box;
+  height: 24px;
+  min-width: 51px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--studio-preview-control-muted);
+  background: transparent;
+  box-shadow: none;
+  font: inherit;
+  font-weight: 400;
+  line-height: 22px;
+  letter-spacing: inherit;
+}
+.previewModeSwitch .previewModeButton[data-active] {
+  color: var(--studio-preview-control-text);
+  background: var(--studio-preview-control-selected);
+  box-shadow: inset 0 0 0 1px var(--studio-preview-control-border);
+  font-weight: 500;
+}
+.previewModeSwitch .previewModeButton:focus-visible {
+  outline: 2px solid var(--studio-accent, var(--ring));
+  outline-offset: 1px;
+}
+:global(.dark) .previewActions {
+  --studio-preview-control-bg: var(--muted);
+  --studio-preview-control-border: var(--border);
+  --studio-preview-control-text: var(--foreground);
+  --studio-preview-control-muted: var(--muted-foreground);
+  --studio-preview-control-icon: var(--foreground);
+  --studio-preview-control-selected: var(--background);
+}
 .moreMenu {
   position: relative;
 }
-.moreMenu summary {
+.moreMenu summary,
+.previewIconAction {
+  box-sizing: border-box;
+  border: 1px solid var(--studio-preview-control-border, var(--border));
+  color: var(--studio-preview-control-text, var(--foreground));
   display: flex;
   width: 28px;
   height: 28px;
   align-items: center;
   justify-content: center;
   border-radius: 6px;
-  background: #f6f6fa;
+  background: var(--studio-preview-control-bg, var(--muted));
   cursor: pointer;
   list-style: none;
 }
@@ -57,23 +121,40 @@
   display: none;
 }
 .moreMenuContent {
+  color: var(--foreground);
   position: absolute;
   right: 0;
   top: 34px;
   z-index: 30;
   display: flex;
-  min-width: 200px;
+  min-width: 224px;
   flex-direction: column;
   align-items: stretch;
   gap: 4px;
   padding: 8px;
   border: 1px solid var(--border);
   background: var(--background);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px #14152b14;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--foreground) 12%, transparent);
 }
 .moreMenuContent button {
+  color: inherit;
   justify-content: flex-start;
+  width: 100%;
+  height: 40px;
+  gap: 12px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-weight: 400;
+}
+.moreMenuSeparator {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
+.previewIconAction {
+  color: var(--studio-preview-control-icon, var(--foreground));
+  padding: 0;
 }
 .assistant {
   display: flex;
@@ -183,4 +264,11 @@
 
 .assistant [data-agent-session-title] {
   display: none;
+}
+
+.moreMenuContent .moreMenuDanger {
+  color: var(--destructive);
+}
+.moreMenuContent .moreMenuDanger:hover {
+  background: color-mix(in srgb, var(--destructive) 10%, transparent);
 }

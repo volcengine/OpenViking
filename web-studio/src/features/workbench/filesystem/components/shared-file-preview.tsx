@@ -12,7 +12,8 @@ import '@openviking/react/components/file-preview/style.css'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { FileTextIcon } from 'lucide-react'
+import styles from '../workbench.module.css'
+import { FileTextIcon, PencilIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import {
@@ -31,7 +32,7 @@ interface Props {
   onNavigate?: (uri: string) => void
   onDirtyChange: (dirty: boolean) => void
   onSaved: (uri: string) => void
-  extraActions?: ReactNode
+  extraActions?: ReactNode | ((actions: FilePreviewActions | null) => ReactNode)
   content?: ReactNode
   readOnly?: boolean
   defaultReadLimit?: number
@@ -130,24 +131,34 @@ export function SharedFilePreview({
   const renderActions = (actions: FilePreviewActions) => {
     actionsRef.current = actions
     return (
-      <div className="flex items-center gap-1">
+      <div className={styles.previewActions}>
         {actions.canSwitchView && !actions.editing ? (
-          <>
+          <div
+            className={styles.previewModeSwitch}
+            role="group"
+            aria-label={t('filePreview.viewMode')}
+          >
             <Button
-              variant={actions.viewMode === 'preview' ? 'secondary' : 'ghost'}
+              variant="ghost"
+              className={styles.previewModeButton}
+              data-active={actions.viewMode === 'preview' || undefined}
+              aria-pressed={actions.viewMode === 'preview'}
               size="sm"
               onClick={() => actions.setViewMode('preview')}
             >
               {t('filePreview.markdownPreview')}
             </Button>
             <Button
-              variant={actions.viewMode === 'source' ? 'secondary' : 'ghost'}
+              variant="ghost"
+              className={styles.previewModeButton}
+              data-active={actions.viewMode === 'source' || undefined}
+              aria-pressed={actions.viewMode === 'source'}
               size="sm"
               onClick={() => actions.setViewMode('source')}
             >
               {t('filePreview.markdownSource')}
             </Button>
-          </>
+          </div>
         ) : null}
         {actions.canEdit || actions.editing ? (
           actions.editing ? (
@@ -171,12 +182,21 @@ export function SharedFilePreview({
               </Button>
             </>
           ) : (
-            <Button variant="ghost" size="sm" onClick={actions.startEditing}>
-              {t('filePreview.edit')}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className={styles.previewIconAction}
+              title={t('filePreview.edit')}
+              aria-label={t('filePreview.edit')}
+              onClick={actions.startEditing}
+            >
+              <PencilIcon className="size-3.5" />
             </Button>
           )
         ) : null}
-        {extraActions}
+        {typeof extraActions === 'function'
+          ? extraActions(actions)
+          : extraActions}
       </div>
     )
   }
@@ -347,7 +367,9 @@ export function SharedFilePreview({
                 <span className="truncate text-xs text-muted-foreground">
                   {file.uri}
                 </span>
-                {extraActions}
+                {typeof extraActions === 'function'
+                  ? extraActions(null)
+                  : extraActions}
               </div>
               <div className="min-h-0 flex-1 overflow-auto">
                 {customContent}

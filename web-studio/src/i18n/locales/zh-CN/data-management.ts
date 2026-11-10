@@ -1,4 +1,21 @@
 const dataManagement = {
+  deleteDocument: '删除文档',
+  deleteConfirmTitle: '删除文档？',
+  deleteConfirmDescription: '确定删除「{{name}}」吗？此操作无法撤销。',
+  deleteUnsavedWarning: '此文档有未保存的修改，删除后这些修改也将丢失。',
+  deleteCancel: '取消',
+  deleteConfirm: '确认删除',
+  deletingDocument: '正在删除…',
+  deleteFailed: '删除失败：{{error}}',
+  documentDeleted: '文档已删除',
+
+  copyContent: '复制内容',
+  copySucceeded: '内容已复制',
+  copyFailed: '复制失败，请重试',
+  historyMenu: '查看历史版本',
+  importMenu: '导入 .ovpack',
+  exportMenu: '导出 .ovpack',
+
   historyTitle: '历史版本',
   transferTitle: 'OVPack 导入与导出',
   transferShortLabel: 'OVPack',

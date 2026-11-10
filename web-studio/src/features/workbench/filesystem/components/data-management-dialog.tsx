@@ -32,6 +32,7 @@ import {
 
 interface Props {
   mode: 'history' | 'transfer'
+  initialTransferTab?: 'import' | 'export'
   onClose: () => void
   onCompare: () => void
   onChanged: () => void
@@ -58,6 +59,7 @@ function downloadBlob(blob: Blob, uri: string): void {
 
 export function DataManagementDialog({
   mode,
+  initialTransferTab = 'export',
   onClose,
   onCompare,
   onChanged,
@@ -74,7 +76,7 @@ export function DataManagementDialog({
   const historyLoading = commits === null && historyError === null
   const [message, setMessage] = useState('')
   const [file, setFile] = useState<File | null>(null)
-  const [transferTab, setTransferTab] = useState('export')
+  const [transferTab, setTransferTab] = useState(initialTransferTab)
   const [conflict, setConflict] = useState<'fail' | 'skip' | 'overwrite'>(
     'fail',
   )

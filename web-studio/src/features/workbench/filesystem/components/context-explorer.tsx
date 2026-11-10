@@ -71,6 +71,10 @@ export function ContextTree({
   rootUri?: string
 }) {
   const { t } = useTranslation('filesystem')
+  // This is an initial location, not a controlled expansion value. Changing it
+  // on selection reinitializes the shared module and discards all loaded branches.
+  // StudioUiProvider remounts this subtree when the connection identity changes.
+  const initialExpandedUri = useRef(currentUri)
   const navigationVersion = useRef(0)
   // Invalidate pending stat requests when this identity-scoped tree unmounts.
   useEffect(
@@ -83,7 +87,7 @@ export function ContextTree({
     rootUri,
     controlled: true,
     currentUri: selectedFileUri || currentUri,
-    defaultExpandedUri: currentUri,
+    defaultExpandedUri: initialExpandedUri.current,
     loadPreview: false,
     locale: studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US',
     onUriChange: (uri) => {

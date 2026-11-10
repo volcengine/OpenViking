@@ -399,6 +399,7 @@ const resources = {
       },
     },
     filePreview: {
+      viewMode: '查看模式',
       editFailed: '无法读取完整文件用于编辑。',
       saveFailed: '文件保存失败。',
       directoryLevels: {

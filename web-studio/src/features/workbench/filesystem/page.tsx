@@ -17,7 +17,9 @@ import {
   MoreHorizontalIcon,
   ArrowLeftIcon,
   HistoryIcon,
-  PackageIcon,
+  CopyIcon,
+  Trash2Icon,
+  DownloadIcon,
   PanelRightCloseIcon,
   PanelRightOpenIcon,
   UploadIcon,
@@ -64,6 +66,7 @@ import {
   ContextTree,
   FilesystemResizeHandle,
 } from '#/features/workbench/filesystem/components/context-explorer'
+import { DeleteDocumentDialog } from './components/delete-document-dialog'
 import { DataManagementDialog } from '#/features/workbench/filesystem/components/data-management-dialog'
 import { SnapshotComparisonDialog } from '#/features/workbench/filesystem/components/snapshot-comparison-dialog'
 import { TerminalPanel } from '#/features/workbench/filesystem/components/terminal-panel'
@@ -167,6 +170,12 @@ function FilesystemWorkbench() {
   const [dataManagementMode, setDataManagementMode] = useState<
     'history' | 'transfer' | 'compare' | null
   >(null)
+  const [deleteTarget, setDeleteTarget] = useState<{
+    uri: string
+    name: string
+    dirty: boolean
+  } | null>(null)
+  const [transferTab, setTransferTab] = useState<'import' | 'export'>('export')
   const [openingUri, setOpeningUri] = useState<string | null>(null)
   const layoutRef = useRef<HTMLDivElement>(null)
   const [leftWidth, setLeftWidth] = useState(() =>
@@ -655,19 +664,95 @@ function FilesystemWorkbench() {
                 void revealResource(uri)
               }}
               defaultReadLimit={canUseLocalTools ? -1 : 10000}
-              extraActions={
+              extraActions={(previewActions) => (
                 <>
                   <details className={styles.moreMenu}>
                     <summary aria-label={t('ide.more')} title={t('ide.more')}>
-                      <MoreHorizontalIcon className="size-4" />
+                      <MoreHorizontalIcon className="size-3.5" />
                     </summary>
-                    <div className={styles.moreMenuContent}>
+                    <div
+                      className={styles.moreMenuContent}
+                      onClick={(event) => {
+                        if (
+                          (event.target as HTMLElement).closest(
+                            'button:not(:disabled)',
+                          )
+                        )
+                          event.currentTarget
+                            .closest('details')
+                            ?.removeAttribute('open')
+                      }}
+                    >
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={
+                          !previewActions?.canCopyContent || previewActions.busy
+                        }
+                        onClick={async () => {
+                          const copied = await previewActions?.copyContent()
+                          if (copied)
+                            toast.success(t('dataManagement:copySucceeded'))
+                          else toast.error(t('dataManagement:copyFailed'))
+                        }}
+                      >
+                        <CopyIcon className="size-4" />
+                        <span>{t('dataManagement:copyContent')}</span>
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setDataManagementMode('history')}
+                      >
+                        <HistoryIcon className="size-4" />
+                        <span>{t('dataManagement:historyMenu')}</span>
+                      </Button>
+                      {canTransferSelectedUri ? (
+                        <>
+                          <div
+                            role="separator"
+                            className={styles.moreMenuSeparator}
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              setTransferTab('import')
+                              setDataManagementMode('transfer')
+                            }}
+                          >
+                            <DownloadIcon className="size-4" />
+                            <span>{t('dataManagement:importMenu')}</span>
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              setTransferTab('export')
+                              setDataManagementMode('transfer')
+                            }}
+                          >
+                            <UploadIcon className="size-4" />
+                            <span>{t('dataManagement:exportMenu')}</span>
+                          </Button>
+                        </>
+                      ) : null}
+                      {canUseLocalTools && selectedIsDirectory ? (
+                        <div
+                          role="separator"
+                          className={styles.moreMenuSeparator}
+                        />
+                      ) : null}
                       {canUseLocalTools && selectedIsDirectory ? (
                         <Button
                           type="button"
                           size="sm"
                           aria-label={t('explorer.addResource')}
-                          className="bg-[var(--studio-accent)] text-white hover:bg-[var(--studio-accent-hover)]"
+                          variant="ghost"
                           onClick={() => setUploadDialogOpen(true)}
                         >
                           <UploadIcon className="size-4" />
@@ -695,29 +780,29 @@ function FilesystemWorkbench() {
                             <span>{t('compile:compileThisFolder')}</span>
                           </Button>
                         )}
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        title={t('dataManagement:historyTitle')}
-                        aria-label={t('dataManagement:historyTitle')}
-                        onClick={() => setDataManagementMode('history')}
-                      >
-                        <HistoryIcon className="size-4" />
-                        <span>{t('dataManagement:historyTitle')}</span>
-                      </Button>
-                      {canTransferSelectedUri ? (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          title={t('dataManagement:transferTitle')}
-                          aria-label={t('dataManagement:transferTitle')}
-                          onClick={() => setDataManagementMode('transfer')}
-                        >
-                          <PackageIcon className="size-4" />
-                          <span>{t('dataManagement:transferShortLabel')}</span>
-                        </Button>
+                      {!selectedIsDirectory ? (
+                        <>
+                          <div
+                            role="separator"
+                            className={styles.moreMenuSeparator}
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className={styles.moreMenuDanger}
+                            onClick={() =>
+                              setDeleteTarget({
+                                uri: selectedFile.uri,
+                                name: selectedFile.name,
+                                dirty: dirtyRef.current,
+                              })
+                            }
+                          >
+                            <Trash2Icon className="size-4" />
+                            <span>{t('dataManagement:deleteDocument')}</span>
+                          </Button>
+                        </>
                       ) : null}
                     </div>
                   </details>
@@ -736,7 +821,7 @@ function FilesystemWorkbench() {
                     </Button>
                   ) : null}
                 </>
-              }
+              )}
               content={
                 selectedIsDirectory &&
                 usesWorkbenchDirectoryView(selectedUri) ? (
@@ -839,6 +924,25 @@ function FilesystemWorkbench() {
           </Dialog>
         </>
       ) : null}
+      {deleteTarget ? (
+        <DeleteDocumentDialog
+          key={`${identityScopeKey}:${deleteTarget.uri}`}
+          {...deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onDeleted={(uri) => {
+            setDeleteTarget(null)
+            if (selectedFileRef.current?.uri === uri) {
+              handleDirtyChange(false)
+              setSelectedFile(null)
+              const directory = normalizeDirUri(parentUri(uri))
+              setCurrentUri(directory)
+              syncSearch({ file: undefined, uri: directory })
+            }
+            toast.success(t('dataManagement:documentDeleted'))
+            void invalidateAll()
+          }}
+        />
+      ) : null}
       {dataManagementMode === 'compare' ? (
         <SnapshotComparisonDialog
           key={`${identityScopeKey}:${selectedUri}:compare`}
@@ -847,8 +951,9 @@ function FilesystemWorkbench() {
         />
       ) : dataManagementMode ? (
         <DataManagementDialog
-          key={`${identityScopeKey}:${dataManagementMode === 'transfer' ? transferUri : selectedUri}:${dataManagementMode}`}
+          key={`${identityScopeKey}:${dataManagementMode === 'transfer' ? transferUri : selectedUri}:${dataManagementMode}:${transferTab}`}
           mode={dataManagementMode}
+          initialTransferTab={transferTab}
           onClose={() => setDataManagementMode(null)}
           onCompare={() => setDataManagementMode('compare')}
           onChanged={() => void invalidateAll()}

@@ -1,4 +1,22 @@
 const dataManagement = {
+  deleteDocument: 'Delete document',
+  deleteConfirmTitle: 'Delete document?',
+  deleteConfirmDescription: 'Delete “{{name}}”? This cannot be undone.',
+  deleteUnsavedWarning:
+    'This document has unsaved changes. Deleting it will also discard those changes.',
+  deleteCancel: 'Cancel',
+  deleteConfirm: 'Delete',
+  deletingDocument: 'Deleting…',
+  deleteFailed: 'Could not delete document: {{error}}',
+  documentDeleted: 'Document deleted',
+
+  copyContent: 'Copy content',
+  copySucceeded: 'Content copied',
+  copyFailed: 'Could not copy content. Please try again.',
+  historyMenu: 'View version history',
+  importMenu: 'Import .ovpack',
+  exportMenu: 'Export .ovpack',
+
   historyTitle: 'Version history',
   transferTitle: 'OVPack import and export',
   transferShortLabel: 'OVPack',

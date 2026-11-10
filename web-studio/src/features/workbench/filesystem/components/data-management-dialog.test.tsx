@@ -206,3 +206,27 @@ it('keeps the selected OVPack file while switching between import and export', a
     expect.objectContaining({ length: 1 }),
   )
 })
+
+it.each(['import', 'export'] as const)(
+  'opens the requested %s tab',
+  (initialTransferTab) => {
+    render(
+      <DataManagementDialog
+        mode="transfer"
+        initialTransferTab={initialTransferTab}
+        uri="viking://resources/project/"
+        isDirectory
+        onClose={vi.fn()}
+        onCompare={vi.fn()}
+        onChanged={vi.fn()}
+      />,
+    )
+    expect(
+      screen
+        .getByRole('tab', {
+          name: initialTransferTab === 'import' ? 'importTab' : 'exportTab',
+        })
+        .getAttribute('aria-selected'),
+    ).toBe('true')
+  },
+)
