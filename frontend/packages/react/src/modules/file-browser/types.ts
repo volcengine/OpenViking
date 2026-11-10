@@ -1,4 +1,6 @@
 import type { Locale } from '../../shared/locale.js';
+import type { AgentConnectProps } from '../../components/agent-connect/index.js';
+import type { FileBrowserEntriesLabels } from '../../components/file-browser-entries/index.js';
 import type {
   FilePreviewLabels,
   FilePreviewTab,
@@ -9,14 +11,19 @@ import type {
   FileTreeRow,
 } from '../../components/file-tree/index.js';
 import type { OvRequestOptions } from '../../client/index.js';
-import type { HTMLAttributes, ReactNode } from 'react';
+import type {
+  ComponentPropsWithRef,
+  HTMLAttributes,
+  ReactElement,
+  ReactNode,
+} from 'react';
 
 /**
- * 文件浏览模块的可替换文案。树与预览各有自己的一套，分别透传，模块外壳只提供
+ * 文件浏览模块的可替换文案。入口、树与预览的文案分别透传，模块外壳只提供
  * 自己渲染的那几条。
  *
- * Replaceable copy of the file browser module. The tree and the preview each keep
- * their own set, passed through as-is; the module shell only carries the strings
+ * Replaceable copy of the file browser module. Entry, tree and preview copy is
+ * passed through as-is; the module shell only carries the strings
  * it renders itself.
  */
 export interface FileBrowserLabels {
@@ -71,6 +78,8 @@ export interface FileBrowserLabels {
    * generated yet", and the two call for different actions.
    */
   summaryFailed?: string;
+  /** 入口条与接入抽屉文案。Copy of the entry row and connection drawer. */
+  entries?: FileBrowserEntriesLabels;
   /** 目录树文案。Copy of the file tree. */
   tree?: FileTreeLabels;
   /** 预览文案。Copy of the file preview. */
@@ -81,26 +90,27 @@ export interface FileBrowserLabels {
  * 文件浏览模块的属性。
  *
  * 模块自己通过 Hook 取数，props 里没有数据字段：宿主给配置、受控的当前资源、
- * 工具栏入口、文案与请求配置。目录、搜索、预览页签与行级状态都在模块内维护。
+ * 接入配置、导入交互、文案与请求配置。入口条、目录、搜索、预览页签与行级
+ * 状态都在模块内维护。
  *
- * 模块只覆盖文件树与文件预览两块。命令面板属于 `console`。
+ * 模块包含文件树、文件预览与顶部入口。命令面板属于 `console`。
  *
  * Props of the file browser module.
  *
  * The module loads its own data through a Hook, so no prop carries data: the
- * host supplies configuration, the controlled current resource, the toolbar
- * entries, copy and request configuration. The directory, search, preview tabs
+ * host supplies configuration, the controlled current resource, import interactions,
+ * copy and request configuration. The entry row, directory, search, preview tabs
  * and per-row state all live inside the module.
  *
- * The module covers only the file tree and the file preview. The command panel
+ * The module includes the file tree, file preview and top entries. The command panel
  * belongs to `console`.
  */
 export interface FileBrowserProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
   'onSelect' | 'children'
 > {
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /**
    * 受控的当前资源 URI。传入时由宿主决定当前资源，模块只上报切换意图。
    *
@@ -138,19 +148,10 @@ export interface FileBrowserProps extends Omit<
    */
   defaultExpandedUri?: string;
   /**
-   * 工具栏上方的宿主入口，例如连接 Agent、导入资源。
-   *
-   * 两个固定入口由 `FileBrowserEntries` 提供，外观、图标、分隔线与等分排布都
-   * 在那边，宿主只决定显示哪几个与点击后做什么。搜索与刷新由模块自己渲染。
-   *
-   * Host entries above the toolbar, for example connecting an agent or importing
-   * resources.
-   *
-   * The two fixed entries come from `FileBrowserEntries`, which owns their look,
-   * icons, divider and equal-width layout; the host only decides which appear and
-   * what a click does. Search and refresh are rendered by the module itself.
+   * 内置接入抽屉的配置；传入后显示连接入口，省略时隐藏。
+   * Configuration of the built-in connection drawer; enables its entry when provided.
    */
-  toolbarActions?: ReactNode;
+  agentConnect?: AgentConnectProps;
   /**
    * 当前资源变化后触发，参数为新的 URI。
    *
@@ -165,6 +166,22 @@ export interface FileBrowserProps extends Omit<
    * pane.
    */
   onUriChange?: (uri: string | null) => void;
+  /**
+   * 默认导入按钮的点击回调，单独传入即可显示导入入口。
+   * Click handler of the default import button; enables its entry on its own.
+   */
+  onImportResources?: () => void;
+  /**
+   * 自定义导入入口，参数是带图标与文案的默认原生按钮。
+   * 宿主可用自己的浮层包装按钮，保留点击回调。省略时使用默认按钮；返回 null
+   * 隐藏导入入口。同时省略点击回调和插槽时不显示导入入口。
+   * Renders the import entry using its default native button, including icon and
+   * label and click handler. Omit to use the default button, or return null to hide
+   * the entry. Omitting both the click handler and renderer hides the entry.
+   */
+  renderImportResources?: (
+    trigger: ReactElement<ComponentPropsWithRef<'button'>>,
+  ) => ReactNode;
   /**
    * 可替换文案，未提供的项使用当前 locale 的内置文案。
    * Replaceable copy; omitted fields follow locale.

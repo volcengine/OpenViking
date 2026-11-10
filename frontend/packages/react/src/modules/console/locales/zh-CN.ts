@@ -10,10 +10,12 @@ const messages: typeof enUS = {
     clear: '新建会话',
     history: '命令历史',
     emptyHistory: '暂无命令历史',
-    commandTitle: 'OpenViking CLI',
-    commandDescription: 'CLI 直接操作上下文',
-    quickStart: '快速体验：',
-  } satisfies Required<Omit<ConsoleLabels, 'tui' | 'vikingBot'>>,
+  } satisfies Required<
+    Omit<
+      ConsoleLabels,
+      'tui' | 'vikingBot' | 'commandTitle' | 'commandDescription' | 'quickStart'
+    >
+  >,
   commands: {
     grep: '匹配资源文本',
     glob: '匹配资源路径',

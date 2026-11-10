@@ -1,11 +1,12 @@
 import type { DirectoryTourIntroProps } from './types.js';
+import { useLocale } from '../../shared/locale-context.js';
 import { resolveLocale } from '../../shared/locale.js';
 import enUS from './locales/en-US.js';
 import zhCN from './locales/zh-CN.js';
 
 /** Presentational introduction; media playback and edit actions belong to the host. */
 export function DirectoryTourIntro({
-  locale,
+  locale: localeProp,
   title,
   description,
   features,
@@ -13,6 +14,7 @@ export function DirectoryTourIntro({
   onDone,
   labels,
 }: DirectoryTourIntroProps) {
+  const locale = useLocale(localeProp);
   const text = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale, labels);
   return (
     <div className="ov-directory-tour__intro">

@@ -2,7 +2,7 @@
 
 English / [中文](README_CN.md)
 
-All public UI components and composed modules require an explicit `locale: 'zh-CN' | 'en-US'` for built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow the current locale and update when it changes. Hosts still provide business content, slots and callback messages.
+Public UI components, composed modules and standalone Hooks accept optional `locale: 'zh-CN' | 'en-US'`. Props override the nearest module or Provider; without a configured language, they use `en-US`. Existing `labels` override individual fields; omitted fields follow the current locale and update when it changes. Hosts still provide business content, slots and callback messages.
 
 React foundations for OpenViking AI application interfaces: build tooling, documentation, layered directories, and scoped styles. FileTree, Tui and FilePreview provide working views, alongside five file-type icons. FileBrowser supports early layout integration; Console provides a native command panel; ScopeCascade provides a working cascade Hook and composition.
 
@@ -94,3 +94,5 @@ Pass three stable API adapter functions to `useScopeCascade({ loadLibraries, loa
 Built-in translations live alongside each component or module in `locales/en-US.ts` and `locales/zh-CN.ts`. The internal `src/shared/locale.ts` contains only shared language types and resolution/override rules, with no business messages or public entry. Modules own workflow copy and reuse the defaults owned by their child components.
 
 Dynamic messages use typed formatter functions; dates and numbers use `Intl`. `npm test` checks matching keys, string placeholders and formatter arity across languages, while type checking validates parameter types. Undefined `labels` entries inherit the selected language; empty strings remain explicit overrides.
+
+Set `locale` on `OpenVikingProvider` for a subtree. Optional module and component Props override the nearest scope, then fall back to `en-US`. Standalone Hooks also inherit the Provider. The private `src/shared/locale-context.tsx` is shared across public entries and remains separate from request-client configuration, so language changes preserve requests and state.

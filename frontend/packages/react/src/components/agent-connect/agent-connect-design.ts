@@ -54,7 +54,10 @@ const custom = [
   { id: 'sdk', Icon: SdkIcon },
 ] as const;
 
-export function getAgentConnectDesign(locale: AgentConnectLocale) {
+export function getAgentConnectDesign(
+  locale: AgentConnectLocale,
+  showOverseasTag = false,
+) {
   const content = getAgentConnectContent(locale);
   const labels = resolveAgentConnectLabels(locale);
   return {
@@ -67,7 +70,9 @@ export function getAgentConnectDesign(locale: AgentConnectLocale) {
       ...content[item.id],
       tags: [
         ...content[item.id].tags,
-        ...(overseasAgents.has(item.id) ? [labels.overseas] : []),
+        ...(showOverseasTag && overseasAgents.has(item.id)
+          ? [labels.overseas]
+          : []),
       ],
     })),
     custom: custom.map((item) => ({ ...item, ...content[item.id] })),

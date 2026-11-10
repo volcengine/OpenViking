@@ -37,7 +37,13 @@ export default defineConfig({
       // Inline bitmaps as data URIs instead of emitting separate asset files: the
       // package's JS entries must stay importable without a bundler (Node, SSR),
       // where an external .png cannot be resolved.
-      output: { emitCss: false, dataUriLimit: { image: 64 * 1024 } },
+      output: {
+        emitCss: false,
+        dataUriLimit: { image: 64 * 1024 },
+        // Normalize this CommonJS default during bundling for direct Node/SSR use.
+        // React and ReactDOM remain external peer dependencies.
+        autoExternal: { exclude: ['react-focus-lock'] },
+      },
       tools: {
         rspack: {
           optimization: { splitChunks: { chunks: 'all', minSize: 0 } },

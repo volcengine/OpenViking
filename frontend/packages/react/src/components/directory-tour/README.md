@@ -19,7 +19,7 @@ modal mask, SVG, network dependency or internal asset URL is included.
 See the bilingual documentation and FileTree example in
 `frontend/docs/docs/{zh,en}/components/directory-tour.mdx`.
 
-Pass the required `locale` (`zh-CN` or `en-US`) for built-in controls. `labels` overrides individual defaults; step content remains host-provided.
+Optional `locale` (`zh-CN` or `en-US`) overrides the nearest scope; otherwise built-in controls inherit or fall back to `en-US`. `labels` overrides individual defaults; step content remains host-provided.
 
 Single-step guides hide their counter. Set `step.cardWidth` to customize width and `renderContent` to supply ready-state content; loading and recovery stay built in. `DirectoryTourIntro` is an optional presentational card exported from this subpath. Its media and feature slots carry host playback/edit actions. `complete` acknowledges; `close` only dismisses.
 

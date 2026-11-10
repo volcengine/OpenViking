@@ -18,8 +18,8 @@ import type {
 export interface VikingBotMessageListProps {
   /** 当前会话的消息。Messages in the current session. */
   messages: readonly VikingBotMessage[];
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /** 附加到根元素的类名。Class name applied to the root element. */
   className?: string;
   /** 助手仍在生成时追加的片段。Parts appended while the assistant is still streaming. */
@@ -60,8 +60,8 @@ export interface VikingBotComposerRef {
 export interface VikingBotComposerProps extends VikingBotInputFeatures {
   /** 受控的草稿文本。Controlled draft text. */
   value: string;
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /** 附加到根元素的类名。Class name applied to the root element. */
   className?: string;
   /** 宿主已选中的附件。Attachments already selected by the host. */
@@ -101,8 +101,8 @@ export interface VikingBotProps
     Omit<HTMLAttributes<HTMLDivElement>, 'onCopy' | 'onSubmit'> {
   /** 当前会话的消息。Messages in the current session. */
   messages: readonly VikingBotMessage[];
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /** Host-owned session history and actions. */
   sessions?: VikingBotSessions;
   /** Optional extension controls, such as a host-provided More menu. */
@@ -137,7 +137,7 @@ export interface VikingBotProps
    * 待确认交互的配置；存在时替代输入区。
    * Configuration of a pending interaction; replaces the composer.
    */
-  interaction?: Omit<VikingBotInteractionProps, 'locale'>;
+  interaction?: VikingBotInteractionProps;
   /**
    * 整块替换交互区；传值时忽略 `interaction` 的内置渲染，宿主自行渲染。
    * Replaces the whole interaction area; when set, the built-in rendering of

@@ -6,6 +6,7 @@ import { useTourAnchor } from './use-tour-anchor.js';
 import { useTourPosition } from './use-tour-position.js';
 import { useTourTheme } from './use-tour-theme.js';
 import { TourCard } from './tour-card.js';
+import { useLocale } from '../../shared/locale-context.js';
 
 /** Data-free directory guidance. Unmounting a closed session resets its steps. */
 export function DirectoryTour(props: DirectoryTourProps) {
@@ -53,7 +54,7 @@ function TourStep({
   placement = 'right',
   onClose,
   labels,
-  locale,
+  locale: localeProp,
   className,
   style,
   renderContent,
@@ -62,6 +63,7 @@ function TourStep({
   index: number;
   advance: (skip: boolean) => void;
 }) {
+  const locale = useLocale(localeProp);
   const [attempt, retry] = useState(0);
   const [surface, setSurface] = useState<HTMLDivElement | null>(null);
   const { anchor, elements, failed } = useTourAnchor(

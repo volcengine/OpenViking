@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
+import { OpenVikingProvider } from '@openviking/react/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { AgentConnect } from '@openviking/react/components/agent-connect';
 import { FileTree } from '@openviking/react/components/file-tree';
@@ -45,9 +46,14 @@ const cases = [
   ],
   [
     Tui,
-    { records: [], value: '' },
-    '运行命令后将在此显示结果。',
-    'Run a command to see its result here.',
+    {
+      records: [],
+      value: '',
+      commands: [{ name: 'ls', description: 'List', usage: 'ov ls' }],
+      quickCommands: ['ls'],
+    },
+    'CLI 直接操作上下文',
+    'Work directly with your context through the CLI',
   ],
   [VikingBot, { messages: [] }, '欢迎使用 VikingBot', 'Welcome to VikingBot'],
   [VikingBotMessageList, { messages: [] }, '开始对话', 'Start a conversation'],
@@ -73,6 +79,20 @@ for (const [Component, props, zh, en] of cases) {
     assert.ok(chinese.includes(zh), chinese);
     assert.ok(english.includes(en), english);
     assert.ok(!chinese.includes(en), chinese);
+    const defaultEnglish = render(Component, props);
+    assert.ok(defaultEnglish.includes(en), defaultEnglish);
+    const inherited = renderToStaticMarkup(
+      h(OpenVikingProvider, { locale: 'zh-CN' }, h(Component, props)),
+    );
+    assert.ok(inherited.includes(zh), inherited);
+    const overridden = renderToStaticMarkup(
+      h(
+        OpenVikingProvider,
+        { locale: 'zh-CN' },
+        h(Component, { ...props, locale: 'en-US' }),
+      ),
+    );
+    assert.ok(overridden.includes(en), overridden);
   });
 }
 

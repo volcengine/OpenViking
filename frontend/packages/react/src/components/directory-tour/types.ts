@@ -32,9 +32,10 @@ export interface DirectoryTourContentContext {
 }
 
 export interface DirectoryTourIntroProps {
-  locale: Locale;
   title: ReactNode;
   description: ReactNode;
+  /** Inherits the nearest language scope, otherwise en-US. */
+  locale?: Locale;
   features?: readonly ReactNode[];
   media?: ReactNode;
   onDone?: () => void;
@@ -57,9 +58,10 @@ export interface DirectoryTourLabels {
 }
 
 export interface DirectoryTourProps {
-  locale: Locale;
   open: boolean;
   steps: readonly DirectoryTourStep[];
+  /** Inherits the nearest language scope, otherwise en-US. */
+  locale?: Locale;
   currentStep?: number;
   defaultStep?: number;
   placement?: 'right' | 'left';

@@ -54,10 +54,7 @@
   padding-bottom: 12px;
 }
 .ov-console__panel .ov-tui__empty {
-  display: block;
-  min-height: 0;
   padding: 0;
-  text-align: start;
 }
 .ov-console__panel .ov-tui__composer {
   width: calc(100% + 32px);

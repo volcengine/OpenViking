@@ -1,3 +1,4 @@
+import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import { useCallback, useId, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 
@@ -40,15 +41,18 @@ export function FileBrowser({
   defaultUri,
   rootUri = 'viking://',
   defaultExpandedUri,
-  locale,
-  toolbarActions,
+  locale: localeProp,
+  agentConnect,
   onUriChange,
+  onImportResources,
+  renderImportResources,
   labels,
   requestOptions,
   className,
   style,
   ...rest
 }: FileBrowserProps) {
+  const locale = useLocale(localeProp);
   const [internalUri, setInternalUri] = useState<string | null>(
     () => defaultUri ?? null,
   );
@@ -124,84 +128,91 @@ export function FileBrowser({
   });
 
   return (
-    <div
-      {...rest}
-      ref={layoutRef}
-      className={['ov-file-browser', className].filter(Boolean).join(' ')}
-      style={
-        {
-          ...style,
-          // 分隔条是独立一列，树宽只作用在自己身上，两者相加才是左栏占用。
-          // The divider is its own column: the tree width applies to the tree alone
-          // and the two together are what the left side occupies.
-          '--ov-file-browser-tree-width': `${treeWidth}px`,
-        } as CSSProperties
-      }
-    >
-      <div className="ov-file-browser__tree">
-        <FileBrowserTreePane
-          toolbarActions={toolbarActions}
-          searchId={searchId}
-          browser={browser}
-          treeLabels={text.tree}
-          locale={locale}
-          searchPlaceholder={text.searchPlaceholder}
-          refreshLabel={text.refresh}
-          searchLoading={text.searchLoading}
-          searchEmpty={text.searchEmpty}
-          searchErrorLabel={text.searchFailed}
-          retryLabel={text.retry}
-        />
-      </div>
-
-      <ResizableHandle
-        label={text.resizeTree}
-        min={TREE_MIN_WIDTH}
-        max={treeMaxWidth}
-        value={treeWidth}
-        onResize={setPreferredTreeWidth}
-        className="ov-file-browser__resizer"
-      />
-
-      {browser.previewTabs && browser.previewTabs.length > 0 ? (
-        <FileBrowserDetail
-          tabs={browser.previewTabs}
-          activeKey={browser.previewKey}
-          locale={locale}
-          labels={previewLabels}
-          footer={browser.previewFooter}
-          viewLabels={{
-            preview: text.previewMode,
-            source: text.sourceMode,
-            copyPath: text.copyPath,
-            copyContent: text.copyContent,
-            download: text.download,
-            viewSwitch: text.viewSwitch,
-          }}
-          onActiveKeyChange={browser.actions.setPreviewKey}
-        />
-      ) : // 读失败与「没选中」是两件事：前者有选中的资源却取不到内容，必须显示
-      // 原因与重试；后者才是空态插画。把失败画成空态会让一次 403 看起来像「还
-      // 没选文件」。
-      //
-      // A read failure and "nothing selected" are two different things: the former
-      // has a selected resource it could not load and needs the reason plus a retry,
-      // while only the latter is the empty-state artwork. Painting a failure as the
-      // empty state makes a 403 look like "no file selected yet".
-      browser.currentUri && browser.previewError ? (
-        <div className="ov-file-browser__detail">
-          <FileBrowserFailure
-            message={text.error}
-            detail={browser.previewError.message}
+    <LocaleProvider locale={locale}>
+      <div
+        {...rest}
+        ref={layoutRef}
+        className={['ov-file-browser', className].filter(Boolean).join(' ')}
+        style={
+          {
+            ...style,
+            // 分隔条是独立一列，树宽只作用在自己身上，两者相加才是左栏占用。
+            // The divider is its own column: the tree width applies to the tree alone
+            // and the two together are what the left side occupies.
+            '--ov-file-browser-tree-width': `${treeWidth}px`,
+          } as CSSProperties
+        }
+      >
+        <div className="ov-file-browser__tree">
+          <FileBrowserTreePane
+            entries={{
+              agentConnect,
+              onImportResources,
+              renderImportResources,
+              labels: labels?.entries,
+            }}
+            searchId={searchId}
+            browser={browser}
+            treeLabels={text.tree}
+            locale={locale}
+            searchPlaceholder={text.searchPlaceholder}
+            refreshLabel={text.refresh}
+            searchLoading={text.searchLoading}
+            searchEmpty={text.searchEmpty}
+            searchErrorLabel={text.searchFailed}
             retryLabel={text.retry}
-            onRetry={() => void browser.actions.refresh()}
           />
         </div>
-      ) : (
-        <div className="ov-file-browser__detail">
-          <FileBrowserEmpty label={text.empty} />
-        </div>
-      )}
-    </div>
+
+        <ResizableHandle
+          label={text.resizeTree}
+          min={TREE_MIN_WIDTH}
+          max={treeMaxWidth}
+          value={treeWidth}
+          onResize={setPreferredTreeWidth}
+          className="ov-file-browser__resizer"
+        />
+
+        {browser.previewTabs && browser.previewTabs.length > 0 ? (
+          <FileBrowserDetail
+            tabs={browser.previewTabs}
+            activeKey={browser.previewKey}
+            locale={locale}
+            labels={previewLabels}
+            footer={browser.previewFooter}
+            viewLabels={{
+              preview: text.previewMode,
+              source: text.sourceMode,
+              copyPath: text.copyPath,
+              copyContent: text.copyContent,
+              download: text.download,
+              viewSwitch: text.viewSwitch,
+            }}
+            onActiveKeyChange={browser.actions.setPreviewKey}
+          />
+        ) : // 读失败与「没选中」是两件事：前者有选中的资源却取不到内容，必须显示
+        // 原因与重试；后者才是空态插画。把失败画成空态会让一次 403 看起来像「还
+        // 没选文件」。
+        //
+        // A read failure and "nothing selected" are two different things: the former
+        // has a selected resource it could not load and needs the reason plus a retry,
+        // while only the latter is the empty-state artwork. Painting a failure as the
+        // empty state makes a 403 look like "no file selected yet".
+        browser.currentUri && browser.previewError ? (
+          <div className="ov-file-browser__detail">
+            <FileBrowserFailure
+              message={text.error}
+              detail={browser.previewError.message}
+              retryLabel={text.retry}
+              onRetry={() => void browser.actions.refresh()}
+            />
+          </div>
+        ) : (
+          <div className="ov-file-browser__detail">
+            <FileBrowserEmpty label={text.empty} />
+          </div>
+        )}
+      </div>
+    </LocaleProvider>
   );
 }

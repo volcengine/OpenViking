@@ -1,6 +1,7 @@
 import type { Locale } from '../../shared/locale.js';
-import type { ReactNode } from 'react';
 
+import { FileBrowserEntries } from '../../components/file-browser-entries/index.js';
+import type { FileBrowserEntriesProps } from '../../components/file-browser-entries/index.js';
 import { FileTree } from '../../components/file-tree/index.js';
 import type {
   FileTreeEntryRow,
@@ -11,19 +12,22 @@ import { fileTypeIcon } from './fs-icon.js';
 import type { FileBrowserApi } from './types.js';
 
 /**
- * 左栏：宿主入口条、搜索行与目录树。
+ * 左栏：内置入口条、搜索行与目录树。
  *
  * 宽度由外层的可拖拽分隔条决定，因此这里只铺满自己的盒子，不设宽度；树内容
  * 比栏宽时横向滚动，而不是把名称截成省略号。
  *
- * The left column: the host's entries, the search row and the tree.
+ * The left column: the built-in entries, the search row and the tree.
  *
  * The width comes from the draggable divider outside, so this only fills its own
  * box. When the tree is wider than the column it scrolls sideways rather than
  * truncating names into ellipses.
  */
 export interface FileBrowserTreePaneProps {
-  toolbarActions?: ReactNode;
+  entries: Pick<
+    FileBrowserEntriesProps,
+    'agentConnect' | 'onImportResources' | 'renderImportResources' | 'labels'
+  >;
   locale: Locale;
   searchId: string;
   browser: FileBrowserApi;
@@ -39,7 +43,7 @@ export interface FileBrowserTreePaneProps {
 }
 
 export function FileBrowserTreePane({
-  toolbarActions,
+  entries,
   locale,
   searchId,
   browser,
@@ -53,9 +57,11 @@ export function FileBrowserTreePane({
 }: FileBrowserTreePaneProps) {
   return (
     <>
-      {toolbarActions ? (
-        <div className="ov-file-browser__entries">{toolbarActions}</div>
-      ) : null}
+      <FileBrowserEntries
+        {...entries}
+        locale={locale}
+        className="ov-file-browser__entries"
+      />
 
       <FileBrowserToolbar
         searchId={searchId}
