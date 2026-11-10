@@ -96,6 +96,9 @@ dependencies = [
 
 
 [project.optional-dependencies]
+reporting = [
+    "kafka-python>=3.0.12,<4",
+]
 expiry = [
   "redis>=5.3.1,<7",
 ]
@@ -249,6 +252,7 @@ exclude = ["tests*", "docs*", "examples*"]
 openviking_gateway = ["client-rules.json", "lua/*.lua"]
 "openviking.scheduling.expiry" = ["lua/*.lua"]
 "vikingbot.studio.providers.feishu" = ["icon.png"]
+"openviking.parse.parsers.code.ast" = ["assets/parsers.ghproxy.json"]
 openviking = [
     "prompts/templates/**/*.yaml",
     "system_assets/**/*",

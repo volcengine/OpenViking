@@ -3193,11 +3193,20 @@ def _feishu_oauth_reference(**changes):
     return {
         "account_id": "external",
         "user_id": "owner",
+        "resource_id": "ov-resource",
+        "openviking_account_id": "kernel",
         "ov_user_id": "alice",
         "type": "oauth",
         "platform": "feishu_doc",
         **changes,
     }
+
+
+def _legacy_feishu_oauth_reference(**changes):
+    reference = _feishu_oauth_reference(**changes)
+    reference.pop("resource_id")
+    reference.pop("openviking_account_id")
+    return reference
 
 
 def _feishu_request_context():
@@ -3209,20 +3218,26 @@ def _feishu_request_context():
 
 
 @pytest.mark.asyncio
-async def test_document_auth_resolves_token_and_retains_only_private_reference(monkeypatch):
+@pytest.mark.parametrize(
+    "reference_factory", [_feishu_oauth_reference, _legacy_feishu_oauth_reference]
+)
+async def test_document_auth_resolves_token_and_retains_only_private_reference(
+    monkeypatch, reference_factory
+):
     provider = Mock(get_token=Mock(return_value="token"))
     factory = Mock(return_value=provider)
     monkeypatch.setattr(auth, "ExternalFeishuToken", factory)
-    args = {"openviking_oauth_ref": _feishu_oauth_reference()}
+    reference = reference_factory()
+    args = {"openviking_oauth_ref": reference}
 
     resolved = await auth.document_auth_config(args, _feishu_request_context())
 
     assert resolved == {
         "lark_access_token": "token",
-        "openviking_oauth_ref": _feishu_oauth_reference(),
+        "openviking_oauth_ref": reference,
     }
-    factory.assert_called_once_with(_feishu_oauth_reference(), "key")
-    assert args == {"openviking_oauth_ref": _feishu_oauth_reference()}
+    factory.assert_called_once_with(reference, "key")
+    assert args == {"openviking_oauth_ref": reference}
 
 
 @pytest.mark.asyncio

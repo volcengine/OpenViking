@@ -1,15 +1,13 @@
 # Modules
 
-Four placeholder components are available for integrating the personal-terminal layout. Their props are settled — request options, controlled state, callbacks, slots and copy — though each component still renders only a module name and a replaceable placeholder message. Business Hooks, API requests, and module interactions will be added as the implementations land.
+FileBrowser coordinates directory browsing, search and preview through `useFileBrowser`. Console provides a native command panel and standalone `useConsole`, alongside the ScopeCascade coordinator. Conversation services remain host-owned.
 
-No prop carries data. A module loads its own data through a Hook, so the host supplies configuration and the controlled value, and the module reports changes through callbacks.
+Modules load native API data through their Hooks. Hosts supply configuration and controlled values; modules report changes through callbacks.
 
-| Module                           | Component     | Target capability |
-| -------------------------------- | ------------- | ----------------- |
-| [`file-browser`](./file-browser) | `FileBrowser` | File browser.     |
-| [`console`](./console)           | `Console`     | Console.          |
-| [`task-center`](./task-center)   | `TaskCenter`  | Task center.      |
-| [`user-usage`](./user-usage)     | `UserUsage`   | My usage.         |
+| Module                           | Component                | Target capability |
+| -------------------------------- | ------------------------ | ----------------- |
+| [`file-browser`](./file-browser) | `FileBrowser`            | File browser.     |
+| [`console`](./console)           | `Console` / `useConsole` | Console.          |
 
 ## Preview
 
@@ -21,12 +19,40 @@ This example uses the public module entries and the aggregate module stylesheet.
 
 ## Import and styles
 
-Import a component and its Props / Labels / Slots types from `@openviking/react/modules/<module>`. The four component bodies and their main Props types are also exported from `@openviking/react`; Labels, Slots and the enum types come from the subpath only.
+Import a component and its Props / Labels / Slots types from `@openviking/react/modules/<module>`. The two component bodies and their main Props types are also exported from `@openviking/react`; Labels, Slots and the enum types come from the subpath only.
 
 JavaScript does not load CSS. Import `@openviking/react/modules/<module>/style.css` for one module, `@openviking/react/modules/style.css` for all modules, or `@openviking/react/style.css` for the full library. Each stylesheet works independently. There is no aggregate `@openviking/react/modules` JavaScript entry.
 
-The current placeholders accept `className`, `style`, and `labels`. They do not require a Provider. Business Hooks, the shared Client, and `OpenVikingProvider` are planned and are not exported yet.
+Requests inherit `OpenVikingProvider` from `@openviking/react/client`; `useFileBrowser` and `useConsole` are also available independently. FileBrowser loads directories automatically; Console issues requests only when a command is submitted.
+
+## Provider
+
+Modules do not accept a client through props; their Hooks read it from context. Wrap every module in the `OpenVikingProvider` from `@openviking/react/client` and configure the service address, identity and credentials once there. A module outside a Provider cannot request with usable configuration: `FileBrowser` stays empty without sending anything, and `Console` falls back to a default same-origin client that carries no identity.
+
+```tsx
+import { OpenVikingProvider } from '@openviking/react/client';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import { Console } from '@openviking/react/modules/console';
+import '@openviking/react/modules/style.css';
+
+<OpenVikingProvider
+  baseURL={endpoint}
+  apiKey={apiKey}
+  accountId={accountId}
+  userId={userId}
+  resourceId={libraryId}
+>
+  <FileBrowser locale="en-US" />
+  <Console locale="en-US" />
+</OpenVikingProvider>;
+```
+
+The Provider distributes the configuration through context: modules do not take `baseURL` or credentials as props, and a module that addresses another library overrides only that field through `requestOptions`. Nesting another Provider overrides just the fields it declares and inherits the rest.
 
 ## Host responsibilities
 
 Hosts own page layout, authentication, account scope, routing, and permissions. Product onboarding, resource and Skill import flows, and synchronization settings remain in the host. Administration is outside these module boundaries.
+
+## Scope cascade
+
+[ScopeCascade](./scope-cascade) provides working request and cascade Hooks plus a default view. Supply three host API adapters; each level subscribes independently.

@@ -2,44 +2,54 @@
 
 [English](README.md) / 中文
 
-头部作用域面包屑。宿主声明有几个层级、各自叫什么、选项从哪来；组件渲染面包屑触发器、下拉面板与选项列表，并上报搜索与切换意图。
+必填 `locale: 'zh-CN' | 'en-US'` 选择内置中英文文案；已有 `labels` 可逐项覆盖，未覆盖项跟随当前语言。业务内容仍由宿主提供。
 
-`scope-switcher.tsx` 对应 `@openviking/react/components/scope-switcher`。当前是占位组件：只渲染固定尺寸的空壳，不消费 props，用于先行发布包供宿主对照 API。真实实现按本文与类型声明重写，接口以源码为准，本文不重复列举。
+`ScopeSwitcher` 是已实现的无状态面包屑布局。通过 `@openviking/react/components/scope-switcher` 导出的独立 `ScopeSelector` 子组件组合层级，不再支持旧的 `levels` 属性。每个子组件维护自己的展开状态、接收本级数据，布局根组件不汇总状态或订阅请求。
+
+```tsx
+<ScopeSwitcher locale="zh-CN">
+  <ScopeSelector locale="zh-CN" kind="selectable" identity={...} data={...} state={...} actions={...} />
+  <ScopeSelector locale="zh-CN" kind="selectable" identity={...} data={...} state={...} actions={...} />
+  <ScopeSelector locale="zh-CN" kind="fixed" identity={...} trigger={{ label: 'default' }} />
+</ScopeSwitcher>
+```
 
 ## 职责边界
 
-- 组件不认识「库 / 数据空间 / 账号 / 用户」的语义。宿主用层级数组声明有几个层级、各自叫什么、选项从哪来；差异只体现在层级的数量与顺序，组件本身不变。
-- 层数可以随登录方式变化：宿主解析不到某一层时不声明该层，组件不渲染、不占位，也不提供显隐开关。
-- 搜索关键字、分页、选中项、加载与失败全部受控；切换只上报选中项，持久化与路由同步由宿主完成。组件不内置分页规则：首屏由宿主在 `visible` 打开时准备，是否加载下一页由宿主的 `onScroll` 自己判断。
-- 组件只渲染作用域选择本身：触发器、面板、选项列表与搜索框。面板里除列表以外的内容（标题、顶部入口、底部管理入口、说明文字）由宿主的 `renderPanel` 实现，组件不定义动作结构、不判断能否点击，也不接管跳转。
+- 宿主决定子组件的数量、顺序与语义。不需要的层级直接省略；`fixed` 层级只展示当前值，不提供下拉。
+- 选中项、选项、搜索关键字、加载、错误和分页由宿主提供。`data.options` 是判断选中值是否有效的权威集合，`data.visibleOptions` 只是渲染子集，因此搜索过滤不会让当前作用域失效。组件不取数、不持久化、不接管路由；`actions.onScroll` 上报滚动信息，供宿主实现分页。
+- 库 → 空间 → 用户的接口级联可使用 `@openviking/react/modules/scope-cascade` 的 `useScopeCascade` 和 `ScopeCascade`。模块负责请求协调与独立订阅，组件仍为纯视图。
 
-## 可选能力
+## 展开与选择
 
-部分字段表达的是宿主能力，不传即降级为对应表现：
+- 不传 `state.visible` 时，各选择器自行管理开合。可选的 `actions.onVisibleChange` 上报开合请求，包括选择、Escape、外部点击和焦点离开选择器。
+- 传入 `state.visible` 后由宿主控制开合，并通过 `actions.onVisibleChange` 写回状态。选择时先请求关闭，再调用 `actions.onSelect`；受控宿主可以等异步操作完成后再关闭。
+- 选择后，面板实际关闭时焦点返回触发按钮；如果焦点已移到外部则不抢回。Escape 关闭并恢复触发按钮焦点。禁用的选择器不能展开。
 
-| 字段     | 不传时           | 传值时的表现                                       |
-| -------- | ---------------- | -------------------------------------------------- |
-| 搜索     | 不渲染搜索框     | 面板内提供搜索并高亮命中片段                       |
-| 分页     | 只展示已给的选项 | 组件上报 `onScroll` 位置，由宿主决定是否追加下一页 |
-| 固定层级 | 渲染下拉         | 只展示当前值，不渲染下拉                           |
-| 禁用     | 正常可点         | 该层暂不可切换，触发器置灰                         |
-| 面板外壳 | 只渲染列表块     | 由宿主实现标题、顶部与底部内容                     |
-| 行尾内容 | 不渲染           | 由宿主渲染「更多」等行内控件                       |
-| 忙碌     | 正常可点         | 有变更正在进行，组件禁用整个列表                   |
-| 状态兜底 | 使用内置文案     | 用宿主的节点替换空态或失败态                       |
-| 面板事件 | 组件不关心       | 面板开合时通知宿主按需取数                         |
+## 搜索、插槽与键盘交互
 
-## 内部约定
+- 传入 `actions.onSearchKeywordChange` 启用搜索。当已加载数量或 `total` 超过 `SCOPE_SWITCHER_SEARCH_THRESHOLD`（10），或 `searchKeyword` 非空时显示搜索框。宿主过滤选项，视图高亮命中内容。
+- `slots.renderPanel({ search, list })` 可将内置搜索框、列表或状态节点与标题、动作和自定义控件组合。自定义控件保留自身的键盘行为。面板高度上限不变，宿主内容更高时在面板内滚动。
+- `slots.renderOption(content, option)` 可扩展或替换默认行内容。嵌套交互控件不会触发行选择。禁用选项以及 `busy` 时的全部选项都不可选择。
+- 选项行支持 ArrowUp/ArrowDown、Home/End 移动焦点，Enter/空格选择。内置搜索框的上下方向键进入列表，Home/End 保留文本编辑行为。
+- 触发器使用 `aria-haspopup="dialog"` 与 `aria-expanded`；面板内的 `listbox` 包含带 `aria-selected` 的 `option` 行。加载、空态与错误支持文案和兜底节点。
 
-- 搜索框可见性由组件判断：已加载条数或 `total` 超过 `SCOPE_SWITCHER_SEARCH_THRESHOLD`（10），或 `searchKeyword` 非空时显示。宿主不传开关。
-- 命中高亮按 `searchKeyword` 在组件内部计算，不额外接收高亮字段。
-- 选项行内容（`renderOption(content, option)`）可在组件渲染好的默认内容上追加或整块替换；行本身的点击、选中态与键盘交互始终由组件处理。
-- 面板内容（`renderPanel`）收到 `{ search, list }`：`search` 是搜索框，`list` 是列表与三态。面板可见性受控，宿主用 `visible` 决定开合。
-- 选中项统一用 `role="listbox"` + `role="option"` + `aria-selected` 表达，触发器带 `aria-haspopup="listbox"` 与 `aria-expanded`。
-- 面板可见性受控：宿主用 `visible` 决定开合，`onVisibleChange` 回调时写回。「打开才取数」「异步切换成功后才关」都由宿主决定。
+## 样式与开发
 
-## 开发入口
+显式导入 `@openviking/react/components/scope-switcher/style.css`，包含面包屑胶囊、展开和选中态、下拉面板，以及窄屏底部面板样式。JavaScript 不隐式引入 CSS。
 
-开发与构建入口见 [前端工作区 README](../../../../../README.md)，模块约定见[包说明](../../../README.md)。
+整行 32px 高，无描边。每一段是独立的 32px 高、16px 圆角胶囊，左右 8px 内边距、图标与文字间距 8px，文字 13px、字重 500。悬停、聚焦和展开时描主色边框；常态保留透明描边，因此边框出现时不会引起位移。
 
-独立样式入口为 `@openviking/react/components/scope-switcher/style.css`，当前只含占位壳的样式。
+整行不换行。空间不足时各层级收缩、标签省略，因此文案在中英文之间切换不会改变外框高度。
+
+带下拉的层级在悬停、聚焦和展开时给按钮铺浅底，与面板里选项行的反馈一致。不带下拉的层级（`kind: 'fixed'`）几何参数完全相同，只去掉箭头和悬停反馈，因此只读的作用域仍属于同一条面包屑。相邻层级由 CSS 画出 `#c9cbd4` 的 `/`。
+
+面板内悬停行铺浅底，选中行常驻主色浅底、文字加粗、行尾显示勾选；文字颜色不变，设计稿用字重和底色区分选中。搜索命中片段染主色，不加黄底。
+
+选项行首图标装在一个 24px 的底槽里：纯白底、0.5px `#edeef2` 描边、12px 圆角，图形本身保持 14px。宿主渲染圆形头像时把 `--ov-ui-scope-switcher-option-icon-radius` 设为 `50%`。
+
+主题变量声明在 `.ov-scope-switcher` 上，宿主可只覆盖其中一条：`--ov-ui-scope-switcher-divider`、`-icon`、`-option-icon`、`-option-icon-size`、`-option-icon-radius`、`-row-hover`、`-tag-background`、`-tag-text`、`-panel-width`、`-option-height`、`-option-gap`、`-list-max-height`、`-panel-max-height`。
+
+共用颜色走包级主题基线，写法为 `var(--ov-ui-color-<token>, var(--ov-ui-<token>-default, 兜底))`：宿主在祖先上设置了 `--ov-ui-color-*` 就用宿主的，否则用基线默认值。组件不在自己根节点上声明公开的 `--ov-ui-color-*`，否则会阻断宿主的值向下继承。这里用到的 token：`text-1`、`text-3`、`text-disabled`、`border-1`、`border-2`、`border-3`、`bg-1`、`primary`、`primary-light`。
+
+开发命令见[前端工作区 README](../../../../../README.md)，模块约定见[包说明](../../../README.md)。完整字段契约以类型声明为准。

@@ -1,0 +1,151 @@
+.ov-directory-tour {
+  --ov-ui-directory-tour-primary: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default)
+  );
+  --ov-ui-directory-tour-background: var(
+    --ov-ui-color-bg-1,
+    var(--ov-ui-bg-1-default)
+  );
+  --ov-ui-directory-tour-text: var(
+    --ov-ui-color-text-1,
+    var(--ov-ui-text-1-default)
+  );
+  --ov-ui-directory-tour-secondary: var(
+    --ov-ui-color-text-2,
+    var(--ov-ui-text-2-default)
+  );
+  --ov-ui-directory-tour-muted: var(
+    --ov-ui-color-text-3,
+    var(--ov-ui-text-3-default)
+  );
+  --ov-ui-directory-tour-border: var(
+    --ov-ui-color-border-3,
+    var(--ov-ui-border-3-default)
+  );
+  position: fixed;
+  inset: auto;
+  width: 270px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: visible;
+  background: transparent;
+  color: var(--ov-ui-directory-tour-text);
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.ov-directory-tour *,
+.ov-directory-tour *::before,
+.ov-directory-tour *::after {
+  box-sizing: border-box;
+}
+.ov-directory-tour__card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 0.5px solid var(--ov-ui-directory-tour-border);
+  border-radius: 8px;
+  background: var(--ov-ui-directory-tour-background);
+  box-shadow: var(--ov-ui-color-tour-shadow, var(--ov-ui-tour-shadow-default));
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
+}
+.ov-directory-tour__title {
+  margin: 0;
+  padding-right: 16px;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.ov-directory-tour__description {
+  margin-top: -8px;
+  color: var(--ov-ui-directory-tour-secondary);
+  font-size: 12px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.ov-directory-tour__illustration {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 72px;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+.ov-directory-tour__illustration img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.ov-directory-tour__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ov-directory-tour__progress {
+  flex: 1;
+  color: var(--ov-ui-directory-tour-muted);
+  font-size: 12px;
+  line-height: 20px;
+}
+.ov-directory-tour button {
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  padding: 3px 10px;
+  border: 1px solid var(--ov-ui-directory-tour-border);
+  border-radius: 6px;
+  background: var(--ov-ui-directory-tour-background);
+  color: var(--ov-ui-directory-tour-text);
+}
+.ov-directory-tour button:hover {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+.ov-directory-tour button:focus-visible {
+  outline: 2px solid var(--ov-ui-directory-tour-primary);
+  outline-offset: 2px;
+}
+.ov-directory-tour button:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+.ov-directory-tour .ov-directory-tour__primary {
+  background: var(--ov-ui-directory-tour-primary);
+  border: 0;
+  color: var(--ov-ui-color-on-primary, var(--ov-ui-auth-on-primary-default));
+}
+.ov-directory-tour .ov-directory-tour__primary:hover {
+  background: var(
+    --ov-ui-color-primary-hover,
+    var(--ov-ui-primary-hover-default)
+  );
+}
+.ov-directory-tour .ov-directory-tour__close {
+  position: absolute;
+  right: 4px;
+  top: 2px;
+  padding: 2px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--ov-ui-directory-tour-muted);
+  font-size: 18px;
+}
+.ov-directory-tour__highlight {
+  position: fixed;
+  pointer-events: none;
+  border: 1px solid var(--ov-ui-directory-tour-primary);
+  border-radius: 4px;
+  background: var(
+    --ov-ui-color-tour-highlight,
+    var(--ov-ui-tour-highlight-default)
+  );
+}

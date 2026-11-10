@@ -230,7 +230,7 @@ function tableReferences(source) {
       (match) => match[1]
     )
     const paths = Array.from(
-      cells[1].matchAll(/`(\/[A-Za-z0-9_{}./:-]+)`/g),
+      cells[1].matchAll(/`(\/[^`\s]+)`/g),
       (match) => match[1]
     )
     for (const method of methods) {

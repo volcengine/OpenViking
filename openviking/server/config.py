@@ -45,6 +45,11 @@ def _normalize_config_uri(value: Optional[str], field_name: str) -> Optional[str
     uri = value.strip().rstrip("/")
     if not uri:
         raise ValueError(f"{field_name} must not be empty")
+    # Preserve pre-home-alias add-target configurations when upgrading.
+    if uri in {"viking://user/resources", "viking://user/skills"} or uri.startswith(
+        "viking://user/resources/"
+    ):
+        uri = "viking://~/" + uri.removeprefix("viking://user/")
     return uri
 
 
@@ -315,6 +320,17 @@ class TraceDumpBodyConfig(BaseModel):
     max_bytes: int = 4096
 
 
+class EventReportingConfig(BaseModel):
+    """Optional remote business-event exporter. Endpoint settings remain external."""
+
+    enabled: bool = False
+    config_file: Optional[str] = None
+    nacos_server: Optional[str] = None
+    nacos_namespace: Optional[str] = None
+    nacos_data_id: Optional[str] = None
+    nacos_group: Optional[str] = None
+
+
 class ObservabilityConfig(BaseModel):
     """Server-side observability configuration."""
 
@@ -323,6 +339,7 @@ class ObservabilityConfig(BaseModel):
     traces: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
     logs: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
     dump_body: TraceDumpBodyConfig = Field(default_factory=TraceDumpBodyConfig)
+    reporting: EventReportingConfig = Field(default_factory=EventReportingConfig)
 
 
 class TempUploadConfig(BaseModel):

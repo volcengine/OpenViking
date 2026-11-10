@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import {
+  ArrowRightIcon,
   AudioIcon,
   PdfIcon,
   PptIcon,
@@ -8,6 +9,7 @@ import {
 } from '@openviking/react/icons';
 
 const icons = [
+  { name: 'ArrowRightIcon', Icon: ArrowRightIcon },
   { name: 'AudioIcon', Icon: AudioIcon },
   { name: 'PdfIcon', Icon: PdfIcon },
   { name: 'PptIcon', Icon: PptIcon },
@@ -42,8 +44,8 @@ export default function IconsExample() {
         ))}
       </div>
       <p className="ov-demo-row">
-        <PdfIcon width={24} height={24} alt="PDF" />
-        <span>Standalone icon with alt=&quot;PDF&quot;</span>
+        <PdfIcon width={24} height={24} aria-label="PDF" />
+        <span>Standalone icon with aria-label=&quot;PDF&quot;</span>
       </p>
     </div>
   );

@@ -1,8 +1,10 @@
 # Tui
 
-A command console body: current command records, results and input, including the empty state, suggestions and input help. The host owns execution; callbacks report successful command sending, resource opening and copying, and do not fire on failure.
+Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
 
-This is a placeholder component: it renders a fixed-size empty shell and consumes no props, so hosts can prepare against the published types before the view is migrated. The types below describe the intended view API; the placeholder implementation will be replaced.
+A command console body: current records, results and input, including suggestions and help. The host supplies the command catalogue and owns requests, permissions, execution and sessions. The component reports submission intent through `onSubmit` and successful copying through `onCopy`.
+
+The view renders seven result variants, the empty state, and a controlled input with completion and parameter hints. It contains no built-in business command catalogue.
 
 ## Basic usage
 
@@ -10,17 +12,39 @@ This is a placeholder component: it renders a fixed-size empty shell and consume
 
 ```
 
-The placeholder is 360 × 560 and represents the records and input area.
+The demo keeps the records and input in its own state: sending appends a pending record, then resolves it using the command’s result shape. All demo commands use fixed, simulated data; no command reaches a service. Try `ov compile`, `ov task list`, `ov session get session_demo` or `ov help` to compare write, table, status and help results.
+
+The composer is a full-width, borderless editing area with a top separator, at least 80px for editing, and a 40px shortcut legend below. Focusing the editor leaves the separator unchanged. Text grows up to three lines, then scrolls. The legend shows `/` for all commands, `↑` to recall commands from the current records, and `↵` to send; Shift+Enter inserts a newline. There is no separate Send button.
+
+Typing `o` previews `v` in gray; Tab accepts the prefix, and Space completes it to `ov `. Press Tab after `ov ` to open all commands, then type to filter and preview the remaining text; Tab accepts the inline hint or selected command. Ordinary typing shows inline hints; `/` or an explicit Tab opens the list. Completion is derived from the host’s `inputText`. Plain Tab always keeps focus in the composer; without a completion, while entering arguments, or while editing in the middle, it leaves the value and page position unchanged. Shift+Tab moves focus out. Ghost text is never submitted.
+
+Typing `/`, or pressing Tab after `ov `, opens the list with no selected command. Filtering or reopening clears selection. Slash discovery also supports multiword names and aliases, such as `/session g`; it stays available until arguments begin. Down selects the first item; Up selects the last. Hovering or navigating to a command reveals its examples and parameter table. With no keyword and no selected candidate, Tab leaves the input unchanged. The panels stack when horizontal space is limited. Escape and outside clicks dismiss them; browsers without native Popover use an inline panel.
+
+After accepting a command, its host-provided `inputText` prefix is rendered with a muted CLI prefix and an emphasized command name in the text color, with light inline hints for positional parameters (or required flags when there are no positional parameters). The hints disappear when arguments are typed and never enter `value` or submitted text. The full detail panel is only shown while the command list is open.
+
+The editor and command records share a muted CLI prefix, an emphasized command name in the text color, and resource URIs in the link color. Links are underlined on hover. Records use the same `inputText` prefix and preserve their arguments. Timestamps appear on a separate line, aligned right. Copying and history recall use the same prefix; unknown commands retain their original text.
+
+The shared demo follows the documentation language via `useLang()`, supplying localized command descriptors, groups and records. `locale="zh-CN"` selects Chinese interface copy; `locale` is required. `labels` overrides individual interface strings. Hosts localize their own command and result content.
+
+## Empty state and quick commands
+
+```tsx file="../../_demos/tui-empty.tsx" preview
+
+```
+
+This example starts with no records and uses `emptyState` to compose a heading, description and quick commands, following the Volcengine welcome layout. The host chooses and orders `quickCommands` from the same catalogue passed to `commands`, and owns the heading and copy. Clicking a quick command fills and focuses the input; add arguments in the editor and press Enter to submit it. The first submission replaces the welcome view with a simulated result.
+
+Hovering a quick command nudges its arrow backward, forward and back into place once. The arrow stays still when the system requests reduced motion.
 
 ## Component boundary
 
-Tui contains the current command records and results, the empty state, and command input with its suggestions and help. Session creation, history panels, view and user switching, surrounding toolbars and the footer shortcut legend are composed separately by the host through independent components.
+Tui contains the current command records and results, the empty state, and command input with its suggestions and help. Session creation, history panels, view and user switching, surrounding toolbars are composed separately by the host through independent components.
 
 The host handles session and history actions, then updates `records` and `value`. Historical results use the same records view; Tui has no history list, history-preview state, or surrounding toolbar/action slots.
 
-Command matching, suggestions, highlighting, keyboard selection, parameter hints and help are internal component behavior. Command names, parameters, descriptions and examples use the same metadata as the CLI; hosts do not configure suggestions or render help command by command. Accepting a completion or hint updates the input through `onValueChange`; `onSubmit` is invoked only after an explicitly submitted command is sent successfully.
+The host supplies `commands` and optional `commandGroups`; Tui handles filtering, highlighting, keyboard selection, filling and parameter help. Accepting a completion updates `value` through `onValueChange`. Explicit submission calls `onSubmit`; the host executes the operation and supplies status and results through `records`.
 
-This update defines the public type contract. Completion, help and shared CLI metadata integration are not implemented yet. A shared adapter layer owns metadata loading and transport; the component does not fetch data itself.
+Names, aliases, groups, descriptions, parameters, options and examples are descriptor data. New commands using the existing descriptor and result variants require only host data changes. Hosts may load or update that data from their own services; Tui does not fetch it. The demo catalogue lives in `docs/docs/_demos/tui-commands/`.
 
 ## Props
 
@@ -28,6 +52,8 @@ The public props are published as types from the same subpath. Read them from th
 
 ```tsx
 import type {
+  TuiCommandDefinition,
+  TuiCommandGroup,
   TuiLabels,
   TuiProps,
   TuiRecord,
@@ -36,25 +62,44 @@ import type {
 } from '@openviking/react/components/tui';
 ```
 
-The table describes the published type contract. The placeholder does not accept these props yet.
+The table describes the implemented behaviour.
 
-| Property      | Type                      | Default      | Description                                                                                                                                        |
-| ------------- | ------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| records       | readonly TuiRecord[]      | Required     | Currently displayed execution records in submission order; the host updates them on session or history changes.                                    |
-| value         | string                    | Required     | Controlled input value.                                                                                                                            |
-| disabled      | boolean                   | false        | Disables command input and submission; the message comes from `labels.unavailableMessage`.                                                         |
-| emptyState    | ReactNode                 | labels.empty | Complete empty state when no records are displayed; may include a heading, description and shortcuts. `null` hides it.                             |
-| labels        | TuiLabels                 | —            | Interface copy and guidance.                                                                                                                       |
-| onValueChange | (value: string) => void   | —            | Reports input changes, including internally accepted completions and parameter hints; filling does not submit. Omission makes the input read-only. |
-| onSubmit      | (command: string) => void | —            | Called after a command is sent successfully; not called on failure. Omission disables submission.                                                  |
-| onOpenUri     | (uri: string) => void     | —            | Called after a resource opens successfully, with its URI; not called on failure.                                                                   |
-| onCopy        | (text: string) => void    | —            | Called after copying succeeds, with the copied text; not called on failure. Omission does not affect copying.                                      |
+| Property      | Type                            | Default      | Description                                                                                                                                                                                    |
+| ------------- | ------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| records       | readonly TuiRecord[]            | Required     | Currently displayed execution records in submission order; the host updates them on session or history changes.                                                                                |
+| value         | string                          | Required     | Controlled input value.                                                                                                                                                                        |
+| disabled      | boolean                         | false        | Disables command input and submission; the message comes from `labels.unavailableMessage`.                                                                                                     |
+| emptyState    | ReactNode                       | labels.empty | Complete empty state when no records are displayed; may include a heading, description and shortcuts. `null` hides it.                                                                         |
+| `locale`      | `'zh-CN' \| 'en-US'`            | Required     | Built-in Chinese and English copy.                                                                                                                                                             |
+| commands      | readonly TuiCommandDefinition[] | `[]`         | Host command catalogue for completion, help and pending skeletons.                                                                                                                             |
+| commandGroups | readonly TuiCommandGroup[]      | `[]`         | Host group labels and ordering; undeclared groups are appended.                                                                                                                                |
+| labels        | TuiLabels                       | —            | Interface copy and guidance.                                                                                                                                                                   |
+| onValueChange | (value: string) => void         | —            | Reports input changes, including accepted commands and examples; inline hints never change the value or submit. Omission makes the input read-only and disables submission and help insertion. |
+| onSubmit      | (command: string) => void       | —            | Reports explicit submission intent. The host executes it; omission disables submission.                                                                                                        |
+| onOpenUri     | (uri: string) => void           | —            | Receives the URI on link activation; the host opens the resource.                                                                                                                              |
+| onCopy        | (text: string) => void          | —            | Called after copying succeeds, with the copied text; not called on failure. Omission does not affect copying.                                                                                  |
 
-`onSubmit` notifies the host after a command is sent successfully, with the sent command text; it does not perform the send and is not invoked on failure. This notification does not mean that a background command has finished executing. Notification return values do not determine operation success. The host updates later results and errors through `records`; a pending background record does not prevent later submissions.
+Record updates follow the output only while the reader is near the bottom. Scrolling up preserves the reading position; an explicit submission resumes following. Resource tables retain each entry’s title, native URI target and metadata, including entries without detail rows.
+
+Structured resource links accept `viking://`, `https://` and `http://`; unsupported targets render as plain text. Sentence punctuation is excluded from prose URI links, including search summaries/excerpts, descriptions, metadata and write-result messages. Resource identities and raw structured values use literal matching. Command, editor and code URI tokens preserve filename punctuation such as commas, semicolons and parentheses; whitespace and quoting delimiters bound literal tokens.
+
+`onSubmit` reports the submitted text and does not await a result. The host owns sending, permissions and execution, and updates pending, successful or failed records. A pending record does not block later submissions.
 
 `emptyState` is the single entry for a complete custom empty view. The host composes any heading, description, shortcuts and their interactions inside this node. Omitting it shows `labels.empty`; passing `null` hides empty-state content.
 
+### Command descriptors
+
+`TuiCommandDefinition` includes `name`, `description`, `usage`, and optional `inputText`, `summary`, `aliases`, `group`, `params`, `options`, `examples` and `skeleton`. Parameter entries use `label`; options use `token`; both support `description`, `required` and `defaultValue`. `inputText` is the prefix filled when a command is accepted, defaulting to `name`; the demo supplies `ov read` and other CLI prefixes. `required` defaults to `false`, and an omitted `defaultValue` displays an em dash. Group entries contain `key` and `label`. Examples accept a string or `{ value, label? }`; selecting one fills `value` without submitting. This also lets the host display a CLI-prefixed example while filling a slash command.
+
+Omitting `commands` leaves text input and submission available, without command suggestions or parameter help. The component does not translate host descriptors or validate command permissions.
+
 ### Result content
+
+Every result has a command heading and an accessible success, error or loading icon. The heading uses the matched host descriptor’s `inputText` without arguments; duplicate command titles in the body are hidden. Write results use a separate shaded row for each line; status results use shaded key/value rows; resource previews have their own content surface. JSON and Markdown code fences share copyable code blocks. Markdown ordered lists retain visible native numbering, including a non-default start value. Execution success is independent of a returned task’s `pending` status.
+
+Code blocks use an icon-only copy button. Hover or keyboard focus shows “Copy”; after success the icon briefly changes to a check and the tooltip shows “Copied”. Customize these strings through `labels.copy` and `labels.copied`. A failed copy neither shows success feedback nor calls `onCopy`.
+
+Empty result messages use `labels.noResult`; command-help headings and hints use `labels.availableCommands` and `labels.helpHint`.
 
 `TuiRecordContent` contains one general text result and six structured results:
 
@@ -70,19 +115,24 @@ The table describes the published type contract. The placeholder does not accept
 
 For `text`, `format` accepts `plain` or `markdown` and defaults to `plain`. Format JSON as a string and display it through `text`. Failures use `TuiRecord.status: 'error'`, with the error body in a text result; there is no separate error content variant.
 
-Command help is generated from shared command definitions. A shared adapter layer converts other results so hosts reuse the same conversion. These variants define the target shared view contract; shared result conversion and rendering are not implemented yet.
+Each variant has a dedicated view: plain or Markdown text (JSON is indented without changing numeric tokens or other values), search rows with optional score details, resource preview, an aligned resource table with paging, status rows, write lines and grouped command help. Resource URI links in the input, command bubbles, Markdown and structured result strings share `onOpenUri`. Custom React nodes own their internal links. Clicking an input URI does not change or submit the command; Shift+Tab can focus links for Enter activation. Converting CLI output into these variants stays with the host.
 
 ### Copy and guidance
 
-General interface copy is configured through `labels` and defaults to English. Command-specific parameter hints and descriptions come from shared command metadata.
+General interface copy follows `locale`, with individual overrides through `labels`. Command names, descriptions, group labels and parameter help come from host descriptors.
 
 | Property                  | Type   | Description                                                                                 |
 | ------------------------- | ------ | ------------------------------------------------------------------------------------------- |
 | labels.unavailableMessage | string | Message shown when `disabled` is `true`; changing this copy does not disable the component. |
 | labels.pending            | string | Text for the pending state.                                                                 |
 | labels.empty              | string | Default message shown when there are no records and `emptyState` is omitted.                |
+| labels.allCommands        | string | Label for the `/` shortcut.                                                                 |
+| labels.historyCommands    | string | Label for the `↑` shortcut, which recalls commands from the current records.                |
+| labels.send               | string | Label for the `↵` shortcut.                                                                 |
 
 `disabled` defaults to `false`. To disable command input and submission, set it to `true`. `labels.unavailableMessage` customizes the resulting message.
+
+Parameter headings, column labels, required values and pagination copy can also be overridden through `labels.parameters`, `examples`, `noParameters`, `parameter`, `required`, `description`, `defaultValue`, `yes`, `no`, `loadMore` and `resource` (the resource-table identity column).
 
 ### Search result details
 
@@ -95,11 +145,22 @@ General interface copy is configured through `labels` and defaults to English. C
 | scoreLabel   | string    | Host-formatted score.                                                                |
 | scoreDetails | ReactNode | Host-rendered details shown on score hover or keyboard focus; requires `scoreLabel`. |
 
+### Record times
+
+The host supplies `createdAtMs`, a Unix timestamp in milliseconds. The component displays “Just now” for less than one minute, whole minutes below one hour, and whole hours below 24 hours. At 24 hours or more it displays `YYYY-MM-DD HH:mm` in the browser’s local time zone. Future timestamps display “Just now”.
+
+| Field       | Type   | Default | Behavior                                                                                                       |
+| ----------- | ------ | ------- | -------------------------------------------------------------------------------------------------------------- |
+| createdAtMs | number | —       | Preferred timestamp for component-side formatting. Non-finite or out-of-range values fall back to `createdAt`. |
+| createdAt   | string | —       | Optional display text used without a valid timestamp; strings such as `10:24` are never parsed as dates.       |
+
+The initial server render and hydration use `createdAt`, or omit the time if it is absent. After hydration, the component formats the timestamp using the client clock. It recalculates on rendering without a periodic timer. `labels.justNow`, `labels.formatMinutesAgo(minutes)` and `labels.formatHoursAgo(hours)` override the time copy; defaults follow `locale`. Both demos supply timestamps, and completed results preserve the original submission time.
+
 ### Loading records
 
-For a pending `TuiRecord`, the component matches `command` against shared command definitions to select the skeleton. Unrecognized commands use the generic skeleton. `content` can be omitted while pending; the host does not specify a skeleton variant.
+For a pending `TuiRecord`, the component matches `command` against the supplied catalogue, including aliases, and uses the descriptor’s optional `skeleton`. Missing or unrecognized descriptors use the generic skeleton. `content` can be omitted while pending.
 
-Import the placeholder and its scoped stylesheet:
+Import the component and its scoped stylesheet:
 
 ```tsx
 import { Tui } from '@openviking/react/components/tui';
@@ -108,4 +169,4 @@ import '@openviking/react/components/tui/style.css';
 
 ## Implementation scope
 
-The component renders the view and reports completed interactions and successful operations. Execution, data access, persistence, permissions and network connections belong to the integration layer; success notifications do not perform these operations. The placeholder does not implement operation execution or success notifications yet.
+The component renders supplied data and handles local input interaction. Requests, response adaptation, execution, persistence, permissions and network connections belong to the host.

@@ -2,44 +2,54 @@
 
 English / [中文](README_CN.md)
 
-A scope breadcrumb for the header. The host declares how many levels exist, what each is called and where the options come from; the component renders the breadcrumb triggers, the dropdown panels and the option list, and reports search and switch intent.
+Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
 
-`scope-switcher.tsx` maps to `@openviking/react/components/scope-switcher`. It is currently a placeholder: it renders a fixed-size empty shell and consumes no props, so the package can be published for hosts to compare against the API. The real implementation will be rewritten against this document and the type declarations; the source is the source of truth and this document does not repeat the field list.
+`ScopeSwitcher` is an implemented, stateless breadcrumb layout. Compose independent `ScopeSelector` children from `@openviking/react/components/scope-switcher`; the old `levels` prop is no longer supported. Each child owns its local visibility and receives its own data, so the layout does not aggregate state or subscribe to requests.
+
+```tsx
+<ScopeSwitcher locale="en-US">
+  <ScopeSelector locale="en-US" kind="selectable" identity={...} data={...} state={...} actions={...} />
+  <ScopeSelector locale="en-US" kind="selectable" identity={...} data={...} state={...} actions={...} />
+  <ScopeSelector locale="en-US" kind="fixed" identity={...} trigger={{ label: 'default' }} />
+</ScopeSwitcher>
+```
 
 ## Responsibilities
 
-- The component knows nothing about "library / data space / account / user". The host declares how many levels exist, what each is called and where the options come from; the only difference is the number and order of levels, the component itself does not change.
-- The level count can vary with the sign-in method: when the host cannot resolve a level it simply does not declare it, and the component neither renders nor reserves space for it, with no separate visibility switch.
-- The search keyword, paging, selection, loading and failure are all controlled; switching only reports the selected option, and persistence and route sync belong to the host. The component has no built-in paging rule: the first screen is prepared by the host when `visible` opens, and whether to load the next page is the host's call inside `onScroll`.
-- The component renders the scope selection only: triggers, panels, option list and search box. Everything in a panel except the list — heading, top entries, bottom management entries and explanatory text — is implemented by the host's `renderPanel`; the component defines no action shape, decides nothing about what is clickable and takes over no navigation.
+- The host determines the number, order and meaning of children. Omit unavailable levels; a `fixed` level displays a value without a dropdown.
+- Selection, options, search keywords, loading, errors and pagination belong to the host. `data.options` is the authoritative set that decides whether the selection is valid; `data.visibleOptions` is the render subset, so search filtering never invalidates the current scope. The component performs no requests, persistence or routing. `actions.onScroll` reports metrics for host-managed pagination.
+- For library → space → user requests, use `useScopeCascade` and `ScopeCascade` from `@openviking/react/modules/scope-cascade`. The module coordinates requests and independent subscriptions while these components remain pure views.
 
-## Optional capabilities
+## Visibility and selection
 
-Some fields express host capabilities; omitting one degrades to the corresponding behaviour:
+- Without `state.visible`, each selector manages its own open state. `actions.onVisibleChange` optionally reports open/close requests, including selection, Escape, outside clicks and focus leaving the selector.
+- With `state.visible`, the host controls visibility and must write back changes through `actions.onVisibleChange`. Selection requests close before invoking `actions.onSelect`; a controlled host may keep the panel open until its asynchronous work completes.
+- After selection, focus returns to the trigger when the panel actually closes, unless focus has already moved outside. Escape closes and returns focus to the trigger. A disabled selector cannot open.
 
-| Field           | When omitted                | When provided                                                |
-| --------------- | --------------------------- | ------------------------------------------------------------ |
-| Search          | No search box               | The panel offers search and highlights matches               |
-| Paging          | Only the given items        | The component reports `onScroll` position; the host appends  |
-| Fixed level     | Renders a dropdown          | Shows the current value only, no dropdown                    |
-| Disabled        | Clickable                   | The level cannot be switched; the trigger is dimmed          |
-| Panel shell     | Renders the list block only | The host implements heading, top and bottom content          |
-| Row trailing    | Nothing rendered            | The host renders row controls such as "more"                 |
-| Busy            | Clickable                   | A change is in flight; the component disables the whole list |
-| State fallbacks | Built-in copy               | The host's own nodes replace the empty and failed states     |
-| Panel events    | The component ignores them  | Panel open and close notify the host to load on demand       |
+## Search, slots and keyboard interaction
 
-## Internal conventions
+- Supply `actions.onSearchKeywordChange` to enable search. The input appears when the loaded count or `total` exceeds `SCOPE_SWITCHER_SEARCH_THRESHOLD` (10), or when `searchKeyword` is non-empty. The host filters options; the view highlights matches.
+- `slots.renderPanel({ search, list })` arranges the built-in search and list/state nodes alongside host headings, actions and controls. Its custom controls retain their own keyboard behavior. The panel keeps its height cap, so a taller host layout scrolls inside it.
+- `slots.renderOption(content, option)` extends or replaces the default row content. Nested interactive controls do not select the row. Disabled options and all options while `busy` cannot be selected.
+- On option rows, ArrowUp/ArrowDown and Home/End move focus; Enter/Space select. In the built-in search input, ArrowUp/ArrowDown enter the list while Home/End retain text-editing behavior.
+- The trigger uses `aria-haspopup="dialog"` and `aria-expanded`. The panel contains a `listbox` with `option` rows and `aria-selected`; loading, empty and error states support labels and fallback nodes.
 
-- Search visibility is decided by the component: shown when the loaded count or `total` exceeds `SCOPE_SWITCHER_SEARCH_THRESHOLD` (10), or when `searchKeyword` is non-empty. The host passes no switch.
-- Hit highlighting is computed inside the component from `searchKeyword`; no separate highlight field is accepted.
-- Option row content (`renderOption(content, option)`) can append to or replace the default content the component rendered; the row's click, selection state and keyboard interaction always stay with the component.
-- Panel content (`renderPanel`) receives `{ search, list }`: `search` is the search box, `list` is the list with its states. Panel visibility is controlled, and the host drives it through `visible`.
-- Selection is expressed with `role="listbox"` + `role="option"` + `aria-selected`; the trigger carries `aria-haspopup="listbox"` and `aria-expanded`.
-- Panel visibility is controlled: the host drives open and close through `visible` and writes the new state back in `onVisibleChange`. Both "load when the panel opens" and "close only after an async switch succeeds" are the host's call.
+## Styles and development
 
-## Development entry
+Import `@openviking/react/components/scope-switcher/style.css` explicitly. It provides breadcrumb pills, expanded/selected states, dropdown panels and a bottom panel on narrow screens; JavaScript does not import CSS.
 
-Development and build commands are in the [frontend workspace README](../../../../../README.md); module conventions are in the [package guide](../../../README.md).
+The row is 32px tall with no outline. Each level is its own 32px tall, 16px radius pill with 8px horizontal padding and an 8px icon-to-label gap; labels are 13px at weight 500. A level paints its outline in the primary colour on hover, focus and expand, and keeps a transparent outline at rest so nothing shifts when it appears.
 
-The standalone style entry is `@openviking/react/components/scope-switcher/style.css`, which currently contains only the placeholder shell styles.
+The row never wraps. Levels shrink and labels ellipsize when space runs out, so switching a label between languages never changes the frame's height.
+
+A level with a dropdown tints its button on hover, focus and expand — the same feedback an option row gives inside the panel. A level without one (`kind: 'fixed'`) keeps the identical geometry but drops the arrow and the hover feedback, so read-only scopes stay visually part of the breadcrumb. Adjacent levels are separated by a CSS `/` in `#c9cbd4`.
+
+Inside the panel a hovered row tints lightly and a selected row keeps the primary tint with a bold label and a check mark; the label colour is unchanged, since the design separates selection by weight and the tint. Search hits are tinted in the primary colour rather than highlighted in yellow.
+
+Each row's leading icon sits in a 24px well: white surface, 0.5px `#edeef2` outline, 12px radius, with the glyph itself at 14px. A host that renders round avatars sets `--ov-ui-scope-switcher-option-icon-radius: 50%`.
+
+Theme variables are declared on `.ov-scope-switcher` so a host can override any single one: `--ov-ui-scope-switcher-divider`, `-icon`, `-option-icon`, `-option-icon-size`, `-option-icon-radius`, `-row-hover`, `-tag-background`, `-tag-text`, `-panel-width`, `-option-height`, `-option-gap`, `-list-max-height`, `-panel-max-height`.
+
+Shared colours are read through the package theme baseline, written as `var(--ov-ui-color-<token>, var(--ov-ui-<token>-default, fallback))`. A host that sets `--ov-ui-color-*` on an ancestor wins; otherwise the baseline default applies. The component never assigns a public `--ov-ui-color-*` on its own root, because that would block the host's value from inheriting. Tokens used here: `text-1`, `text-3`, `text-disabled`, `border-1`, `border-2`, `border-3`, `bg-1`, `primary`, `primary-light`.
+
+Development commands are in the [frontend workspace README](../../../../../README.md); module conventions are in the [package guide](../../../README.md). The type declarations define the full field contract.

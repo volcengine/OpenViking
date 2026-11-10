@@ -1,0 +1,65 @@
+.ov-console {
+  --ov-ui-console-text: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  --ov-ui-console-secondary: var(
+    --ov-ui-color-text-2,
+    var(--ov-ui-text-2-default)
+  );
+  --ov-ui-console-muted: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  --ov-ui-console-bg: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  --ov-ui-console-fill: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  --ov-ui-console-focus: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default)
+  );
+  display: flex;
+  box-sizing: border-box;
+  flex-direction: column;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  border-radius: 16px;
+  color: var(--ov-ui-console-text);
+  background: var(--ov-ui-console-bg);
+  font-family: var(
+    --ov-ui-font-family,
+    'PingFang SC',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif
+  );
+  font-size: 13px;
+  container-type: inline-size;
+}
+.ov-console__panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 16px;
+}
+.ov-console__panel[hidden] {
+  display: none;
+}
+.ov-console__panel > .ov-tui,
+.ov-console__panel > .ov-viking-bot {
+  flex: 1;
+  min-height: 0;
+}
+.ov-console__panel .ov-tui__body {
+  gap: 24px;
+  padding-bottom: 12px;
+}
+.ov-console__panel .ov-tui__empty {
+  display: block;
+  min-height: 0;
+  padding: 0;
+  text-align: start;
+}
+.ov-console__panel .ov-tui__composer {
+  width: calc(100% + 32px);
+  margin-inline: -16px;
+}

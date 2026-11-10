@@ -206,8 +206,7 @@ Configure OIDC in `ov.conf`:
         "user_id": {
           "source": "claim",
           "claim": "sub",
-          "prefix": "user-",
-          "normalize": "lowercase"
+          "prefix": "user-"
         },
         "role": {
           "source": "claim",
@@ -275,11 +274,46 @@ Two modes are supported:
   "user_id": {
     "source": "claim",
     "claim": "sub",
-    "prefix": "user-",
-    "normalize": "lowercase"
+    "prefix": "user-"
   }
 }
 ```
+
+#### Identity validation and providers with special characters
+
+After applying the administrator's mapping, OpenViking validates `account_id` and `user_id` without changing them. IDs must be nonempty, contain only letters `a-z`/`A-Z`, digits, `_`, `.`, `@`, or `-`, and must not be `.` or `..`. Each ID may contain at most one `@`; an account ID must not start with `_`. Invalid results return HTTP 401 (`UNAUTHENTICATED`) with an identity-mapping error.
+
+For example, `sub=alice_prod` remains `user_id=alice_prod` with the default mapping; `sub=alice|prod` is rejected instead of being rewritten to `alice_prod`.
+
+Subjects such as Auth0's `auth0|123` cannot be used directly as OpenViking user IDs. The deployment administrator can have the login system provide a separate ID that meets the rules, then configure OpenViking to read that field. For example, consider a user named Alice.
+
+**Configure the login system first.** Assign Alice the stable, unique ID `u_1001` and include it in the signed login credential (token). The relevant token fields would be:
+
+```json
+{
+  "sub": "auth0|123",
+  "openviking_user_id": "u_1001"
+}
+```
+
+Here, `openviking_user_id` is an example field name and `u_1001` is Alice's user ID. Other users must have their own distinct IDs.
+
+**Then configure OpenViking.** Set `server.oidc.identity.user_id` in `ov.conf` to:
+
+```json
+{
+  "source": "claim",
+  "claim": "openviking_user_id"
+}
+```
+
+`source: claim` means to read a field from the login token; `claim: openviking_user_id` selects the field named `openviking_user_id`. Use the actual field name issued by your login system in both places. Changing `ov.conf` does not create the field; authentication fails if it is missing.
+
+After Alice logs in, the client sends the original token to OpenViking. OpenViking verifies its signature, reads `u_1001`, and handles the request as that user. The client cannot change signed claims or select its identity through request headers.
+
+The selected user claim must not be editable by end users, and the administrator must ensure that it is stable and unique within each OpenViking account. OpenViking validates ID format; it does not check custom mappings for uniqueness. Lowercasing, regex extraction, and shared user fallbacks can merge different users. Account mappings may intentionally group users into one account, but must preserve the intended tenant boundaries.
+
+**Upgrading:** Automatic replacement of unsupported characters with `_` has been removed. Existing valid IDs retain their data paths. Users who relied on replacement must have their ownership verified by the administrator before a dedicated claim is mapped to an existing local ID. Changing the mapped ID changes the data namespace; OpenViking does not automatically rename or migrate existing data.
 
 #### Role Mapping
 

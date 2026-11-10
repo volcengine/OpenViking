@@ -1,8 +1,10 @@
 # FilePreview
 
+Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
+
 A tabbed file preview. The host supplies the content and file name; the component handles format detection, the tab row, the content header and the body.
 
-This is a placeholder implementation: the shell, editing flow and success notifications are in place and interactive, and the file body falls back to plain text until FileViewer is wired in. The view will be rewritten against the contract described here.
+Bodies use lazily loaded FileViewerCore adapters for Markdown, images, code, tables, PDF, Office and media, inside the console-style tab, breadcrumb and footer shell.
 
 ## Basic usage
 
@@ -12,6 +14,22 @@ Pass at least one tab. A file tab carries `source`; a content tab carries a node
 
 ```
 
+## Content levels and images
+
+```tsx file="../../_demos/file-preview-console.tsx" preview
+
+```
+
+A file tab may supply `levels`, each with `key`, `label`, `source` and optional `resources`, `disabled`, `editing`. The selector appears below the path and defaults to the first enabled level. Control it with `activeLevelKey` and `onLevelChange`. Disabled levels cannot be selected. Switching discards drafts and restores preview mode; loading or saving blocks switching. Levels are read-only unless that level explicitly supplies `editing`.
+
+The host loads each level: directories can expose L0 abstract and L1 overview, and files can add L2 content. The component does not request summaries. The required tab `source` remains the fallback when no level is available.
+
+Supply original images through `source.url` or `source.file`, rather than binary data decoded into `source.content`. Images fit proportionally in a plain panel, show their original pixel dimensions at the bottom right and open a larger preview on click.
+
+For Markdown images, `resources` matches the original image target. For dynamic authenticated images, supply `resolveImage(src, source): Promise<string>`. The host resolves relative paths or Viking URIs using the active level's `source.path`, returning an accessible URL. The host owns requests, cancellation and blob URL cleanup. Each level can override `resources`; omission inherits the file tab's resources. The component does not translate Viking URIs into HTTP endpoints.
+
+Use `slots.footer` for modification time and parsing attribution in a two-sided footer, `slots.titleExtra` for permission badges and `slots.actions` for the host's menu.
+
 ## Two tab kinds
 
 | Kind              | Rendered by     | Typical use                    |
@@ -19,9 +37,11 @@ Pass at least one tab. A file tab carries `source`; a content tab carries a node
 | `kind: 'file'`    | The component   | A file, its source, a document |
 | `kind: 'content'` | The host, as-is | Dashboards, graphs, summaries  |
 
-Both share the shell — tab row, path breadcrumb, copy path and the header slots. They differ in how the body arrives, and in that the preview/source switch is a file-tab capability: a content tab renders whatever views it needs inside `content`.
+Both share the shell — tab row, path breadcrumb, copy path and the header action area. They differ in how the body arrives, and in that the preview/source switch is a file-tab capability: a content tab renders whatever views it needs inside `content`.
 
-The active tab is owned by the component. To switch from outside, use the ref handle:
+**The component ships no action buttons of its own.** Copy body, copy path, download, the preview/source switch and editing all carry host product semantics and copy; built in they could be neither trimmed nor restyled. Copy path is the exception — any file with a `source.path` needs it under every host, so it stays in the shell at the end of the breadcrumb. Everything else is rendered by the host in `slots.actions`, which receives a `FilePreviewActions` context: the current view mode, editing state, which capabilities are available, and the methods that change them. The state stays with the component.
+
+Control the active tab with `activeKey` / `onActiveKeyChange`, set its initial value with `defaultActiveKey`, or use the ref handle:
 
 ```tsx
 const previewRef = useRef<FilePreviewHandle>(null);
@@ -40,11 +60,11 @@ previewRef.current?.setActiveTab('dashboard');
 
 ## States
 
-Loading, failure and unsupported formats are not props — the component decides them from the content and the file name. All three can be replaced through `slots`:
+Loading, failure and unsupported formats are not props: this component decides loading and failure, while whether a format can be previewed is the base component's call. All three can be replaced through `slots`:
 
 - `slots.loadingFallback`
 - `slots.errorFallback`
-- `slots.unsupportedFallback`
+- `slots.unsupportedFallback` — handed to the base, which then owns the whole unsupported state, so the download entry it would otherwise offer no longer appears
 
 The host supplies asynchronous `editing.save` and optional `editing.loadContent` capabilities. `loadContent` returns the full text; `undefined` abandons the edit, and rejection shows a read error. A failed save retains the draft and shows an error. `editing.onSave` only reports a successful save; `editing.onCancel` reports a discarded draft. Saving prevents duplicate submissions and tab changes until completion.
 
@@ -55,62 +75,132 @@ Execution capabilities and notifications are separate. Operation resolution trig
 | Property    | Type                                             | Default  | Description                                                    |
 | ----------- | ------------------------------------------------ | -------- | -------------------------------------------------------------- |
 | `tabs`      | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | Required | At least one tab; the first is shown initially.                |
-| `labels`    | `FilePreviewLabels`                              | English  | Default copy for every tab; a tab can override field by field. |
+| `labels`    | `FilePreviewLabels`                              | locale   | Default copy for every tab; a tab can override field by field. |
 | Other props | `HTMLAttributes<HTMLDivElement>`                 | —        | Standard div attributes.                                       |
 
 ### Per-tab fields
 
 Shared by both kinds:
 
-| Property             | Type                         | Default   | Description                                                                  |
-| -------------------- | ---------------------------- | --------- | ---------------------------------------------------------------------------- |
-| `key`                | `string`                     | Required  | Unique tab key.                                                              |
-| `title`              | `ReactNode`                  | File name | What the tab row shows. Required for content tabs.                           |
-| `icon`               | `ReactNode`                  | By format | Tab icon.                                                                    |
-| `labels`             | `Partial<FilePreviewLabels>` | —         | Overrides the outer copy for this tab.                                       |
-| `disabled`           | `boolean`                    | `false`   | Disables the tab.                                                            |
-| `onOpenParent`       | `(path: string) => void`     | —         | Called after the parent directory opens successfully; not called on failure. |
-| `onCopyPath`         | `(path: string) => void`     | —         | Called after path copying succeeds.                                          |
-| `showViewModeSwitch` | `boolean`                    | `true`    | Preview/source switch; file tabs only.                                       |
-| `slots`              | `FilePreviewHeaderSlots`     | —         | `actions`, `titleExtra`.                                                     |
+| Property       | Type                         | Default   | Description                                                                  |
+| -------------- | ---------------------------- | --------- | ---------------------------------------------------------------------------- |
+| `key`          | `string`                     | Required  | Unique tab key.                                                              |
+| `title`        | `ReactNode`                  | File name | What the tab row shows. Required for content tabs.                           |
+| `icon`         | `ReactNode`                  | —         | Tab icon, supplied by the host; omit to hide.                                |
+| `labels`       | `Partial<FilePreviewLabels>` | —         | Overrides the outer copy for this tab.                                       |
+| `disabled`     | `boolean`                    | `false`   | Disables the tab.                                                            |
+| `onOpenParent` | `(path: string) => void`     | —         | Called after the parent directory opens successfully; not called on failure. |
+| `onCopyPath`   | `(path: string) => void`     | —         | Called after path copying succeeds.                                          |
+
+`slots.titleExtra` renders after the path and copy button, before the action group. Use it for a marker beside the title — a permission tag, a status badge, a version label. The component does not interpret or style it: whatever you pass is what renders, and omitting it takes no space.
+
+```tsx
+{
+  kind: 'file',
+  key: 'file',
+  source: { content, fileName: 'JC-17-A.md', path },
+  slots: { titleExtra: <Tag>Can manage</Tag> },
+}
+```
 
 File tabs add:
 
-| Property        | Type                            | Default  | Description                                                                                             |
-| --------------- | ------------------------------- | -------- | ------------------------------------------------------------------------------------------------------- |
-| `source`        | `FilePreviewSource`             | Required | The content and file name.                                                                              |
-| `operations`    | `FilePreviewOperations`         | —        | Async `openParent(path)`, `download()` and `openUri(uri)` capabilities, each returning `Promise<void>`. |
-| `resources`     | `readonly FileViewerResource[]` | —        | Companion resources, e.g. textures.                                                                     |
-| `editing`       | `FilePreviewEditing`            | —        | Editing capability; omit for read-only.                                                                 |
-| `slots`         | `FilePreviewFileTabSlots`       | —        | Adds the three state fallbacks.                                                                         |
-| `onCopyContent` | `(text: string) => void`        | —        | Called after content copying succeeds.                                                                  |
-| `onDownload`    | `() => void`                    | —        | Called after the download operation succeeds; not called on failure.                                    |
-| `onOpenUri`     | `(uri: string) => void`         | —        | Called after a content resource opens successfully; not called on failure.                              |
+| Property         | Type                               | Default             | Description                                                                                                        |
+| ---------------- | ---------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `source`         | `FilePreviewSource`                | Required            | The content and file name.                                                                                         |
+| `operations`     | `FilePreviewOperations`            | —                   | Async `openParent(path)` and `download()` capabilities, each returning `Promise<void>`.                            |
+| `resources`      | `readonly FileViewerResource[]`    | —                   | Companion resources, e.g. textures.                                                                                |
+| `levels`         | `readonly FilePreviewLevel[]`      | —                   | Content levels with individual sources and optional resources/editing.                                             |
+| `activeLevelKey` | `string`                           | First enabled level | Controlled content level.                                                                                          |
+| `onLevelChange`  | `(key: string) => void`            | —                   | Selection intent; the host updates activeLevelKey when controlled.                                                 |
+| `resolveImage`   | `(src, source) => Promise<string>` | —                   | Host resolution of Markdown images to accessible URLs.                                                             |
+| `editing`        | `FilePreviewEditing`               | —                   | Editing capability; omit for read-only.                                                                            |
+| `slots`          | `FilePreviewFileTabSlots`          | —                   | `actions` (node or renderer), `titleExtra`, `footer`, plus fallbacks for loading, failure and unsupported formats. |
+| `onCopyContent`  | `(text: string) => void`           | —                   | Called after content copying succeeds.                                                                             |
+| `onDownload`     | `() => void`                       | —                   | Called after the download operation succeeds; not called on failure.                                               |
+| `onOpenUri`      | `(uri: string) => void`            | —                   | Called after a content resource opens successfully; not called on failure.                                         |
+
+Content tabs add:
+
+| Property  | Type        | Default  | Description                                                                           |
+| --------- | ----------- | -------- | ------------------------------------------------------------------------------------- |
+| `content` | `ReactNode` | Required | The tab body, filling everything below the tab row; the host lays it out and scrolls. |
+
+A content tab has no content header row and does not use `slots` — that whole area belongs to the host, so there is no component-provided header or state to fill. The component places no wrapper around `content` either: a wrapper would only constrain the host's layout. Put any toolbar, title or status line inside `content` itself.
 
 ```tsx
 import { FilePreview } from '@openviking/react/components/file-preview';
 import '@openviking/react/components/file-preview/style.css';
 ```
 
-Copying is handled by the component. File tabs with `source.path` show the copy-path button. The content-copy button is disabled when no copyable text is available. Both callbacks receive the value already copied, run only on success, and are optional; omitting them does not affect copying. Hosts do not perform another copy.
+Copying is handled by the component: the host renders the button and calls `actions.copyContent()` or `actions.copyPath()`, both resolving to whether it succeeded. `onCopyContent` / `onCopyPath` fire after a successful copy with the value already copied, and never on failure.
 
 ## Accessibility
 
 The tab row uses `role="tablist"` with `role="tab"` buttons and reports `aria-selected`. Every icon-only control carries an accessible name through `aria-label` and a `title` tooltip. The path breadcrumb is enabled only when `operations.openParent` is supplied.
 
+## Class names
+
+Class names are prefixed with `ov-`. The block is `ov-file-preview`; elements use `ov-file-preview__<element>`.
+
+| Class name                         | Element      | Purpose                                |
+| ---------------------------------- | ------------ | -------------------------------------- |
+| `ov-file-preview`                  | Root         | Column layout and base typography.     |
+| `ov-file-preview__tab-row`         | Tab bar      | Scrollable row of tabs.                |
+| `ov-file-preview__tab`             | Tab          | One tab; carries `aria-selected`.      |
+| `ov-file-preview__tab-title`       | Tab label    | Truncated tab text.                    |
+| `ov-file-preview__header`          | Header       | Path row and action area.              |
+| `ov-file-preview__breadcrumb`      | Breadcrumb   | Parent navigation button.              |
+| `ov-file-preview__header-actions`  | Action area  | Switch, buttons, and extra actions.    |
+| `ov-file-preview__action`          | Icon button  | Square icon-only control.              |
+| `ov-file-preview__button`          | Button       | Secondary button.                      |
+| `ov-file-preview__button--primary` | Button       | Primary (save) button.                 |
+| `ov-file-preview__switch`          | Switch group | Edit/preview toggle container.         |
+| `ov-file-preview__switch-item`     | Switch item  | One toggle; carries `data-active`.     |
+| `ov-file-preview__body`            | Scroll body  | The scrolling content region.          |
+| `ov-file-preview__pre`             | Preview text | Read-only text content.                |
+| `ov-file-preview__textarea`        | Editor       | Editable text area.                    |
+| `ov-file-preview__state`           | State panel  | Full-height loading, empty, and error. |
+
+```css
+.my-workbench .ov-file-preview__tab {
+  max-width: 180px;
+}
+```
+
 ## Theme tokens
 
-| CSS variable         | Default                   | Purpose                        |
-| -------------------- | ------------------------- | ------------------------------ |
-| `--ov-ui-border`     | `rgb(0 0 0 / 8%)`         | Row separators and borders.    |
-| `--ov-ui-text-muted` | `#8f959e`                 | Secondary text and icons.      |
-| `--ov-ui-row-hover`  | `rgb(0 0 0 / 4%)`         | Hover background.              |
-| `--ov-ui-accent`     | `#2563c5`                 | Breadcrumb and primary button. |
-| `--ov-ui-focus-ring` | `#2563c5`                 | Keyboard focus ring.           |
-| `--ov-ui-radius`     | `6px`                     | Corner radius.                 |
-| `--ov-ui-surface`    | `canvas`                  | Selected tab background.       |
-| `--ov-ui-font-mono`  | `ui-monospace, monospace` | Body and editor text.          |
+Colours come from the design system the OpenViking console uses — the values only, never its component styles. Dark mode keys off the `.dark` class a host puts on `<html>`, never `prefers-color-scheme`, since the system preference can disagree with the theme the host renders.
+
+**Baseline** (`--ov-ui-color-*`, declared in the package-level `theme.css` and shared with FileTree and other components). Every component variable derives from these, so overriding the baseline re-skins the component:
+
+| CSS variable                  | Light     | Dark      | Purpose                 |
+| ----------------------------- | --------- | --------- | ----------------------- |
+| `--ov-ui-color-primary`       | `#5252ff` | `#5f5fff` | Primary.                |
+| `--ov-ui-color-primary-hover` | `#7075ff` | `#7075ff` | Primary on hover.       |
+| `--ov-ui-color-text-1`        | `#0b0b0f` | `#c7ccd6` | Body text.              |
+| `--ov-ui-color-text-3`        | `#6e718c` | `#737a87` | Secondary text.         |
+| `--ov-ui-color-border-2`      | `#e1e4f2` | `#2e3138` | Separators and borders. |
+| `--ov-ui-color-bg-1`          | `#ffffff` | `#131416` | Panel surface.          |
+| `--ov-ui-color-bg-5`          | `#f1f2f9` | `#23252a` | Hover background.       |
+
+**Component variables** (`--ov-ui-file-preview-*`), to adjust only this component:
+
+| CSS variable                        | Default                       | Purpose                        |
+| ----------------------------------- | ----------------------------- | ------------------------------ |
+| `--ov-ui-file-preview-accent`       | `--ov-ui-color-primary`       | Breadcrumb and primary button. |
+| `--ov-ui-file-preview-accent-hover` | `--ov-ui-color-primary-hover` | Link and "…" hover.            |
+| `--ov-ui-file-preview-border`       | `--ov-ui-color-border-2`      | Separators and borders.        |
+| `--ov-ui-file-preview-row-hover`    | `--ov-ui-color-bg-5`          | Hover background.              |
+| `--ov-ui-file-preview-surface`      | `--ov-ui-color-bg-1`          | Tab and menu surface.          |
+| `--ov-ui-file-preview-text`         | `--ov-ui-color-text-1`        | Body text.                     |
+| `--ov-ui-file-preview-text-muted`   | `--ov-ui-color-text-3`        | Secondary text and icons.      |
+| `--ov-ui-file-preview-focus-ring`   | `--ov-ui-color-primary`       | Keyboard focus ring.           |
+| `--ov-ui-radius`                    | `6px`                         | Corner radius.                 |
+| `--ov-ui-font-mono`                 | `ui-monospace, monospace`     | Path, body and editor text.    |
 
 ## Implementation scope
 
 The component renders the shell and reports successful operations. Reading, saving, downloading and navigation are supplied as execution capabilities by the host; success notifications do not execute them.
+
+`labels.showHiddenPath` overrides the collapsed-path menu button’s accessible name: “Show hidden path levels” in English and “显示隐藏的路径层级” in Chinese.

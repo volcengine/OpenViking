@@ -349,23 +349,30 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
     from openviking.server.auth.plugins import oidc as oidc_module
 
     if mode == "oidc":
+        import time
+
+        jwt = pytest.importorskip("jose.jwt")
+        assert oidc_module._check_jwt_available()
         plugin = oidc_module.OIDCAuthPlugin()
-        config = OIDCConfig(issuer="https://issuer.test")
-        headers = [(b"authorization", b"Bearer external.token.value")]
-        monkeypatch.setattr(oidc_module, "_check_jwt_available", lambda: True)
-        monkeypatch.setattr(
-            plugin,
-            "_validate_token",
-            AsyncMock(return_value={"sub": "auth0|123", "org": "Team", "preferred": "Alice"}),
-        )
-        expected = ("default", "auth0_123")
+        config = OIDCConfig(issuer="https://issuer.test", audience="openviking")
+        claims = {
+            "iss": config.issuer,
+            "aud": config.audience,
+            "exp": int(time.time()) + 60,
+            "sub": "alice_prod",
+            "org": "Team",
+            "https://openviking.example/user_id": "Alice",
+        }
+        expected = ("default", "alice_prod")
         if custom:
+            claims["sub"] = "auth0|123"
             config.identity.account_id.source = "claim"
             config.identity.account_id.claim = "org"
             config.identity.account_id.normalize = "lowercase"
-            config.identity.user_id.claims = ["preferred", "sub"]
-            config.identity.user_id.prefix = "ext-"
-            expected = ("team", "ext-Alice")
+            config.identity.user_id.claim = "https://openviking.example/user_id"
+            expected = ("team", "Alice")
+        token = jwt.encode(claims, "test-secret", algorithm="HS256", headers={"kid": "test"})
+        headers = [(b"authorization", f"Bearer {token}".encode())]
     else:
         plugin = ldap_module.LDAPAuthPlugin()
         config = LDAPConfig(host="directory.test", base_dn="dc=test")
@@ -388,8 +395,14 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
             expected = ("Team", "alice")
     config.identity.role.source = "fixed"
     config.identity.role.value = "root"
-    plugin._config = config
-    plugin._mapper = IdentityMapper(config.identity)
+    if mode == "oidc":
+        server_config = SimpleNamespace(oidc=config)
+        plugin.validate_config(server_config)
+        await plugin.initialize(None, None, server_config)
+        plugin._jwks["test"] = oidc_module.jwk.construct("test-secret", "HS256")
+    else:
+        plugin._config = config
+        plugin._mapper = IdentityMapper(config.identity)
     request = await make_request(runtime, mode, headers=headers)
     request.app.state.auth_plugin = plugin
     identity = await plugin.resolve_identity(request)
@@ -397,6 +410,32 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
     assert identity.role == Role.USER
     ctx = await get_request_context(request, identity, None, None, None)
     assert ctx.role == Role.USER
+
+    if mode == "oidc":
+        # Validly signed tokens must not acquire another identity through
+        # implicit character replacement, including after an explicit mapping.
+        invalid_claims = [
+            ({config.identity.user_id.claim: value}, "user_id")
+            for value in ("alice|prod", "alice_prod\n", "")
+        ]
+        if custom:
+            invalid_claims.extend(
+                ({"org": value}, "account_id")
+                for value in ("Team|prod", "Team\n", "_system")
+            )
+        for changes, field in invalid_claims:
+            token = jwt.encode(
+                {**claims, **changes},
+                "test-secret",
+                algorithm="HS256",
+                headers={"kid": "test"},
+            )
+            request = await make_request(
+                runtime, mode, headers=[(b"authorization", f"Bearer {token}".encode())]
+            )
+            request.app.state.auth_plugin = plugin
+            with pytest.raises(UnauthenticatedError, match=field):
+                await plugin.resolve_identity(request)
 
 
 @pytest.mark.parametrize(

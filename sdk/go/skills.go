@@ -153,7 +153,7 @@ func (c *Client) attachSkillData(ctx context.Context, payload map[string]any, da
 		payload["data"] = data
 		return nil
 	}
-	if err := c.addLocalUpload(ctx, payload, path, false); err != nil {
+	if err := c.addLocalUpload(ctx, payload, path, false, true); err != nil {
 		return err
 	}
 	if _, ok := payload["path"]; ok {

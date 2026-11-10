@@ -1,0 +1,37 @@
+# ScopeCascade
+
+Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
+
+Connect three API adapters without writing request state or cascading logic. `useScopeCascade` returns a stable instance controller and does not subscribe the caller to its data. `ScopeCascade` subscribes in its three leaf selectors, preserving independent renders without `memo`.
+
+## Basic usage
+
+```tsx file="../../_demos/scope-cascade-basic.tsx" preview
+
+```
+
+Only the three adapters are required. They return `Promise<readonly ScopeSwitcherOption[]>` (`{ id, label, icon?, description?, disabled? }`). Authentication, endpoint URLs, response mapping and permissions belong in those adapters. Supply stable function references; changing any adapter cancels requests and resets all selections. Use separate mounted instances (or a React `key`) for different accounts.
+
+| Adapter         | Arguments                                                 |
+| --------------- | --------------------------------------------------------- |
+| `loadLibraries` | `signal: AbortSignal`                                     |
+| `loadSpaces`    | `libraryId: string, signal: AbortSignal`                  |
+| `loadUsers`     | `libraryId: string, spaceId: string, signal: AbortSignal` |
+
+Mounting loads libraries; no option is automatically selected. Selecting a library clears both descendants and loads spaces. Selecting a space clears the user and loads users. Selecting a user updates only that level. Re-selecting the same identity is a no-op. The coordinator aborts obsolete requests and ignores stale completions even if an adapter ignores its signal. Unmount cancels all requests; Strict Mode setup/cleanup is supported.
+
+The default view includes local search of loaded options, loading/empty/error states, retry, and independent panel visibility. Each channel's `refresh()` reloads that level; refreshing an ancestor does not reload descendants unless its selected identity disappears or becomes disabled, in which case descendants are cleared and disabled. API errors remain local. This version loads complete lists: server search and pagination are not built into this module; use the pure view components for those flows.
+
+## Custom view
+
+```tsx file="../../_demos/scope-cascade-custom.tsx" preview
+
+```
+
+Call `useScopeCascadeLevel(controller.levels[index])` inside each leaf. Do not gather all three subscriptions in the root: that would restore root-driven rendering. A snapshot exposes `options`, `selected`, `loading`, `error`, `enabled`, `parentIds` and `scopeKey`. Each channel exposes `select(option)` and `refresh()`. Key a custom selector's local state by `scopeKey` to reset it when ancestors change.
+
+To consume the complete identity in a separate content component, subscribe to the user channel: `parentIds[0]` is the library, `parentIds[1]` is the space and `selected?.id` is the user. Gate requests on `enabled && selected`; ancestor changes clear selection before notifying subscribers.
+
+## View props
+
+`ScopeCascade` requires `controller` and `locale`. Optional `levelNames` is a library/space/user tuple, `labels` customizes loading/search/empty/error copy, and `retryLabel` changes the retry button. HTML attributes such as `className` and `style` are forwarded to the layout. Hooks need no CSS; the default view uses `@openviking/react/modules/scope-cascade/style.css`.

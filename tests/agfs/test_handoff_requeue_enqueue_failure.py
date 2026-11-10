@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Failed handoff replacements must survive a real SQLite QueueFS restart."""
+"""Handoff retry publication and failures preserve QueueFS recovery."""
 
 import json
 from types import SimpleNamespace
@@ -41,8 +41,9 @@ OUTPUT = "/local/recovery/resources/result.md"
 @pytest.mark.parametrize(
     "consumer", ["AddResource", "Reindex", "ContentWrite", "Semantic", "SemanticSkill"]
 )
-async def test_handoff_replacement_enqueue_failure_survives_restart(
-    tmp_path, monkeypatch, consumer
+@pytest.mark.parametrize("enqueue_failure", [False, True])
+async def test_handoff_retry_publication_and_failure_survive_restart(
+    tmp_path, monkeypatch, consumer, enqueue_failure
 ):
     """Use real retry methods, middleware, TaskStore, queue recovery and ACK.
 
@@ -175,8 +176,7 @@ async def test_handoff_replacement_enqueue_failure_survives_restart(
         original = (await queue.snapshot())[0]
         metadata = extract_task_metadata(original)
 
-        # Fault only the queue transport after registration, never the real
-        # middleware or any retry method. No replacement reaches SQLite.
+        # Fault only replacement publication; failure leaves the original unacknowledged.
         original_write = queue._async_agfs.write
         attempted = []
 
@@ -186,22 +186,40 @@ async def test_handoff_replacement_enqueue_failure_survives_restart(
                 raise OSError("replacement enqueue failed")
             return await original_write(path, data, *args, **kwargs)
 
-        monkeypatch.setattr(queue._async_agfs, "write", fail_enqueue)
+        if enqueue_failure:
+            monkeypatch.setattr(queue._async_agfs, "write", fail_enqueue)
         await queue.dequeue()
-        assert len(attempted) == 1
-        assert attempted[0]["_task_work_id"] == metadata.work_id
-        assert attempted[0]["lock_handoff_retry"] == 1
-        assert await tracker.get_work_state("task", metadata.work_id, **OWNER) is WorkState.RUNNING
+        if enqueue_failure:
+            assert len(attempted) == 1
+            assert attempted[0]["_task_work_id"] == metadata.work_id
+            assert attempted[0]["lock_handoff_retry"] == 1
+            assert (
+                await tracker.get_work_state("task", metadata.work_id, **OWNER) is WorkState.RUNNING
+            )
+            assert await queue.snapshot() == [original]
+            status = await queue.get_status()
+            assert (status.pending, status.in_progress) == (0, 1)
+        else:
+            assert attempted == []
+            assert (
+                await tracker.get_work_state("task", metadata.work_id, **OWNER) is WorkState.PENDING
+            )
+            work = await tracker._store.get_work("task", metadata.work_id, **OWNER)
+            assert work.error is None and work.errors == []
+            replacement = (await queue.snapshot())[0]
+            assert replacement["id"] != original["id"]
+            assert extract_task_metadata(replacement).work_id == metadata.work_id
+            assert json.loads(replacement["data"])["lock_handoff_retry"] == 1
+            status = await queue.get_status()
+            assert (status.pending, status.in_progress) == (1, 0)
         assert (await tracker.get("task", **OWNER)).status is TaskStatus.RUNNING
-        assert await queue.snapshot() == [original]
-        status = await queue.get_status()
-        assert (status.pending, status.in_progress) == (0, 1)
+        assert (await tracker.get("task", **OWNER)).error is None
         assert executed == []
         await agfs.run("close")
         clients.remove(manager._agfs)
 
         # Drop the original tracker, middleware, queue and native client.
-        # RecoverStale and the production snapshot bootstrap resume the work.
+        # Either the original or the published replacement survives runtime restart.
         agfs, tracker, manager, queue = open_runtime()
         assert (await tracker.get("task", **OWNER)).status is TaskStatus.RUNNING
         status = await queue.get_status()
@@ -209,13 +227,12 @@ async def test_handoff_replacement_enqueue_failure_survives_restart(
         await manager.prepare_task_tracking(tracker)
         assert await tracker.get_work_state("task", metadata.work_id, **OWNER) is WorkState.PENDING
 
-        # Coverage is still blocked: the recovered original now successfully
-        # publishes its replacement and is ACKed, keeping the same logical work.
+        # Coverage is still blocked; another explicit retry replaces this message.
         await queue.dequeue()
         replacement = (await queue.snapshot())[0]
         assert replacement["id"] != original["id"]
         assert extract_task_metadata(replacement).work_id == metadata.work_id
-        assert json.loads(replacement["data"])["lock_handoff_retry"] == 1
+        assert json.loads(replacement["data"])["lock_handoff_retry"] == (1 if enqueue_failure else 2)
         assert await tracker.get_work_state("task", metadata.work_id, **OWNER) is WorkState.PENDING
 
         blocked = False

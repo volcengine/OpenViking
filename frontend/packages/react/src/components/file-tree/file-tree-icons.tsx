@@ -1,77 +1,38 @@
-import styles from './file-tree.module.css';
+import {
+  ChevronRightIcon,
+  DocumentIcon,
+  FolderIcon,
+  FolderOpenIcon,
+} from '../../icons/index.js';
 
-export function Chevron({ expanded }: { expanded: boolean }) {
+/**
+ * 文件夹图标。展开态与收起态叠放在一起交叉淡入，和宿主一致。
+ *
+ * The folder icon. The open and collapsed states sit stacked and cross-fade,
+ * matching the host tree.
+ */
+export function FileTreeFolderIcon({ open }: { open: boolean }) {
   return (
-    <svg
-      aria-hidden="true"
-      className={styles.chevron}
-      data-expanded={expanded || undefined}
-      viewBox="0 0 16 16"
-      width="12"
-      height="12"
-    >
-      <path
-        d="M6 3.5 10.5 8 6 12.5"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.5"
-      />
-    </svg>
+    <span className="ov-file-tree__folder">
+      <FolderIcon className="ov-file-tree__folder-layer" data-open={!open} />
+      <FolderOpenIcon className="ov-file-tree__folder-layer" data-open={open} />
+    </span>
   );
 }
 
-export function FolderIcon({ open }: { open: boolean }) {
-  return (
-    <svg
-      aria-hidden="true"
-      className={styles.icon}
-      viewBox="0 0 16 16"
-      width="14"
-      height="14"
-    >
-      <path
-        d={
-          open
-            ? 'M1.5 13V4.5A1 1 0 0 1 2.5 3.5h3l1.2 1.5h5.8a1 1 0 0 1 1 1V7M1.5 13l1.6-5h11.4l-1.6 5H1.5Z'
-            : 'M1.5 12.5v-9a1 1 0 0 1 1-1h3l1.2 1.5h6.8a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1Z'
-        }
-        fill="none"
-        stroke="currentColor"
-        strokeLinejoin="round"
-        strokeWidth="1.2"
-      />
-    </svg>
-  );
+/** 宿主没有提供 `renderRowIcon` 时的文件图标。Fallback file icon. */
+export function FileTreeFileIcon() {
+  return <DocumentIcon className="ov-file-tree__file-icon" />;
 }
 
-export function FileIcon() {
+/** 展开箭头，展开时旋转 90°。The expand chevron, rotated when open. */
+export function FileTreeChevron({ open }: { open: boolean }) {
   return (
-    <svg
-      aria-hidden="true"
-      className={styles.icon}
-      viewBox="0 0 16 16"
-      width="14"
-      height="14"
-    >
-      <path
-        d="M4 1.5h5L12.5 5v9.5h-8.5V1.5Z"
-        fill="none"
-        stroke="currentColor"
-        strokeLinejoin="round"
-        strokeWidth="1.2"
-      />
-      <path
-        d="M9 1.5V5h3.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.2"
-      />
-    </svg>
+    <ChevronRightIcon
+      className="ov-file-tree__chevron"
+      data-expanded={open || undefined}
+      width={12}
+      height={12}
+    />
   );
-}
-
-export function Spinner() {
-  return <span aria-hidden="true" className={styles.spinner} />;
 }
