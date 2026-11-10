@@ -26,7 +26,7 @@ The view and interaction for command records, results and input. The record area
 - `onOpenUri` receives the raw URI when a link in the input, command bubble or results is activated. The host owns navigation; plain-text links use their native `href` when no handler is supplied.
 - Copying is performed by the component and reported through `onCopy` on success, with the copied text as the argument; the callback does not fire on failure. Omitting the callback does not affect copying.
 - Command matching, highlighting, keyboard selection, filling and parameter help stay in the component. Hosts supply `commands` and optional `commandGroups`, including localized descriptions, parameters, options and examples. The component does not fetch data or use local storage.
-- `emptyState` is the single configuration entry for the complete empty state and can combine a title, description and shortcut entries, with the related interaction handled by the host inside the node. It is shown when there are no records; when omitted, `labels.empty` is used, and passing `null` hides the empty-state content.
+- `quickCommands` lists the command names the built-in empty state shows, resolved from `commands` in array order with unknown names skipped and repeats keeping their first occurrence. The component renders the heading, description and list, and selecting one fills and focuses the input without submitting. `emptyState` replaces that built-in empty state entirely; passing `null` shows nothing, and omitting both shows nothing either.
 - Component copy and guidance text are configured uniformly through `labels`. `disabled` independently controls whether the command input and submit are available, and `labels.unavailableMessage` provides the hint while disabled; setting the copy alone does not disable the component.
 
 Command descriptors and groups are host data. New commands using existing descriptor and result types require no component release. The demo catalogue lives in `docs/docs/_demos/tui-commands/`; there is no bundled business catalogue. Without `commands`, text input and submission remain available without suggestions or parameter help.
@@ -49,11 +49,11 @@ Hosts still own the conversion from a CLI response to these variants; the compon
 
 Some fields express host capabilities; omitting one degrades to the corresponding behaviour:
 
-| Field                    | When omitted         | When provided                                                       |
-| ------------------------ | -------------------- | ------------------------------------------------------------------- |
-| Empty-state node         | Shows `labels.empty` | Shows the full node when there are no records; `null` hides it      |
-| Retrieval level and type | No labels shown      | Shown next to the title and next to the score respectively          |
-| Score detail             | Score shown as text  | When score copy is provided, hover or focus shows the host's detail |
+| Field                    | When omitted        | When provided                                                                                    |
+| ------------------------ | ------------------- | ------------------------------------------------------------------------------------------------ |
+| Empty state              | Nothing shown       | `quickCommands` renders the built-in empty state; `emptyState` replaces it, `null` shows nothing |
+| Retrieval level and type | No labels shown     | Shown next to the title and next to the score respectively                                       |
+| Score detail             | Score shown as text | When score copy is provided, hover or focus shows the host's detail                              |
 
 While a record is `pending`, the component matches the supplied catalogue and uses its optional `skeleton`; missing or unknown descriptors use the generic shape. `content` may be omitted while waiting.
 

@@ -13,7 +13,9 @@ const messages = {
   error: 'Failed',
   copy: 'Copy',
   copied: 'Copied',
-  empty: 'Run a command to see its result here.',
+  emptyTitle: 'OpenViking CLI',
+  emptyDescription: 'Work directly with your context through the CLI',
+  quickStart: 'Quick start:',
   noResult: 'No result returned',
   justNow: 'Just now',
   formatMinutesAgo: (minutes) =>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import { TuiAssist } from './tui-assist.js';
 import { TuiComposer } from './tui-composer.js';
+import { pickTuiCommands, TuiEmptyRegion } from './tui-empty.js';
 import { resolveTuiLabels } from './tui-labels.js';
 import { TuiRecordItem } from './tui-record.js';
 import { useTuiCompletion } from './use-tui-completion.js';
@@ -52,6 +53,7 @@ export function Tui({
   value,
   disabled = false,
   emptyState,
+  quickCommands,
   locale = 'en-US',
   commands = [],
   commandGroups = [],
@@ -156,9 +158,13 @@ export function Tui({
             />
           ))
         ) : (
-          <div className="ov-tui__empty">
-            {emptyState === undefined ? text.empty : emptyState}
-          </div>
+          <TuiEmptyRegion
+            emptyState={emptyState}
+            commands={pickTuiCommands(quickCommands, commands)}
+            labels={text}
+            disabled={disabled || readOnly}
+            onPick={(command) => fillCommand(`${command.name} `)}
+          />
         )}
       </div>
       <TuiAssist

@@ -67,9 +67,7 @@ test('every quick-start command focuses its own composer so arguments can be ent
   await act(() => root.render(createElement(TuiEmpty)));
   try {
     const input = container.querySelector('textarea');
-    for (const button of container.querySelectorAll(
-      '.ov-demo-tui-empty__action',
-    )) {
+    for (const button of container.querySelectorAll('.ov-tui__empty-action')) {
       await click(button);
       assert.ok(document.activeElement === input);
       const prefix = input.value;

@@ -45,9 +45,14 @@ const cases = [
   ],
   [
     Tui,
-    { records: [], value: '' },
-    '运行命令后将在此显示结果。',
-    'Run a command to see its result here.',
+    {
+      records: [],
+      value: '',
+      commands: [{ name: 'ls', description: 'List', usage: 'ov ls' }],
+      quickCommands: ['ls'],
+    },
+    'CLI 直接操作上下文',
+    'Work directly with your context through the CLI',
   ],
   [VikingBot, { messages: [] }, '欢迎使用 VikingBot', 'Welcome to VikingBot'],
   [VikingBotMessageList, { messages: [] }, '开始对话', 'Start a conversation'],

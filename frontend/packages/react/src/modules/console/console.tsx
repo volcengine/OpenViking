@@ -7,13 +7,16 @@ import {
 import { useConsole } from './use-console.js';
 import { consoleLabels } from './labels.js';
 import { ConsoleToolbar } from './console-toolbar.js';
-import { ConsoleEmpty } from './console-empty.js';
 import type { ConsoleProps } from './types.js';
+
+/** 终端空态默认展示的快捷命令，顺序即展示顺序。 */
+const DEFAULT_QUICK_COMMANDS = ['help', 'ls', 'find', 'read', 'status'];
 
 export function Console({
   mode,
   defaultMode,
   locale = 'en-US',
+  quickCommands = DEFAULT_QUICK_COMMANDS,
   scopeKey,
   requestOptions,
   onModeChange,
@@ -110,13 +113,7 @@ export function Console({
           commands={state.commands}
           locale={locale}
           disabled={state.isExecuting}
-          emptyState={
-            <ConsoleEmpty
-              commands={state.commands}
-              labels={labels}
-              onSelect={fillCommand}
-            />
-          }
+          quickCommands={quickCommands}
           onValueChange={state.setCommand}
           onSubmit={(command) => void state.execute(command)}
           onOpenUri={onOpenUri}
