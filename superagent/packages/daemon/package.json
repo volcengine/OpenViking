@@ -1,6 +1,6 @@
 {
   "name": "@ov-superagent/daemon",
-  "version": "0.5.0-preview",
+  "version": "0.5.1-preview",
   "license": "AGPL-3.0",
   "private": true,
   "description": "Personal Agent connectors, runtime execution, SQLite state, and private activity API.",
