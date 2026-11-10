@@ -7,7 +7,7 @@ import zlib
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from vikingbot.agent import loop as loop_module
@@ -22,6 +22,8 @@ from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
 from vikingbot.openviking_mount.session_state import make_openviking_storage_session_id
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.session.manager import SessionManager
+
+from openviking_cli.exceptions import NotFoundError
 
 
 class _FakeProvider(LLMProvider):
@@ -395,6 +397,56 @@ def test_context_keeps_multimodal_tool_result_on_tool_message(temp_dir: Path):
             "content": content,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_context_prefers_openviking_agent_and_falls_back_to_local_soul(temp_dir, monkeypatch):
+    (temp_dir / "SOUL.md").write_text("Local Soul instructions", encoding="utf-8")
+    (temp_dir / "AGENTS.md").write_text("Local working rules", encoding="utf-8")
+    config = Config(storage_workspace=str(temp_dir))
+    config.ov_server.server_url = "http://ov.test"
+    client = SimpleNamespace(
+        initialize=AsyncMock(),
+        read_raw=AsyncMock(return_value="Remote Agent instructions"),
+        close=AsyncMock(),
+    )
+    http_client = Mock(return_value=client)
+    monkeypatch.setattr("vikingbot.openviking_mount.ov_server.ov.AsyncHTTPClient", http_client)
+    context = ContextBuilder(
+        workspace=temp_dir,
+        config=config,
+        actor_peer_id="sender-1",
+        openviking_connection={"api_key": "request-key", "account_id": "acme", "user_id": "alice"},
+    )
+
+    async def system_prompt():
+        messages = await context.build_messages(
+            history=[],
+            current_message="hello",
+            session_key=SessionKey(type="cli", channel_id="default", chat_id="agent-instructions"),
+            ov_tools_enable=False,
+        )
+        return messages[0]["content"]
+
+    prompt = await system_prompt()
+    assert "Remote Agent instructions" in prompt
+    assert "Local Soul instructions" not in prompt
+    assert "Local working rules" in prompt
+    client.read_raw.assert_awaited_once_with("viking://~/memories/AGENT.md", offset=0, limit=-1)
+    assert http_client.call_args.kwargs["api_key"] == "request-key"
+    assert http_client.call_args.kwargs["user"] == "alice"
+    assert http_client.call_args.kwargs["actor_peer_id"] == "sender-1"
+
+    for failure in (NotFoundError("AGENT.md"), TimeoutError("OpenViking unavailable")):
+        client.read_raw.side_effect = failure
+        prompt = await system_prompt()
+        assert "Local Soul instructions" in prompt
+        assert "Remote Agent instructions" not in prompt
+    assert client.close.await_count == 3
+
+    config.ov_server.server_url = ""
+    assert "Local Soul instructions" in await system_prompt()
+    assert http_client.call_count == 3
 
 
 @pytest.mark.asyncio
