@@ -57,7 +57,8 @@ export interface ConsoleProps
   /** 内置中英文文案的语言。Language of the built-in interface copy. */
   locale: Locale;
   /**
-   * 终端空态展示的快捷命令名称，按数组顺序取自命令目录，未命中的名称跳过。
+   * 终端空态展示的快捷命令名称，按数组顺序取自命令目录，未命中的名称跳过，
+   * 重复名称只保留首次出现。
    * 省略时使用默认集合；传空数组不展示内置空态。
    * Quick command names shown in the terminal empty state, resolved from the
    * command catalogue in array order with unknown names skipped. Omitted uses

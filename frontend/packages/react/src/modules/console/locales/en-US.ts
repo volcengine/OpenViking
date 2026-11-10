@@ -10,10 +10,12 @@ const messages = {
     clear: 'New session',
     history: 'Command history',
     emptyHistory: 'No command history yet',
-    commandTitle: 'OpenViking CLI',
-    commandDescription: 'Work directly with your context through the CLI',
-    quickStart: 'Quick start:',
-  } satisfies Required<Omit<ConsoleLabels, 'tui' | 'vikingBot'>>,
+  } satisfies Required<
+    Omit<
+      ConsoleLabels,
+      'tui' | 'vikingBot' | 'commandTitle' | 'commandDescription' | 'quickStart'
+    >
+  >,
   commands: {
     grep: 'Match text in resources',
     glob: 'Match resource paths',

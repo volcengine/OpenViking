@@ -180,3 +180,25 @@ test('Console exposes the terminal empty state and lets the host replace its qui
     await host.dispose();
   }
 });
+
+test('Console forwards only explicit terminal copy overrides to Tui', async () => {
+  const title = () =>
+    host0.container.querySelector('.ov-tui__empty-title').textContent;
+  const host0 = await mount(async () => ok({ state: 'ready' }));
+  try {
+    assert.equal(title(), 'OpenViking CLI');
+
+    await host0.render({ labels: { commandTitle: 'Custom CLI' } });
+    assert.equal(title(), 'Custom CLI');
+
+    await host0.render({
+      labels: { commandTitle: 'Legacy', tui: { emptyTitle: 'Tui wins' } },
+    });
+    assert.equal(title(), 'Tui wins');
+
+    await host0.render({ labels: { commandTitle: '' } });
+    assert.equal(title(), '');
+  } finally {
+    await host0.dispose();
+  }
+});

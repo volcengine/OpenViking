@@ -5,15 +5,17 @@ import type { ResolvedTuiLabels } from './tui-labels.js';
 
 /**
  * 按名称从宿主目录中取快捷命令，保持传入顺序，未命中的名称直接跳过。
+ * 重复名称只保留首次出现，避免同一命令渲染成多个相同 key 的兄弟节点。
  * Resolves quick commands from the host catalogue in the given order, skipping
- * names the catalogue does not contain.
+ * names the catalogue does not contain. Repeated names keep their first
+ * occurrence so one command never renders as sibling nodes with the same key.
  */
 export function pickTuiCommands(
   names: readonly string[] = [],
   commands: readonly TuiCommandDefinition[],
 ): readonly TuiCommandDefinition[] {
   const byName = new Map(commands.map((command) => [command.name, command]));
-  return names.flatMap((name) => byName.get(name) ?? []);
+  return [...new Set(names)].flatMap((name) => byName.get(name) ?? []);
 }
 
 /**

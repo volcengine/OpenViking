@@ -535,10 +535,12 @@ export interface TuiProps extends Omit<
    */
   emptyState?: ReactNode;
   /**
-   * 内置空态展示的快捷命令名称，按数组顺序取自 `commands`，未命中的名称跳过。
+   * 内置空态展示的快捷命令名称，按数组顺序取自 `commands`，未命中的名称跳过，
+   * 重复名称只保留首次出现。
    * 点击后填入输入框并聚焦，不提交命令。
    * Quick command names rendered by the built-in empty state, resolved from
-   * `commands` in array order; unknown names are skipped. Selecting one fills
+   * `commands` in array order; unknown names are skipped and repeats keep their
+   * first occurrence. Selecting one fills
    * and focuses the input without submitting.
    */
   quickCommands?: readonly string[];

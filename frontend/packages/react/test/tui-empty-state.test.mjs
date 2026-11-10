@@ -150,3 +150,21 @@ test('disabled and read-only instances render quick commands that cannot be pick
     await readOnly.dispose();
   }
 });
+
+test('duplicate names render once and a removed command disappears on update', async () => {
+  const view = await mount({
+    commands,
+    quickCommands: ['ls', 'ls', 'find'],
+  });
+  try {
+    const names = () =>
+      actions(view.container).map(
+        (button) => button.querySelector('.ov-tui__empty-name').textContent,
+      );
+    assert.deepEqual(names(), ['ls', 'find']);
+    await view.render({ commands, quickCommands: ['find'] });
+    assert.deepEqual(names(), ['find']);
+  } finally {
+    await view.dispose();
+  }
+});
