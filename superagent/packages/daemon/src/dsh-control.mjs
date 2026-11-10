@@ -17,9 +17,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { DshBridgeFramer } from './dsh-bridge/framer.mjs';
-import { spawnDetached } from './platform/index.mjs';
+import { spawn, spawnDetached } from './platform/index.mjs';
 import { terminateProcessTree } from './process-utils.mjs';
 import {
   DSH_BRIDGE_CLI_METHODS, DSH_BRIDGE_PATH,
@@ -164,6 +163,9 @@ export class DshControlClient {
    * @returns {Promise<DshControlClient>} a client whose bridge is verified.
    */
   static async open({
+    // Platform spawn, like the DSH session runtime: npm installs `dsh` as a
+    // .cmd shim on Windows, and a raw child_process.spawn of that shim throws
+    // EINVAL (CreateProcess cannot run a batch file).
     dataDir, bin = 'dsh', env = process.env, spawnImpl = spawn, policy = '',
     bridgePath = DSH_BRIDGE_PATH,
     helloTimeoutMs = CONTROL_HELLO_TIMEOUT_MS,
