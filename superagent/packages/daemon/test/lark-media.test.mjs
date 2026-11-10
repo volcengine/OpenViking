@@ -22,13 +22,13 @@ function temporaryRoot(t) {
 test('downloads and reads images outside /root, retaining them until maintenance expires them', async (t) => {
   const root = temporaryRoot(t);
   const tempDir = path.join(root, 'private');
-  const previous = process.env.VIKA_TEMP_DIR;
-  process.env.VIKA_TEMP_DIR = tempDir;
+  const previous = process.env.OV_SUPERAGENT_TEMP_DIR;
+  process.env.OV_SUPERAGENT_TEMP_DIR = tempDir;
   t.after(() => {
-    if (previous === undefined) delete process.env.VIKA_TEMP_DIR;
-    else process.env.VIKA_TEMP_DIR = previous;
+    if (previous === undefined) delete process.env.OV_SUPERAGENT_TEMP_DIR;
+    else process.env.OV_SUPERAGENT_TEMP_DIR = previous;
   });
-  const config = { ...getConfig(), dataDir: '/root/.ovsa/data', retentionMs: 86_400_000 };
+  const config = { ...getConfig(), dataDir: '/root/.superagent/data', retentionMs: 86_400_000 };
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aol8AAAAASUVORK5CYII=', 'base64');
   const lark = new LarkClient(config, {
     async run(command, args, { cwd }) {

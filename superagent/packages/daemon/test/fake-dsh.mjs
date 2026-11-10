@@ -233,7 +233,7 @@ function main() {
   let coldRefusals = Math.max(0, Number.parseInt(process.env.FAKE_DSH_COLD_REFUSALS || '0', 10) || 0);
 
   // A hand-edited document the settings service cannot parse is the state
-  // `ovsa dsh model repair` exists to fix, so the fake reproduces it: every
+  // `ov-superagent dsh model repair` exists to fix, so the fake reproduces it: every
   // settings call fails until something rewrites the file.
   const patchText = fs.existsSync(patchPath) ? fs.readFileSync(patchPath, 'utf8') : null;
   const stored = readJsonFile(patchPath, null);

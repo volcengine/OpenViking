@@ -25,7 +25,7 @@ test('installation checks each existing instance with its pinned OV config', asy
     dataDir: path.join(home, id, 'data'), workspace: path.join(home, id, 'ws'), ovConfig: path.join(home, id, 'ov.json'),
   })) }));
   const checked = [];
-  await assert.rejects(checkInstallationOV({ env: { HOME: home, VIKA_CONFIG: manifest }, detect: async ({ configPath }) => {
+  await assert.rejects(checkInstallationOV({ env: { HOME: home, OV_SUPERAGENT_CONFIG: manifest }, detect: async ({ configPath }) => {
     checked.push(configPath);
     return { usable: checked.length === 1, reason: 'offline' };
   } }), /b.*offline/);

@@ -19,7 +19,7 @@ function agent(id, overrides = {}) {
     displayName: 'OpenViking SuperAgent',
     channel: 'lark',
     connectors: ['lark'],
-    profile: `vika-${id}`,
+    profile: `superagent-${id}`,
     port: 3738,
     dataDir: `/srv/vika/data/${id}`,
     workspace: `/srv/vika/workspace/${id}`,
@@ -36,17 +36,17 @@ function tempHome(t) {
 }
 
 test('setup defaults only /root data paths to a per-instance /tmp directory and preserves explicit choices', () => {
-  for (const dataDir of ['/root', '/root/.ovsa/data/primary', '/root/.local/share/vika-primary', '/srv/../root/data']) {
+  for (const dataDir of ['/root', '/root/.superagent/data/primary', '/root/.local/share/superagent-primary', '/srv/../root/data']) {
     const original = agent('primary', { dataDir });
     const configured = withDefaultTempDir(original, { TMPDIR: '/root/tmp' });
-    assert.deepEqual(configured, { ...original, tempDir: '/tmp/vika-primary' });
+    assert.deepEqual(configured, { ...original, tempDir: '/tmp/superagent-primary' });
     assert.equal(original.tempDir, undefined);
-    assert.equal(withDefaultTempDir({ ...original, id: 'secondary' }).tempDir, '/tmp/vika-secondary');
-    assert.equal(withDefaultTempDir(original, { VIKA_TEMP_DIR: '/tmp/custom' }), original);
+    assert.equal(withDefaultTempDir({ ...original, id: 'secondary' }).tempDir, '/tmp/superagent-secondary');
+    assert.equal(withDefaultTempDir(original, { OV_SUPERAGENT_TEMP_DIR: '/tmp/custom' }), original);
     const custom = { ...original, tempDir: '/tmp/my-agent' };
-    assert.equal(withDefaultTempDir(custom, { VIKA_TEMP_DIR: '/tmp/global' }), custom);
+    assert.equal(withDefaultTempDir(custom, { OV_SUPERAGENT_TEMP_DIR: '/tmp/global' }), custom);
   }
-  for (const dataDir of ['/root-other/data', '/srv/root/data', '/home/alice/.ovsa/data/primary']) {
+  for (const dataDir of ['/root-other/data', '/srv/root/data', '/home/alice/.superagent/data/primary']) {
     const original = agent('primary', { dataDir });
     assert.equal(withDefaultTempDir(original), original);
   }
@@ -80,7 +80,7 @@ test('shared env only gains keys it does not have yet', () => {
 
 test('only a manifest the daemon accepts is saved; the previous one is kept as .bak', (t) => {
   const home = tempHome(t);
-  const filePath = path.join(home, '.ovsa', 'config.json');
+  const filePath = path.join(home, '.superagent', 'config.json');
   const first = withInstance(null, agent('primary'));
   writeManifest(filePath, first);
   assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
@@ -99,8 +99,8 @@ test('only a manifest the daemon accepts is saved; the previous one is kept as .
 
 test('setup refuses to build on a manifest that does not load', (t) => {
   const home = tempHome(t);
-  fs.mkdirSync(path.join(home, '.ovsa'));
-  fs.writeFileSync(path.join(home, '.ovsa', 'config.json'), '{"version": 2}');
+  fs.mkdirSync(path.join(home, '.superagent'));
+  fs.writeFileSync(path.join(home, '.superagent', 'config.json'), '{"version": 2}');
   assert.throws(() => readManifest({ HOME: home }), /version must be 1/);
   assert.deepEqual(readManifest({ HOME: path.join(home, 'nobody') }).value, null);
 });
@@ -126,7 +126,7 @@ test('setup cannot overwrite a live primary change from a stale snapshot, and wr
 
 test('Slack can be primary or secondary; Ark is rejected', (t) => {
   const home = tempHome(t);
-  const filename = path.join(home, '.ovsa', 'config.json');
+  const filename = path.join(home, '.superagent', 'config.json');
   const sl = agent('sl', { channel: 'slack', connectors: ['slack'], profile: undefined, model: 'pi' });
   assert.doesNotThrow(() => validateManifest(filename, withInstance(null, sl)));
   assert.doesNotThrow(() => validateManifest(filename, withInstance(null, agent('sl', { connectors: ['lark', 'slack', 'telegram'] }))));
@@ -136,7 +136,7 @@ test('Slack can be primary or secondary; Ark is rejected', (t) => {
 
 test('Telegram can be primary or secondary; Ark and a stray Lark profile are rejected', (t) => {
   const home = tempHome(t);
-  const filename = path.join(home, '.ovsa', 'config.json');
+  const filename = path.join(home, '.superagent', 'config.json');
   const wa = agent('wa', { channel: 'telegram', connectors: ['telegram'], profile: undefined, model: 'pi' });
   assert.doesNotThrow(() => validateManifest(filename, withInstance(null, wa)));
   assert.doesNotThrow(() => validateManifest(filename, withInstance(null, agent('wa', { connectors: ['lark', 'telegram'] }))));
@@ -146,7 +146,7 @@ test('Telegram can be primary or secondary; Ark and a stray Lark profile are rej
 });
 
 test('QQ can be primary or secondary, and cannot select Ark or a Lark-only profile', (t) => {
-  const filename = path.join(tempHome(t), '.ovsa', 'config.json');
+  const filename = path.join(tempHome(t), '.superagent', 'config.json');
   const qq = agent('qq', { channel: 'qq', connectors: ['qq'], profile: undefined, model: 'pi' });
   assert.doesNotThrow(() => validateManifest(filename, withInstance(null, qq)));
   assert.doesNotThrow(() => validateManifest(filename, withInstance(null, agent('qq', { connectors: ['lark', 'qq'] }))));
@@ -155,18 +155,18 @@ test('QQ can be primary or secondary, and cannot select Ark or a Lark-only profi
     volcSessionId: 'session-test', volcEnvironmentId: 'env-test' })), /qq connector cannot use the ark runtime/);
 });
 
-test('the vika command is named by its launcher until ~/.ovsa/bin is on PATH', async () => {
+test('the vika command is named by its launcher until ~/.superagent/bin is on PATH', async () => {
   const posix = await import('../../daemon/src/platform/posix.mjs');
   const windows = await import('../../daemon/src/platform/win32.mjs');
   const home = path.join(path.sep, 'home', 'alice');
-  const bin = path.join(home, '.ovsa', 'bin');
-  assert.equal(vikaCommand({ HOME: home, PATH: '' }, posix), '~/.ovsa/bin/ovsa');
+  const bin = path.join(home, '.superagent', 'bin');
+  assert.equal(vikaCommand({ HOME: home, PATH: '' }, posix), '~/.superagent/bin/ov-superagent');
   // Where no shell script runs, the launcher's full name is needed: cmd.exe
   // expands no ~ and adds no extension.
-  assert.equal(vikaCommand({ HOME: home, PATH: '' }, windows), path.join(bin, 'ovsa.cmd'));
-  assert.equal(vikaCommand({ HOME: home, PATH: ['/usr/bin', bin].join(posix.pathDelimiter) }, posix), 'ovsa');
+  assert.equal(vikaCommand({ HOME: home, PATH: '' }, windows), path.join(bin, 'ov-superagent.cmd'));
+  assert.equal(vikaCommand({ HOME: home, PATH: ['/usr/bin', bin].join(posix.pathDelimiter) }, posix), 'ov-superagent');
   // A Windows PATH is compared without case; a POSIX one as written.
   const shouted = ['C:\\Windows', bin.toUpperCase()].join(windows.pathDelimiter);
-  assert.equal(vikaCommand({ HOME: home, PATH: shouted }, windows), 'ovsa');
-  assert.equal(vikaCommand({ HOME: home, PATH: shouted }, posix), '~/.ovsa/bin/ovsa');
+  assert.equal(vikaCommand({ HOME: home, PATH: shouted }, windows), 'ov-superagent');
+  assert.equal(vikaCommand({ HOME: home, PATH: shouted }, posix), '~/.superagent/bin/ov-superagent');
 });

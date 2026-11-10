@@ -88,7 +88,7 @@ test('generated patch replaces SDK transport and keeps config/mcp variants', (t)
     models: null,
     provider: { test: { api: 'openai-completions', models: [{ id: 'deepseek-chat' }] } },
     modelsFile: '/nowhere/models.json',
-    env: { VIKA_DSH_MODELS_FILE: '/nowhere/models.json' },
+    env: { OV_SUPERAGENT_DSH_MODELS_FILE: '/nowhere/models.json' },
   });
   assert.deepEqual(staleCaller, buildDshPatch({ mcp: null }));
   assert.equal(staleCaller.some(row => row.id === 'llm-pi-ai'), false);
@@ -124,7 +124,7 @@ test('private DSH environment removes inherited DSH settings and pins Node', t =
   const root = temp(t);
   const env = sanitizeDshEnv({
     PATH: '/bin:/usr/bin', DSH_HOME: '/other', DSH_PROFILE: 'web',
-    DEEPSEEK_API_KEY: 'not-printed', VIKA_INSTANCE_ID: 'do-not-inherit',
+    DEEPSEEK_API_KEY: 'not-printed', OV_SUPERAGENT_INSTANCE_ID: 'do-not-inherit',
   }, { dataDir: root, execPath: '/node24/bin/node', actions: { socketPath: '/tmp/actions.sock', authority: 'token' } });
   assert.equal(env.DSH_HOME, path.join(root, 'dsh', 'home'));
   assert.equal(env.DSH_AGENTS_HOME, path.join(root, 'dsh', 'agents'));
@@ -132,7 +132,7 @@ test('private DSH environment removes inherited DSH settings and pins Node', t =
   assert.equal(env.DSH_TELEMETRY_DISABLED, '1');
   assert.equal(env.DSH_PROFILE, undefined);
   assert.equal(env.DEEPSEEK_API_KEY, 'not-printed');
-  assert.equal(env.VIKA_INSTANCE_ID, undefined);
+  assert.equal(env.OV_SUPERAGENT_INSTANCE_ID, undefined);
   assert.equal(env.PATH, '/node24/bin:/bin:/usr/bin');
   for (const directory of Object.values(prepareDshEnvironment(root))) {
     if (typeof directory !== 'string') continue;

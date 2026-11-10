@@ -11,7 +11,7 @@ import { list, t } from './i18n.mjs';
 import { writeManifest as saveManifest } from '../../daemon/src/deployment-manifest.mjs';
 export { validateManifest } from '../../daemon/src/deployment-manifest.mjs';
 
-// Setup edits ~/.ovsa/config.json as plain JSON, and only ever saves a file
+// Setup edits ~/.superagent/config.json as plain JSON, and only ever saves a file
 // that the daemon's own loader accepts.
 
 const require = createRequire(import.meta.url);
@@ -44,19 +44,19 @@ export const WEB_PORT = 3737;
 const FIRST_INSTANCE_PORT = 3738;
 
 export function vikaHome(env = process.env) {
-  return path.join(platform.homeDir(env) || os.homedir(), '.ovsa');
+  return path.join(platform.homeDir(env) || os.homedir(), '.superagent');
 }
 
 // setup persists the default so users can inspect/change it. A global or
 // per-instance explicit choice wins; the durable data directory never moves.
 export function withDefaultTempDir(agent, env = {}) {
-  if (agent.tempDir != null || String(env.VIKA_TEMP_DIR ?? '').trim()) return agent;
+  if (agent.tempDir != null || String(env.OV_SUPERAGENT_TEMP_DIR ?? '').trim()) return agent;
   const dataDir = path.resolve(agent.dataDir);
   if (dataDir !== '/root' && !dataDir.startsWith('/root/')) return agent;
-  return { ...agent, tempDir: `/tmp/vika-${agent.id}` };
+  return { ...agent, tempDir: `/tmp/superagent-${agent.id}` };
 }
 
-// How to call the vika command from here: by name once ~/.ovsa/bin is on
+// How to call the vika command from here: by name once ~/.superagent/bin is on
 // PATH, by its full path in the shell the installer ran from. Where the platform
 // runs no shell scripts, that path is the batch launcher, not a ~ prefix.
 export function vikaCommand(env = process.env, implementation = platform) {
@@ -65,8 +65,8 @@ export function vikaCommand(env = process.env, implementation = platform) {
   const same = (entry) => implementation.environmentCaseSensitive
     ? entry === bin
     : entry.toLowerCase() === bin.toLowerCase();
-  if (entries.some(same)) return 'ovsa';
-  return implementation.supportsShellScripts ? '~/.ovsa/bin/ovsa' : path.join(bin, 'ovsa.cmd');
+  if (entries.some(same)) return 'ov-superagent';
+  return implementation.supportsShellScripts ? '~/.superagent/bin/ov-superagent' : path.join(bin, 'ov-superagent.cmd');
 }
 
 export function manifestPath(env = process.env) {
@@ -78,7 +78,7 @@ export function manifestPath(env = process.env) {
 export function readManifest(env = process.env) {
   const filePath = manifestPath(env);
   if (!fs.existsSync(filePath)) return { path: filePath, value: null, ignored: [] };
-  const { ignoredFields } = loadDeploymentManifest({ ...env, VIKA_CONFIG: filePath });
+  const { ignoredFields } = loadDeploymentManifest({ ...env, OV_SUPERAGENT_CONFIG: filePath });
   return { path: filePath, value: JSON.parse(fs.readFileSync(filePath, 'utf8')), ignored: ignoredFields };
 }
 
@@ -150,7 +150,7 @@ export function withChangedInstance(manifest, agent, env = {}) {
 export function writeManifest(filePath, value, options) {
   try { return saveManifest(filePath, value, options); } catch (error) {
     if (error.code === 'manifest_conflict') {
-      error.message = t('实例配置已被其他操作修改，请重新运行 ovsa setup。', 'The instance configuration changed elsewhere; run ovsa setup again.');
+      error.message = t('实例配置已被其他操作修改，请重新运行 ov-superagent setup。', 'The instance configuration changed elsewhere; run ov-superagent setup again.');
     }
     throw error;
   }

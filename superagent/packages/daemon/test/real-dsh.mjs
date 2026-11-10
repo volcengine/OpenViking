@@ -24,12 +24,12 @@ import { terminateProcessTree } from '../src/process-utils.mjs';
 //
 // The skip is silent in the one place it matters most: `node --test` reports the
 // same `skipped` count whether these suites were skipped or never collected, so a
-// CI runner without `dsh` loses 20 cases and still exits 0. `VIKA_REQUIRE_DSH=1`
+// CI runner without `dsh` loses 20 cases and still exits 0. `OV_SUPERAGENT_REQUIRE_DSH=1`
 // turns "no dsh" into a failure instead, which is what a job that is supposed to
 // cover the live contract sets.
 //   - `prepareLiveDshRoot()` / `hermeticDshEnv()`: a private data directory and
 //     an environment with no operator DEEPSEEK_* or DSH_* values, so a test
-//     never reaches the network, ~/.dsh, or ~/.ovsa.
+//     never reaches the network, ~/.dsh, or ~/.superagent.
 //   - `startLiveDsh()`: the process, LF framing, request/response correlation,
 //     JSON-RPC error mapping (the same shape dsh.mjs produces), and a cleanup
 //     that kills the process group.
@@ -89,10 +89,10 @@ export async function realDshAvailability({ bin = process.env.DSH_BIN || 'dsh', 
   if (availabilityCache.has(key)) return availabilityCache.get(key);
   const probe = (async () => {
     const verdict = await probeDsh(bin, timeoutMs);
-    if (process.env.VIKA_REQUIRE_DSH === '1' && !verdict.ok) {
+    if (process.env.OV_SUPERAGENT_REQUIRE_DSH === '1' && !verdict.ok) {
       // A job that means to cover the live contract must fail when it cannot,
       // instead of reporting the same green as a job that skipped the work.
-      throw new Error(`VIKA_REQUIRE_DSH=1 but ${verdict.reason}`);
+      throw new Error(`OV_SUPERAGENT_REQUIRE_DSH=1 but ${verdict.reason}`);
     }
     return verdict;
   })();

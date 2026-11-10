@@ -153,7 +153,7 @@ export class LarkClient {
       try { profiles = JSON.parse(listed.stdout); } catch {}
       const active = Array.isArray(profiles) ? profiles.filter((profile) => profile?.active) : [];
       if (active.length !== 1 || typeof active[0].name !== 'string' || !active[0].name) {
-        throw new Error('lark-cli must have exactly one active profile, or set VIKA_LARK_PROFILE');
+        throw new Error('lark-cli must have exactly one active profile, or set OV_SUPERAGENT_LARK_PROFILE');
       }
       this.profile = active[0].name;
     }

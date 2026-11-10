@@ -4,7 +4,7 @@
 
 Set up your machine (local or a cloud VM) with the software, projects, and tools you need. OpenViking SuperAgent connects your agent to OpenViking and instant messaging: send a task in chat, let your agent work on your machine, and receive the results in the same conversation. OpenViking provides knowledge, memory, and context across sessions.
 
-OpenViking SuperAgent supports runtimes such as Codex, Claude Code, DeepSeek Harness, and Pi, and connects to Feishu / Lark, WeChat, Telegram, Slack, QQ, and email. The CLI command is `ovsa`. The previous `vika` command remains a compatibility alias. For an existing installation, follow the migration guide below, then rerun the installer to add the `ovsa` launcher; upgrading the release alone does not replace launchers.
+OpenViking SuperAgent supports runtimes such as Codex, Claude Code, DeepSeek Harness, and Pi, and connects to Feishu / Lark, WeChat, Telegram, Slack, QQ, and email. The CLI command is `ov-superagent`. The previous `ovsa` and `vika` commands remain compatibility aliases. For an existing installation, follow the migration guide below, then rerun the installer to add the `ov-superagent` launcher; upgrading the release alone does not replace launchers.
 
 [Quick start](install.md) · [Features and architecture](docs/usage-reference.md) · [Configuration example](config.example.json) · [Contributing](../CONTRIBUTING.md)
 
@@ -17,23 +17,23 @@ OpenViking SuperAgent supports runtimes such as Codex, Claude Code, DeepSeek Har
 
 ## Quick start
 
-You need a configured model runtime and **an OpenViking service (required; local or remote)**. Choose the command for your system; both installers open the same `ovsa setup` on first interactive installation.
+You need a configured model runtime and **an OpenViking service (required; local or remote)**. Choose the command for your system; both installers open the same `ov-superagent setup` on first interactive installation.
 
 **macOS / Linux / WSL2 (x64 or arm64):**
 
 ```bash
-curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/install.sh | sh
+curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/superagent/install.sh | sh
 ```
 
-This installs the latest release (currently `0.5.0-preview`). To pin a version, use `curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/releases/<version>/install.sh | sh -s -- --version <version>`.
+This installs the latest release. To pin a version, use `curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/superagent/releases/<version>/install.sh | sh -s -- --version <version>`.
 
 **Windows 10/11 (x64, preview), in PowerShell 5.1 or 7:**
 
 ```powershell
-irm https://ovrelease.tos-cn-beijing.volces.com/vika/install.ps1 | iex
+irm https://ovrelease.tos-cn-beijing.volces.com/superagent/install.ps1 | iex
 ```
 
-The package includes Node, PM2, chat CLIs, Pi, and Durable. On first installation, `ovsa setup` connects OV, selects a runtime and workspace, and authorizes your chat channels. You do not need to install lark-cli globally. For Codex or Claude Code, install and sign in to that CLI first. DeepSeek Harness is not bundled either: install `dsh` **0.2.x** (0.2.2-rc.1 or later) on Node 24.9+, then manage its model routes with `ovsa dsh model`.
+The package includes Node, PM2, chat CLIs, Pi, and Durable. On first installation, `ov-superagent setup` connects OV, selects a runtime and workspace, and authorizes your chat channels. You do not need to install lark-cli globally. For Codex or Claude Code, install and sign in to that CLI first. DeepSeek Harness is not bundled either: install `dsh` **0.2.x** (0.2.2-rc.1 or later) on Node 24.9+, then manage its model routes with `ov-superagent dsh model`.
 
 Once configured, send the bot a task in a direct chat:
 
@@ -46,9 +46,9 @@ See the [installation guide](install.md) for details.
 Send `/help` in a direct chat for commands, `/status` for status, `/model` and `/effort` to inspect or change model settings, and `/new` to start a new session. In your terminal:
 
 ```bash
-ovsa setup           # Add or edit an instance
-ovsa status
-ovsa logs primary
+ov-superagent setup           # Add or edit an instance
+ov-superagent status
+ov-superagent logs primary
 ```
 
 For upgrades, see the [platform-specific instructions](docs/installation-reference.md#upgrade-and-rollback).
@@ -74,4 +74,4 @@ The release-process guide is currently in Chinese.
 
 Features in the source tree may not yet be published. Check your installed release.
 
-Existing `~/.vika` installations: follow the [ovsa migration guide](docs/migration-to-ovsa.md) before installing this version.
+Existing `~/.vika` or `~/.ovsa` installations: follow the [ov-superagent migration guide](docs/migration-to-superagent.md) before installing this version.

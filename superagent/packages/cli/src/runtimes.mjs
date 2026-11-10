@@ -80,7 +80,7 @@ export async function detectRuntimes({
     id: 'pi', label: t('Pi（内置）', 'Pi (built in)'), model: 'pi', bin: null, binEnv: null,
     available: models.length > 0,
     note: models.length > 0 ? t(`用 ~/.pi/agent 里的 ${models[0]}`, `uses ${models[0]} from ~/.pi/agent`)
-      : t('没有可用模型：运行 ovsa pi 后 /login，或编辑 ~/.pi/agent/models.json', 'no model yet: run ovsa pi and /login, or edit ~/.pi/agent/models.json'),
+      : t('没有可用模型：运行 ov-superagent pi 后 /login，或编辑 ~/.pi/agent/models.json', 'no model yet: run ov-superagent pi and /login, or edit ~/.pi/agent/models.json'),
   });
 
   const durable = await detectDurable({ env, execFileImpl });
@@ -107,7 +107,7 @@ const chat = await availableChatModels(models);
 process.stdout.write(JSON.stringify(chat.map((model) => \`\${model.provider}/\${model.id}\`)));
 `;
 
-// The daemon may get provider keys from ~/.ovsa/secrets.env (see
+// The daemon may get provider keys from ~/.superagent/secrets.env (see
 // deployment-config.cjs); the setup probe must see the same credentials or it
 // would offer a runtime that only looks unusable here.
 const DURABLE_PROVIDER_KEYS = [
@@ -116,8 +116,8 @@ const DURABLE_PROVIDER_KEYS = [
 ];
 
 function providerSecrets(env) {
-  const file = String(env.VIKA_SECRETS_FILE || '').trim()
-    || (env.HOME ? path.join(env.HOME, '.ovsa', 'secrets.env') : '');
+  const file = String(env.OV_SUPERAGENT_SECRETS_FILE || '').trim()
+    || (env.HOME ? path.join(env.HOME, '.superagent', 'secrets.env') : '');
   if (!file) return {};
   let raw = '';
   try { raw = fs.readFileSync(file, 'utf8'); } catch { return {}; }
@@ -148,8 +148,8 @@ async function detectDurable({ env, execFileImpl }) {
     id: 'durable', label: t('Durable（内置）', 'Durable (built in)'), model: 'durable', bin: null, binEnv: null,
     available: models.length > 0,
     note: models.length > 0 ? t(`自托管 durable harness，用 ${models[0]}（和 Pi 共用 ~/.pi/agent 的模型）`, `self-hosted durable harness, uses ${models[0]} (models shared with Pi in ~/.pi/agent)`)
-      : t('有可用模型才可选：运行 ovsa pi 后 /login 或编辑 ~/.pi/agent/models.json，或配置 OPENAI_API_KEY 等 provider 密钥',
-        'needs a model: run ovsa pi and /login, edit ~/.pi/agent/models.json, or set a provider key such as OPENAI_API_KEY'),
+      : t('有可用模型才可选：运行 ov-superagent pi 后 /login 或编辑 ~/.pi/agent/models.json，或配置 OPENAI_API_KEY 等 provider 密钥',
+        'needs a model: run ov-superagent pi and /login, edit ~/.pi/agent/models.json, or set a provider key such as OPENAI_API_KEY'),
   };
 }
 
@@ -240,7 +240,7 @@ export async function detectDsh({ env = process.env, execFileImpl = execFile, pr
   const probeEnv = { ...env, ...secrets, ...(credential ? { DEEPSEEK_API_KEY: credential } : {}) };
   // Availability is the protocol: the binary answers, the bridge handshake
   // succeeds, and DSH can enumerate its own routes. Whether those routes carry
-  // credentials is DSH's configuration (`ovsa dsh model list`), not something a
+  // credentials is DSH's configuration (`ov-superagent dsh model list`), not something a
   // keyless probe can decide — so it is reported, never used to hide the runtime.
   const handshake = await probe(bin, { env: probeEnv, ...(dataDir ? { dataDir } : {}) });
   result.route = handshake.route ?? '';
@@ -261,8 +261,8 @@ export async function detectDsh({ env = process.env, execFileImpl = execFile, pr
   // what was actually verified (the protocol) instead of claiming the instance
   // has no model.
   const detail = handshake.note ? `（${handshake.note}）` : '';
-  result.note = t(`SDK bridge 兼容（${version.stdout.trim()}）；model 目录由 DSH 自己管理（ovsa dsh model list），本机内置 route ${via} 需要 DEEPSEEK_API_KEY${detail}`,
-    `SDK bridge compatible (${version.stdout.trim()}); model routes belong to DSH itself (ovsa dsh model list), and the built-in route ${via} needs DEEPSEEK_API_KEY${detail}`);
+  result.note = t(`SDK bridge 兼容（${version.stdout.trim()}）；model 目录由 DSH 自己管理（ov-superagent dsh model list），本机内置 route ${via} 需要 DEEPSEEK_API_KEY${detail}`,
+    `SDK bridge compatible (${version.stdout.trim()}); model routes belong to DSH itself (ov-superagent dsh model list), and the built-in route ${via} needs DEEPSEEK_API_KEY${detail}`);
   return result;
 }
 

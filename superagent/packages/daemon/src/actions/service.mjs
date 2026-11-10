@@ -27,7 +27,7 @@ import { TOOLS, publicTool, toolDefinition, validateInput } from './tools.mjs';
 
 const NO_ACTION = 'No action was taken.';
 // Replies to bot messages in one chat/thread with no person writing there,
-// after which the safety fuse holds further ones (VIKA_BOT_REPLY_FUSE).
+// after which the safety fuse holds further ones (OV_SUPERAGENT_BOT_REPLY_FUSE).
 const BOT_REPLY_FUSE = 20;
 // Calls in one turn that change nothing for the same input (a duplicate
 // stay_silent, send or timer) before the daemon ends that turn. One repeat is

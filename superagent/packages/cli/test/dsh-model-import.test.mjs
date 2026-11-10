@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
-// The migration half of `ovsa dsh model`: turning a legacy Pi `models.json`
+// The migration half of `ov-superagent dsh model`: turning a legacy Pi `models.json`
 // into native DSH routes without ever sending a request to the wrong provider.
 //
 // The write protocol is three invariants, and the tests assert the invariants
@@ -600,7 +600,7 @@ test('SESSION_ID is treated as a variable the DSH child does not inherit', () =>
   assert.equal(plan.routes[0].apiKeyEnv, 'SESSION_ID', 'the reference is kept so a stored value can resolve it');
   assert.match(notes(plan), /SESSION_ID/);
   assert.match(notes(plan), /withhold/);
-  assert.match(notes(plan), /ovsa dsh model key set SESSION_ID/);
+  assert.match(notes(plan), /ov-superagent dsh model key set SESSION_ID/);
 });
 
 test('a variable the child does inherit stays silent', () => {
@@ -653,7 +653,7 @@ function writeCredentialDocument(state) {
 // plain mode, so its writes land.
 //
 // The environment comes from a file the test wrote: this process runs as the
-// DSH child, whose environment the daemon has already sanitized (VIKA_CONFIG and
+// DSH child, whose environment the daemon has already sanitized (OV_SUPERAGENT_CONFIG and
 // DSH_BIN are stripped there), so re-deriving them here would run a different
 // instance — or a real dsh.
 function runCompetitor() {
@@ -808,7 +808,7 @@ function readJsonLines(file) {
 function fixture(t, { state = null } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-dsh-migrate-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const config = path.join(home, '.ovsa', 'config.json');
+  const config = path.join(home, '.superagent', 'config.json');
   fs.mkdirSync(path.dirname(config), { recursive: true, mode: 0o700 });
   fs.writeFileSync(config, `${JSON.stringify({
     version: 1,
@@ -843,12 +843,12 @@ function fixture(t, { state = null } = {}) {
   fs.writeFileSync(credentialsFile, 'version: 1\nrefs:\n' + seeded.map(([ref, value]) => `  ${ref}: ${value}\n`).join(''), { mode: 0o600 });
   // What a competing CLI process needs to reach this same instance and this
   // same fake: written out because the fake runs with the daemon's sanitized
-  // environment, which no longer carries VIKA_CONFIG or DSH_BIN.
+  // environment, which no longer carries OV_SUPERAGENT_CONFIG or DSH_BIN.
   fs.writeFileSync(path.join(stateDir, 'competitor-plan.json'), `${JSON.stringify({
     cli: BIN,
     route: 'foo_bar_extra',
     models: path.join(home, 'competitor-models.json'),
-    env: { HOME: home, VIKA_CONFIG: config, VIKA_LANG: 'en', DSH_BIN: script, FAKE_DSH_STATE: stateDir },
+    env: { HOME: home, OV_SUPERAGENT_CONFIG: config, OV_SUPERAGENT_LANG: 'en', DSH_BIN: script, FAKE_DSH_STATE: stateDir },
   })}\n`);
   return {
     home,
@@ -857,8 +857,8 @@ function fixture(t, { state = null } = {}) {
     env: {
       ...process.env,
       HOME: home,
-      VIKA_CONFIG: config,
-      VIKA_LANG: 'en',
+      OV_SUPERAGENT_CONFIG: config,
+      OV_SUPERAGENT_LANG: 'en',
       DSH_BIN: script,
       FAKE_DSH_STATE: stateDir,
     },
@@ -1099,7 +1099,7 @@ test('end to end: an unconfirmed settings write keeps the new reference and says
   const text = output(result);
   assert.match(text, /Cannot tell whether this import landed/, 'the uncertainty is stated, not hidden');
   assert.match(text, /GATEWAY_API_KEY/, 'the reference to inspect is named');
-  assert.match(text, /ovsa dsh model list/, 'the operator is told how to check');
+  assert.match(text, /ov-superagent dsh model list/, 'the operator is told how to check');
   assert.ok(!text.includes('sk-new'), 'a value is never printed');
 });
 

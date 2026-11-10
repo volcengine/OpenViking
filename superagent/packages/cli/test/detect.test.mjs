@@ -46,7 +46,7 @@ test('OpenViking: the user config wins, its credentials prove who the user is', 
   assert.equal(calls[0].headers['X-OpenViking-Account'], 'acme');
 
   // Under an API key the key is the identity; the copy names no peer.
-  const target = path.join(home, '.ovsa', 'ov', 'primary.json');
+  const target = path.join(home, '.superagent', 'ov', 'primary.json');
   writeInstanceOvConfig({ config: await instanceOvConfig({ detected, instanceId: 'primary' }), target });
   assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf8')), {
     url: 'https://ov.example', api_key: 'key-1', account: 'acme', plugin: { recall: true },
@@ -221,10 +221,10 @@ test('runtimes: durable is offered when a provider has credentials', async () =>
   assert.match(durable.note, /openai\/gpt-4o/);
 });
 
-test('runtimes: the durable probe sees provider keys from ~/.ovsa/secrets.env', async (t) => {
+test('runtimes: the durable probe sees provider keys from ~/.superagent/secrets.env', async (t) => {
   const home = tempDir(t, 'vika-home-');
-  fs.mkdirSync(path.join(home, '.ovsa'));
-  fs.writeFileSync(path.join(home, '.ovsa', 'secrets.env'), '# comment\nOPENAI_API_KEY=sk-test\nOTHER=ignored\n');
+  fs.mkdirSync(path.join(home, '.superagent'));
+  fs.writeFileSync(path.join(home, '.superagent', 'secrets.env'), '# comment\nOPENAI_API_KEY=sk-test\nOTHER=ignored\n');
   let probeEnv = null;
   const execFileImpl = async (command, args, options) => {
     if (args.includes('-e')) { probeEnv = options.env; return { stdout: '["openai/gpt-4o"]' }; }
@@ -237,7 +237,7 @@ test('runtimes: the durable probe sees provider keys from ~/.ovsa/secrets.env', 
   assert.equal(probeEnv.OTHER, undefined);
 });
 
-test('runtimes: a Pi with no model points the user at ovsa pi', async () => {
+test('runtimes: a Pi with no model points the user at ov-superagent pi', async () => {
   const runtimes = await detectRuntimes({
     env: { PATH: '' }, piBin: '/managed/pi.js',
     execFileImpl: async () => ({ stdout: 'No models available.\n' }),
@@ -245,7 +245,7 @@ test('runtimes: a Pi with no model points the user at ovsa pi', async () => {
   assert.deepEqual(runtimes.map(({ id, available }) => [id, available]), [
     ['codex', false], ['claude', false], ['pi', false], ['durable', false], ['opencode', false], ['agy', false], ['dsh', false],
   ]);
-  assert.match(runtimes[2].note, /ovsa pi/);
+  assert.match(runtimes[2].note, /ov-superagent pi/);
 });
 
 function traexFixture(t, names) {

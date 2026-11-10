@@ -10,10 +10,10 @@ import { promisify } from 'node:util';
 import { findExecutable, executableInvocation, normalizeEnvironment, execFile, localSocketPath, isNamedPipe } from '../src/platform/index.mjs';
 
 test('pipe identity is stable, case insensitive and scoped to the instance directory', () => {
-  const one = windows.localSocketPath('C:\\Users\\Alice\\.ovsa\\primary', 'actions');
+  const one = windows.localSocketPath('C:\\Users\\Alice\\.superagent\\primary', 'actions');
   assert.ok(windows.isNamedPipe(one));
-  assert.equal(one, windows.localSocketPath('c:\\users\\alice\\.ovsa\\primary', 'actions'));
-  assert.notEqual(one, windows.localSocketPath('C:\\Users\\Alice\\.ovsa\\other', 'actions'));
+  assert.equal(one, windows.localSocketPath('c:\\users\\alice\\.superagent\\primary', 'actions'));
+  assert.notEqual(one, windows.localSocketPath('C:\\Users\\Alice\\.superagent\\other', 'actions'));
   assert.equal(posix.localSocketPath('/tmp/vika', 'actions'), '/tmp/vika/actions.sock');
 });
 
@@ -109,7 +109,7 @@ test('Windows wrappers support omitted args, options-only and inherited null env
 });
 test('pipe names differ across daemon processes, not only instance directories', () => {
   const module = new URL('../src/platform/win32.mjs', import.meta.url).href;
-  const script = `import {localSocketPath} from ${JSON.stringify(module)}; console.log(localSocketPath('C:/Users/test/.ovsa/data'));`;
+  const script = `import {localSocketPath} from ${JSON.stringify(module)}; console.log(localSocketPath('C:/Users/test/.superagent/data'));`;
   const { execFileSync } = requireNative;
   const first = execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
   const second = execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });

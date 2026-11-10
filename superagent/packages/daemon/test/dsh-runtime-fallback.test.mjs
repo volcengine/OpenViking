@@ -4,7 +4,7 @@
 // Layer: coordinator + DSH handshake -- what the daemon does when the route it
 // was configured to run serves nothing.
 //
-// The failure this file pins down: `ovsa setup` selected DeepSeek Harness and
+// The failure this file pins down: `ov-superagent setup` selected DeepSeek Harness and
 // wrote the bare runtime alias `"model": "dsh"`, which resolves to dsh's own
 // default `deepseek-official/deepseek-flash`. That route is registered in DSH but
 // serves ZERO models without DEEPSEEK_API_KEY -- the owner's credential lives on
@@ -372,7 +372,7 @@ describe('a fresh instance whose configured route serves nothing', () => {
   // fix got wrong.
   it('starts on the first servable catalogue route when initialize is accepted but serves nothing', async () => {
     const store = makeStore();
-    assert.equal(store.hasCognitionRuntime(), false, 'the state `ovsa setup` leaves behind');
+    assert.equal(store.hasCognitionRuntime(), false, 'the state `ov-superagent setup` leaves behind');
     const context = makeRuntime({
       store, initialModel: 'dsh', catalogue: UNUSABLE_DEFAULT, refuse: ACCEPT_EVERYTHING,
     });

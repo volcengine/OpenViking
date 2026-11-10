@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-// The pure half of `ovsa dsh model`: what a route id, a model id and a
+// The pure half of `ov-superagent dsh model`: what a route id, a model id and a
 // credential reference may look like, which settings operations add or remove a
 // model, and how a Pi `models.json` translates into native routes.
 //
@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { t } from './i18n.mjs';
-// `ovsa dsh model` only ever writes a DSH configuration, so it validates with
+// `ov-superagent dsh model` only ever writes a DSH configuration, so it validates with
 // the rule the DSH path of `/model` applies — the wider one, which admits the
 // `+` a real dsh serves. Every other runtime keeps the narrower shared rule.
 import { DSH_MODEL_ID_PATTERN } from '../../daemon/src/runtime-catalog.mjs';
@@ -72,13 +72,13 @@ const CHAT_TEMPLATE_VARS = Object.freeze(['thinking.enabled', 'thinking.effort',
 // one of them can only resolve from DSH's credential service; a migration keeps
 // the reference (its value may be stored later) and says so. The prefixes mirror
 // `sanitizeAgentChildEnv`/`sanitizeNonArkChildEnv` in the daemon: ARK_* and
-// VOLCENGINE_* are stripped for every child, LARK/FEISHU/LARKSUITE/VIKA with
+// VOLCENGINE_* are stripped for every child, LARK/FEISHU/LARKSUITE/OV_SUPERAGENT (and its aliases) with
 // the connector settings, DSH_* by the DSH child environment itself.
 //
 // `SESSION_ID` is stripped by exact name, not by prefix (`sanitizeNonArkChildEnv`
 // in process-utils.mjs), so it needs its own alternative: a prefix rule alone
 // silently claimed the child would resolve it.
-const WITHHELD_ENV = /^(?:(?:ARK|VOLCENGINE|LARK|FEISHU|LARKSUITE|VIKA|DSH)_|SESSION_ID$)/i;
+const WITHHELD_ENV = /^(?:(?:ARK|VOLCENGINE|LARK|FEISHU|LARKSUITE|OV_SUPERAGENT|OVSA|VIKA|DSH)_|SESSION_ID$)/i;
 
 export class UsageError extends Error {}
 
@@ -424,9 +424,9 @@ export function addModelOps(providers, spec, { notes = [] } = {}) {
     if (others.length) {
       throw new UsageError(t(
         `credential reference ${spec.keyEnv} 已经被 ${others.join('、')} 解析，两个 route 不能共用同一个 reference：`
-        + `那样一个 route 会带上另一个的密钥。换一个 reference；要复用同一个密钥，用 ovsa dsh model key set <新 reference> 存同一个值。`,
+        + `那样一个 route 会带上另一个的密钥。换一个 reference；要复用同一个密钥，用 ov-superagent dsh model key set <新 reference> 存同一个值。`,
         `The reference ${spec.keyEnv} is already resolved by ${others.join(', ')}; two routes may not share one reference, `
-        + 'because one of them would then send the other\'s secret. Pick another reference; to reuse the same secret, store it under a new reference with ovsa dsh model key set <REF>.'));
+        + 'because one of them would then send the other\'s secret. Pick another reference; to reuse the same secret, store it under a new reference with ov-superagent dsh model key set <REF>.'));
     }
     profile.apiKeyEnv = spec.keyEnv;
   } else if (!existing && !text(profile.apiKeyEnv)) {
@@ -861,8 +861,8 @@ function resolveCredential(route, provider, { auth, notes }) {
     if (envRef) {
       const name = envRef[1];
       if (WITHHELD_ENV.test(name)) {
-        notes.push(t(`${route}：apiKey 指向 ${name}，这个变量会被 DSH 子进程环境过滤，只能从 credential 服务解析；迁移不带值，存一次才可用：ovsa dsh model key set ${name}`,
-          `${route}: apiKey names ${name}, which the DSH child environment withholds; only the credential service can resolve it, so the migration carries no value and the route works after: ovsa dsh model key set ${name}`));
+        notes.push(t(`${route}：apiKey 指向 ${name}，这个变量会被 DSH 子进程环境过滤，只能从 credential 服务解析；迁移不带值，存一次才可用：ov-superagent dsh model key set ${name}`,
+          `${route}: apiKey names ${name}, which the DSH child environment withholds; only the credential service can resolve it, so the migration carries no value and the route works after: ov-superagent dsh model key set ${name}`));
       }
       return { kind: 'explicit', ref: name, value: null };
     }

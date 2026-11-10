@@ -21,15 +21,15 @@ const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { re
 const baseConfig = {
   agyBin: 'agy',
   agyModel: '',
-  workspace: '/tmp/vika-agy-workspace',
+  workspace: '/tmp/superagent-agy-workspace',
   projectDir: '/release',
-  dataDir: '/tmp/vika-agy-data',
-  databasePath: '/tmp/vika-test.sqlite3',
+  dataDir: '/tmp/superagent-agy-data',
+  databasePath: '/tmp/superagent-test.sqlite3',
   profile: 'test-profile',
   connectors: ['lark'],
   larkCliBin: '/fake/lark-cli',
   slackCliBin: '/fake-slack/slack',
-  actionSocketPath: '/tmp/vika-agy-data/actions.sock',
+  actionSocketPath: '/tmp/superagent-agy-data/actions.sock',
   actionMcpPath: '/release/packages/daemon/src/actions/mcp.mjs',
   sendTimeoutMs: 5_000,
   maxReplyChars: 1_000,
@@ -224,7 +224,7 @@ describe('AgyAgent ACP backend', () => {
     assert.ok(geminiDir.startsWith(path.join(os.tmpdir(), 'vika-agy-')));
     assert.equal(path.basename(geminiDir), 'config-home');
     assert.equal(fs.statSync(path.join(geminiDir, 'config')).isDirectory(), true);
-    assert.equal(call.options.cwd, '/tmp/vika-agy-workspace');
+    assert.equal(call.options.cwd, '/tmp/superagent-agy-workspace');
     const env = call.options.env;
     assert.equal(env.OPENCODE_CONFIG, undefined);
     assert.equal(env.HOME, fakeHome);
@@ -277,11 +277,11 @@ describe('AgyAgent ACP backend', () => {
     const { agent, children } = newAgent();
     const child = await startSession(agent, children);
     const sessionNew = requests(child).find((message) => message.method === 'session/new');
-    assert.equal(sessionNew.params.cwd, '/tmp/vika-agy-workspace');
+    assert.equal(sessionNew.params.cwd, '/tmp/superagent-agy-workspace');
     assert.deepEqual(sessionNew.params.mcpServers, [{
       name: 'personal_agent',
       command: process.execPath,
-      args: ['/release/packages/daemon/src/actions/mcp.mjs', '--socket', '/tmp/vika-agy-data/actions.sock', '--authority', 'agy-token'],
+      args: ['/release/packages/daemon/src/actions/mcp.mjs', '--socket', '/tmp/superagent-agy-data/actions.sock', '--authority', 'agy-token'],
       env: [],
     }]);
     assert.match(sessionNew.params._meta.antigravity.systemPrompt.append, /Operating policy/);

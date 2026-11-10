@@ -476,7 +476,7 @@ describe('DshAgent model settings source', () => {
     const startedHash = dshProfilePatchHash({ dataDir: context.config.dataDir });
     // DSH reads this document in its own start-up. Holding the bridge hello lets
     // the test write a second change after the child that booted from `started`
-    // has read it -- the window a coincident `ovsa dsh model` command lands in.
+    // has read it -- the window a coincident `ov-superagent dsh model` command lands in.
     let releaseBoot = null;
     const spawn = agent._spawn;
     agent._spawn = (bin, args, options) => {

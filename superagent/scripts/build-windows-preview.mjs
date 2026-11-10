@@ -22,8 +22,8 @@ const git = (...args) => execFileSync('git', args, { cwd: source, encoding: 'utf
 const commit = git('rev-parse', 'HEAD');
 const pkg = JSON.parse(git('show', 'HEAD:./package.json'));
 const version = `${pkg.version}-windows-preview-${commit.slice(0, 12)}`;
-const name = `vika-${version}-win32-x64`;
-const work = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-win-build-'));
+const name = `superagent-${version}-win32-x64`;
+const work = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-win-build-'));
 const root = path.join(work, name);
 try {
   fs.mkdirSync(root);
@@ -53,13 +53,13 @@ try {
     fs.unlinkSync(link);
     fs.cpSync(workspaceDir, link, { recursive: true });
   }
-  fs.copyFileSync(path.join(root, 'scripts', 'windows', 'vika-preview.ps1'), path.join(root, 'vika-preview.ps1'));
-  const metadata = { name: 'vika', version, commit, platform: 'win32-x64', channel: 'windows-preview',
+  fs.copyFileSync(path.join(root, 'scripts', 'windows', 'superagent-preview.ps1'), path.join(root, 'superagent-preview.ps1'));
+  const metadata = { name: 'superagent', version, commit, platform: 'win32-x64', channel: 'windows-preview',
     node: pkg.vika.node, builtAt: new Date().toISOString() };
   fs.writeFileSync(path.join(root, 'windows-preview.json'), `${JSON.stringify(metadata, null, 2)}\n`);
   // Ship the repository license alongside this source-containing preview.
   fs.writeFileSync(path.join(root, 'LICENSE'), git('show', 'HEAD:LICENSE'));
-  run('pwsh', ['-NoProfile', '-File', path.join(root, 'vika-preview.ps1'), '-Action', 'check'], root);
+  run('pwsh', ['-NoProfile', '-File', path.join(root, 'superagent-preview.ps1'), '-Action', 'check'], root);
   fs.mkdirSync(out, { recursive: true });
   const archive = path.join(out, `${name}.zip`);
   // Use .NET ZIP, which includes dotfiles and avoids Compress-Archive's hidden-file exclusions.
@@ -70,10 +70,10 @@ try {
   fs.writeFileSync(path.join(out, 'release.json'), `${JSON.stringify({ ...metadata,
     file: path.basename(archive), sha256, size: fs.statSync(archive).size }, null, 2)}\n`);
   const installer = fs.readFileSync(path.join(root, 'scripts', 'windows', 'install-preview.ps1'), 'utf8');
-  const downloadBase = process.env.VIKA_DOWNLOAD_BASE || 'https://ovrelease.tos-cn-beijing.volces.com/vika';
-  if (!/^https:\/\/[^'\r\n]+$/.test(downloadBase)) throw new Error('Invalid VIKA_DOWNLOAD_BASE');
+  const downloadBase = process.env.OV_SUPERAGENT_DOWNLOAD_BASE || 'https://ovrelease.tos-cn-beijing.volces.com/superagent';
+  if (!/^https:\/\/[^'\r\n]+$/.test(downloadBase)) throw new Error('Invalid OV_SUPERAGENT_DOWNLOAD_BASE');
   // HTTP declares UTF-8; a BOM passed through irm becomes an iex token.
-  const publishedInstaller = installer.replace(/^\uFEFF/, '').replaceAll('__VIKA_DOWNLOAD_BASE__', downloadBase.replace(/\/$/, ''));
+  const publishedInstaller = installer.replace(/^\uFEFF/, '').replaceAll('__OV_SUPERAGENT_DOWNLOAD_BASE__', downloadBase.replace(/\/$/, ''));
   for (const file of ['install.ps1', 'install-preview.ps1']) {
     // Keep a BOM for the offline file: Windows PowerShell 5.1 defaults to ANSI.
     fs.writeFileSync(path.join(out, file), (file === 'install-preview.ps1' ? '\uFEFF' : '') + publishedInstaller);

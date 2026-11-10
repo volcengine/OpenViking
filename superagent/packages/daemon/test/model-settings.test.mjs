@@ -11,7 +11,7 @@ import { Store } from '../src/store.mjs';
 import { executeCommand } from '../src/commands.mjs';
 
 const logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
-const config = { workspace: '/tmp/vika-test' };
+const config = { workspace: '/tmp/superagent-test' };
 
 function fixture(t, { runtimeId = 'codex', claudeFactory } = {}) {
   const store = new Store(':memory:', logger);

@@ -45,13 +45,13 @@ import { connectTelegram } from './telegram.mjs';
 import { connectQQ } from './qq.mjs';
 import { connectSlack } from './slack.mjs';
 
-// `ovsa setup`: add, change or remove an instance. A new instance is asked
+// `ov-superagent setup`: add, change or remove an instance. A new instance is asked
 // question by question; a change is a list of every setting with its current
 // value, where the owner opens the ones to change and saves. Then the QR scans
 // (only for a newly connected IM), then the manifest is written and the
 // instance (re)started. A new instance's OV config is prepared and checked
 // before IM setup, then removed on cancellation until its manifest is saved.
-// It is also the one place that connects an IM; `ovsa login` only renews.
+// It is also the one place that connects an IM; `ov-superagent login` only renews.
 
 const PERMISSIONS = new URL('../../../permission.json', import.meta.url);
 
@@ -271,7 +271,7 @@ function initialState({ id, env, homeDir, current, runtimes, kept }) {
     // roleSeed is the role a new file of theirs starts from (written on save).
     role: current ? current.role ?? null : ROLE_PRESETS[0],
     roleSeed: null,
-    workspace: current?.workspace ?? path.join(homeDir, 'vika-workspace', id),
+    workspace: current?.workspace ?? path.join(homeDir, 'superagent-workspace', id),
     runtime: kept ?? runtimes.find((runtime) => runtime.available && (!current || runtime.model === current.model)),
     connectors,
     channel: current?.channel ?? connectors[0],
@@ -319,7 +319,7 @@ async function askWorkspace({ prompter, env, homeDir }, state) {
     validate: (value) => {
       const resolved = path.resolve(expandHome(value, homeDir));
       if (resolved === homeDir) return t('不要直接用 home 目录，换一个子目录', 'Not the home directory itself; use a folder inside it');
-      if (resolved.startsWith(`${vikaHome(env)}${path.sep}`)) return t('不能放在 ~/.ovsa 里', 'Not inside ~/.ovsa');
+      if (resolved.startsWith(`${vikaHome(env)}${path.sep}`)) return t('不能放在 ~/.superagent 里', 'Not inside ~/.superagent');
       return null;
     },
   }), homeDir));
@@ -381,7 +381,7 @@ async function askRole({ prompter, env, homeDir }, state) {
 // A role file of the owner's own, begun from a shipped role (or blank).
 function writeRoleFile({ role, roleSeed }, id) {
   if (roleSeed === null || fs.existsSync(role)) return;
-  const note = `<!-- ${roleSeed ? `Started from OpenViking SuperAgent's "${roleSeed}" role. ` : ''}This is ${id}'s role: edit it freely, then run ovsa restart ${id}. Comments like this one are not sent to the model. -->\n\n`;
+  const note = `<!-- ${roleSeed ? `Started from OpenViking SuperAgent's "${roleSeed}" role. ` : ''}This is ${id}'s role: edit it freely, then run ov-superagent restart ${id}. Comments like this one are not sent to the model. -->\n\n`;
   fs.mkdirSync(path.dirname(role), { recursive: true, mode: 0o700 });
   fs.writeFileSync(role, `${note}${roleSeed ? fs.readFileSync(resolveRolePromptPath(roleSeed), 'utf8') : ''}`, { mode: 0o600 });
 }
@@ -1002,9 +1002,9 @@ export async function connectLark({
   await confirmUnshared({ prompter, larkCli, appId: app.appId, others });
   if (inspected && lacksAny(reportApp(prompter, scopes, inspected, { manual }))) {
     prompter.info(manual
-      ? t('缺的在飞书开放平台给应用补上；你是应用的所有者或管理员的话，也可以之后运行 ovsa setup 扫码补齐',
-        'Add what is missing in the developer console; if you own or administer the app, ovsa setup can add it with a scan later')
-      : t('之后运行 ovsa setup 可以扫码补齐', 'ovsa setup can add it with a scan later'));
+      ? t('缺的在飞书开放平台给应用补上；你是应用的所有者或管理员的话，也可以之后运行 ov-superagent setup 扫码补齐',
+        'Add what is missing in the developer console; if you own or administer the app, ov-superagent setup can add it with a scan later')
+      : t('之后运行 ov-superagent setup 可以扫码补齐', 'ov-superagent setup can add it with a scan later'));
   }
   await larkCli.configureProfile({ profile, ...app });
   const login = await larkCli.beginUserLogin({ profile, scopes: grantedUserScopes(scopes, inspected) });
@@ -1047,7 +1047,7 @@ const readInstanceApp = (larkCli, agent) => readApp((pathname, query) => larkCli
 
 // The user scopes the app has that the owner's login does not carry yet: a
 // release that asks for more needs the owner to authorize again. None when
-// the login cannot be read (`ovsa login lark` is for that).
+// the login cannot be read (`ov-superagent login lark` is for that).
 async function loginLacks(larkCli, agent, scopes, inspected) {
   const granted = await larkCli.userScopes({ profile: agent.profile }).catch(() => null);
   if (!granted || !inspected) return [];
@@ -1437,9 +1437,9 @@ function dshModelHint({ env, state }) {
   return t(
     `补一个 model route：${vika} dsh model${instance}\n`
     + `  在菜单里选「添加 model」，按提示填网关地址、protocol、model id 和 credential`
-    + `（和 ovsa setup 一样，写入前先用临时 DSH 验证）`,
+    + `（和 ov-superagent setup 一样，写入前先用临时 DSH 验证）`,
     `Add a model route: ${vika} dsh model${instance}\n`
-    + `  pick "Add a model" in the menu and answer the same questions ovsa setup asks`
+    + `  pick "Add a model" in the menu and answer the same questions ov-superagent setup asks`
     + ` (gateway URL, protocol, model id, credential; checked against a temporary DSH first)`);
 }
 
@@ -1461,7 +1461,7 @@ function instanceRouteNote(route) {
 }
 
 // Re-read one existing instance's DSH routes from its own home, the way
-// `ovsa dsh model list` starts a control process against it. Detection probed a
+// `ov-superagent dsh model list` starts a control process against it. Detection probed a
 // throwaway home, so without this a configured instance would report "no route"
 // even though its turns work.
 async function refreshDshRoutes({ prompter, env, detect, current, runtimes }) {
@@ -1792,7 +1792,7 @@ async function setupFlow({
     Object.assign(agent, state.switches);
     if (emailAccounts.length) agent.emailAccounts = emailAccounts;
     else delete agent.emailAccounts;
-    return withDefaultTempDir(agent, { VIKA_TEMP_DIR: env.VIKA_TEMP_DIR ?? manifest?.env?.VIKA_TEMP_DIR });
+    return withDefaultTempDir(agent, { OV_SUPERAGENT_TEMP_DIR: env.OV_SUPERAGENT_TEMP_DIR ?? manifest?.env?.OV_SUPERAGENT_TEMP_DIR });
   };
   // The IMs this run connects: the new ones, and Feishu again for another app.
   const toConnect = () => {
@@ -1817,7 +1817,7 @@ async function setupFlow({
       label: t('实例名称', 'Instance name'), initial: state.id, validate: (value) => instanceIdProblem(value, manifest),
     });
     state.dataDir = path.join(vikaHome(env), 'data', state.id);
-    if (state.workspace === path.join(homeDir, 'vika-workspace', before)) state.workspace = path.join(homeDir, 'vika-workspace', state.id);
+    if (state.workspace === path.join(homeDir, 'superagent-workspace', before)) state.workspace = path.join(homeDir, 'superagent-workspace', state.id);
   };
   // The mailboxes once the rest is known: checked first with a stand-in,
   // since their names come from the addresses.
@@ -1904,7 +1904,7 @@ async function setupFlow({
     try {
       lark = newIms.includes('lark')
         ? await connect.lark({
-          plan, prompter, larkCli: new LarkCli(larkCliBin), fetchImpl, profile: agent.profile, debug: Boolean(env.VIKA_DEBUG), canGoBack: prompter.tty,
+          plan, prompter, larkCli: new LarkCli(larkCliBin), fetchImpl, profile: agent.profile, debug: Boolean(env.OV_SUPERAGENT_DEBUG), canGoBack: prompter.tty,
           source: larkSource(state, current), app: state.larkApp?.app ?? null, access: state.larkApp?.access ?? 'owner',
           others: (manifest?.agents ?? []).filter((other) => other.id !== state.id && other.profile),
         })
@@ -2016,8 +2016,8 @@ async function setupFlow({
       const spinning = prompter.spin(t(`启动${label}`, `Starting the ${label.toLowerCase()}`));
       await control[action](target, { env, stdout: quiet }).then(
         () => spinning.succeed(label),
-        (error) => spinning.warn(t(`vika-${target} 没有起来：${error.message}；之后运行 ${vika} ${action} ${target}`,
-          `vika-${target} did not start: ${error.message}; later, run ${vika} ${action} ${target}`)),
+        (error) => spinning.warn(t(`superagent-${target} 没有起来：${error.message}；之后运行 ${vika} ${action} ${target}`,
+          `superagent-${target} did not start: ${error.message}; later, run ${vika} ${action} ${target}`)),
       );
     }
   }
@@ -2060,7 +2060,7 @@ async function setupFlow({
     if (env.SSH_CONNECTION) {
       next.push(['', t(`远程机器：本地 ssh -L ${WEB_PORT}:127.0.0.1:${WEB_PORT} 再打开`, `Remote machine: ssh -L ${WEB_PORT}:127.0.0.1:${WEB_PORT} first, then open it`)]);
     }
-    next.push([t('常用命令', 'Commands'), 'ovsa status · ovsa logs · ovsa setup']);
+    next.push([t('常用命令', 'Commands'), 'ov-superagent status · ov-superagent logs · ov-superagent setup']);
   }
   const title = t(`${state.displayName}（${id}）${current ? '已更新' : '已就绪'}`, `${state.displayName} (${id}) is ${current ? 'updated' : 'ready'}`);
   if (prompter.fancy) {
@@ -2068,9 +2068,9 @@ async function setupFlow({
   } else {
     out(`\n${title}${t('。', '.')}\n${next.map(([key, value]) => `  ${key ? `${key}${t('：', ': ')}` : ''}${value}\n`).join('')}`);
   }
-  if (vika !== 'ovsa' && !current) {
-    prompter.info(t(`这个终端还找不到 ovsa：新开一个终端就行（安装时已加进 shell 配置），或先用 ${vika}`,
-      `This terminal does not know ovsa yet: open a new one (the installer added it to your shell setup), or use ${vika} for now`));
+  if (vika !== 'ov-superagent' && !current) {
+    prompter.info(t(`这个终端还找不到 ov-superagent：新开一个终端就行（安装时已加进 shell 配置），或先用 ${vika}`,
+      `This terminal does not know ov-superagent yet: open a new one (the installer added it to your shell setup), or use ${vika} for now`));
   }
   return 0;
 }

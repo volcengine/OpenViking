@@ -31,10 +31,10 @@ import { t } from './i18n.mjs';
 import { padEnd, spinner, styler } from './ui.mjs';
 
 // start / stop / restart / status / logs run the release already installed
-// under ~/.ovsa/current. Nothing here fetches code or publishes a release.
+// under ~/.superagent/current. Nothing here fetches code or publishes a release.
 
 const execFile = promisify(execFileCallback);
-const UPDATER_APP = 'vika-updater';
+const UPDATER_APP = 'superagent-updater';
 // This command's own release (or source checkout); bin/pm2 runs its pinned pm2.
 const RELEASE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
@@ -43,7 +43,7 @@ export function pm2Defaults(env = process.env) {
   return {
     pm2Bin: env.PM2_BIN || (fs.existsSync(releasePm2) ? releasePm2 : 'pm2'),
     // OpenViking SuperAgent's own pm2 daemon, apart from any pm2 the user runs.
-    pm2Env: cleanPm2ControlEnv({ ...env, PM2_HOME: env.PM2_HOME || path.join(homeDir(env) || '', '.ovsa', 'pm2') }),
+    pm2Env: cleanPm2ControlEnv({ ...env, PM2_HOME: env.PM2_HOME || path.join(homeDir(env) || '', '.superagent', 'pm2') }),
   };
 }
 
@@ -56,8 +56,8 @@ function defaults(options = {}) {
     execFileImpl: options.execFileImpl ?? execFile,
     fetchImpl: options.fetchImpl ?? globalThis.fetch,
     readyOptions: options.readyOptions,
-    releaseLink: options.releaseLink ?? env.VIKA_UPDATER_RELEASE_LINK ?? defaultReleaseLink(homeDir(env)),
-    socketPath: options.socketPath ?? env.VIKA_UPDATER_SOCKET ?? defaultSocketPath(homeDir(env)),
+    releaseLink: options.releaseLink ?? env.OV_SUPERAGENT_UPDATER_RELEASE_LINK ?? defaultReleaseLink(homeDir(env)),
+    socketPath: options.socketPath ?? env.OV_SUPERAGENT_UPDATER_SOCKET ?? defaultSocketPath(homeDir(env)),
     pm2Env: options.pm2Env ?? pm2.pm2Env,
     stdout: options.stdout ?? process.stdout,
   };
@@ -132,12 +132,19 @@ async function step(context, label, done, run) {
   }
 }
 
+
+function refuseLegacyProcesses(names, apps) {
+  const legacy = apps.flatMap(({ app }) => ['vika-', 'ovsa-'].map(prefix => app.replace(/^superagent-/, prefix))).filter((name) => names.has(name));
+  if (legacy.length) throw new Error(`Legacy PM2 processes remain: ${legacy.join(', ')}. Stop and remove them with the old installation before starting ov-superagent processes; see docs/migration-to-superagent.md.`);
+}
+
 // Starts what is not running; an app that is online already is left alone.
 export async function startCommand(target, options) {
   const context = defaults(options);
   const apps = appsFor(target, loadTargets(context.env));
   Object.assign(context, await installedRelease(context.releaseLink));
   const running = new Map((await pm2Processes(context)).map((processInfo) => [processInfo?.name, processInfo]));
+  refuseLegacyProcesses(running, apps);
   const s = styler(context.stdout, context.env);
   for (const spec of apps) {
     const current = running.get(spec.app);
@@ -164,6 +171,7 @@ export async function restartCommand(target, options) {
   const apps = appsFor(target, loadTargets(context.env));
   Object.assign(context, await installedRelease(context.releaseLink));
   const running = new Set((await pm2Processes(context)).map((processInfo) => processInfo?.name));
+  refuseLegacyProcesses(running, apps);
   for (const spec of apps) {
     await step(context, t(`重启 ${spec.app}`, `Restarting ${spec.app}`), t(`${spec.app} 已就绪`, `${spec.app} is ready`), async () => {
       if (running.has(spec.app)) {
@@ -197,7 +205,7 @@ export async function removeManagedApps(targets, options = {}) {
   // The shared Web is checked too before setup refreshes its routes.
   for (const target of new Set([...targets, ...(options.checkTargets ?? [])])) {
     if (!/^[a-z][a-z0-9-]{0,31}$/.test(target) || target === 'all') throw new Error(`invalid removal target: ${target}`);
-    const app = `vika-${target}`;
+    const app = `superagent-${target}`;
     const matches = processes.filter((info) => info?.name === app);
     if (!matches.length) continue;
     if (matches.length !== 1) throw new Error(`expected exactly one PM2 app named ${app}`);
@@ -211,11 +219,11 @@ export async function removeManagedApps(targets, options = {}) {
       throw new Error(`${app} is outside the managed releases or has an unexpected executable; refusing to remove it`);
     }
     if (component !== 'web') {
-      const configured = info.pm2_env?.VIKA_CONFIG;
+      const configured = info.pm2_env?.OV_SUPERAGENT_CONFIG;
       if (!configured || await realpath(configured) !== await realpath(manifestPath(context.env))) {
         throw new Error(`${app} belongs to a different manifest; refusing to remove it`);
       }
-      if (component === 'daemon' && info.pm2_env?.VIKA_INSTANCE_ID !== target) {
+      if (component === 'daemon' && info.pm2_env?.OV_SUPERAGENT_INSTANCE_ID !== target) {
         throw new Error(`${app} belongs to a different instance; refusing to remove it`);
       }
     }
@@ -251,7 +259,7 @@ export async function statusCommand(options) {
   const processes = new Map((await pm2Processes(context)).map((processInfo) => [processInfo?.name, processInfo]));
   let deployment = null;
   try { deployment = loadInstances(context.env); } catch {}
-  const ims = new Map((deployment?.agents ?? []).map((agent) => [`vika-${agent.id}`, imList(agent.connectors, agent.emailAccounts?.length)]));
+  const ims = new Map((deployment?.agents ?? []).map((agent) => [`superagent-${agent.id}`, imList(agent.connectors, agent.emailAccounts?.length)]));
   const s = styler(context.stdout, context.env);
   const rows = [];
   for (const spec of apps) {

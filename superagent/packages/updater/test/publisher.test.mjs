@@ -14,13 +14,13 @@ const BASE = 'https://releases.example/vika';
 
 // A bucket with real archives built the way build-release.mjs lays them out.
 function bucket(t) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vika-publisher-')));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-publisher-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const objects = new Map();
   const requests = [];
   const publish = (version, { platform = 'linux-x64', corrupt = false, inner = {} } = {}) => {
     const work = path.join(root, 'build', version);
-    const directory = path.join(work, `vika-${version}-${platform}`);
+    const directory = path.join(work, `superagent-${version}-${platform}`);
     fs.mkdirSync(path.join(directory, 'node', 'bin'), { recursive: true });
     fs.writeFileSync(path.join(directory, 'ecosystem.config.cjs'), 'module.exports = {};\n');
     fs.writeFileSync(path.join(directory, 'release.json'), JSON.stringify({ version, platform, commit: `c-${version}`, ...inner }));
@@ -28,9 +28,9 @@ function bucket(t) {
     execFileSync('tar', ['-czf', archive, '-C', work, path.basename(directory)]);
     const bytes = fs.readFileSync(archive);
     const sha256 = createHash('sha256').update(corrupt ? 'other' : bytes).digest('hex');
-    objects.set(`${BASE}/releases/${version}/vika-${version}-linux-x64.tar.gz`, bytes);
+    objects.set(`${BASE}/releases/${version}/superagent-${version}-linux-x64.tar.gz`, bytes);
     objects.set(`${BASE}/releases/${version}/release.json`, Buffer.from(JSON.stringify({
-      version, commit: `c-${version}`, files: { 'linux-x64': { name: `vika-${version}-linux-x64.tar.gz`, sha256, size: bytes.length } },
+      version, commit: `c-${version}`, files: { 'linux-x64': { name: `superagent-${version}-linux-x64.tar.gz`, sha256, size: bytes.length } },
     })));
     objects.set(`${BASE}/latest`, Buffer.from(`${version}\n`));
   };
@@ -39,11 +39,11 @@ function bucket(t) {
     const body = objects.get(url);
     return body ? new Response(body) : new Response('missing', { status: 404 });
   };
-  const baseDir = path.join(root, 'home', '.ovsa');
+  const baseDir = path.join(root, 'home', '.superagent');
   fs.mkdirSync(baseDir, { recursive: true });
   const smoked = [];
   const options = {
-    baseDir, env: { VIKA_DOWNLOAD_BASE: BASE }, platformId: 'linux-x64', fetchImpl,
+    baseDir, env: { OV_SUPERAGENT_DOWNLOAD_BASE: BASE }, platformId: 'linux-x64', fetchImpl,
     smokeTestImpl: async (release) => { smoked.push(release); },
   };
   const current = () => fs.realpathSync(path.join(baseDir, 'current'));
@@ -101,7 +101,7 @@ test('the download base comes from the installed release', async (t) => {
   assert.equal(result.version, '0.6.0');
 
   const empty = bucket(t);
-  await assert.rejects(publishLatestRelease({ ...empty.options, env: {} }), /set VIKA_DOWNLOAD_BASE/);
+  await assert.rejects(publishLatestRelease({ ...empty.options, env: {} }), /set OV_SUPERAGENT_DOWNLOAD_BASE/);
 });
 
 test('a running release without metadata is never reinstalled over itself', async (t) => {

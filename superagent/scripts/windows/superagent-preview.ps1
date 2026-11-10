@@ -14,7 +14,7 @@ function Invoke-BundledNode {
     if ($LASTEXITCODE -ne 0) { throw "Bundled Node command failed (exit $LASTEXITCODE)" }
 }
 $previousPath = $env:PATH
-$previousConfig = $env:VIKA_CONFIG
+$previousConfig = $env:OV_SUPERAGENT_CONFIG
 Push-Location $PSScriptRoot
 try {
     $env:PATH = "$(Join-Path $PSScriptRoot 'runtime');$(Join-Path $PSScriptRoot 'node_modules\.bin');$previousPath"
@@ -34,7 +34,7 @@ try {
         if (!$Config -or ![IO.Path]::IsPathRooted($Config) -or !(Test-Path -LiteralPath $Config -PathType Leaf)) {
             throw 'Pass -Config with an absolute path to your configured Windows manifest.'
         }
-        $env:VIKA_CONFIG = $Config
+        $env:OV_SUPERAGENT_CONFIG = $Config
         Invoke-BundledNode -Arguments @($pm2, 'start', 'ecosystem.config.cjs', '--only', 'vika-primary,vika-web')
     } elseif ($Action -eq 'stop') {
         Invoke-BundledNode -Arguments @($pm2, 'stop', 'vika-primary', 'vika-web')
@@ -43,6 +43,6 @@ try {
     }
 } finally {
     $env:PATH = $previousPath
-    $env:VIKA_CONFIG = $previousConfig
+    $env:OV_SUPERAGENT_CONFIG = $previousConfig
     Pop-Location
 }

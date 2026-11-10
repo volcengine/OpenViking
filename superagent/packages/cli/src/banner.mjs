@@ -322,7 +322,7 @@ function pinHeader({ output, frame, fps = 14 }) {
 export async function openingBanner({ output = process.stdout, input = process.stdin, env = process.env, version = '', durationMs } = {}) {
   const idle = { release() {}, resume() {}, top: () => null };
   const depth = colorDepth(output, env);
-  const still = env.VIKA_NO_ANIMATION === '1' || Boolean(env.CI);
+  const still = env.OV_SUPERAGENT_NO_ANIMATION === '1' || Boolean(env.CI);
   if (depth < 8 || still || (output.columns ?? 0) <= SCENE_WIDTH || (output.rows ?? 0) <= SCENE_HEIGHT + 2) {
     await playBanner({ output, input, env, version });
     return idle;
@@ -370,7 +370,7 @@ export async function playBanner({
     output.write(`\n${s.bold(s.gradient(PRODUCT_NAME, PALETTE.sail))}  ${tagline()}${version ? s.gray(`  v${version}`) : ''}\n\n`);
     return;
   }
-  const still = env.VIKA_NO_ANIMATION === '1' || env.CI;
+  const still = env.OV_SUPERAGENT_NO_ANIMATION === '1' || env.CI;
   const draw = (t, first = false) => {
     const lines = bannerLines(t, { depth, version, columns });
     output.write(`${first ? '' : `\x1b[${lines.length}A`}${lines.map((line) => `\x1b[2K${line}`).join('\n')}\n`);

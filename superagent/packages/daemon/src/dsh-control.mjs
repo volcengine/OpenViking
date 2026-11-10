@@ -28,7 +28,7 @@ import {
 } from './dsh-runtime.mjs';
 
 // The control patch is kept beside the daemon's own run patch, never on top of
-// it: `ovsa dsh model` must not disturb the process a live instance drives.
+// it: `ov-superagent dsh model` must not disturb the process a live instance drives.
 export const CONTROL_PATCH_FILE = 'control-patch.yml';
 
 // A source-tree DSH starts through tsx and takes seconds; the packaged one is

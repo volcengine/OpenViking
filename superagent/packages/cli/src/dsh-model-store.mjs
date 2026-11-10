@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-// The writing half of `ovsa dsh model`: everything that spawns DSH or touches a
+// The writing half of `ov-superagent dsh model`: everything that spawns DSH or touches a
 // file on disk.
 //
 // The only source of truth is DSH's own `llm-pi-ai` settings document. Nearly
@@ -85,8 +85,8 @@ export async function describeProviders(client) {
     // v2.1 answers `descriptor: null` (not an error) when the settings
     // document cannot be read, which is the state `repair` exists for.
     throw new Error(t(
-      'DeepSeek Harness 读不到可写的 llm-pi-ai 配置项：文档可能被手工写坏，或 model 插件被禁用。\n先运行 ovsa dsh model repair 尝试修复。',
-      'DeepSeek Harness cannot read a writable llm-pi-ai entry: the document may be hand-broken, or the model plugin is disabled.\nRun ovsa dsh model repair first.'));
+      'DeepSeek Harness 读不到可写的 llm-pi-ai 配置项：文档可能被手工写坏，或 model 插件被禁用。\n先运行 ov-superagent dsh model repair 尝试修复。',
+      'DeepSeek Harness cannot read a writable llm-pi-ai entry: the document may be hand-broken, or the model plugin is disabled.\nRun ov-superagent dsh model repair first.'));
   }
   // The resolved value is the base for an upsert: it already carries every
   // schema default, so merging into it keeps fields this command never names.
@@ -143,8 +143,8 @@ export function settingsFailure(error, { dataDir }) {
   }
   if (notConfigurable) {
     return new Error(t(
-      `DeepSeek Harness 没有可写的 llm-pi-ai 配置项（可能被禁用或文档被手工写坏）。运行 ovsa dsh model repair 尝试修复。\n${message}`,
-      `DeepSeek Harness exposes no writable llm-pi-ai entry (it may be disabled, or the document was hand-edited). Run ovsa dsh model repair to recover.\n${message}`));
+      `DeepSeek Harness 没有可写的 llm-pi-ai 配置项（可能被禁用或文档被手工写坏）。运行 ov-superagent dsh model repair 尝试修复。\n${message}`,
+      `DeepSeek Harness exposes no writable llm-pi-ai entry (it may be disabled, or the document was hand-edited). Run ov-superagent dsh model repair to recover.\n${message}`));
   }
   if (invalid) {
     return new Error(t(`DSH 拒绝了这次配置：${message}`, `DSH refused this configuration: ${message}`));
@@ -185,7 +185,7 @@ export async function updateSettings(client, buildOps, { dataDir }) {
 /**
  * Write one model route into a DSH home through DSH's own settings service.
  *
- * This is the write `ovsa setup` uses for an instance whose DSH home already
+ * This is the write `ov-superagent setup` uses for an instance whose DSH home already
  * exists: the settings service owns that document, so the merge into the
  * existing `providers` map is the same upsert `add` performs (`addModelOps`),
  * never a second YAML writer. A literal credential captured by the caller is
@@ -252,7 +252,7 @@ export async function writeModelDraft({ dataDir, draft, bin = 'dsh', env = proce
  * at the instant the route lands, the reference it names already holds its
  * value. Writing it the other way round leaves a route pointing at a reference
  * with nothing behind it whenever the credential write is refused -- the
- * instance then looks configured and serves nothing, and `ovsa setup` reports a
+ * instance then looks configured and serves nothing, and `ov-superagent setup` reports a
  * failure while the route stays in the document.
  *
  * A refused credential therefore leaves the document untouched. A refused
@@ -289,8 +289,8 @@ async function writeRouteWithCredential({ client, dataDir, spec, notes, keyValue
         await client.unsetCredential(ref);
       } catch (cleanupError) {
         notes.push(t(
-          `credential reference ${ref} 已写入但 route 未写成，且清理失败（${cleanupError.message}）；用 ovsa dsh model key unset ${ref} 移除它`,
-          `The reference ${ref} was stored but the route was not written, and removing it failed (${cleanupError.message}); remove it with ovsa dsh model key unset ${ref}`));
+          `credential reference ${ref} 已写入但 route 未写成，且清理失败（${cleanupError.message}）；用 ov-superagent dsh model key unset ${ref} 移除它`,
+          `The reference ${ref} was stored but the route was not written, and removing it failed (${cleanupError.message}); remove it with ov-superagent dsh model key unset ${ref}`));
       }
     }
     throw settingsFailure(error, { dataDir });
@@ -508,9 +508,9 @@ export function writeMinimalSettingsDocument(file, { expected = undefined } = {}
     const same = expected === null ? current === null : current !== null && current.equals(expected);
     if (!same) {
       throw new Error(t(
-        `设置文档在修复过程中被改动，未覆盖它：${file}\n没有写入最小文档；请重新运行 ovsa dsh model repair。`,
+        `设置文档在修复过程中被改动，未覆盖它：${file}\n没有写入最小文档；请重新运行 ov-superagent dsh model repair。`,
         `The settings document changed while repair was running; it was not overwritten: ${file}\n`
-        + 'The minimal document was not written; run ovsa dsh model repair again.'));
+        + 'The minimal document was not written; run ov-superagent dsh model repair again.'));
     }
   }
   const temporary = `${file}.${process.pid}.tmp`;

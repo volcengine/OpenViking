@@ -11,15 +11,15 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { t } from './i18n.mjs';
 
-// `ovsa autostart enable|disable`: start OpenViking SuperAgent at login/boot without sudo.
+// `ov-superagent autostart enable|disable`: start OpenViking SuperAgent at login/boot without sudo.
 // Linux: a systemd user unit; macOS: a LaunchAgent; Windows: a script in the
-// user's own Startup folder. All three run `ovsa start`, the same path as by
+// user's own Startup folder. All three run `ov-superagent start`, the same path as by
 // hand, with the PATH of the shell that enabled it so the agent CLIs (codex,
 // claude) are found under a minimal service environment.
 
 const execFile = promisify(execFileCallback);
-const LABEL = 'com.vika.agent';
-const STARTUP_ENTRY = 'vika-autostart.vbs';
+const LABEL = 'com.superagent.agent';
+const STARTUP_ENTRY = 'superagent-autostart.vbs';
 
 export function systemdUnit({ homeDir, pathValue }) {
   return `[Unit]
@@ -28,10 +28,10 @@ After=network-online.target
 
 [Service]
 Type=forking
-PIDFile=${path.join(homeDir, '.ovsa', 'pm2', 'pm2.pid')}
+PIDFile=${path.join(homeDir, '.superagent', 'pm2', 'pm2.pid')}
 Environment=PATH=${pathValue}
-ExecStart=${path.join(homeDir, '.ovsa', 'bin', 'ovsa')} start
-ExecStop=${path.join(homeDir, '.ovsa', 'bin', 'ovsa')} stop
+ExecStart=${path.join(homeDir, '.superagent', 'bin', 'ov-superagent')} start
+ExecStop=${path.join(homeDir, '.superagent', 'bin', 'ov-superagent')} stop
 Restart=on-failure
 
 [Install]
@@ -44,7 +44,7 @@ function xml(value) {
 }
 
 export function launchAgent({ homeDir, pathValue }) {
-  const log = path.join(homeDir, '.ovsa', 'logs', 'autostart.log');
+  const log = path.join(homeDir, '.superagent', 'logs', 'autostart.log');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -52,7 +52,7 @@ export function launchAgent({ homeDir, pathValue }) {
   <key>Label</key><string>${LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${xml(path.join(homeDir, '.ovsa', 'bin', 'ovsa'))}</string>
+    <string>${xml(path.join(homeDir, '.superagent', 'bin', 'ov-superagent'))}</string>
     <string>start</string>
   </array>
   <key>EnvironmentVariables</key>
@@ -65,18 +65,18 @@ export function launchAgent({ homeDir, pathValue }) {
 `;
 }
 
-function targets(homeDir, platform, env = process.env) {
+function targets(homeDir, platform, env = process.env, legacy = false) {
   if (platform.loginService === 'launchd') {
-    return { file: path.join(homeDir, 'Library', 'LaunchAgents', `${LABEL}.plist`) };
+    return { file: path.join(homeDir, 'Library', 'LaunchAgents', `${legacy ? `com.${legacy}.agent` : LABEL}.plist`) };
   }
   if (platform.loginService === 'startupFolder') {
     // The shell runs this folder at logon. Windows has no per-user service
     // manager to ask instead, and a scheduled task would need more privilege
     // than the feature is worth.
     const roaming = env.APPDATA || path.join(env.USERPROFILE || homeDir, 'AppData', 'Roaming');
-    return { file: path.join(roaming, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', STARTUP_ENTRY) };
+    return { file: path.join(roaming, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', legacy ? `${legacy}-autostart.vbs` : STARTUP_ENTRY) };
   }
-  return { file: path.join(homeDir, '.config', 'systemd', 'user', 'vika.service') };
+  return { file: path.join(homeDir, '.config', 'systemd', 'user', legacy ? `${legacy}.service` : 'superagent.service') };
 }
 
 // A .vbs starts the launcher with no console window; a .cmd in the Startup
@@ -84,12 +84,12 @@ function targets(homeDir, platform, env = process.env) {
 // anything else as ANSI and a profile path need not be ASCII.
 export function startupEntry(homeDir, pathValue = null) {
   const vb = (value) => String(value).replaceAll('"', '""');
-  const launcher = path.join(homeDir, '.ovsa', 'bin', 'ovsa.cmd');
-  const logs = path.join(homeDir, '.ovsa', 'logs');
+  const launcher = path.join(homeDir, '.superagent', 'bin', 'ov-superagent.cmd');
+  const logs = path.join(homeDir, '.superagent', 'logs');
   const log = path.join(logs, 'autostart.log');
   return [
-    "' OpenViking SuperAgent: start it when this user logs in. Written by `ovsa autostart enable`.",
-    "' Delete this file, or run `ovsa autostart disable`, to stop it.",
+    "' OpenViking SuperAgent: start it when this user logs in. Written by `ov-superagent autostart enable`.",
+    "' Delete this file, or run `ov-superagent autostart disable`, to stop it.",
     'Option Explicit',
     'Dim shell, q, command',
     'Set shell = CreateObject("WScript.Shell")',
@@ -116,7 +116,7 @@ export async function autostartCommand([action, ...extra], {
   uid = process.getuid?.(),
 } = {}) {
   if (!['enable', 'disable'].includes(action) || extra.length) {
-    output.write('usage: ovsa autostart <enable|disable>\n');
+    output.write('usage: ov-superagent autostart <enable|disable>\n');
     return 2;
   }
   if (!capabilitiesFor(platform).autostart) {
@@ -124,6 +124,19 @@ export async function autostartCommand([action, ...extra], {
     return 1;
   }
   const { file } = targets(homeDir, platform, env);
+  const legacyEntries = ['vika', 'ovsa'].map(name => ({ name, file: targets(homeDir, platform, env, name).file }))
+    .filter(entry => fs.existsSync(entry.file));
+  if (action === 'enable' && legacyEntries.length) {
+    throw new Error('Legacy autostart entry found; run ov-superagent autostart disable before enabling the renamed service.');
+  }
+  if (action === 'disable') for (const legacy of legacyEntries) {
+    if (platform.loginService === 'launchd') {
+      await execFileImpl('launchctl', ['bootout', `gui/${uid}`, legacy.file]);
+    } else if (platform.loginService !== 'startupFolder') {
+      await execFileImpl('systemctl', ['--user', 'disable', '--now', `${legacy.name}.service`]);
+    }
+    fs.rmSync(legacy.file, { force: true });
+  }
   if (platform.loginService === 'startupFolder') {
     return action === 'disable'
       ? disableStartupEntry({ file, output })
@@ -131,7 +144,7 @@ export async function autostartCommand([action, ...extra], {
   }
   if (action === 'disable') {
     if (platform.loginService === 'launchd') await execFileImpl('launchctl', ['bootout', `gui/${uid}`, file]).catch(() => {});
-    else await execFileImpl('systemctl', ['--user', 'disable', '--now', 'vika.service']).catch(() => {});
+    else await execFileImpl('systemctl', ['--user', 'disable', '--now', 'superagent.service']).catch(() => {});
     fs.rmSync(file, { force: true });
     if (platform.loginService !== 'launchd') await execFileImpl('systemctl', ['--user', 'daemon-reload']).catch(() => {});
     output.write(t('开机自启已关闭\n', 'Autostart is off\n'));
@@ -140,7 +153,7 @@ export async function autostartCommand([action, ...extra], {
   const pathValue = env.PATH || '/usr/bin:/bin';
   fs.mkdirSync(path.dirname(file), { recursive: true });
   if (platform.loginService === 'launchd') {
-    fs.mkdirSync(path.join(homeDir, '.ovsa', 'logs'), { recursive: true });
+    fs.mkdirSync(path.join(homeDir, '.superagent', 'logs'), { recursive: true });
     fs.writeFileSync(file, launchAgent({ homeDir, pathValue }));
     await execFileImpl('launchctl', ['bootout', `gui/${uid}`, file]).catch(() => {});
     await execFileImpl('launchctl', ['bootstrap', `gui/${uid}`, file]);
@@ -149,7 +162,7 @@ export async function autostartCommand([action, ...extra], {
   }
   fs.writeFileSync(file, systemdUnit({ homeDir, pathValue }));
   await execFileImpl('systemctl', ['--user', 'daemon-reload']);
-  await execFileImpl('systemctl', ['--user', 'enable', 'vika.service']);
+  await execFileImpl('systemctl', ['--user', 'enable', 'superagent.service']);
   output.write(t(`开机自启已开启（${file}）\n`, `Autostart is on (${file})\n`));
   output.write(t('服务器上还要执行一次 loginctl enable-linger，否则退出登录后 OpenViking SuperAgent 会停。\n',
     'On a server, also run loginctl enable-linger once, or OpenViking SuperAgent stops when you log out.\n'));
@@ -160,19 +173,19 @@ export async function autostartCommand([action, ...extra], {
 // Windows: the Startup folder needs no elevation, and the user can see, disable
 // or delete the entry themselves (Task Manager lists it on its Startup tab).
 function enableStartupEntry({ file, homeDir, env, output }) {
-  const launcher = path.join(homeDir, '.ovsa', 'bin', 'ovsa.cmd');
+  const launcher = path.join(homeDir, '.superagent', 'bin', 'ov-superagent.cmd');
   if (!fs.existsSync(launcher)) {
     output.write(t(`没找到 ${launcher}：先运行安装脚本，再开启开机自启\n`,
       `${launcher} is missing: run the installer first, then enable autostart\n`));
     return 1;
   }
-  fs.mkdirSync(path.join(homeDir, '.ovsa', 'logs'), { recursive: true });
+  fs.mkdirSync(path.join(homeDir, '.superagent', 'logs'), { recursive: true });
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const text = startupEntry(homeDir, env.PATH ?? env.Path ?? null);
   fs.writeFileSync(file, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]));
   output.write(t(`开机自启已开启（${file}）\n`, `Autostart is on (${file})\n`));
-  output.write(t('登录这个用户后自动启动，不是系统服务，也不需要管理员；输出在 ~/.ovsa/logs/autostart.log\n',
-    'It starts when this user logs in, as no service and with no administrator; output goes to ~/.ovsa/logs/autostart.log\n'));
+  output.write(t('登录这个用户后自动启动，不是系统服务，也不需要管理员；输出在 ~/.superagent/logs/autostart.log\n',
+    'It starts when this user logs in, as no service and with no administrator; output goes to ~/.superagent/logs/autostart.log\n'));
   return 0;
 }
 

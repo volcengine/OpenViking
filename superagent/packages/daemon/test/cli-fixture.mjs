@@ -10,7 +10,7 @@ import { createRequire } from 'node:module';
 import { terminateProcessTree } from '../src/process-utils.mjs';
 
 // A throwaway "installation" for CLI end-to-end tests: a deployment manifest
-// with one or more instances, a temp HOME (so ~/.ovsa is never touched), and a
+// with one or more instances, a temp HOME (so ~/.superagent is never touched), and a
 // fake `dsh` on PATH *and* in DSH_BIN. The CLI under test is the real entry
 // point (`node packages/cli/bin/vika.mjs`), so an argument-parsing or
 // dispatch regression fails here instead of in a unit test.
@@ -22,11 +22,11 @@ import { terminateProcessTree } from '../src/process-utils.mjs';
 const SUPPORT_DIR = path.dirname(fileURLToPath(import.meta.url));
 /**
  * The repository root (`vika/`) whose CLI a fixture drives. It defaults to the
- * checkout this file lives in; `VIKA_E2E_PROJECT_ROOT` points the same suite at
+ * checkout this file lives in; `OV_SUPERAGENT_E2E_PROJECT_ROOT` points the same suite at
  * another checkout, which is how an integration branch is checked before the
  * test file itself is merged there.
  */
-export const PROJECT_ROOT = path.resolve(process.env.VIKA_E2E_PROJECT_ROOT || path.resolve(SUPPORT_DIR, '..', '..', '..'));
+export const PROJECT_ROOT = path.resolve(process.env.OV_SUPERAGENT_E2E_PROJECT_ROOT || path.resolve(SUPPORT_DIR, '..', '..', '..'));
 /** The real CLI entry point. */
 export const CLI_ENTRY = path.join(PROJECT_ROOT, 'packages', 'cli', 'bin', 'vika.mjs');
 /** The command module the `dsh model` tests require; absent before the CLI lands. */
@@ -116,16 +116,16 @@ export function createCliFixture(tests, { instances = ['qa'] } = {}) {
   }, null, 2)}\n`, { mode: 0o600 });
   // Validated with the daemon's own loader: a fixture the product would reject
   // must fail the suite here, not inside the CLI being measured.
-  loadDeploymentManifest({ VIKA_CONFIG: manifestPath, HOME: home });
+  loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath, HOME: home });
 
   const logPath = path.join(root, 'fake-dsh.jsonl');
-  const env = { ...process.env, HOME: home, VIKA_CONFIG: manifestPath, DSH_BIN: fakeDsh };
+  const env = { ...process.env, HOME: home, OV_SUPERAGENT_CONFIG: manifestPath, DSH_BIN: fakeDsh };
   for (const key of Object.keys(env)) {
     if (/^(?:VIKA|DEEPSEEK|DSH|FAKE_DSH)_/i.test(key)) delete env[key];
   }
   Object.assign(env, {
     HOME: home,
-    VIKA_CONFIG: manifestPath,
+    OV_SUPERAGENT_CONFIG: manifestPath,
     DSH_BIN: fakeDsh,
     PATH: `${binDirectory}${path.delimiter}${process.env.PATH ?? ''}`,
     FAKE_DSH_LOG: logPath,

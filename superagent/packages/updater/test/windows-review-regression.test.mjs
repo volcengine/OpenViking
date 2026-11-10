@@ -22,11 +22,11 @@ test('ecosystem excludes updater only on Windows and preserves mixed-case Path',
     const output = execFileSync(process.execPath, ['-e', `
       Object.defineProperty(process, 'platform', {value: ${JSON.stringify(platform)}});
       const {buildEcosystem} = require(${JSON.stringify(ecosystem)});
-      console.log(JSON.stringify(buildEcosystem({HOME: process.env.HOME, VIKA_CONFIG: process.env.VIKA_CONFIG, Path: 'inherited-path'})));
-    `], { env: { ...process.env, HOME: home, VIKA_CONFIG: config }, encoding: 'utf8' });
+      console.log(JSON.stringify(buildEcosystem({HOME: process.env.HOME, OV_SUPERAGENT_CONFIG: process.env.OV_SUPERAGENT_CONFIG, Path: 'inherited-path'})));
+    `], { env: { ...process.env, HOME: home, OV_SUPERAGENT_CONFIG: config }, encoding: 'utf8' });
     const apps = JSON.parse(output).apps;
-    assert.equal(apps.some(app => app.name === 'vika-updater'), platform !== 'win32');
-    const daemon = apps.find(app => app.name === 'vika-primary');
+    assert.equal(apps.some(app => app.name === 'superagent-updater'), platform !== 'win32');
+    const daemon = apps.find(app => app.name === 'superagent-primary');
     if (platform === 'win32') assert.equal(daemon.env.PATH, 'inherited-path');
     else assert.equal(daemon.env.PATH, ':/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin');
   }
@@ -40,7 +40,7 @@ test('Linux and macOS config selection match the full upstream POSIX snapshot (h
     id: 'primary', displayName: 'Primary', profile: 'test', port: 3738, dataDir: path.join(home, 'data'),
     workspace: path.join(home, 'work'), ovConfig: path.join(home, 'ov.json'), model: 'durable',
   }] }));
-  const source = { HOME: home, VIKA_CONFIG: config, PATH: '/fixture/bin', USERPROFILE: '/ignored', Path: '/ignored',
+  const source = { HOME: home, OV_SUPERAGENT_CONFIG: config, PATH: '/fixture/bin', USERPROFILE: '/ignored', Path: '/ignored',
     TEMP: '/ignored', TMP: '/ignored', SYSTEMROOT: '/ignored', APPDATA: '/ignored', LOCALAPPDATA: '/ignored',
     COMSPEC: '/ignored', PATHEXT: '/ignored', HOMEDRIVE: '/ignored', HOMEPATH: '/ignored', USERNAME: '/ignored',
     UNRELATED_SECRET: 'must-not-propagate' };
@@ -54,12 +54,12 @@ test('Linux and macOS config selection match the full upstream POSIX snapshot (h
       const {cleanPm2ControlEnv} = require(${JSON.stringify(pm2)});
       const source = ${JSON.stringify(source)};
       console.log(JSON.stringify({ecosystem:buildEcosystem(source),control:cleanPm2ControlEnv(source)}));
-    `], { env: { ...process.env, HOME: home, VIKA_CONFIG: config }, encoding: 'utf8' });
+    `], { env: { ...process.env, HOME: home, OV_SUPERAGENT_CONFIG: config }, encoding: 'utf8' });
     const result = JSON.parse(output);
     const normalized = JSON.parse(JSON.stringify(result.ecosystem).replaceAll(home, '<HOME>')
       .replaceAll(path.dirname(ecosystem), '<RELEASE>').replaceAll(process.execPath, '<NODE>'));
     assert.deepEqual(normalized, expected, platform);
-    assert.deepEqual(result.control, { HOME: home, PATH: '/fixture/bin', VIKA_CONFIG: config }, platform);
+    assert.deepEqual(result.control, { HOME: home, PATH: '/fixture/bin', OV_SUPERAGENT_CONFIG: config }, platform);
   }
 });
 
@@ -67,11 +67,11 @@ test('PM2 helpers use injected OS primitives while preserving environment whitel
   const posix = await import('../../daemon/src/platform/posix.mjs');
   const windows = await import('../../daemon/src/platform/win32.mjs');
   const { allowedPm2Environment, ecosystemSearchPath, pm2Bin, pm2Options } = await import('../src/pm2-platform.mjs');
-  const env = { HOME: '/home/test', Path: 'inherited', PATH: 'explicit', Temp: 'scratch', HomeDrive: 'C:', vika_log_level: 'debug', UNRELATED_SECRET: 'hidden' };
-  const keys = ['HOME', 'PATH', 'VIKA_LOG_LEVEL'];
+  const env = { HOME: '/home/test', Path: 'inherited', PATH: 'explicit', Temp: 'scratch', HomeDrive: 'C:', ov_superagent_log_level: 'debug', UNRELATED_SECRET: 'hidden' };
+  const keys = ['HOME', 'PATH', 'OV_SUPERAGENT_LOG_LEVEL'];
   assert.deepEqual(allowedPm2Environment(env, keys, { implementation: posix }), { HOME: '/home/test', PATH: 'explicit' });
   assert.deepEqual(allowedPm2Environment(env, keys, { implementation: windows }), {
-    HOME: '/home/test', PATH: 'explicit', VIKA_LOG_LEVEL: 'debug', TEMP: 'scratch', HOMEDRIVE: 'C:',
+    HOME: '/home/test', PATH: 'explicit', OV_SUPERAGENT_LOG_LEVEL: 'debug', TEMP: 'scratch', HOMEDRIVE: 'C:',
   });
   assert.equal(ecosystemSearchPath({ Path: 'inherited' }, '/fallback', windows), 'inherited');
   assert.equal(ecosystemSearchPath({ Path: 'inherited' }, '/fallback', posix), ':/fallback');
@@ -94,7 +94,7 @@ test('a Windows release runs its daemon on the Node it ships in runtime/', t => 
   fs.mkdirSync(path.join(release, 'runtime'));
   fs.writeFileSync(path.join(release, 'runtime', 'node.exe'), '');
   fs.symlinkSync(path.join(source, 'packages'), path.join(release, 'packages'), 'junction');
-  for (const file of ['ecosystem.config.cjs', 'deployment-config.cjs']) {
+  for (const file of ['ecosystem.config.cjs', 'deployment-config.cjs', 'env-compat.cjs']) {
     fs.copyFileSync(path.join(source, file), path.join(release, file));
   }
   const config = path.join(home, 'config.json');
@@ -104,8 +104,8 @@ test('a Windows release runs its daemon on the Node it ships in runtime/', t => 
   }] }));
   const output = execFileSync(process.execPath, ['-e', `
     const {buildEcosystem} = require(${JSON.stringify(path.join(release, 'ecosystem.config.cjs'))});
-    console.log(JSON.stringify(buildEcosystem({HOME: process.env.HOME, VIKA_CONFIG: process.env.VIKA_CONFIG, Path: 'inherited'})));
-  `], { env: { ...process.env, HOME: home, VIKA_CONFIG: config }, encoding: 'utf8' });
+    console.log(JSON.stringify(buildEcosystem({HOME: process.env.HOME, OV_SUPERAGENT_CONFIG: process.env.OV_SUPERAGENT_CONFIG, Path: 'inherited'})));
+  `], { env: { ...process.env, HOME: home, OV_SUPERAGENT_CONFIG: config }, encoding: 'utf8' });
   const expected = path.join(release, 'runtime', 'node.exe');
   for (const app of JSON.parse(output).apps) assert.equal(app.interpreter, expected, app.name);
 });

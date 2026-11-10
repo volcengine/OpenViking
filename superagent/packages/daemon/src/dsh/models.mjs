@@ -227,7 +227,7 @@ export default {
     // A route with no models (an account that is not logged in, a route without
     // a credential) is omitted: /model lists what can actually run.
     if (!this.connected) return this.modelCatalog;
-    // A document edited outside this process -- `ovsa dsh model add` writes it
+    // A document edited outside this process -- `ov-superagent dsh model add` writes it
     // from another one -- is only read at start-up. Refresh the process before
     // answering the menu, so a route added a minute ago is not missing from it.
     // Mid-turn the restart is refused and the menu simply shows what is running.

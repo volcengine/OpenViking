@@ -32,7 +32,7 @@ export function platform(id) {
 }
 
 export function artifactName(version, id) {
-  return `vika-${version}-${id}.tar.gz`;
+  return `superagent-${version}-${id}.tar.gz`;
 }
 
 // Every downloaded file is checked against a SHA-256 that came from elsewhere.
@@ -73,11 +73,11 @@ export function checksumFor(listing, name) {
   throw new Error(`no checksum listed for ${name}`);
 }
 
-// Where releases are published: VIKA_DOWNLOAD_BASE, else the base the
+// Where releases are published: OV_SUPERAGENT_DOWNLOAD_BASE, else the base the
 // installed release was built for (its release.json).
 export function downloadBase(env = process.env, releaseMetadata = null) {
-  const base = String(env.VIKA_DOWNLOAD_BASE || releaseMetadata?.downloadBase || '').replace(/\/+$/, '');
-  if (!/^https?:\/\//.test(base)) throw new Error('no release download base: set VIKA_DOWNLOAD_BASE');
+  const base = String(env.OV_SUPERAGENT_DOWNLOAD_BASE || releaseMetadata?.downloadBase || '').replace(/\/+$/, '');
+  if (!/^https?:\/\//.test(base)) throw new Error('no release download base: set OV_SUPERAGENT_DOWNLOAD_BASE');
   return base;
 }
 

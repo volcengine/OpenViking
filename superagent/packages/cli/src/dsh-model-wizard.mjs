@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-// The model-route wizard shared by `ovsa setup` and `ovsa dsh model`.
+// The model-route wizard shared by `ov-superagent setup` and `ov-superagent dsh model`.
 //
 // One implementation, two entry points: setup asks these questions while it
 // creates an instance (the draft is written only when the instance is saved),
-// and `ovsa dsh model` asks the same ones for an instance that already exists
+// and `ov-superagent dsh model` asks the same ones for an instance that already exists
 // (the draft is written right away). The questions, their validators and the
 // write path live here so the two cannot drift apart.
 //
@@ -38,7 +38,7 @@ export function dshCredentialsDocument(dataDir) {
 
 /**
  * The model id an operator copies from the terminal: `<route>/<model>`.
- * It is the spelling `/model` and `ovsa dsh model remove` take, not the
+ * It is the spelling `/model` and `ov-superagent dsh model remove` take, not the
  * `dsh:`-qualified value the manifest carries.
  * @param {{route: string, model: string}} draft - the route and model.
  * @returns {string} the canonical id.
@@ -66,7 +66,7 @@ function writePrivateFile(file, contents) {
  * The two documents a DSH home needs before its first start.
  *
  * The profile patch is a top-level YAML array and JSON is a YAML subset, so a
- * fresh home needs no YAML writer here -- `ovsa dsh model repair` writes its
+ * fresh home needs no YAML writer here -- `ov-superagent dsh model repair` writes its
  * minimal document the same way. The provider profile comes from
  * `addModelOps`, the same builder the model menu's wizard uses, so the fields are
  * exactly the ones the flag form writes.
@@ -412,8 +412,8 @@ export async function verifyDshModelDraft({ prompter, validate = validateDshMode
   prompter.warn(t(`临时 DSH 没有给出 ${draft.route}/${draft.model}${why ? `（${why}）` : ''}`,
     `The temporary DSH did not offer ${draft.route}/${draft.model}${why ? ` (${why})` : ''}`));
   if (!draft.keyValue) {
-    prompter.info(t(`reference ${draft.keyEnv} 现在没有值：DSH 要能解析它才会列出 model。可以先用 ovsa dsh model key set ${draft.keyEnv} 存值，或者保存后在实例里再存。`,
-      `The reference ${draft.keyEnv} has no value yet: DSH lists the model only once it can resolve it. Store one with ovsa dsh model key set ${draft.keyEnv}, or after saving.`));
+    prompter.info(t(`reference ${draft.keyEnv} 现在没有值：DSH 要能解析它才会列出 model。可以先用 ov-superagent dsh model key set ${draft.keyEnv} 存值，或者保存后在实例里再存。`,
+      `The reference ${draft.keyEnv} has no value yet: DSH lists the model only once it can resolve it. Store one with ov-superagent dsh model key set ${draft.keyEnv}, or after saving.`));
   }
   return result;
 }

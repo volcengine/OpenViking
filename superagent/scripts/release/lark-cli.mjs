@@ -14,7 +14,7 @@ import { assertSha256, checksumFor, download, platform } from '../../packages/up
 
 const MIRROR = 'https://registry.npmmirror.com';
 
-export async function installLarkCliBinary({ packageDir, platformId, fetchImpl = globalThis.fetch, mirror = process.env.VIKA_LARK_CLI_MIRROR || MIRROR, execFileSyncImpl = execFileSync }) {
+export async function installLarkCliBinary({ packageDir, platformId, fetchImpl = globalThis.fetch, mirror = process.env.OV_SUPERAGENT_LARK_CLI_MIRROR || MIRROR, execFileSyncImpl = execFileSync }) {
   const { version } = JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json'), 'utf8'));
   const target = platform(platformId);
   const windows = target.os === 'win32';

@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import '../../../env-compat.cjs';
+
 import { onShutdown } from '../../daemon/src/platform/index.mjs';
 
 import { getConfig, publicConfig } from './config.mjs';

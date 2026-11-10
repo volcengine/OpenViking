@@ -233,7 +233,7 @@ class FakeChild extends EventEmitter {
         if (this.resumeError) this.feed({ id: frame.id, error: { code: -32603, message: this.resumeError } });
         else this.feed({ id: frame.id, result: {} });
       } else if (frame.method === 'session/working-directory/get') {
-        this.feed({ id: frame.id, result: { cwd: '/tmp/vika-workspace' } });
+        this.feed({ id: frame.id, result: { cwd: '/tmp/superagent-workspace' } });
       } else if (frame.method === 'vika/settings/describe') {
         this.feed({ id: frame.id, result: { ns: 'llm-pi-ai', descriptor: this.settingsDescriptor } });
       } else if (frame.method === 'vika/llm/models') {

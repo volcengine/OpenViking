@@ -758,7 +758,7 @@ describe('global Codex/Claude hard switch', () => {
 
     try {
       await runtime.start();
-      // No opencode_model setting and no VIKA_OPENCODE_MODEL, as on an
+      // No opencode_model setting and no OV_SUPERAGENT_OPENCODE_MODEL, as on an
       // instance that never ran OpenCode: the target model is the default ''.
       const result = await runtime.transition({ kind: 'select-runtime', runtime: 'opencode' });
       assert.equal(result.runtimeChanged, true);

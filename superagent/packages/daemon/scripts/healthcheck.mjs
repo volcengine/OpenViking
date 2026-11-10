@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-const host = process.env.VIKA_HOST || '127.0.0.1';
-const port = process.env.VIKA_PORT || '3738';
+const host = process.env.OV_SUPERAGENT_HOST || '127.0.0.1';
+const port = process.env.OV_SUPERAGENT_PORT || '3738';
 
 try {
   const response = await fetch(`http://${host}:${port}/ready`, {

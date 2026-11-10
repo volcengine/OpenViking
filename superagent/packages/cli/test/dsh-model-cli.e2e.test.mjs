@@ -10,7 +10,7 @@ import {
 } from '../../daemon/test/cli-fixture.mjs';
 import { DSH_BRIDGE_PATH } from '../../daemon/src/dsh-runtime.mjs';
 
-// End-to-end coverage of `ovsa dsh model ...` through the real CLI entry
+// End-to-end coverage of `ov-superagent dsh model ...` through the real CLI entry
 // point. The fake `dsh` on PATH is the same fixture the daemon tests use, so
 // what is measured is the CLI's own behaviour: argument parsing, the control
 // subprocess it spawns, the `ops` it sends, and the files that end up on disk.
@@ -36,12 +36,12 @@ function expectRoute(providers, route) {
   return profile;
 }
 
-describe('ovsa dsh model through the real CLI entry point', { skip }, () => {
+describe('ov-superagent dsh model through the real CLI entry point', { skip }, () => {
   /** @type {ReturnType<typeof createCliFixture>} */
   let fixture;
   const baseURL = 'http://127.0.0.1:9/v1';
 
-  // `ovsa dsh model add` no longer exists, so the document these cases start
+  // `ov-superagent dsh model add` no longer exists, so the document these cases start
   // from is written directly (JSON is valid YAML, the same shape a fresh home
   // is seeded with). The CLI's own writer is covered by the unit tests and the
   // interactive suite; this file is about the control subprocess and the files
@@ -134,7 +134,7 @@ describe('ovsa dsh model through the real CLI entry point', { skip }, () => {
     assert.ok(controlPatch.some((entry) => entry.id === 'sdk-jsonrpc-server' && entry.disabled === true));
     const inserted = controlPatch.flatMap((entry) => entry.insert ?? []);
     // The bridge path comes from the checkout the CLI itself runs, which is not
-    // necessarily this one (VIKA_E2E_PROJECT_ROOT); the last segments are the
+    // necessarily this one (OV_SUPERAGENT_E2E_PROJECT_ROOT); the last segments are the
     // contract.
     const bridgeEntry = inserted.find((entry) => entry.id === 'vika-dsh-bridge');
     assert.ok(bridgeEntry, 'the control patch must insert the vika bridge');

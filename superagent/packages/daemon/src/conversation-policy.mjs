@@ -29,7 +29,7 @@ export function resolveRolePromptPath(role, dir = DEFAULT_PROMPT_DIR) {
 }
 
 function agentName(config) {
-  return (config.agentName ?? process.env.VIKA_AGENT_NAME ?? process.env.VIKA_INSTANCE_ID ?? '').trim() || 'the bot';
+  return (config.agentName ?? process.env.OV_SUPERAGENT_AGENT_NAME ?? process.env.OV_SUPERAGENT_INSTANCE_ID ?? '').trim() || 'the bot';
 }
 
 // Whose visibility reads and searches use (agents[].larkMessageAccess): the
@@ -51,13 +51,13 @@ const READ_IDENTITY = {
 export function substitutePromptPlaceholders(text, config = {}) {
   const upgradeTarget = (
     config.upgradeTarget
-    ?? process.env.VIKA_UPGRADE_TARGET
+    ?? process.env.OV_SUPERAGENT_UPGRADE_TARGET
     ?? config.instanceId
     ?? ''
   ).trim();
   return String(text ?? '')
     .replaceAll('{{AGENT_NAME}}', agentName(config))
-    .replaceAll('{{VIKA_UPGRADE_TARGET}}', upgradeTarget || '(configured target)')
+    .replaceAll('{{OV_SUPERAGENT_UPGRADE_TARGET}}', upgradeTarget || '(configured target)')
     .replaceAll('{{LARK_CLI}}', () => cliCommandCode(config.larkCliBin || 'lark-cli'))
     .replaceAll('{{LARK_CLI_HELP}}', () => cliCommandCode(config.larkCliBin || 'lark-cli', ' --help'))
     .replace(/\{\{(SEARCH_MESSAGES|OWNER_DATA|LARK_READ_IDENTITY)\}\}/g,
@@ -111,7 +111,7 @@ function naturalWritingSection(config) {
   return config.naturalWriting === false ? '' : renderPrompt(config, 'natural-writing.md');
 }
 
-// Appended last, and only with VIKA_EXPLICIT_SILENCE on, so an instance with it
+// Appended last, and only with OV_SUPERAGENT_EXPLICIT_SILENCE on, so an instance with it
 // off assembles exactly the policy (and policyHash) it had without the feature.
 // Only the Core-tool runtimes assemble this policy; Volc never sees it. It
 // overrides the Core's and the Role's "stay silent" / "end the turn" wording

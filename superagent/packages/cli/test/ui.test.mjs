@@ -82,7 +82,7 @@ test('the banner is one plain title line on a terminal that is too small or has 
   assert.equal(edgeBanner.top(), null);
   assert.equal(stripAnsi(edge.written()).trim(), 'OpenViking SuperAgent  把本机的 coding agent 带上船');
   const still = screen();
-  await playBanner({ output: still.output, input: new PassThrough(), env: { VIKA_NO_ANIMATION: '1' } });
+  await playBanner({ output: still.output, input: new PassThrough(), env: { OV_SUPERAGENT_NO_ANIMATION: '1' } });
   assert.equal(stripAnsi(still.written()).split('\n').filter((line) => line.includes('OpenViking SuperAgent')).length, 1, 'one frame, drawn once');
 });
 

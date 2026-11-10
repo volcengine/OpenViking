@@ -24,7 +24,7 @@ function stage(filePath, value) {
   const temporary = `${filePath}.${randomUUID()}.tmp`;
   try {
     fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
-    loadDeploymentManifest({ VIKA_CONFIG: temporary, HOME: os.homedir() });
+    loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: temporary, HOME: os.homedir() });
     return temporary;
   } catch (error) {
     fs.rmSync(temporary, { force: true });
@@ -56,7 +56,7 @@ export function validateManifest(filePath, value) {
 export function writeManifest(filePath, value, { expected } = {}) {
   return withManifestLock(filePath, () => {
     if (expected !== undefined && JSON.stringify(currentValue(filePath)) !== JSON.stringify(expected)) {
-      throw Object.assign(new Error('Configuration changed elsewhere; run ovsa setup again.'), { code: 'manifest_conflict' });
+      throw Object.assign(new Error('Configuration changed elsewhere; run ov-superagent setup again.'), { code: 'manifest_conflict' });
     }
     save(filePath, value);
   });
@@ -66,7 +66,7 @@ export function writeManifest(filePath, value, { expected } = {}) {
 // instances and fields; a repeated command does not rewrite the file/backup.
 export function updateManifest(filePath, edit) {
   return withManifestLock(filePath, () => {
-    const deployment = loadDeploymentManifest({ VIKA_CONFIG: filePath, HOME: os.homedir() });
+    const deployment = loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: filePath, HOME: os.homedir() });
     const value = currentValue(filePath);
     const before = JSON.stringify(value);
     edit(value, deployment);

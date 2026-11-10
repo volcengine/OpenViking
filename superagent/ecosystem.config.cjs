@@ -3,6 +3,7 @@
 
 'use strict';
 
+const { normalizeEnv } = require('./env-compat.cjs');
 const fs = require('node:fs');
 const { homeDir: platformHomeDir } = require('./packages/daemon/src/platform/index.mjs');
 const { capabilities } = require('./packages/daemon/src/capabilities.mjs');
@@ -47,9 +48,10 @@ function defined(values) {
 }
 
 function buildEcosystem(sourceEnv = process.env) {
+  sourceEnv = normalizeEnv(sourceEnv);
   const homeDir = platformHomeDir(sourceEnv);
   if (!homeDir || !path.isAbsolute(homeDir)) throw new Error('HOME must be an absolute path');
-  const baseDir = path.join(homeDir, '.ovsa');
+  const baseDir = path.join(homeDir, '.superagent');
   const deployment = loadDeploymentManifest(sourceEnv);
   if (deployment.agents.some((agent) => agent.port === 3737)) {
     throw new Error('agent port 3737 conflicts with the shared Web port');
@@ -59,7 +61,7 @@ function buildEcosystem(sourceEnv = process.env) {
 
   const daemonApps = deployment.agents.map((agent) => ({
     ...common,
-    name: `vika-${agent.id}`,
+    name: `superagent-${agent.id}`,
     script: path.join(daemonDir, 'src', 'main.mjs'),
     cwd: daemonDir,
     restart_delay: 2000,
@@ -70,28 +72,28 @@ function buildEcosystem(sourceEnv = process.env) {
     env: defined({
       ...sharedDaemonEnv,
       NODE_ENV: 'production',
-      VIKA_CONFIG: deployment.manifestPath,
-      VIKA_INSTANCE_ID: agent.id,
-      VIKA_UPGRADE_TARGET: agent.id,
-      VIKA_HOST: '127.0.0.1',
-      VIKA_HTTP_ENABLED: 'true',
-      VIKA_CHANNEL: agent.channel,
-      VIKA_CONNECTORS_JSON: JSON.stringify(agent.connectors),
-      VIKA_EMAIL_ACCOUNTS_JSON: agent.emailAccounts.length > 0 ? JSON.stringify(agent.emailAccounts) : undefined,
-      VIKA_PORT: String(agent.port),
+      OV_SUPERAGENT_CONFIG: deployment.manifestPath,
+      OV_SUPERAGENT_INSTANCE_ID: agent.id,
+      OV_SUPERAGENT_UPGRADE_TARGET: agent.id,
+      OV_SUPERAGENT_HOST: '127.0.0.1',
+      OV_SUPERAGENT_HTTP_ENABLED: 'true',
+      OV_SUPERAGENT_CHANNEL: agent.channel,
+      OV_SUPERAGENT_CONNECTORS_JSON: JSON.stringify(agent.connectors),
+      OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON: agent.emailAccounts.length > 0 ? JSON.stringify(agent.emailAccounts) : undefined,
+      OV_SUPERAGENT_PORT: String(agent.port),
       // Empty for an instance without the lark connector, so a profile in
       // pm2's own environment cannot leak into it.
-      VIKA_LARK_PROFILE: agent.profile || '',
+      OV_SUPERAGENT_LARK_PROFILE: agent.profile || '',
       LARKSUITE_CLI_PROFILE: agent.profile || '',
-      VIKA_AGENT_NAME: agent.displayName,
-      VIKA_DATA_DIR: agent.dataDir,
-      VIKA_TEMP_DIR: agent.tempDir || sharedDaemonEnv.VIKA_TEMP_DIR || '',
-      VIKA_WORKSPACE: agent.workspace,
-      VIKA_MODEL: agent.model,
+      OV_SUPERAGENT_AGENT_NAME: agent.displayName,
+      OV_SUPERAGENT_DATA_DIR: agent.dataDir,
+      OV_SUPERAGENT_TEMP_DIR: agent.tempDir || sharedDaemonEnv.OV_SUPERAGENT_TEMP_DIR || '',
+      OV_SUPERAGENT_WORKSPACE: agent.workspace,
+      OV_SUPERAGENT_MODEL: agent.model,
       // Empty values deliberately override any legacy global seed. Managed
       // Agent identity must remain pinned to one daemon/profile instance.
-      VIKA_VOLC_SESSION_ID: agent.volcSessionId || '',
-      VIKA_VOLC_ENVIRONMENT_ID: agent.volcEnvironmentId || '',
+      OV_SUPERAGENT_VOLC_SESSION_ID: agent.volcSessionId || '',
+      OV_SUPERAGENT_VOLC_ENVIRONMENT_ID: agent.volcEnvironmentId || '',
       ...openVikingAgentEnv(agent),
       PATH: ecosystemSearchPath(sourceEnv, fallbackPath),
     }),
@@ -105,7 +107,7 @@ function buildEcosystem(sourceEnv = process.env) {
   }));
   const webTargetsJson = JSON.stringify(webTargets);
   for (const [name, value] of [
-    ['VIKA_WEB_INSTANCES', webTargetsJson],
+    ['OV_SUPERAGENT_WEB_INSTANCES', webTargetsJson],
   ]) {
     if (Buffer.byteLength(value) > CONTROL_ENV_MAX_BYTES) {
       throw new Error(`${name} exceeds ${CONTROL_ENV_MAX_BYTES} bytes`);
@@ -121,10 +123,10 @@ function buildEcosystem(sourceEnv = process.env) {
           ...common.filter_env,
           'ARK_',
           'VOLCENGINE_',
-          'VIKA_VOLC_',
+          'OV_SUPERAGENT_VOLC_',
           'SESSION_ID',
         ],
-        name: 'vika-web',
+        name: 'superagent-web',
         script: path.join(webDir, 'src', 'main.mjs'),
         cwd: webDir,
         restart_delay: 1000,
@@ -134,16 +136,16 @@ function buildEcosystem(sourceEnv = process.env) {
         listen_timeout: 10000,
         env: {
           NODE_ENV: 'production',
-          VIKA_WEB_HOST: '127.0.0.1',
-          VIKA_WEB_PORT: '3737',
-          VIKA_WEB_DEFAULT_INSTANCE: deployment.defaultInstance,
-          VIKA_WEB_INSTANCES: webTargetsJson,
+          OV_SUPERAGENT_WEB_HOST: '127.0.0.1',
+          OV_SUPERAGENT_WEB_PORT: '3737',
+          OV_SUPERAGENT_WEB_DEFAULT_INSTANCE: deployment.defaultInstance,
+          OV_SUPERAGENT_WEB_INSTANCES: webTargetsJson,
           PATH: ecosystemSearchPath(sourceEnv, fallbackPath),
         },
       },
       ...(capabilities.updater ? [{
         ...common,
-        name: 'vika-updater',
+        name: 'superagent-updater',
         script: path.join(updaterDir, 'src', 'main.mjs'),
         cwd: updaterDir,
         restart_delay: 1000,
@@ -154,9 +156,9 @@ function buildEcosystem(sourceEnv = process.env) {
         env: {
           ...systemDaemonEnvOverrides,
           NODE_ENV: 'production',
-          VIKA_CONFIG: deployment.manifestPath,
-          VIKA_UPDATER_RELEASE_LINK: path.join(baseDir, 'current'),
-          VIKA_UPDATER_SOCKET: path.join(baseDir, 'updater.sock'),
+          OV_SUPERAGENT_CONFIG: deployment.manifestPath,
+          OV_SUPERAGENT_UPDATER_RELEASE_LINK: path.join(baseDir, 'current'),
+          OV_SUPERAGENT_UPDATER_SOCKET: path.join(baseDir, 'updater.sock'),
           // The updater drives the same pm2 daemon the vika command uses.
           PM2_HOME: sourceEnv.PM2_HOME || path.join(baseDir, 'pm2'),
           PM2_BIN: path.join(releaseDir, 'bin', 'pm2'),

@@ -766,7 +766,7 @@ describe('durable model configuration', () => {
       const { models } = await loadDurableModels();
       const chat = await availableChatModels(models);
       // A model configured in Pi is a model the durable runtime can run, and
-      // Pi's default is what an unset VIKA_DURABLE_MODEL resolves to.
+      // Pi's default is what an unset OV_SUPERAGENT_DURABLE_MODEL resolves to.
       assert.equal(chat[0].provider, 'volcengine-ark');
       assert.equal(chat[0].id, 'ep-test');
     } finally {

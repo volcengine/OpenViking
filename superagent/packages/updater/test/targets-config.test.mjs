@@ -26,8 +26,8 @@ fs.writeFileSync(manifestPath, `${JSON.stringify({
     model: 'gpt-5.6-sol',
   })),
 }, null, 2)}\n`);
-delete process.env.VIKA_UPDATER_TARGETS_JSON;
-process.env.VIKA_CONFIG = manifestPath;
+delete process.env.OV_SUPERAGENT_UPDATER_TARGETS_JSON;
+process.env.OV_SUPERAGENT_CONFIG = manifestPath;
 
 const {
   assertUpgradeTarget,
@@ -40,7 +40,7 @@ after(() => fs.rmSync(directory, { recursive: true, force: true }));
 test('updater derives every allowlisted target from the deployment manifest', () => {
   assert.deepEqual(upgradeTargetNames(), ['alpha', 'beta', 'gamma', 'all']);
   assert.deepEqual(loadTargets().beta, {
-    app: 'vika-beta',
+    app: 'superagent-beta',
     config: 'ecosystem.config.cjs',
     readyUrl: 'http://127.0.0.1:3739/ready',
     upgradeSharedWeb: false,
@@ -57,5 +57,5 @@ test('an instance added to the manifest is a target without restarting the updat
     dataDir: '/srv/vika/data/delta', workspace: '/srv/vika/workspaces/delta', ovConfig: '/srv/vika/ov/delta.json' });
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   assert.equal(assertUpgradeTarget('delta'), 'delta');
-  assert.equal(loadTargets().delta.app, 'vika-delta');
+  assert.equal(loadTargets().delta.app, 'superagent-delta');
 });

@@ -49,19 +49,19 @@ function boolEnv(name, fallback) {
   throw new Error(`${name} must be a boolean`);
 }
 
-// VIKA_ROLE: a role shipped under agent/roles, or the absolute path of the
+// OV_SUPERAGENT_ROLE: a role shipped under agent/roles, or the absolute path of the
 // owner's own role file. Unset, the agent runs on the Core's defaults alone.
 function rolePromptEnv(promptDir) {
-  const role = (process.env.VIKA_ROLE ?? '').trim();
+  const role = (process.env.OV_SUPERAGENT_ROLE ?? '').trim();
   if (!role) return '';
   if (!path.isAbsolute(role) && !/^[a-z][a-z0-9-]{0,31}$/.test(role)) {
-    throw new Error('VIKA_ROLE must be a role name or an absolute path');
+    throw new Error('OV_SUPERAGENT_ROLE must be a role name or an absolute path');
   }
   const filePath = resolveRolePromptPath(role, promptDir);
   let info = null;
   try { info = fs.statSync(filePath); } catch {}
   if (!info?.isFile()) {
-    throw new Error(path.isAbsolute(role) ? 'VIKA_ROLE names a file that does not exist' : `VIKA_ROLE ${role} is not a known role`);
+    throw new Error(path.isAbsolute(role) ? 'OV_SUPERAGENT_ROLE names a file that does not exist' : `OV_SUPERAGENT_ROLE ${role} is not a known role`);
   }
   return filePath;
 }
@@ -98,7 +98,7 @@ function jsonStringArrayEnv(name, fallback = []) {
 
 function assertLoopbackHost(host) {
   if (!['127.0.0.1', '::1', 'localhost'].includes(host)) {
-    throw new Error('VIKA_HOST must be a loopback address');
+    throw new Error('OV_SUPERAGENT_HOST must be a loopback address');
   }
 }
 
@@ -124,15 +124,15 @@ export function privateRegularFile(value, name, enforceFileMode = supportsFileMo
 // The email connector's mailboxes: [{ id: 'email-<name>', config: <account file> }].
 function emailAccountsEnv() {
   let value = null;
-  try { value = JSON.parse(process.env.VIKA_EMAIL_ACCOUNTS_JSON ?? ''); } catch {}
+  try { value = JSON.parse(process.env.OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON ?? ''); } catch {}
   if (!Array.isArray(value) || value.length === 0) {
-    throw new Error('VIKA_EMAIL_ACCOUNTS_JSON must list the mailboxes of the email connector');
+    throw new Error('OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON must list the mailboxes of the email connector');
   }
   const ids = new Set();
   return Object.freeze(value.map((entry) => {
     const id = String(entry?.id ?? '');
     if (!/^email-[a-z0-9][a-z0-9-]{0,39}$/.test(id) || ids.has(id)) {
-      throw new Error('VIKA_EMAIL_ACCOUNTS_JSON has an invalid or repeated mailbox id');
+      throw new Error('OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON has an invalid or repeated mailbox id');
     }
     ids.add(id);
     return Object.freeze({ id, configFile: privateRegularFile(entry.config, `email account file of ${id}`) });
@@ -149,53 +149,53 @@ function pathsOverlap(left, right) {
 
 export function getConfig() {
   const dataDir = path.resolve(
-    process.env.VIKA_DATA_DIR || path.join(os.homedir(), '.ovsa', 'data'),
+    process.env.OV_SUPERAGENT_DATA_DIR || path.join(os.homedir(), '.superagent', 'data'),
   );
-  const configuredTempDir = (process.env.VIKA_TEMP_DIR ?? '').trim();
+  const configuredTempDir = (process.env.OV_SUPERAGENT_TEMP_DIR ?? '').trim();
   if (configuredTempDir && !path.isAbsolute(configuredTempDir)) {
-    throw new Error('VIKA_TEMP_DIR must be an absolute path');
+    throw new Error('OV_SUPERAGENT_TEMP_DIR must be an absolute path');
   }
   const workspace = path.resolve(
-    process.env.VIKA_WORKSPACE
+    process.env.OV_SUPERAGENT_WORKSPACE
       || path.join(os.homedir(), 'Documents', 'work', 'vika-workspace'),
   );
-  const host = process.env.VIKA_HOST || '127.0.0.1';
+  const host = process.env.OV_SUPERAGENT_HOST || '127.0.0.1';
   assertLoopbackHost(host);
-  const channel = enumEnv('VIKA_CHANNEL', 'lark', ['lark', 'weixin', 'telegram', 'slack', 'qq']);
-  const configuredConnectors = jsonStringArrayEnv('VIKA_CONNECTORS_JSON');
+  const channel = enumEnv('OV_SUPERAGENT_CHANNEL', 'lark', ['lark', 'weixin', 'telegram', 'slack', 'qq']);
+  const configuredConnectors = jsonStringArrayEnv('OV_SUPERAGENT_CONNECTORS_JSON');
   const connectors = configuredConnectors.length > 0 ? [...new Set(configuredConnectors)] : [channel];
   if (connectors.some((connector) => !['lark', 'weixin', 'email', 'telegram', 'slack', 'qq'].includes(connector))) {
-    throw new Error('VIKA_CONNECTORS_JSON contains an unsupported connector');
+    throw new Error('OV_SUPERAGENT_CONNECTORS_JSON contains an unsupported connector');
   }
   if (!connectors.includes(channel)) {
-    throw new Error('VIKA_CONNECTORS_JSON must include VIKA_CHANNEL');
+    throw new Error('OV_SUPERAGENT_CONNECTORS_JSON must include OV_SUPERAGENT_CHANNEL');
   }
   // Each mailbox's account and client password, in a file only the daemon user can read.
   const emailAccounts = connectors.includes('email') ? emailAccountsEnv() : [];
   const promptDir = path.join(moduleDir, 'agent');
   if (pathsOverlap(workspace, projectDir)) {
-    throw new Error('VIKA_WORKSPACE must not overlap the running daemon directory');
+    throw new Error('OV_SUPERAGENT_WORKSPACE must not overlap the running daemon directory');
   }
   if (pathsOverlap(workspace, dataDir)) {
-    throw new Error('VIKA_WORKSPACE must not overlap VIKA_DATA_DIR');
+    throw new Error('OV_SUPERAGENT_WORKSPACE must not overlap OV_SUPERAGENT_DATA_DIR');
   }
-  const daemonProfile = (process.env.VIKA_LARK_PROFILE ?? '').trim();
+  const daemonProfile = (process.env.OV_SUPERAGENT_LARK_PROFILE ?? '').trim();
   const cliProfile = (process.env.LARKSUITE_CLI_PROFILE ?? '').trim();
   if (daemonProfile && cliProfile && daemonProfile !== cliProfile) {
-    throw new Error('VIKA_LARK_PROFILE must match LARKSUITE_CLI_PROFILE');
+    throw new Error('OV_SUPERAGENT_LARK_PROFILE must match LARKSUITE_CLI_PROFILE');
   }
   // Connector commands run from projectDir; make relative overrides independent
   // of the agent workspace too. Bare command names keep their PATH semantics.
   const cliBin = (value) => (value?.includes('/') || value?.includes(path.sep))
     ? path.resolve(projectDir, value) : value;
-  const volcBaseUrl = (process.env.VIKA_VOLC_BASE_URL
+  const volcBaseUrl = (process.env.OV_SUPERAGENT_VOLC_BASE_URL
     || 'https://ark.cn-beijing.volces.com/api/v3').replace(/\/+$/, '');
   let parsedVolcBaseUrl;
   try { parsedVolcBaseUrl = new URL(volcBaseUrl); } catch {
-    throw new Error('VIKA_VOLC_BASE_URL must be a valid HTTPS URL');
+    throw new Error('OV_SUPERAGENT_VOLC_BASE_URL must be a valid HTTPS URL');
   }
   if (parsedVolcBaseUrl.protocol !== 'https:') {
-    throw new Error('VIKA_VOLC_BASE_URL must be a valid HTTPS URL');
+    throw new Error('OV_SUPERAGENT_VOLC_BASE_URL must be a valid HTTPS URL');
   }
 
   return {
@@ -208,19 +208,19 @@ export function getConfig() {
     promptDir,
     rolePromptPath: rolePromptEnv(promptDir),
     // On by default; agents[].naturalWriting: false turns it off.
-    naturalWriting: boolEnv('VIKA_NATURAL_WRITING', true),
+    naturalWriting: boolEnv('OV_SUPERAGENT_NATURAL_WRITING', true),
     openVikingConfigPath: (process.env.OPENVIKING_CLI_CONFIG_FILE || '').trim(),
     // Opt-in per instance (agents[].ovAutoRecall, config file only): besides
     // the preferences it always shows, the daemon runs one OV search per line
     // someone sends (ov-recall.mjs).
-    ovAutoRecall: boolEnv('VIKA_OV_AUTO_RECALL', false),
+    ovAutoRecall: boolEnv('OV_SUPERAGENT_OV_AUTO_RECALL', false),
     // One OpenViking tool request, bounded for the model-facing tools (the
     // faster read/list paths get half of it).
-    openVikingToolTimeoutMs: intEnv('VIKA_OV_TOOL_TIMEOUT_MS', 20_000, { min: 1_000, max: 120_000 }),
-    agentName: process.env.VIKA_AGENT_NAME || process.env.VIKA_INSTANCE_ID || 'Agent',
-    instanceId: process.env.VIKA_INSTANCE_ID || 'default',
-    timerStorage: enumEnv('VIKA_TIMER_STORAGE', 'ov', ['ov', 'sqlite']),
-    upgradeTarget: process.env.VIKA_UPGRADE_TARGET || process.env.VIKA_INSTANCE_ID || '',
+    openVikingToolTimeoutMs: intEnv('OV_SUPERAGENT_OV_TOOL_TIMEOUT_MS', 20_000, { min: 1_000, max: 120_000 }),
+    agentName: process.env.OV_SUPERAGENT_AGENT_NAME || process.env.OV_SUPERAGENT_INSTANCE_ID || 'Agent',
+    instanceId: process.env.OV_SUPERAGENT_INSTANCE_ID || 'default',
+    timerStorage: enumEnv('OV_SUPERAGENT_TIMER_STORAGE', 'ov', ['ov', 'sqlite']),
+    upgradeTarget: process.env.OV_SUPERAGENT_UPGRADE_TARGET || process.env.OV_SUPERAGENT_INSTANCE_ID || '',
     channel,
     connectors: Object.freeze(connectors),
     connectorWorkerPath: path.join(sourceDir, 'connectors', 'worker.mjs'),
@@ -229,7 +229,7 @@ export function getConfig() {
     larkCliBin: cliBin(process.env.LARK_CLI_BIN || bundledLarkCli()),
     slackCliBin: cliBin(process.env.SLACK_CLI_BIN || undefined),
     emailAccounts,
-    weixinLongPollTimeoutMs: intEnv('VIKA_WEIXIN_LONG_POLL_TIMEOUT_MS', 35_000, {
+    weixinLongPollTimeoutMs: intEnv('OV_SUPERAGENT_WEIXIN_LONG_POLL_TIMEOUT_MS', 35_000, {
       min: 5_000,
       max: 120_000,
     }),
@@ -239,36 +239,36 @@ export function getConfig() {
     piBin: process.env.PI_BIN || managedPiBin(),
     opencodeBin: process.env.OPENCODE_BIN || 'opencode',
     agyBin: process.env.AGY_BIN || 'agy',
-    initialModel: process.env.VIKA_MODEL || '',
-    codexEffort: enumEnv('VIKA_CODEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']),
-    traexEffort: enumEnv('VIKA_TRAEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
-    claudeModel: process.env.VIKA_CLAUDE_MODEL || '',
-    claudeEffort: enumEnv('VIKA_CLAUDE_EFFORT', 'medium', ['low', 'medium', 'high', 'xhigh', 'max']),
-    piModel: process.env.VIKA_PI_MODEL || '',
+    initialModel: process.env.OV_SUPERAGENT_MODEL || '',
+    codexEffort: enumEnv('OV_SUPERAGENT_CODEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']),
+    traexEffort: enumEnv('OV_SUPERAGENT_TRAEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
+    claudeModel: process.env.OV_SUPERAGENT_CLAUDE_MODEL || '',
+    claudeEffort: enumEnv('OV_SUPERAGENT_CLAUDE_EFFORT', 'medium', ['low', 'medium', 'high', 'xhigh', 'max']),
+    piModel: process.env.OV_SUPERAGENT_PI_MODEL || '',
     piEffort: enumEnv(
-      'VIKA_PI_EFFORT',
+      'OV_SUPERAGENT_PI_EFFORT',
       'medium',
       ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     ),
     // Durable harness (built-in @earendil-works/pi-durable host). The model is
     // spoken as provider/modelId; the effort set matches pi-durable thinking
     // levels.
-    durableModel: process.env.VIKA_DURABLE_MODEL || '',
+    durableModel: process.env.OV_SUPERAGENT_DURABLE_MODEL || '',
     durableEffort: enumEnv(
-      'VIKA_DURABLE_EFFORT',
+      'OV_SUPERAGENT_DURABLE_EFFORT',
       'medium',
       ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     ),
-    opencodeModel: process.env.VIKA_OPENCODE_MODEL || '',
-    agyModel: process.env.VIKA_AGY_MODEL || '',
+    opencodeModel: process.env.OV_SUPERAGENT_OPENCODE_MODEL || '',
+    agyModel: process.env.OV_SUPERAGENT_AGY_MODEL || '',
     dshBin: process.env.DSH_BIN || 'dsh',
     // Model routes are DSH's own settings document, not a daemon setting and not
     // a manifest field: DSH's own settings service is the only writer, and
-    // `ovsa dsh model` plus `/model` are the only callers. This is the effort a
+    // `ov-superagent dsh model` plus `/model` are the only callers. This is the effort a
     // fresh instance starts with; the union is what DSH understands for a route
     // (llm-pi-ai/src/catalog.ts).
     dshEffort: enumEnv(
-      'VIKA_DSH_EFFORT',
+      'OV_SUPERAGENT_DSH_EFFORT',
       'high',
       ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     ),
@@ -279,40 +279,40 @@ export function getConfig() {
     // here at 0.4 s each on an idle host, and long enough to blow a 30 s bound
     // while an unpack and a second instance start at the same time. A start that
     // times out fails the daemon, so the bound is adjustable.
-    dshStartTimeoutMs: intEnv('VIKA_DSH_START_TIMEOUT_MS', 30_000, { min: 1_000 }),
+    dshStartTimeoutMs: intEnv('OV_SUPERAGENT_DSH_START_TIMEOUT_MS', 30_000, { min: 1_000 }),
     volcApiKey: process.env.ARK_API_KEY || '',
-    volcSessionId: process.env.VIKA_VOLC_SESSION_ID
+    volcSessionId: process.env.OV_SUPERAGENT_VOLC_SESSION_ID
       || process.env.ARK_SESSION_ID
       || process.env.SESSION_ID
       || '',
-    volcEnvironmentId: (process.env.VIKA_VOLC_ENVIRONMENT_ID || '').trim(),
+    volcEnvironmentId: (process.env.OV_SUPERAGENT_VOLC_ENVIRONMENT_ID || '').trim(),
     volcBaseUrl,
-    volcRequestTimeoutMs: intEnv('VIKA_VOLC_REQUEST_TIMEOUT_MS', 30_000, {
+    volcRequestTimeoutMs: intEnv('OV_SUPERAGENT_VOLC_REQUEST_TIMEOUT_MS', 30_000, {
       min: 1_000,
       max: 300_000,
     }),
-    volcStreamIdleTimeoutMs: intEnv('VIKA_VOLC_STREAM_IDLE_TIMEOUT_MS', 900_000, {
+    volcStreamIdleTimeoutMs: intEnv('OV_SUPERAGENT_VOLC_STREAM_IDLE_TIMEOUT_MS', 900_000, {
       min: 30_000,
       max: 3_600_000,
     }),
     // Codex model the daemon auto-switches to when a claude turn fails.
     fallbackModel: process.env.FALLBACK_MODEL || 'gpt-5.6-sol',
     host,
-    port: intEnv('VIKA_PORT', 3738, { min: 1, max: 65535 }),
-    httpEnabled: boolEnv('VIKA_HTTP_ENABLED', true),
-    logLevel: enumEnv('VIKA_LOG_LEVEL', 'info', ['debug', 'info', 'warn', 'error']),
+    port: intEnv('OV_SUPERAGENT_PORT', 3738, { min: 1, max: 65535 }),
+    httpEnabled: boolEnv('OV_SUPERAGENT_HTTP_ENABLED', true),
+    logLevel: enumEnv('OV_SUPERAGENT_LOG_LEVEL', 'info', ['debug', 'info', 'warn', 'error']),
     profile: daemonProfile || cliProfile,
-    ignoredSenderIds: csvEnv('VIKA_IGNORED_SENDER_IDS'),
-    sendTimeoutMs: intEnv('VIKA_SEND_TIMEOUT_MS', 30_000, { min: 1_000 }),
-    shutdownTimeoutMs: intEnv('VIKA_SHUTDOWN_TIMEOUT_MS', 20_000, { min: 5_000, max: 25_000 }),
-    maxReplyChars: intEnv('VIKA_MAX_REPLY_CHARS', 30_000, { min: 100, max: 100_000 }),
-    maxEventBytes: intEnv('VIKA_MAX_EVENT_BYTES', 1_000_000, { min: 1_024, max: 10_000_000 }),
-    maxEventAgeMs: intEnv('VIKA_MAX_EVENT_AGE_MS', 86_400_000, { min: 60_000 }),
-    idleReactionAfterMs: intEnv('VIKA_IDLE_REACTION_AFTER_MS', 600_000, {
+    ignoredSenderIds: csvEnv('OV_SUPERAGENT_IGNORED_SENDER_IDS'),
+    sendTimeoutMs: intEnv('OV_SUPERAGENT_SEND_TIMEOUT_MS', 30_000, { min: 1_000 }),
+    shutdownTimeoutMs: intEnv('OV_SUPERAGENT_SHUTDOWN_TIMEOUT_MS', 20_000, { min: 5_000, max: 25_000 }),
+    maxReplyChars: intEnv('OV_SUPERAGENT_MAX_REPLY_CHARS', 30_000, { min: 100, max: 100_000 }),
+    maxEventBytes: intEnv('OV_SUPERAGENT_MAX_EVENT_BYTES', 1_000_000, { min: 1_024, max: 10_000_000 }),
+    maxEventAgeMs: intEnv('OV_SUPERAGENT_MAX_EVENT_AGE_MS', 86_400_000, { min: 60_000 }),
+    idleReactionAfterMs: intEnv('OV_SUPERAGENT_IDLE_REACTION_AFTER_MS', 600_000, {
       min: 0,
       max: 604_800_000,
     }),
-    timerOccurrenceCheckDelayMs: intEnv('VIKA_TIMER_OCCURRENCE_CHECK_DELAY_MS', 300_000, {
+    timerOccurrenceCheckDelayMs: intEnv('OV_SUPERAGENT_TIMER_OCCURRENCE_CHECK_DELAY_MS', 300_000, {
       min: 1_000,
       max: 86_400_000,
     }),
@@ -321,22 +321,22 @@ export function getConfig() {
     // ledger and the turn-end decision check. Off, the daemon offers the same
     // tools and assembles the same policy text as without them. Unpinned (a
     // daemon started without a manifest) it stays off.
-    explicitSilence: boolEnv('VIKA_EXPLICIT_SILENCE', false),
+    explicitSilence: boolEnv('OV_SUPERAGENT_EXPLICIT_SILENCE', false),
     // Opt-in per instance (agents[].stagedReplies): a longer task may get an
     // OnIt and interim findings before its final delivery.
-    stagedReplies: boolEnv('VIKA_STAGED_REPLIES', false),
+    stagedReplies: boolEnv('OV_SUPERAGENT_STAGED_REPLIES', false),
     // agents[].larkMessageAccess: `bot` keeps every Lark read (history and
     // search) inside the chats the bot has joined, read as the bot.
-    larkMessageAccess: enumEnv('VIKA_LARK_MESSAGE_ACCESS', 'owner', ['owner', 'bot']),
+    larkMessageAccess: enumEnv('OV_SUPERAGENT_LARK_MESSAGE_ACCESS', 'owner', ['owner', 'bot']),
     // Opt-in per instance (agents[].meetingNotes), on one instance at most:
     // the owner's Feishu/Lark meeting notes are stored in OV.
-    meetingNotes: boolEnv('VIKA_MEETING_NOTES', false) && connectors.includes('lark'),
-    historyLimit: intEnv('VIKA_HISTORY_LIMIT', 30, { min: 0, max: 200 }),
+    meetingNotes: boolEnv('OV_SUPERAGENT_MEETING_NOTES', false) && connectors.includes('lark'),
+    historyLimit: intEnv('OV_SUPERAGENT_HISTORY_LIMIT', 30, { min: 0, max: 200 }),
     // Replies to bot messages in one chat/thread with no person writing there
     // before the safety fuse holds further ones; 0 turns the fuse off.
-    botReplyFuse: intEnv('VIKA_BOT_REPLY_FUSE', 20, { min: 0, max: 1_000 }),
-    retentionMs: intEnv('VIKA_RETENTION_MS', 7_776_000_000, { min: 86_400_000 }),
-    dryRun: boolEnv('VIKA_DRY_RUN', false),
+    botReplyFuse: intEnv('OV_SUPERAGENT_BOT_REPLY_FUSE', 20, { min: 0, max: 1_000 }),
+    retentionMs: intEnv('OV_SUPERAGENT_RETENTION_MS', 7_776_000_000, { min: 86_400_000 }),
+    dryRun: boolEnv('OV_SUPERAGENT_DRY_RUN', false),
   };
 }
 

@@ -12,7 +12,7 @@ export function sanitizeNonArkChildEnv(environment) {
   const safeEnv = { ...environment };
   for (const key of Object.keys(safeEnv)) {
     if (/^(?:ARK|VOLCENGINE)_/i.test(key)
-      || /^VIKA_VOLC_/i.test(key)
+      || /^(?:OV_SUPERAGENT|OVSA|VIKA)_VOLC_/i.test(key)
       || key === 'SESSION_ID') delete safeEnv[key];
   }
   return safeEnv;
@@ -33,7 +33,7 @@ export function sanitizeAgentChildEnv(environment, {
     NO_COLOR: '1',
   };
   for (const key of Object.keys(safeEnv)) {
-    if (/^(?:LARK|FEISHU|LARKSUITE|VIKA)_/i.test(key)
+    if (/^(?:LARK|FEISHU|LARKSUITE|OV_SUPERAGENT|OVSA|VIKA)_/i.test(key)
       || (stripClaudeCode && key === 'CLAUDECODE')) delete safeEnv[key];
   }
   if (profile) safeEnv.LARKSUITE_CLI_PROFILE = profile;

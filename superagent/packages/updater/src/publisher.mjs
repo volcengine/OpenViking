@@ -107,7 +107,7 @@ export async function activateRelease(baseDir, release, previousRelease) {
 }
 
 export async function publishLatestRelease({
-  baseDir = path.join(os.homedir(), '.ovsa'),
+  baseDir = path.join(os.homedir(), '.superagent'),
   env = process.env,
   platformId = hostPlatform(),
   fetchImpl = globalThis.fetch,

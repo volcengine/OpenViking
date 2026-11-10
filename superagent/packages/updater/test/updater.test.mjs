@@ -17,14 +17,14 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-process.env.VIKA_UPDATER_TARGETS_JSON = JSON.stringify({
+process.env.OV_SUPERAGENT_UPDATER_TARGETS_JSON = JSON.stringify({
   alpha: {
-    app: 'vika-alpha',
+    app: 'superagent-alpha',
     readyUrl: 'http://127.0.0.1:3738/ready',
     upgradeSharedWeb: false,
   },
   beta: {
-    app: 'vika-beta',
+    app: 'superagent-beta',
     readyUrl: 'http://127.0.0.1:3740/ready',
     upgradeSharedWeb: false,
   },
@@ -42,7 +42,7 @@ async function fixtureTempRoot(prefix) {
 }
 
 async function fixtureRelease() {
-  const root = await fixtureTempRoot('vika-updater-test-');
+  const root = await fixtureTempRoot('superagent-updater-test-');
   const base = path.join(root, 'vika');
   const release = path.join(base, 'releases', '0.4.0-test');
   await mkdir(release, { recursive: true });
@@ -144,7 +144,7 @@ test('upgradeTarget cold-starts only the allowlisted Beta app from current relea
         jlistCalls += 1;
         return {
           stdout: JSON.stringify(jlistCalls === 1 ? [] : [{
-            name: 'vika-beta',
+            name: 'superagent-beta',
             pm2_env: { status: 'online', pm_exec_path: daemonEntry },
           }]),
         };
@@ -156,7 +156,7 @@ test('upgradeTarget cold-starts only the allowlisted Beta app from current relea
     pm2Env: { HOME: '/safe-home', PATH: '/safe-bin' },
   });
 
-  assert.equal(result.app, 'vika-beta');
+  assert.equal(result.app, 'superagent-beta');
   assert.equal(result.release, fixture.release);
   assert.deepEqual(calls, [
     {
@@ -173,7 +173,7 @@ test('upgradeTarget cold-starts only the allowlisted Beta app from current relea
         'start',
         path.join(fixture.release, 'ecosystem.config.cjs'),
         '--only',
-        'vika-beta',
+        'superagent-beta',
         '--update-env',
       ],
       options: {
@@ -211,9 +211,9 @@ test('upgrade all rolls both daemons and the shared web from one ecosystem confi
   const calls = [];
   const fetches = [];
   const processes = [
-    { name: 'vika-alpha', pm2_env: { status: 'online', pm_exec_path: daemonEntry } },
-    { name: 'vika-beta', pm2_env: { status: 'online', pm_exec_path: daemonEntry } },
-    { name: 'vika-web', pm2_env: { status: 'online', pm_exec_path: webEntry } },
+    { name: 'superagent-alpha', pm2_env: { status: 'online', pm_exec_path: daemonEntry } },
+    { name: 'superagent-beta', pm2_env: { status: 'online', pm_exec_path: daemonEntry } },
+    { name: 'superagent-web', pm2_env: { status: 'online', pm_exec_path: webEntry } },
   ];
   const result = await upgradeTarget('all', {
     releaseLink: fixture.releaseLink,
@@ -227,17 +227,17 @@ test('upgrade all rolls both daemons and the shared web from one ecosystem confi
     readyOptions: { attempts: 1, intervalMs: 0 },
   });
 
-  assert.deepEqual(result.apps, ['vika-alpha', 'vika-beta', 'vika-web']);
+  assert.deepEqual(result.apps, ['superagent-alpha', 'superagent-beta', 'superagent-web']);
   assert.deepEqual(
     calls.filter((args) => args[0] === 'start').map((args) => [args[1], args[3]]),
     [
-      [path.join(fixture.release, 'ecosystem.config.cjs'), 'vika-alpha'],
-      [path.join(fixture.release, 'ecosystem.config.cjs'), 'vika-beta'],
-      [path.join(fixture.release, 'ecosystem.config.cjs'), 'vika-web'],
+      [path.join(fixture.release, 'ecosystem.config.cjs'), 'superagent-alpha'],
+      [path.join(fixture.release, 'ecosystem.config.cjs'), 'superagent-beta'],
+      [path.join(fixture.release, 'ecosystem.config.cjs'), 'superagent-web'],
     ],
   );
   assert.ok(!calls.some((args) => args[0] === 'startOrReload'));
-  for (const app of ['vika-alpha', 'vika-beta', 'vika-web']) {
+  for (const app of ['superagent-alpha', 'superagent-beta', 'superagent-web']) {
     assert.ok(calls.some((args) => args[0] === 'delete' && args[1] === app));
   }
   assert.deepEqual(fetches, [
@@ -258,11 +258,11 @@ test('upgrade all removes only stale daemon apps owned by the managed releases d
     await writeFile(entry, '');
   }
   let processes = [
-    { name: 'vika-alpha', pm2_env: { status: 'online', pm_exec_path: daemonEntry } },
-    { name: 'vika-beta', pm2_env: { status: 'online', pm_exec_path: daemonEntry } },
-    { name: 'vika-web', pm2_env: { status: 'online', pm_exec_path: webEntry } },
-    { name: 'vika-retired', pm2_env: { status: 'online', pm_exec_path: daemonEntry } },
-    { name: 'vika-foreign', pm2_env: { status: 'online', pm_exec_path: foreignEntry } },
+    { name: 'superagent-alpha', pm2_env: { status: 'online', pm_exec_path: daemonEntry } },
+    { name: 'superagent-beta', pm2_env: { status: 'online', pm_exec_path: daemonEntry } },
+    { name: 'superagent-web', pm2_env: { status: 'online', pm_exec_path: webEntry } },
+    { name: 'superagent-retired', pm2_env: { status: 'online', pm_exec_path: daemonEntry } },
+    { name: 'superagent-foreign', pm2_env: { status: 'online', pm_exec_path: foreignEntry } },
     { name: 'unrelated-service', pm2_env: { status: 'online', pm_exec_path: daemonEntry } },
   ];
   const deleted = [];
@@ -285,7 +285,7 @@ test('upgrade all removes only stale daemon apps owned by the managed releases d
           name: app,
           pm2_env: {
             status: 'online',
-            pm_exec_path: app === 'vika-web' ? webEntry : daemonEntry,
+            pm_exec_path: app === 'superagent-web' ? webEntry : daemonEntry,
           },
         });
         return { stdout: '' };
@@ -297,11 +297,11 @@ test('upgrade all removes only stale daemon apps owned by the managed releases d
     readyOptions: { attempts: 1, intervalMs: 0 },
   });
 
-  assert.deepEqual(result.removedApps, ['vika-retired']);
-  assert.ok(deleted.includes('vika-retired'));
-  assert.ok(!deleted.includes('vika-foreign'));
+  assert.deepEqual(result.removedApps, ['superagent-retired']);
+  assert.ok(deleted.includes('superagent-retired'));
+  assert.ok(!deleted.includes('superagent-foreign'));
   assert.ok(!deleted.includes('unrelated-service'));
-  assert.ok(processes.some((row) => row.name === 'vika-foreign'));
+  assert.ok(processes.some((row) => row.name === 'superagent-foreign'));
   assert.ok(processes.some((row) => row.name === 'unrelated-service'));
 });
 
@@ -315,20 +315,20 @@ test('PM2 control commands discard metadata inherited from a managed caller', ()
     pm_id: '28',
     pm_exec_path: '/old/release/main.mjs',
     cwd: '/old/release',
-    VIKA_LARK_PROFILE: 'secret-profile',
-    VIKA_CONFIG: '/safe-home/custom/config.json',
-    VIKA_LOG_LEVEL: 'debug',
+    OV_SUPERAGENT_LARK_PROFILE: 'secret-profile',
+    OV_SUPERAGENT_CONFIG: '/safe-home/custom/config.json',
+    OV_SUPERAGENT_LOG_LEVEL: 'debug',
     ARK_API_KEY: 'system-only-secret',
-    VIKA_IGNORED_SENDER_IDS: '',
+    OV_SUPERAGENT_IGNORED_SENDER_IDS: '',
   }), {
     HOME: '/safe-home',
     PATH: '/safe-bin',
     PM2_HOME: '/safe-pm2',
     LANG: 'C.UTF-8',
-    VIKA_CONFIG: '/safe-home/custom/config.json',
-    VIKA_LOG_LEVEL: 'debug',
+    OV_SUPERAGENT_CONFIG: '/safe-home/custom/config.json',
+    OV_SUPERAGENT_LOG_LEVEL: 'debug',
     ARK_API_KEY: 'system-only-secret',
-    VIKA_IGNORED_SENDER_IDS: '',
+    OV_SUPERAGENT_IGNORED_SENDER_IDS: '',
   });
 });
 
@@ -341,7 +341,7 @@ test('upgradeTarget replaces an app whose PM2 exec path belongs to an old releas
   await writeFile(currentEntry, '');
   const currentConfig = path.join(fixture.release, 'ecosystem.config.cjs');
   const pm2 = replacePm2Harness({
-    app: 'vika-beta',
+    app: 'superagent-beta',
     initialEntry: previous.entry,
     entriesByConfig: new Map([
       [currentConfig, currentEntry],
@@ -364,8 +364,8 @@ test('upgradeTarget replaces an app whose PM2 exec path belongs to an old releas
   assert.equal(pm2.activeEntry, currentEntry);
   assert.deepEqual(pm2.events, [
     ['pm2', 'jlist'],
-    ['pm2', 'delete', 'vika-beta'],
-    ['pm2', 'start', currentConfig, '--only', 'vika-beta', '--update-env'],
+    ['pm2', 'delete', 'superagent-beta'],
+    ['pm2', 'start', currentConfig, '--only', 'superagent-beta', '--update-env'],
     ['pm2', 'jlist'],
     ['ready', 'http://127.0.0.1:3740/ready', currentEntry],
     ['pm2', 'save'],
@@ -381,7 +381,7 @@ test('failed replacement restores the app from the release that owned its old ex
   await writeFile(currentEntry, '');
   const currentConfig = path.join(fixture.release, 'ecosystem.config.cjs');
   const pm2 = replacePm2Harness({
-    app: 'vika-beta',
+    app: 'superagent-beta',
     initialEntry: previous.entry,
     entriesByConfig: new Map([
       [currentConfig, currentEntry],
@@ -403,12 +403,12 @@ test('failed replacement restores the app from the release that owned its old ex
   assert.equal(pm2.activeEntry, previous.entry);
   assert.deepEqual(pm2.events.filter((event) => event[1] !== 'save'), [
     ['pm2', 'jlist'],
-    ['pm2', 'delete', 'vika-beta'],
-    ['pm2', 'start', currentConfig, '--only', 'vika-beta', '--update-env'],
+    ['pm2', 'delete', 'superagent-beta'],
+    ['pm2', 'start', currentConfig, '--only', 'superagent-beta', '--update-env'],
     ['pm2', 'jlist'],
     ['ready', 'http://127.0.0.1:3740/ready', currentEntry],
-    ['pm2', 'delete', 'vika-beta'],
-    ['pm2', 'start', previous.config, '--only', 'vika-beta', '--update-env'],
+    ['pm2', 'delete', 'superagent-beta'],
+    ['pm2', 'start', previous.config, '--only', 'superagent-beta', '--update-env'],
     ['ready', 'http://127.0.0.1:3740/ready', previous.entry],
   ]);
 });
@@ -427,7 +427,7 @@ test('web upgrade and old-release rollback never inherit Ark credentials from PM
   await writeFile(daemonEntry, '');
   await writeFile(webEntry, '');
 
-  const active = new Map([['vika-web', previous.entry]]);
+  const active = new Map([['superagent-web', previous.entry]]);
   const starts = [];
   const pm2Env = {
     HOME: '/safe-home',
@@ -435,7 +435,7 @@ test('web upgrade and old-release rollback never inherit Ark credentials from PM
     ARK_API_KEY: 'sentinel-key',
     ARK_SESSION_ID: 'sentinel-ark-session',
     VOLCENGINE_API_KEY: 'sentinel-volc-key',
-    VIKA_VOLC_SESSION_ID: 'sentinel-seed',
+    OV_SUPERAGENT_VOLC_SESSION_ID: 'sentinel-seed',
     SESSION_ID: 'sentinel-generic-session',
   };
   const execFileImpl = async (_command, args, options) => {
@@ -454,7 +454,7 @@ test('web upgrade and old-release rollback never inherit Ark credentials from PM
     }
     if (operation === 'start') {
       const app = args[3];
-      const entry = app === 'vika-web'
+      const entry = app === 'superagent-web'
         ? (args[1] === previous.config ? previous.entry : webEntry)
         : daemonEntry;
       active.set(app, entry);
@@ -471,13 +471,13 @@ test('web upgrade and old-release rollback never inherit Ark credentials from PM
     pm2Env,
     execFileImpl,
     fetchImpl: async (url) => ({
-      ok: !url.endsWith(':3737/ready') || active.get('vika-web') === previous.entry,
+      ok: !url.endsWith(':3737/ready') || active.get('superagent-web') === previous.entry,
       status: 503,
     }),
     readyOptions: { attempts: 1, intervalMs: 0 },
   }), /did not become ready/);
 
-  const webStarts = starts.filter(({ app }) => app === 'vika-web');
+  const webStarts = starts.filter(({ app }) => app === 'superagent-web');
   assert.deepEqual(webStarts.map(({ config }) => config), [
     path.join(fixture.release, 'ecosystem.config.cjs'),
     previous.config,
@@ -485,7 +485,7 @@ test('web upgrade and old-release rollback never inherit Ark credentials from PM
   for (const { env } of webStarts) {
     assert.deepEqual(env, { HOME: '/safe-home', PATH: '/safe-bin' });
   }
-  assert.ok(starts.some(({ app, env }) => app.startsWith('vika-')
+  assert.ok(starts.some(({ app, env }) => app.startsWith('superagent-')
     && env.ARK_API_KEY === 'sentinel-key'));
   assert.deepEqual(cleanWebPm2ControlEnv(pm2Env), {
     HOME: '/safe-home',
@@ -508,7 +508,7 @@ test('upgradeTarget rejects inherited object property names as targets', async (
 
 test('upgradeTarget rechecks the target after acquiring the deploy lock', async () => {
   const fixture = await fixtureRelease();
-  const original = process.env.VIKA_UPDATER_TARGETS_JSON;
+  const original = process.env.OV_SUPERAGENT_UPDATER_TARGETS_JSON;
   let published = false;
   try {
     const pending = upgradeTarget('beta', {
@@ -518,12 +518,12 @@ test('upgradeTarget rechecks the target after acquiring the deploy lock', async 
     // mkdir yields; removal can finish before the upgrade acquires its lock.
     const next = JSON.parse(original);
     delete next.beta;
-    process.env.VIKA_UPDATER_TARGETS_JSON = JSON.stringify(next);
+    process.env.OV_SUPERAGENT_UPDATER_TARGETS_JSON = JSON.stringify(next);
     await assert.rejects(pending, /target must be one of/);
     assert.equal(published, false);
     await mkdir(path.join(path.dirname(fixture.releaseLink), 'deploy.lock'));
   } finally {
-    process.env.VIKA_UPDATER_TARGETS_JSON = original;
+    process.env.OV_SUPERAGENT_UPDATER_TARGETS_JSON = original;
   }
 });
 
@@ -536,7 +536,7 @@ test('upgradeTarget shares the deploy lock with the installer', async () => {
       releaseLink: fixture.releaseLink,
       execFileImpl: async () => { called = true; },
     }),
-    /another ovsa deploy or upgrade is running/,
+    /another ov-superagent deploy or upgrade is running/,
   );
   assert.equal(called, false);
 });
@@ -562,7 +562,7 @@ test('upgradeTarget publishes upstream before rolling the target', async () => {
       return {
         stdout: args[0] === 'jlist'
           ? JSON.stringify([{
-            name: 'vika-beta',
+            name: 'superagent-beta',
             pm2_env: { status: 'online', pm_exec_path: daemonEntry },
           }])
           : '',
@@ -588,7 +588,7 @@ test('the updater replaces itself after an upgrade that moved it to another rele
     releaseLink: fixture.releaseLink,
     publishReleaseImpl: async () => ({ release: fixture.release, commit: 'c', version: '0.5.0', published: true }),
     execFileImpl: async (_command, args) => ({
-      stdout: args[0] === 'jlist' ? JSON.stringify([{ name: 'vika-beta', pm2_env: { status: 'online', pm_exec_path: daemonEntry } }]) : '',
+      stdout: args[0] === 'jlist' ? JSON.stringify([{ name: 'superagent-beta', pm2_env: { status: 'online', pm_exec_path: daemonEntry } }]) : '',
     }),
     fetchImpl: async () => ({ ok: true }),
     readyOptions: { attempts: 1, intervalMs: 0 },
@@ -610,31 +610,31 @@ test('the updater replaces itself after an upgrade that moved it to another rele
 test('the replacement shell outlives the updater and starts it from the new release', () => {
   const calls = [];
   scheduleUpdaterRestart({
-    release: '/vika/releases/0.5.0',
-    pm2Bin: '/vika/releases/0.4.0/bin/pm2',
-    pm2Env: { HOME: '/home/u', PM2_HOME: '/home/u/.ovsa/pm2' },
+    release: '/superagent/releases/0.5.0',
+    pm2Bin: '/superagent/releases/0.4.0/bin/pm2',
+    pm2Env: { HOME: '/home/u', PM2_HOME: '/home/u/.superagent/pm2' },
     spawnImpl: (command, args, options) => { calls.push({ command, args, options }); return { unref() {} }; },
   });
   const [{ command, args, options }] = calls;
   assert.equal(command, '/bin/sh');
   // Backgrounded inside the shell, so it is no longer in the updater's process tree.
-  assert.match(args[1], /^\(sleep 2; "\$PM2" delete vika-updater .*\) .*&$/);
-  assert.match(args[1], /start "\$CONFIG" --only vika-updater --update-env/);
+  assert.match(args[1], /^\(sleep 2; "\$PM2" delete superagent-updater .*\) .*&$/);
+  assert.match(args[1], /start "\$CONFIG" --only superagent-updater --update-env/);
   assert.equal(options.detached, true);
-  assert.equal(options.env.CONFIG, '/vika/releases/0.5.0/ecosystem.config.cjs');
-  assert.equal(options.env.PM2, '/vika/releases/0.4.0/bin/pm2', 'falls back to the running pm2 when the release has none');
-  assert.equal(options.env.PM2_HOME, '/home/u/.ovsa/pm2');
+  assert.equal(options.env.CONFIG, '/superagent/releases/0.5.0/ecosystem.config.cjs');
+  assert.equal(options.env.PM2, '/superagent/releases/0.4.0/bin/pm2', 'falls back to the running pm2 when the release has none');
+  assert.equal(options.env.PM2_HOME, '/home/u/.superagent/pm2');
 });
 
 test('server accepts one allowlisted upgrade over its private socket', async (t) => {
-  const root = await fixtureTempRoot('vika-updater-socket-test-');
+  const root = await fixtureTempRoot('superagent-updater-socket-test-');
   const socketPath = path.join(root, 'updater.sock');
   const calls = [];
   const updater = await createUpdaterServer({
     socketPath,
     upgrade: async (target) => {
       calls.push(target);
-      return { target, app: `vika-${target}`, release: '/release', status: 'ready' };
+      return { target, app: `superagent-${target}`, release: '/release', status: 'ready' };
     },
   });
   t.after(() => updater.close());
@@ -646,14 +646,14 @@ test('server accepts one allowlisted upgrade over its private socket', async (t)
 });
 
 test('request body timeout does not abort a long-running upgrade response', async (t) => {
-  const root = await fixtureTempRoot('vika-updater-socket-test-');
+  const root = await fixtureTempRoot('superagent-updater-socket-test-');
   const socketPath = path.join(root, 'updater.sock');
   const updater = await createUpdaterServer({
     socketPath,
     requestBodyTimeoutMs: 10,
     upgrade: async (target) => {
       await new Promise((resolve) => setTimeout(resolve, 30));
-      return { target, app: 'vika-beta', release: '/release/current', status: 'ready' };
+      return { target, app: 'superagent-beta', release: '/release/current', status: 'ready' };
     },
   });
   t.after(() => updater.close());
@@ -680,7 +680,7 @@ test('client disconnect does not cancel an upgrade already owned by the updater'
       markStarted();
       await finish;
       markCompleted(target);
-      return { target, app: 'vika-alpha', release: '/release/current', status: 'ready' };
+      return { target, app: 'superagent-alpha', release: '/release/current', status: 'ready' };
     },
   });
   t.after(() => updater.close());
@@ -702,7 +702,7 @@ test('client disconnect does not cancel an upgrade already owned by the updater'
 });
 
 test('server rejects a non-allowlisted target without calling upgrade', async (t) => {
-  const root = await fixtureTempRoot('vika-updater-reject-test-');
+  const root = await fixtureTempRoot('superagent-updater-reject-test-');
   const socketPath = path.join(root, 'updater.sock');
   let called = false;
   const updater = await createUpdaterServer({
@@ -718,7 +718,7 @@ test('server rejects a non-allowlisted target without calling upgrade', async (t
 });
 
 test('server serializes upgrade requests', async (t) => {
-  const root = await fixtureTempRoot('vika-updater-busy-test-');
+  const root = await fixtureTempRoot('superagent-updater-busy-test-');
   const socketPath = path.join(root, 'updater.sock');
   let releaseFirst;
   const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
@@ -740,7 +740,7 @@ test('server serializes upgrade requests', async (t) => {
 });
 
 test('a second updater cannot unlink the live updater socket', async (t) => {
-  const root = await fixtureTempRoot('vika-updater-owner-test-');
+  const root = await fixtureTempRoot('superagent-updater-owner-test-');
   const socketPath = path.join(root, 'updater.sock');
   const first = await createUpdaterServer({
     socketPath,
@@ -757,13 +757,13 @@ test('a second updater cannot unlink the live updater socket', async (t) => {
 });
 
 test('CLI upgrade command reaches the updater over the Unix socket', async (t) => {
-  const root = await fixtureTempRoot('vika-updater-cli-test-');
+  const root = await fixtureTempRoot('superagent-updater-cli-test-');
   const socketPath = path.join(root, 'updater.sock');
   const updater = await createUpdaterServer({
     socketPath,
     upgrade: async (target) => ({
       target,
-      app: 'vika-beta',
+      app: 'superagent-beta',
       release: '/release/current',
       status: 'ready',
     }),
@@ -774,10 +774,10 @@ test('CLI upgrade command reaches the updater over the Unix socket', async (t) =
   const child = spawn(process.execPath, [bin, 'upgrade', 'beta'], {
     env: {
       ...process.env,
-      VIKA_UPDATER_SOCKET: socketPath,
-      VIKA_UPDATER_TARGETS_JSON: JSON.stringify({
+      OV_SUPERAGENT_UPDATER_SOCKET: socketPath,
+      OV_SUPERAGENT_UPDATER_TARGETS_JSON: JSON.stringify({
         beta: {
-          app: 'vika-beta',
+          app: 'superagent-beta',
           readyUrl: 'http://127.0.0.1:3740/ready',
           upgradeSharedWeb: false,
         },
@@ -796,6 +796,6 @@ test('CLI upgrade command reaches the updater over the Unix socket', async (t) =
   assert.equal(exitCode, 0, Buffer.concat(stderr).toString('utf8'));
   assert.equal(
     Buffer.concat(stdout).toString('utf8'),
-    'vika-beta is ready (/release/current)\n',
+    'superagent-beta is ready (/release/current)\n',
   );
 });

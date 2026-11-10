@@ -67,8 +67,8 @@ test('a live runtime switch updates only its instance and survives config reload
     agents: [f.manifest.agents[0], { ...f.manifest.agents[1], model: 'pi' }],
   });
   const env = {};
-  applyDeploymentAgentEnv(env, loadDeploymentManifest({ VIKA_CONFIG: f.manifestPath }), 'second');
-  assert.equal(env.VIKA_MODEL, 'pi');
+  applyDeploymentAgentEnv(env, loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: f.manifestPath }), 'second');
+  assert.equal(env.OV_SUPERAGENT_MODEL, 'pi');
   assert.equal(fs.statSync(f.manifestPath).mode & 0o777, 0o600);
 });
 
@@ -99,7 +99,7 @@ test('runtime persistence preserves unrelated edits and rejects a stale instance
   const f = fixture(t);
   const changed = f.read();
   changed.agents[0].displayName = 'Changed elsewhere';
-  changed.env.VIKA_LOG_LEVEL = 'warn';
+  changed.env.OV_SUPERAGENT_LOG_LEVEL = 'warn';
   writeManifest(f.manifestPath, changed);
   updateRuntimePreference(f.config, 'claude');
   changed.agents[1].model = 'claude:';

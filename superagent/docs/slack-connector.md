@@ -98,7 +98,7 @@ Slack 需要在 **Connector 层**处理的事情：
 2. 收到 `hello` 时校验 `connection_info.app_id` 和 bot token 属于同一个 App，并记下 `num_connections`。
 3. 收到 `events_api` 时**先 normalize 并写 stdout，再回 ack**。这和 Telegram「先 emit 再推进游标」同一语义；崩在两步之间，Slack 会重投，Core 再去重。
 4. 收到 `disconnect`（`warning`/`refresh_requested`）时**先建新连接，再关旧连接**。重叠期间两条连接都可能收到事件，由 id 去重兜底。
-5. 连接异常时按指数退避重连。如果 `apps.connections.open` 返回 `invalid_auth`、`not_allowed_token_type` 或 App 被卸载，就发 `STATUS failed` 并退出，交给 ConnectorManager，提示 `ovsa login slack`。
+5. 连接异常时按指数退避重连。如果 `apps.connections.open` 返回 `invalid_auth`、`not_allowed_token_type` 或 App 被卸载，就发 `STATUS failed` 并退出，交给 ConnectorManager，提示 `ov-superagent login slack`。
 
 ### 5.2 半开连接
 
@@ -168,7 +168,7 @@ slack: connectorManifest({
 
 | # | 位置 | 改动 |
 | --- | --- | --- |
-| C1 | `config.mjs`、`deployment-config.cjs`、CLI manifest 校验 | `connectors`/`VIKA_CHANNEL` 加 `slack`；`ark` runtime 拒绝 slack（同 Telegram：Volc Worker 访问不到 actions.sock） |
+| C1 | `config.mjs`、`deployment-config.cjs`、CLI manifest 校验 | `connectors`/`OV_SUPERAGENT_CHANNEL` 加 `slack`；`ark` runtime 拒绝 slack（同 Telegram：Volc Worker 访问不到 actions.sock） |
 | C2 | `runtime-input.mjs fromLabel` + 协议 | `fromLabel` 现在只有飞书走 roster，Slack 只会显示 `U0123ABCD`。建议在协议里给 `actor` 加可选的 `name`（不可信，复用 `sanitizeMemberName`），非飞书来源有名字就显示名字。Telegram、微信以后也能用 |
 | C3 | `actions/tools.mjs` | `mention_user_ids` 的 pattern 写死了 `^ou_`，`reply_in_thread`、`mention_*` 的描述写的是「Lark only」。改成按 manifest 声明的能力描述，id pattern 放宽到 `ou_…` 或 Slack 的 `[UW][A-Z0-9]{8,}`。实现时 `mention_names` 也支持了 Slack：Core 把名字原样交给 Connector，由它按自己在该频道给模型看过的人解析 |
 | C4 | `actions/tools.mjs get_message_media` | Slack 一条消息可以带多个文件：放宽 `key` 允许 `F[A-Z0-9]{8,}`，或者不传 key 时返回全部 |
@@ -212,10 +212,10 @@ slack: connectorManifest({
 1. 显示预填链接（终端里可按 `o` 打开浏览器）→ 用户选 workspace 创建 App → Install to Workspace。
 2. 用户复制 Bot User OAuth Token（`xoxb-`），到 Basic Information → App-Level Tokens 生成带 `connections:write` 的 `xapp-` token。两个都用隐藏输入粘贴。
 3. 验证：`auth.test`（拿 team/bot user/bot_id）+ `apps.connections.open`（App-level token 有效）+ `hello.app_id` 与 bot 同属一个 App。
-4. **owner 绑定**：显示随机口令，并提供 `slack://app?team=<T>&id=<A>&tab=messages` 链接直达 bot 私聊。用户私聊发口令后，固定 owner 的 `user_id` 和 DM 的 `channel`（或 `conversations.open` 得到）。`check` 返回 `owner: { id: U…, target: { chat_id: D… } }`。和微信不同，Slack bot 随时可以主动私聊 owner，所以可以当主渠道（`VIKA_CHANNEL=slack`）用于 `notify_owner` 和邮件审批。
+4. **owner 绑定**：显示随机口令，并提供 `slack://app?team=<T>&id=<A>&tab=messages` 链接直达 bot 私聊。用户私聊发口令后，固定 owner 的 `user_id` 和 DM 的 `channel`（或 `conversations.open` 得到）。`check` 返回 `owner: { id: U…, target: { chat_id: D… } }`。和微信不同，Slack bot 随时可以主动私聊 owner，所以可以当主渠道（`OV_SUPERAGENT_CHANNEL=slack`）用于 `notify_owner` 和邮件审批。
 5. token、owner、route 表存在 `<dataDir>/slack/state.sqlite3`（文件 0600、目录 0700），不写进 manifest。日志只记 `opaqueRef`，token 字段一律 `[REDACTED]`（worker logger 已经对含 `token` 的键做了脱敏）。
 
-`ovsa login slack <实例>`：换 token，或重新绑定 owner（流程同 Telegram）。
+`ov-superagent login slack <实例>`：换 token，或重新绑定 owner（流程同 Telegram）。
 
 **斜杠命令**：在 Slack 里输入 `/new` 会被客户端当作 Slack 命令拦下，提示「not a valid command」，消息到不了 bot。
 
@@ -229,7 +229,7 @@ slack: connectorManifest({
    - 会多消耗 token；按现有 prompt，模型对自动广播大多保持沉默。
    - 高频告警会让该频道顶层消息上的决定更容易过期（§3）。
    - 两个 AI bot（最坏的情况是同一频道里另一个 OpenViking SuperAgent 实例）可能互相回复形成循环。飞书要 `im:message.group_msg.include_bot:read` 才推送其他 bot 的消息（`permission.json` 已申请，README 手动配置说明里补上了）；Slack 的 `message.*` 订阅没有这个开关，默认就会收到。
-     **最终做法**（讨论后定，飞书和 Slack 共用）：多 bot 协作是重要场景，所以不用 @ 做机制，也不按小次数拦截。回不回、协作几轮由模型按「有必要才说话」判断，Core 只给它信息：`sender=bot` 和 `bots_since_human=N`。另有一根只防失控的保险丝：同一会话没有真人说话、已回应 `VIKA_BOT_REPLY_FUSE`（默认 20，0 关闭）条 bot 消息后拒绝再回（`bot_loop`），私聊通知 owner 一次，真人发言即重置。参考了 botmux：它没有轮数上限，靠「bot 消息必须显式 @ 才唤醒 + 每条发送必须明确 @ 谁」把循环门槛抬高；OpenViking SuperAgent 不走 @，而且全局只有一个 runtime，一个群失控会拖住所有群，所以保留这根保险丝。
+     **最终做法**（讨论后定，飞书和 Slack 共用）：多 bot 协作是重要场景，所以不用 @ 做机制，也不按小次数拦截。回不回、协作几轮由模型按「有必要才说话」判断，Core 只给它信息：`sender=bot` 和 `bots_since_human=N`。另有一根只防失控的保险丝：同一会话没有真人说话、已回应 `OV_SUPERAGENT_BOT_REPLY_FUSE`（默认 20，0 关闭）条 bot 消息后拒绝再回（`bot_loop`），私聊通知 owner 一次，真人发言即重置。参考了 botmux：它没有轮数上限，靠「bot 消息必须显式 @ 才唤醒 + 每条发送必须明确 @ 谁」把循环门槛抬高；OpenViking SuperAgent 不走 @，而且全局只有一个 runtime，一个群失控会拖住所有群，所以保留这根保险丝。
    - 吵得太厉害的 bot 可以用 `ignoredSenderIds` 按 `bot_id` 屏蔽。
 3. **Slack Connect 外部共享频道**：建议和飞书外部群一样照常接收，靠现有 prompt 的「群聊可能有外部客户」信息边界约束。Connector 再在事件里标出 `is_ext_shared`，让模型确定地知道对方在场。bot 必须被人主动拉进这类频道，所以不需要默认忽略。
 4. **数据合规**：Slack 2025-05 的 API 条款强调第三方 App 不得批量下载会话数据用于索引/查询。OpenViking SuperAgent 会把收到的消息写进 SQLite 和 OV session。作为用户自建、只装在自己 workspace 的内部 App，风险较低，但企业 workspace 最好让管理员确认；很多企业还开启了「装 App 需管理员审批」。

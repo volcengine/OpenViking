@@ -14,8 +14,8 @@ import { OWNER_MESSAGE_SCOPES, larkScopes } from '../src/setup.mjs';
 function agent(home, id, overrides = {}) {
   return {
     id, displayName: id.toUpperCase(), channel: 'lark', connectors: ['lark'], profile: `vika-${id}`,
-    port: 3738, dataDir: path.join(home, '.ovsa', 'data', id), workspace: path.join(home, 'ws', id), model: 'codex:',
-    ovConfig: path.join(home, '.ovsa', 'ov', `${id}.json`),
+    port: 3738, dataDir: path.join(home, '.superagent', 'data', id), workspace: path.join(home, 'ws', id), model: 'codex:',
+    ovConfig: path.join(home, '.superagent', 'ov', `${id}.json`),
     ...overrides,
   };
 }
@@ -25,8 +25,8 @@ function machine(t, agents, { answers = [], tty = false } = {}) {
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const list = agents(home);
   if (list.length) {
-    fs.mkdirSync(path.join(home, '.ovsa'), { recursive: true });
-    fs.writeFileSync(path.join(home, '.ovsa', 'config.json'),
+    fs.mkdirSync(path.join(home, '.superagent'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.superagent', 'config.json'),
       JSON.stringify({ version: 1, defaultInstance: list[0].id, env: {}, agents: list }));
   }
   const input = new PassThrough();
@@ -44,25 +44,25 @@ function machine(t, agents, { answers = [], tty = false } = {}) {
     },
     control: { restart: async (id) => { calls.push(['restart', id]); } },
   };
-  const manifest = () => JSON.parse(fs.readFileSync(path.join(home, '.ovsa', 'config.json'), 'utf8'));
+  const manifest = () => JSON.parse(fs.readFileSync(path.join(home, '.superagent', 'config.json'), 'utf8'));
   return { home, input, options, calls, written: () => written, manifest };
 }
 
 test('login renews what an instance has; connecting a new IM is setup\'s', async (t) => {
   const m = machine(t, (home) => [agent(home, 'haha', { channel: 'weixin', connectors: ['weixin'], profile: undefined })]);
-  const before = fs.readFileSync(path.join(m.home, '.ovsa', 'config.json'), 'utf8');
+  const before = fs.readFileSync(path.join(m.home, '.superagent', 'config.json'), 'utf8');
   assert.equal(await loginCommand(['weixin'], m.options), 0);
   assert.deepEqual(m.calls, [['weixin', 'haha']]);
   // A new login is a new conversation: the owner writes first again.
   assert.match(m.written(), /最后一步：在微信里先给机器人发一句话/);
-  assert.equal(fs.readFileSync(path.join(m.home, '.ovsa', 'config.json'), 'utf8'), before, 'the manifest is untouched');
+  assert.equal(fs.readFileSync(path.join(m.home, '.superagent', 'config.json'), 'utf8'), before, 'the manifest is untouched');
 
-  await assert.rejects(loginCommand(['lark'], m.options), /还没有实例接飞书；要接入，运行 ovsa setup 修改实例/);
-  await assert.rejects(loginCommand(['email', 'haha'], m.options), /实例 haha 没有接邮箱；要接入，运行 ovsa setup，选择修改 haha/);
+  await assert.rejects(loginCommand(['lark'], m.options), /还没有实例接飞书；要接入，运行 ov-superagent setup 修改实例/);
+  await assert.rejects(loginCommand(['email', 'haha'], m.options), /实例 haha 没有接邮箱；要接入，运行 ov-superagent setup，选择修改 haha/);
 });
 
 test('a mailbox password is renewed for the mailbox chosen, and the instance restarts', async (t) => {
-  const file = (home, id) => path.join(home, '.ovsa', 'email', 'wx', `${id}.json`);
+  const file = (home, id) => path.join(home, '.superagent', 'email', 'wx', `${id}.json`);
   const m = machine(t, (home) => {
     for (const [id, address] of [['email-gmail', 'me@gmail.com'], ['email-qq', 'me@qq.com']]) {
       fs.mkdirSync(path.dirname(file(home, id)), { recursive: true });
@@ -94,9 +94,9 @@ test('with several instances it asks which one, among those that have the IM', a
 
 test('usage, and nothing to renew before setup', async (t) => {
   const empty = machine(t, () => []);
-  await assert.rejects(loginCommand(['weixin'], empty.options), /先运行 ovsa setup/);
+  await assert.rejects(loginCommand(['weixin'], empty.options), /先运行 ov-superagent setup/);
   assert.equal(await loginCommand(['setup'], empty.options), 2);
-  assert.match(empty.written(), /用法：ovsa login <lark\|weixin\|email\|telegram\|slack\|qq> \[实例\]\n  登录过期或改了密码后重新授权；要接入新的 IM，运行 ovsa setup 修改实例/);
+  assert.match(empty.written(), /用法：ov-superagent login <lark\|weixin\|email\|telegram\|slack\|qq> \[实例\]\n  登录过期或改了密码后重新授权；要接入新的 IM，运行 ov-superagent setup 修改实例/);
 });
 
 test('Telegram login stops the poller before verification and restarts with the new key', async (t) => {

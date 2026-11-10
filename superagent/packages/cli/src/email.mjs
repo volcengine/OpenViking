@@ -8,7 +8,7 @@ import { t } from './i18n.mjs';
 import { vikaHome } from './manifest.mjs';
 import { PromptAborted } from './prompt.mjs';
 
-// The mailbox steps of `ovsa setup` and `ovsa login email`: an address and the
+// The mailbox steps of `ov-superagent setup` and `ov-superagent login email`: an address and the
 // provider's client password, checked by logging in to IMAP and SMTP before
 // anything is saved. A known provider needs no server names. An instance may
 // watch several mailboxes; each is its own Connector instance, `email-<name>`.

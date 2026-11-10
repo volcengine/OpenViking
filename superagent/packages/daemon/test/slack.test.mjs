@@ -430,7 +430,7 @@ test('Socket Mode acknowledges after handling, refreshes before closing, and ref
   await assert.rejects(off, /Socket Mode was turned off/);
   const revoked = new SlackApi(APP_TOKEN, { kind: 'app', fetchImpl: provider({ 'apps.connections.open': () => ({ error: 'invalid_auth' }) }) });
   await assert.rejects(new SocketModeReceiver({ api: revoked, appId: account.appId, WebSocketImpl: sockets().Socket, logger, ...fast })
-    .run(() => {}, AbortSignal.timeout(2000)), /ovsa login slack/);
+    .run(() => {}, AbortSignal.timeout(2000)), /ov-superagent login slack/);
 });
 
 test('binds the owner by a one-time code in a direct message and stages messages while re-binding', async (t) => {

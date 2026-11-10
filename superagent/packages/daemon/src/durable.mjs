@@ -191,7 +191,7 @@ export class DurableAgent {
   }
 
   hostPath() {
-    return durableHostPath(this.config.durableHostPath ?? process.env.VIKA_DURABLE_HOST ?? '');
+    return durableHostPath(this.config.durableHostPath ?? process.env.OV_SUPERAGENT_DURABLE_HOST ?? '');
   }
 
   _spawnHost() {

@@ -10,20 +10,20 @@ import { appsFor, restartCommand, startCommand, statusCommand, stopCommand } fro
 
 const windows = process.platform === 'win32';
 const TARGETS = JSON.stringify({
-  alpha: { app: 'vika-alpha', readyUrl: 'http://127.0.0.1:3738/ready', upgradeSharedWeb: false },
-  beta: { app: 'vika-beta', readyUrl: 'http://127.0.0.1:3739/ready', upgradeSharedWeb: false },
+  alpha: { app: 'superagent-alpha', readyUrl: 'http://127.0.0.1:3738/ready', upgradeSharedWeb: false },
+  beta: { app: 'superagent-beta', readyUrl: 'http://127.0.0.1:3739/ready', upgradeSharedWeb: false },
 });
 
-// ~/.ovsa with one installed release and a fake pm2 that tracks app state.
+// ~/.superagent with one installed release and a fake pm2 that tracks app state.
 function fixture(t, online = []) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-control-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const release = path.join(home, '.ovsa', 'releases', '0.4.0-test');
+  const release = path.join(home, '.superagent', 'releases', '0.4.0-test');
   fs.mkdirSync(path.join(release, 'packages', 'daemon', 'src'), { recursive: true });
   fs.writeFileSync(path.join(release, 'ecosystem.config.cjs'), 'module.exports = {};\n');
   const script = path.join(release, 'packages', 'daemon', 'src', 'main.mjs');
   fs.writeFileSync(script, '');
-  const releaseLink = path.join(home, '.ovsa', 'current');
+  const releaseLink = path.join(home, '.superagent', 'current');
   fs.symlinkSync(release, releaseLink, windows ? 'junction' : 'dir');
   const apps = new Map(online.map((name) => [name, 'online']));
   const commands = [];
@@ -42,8 +42,8 @@ function fixture(t, online = []) {
   const fetchImpl = async (url) => { ready.push(url); return { ok: true }; };
   let output = '';
   const options = {
-    env: { VIKA_UPDATER_TARGETS_JSON: TARGETS, HOME: home, USERPROFILE: home }, releaseLink, execFileImpl, fetchImpl,
-    pm2Bin: 'pm2', socketPath: path.join(home, '.ovsa', 'updater.sock'), readyOptions: { attempts: 1, intervalMs: 1 },
+    env: { OV_SUPERAGENT_UPDATER_TARGETS_JSON: TARGETS, HOME: home, USERPROFILE: home }, releaseLink, execFileImpl, fetchImpl,
+    pm2Bin: 'pm2', socketPath: path.join(home, '.superagent', 'updater.sock'), readyOptions: { attempts: 1, intervalMs: 1 },
     stdout: { write: (text) => { output += text; } },
   };
   return { options, commands, ready, apps, output: () => output };
@@ -51,28 +51,28 @@ function fixture(t, online = []) {
 
 test('a target names one instance, the Web, the updater, or everything', () => {
   const targets = JSON.parse(TARGETS);
-  assert.deepEqual(appsFor('beta', targets).map(({ app }) => app), ['vika-beta']);
-  assert.deepEqual(appsFor(undefined, targets).map(({ app }) => app), ['vika-alpha', 'vika-beta', 'vika-web', ...(windows ? [] : ['vika-updater'])]);
-  assert.deepEqual(appsFor('web', targets).map(({ app }) => app), ['vika-web']);
+  assert.deepEqual(appsFor('beta', targets).map(({ app }) => app), ['superagent-beta']);
+  assert.deepEqual(appsFor(undefined, targets).map(({ app }) => app), ['superagent-alpha', 'superagent-beta', 'superagent-web', ...(windows ? [] : ['superagent-updater'])]);
+  assert.deepEqual(appsFor('web', targets).map(({ app }) => app), ['superagent-web']);
   assert.throws(() => appsFor('gamma', targets), /unknown instance gamma/);
 });
 
 test('start runs the installed release and leaves online apps alone; nothing is fetched or published', async (t) => {
-  const f = fixture(t, ['vika-alpha']);
+  const f = fixture(t, ['superagent-alpha']);
   const result = await startCommand(undefined, { ...f.options, socketPath: '/nonexistent.sock' }).catch((error) => error.message);
   if (windows) assert.equal(result, 0);
   else assert.equal(result, 'updater did not become ready on /nonexistent.sock');
   assert.deepEqual(f.commands.filter((command) => command.startsWith('start')), [
-    `start ${fs.realpathSync(path.join(path.dirname(f.options.releaseLink), 'releases', '0.4.0-test', 'ecosystem.config.cjs'))} --only vika-beta --update-env`,
-    `start ${fs.realpathSync(path.join(path.dirname(f.options.releaseLink), 'releases', '0.4.0-test', 'ecosystem.config.cjs'))} --only vika-web --update-env`,
-    ...(windows ? [] : [`start ${fs.realpathSync(path.join(path.dirname(f.options.releaseLink), 'releases', '0.4.0-test', 'ecosystem.config.cjs'))} --only vika-updater --update-env`]),
+    `start ${fs.realpathSync(path.join(path.dirname(f.options.releaseLink), 'releases', '0.4.0-test', 'ecosystem.config.cjs'))} --only superagent-beta --update-env`,
+    `start ${fs.realpathSync(path.join(path.dirname(f.options.releaseLink), 'releases', '0.4.0-test', 'ecosystem.config.cjs'))} --only superagent-web --update-env`,
+    ...(windows ? [] : [`start ${fs.realpathSync(path.join(path.dirname(f.options.releaseLink), 'releases', '0.4.0-test', 'ecosystem.config.cjs'))} --only superagent-updater --update-env`]),
   ]);
-  assert.match(f.output(), /vika-alpha 已经在运行/);
+  assert.match(f.output(), /superagent-alpha 已经在运行/);
   assert.deepEqual(f.ready, ['http://127.0.0.1:3738/ready', 'http://127.0.0.1:3739/ready', 'http://127.0.0.1:3737/ready']);
 });
 
 test('start refuses to report an online daemon as ready when its runtime has not started', async (t) => {
-  const f = fixture(t, ['vika-alpha']);
+  const f = fixture(t, ['superagent-alpha']);
   await assert.rejects(startCommand('alpha', {
     ...f.options, fetchImpl: async () => ({ ok: false, status: 503 }),
   }), /daemon did not become ready.*503/);
@@ -81,30 +81,30 @@ test('start refuses to report an online daemon as ready when its runtime has not
 });
 
 test('start verifies the identity of an already online app before checking ready', async (t) => {
-  const f = fixture(t, ['vika-alpha']);
+  const f = fixture(t, ['superagent-alpha']);
   const outside = path.join(path.dirname(f.options.releaseLink), 'unrelated.mjs');
   fs.writeFileSync(outside, '');
   await assert.rejects(startCommand('alpha', {
     ...f.options, execFileImpl: async () => ({ stdout: JSON.stringify([{
-      name: 'vika-alpha', pm2_env: { status: 'online', pm_exec_path: outside },
+      name: 'superagent-alpha', pm2_env: { status: 'online', pm_exec_path: outside },
     }]) }),
   }), /outside the current release/);
   assert.deepEqual(f.ready, []);
 });
 
 test('start checks an already online updater socket instead of announcing success', async (t) => {
-  const f = fixture(t, ['vika-updater']);
+  const f = fixture(t, ['superagent-updater']);
   await assert.rejects(startCommand('updater', f.options), windows ? /do not support the release updater/ : /updater did not become ready/);
   assert.doesNotMatch(f.output(), /已经在运行/);
 });
 
 test('restart replaces a running app; stop leaves a stopped app; both save the pm2 list', async (t) => {
-  const f = fixture(t, ['vika-alpha']);
+  const f = fixture(t, ['superagent-alpha']);
   await restartCommand('alpha', f.options);
   assert.deepEqual(f.commands.filter((command) => !command.startsWith('jlist')).map((command) => command.split(' ')[0]),
     ['delete', 'start', 'save']);
   await stopCommand('alpha', f.options);
-  assert.equal(f.apps.get('vika-alpha'), 'stopped');
+  assert.equal(f.apps.get('superagent-alpha'), 'stopped');
   assert.equal(f.commands.at(-1), 'save');
 });
 
@@ -120,17 +120,17 @@ test('start tolerates PM2 launching before the process becomes online', async (t
   let launching = true;
   const base = f.options.execFileImpl;
   f.options.execFileImpl = async (bin, args) => {
-    if (args[0] === 'jlist' && f.apps.has('vika-alpha') && launching) {
+    if (args[0] === 'jlist' && f.apps.has('superagent-alpha') && launching) {
       launching = false;
       return { stdout: JSON.stringify([{
-        name: 'vika-alpha',
+        name: 'superagent-alpha',
         pm2_env: { status: 'one-launch-status', pm_exec_path: path.join(fs.realpathSync(f.options.releaseLink), 'packages', 'daemon', 'src', 'main.mjs') },
       }]) };
     }
     return base(bin, args);
   };
   await startCommand('alpha', { ...f.options, readyOptions: { attempts: 2, intervalMs: 1 } });
-  assert.equal(f.apps.get('vika-alpha'), 'online');
+  assert.equal(f.apps.get('superagent-alpha'), 'online');
 });
 
 test('start does not retry a terminal PM2 state', async (t) => {
@@ -138,10 +138,10 @@ test('start does not retry a terminal PM2 state', async (t) => {
   const base = f.options.execFileImpl;
   let jlistCalls = 0;
   f.options.execFileImpl = async (bin, args, options) => {
-    if (args[0] === 'jlist' && f.apps.has('vika-alpha')) {
+    if (args[0] === 'jlist' && f.apps.has('superagent-alpha')) {
       jlistCalls += 1;
       return { stdout: JSON.stringify([{
-        name: 'vika-alpha',
+        name: 'superagent-alpha',
         pm2_env: { status: 'errored', exit_code: 1, unstable_restarts: 2, pm_exec_path: path.join(fs.realpathSync(f.options.releaseLink), 'packages', 'daemon', 'src', 'main.mjs') },
       }]) };
     }
@@ -159,10 +159,10 @@ test('start gives each PM2 probe no more than the remaining online deadline', as
   const base = f.options.execFileImpl;
   const timeouts = [];
   f.options.execFileImpl = async (bin, args, options) => {
-    if (args[0] === 'jlist' && f.apps.has('vika-alpha')) {
+    if (args[0] === 'jlist' && f.apps.has('superagent-alpha')) {
       timeouts.push(options.timeout);
       return { stdout: JSON.stringify([{
-        name: 'vika-alpha',
+        name: 'superagent-alpha',
         pm2_env: { status: 'one-launch-status', pm_exec_path: path.join(fs.realpathSync(f.options.releaseLink), 'packages', 'daemon', 'src', 'main.mjs') },
       }]) };
     }
@@ -177,27 +177,38 @@ test('start gives each PM2 probe no more than the remaining online deadline', as
 });
 
 test('status lists every app with its pm2 state and readiness', async (t) => {
-  const f = fixture(t, ['vika-alpha']);
+  const f = fixture(t, ['superagent-alpha']);
   await statusCommand(f.options);
-  assert.match(f.output(), /vika-alpha\s+运行中\s+就绪/);
-  assert.match(f.output(), /vika-beta\s+未启动\s+-/);
-  if (windows) assert.doesNotMatch(f.output(), /vika-updater/);
-  else assert.match(f.output(), /vika-updater\s+未启动/);
+  assert.match(f.output(), /superagent-alpha\s+运行中\s+就绪/);
+  assert.match(f.output(), /superagent-beta\s+未启动\s+-/);
+  if (windows) assert.doesNotMatch(f.output(), /superagent-updater/);
+  else assert.match(f.output(), /superagent-updater\s+未启动/);
 });
 
 test('status names the manifest settings this version ignores', async (t) => {
   const f = fixture(t);
   const home = f.options.env.HOME;
-  fs.writeFileSync(path.join(home, '.ovsa', 'config.json'), JSON.stringify({
+  fs.writeFileSync(path.join(home, '.superagent', 'config.json'), JSON.stringify({
     version: 1,
     defaultInstance: 'alpha',
-    env: { VIKA_COGNITION_MAX_CHARS: '120000' },
+    env: { OV_SUPERAGENT_COGNITION_MAX_CHARS: '120000' },
     agents: [{
-      id: 'alpha', displayName: 'Alpha', profile: 'vika-alpha', port: 3738, model: 'codex',
+      id: 'alpha', displayName: 'Alpha', profile: 'superagent-alpha', port: 3738, model: 'codex',
       dataDir: path.join(home, 'data'), workspace: path.join(home, 'workspace'), ovConfig: path.join(home, 'ov.json'),
     }],
   }));
   await statusCommand(f.options);
-  assert.match(f.output(), /vika-alpha\s+未启动/);
-  assert.match(f.output(), /已忽略.*config\.json 删掉：env\.VIKA_COGNITION_MAX_CHARS/);
+  assert.match(f.output(), /superagent-alpha\s+未启动/);
+  assert.match(f.output(), /已忽略.*config\.json 删掉：env\.OV_SUPERAGENT_COGNITION_MAX_CHARS/);
+});
+
+test('start and restart refuse old managed names before creating duplicate processes', async (t) => {
+  for (const legacy of ['vika-alpha', 'ovsa-alpha']) {
+    for (const command of [startCommand, restartCommand]) {
+      const f = fixture(t, [legacy]);
+      await assert.rejects(command('alpha', f.options), /Legacy PM2 processes remain/);
+      assert.deepEqual(f.commands, ['jlist']);
+      assert.equal(f.apps.get(legacy), 'online');
+    }
+  }
 });

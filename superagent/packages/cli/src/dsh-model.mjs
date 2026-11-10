@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-// `ovsa dsh model`: the model settings of one DeepSeek Harness instance.
+// `ov-superagent dsh model`: the model settings of one DeepSeek Harness instance.
 //
 // The only source of truth is DSH's own `llm-pi-ai` settings document, which
 // this command edits through the bridge of a short-lived DSH process
@@ -82,7 +82,7 @@ function instanceFlag(flags) {
 
 // The instance a command acts on. `--instance` names it, a single instance is
 // used without asking, and several ask on a terminal through the same chooser
-// `ovsa setup` uses. There is deliberately no "fall back to the manifest's
+// `ov-superagent setup` uses. There is deliberately no "fall back to the manifest's
 // defaultInstance": that silently pointed every command at the first instance,
 // which made a second instance unreachable from this command.
 //
@@ -103,8 +103,8 @@ function formatModelList(rows, { agent }) {
   const lines = [t(`实例 ${agent.id}（${agent.dataDir}）`, `instance ${agent.id} (${agent.dataDir})`)];
   if (rows.length === 0) {
     lines.push(t('  没有任何 model route。', '  No model routes.'));
-    lines.push(t(`  添加一个：ovsa dsh model --instance ${agent.id}（菜单里选「添加 model」）`,
-      `  Add one: ovsa dsh model --instance ${agent.id} (pick "Add a model" in the menu)`));
+    lines.push(t(`  添加一个：ov-superagent dsh model --instance ${agent.id}（菜单里选「添加 model」）`,
+      `  Add one: ov-superagent dsh model --instance ${agent.id} (pick "Add a model" in the menu)`));
     return `${lines.join('\n')}\n`;
   }
   for (const row of rows) {
@@ -120,7 +120,7 @@ function formatModelList(rows, { agent }) {
         : row.credential.present ? t('credential 已配置', 'credential ready')
           : row.credential.known ? t('credential 未配置', 'credential missing') : t('credential 状态未知', 'credential state unknown');
       const hint = row.credential?.present === false && row.credential?.known !== false
-        ? `  → ovsa dsh model key set ${keyRef}`
+        ? `  → ov-superagent dsh model key set ${keyRef}`
         : '';
       lines.push(`  ${t('密钥', 'key')} ${keyRef}  ${state}${hint}`);
     } else {
@@ -153,7 +153,7 @@ function formatModelList(rows, { agent }) {
 
 // The wizard lives in its own module and is loaded on demand: it imports the plan
 // and store modules, never this one, so a static import here would not be a cycle
-// -- but the flag paths (the majority) still never need it, and `ovsa setup`
+// -- but the flag paths (the majority) still never need it, and `ov-superagent setup`
 // reaches the wizard through its own import without this file at all.
 async function loadWizard() {
   return import('./dsh-model-wizard.mjs');
@@ -217,13 +217,13 @@ async function addModelInteractively({ env, stdout, prompter, agent, deployment,
     `Wrote ${id} (route ${payload.route}, api=${payload.api})\n`));
   writeNotes(stdout, written.notes ?? []);
   if (!payload.keyValue && written.keyRef) {
-    stdout.write(t(`  credential reference ${written.keyRef}：还没写入值时 model 不会出现在 /model 里，运行 ovsa dsh model key set ${written.keyRef}\n`,
-      `  credential ${written.keyRef}: the model stays out of /model until the value is stored; run ovsa dsh model key set ${written.keyRef}\n`));
+    stdout.write(t(`  credential reference ${written.keyRef}：还没写入值时 model 不会出现在 /model 里，运行 ov-superagent dsh model key set ${written.keyRef}\n`,
+      `  credential ${written.keyRef}: the model stays out of /model until the value is stored; run ov-superagent dsh model key set ${written.keyRef}\n`));
   }
   // DSH reads its settings document at start-up only; the daemon's process has
   // already started, so the new route is invisible until it is restarted.
-  stdout.write(t(`  DSH 只在启动时读这份设置：让正在运行的 ${agent.id} 用上它，运行 ovsa restart ${agent.id}\n`,
-    `  DSH reads this document only at start-up: to let the running ${agent.id} use it, run ovsa restart ${agent.id}\n`));
+  stdout.write(t(`  DSH 只在启动时读这份设置：让正在运行的 ${agent.id} 用上它，运行 ov-superagent restart ${agent.id}\n`,
+    `  DSH reads this document only at start-up: to let the running ${agent.id} use it, run ov-superagent restart ${agent.id}\n`));
   return true;
 }
 
@@ -331,11 +331,11 @@ async function editModelInteractively({ env, stdout, prompter, agent, deployment
   for (const line of changes) stdout.write(`  ${line}\n`);
   writeNotes(stdout, written.notes ?? []);
   if (!payload.keyValue && written.keyRef && seed.keyEnv !== payload.keyEnv) {
-    stdout.write(t(`  credential reference ${written.keyRef}：还没写入值时 model 不会出现在 /model 里，运行 ovsa dsh model key set ${written.keyRef}\n`,
-      `  credential ${written.keyRef}: the model stays out of /model until the value is stored; run ovsa dsh model key set ${written.keyRef}\n`));
+    stdout.write(t(`  credential reference ${written.keyRef}：还没写入值时 model 不会出现在 /model 里，运行 ov-superagent dsh model key set ${written.keyRef}\n`,
+      `  credential ${written.keyRef}: the model stays out of /model until the value is stored; run ov-superagent dsh model key set ${written.keyRef}\n`));
   }
-  stdout.write(t(`  DSH 只在启动时读这份设置：让正在运行的 ${agent.id} 用上它，运行 ovsa restart ${agent.id}\n`,
-    `  DSH reads this document only at start-up: to let the running ${agent.id} use it, run ovsa restart ${agent.id}\n`));
+  stdout.write(t(`  DSH 只在启动时读这份设置：让正在运行的 ${agent.id} 用上它，运行 ov-superagent restart ${agent.id}\n`,
+    `  DSH reads this document only at start-up: to let the running ${agent.id} use it, run ov-superagent restart ${agent.id}\n`));
   return true;
 }
 
@@ -434,7 +434,7 @@ async function runMenuAction({ choice, env, prompter, stdout, agent, deployment,
   return false;
 }
 
-// `ovsa dsh model` on a terminal: the routes, then a menu that keeps coming
+// `ov-superagent dsh model` on a terminal: the routes, then a menu that keeps coming
 // back until the operator quits. Nothing here is full-screen; every question is
 // a prompt the rest of the CLI already uses, so keys never stop responding.
 //
@@ -507,7 +507,7 @@ async function interactiveCommand({ argv, env, stdin, stdout, stderr, prompter }
   });
 }
 
-// `ovsa dsh model` with only its own flags names no subcommand: it is the menu in
+// `ov-superagent dsh model` with only its own flags names no subcommand: it is the menu in
 // a terminal and the list anywhere else. `--json` belongs to that list, so it
 // must not read as a subcommand name. Anything else is a subcommand (or a typo)
 // and follows the old dispatch.
@@ -547,20 +547,20 @@ function knownRoutesOf(rows) {
 function usageText() {
   return t(
     `用法：
-  ovsa dsh model [list] [--instance <实例>] [--json]
-  ovsa dsh model                         在终端里打开 model 菜单：添加/修改 model、删除、credential、列表
-  ovsa dsh model remove <route>[/<model>] [--instance <实例>]
-  ovsa dsh model import <models.json> [--dry-run] [--instance <实例>]
-  ovsa dsh model repair [--instance <实例>]
-  ovsa dsh model key set <reference> [--stdin] [--instance <实例>]
-  ovsa dsh model key unset <reference> [--instance <实例>]
+  ov-superagent dsh model [list] [--instance <实例>] [--json]
+  ov-superagent dsh model                         在终端里打开 model 菜单：添加/修改 model、删除、credential、列表
+  ov-superagent dsh model remove <route>[/<model>] [--instance <实例>]
+  ov-superagent dsh model import <models.json> [--dry-run] [--instance <实例>]
+  ov-superagent dsh model repair [--instance <实例>]
+  ov-superagent dsh model key set <reference> [--stdin] [--instance <实例>]
+  ov-superagent dsh model key unset <reference> [--instance <实例>]
 
 说明：
   list      列出 route、model 和 credential 是否就绪（--json 输出机器可读的数组）
   无子命令  在终端里是菜单：添加 model、修改 model、删除 model 或 route、设置/删除
             credential、切换实例、退出；不是终端时就是 list
             （有多个实例又没写 --instance 时报错并列出实例）
-  添加/修改 model 只在菜单里（和 ovsa setup 里那份是同一套问题）：选「添加 model」按提示填
+  添加/修改 model 只在菜单里（和 ov-superagent setup 里那份是同一套问题）：选「添加 model」按提示填
             网关地址、protocol、model id 和 credential；选「修改 model」先挑一个已有的
             route/model，再改它的字段。写入前都会先用一次临时 DSH 验证，并在之后提示
             重启实例。命令行不再提供 add 子命令。
@@ -579,14 +579,14 @@ import 永远为字面密钥分配新 reference，不改写任何已有 referenc
 （Ctrl-C、崩溃）可能留下没有任何 route 引用的 credential：list 只显示 route 引用的那些，
 用 key unset <reference> 清理。`,
     `Usage:
-  ovsa dsh model [list] [--instance <id>] [--json]
-  ovsa dsh model                         open the model menu in a terminal: add/edit models, remove,
+  ov-superagent dsh model [list] [--instance <id>] [--json]
+  ov-superagent dsh model                         open the model menu in a terminal: add/edit models, remove,
                                          credentials, list
-  ovsa dsh model remove <route>[/<model>] [--instance <id>]
-  ovsa dsh model import <models.json> [--dry-run] [--instance <id>]
-  ovsa dsh model repair [--instance <id>]
-  ovsa dsh model key set <REF> [--stdin] [--instance <id>]
-  ovsa dsh model key unset <REF> [--instance <id>]
+  ov-superagent dsh model remove <route>[/<model>] [--instance <id>]
+  ov-superagent dsh model import <models.json> [--dry-run] [--instance <id>]
+  ov-superagent dsh model repair [--instance <id>]
+  ov-superagent dsh model key set <REF> [--stdin] [--instance <id>]
+  ov-superagent dsh model key unset <REF> [--instance <id>]
 
 Notes:
   list      show routes, models and whether each credential is ready (--json for machines)
@@ -594,7 +594,7 @@ Notes:
             set/remove a credential, show the full list, switch instance, quit; without a
             terminal it is list (with several instances and no --instance it refuses and
             lists them)
-  add/edit  only in the menu (the same questions ovsa setup asks): "Add a model" asks for the
+  add/edit  only in the menu (the same questions ov-superagent setup asks): "Add a model" asks for the
             gateway URL, protocol, model id and credential; "Edit a model" picks an existing
             route/model first, then changes its fields. Both check the draft against a
             temporary DSH and tell you to restart the instance afterwards. There is no add
@@ -709,8 +709,8 @@ async function removeTarget({ agent, deployment, env, target, stdout }) {
     ? t(`已删除 route ${target.route}\n`, `Removed route ${target.route}\n`)
     : t(`已从 ${target.route} 删除 model ${target.model}\n`, `Removed model ${target.model} from ${target.route}\n`));
   if (keyRef) {
-    stdout.write(t(`  credential reference ${keyRef} 保留着；要一起删除：ovsa dsh model key unset ${keyRef}\n`,
-      `  the credential ${keyRef} is left in place; remove it with ovsa dsh model key unset ${keyRef}\n`));
+    stdout.write(t(`  credential reference ${keyRef} 保留着；要一起删除：ov-superagent dsh model key unset ${keyRef}\n`,
+      `  the credential ${keyRef} is left in place; remove it with ov-superagent dsh model key unset ${keyRef}\n`));
   }
 }
 
@@ -959,10 +959,10 @@ async function importCommand({ argv, env, stdout, prompter }) {
       throw new Error(t(
         `无法确认这次导入是否已经写入：${result.failure.message}\n`
         + `已写入的 credential reference${held.length ? `（${held.join(', ')}）` : ''}故意保留，因为 route 可能已经指向它们。\n`
-        + '请先 `ovsa dsh model list` 复查；重跑 import 会另分配新 reference，不会覆盖这些。',
+        + '请先 `ov-superagent dsh model list` 复查；重跑 import 会另分配新 reference，不会覆盖这些。',
         `Cannot tell whether this import landed: ${result.failure.message}\n`
         + `The references this run stored${held.length ? ` (${held.join(', ')})` : ''} are kept on purpose, because the routes may already point at them.\n`
-        + 'Check with ovsa dsh model list first; running the import again allocates new references and never overwrites these.') + leftoverNote);
+        + 'Check with ov-superagent dsh model list first; running the import again allocates new references and never overwrites these.') + leftoverNote);
     }
     throw new Error(t(
       `一个 route 都没有写入：${result.failure.message}\n`
@@ -991,8 +991,8 @@ async function importCommand({ argv, env, stdout, prompter }) {
     rotations.get(key).routes.push(route.route);
   }
   if (rotations.size) {
-    stdout.write(t('导入不改写已有 reference：下面的旧 reference（连同原值）都保留着，需要时用 ovsa dsh model key unset 删除\n',
-      'The import never overwrites an existing reference; these previous references keep their values (remove one with ovsa dsh model key unset)\n'));
+    stdout.write(t('导入不改写已有 reference：下面的旧 reference（连同原值）都保留着，需要时用 ov-superagent dsh model key unset 删除\n',
+      'The import never overwrites an existing reference; these previous references keep their values (remove one with ov-superagent dsh model key unset)\n'));
     for (const rotation of rotations.values()) {
       stdout.write(`  ${rotation.routes.join(', ')}: ${rotation.from} → ${rotation.to}\n`);
     }
@@ -1155,15 +1155,15 @@ async function keyCommand({ argv, env, stdin, stdout, prompter }) {
   }
   const value = await readCredentialValue({ ref, stdin, forceStdin: flags['--stdin'] === true, prompter });
   if (!value) {
-    throw new Error(t('没有读到密钥值：请用管道或 --stdin 提供，例如 echo "$KEY" | ovsa dsh model key set REF --stdin',
-      'No credential value arrived: pipe one or pass --stdin, e.g. echo "$KEY" | ovsa dsh model key set REF --stdin'));
+    throw new Error(t('没有读到密钥值：请用管道或 --stdin 提供，例如 echo "$KEY" | ov-superagent dsh model key set REF --stdin',
+      'No credential value arrived: pipe one or pass --stdin, e.g. echo "$KEY" | ov-superagent dsh model key set REF --stdin'));
   }
   await setCredentialRef({ agent, deployment, env, ref, value, stdout });
   return 0;
 }
 
 /**
- * Run `ovsa dsh model` (arguments after the `model` token).
+ * Run `ov-superagent dsh model` (arguments after the `model` token).
  * @param {string[]} argv - subcommand and its arguments.
  * @param {object} [context] - injectable environment and streams.
  * @returns {Promise<number>} the process exit code.
@@ -1191,7 +1191,7 @@ export async function dshModelCommand(argv, {
       case 'repair': return await repairCommand({ ...context, argv: rest });
       case 'key': return await keyCommand({ ...context, argv: rest });
       default:
-        stderr.write(t(`ovsa dsh model：没有「${subcommand}」这个子命令\n\n`, `ovsa dsh model: there is no "${subcommand}" subcommand\n\n`));
+        stderr.write(t(`ov-superagent dsh model：没有「${subcommand}」这个子命令\n\n`, `ov-superagent dsh model: there is no "${subcommand}" subcommand\n\n`));
         stderr.write(`${usageText()}\n`);
         return 2;
     }
@@ -1208,8 +1208,8 @@ export async function dshModelCommand(argv, {
       // is exactly what `repair` recovers from; say so instead of leaving the
       // user with a boot trace.
       const hint = /before answering/i.test(error.message)
-        ? t('\n如果刚手工改过实例的 DSH 配置，运行 ovsa dsh model repair 修复。',
-          '\nIf the instance’s DSH configuration was just hand-edited, run ovsa dsh model repair.')
+        ? t('\n如果刚手工改过实例的 DSH 配置，运行 ov-superagent dsh model repair 修复。',
+          '\nIf the instance’s DSH configuration was just hand-edited, run ov-superagent dsh model repair.')
         : '';
       throw new Error(t(
         `与临时 DSH 子进程交互失败：${error.message}${detail ? `\n${detail}` : ''}${hint}`,

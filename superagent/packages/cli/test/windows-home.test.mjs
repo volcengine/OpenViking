@@ -17,8 +17,8 @@ test('manifest and release helpers use the same explicit HOME override', () => {
     console.log(JSON.stringify([vikaHome(), manifestPath(), defaultReleaseLink(), defaultSocketPath()]));
   `;
   const env = { ...process.env, HOME: home, USERPROFILE: profile };
-  delete env.VIKA_CONFIG;
+  delete env.OV_SUPERAGENT_CONFIG;
   const actual = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' }));
-  assert.deepEqual(actual, [path.join(home, '.ovsa'), path.join(home, '.ovsa', 'config.json'),
-    path.join(home, '.ovsa', 'current'), path.join(home, '.ovsa', 'updater.sock')]);
+  assert.deepEqual(actual, [path.join(home, '.superagent'), path.join(home, '.superagent', 'config.json'),
+    path.join(home, '.superagent', 'current'), path.join(home, '.superagent', 'updater.sock')]);
 });

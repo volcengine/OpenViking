@@ -84,7 +84,7 @@ describe('conversation policy assemble', () => {
   it('fills in the instance name and upgrade target', () => {
     const text = assembleConversationPolicy({ connectors: ['lark'], agentName: '贝塔', upgradeTarget: 'beta' });
     assert.match(text, /directly calls `贝塔`/);
-    assert.match(text, /`ovsa upgrade beta`/);
+    assert.match(text, /`ov-superagent upgrade beta`/);
     assert.doesNotMatch(text, /\{\{[A-Z_]+\}\}/);
   });
 
