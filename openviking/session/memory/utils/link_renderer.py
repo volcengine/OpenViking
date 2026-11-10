@@ -131,12 +131,19 @@ class LinkRenderer:
         """Yield parsed inline Markdown links with their source spans."""
         position = 0
         while opener := LinkRenderer._LINK_START_RE.search(content, position):
+            start = opener.start()
+            escape_start = start
+            while escape_start > 0 and content[escape_start - 1] == "\\":
+                escape_start -= 1
+            if (start - escape_start) % 2:
+                position = start + 1
+                continue
             parsed = LinkRenderer._parse_inline_markdown_link(content, opener.end())
             if parsed is None:
-                position = opener.start() + 1
+                position = start + 1
                 continue
             target, end = parsed
-            yield MarkdownLink(opener.start(), end, opener.group("text"), target)
+            yield MarkdownLink(start, end, opener.group("text"), target)
             position = end
 
     @staticmethod

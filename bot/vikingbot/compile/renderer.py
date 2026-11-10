@@ -294,7 +294,6 @@ def _body_markdown_links(body: str) -> list[MarkdownLink]:
     link_spans = {(link.start, link.end) for link in links}
     protected = [s for s in LinkRenderer.protected_markdown_spans(body) if s not in link_spans]
     protected.extend((m.start(), m.end()) for m in re.finditer(r"<!--.*?-->", body, re.DOTALL))
-    protected.extend((m.start(), m.end()) for m in re.finditer(r"(?m)^(?: {4}|\t)[^\n]*", body))
     return [
         link
         for link in links

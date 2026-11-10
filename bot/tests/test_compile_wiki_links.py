@@ -44,14 +44,21 @@ def test_normalize_only_unambiguous_known_output_links():
         "[Source](viking://resources/source.md) [Web](https://example.org/concept/b.md)\n"
         "[Anchor](#part) ![Image](concept/b.md)\n"
         "`[Code](concept/b.md)`\n<!-- [Comment](concept/b.md) -->\n"
-        "```md\n[Fenced](concept/b.md)\n```\n    [Indented](concept/b.md)\n"
+        "```md\n[Fenced](concept/b.md)\n```\n    [Indented](concept/b.md)\n\n"
+        "\\[Literal](concept/a b.md)\n"
+        "\\\\[After backslash](concept/b.md)\n\n"
+        "1. Item\n\n    [Nested](concept/b.md)\n"
     )
+    validate_wiki_link_destinations(body)
     result, count = normalize_wiki_page_links(
         body, path="concept/a.md", known_paths={"concept/b.md", "entity/c.md"}
     )
-    assert count == 2
-    assert result == body.replace('concept/b.md#part "Title"', 'b.md#part "Title"').replace(
-        "entity/c.md?view=1#anchor", "../entity/c.md?view=1#anchor"
+    assert count == 4
+    assert result == (
+        body.replace('concept/b.md#part "Title"', 'b.md#part "Title"')
+        .replace("entity/c.md?view=1#anchor", "../entity/c.md?view=1#anchor")
+        .replace("[After backslash](concept/b.md)", "[After backslash](b.md)")
+        .replace("[Nested](concept/b.md)", "[Nested](b.md)")
     )
     assert normalize_wiki_page_links(
         result, path="concept/a.md", known_paths={"concept/b.md", "entity/c.md"}
