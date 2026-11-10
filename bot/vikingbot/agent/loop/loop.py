@@ -589,7 +589,7 @@ class AgentLoop(LoopToolMixin, LoopEventMixin, LoopSessionMixin, LoopCompactionM
                 final_reasoning_content = response.reasoning_content
                 break
 
-        if final_content == "" and tools_used and tools_used[-1].get("tool_name") in stop_tools:
+        if final_content == "" and any(t.get("tool_name") in stop_tools for t in tools_used):
             pass
         elif final_content is None or (
             isinstance(final_content, str) and not final_content.strip()
@@ -637,7 +637,10 @@ class AgentLoop(LoopToolMixin, LoopEventMixin, LoopSessionMixin, LoopCompactionM
                         )
                     )
 
-        if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
+        if final_content is None or (
+            isinstance(final_content, str) and not final_content.strip()
+            and not any(t.get("tool_name") in stop_tools for t in tools_used)
+        ):
             if iteration >= iteration_limit:
                 final_content = (
                     "I reached the tool-use limit before completing every step, and the "
