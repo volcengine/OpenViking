@@ -59,9 +59,14 @@ export function TuiEmptyRegion({
               onClick={() => onPick(command)}
             >
               <ArrowRightIcon width={14} height={14} focusable="false" />
-              <span className="ov-tui__empty-name">{command.name}</span>
-              <span className="ov-tui__empty-desc">
-                {command.summary ?? command.description}
+              <span className="ov-tui__empty-content">
+                <span className="ov-tui__empty-name">{command.name}</span>
+                <span
+                  className="ov-tui__empty-desc"
+                  title={command.summary ?? command.description}
+                >
+                  {command.summary ?? command.description}
+                </span>
               </span>
             </button>
           </li>
