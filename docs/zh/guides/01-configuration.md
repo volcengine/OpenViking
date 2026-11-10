@@ -1127,6 +1127,26 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 
 **MinerU 协议**：同步调用 `POST {mineru_endpoint}/file_parse`，multipart 文件字段为 `files`，form 参数由 `mineru_bodys` 透传。
 
+内置适配器要求服务同时满足以下两个契约：
+
+| 请求 | 要求的响应 |
+|---|---|
+| 启动时 `GET {mineru_endpoint}/health` | HTTP 200，包含非空 `protocol_version` 和 `status: "healthy"` |
+| `POST {mineru_endpoint}/file_parse` | JSON 包含 `status: "completed"` 和 `results[filename].md_content`；若有提取的图片，则以 data URL 存放在 `results[filename].images` 中 |
+
+:::warning MinerU API 兼容性
+MinerU 的 `/v1/*` API 使用不同的契约。例如，
+[MinerU 4.1 file-parse 服务](https://github.com/opendatalab/MinerU/blob/mineru-4.1.7-released/docs/zh/usage/file_parse.md)
+在 `/v1/file_parse` 接收 multipart `file` 并返回附件，内置适配器则发送 multipart
+`files` 并读取内联 JSON。将 `mineru_endpoint` 改为以 `/v1` 结尾并不能使两者兼容。
+请核实上述两个服务契约，不要仅凭 MinerU 包版本判断兼容性。
+
+可以使用实现上述契约的服务，或设为 `strategy: "local"` 使用 pdfplumber。
+`strategy: "mineru"` 的健康预检失败会中止服务初始化；`auto` 的预检失败只会警告，
+转换时仍先尝试 pdfplumber，仅在本地转换失败时调用 MinerU。
+配置 `mineru_endpoint` 不会让 `auto` 优先使用远程解析。
+:::
+
 ### 外部解析 API（`parser_api`） {#parser-api}
 
 顶层 `parser_api` 配置将指定格式交给外部 Understanding files/responses API。它只替换 Parser 阶段；TreeBuilder、持久化和语义处理仍由 OpenViking 完成。路由与异步行为见[资源处理流程](../api/02-resources.md#资源处理流程)。

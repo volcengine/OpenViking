@@ -1112,6 +1112,28 @@ PDF parsing configuration. Three strategies are supported: `local` (local pdfplu
 
 **MinerU protocol**: a synchronous `POST {mineru_endpoint}/file_parse` request with the PDF as the multipart `files` field; form parameters are passed through from `mineru_bodys`.
 
+The built-in adapter requires both of these server contracts:
+
+| Request | Required response |
+|---|---|
+| `GET {mineru_endpoint}/health` at startup | HTTP 200 with a non-empty `protocol_version` and `status: "healthy"` |
+| `POST {mineru_endpoint}/file_parse` | JSON with `status: "completed"` and `results[filename].md_content`; extracted images, when present, are data URLs in `results[filename].images` |
+
+:::warning MinerU API compatibility
+MinerU's `/v1/*` APIs use different contracts. For example, the
+[MinerU 4.1 file-parse service](https://github.com/opendatalab/MinerU/blob/mineru-4.1.7-released/docs/en/usage/file_parse.md)
+accepts a multipart `file` at `/v1/file_parse` and returns an attachment, rather than
+this adapter's multipart `files` and inline JSON. Changing `mineru_endpoint` to end
+in `/v1` does not make it compatible. Verify both server contracts above instead
+of assuming compatibility from a MinerU package version alone.
+
+Use a service implementing those contracts, or set `strategy: "local"` to use
+pdfplumber. With `strategy: "mineru"`, a failed health preflight stops service
+initialization. With `auto`, the preflight only warns: conversion still tries
+pdfplumber first and calls MinerU only if local conversion fails. Configuring
+`mineru_endpoint` does not make `auto` prefer remote parsing.
+:::
+
 ### External parser API (`parser_api`) {#parser-api}
 
 The top-level `parser_api` section routes selected formats to the external Understanding files/responses API. It replaces the Parser stage; TreeBuilder, persistence, and semantic processing remain in OpenViking. See [Resource processing](../api/02-resources.md#resource-processing-pipeline) for routing and asynchronous behavior.
