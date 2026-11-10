@@ -84,6 +84,44 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 
 `ov.conf` 中的 `server.root_api_key` 是服务端接受的凭证；CLI 管理该服务端时，`ovcli.conf` 中的 `root_api_key` 需要与其一致。
 
+### 按目录选择插件连接
+
+使用共享 JavaScript 配置加载器的 Agent 插件，可以根据工作目录选择连接。
+在本机的 `ovcli.conf` 中，将目录规则与默认连接一起配置：
+
+```json
+{
+  "url": "https://openviking.example.com",
+  "api_key": "<personal-key>",
+  "account": "personal",
+  "user": "me",
+  "connections": [
+    {
+      "path": "~/work",
+      "api_key": "<work-key>",
+      "account": "work"
+    }
+  ]
+}
+```
+
+每项必须提供唯一的绝对目录或以 `~` 开头的目录。优先选择匹配路径最长的项；
+`~/work` 匹配自身及子目录，不匹配 `~/work-other`。Windows 路径匹配忽略大小写。
+每项可以覆盖 `url`、`api_key`、`account`、`user`，省略的字段继承顶层值，
+而不是另一条匹配规则。宿主显式传值、环境变量以及
+`OPENVIKING_CREDENTIAL_SOURCE` 的优先级保持原有行为。
+
+Hook 根据会话上报的目录选择连接，并为该会话固定所选项；后续切换目录不会改变连接。
+每次调用仍从 `ovcli.conf` 读取凭证，轮换密钥时不会将密钥复制到会话状态文件。
+删除已选项或修改其服务地址、账户、用户后，需要开启新会话。
+stdio MCP 代理按启动目录选择连接，因此应在目标工作区启动代理。
+工作区配置文件不能提供这些连接规则。此配置作用于共享插件加载器，
+不会改变独立 `ov` CLI 的连接选择行为。
+
+启用 `connections` 后，待重试上传按实际连接及其凭证分别存储，避免跨租户重放。
+启用前或轮换凭证前，应使用原配置处理完已有待上传数据。
+原有未划分连接的队列文件会保留在磁盘上，不会自动归入某个目录连接。
+
 ## 命令行为
 
 ```json

@@ -24,9 +24,9 @@ if (!isPluginEnabled()) {
   process.exit(0);
 }
 
-const baseCfg = loadConfig();
+let baseCfg = loadConfig();
 const { log, logError } = createLogger("auto-recall");
-const fetchJSON = makeFetchJSON(baseCfg);
+let fetchJSON;
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -78,6 +78,8 @@ runHookStage({
     if (cfg.enabled !== false) writeRecallState({ count: 0, reason, cc_session_id: sessionId });
   },
 }, async ({ cfg, input, cwd, sessionId }) => {
+  baseCfg = cfg;
+  fetchJSON = makeFetchJSON(cfg);
   let userPrompt = (input.prompt || "").trim();
   const effectivePeer = getEffectivePeerId(cfg, { sessionId, cwd });
   log("start", {

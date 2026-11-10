@@ -5,10 +5,31 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { enqueue, listPending } from "./shared/pending-queue.mjs";
 import { OpenVikingRuntime } from "./runtime.mjs";
+import { createPendingQueue } from "./shared/pending-queue.mjs";
 
 const originalPendingDir = process.env.OPENVIKING_PENDING_DIR;
 const originalDrainInterval = process.env.OPENVIKING_PENDING_DRAIN_INTERVAL_MS;
 const tempDirs = [];
+
+test("a runtime replays only writes queued for its own connection", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-connection-drain-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  const sent = [];
+  const runtime = new OpenVikingRuntime({
+    async fetchJSON(_path, init) {
+      sent.push(JSON.parse(init.body).content);
+      return { ok: true };
+    },
+  }, { ...config(), connectionScope: "work" }, { debug() {} });
+  const state = { ovSessionId: "same-id", pendingCreatedAt: 0 };
+  await runtime.enqueuePending(state, "addMessage", { content: "work" });
+  const other = createPendingQueue("personal");
+  await other.enqueue("addMessage", "same-id", { content: "personal" });
+  await runtime.replayPendingQueue();
+  assert.deepEqual(sent, ["work"]);
+  assert.equal((await other.listPending()).length, 1);
+});
 
 afterEach(async () => {
   if (originalPendingDir === undefined) delete process.env.OPENVIKING_PENDING_DIR;

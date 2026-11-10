@@ -100,14 +100,14 @@ export function isPluginEnabled() {
  * `cwd` selects the workspace layer (`.openviking/config.json` and the
  * registry entry for that directory). It defaults to this process's directory,
  * which is all a hook knows at module load; a hook whose payload names the
- * session's directory calls this again with it. Re-resolving that late is safe
- * because a workspace file may not carry connection or credential keys, so
- * baseUrl/apiKey cannot move — loggers and fetch helpers built from the first
- * load stay valid.
+ * session's directory calls this again with it and its session id. Resolve the
+ * connection before constructing an HTTP client: ovcli.conf connections[] can
+ * select another tenant. Workspace files still cannot carry credentials.
  */
-export function loadConfig(cwd = process.cwd(), { env = process.env } = {}) {
+export function loadConfig(cwd = process.cwd(), { env = process.env, sessionId = "" } = {}) {
   const config = buildPluginConfig("claude-code", {
     cwd,
+    sessionId,
     env,
     manifestUrl: MANIFEST_URL,
     logFile: "cc-hooks.log",

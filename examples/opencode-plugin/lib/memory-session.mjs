@@ -9,8 +9,7 @@ import {
   deriveHarnessSessionId,
 } from "./shared/session-model.mjs"
 import {
-  enqueue,
-  replayPending,
+  createPendingQueue,
 } from "./shared/pending-queue.mjs"
 import {
   sendSessionMessages,
@@ -28,6 +27,9 @@ import {
 const STALE_SESSION_STATE_MS = 7 * 24 * 60 * 60 * 1000
 
 export function createMemorySessionManager({ config, pluginRoot }) {
+  const pending = createPendingQueue(config.connectionScope)
+  const { enqueue, replayPending } = pending
+  if (config.connectionScope) pluginRoot = path.join(pluginRoot, "connections", config.connectionScope)
   const sessions = new Map()
   const statePath = path.join(pluginRoot, "openviking-session-state.json")
   const oldSessionMapPath = path.join(pluginRoot, "openviking-session-map.json")
@@ -474,12 +476,12 @@ export function createMemorySessionManager({ config, pluginRoot }) {
         added += 1
       }
     } else {
-      const res = await sendSessionMessages(
+      const res = await pending.run(() => sendSessionMessages(
         (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, { timeoutMs: 10000, ...options }),
         state.ovSessionId,
         toSend.map((item) => item.body),
         { enqueueOnRetryable: true },
-      )
+      ))
       added = res.sent + res.queued
       for (const item of toSend.slice(0, added)) {
         item.message.captured = true

@@ -48,7 +48,7 @@ if (!isPluginEnabled()) {
 
 const baseCfg = loadConfig();
 const { log, logError } = createLogger("auto-capture");
-const fetchJSON = makeFetchJSON(baseCfg, "captureTimeoutMs");
+let fetchJSON;
 
 const STATE_DIR = join(tmpdir(), "openviking-cc-capture-state");
 
@@ -484,7 +484,10 @@ async function start() {
     gates: { enabled: (cfg) => cfg.autoCapture },
     envelope: approve,
     onSkip: (reason) => log("skip", { stage: "init", reason }),
-  }, main);
+  }, (stage) => {
+    fetchJSON = makeFetchJSON(stage.cfg, "captureTimeoutMs");
+    return main(stage);
+  });
 }
 
 start().catch((err) => { logError("uncaught", err); approve(); });
