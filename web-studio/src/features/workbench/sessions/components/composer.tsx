@@ -1,8 +1,8 @@
-import { ArrowUpIcon, SquareIcon } from 'lucide-react'
+import { SquareIcon } from 'lucide-react'
+import { VikingBotComposer } from '@openviking/react/components/viking-bot'
+import '@openviking/react/components/viking-bot/style.css'
 import { useCallback, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-
-import { cn } from '#/shared/lib/utils'
 
 interface ComposerProps {
   onSend: (message: string) => void | boolean | Promise<void | boolean>
@@ -21,16 +21,6 @@ export function Composer({
   const [value, setValue] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const submittingRef = useRef(false)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const isCompact = variant === 'compact'
-
-  const resize = useCallback(() => {
-    const el = textareaRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`
-  }, [])
-
   const handleSend = useCallback(async () => {
     const trimmed = value.trim()
     if (!trimmed || submittingRef.current) return
@@ -49,88 +39,34 @@ export function Composer({
     }
   }, [value, onSend])
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      const isComposing = e.nativeEvent.isComposing || e.keyCode === 229
-      if (isComposing) return
-
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault()
-        void handleSend()
-      }
-    },
-    [handleSend],
-  )
-
   return (
-    <div className={cn(isCompact ? 'px-3 pb-3 pt-2' : 'px-4 pb-4 pt-2')}>
-      <div
-        className={cn(
-          'mx-auto w-full border border-border/50 bg-background/95',
-          isCompact ? 'max-w-none' : 'max-w-4xl',
-          isCompact ? 'rounded-xl' : 'rounded-2xl',
-          'shadow-lg shadow-black/8 dark:shadow-black/25',
-        )}
-      >
-        {/* Attachment preview */}
-        <textarea
-          ref={textareaRef}
-          autoFocus
-          aria-label={t('chat.placeholder')}
-          placeholder={t('chat.placeholder')}
-          rows={1}
-          value={value}
-          onChange={(e) => {
-            setValue(e.target.value)
-            resize()
-          }}
-          onKeyDown={handleKeyDown}
-          className={cn(
-            'w-full resize-none bg-transparent text-sm',
-            isCompact
-              ? 'min-h-[38px] px-3 pb-0.5 pt-2.5'
-              : 'min-h-[44px] px-4 pb-1 pt-3',
-            'placeholder:text-muted-foreground/60',
-            'focus-visible:outline-none',
-          )}
-        />
-        <div
-          className={cn(
-            'flex items-center justify-end gap-2',
-            isCompact ? 'px-2.5 pb-2' : 'px-3 pb-2.5',
-          )}
-        >
-          {isStreaming && (
+    <div className="ov-viking-bot" style={{ height: 'auto', minHeight: 0 }}>
+      <VikingBotComposer
+        value={value}
+        variant={variant}
+        disabled={isSubmitting}
+        actions={
+          isStreaming ? (
             <button
               type="button"
               aria-label={t('chat.cancel')}
               onClick={onCancel}
-              className={cn(
-                'inline-flex size-8 items-center justify-center rounded-lg',
-                'bg-muted text-foreground',
-                'transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-              )}
             >
-              <SquareIcon className="size-3.5" />
+              <SquareIcon className="size-4" />
             </button>
-          )}
-          {(!isStreaming || value.trim()) && (
-            <button
-              type="button"
-              aria-label={t('chat.send')}
-              onClick={handleSend}
-              disabled={!value.trim() || isSubmitting}
-              className={cn(
-                'inline-flex size-8 items-center justify-center rounded-lg',
-                'bg-primary text-primary-foreground',
-                'transition-colors hover:bg-primary/90 disabled:opacity-30',
-              )}
-            >
-              <ArrowUpIcon className="size-3.5" />
-            </button>
-          )}
-        </div>
-      </div>
+          ) : undefined
+        }
+        onValueChange={setValue}
+        onSend={() => {
+          void handleSend()
+        }}
+        onCancel={onCancel}
+        labels={{
+          placeholder: t('chat.placeholder'),
+          send: t('chat.send'),
+          stop: t('chat.cancel'),
+        }}
+      />
     </div>
   )
 }

@@ -1,202 +1,102 @@
 // @vitest-environment jsdom
-
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MessageList } from './message-list'
+import { sharedPart } from '../lib/shared-messages'
+import type { Message } from '../lib/types/message'
 
-import { MessageList } from '#/features/workbench/sessions/components/message-list'
-import type { MessagePart } from '#/features/workbench/sessions/lib/types/message'
-
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+const { list } = vi.hoisted(() => ({ list: vi.fn(() => null) }))
+vi.mock('@openviking/react/components/viking-bot', () => ({
+  VikingBotMessageList: list,
 }))
-
-afterEach(cleanup)
-
-describe('MessageList streaming indicator', () => {
-  it('shows the generating dot only while streaming', () => {
-    const { rerender } = render(
-      <MessageList messages={[]} streaming={{ iteration: 1, parts: [] }} />,
-    )
-    expect(screen.getByRole('status', { name: 'chat.generating' })).toBeTruthy()
-
-    rerender(<MessageList messages={[]} />)
-    expect(screen.queryByRole('status', { name: 'chat.generating' })).toBeNull()
-  })
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string) => key,
+    i18n: { language: 'zh-CN' },
+  }),
+}))
+afterEach(() => {
+  cleanup()
+  vi.clearAllMocks()
+})
+const message = (id: string, role: 'assistant' | 'user'): Message => ({
+  id,
+  role,
+  parts: [{ type: 'text', text: id }],
+  created_at: '2026-11-10T00:00:00Z',
 })
 
-const toolParts: MessagePart[] = [
-  {
-    type: 'tool',
-    tool_id: 'tool-1',
-    tool_name: 'auto_memory_search',
-    tool_uri: '',
-    skill_uri: '',
-    tool_status: 'completed',
-    tool_input: { query: 'hello' },
-    tool_output: 'result',
-  },
-  {
-    type: 'tool_result',
-    tool_id: 'tool-1',
-    tool_name: 'auto_memory_search',
-    tool_output: 'result',
-    is_error: false,
-  },
-]
-
-describe('MessageList tool calls', () => {
-  it.each([
-    { state: 'completed', status: 'completed', isOpen: false },
-    { state: 'streaming', status: 'running', isOpen: true },
-  ] as const)(
-    'merges tool input and result into one disclosure for $state messages',
-    ({ state, status, isOpen }) => {
-      const parts = toolParts.map((part) =>
-        part.type === 'tool' ? { ...part, tool_status: status } : part,
-      )
-
-      render(
-        <MessageList
-          messages={
-            state === 'completed'
-              ? [
-                  {
-                    id: 'message-1',
-                    role: 'assistant',
-                    parts,
-                    created_at: new Date().toISOString(),
-                  },
-                ]
-              : []
-          }
-          streaming={
-            state === 'streaming' ? { iteration: 1, parts } : undefined
-          }
-        />,
-      )
-
-      const toolName = screen.getByText('auto_memory_search')
-      expect(screen.getAllByText('auto_memory_search')).toHaveLength(1)
-      expect(toolName.closest('details')).toHaveProperty('open', isOpen)
-      expect(toolName.closest('details')?.className).toContain('group/tool')
-      expect(screen.getByText(/"query": "hello"/)).toBeTruthy()
-      expect(screen.getByText('result')).toBeTruthy()
-    },
-  )
-})
-
-describe('MessageList reasoning', () => {
-  it.each([
-    { isRunning: false, label: 'chat.reasoning' },
-    { isRunning: true, label: 'chat.thinking' },
-  ])('renders $label as a lightweight disclosure', ({ isRunning, label }) => {
+describe('shared message integration', () => {
+  it('keeps a streaming reply before later user messages after grouping history', () => {
     render(
       <MessageList
-        messages={
-          isRunning
-            ? []
-            : [
-                {
-                  id: 'message-1',
-                  role: 'assistant',
-                  parts: [
-                    {
-                      type: 'reasoning',
-                      reasoning: 'Inspect the relevant memories.',
-                      is_running: false,
-                    },
-                  ],
-                  created_at: new Date().toISOString(),
-                },
-              ]
-        }
-        streaming={
-          isRunning
-            ? {
-                iteration: 1,
-                parts: [
-                  {
-                    type: 'reasoning',
-                    reasoning: 'Inspect the relevant memories.',
-                    is_running: true,
-                  },
-                ],
-              }
-            : undefined
-        }
-      />,
-    )
-
-    const details = screen.getByText(label).closest('details')
-    expect(details).toHaveProperty('open', isRunning)
-    expect(details?.className).toContain('group/reasoning')
-  })
-})
-
-describe('MessageList streaming insert position', () => {
-  it('renders streaming assistant before later user messages', () => {
-    const { container } = render(
-      <MessageList
         messages={[
-          {
-            id: 'main-input',
-            role: 'user',
-            parts: [{ type: 'text', text: 'A' }],
-            created_at: '2026-09-13T00:00:00Z',
-          },
-          {
-            id: 'accepted-input-b',
-            role: 'user',
-            parts: [{ type: 'text', text: 'B' }],
-            created_at: '2026-09-13T00:00:01Z',
-          },
-          {
-            id: 'accepted-input-c',
-            role: 'user',
-            parts: [{ type: 'text', text: 'C' }],
-            created_at: '2026-09-13T00:00:02Z',
-          },
+          message('a', 'assistant'),
+          message('b', 'assistant'),
+          message('c', 'user'),
         ]}
         streaming={{
+          insertIndex: 2,
           iteration: 1,
-          parts: [{ type: 'text', text: 'answer still streaming' }],
-          insertIndex: 1,
+          parts: [{ type: 'text', text: 'live' }],
         }}
       />,
     )
-
-    const text = container.textContent
-    expect(text.indexOf('A')).toBeLessThan(
-      text.indexOf('answer still streaming'),
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [
+          expect.objectContaining({ id: 'a' }),
+          expect.objectContaining({ id: 'c' }),
+        ],
+        streaming: {
+          insertIndex: 1,
+          iteration: 1,
+          parts: [{ type: 'text', text: 'live' }],
+        },
+      }),
+      undefined,
     )
-    expect(text.indexOf('answer still streaming')).toBeLessThan(
-      text.indexOf('B'),
-    )
-    expect(text.indexOf('B')).toBeLessThan(text.indexOf('C'))
   })
-})
-
-describe('MessageList images', () => {
-  it('renders an image using the server message format', () => {
-    const { container } = render(
-      <MessageList
-        messages={[
-          {
-            id: 'image-message',
-            role: 'user',
-            created_at: '2026-09-13T00:00:00Z',
-            parts: [
-              {
-                type: 'image_url',
-                image_url: { url: 'https://example.com/a.png', detail: 'auto' },
-              },
-            ],
-          },
-        ]}
-      />,
-    )
-    expect(container.querySelector('img')?.getAttribute('src')).toBe(
-      'https://example.com/a.png',
+  it('preserves tool status, result identity, reasoning and image data', () => {
+    expect(
+      sharedPart({
+        type: 'tool_result',
+        tool_id: 't',
+        tool_name: 'read',
+        tool_output: 'failed',
+        is_error: true,
+      }),
+    ).toEqual({
+      type: 'tool_result',
+      id: 't',
+      name: 'read',
+      output: 'failed',
+      isError: true,
+    })
+    expect(
+      sharedPart({
+        type: 'reasoning',
+        reasoning: 'thinking',
+        is_running: true,
+      }),
+    ).toEqual({ type: 'reasoning', text: 'thinking', running: true })
+    expect(
+      sharedPart({
+        type: 'image_url',
+        image_url: { url: 'https://example.com/a.png' },
+      }),
+    ).toEqual({
+      type: 'image',
+      src: 'https://example.com/a.png',
+      detail: undefined,
+    })
+  })
+  it('forwards resource navigation to Studio', () => {
+    const onResourceClick = vi.fn()
+    render(<MessageList messages={[]} onResourceClick={onResourceClick} />)
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({ onOpenUri: onResourceClick }),
+      undefined,
     )
   })
 })

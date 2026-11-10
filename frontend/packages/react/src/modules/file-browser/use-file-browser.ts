@@ -13,6 +13,8 @@ import { useFsTree } from './use-fs-tree.js';
 import type { FileBrowserActions, FileBrowserApi } from './types.js';
 
 export interface UseFileBrowserOptions {
+  /** Disable preview loading when the host provides an editable detail pane. */
+  loadPreview?: boolean;
   rootUri: string;
   /**
    * 宿主是否受控地持有当前资源。受控时 `currentUri` 就是唯一事实；非受控时
@@ -57,6 +59,7 @@ export interface UseFileBrowserOptions {
  */
 export function useFileBrowser({
   rootUri,
+  loadPreview = true,
   controlled = false,
   summaryLabels,
   defaultExpandedUri,
@@ -173,7 +176,7 @@ export function useFileBrowser({
     // Under the uncontrolled mode `currentUri` is null and `pendingUri` holds the
     // real selection, so the preview follows that instead — otherwise a selection
     // the module owns would never load anything.
-    uri: activeUri,
+    uri: loadPreview ? activeUri : null,
     resourceType,
     labels: summaryLabels,
     openParent,

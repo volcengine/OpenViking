@@ -114,3 +114,7 @@ import {
 } from '@openviking/react/components/scope-switcher';
 import '@openviking/react/components/scope-switcher/style.css';
 ```
+
+## Always-visible search
+
+For hosts that accept identities absent from the list, set `state.alwaysShowSearch: true` and provide `actions.onSearchKeywordChange`. This bypasses the option-count threshold. By default, visibility still follows the option count and search keyword.

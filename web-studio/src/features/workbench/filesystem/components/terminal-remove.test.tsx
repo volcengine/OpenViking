@@ -69,7 +69,7 @@ function submit(command: string) {
   )
   const input = screen.getByRole('textbox')
   fireEvent.change(input, { target: { value: command } })
-  fireEvent.submit(input.closest('form')!)
+  fireEvent.keyDown(input, { key: 'Enter' })
 }
 it('deletes the explicit subtree only after confirmation, then refreshes the tree', async () => {
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
@@ -123,7 +123,7 @@ it.each([
   fireEvent.focus(input)
   fireEvent.change(input, { target: { value: '/rm viking://resources/old' } })
   fireEvent.keyDown(input, { key: 'Tab' })
-  fireEvent.submit(input.closest('form')!)
+  fireEvent.keyDown(input, { key: 'Enter' })
   await waitFor(() => expect(m.refresh).toHaveBeenCalledTimes(1))
   expect(confirm).toHaveBeenCalledWith(`terminal.rmConfirm: ${uri}`)
   expect(m.remove).toHaveBeenCalledExactlyOnceWith({

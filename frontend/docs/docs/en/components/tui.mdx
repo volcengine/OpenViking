@@ -168,3 +168,9 @@ import '@openviking/react/components/tui/style.css';
 ## Implementation scope
 
 The component renders supplied data and handles local input interaction. Requests, response adaptation, execution, persistence, permissions and network connections belong to the host.
+
+## Standalone results
+
+`TuiResult` is exported from the same entry and uses the TUI stylesheet. Pass `record: TuiRecord`, optional `locale` (`en` / `zh`, default `en`), `onOpenUri`, and `onCopy` to render a result body without the command composer or command echo. Hosts can retain task tracking and session actions.
+
+`renderRecord?: (record: TuiRecord) => ReactNode` replaces each record body for host-specific results. `history?: readonly string[]` supplies a separately sanitized command history; when omitted, history is derived from records.

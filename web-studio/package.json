@@ -6,7 +6,7 @@
     "#/*": "./src/*"
   },
   "scripts": {
-    "dev": "vite dev --port 3000",
+    "dev": "node script/dev-with-ui.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
@@ -15,7 +15,9 @@
     "check": "prettier --write 'src/**/*.{ts,tsx}' && eslint src --fix --ignore-pattern 'src/gen/**' --ignore-pattern 'src/routeTree.gen.ts'",
     "gen-server-client": "sh ./script/gen-server-client/gen-server-client.sh",
     "test:i18n": "vitest run src/i18n src/shared/components/code-editor.test.tsx script/eslint-i18n.test.ts",
-    "prebuild": "npm run lint && npm run test:i18n"
+    "prebuild": "npm run build:ui && npm run lint && npm run test:i18n",
+    "build:ui": "npm --prefix ../frontend ci && npm --prefix ../frontend run build:lib",
+    "predev": "npm run build:ui"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
@@ -43,6 +45,7 @@
     "@fontsource-variable/noto-sans": "^5.2.10",
     "@microsoft/fetch-event-source": "^2.0.1",
     "@noble/hashes": "^1.8.0",
+    "@openviking/react": "file:../frontend/packages/react",
     "@rjsf/core": "^6.11.0",
     "@rjsf/utils": "^6.11.0",
     "@rjsf/validator-ajv8": "^6.11.0",

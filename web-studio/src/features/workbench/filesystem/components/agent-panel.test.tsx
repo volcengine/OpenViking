@@ -5,6 +5,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { AgentToolbar } from '#/features/workbench/filesystem/components/agent-panel'
 
+vi.stubGlobal(
+  'ResizeObserver',
+  class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  },
+)
 afterEach(() => {
   cleanup()
   document.body.innerHTML = ''
@@ -31,8 +39,8 @@ describe('AgentToolbar', () => {
     )
 
     expect(container.textContent).toContain('Current session')
-    fireEvent.click(screen.getByTitle('History'))
-    fireEvent.click(screen.getByTitle('New session'))
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }))
     expect(onOpenHistory).toHaveBeenCalledOnce()
     expect(onNewSession).toHaveBeenCalledOnce()
 

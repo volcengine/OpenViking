@@ -308,3 +308,15 @@
   width: 10.208px;
   height: 10.208px;
 }
+
+.ov-viking-bot__session-history li {
+  display: flex;
+  align-items: center;
+}
+.ov-viking-bot__session-history li > button {
+  flex: 1;
+  min-width: 0;
+}
+.ov-viking-bot__session-extra {
+  flex-shrink: 0;
+}

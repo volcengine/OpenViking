@@ -107,3 +107,5 @@ import { FileBrowser } from '@openviking/react/modules/file-browser';
 文案为纯文本，宿主可将自身的翻译结果映射到这些属性。props 里没有数据字段——数据由模块自己加载。
 
 模块通过 `useFileBrowser` 自己取数，宿主无需提供目录或预览数据；`labels.tree` 与 `labels.preview` 分别透传给文件树与文件预览组件。
+
+`useFileBrowser` 支持 `loadPreview?: boolean`（默认 `true`）。宿主提供独立可编辑详情面板时可设为 `false`：目录、选择、搜索和刷新仍由模块管理，避免重复请求预览正文。

@@ -1,4 +1,5 @@
-.ov-console {
+.ov-console,
+.ov-console__modes {
   --ov-ui-console-text: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
   --ov-ui-console-secondary: var(
     --ov-ui-color-text-2,
@@ -11,6 +12,8 @@
     --ov-ui-color-primary,
     var(--ov-ui-primary-default)
   );
+}
+.ov-console {
   display: flex;
   box-sizing: border-box;
   flex-direction: column;

@@ -36,6 +36,12 @@ export interface VikingBotSession {
 
 /** Session persistence and requests belong to the host. */
 export interface VikingBotSessions {
+  /** Host actions beside a session, for example a deletion confirmation. */
+  renderAction?: (session: VikingBotSession) => ReactNode;
+  /** Disable creation while the host creates a session. */
+  isCreating?: boolean;
+  /** Hide creation when the current draft is already empty. */
+  canCreate?: boolean;
   items: readonly VikingBotSession[];
   currentId?: string;
   isLoading?: boolean;

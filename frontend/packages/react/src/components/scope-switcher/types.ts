@@ -184,6 +184,8 @@ export interface ScopeSwitcherData {
  * A level's interaction state. Changes with user actions and request progress.
  */
 export interface ScopeSwitcherState {
+  /** Keep search visible for hosts that allow entering identities absent from the list. */
+  alwaysShowSearch?: boolean;
   /**
    * 选项列表是否正在首次加载。为 `true` 时面板显示加载态，不渲染列表。
    * Whether the option list is loading for the first time. While true the panel

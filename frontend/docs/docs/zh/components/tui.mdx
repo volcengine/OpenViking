@@ -168,3 +168,9 @@ import '@openviking/react/components/tui/style.css';
 ## 实现范围
 
 组件渲染宿主数据并处理本地输入交互。请求、响应转换、执行、持久化、权限和网络连接由宿主负责。
+
+## 独立结果展示
+
+`TuiResult` 从同一公开入口导出，使用 TUI 样式。传入 `record: TuiRecord`、可选 `locale`（`en` / `zh`，默认 `en`）、`onOpenUri` 和 `onCopy` 可单独渲染结果正文。它不渲染命令输入框或命令回显，便于宿主保留任务跟踪与会话操作。
+
+`renderRecord?: (record: TuiRecord) => ReactNode` 可替换每条执行记录的正文，用于宿主专用结果。`history?: readonly string[]` 可单独传入已脱敏的命令历史；省略时从记录中生成。

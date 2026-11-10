@@ -1,7 +1,8 @@
+import { Tui, TuiResult } from '@openviking/react/components/tui'
+import '@openviking/react/components/tui/style.css'
 import { createRandomUuid } from '#/shared/lib/browser-crypto'
 import {
   active as activeCompileTask,
-  fetchCompileSkills,
   fetchCompileTask,
 } from '#/features/workbench/compile/lib/api'
 import {
@@ -10,7 +11,6 @@ import {
   isCompileCommand,
   tokenize,
 } from '#/features/workbench/compile/lib/commands'
-import { compileSuggestions } from '#/features/workbench/compile/lib/suggestions'
 import { runCompileSubmission } from '#/features/workbench/compile/lib/terminal'
 import { useInvalidateVikingFs } from '#/features/workbench/resources/hooks/viking-fm'
 import { addNewSkill } from '#/features/workbench/skills/lib/add-skill'
@@ -22,7 +22,6 @@ import {
   CheckCircle2Icon,
   HistoryIcon,
   Loader2Icon,
-  SendIcon,
   SparklesIcon,
   TrashIcon,
   XCircleIcon,
@@ -103,11 +102,9 @@ import {
   TerminalActionError,
   waitForResourceTask,
 } from '#/features/workbench/filesystem/lib/terminal-actions'
-import { getCommandInputHint } from '#/features/workbench/filesystem/lib/terminal-input-hint'
 import type {
   ResourceOpenHandler,
   ResourceRef,
-  TerminalCommandGroup,
   TerminalCommandParameterKey,
   TerminalCommandView,
   TerminalEntry,
@@ -136,16 +133,6 @@ let terminalPageCache: {
   history: TerminalEntry[]
   commandHistory: string[]
 } | null = null
-const URI_ARGUMENT_COMMANDS = new Set([
-  '/abstract',
-  '/ls',
-  '/overview',
-  '/read',
-  '/rm',
-  '/stat',
-  '/tree',
-])
-
 type SessionSubcommandHelp = {
   examples: string[]
   insertText: string
@@ -254,21 +241,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session delete <session_id>',
   },
 ]
-
-const SESSION_SUBCOMMANDS_BY_KEY = new Map(
-  SESSION_SUBCOMMANDS.map((item) => [item.key, item]),
-)
-
-type TerminalSuggestionGroup =
-  | TerminalCommandGroup
-  | 'history'
-  | 'resource'
-  | 'subcommand'
-
-type TerminalSuggestion = Omit<TerminalCommandView, 'group'> & {
-  group: TerminalSuggestionGroup
-  id: string
-}
 
 type TerminalQuickStartExample = {
   action?: () => void
@@ -505,16 +477,12 @@ export function TerminalPanel({
   sessionId?: string
   toolbarContainer: HTMLDivElement | null
 }) {
-  const { t } = useTranslation('filesystem')
+  const { t, i18n: translation } = useTranslation('filesystem')
   const { connectionRole, identityScopeKey } = useAppConnection()
   const { invalidateAll } = useInvalidateVikingFs()
   const [command, setCommand] = useState('')
   const [running, setRunning] = useState(false)
-  const compileSkills = useQuery({
-    queryKey: ['compile-skills', identityScopeKey],
-    queryFn: ({ signal }) => fetchCompileSkills(signal),
-    enabled: /^(?:ov\s+)?\/?compile\s/.test(command),
-  })
+
   const identityRef = useRef(identityScopeKey)
   identityRef.current = identityScopeKey
   const mountedRef = useRef(false)
@@ -532,11 +500,6 @@ export function TerminalPanel({
       resourcePollsRef.current.clear()
     }
   }, [identityScopeKey])
-  const [suggestionsOpen, setSuggestionsOpen] = useState(false)
-  const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0)
-  const [previewSuggestionIndex, setPreviewSuggestionIndex] = useState<
-    number | null
-  >(null)
   const [commandHistory, setCommandHistory] = useState<string[]>(() =>
     terminalPageCache?.identityScopeKey === identityScopeKey
       ? terminalPageCache.commandHistory
@@ -548,11 +511,6 @@ export function TerminalPanel({
       : [],
   )
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [inputFocused, setInputFocused] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const suggestionRefs = useRef<Array<HTMLButtonElement | null>>([])
-  const scrollRef = useRef<HTMLDivElement>(null)
-
   const commands = useMemo<TerminalCommandView[]>(
     () =>
       TERMINAL_COMMANDS.filter(
@@ -599,335 +557,6 @@ export function TerminalPanel({
     }
     return Array.from(candidates).filter(Boolean).sort()
   }, [commandHistory, currentUri, entries, history])
-
-  const activeCommand = useMemo(() => {
-    const rawQuery = command.trimStart()
-    return [...commands]
-      .sort((a, b) => b.command.length - a.command.length)
-      .find(
-        (item) =>
-          rawQuery === item.command || rawQuery.startsWith(`${item.command} `),
-      )
-  }, [command, commands])
-
-  const inputHint = useMemo(
-    () => getCommandInputHint(command, [...commands, ...SESSION_SUBCOMMANDS]),
-    [command, commands],
-  )
-
-  const suggestions = useMemo<TerminalSuggestion[]>(() => {
-    const rawQuery = command.trimStart()
-    const query = rawQuery.toLowerCase()
-    const commandOrder = [
-      '/add-resource',
-      '/add-skill',
-      '/compile',
-      '/find',
-      '/read',
-      '/write',
-      '/add-memory',
-      '/session',
-      '/ls',
-      '/tree',
-      '/stat',
-      '/search',
-      '/grep',
-      '/glob',
-      '/abstract',
-      '/overview',
-      '/status',
-      '/health',
-      '/task',
-      '/wait',
-    ]
-    const commandMatches =
-      query === '/'
-        ? [...commands]
-            .sort((a, b) => {
-              const aIndex = commandOrder.indexOf(a.command)
-              const bIndex = commandOrder.indexOf(b.command)
-              return (
-                (aIndex === -1 ? commandOrder.length : aIndex) -
-                (bIndex === -1 ? commandOrder.length : bIndex)
-              )
-            })
-            .map((item) => ({
-              ...item,
-              id: `command:${item.command}`,
-            }))
-        : query.startsWith('/')
-          ? commands
-              .filter(
-                (item) =>
-                  item.command.toLowerCase().startsWith(query) ||
-                  item.description.toLowerCase().includes(query.slice(1)),
-              )
-              .map((item) => ({
-                ...item,
-                id: `command:${item.command}`,
-              }))
-          : []
-
-    const resourceMatches =
-      activeCommand && URI_ARGUMENT_COMMANDS.has(activeCommand.command)
-        ? resourceCandidates
-            .filter((uri) => {
-              const argQuery = rawQuery
-                .slice(activeCommand.command.length)
-                .trimStart()
-                .toLowerCase()
-              if (!argQuery) return true
-              return (
-                uri.toLowerCase().startsWith(argQuery) ||
-                uri.toLowerCase().includes(argQuery)
-              )
-            })
-            .slice(0, 12)
-            .map((uri) => ({
-              ...activeCommand,
-              command: uri,
-              description: t('terminal.resourceSuggestion'),
-              group: 'resource' as const,
-              id: `resource:${activeCommand.command}:${uri}`,
-              insertText: `${activeCommand.command} ${
-                activeCommand.command === '/rm'
-                  ? `"${uri.replace(/["\\]/g, '\\$&')}"`
-                  : uri
-              }`,
-              usage: `${activeCommand.command} ${uri}`,
-            }))
-        : []
-
-    const sessionSubcommandMatches =
-      activeCommand?.command === '/session'
-        ? (() => {
-            const rawBody = rawQuery.slice(activeCommand.command.length)
-            const body = rawBody.trimStart()
-            const [partial = ''] = body.split(/\s+/)
-            const isChoosingSubcommand =
-              body.length === 0 ||
-              (!rawBody.endsWith(' ') && !body.slice(partial.length).trim())
-
-            if (!isChoosingSubcommand) return []
-
-            return SESSION_SUBCOMMANDS.filter((item) => {
-              const description = t(
-                `terminal.commandExamples.${item.examples[0]}.description`,
-              )
-              return (
-                !partial ||
-                item.key.toLowerCase().startsWith(partial.toLowerCase()) ||
-                description.toLowerCase().includes(partial.toLowerCase())
-              )
-            }).map((item) => {
-              return {
-                ...activeCommand,
-                command: item.key,
-                description: t(
-                  `terminal.commandExamples.${item.examples[0]}.description`,
-                ),
-                group: 'subcommand' as const,
-                id: `subcommand:session:${item.key}`,
-                insertText: item.insertText,
-                key: `session:${item.key}`,
-                usage: item.usage,
-              }
-            })
-          })()
-        : []
-
-    const historyMatches = (query ? commandHistory : [])
-      .filter((item) => {
-        const lower = item.toLowerCase()
-        return lower !== query && lower.startsWith(query)
-      })
-      .slice(0, 8)
-      .map((item) => ({
-        adminOnly: false,
-        command: item,
-        description: t('terminal.historySuggestion'),
-        executable: false,
-        group: 'history' as const,
-        id: `history:${item}`,
-        insertText: item,
-        key: 'history',
-        usage: item,
-      }))
-
-    const seen = new Set<string>()
-    return [
-      ...compileSuggestions(
-        rawQuery,
-        entries.filter((entry) => entry.isDir).map((entry) => entry.uri),
-        compileSkills.data?.map((skill) => skill.uri) || [],
-      ).map((insertText) => ({
-        adminOnly: false,
-        command: insertText,
-        description: t('compile:terminalHint'),
-        executable: false,
-        group: 'core' as const,
-        id: `compile:${insertText}`,
-        insertText,
-        key: 'compile',
-        usage: insertText,
-      })),
-      ...commandMatches,
-      ...resourceMatches,
-      ...sessionSubcommandMatches,
-      ...historyMatches,
-    ].filter((item) => {
-      if (seen.has(item.insertText)) return false
-      seen.add(item.insertText)
-      return true
-    })
-  }, [
-    activeCommand,
-    command,
-    commandHistory,
-    commands,
-    resourceCandidates,
-    t,
-    entries,
-    compileSkills.data,
-  ])
-
-  const helpCommand = useMemo(() => {
-    if (!activeCommand) return undefined
-    return activeCommand
-  }, [activeCommand])
-
-  const hoveredHelpCommand =
-    suggestionsOpen && previewSuggestionIndex !== null
-      ? commands.find(
-          (item) =>
-            item.command === suggestions[previewSuggestionIndex]?.command,
-        )
-      : undefined
-  const displayHelpCommand = hoveredHelpCommand ?? helpCommand
-
-  const selectedSessionSubcommand = useMemo(() => {
-    if (
-      helpCommand?.command !== '/session' ||
-      displayHelpCommand?.command !== '/session'
-    )
-      return undefined
-    const body = command
-      .trimStart()
-      .slice(helpCommand.command.length)
-      .trimStart()
-    const [subcommand = ''] = body.split(/\s+/)
-    return SESSION_SUBCOMMANDS_BY_KEY.get(subcommand)
-  }, [command, displayHelpCommand, helpCommand])
-
-  const sessionSubcommandRows = useMemo(
-    () =>
-      SESSION_SUBCOMMANDS.map((item) => {
-        const exampleKey = item.examples[0]
-        return {
-          ...item,
-          description: t(`terminal.commandExamples.${exampleKey}.description`),
-        }
-      }),
-    [t],
-  )
-
-  const showSessionSubcommandList =
-    displayHelpCommand?.command === '/session' && !selectedSessionSubcommand
-
-  const helpTitle = selectedSessionSubcommand
-    ? `/session ${selectedSessionSubcommand.key}`
-    : displayHelpCommand?.command
-  const helpDescription = selectedSessionSubcommand
-    ? t(
-        `terminal.commandExamples.${selectedSessionSubcommand.examples[0]}.description`,
-      )
-    : displayHelpCommand?.description
-  const helpUsage = selectedSessionSubcommand
-    ? selectedSessionSubcommand.usage
-    : displayHelpCommand?.usage
-
-  const commandParameters = useMemo(
-    () =>
-      (
-        selectedSessionSubcommand?.parameters ??
-        (showSessionSubcommandList
-          ? []
-          : (displayHelpCommand?.parameters ?? []))
-      ).map((key) => {
-        const meta: {
-          type: 'Text' | 'URI' | 'Number' | 'Boolean'
-          required?: boolean
-          defaultValue?: string
-        } = PARAMETER_META[key] ?? { type: 'Text' }
-        return {
-          description: t(`terminal.commandParameters.${key}.description`),
-          key,
-          name: t(`terminal.commandParameters.${key}.name`),
-          ...meta,
-          ...(key === 'nodeLimit' &&
-          ['/grep', '/glob'].includes(displayHelpCommand?.command ?? '')
-            ? { defaultValue: '256' }
-            : {}),
-        }
-      }),
-    [
-      displayHelpCommand,
-      selectedSessionSubcommand,
-      showSessionSubcommandList,
-      t,
-    ],
-  )
-
-  const commandExamples = useMemo(
-    () =>
-      (
-        selectedSessionSubcommand?.examples ??
-        (showSessionSubcommandList ? [] : (displayHelpCommand?.examples ?? []))
-      ).map((key) => {
-        return {
-          code: t(`terminal.commandExamples.${key}.code`),
-          description: t(`terminal.commandExamples.${key}.description`),
-          key,
-        }
-      }),
-    [
-      displayHelpCommand,
-      selectedSessionSubcommand,
-      showSessionSubcommandList,
-      t,
-    ],
-  )
-
-  const canUseCurrentScope =
-    displayHelpCommand?.command === '/find' ||
-    displayHelpCommand?.command === '/search'
-
-  const showCommandAssist =
-    inputFocused &&
-    (Boolean(displayHelpCommand) || (suggestionsOpen && suggestions.length > 0))
-
-  useEffect(() => {
-    setActiveSuggestionIndex(0)
-    setPreviewSuggestionIndex(null)
-  }, [suggestions.length])
-
-  useEffect(() => {
-    suggestionRefs.current = suggestionRefs.current.slice(0, suggestions.length)
-  }, [suggestions.length])
-
-  useEffect(() => {
-    if (!suggestionsOpen) return
-    suggestionRefs.current[activeSuggestionIndex]?.scrollIntoView({
-      block: 'nearest',
-    })
-  }, [activeSuggestionIndex, suggestionsOpen])
-
-  useEffect(() => {
-    scrollRef.current?.scrollTo({
-      behavior: 'smooth',
-      top: scrollRef.current.scrollHeight,
-    })
-  }, [history.length, running])
 
   const append = useCallback((entry: Omit<TerminalEntry, 'id'>) => {
     const id = createRandomUuid()
@@ -1160,7 +789,6 @@ export function TerminalPanel({
       append({ kind: 'command', title: trimmed })
       if (safeHistory.remember) rememberCommand(safeHistory.title)
       setCommand('')
-      setSuggestionsOpen(false)
       setRunning(true)
 
       try {
@@ -1913,40 +1541,28 @@ export function TerminalPanel({
     ],
   )
 
+  const terminalRef = useRef<HTMLDivElement>(null)
   const acceptSuggestion = useCallback((suggestion: { insertText: string }) => {
     setCommand(suggestion.insertText)
-    setSuggestionsOpen(false)
-    window.requestAnimationFrame(() => {
-      const input = inputRef.current
-      input?.focus()
-      input?.setSelectionRange(
-        suggestion.insertText.length,
-        suggestion.insertText.length,
-      )
-    })
+    requestAnimationFrame(() =>
+      terminalRef.current?.querySelector('textarea')?.focus(),
+    )
   }, [])
-
-  const insertCurrentScope = useCallback(() => {
-    const trimmed = command.trimEnd()
-    const hasScope = trimmed.match(/(?:^|\s)(?:--uri|--scope|-u)(?:=|\s)/)
-    const commandName = helpCommand?.command ?? trimmed.split(/\s+/)[0]
-    const body = trimmed.slice(commandName.length).trim()
-    const next = hasScope
-      ? command
-      : body
-        ? `${trimmed} --uri ${currentUri}`
-        : `${commandName}  --uri ${currentUri}`
-    const cursorPosition =
-      hasScope || body ? next.length : commandName.length + 1
-    setCommand(next)
-    setSuggestionsOpen(false)
-    window.requestAnimationFrame(() => {
-      const input = inputRef.current
-      input?.focus()
-      input?.setSelectionRange(cursorPosition, cursorPosition)
-    })
-  }, [command, currentUri, helpCommand])
-
+  const resourceCompletions = commands
+    .filter(
+      (item) =>
+        /^\/(?:rm|read|stat|ls|tree|abstract|overview)$/.test(item.command) &&
+        command.startsWith(`${item.command} `),
+    )
+    .flatMap((item) =>
+      resourceCandidates.map((uri) => ({
+        name: `${item.command.slice(1)} ${uri}`,
+        inputText: `${item.command} '${uri.replaceAll("'", "'\\''")}'`,
+        description: uri,
+        usage: item.usage,
+        group: 'resources',
+      })),
+    )
   const quickStartExamples = useMemo<TerminalQuickStartExample[]>(
     () => [
       {
@@ -1999,393 +1615,86 @@ export function TerminalPanel({
             toolbarContainer,
           )
         : null}
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div
-          ref={scrollRef}
-          className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
-        >
-          <div className="space-y-3">
-            {history.length === 0 && !running ? (
-              <TerminalQuickStart
-                examples={quickStartExamples}
-                title={t('terminal.quickStart.title')}
-                heading={t('terminal.quickStart.heading')}
-                description={t('terminal.quickStart.description')}
-              />
-            ) : null}
-            {history.map((entry) => (
+      <div ref={terminalRef} className="flex min-h-0 flex-1 flex-col">
+        <Tui
+          locale={translation.language.startsWith('zh') ? 'zh' : 'en'}
+          value={command}
+          onValueChange={setCommand}
+          disabled={running}
+          history={commandHistory}
+          records={history.map((entry) => ({
+            id: entry.id,
+            command: entry.title,
+            status:
+              entry.kind === 'error'
+                ? ('error' as const)
+                : ('success' as const),
+          }))}
+          renderRecord={(record) => {
+            const entry = history.find((item) => item.id === record.id)!
+            return (
               <TerminalHistoryItem
-                key={entry.id}
                 entry={entry}
                 onOpenResource={onOpenResource}
                 openingUri={openingUri}
               />
-            ))}
-            {running ? (
-              <div className="flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-xs text-muted-foreground">
-                <Loader2Icon className="size-3.5 animate-spin" />
-                {t('terminal.running')}
-              </div>
-            ) : null}
-          </div>
-        </div>
-        <div className="border-t bg-background p-3">
-          <form
-            className="relative rounded-xl border bg-background px-3 py-2 focus-within:border-ring"
-            onSubmit={(event) => {
-              event.preventDefault()
-              void runCommand(command)
-            }}
-          >
-            <span
-              className="block truncate font-mono text-[10px] text-muted-foreground"
-              title={t('terminal.scopeLabel', { uri: currentUri })}
-            >
-              {currentUri}
-            </span>
-            <div className="flex min-w-0 items-center gap-2">
-              <div className="relative min-w-0 flex-1">
-                {inputHint ? (
-                  <div
-                    aria-hidden="true"
-                    className="pointer-events-none absolute inset-0 flex h-8 min-w-0 items-center overflow-hidden whitespace-pre font-mono text-xs"
-                  >
-                    <span className="text-transparent">{command}</span>
-                    <span className="truncate text-muted-foreground/70">
-                      {inputHint}
-                    </span>
-                  </div>
-                ) : null}
-                <input
-                  ref={inputRef}
-                  value={command}
-                  onBlur={() => {
-                    window.setTimeout(() => {
-                      setInputFocused(false)
-                      setSuggestionsOpen(false)
-                    }, 120)
-                  }}
-                  onChange={(event) => {
-                    setCommand(event.target.value)
-                    setSuggestionsOpen(true)
-                    setPreviewSuggestionIndex(null)
-                  }}
-                  onFocus={() => {
-                    setInputFocused(true)
-                    setSuggestionsOpen(true)
-                  }}
-                  onKeyDown={(event) => {
-                    if (!suggestionsOpen || suggestions.length === 0) return
-                    if (event.key === 'ArrowDown') {
-                      event.preventDefault()
-                      setActiveSuggestionIndex((current) =>
-                        Math.min(current + 1, suggestions.length - 1),
-                      )
-                      setPreviewSuggestionIndex((current) =>
-                        Math.min(
-                          (current ?? activeSuggestionIndex) + 1,
-                          suggestions.length - 1,
-                        ),
-                      )
-                      return
-                    }
-                    if (event.key === 'ArrowUp') {
-                      event.preventDefault()
-                      setActiveSuggestionIndex((current) =>
-                        Math.max(current - 1, 0),
-                      )
-                      setPreviewSuggestionIndex((current) =>
-                        Math.max((current ?? activeSuggestionIndex) - 1, 0),
-                      )
-                      return
-                    }
-                    if (event.key === 'Tab') {
-                      event.preventDefault()
-                      acceptSuggestion(suggestions[activeSuggestionIndex])
-                      return
-                    }
-                    if (
-                      event.key === 'ArrowRight' &&
-                      event.currentTarget.selectionStart === command.length &&
-                      event.currentTarget.selectionEnd === command.length
-                    ) {
-                      event.preventDefault()
-                      acceptSuggestion(suggestions[activeSuggestionIndex])
-                      return
-                    }
-                    if (event.key === 'Enter') {
-                      event.preventDefault()
-                      acceptSuggestion(suggestions[activeSuggestionIndex])
-                      return
-                    }
-                    if (event.key === 'Escape') {
-                      setSuggestionsOpen(false)
-                    }
-                  }}
-                  placeholder={t('terminal.placeholder')}
-                  className="relative h-8 w-full min-w-0 bg-transparent font-mono text-xs outline-none placeholder:text-muted-foreground/80"
-                />
-              </div>
-              {showCommandAssist ? (
-                <div className="pointer-events-none absolute bottom-[calc(100%+0.5rem)] left-0 right-0 z-30">
-                  {displayHelpCommand ? (
-                    <div
-                      className={cn(
-                        'pointer-events-auto max-h-[min(420px,52vh)] overflow-y-auto rounded-xl border bg-popover p-4 shadow-lg',
-                        suggestionsOpen && suggestions.length > 0
-                          ? 'absolute bottom-0 right-[calc(100%+2px)] hidden w-[400px] lg:block'
-                          : 'w-full',
-                      )}
-                    >
-                      <div className="flex min-w-0 items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="truncate font-mono text-base font-semibold text-foreground">
-                            {helpTitle}
-                          </div>
-                          <div className="mt-1 text-xs leading-5 text-muted-foreground">
-                            {helpDescription}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="mt-4 space-y-4">
-                        {showSessionSubcommandList ? (
-                          <div className="min-w-0">
-                            <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">
-                              {t('terminal.helpSubcommands')}
-                            </div>
-                            <div className="overflow-hidden rounded-md border">
-                              <table className="w-full table-fixed border-collapse text-xs">
-                                <tbody className="divide-y">
-                                  {sessionSubcommandRows.map((item) => (
-                                    <tr key={item.key}>
-                                      <td className="w-40 align-top bg-muted/30 px-2 py-1.5 font-mono text-foreground">
-                                        <button
-                                          type="button"
-                                          className="block max-w-full truncate text-left text-primary hover:underline"
-                                          title={item.usage}
-                                          onClick={() =>
-                                            acceptSuggestion({
-                                              insertText: item.insertText,
-                                            })
-                                          }
-                                          onMouseDown={(event) =>
-                                            event.preventDefault()
-                                          }
-                                        >
-                                          {item.key}
-                                        </button>
-                                      </td>
-                                      <td className="align-top px-2 py-1.5 leading-4 text-muted-foreground">
-                                        {item.description}
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        ) : (
-                          <>
-                            {commandExamples.length > 0 ? (
-                              <div className="min-w-0">
-                                <div className="mb-2 text-xs text-muted-foreground">
-                                  {t('terminal.quickStart.title')}
-                                </div>
-                                <div className="space-y-1">
-                                  {commandExamples.map((example, index) => (
-                                    <button
-                                      key={example.key}
-                                      type="button"
-                                      className="flex w-full items-start gap-2 rounded-lg bg-muted/70 px-3 py-2 text-left font-mono text-xs leading-5 text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                      title={example.description}
-                                      onMouseDown={(event) =>
-                                        event.preventDefault()
-                                      }
-                                      onClick={() =>
-                                        acceptSuggestion({
-                                          insertText: example.code,
-                                        })
-                                      }
-                                    >
-                                      <span className="w-4 shrink-0 text-muted-foreground">
-                                        {index + 1}
-                                      </span>
-                                      <span className="min-w-0 break-all">
-                                        {example.code}
-                                      </span>
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                            ) : null}
-                            <div className="min-w-0">
-                              <div className="mb-1.5 text-sm font-semibold text-foreground">
-                                {t('terminal.helpParameters')}
-                              </div>
-                              <div className="mb-1 break-all rounded-md border bg-muted/70 px-3 py-2 font-mono text-xs leading-5 text-foreground">
-                                {helpUsage}
-                              </div>
-                              {commandParameters.length > 0 ? (
-                                <div className="overflow-hidden rounded-md border">
-                                  <table className="w-full table-fixed border-collapse text-[11px]">
-                                    <thead className="border-b bg-muted/40 text-muted-foreground">
-                                      <tr>
-                                        <th className="w-[32%] px-2 py-1.5 text-left font-medium">
-                                          {t('terminal.parameterName')}
-                                        </th>
-                                        <th className="w-[12%] px-1 py-1.5 text-center font-medium">
-                                          {t('terminal.parameterRequired')}
-                                        </th>
-                                        <th className="w-[41%] px-2 py-1.5 text-left font-medium">
-                                          {t('terminal.parameterDescription')}
-                                        </th>
-                                        <th className="w-[15%] px-1 py-1.5 text-center font-medium">
-                                          {t('terminal.parameterDefault')}
-                                        </th>
-                                      </tr>
-                                    </thead>
-                                    <tbody className="divide-y">
-                                      {commandParameters.map((parameter) => (
-                                        <tr key={parameter.key}>
-                                          <td className="align-top px-2 py-1.5 text-foreground">
-                                            <span className="block break-all font-mono leading-4">
-                                              {parameter.name}
-                                            </span>
-                                            <span className="mt-1 inline-block rounded bg-muted px-1 py-0.5 text-[9px] leading-none text-muted-foreground">
-                                              {t(
-                                                `terminal.parameterTypes.${parameter.type}`,
-                                              )}
-                                            </span>
-                                          </td>
-                                          <td className="align-top px-1 py-1.5 text-center text-muted-foreground">
-                                            {parameter.required
-                                              ? t('terminal.yes')
-                                              : t('terminal.no')}
-                                          </td>
-                                          <td className="align-top px-2 py-1.5 text-muted-foreground">
-                                            <div className="flex min-w-0 items-start justify-between gap-2">
-                                              <span className="min-w-0 break-words leading-4">
-                                                {parameter.description}
-                                              </span>
-                                              {canUseCurrentScope &&
-                                              parameter.key === 'scope' ? (
-                                                <Button
-                                                  type="button"
-                                                  variant="outline"
-                                                  size="sm"
-                                                  className="h-6 shrink-0 px-2 text-xs"
-                                                  onClick={insertCurrentScope}
-                                                  onMouseDown={(event) =>
-                                                    event.preventDefault()
-                                                  }
-                                                >
-                                                  {t(
-                                                    'terminal.currentScopeAction',
-                                                  )}
-                                                </Button>
-                                              ) : null}
-                                            </div>
-                                          </td>
-                                          <td className="break-all px-1 py-1.5 text-center font-mono text-muted-foreground">
-                                            {parameter.defaultValue ?? '—'}
-                                          </td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              ) : (
-                                <div className="rounded-md border border-dashed bg-muted/40 px-3 py-2 text-center text-xs text-muted-foreground">
-                                  {t('terminal.noParameters')}
-                                </div>
-                              )}
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  ) : null}
-                  {suggestionsOpen && suggestions.length > 0 ? (
-                    <div className="pointer-events-auto max-h-[min(360px,45vh)] overflow-y-auto rounded-xl border bg-popover px-2 py-3 shadow-lg">
-                      {suggestions.map((suggestion, index) => (
-                        <div key={suggestion.id}>
-                          {index === 0 ||
-                          suggestions[index - 1]?.group !== suggestion.group ? (
-                            <div className="px-2.5 pb-1 pt-2 text-[10px] text-muted-foreground">
-                              {t(`terminal.paletteGroups.${suggestion.group}`)}
-                            </div>
-                          ) : null}
-                          <button
-                            ref={(node) => {
-                              suggestionRefs.current[index] = node
-                            }}
-                            type="button"
-                            className={cn(
-                              'min-h-8 w-full min-w-0 rounded-md px-2.5 py-1 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                              index === activeSuggestionIndex
-                                ? 'bg-muted text-foreground'
-                                : 'hover:bg-muted/60',
-                            )}
-                            onClick={() => acceptSuggestion(suggestion)}
-                            onMouseDown={(event) => event.preventDefault()}
-                            onMouseEnter={() => {
-                              setActiveSuggestionIndex(index)
-                              setPreviewSuggestionIndex(index)
-                            }}
-                          >
-                            {suggestion.group === 'history' ||
-                            suggestion.group === 'resource' ||
-                            suggestion.group === 'subcommand' ? (
-                              <span className="flex min-w-0 items-center gap-3">
-                                <span className="min-w-0 flex-1 truncate font-mono text-xs font-medium text-foreground">
-                                  {suggestion.command}
-                                </span>
-                                <span className="shrink-0 text-xs leading-4 text-muted-foreground">
-                                  {suggestion.description}
-                                </span>
-                              </span>
-                            ) : (
-                              <span className="grid min-w-0 grid-cols-[minmax(5.25rem,7.5rem)_minmax(0,1fr)] items-center gap-2.5">
-                                <span className="min-w-0 truncate font-mono text-xs font-medium text-foreground">
-                                  {suggestion.command}
-                                </span>
-                                <span className="min-w-0 text-xs leading-4 text-muted-foreground">
-                                  {suggestion.description}
-                                </span>
-                              </span>
-                            )}
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-              <Button
-                type="submit"
-                size="icon-sm"
-                disabled={running || !command.trim()}
-              >
-                <SendIcon className="size-4" />
-              </Button>
-            </div>
-          </form>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {quickStartExamples.map((example) => (
-              <button
-                key={example.key}
-                type="button"
-                className="rounded-md border bg-muted/30 px-2 py-1 font-mono text-[11px] text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                onClick={example.action}
-              >
-                {`/${example.key}`}
-              </button>
-            ))}
-          </div>
-          <div className="mt-1.5 text-[10px] text-muted-foreground">
-            {t('terminal.inputHint')}
-          </div>
-        </div>
+            )
+          }}
+          commands={[
+            ...resourceCompletions,
+            ...[
+              ...commands,
+              ...SESSION_SUBCOMMANDS.map((item) => ({
+                ...item,
+                command: item.insertText,
+                group: 'core',
+                description: t(
+                  `terminal.commandExamples.${item.examples[0]}.description`,
+                ),
+              })),
+            ].map((item) => ({
+              name: item.command.replace(/^\//, ''),
+              inputText: item.command,
+              group: item.group,
+              description: item.description,
+              usage: item.usage,
+              params: item.parameters?.map((key) => ({
+                label: t(`terminal.commandParameters.${key}.name`),
+                description: t(`terminal.commandParameters.${key}.description`),
+                required: PARAMETER_META[key]?.required,
+                defaultValue: PARAMETER_META[key]?.defaultValue,
+              })),
+              examples: [
+                ...(item.examples ?? []).map((key) => ({
+                  value: t(`terminal.commandExamples.${key}.code`),
+                  label: t(`terminal.commandExamples.${key}.description`),
+                })),
+                ...resourceCandidates.slice(0, 20).map((uri) => ({
+                  value: `${item.command} ${uri}`,
+                  label: uri,
+                })),
+              ],
+            })),
+          ]}
+          onSubmit={(value) => {
+            void runCommand(value)
+          }}
+          onOpenUri={(uri) => {
+            void onOpenResource(uri)
+          }}
+          labels={{
+            placeholder: t('terminal.placeholder'),
+            send: t('terminal.inputHint'),
+          }}
+          emptyState={
+            <TerminalQuickStart
+              examples={quickStartExamples}
+              title={t('terminal.quickStart.title')}
+              heading={t('terminal.quickStart.heading')}
+              description={t('terminal.quickStart.description')}
+            />
+          }
+        />
       </div>
       <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
         <DialogContent className="gap-4 sm:max-w-2xl">
@@ -2577,6 +1886,12 @@ export function TerminalHistoryItem({
         {entry.resourceTaskId && (
           <Link
             to="/tasks"
+            search={{
+              file: undefined,
+              uri: undefined,
+              panel: undefined,
+              session: undefined,
+            }}
             className="ml-auto shrink-0 text-xs text-primary hover:underline"
           >
             {t('terminal.viewResourceTask')}
@@ -2595,9 +1910,18 @@ export function TerminalHistoryItem({
           onOpenResource={onOpenResource}
         />
       ) : entry.body ? (
-        <pre className="whitespace-pre-wrap break-words rounded-md bg-muted/40 p-2 text-xs leading-5 text-muted-foreground">
-          {entry.body}
-        </pre>
+        <TuiResult
+          record={{
+            id: entry.id,
+            command: entry.title,
+            status: entry.kind === 'error' ? 'error' : 'success',
+            content: { variant: 'text', text: entry.body },
+          }}
+          locale={translation.language.startsWith('zh') ? 'zh' : 'en'}
+          onOpenUri={(uri) => {
+            void onOpenResource(uri)
+          }}
+        />
       ) : null}
       {entry.details?.length ? (
         <dl className="mt-2 space-y-2">

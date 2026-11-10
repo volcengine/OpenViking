@@ -39,63 +39,6 @@
   border-radius: 0 12px 12px 0;
   margin-left: -8px;
 }
-.documentTabs {
-  height: 36px;
-  display: flex;
-  flex-shrink: 0;
-  align-items: stretch;
-  border-bottom: 1px solid #edeef3;
-  padding: 4px 8px 0;
-}
-.activeTab {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 80px;
-  max-width: 90%;
-  border: 1px solid #edeef3;
-  border-bottom-color: var(--background);
-  border-radius: 8px 8px 0 0;
-  margin-bottom: -1px;
-  padding: 0 12px;
-  font-size: 13px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.dirtyDot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #5252ff;
-}
-.documentToolbar,
-.emptyToolbar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 44px;
-  flex-shrink: 0;
-  padding: 4px 8px;
-}
-.documentToolbar {
-  border-bottom: 1px solid #edeef3;
-}
-.emptyToolbar {
-  justify-content: flex-end;
-}
-.documentToolbar > button:first-child {
-  font-family: inherit;
-  font-weight: 400;
-  font-size: 12px;
-  color: #787c91;
-}
-.editorActions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-}
 .moreMenu {
   position: relative;
 }

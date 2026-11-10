@@ -156,10 +156,7 @@ afterEach(() => {
   clients.forEach((client) => client.clear())
   clients.length = 0
 })
-function mount(
-  settingsPath: '/settings' | '/admin/settings' = '/settings',
-  showAccountScope = true,
-) {
+function mount(settingsPath: string = '/settings', showAccountScope = true) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -168,7 +165,9 @@ function mount(
     <QueryClientProvider client={client}>
       <StudioScopeSwitcher
         key={`${state.scope}:${managementMode}`}
-        settingsPath={settingsPath}
+        settingsPath={
+          settingsPath.startsWith('/admin') ? '/admin/settings' : '/settings'
+        }
         managementMode={managementMode}
         showAccountScope={showAccountScope}
       />
@@ -188,7 +187,7 @@ it('lists trusted users without credentials and switches without a User Key', as
   state.apiKey = ''
   mount()
   fireEvent.click(screen.getByRole('button', { name: 'scope.switchUser' }))
-  fireEvent.click(await screen.findByRole('button', { name: 'bob' }))
+  fireEvent.click(await screen.findByRole('option', { name: 'bob' }))
   expect(state.users).toHaveBeenCalledWith(
     expect.objectContaining({ apiKey: 'root-key' }),
     'team-a',
@@ -209,9 +208,12 @@ it('accepts an unlisted trusted User ID without asking for another key', async (
   state.apiKey = ''
   mount()
   fireEvent.click(screen.getByRole('button', { name: 'scope.switchUser' }))
-  fireEvent.change(screen.getByRole('textbox', { name: 'scope.searchUsers' }), {
-    target: { value: 'new-user' },
-  })
+  fireEvent.change(
+    screen.getByRole('searchbox', { name: 'scope.searchUsers' }),
+    {
+      target: { value: 'new-user' },
+    },
+  )
   fireEvent.click(screen.getByRole('button', { name: 'scope.useTrustedUser' }))
   expect(state.switchIdentity).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -227,20 +229,20 @@ it('shows each service once, leaving Account and User details out of its menu', 
     screen.getByRole('button', { name: 'connections.switch' }).textContent,
   ).toBe('Development')
   fireEvent.click(screen.getByRole('button', { name: 'connections.switch' }))
-  expect(screen.getAllByRole('button', { name: /Development/ })).toHaveLength(1)
+  expect(screen.getAllByRole('option', { name: /Development/ })).toHaveLength(1)
   expect(screen.queryByText('Same server, another configuration')).toBeNull()
   expect(within(screen.getByRole('dialog')).queryByText('alice')).toBeNull()
   expect(screen.queryByText('scope.userCredential')).toBeNull()
   expect(screen.queryByText(/team-a\s*\//)).toBeNull()
   expect(
     screen
-      .getByRole('button', { name: /Development\s*http/ })
-      .getAttribute('aria-current'),
+      .getByRole('option', { name: /Development\s*http/ })
+      .getAttribute('aria-selected'),
   ).toBe('true')
-  fireEvent.click(screen.getByRole('button', { name: /Development\s*http/ }))
+  fireEvent.click(screen.getByRole('option', { name: /Development\s*http/ }))
   expect(state.activateProfile).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: 'connections.switch' }))
-  fireEvent.click(screen.getByRole('button', { name: /Production\s*https/ }))
+  fireEvent.click(screen.getByRole('option', { name: /Production\s*https/ }))
   expect(state.activateProfile).toHaveBeenCalledWith('three')
   expect(state.accounts).not.toHaveBeenCalled()
   expect(state.users).not.toHaveBeenCalled()
@@ -255,10 +257,10 @@ it('keeps the same service label and selection when another saved User profile i
   fireEvent.click(screen.getByRole('button', { name: 'connections.switch' }))
   expect(
     screen
-      .getByRole('button', { name: /Development\s*http/ })
-      .getAttribute('aria-current'),
+      .getByRole('option', { name: /Development\s*http/ })
+      .getAttribute('aria-selected'),
   ).toBe('true')
-  fireEvent.click(screen.getByRole('button', { name: /Development\s*http/ }))
+  fireEvent.click(screen.getByRole('option', { name: /Development\s*http/ }))
   expect(state.activateProfile).not.toHaveBeenCalled()
 })
 
@@ -266,7 +268,7 @@ it('keeps a grouped profile User key available in the third selector under its A
   state.accountId = 'other'
   mount()
   fireEvent.click(screen.getByRole('button', { name: 'scope.switchUser' }))
-  fireEvent.click(screen.getByRole('button', { name: 'jane' }))
+  fireEvent.click(screen.getByRole('option', { name: 'jane' }))
   expect(state.switchIdentity).toHaveBeenCalledWith(
     expect.objectContaining({
       accountId: 'other',
@@ -275,7 +277,7 @@ it('keeps a grouped profile User key available in the third selector under its A
       preserveProfile: true,
     }),
   )
-  expect(screen.queryByRole('button', { name: 'production-user' })).toBeNull()
+  expect(screen.queryByRole('option', { name: 'production-user' })).toBeNull()
   expect(state.activateProfile).not.toHaveBeenCalled()
   expect(state.accounts).not.toHaveBeenCalled()
   expect(state.users).not.toHaveBeenCalled()
@@ -286,7 +288,7 @@ it('keeps service-wide Account selection explicit in management mode', async () 
   expect(screen.queryByRole('button', { name: 'scope.switchUser' })).toBeNull()
   expect(screen.getByRole('status').textContent).toBe('scope.rootManagement')
   fireEvent.click(screen.getByRole('button', { name: 'scope.switchAccount' }))
-  fireEvent.click(await screen.findByRole('button', { name: 'team-b' }))
+  fireEvent.click(await screen.findByRole('option', { name: 'team-b' }))
   expect(state.accounts).toHaveBeenCalledWith(
     expect.objectContaining({ apiKey: 'root-key' }),
   )
@@ -302,8 +304,8 @@ it.each(['root', 'user'])(
     state.role = role
     mount()
     fireEvent.click(screen.getByRole('button', { name: 'scope.switchUser' }))
-    expect(screen.getByRole('button', { name: 'alice' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'bob' }))
+    expect(screen.getByRole('option', { name: 'alice' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('option', { name: 'bob' }))
     expect(state.switchIdentity).toHaveBeenCalledWith({
       accountId: 'team-a',
       userId: 'bob',
@@ -328,11 +330,11 @@ it('bounds Account Admin management to its Account without selecting saved User 
   expect(
     screen.queryByRole('button', { name: 'scope.switchAccount' }),
   ).toBeNull()
-  expect(
-    screen.getByRole('group', { name: 'scope.managementAccount' }).textContent,
-  ).toBe('team-a')
+  expect(screen.getByLabelText('scope.managementAccount').textContent).toBe(
+    'team-a',
+  )
   expect(screen.queryByRole('dialog')).toBeNull()
-  expect(screen.queryByRole('button', { name: 'other' })).toBeNull()
+  expect(screen.queryByRole('option', { name: 'other' })).toBeNull()
   expect(screen.queryByRole('button', { name: 'scope.switchUser' })).toBeNull()
   expect(state.accounts).not.toHaveBeenCalled()
   expect(state.users).not.toHaveBeenCalled()
@@ -360,14 +362,14 @@ it('restores the workbench User selector after a mode round trip without switchi
 it('filters saved users by Account after the scope changes', () => {
   const view = mount()
   fireEvent.click(screen.getByRole('button', { name: 'scope.switchUser' }))
-  expect(screen.getByRole('button', { name: 'bob' })).toBeTruthy()
+  expect(screen.getByRole('option', { name: 'bob' })).toBeTruthy()
   state.accountId = 'team-b'
   state.scope = 'second'
   state.apiKey = ''
   view.refresh()
   fireEvent.click(screen.getByRole('button', { name: 'scope.switchUser' }))
-  expect(screen.getByRole('button', { name: 'carol' })).toBeTruthy()
-  expect(screen.queryByRole('button', { name: 'bob' })).toBeNull()
+  expect(screen.getByRole('option', { name: 'carol' })).toBeTruthy()
+  expect(screen.queryByRole('option', { name: 'bob' })).toBeNull()
   expect(state.users).not.toHaveBeenCalled()
 })
 it.each(['root', 'user'])(
@@ -376,7 +378,7 @@ it.each(['root', 'user'])(
     state.role = role
     mount()
     fireEvent.click(screen.getByRole('button', { name: 'scope.switchAccount' }))
-    fireEvent.click(screen.getByRole('button', { name: 'other' }))
+    fireEvent.click(screen.getByRole('option', { name: 'other' }))
     expect(state.switchIdentity).toHaveBeenCalledWith(
       expect.objectContaining({
         accountId: 'other',
@@ -396,7 +398,7 @@ it('provides configuration rather than fetching identities when no User API Key 
   state.hasHistory = false
   mount()
   fireEvent.click(screen.getByRole('button', { name: 'scope.switchUser' }))
-  expect(screen.queryByRole('button', { name: 'alice' })).toBeNull()
+  expect(screen.queryByRole('option', { name: 'alice' })).toBeNull()
   expect(screen.getByText('scope.noSavedUsers')).toBeTruthy()
   expect(
     screen.getByRole('link', { name: 'scope.addUserKey' }).getAttribute('href'),
@@ -406,7 +408,7 @@ it('provides configuration rather than fetching identities when no User API Key 
 it('keeps Account creation in the management selector', async () => {
   mount('/admin/settings')
   fireEvent.click(screen.getByRole('button', { name: 'scope.switchAccount' }))
-  await screen.findByRole('button', { name: 'team-b' })
+  await screen.findByRole('option', { name: 'team-b' })
   fireEvent.click(screen.getByRole('button', { name: 'create' }))
   expect(await screen.findByRole('dialog')).toBeTruthy()
 })
@@ -440,11 +442,11 @@ it.each([false, true])(
   (management) => {
     mount(management ? '/admin/settings' : '/settings')
     fireEvent.click(screen.getByRole('button', { name: 'connections.switch' }))
-    expect(Boolean(screen.queryByRole('button', { name: /Volcengine/ }))).toBe(
+    expect(Boolean(screen.queryByRole('option', { name: /Volcengine/ }))).toBe(
       !management,
     )
     expect(
-      screen.getByRole('button', { name: /Production\s*https/ }),
+      screen.getByRole('option', { name: /Production\s*https/ }),
     ).toBeTruthy()
   },
 )

@@ -1,3 +1,4 @@
+import type { VikingBotComposerProps } from '@openviking/react/components/viking-bot'
 // @vitest-environment jsdom
 import { AgentPanel } from '#/features/workbench/filesystem/components/agent-panel'
 import { registerFilesystemAgentSessionId } from '#/features/workbench/filesystem/lib/utils'
@@ -50,6 +51,29 @@ vi.mock('#/features/workbench/sessions/lib/api', () => ({
   serializeParts: vi.fn(),
   interruptChatSession: vi.fn().mockResolvedValue({ interrupted: false }),
 }))
+vi.mock('@openviking/react/components/viking-bot', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  VikingBotComposer: ({
+    value,
+    onValueChange,
+    onSend,
+    disabled,
+    labels,
+  }: VikingBotComposerProps) => (
+    <div>
+      <input
+        value={value}
+        onChange={(event) => onValueChange?.(event.target.value)}
+      />
+      <button
+        disabled={disabled}
+        onClick={() => onSend?.({ text: value, attachments: [] })}
+      >
+        {labels?.send}
+      </button>
+    </div>
+  ),
+}))
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
   window.localStorage.clear()
@@ -58,6 +82,14 @@ beforeEach(() => {
   m.history.mockReset().mockReturnValue({ data: undefined })
   m.stream.mockReset().mockImplementation(() => new Promise(() => {}))
 })
+vi.stubGlobal(
+  'ResizeObserver',
+  class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  },
+)
 afterEach(() => {
   cleanup()
   document.body.innerHTML = ''
@@ -98,7 +130,7 @@ it('preserves edits and blocks duplicate submission while creation waits', async
   submit('first')
   const id = m.create.mock.calls[0][0]
   submit('second')
-  expect(screen.getByRole('textbox').value).toBe('second')
+  expect(screen.getByRole<HTMLInputElement>('textbox').value).toBe('second')
   expect(m.stream).not.toHaveBeenCalled()
   await act(async () => {
     pending.resolve(id)
@@ -113,7 +145,7 @@ it('ignores a late creation after switching to another session', async () => {
   const pending = setup()
   submit('message for A')
   const id = m.create.mock.calls[0][0]
-  fireEvent.click(screen.getByTitle('agent.history'))
+  fireEvent.click(screen.getByRole('button', { name: 'agent.history' }))
   fireEvent.click(screen.getAllByText('B')[0].closest('button')!)
   expect(pending.url).toHaveBeenLastCalledWith('B')
   expect(m.history).toHaveBeenLastCalledWith('B')
@@ -130,19 +162,21 @@ it('preserves the first input when creation fails', async () => {
   await act(async () => {
     pending.reject(new Error('offline'))
   })
-  expect(screen.getByRole('textbox').value).toBe('important input')
+  expect(screen.getByRole<HTMLInputElement>('textbox').value).toBe(
+    'important input',
+  )
   expect(m.stream).not.toHaveBeenCalled()
 })
 
 it('clears accepted input once creation succeeds', async () => {
   const pending = setup()
   submit('first')
-  expect(screen.getByRole('textbox').value).toBe('first')
+  expect(screen.getByRole<HTMLInputElement>('textbox').value).toBe('first')
   const id = m.create.mock.calls[0][0]
   await act(async () => {
     pending.resolve(id)
   })
-  expect(screen.getByRole('textbox').value).toBe('')
+  expect(screen.getByRole<HTMLInputElement>('textbox').value).toBe('')
   expect(m.stream).toHaveBeenCalledTimes(1)
 })
 
@@ -161,11 +195,9 @@ it('does not send or publish after the panel unmounts', async () => {
 it('deletes the active history session only after confirmation and returns to a draft', async () => {
   const pending = setup()
   fireEvent.click(screen.getByRole('button', { name: 'agent.history' }))
-  fireEvent.click(screen.getByRole('button', { name: 'BB' }))
+  fireEvent.click(screen.getAllByText('B')[0].closest('button')!)
   fireEvent.click(screen.getByRole('button', { name: 'agent.history' }))
-  fireEvent.click(
-    screen.getByRole('button', { name: 'threadList.deleteSession' }),
-  )
+  fireEvent.click(screen.getByLabelText('threadList.deleteSession'))
   expect(m.remove).not.toHaveBeenCalled()
   await act(async () => {
     fireEvent.click(
@@ -179,13 +211,13 @@ it('deletes the active history session only after confirmation and returns to a 
 
 it('shows new session only for an existing conversation and opens an unpersisted draft', () => {
   const pending = setup()
-  expect(screen.queryByTitle('agent.newSession')).toBeNull()
-  fireEvent.click(screen.getByTitle('agent.history'))
+  expect(screen.queryByRole('button', { name: 'agent.newSession' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'agent.history' }))
   fireEvent.click(screen.getAllByText('B')[0].closest('button')!)
-  expect(screen.getByTitle('agent.newSession')).toBeTruthy()
-  fireEvent.click(screen.getByTitle('agent.newSession'))
+  expect(screen.getByRole('button', { name: 'agent.newSession' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'agent.newSession' }))
   expect(m.create).not.toHaveBeenCalled()
   expect(m.history).toHaveBeenLastCalledWith(undefined)
   expect(pending.url).toHaveBeenCalledWith('')
-  expect(screen.queryByTitle('agent.newSession')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'agent.newSession' })).toBeNull()
 })

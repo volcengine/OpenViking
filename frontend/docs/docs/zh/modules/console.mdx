@@ -79,3 +79,7 @@
 | `className`、`style` | 标准 HTML 属性                | —              | 根容器样式，其余 HTML 属性也透传                                                        |
 
 认证、权限、账号切换、页面布局与跨模块资源导航由宿主负责。
+
+## 独立模式切换
+
+`ConsoleModeSwitch` 从 `@openviking/react/modules/console` 导出，使用模块样式。通过 `mode`（`conversation` / `command`）和 `onModeChange` 受控切换；`labels` 包含 `mode`、`conversation`、`command` 三个文案。`showConversation={false}` 隐藏对话入口；可选 `panelId` 关联对应面板。宿主已有执行逻辑时可单独使用，不会创建 Client 或发起请求。

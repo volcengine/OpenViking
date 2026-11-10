@@ -1,3 +1,4 @@
+import { ConsoleModeSwitch } from './console-mode-switch.js';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { TuiRecord } from '../../components/tui/index.js';
@@ -35,23 +36,12 @@ export function ConsoleToolbar({
   const [sessionVersion, setSessionVersion] = useState(0);
   return (
     <div className="ov-console__toolbar">
-      <div className="ov-console__modes" role="group" aria-label={labels.mode}>
-        {(['conversation', 'command'] as const).map((value) => (
-          <button
-            className="ov-console__mode"
-            type="button"
-            key={value}
-            aria-label={labels[value]}
-            title={labels[value]}
-            aria-pressed={mode === value}
-            aria-controls={`${panelId}-${value}`}
-            onClick={() => onModeChange(value)}
-          >
-            <ConsoleIcon name={value} />
-            {mode === value ? <span>{labels[value]}</span> : null}
-          </button>
-        ))}
-      </div>
+      <ConsoleModeSwitch
+        mode={mode}
+        panelId={panelId}
+        labels={labels}
+        onModeChange={onModeChange}
+      />
       {children ? (
         <div className="ov-console__toolbar-slot">{children}</div>
       ) : null}

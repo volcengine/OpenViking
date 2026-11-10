@@ -49,6 +49,8 @@ export type {
  */
 export function Tui({
   records,
+  renderRecord,
+  history,
   value,
   disabled = false,
   emptyState,
@@ -140,21 +142,25 @@ export function Tui({
         }}
       >
         {records.length ? (
-          records.map((record) => (
-            <TuiRecordItem
-              key={record.id}
-              record={record}
-              command={findTuiCommand(record.command, commands)}
-              labels={text}
-              onOpenUri={onOpenUri}
-              onCopy={onCopy}
-              onPickCommand={
-                disabled || readOnly
-                  ? undefined
-                  : (command) => fillCommand(`${command} `)
-              }
-            />
-          ))
+          records.map((record) =>
+            renderRecord ? (
+              <div key={record.id}>{renderRecord(record)}</div>
+            ) : (
+              <TuiRecordItem
+                key={record.id}
+                record={record}
+                command={findTuiCommand(record.command, commands)}
+                labels={text}
+                onOpenUri={onOpenUri}
+                onCopy={onCopy}
+                onPickCommand={
+                  disabled || readOnly
+                    ? undefined
+                    : (command) => fillCommand(`${command} `)
+                }
+              />
+            ),
+          )
         ) : (
           <div className="ov-tui__empty">
             {emptyState === undefined ? text.empty : emptyState}
@@ -182,9 +188,12 @@ export function Tui({
         anchorRef={composerRef}
         onFocus={() => setDismissedValue(null)}
         value={value}
-        history={records.map((record) =>
-          formatTuiCommandInput(record.command, commands),
-        )}
+        history={
+          history ??
+          records.map((record) =>
+            formatTuiCommandInput(record.command, commands),
+          )
+        }
         labels={text}
         completion={completion}
         disabled={disabled}

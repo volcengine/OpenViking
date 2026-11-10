@@ -133,14 +133,19 @@ export function useInvalidateVikingFs() {
         predicate: ({ queryKey }) =>
           queryKey[0] === 'viking-fs-ls' ||
           queryKey[0] === 'viking-fs-tree' ||
-          queryKey[0] === 'viking-fs-stat',
+          queryKey[0] === 'viking-fs-stat' ||
+          queryKey[0] === 'studio-shared-preview',
       }),
     [queryClient],
   )
   const invalidatePreview = useCallback(
     (uri?: string) =>
       queryClient.invalidateQueries({
-        queryKey: uri ? ['viking-file-read', uri] : ['viking-file-read'],
+        predicate: ({ queryKey }) =>
+          (queryKey[0] === 'viking-file-read' &&
+            (!uri || queryKey[1] === uri)) ||
+          (queryKey[0] === 'studio-shared-preview' &&
+            (!uri || queryKey[2] === uri)),
       }),
     [queryClient],
   )

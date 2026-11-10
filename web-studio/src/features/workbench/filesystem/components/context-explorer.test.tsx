@@ -1,219 +1,93 @@
 // @vitest-environment jsdom
-
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { afterEach, expect, it, vi } from 'vitest'
+import { ContextTree } from './context-explorer'
 
-import type { VikingFsEntry } from '#/shared/types/viking-fs'
-
-import { ContextTree } from '#/features/workbench/filesystem/components/context-explorer'
-
-const { useVikingFsListMock } = vi.hoisted(() => ({
-  useVikingFsListMock: vi.fn(),
+const m = vi.hoisted(() => ({
+  select: vi.fn(),
+  toggleExpand: vi.fn(),
+  refresh: vi.fn(),
+  stat: vi.fn(),
+  hook: vi.fn(),
 }))
-
-vi.mock('#/features/workbench/resources/hooks/viking-fm', () => ({
-  useVikingFsList: useVikingFsListMock,
+vi.mock('./agent-connect-dialog', () => ({ AgentConnectDialog: () => null }))
+vi.mock('#/features/workbench/resources/lib/api', () => ({
+  fetchFsStat: m.stat,
 }))
-
+vi.mock('@openviking/react/modules/file-browser', () => ({
+  useFileBrowser: m.hook,
+}))
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, options?: { name?: string }) => {
-      if (key === 'explorer.title') return 'Filesystem'
-      if (key === 'explorer.expandDirectory') {
-        return `Expand ${options?.name}`
-      }
-      if (key === 'explorer.collapseDirectory') {
-        return `Collapse ${options?.name}`
-      }
-      if (key === 'explorer.namespaces.resources') {
-        return 'External resources the Agent can reference'
-      }
-      return key
-    },
-  }),
+  useTranslation: () => ({ t: (key: string) => key }),
 }))
-
-const directory: VikingFsEntry = {
-  abstract: '',
-  isDir: true,
-  modTime: '2026-08-24 12:00',
-  modTimestamp: 1,
-  name: 'resources',
-  overview: '',
-  size: '',
-  sizeBytes: null,
-  uri: 'viking://resources',
-}
-
-const file: VikingFsEntry = {
-  abstract: '',
-  isDir: false,
-  modTime: '2026-08-24 12:00',
-  modTimestamp: 1,
-  name: 'guide.md',
-  overview: '',
-  size: '1 KB',
-  sizeBytes: 1024,
-  uri: 'viking://resources/guide.md',
-}
-
-beforeEach(() => {
-  useVikingFsListMock.mockImplementation((uri: string) => ({
-    data: { entries: uri === 'viking://' ? [directory] : [file] },
-    isError: false,
-    isLoading: false,
-  }))
-  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
-    callback(0)
-    return 1
-  })
-})
-
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
-  vi.unstubAllGlobals()
 })
-
-function renderTree({
-  currentUri = 'viking://',
-  expandedKeys = new Set<string>(),
-  selectedFileUri = null,
-}: {
-  currentUri?: string
-  expandedKeys?: Set<string>
-  selectedFileUri?: string | null
-} = {}) {
-  const onExpandedKeysChange = vi.fn()
-  const onSelectDirectory = vi.fn()
-  const onSelectFile = vi.fn()
-
-  render(
-    <ContextTree
-      currentUri={currentUri}
-      expandedKeys={expandedKeys}
-      onExpandedKeysChange={onExpandedKeysChange}
-      onSelectDirectory={onSelectDirectory}
-      onSelectFile={onSelectFile}
-      selectedFileUri={selectedFileUri}
-    />,
-  )
-
-  return { onExpandedKeysChange, onSelectDirectory, onSelectFile }
+const row = {
+  kind: 'entry' as const,
+  id: 'viking://resources',
+  uri: 'viking://resources',
+  name: 'resources',
+  type: 'directory' as const,
+  depth: 0,
+  expanded: false,
 }
-
-describe('ContextTree keyboard semantics', () => {
-  it.each([
-    { rowTop: 160, expectedScrollTop: 300 },
-    { rowTop: 190, expectedScrollTop: 322 },
-  ])(
-    'only scrolls the tree when selection falls outside its viewport ($rowTop)',
-    ({ rowTop, expectedScrollTop }) => {
-      const props = {
-        currentUri: 'viking://',
-        expandedKeys: new Set([directory.uri]),
-        onExpandedKeysChange: vi.fn(),
-        onSelectDirectory: vi.fn(),
-        onSelectFile: vi.fn(),
-      }
-      const { rerender } = render(<ContextTree {...props} />)
-      const tree = screen.getByRole('list', {
-        name: 'Filesystem',
-      }).parentElement!
-      const row = screen.getByRole('button', { name: file.name }).parentElement!
-      tree.getBoundingClientRect = () => new DOMRect(0, 100, 300, 100)
-      Object.defineProperty(tree, 'clientHeight', { value: 100 })
-      tree.scrollTop = 300
-      row.getBoundingClientRect = () => new DOMRect(0, rowTop, 300, 32)
-
-      rerender(<ContextTree {...props} selectedFileUri={file.uri} />)
-
-      expect(tree.scrollTop).toBe(expectedScrollTop)
+function setup() {
+  m.hook.mockReturnValue({
+    rows: [row],
+    selectedId: row.id,
+    isReady: true,
+    treeError: null,
+    actions: {
+      select: m.select,
+      toggleExpand: m.toggleExpand,
+      refresh: m.refresh,
     },
+  })
+  const onSelectDirectory = vi.fn(),
+    onSelectFile = vi.fn(),
+    onExpandedKeysChange = vi.fn()
+  const client = new QueryClient()
+  client.setQueryData(['viking-fs-ls', 'viking://'], [])
+  render(
+    <QueryClientProvider client={client}>
+      <ContextTree
+        currentUri="viking://"
+        expandedKeys={new Set()}
+        onExpandedKeysChange={onExpandedKeysChange}
+        onSelectDirectory={onSelectDirectory}
+        onSelectFile={onSelectFile}
+      />
+    </QueryClientProvider>,
   )
-
-  it('renders native controls in a labelled, nested list', () => {
-    renderTree({
-      expandedKeys: new Set([directory.uri]),
-      selectedFileUri: file.uri,
-    })
-
-    const rootList = screen.getByRole('list', { name: 'Filesystem' })
-    const disclosure = screen.getByRole('button', {
-      name: 'Collapse resources',
-    })
-    const directorySelection = screen.getByRole('button', {
-      name: 'resources',
-    })
-    const fileSelection = screen.getByRole('button', { name: 'guide.md' })
-
-    expect(rootList.contains(directorySelection)).toBe(true)
-    expect(disclosure.getAttribute('aria-expanded')).toBe('true')
-    expect(disclosure.getAttribute('title')).toBe('Collapse resources')
-    expect(directorySelection.tabIndex).toBe(0)
-    expect(fileSelection.tabIndex).toBe(0)
-    expect(fileSelection.getAttribute('aria-current')).toBe('location')
-
-    fileSelection.focus()
-    expect(document.activeElement).toBe(fileSelection)
-
-    const directoryItem = directorySelection.closest('li')
-    const childList = fileSelection.closest('ul')
-    expect(directoryItem).toBeTruthy()
-    expect(childList?.parentElement).toBe(directoryItem)
-  })
-
-  it('activates disclosure with Enter without selecting the directory', async () => {
-    const user = userEvent.setup()
-    const { onExpandedKeysChange, onSelectDirectory, onSelectFile } =
-      renderTree()
-
-    const disclosure = screen.getByRole('button', {
-      name: 'Expand resources',
-    })
-    expect(disclosure.getAttribute('aria-expanded')).toBe('false')
-
-    await user.tab()
-    expect(document.activeElement).toBe(disclosure)
-    await user.keyboard('{Enter}')
-
-    expect(onExpandedKeysChange).toHaveBeenCalledOnce()
-    expect(onExpandedKeysChange.mock.calls[0]?.[0]).toEqual(
-      new Set([directory.uri]),
-    )
-    expect(onSelectDirectory).not.toHaveBeenCalled()
-    expect(onSelectFile).not.toHaveBeenCalled()
-  })
-
-  it('selects directories with Space and files with Enter', async () => {
-    const user = userEvent.setup()
-    const { onExpandedKeysChange, onSelectDirectory, onSelectFile } =
-      renderTree({ expandedKeys: new Set([directory.uri]) })
-
-    const disclosure = screen.getByRole('button', {
-      name: 'Collapse resources',
-    })
-    const directorySelection = screen.getByRole('button', {
-      name: 'resources',
-    })
-    const fileSelection = screen.getByRole('button', { name: 'guide.md' })
-
-    await user.tab()
-    expect(document.activeElement).toBe(disclosure)
-    await user.tab()
-    expect(document.activeElement).toBe(directorySelection)
-    await user.keyboard(' ')
-    await user.tab()
-    expect(document.activeElement).toBe(fileSelection)
-    await user.keyboard('{Enter}')
-
-    expect(onSelectDirectory).toHaveBeenCalledOnce()
-    expect(onSelectDirectory).toHaveBeenCalledWith(
-      expect.objectContaining({ uri: directory.uri }),
-    )
-    expect(onSelectFile).toHaveBeenCalledOnce()
-    expect(onSelectFile).toHaveBeenCalledWith(file)
-    expect(onExpandedKeysChange).not.toHaveBeenCalled()
-  })
+  return { client, onSelectDirectory, onSelectFile, onExpandedKeysChange }
+}
+it('uses module rows and delegates selection to the module', async () => {
+  setup()
+  await userEvent.click(screen.getByRole('treeitem', { name: /resources/ }))
+  expect(m.select).toHaveBeenCalledWith(
+    expect.objectContaining({ uri: row.uri }),
+  )
+  expect(m.hook).toHaveBeenCalledWith(
+    expect.objectContaining({ controlled: true, loadPreview: false }),
+  )
+})
+it('adapts the selected URI into Studio file metadata', async () => {
+  const { onSelectFile } = setup()
+  const file = {
+    uri: 'viking://resources/guide.md',
+    isDir: false,
+    name: 'guide.md',
+  }
+  m.stat.mockResolvedValue(file)
+  m.hook.mock.calls.at(-1)![0].onUriChange(file.uri)
+  await waitFor(() => expect(onSelectFile).toHaveBeenCalledWith(file))
+})
+it('refreshes module data after a Studio filesystem mutation', async () => {
+  const { client } = setup()
+  await client.invalidateQueries({ queryKey: ['viking-fs-ls'] })
+  await waitFor(() => expect(m.refresh).toHaveBeenCalledTimes(1))
 })

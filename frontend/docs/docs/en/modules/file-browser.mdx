@@ -110,3 +110,5 @@ The module exports `FileBrowserProps` from the subpath and the root entry; `File
 Labels are plain text; the host maps its own translation system into these props. No prop carries data — the module loads it.
 
 The module loads its own data through `useFileBrowser`, so the host supplies no directory or preview data; `labels.tree` and `labels.preview` are passed through to the file tree and the file preview.
+
+`useFileBrowser` accepts `loadPreview?: boolean` (default `true`). Set it to `false` when the host provides a separate editable detail pane: tree, selection, search and refresh remain managed by the module, without duplicate preview requests.

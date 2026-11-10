@@ -1,3 +1,5 @@
+import { ConsoleModeSwitch } from '@openviking/react/modules/console'
+import '@openviking/react/modules/console/style.css'
 import { StudioHeaderActions } from '#/app/layouts/studio-header-actions'
 import { useQueryClient } from '@tanstack/react-query'
 import styles from './workbench.module.css'
@@ -12,16 +14,12 @@ import { showErrorToast } from '#/shared/lib/error-toast'
 import { getRouteApi, useNavigate, useBlocker } from '@tanstack/react-router'
 import {
   GalleryVerticalEndIcon,
-  FileTextIcon,
   MoreHorizontalIcon,
   ArrowLeftIcon,
-  BotIcon,
-  ClipboardIcon,
   HistoryIcon,
   PackageIcon,
   PanelRightCloseIcon,
   PanelRightOpenIcon,
-  TerminalIcon,
   UploadIcon,
   WandSparkles,
 } from 'lucide-react'
@@ -34,7 +32,7 @@ import { useAppConnection } from '#/features/connection/hooks/use-app-connection
 import { useStudioService } from '#/features/connection/hooks/use-studio-service'
 import { AddResourceForm } from '#/features/workbench/resources/components/add-resource-page'
 import { FindPalette } from '#/features/workbench/resources/components/find-palette'
-import { LazyFilePreview } from '#/features/workbench/resources/components/lazy-file-preview'
+import { SharedFilePreview } from './components/shared-file-preview'
 import {
   ResourceUploadProvider,
   useResourceUpload,
@@ -51,7 +49,6 @@ import {
   parentUri,
 } from '#/shared/lib/viking-fs'
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
-import { copyTextToClipboard } from '#/shared/lib/clipboard'
 import { Button } from '#/shared/ui/button'
 import {
   Dialog,
@@ -66,7 +63,6 @@ import {
   ContextExplorerHeader,
   ContextTree,
   FilesystemResizeHandle,
-  PanelTab,
 } from '#/features/workbench/filesystem/components/context-explorer'
 import { DataManagementDialog } from '#/features/workbench/filesystem/components/data-management-dialog'
 import { SnapshotComparisonDialog } from '#/features/workbench/filesystem/components/snapshot-comparison-dialog'
@@ -148,11 +144,7 @@ function FilesystemWorkbench() {
   const [uploadDialogOpen, setUploadDialogOpen] = useState(
     () => search.upload ?? false,
   )
-  const [documentToolbar, setDocumentToolbar] = useState<HTMLDivElement | null>(
-    null,
-  )
   const {
-    dirty: documentDirty,
     dirtyRef,
     onDirtyChange: handleDirtyChange,
     confirmNavigation: confirmDocumentNavigation,
@@ -228,6 +220,7 @@ function FilesystemWorkbench() {
   })
   const { activeTaskCount, hasActiveTasks, isRefreshingTasks } =
     useResourceUpload()
+  const contextRefreshRef = useRef<{ refresh: () => Promise<void> }>(null)
   const { invalidateAll, invalidateList } = useInvalidateVikingFs()
   const handleDocumentSaved = useCallback(
     (uri: string) => {
@@ -238,6 +231,7 @@ function FilesystemWorkbench() {
         queryKey: ['agent-experience-list', identityScopeKey],
       })
       void invalidateAll()
+      void contextRefreshRef.current?.refresh()
     },
     [identityScopeKey, queryClient, invalidateAll],
   )
@@ -443,6 +437,7 @@ function FilesystemWorkbench() {
   const handleRefreshContextTree = useCallback(async () => {
     const refreshedFile = selectedFileRef.current
     await invalidateList()
+    await contextRefreshRef.current?.refresh()
     if (!refreshedFile || refreshedFile.isDir) return
 
     try {
@@ -482,7 +477,6 @@ function FilesystemWorkbench() {
   }, [])
 
   const selectedUri = selectedFile?.uri ?? currentUri
-  const hasOpenDocument = selectedFile !== null && selectedUri !== ROOT_URI
   const selectedIsDirectory = selectedFile?.isDir ?? true
   const transferUri = selectedIsDirectory
     ? selectedUri
@@ -491,11 +485,6 @@ function FilesystemWorkbench() {
     setDataManagementMode(null)
   }, [selectedUri])
   const canTransferSelectedUri = transferUri.startsWith('viking://resources/')
-  const displayUri = selectedUri
-    .replace(/^viking:\/\//, '')
-    .replace(/\/$/, '')
-    .split('/')
-    .join(' / ')
   const entries = visibleContextEntries(listQuery.data?.entries ?? [])
   const layoutStyle = useMemo(
     () =>
@@ -637,6 +626,7 @@ function FilesystemWorkbench() {
           />
           <div className="min-h-0 flex-1">
             <ContextTree
+              refreshRef={contextRefreshRef}
               currentUri={currentUri}
               selectedFileUri={
                 selectedFile && !selectedFile.isDir ? selectedFile.uri : null
@@ -655,53 +645,18 @@ function FilesystemWorkbench() {
         />
 
         <main className={styles.document}>
-          {hasOpenDocument ? (
-            <div className={styles.documentTabs}>
-              <span className={styles.activeTab}>
-                <FileTextIcon className="size-3.5" />
-                {selectedFile.name}
-                {documentDirty ? <span className={styles.dirtyDot} /> : null}
-              </span>
-            </div>
-          ) : null}
-          {hasOpenDocument ||
-          (canUseCliPanel && (isCompactLayout || rightCollapsed)) ? (
-            <div
-              className={
-                hasOpenDocument ? styles.documentToolbar : styles.emptyToolbar
-              }
-            >
-              {hasOpenDocument ? (
+          {selectedFile ? (
+            <SharedFilePreview
+              key={selectedFile.uri}
+              file={selectedFile}
+              onDirtyChange={handleDirtyChange}
+              onSaved={handleDocumentSaved}
+              onNavigate={(uri) => {
+                void revealResource(uri)
+              }}
+              defaultReadLimit={canUseLocalTools ? -1 : 10000}
+              extraActions={
                 <>
-                  <button
-                    type="button"
-                    className="min-w-0 flex-1 truncate rounded px-1.5 py-1 text-left font-mono text-xs font-semibold text-foreground transition-colors hover:bg-muted"
-                    title={selectedUri}
-                    onClick={() => void revealResource(selectedUri)}
-                  >
-                    {displayUri}
-                  </button>
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="ghost"
-                    title={t('copyUri')}
-                    onClick={() => {
-                      void copyTextToClipboard(selectedUri)
-                        .then(() => {
-                          toast.success(t('copied'))
-                        })
-                        .catch(() => {
-                          toast.error(t('copyFailed'))
-                        })
-                    }}
-                  >
-                    <ClipboardIcon className="size-4" />
-                  </Button>
-                  <div
-                    ref={setDocumentToolbar}
-                    className={styles.editorActions}
-                  />
                   <details className={styles.moreMenu}>
                     <summary aria-label={t('ide.more')} title={t('ide.more')}>
                       <MoreHorizontalIcon className="size-4" />
@@ -771,81 +726,50 @@ function FilesystemWorkbench() {
                       ) : null}
                     </div>
                   </details>
-                </>
-              ) : null}
-              {canUseCliPanel ? (
-                <div className="flex shrink-0 items-center gap-1 xl:hidden">
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant={activePanel === 'terminal' ? 'secondary' : 'ghost'}
-                    title={t('tabs.terminal')}
-                    aria-label={t('tabs.terminal')}
-                    onClick={() => handleOpenActionPanel('terminal')}
-                  >
-                    <TerminalIcon className="size-4" />
-                  </Button>
-                  {canUseLocalTools ? (
+                  {canUseCliPanel && (isCompactLayout || rightCollapsed) ? (
                     <Button
-                      type="button"
+                      variant="ghost"
                       size="icon-sm"
-                      variant={activePanel === 'agent' ? 'secondary' : 'ghost'}
-                      title={t('tabs.agent')}
-                      aria-label={t('tabs.agent')}
-                      onClick={() => handleOpenActionPanel('agent')}
+                      title={t('actionPanel.expand')}
+                      onClick={() =>
+                        isCompactLayout
+                          ? handleOpenActionPanel(activePanel)
+                          : toggleRightCollapsed()
+                      }
                     >
-                      <BotIcon className="size-4" />
+                      <PanelRightOpenIcon className="size-4" />
                     </Button>
                   ) : null}
-                </div>
-              ) : null}
-              {canUseCliPanel && rightCollapsed ? (
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  variant="ghost"
-                  className="hidden shrink-0 xl:inline-flex"
-                  title={t('actionPanel.expand')}
-                  aria-label={t('actionPanel.expand')}
-                  onClick={toggleRightCollapsed}
-                >
-                  <PanelRightOpenIcon className="size-4" />
-                </Button>
-              ) : null}
-            </div>
-          ) : null}
-          {hasOpenDocument ? (
-            <div className="filesystem-preview min-h-0 flex-1">
-              {selectedIsDirectory &&
-              usesWorkbenchDirectoryView(selectedUri) ? (
-                <WorkbenchDirectory
-                  key={selectedUri}
-                  uri={selectedUri}
-                  onNavigate={(uri) => void revealResource(uri)}
-                />
-              ) : (
-                <LazyFilePreview
-                  ide
-                  toolbarContainer={documentToolbar}
-                  onDirtyChange={handleDirtyChange}
-                  onSaved={handleDocumentSaved}
-                  previewContent={
-                    isExperienceFile(selectedFile.uri) ? (
-                      <ExperienceDetail
-                        experienceUri={selectedFile.uri}
-                        embedded
-                      />
-                    ) : undefined
-                  }
-                  defaultReadLimit={canUseLocalTools ? -1 : 10000}
-                  file={selectedFile}
-                  hideDirectoryHeader
-                  onClose={() => setSelectedFile(null)}
-                  onNavigate={(uri) => void revealResource(uri)}
-                  showCloseButton={false}
-                />
-              )}
-            </div>
+                </>
+              }
+              content={
+                selectedIsDirectory &&
+                usesWorkbenchDirectoryView(selectedUri) ? (
+                  <WorkbenchDirectory
+                    key={selectedUri}
+                    uri={selectedUri}
+                    onNavigate={(uri) => {
+                      void revealResource(uri)
+                    }}
+                  />
+                ) : isExperienceFile(selectedFile.uri) ? (
+                  <ExperienceDetail experienceUri={selectedFile.uri} embedded />
+                ) : undefined
+              }
+            />
+          ) : canUseCliPanel && (isCompactLayout || rightCollapsed) ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              title={t('actionPanel.expand')}
+              onClick={() =>
+                isCompactLayout
+                  ? handleOpenActionPanel(activePanel)
+                  : toggleRightCollapsed()
+              }
+            >
+              <PanelRightOpenIcon className="size-4" />
+            </Button>
           ) : null}
         </main>
         {canUseCliPanel && !rightCollapsed ? (
@@ -1122,22 +1046,18 @@ function FilesystemActionTabs({
   const { t } = useTranslation('filesystem')
 
   return (
-    <div className="inline-flex rounded-lg bg-muted p-0.5">
-      {showAgentTab ? (
-        <PanelTab
-          active={activePanel === 'agent'}
-          icon={BotIcon}
-          label={t('tabs.agent')}
-          onClick={() => onPanelChange('agent')}
-        />
-      ) : null}
-      <PanelTab
-        active={activePanel === 'terminal'}
-        icon={TerminalIcon}
-        label={t('tabs.terminal')}
-        onClick={() => onPanelChange('terminal')}
-      />
-    </div>
+    <ConsoleModeSwitch
+      mode={activePanel === 'agent' ? 'conversation' : 'command'}
+      showConversation={showAgentTab}
+      onModeChange={(mode) =>
+        onPanelChange(mode === 'conversation' ? 'agent' : 'terminal')
+      }
+      labels={{
+        mode: t('actionPanel.expand'),
+        conversation: t('tabs.agent'),
+        command: t('tabs.terminal'),
+      }}
+    />
   )
 }
 

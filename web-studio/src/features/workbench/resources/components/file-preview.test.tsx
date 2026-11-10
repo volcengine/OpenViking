@@ -22,7 +22,6 @@ import {
 import { saveFileContent } from '#/features/workbench/resources/lib/api'
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
 import { getContentDownload } from '#/shared/api/ov-client/index'
-import { toast } from 'sonner'
 
 const previewState = vi.hoisted(() => ({
   override: null as {
@@ -39,10 +38,18 @@ const previewMocks = vi.hoisted(() => ({
   })),
 }))
 
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
+  useAppConnection: () => ({ identityScopeKey: 'test', connection: {} }),
+}))
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 vi.mock('#/features/workbench/resources/lib/api', async (original) => ({
   ...(await original<Record<string, unknown>>()),
   saveFileContent: vi.fn(),
+  fetchFileContent: vi.fn(async () => ({
+    content: previewState.override?.content ?? '[Target](./target.md)',
+    truncated: previewState.override?.truncated ?? false,
+  })),
+  fetchDirectoryLevelContent: vi.fn(async () => ''),
 }))
 vi.mock('#/shared/components/code-editor', async () => {
   const React = await import('react')
@@ -76,6 +83,7 @@ vi.mock('next-themes', () => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
+    i18n: { language: 'en' },
     t: (key: string) =>
       ({
         'filePreview.mermaid.diagramLabel': 'Mermaid diagram',
@@ -147,14 +155,29 @@ const directory: VikingFsEntry = {
 
 function renderPreview(
   entry: VikingFsEntry,
-  onNavigate: ((uri: string) => void) | undefined,
+  onNavigate?: (uri: string) => void,
   directoryOverview?: string,
   directoryAbstract?: string,
   ide = false,
 ) {
+  if (previewState.override?.fileType === 'jsonl')
+    entry = {
+      ...entry,
+      name: 'index.jsonl',
+      uri: entry.uri.replace(/\.md$/, '.jsonl'),
+    }
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   })
+  queryClient.setQueryData(
+    ['studio-shared-preview', 'test', entry.uri, entry.modTime, -1],
+    entry.isDir
+      ? { abstract: directoryAbstract ?? '', overview: directoryOverview ?? '' }
+      : {
+          content: previewState.override?.content ?? '[Target](./target.md)',
+          truncated: previewState.override?.truncated ?? false,
+        },
+  )
   if (entry.isDir) {
     queryClient.setQueryData(
       ['viking-directory-sidecar', entry.uri, 'abstract'],
@@ -181,8 +204,27 @@ function renderPreview(
   )
 }
 
+beforeEach(() => {
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  )
+})
+
 describe('FilePreview Markdown rendering', () => {
   beforeEach(() => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
     cleanup()
     previewMocks.renderMermaid.mockClear()
     Object.defineProperty(URL, 'createObjectURL', {
@@ -454,14 +496,14 @@ describe('FilePreview Markdown rendering', () => {
     expect(screen.getByText('Summary body')).toBeTruthy()
     expect(screen.queryByText('Overview body')).toBeNull()
 
-    const overview = screen.getByRole('button', { name: /^L1 / })
+    const overview = screen.getByRole('tab', { name: 'L1' })
     fireEvent.click(overview)
-    expect(overview.getAttribute('aria-pressed')).toBe('true')
+    expect(overview.getAttribute('aria-selected')).toBe('true')
     expect(screen.getByText('Overview body')).toBeTruthy()
     expect(screen.queryByText('Summary body')).toBeNull()
   })
 
-  it('renders directory L0 and L1 frontmatter as independent metadata panels', () => {
+  it('renders directory L0 and L1 frontmatter as independent metadata panels', async () => {
     const sidecar = (
       filename: '.abstract.md' | '.overview.md',
       trigger: string,
@@ -492,32 +534,24 @@ describe('FilePreview Markdown rendering', () => {
       sidecar('.abstract.md', 'abstract_refresh', 'L0 body'),
     )
 
-    expect(
-      screen.getAllByRole('region', {
-        name: 'filePreview.yamlMetadata.ariaLabel',
-      }),
-    ).toHaveLength(2)
-    expect(screen.getByText('abstract_refresh')).toBeDefined()
-    expect(screen.getByText('overview_refresh')).toBeDefined()
-    expect(screen.getByText('L0 body')).toBeDefined()
-    expect(screen.getByText('L1 body')).toBeDefined()
-
-    const articles = [
-      screen.getByText('L0 body').closest('article'),
-      screen.getByText('L1 body').closest('article'),
-    ]
-    expect(articles.every(Boolean)).toBe(true)
-    for (const article of articles) {
+    for (const [tab, body, generator, sidecarName] of [
+      ['L0', 'L0 body', 'abstract_refresh', '.abstract.md'],
+      ['L1', 'L1 body', 'overview_refresh', '.overview.md'],
+    ]) {
+      fireEvent.click(screen.getByRole('tab', { name: tab }))
+      expect(
+        screen.getAllByRole('region', {
+          name: 'filePreview.yamlMetadata.ariaLabel',
+        }),
+      ).toHaveLength(1)
+      expect(screen.getByText(generator)).toBeDefined()
+      const article = screen.getByText(body).closest('article')
       expect(article?.textContent).not.toContain('generated_by:')
       expect(article?.textContent).not.toContain('extensions:')
+      const details = container.querySelector('details')!
+      if (!details.open) fireEvent.click(details.querySelector('summary')!)
+      expect(details.textContent).toContain(`sidecar: ${sidecarName}`)
     }
-
-    const details = [...container.querySelectorAll('details')]
-    expect(details).toHaveLength(2)
-    expect(details.every((item) => !item.open)).toBe(true)
-    fireEvent.click(details[0].querySelector('summary')!)
-    expect(details[0].textContent).toContain('sidecar: .abstract.md')
-    expect(details[1].textContent).toContain('sidecar: .overview.md')
   })
 })
 
@@ -1422,10 +1456,16 @@ describe('FilePreview complete-content editing', () => {
         <FilePreview file={file} defaultReadLimit={10000} onClose={vi.fn()} />
       </QueryClientProvider>,
     )
-    fireEvent.click(screen.getByRole('button', { name: 'filePreview.edit' }))
-    expect((await screen.findByTestId('editor-content')).textContent).toBe(
-      'complete original\nlast line',
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'filePreview.edit' }),
     )
+    expect(
+      (
+        await screen.findByRole<HTMLTextAreaElement>('textbox', {
+          name: 'filePreview.edit',
+        })
+      ).value,
+    ).toBe('complete original\nlast line')
     expect(getContentDownload).toHaveBeenCalledWith({
       query: { uri: file.uri },
       responseType: 'text',
@@ -1433,10 +1473,12 @@ describe('FilePreview complete-content editing', () => {
     })
     vi.mocked(saveFileContent).mockRejectedValue(new Error('Forbidden'))
     fireEvent.click(screen.getByRole('button', { name: 'filePreview.save' }))
-    await waitFor(() => expect(toast.error).toHaveBeenCalled())
-    expect(screen.getByTestId('editor-content').textContent).toBe(
-      'complete original\nlast line',
-    )
+    await screen.findByRole('alert')
+    expect(
+      screen.getByRole<HTMLTextAreaElement>('textbox', {
+        name: 'filePreview.edit',
+      }).value,
+    ).toBe('complete original\nlast line')
   })
 
   it('does not open an editor when the complete original cannot be read', async () => {
@@ -1452,9 +1494,13 @@ describe('FilePreview complete-content editing', () => {
         <FilePreview file={file} defaultReadLimit={10000} onClose={vi.fn()} />
       </QueryClientProvider>,
     )
-    fireEvent.click(screen.getByRole('button', { name: 'filePreview.edit' }))
-    await waitFor(() => expect(toast.error).toHaveBeenCalled())
-    expect(screen.queryByTestId('editor-content')).toBeNull()
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'filePreview.edit' }),
+    )
+    await screen.findByRole('alert')
+    expect(
+      screen.queryByRole('textbox', { name: 'filePreview.edit' }),
+    ).toBeNull()
   })
 })
 
@@ -1481,12 +1527,11 @@ describe('IDE file preview', () => {
     )
     expect(screen.getByText('Experience details')).toBeTruthy()
     expect(
-      toolbar.contains(
-        screen.getByRole('button', { name: 'filePreview.markdownSource' }),
-      ),
-    ).toBe(true)
+      await screen.findByRole('button', { name: 'filePreview.markdownSource' }),
+    ).toBeTruthy()
+    expect(toolbar.childElementCount).toBe(0)
     fireEvent.click(
-      screen.getByRole('button', { name: 'filePreview.markdownSource' }),
+      await screen.findByRole('button', { name: 'filePreview.markdownSource' }),
     )
     expect(screen.queryByText('Experience details')).toBeNull()
     fireEvent.click(
@@ -1498,6 +1543,9 @@ describe('IDE file preview', () => {
   })
 
   it('saves the editor content with the IDE keyboard shortcut and exits editing', async () => {
+    vi.mocked(getContentDownload).mockResolvedValue({
+      data: '[Target](./target.md)',
+    } as never)
     const onSaved = vi.fn()
     vi.mocked(saveFileContent).mockResolvedValue(undefined)
     const toolbar = document.createElement('div')
@@ -1514,8 +1562,10 @@ describe('IDE file preview', () => {
         />
       </QueryClientProvider>,
     )
-    fireEvent.click(screen.getByRole('button', { name: 'filePreview.edit' }))
-    await screen.findByTestId('editor-content')
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'filePreview.edit' }),
+    )
+    await screen.findByRole('textbox', { name: 'filePreview.edit' })
     fireEvent.keyDown(window, { key: 's', ctrlKey: true })
     await waitFor(() =>
       expect(saveFileContent).toHaveBeenCalledWith(
@@ -1524,7 +1574,9 @@ describe('IDE file preview', () => {
       ),
     )
     await waitFor(() =>
-      expect(screen.queryByTestId('editor-content')).toBeNull(),
+      expect(
+        screen.queryByRole('textbox', { name: 'filePreview.edit' }),
+      ).toBeNull(),
     )
     expect(
       screen.getByRole('button', { name: 'filePreview.edit' }),

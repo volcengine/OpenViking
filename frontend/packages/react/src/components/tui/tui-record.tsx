@@ -35,7 +35,7 @@ export interface TuiRecordProps {
   onPickCommand?: (command: string) => void;
 }
 
-function RecordBody({
+export function RecordBody({
   record,
   command,
   labels,

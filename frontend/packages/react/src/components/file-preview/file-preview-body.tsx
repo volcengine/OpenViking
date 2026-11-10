@@ -76,6 +76,15 @@ export function FilePreviewBody({
   // Loading outranks empty: `source` is not filled in yet, which is not an empty file.
   if (fileTab.loading) return <LoadingState text={text} />;
 
+  if (viewMode === 'source' && fileTab.preview !== undefined)
+    return (
+      <pre className="ov-file-preview__source">
+        <code>{fileTab.source.content}</code>
+      </pre>
+    );
+  if (viewMode === 'preview' && fileTab.preview !== undefined)
+    return <>{fileTab.preview}</>;
+
   if (isEmptyFile(fileTab.source)) return <EmptyFileState text={text} />;
 
   return (

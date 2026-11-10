@@ -104,3 +104,9 @@ An interaction is host state, not a backend pause: the host derives the question
 ## Development entry
 
 The standalone style entry is `@openviking/react/components/viking-bot/style.css`, which already includes the theme baseline and can be consumed on its own.
+
+## Standalone welcome view
+
+`VikingBotWelcome` is exported from the same entry and uses the same stylesheet. Supply optional `labels`, `quickInputs`, and `onSelect` to reuse the welcome illustration and prompt list. `disabled` disables prompts. Selection only reports the input; the host decides whether to fill a draft or submit it.
+
+`VikingBotSessions.renderAction?: (session: VikingBotSession) => ReactNode` adds a sibling action beside each session, such as deletion. The host owns its confirmation and request. `isCreating` disables creation while pending; `canCreate: false` hides the creation action (default: visible). Keep confirmation dialogs outside the history popover so dismissal does not unmount them.

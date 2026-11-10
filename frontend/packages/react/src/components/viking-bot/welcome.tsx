@@ -1,19 +1,21 @@
 import { VikingBotIcon } from '../../icons/viking-bot-icons.js';
 import type { VikingBotQuickInput } from './capabilities.js';
 import type { VikingBotLabels } from './model.js';
+import { DEFAULT_LABELS } from './labels.js';
 import { QuickInputs } from './quick-inputs.js';
 
 export function VikingBotWelcome({
-  labels,
+  labels: overrides,
   quickInputs,
   onSelect,
   disabled,
 }: {
-  labels: Required<VikingBotLabels>;
+  labels?: VikingBotLabels;
   quickInputs?: readonly VikingBotQuickInput[];
   onSelect: (input: VikingBotQuickInput) => void;
   disabled?: boolean;
 }) {
+  const labels = { ...DEFAULT_LABELS, ...overrides };
   return (
     <div className="ov-viking-bot__home">
       <div className="ov-viking-bot__home-intro">

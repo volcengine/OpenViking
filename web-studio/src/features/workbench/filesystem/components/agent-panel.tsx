@@ -1,14 +1,11 @@
 import { useDefaultConversationTitles } from '#/features/workbench/sessions/lib/use-default-conversation-titles'
+import type { VikingBotSessions } from '@openviking/react/components/viking-bot'
 import {
-  CheckCircle2Icon,
-  CircleAlertIcon,
-  HistoryIcon,
-  Loader2Icon,
-  BookOpenIcon,
-  LightbulbIcon,
-  PanelsTopLeftIcon,
-  SquarePenIcon,
-} from 'lucide-react'
+  VikingBotSessionActions,
+  VikingBotWelcome,
+} from '@openviking/react/components/viking-bot'
+import '@openviking/react/components/viking-bot/style.css'
+import { CircleAlertIcon, Loader2Icon, Trash2Icon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
@@ -29,15 +26,7 @@ import {
   createVikingBotWebSessionId,
   isVikingBotWebSession,
 } from '#/features/workbench/sessions/lib/vikingbot-sessions'
-import { cn } from '#/shared/lib/utils'
 import { Button } from '#/shared/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '#/shared/ui/dialog'
 
 import type { ResourceOpenHandler } from '#/features/workbench/filesystem/lib/types'
 import {
@@ -59,10 +48,10 @@ export function AgentPanel({
 }) {
   const { t } = useTranslation('filesystem')
   const { identityScopeKey } = useAppConnection()
+  const [deleteSessionId, setDeleteSessionId] = useState<string | null>(null)
   const [sessionId, setSessionId] = useState(
     initialSessionId ?? createVikingBotWebSessionId(),
   )
-  const [historyOpen, setHistoryOpen] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [isCreatingSession, setIsCreatingSession] = useState(false)
   const [historySessionId, setHistorySessionId] = useState(initialSessionId)
@@ -110,7 +99,6 @@ export function AgentPanel({
     setPersistedSessionId(undefined)
     setSessionId(createVikingBotWebSessionId())
     onSessionChange('')
-    setHistoryOpen(false)
   }, [chat, isCreatingSession, onSessionChange])
 
   const handleSwitchSession = useCallback(
@@ -127,7 +115,6 @@ export function AgentPanel({
       setPersistedSessionId(nextSessionId)
       setSessionId(nextSessionId)
       onSessionChange(nextSessionId)
-      setHistoryOpen(false)
     },
     [chat, identityScopeKey, onSessionChange],
   )
@@ -204,12 +191,63 @@ export function AgentPanel({
         isCreatingSession={isCreatingSession}
         newSessionLabel={t('agent.newSession')}
         onNewSession={() => void handleNewSession()}
-        onOpenHistory={() => setHistoryOpen(true)}
+        sessions={{
+          items: reversedSessions.map((session) => ({
+            id: session.session_id,
+            title: getTitle(session.session_id),
+          })),
+          currentId: sessionId,
+          isLoading: isLoadingSessions,
+          onSelect: handleSwitchSession,
+          onNew: () => {
+            void handleNewSession()
+          },
+          renderAction: (session) => (
+            <SessionDeleteAction
+              title={session.title}
+              onClick={() => setDeleteSessionId(session.id)}
+            />
+          ),
+        }}
+        onOpenHistory={() => {}}
         sessionTitle={displayedSessionTitle}
         showNewSession={Boolean(
           persistedSessionId || chat.messages.length || sessionError,
         )}
       />
+      {deleteSessionId ? (
+        <DeleteConversation
+          defaultOpen
+          hideTrigger
+          onOpenChange={(open) => {
+            if (!open) setDeleteSessionId(null)
+          }}
+          id={deleteSessionId}
+          title={getTitle(deleteSessionId)}
+          onDeleted={() => {
+            setDeleteSessionId(null)
+            removeTitle(deleteSessionId)
+            setFilesystemSessionIds((ids) =>
+              ids.filter((id) => id !== deleteSessionId),
+            )
+            if (deleteSessionId === sessionId) {
+              creationGenerationRef.current += 1
+              chat.abort({
+                closeLocalStream: true,
+                discardPartial: true,
+              })
+              chat.setMessages([])
+              creationStartedRef.current = false
+              setIsCreatingSession(false)
+              setSessionError(null)
+              setHistorySessionId(undefined)
+              setPersistedSessionId(undefined)
+              setSessionId(createVikingBotWebSessionId())
+              onSessionChange('')
+            }
+          }}
+        />
+      ) : null}
       <div className="flex min-h-0 flex-1 flex-col">
         <div
           ref={scrollRef}
@@ -278,111 +316,12 @@ export function AgentPanel({
           </div>
         )}
       </div>
-
-      <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
-        <DialogContent className="gap-4 sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{t('agent.historyTitle')}</DialogTitle>
-            <DialogDescription>
-              {t('agent.historyDescription')}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[420px] overflow-y-auto pr-1">
-            {isLoadingSessions ? (
-              <div className="flex items-center gap-2 rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
-                <Loader2Icon className="size-4 animate-spin" />
-                {t('agent.loadingSessions')}
-              </div>
-            ) : reversedSessions.length === 0 ? (
-              <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
-                {t('agent.noSessions')}
-              </div>
-            ) : (
-              <div className="grid gap-2">
-                {reversedSessions.map((session) => {
-                  const active = session.session_id === sessionId
-                  const title = getTitle(session.session_id)
-
-                  return (
-                    <div
-                      key={session.session_id}
-                      className="group/conversation flex items-center gap-1"
-                    >
-                      <button
-                        type="button"
-                        className={cn(
-                          'flex min-w-0 flex-1 items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors hover:border-primary/45 hover:bg-muted/45',
-                          active
-                            ? 'border-primary/60 bg-primary/10'
-                            : 'border-border bg-background',
-                        )}
-                        onClick={() => handleSwitchSession(session.session_id)}
-                      >
-                        <HistoryIcon className="size-4 shrink-0 text-muted-foreground" />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium text-foreground">
-                            {title}
-                          </span>
-                          <span className="block truncate font-mono text-[11px] text-muted-foreground">
-                            {session.session_id}
-                          </span>
-                        </span>
-                        {active ? (
-                          <CheckCircle2Icon className="size-4 shrink-0 text-primary" />
-                        ) : null}
-                      </button>
-                      <DeleteConversation
-                        id={session.session_id}
-                        title={title}
-                        onDeleted={() => {
-                          removeTitle(session.session_id)
-                          setFilesystemSessionIds((ids) =>
-                            ids.filter((id) => id !== session.session_id),
-                          )
-                          if (session.session_id === sessionId) {
-                            creationGenerationRef.current += 1
-                            chat.abort({
-                              closeLocalStream: true,
-                              discardPartial: true,
-                            })
-                            chat.setMessages([])
-                            creationStartedRef.current = false
-                            setIsCreatingSession(false)
-                            setSessionError(null)
-                            setHistorySessionId(undefined)
-                            setPersistedSessionId(undefined)
-                            setSessionId(createVikingBotWebSessionId())
-                            onSessionChange('')
-                            setHistoryOpen(false)
-                          }
-                        }}
-                      />
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-          <Button
-            type="button"
-            className="w-full"
-            onClick={() => void handleNewSession()}
-            disabled={isCreatingSession}
-          >
-            {isCreatingSession ? (
-              <Loader2Icon className="size-4 animate-spin" />
-            ) : (
-              <SquarePenIcon className="size-4" />
-            )}
-            {t('agent.newSession')}
-          </Button>
-        </DialogContent>
-      </Dialog>
     </>
   )
 }
 
 export function AgentToolbar({
+  sessions,
   container,
   historyLabel,
   isCreatingSession,
@@ -392,6 +331,7 @@ export function AgentToolbar({
   sessionTitle,
   showNewSession,
 }: {
+  sessions?: VikingBotSessions
   container: HTMLDivElement | null
   historyLabel: string
   isCreatingSession: boolean
@@ -404,43 +344,29 @@ export function AgentToolbar({
   if (!container) return null
 
   return createPortal(
-    <>
-      <span
-        className="min-w-0 max-w-48 truncate px-1 text-sm font-medium text-foreground"
-        title={sessionTitle}
-        data-agent-session-title
-      >
-        {sessionTitle}
-      </span>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        className="size-7 shrink-0"
-        title={historyLabel}
-        onClick={onOpenHistory}
-      >
-        <HistoryIcon className="size-3.5" />
-      </Button>
-      {showNewSession ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-7 shrink-0"
-          title={newSessionLabel}
-          aria-label={newSessionLabel}
-          disabled={isCreatingSession}
-          onClick={onNewSession}
-        >
-          {isCreatingSession ? (
-            <Loader2Icon className="size-3.5 animate-spin" />
-          ) : (
-            <SquarePenIcon className="size-3.5" />
-          )}
-        </Button>
-      ) : null}
-    </>,
+    <div className="ov-viking-bot" style={{ height: 'auto', minHeight: 0 }}>
+      <VikingBotSessionActions
+        sessions={{
+          items: [],
+          onSelect: () => {},
+          onNew: onNewSession,
+          ...sessions,
+          onOpenHistory,
+          isCreating: isCreatingSession,
+          canCreate: showNewSession,
+        }}
+        labels={{ sessionHistory: historyLabel, newSession: newSessionLabel }}
+        extra={
+          <span
+            className="min-w-0 max-w-48 truncate px-1 text-sm font-medium"
+            title={sessionTitle}
+            data-agent-session-title
+          >
+            {sessionTitle}
+          </span>
+        }
+      />
+    </div>,
     container,
   )
 }
@@ -500,41 +426,42 @@ export function AgentEmptyState({
     returnObjects: true,
   }) as string[]
   return (
-    <div className="flex min-h-full flex-col gap-4">
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 py-8 text-center">
-        <div
-          aria-hidden="true"
-          className="relative mb-5 h-20 w-32 text-foreground"
-        >
-          <span className="absolute bottom-0 left-0 flex size-10 -rotate-12 items-center justify-center rounded-xl bg-muted/70">
-            <LightbulbIcon className="size-6" />
-          </span>
-          <span className="absolute top-0 left-12 flex size-10 items-center justify-center rounded-xl bg-muted/70">
-            <BookOpenIcon className="size-6" />
-          </span>
-          <span className="absolute right-0 bottom-0 flex size-10 rotate-12 items-center justify-center rounded-xl bg-muted/70">
-            <PanelsTopLeftIcon className="size-6" />
-          </span>
-        </div>
-        <h2 className="text-xl font-medium tracking-tight">
-          {t('agent.empty.heading')}
-        </h2>
-        <p className="max-w-xs text-sm leading-6 text-muted-foreground">
-          {t('agent.empty.body')}
-        </p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {prompts.map((prompt) => (
-          <button
-            key={prompt}
-            type="button"
-            className="rounded-full border bg-background px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-            onClick={() => onSend(prompt)}
-          >
-            {prompt}
-          </button>
-        ))}
-      </div>
+    <div
+      className="ov-viking-bot"
+      style={{ minHeight: '100%', height: 'auto' }}
+    >
+      <VikingBotWelcome
+        labels={{
+          welcomeTitle: t('agent.empty.heading'),
+          welcomeDescription: t('agent.empty.body'),
+        }}
+        quickInputs={prompts.map((prompt) => ({
+          id: prompt,
+          label: prompt,
+          prompt,
+        }))}
+        onSelect={(input) => onSend(input.prompt)}
+      />
     </div>
+  )
+}
+
+function SessionDeleteAction({
+  title,
+  onClick,
+}: {
+  title: string
+  onClick: () => void
+}) {
+  const { t } = useTranslation('sessions')
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label={t('threadList.deleteSession', { title })}
+      onClick={onClick}
+    >
+      <Trash2Icon className="size-4" />
+    </Button>
   )
 }
