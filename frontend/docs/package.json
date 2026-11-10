@@ -26,6 +26,9 @@
     "#scope-switcher-requests": "./docs/_demos/scope-switcher-requests.ts",
     "#tui-records": "./docs/_demos/tui-records.tsx",
     "#tui-commands": "./docs/_demos/tui-commands/index.ts",
-    "#tui-demo-result": "./docs/_demos/tui-demo-result.ts"
+    "#tui-demo-result": "./docs/_demos/tui-demo-result.ts",
+    "#file-tree-console-data": "./docs/_demos/file-tree-console-data.ts",
+    "#file-tree-console.css": "./docs/_demos/file-tree-console.css",
+    "#file-preview-console-data": "./docs/_demos/file-preview-console-data.ts"
   }
 }

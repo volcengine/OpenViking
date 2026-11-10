@@ -1,18 +1,10 @@
-import type {
-  ViewerHandle,
-  ViewerViewModeOption,
-} from '@ark-design/ui/file-viewer/core';
-import {
-  forwardRef,
-  useCallback,
-  useImperativeHandle,
-  useRef,
-  useState,
-} from 'react';
+import { forwardRef, useCallback, useImperativeHandle, useState } from 'react';
 
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 
 import { FilePreviewPanels } from './file-preview-panels.js';
+import { useFilePreviewViewState } from './use-file-preview-view-state.js';
+import { useFilePreviewLevels } from './use-file-preview-levels.js';
 import { DEFAULT_LABELS } from './file-preview-labels.js';
 import { FilePreviewTabRow } from './file-preview-tab-row.js';
 import { useFilePreviewActions } from './use-file-preview-actions.js';
@@ -28,30 +20,9 @@ import type {
   FilePreviewHandle,
   FilePreviewProps,
   FilePreviewTab,
-  FilePreviewViewMode,
 } from './types.js';
 
 export { LoadingState } from './file-preview-state.js';
-
-export type {
-  FilePreviewActions,
-  FilePreviewComponent,
-  FilePreviewContentTab,
-  FilePreviewDirectoryLevel,
-  FilePreviewDirectoryTab,
-  FilePreviewEditing,
-  FilePreviewFileTab,
-  FilePreviewFileTabSlots,
-  FilePreviewHandle,
-  FilePreviewHeaderSlots,
-  FilePreviewLabels,
-  FilePreviewOperations,
-  FilePreviewProps,
-  FilePreviewSource,
-  FilePreviewTab,
-  FilePreviewTabBase,
-  FilePreviewViewMode,
-} from './types.js';
 
 function isFileTab(tab: FilePreviewTab): tab is FilePreviewFileTab {
   return tab.kind === 'file';
@@ -88,17 +59,33 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   const [internalKey, setInternalKey] = useState(
     () => defaultActiveKey ?? tabs[0].key,
   );
-  const [viewMode, setViewMode] = useState<FilePreviewViewMode>('preview');
-  const [viewModes, setViewModes] = useState<readonly string[]>([]);
-  const viewerHandle = useRef<ViewerHandle | null>(null);
-
-  const panelClass = 'ov-file-preview__panel';
   const currentKey = activeKey ?? internalKey;
-  const activeTab = tabs.find((tab) => tab.key === currentKey) ?? tabs[0];
+  const selectedTab = tabs.find((tab) => tab.key === currentKey) ?? tabs[0];
+  const {
+    tab: activeTab,
+    levelKey,
+    selectLevel,
+  } = useFilePreviewLevels(selectedTab);
+  const directory = useDirectoryLevel(
+    activeTab.kind === 'directory' ? activeTab : undefined,
+  );
+  const {
+    viewMode,
+    setViewMode,
+    viewModes,
+    setViewModes,
+    viewerHandle,
+    onHandleChange,
+    onViewModesChange,
+  } = useFilePreviewViewState(
+    JSON.stringify([activeTab.key, levelKey, directory.activeLevel?.key]),
+  );
   const { tabId, panelId, panelProps } = useFilePreviewIds(activeTab.key);
   // 编辑态跟着实际渲染的页签走，理由见 `switchTab`。
   // Editing follows the tab that actually renders; see `switchTab`.
-  const editing = useFilePreviewEditing(activeTab.key);
+  const editing = useFilePreviewEditing(
+    JSON.stringify([activeTab.key, levelKey, directory.activeLevel?.key]),
+  );
   const actions = useFilePreviewActions();
 
   const tabText = { ...text, ...activeTab.labels };
@@ -140,23 +127,17 @@ export const FilePreview: FilePreviewComponent = forwardRef<
       onActiveKeyChange?.(key);
       return true;
     },
-    [activeKey, activeTab, currentKey, editing, onActiveKeyChange, tabs],
-  );
-
-  const onHandleChange = useCallback((handle: ViewerHandle | null) => {
-    viewerHandle.current = handle;
-  }, []);
-
-  const onViewModesChange = useCallback(
-    (modes: readonly ViewerViewModeOption[]) => {
-      // 内容没变就保留原引用：每次写入新数组都会触发一次重渲染，而适配器
-      // 可能在每次渲染后再次上报，形成反复更新。
-      const next = modes.map((mode) => mode.value);
-      setViewModes((previous) =>
-        previous.join() === next.join() ? previous : next,
-      );
-    },
-    [],
+    [
+      activeKey,
+      activeTab,
+      currentKey,
+      editing,
+      onActiveKeyChange,
+      tabs,
+      setViewMode,
+      setViewModes,
+      viewerHandle,
+    ],
   );
 
   useImperativeHandle(
@@ -166,7 +147,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
       getActiveTab: () => activeTab.key,
       getViewerHandle: () => (fileTab ? viewerHandle.current : null),
     }),
-    [activeTab.key, fileTab, switchTab],
+    [activeTab.key, fileTab, switchTab, viewerHandle],
   );
 
   // 只有该格式同时声明了预览与源码才可切换：图片、音视频、PDF 没有源码视图。
@@ -203,7 +184,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   // 目录页签的当前层级由外壳持有，复制正文、复制路径与正文因此取同一份来源。
   // The shell owns the active level, so copy-content, copy-path and the body read the
   // same source.
-  const level = useDirectoryLevel(directoryTab);
+  const level = directory;
   // 目录与文件都有路径行，复制路径按钮按路径出现，不按页签类型。
   // Both a directory and a file have a path row, so copy-path follows the path
   // rather than the tab kind.
@@ -243,7 +224,13 @@ export const FilePreview: FilePreviewComponent = forwardRef<
         directoryTab={level.directoryTab}
         fileTab={fileTab}
         panelProps={panelProps}
-        panelClass={panelClass}
+        panelClass="ov-file-preview__panel"
+        levelKey={levelKey}
+        onLevelChange={(key) => {
+          if (editing.saving || editing.loadingEdit) return;
+          editing.discard(activeTab);
+          selectLevel(key);
+        }}
         text={tabText}
         locale={locale}
         actions={actions}

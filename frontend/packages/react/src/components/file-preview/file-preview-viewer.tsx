@@ -4,11 +4,12 @@ import type {
   ViewerHandle,
   ViewerViewModeOption,
 } from '@ark-design/ui/file-viewer/core';
-import { useMemo, useRef } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 
 import { createFilePreviewAdapters } from './file-preview-handle-adapters.js';
+import { imagePreviewTarget } from './file-preview-markdown-images.js';
 import { toFileSource } from './file-preview-source.js';
 import {
   LoadFailedState,
@@ -105,14 +106,38 @@ export function FilePreviewViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     sourceDeps(tab.source),
   );
+  const imageInput = useRef(tab.source);
+  imageInput.current = tab.source;
+  const imageResolver = tab.resolveImage;
+  const resolveImage = useCallback(
+    (src: string) => imageResolver!(src, imageInput.current),
+    [imageResolver],
+  );
+  const resources = useMemo(
+    () =>
+      tab.resources?.flatMap((resource) => {
+        const key = imagePreviewTarget(resource.key);
+        return key === resource.key
+          ? [resource]
+          : [resource, { ...resource, key }];
+      }),
+    [tab.resources],
+  );
   const adapters = useMemo(
     () =>
       createFilePreviewAdapters({
         onHandleChange,
         onViewModesChange,
         onLinkClick,
+        resolveImage: imageResolver ? resolveImage : undefined,
       }),
-    [onHandleChange, onViewModesChange, onLinkClick],
+    [
+      onHandleChange,
+      onViewModesChange,
+      onLinkClick,
+      resolveImage,
+      imageResolver,
+    ],
   );
 
   // 底座把 `slots` 里的函数当依赖，换新函数会重建渲染器。而这三个来源在宿主
@@ -265,7 +290,7 @@ export function FilePreviewViewer({
       adapters={adapters}
       className="ov-file-preview__viewer"
       locale={locale}
-      resources={tab.resources}
+      resources={resources}
       slots={slots}
       source={source}
       toolbar={false}

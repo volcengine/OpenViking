@@ -1,0 +1,108 @@
+.ov-file-tree__controls {
+  display: flex;
+  flex: none;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 1px 7px;
+}
+
+.ov-file-tree__search,
+.ov-file-tree__refresh {
+  display: inline-flex;
+  box-sizing: border-box;
+  height: 32px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  padding: 0;
+  color: var(--ov-ui-file-tree-icon);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 22px;
+  box-shadow: 0 1px 1px rgb(0 0 0 / 5%);
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease;
+}
+
+.ov-file-tree__search {
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: flex-start;
+  gap: 4px;
+  padding: 4px 12px;
+  color: var(--ov-ui-file-tree-text-muted);
+  text-align: left;
+}
+
+.ov-file-tree__search svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.ov-file-tree__search-label {
+  min-width: 0;
+  overflow: hidden;
+  letter-spacing: 0.036px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-file-tree__refresh {
+  width: 32px;
+}
+
+.ov-file-tree__refresh svg {
+  display: block;
+  flex: none;
+}
+
+.ov-file-tree__search:hover:not(:disabled),
+.ov-file-tree__refresh:hover:not(:disabled) {
+  border-color: var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+}
+
+.ov-file-tree__refresh:hover:not(:disabled) {
+  background: var(--ov-ui-file-tree-row-hover);
+}
+
+.ov-file-tree__search:focus-visible,
+.ov-file-tree__refresh:focus-visible {
+  outline: 2px solid var(--ov-ui-file-tree-action);
+  outline-offset: 2px;
+}
+
+.ov-file-tree__search:disabled,
+.ov-file-tree__refresh:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.ov-file-tree__refresh[aria-busy='true'] {
+  cursor: wait;
+  opacity: 1;
+}
+
+.ov-file-tree__refresh-spinning {
+  animation: ov-file-tree-spin 900ms linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-file-tree__search,
+  .ov-file-tree__refresh {
+    transition: none;
+  }
+
+  .ov-file-tree__refresh-spinning {
+    animation-duration: 2s;
+  }
+}

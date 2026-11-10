@@ -406,6 +406,10 @@ export interface FileTreeInfoLabels {
  * Replaceable copy; the component ships English defaults.
  */
 export interface FileTreeLabels {
+  /** 搜索入口文案。Search trigger label. */
+  search?: string;
+  /** 刷新按钮的无障碍名称。Accessible refresh button label. */
+  refresh?: string;
   /**
    * 空树提示。
    * Empty tree message.
@@ -451,9 +455,8 @@ export interface FileTreeLabels {
 }
 
 /**
- * 树的插槽。目前只有工具栏，页面层可自行决定内容与交互。
- * Slots of the tree. Only the toolbar for now; the page layer owns its content
- * and interaction.
+ * 树的插槽。宿主可追加工具栏内容或替换加载指示器。
+ * Tree slots for additional toolbar content and a custom loading indicator.
  */
 export interface FileTreeSlots {
   /**
@@ -501,6 +504,10 @@ export interface FileTreeHandle {
 
 /** 文件树操作的执行能力。File-tree operation capabilities. */
 export interface FileTreeOperations {
+  /** 打开宿主搜索界面。Opens the host's search interface. */
+  search?: () => Promise<void>;
+  /** 刷新目录；等待期间自动显示加载态。Refreshes the tree with a pending state. */
+  refresh?: () => Promise<void>;
   /** 选中条目。Selects an entry. */
   select?: (row: FileTreeEntryRow) => Promise<void>;
   /** 展开或折叠目录。Expands or collapses a directory. */
@@ -542,6 +549,16 @@ export interface FileTreeProps extends Omit<
    * Selected row id, owned by the host.
    */
   selectedId?: string | null;
+  /**
+   * 显示内置搜索入口；默认隐藏，未提供 operations.search 时禁用。
+   * Shows the built-in search trigger. Hidden by default; disabled without operations.search.
+   */
+  search?: boolean | { disabled?: boolean };
+  /**
+   * 显示内置刷新按钮；默认隐藏。loading 可表达宿主额外的刷新状态。
+   * Shows the refresh button. Hidden by default; loading adds a host-controlled pending state.
+   */
+  refresh?: boolean | { disabled?: boolean; loading?: boolean };
   /**
    * 首次加载是否已完成。
    * Whether the tree has finished its first load.
@@ -620,10 +637,13 @@ export interface FileTreeProps extends Omit<
    * Called after retention settings open successfully, with the URI; not called on failure.
    */
   onOpenRetentionSettings?: (uri: string) => void;
+  /** 搜索界面成功打开后触发。Called after search opens successfully. */
+  onSearch?: () => void;
+  /** 刷新成功后触发，失败时不触发。Called after a successful refresh only. */
+  onRefresh?: () => void;
   /**
-   * 树的插槽。工具栏由页面层实现，可以是搜索、导入来源、刷新等任意组合。
-   * Slots of the tree. The toolbar is implemented by the page layer and can
-   * hold search, import sources, refresh or any other combination.
+   * 自定义工具栏位于内置搜索与刷新上方，可放导入等宿主操作。
+   * A custom toolbar above built-in controls, for host actions such as import.
    */
   slots?: FileTreeSlots;
   /**

@@ -13,6 +13,11 @@ import { text } from '@ark-design/ui/file-viewer/adapters/text';
 import { word } from '@ark-design/ui/file-viewer/adapters/word';
 import type { FileViewerCoreProps } from '@ark-design/ui/file-viewer/core';
 
+import {
+  originalImageTarget,
+  preserveVikingImages,
+} from './file-preview-markdown-images.js';
+
 /**
  * 组件内置的格式集合：文本、文档、图片与音视频。
  *
@@ -35,6 +40,7 @@ import type { FileViewerCoreProps } from '@ark-design/ui/file-viewer/core';
  */
 export function createFilePreviewAdapterList({
   onLinkClick,
+  resolveImage,
 }: {
   /**
    * Markdown 正文里的链接被点击时调用。传入后由回调接管导航，底座不再自行
@@ -45,12 +51,39 @@ export function createFilePreviewAdapterList({
    * Markdown adapter supports this; other formats ignore it.
    */
   onLinkClick?: MarkdownAdapterOptions['onLinkClick'];
+  resolveImage?: (src: string) => Promise<string>;
 } = {}): FileViewerCoreProps['adapters'] {
   return [
     code({ showLineNumbers: true }),
     text({ showLineNumbers: true }),
     json({ defaultExpandDepth: 4 }),
-    markdown({ onLinkClick }),
+    markdown({
+      onLinkClick,
+      rendererProps: {
+        astPlugins: (current) => [
+          ...current,
+          {
+            name: 'ov-viking-images',
+            config: { priority: 2 },
+            modifier: (root) => {
+              preserveVikingImages(root);
+            },
+            before: () => {},
+            after: () => {},
+            beforeEach: () => {},
+            afterEach: () => {},
+          },
+        ],
+        imageOptions: {
+          processSrcBeforeLoad: resolveImage
+            ? (src) => resolveImage(originalImageTarget(src))
+            : undefined,
+          forceHttps: false,
+          objectFit: 'contain',
+          responsiveNaturalSize: true,
+        },
+      },
+    }),
     html(),
     table(),
     pdf({ initialFit: 'fit-width' }),

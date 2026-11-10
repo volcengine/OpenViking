@@ -2,12 +2,8 @@
 
 English / [中文](README_CN.md)
 
-Multi-format file preview. The host supplies the content and file name; the component handles format detection, renderer loading, the header, tabs, view switching and editing.
+Console-style file tabs, breadcrumbs, content levels, image preview, source view and editing. Import `FilePreview` and its types from `@openviking/react/components/file-preview`; import the standalone CSS explicitly from `@openviking/react/components/file-preview/style.css`.
 
-`index.ts` maps to `@openviking/react/components/file-preview`. The entry, stylesheet and package exports are reserved; no component or type is exported yet. The implementation is rewritten against this document, and the source is the source of truth for the field list.
+File tabs accept `source`, optional `levels` (L0/L1/L2 or host-defined labels), and `resolveImage(src, source)` for authenticated or relative Markdown images. Each level owns its source and may override companion resources or editing. The host loads content and owns returned URL lifetimes. Use binary `file` or an accessible `url` for images. Actions and permission badges are host slots; the footer accepts modification time and attribution.
 
-## Development entry
-
-Development and build commands are in the [frontend workspace README](../../../../../README.md); module conventions are in the [package guide](../../../README.md).
-
-The standalone style entry is `@openviking/react/components/file-preview/style.css`, which is empty before the implementation lands.
+The viewer is lazy-loaded and the shell is SSR-safe. See the bilingual component documentation and runnable console example in `frontend/docs/docs/` for the full contract.

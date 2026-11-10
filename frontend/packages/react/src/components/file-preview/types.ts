@@ -168,6 +168,15 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    * textures of a 3D model.
    */
   resources?: readonly FileViewerResource[];
+  /** 可选的分级内容，宿主提供 L0/L1/L2 等视图与内容。 Optional host-supplied content levels. */
+  levels?: readonly FilePreviewLevel[];
+  /** 受控分级 key。 Controlled content-level key. */
+  activeLevelKey?: string;
+  /** Markdown 图片地址解析；宿主负责相对路径、鉴权与 URL 生命周期。
+   * Resolves Markdown images; the host owns relative paths, authentication and URL lifetime. */
+  resolveImage?: (src: string, source: FilePreviewSource) => Promise<string>;
+  /** 分级切换意图；受控时宿主更新 activeLevelKey。 Content-level selection intent. */
+  onLevelChange?: (key: string) => void;
   /**
    * 文件编辑配置；省略时只读。
    * File-editing options; omit them for a read-only preview.
@@ -199,6 +208,17 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    * failure. Only Markdown bodies fire this.
    */
   onOpenUri?: (uri: string) => void;
+}
+
+/** 一个资源的内容层级，使用独立 source 与资源表。 One content level with its own source and resources. */
+export interface FilePreviewLevel {
+  key: string;
+  label: ReactNode;
+  source: FilePreviewSource;
+  resources?: readonly FileViewerResource[];
+  disabled?: boolean;
+  /** 摘要默认只读；只有明确提供此能力时才可编辑。 Summaries are read-only unless explicitly editable. */
+  editing?: FilePreviewEditing;
 }
 
 /**
@@ -283,6 +303,10 @@ export interface FilePreviewDirectoryTab extends FilePreviewTabBase {
    * Initial level key when uncontrolled; the first level is selected when omitted.
    */
   defaultLevelKey?: string;
+  /** 目录摘要的伴随图片资源。 Companion images shared by directory summary levels. */
+  resources?: readonly FileViewerResource[];
+  /** 宿主解析当前摘要的 Markdown 图片。 Host resolution of Markdown images in the active summary. */
+  resolveImage?: FilePreviewFileTab['resolveImage'];
   /**
    * 当前层级变化后触发，参数为新的层级 key。
    * Called after the active level changes, with the new level key.
@@ -321,6 +345,8 @@ export interface FilePreviewDirectoryLevel {
    * to the component for format rendering.
    */
   source: FilePreviewSource;
+  /** 该级独立的伴随资源。 Companion resources specific to this level. */
+  resources?: readonly FileViewerResource[];
 }
 
 /**
