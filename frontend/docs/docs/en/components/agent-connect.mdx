@@ -1,6 +1,6 @@
 # AgentConnect
 
-A connection view matching the [Figma layout](https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=10468-23946), with built-in Chinese and English content and icons. Hosts must supply an API key and `locale` parameter; there is no language selection UI.
+A connection view matching the [Figma layout](https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=10468-23946), with built-in Chinese and English content and icons. Hosts supply an API key and may override the inherited language with `locale`; there is no language selection UI.
 
 ## Basic usage
 
@@ -27,7 +27,7 @@ Every code block supports independent copying, including installer commands. API
 | Property          | Type                                 | Default                                                 | Description                                                                                                                                                                |
 | ----------------- | ------------------------------------ | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `apiKey`          | `string`                             | Required                                                | Host API key; masked in the view and preserved when copied.                                                                                                                |
-| `locale`          | `'zh-CN' \| 'en-US'`                 | Required                                                | Language for headings, tabs, catalog, instructions and feedback.                                                                                                           |
+| `locale`          | `'zh-CN' \| 'en-US'`                 | Inherited / en-US                                       | Language for headings, tabs, catalog, instructions and feedback.                                                                                                           |
 | `baseUrl`         | `string`                             | `https://api.vikingdb.cn-beijing.volces.com/openviking` | Service endpoint; trailing slashes are removed for appended paths and the API example variable, while installer arguments and standalone URLs preserve the original value. |
 | `agreementUrl`    | `string`                             | —                                                       | Host agreement URL; renders an accessible agreement link when supplied, otherwise only the data access notice.                                                             |
 | `showOverseasTag` | `boolean`                            | `false`                                                 | Show the Overseas tag for applicable agents.                                                                                                                               |

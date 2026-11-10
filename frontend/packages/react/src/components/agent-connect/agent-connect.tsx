@@ -1,3 +1,4 @@
+import { useLocale } from '../../shared/locale-context.js';
 import { useId, useState } from 'react';
 
 import { AgentConnectDetailView } from './agent-connect-detail.js';
@@ -20,7 +21,7 @@ export type {
 /** 按设计稿固定文案与图标；选择与复制保持实例内交互。 */
 export function AgentConnect({
   apiKey,
-  locale,
+  locale: localeProp,
   baseUrl = DEFAULT_BASE_URL,
   agreementUrl,
   showOverseasTag = false,
@@ -32,6 +33,7 @@ export function AgentConnect({
   className,
   ...rest
 }: AgentConnectProps) {
+  const locale = useLocale(localeProp);
   const id = useId();
   const [localTabId, setLocalTabId] = useState<AgentConnectTabId>('mainstream');
   const [localSelection, setLocalSelection] = useState({

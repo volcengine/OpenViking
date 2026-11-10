@@ -17,8 +17,8 @@ export interface AgentConnectProps extends Omit<
 > {
   /** 调用方提供的密钥；展示脱敏，复制保留原值。Host API key. */
   apiKey: string;
-  /** 内置文案语言；必须由调用方指定。Required content locale. */
-  locale: AgentConnectLocale;
+  /** 内置文案语言；省略时继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: AgentConnectLocale;
   /** 服务地址，默认 OpenViking 云服务。Optional service endpoint. */
   baseUrl?: string;
   /** 宿主提供的用户协议链接；未传时不显示协议引用。Host agreement URL. */

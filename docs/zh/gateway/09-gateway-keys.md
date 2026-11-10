@@ -68,17 +68,21 @@ description: 签发把客户端接入 OpenViking 网关的网关密钥，并在�
 
 **允许的模型**默认留空，表示允许这把密钥所绑[上游](07-upstreams.md#upstreams)提供的全部模型。要限制时，填入客户端发送的模型名称，包括别名。之后这把密钥的模型列表只显示这些名称，请求其他模型会在到达服务商之前被拒绝。设置了允许模型的密钥还要求每个请求都写明模型；具体报错见[客户端收到网关返回的错误](12-troubleshooting.md#clients-get-an-error-from-the-gateway)。
 
+### 设置默认 Peer {#default-peer}
+
+密钥可以带一个默认 [Peer](03-connect-clients.md#peer)：请求没带 `X-OpenViking-Actor-Peer` 请求头时就用它；请求带了这个请求头时，以请求头为准。通过[管理 API](../api/25-gateway.md#gateway-keys) 签发密钥时用 `default_peer_id` 设置。Studio 暂时还不显示这个字段。
+
 ## 签发之后 {#after-issuing}
 
 [网关密钥](#gateway-keys)一经签发就不能再改，但它发起的对话属于它的用户。
 
-- **密钥不能编辑。** 要更换上下文配置、上游、允许的模型或用户，就签发新密钥，再吊销旧的。
+- **密钥不能编辑。** 要更换上下文配置、上游、允许的模型、默认 Peer 或用户，就签发新密钥，再吊销旧的。
 - **对话属于用户，不属于密钥。** 客户端发送相同的会话 ID 时，同一用户的新密钥会接着原来的[对话](03-connect-clients.md#how-conversations-are-recognized)，换密钥不会打断对话。
 - **吊销**（在**密钥**标签页点**吊销**，再点**吊销密钥**确认）后，这把密钥立即失效。用户的对话状态和日志保留，直到被显式删除或过期。尚未保存到 OpenViking 的内容（例如最新一条回复），只有在用新密钥继续这段对话时才会保存。
 
 ### 每人一把密钥 {#one-key-per-person}
 
-记忆属于[网关密钥](#gateway-keys)背后的 OpenViking 用户，所以共用一把密钥的人也共用这位用户的记忆。请给每人签发一把密钥。想让不同客户端使用不同的上下文配置，或者想单独吊销某个客户端，再按客户端分开签发。
+记忆属于[网关密钥](#gateway-keys)背后的 OpenViking 用户，所以共用一把密钥的人也共用这位用户的记忆。请给每人签发一把密钥。想让不同客户端使用不同的上下文配置，或者想单独吊销某个客户端，再按客户端分开签发。[Peer](03-connect-clients.md#peer) 能在同一位用户的记忆里区分不同的交互对象，但其他 Peer 的记忆仍可能被召回，持有密钥的人也可以自己选 Peer，所以它代替不了分开签发密钥。
 
 ### 用户的 OpenViking API 密钥变了 {#when-the-openviking-key-changes}
 

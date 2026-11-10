@@ -2,7 +2,7 @@
 
 [English](README.md) / 中文
 
-所有公开 UI 组件和组合模块均需显式传入 `locale: 'zh-CN' | 'en-US'`，选择内置中文或英文文案。已有的 `labels` 可逐项覆盖，未覆盖项跟随当前语言；切换 `locale` 会立即更新基础文案。业务数据、插槽与回调返回的文案仍由宿主提供。
+公开 UI 组件、组合模块和独立 Hook 均支持可选的 `locale: 'zh-CN' | 'en-US'`。Props 覆盖最近的模块或 Provider，均未配置时默认 `en-US`。已有 `labels` 保留逐项覆盖能力，业务内容、插槽和回调文案仍由宿主提供。
 
 OpenViking AI 应用界面的 React 基础：构建工具、文档、分层目录与局部化样式。FileTree、Tui 与 FilePreview 已提供可用视图，另附五种文件类型图标。Console 提供原生命令面板与受控对话视图，ScopeCascade 提供三级级联 Hook 与组合视图，FileBrowser 仍为布局占位。
 
@@ -34,7 +34,7 @@ OpenViking AI 应用界面的 React 基础：构建工具、文档、分层目�
 
 - 组件只接收**已适配的数据**：文件条目、页签与内容来源由模块 Hook 或宿主映射成包内类型，组件不引用任一宿主的数据模型。
 - 状态用受控字段表达，回调只上报意图，不返回业务数据。
-- 界面文案内置中英文，通过必填的 `locale: 'zh-CN' | 'en-US'` 选择；已有 labels 可逐项覆盖，动态文案由宿主在接入层映射 i18next 或 Starling。
+- 界面文案内置中英文，通过可选的 `locale: 'zh-CN' | 'en-US'` 选择；已有 labels 可逐项覆盖，动态文案由宿主在接入层映射 i18next 或 Starling。
 - 图标、扩展页签、额外字段、工具栏动作通过插槽或节点传入，组件不绑定第三方 UI 库。
 - 列表型组件按上层展开后的行/项渲染，分页、加载、错误、空态由模块 Hook 或宿主提供。
 
@@ -93,3 +93,5 @@ React 与 ReactDOM 为 peer dependencies（`^18.2.0 || ^19.0.0`），由 Rslib �
 内置语言资源就近放在各组件、模块的 `locales/en-US.ts` 与 `locales/zh-CN.ts`，随代码一起维护。共同的语言类型、默认值和逐项覆盖规则位于内部 `src/shared/locale.ts`；该文件不存放业务词条，也不提供公开入口。模块仅维护流程文案，组件默认文案由组件自己维护。
 
 动态文案使用类型化格式化函数，日期与数字使用 `Intl`。`npm test` 自动检查中英文 key、字符串占位符和格式化函数参数数量，类型检查约束参数类型。已有 `labels` 的未定义项继承当前语言，空字符串作为显式覆盖保留。
+
+在 `OpenVikingProvider` 上配置子树语言。模块与组件的可选 `locale` Props 覆盖最近的语言作用域，最终默认 `en-US`；独立 Hook 同样继承 Provider。内部 `src/shared/locale-context.tsx` 由各公开入口共享，与请求 Client 配置分离，切换语言保留请求和状态。
