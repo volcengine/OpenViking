@@ -30,8 +30,8 @@ node scripts/install-lark-cli.mjs
 npm run check:pi
 npm run check:durable
 $env:HOME = $env:USERPROFILE
-$env:PM2_HOME = Join-Path $env:USERPROFILE '.ovsa\pm2'
-$env:VIKA_CONFIG = Join-Path $env:USERPROFILE '.ovsa\windows-preview.json'
+$env:PM2_HOME = Join-Path $env:USERPROFILE '.ov-superagent\pm2'
+$env:OV_SUPERAGENT_CONFIG = Join-Path $env:USERPROFILE '.ov-superagent\windows-preview.json'
 ```
 
 Create that manifest using [config.example.json](../config.example.json), keeping
@@ -44,16 +44,16 @@ replace an existing working installation's configuration while evaluating this p
 Launch from the same terminal after configuring the manifest:
 
 ```powershell
-pm2 start ecosystem.config.cjs --only vika-primary,vika-web
-pm2 describe vika-primary
-pm2 logs vika-primary --lines 50 --nostream
-pm2 stop vika-primary vika-web
+pm2 start ecosystem.config.cjs --only superagent-primary,superagent-web
+pm2 describe superagent-primary
+pm2 logs superagent-primary --lines 50 --nostream
+pm2 stop superagent-primary superagent-web
 ```
 
 PM2 is the user-installed, unmodified program. OpenViking SuperAgent does not patch its Windows
 pipes or promise isolation between multiple PM2 homes. Use only the named apps;
 never stop unrelated PM2 applications. These commands start the source checkout.
-The release-oriented `ovsa start` expects an installed `current` release and is
+The release-oriented `ov-superagent start` expects an installed `current` release and is
 not the source startup procedure. Updating a checkout requires restarting these
 apps; it does not update a separate installed release.
 
@@ -77,7 +77,7 @@ apps; it does not update a separate installed release.
 - OpenViking SuperAgent does not provision or verify Windows ACLs. Use private user-owned data,
   workspace and temporary directories. No filesystem sandbox is claimed.
 - Upgrade/updater and stable Windows release builds are disabled. Autostart is
-  available at the user level: `ovsa autostart enable` writes a script into the
+  available at the user level: `ov-superagent autostart enable` writes a script into the
   current user's own Startup folder, which the shell runs at logon. It is not a
   service, needs no administrator, and shows up in Task Manager's Startup tab.
 - Email is enabled. On Windows the email account file's mode is not checked
@@ -91,10 +91,10 @@ apps; it does not update a separate installed release.
 ## Migration and validation
 
 This replaces the full Windows fork's installation approach. That fork's
-installer, its `.ovsa/bin` launchers and its patched `pm2.cmd` are no longer
-provided; the preview package's installer adds only a `vika.cmd` shim that runs
+installer, its old `bin` launchers and its patched `pm2.cmd` are no longer
+provided; the preview package's installer adds only an `ov-superagent.cmd` shim that runs
 this release's CLI, and the release's own `bin\pm2.cmd`, which runs that release's
-Node on its bundled pm2, so `ovsa start` uses no system Node or PM2. Keep the old
+Node on its bundled pm2, so `ov-superagent start` uses no system Node or PM2. Keep the old
 checkout/commit and configuration for rollback; do not copy this tree over a
 running installation. The previous logs options and unrelated lock, logging,
 delivery, interruption and PM2 behavior fixes were split out for separate review.

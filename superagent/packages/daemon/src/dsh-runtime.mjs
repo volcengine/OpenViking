@@ -13,7 +13,7 @@ const RUNTIME = getRuntimeDefinition('dsh');
 export const DSH_BRIDGE_PATH = fileURLToPath(new URL('./dsh-bridge.mjs', import.meta.url));
 const DSH_SUPPORTED = Object.freeze({ min: '0.2.2-rc.1', belowMajorMinor: '0.3' });
 // The full set DSH understands for a route (`llm-pi-ai/src/catalog.ts`); which
-// of them a model offers is answered per model by `vika/llm/model/info`.
+// of them a model offers is answered per model by `superagent/llm/model/info`.
 export const DSH_EFFORTS = RUNTIME?.efforts
   ?? Object.freeze(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 // The built-in route the adapter falls back on when a requested one is unknown.
@@ -54,22 +54,22 @@ export function dshProfilePatchHash({ dataDir } = {}) {
 
 // The bridge's own protocol version and the methods each caller depends on.
 // v2 adds the model catalogue, model selection, the `llm-pi-ai` settings
-// document, and credential writes. Names live under `vika/` so a future SDK
+// document, and credential writes. Names live under `superagent/` so a future SDK
 // method with the same purpose can never be shadowed by this bridge.
-export const DSH_BRIDGE_ID = 'vika-dsh-bridge';
+export const DSH_BRIDGE_ID = 'superagent-dsh-bridge';
 export const DSH_BRIDGE_VERSION = 2;
 export const DSH_BRIDGE_DAEMON_METHODS = Object.freeze([
   'session/steer', 'session/cancel',
-  'vika/llm/models', 'vika/llm/model/info', 'vika/session/model/select',
+  'superagent/llm/models', 'superagent/llm/model/info', 'superagent/session/model/select',
 ]);
 export const DSH_BRIDGE_CLI_METHODS = Object.freeze([
   ...DSH_BRIDGE_DAEMON_METHODS,
-  'vika/settings/describe', 'vika/settings/mutate',
-  'vika/credentials/set', 'vika/credentials/unset',
+  'superagent/settings/describe', 'superagent/settings/mutate',
+  'superagent/credentials/set', 'superagent/credentials/unset',
 ]);
 
 /**
- * Whether a `vika/hello` reply is the bridge this release drives.
+ * Whether a `superagent/hello` reply is the bridge this release drives.
  * @param hello - the reply result.
  * @param methods - methods the caller will use.
  * @returns true when the bridge id, version, and every method match.
@@ -248,7 +248,7 @@ export function dshCommand({ bin = 'dsh', patchPath }) {
 //
 // The patch deliberately carries no `llm-pi-ai` entry: model routes live in
 // `<DSH_HOME>/profiles/sdk/cordis.patch.yml`, which DSH's own settings service
-// writes (design §1). A provider section here would make `vika/settings/mutate`
+// writes (design §1). A provider section here would make `superagent/settings/mutate`
 // answer "overridden by a home patch or command-line overlay", so the CLI would
 // be editing a document nothing reads.
 export function buildDshPatch({
@@ -259,13 +259,13 @@ export function buildDshPatch({
   if (bridgePath !== null) {
     patch.push({ id: 'sdk-jsonrpc-server', disabled: true });
     insert.push({
-      id: 'vika-dsh-bridge', name: bridgePath,
+      id: 'superagent-dsh-bridge', name: bridgePath,
       inject: ['sdkAppStartup', 'loader'],
       config: { maxTokensAsSuccess: true },
     });
   }
   if (mcp !== null) insert.push({
-    id: 'vika-personal-agent', name: '@deepseek-ai/dsh-mcp-client',
+    id: 'superagent-personal-agent', name: '@deepseek-ai/dsh-mcp-client',
     config: {
       serverName: 'personal_agent', transport: 'stdio',
       command: mcp.command, args: [...mcp.args],

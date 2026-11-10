@@ -21,7 +21,7 @@ function tempDir(t, prefix) {
 }
 
 test('DSH: requires a supported binary and a successful bridge handshake', async t => {
-  const bin = tempDir(t, 'vika-dsh-detect-');
+  const bin = tempDir(t, 'superagent-dsh-detect-');
   fs.writeFileSync(path.join(bin, 'dsh'), '#!/bin/sh\n', { mode: 0o755 });
   let probeCalls = 0;
   const options = {
@@ -52,7 +52,7 @@ test('DSH: requires a supported binary and a successful bridge handshake', async
 });
 
 test('DSH: a route in the bridge catalogue makes the runtime available without DEEPSEEK_API_KEY', async t => {
-  const bin = tempDir(t, 'vika-dsh-route-');
+  const bin = tempDir(t, 'superagent-dsh-route-');
   fs.writeFileSync(path.join(bin, 'dsh'), '#!/bin/sh\n', { mode: 0o755 });
   const probed = [];
   const runtime = await detectDsh({
@@ -71,7 +71,7 @@ test('DSH: a route in the bridge catalogue makes the runtime available without D
 });
 
 test('DSH: without a servable route the note stays about the protocol', async t => {
-  const bin = tempDir(t, 'vika-dsh-nokey-');
+  const bin = tempDir(t, 'superagent-dsh-nokey-');
   fs.writeFileSync(path.join(bin, 'dsh'), '#!/bin/sh\n', { mode: 0o755 });
   const runtime = await detectDsh({
     env: { PATH: bin },
@@ -86,18 +86,18 @@ test('DSH: without a servable route the note stays about the protocol', async t 
   // throwaway DSH home and can never see the routes a real instance has, so
   // hiding the runtime behind this catalogue would hide a configured instance.
   assert.equal(runtime.available, true);
-  assert.match(runtime.note, /ovsa dsh model list/, 'routes are pointed at DSH, not at an OpenViking SuperAgent file');
+  assert.match(runtime.note, /ov-superagent dsh model list/, 'routes are pointed at DSH, not at an OpenViking SuperAgent file');
   assert.match(runtime.note, /DEEPSEEK_API_KEY/);
   assert.match(runtime.note, /deepseek-official: 0 models/, 'the catalogue answer is surfaced');
   assert.doesNotMatch(runtime.note, /暂无可用模型|no usable model yet/);
 });
 
 test('DSH: a secrets-file key reaches the probe without a placeholder', async t => {
-  const bin = tempDir(t, 'vika-dsh-secret-');
+  const bin = tempDir(t, 'superagent-dsh-secret-');
   fs.writeFileSync(path.join(bin, 'dsh'), '#!/bin/sh\n', { mode: 0o755 });
-  const home = tempDir(t, 'vika-dsh-home-');
-  fs.mkdirSync(path.join(home, '.ovsa'));
-  fs.writeFileSync(path.join(home, '.ovsa', 'secrets.env'), 'DEEPSEEK_API_KEY=sk-dsh-test\n');
+  const home = tempDir(t, 'superagent-dsh-home-');
+  fs.mkdirSync(path.join(home, '.ov-superagent'));
+  fs.writeFileSync(path.join(home, '.ov-superagent', 'secrets.env'), 'DEEPSEEK_API_KEY=sk-dsh-test\n');
   let probeEnv = null;
   const runtime = await detectDsh({
     env: { PATH: bin, HOME: home },
@@ -113,7 +113,7 @@ test('DSH: a secrets-file key reaches the probe without a placeholder', async t 
 // directory looked for `$CWD/dsh`, reported a broken install for a binary that
 // is on PATH, and pinned that non-existent path into the manifest.
 test('DSH: a bare DSH_BIN is a PATH lookup, never a path relative to the cwd', async (t) => {
-  const bin = tempDir(t, 'vika-dsh-bare-');
+  const bin = tempDir(t, 'superagent-dsh-bare-');
   fs.writeFileSync(path.join(bin, 'dsh'), '#!/bin/sh\n', { mode: 0o755 });
   const seen = [];
   const runtime = await detectDsh({
@@ -137,7 +137,7 @@ test('DSH: a bare DSH_BIN that is not on PATH is reported as not installed', asy
 });
 
 test('OpenCode: a bare OPENCODE_BIN is a PATH lookup, never a path relative to the cwd', async (t) => {
-  const bin = tempDir(t, 'vika-opencode-bare-');
+  const bin = tempDir(t, 'superagent-opencode-bare-');
   fs.writeFileSync(path.join(bin, 'opencode'), '#!/bin/sh\n', { mode: 0o755 });
   const seen = [];
   const runtime = (await detectRuntimes({

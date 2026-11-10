@@ -77,7 +77,7 @@ export class SocketModeReceiver {
         if (signal.aborted) throw signal.reason ?? error;
         if (error.fatal) throw error;
         if (error instanceof SlackError && error.auth) {
-          throw fatal('Slack authorization failed; run ovsa login slack <instance>');
+          throw fatal('Slack authorization failed; run ov-superagent login slack <instance>');
         }
         const waitMs = error instanceof SlackError && error.retryAfter !== null
           ? error.retryAfter * 1000 : this.backoffMs[Math.min(failures, this.backoffMs.length - 1)];

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 // A DeepSeek Harness runtime with no route that serves a model, reached through
-// `ovsa setup`. The wizard adds one route, the draft stays in memory until the
+// `ov-superagent setup`. The wizard adds one route, the draft stays in memory until the
 // instance is saved, and the manifest names the route fully qualified.
 //
 // The probe and the draft check are the only pieces faked: no real `dsh` and no
@@ -84,7 +84,7 @@ class ScriptedPrompter extends Prompter {
 }
 
 function harness(t, { runtimes, detectDsh, script = [], answers = [], onAsk = () => {} } = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-setup-dsh-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-setup-dsh-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const input = new PassThrough();
   const output = new PassThrough();
@@ -107,7 +107,7 @@ function harness(t, { runtimes, detectDsh, script = [], answers = [], onAsk = ()
   };
   const options = {
     prompter,
-    env: { HOME: home, PATH: '', LARK_CLI_BIN: '/opt/lark/bin/lark-cli', VIKA_LANG: 'en' },
+    env: { HOME: home, PATH: '', LARK_CLI_BIN: '/opt/lark/bin/lark-cli', OV_SUPERAGENT_LANG: 'en' },
     homeDir: home,
     detect: {
       runtimes: async () => runtimes,
@@ -136,8 +136,8 @@ function harness(t, { runtimes, detectDsh, script = [], answers = [], onAsk = ()
   };
   return {
     home, options, prompter, calls, written: () => written,
-    dataDir: path.join(home, '.ovsa', 'data', 'primary'),
-    manifest: () => JSON.parse(fs.readFileSync(path.join(home, '.ovsa', 'config.json'), 'utf8')),
+    dataDir: path.join(home, '.ov-superagent', 'data', 'primary'),
+    manifest: () => JSON.parse(fs.readFileSync(path.join(home, '.ov-superagent', 'config.json'), 'utf8')),
   };
 }
 
@@ -243,8 +243,8 @@ test('without a terminal, setup prints the hint and continues instead of asking'
     answers: ['小V', '', '', '1', '2', 'y'],
   });
   assert.equal(await setupCommand(h.options), 0);
-  assert.match(h.written(), /ovsa dsh model --instance/);
-  assert.doesNotMatch(h.written(), /ovsa dsh model add /);
+  assert.match(h.written(), /ov-superagent dsh model --instance/);
+  assert.doesNotMatch(h.written(), /ov-superagent dsh model add /);
   assert.equal(h.manifest().agents[0].model, 'dsh');
 });
 
@@ -374,7 +374,7 @@ test('the draft check reports a route DSH did not offer', async () => {
 });
 
 test('a fresh DSH home is seeded with both documents, and only the route it was given', async (t) => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-setup-dsh-write-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-setup-dsh-write-'));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   const written = await writeDshModelDraft({
     dataDir,
@@ -393,7 +393,7 @@ test('an instance home that already has a settings document keeps every other ro
   // it. It goes through the settings service, the same upsert the model menu
   // performs, so an existing route and its key survive.
   const { FAKE_DSH } = await import('../../daemon/test/cli-fixture.mjs');
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-setup-dsh-merge-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-setup-dsh-merge-'));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   const document = path.join(dataDir, 'dsh', 'home', 'profiles', 'sdk', 'cordis.patch.yml');
   fs.mkdirSync(path.dirname(document), { recursive: true, mode: 0o700 });

@@ -31,7 +31,7 @@ async function waitFor(predicate, label, timeoutMs = 2_000) {
 const createdTempDirs = new Set();
 
 function tempDir() {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-model-selection-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-model-selection-'));
   createdTempDirs.add(directory);
   return directory;
 }
@@ -180,7 +180,7 @@ class FakeChild extends EventEmitter {
       this.held.push(frame);
       return;
     }
-    if (frame.method === 'vika/session/model/select' && this.holdSelect) {
+    if (frame.method === 'superagent/session/model/select' && this.holdSelect) {
       this.heldSelects.push(frame);
       return;
     }
@@ -212,31 +212,31 @@ class FakeChild extends EventEmitter {
       else this._result(frame, { serverInfo: { name: 'deepseek-harness-sdk-runtime', version: '0.2.2-rc.1' } });
       return;
     }
-    if (method === 'vika/hello') {
+    if (method === 'superagent/hello') {
       this._result(frame, {
-        bridge: 'vika-dsh-bridge',
+        bridge: 'superagent-dsh-bridge',
         version: 2,
         methods: [
           'session/steer', 'session/cancel',
-          'vika/llm/models', 'vika/llm/model/info', 'vika/session/model/select',
+          'superagent/llm/models', 'superagent/llm/model/info', 'superagent/session/model/select',
         ],
       });
       return;
     }
-    if (method === 'vika/settings/describe') {
+    if (method === 'superagent/settings/describe') {
       this._result(frame, { ns: 'llm-pi-ai', descriptor: DESCRIPTOR });
       return;
     }
     if (method === 'session/resume') { this._result(frame, {}); return; }
     if (method === 'session/working-directory/get') { this._result(frame, { cwd: '/tmp/workspace' }); return; }
-    if (method === 'vika/llm/models') { this._result(frame, { providers: this.models }); return; }
-    if (method === 'vika/llm/model/info') {
+    if (method === 'superagent/llm/models') { this._result(frame, { providers: this.models }); return; }
+    if (method === 'superagent/llm/model/info') {
       const info = (this.modelInfo ?? defaultModelInfo)(frame.params.provider, frame.params.model);
       if (info instanceof Error) this._error(frame, info);
       else this._result(frame, info);
       return;
     }
-    if (method === 'vika/session/model/select') {
+    if (method === 'superagent/session/model/select') {
       if (this.selectError) this._error(frame, this.selectError);
       else {
         this._result(frame, {

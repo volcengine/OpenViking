@@ -14,14 +14,14 @@ import { assertSha256, checksumFor, download, platform } from '../../packages/up
 
 const MIRROR = 'https://registry.npmmirror.com';
 
-export async function installLarkCliBinary({ packageDir, platformId, fetchImpl = globalThis.fetch, mirror = process.env.VIKA_LARK_CLI_MIRROR || MIRROR, execFileSyncImpl = execFileSync }) {
+export async function installLarkCliBinary({ packageDir, platformId, fetchImpl = globalThis.fetch, mirror = process.env.OV_SUPERAGENT_LARK_CLI_MIRROR || MIRROR, execFileSyncImpl = execFileSync }) {
   const { version } = JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json'), 'utf8'));
   const target = platform(platformId);
   const windows = target.os === 'win32';
   const executable = windows ? 'lark-cli.exe' : 'lark-cli';
   const archive = `lark-cli-${version}-${target.larkCli}.${windows ? 'zip' : 'tar.gz'}`;
   const expected = checksumFor(fs.readFileSync(path.join(packageDir, 'checksums.txt'), 'utf8'), archive);
-  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-lark-cli-'));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-lark-cli-'));
   try {
     const file = path.join(work, archive);
     const urls = [

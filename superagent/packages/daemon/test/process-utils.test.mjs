@@ -21,7 +21,7 @@ import { supportsShellScripts } from '../src/platform/index.mjs';
 const posixShell = { skip: !supportsShellScripts && 'requires POSIX /bin/sh fixtures' };
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-agent-cli-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-agent-cli-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const workspace = path.join(root, 'workspace');
   const systemBin = path.join(root, 'system-bin');
@@ -44,11 +44,11 @@ function shell(command, env, cwd) {
 for (const layout of ['source', 'release']) {
   test(`agent shell resolves the pinned CLI from a ${layout} outside the workspace`, posixShell, (t) => {
     const { root, workspace, systemBin } = fixture(t);
-    const install = layout === 'source' ? path.join(root, 'checkout', 'superagent') : path.join(root, '.ovsa', 'releases', '1.0');
+    const install = layout === 'source' ? path.join(root, 'checkout', 'superagent') : path.join(root, '.ov-superagent', 'releases', '1.0');
     const relativeBin = 'node_modules/@larksuite/cli/bin/lark-cli';
     executable(path.join(install, relativeBin), 'pinned');
     executable(path.join(install, 'bin', 'slack'), 'slack-pinned');
-    const current = path.join(root, '.ovsa', 'current');
+    const current = path.join(root, '.ov-superagent', 'current');
     if (layout === 'release') fs.symlinkSync(install, current, 'dir');
     const larkCliBin = path.join(layout === 'release' ? current : install, relativeBin);
     const slackCliBin = path.join(layout === 'release' ? current : install, 'bin', 'slack');
@@ -115,7 +115,7 @@ test('bare CLI names do not add the current directory to PATH', () => {
 test('CLI discovery preserves the agent credential boundary and leaves connector PATH alone', () => {
   const inherited = {
     PATH: '/usr/bin:/bin', LARK_CLI_BIN: '/ignored/lark-cli', LARK_APP_SECRET: 'secret',
-    FEISHU_TOKEN: 'secret', LARKSUITE_CLI_PROFILE: 'wrong', VIKA_PRIVATE: 'secret',
+    FEISHU_TOKEN: 'secret', LARKSUITE_CLI_PROFILE: 'wrong', OV_SUPERAGENT_PRIVATE: 'secret',
     ARK_API_KEY: 'secret', VOLCENGINE_TOKEN: 'secret', SESSION_ID: 'secret', CLAUDECODE: 'nested',
     OPENAI_API_KEY: 'model-key', OPENVIKING_CLI_CONFIG_FILE: '/tmp/ov.conf',
   };
@@ -124,7 +124,7 @@ test('CLI discovery preserves the agent credential boundary and leaves connector
     cliBins: ['/configured/lark-cli'], profile: 'fixed', stripClaudeCode: true,
     actions: { socketPath: '/tmp/actions.sock', authority: 'authority' },
   });
-  assert.deepEqual(Object.keys(env).filter(key => /^(LARK|FEISHU|LARKSUITE|VIKA|ARK|VOLCENGINE)_/.test(key)), ['LARKSUITE_CLI_PROFILE']);
+  assert.deepEqual(Object.keys(env).filter(key => /^(LARK|FEISHU|LARKSUITE|OV_SUPERAGENT|ARK|VOLCENGINE)_/.test(key)), ['LARKSUITE_CLI_PROFILE']);
   assert.equal(env.LARKSUITE_CLI_PROFILE, 'fixed');
   assert.equal(env.CLAUDECODE, undefined);
   assert.equal(env.SESSION_ID, undefined);
@@ -161,8 +161,8 @@ test('the installed Slack CLI runs version in an agent shell', {
 
 test('Windows runtime PATH preserves inherited mixed-case Path before adding CLI prefixes', { skip: process.platform !== 'win32' }, () => {
   const original = { Path: 'C:\\Git\\bin;C:\\Node', Pathext: '.EXE;.CMD' };
-  const env = sanitizeAgentChildEnv(original, { cliBins: ['C:\\vika\\lark-cli.exe'] });
-  assert.equal(env.PATH, 'C:\\vika;C:\\Git\\bin;C:\\Node');
+  const env = sanitizeAgentChildEnv(original, { cliBins: ['C:\\superagent\\lark-cli.exe'] });
+  assert.equal(env.PATH, 'C:\\superagent;C:\\Git\\bin;C:\\Node');
   assert.equal(env.Path, undefined);
   assert.equal(original.Path, 'C:\\Git\\bin;C:\\Node');
 });

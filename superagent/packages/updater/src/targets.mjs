@@ -15,20 +15,20 @@ const {
 
 function parseUpdaterTargets(raw) {
   if (Buffer.byteLength(raw) > CONTROL_ENV_MAX_BYTES) {
-    throw new Error(`VIKA_UPDATER_TARGETS_JSON exceeds ${CONTROL_ENV_MAX_BYTES} bytes`);
+    throw new Error(`OV_SUPERAGENT_UPDATER_TARGETS_JSON exceeds ${CONTROL_ENV_MAX_BYTES} bytes`);
   }
   let value;
   try { value = JSON.parse(raw); } catch {
-    throw new Error('VIKA_UPDATER_TARGETS_JSON must be valid JSON');
+    throw new Error('OV_SUPERAGENT_UPDATER_TARGETS_JSON must be valid JSON');
   }
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length === 0) {
-    throw new Error('VIKA_UPDATER_TARGETS_JSON must be a non-empty object');
+    throw new Error('OV_SUPERAGENT_UPDATER_TARGETS_JSON must be a non-empty object');
   }
   return Object.fromEntries(Object.entries(value).map(([id, spec]) => {
     if (!/^[a-z][a-z0-9-]{0,31}$/.test(id) || ['all', 'web', 'updater'].includes(id)) {
       throw new Error(`invalid updater target id: ${id}`);
     }
-    const expectedApp = `vika-${id}`;
+    const expectedApp = `superagent-${id}`;
     if (spec?.app !== expectedApp) throw new Error(`${id}.app must be ${expectedApp}`);
     if (spec?.readyUrl !== `http://127.0.0.1:${new URL(spec?.readyUrl).port}/ready`
       || !/^http:\/\/127\.0\.0\.1:\d+\/ready$/.test(spec.readyUrl)) {
@@ -47,15 +47,15 @@ function parseUpdaterTargets(raw) {
 }
 
 // Read on every call: the manifest can gain an instance while the updater
-// runs. VIKA_UPDATER_TARGETS_JSON replaces the manifest, for tests.
+// runs. OV_SUPERAGENT_UPDATER_TARGETS_JSON replaces the manifest, for tests.
 export function loadTargets(env = process.env) {
-  const raw = env.VIKA_UPDATER_TARGETS_JSON
+  const raw = env.OV_SUPERAGENT_UPDATER_TARGETS_JSON
     || JSON.stringify(updaterTargetsFor(loadDeploymentManifest(env)));
   return Object.freeze(parseUpdaterTargets(raw));
 }
 
 export const SHARED_WEB = Object.freeze({
-  app: 'vika-web',
+  app: 'superagent-web',
   config: 'ecosystem.config.cjs',
   readyUrl: 'http://127.0.0.1:3737/ready',
 });
@@ -88,9 +88,9 @@ export function shouldUpgradeSharedWeb(target, targets = loadTargets()) {
 }
 
 export function defaultSocketPath(homeDir = platformHomeDir() || os.homedir()) {
-  return path.join(homeDir, '.ovsa', 'updater.sock');
+  return path.join(homeDir, '.ov-superagent', 'updater.sock');
 }
 
 export function defaultReleaseLink(homeDir = platformHomeDir() || os.homedir()) {
-  return path.join(homeDir, '.ovsa', 'current');
+  return path.join(homeDir, '.ov-superagent', 'current');
 }

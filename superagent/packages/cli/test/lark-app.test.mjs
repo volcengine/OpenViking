@@ -24,7 +24,7 @@ test('one scan creates the app through the official SDK, with the full request',
     },
   });
   assert.deepEqual(app, { appId: 'cli_new', appSecret: 'secret', brand: 'feishu', ownerOpenId: 'ou_owner' });
-  assert.equal(options.source, 'vika');
+  assert.equal(options.source, 'ov-superagent');
   assert.equal(options.createOnly, true);
   assert.deepEqual(options.appPreset, { name: 'OpenViking SuperAgent', desc: 'desc' });
   assert.deepEqual(options.addons, { scopes: SCOPES, events: { items: { tenant: EVENTS } }, callbacks: { items: CALLBACKS } });

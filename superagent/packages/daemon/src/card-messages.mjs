@@ -77,7 +77,7 @@ export function resolveCardAction(db, event, profile) {
   let content;
   if (question) {
     if (question.answerer_id !== operator) throw new Error('card answerer is not authorized');
-    const key = value?.vika_choice;
+    const key = value?.superagent_choice;
     answer = question.options.find((option) => option.key === key);
     if (!answer) throw new Error('invalid card choice');
     content = `[card answer] ${JSON.stringify({ question: question.prompt, key: answer.key, label: answer.label })}`;

@@ -10,22 +10,22 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 const shell = process.env.POWERSHELL_EXE || 'pwsh';
-const work = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-online-test-'));
+const work = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-online-test-'));
 const quote = value => `'${value.replaceAll("'", "''")}'`;
 // Match the published HTTP entry: UTF-8 without BOM (offline .ps1 keeps BOM).
 const installer = fs.readFileSync(fileURLToPath(new URL('install-preview.ps1', import.meta.url)), 'utf8').replace(/^\uFEFF/, '');
 const version = '0.4.0-windows-preview-online';
-const name = `vika-${version}-win32-x64.zip`;
+const name = `superagent-${version}-win32-x64.zip`;
 const root = path.join(work, 'fixture');
 fs.mkdirSync(root);
 fs.writeFileSync(path.join(root, 'windows-preview.json'), JSON.stringify({ version, platform: 'win32-x64', channel: 'windows-preview' }));
-fs.writeFileSync(path.join(root, 'vika-preview.ps1'), 'param($Action)\n');
+fs.writeFileSync(path.join(root, 'superagent-preview.ps1'), 'param($Action)\n');
 fs.mkdirSync(path.join(root, 'runtime'));
 fs.writeFileSync(path.join(root, 'runtime/node.exe'), '');
 function run(code, env = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(shell, ['-NoProfile', '-EncodedCommand', Buffer.from(code, 'utf16le').toString('base64')], {
-      env: { ...process.env, VIKA_LANG: 'en', NO_COLOR: '1', VIKA_VERSION: '', ...env },
+      env: { ...process.env, OV_SUPERAGENT_LANG: 'en', NO_COLOR: '1', OV_SUPERAGENT_VERSION: '', ...env },
     });
     let output = '';
     child.stdout.on('data', data => { output += data; });
@@ -47,7 +47,7 @@ try {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     if (req.url === '/install.ps1') return res.end(installer);
     const servedVersion = mode === 'mismatch' ? '0.4.0-windows-preview-other' : version;
-    const servedName = `vika-${servedVersion}-win32-x64.zip`;
+    const servedName = `superagent-${servedVersion}-win32-x64.zip`;
     if (req.url === '/windows-preview/latest/version') return res.end(mode === 'unsafe' ? '../escape' : servedVersion);
     if (req.url === `/windows-preview/${servedVersion}/${servedName}.sha256`) {
       if (mode === 'missing') { res.statusCode = 404; return res.end('missing'); }
@@ -67,14 +67,14 @@ try {
       ? `& ([scriptblock]::Create((irm ${quote(`${base}/install.ps1`)}))) -Version ${quote(version)} -NoSetup`
       : `irm ${quote(`${base}/install.ps1`)} | iex`;
     const result = await run(`$ErrorActionPreference = 'Stop'; try { ${command}; 'INSTALL-RETURNED' } catch { Write-Output $_; exit 1 }`, {
-      VIKA_DOWNLOAD_BASE: base, VIKA_HOME: home, TMPDIR: home, TMP: home, TEMP: home,
-      VIKA_VERSION: '',
+      OV_SUPERAGENT_DOWNLOAD_BASE: base, OV_SUPERAGENT_HOME: home, TMPDIR: home, TMP: home, TEMP: home,
+      OV_SUPERAGENT_VERSION: '',
     });
     if (['ok', 'pinned'].includes(scenario)) {
       assert.equal(result.code, 0, result.output);
       assert.match(result.output, /INSTALL-RETURNED/);
       assert.ok(fs.existsSync(path.join(home, 'releases', version, 'windows-preview.json')));
-      assert.ok(fs.existsSync(path.join(home, 'bin/vika.cmd')));
+      assert.ok(fs.existsSync(path.join(home, 'bin/ov-superagent.cmd')));
       if (scenario === 'pinned') assert.ok(!requests.includes('/windows-preview/latest/version'));
     } else {
       assert.notEqual(result.code, 0, result.output);
@@ -83,7 +83,7 @@ try {
       if (scenario === 'missing' || scenario === 'unsafe') assert.ok(!requests.some(url => url.endsWith('.zip')));
     }
     assert.ok(!fs.existsSync(path.join(home, 'deploy.lock')));
-    assert.ok(!fs.readdirSync(home).some(name => name.startsWith('vika-download-')));
+    assert.ok(!fs.readdirSync(home).some(name => name.startsWith('superagent-download-')));
     console.log(`Online installer: ${scenario} passed (${shell})`);
   }
 } finally {

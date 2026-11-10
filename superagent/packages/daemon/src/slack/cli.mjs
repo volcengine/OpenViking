@@ -24,7 +24,7 @@ export class SlackCli {
   async call(method, params = {}, signal = AbortSignal.timeout(30_000)) {
     if (!READ_METHODS.has(method)) throw new Error('Unsupported Slack CLI query');
     signal.throwIfAborted();
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-slack-cli-'));
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-slack-cli-'));
     const env = {};
     for (const key of ['PATH', 'Path', 'HOME', 'USERPROFILE', 'SystemRoot', 'SYSTEMROOT', 'TEMP', 'TMP', 'TMPDIR', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
       'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy']) {

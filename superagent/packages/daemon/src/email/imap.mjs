@@ -222,7 +222,7 @@ export class ImapConnection {
     await this.command('LOGIN', `${quote(user)} ${quote(password)}`);
     await this.command('CAPABILITY');
     // Some providers (163.com) refuse a session that never identified its client.
-    if (this.capabilities.has('ID')) await this.command('ID', '("name" "vika")').catch(() => {});
+    if (this.capabilities.has('ID')) await this.command('ID', '("name" "ov-superagent")').catch(() => {});
   }
 
   async examine(mailbox = 'INBOX') {

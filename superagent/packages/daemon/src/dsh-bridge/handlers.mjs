@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-export const BRIDGE_ID = 'vika-dsh-bridge';
+export const BRIDGE_ID = 'superagent-dsh-bridge';
 export const BRIDGE_VERSION = 2;
 
 // The only settings namespace OpenViking SuperAgent may write. The models page owns the same
@@ -49,7 +49,7 @@ function notReady(service) {
 // `SettingsConflictError`, which carries a string code plus expected/actual.
 // Both fold into one closed code surface so callers route on `data.code` and
 // never on message text (design §4.2.1).
-const SETTINGS_METHOD_PREFIX = 'vika/settings/';
+const SETTINGS_METHOD_PREFIX = 'superagent/settings/';
 
 const SETTINGS_MESSAGE_CODES = Object.freeze([
   [/overridden by a home patch/i, 'SETTINGS_OVERRIDDEN'],
@@ -78,7 +78,7 @@ function settingsErrorCode(error, message) {
  * message matching.
  * @param error - the thrown value.
  * @param method - the handler that failed; settings failures are translated to
- *   the closed SETTINGS_* surface only under `vika/settings/*`.
+ *   the closed SETTINGS_* surface only under `superagent/settings/*`.
  * @returns a JSON-RPC error object.
  */
 export function bridgeErrorFrame(error, method = '') {
@@ -207,7 +207,7 @@ async function credentialPresence(credentials, ref) {
 }
 
 /**
- * Bridge request handlers. Methods are the whole routing surface: `vika/hello`
+ * Bridge request handlers. Methods are the whole routing surface: `superagent/hello`
  * advertises every key except itself, so the advertised list cannot drift from
  * what the bridge actually answers.
  * @param options.ctx - DSH plugin context; services are resolved per request so
@@ -246,7 +246,7 @@ export function createBridgeHandlers({
       agent.cancel({ kind: 'user' }, { keepInbox: params.keepInbox ?? false });
       return { cancelled };
     },
-    async 'vika/llm/models'() {
+    async 'superagent/llm/models'() {
       const llm = requireService(ctx, 'llm');
       const settings = ctx?.get?.('settings') ?? null;
       const credentials = ctx?.get?.('credentials') ?? null;
@@ -280,7 +280,7 @@ export function createBridgeHandlers({
         })),
       };
     },
-    async 'vika/llm/model/info'(params) {
+    async 'superagent/llm/model/info'(params) {
       const provider = text(params.provider);
       const model = text(params.model);
       if (!provider || !model) throw invalid('provider and model must be non-empty strings');
@@ -292,7 +292,7 @@ export function createBridgeHandlers({
         llm.resolveModelInfo(provider, model), modelInfoTimeoutMs, `resolveModelInfo(${provider}/${model})`,
       );
     },
-    async 'vika/session/model/select'(params) {
+    async 'superagent/session/model/select'(params) {
       const agent = rootSessionAgent(agents, params.sessionId);
       const provider = text(params.provider);
       const model = text(params.model);
@@ -314,14 +314,14 @@ export function createBridgeHandlers({
       agent.model.select(selection);
       return { provider, model, reasoningEffort: effort ?? null };
     },
-    'vika/settings/describe'(params) {
+    'superagent/settings/describe'(params) {
       const ns = text(params.ns) || SETTINGS_NS;
       if (ns !== SETTINGS_NS) throw invalid(`unsupported settings namespace: ${ns}`);
       const settings = requireService(ctx, 'settings');
       const descriptor = settings.describe({ redactSecrets: true }).find(row => row.ns === ns);
       return { ns, descriptor: descriptor ?? null };
     },
-    async 'vika/settings/mutate'(params) {
+    async 'superagent/settings/mutate'(params) {
       const ns = text(params.ns) || SETTINGS_NS;
       if (ns !== SETTINGS_NS) throw invalid(`unsupported settings namespace: ${ns}`);
       if (!Array.isArray(params.ops) || params.ops.length === 0) {
@@ -331,7 +331,7 @@ export function createBridgeHandlers({
       await settings.mutate(ns, params.ops, params.expectedRevision);
       return { ok: true };
     },
-    async 'vika/credentials/set'(params) {
+    async 'superagent/credentials/set'(params) {
       const ref = text(params.ref);
       if (!CREDENTIAL_REF.test(ref)) throw invalid('ref must be a POSIX shell identifier');
       if (typeof params.value !== 'string' || params.value.length === 0) {
@@ -342,7 +342,7 @@ export function createBridgeHandlers({
       await credentials.set(ref, params.value);
       return { ok: true };
     },
-    async 'vika/credentials/unset'(params) {
+    async 'superagent/credentials/unset'(params) {
       const ref = text(params.ref);
       if (!CREDENTIAL_REF.test(ref)) throw invalid('ref must be a POSIX shell identifier');
       const credentials = requireService(ctx, 'credentials');
@@ -352,10 +352,10 @@ export function createBridgeHandlers({
   };
 
   // Installed last so the advertised method list is the handlers themselves.
-  handlers['vika/hello'] = () => ({
+  handlers['superagent/hello'] = () => ({
     bridge: BRIDGE_ID,
     version: BRIDGE_VERSION,
-    methods: Object.keys(handlers).filter(name => name !== 'vika/hello'),
+    methods: Object.keys(handlers).filter(name => name !== 'superagent/hello'),
   });
   return handlers;
 }

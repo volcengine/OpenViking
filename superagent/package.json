@@ -1,13 +1,12 @@
 {
-  "name": "vika",
+  "name": "superagent",
   "version": "0.5.0-preview",
   "license": "AGPL-3.0",
   "private": true,
   "description": "A local personal agent core with connector processes and an activity web module.",
   "type": "module",
   "bin": {
-    "ovsa": "packages/cli/bin/vika.mjs",
-    "vika": "packages/cli/bin/vika.mjs"
+    "ov-superagent": "packages/cli/bin/ov-superagent.mjs"
   },
   "workspaces": [
     "packages/daemon",
@@ -33,7 +32,7 @@
     "simulator:claude-runtime": "node packages/daemon/simulator/claude-runtime-simulator.mjs",
     "health": "node packages/web/scripts/healthcheck.mjs"
   },
-  "vika": {
+  "superagent": {
     "node": "24.21.0"
   }
 }

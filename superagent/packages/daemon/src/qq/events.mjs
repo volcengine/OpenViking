@@ -20,7 +20,7 @@ export function normalizeMessage(message, account, state, instance = 'qq') {
   if (!Number.isFinite(at) || at < account.activatedAt || at > Date.now() + 30_000) return null;
   let text = typeof message.content === 'string' ? message.content.slice(0, 16_000) : '';
   // Pairing secrets never enter the runtime or conversation archive.
-  if (/^vika-bind(?:\s|$)/.test(text.trim())) return null;
+  if (/^superagent-bind(?:\s|$)/.test(text.trim())) return null;
   const nativeId = identifier(message.messageId, 'message id');
   const refIdx = message.msgIdx ? identifier(message.msgIdx, 'reference index') : null;
   const id = localMessageId(account.appId, nativeId, refIdx ?? '');

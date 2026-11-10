@@ -11,7 +11,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { GoBack, Prompter } from '../src/prompt.mjs';
 import { OWNER_MESSAGE_SCOPES, connectLark, expandHome, larkMessageListener, larkScopes, registerApp, setupCommand } from '../src/setup.mjs';
-import { vikaCommand } from '../src/manifest.mjs';
+import { superagentCommand } from '../src/manifest.mjs';
 import { stripAnsi } from '../src/ui.mjs';
 import { connectTelegram } from '../src/telegram.mjs';
 import { TelegramState } from '../../daemon/src/telegram/state.mjs';
@@ -26,7 +26,7 @@ const RUNTIMES = [
 ];
 
 function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1933', usable: true }, runtimes = RUNTIMES, failStart = false } = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-setup-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-setup-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const input = new PassThrough();
   input.end(answers.map((line) => `${line}\n`).join(''));
@@ -66,18 +66,18 @@ function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1
     listen: async ({ port }) => { calls.push(['listen', port]); return { wait: async () => true }; },
     allocate: async () => 3738,
   };
-  return { home, options, calls, written: () => written, manifest: () => JSON.parse(fs.readFileSync(path.join(home, '.ovsa', 'config.json'), 'utf8')) };
+  return { home, options, calls, written: () => written, manifest: () => JSON.parse(fs.readFileSync(path.join(home, '.ov-superagent', 'config.json'), 'utf8')) };
 }
 
 test('a startup failure points to the instance logs before retrying start', async (t) => {
   const h = harness(t, ['OpenViking SuperAgent', '', '', '1', '1', '', '', 'y'], { failStart: true });
   assert.equal(await setupCommand(h.options), 1);
-  assert.ok(h.written().includes(`${vikaCommand(h.options.env)} logs primary 查看具体错误`));
-  assert.ok(h.written().includes(`${vikaCommand(h.options.env)} start primary`));
+  assert.ok(h.written().includes(`${superagentCommand(h.options.env)} logs primary 查看具体错误`));
+  assert.ok(h.written().includes(`${superagentCommand(h.options.env)} start primary`));
 });
 
 test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after every answer, then it starts', async (t) => {
-  const ovSource = path.join(os.tmpdir(), `vika-ov-source-${process.pid}.conf`);
+  const ovSource = path.join(os.tmpdir(), `superagent-ov-source-${process.pid}.conf`);
   fs.writeFileSync(ovSource, JSON.stringify({ url: 'https://ov.example', api_key: 'k' }));
   t.after(() => fs.rmSync(ovSource, { force: true }));
   const ov = { configPath: ovSource, url: 'https://ov.example', usable: true, user: 'amy', authMode: 'api_key', reason: null };
@@ -95,11 +95,11 @@ test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after ev
     displayName: '小V',
     channel: 'weixin',
     connectors: ['lark', 'weixin'],
-    profile: 'vika-primary',
+    profile: 'superagent-primary',
     port: 3738,
-    dataDir: path.join(h.home, '.ovsa', 'data', 'primary'),
-    workspace: path.join(h.home, 'vika-workspace', 'primary'),
-    ovConfig: path.join(h.home, '.ovsa', 'ov', 'primary.json'),
+    dataDir: path.join(h.home, '.ov-superagent', 'data', 'primary'),
+    workspace: path.join(h.home, 'superagent-workspace', 'primary'),
+    ovConfig: path.join(h.home, '.ov-superagent', 'ov', 'primary.json'),
     stagedReplies: false,
     naturalWriting: true,
     // On by default for every runtime but Ark.
@@ -113,7 +113,7 @@ test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after ev
   assert.deepEqual(JSON.parse(fs.readFileSync(manifest.agents[0].ovConfig, 'utf8')), { url: 'https://ov.example', api_key: 'k' });
   assert.match(h.written(), /OpenViking 已就绪，接下来接入 IM（这个实例在 OpenViking 里是用户 amy）/);
   assert.ok(fs.statSync(manifest.agents[0].workspace).isDirectory());
-  const dataDir = path.join(h.home, '.ovsa', 'data', 'primary');
+  const dataDir = path.join(h.home, '.ov-superagent', 'data', 'primary');
   assert.deepEqual(h.calls.map((call) => call.slice(0, 2)), [
     ['lark', 'primary'],
     ['weixin', dataDir],
@@ -139,7 +139,7 @@ test('without a usable OV, a new instance goes no further than the OV form', asy
   assert.match(h.written(), /用本机默认地址（不带凭据）\s+http:\/\/127\.0\.0\.1:1933 · OpenViking 服务不可用/);
   assert.doesNotMatch(h.written(), /机器人名字/);
   assert.deepEqual(h.calls, []);
-  assert.equal(fs.existsSync(path.join(h.home, '.ovsa')), false);
+  assert.equal(fs.existsSync(path.join(h.home, '.ov-superagent')), false);
 });
 
 test('the real OV form accepts remote credentials before any IM questions or authorization', async (t) => {
@@ -285,7 +285,7 @@ test('cancelling setup after an administrator key created the instance its user 
     ['DELETE', '/api/v1/admin/accounts/team/users/boss.primary', 'admin-key'],
     ['GET', '/api/v1/tasks/t1', 'admin-key'],
   ]);
-  assert.deepEqual(fs.readdirSync(path.join(h.home, '.ovsa', 'ov')), [], 'the pending config with its key is gone too');
+  assert.deepEqual(fs.readdirSync(path.join(h.home, '.ov-superagent', 'ov')), [], 'the pending config with its key is gone too');
   assert.doesNotMatch(h.written(), /admin-key|user-key/);
 });
 
@@ -297,14 +297,14 @@ test('an unusable generated OV identity fails before IM selection and removes th
   await assert.rejects(setupCommand(h.options), /OpenViking.*primary.*identity denied/);
   assert.doesNotMatch(h.written(), /接入哪些 IM/);
   assert.deepEqual(h.calls, []);
-  assert.equal(fs.existsSync(path.join(h.home, '.ovsa', 'config.json')), false);
-  assert.deepEqual(fs.readdirSync(path.join(h.home, '.ovsa', 'ov')), []);
+  assert.equal(fs.existsSync(path.join(h.home, '.ov-superagent', 'config.json')), false);
+  assert.deepEqual(fs.readdirSync(path.join(h.home, '.ov-superagent', 'ov')), []);
 });
 
 test('an unwritable OV config fails before IM selection without touching existing files', async (t) => {
   const h = harness(t, ['', '', '', '1']);
-  fs.mkdirSync(path.join(h.home, '.ovsa'), { recursive: true });
-  const blocked = path.join(h.home, '.ovsa', 'ov');
+  fs.mkdirSync(path.join(h.home, '.ov-superagent'), { recursive: true });
+  const blocked = path.join(h.home, '.ov-superagent', 'ov');
   fs.writeFileSync(blocked, 'existing file');
   await assert.rejects(setupCommand(h.options), /EEXIST|ENOTDIR/);
   assert.equal(fs.readFileSync(blocked, 'utf8'), 'existing file');
@@ -321,8 +321,8 @@ test('OV going down while answers are collected blocks scans and email credentia
     });
     await assert.rejects(setupCommand(h.options), /OpenViking.*went offline/);
     assert.deepEqual(h.calls, []);
-    assert.equal(fs.existsSync(path.join(h.home, '.ovsa', 'config.json')), false);
-    assert.deepEqual(fs.readdirSync(path.join(h.home, '.ovsa', 'ov')), []);
+    assert.equal(fs.existsSync(path.join(h.home, '.ov-superagent', 'config.json')), false);
+    assert.deepEqual(fs.readdirSync(path.join(h.home, '.ov-superagent', 'ov')), []);
   }
 });
 
@@ -388,10 +388,10 @@ test('Telegram-only setup binds a private Start challenge and saves no token in 
   h.options.connect.telegram = connectTelegram;
   h.options.fetchImpl = async (url, init) => {
     const method = url.split('/').at(-1);
-    if (method === 'getMe') return Response.json({ ok: true, result: { id: 123456, is_bot: true, username: 'vika_test_bot' } });
+    if (method === 'getMe') return Response.json({ ok: true, result: { id: 123456, is_bot: true, username: 'superagent_test_bot' } });
     if (method === 'getWebhookInfo') return Response.json({ ok: true, result: { url: '' } });
     assert.equal(method, 'getUpdates');
-    const nonce = h.written().match(/https:\/\/t\.me\/vika_test_bot\?start=([A-Za-z0-9_-]+)/)[1];
+    const nonce = h.written().match(/https:\/\/t\.me\/superagent_test_bot\?start=([A-Za-z0-9_-]+)/)[1];
     return Response.json({ ok: true, result: [{ update_id: 1, message: { message_id: 1,
       date: Math.floor(Date.now() / 1000), from: { id: 99, is_bot: false }, chat: { id: 99, type: 'private' }, text: `/start ${nonce}` } }] });
   };
@@ -410,7 +410,7 @@ test('Telegram-only setup binds a private Start challenge and saves no token in 
 test('QQ-only setup needs no Lark profile, selects QQ as primary and binds before saving', async (t) => {
   const h = harness(t, ['QQ Agent', '', '', '3', '6', 'y']);
   h.options.connect.qq = async ({ plan }) => {
-    assert.equal(fs.existsSync(path.join(h.home, '.ovsa', 'config.json')), false);
+    assert.equal(fs.existsSync(path.join(h.home, '.ov-superagent', 'config.json')), false);
     h.calls.push(['qq', plan.dataDir]);
   };
   assert.equal(await setupCommand(h.options), 0);
@@ -458,7 +458,7 @@ test('setup detects a primary command that changed the manifest while it was con
   const h = harness(t, ['2', '5', '1,4', '7', '2', '11']);
   const before = existing(h, { connectors: ['lark', 'slack'] });
   h.options.connect.telegram = async () => {
-    updateManifest(path.join(h.home, '.ovsa', 'config.json'), (value) => { value.agents[0].channel = 'slack'; });
+    updateManifest(path.join(h.home, '.ov-superagent', 'config.json'), (value) => { value.agents[0].channel = 'slack'; });
   };
   await assert.rejects(setupCommand(h.options), /配置已被其他操作修改/);
   assert.deepEqual(h.manifest().agents, [{ ...before, channel: 'slack' }]);
@@ -479,8 +479,8 @@ test('a second instance keeps the shared env and the default instance', async (t
   assert.equal(await setupCommand(h.options), 0);
   //                        new  id
   const second = harness(t, ['1', '', 'Second', '', '', '3', '1', '', '', 'y']);
-  fs.mkdirSync(path.join(second.home, '.ovsa'), { recursive: true });
-  fs.copyFileSync(path.join(h.home, '.ovsa', 'config.json'), path.join(second.home, '.ovsa', 'config.json'));
+  fs.mkdirSync(path.join(second.home, '.ov-superagent'), { recursive: true });
+  fs.copyFileSync(path.join(h.home, '.ov-superagent', 'config.json'), path.join(second.home, '.ov-superagent', 'config.json'));
   second.options.allocate = async () => 3739;
   assert.equal(await setupCommand(second.options), 0);
   const manifest = second.manifest();
@@ -492,8 +492,8 @@ test('a second instance keeps the shared env and the default instance', async (t
 test('declining before the scans writes nothing; a Weixin-only instance has no profile and no lark-cli need', async (t) => {
   const declined = harness(t, ['', '', '', '1', '2', 'n']);
   assert.equal(await setupCommand(declined.options), 1);
-  assert.equal(fs.existsSync(path.join(declined.home, '.ovsa', 'config.json')), false);
-  assert.deepEqual(fs.readdirSync(path.join(declined.home, '.ovsa', 'ov')), []);
+  assert.equal(fs.existsSync(path.join(declined.home, '.ov-superagent', 'config.json')), false);
+  assert.deepEqual(fs.readdirSync(path.join(declined.home, '.ov-superagent', 'ov')), []);
   assert.deepEqual(declined.calls, []);
 
   const weixin = harness(t, ['', '', '', '1', '2', 'y']);
@@ -521,7 +521,7 @@ test('mailboxes come with an IM, are checked before the scans and saved with the
   assert.equal(await setupCommand(h.options), 0);
   assert.match(h.written(), /邮箱不能单独接/);
   const [agent] = h.manifest().agents;
-  const file = (id) => path.join(h.home, '.ovsa', 'email', 'primary', `${id}.json`);
+  const file = (id) => path.join(h.home, '.ov-superagent', 'email', 'primary', `${id}.json`);
   assert.deepEqual([agent.connectors, agent.channel, agent.emailAccounts], [['weixin', 'email'], 'weixin',
     [{ id: 'email-gmail', config: file('email-gmail') }, { id: 'email-qq', config: file('email-qq') }]]);
   assert.deepEqual(taken, [[], ['alice.example@gmail.com']]);
@@ -532,38 +532,38 @@ test('mailboxes come with an IM, are checked before the scans and saved with the
 
   const declined = harness(t, ['', '', '', '1', '1,3', '', '', 'n', 'n']);
   assert.equal(await setupCommand(declined.options), 1);
-  assert.equal(fs.existsSync(path.join(declined.home, '.ovsa', 'email')), false, 'nothing is saved before the scans');
+  assert.equal(fs.existsSync(path.join(declined.home, '.ov-superagent', 'email')), false, 'nothing is saved before the scans');
 });
 
 // An instance already on the machine, for setup to change.
 function existing(h, agent) {
-  fs.mkdirSync(path.join(h.home, '.ovsa'), { recursive: true });
-  const full = { id: 'asd', displayName: 'ASD', channel: 'lark', connectors: ['lark'], profile: 'vika-asd', port: 3738,
-    dataDir: path.join(h.home, '.ovsa', 'data', 'asd'), workspace: path.join(h.home, 'ws'), ovConfig: path.join(h.home, '.ovsa', 'ov', 'asd.json'), ovAutoRecall: false,
+  fs.mkdirSync(path.join(h.home, '.ov-superagent'), { recursive: true });
+  const full = { id: 'asd', displayName: 'ASD', channel: 'lark', connectors: ['lark'], profile: 'superagent-asd', port: 3738,
+    dataDir: path.join(h.home, '.ov-superagent', 'data', 'asd'), workspace: path.join(h.home, 'ws'), ovConfig: path.join(h.home, '.ov-superagent', 'ov', 'asd.json'), ovAutoRecall: false,
     stagedReplies: false, naturalWriting: true, explicitSilence: false, meetingNotes: false, model: 'codex:', ...agent };
-  fs.writeFileSync(path.join(h.home, '.ovsa', 'config.json'),
+  fs.writeFileSync(path.join(h.home, '.ov-superagent', 'config.json'),
     JSON.stringify({ version: 1, defaultInstance: full.id, env: {}, agents: [full] }));
   return full;
 }
 
 test('setup saves the safe temporary directory for /root data without moving the data or workspace', async (t) => {
   const h = harness(t, ['2', '1', 'New name', '11']);
-  const before = existing(h, { dataDir: '/root/.ovsa/data/asd' });
+  const before = existing(h, { dataDir: '/root/.ov-superagent/data/asd' });
   assert.equal(await setupCommand(h.options), 0);
-  assert.deepEqual(h.manifest().agents, [{ ...before, displayName: 'New name', tempDir: '/tmp/vika-asd' }]);
+  assert.deepEqual(h.manifest().agents, [{ ...before, displayName: 'New name', tempDir: '/tmp/superagent-asd' }]);
   assert.deepEqual(h.calls, [['restart', 'asd']]);
 });
 
 test('setup keeps per-instance, manifest and shell temporary directory overrides', async (t) => {
   for (const source of ['instance', 'manifest', 'shell']) {
     const h = harness(t, ['2', '1', 'New name', '11']);
-    const before = existing(h, { dataDir: '/root/.ovsa/data/asd',
+    const before = existing(h, { dataDir: '/root/.ov-superagent/data/asd',
       ...(source === 'instance' ? { tempDir: '/tmp/custom' } : {}) });
-    if (source === 'shell') h.options.env.VIKA_TEMP_DIR = '/tmp/custom';
+    if (source === 'shell') h.options.env.OV_SUPERAGENT_TEMP_DIR = '/tmp/custom';
     if (source === 'manifest') {
       const manifest = h.manifest();
-      manifest.env.VIKA_TEMP_DIR = '/tmp/custom';
-      fs.writeFileSync(path.join(h.home, '.ovsa', 'config.json'), JSON.stringify(manifest));
+      manifest.env.OV_SUPERAGENT_TEMP_DIR = '/tmp/custom';
+      fs.writeFileSync(path.join(h.home, '.ov-superagent', 'config.json'), JSON.stringify(manifest));
     }
     assert.equal(await setupCommand(h.options), 0);
     assert.deepEqual(h.manifest().agents, [{ ...before, displayName: 'New name' }]);
@@ -575,7 +575,7 @@ test('setup offers removal without requiring a usable runtime or OpenViking', as
   const agent = existing(h, {});
   assert.equal(await setupCommand(h.options), 0);
   assert.deepEqual(h.calls, [['remove', ['updater', agent.id, 'web']]]);
-  assert.equal(fs.existsSync(path.join(h.home, '.ovsa', 'config.json')), false);
+  assert.equal(fs.existsSync(path.join(h.home, '.ov-superagent', 'config.json')), false);
   assert.match(h.written(), /删除一个实例/);
   assert.match(h.written(), /确认删除这个实例？.*y\/N/);
   assert.doesNotMatch(h.written(), /机器人名字|OpenViking 已就绪/);
@@ -603,7 +603,7 @@ test('changing an instance lists every setting; only the ones opened change', as
   const [after] = h.manifest().agents;
   assert.deepEqual(after, { ...before, connectors: ['lark', 'weixin'], channel: 'weixin' });
   // The list shows every value; what was changed is marked.
-  assert.match(h.written(), /1\) 机器人名字\s+ASD\n  2\) 角色\s+没有设置（只用默认规则）\n  3\) 工作目录\s+~\/ws\n  4\) Agent 运行时\s+Codex\n  5\) 接入的 IM\s+飞书\n  6\) 飞书应用\s+现在的应用\n  7\) 主渠道\s+飞书\n  8\) 邮箱\s+没有接\n  9\) OpenViking\s+~\/\.ovsa\/ov\/asd\.json\n  10\) 其他设置\s+开着：自然写作\n  11\) 保存\n  12\) 放弃修改/);
+  assert.match(h.written(), /1\) 机器人名字\s+ASD\n  2\) 角色\s+没有设置（只用默认规则）\n  3\) 工作目录\s+~\/ws\n  4\) Agent 运行时\s+Codex\n  5\) 接入的 IM\s+飞书\n  6\) 飞书应用\s+现在的应用\n  7\) 主渠道\s+飞书\n  8\) 邮箱\s+没有接\n  9\) OpenViking\s+~\/\.ov-superagent\/ov\/asd\.json\n  10\) 其他设置\s+开着：自然写作\n  11\) 保存\n  12\) 放弃修改/);
   assert.match(h.written(), /5\) 接入的 IM\s+飞书、微信（已改）[\s\S]*7\) 主渠道\s+微信（已改）\n[\s\S]*11\) 保存（2 项改动）/);
   assert.match(h.written(), /将修改 ASD（asd）：\n  接入微信（需要扫码）\n  主渠道：飞书 → 微信\n/);
   assert.deepEqual(h.calls.map((call) => call.slice(0, 2)), [['weixin', before.dataDir], ['restart', 'asd']]);
@@ -665,17 +665,17 @@ test('a new instance takes a shipped role by what it is for', async (t) => {
 });
 
 test('an instance can use its own role file, begun from a shipped role, written only when saved', async (t) => {
-  const roleFile = (h) => path.join(h.home, '.ovsa', 'roles', 'asd.md');
+  const roleFile = (h) => path.join(h.home, '.ov-superagent', 'roles', 'asd.md');
   //                    change  role  own  default path  start from qa  save
   const h = harness(t, ['2',    '2',  '4', '',           '3',           '11']);
   const before = existing(h, {});
   assert.equal(await setupCommand(h.options), 0);
   assert.deepEqual(h.manifest().agents, [{ ...before, role: roleFile(h) }]);
   const text = fs.readFileSync(roleFile(h), 'utf8');
-  assert.match(text, /^<!-- Started from OpenViking SuperAgent's "qa" role\. This is asd's role: edit it freely, then run ovsa restart asd\./);
+  assert.match(text, /^<!-- Started from OpenViking SuperAgent's "qa" role\. This is asd's role: edit it freely, then run ov-superagent restart asd\./);
   assert.ok(text.endsWith(fs.readFileSync(fileURLToPath(new URL('../../daemon/agent/roles/qa.md', import.meta.url)), 'utf8')));
   assert.equal(fs.statSync(roleFile(h)).mode & 0o777, 0o600);
-  assert.match(h.written(), /角色：没有设置（只用默认规则） → ~\/\.ovsa\/roles\/asd\.md（模型会开一次新的会话）/);
+  assert.match(h.written(), /角色：没有设置（只用默认规则） → ~\/\.ov-superagent\/roles\/asd\.md（模型会开一次新的会话）/);
   assert.deepEqual(h.calls, [['restart', 'asd']]);
 
   // A file that is there already is used as it is; discarding writes nothing.
@@ -717,7 +717,7 @@ test('dropping the primary IM moves the primary to what is left; a change the da
 test('an instance\'s mailboxes are changed from their own menu until done', async (t) => {
   //                    change  mailboxes  remove gmail  done  save
   const h = harness(t, ['2',    '8',       '5',          '1',  '11']);
-  const file = (id) => path.join(h.home, '.ovsa', 'email', 'asd', `${id}.json`);
+  const file = (id) => path.join(h.home, '.ov-superagent', 'email', 'asd', `${id}.json`);
   for (const [id, address] of [['email-gmail', 'me@gmail.com'], ['email-qq', 'me@qq.com']]) {
     fs.mkdirSync(path.dirname(file(id)), { recursive: true });
     fs.writeFileSync(file(id), JSON.stringify({ address, password: 'p', imap: { host: 'i', port: 993 }, smtp: { host: 's', port: 465 } }), { mode: 0o600 });
@@ -741,7 +741,7 @@ test('setup stops early when no runtime can run, and reports a start failure aft
   const webDown = harness(t, ['', '', '', '1', '1', '', '', 'y']);
   webDown.options.control.restart = async () => { throw new Error('port 3737 is in use'); };
   assert.equal(await setupCommand(webDown.options), 0);
-  assert.match(webDown.written(), /vika-web 没有起来：port 3737 is in use/);
+  assert.match(webDown.written(), /superagent-web 没有起来：port 3737 is in use/);
   assert.deepEqual(webDown.calls.map(([kind]) => kind), ['lark', 'start', 'start', 'greet']);
 
   const failing = harness(t, ['', '', '', '1', '1', '', '', 'y'], { failStart: true });
@@ -775,7 +775,7 @@ test('with no runtime on a terminal, setup offers to log the built-in Pi in to a
   await answering;
   assert.deepEqual([launched, detections], [1, 2]);
   assert.match(written, /没有可用的 agent 运行时[\s\S]*找到 Codex、Pi（内置）/);
-  assert.equal(fs.existsSync(path.join(h.home, '.ovsa', 'config.json')), false);
+  assert.equal(fs.existsSync(path.join(h.home, '.ov-superagent', 'config.json')), false);
 });
 
 // A terminal for setup: keys are typed one at a time, each once the screen
@@ -854,9 +854,9 @@ test('back from Telegram key entry returns to setup confirmation without saving 
   ]);
   assert.equal(await setupCommand(h.options), 1);
   await driving;
-  assert.equal(fs.existsSync(path.join(h.home, '.ovsa', 'config.json')), false);
-  assert.equal(fs.existsSync(path.join(h.home, '.ovsa', 'data', 'primary', 'telegram')), false);
-  assert.deepEqual(fs.readdirSync(path.join(h.home, '.ovsa', 'ov')), []);
+  assert.equal(fs.existsSync(path.join(h.home, '.ov-superagent', 'config.json')), false);
+  assert.equal(fs.existsSync(path.join(h.home, '.ov-superagent', 'data', 'primary', 'telegram')), false);
+  assert.deepEqual(fs.readdirSync(path.join(h.home, '.ov-superagent', 'ov')), []);
   assert.deepEqual(h.calls, []);
 });
 
@@ -866,7 +866,7 @@ test('back during Telegram verification cancels polling and returns an existing 
   h.options.connect.telegram = connectTelegram;
   let aborted = false;
   h.options.fetchImpl = async (url, { signal }) => {
-    if (url.endsWith('/getMe')) return Response.json({ ok: true, result: { id: 123456, is_bot: true, username: 'vika_test_bot' } });
+    if (url.endsWith('/getMe')) return Response.json({ ok: true, result: { id: 123456, is_bot: true, username: 'superagent_test_bot' } });
     if (url.endsWith('/getWebhookInfo')) return Response.json({ ok: true, result: { url: '' } });
     return new Promise((_resolve, reject) => {
       signal.addEventListener('abort', () => { aborted = true; reject(signal.reason); }, { once: true });
@@ -917,7 +917,7 @@ test('← goes back a question with its answer kept, → takes the value shown, 
   assert.match(h.screen(), /机器人名字（新建的飞书应用也叫这个，@它时用这个名字） \(小V\)/, 'the earlier answer is the default');
   assert.match(h.screen(), /── 确认 ──[\s\S]*── 消息渠道 ──[\s\S]*── 确认 ──/, 'a section is shown again on the way back into it');
   assert.equal(h.calls.length, 0);
-  assert.equal(fs.existsSync(path.join(h.home, '.ovsa', 'config.json')), false);
+  assert.equal(fs.existsSync(path.join(h.home, '.ov-superagent', 'config.json')), false);
 });
 
 test('a new instance\'s OV menu is a step like the others: ← leaves it, ← comes back to it, and a new choice rewrites the identity', async (t) => {
@@ -953,7 +953,7 @@ test('a new instance\'s OV menu is a step like the others: ← leaves it, ← co
   await driving;
   const [unchanged, fresh] = h.manifest().agents;
   assert.deepEqual(unchanged, before);
-  assert.deepEqual(fs.readdirSync(path.join(h.home, '.ovsa', 'ov')), ['fresh.json']);
+  assert.deepEqual(fs.readdirSync(path.join(h.home, '.ov-superagent', 'ov')), ['fresh.json']);
   assert.match(h.screen(), /共用 这把 Key 的用户（OpenViking 命令行 也在用）\s+两边的记忆不隔离/);
   assert.deepEqual(JSON.parse(fs.readFileSync(fresh.ovConfig, 'utf8')), { url: 'https://first.example', api_key: 'one' });
   assert.equal(fs.readFileSync(savedOVConfigPath(h.home), 'utf8'), saved, 'the CLI config is found anyway; nothing to save');
@@ -976,7 +976,7 @@ test('changing the instance name on the way back replaces the pending OV identit
   await assert.rejects(setupCommand(h.options), { name: 'PromptAborted' });
   await driving;
   assert.deepEqual(users, ['agent2', 'renamed']);
-  assert.deepEqual(fs.readdirSync(path.join(h.home, '.ovsa', 'ov')), []);
+  assert.deepEqual(fs.readdirSync(path.join(h.home, '.ov-superagent', 'ov')), []);
   assert.deepEqual(h.manifest().agents.map(({ id }) => id), ['asd']);
   assert.deepEqual(h.calls, []);
 });
@@ -1171,13 +1171,13 @@ test('an instance with Feishu can switch to another app; the bot takes the app\'
   //                    change asd  飞书应用  pick existing  reads-as-you  save  call it 小助手
   const h = harness(t, ['2',        '6',      '3',           '',           '11', 'y']);
   const before = existing(h, {});
-  fs.mkdirSync(path.join(h.home, '.ovsa'), { recursive: true });
+  fs.mkdirSync(path.join(h.home, '.ov-superagent'), { recursive: true });
   const given = recordLark(h, { name: '小助手' });
   assert.equal(await setupCommand(h.options), 0);
   assert.match(h.written(), /6\) 飞书应用\s+扫码选择已有的机器人（已改）/);
   assert.match(h.written(), /将修改 ASD（asd）：\n  换飞书应用：扫码选择已有的机器人（需要扫码）\n/);
   assert.match(h.written(), /接下来扫码：飞书 2 次/);
-  assert.deepEqual([given[0].source, given[0].profile], ['select', 'vika-asd']);
+  assert.deepEqual([given[0].source, given[0].profile], ['select', 'superagent-asd']);
   assert.match(h.written(), /这个机器人在飞书里叫「小助手」，OpenViking SuperAgent 里也这么叫它？（选否就还叫「ASD」）/);
   assert.deepEqual(h.manifest().agents, [{ ...before, displayName: '小助手' }]);
   assert.deepEqual(h.calls.map((call) => call.slice(0, 2)), [['lark', 'asd'], ['restart', 'asd'], ['greet', 'ou_owner']]);
@@ -1252,7 +1252,7 @@ test('ticking Feishu on an instance that had none asks where its bot comes from,
   const given = recordLark(h);
   assert.equal(await setupCommand(h.options), 0);
   assert.equal(given[0].source, 'select');
-  assert.deepEqual(h.manifest().agents, [{ ...before, connectors: ['lark', 'weixin'], profile: 'vika-asd' }]);
+  assert.deepEqual(h.manifest().agents, [{ ...before, connectors: ['lark', 'weixin'], profile: 'superagent-asd' }]);
   assert.doesNotMatch(h.written(), /不换，用现在的应用/, 'there is no current app to keep');
 });
 
@@ -1322,7 +1322,7 @@ test('on a terminal, setup asks the owner to reply on Feishu and waits; s skips 
       assert.match(screen, /飞书：已经收到你的消息，接着聊就行/);
     } else {
       assert.match(screen, /跳过了；之后它要是收不到你的消息，按下面查：\n {4}1\. 开放平台「事件与回调」里，事件订阅方式是长连接/);
-      assert.ok(screen.includes(`4. 运行 ${vikaCommand(h.options.env)} logs primary 看飞书连接有没有报错`));
+      assert.ok(screen.includes(`4. 运行 ${superagentCommand(h.options.env)} logs primary 看飞书连接有没有报错`));
       assert.match(screen, /飞书：私聊里它已经跟你打了招呼，直接回它/);
     }
   }
@@ -1375,10 +1375,10 @@ test('connecting a bot that reads only its own chats: the scans ask for no messa
   const larkCli = { ...fakeLarkCli(), userScopes: async () => [] };
   const { prompter, written } = pipePrompter([]);
   await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter, larkCli, fetchImpl: pickedApp(granted),
-    profile: 'vika-new', source: 'create', access: 'bot', register });
+    profile: 'superagent-new', source: 'create', access: 'bot', register });
   assert.deepEqual(addons.scopes, scopes);
   // The app still has the owner's message scopes; the login does not ask for them.
-  assert.deepEqual(larkCli.calls, [['profile', 'vika-new', 'cli_old'], ['login', scopes.user]]);
+  assert.deepEqual(larkCli.calls, [['profile', 'superagent-new', 'cli_old'], ['login', scopes.user]]);
   assert.match(written(), /第 2 次扫码：授权 OpenViking SuperAgent 以你的身份用文档、日历等（不读你的消息）/);
   assert.doesNotMatch(written(), /用于搜索和读历史|以前允许过/);
 
@@ -1386,13 +1386,13 @@ test('connecting a bot that reads only its own chats: the scans ask for no messa
   const once = { ...fakeLarkCli(), userScopes: async () => ['docx:document:readonly', 'search:message', 'im:message.group_msg:get_as_user'] };
   const told = pipePrompter([]);
   await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter: told.prompter, larkCli: once, fetchImpl: pickedApp(granted),
-    profile: 'vika-new', source: 'select', access: 'bot', register });
+    profile: 'superagent-new', source: 'select', access: 'bot', register });
   assert.match(told.written(), /你以前允许过这个应用以你的身份读消息（search:message、im:message\.group_msg:get_as_user），飞书不会收回[\s\S]*换一个新建的机器人/);
 
   // Reading as the owner never looks for an old grant.
   const owner = { ...fakeLarkCli(), userScopes: async () => { throw new Error('not asked'); } };
   await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter: pipePrompter([]).prompter, larkCli: owner, fetchImpl: pickedApp(granted),
-    profile: 'vika-new', source: 'create', register });
+    profile: 'superagent-new', source: 'create', register });
 });
 
 test('connecting a picked app: another instance on it is a warning, what it lacks is named, and only its user scopes are asked for', async () => {
@@ -1403,36 +1403,36 @@ test('connecting a picked app: another instance on it is a warning, what it lack
     assert.equal('createOnly' in options, false);
     return { client_id: 'cli_old', client_secret: 's', user_info: { open_id: 'ou_owner' } };
   };
-  const others = [{ id: 'other', displayName: 'Other', profile: 'vika-other' }, { id: 'third', displayName: 'Third', profile: 'vika-third' }];
-  const larkCli = fakeLarkCli([{ name: 'vika-other', appId: 'cli_old' }, { name: 'vika-third', appId: 'cli_else' }, { name: 'mine', appId: 'cli_old' }]);
+  const others = [{ id: 'other', displayName: 'Other', profile: 'superagent-other' }, { id: 'third', displayName: 'Third', profile: 'superagent-third' }];
+  const larkCli = fakeLarkCli([{ name: 'superagent-other', appId: 'cli_old' }, { name: 'superagent-third', appId: 'cli_else' }, { name: 'mine', appId: 'cli_old' }]);
   const { prompter, written } = pipePrompter(['y']);
   const result = await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter, larkCli, fetchImpl: pickedApp(granted, { pending: true }),
-    profile: 'vika-new', source: 'select', others, register });
-  assert.deepEqual(result, { profile: 'vika-new', ownerOpenId: 'ou_owner', name: '小助手' });
+    profile: 'superagent-new', source: 'select', others, register });
+  assert.deepEqual(result, { profile: 'superagent-new', ownerOpenId: 'ou_owner', name: '小助手' });
   const output = written();
   assert.match(output, /实例 Other（other）也在用应用 cli_old：同时运行时，每条消息只会随机推给其中一个实例。/);
   assert.match(output, /应用有一个新版本在等管理员审核：下面缺的可能就在里面，审核通过后生效。\n.*有 \d+ 个权限没开通/);
   assert.match(output, /没有订阅接收消息事件（im\.message\.receive_v1）：机器人收不到消息/);
   assert.match(output, /没有订阅文档评论事件（drive\.notice\.comment_add_v1）：在飞书文档的评论里 @ 机器人，它收不到/);
   assert.match(output, /卡片回调（card\.action\.trigger）没有用长连接订阅/);
-  assert.match(output, /之后运行 ovsa setup 可以扫码补齐/);
+  assert.match(output, /之后运行 ov-superagent setup 可以扫码补齐/);
   assert.doesNotMatch(output, /事件走长连接还是 webhook 读不到/, 'a scanned app had its events set by the platform');
-  assert.deepEqual(larkCli.calls, [['profile', 'vika-new', 'cli_old'], ['login', scopes.user.slice(0, 2)]]);
+  assert.deepEqual(larkCli.calls, [['profile', 'superagent-new', 'cli_old'], ['login', scopes.user.slice(0, 2)]]);
 
   // Declining goes back to the questions, before the profile is written.
-  const declined = fakeLarkCli([{ name: 'vika-other', appId: 'cli_old' }]);
+  const declined = fakeLarkCli([{ name: 'superagent-other', appId: 'cli_old' }]);
   const refusing = pipePrompter(['n']);
   await assert.rejects(connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter: refusing.prompter, larkCli: declined,
-    fetchImpl: pickedApp(granted), profile: 'vika-new', source: 'select', others, register }), { name: 'GoBack' });
+    fetchImpl: pickedApp(granted), profile: 'superagent-new', source: 'select', others, register }), { name: 'GoBack' });
   assert.deepEqual(declined.calls, []);
 
   // A bot on a webhook is refused before anything is asked or written; why
   // goes back with it, for setup to say where it comes back to.
-  const hooked = fakeLarkCli([{ name: 'vika-other', appId: 'cli_old' }]);
+  const hooked = fakeLarkCli([{ name: 'superagent-other', appId: 'cli_old' }]);
   const refused = pipePrompter([]);
   await assert.rejects(connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter: refused.prompter, larkCli: hooked,
     fetchImpl: pickedApp(granted, { callbacks: { callback_type: 'webhook', subscribed_callbacks: ['card.action.trigger'] } }),
-    profile: 'vika-new', source: 'select', others, register }),
+    profile: 'superagent-new', source: 'select', others, register }),
   (error) => error.name === 'GoBack' && /这个机器人的卡片回调走 webhook，事件多半也是，OpenViking SuperAgent 接不了/.test(error.notice));
   assert.doesNotMatch(refused.written(), /仍然用这个应用/);
   assert.deepEqual(hooked.calls, []);
@@ -1447,7 +1447,7 @@ test('an app made by an account that cannot run bots goes back to the questions,
   const larkCli = fakeLarkCli();
   const { prompter, written } = pipePrompter([]);
   const register = async () => ({ client_id: 'cli_doubao', client_secret: 's', user_info: { open_id: 'ou_doubao', tenant_brand: 'feishu' } });
-  const error = await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter, larkCli, fetchImpl: policyRefused, profile: 'vika-new',
+  const error = await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter, larkCli, fetchImpl: policyRefused, profile: 'superagent-new',
     source: 'create', register }).then(() => null, (rejected) => rejected);
   assert.equal(error?.name, 'GoBack');
   assert.match(error.notice, /飞书不给应用 cli_doubao 发访问凭证（tenant_access_token failed: code=21001 access denied by access control policy）：它所在的飞书账号不能运行机器人，用豆包账号登录的飞书就是这样。这个应用已经建好但用不了，可以在开放平台删掉。用手机号注册的飞书账号（注册时会建一个免费企业，你是管理员）或公司的飞书账号重新扫码，或者回去不接飞书/);
@@ -1456,7 +1456,7 @@ test('an app made by an account that cannot run bots goes back to the questions,
 
   // Picked, not made: there is nothing new to delete.
   const picked = await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter: pipePrompter([]).prompter, larkCli: fakeLarkCli(),
-    fetchImpl: policyRefused, profile: 'vika-new', source: 'select', register }).then(() => null, (rejected) => rejected);
+    fetchImpl: policyRefused, profile: 'superagent-new', source: 'select', register }).then(() => null, (rejected) => rejected);
   assert.equal(picked?.name, 'GoBack');
   assert.doesNotMatch(picked.notice, /已经建好/);
 });
@@ -1467,48 +1467,48 @@ test('connecting an app typed in: no scan for it, and how its events arrive is l
   const larkCli = fakeLarkCli();
   const { prompter, written } = pipePrompter([]);
   const register = async () => { throw new Error('no scan for an app typed in'); };
-  const result = await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter, larkCli, fetchImpl: pickedApp(granted), profile: 'vika-new',
+  const result = await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter, larkCli, fetchImpl: pickedApp(granted), profile: 'superagent-new',
     source: 'manual', app: { appId: 'cli_old', appSecret: 's', brand: 'feishu', ownerOpenId: null }, register });
   assert.equal(result.ownerOpenId, 'ou_owner');
   const output = written();
   assert.match(output, /用应用 cli_old/);
   assert.match(output, /权限核对通过/);
   assert.match(output, /事件走长连接还是 webhook 读不到/);
-  assert.match(output, /缺的在飞书开放平台给应用补上；你是应用的所有者或管理员的话，也可以之后运行 ovsa setup 扫码补齐/);
+  assert.match(output, /缺的在飞书开放平台给应用补上；你是应用的所有者或管理员的话，也可以之后运行 ov-superagent setup 扫码补齐/);
   assert.match(output, /扫码授权 OpenViking SuperAgent 以你的身份读消息/);
   assert.doesNotMatch(output, /第 1 次扫码|第 2 次扫码/);
 });
 
-test('the vika command prints usage, and upgrade lists the configured targets', (t) => {
-  const bin = fileURLToPath(new URL('../bin/vika.mjs', import.meta.url));
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-help-'));
+test('the ov-superagent command prints usage, and upgrade lists the configured targets', (t) => {
+  const bin = fileURLToPath(new URL('../bin/ov-superagent.mjs', import.meta.url));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-help-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const env = { ...process.env, HOME: home, VIKA_LANG: 'zh' };
+  const env = { ...process.env, HOME: home, OV_SUPERAGENT_LANG: 'zh' };
   const help = spawnSync(process.execPath, [bin, 'help'], { encoding: 'utf8', env });
   assert.equal(help.status, 0);
-  assert.match(help.stdout, /ovsa <命令>[\s\S]*setup[\s\S]*upgrade/);
+  assert.match(help.stdout, /ov-superagent <命令>[\s\S]*setup[\s\S]*upgrade/);
   const english = spawnSync(process.execPath, [bin, '--lang', 'en', 'help'], { encoding: 'utf8', env });
-  assert.match(english.stdout, /ovsa <command>[\s\S]*setup[\s\S]*--lang <zh\|en>/);
+  assert.match(english.stdout, /ov-superagent <command>[\s\S]*setup[\s\S]*--lang <zh\|en>/);
   assert.doesNotMatch(english.stdout, /[一-龥]/);
   const wrong = spawnSync(process.execPath, [bin, '--lang', 'fr', 'help'], { encoding: 'utf8', env });
   assert.equal(wrong.status, 2);
   assert.equal(wrong.stderr, '--lang 只能是 zh 或 en\n');
   // --lang is kept; alone it only switches.
-  const { VIKA_LANG, ...plain } = env;
+  const { OV_SUPERAGENT_LANG, ...plain } = env;
   const switched = spawnSync(process.execPath, [bin, '--lang', 'en'], { encoding: 'utf8', env: plain });
   assert.equal(switched.stdout, 'The interface language is now English\n');
-  assert.equal(fs.readFileSync(path.join(home, '.ovsa', 'language'), 'utf8'), 'en\n');
-  assert.match(spawnSync(process.execPath, [bin, 'help'], { encoding: 'utf8', env: plain }).stdout, /ovsa <command>/);
+  assert.equal(fs.readFileSync(path.join(home, '.ov-superagent', 'language'), 'utf8'), 'en\n');
+  assert.match(spawnSync(process.execPath, [bin, 'help'], { encoding: 'utf8', env: plain }).stdout, /ov-superagent <command>/);
   const unknown = spawnSync(process.execPath, [bin, 'nope'], { encoding: 'utf8', env });
   assert.equal(unknown.status, 2);
   const upgrade = spawnSync(process.execPath, [bin, 'upgrade', 'beta', 'extra'], {
     encoding: 'utf8',
-    env: { ...process.env, VIKA_UPDATER_TARGETS_JSON: JSON.stringify({
-      beta: { app: 'vika-beta', readyUrl: 'http://127.0.0.1:3740/ready', upgradeSharedWeb: false },
+    env: { ...process.env, OV_SUPERAGENT_UPDATER_TARGETS_JSON: JSON.stringify({
+      beta: { app: 'superagent-beta', readyUrl: 'http://127.0.0.1:3740/ready', upgradeSharedWeb: false },
     }) },
   });
   assert.equal(upgrade.status, 2);
-  assert.equal(upgrade.stderr, 'usage: ovsa upgrade <beta|all>\n');
+  assert.equal(upgrade.stderr, 'usage: ov-superagent upgrade <beta|all>\n');
 });
 
 test('when the scan confirmation never arrives, m switches to typing the App ID and Secret, checked with the platform', async () => {
@@ -1559,7 +1559,7 @@ const ENGLISH_RUNTIMES = RUNTIMES.map((runtime) => ({ ...runtime, label: runtime
 
 test('English setup offers QQ and describes credentials and private-chat binding', async (t) => {
   const h = harness(t, ['QQ Agent', '', '', '1', '6', 'y'], { runtimes: ENGLISH_RUNTIMES });
-  h.options.env.VIKA_LANG = 'en';
+  h.options.env.OV_SUPERAGENT_LANG = 'en';
   assert.equal(await setupCommand(h.options), 0);
   assert.equal(h.manifest().agents[0].channel, 'qq');
   assert.equal(h.calls[0][0], 'qq');
@@ -1571,7 +1571,7 @@ test('English setup offers QQ and describes credentials and private-chat binding
 test('in English, a first setup says it all in English, and the bot says hello in English', async (t) => {
   //                   name   role  workspace  runtime IMs    channel feishu reads-as-you confirm
   const h = harness(t, ['Vee', '',   '',        '1',    '1,2', '1',    '',    '',          'y'], { runtimes: ENGLISH_RUNTIMES });
-  h.options.env.VIKA_LANG = 'en';
+  h.options.env.OV_SUPERAGENT_LANG = 'en';
   assert.equal(await setupCommand(h.options), 0);
   const text = h.written();
   assert.doesNotMatch(text, /[一-鿿]/);
@@ -1581,8 +1581,8 @@ test('in English, a first setup says it all in English, and the bot says hello i
   assert.match(text, /Vee \(primary\) is ready\.\n  Feishu\/Lark: It said hello in your chat; just reply\n  WeChat: Say "hi" to it first/);
   const [, , hello] = h.calls.find(([kind]) => kind === 'greet');
   assert.match(hello, /^Hi, I'm Vee, now running on your computer\. .* When I need to reach you on my own/);
-  // VIKA_LANG is the owner's own choice, so later commands keep it.
-  assert.equal(fs.readFileSync(path.join(h.home, '.ovsa', 'language'), 'utf8'), 'en\n');
+  // OV_SUPERAGENT_LANG is the owner's own choice, so later commands keep it.
+  assert.equal(fs.readFileSync(path.join(h.home, '.ov-superagent', 'language'), 'utf8'), 'en\n');
 });
 
 test('with a locale that is not Chinese, a terminal setup asks the language first, once, and keeps it', async (t) => {
@@ -1594,12 +1594,12 @@ test('with a locale that is not Chinese, a terminal setup asks the language firs
   await driving;
   assert.match(h.screen(), /Language \/ 语言（↑↓ 移动，回车确认）\n\x1b\[\?25l❯ 中文\n {2}English/);
   assert.ok(h.screen().indexOf('Language / 语言') < h.screen().indexOf('OpenViking SuperAgent setup：'), 'asked before anything else is said');
-  assert.equal(fs.readFileSync(path.join(h.home, '.ovsa', 'language'), 'utf8'), 'zh\n');
+  assert.equal(fs.readFileSync(path.join(h.home, '.ov-superagent', 'language'), 'utf8'), 'zh\n');
 
   const again = terminalHarness(t);
   again.options.env.LANG = 'en_US.UTF-8';
-  fs.mkdirSync(path.join(again.home, '.ovsa'), { recursive: true });
-  fs.writeFileSync(path.join(again.home, '.ovsa', 'language'), 'en\n');
+  fs.mkdirSync(path.join(again.home, '.ov-superagent'), { recursive: true });
+  fs.writeFileSync(path.join(again.home, '.ov-superagent', 'language'), 'en\n');
   const drivingAgain = again.drive([['Bot name', '\x03']]);
   await assert.rejects(setupCommand(again.options), { name: 'PromptAborted' });
   await drivingAgain;
@@ -1609,14 +1609,14 @@ test('with a locale that is not Chinese, a terminal setup asks the language firs
   const piped = harness(t, ['', '', '', '1', '1', '', '', 'n']);
   piped.options.env.LANG = 'en_US.UTF-8';
   assert.equal(await setupCommand(piped.options), 1);
-  assert.ok(piped.written().includes(`什么都没保存；准备好了再运行 ${vikaCommand(piped.options.env)} setup。`));
-  assert.equal(fs.existsSync(path.join(piped.home, '.ovsa', 'language')), false);
+  assert.ok(piped.written().includes(`什么都没保存；准备好了再运行 ${superagentCommand(piped.options.env)} setup。`));
+  assert.equal(fs.existsSync(path.join(piped.home, '.ov-superagent', 'language')), false);
 });
 
 test('in English, changing an instance: the list, what a setting says, the changes and the result', async (t) => {
   //                    change asd  IMs  lark+weixin  primary  weixin  save
   const h = harness(t, ['2', '5', '1,2', '7', '2', '11'], { runtimes: ENGLISH_RUNTIMES });
-  h.options.env.VIKA_LANG = 'en';
+  h.options.env.OV_SUPERAGENT_LANG = 'en';
   const before = existing(h, {});
   assert.equal(await setupCommand(h.options), 0);
   assert.deepEqual(h.manifest().agents, [{ ...before, connectors: ['lark', 'weixin'], channel: 'weixin' }]);
@@ -1638,8 +1638,8 @@ test('meeting notes: on for the first assistant or colleague on Feishu, off for 
   assert.match(h.written(), /其他设置\s+开着：自然写作、显式不回复、会议纪要入库（以后在修改实例里调）/);
 
   const second = harness(t, ['1', '', 'Second', '', '', '3', '1', '', '', 'y']);
-  fs.mkdirSync(path.join(second.home, '.ovsa'), { recursive: true });
-  fs.copyFileSync(path.join(h.home, '.ovsa', 'config.json'), path.join(second.home, '.ovsa', 'config.json'));
+  fs.mkdirSync(path.join(second.home, '.ov-superagent'), { recursive: true });
+  fs.copyFileSync(path.join(h.home, '.ov-superagent', 'config.json'), path.join(second.home, '.ov-superagent', 'config.json'));
   second.options.allocate = async () => 3739;
   assert.equal(await setupCommand(second.options), 0);
   assert.deepEqual(second.manifest().agents.map(({ id, meetingNotes }) => [id, meetingNotes]), [['primary', true], ['agent2', false]]);
@@ -1654,10 +1654,10 @@ test('会议纪要入库 is one instance\'s: refused while another has it, switc
   //                    change asd  other  notes  done  discard
   const h = harness(t, ['2',        '10',  '4',   '5',  '12']);
   const asd = existing(h, {});
-  const bee = { ...asd, id: 'bee', displayName: 'BEE', profile: 'vika-bee', port: 3739, dataDir: path.join(h.home, '.ovsa', 'data', 'bee'),
-    workspace: path.join(h.home, 'ws-bee'), ovConfig: path.join(h.home, '.ovsa', 'ov', 'bee.json'), meetingNotes: true };
+  const bee = { ...asd, id: 'bee', displayName: 'BEE', profile: 'superagent-bee', port: 3739, dataDir: path.join(h.home, '.ov-superagent', 'data', 'bee'),
+    workspace: path.join(h.home, 'ws-bee'), ovConfig: path.join(h.home, '.ov-superagent', 'ov', 'bee.json'), meetingNotes: true };
   const two = { version: 1, defaultInstance: 'asd', env: {}, agents: [asd, bee] };
-  fs.writeFileSync(path.join(h.home, '.ovsa', 'config.json'), JSON.stringify(two));
+  fs.writeFileSync(path.join(h.home, '.ov-superagent', 'config.json'), JSON.stringify(two));
   assert.equal(await setupCommand(h.options), 0);
   assert.match(h.written(), /会议纪要已经由 BEE（bee）入库：一台机器上只有一个实例能开，先修改 bee 把它关掉\n[\s\S]*4\) 会议纪要入库\s+关 · /);
   assert.deepEqual(h.manifest(), two);
@@ -1713,9 +1713,9 @@ test('what an instance lacks: the app\'s scopes, events and callback, and scopes
     async finishUserLogin() { this.calls.push('finished'); },
   });
   const { larkNeeds, updateLarkApp } = await import('../src/setup.mjs');
-  const complete = await larkNeeds({ agent: { profile: 'vika-asd', meetingNotes: true }, larkCli: larkCli(scopes.user), scopes });
+  const complete = await larkNeeds({ agent: { profile: 'superagent-asd', meetingNotes: true }, larkCli: larkCli(scopes.user), scopes });
   assert.equal(complete.count, 0, 'storing meeting notes needs nothing of the app beyond the permission list');
-  const short = await larkNeeds({ agent: { profile: 'vika-asd' }, larkCli: larkCli(['search:message'], ['im:message']), scopes });
+  const short = await larkNeeds({ agent: { profile: 'superagent-asd' }, larkCli: larkCli(['search:message'], ['im:message']), scopes });
   assert.deepEqual(short.missing.scopes.tenant, ['im:chat:read']);
   assert.deepEqual(short.login, ['vc:note:read']);
   assert.equal(short.count, 2);
@@ -1727,7 +1727,7 @@ test('what an instance lacks: the app\'s scopes, events and callback, and scopes
   let written = '';
   output.on('data', (chunk) => { written += chunk; });
   const cli = larkCli(['search:message'], ['im:message']);
-  const updated = await updateLarkApp({ agent: { id: 'asd', displayName: 'ASD', profile: 'vika-asd' },
+  const updated = await updateLarkApp({ agent: { id: 'asd', displayName: 'ASD', profile: 'superagent-asd' },
     prompter: new Prompter({ input, output }), larkCli: cli, scopes, register: async () => { throw new Error('not asked for'); } });
   assert.equal(updated, false);
   assert.match(written, /有 1 个权限没开通，相关功能会不可用：im:chat:read/);
@@ -1740,11 +1740,11 @@ test('what an instance lacks: the app\'s scopes, events and callback, and scopes
 test('expandHome expands home prefixes without changing literal paths', () => {
   const home = path.resolve('Users', 'example $& 中文');
   assert.equal(expandHome('~', home), home);
-  assert.equal(expandHome('~/vika-workspace/primary', home), process.platform === 'win32'
-    ? path.join(home, 'vika-workspace', 'primary') : '~/vika-workspace/primary'.replace(/^~(?=\/)/, home));
-  const windowsInput = String.raw`~\vika-workspace\primary`;
+  assert.equal(expandHome('~/superagent-workspace/primary', home), process.platform === 'win32'
+    ? path.join(home, 'superagent-workspace', 'primary') : '~/superagent-workspace/primary'.replace(/^~(?=\/)/, home));
+  const windowsInput = String.raw`~\superagent-workspace\primary`;
   assert.equal(expandHome(windowsInput, home), process.platform === 'win32'
-    ? path.join(home, 'vika-workspace', 'primary') : windowsInput);
+    ? path.join(home, 'superagent-workspace', 'primary') : windowsInput);
   for (const literal of ['~other/workspace', 'workspace', path.join(home, 'existing')]) {
     assert.equal(expandHome(literal, home), literal);
   }

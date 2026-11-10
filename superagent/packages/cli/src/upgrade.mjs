@@ -6,7 +6,7 @@ import { capabilities } from '../../daemon/src/capabilities.mjs';
 import http from 'node:http';
 import { assertUpgradeTarget, defaultSocketPath, upgradeTargetNames } from '../../updater/src/targets.mjs';
 
-// `ovsa upgrade` only asks the updater process; the updater fetches, publishes
+// `ov-superagent upgrade` only asks the updater process; the updater fetches, publishes
 // and rolls the apps, so the upgrade survives the caller disconnecting.
 
 function requestUpgrade(socketPath, target) {
@@ -51,11 +51,11 @@ export async function upgradeCommand(args, { stdout = process.stdout, stderr = p
   }
   const [target, ...extra] = args;
   if (!target || extra.length > 0) {
-    stderr.write(`usage: ovsa upgrade <${upgradeTargetNames().join('|')}>\n`);
+    stderr.write(`usage: ov-superagent upgrade <${upgradeTargetNames().join('|')}>\n`);
     return 2;
   }
   assertUpgradeTarget(target);
-  const result = await requestUpgrade(env.VIKA_UPDATER_SOCKET || defaultSocketPath(), target);
+  const result = await requestUpgrade(env.OV_SUPERAGENT_UPDATER_SOCKET || defaultSocketPath(), target);
   const apps = Array.isArray(result.apps) && result.apps.length > 0
     ? result.apps
     : [result.app].filter(Boolean);

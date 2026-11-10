@@ -38,7 +38,7 @@ const payload = (event = {}, extra = {}) => ({
 });
 
 function fixture(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-slack-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-slack-'));
   const state = new SlackState(dir);
   t.after(() => { state.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   return { dir, state };
@@ -54,7 +54,7 @@ function provider(handlers = {}, calls = []) {
     calls.push([method, params, init.headers.Authorization]);
     const defaults = {
       'auth.test': () => ({ team_id: account.teamId, team: 'Acme', user_id: account.botUserId, bot_id: account.botId }),
-      'bots.info': () => ({ bot: { id: account.botId, app_id: account.appId, name: 'vika' } }),
+      'bots.info': () => ({ bot: { id: account.botId, app_id: account.appId, name: 'superagent' } }),
       'apps.connections.open': () => ({ url: 'wss://wss-primary.slack.com/link/?ticket=1' }),
       'users.info': ({ user }) => ({ user: { id: user, profile: { display_name: { U0ALICE: 'Alice Smith', U0OWNER: 'Owner' }[user] ?? '' } } }),
     };
@@ -430,7 +430,7 @@ test('Socket Mode acknowledges after handling, refreshes before closing, and ref
   await assert.rejects(off, /Socket Mode was turned off/);
   const revoked = new SlackApi(APP_TOKEN, { kind: 'app', fetchImpl: provider({ 'apps.connections.open': () => ({ error: 'invalid_auth' }) }) });
   await assert.rejects(new SocketModeReceiver({ api: revoked, appId: account.appId, WebSocketImpl: sockets().Socket, logger, ...fast })
-    .run(() => {}, AbortSignal.timeout(2000)), /ovsa login slack/);
+    .run(() => {}, AbortSignal.timeout(2000)), /ov-superagent login slack/);
 });
 
 test('binds the owner by a one-time code in a direct message and stages messages while re-binding', async (t) => {
@@ -442,11 +442,11 @@ test('binds the owner by a one-time code in a direct message and stages messages
   const login = loginSlack({ state, botToken: BOT_TOKEN, appToken: APP_TOKEN, fetchImpl: provider(), WebSocketImpl: ws.Socket,
     receiver: fast, signal: AbortSignal.timeout(3000), onChallenge: (value) => { challenge = value; } });
   await until(() => challenge);
-  assert.match(challenge.code, /^vika-[a-z2-9]{8}$/);
+  assert.match(challenge.code, /^superagent-[a-z2-9]{8}$/);
   assert.equal(challenge.url, 'https://slack.com/app_redirect?app=A0APP&team=T0TEAM');
   const socket = ws.opened[0];
   socket.frame({ type: 'events_api', envelope_id: 'a', payload: payload({ channel: 'C0GENERAL', text: challenge.code }) });
-  socket.frame({ type: 'events_api', envelope_id: 'b', payload: payload({ channel: 'D0ALICE', channel_type: 'im', text: 'vika-wrong' }) });
+  socket.frame({ type: 'events_api', envelope_id: 'b', payload: payload({ channel: 'D0ALICE', channel_type: 'im', text: 'superagent-wrong' }) });
   socket.frame({ type: 'events_api', envelope_id: 'c', payload: payload({ channel: 'D0OWNER', channel_type: 'im', user: 'U0OWNER', text: ` ${challenge.code} `, ts: fresh(3) }) });
   const bound = await login;
   assert.equal(bound.ownerId, 'U0OWNER');

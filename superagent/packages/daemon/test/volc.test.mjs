@@ -173,7 +173,7 @@ describe('Volc managed-agent runtime', () => {
     });
     assert.match(agent.transportPolicy, /Managed Agent self-hosted delivery runtime/);
     assert.match(agent.transportPolicy, /official self-hosted Environment Worker is the only tool executor/);
-    assert.doesNotMatch(agent.transportPolicy, /strict JSON|vika-tools\/v1/);
+    assert.doesNotMatch(agent.transportPolicy, /strict JSON|superagent-tools\/v1/);
     assert.match(agent.transportPolicy, /one native turn may call it repeatedly before end_turn/);
 
     agent.connected = true;
@@ -651,7 +651,7 @@ describe('Volc managed-agent runtime', () => {
   });
 
   it('carries the instance role into the policy it injects', () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-volc-role-'));
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-volc-role-'));
     const rolePromptPath = path.join(directory, 'role.md');
     fs.writeFileSync(rolePromptPath, '<!-- editor note -->\nROLE_MARKER: {{AGENT_NAME}} answers garden questions.\n');
     try {

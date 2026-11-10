@@ -29,7 +29,7 @@ export function extractSlackCliBinary(archive, directory) {
 export async function installSlackCliBinary({ root, platformId, fetchImpl = globalThis.fetch }) {
   const asset = SLACK_CLI_ASSETS[platformId];
   if (!asset) throw new Error(`Unsupported Slack CLI platform: ${platformId}`);
-  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-slack-install-'));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-slack-install-'));
   try {
     const name = `slack_cli_${SLACK_CLI_VERSION}_${asset[0]}.tar.gz`;
     const archive = path.join(work, name);

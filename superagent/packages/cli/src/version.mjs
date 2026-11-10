@@ -3,7 +3,7 @@
 
 import fs from 'node:fs';
 
-// What this vika is: an installed release says so in release.json, a source
+// What this ov-superagent is: an installed release says so in release.json, a source
 // checkout has only package.json.
 export function releaseInfo() {
   const root = new URL('../../../', import.meta.url);

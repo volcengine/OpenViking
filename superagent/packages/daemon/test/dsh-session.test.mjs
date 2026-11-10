@@ -73,17 +73,17 @@ describe('DshAgent reconnect, settings and rotation', () => {
     agent.setModel('deepseek-v4-pro');
     agent.setEffort('max');
     agent.deliver('after settings', 7);
-    await waitFor(() => child.requests('vika/session/model/select').length === 1);
+    await waitFor(() => child.requests('superagent/session/model/select').length === 1);
     // A switch is a session selection, not a process restart.
     assert.equal(context.children.length, 1);
     assert.equal(child.exitCode, null);
-    assert.deepEqual(child.requests('vika/session/model/select')[0].params, {
+    assert.deepEqual(child.requests('superagent/session/model/select')[0].params, {
       sessionId, provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'max',
     });
     await waitFor(() => child.requests('session/steer').length === 1);
     // The selection lands before the input, never in the middle of a turn.
     const methods = child.sent().map((frame) => frame.method);
-    assert.ok(methods.indexOf('vika/session/model/select') < methods.indexOf('session/steer'));
+    assert.ok(methods.indexOf('superagent/session/model/select') < methods.indexOf('session/steer'));
     assert.equal(agent.appliedModel, 'deepseek-official/deepseek-v4-pro');
     assert.equal(agent.appliedEffort, 'max');
     assert.equal(agent.resolvedModel, 'deepseek-official/deepseek-v4-pro');
@@ -111,8 +111,8 @@ describe('DshAgent reconnect, settings and rotation', () => {
     // A route without models (an account that is not logged in, a route without
     // a credential) is never offered: /model lists what can actually run.
     assert.ok(!models.some((entry) => entry.id.startsWith('deepseek-account/')));
-    assert.equal(child.requests('vika/llm/models').length, 1);
-    assert.equal(child.requests('vika/llm/model/info').length, 2);
+    assert.equal(child.requests('superagent/llm/models').length, 1);
+    assert.equal(child.requests('superagent/llm/model/info').length, 2);
     const flash = models.find((entry) => entry.id === 'deepseek-official/deepseek-flash');
     assert.deepEqual(flash, {
       id: 'deepseek-official/deepseek-flash',
@@ -138,7 +138,7 @@ describe('DshAgent reconnect, settings and rotation', () => {
     const first = await agent.listModels();
     assert.equal(first.length, 2);
     const request = agent._request.bind(agent);
-    agent._request = (method, params, timeoutMs, extra) => method === 'vika/llm/models'
+    agent._request = (method, params, timeoutMs, extra) => method === 'superagent/llm/models'
       ? Promise.reject(new Error('catalogue unavailable'))
       : request(method, params, timeoutMs, extra);
     // A failed refresh keeps the entries the menu already showed.
@@ -234,7 +234,7 @@ describe('DshAgent reconnect, settings and rotation', () => {
     assert.match(context.failures[0].error, /dsh model selection failed \(UNSUPPORTED_REASONING_EFFORT\)/);
     // One attempt: the refused pair is recorded, so neither the failure's own
     // availability signal nor the claim that follows resubmits it.
-    assert.equal(child.requests('vika/session/model/select').length, 1);
+    assert.equal(child.requests('superagent/session/model/select').length, 1);
     assert.equal(agent._selectionPending(), false);
     assert.equal(agent.selectionStale, false);
     assert.deepEqual(agent.rejectedSelection, {
@@ -248,7 +248,7 @@ describe('DshAgent reconnect, settings and rotation', () => {
     );
     await acknowledge(child, child.requests('session/steer')[0]);
     await settle(child, agent);
-    assert.equal(child.requests('vika/session/model/select').length, 1);
+    assert.equal(child.requests('superagent/session/model/select').length, 1);
     assert.equal(
       context.warnings.filter((entry) => entry.event === 'dsh_model_select_failed').length, 1,
     );
@@ -268,7 +268,7 @@ describe('DshAgent reconnect, settings and rotation', () => {
     agent.setModel('deepseek/deepseek-chat');
     agent.deliver('first attempt', 7);
     await waitFor(() => context.failures.length === 1, 2_000);
-    assert.equal(child.requests('vika/session/model/select').length, 1);
+    assert.equal(child.requests('superagent/session/model/select').length, 1);
     // The refused pair is remembered and the desired value is back on the route
     // the process really has, so nothing keeps asking for it.
     assert.deepEqual(agent.rejectedSelection, {
@@ -281,9 +281,9 @@ describe('DshAgent reconnect, settings and rotation', () => {
     agent.setModel('deepseek-v4-pro');
     assert.equal(agent.rejectedSelection, null);
     agent.deliver('second attempt', 8);
-    await waitFor(() => child.requests('vika/session/model/select').length === 2
+    await waitFor(() => child.requests('superagent/session/model/select').length === 2
       && agent.appliedModel === 'deepseek-official/deepseek-v4-pro', 2_000);
-    assert.deepEqual(child.requests('vika/session/model/select')[1].params, {
+    assert.deepEqual(child.requests('superagent/session/model/select')[1].params, {
       sessionId: agent.threadId,
       provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'high',
     });
@@ -314,7 +314,7 @@ describe('DshAgent reconnect, settings and rotation', () => {
     // recorded as applied instead of null -- null used to leave the pending test
     // true forever, with no applied pair to roll back to.
     assert.equal(child.requests('session/resume').length, 1);
-    assert.equal(child.requests('vika/session/model/select').length, 1);
+    assert.equal(child.requests('superagent/session/model/select').length, 1);
     assert.ok(second.warnings.some((entry) => entry.event === 'dsh_resume_model_select_failed'));
     assert.equal(second.agent.appliedModel, 'deepseek-official/deepseek-flash');
     assert.equal(second.agent.appliedEffort, 'high');
@@ -324,13 +324,13 @@ describe('DshAgent reconnect, settings and rotation', () => {
     // Exactly one more attempt: the boundary asks once, records the refusal, and
     // reports the queued input instead of retrying it on every availability
     // signal.
-    assert.equal(child.requests('vika/session/model/select').length, 2);
+    assert.equal(child.requests('superagent/session/model/select').length, 2);
     assert.equal(second.agent.selectionStale, false);
     assert.equal(second.agent._selectionPending(), false);
     assert.deepEqual(second.failures[0].inboundSeqs, [7]);
     second.agent.deliver('after the refusal', 8);
     await waitFor(() => child.requests('session/steer').length === 1, 2_000);
-    assert.equal(child.requests('vika/session/model/select').length, 2);
+    assert.equal(child.requests('superagent/session/model/select').length, 2);
     await acknowledge(child, child.requests('session/steer')[0], 'after-refusal');
     await settle(child, second.agent);
     await second.agent.stop();
@@ -378,7 +378,7 @@ describe('DshAgent reconnect, settings and rotation', () => {
     // The next input runs the route the books name, with no extra select.
     agent.deliver('next turn', 9);
     await waitFor(() => child.requests('session/steer').length === 2, 2_000);
-    assert.equal(child.requests('vika/session/model/select').length, 2);
+    assert.equal(child.requests('superagent/session/model/select').length, 2);
     await acknowledge(child, child.requests('session/steer')[1], 'after-rotation');
     await settle(child, agent);
     await agent.stop();
@@ -401,7 +401,7 @@ describe('DshAgent reconnect, settings and rotation', () => {
     // A new session inherits the initialize route, so the selection is
     // re-asserted before its first input.
     await waitFor(() => child.requests('session/steer').length === 1);
-    assert.deepEqual(child.requests('vika/session/model/select').at(-1).params, {
+    assert.deepEqual(child.requests('superagent/session/model/select').at(-1).params, {
       sessionId: prepared.id, provider: 'deepseek-official', model: 'deepseek-flash',
       reasoningEffort: 'high',
     });
@@ -459,7 +459,7 @@ describe('DshAgent model settings source', () => {
     const second = context.children[1];
     assert.equal(second.requests('session/resume')[0].params.sessionId, sessionId);
     // The restart reapplies the selection on the resumed session, then steers.
-    assert.equal(second.requests('vika/session/model/select').length, 1);
+    assert.equal(second.requests('superagent/session/model/select').length, 1);
     await waitFor(() => second.requests('session/steer').length === 1);
     await acknowledge(second, second.requests('session/steer')[0]);
     await settle(second, agent);
@@ -476,14 +476,14 @@ describe('DshAgent model settings source', () => {
     const startedHash = dshProfilePatchHash({ dataDir: context.config.dataDir });
     // DSH reads this document in its own start-up. Holding the bridge hello lets
     // the test write a second change after the child that booted from `started`
-    // has read it -- the window a coincident `ovsa dsh model` command lands in.
+    // has read it -- the window a coincident `ov-superagent dsh model` command lands in.
     let releaseBoot = null;
     const spawn = agent._spawn;
     agent._spawn = (bin, args, options) => {
       const child = spawn(bin, args, options);
       const answer = child._answer.bind(child);
       child._answer = (frame) => {
-        if (frame.method !== 'vika/hello' || releaseBoot) {
+        if (frame.method !== 'superagent/hello' || releaseBoot) {
           answer(frame);
           return;
         }
@@ -526,7 +526,7 @@ describe('DshAgent model settings source', () => {
     agent.deliver('same settings', 7);
     await waitFor(() => child.requests('session/steer').length === 1);
     assert.equal(context.children.length, 1);
-    assert.equal(child.requests('vika/session/model/select').length, 0);
+    assert.equal(child.requests('superagent/session/model/select').length, 0);
     await acknowledge(child, child.requests('session/steer')[0]);
     await settle(child, agent);
     await agent.stop();
@@ -540,7 +540,7 @@ describe('DshAgent model settings source', () => {
     const models = await agent.listModels();
     // The menu is served by the process that actually reads the new document.
     assert.equal(context.children.length, 2);
-    assert.equal(child.requests('vika/llm/models').length, 0);
+    assert.equal(child.requests('superagent/llm/models').length, 0);
     assert.deepEqual(models.map((entry) => entry.id), [
       'deepseek-official/deepseek-flash', 'deepseek-official/deepseek-v4-pro',
     ]);

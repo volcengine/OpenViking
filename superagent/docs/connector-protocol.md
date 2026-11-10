@@ -283,7 +283,7 @@ whether and when to answer it is the model's judgment, with or without an `@`.
 Its line carries `sender=bot` and `bots_since_human=<n>`, the bot messages in that
 chat/thread since a person last wrote there. A safety fuse, not a working rule,
 stops runaway loops: with no person writing in a chat/thread, once the agent's
-text deliveries there have answered `VIKA_BOT_REPLY_FUSE` bot messages (default
+text deliveries there have answered `OV_SUPERAGENT_BOT_REPLY_FUSE` bot messages (default
 20; `0` turns it off), the next is refused with `bot_loop` and the owner is told
 once, privately, on the primary IM. A person's message there starts the count
 over. The messages of one decision's burst count once; reactions and notices to
@@ -293,7 +293,7 @@ Who a decision may reach is decided in one Core function, so routing rules
 (a source that may also post to a group, say) can be added there later. Today
 a non-chat event may only notify the owner, through `notify_owner`: the agent
 passes no chat id, and the Core sends to the owner's `target` on the primary
-IM (`VIKA_CHANNEL`). A chat message may name another IM (`source`) when
+IM (`OV_SUPERAGENT_CHANNEL`). A chat message may name another IM (`source`) when
 the owner asked to be told there. A chat decision keeps every other delivery
 tool, across Connectors too.
 
@@ -390,7 +390,7 @@ gateway transport (Identify/heartbeat/Resume/reconnect, intent `1 << 25`). HTTP
 requests use bounded, cancellable fetches with no raw provider diagnostics.
 Only `C2C_MESSAGE_CREATE` from the verified owner's OpenID is admitted; group,
 guild and stranger messages are ignored. The independent QR credential SDK is
-not bundled. Setup takes AppID/AppSecret, then a fresh random `vika-bind` C2C
+not bundled. Setup takes AppID/AppSecret, then a fresh random `superagent-bind` C2C
 proof within three minutes. Reauthorization keeps old credentials until proof,
 stages the old owner's events during the handshake, and holds a local PID lease.
 
@@ -468,7 +468,7 @@ and numbered mail approval paths use the existing Core authorization rules.
 ## Slack provider contract
 
 Slack uses one workspace-internal app per instance, created from the manifest
-`ovsa setup` prefills (Socket Mode on, token rotation off, bot scopes
+`ov-superagent setup` prefills (Socket Mode on, token rotation off, bot scopes
 `chat:write reactions:write files:read files:write users:read
 channels:read groups:read im:read mpim:read
 channels:history groups:history im:history mpim:history`, bot events

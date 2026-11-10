@@ -14,7 +14,7 @@ export const LOCAL_OV_URL = 'http://127.0.0.1:1933';
 // Volcengine's hosted OpenViking Service, the address `ov config` uses for it.
 export const HOSTED_OV_URL = 'https://api.vikingdb.cn-beijing.volces.com/openviking';
 
-export const savedOVConfigPath = (homeDir = os.homedir()) => path.join(homeDir, '.ovsa', 'ov-connection.json');
+export const savedOVConfigPath = (homeDir = os.homedir()) => path.join(homeDir, '.ov-superagent', 'ov-connection.json');
 
 export async function detectOpenViking({ env = process.env, homeDir = os.homedir(), fetchImpl = globalThis.fetch, configPath, config: suppliedConfig } = {}) {
   const defaultPath = path.join(homeDir, '.openviking', 'ovcli.conf');

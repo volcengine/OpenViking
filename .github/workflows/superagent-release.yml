@@ -2,10 +2,10 @@ name: OpenViking SuperAgent Release
 
 # Tests, builds and publishes SuperAgent (superagent/) to the TOS release bucket, laid out
 # the way its installer and updater read it:
-#   <prefix>/releases/<version>/  vika-<version>-<platform>.tar.gz (+ .sha256),
+#   <prefix>/releases/<version>/  superagent-<version>-<platform>.tar.gz (+ .sha256),
 #                                 install.sh, and release.json, uploaded last
 #   <prefix>/install.sh, <prefix>/latest  written last, only for an
-#                                         openviking-vika@ tag newer than
+#                                         openviking-superagent@ tag newer than
 #                                         latest (pre-releases until a stable one)
 # A pull request that touches superagent/ tests and builds linux-x64 and publishes
 # nothing. A manual run publishes the chosen branch as <version>-<commit>, a
@@ -16,7 +16,7 @@ name: OpenViking SuperAgent Release
 
 on:
   push:
-    tags: ["openviking-vika@*"]
+    tags: ["openviking-superagent@*"]
   workflow_dispatch:
     inputs:
       platforms:
@@ -38,15 +38,15 @@ permissions:
 
 # Only pull request runs replace each other; a publishing run is never cancelled.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('vika-release-{0}', github.ref) || format('vika-release-{0}', github.run_id) }}
+  group: ${{ github.event_name == 'pull_request' && format('superagent-release-{0}', github.ref) || format('superagent-release-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Public address of the published tree: release.json and the installer carry
   # it, and the updater reads <base>/latest from it.
-  VIKA_DOWNLOAD_BASE: ${{ vars.VIKA_DOWNLOAD_BASE || 'https://ovrelease.tos-cn-beijing.volces.com/vika' }}
+  OV_SUPERAGENT_DOWNLOAD_BASE: ${{ vars.OV_SUPERAGENT_DOWNLOAD_BASE || 'https://ovrelease.tos-cn-beijing.volces.com/superagent' }}
   # Key prefix of the same tree in the bucket.
-  VIKA_TOS_PREFIX: ${{ vars.VIKA_TOS_PREFIX || 'vika' }}
+  OV_SUPERAGENT_TOS_PREFIX: ${{ vars.OV_SUPERAGENT_TOS_PREFIX || 'superagent' }}
 
 jobs:
   build:
@@ -72,7 +72,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          test "$RELEASE_TAG" = "openviking-vika@$PACKAGE_VERSION"
+          test "$RELEASE_TAG" = "openviking-superagent@$PACKAGE_VERSION"
 
       - run: npm ci --no-audit --no-fund
       - run: npm run check
@@ -81,34 +81,34 @@ jobs:
       - name: Build release archives
         env:
           PLATFORMS: ${{ github.event_name == 'pull_request' && 'linux-x64' || inputs.platforms || 'all' }}
-          DIST: ${{ runner.temp }}/vika-dist
+          DIST: ${{ runner.temp }}/superagent-dist
           RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
         run: |
           if [ "$PLATFORMS" = all ]; then set -- --all; else set -- --platform "$PLATFORMS"; fi
           # A tag names the version; any other run builds <package version>-<commit>.
-          if [ -n "$RELEASE_TAG" ]; then set -- "$@" --version "${RELEASE_TAG#openviking-vika@}"; fi
-          node scripts/build-release.mjs "$@" --download-base "$VIKA_DOWNLOAD_BASE" --out "$DIST"
-          sed "s|__VIKA_DOWNLOAD_BASE__|$VIKA_DOWNLOAD_BASE|" scripts/install.sh > "$DIST/install.sh"
+          if [ -n "$RELEASE_TAG" ]; then set -- "$@" --version "${RELEASE_TAG#openviking-superagent@}"; fi
+          node scripts/build-release.mjs "$@" --download-base "$OV_SUPERAGENT_DOWNLOAD_BASE" --out "$DIST"
+          sed "s|__OV_SUPERAGENT_DOWNLOAD_BASE__|$OV_SUPERAGENT_DOWNLOAD_BASE|" scripts/install.sh > "$DIST/install.sh"
 
       # What the updater checks before it switches a machine to a release: the
       # bundled Node starts here and the bundled Pi is the pinned version.
       - name: Smoke-test the linux-x64 archive
         env:
-          DIST: ${{ runner.temp }}/vika-dist
+          DIST: ${{ runner.temp }}/superagent-dist
         run: |
           VERSION="$(jq -r .version "$DIST/release.json")"
-          NAME="vika-$VERSION-linux-x64"
+          NAME="superagent-$VERSION-linux-x64"
           (cd "$DIST" && sha256sum -c "$NAME.tar.gz.sha256")
           mkdir -p "$RUNNER_TEMP/smoke"
           tar -xzf "$DIST/$NAME.tar.gz" -C "$RUNNER_TEMP/smoke"
           cd "$RUNNER_TEMP/smoke/$NAME"
           node/bin/node packages/daemon/scripts/check-pi.mjs
-          node/bin/node packages/cli/bin/vika.mjs --version
+          node/bin/node packages/cli/bin/ov-superagent.mjs --version
 
       - uses: actions/upload-artifact@v7
         with:
-          name: vika-dist
-          path: ${{ runner.temp }}/vika-dist
+          name: superagent-dist
+          path: ${{ runner.temp }}/superagent-dist
           retention-days: 7
           compression-level: 0
 
@@ -124,12 +124,12 @@ jobs:
     # Publishing runs one at a time, in order, and none is dropped: two runs of
     # one version would otherwise both find it unpublished and mix their files.
     concurrency:
-      group: vika-publish
+      group: superagent-publish
       queue: max
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: vika-dist
+          name: superagent-dist
           path: dist
 
       - uses: actions/setup-python@v6
@@ -197,7 +197,7 @@ jobs:
           }
 
           VERSION="$(jq -r .version dist/release.json)"
-          DIR="${VIKA_TOS_PREFIX}/releases/${VERSION}"
+          DIR="${OV_SUPERAGENT_TOS_PREFIX}/releases/${VERSION}"
           # A version is published once, and its release.json goes up last.
           # Finding this run's own release.json means the job is re-run after a
           # later step failed: the files are in place and the rest goes on. Any
@@ -220,7 +220,7 @@ jobs:
           MOVE_LATEST=false
           CURRENT=""
           if [ "${IS_RELEASE}" = true ]; then
-            if fetch "${VIKA_TOS_PREFIX}/latest" current-latest; then
+            if fetch "${OV_SUPERAGENT_TOS_PREFIX}/latest" current-latest; then
               CURRENT="$(tr -d ' \r\n' < current-latest)"
             fi
             BASE="${VERSION%%-*}"
@@ -248,15 +248,15 @@ jobs:
           fi
           if [ "${MOVE_LATEST}" = true ]; then
             printf '%s\n' "${VERSION}" > latest
-            upload dist/install.sh "${VIKA_TOS_PREFIX}/install.sh" "${TEXT}" "${NO_CACHE}"
-            upload latest "${VIKA_TOS_PREFIX}/latest" "${TEXT}" "${NO_CACHE}"
+            upload dist/install.sh "${OV_SUPERAGENT_TOS_PREFIX}/install.sh" "${TEXT}" "${NO_CACHE}"
+            upload latest "${OV_SUPERAGENT_TOS_PREFIX}/latest" "${TEXT}" "${NO_CACHE}"
           fi
 
           {
             echo "## OpenViking SuperAgent ${VERSION}"
             if [ "${MOVE_LATEST}" = true ]; then
               echo '```sh'
-              echo "curl -fsSL ${VIKA_DOWNLOAD_BASE}/install.sh | sh"
+              echo "curl -fsSL ${OV_SUPERAGENT_DOWNLOAD_BASE}/install.sh | sh"
               echo '```'
             else
               if [ "${IS_RELEASE}" = true ]; then
@@ -265,9 +265,9 @@ jobs:
                 echo "Preview: \`latest\` is unchanged. Install it with"
               fi
               echo '```sh'
-              echo "curl -fsSL ${VIKA_DOWNLOAD_BASE}/releases/${VERSION}/install.sh | sh -s -- --version ${VERSION}"
+              echo "curl -fsSL ${OV_SUPERAGENT_DOWNLOAD_BASE}/releases/${VERSION}/install.sh | sh -s -- --version ${VERSION}"
               echo '```'
-              echo "then \`ovsa restart\` on a machine that already runs OpenViking SuperAgent; \`ovsa upgrade all\` returns it to the latest release."
+              echo "then \`ov-superagent restart\` on a machine that already runs OpenViking SuperAgent; \`ov-superagent upgrade all\` returns it to the latest release."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -293,20 +293,20 @@ jobs:
             echo 'macOS / Linux / WSL2 (this version):'
             echo
             echo '```sh'
-            echo "curl -fsSL ${VIKA_DOWNLOAD_BASE}/releases/${VERSION}/install.sh | sh -s -- --version ${VERSION}"
+            echo "curl -fsSL ${OV_SUPERAGENT_DOWNLOAD_BASE}/releases/${VERSION}/install.sh | sh -s -- --version ${VERSION}"
             echo '```'
             echo
             echo 'Windows users: use the PowerShell one-line installer in the shared guide below. Windows previews are published separately; this command and these release assets are for macOS / Linux.'
             echo
             echo "[Installation and setup guide](https://github.com/${GITHUB_REPOSITORY}/blob/feat/vika/superagent/install.md)"
-          } > "${RUNNER_TEMP}/vika-release-notes.md"
+          } > "${RUNNER_TEMP}/superagent-release-notes.md"
           gh release create "${TAG}" dist/*.tar.gz dist/*.sha256 dist/release.json \
             --repo "${GITHUB_REPOSITORY}" \
             --verify-tag \
             --latest=false \
             ${PRERELEASE[@]+"${PRERELEASE[@]}"} \
             --title "OpenViking SuperAgent ${VERSION}" \
-            --notes-file "${RUNNER_TEMP}/vika-release-notes.md"
+            --notes-file "${RUNNER_TEMP}/superagent-release-notes.md"
 
   windows-preview:
     name: Windows x64 preview
@@ -340,11 +340,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'PowerShell 5.1 online installer tests failed' }
       - name: Build committed Windows preview
         run: |
-          node scripts/build-windows-preview.mjs "$env:RUNNER_TEMP/vika-windows-dist"
+          node scripts/build-windows-preview.mjs "$env:RUNNER_TEMP/superagent-windows-dist"
           if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
       - name: Install and check relocated package without global Node or PM2
         run: |
-          $dist = Join-Path $env:RUNNER_TEMP 'vika-windows-dist'
+          $dist = Join-Path $env:RUNNER_TEMP 'superagent-windows-dist'
           $archive = (Get-ChildItem $dist -Filter '*.zip').FullName
           $destination = Join-Path $env:RUNNER_TEMP 'OpenViking SuperAgent 测试 package'
           $originalPath = $env:PATH
@@ -363,8 +363,8 @@ jobs:
       - uses: actions/upload-artifact@v7
         id: upload
         with:
-          name: vika-windows-preview-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/vika-windows-dist/*
+          name: superagent-windows-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/superagent-windows-dist/*
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
@@ -393,12 +393,12 @@ jobs:
     timeout-minutes: 60
     environment: vika-release
     concurrency:
-      group: vika-windows-preview-publish
+      group: superagent-windows-preview-publish
       queue: max
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: vika-windows-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          name: superagent-windows-preview-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist
 
       - uses: actions/setup-python@v6
@@ -450,15 +450,15 @@ jobs:
 
           cd dist
           shopt -s nullglob
-          zips=(vika-*-win32-x64.zip)
+          zips=(superagent-*-win32-x64.zip)
           if [ "${#zips[@]}" -ne 1 ]; then
             echo "::error::Expected exactly one Windows preview ZIP, found ${#zips[@]}"
             exit 1
           fi
           ZIP="${zips[0]}"
-          VERSION="${ZIP#vika-}"
+          VERSION="${ZIP#superagent-}"
           VERSION="${VERSION%-win32-x64.zip}"
-          PREFIX="${VIKA_TOS_PREFIX}/windows-preview"
+          PREFIX="${OV_SUPERAGENT_TOS_PREFIX}/windows-preview"
           DIR="${PREFIX}/${VERSION}"
 
           # Versioned copy: immutable, exactly what the Actions artifact holds.
@@ -472,7 +472,7 @@ jobs:
           # Stable alias for documentation links. The installer requires the
           # checksum file to name the ZIP it sits next to, so it is rewritten
           # for the fixed name rather than copied.
-          ALIAS="vika-windows-preview-win32-x64.zip"
+          ALIAS="superagent-windows-preview-win32-x64.zip"
           cp "${ZIP}" "${ALIAS}"
           printf '%s  %s\n' "$(cut -d' ' -f1 "${ZIP}.sha256")" "${ALIAS}" > "${ALIAS}.sha256"
           printf '%s\n' "${VERSION}" > latest
@@ -481,16 +481,16 @@ jobs:
           upload install-preview.ps1 "${PREFIX}/latest/install-preview.ps1" "${TEXT}" "${NO_CACHE}"
           upload README.md "${PREFIX}/latest/README.md" "text/markdown; charset=utf-8" "${NO_CACHE}"
           upload install.ps1 "${PREFIX}/latest/install.ps1" "${TEXT}" "${NO_CACHE}"
-          upload install.ps1 "${VIKA_TOS_PREFIX}/install.ps1" "${TEXT}" "${NO_CACHE}"
+          upload install.ps1 "${OV_SUPERAGENT_TOS_PREFIX}/install.ps1" "${TEXT}" "${NO_CACHE}"
           upload latest "${PREFIX}/latest/version" "${TEXT}" "${NO_CACHE}"
 
           {
             echo "## Windows x64 preview on TOS"
             echo "Version: \`${VERSION}\`"
             echo '```powershell'
-            echo "irm ${VIKA_DOWNLOAD_BASE}/install.ps1 | iex"
+            echo "irm ${OV_SUPERAGENT_DOWNLOAD_BASE}/install.ps1 | iex"
             echo '```'
-            echo "- Latest ZIP: ${VIKA_DOWNLOAD_BASE}/windows-preview/latest/${ALIAS}"
-            echo "- This build: ${VIKA_DOWNLOAD_BASE}/windows-preview/${VERSION}/${ZIP}"
+            echo "- Latest ZIP: ${OV_SUPERAGENT_DOWNLOAD_BASE}/windows-preview/latest/${ALIAS}"
+            echo "- This build: ${OV_SUPERAGENT_DOWNLOAD_BASE}/windows-preview/${VERSION}/${ZIP}"
             echo "Stable \`latest\` for macOS/Linux is unchanged."
           } >> "$GITHUB_STEP_SUMMARY"

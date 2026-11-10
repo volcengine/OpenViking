@@ -13,20 +13,20 @@ import { OWNER_MESSAGE_SCOPES, larkScopes } from '../src/setup.mjs';
 
 function agent(home, id, overrides = {}) {
   return {
-    id, displayName: id.toUpperCase(), channel: 'lark', connectors: ['lark'], profile: `vika-${id}`,
-    port: 3738, dataDir: path.join(home, '.ovsa', 'data', id), workspace: path.join(home, 'ws', id), model: 'codex:',
-    ovConfig: path.join(home, '.ovsa', 'ov', `${id}.json`),
+    id, displayName: id.toUpperCase(), channel: 'lark', connectors: ['lark'], profile: `superagent-${id}`,
+    port: 3738, dataDir: path.join(home, '.ov-superagent', 'data', id), workspace: path.join(home, 'ws', id), model: 'codex:',
+    ovConfig: path.join(home, '.ov-superagent', 'ov', `${id}.json`),
     ...overrides,
   };
 }
 
 function machine(t, agents, { answers = [], tty = false } = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-login-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-login-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const list = agents(home);
   if (list.length) {
-    fs.mkdirSync(path.join(home, '.ovsa'), { recursive: true });
-    fs.writeFileSync(path.join(home, '.ovsa', 'config.json'),
+    fs.mkdirSync(path.join(home, '.ov-superagent'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ov-superagent', 'config.json'),
       JSON.stringify({ version: 1, defaultInstance: list[0].id, env: {}, agents: list }));
   }
   const input = new PassThrough();
@@ -44,25 +44,25 @@ function machine(t, agents, { answers = [], tty = false } = {}) {
     },
     control: { restart: async (id) => { calls.push(['restart', id]); } },
   };
-  const manifest = () => JSON.parse(fs.readFileSync(path.join(home, '.ovsa', 'config.json'), 'utf8'));
+  const manifest = () => JSON.parse(fs.readFileSync(path.join(home, '.ov-superagent', 'config.json'), 'utf8'));
   return { home, input, options, calls, written: () => written, manifest };
 }
 
 test('login renews what an instance has; connecting a new IM is setup\'s', async (t) => {
   const m = machine(t, (home) => [agent(home, 'haha', { channel: 'weixin', connectors: ['weixin'], profile: undefined })]);
-  const before = fs.readFileSync(path.join(m.home, '.ovsa', 'config.json'), 'utf8');
+  const before = fs.readFileSync(path.join(m.home, '.ov-superagent', 'config.json'), 'utf8');
   assert.equal(await loginCommand(['weixin'], m.options), 0);
   assert.deepEqual(m.calls, [['weixin', 'haha']]);
   // A new login is a new conversation: the owner writes first again.
   assert.match(m.written(), /最后一步：在微信里先给机器人发一句话/);
-  assert.equal(fs.readFileSync(path.join(m.home, '.ovsa', 'config.json'), 'utf8'), before, 'the manifest is untouched');
+  assert.equal(fs.readFileSync(path.join(m.home, '.ov-superagent', 'config.json'), 'utf8'), before, 'the manifest is untouched');
 
-  await assert.rejects(loginCommand(['lark'], m.options), /还没有实例接飞书；要接入，运行 ovsa setup 修改实例/);
-  await assert.rejects(loginCommand(['email', 'haha'], m.options), /实例 haha 没有接邮箱；要接入，运行 ovsa setup，选择修改 haha/);
+  await assert.rejects(loginCommand(['lark'], m.options), /还没有实例接飞书；要接入，运行 ov-superagent setup 修改实例/);
+  await assert.rejects(loginCommand(['email', 'haha'], m.options), /实例 haha 没有接邮箱；要接入，运行 ov-superagent setup，选择修改 haha/);
 });
 
 test('a mailbox password is renewed for the mailbox chosen, and the instance restarts', async (t) => {
-  const file = (home, id) => path.join(home, '.ovsa', 'email', 'wx', `${id}.json`);
+  const file = (home, id) => path.join(home, '.ov-superagent', 'email', 'wx', `${id}.json`);
   const m = machine(t, (home) => {
     for (const [id, address] of [['email-gmail', 'me@gmail.com'], ['email-qq', 'me@qq.com']]) {
       fs.mkdirSync(path.dirname(file(home, id)), { recursive: true });
@@ -94,9 +94,9 @@ test('with several instances it asks which one, among those that have the IM', a
 
 test('usage, and nothing to renew before setup', async (t) => {
   const empty = machine(t, () => []);
-  await assert.rejects(loginCommand(['weixin'], empty.options), /先运行 ovsa setup/);
+  await assert.rejects(loginCommand(['weixin'], empty.options), /先运行 ov-superagent setup/);
   assert.equal(await loginCommand(['setup'], empty.options), 2);
-  assert.match(empty.written(), /用法：ovsa login <lark\|weixin\|email\|telegram\|slack\|qq> \[实例\]\n  登录过期或改了密码后重新授权；要接入新的 IM，运行 ovsa setup 修改实例/);
+  assert.match(empty.written(), /用法：ov-superagent login <lark\|weixin\|email\|telegram\|slack\|qq> \[实例\]\n  登录过期或改了密码后重新授权；要接入新的 IM，运行 ov-superagent setup 修改实例/);
 });
 
 test('Telegram login stops the poller before verification and restarts with the new key', async (t) => {
@@ -178,11 +178,11 @@ test('Feishu login checks the app first; its owner adds what it lacks with one s
   assert.match(output, /扫码把缺的补上？要你是这个应用的所有者或管理员/);
   assert.match(output, /平台已确认[\s\S]*权限核对通过/);
   const calls = lark.calls();
-  assert.ok(calls.every((args) => args[0] === '--profile' && args[1] === 'vika-haha'));
+  assert.ok(calls.every((args) => args[0] === '--profile' && args[1] === 'superagent-haha'));
   assert.ok(calls.filter((args) => args.includes('api')).every((args) => args.at(-2) === '--as' && args.at(-1) === 'bot'));
   const login = calls.find((args) => args.includes('--no-wait'));
   assert.equal(login[login.indexOf('--scope') + 1], larkScopes().user.join(' '), 'after the update every user scope is there');
-  assert.match(output, /vika-haha 已重新授权/);
+  assert.match(output, /superagent-haha 已重新授权/);
   assert.deepEqual(m.calls, [], 'the running instance is not restarted');
 });
 
@@ -218,7 +218,7 @@ test('Feishu login with a version under review says the scan would withdraw it, 
   assert.equal(await loginCommand(['lark'], m.options), 0);
   assert.match(m.written(), /应用有一个版本正在审核：扫码补齐时，飞书会先撤回它再提交新版本，审批要重新排队。/);
   assert.match(m.written(), /扫码把缺的补上？要你是这个应用的所有者或管理员 \[y\/N\]/);
-  assert.match(m.written(), /vika-haha 已重新授权/);
+  assert.match(m.written(), /superagent-haha 已重新授权/);
 });
 
 for (const fail of [false, true]) test(`QQ login stops the receiver and restores the instance after verification (failure=${fail})`, async (t) => {

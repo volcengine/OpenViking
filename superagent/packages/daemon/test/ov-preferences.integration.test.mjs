@@ -5,7 +5,7 @@
 // directory of the person who stated them, namesakes and the owner apart;
 // recall shows each person only their own; a change replaces, a withdrawal
 // removes; and OV's own search finds them. Opt in with
-// VIKA_OV_PREFERENCE_TEST_CONFIG naming the ovConfig of a NEW, disposable
+// OV_SUPERAGENT_OV_PREFERENCE_TEST_CONFIG naming the ovConfig of a NEW, disposable
 // user on a test server: it writes synthetic preferences and leaves them for
 // inspection. Never point it at an instance's real memory.
 
@@ -23,11 +23,11 @@ import { Store } from '../src/store.mjs';
 import { fakeConnectors } from './action-fixture.mjs';
 import { chatEvent } from './event-fixture.mjs';
 
-const configPath = process.env.VIKA_OV_PREFERENCE_TEST_CONFIG;
+const configPath = process.env.OV_SUPERAGENT_OV_PREFERENCE_TEST_CONFIG;
 const logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 
 test('live OV: each person\'s preferences stay theirs through store, change, withdrawal, recall and search', {
-  skip: !configPath && 'set VIKA_OV_PREFERENCE_TEST_CONFIG to a disposable OV user', timeout: 300_000,
+  skip: !configPath && 'set OV_SUPERAGENT_OV_PREFERENCE_TEST_CONFIG to a disposable OV user', timeout: 300_000,
 }, async (t) => {
   const connection = new OVConnection(readOVConfig(configPath), { timeoutMs: 60_000 });
   const tree = async () => {

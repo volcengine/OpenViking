@@ -16,8 +16,8 @@ test('only a Chinese locale settles the language; a locale naming no language sa
   for (const locale of ['', 'C', 'C.UTF-8', 'POSIX']) assert.equal(localeLanguage({ LANG: locale }), null, locale);
 });
 
-test('--lang beats VIKA_LANG, which beats the saved language, which beats Chinese; the locale only settles asking', (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-lang-'));
+test('--lang beats OV_SUPERAGENT_LANG, which beats the saved language, which beats Chinese; the locale only settles asking', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-lang-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const env = { HOME: home, LANG: 'en_US.UTF-8' };
   // A server's en_US says little about who reads it: Chinese, but asked.
@@ -25,10 +25,10 @@ test('--lang beats VIKA_LANG, which beats the saved language, which beats Chines
   assert.deepEqual(languageChoice({ env: { HOME: home } }), { language: 'zh', settled: false, explicit: false });
   assert.deepEqual(languageChoice({ env: { HOME: home, LANG: 'zh_CN.UTF-8' } }), { language: 'zh', settled: true, explicit: false });
   saveLanguage('zh', env);
-  assert.equal(fs.readFileSync(path.join(home, '.ovsa', 'language'), 'utf8'), 'zh\n');
+  assert.equal(fs.readFileSync(path.join(home, '.ov-superagent', 'language'), 'utf8'), 'zh\n');
   assert.equal(savedLanguage(env), 'zh');
   assert.deepEqual(languageChoice({ env }), { language: 'zh', settled: true, explicit: false });
-  assert.deepEqual(languageChoice({ env: { ...env, VIKA_LANG: 'en' } }), { language: 'en', settled: true, explicit: true });
-  assert.deepEqual(languageChoice({ env: { ...env, VIKA_LANG: 'en' }, flag: 'zh' }), { language: 'zh', settled: true, explicit: true });
-  assert.equal(languageChoice({ env: { ...env, VIKA_LANG: 'fr' } }).language, 'zh', 'an unknown VIKA_LANG is ignored');
+  assert.deepEqual(languageChoice({ env: { ...env, OV_SUPERAGENT_LANG: 'en' } }), { language: 'en', settled: true, explicit: true });
+  assert.deepEqual(languageChoice({ env: { ...env, OV_SUPERAGENT_LANG: 'en' }, flag: 'zh' }), { language: 'zh', settled: true, explicit: true });
+  assert.equal(languageChoice({ env: { ...env, OV_SUPERAGENT_LANG: 'fr' } }).language, 'zh', 'an unknown OV_SUPERAGENT_LANG is ignored');
 });

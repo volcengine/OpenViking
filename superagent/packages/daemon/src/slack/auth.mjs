@@ -10,7 +10,7 @@ const ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 const quiet = { debug() {}, info() {}, warn() {}, error() {} };
 
 function code() {
-  return `vika-${[...randomBytes(8)].map((byte) => ALPHABET[byte % ALPHABET.length]).join('')}`;
+  return `superagent-${[...randomBytes(8)].map((byte) => ALPHABET[byte % ALPHABET.length]).join('')}`;
 }
 
 function millis(ts) {

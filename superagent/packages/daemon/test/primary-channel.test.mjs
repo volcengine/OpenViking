@@ -23,13 +23,13 @@ const logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return 
 const ids = ['lark', 'weixin', 'telegram', 'slack', 'qq'];
 
 function fixture(t) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-primary-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-primary-'));
   const manifestPath = path.join(directory, 'custom-config.json');
   const agent = (id, port) => ({ id, displayName: id, channel: 'lark', connectors: ids,
     profile: `profile-${id}`, port, model: 'codex:', dataDir: path.join(directory, id, 'data'),
     workspace: path.join(directory, id, 'workspace'), ovConfig: path.join(directory, id, 'ov.json') });
   const first = agent('first', 3738), second = agent('second', 3739);
-  const manifest = { version: 1, defaultInstance: 'first', env: { VIKA_LOG_LEVEL: 'warn' }, agents: [first, second] };
+  const manifest = { version: 1, defaultInstance: 'first', env: { OV_SUPERAGENT_LOG_LEVEL: 'warn' }, agents: [first, second] };
   writeManifest(manifestPath, manifest);
   fs.mkdirSync(second.workspace, { recursive: true });
   fs.mkdirSync(second.dataDir, { recursive: true });
@@ -77,8 +77,8 @@ test('every IM switches live through ingress/outbox and survive config reload wi
     assert.deepEqual(f.saved(), { ...f.manifest,
       agents: [f.manifest.agents[0], { ...f.manifest.agents[1], channel: source }] });
     const restarted = {};
-    applyDeploymentAgentEnv(restarted, loadDeploymentManifest({ VIKA_CONFIG: f.manifestPath }), 'second');
-    assert.equal(restarted.VIKA_CHANNEL, source);
+    applyDeploymentAgentEnv(restarted, loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: f.manifestPath }), 'second');
+    assert.equal(restarted.OV_SUPERAGENT_CHANNEL, source);
     assert.match((await f.receive(source, '/primary STATUS')).text, new RegExp(`当前主 IM：.*（${source}）`));
 
     const notice = subjectEvent({ eventId: `notice-${source}` });
@@ -118,7 +118,7 @@ test('switching patches the latest manifest and preserves changes to another ins
   const changed = f.saved();
   changed.agents[0].channel = 'slack';
   changed.agents[1].displayName = 'Renamed while running';
-  changed.env.VIKA_LOG_LEVEL = 'error';
+  changed.env.OV_SUPERAGENT_LOG_LEVEL = 'error';
   writeManifest(f.manifestPath, changed);
   assert.match((await f.receive('telegram', '/primary')).text, /立即生效/);
   changed.agents[1].channel = 'telegram';

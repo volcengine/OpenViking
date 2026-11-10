@@ -10,9 +10,9 @@ import { createRequire } from 'node:module';
 import { terminateProcessTree } from '../src/process-utils.mjs';
 
 // A throwaway "installation" for CLI end-to-end tests: a deployment manifest
-// with one or more instances, a temp HOME (so ~/.ovsa is never touched), and a
+// with one or more instances, a temp HOME (so ~/.ov-superagent is never touched), and a
 // fake `dsh` on PATH *and* in DSH_BIN. The CLI under test is the real entry
-// point (`node packages/cli/bin/vika.mjs`), so an argument-parsing or
+// point (`node packages/cli/bin/ov-superagent.mjs`), so an argument-parsing or
 // dispatch regression fails here instead of in a unit test.
 //
 // `runCli()` executes one CLI invocation and returns its exit status and
@@ -21,14 +21,14 @@ import { terminateProcessTree } from '../src/process-utils.mjs';
 
 const SUPPORT_DIR = path.dirname(fileURLToPath(import.meta.url));
 /**
- * The repository root (`vika/`) whose CLI a fixture drives. It defaults to the
- * checkout this file lives in; `VIKA_E2E_PROJECT_ROOT` points the same suite at
+ * The repository root (`superagent/`) whose CLI a fixture drives. It defaults to the
+ * checkout this file lives in; `OV_SUPERAGENT_E2E_PROJECT_ROOT` points the same suite at
  * another checkout, which is how an integration branch is checked before the
  * test file itself is merged there.
  */
-export const PROJECT_ROOT = path.resolve(process.env.VIKA_E2E_PROJECT_ROOT || path.resolve(SUPPORT_DIR, '..', '..', '..'));
+export const PROJECT_ROOT = path.resolve(process.env.OV_SUPERAGENT_E2E_PROJECT_ROOT || path.resolve(SUPPORT_DIR, '..', '..', '..'));
 /** The real CLI entry point. */
-export const CLI_ENTRY = path.join(PROJECT_ROOT, 'packages', 'cli', 'bin', 'vika.mjs');
+export const CLI_ENTRY = path.join(PROJECT_ROOT, 'packages', 'cli', 'bin', 'ov-superagent.mjs');
 /** The command module the `dsh model` tests require; absent before the CLI lands. */
 export const CLI_DSH_MODEL_MODULE = path.join(PROJECT_ROOT, 'packages', 'cli', 'src', 'dsh-model.mjs');
 /** The reusable fake dsh executable. */
@@ -75,7 +75,7 @@ function parseCredentialsDocument(text) {
  * @param options.instances - instance ids to declare; the first is the default.
  */
 export function createCliFixture(tests, { instances = ['qa'] } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-cli-e2e-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-cli-e2e-'));
   fs.chmodSync(root, 0o700);
   const home = path.join(root, 'home');
   fs.mkdirSync(home, { mode: 0o700 });
@@ -116,16 +116,16 @@ export function createCliFixture(tests, { instances = ['qa'] } = {}) {
   }, null, 2)}\n`, { mode: 0o600 });
   // Validated with the daemon's own loader: a fixture the product would reject
   // must fail the suite here, not inside the CLI being measured.
-  loadDeploymentManifest({ VIKA_CONFIG: manifestPath, HOME: home });
+  loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath, HOME: home });
 
   const logPath = path.join(root, 'fake-dsh.jsonl');
-  const env = { ...process.env, HOME: home, VIKA_CONFIG: manifestPath, DSH_BIN: fakeDsh };
+  const env = { ...process.env, HOME: home, OV_SUPERAGENT_CONFIG: manifestPath, DSH_BIN: fakeDsh };
   for (const key of Object.keys(env)) {
-    if (/^(?:VIKA|DEEPSEEK|DSH|FAKE_DSH)_/i.test(key)) delete env[key];
+    if (/^(?:OV_SUPERAGENT|DEEPSEEK|DSH|FAKE_DSH)_/i.test(key)) delete env[key];
   }
   Object.assign(env, {
     HOME: home,
-    VIKA_CONFIG: manifestPath,
+    OV_SUPERAGENT_CONFIG: manifestPath,
     DSH_BIN: fakeDsh,
     PATH: `${binDirectory}${path.delimiter}${process.env.PATH ?? ''}`,
     FAKE_DSH_LOG: logPath,
@@ -162,7 +162,7 @@ export function createCliFixture(tests, { instances = ['qa'] } = {}) {
     credentialsFile: (id) => path.join(dataDirOf(id), 'dsh', 'home', '.credentials.yaml'),
     controlPatch: (id) => path.join(dataDirOf(id), 'dsh', 'run', 'control-patch.yml'),
 
-    /** Run one `vika ...` invocation with the fixture environment. */
+    /** Run one `superagent ...` invocation with the fixture environment. */
     runCli(args, { input = null, timeoutMs = 60_000, env: extraEnv = {} } = {}) {
       return new Promise((resolve) => {
         const child = spawn(process.execPath, [CLI_ENTRY, ...args], {
@@ -210,9 +210,9 @@ export function createCliFixture(tests, { instances = ['qa'] } = {}) {
         .filter((entry) => entry.event === 'request')
         .filter((entry) => method === null || entry.method === method);
     },
-    /** The `vika/settings/mutate` ops the CLI sent, oldest first. */
+    /** The `superagent/settings/mutate` ops the CLI sent, oldest first. */
     mutateOps() {
-      return fixture.requests('vika/settings/mutate').flatMap((entry) => entry.params?.ops ?? []);
+      return fixture.requests('superagent/settings/mutate').flatMap((entry) => entry.params?.ops ?? []);
     },
     /** Parsed `llm-pi-ai` providers from the persisted profile patch, or null. */
     patchProviders(id = instances[0]) {

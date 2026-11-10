@@ -15,6 +15,7 @@ const {
   applyDeploymentDaemonEnv,
   loadDeploymentManifest,
   resolveDeploymentManifestPath,
+  resolveSecretsFilePath,
   resolvedDeploymentDaemonEnv,
   selectDeploymentAgent,
 } = require('../../../deployment-config.cjs');
@@ -24,10 +25,10 @@ function validManifest() {
     version: 1,
     defaultInstance: 'beta',
     env: {
-      VIKA_LOG_LEVEL: 'info',
-      VIKA_DRY_RUN: 'false',
-      VIKA_TRAEX_EFFORT: 'medium',
-      VIKA_IGNORED_SENDER_IDS: '',
+      OV_SUPERAGENT_LOG_LEVEL: 'info',
+      OV_SUPERAGENT_DRY_RUN: 'false',
+      OV_SUPERAGENT_TRAEX_EFFORT: 'medium',
+      OV_SUPERAGENT_IGNORED_SENDER_IDS: '',
     },
     agents: [
       {
@@ -35,9 +36,9 @@ function validManifest() {
         displayName: 'Alpha',
         profile: 'cli_alpha',
         port: 3738,
-        dataDir: '/srv/vika/data/alpha',
-        workspace: '/srv/vika/workspaces/alpha',
-        ovConfig: '/srv/vika/ov/alpha.json',
+        dataDir: '/srv/superagent/data/alpha',
+        workspace: '/srv/superagent/workspaces/alpha',
+        ovConfig: '/srv/superagent/ov/alpha.json',
         model: 'gpt-5.6-sol',
       },
       {
@@ -45,9 +46,9 @@ function validManifest() {
         displayName: 'Beta',
         profile: 'cli_beta',
         port: 3740,
-        dataDir: '/srv/vika/data/beta',
-        workspace: '/srv/vika/workspaces/beta',
-        ovConfig: '/srv/vika/ov/beta.json',
+        dataDir: '/srv/superagent/data/beta',
+        workspace: '/srv/superagent/workspaces/beta',
+        ovConfig: '/srv/superagent/ov/beta.json',
         model: 'gpt-5.6-sol',
       },
       {
@@ -55,9 +56,9 @@ function validManifest() {
         displayName: 'Gamma',
         profile: 'cli_gamma',
         port: 3741,
-        dataDir: '/srv/vika/data/gamma',
-        workspace: '/srv/vika/workspaces/gamma',
-        ovConfig: '/srv/vika/ov/gamma.json',
+        dataDir: '/srv/superagent/data/gamma',
+        workspace: '/srv/superagent/workspaces/gamma',
+        ovConfig: '/srv/superagent/ov/gamma.json',
         model: 'gpt-5.6-sol',
       },
     ],
@@ -78,16 +79,16 @@ function withManifest(value, callback) {
 test('loads any number of agents from one absolute deployment manifest', () => {
   withManifest(validManifest(), (manifestPath) => {
     const deployment = loadDeploymentManifest({
-      VIKA_CONFIG: manifestPath,
+      OV_SUPERAGENT_CONFIG: manifestPath,
     });
 
     assert.equal(deployment.version, 1);
     assert.equal(deployment.defaultInstance, 'beta');
     assert.deepEqual(deployment.env, {
-      VIKA_LOG_LEVEL: 'info',
-      VIKA_DRY_RUN: 'false',
-      VIKA_TRAEX_EFFORT: 'medium',
-      VIKA_IGNORED_SENDER_IDS: '',
+      OV_SUPERAGENT_LOG_LEVEL: 'info',
+      OV_SUPERAGENT_DRY_RUN: 'false',
+      OV_SUPERAGENT_TRAEX_EFFORT: 'medium',
+      OV_SUPERAGENT_IGNORED_SENDER_IDS: '',
     });
     assert.deepEqual(deployment.agents.map(({ id }) => id), ['alpha', 'beta', 'gamma']);
     assert.equal(selectDeploymentAgent(deployment).id, 'beta');
@@ -97,24 +98,24 @@ test('loads any number of agents from one absolute deployment manifest', () => {
 
 test('passes timer storage selection from the manifest into the daemon environment', () => {
   const manifest = validManifest();
-  manifest.env.VIKA_TIMER_STORAGE = 'sqlite';
+  manifest.env.OV_SUPERAGENT_TIMER_STORAGE = 'sqlite';
   withManifest(manifest, (manifestPath) => {
-    const deployment = loadDeploymentManifest({ VIKA_CONFIG: manifestPath });
+    const deployment = loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath });
     const env = {};
     applyDeploymentDaemonEnv(env, deployment);
-    assert.equal(env.VIKA_TIMER_STORAGE, 'sqlite');
-    assert.equal(resolvedDeploymentDaemonEnv(deployment, { VIKA_TIMER_STORAGE: 'ov' }).VIKA_TIMER_STORAGE, 'ov');
+    assert.equal(env.OV_SUPERAGENT_TIMER_STORAGE, 'sqlite');
+    assert.equal(resolvedDeploymentDaemonEnv(deployment, { OV_SUPERAGENT_TIMER_STORAGE: 'ov' }).OV_SUPERAGENT_TIMER_STORAGE, 'ov');
   });
 });
 
 test('defaults the manifest path under HOME and accepts an explicit absolute override', () => {
   assert.equal(
     resolveDeploymentManifestPath({ HOME: '/Users/test' }),
-    '/Users/test/.ovsa/config.json',
+    '/Users/test/.ov-superagent/config.json',
   );
   assert.equal(resolveDeploymentManifestPath({
     HOME: '/Users/test',
-    VIKA_CONFIG: '/srv/lark/config.json',
+    OV_SUPERAGENT_CONFIG: '/srv/lark/config.json',
   }), '/srv/lark/config.json');
   assert.throws(
     () => resolveDeploymentManifestPath({ HOME: 'relative' }),
@@ -124,30 +125,30 @@ test('defaults the manifest path under HOME and accepts an explicit absolute ove
 
 test('passes the temporary directory through deployment and supports isolated instance overrides', () => {
   const manifest = validManifest();
-  manifest.env.VIKA_TEMP_DIR = '/tmp/vika-default';
-  manifest.agents[0].tempDir = '/tmp/vika-alpha';
-  manifest.agents[1].tempDir = '/tmp/vika-beta';
+  manifest.env.OV_SUPERAGENT_TEMP_DIR = '/tmp/superagent-default';
+  manifest.agents[0].tempDir = '/tmp/superagent-alpha';
+  manifest.agents[1].tempDir = '/tmp/superagent-beta';
   withManifest(manifest, (manifestPath) => {
-    const sourceEnv = { VIKA_CONFIG: manifestPath };
+    const sourceEnv = { OV_SUPERAGENT_CONFIG: manifestPath };
     const deployment = loadDeploymentManifest(sourceEnv);
     assert.deepEqual(deployment.ignoredFields, []);
-    assert.equal(deploymentDaemonEnvOverrides({ ...sourceEnv, VIKA_TEMP_DIR: '/tmp/from-shell' }).VIKA_TEMP_DIR, '/tmp/from-shell');
-    for (const [id, expected] of [['alpha', '/tmp/vika-alpha'], ['beta', '/tmp/vika-beta'], ['gamma', '/tmp/vika-default']]) {
+    assert.equal(deploymentDaemonEnvOverrides({ ...sourceEnv, OV_SUPERAGENT_TEMP_DIR: '/tmp/from-shell' }).OV_SUPERAGENT_TEMP_DIR, '/tmp/from-shell');
+    for (const [id, expected] of [['alpha', '/tmp/superagent-alpha'], ['beta', '/tmp/superagent-beta'], ['gamma', '/tmp/superagent-default']]) {
       const env = { ...sourceEnv };
       applyDeploymentDaemonEnv(env, deployment);
       applyDeploymentAgentEnv(env, deployment, id);
-      assert.equal(env.VIKA_TEMP_DIR, expected);
-      assert.equal(env.VIKA_DATA_DIR, `/srv/vika/data/${id}`);
+      assert.equal(env.OV_SUPERAGENT_TEMP_DIR, expected);
+      assert.equal(env.OV_SUPERAGENT_DATA_DIR, `/srv/superagent/data/${id}`);
     }
-    assert.equal(resolvedDeploymentDaemonEnv(deployment, { VIKA_TEMP_DIR: '/tmp/from-shell' }).VIKA_TEMP_DIR, '/tmp/from-shell');
+    assert.equal(resolvedDeploymentDaemonEnv(deployment, { OV_SUPERAGENT_TEMP_DIR: '/tmp/from-shell' }).OV_SUPERAGENT_TEMP_DIR, '/tmp/from-shell');
   });
-  manifest.agents[1].tempDir = '/tmp/vika-alpha';
+  manifest.agents[1].tempDir = '/tmp/superagent-alpha';
   withManifest(manifest, (manifestPath) => {
-    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /storage paths overlap/);
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /storage paths overlap/);
   });
   manifest.agents[1].tempDir = 'relative/tmp';
   withManifest(manifest, (manifestPath) => {
-    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /tempDir must be an absolute path/);
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /tempDir must be an absolute path/);
   });
 });
 
@@ -155,35 +156,35 @@ test('system environment overrides manifest daemon env while agent identity stay
   withManifest(validManifest(), (manifestPath) => {
     const env = {
       HOME: '/Users/test',
-      VIKA_CONFIG: manifestPath,
-      VIKA_LOG_LEVEL: 'debug',
+      OV_SUPERAGENT_CONFIG: manifestPath,
+      OV_SUPERAGENT_LOG_LEVEL: 'debug',
       ARK_API_KEY: 'system-only-secret',
-      VIKA_PORT: '9999',
-      VIKA_LARK_PROFILE: 'wrong',
+      OV_SUPERAGENT_PORT: '9999',
+      OV_SUPERAGENT_LARK_PROFILE: 'wrong',
     };
     const deployment = loadDeploymentManifest(env);
     applyDeploymentDaemonEnv(env, deployment);
     applyDeploymentAgentEnv(env, deployment, 'alpha');
 
-    assert.equal(env.VIKA_LOG_LEVEL, 'debug');
-    assert.equal(env.VIKA_DRY_RUN, 'false');
-    assert.equal(env.VIKA_IGNORED_SENDER_IDS, '');
+    assert.equal(env.OV_SUPERAGENT_LOG_LEVEL, 'debug');
+    assert.equal(env.OV_SUPERAGENT_DRY_RUN, 'false');
+    assert.equal(env.OV_SUPERAGENT_IGNORED_SENDER_IDS, '');
     assert.equal(env.ARK_API_KEY, 'system-only-secret');
-    assert.equal(env.VIKA_PORT, '3738');
-    assert.equal(env.VIKA_LARK_PROFILE, 'cli_alpha');
+    assert.equal(env.OV_SUPERAGENT_PORT, '3738');
+    assert.equal(env.OV_SUPERAGENT_LARK_PROFILE, 'cli_alpha');
   });
 });
 
 test('deployment manifest accepts the timer occurrence check delay env', () => {
   const manifest = validManifest();
-  manifest.env.VIKA_TIMER_OCCURRENCE_CHECK_DELAY_MS = '120000';
+  manifest.env.OV_SUPERAGENT_TIMER_OCCURRENCE_CHECK_DELAY_MS = '120000';
   withManifest(manifest, (manifestPath) => {
-    const deployment = loadDeploymentManifest({ VIKA_CONFIG: manifestPath });
+    const deployment = loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath });
     assert.deepEqual(deployment.ignoredFields, []);
-    assert.equal(deployment.env.VIKA_TIMER_OCCURRENCE_CHECK_DELAY_MS, '120000');
-    const env = { VIKA_CONFIG: manifestPath };
+    assert.equal(deployment.env.OV_SUPERAGENT_TIMER_OCCURRENCE_CHECK_DELAY_MS, '120000');
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath };
     applyDeploymentDaemonEnv(env, deployment);
-    assert.equal(env.VIKA_TIMER_OCCURRENCE_CHECK_DELAY_MS, '120000');
+    assert.equal(env.OV_SUPERAGENT_TIMER_OCCURRENCE_CHECK_DELAY_MS, '120000');
   });
 });
 
@@ -195,8 +196,8 @@ test('falls back to a secrets file for daemon-wide secrets missing from the envi
     try {
       const env = {
         HOME: '/Users/test',
-        VIKA_CONFIG: manifestPath,
-        VIKA_SECRETS_FILE: secretsPath,
+        OV_SUPERAGENT_CONFIG: manifestPath,
+        OV_SUPERAGENT_SECRETS_FILE: secretsPath,
       };
       const deployment = loadDeploymentManifest(env);
       applyDeploymentDaemonEnv(env, deployment);
@@ -217,8 +218,8 @@ test('the secrets file can carry a durable runtime provider key', () => {
     try {
       const env = {
         HOME: '/Users/test',
-        VIKA_CONFIG: manifestPath,
-        VIKA_SECRETS_FILE: secretsPath,
+        OV_SUPERAGENT_CONFIG: manifestPath,
+        OV_SUPERAGENT_SECRETS_FILE: secretsPath,
       };
       const deployment = loadDeploymentManifest(env);
       applyDeploymentDaemonEnv(env, deployment);
@@ -238,8 +239,8 @@ test('the environment still wins over the secrets file', () => {
     try {
       const env = {
         HOME: '/Users/test',
-        VIKA_CONFIG: manifestPath,
-        VIKA_SECRETS_FILE: secretsPath,
+        OV_SUPERAGENT_CONFIG: manifestPath,
+        OV_SUPERAGENT_SECRETS_FILE: secretsPath,
         ARK_API_KEY: 'from-shell-env',
       };
       const deployment = loadDeploymentManifest(env);
@@ -255,8 +256,8 @@ test('a missing secrets file is not an error', () => {
   withManifest(validManifest(), (manifestPath) => {
     const env = {
       HOME: '/Users/test',
-      VIKA_CONFIG: manifestPath,
-      VIKA_SECRETS_FILE: '/no/such/file/secrets.env',
+      OV_SUPERAGENT_CONFIG: manifestPath,
+      OV_SUPERAGENT_SECRETS_FILE: '/no/such/file/secrets.env',
     };
     const deployment = loadDeploymentManifest(env);
     applyDeploymentDaemonEnv(env, deployment);
@@ -266,28 +267,28 @@ test('a missing secrets file is not an error', () => {
 
 test('manifest env passes on only the daemon-wide allowlist and drops every other key', () => {
   const dropped = [
-    ['reserved identity', 'VIKA_LARK_PROFILE', 'cli_wrong'],
-    ['reserved control plane', 'VIKA_UPDATER_SOCKET', '/tmp/wrong'],
+    ['reserved identity', 'OV_SUPERAGENT_LARK_PROFILE', 'cli_wrong'],
+    ['reserved control plane', 'OV_SUPERAGENT_UPDATER_SOCKET', '/tmp/wrong'],
     ['system-only secret', 'ARK_API_KEY', 'must-not-live-in-manifest'],
-    ['removed Codex model', 'VIKA_CODEX_MODEL', 'gpt-5.6-sol'],
-    ['retired history cap', 'VIKA_COGNITION_MAX_CHARS', '120000'],
+    ['removed Codex model', 'OV_SUPERAGENT_CODEX_MODEL', 'gpt-5.6-sol'],
+    ['retired history cap', 'OV_SUPERAGENT_COGNITION_MAX_CHARS', '120000'],
     ['unknown key', 'UNRELATED_SETTING', 'value'],
   ];
   for (const [name, key, value] of dropped) {
     const manifest = validManifest();
     manifest.env[key] = value;
     withManifest(manifest, (manifestPath) => {
-      const deployment = loadDeploymentManifest({ VIKA_CONFIG: manifestPath });
+      const deployment = loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath });
       assert.deepEqual(deployment.ignoredFields, [`env.${key}`], name);
       assert.equal(Object.hasOwn(deployment.env, key), false, name);
-      const processEnv = resolvedDeploymentDaemonEnv(deployment, { VIKA_SECRETS_FILE: '/no/such/file/secrets.env' });
+      const processEnv = resolvedDeploymentDaemonEnv(deployment, { OV_SUPERAGENT_SECRETS_FILE: '/no/such/file/secrets.env' });
       assert.equal(Object.hasOwn(processEnv, key), false, name);
     });
   }
   const manifest = validManifest();
-  manifest.env.VIKA_HISTORY_LIMIT = 30;
+  manifest.env.OV_SUPERAGENT_HISTORY_LIMIT = 30;
   withManifest(manifest, (manifestPath) => {
-    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /env\.VIKA_HISTORY_LIMIT must be a string/);
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /env\.OV_SUPERAGENT_HISTORY_LIMIT must be a string/);
   });
 });
 
@@ -297,13 +298,13 @@ test('ignores and reports unknown manifest fields at every level', () => {
   manifest.agents[0].alias = 'old-name';
   manifest.agents[0].meetingAudio = { pythonCommand: '/usr/bin/python3' };
   manifest.agents[1].connectors = ['lark', 'email'];
-  manifest.agents[1].emailAccounts = [{ id: 'email-gmail', config: '/srv/vika/secrets/beta-gmail.json', label: 'Gmail' }];
-  manifest.env.VIKA_COGNITION_MAX_CHARS = '120000';
+  manifest.agents[1].emailAccounts = [{ id: 'email-gmail', config: '/srv/superagent/secrets/beta-gmail.json', label: 'Gmail' }];
+  manifest.env.OV_SUPERAGENT_COGNITION_MAX_CHARS = '120000';
   withManifest(manifest, (manifestPath) => {
-    const deployment = loadDeploymentManifest({ VIKA_CONFIG: manifestPath });
+    const deployment = loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath });
     assert.deepEqual(deployment.ignoredFields, [
       'instances',
-      'env.VIKA_COGNITION_MAX_CHARS',
+      'env.OV_SUPERAGENT_COGNITION_MAX_CHARS',
       'agents[0].alias',
       'agents[0].meetingAudio',
       'agents[1].emailAccounts[0].label',
@@ -311,35 +312,35 @@ test('ignores and reports unknown manifest fields at every level', () => {
     const alpha = selectDeploymentAgent(deployment, 'alpha');
     assert.equal(Object.hasOwn(alpha, 'alias'), false);
     assert.deepEqual(selectDeploymentAgent(deployment, 'beta').emailAccounts, [
-      { id: 'email-gmail', config: '/srv/vika/secrets/beta-gmail.json' },
+      { id: 'email-gmail', config: '/srv/superagent/secrets/beta-gmail.json' },
     ]);
   });
   withManifest(validManifest(), (manifestPath) => {
-    assert.deepEqual(loadDeploymentManifest({ VIKA_CONFIG: manifestPath }).ignoredFields, []);
+    assert.deepEqual(loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }).ignoredFields, []);
   });
 });
 
 test('foreground selection defaults to defaultInstance and pins every identity boundary', () => {
   withManifest(validManifest(), (manifestPath) => {
     const env = {
-      VIKA_CONFIG: manifestPath,
-      VIKA_VOLC_SESSION_ID: 'legacy-global-seed',
-      VIKA_VOLC_ENVIRONMENT_ID: 'legacy-global-environment',
+      OV_SUPERAGENT_CONFIG: manifestPath,
+      OV_SUPERAGENT_VOLC_SESSION_ID: 'legacy-global-seed',
+      OV_SUPERAGENT_VOLC_ENVIRONMENT_ID: 'legacy-global-environment',
     };
     const deployment = loadDeploymentManifest(env);
     applyDeploymentAgentEnv(env, deployment);
 
     assert.deepEqual({
-      id: env.VIKA_INSTANCE_ID,
-      target: env.VIKA_UPGRADE_TARGET,
-      name: env.VIKA_AGENT_NAME,
-      profile: env.VIKA_LARK_PROFILE,
+      id: env.OV_SUPERAGENT_INSTANCE_ID,
+      target: env.OV_SUPERAGENT_UPGRADE_TARGET,
+      name: env.OV_SUPERAGENT_AGENT_NAME,
+      profile: env.OV_SUPERAGENT_LARK_PROFILE,
       cliProfile: env.LARKSUITE_CLI_PROFILE,
-      port: env.VIKA_PORT,
-      dataDir: env.VIKA_DATA_DIR,
-      workspace: env.VIKA_WORKSPACE,
+      port: env.OV_SUPERAGENT_PORT,
+      dataDir: env.OV_SUPERAGENT_DATA_DIR,
+      workspace: env.OV_SUPERAGENT_WORKSPACE,
       ovConfig: env.OPENVIKING_CLI_CONFIG_FILE,
-      model: env.VIKA_MODEL,
+      model: env.OV_SUPERAGENT_MODEL,
     }, {
       id: 'beta',
       target: 'beta',
@@ -347,14 +348,14 @@ test('foreground selection defaults to defaultInstance and pins every identity b
       profile: 'cli_beta',
       cliProfile: 'cli_beta',
       port: '3740',
-      dataDir: '/srv/vika/data/beta',
-      workspace: '/srv/vika/workspaces/beta',
-      ovConfig: '/srv/vika/ov/beta.json',
+      dataDir: '/srv/superagent/data/beta',
+      workspace: '/srv/superagent/workspaces/beta',
+      ovConfig: '/srv/superagent/ov/beta.json',
       model: 'gpt-5.6-sol',
     });
-    assert.equal(env.VIKA_CODEX_MODEL, undefined);
-    assert.equal(env.VIKA_VOLC_SESSION_ID, undefined);
-    assert.equal(env.VIKA_VOLC_ENVIRONMENT_ID, undefined);
+    assert.equal(env.OV_SUPERAGENT_CODEX_MODEL, undefined);
+    assert.equal(env.OV_SUPERAGENT_VOLC_SESSION_ID, undefined);
+    assert.equal(env.OV_SUPERAGENT_VOLC_ENVIRONMENT_ID, undefined);
   });
 });
 
@@ -364,13 +365,13 @@ test('pins Ark as a generic initial model without misconfiguring Codex', () => {
   manifest.agents[1].volcSessionId = 'sesn-beta-self-hosted';
   manifest.agents[1].volcEnvironmentId = 'env-beta-self-hosted';
   withManifest(manifest, (manifestPath) => {
-    const env = { VIKA_CONFIG: manifestPath };
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath };
     const deployment = loadDeploymentManifest(env);
     applyDeploymentAgentEnv(env, deployment);
-    assert.equal(env.VIKA_MODEL, 'ark');
-    assert.equal(env.VIKA_CODEX_MODEL, undefined);
-    assert.equal(env.VIKA_VOLC_SESSION_ID, 'sesn-beta-self-hosted');
-    assert.equal(env.VIKA_VOLC_ENVIRONMENT_ID, 'env-beta-self-hosted');
+    assert.equal(env.OV_SUPERAGENT_MODEL, 'ark');
+    assert.equal(env.OV_SUPERAGENT_CODEX_MODEL, undefined);
+    assert.equal(env.OV_SUPERAGENT_VOLC_SESSION_ID, 'sesn-beta-self-hosted');
+    assert.equal(env.OV_SUPERAGENT_VOLC_ENVIRONMENT_ID, 'env-beta-self-hosted');
   });
 });
 
@@ -392,7 +393,7 @@ test('requires a complete per-agent self-hosted binding for Ark', () => {
     mutate(manifest.agents[1]);
     withManifest(manifest, (manifestPath) => {
       assert.throws(
-        () => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }),
+        () => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }),
         error,
         name,
       );
@@ -402,19 +403,19 @@ test('requires a complete per-agent self-hosted binding for Ark', () => {
 
 test('connects mailboxes only together with the email connector, each account file once', () => {
   const manifest = validManifest();
-  const mailboxes = [{ id: 'email-gmail', config: '/srv/vika/secrets/beta-gmail.json' }, { id: 'email-qq', config: '/srv/vika/secrets/beta-qq.json' }];
+  const mailboxes = [{ id: 'email-gmail', config: '/srv/superagent/secrets/beta-gmail.json' }, { id: 'email-qq', config: '/srv/superagent/secrets/beta-qq.json' }];
   manifest.agents[1].connectors = ['email', 'lark'];
   manifest.agents[1].emailAccounts = mailboxes;
   withManifest(manifest, (manifestPath) => {
-    const env = { VIKA_CONFIG: manifestPath, VIKA_EMAIL_ACCOUNTS_JSON: '[]' };
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON: '[]' };
     const deployment = loadDeploymentManifest(env);
     // A mailbox is never the primary IM, wherever it is listed.
     assert.equal(selectDeploymentAgent(deployment).channel, 'lark');
     applyDeploymentAgentEnv(env, deployment, 'beta');
-    assert.equal(env.VIKA_CONNECTORS_JSON, '["email","lark"]');
-    assert.deepEqual(JSON.parse(env.VIKA_EMAIL_ACCOUNTS_JSON), mailboxes);
+    assert.equal(env.OV_SUPERAGENT_CONNECTORS_JSON, '["email","lark"]');
+    assert.deepEqual(JSON.parse(env.OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON), mailboxes);
     applyDeploymentAgentEnv(env, deployment, 'gamma');
-    assert.equal(env.VIKA_EMAIL_ACCOUNTS_JSON, undefined);
+    assert.equal(env.OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON, undefined);
   });
   for (const [mutate, error] of [
     [(agent) => { agent.connectors = ['lark', 'email']; }, /emailAccounts and the email connector must be configured together/],
@@ -426,7 +427,7 @@ test('connects mailboxes only together with the email connector, each account fi
     const broken = validManifest();
     mutate(broken.agents[1]);
     withManifest(broken, (manifestPath) => {
-      assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), error);
+      assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), error);
     });
   }
 });
@@ -443,20 +444,20 @@ test('OV memory is the daemon\'s; per-line search is opt-in; any OV plugin that 
   delete manifest.agents[2].profile;
   withManifest(manifest, (manifestPath) => {
     const env = {
-      VIKA_CONFIG: manifestPath,
+      OV_SUPERAGENT_CONFIG: manifestPath,
       OPENVIKING_CLI_CONFIG_FILE: '/stale/ovcli.conf',
-      VIKA_LARK_PROFILE: 'stale',
+      OV_SUPERAGENT_LARK_PROFILE: 'stale',
       LARKSUITE_CLI_PROFILE: 'stale',
     };
     const deployment = loadDeploymentManifest(env);
     assert.equal(selectDeploymentAgent(deployment, 'alpha').ovAutoRecall, false);
     applyDeploymentAgentEnv(env, deployment, 'alpha');
-    assert.equal(env.OPENVIKING_CLI_CONFIG_FILE, '/srv/vika/ov/alpha.json');
+    assert.equal(env.OPENVIKING_CLI_CONFIG_FILE, '/srv/superagent/ov/alpha.json');
     assert.equal(env.OPENVIKING_MEMORY_ENABLED, '0');
     assert.equal(env.OPENVIKING_AUTO_RECALL, '0');
-    assert.equal(env.VIKA_OV_AUTO_RECALL, 'false');
-    assert.equal(env.VIKA_OV_RECALL_SCOPE, undefined);
-    assert.equal(env.VIKA_OV_REMEMBER, undefined);
+    assert.equal(env.OV_SUPERAGENT_OV_AUTO_RECALL, 'false');
+    assert.equal(env.OV_SUPERAGENT_OV_RECALL_SCOPE, undefined);
+    assert.equal(env.OV_SUPERAGENT_OV_REMEMBER, undefined);
     // OpenViking SuperAgent owns OV: a plugin that loads anyway writes and recalls nothing.
     assert.equal(env.OPENVIKING_AUTO_CAPTURE, '0');
     assert.equal(env.OPENVIKING_AUTO_COMMIT_ON_COMPACT, '0');
@@ -464,24 +465,24 @@ test('OV memory is the daemon\'s; per-line search is opt-in; any OV plugin that 
     assert.equal(env.OPENVIKING_WORKSPACE_PEER, '0');
     assert.equal(env.OPENVIKING_RECALL_PEER_SCOPE, 'all');
     // Plugin state and queued writes stay inside this instance.
-    assert.equal(env.OPENVIKING_HOME, '/srv/vika/data/alpha/openviking');
-    assert.equal(env.OPENVIKING_STATE_DIR, '/srv/vika/data/alpha/openviking/state');
-    assert.equal(env.OPENVIKING_HOOK_STATE_DIR, '/srv/vika/data/alpha/openviking/hook-state');
-    assert.equal(env.OPENVIKING_CODEX_STATE_DIR, '/srv/vika/data/alpha/openviking/codex-plugin-state');
-    assert.equal(env.OPENVIKING_PENDING_DIR, '/srv/vika/data/alpha/openviking/pending');
-    assert.equal(env.OPENVIKING_RECALL_LEDGER_DIR, '/srv/vika/data/alpha/openviking/recall-ledger');
+    assert.equal(env.OPENVIKING_HOME, '/srv/superagent/data/alpha/openviking');
+    assert.equal(env.OPENVIKING_STATE_DIR, '/srv/superagent/data/alpha/openviking/state');
+    assert.equal(env.OPENVIKING_HOOK_STATE_DIR, '/srv/superagent/data/alpha/openviking/hook-state');
+    assert.equal(env.OPENVIKING_CODEX_STATE_DIR, '/srv/superagent/data/alpha/openviking/codex-plugin-state');
+    assert.equal(env.OPENVIKING_PENDING_DIR, '/srv/superagent/data/alpha/openviking/pending');
+    assert.equal(env.OPENVIKING_RECALL_LEDGER_DIR, '/srv/superagent/data/alpha/openviking/recall-ledger');
     applyDeploymentAgentEnv(env, deployment, 'beta');
-    assert.equal(env.OPENVIKING_CLI_CONFIG_FILE, '/srv/vika/ov/beta.json');
+    assert.equal(env.OPENVIKING_CLI_CONFIG_FILE, '/srv/superagent/ov/beta.json');
     assert.equal(env.OPENVIKING_MEMORY_ENABLED, '0');
     // Search on: the daemon searches (ov-recall.mjs); the plugins' own stays off.
     assert.equal(env.OPENVIKING_AUTO_RECALL, '0');
-    assert.equal(env.VIKA_OV_AUTO_RECALL, 'true');
+    assert.equal(env.OV_SUPERAGENT_OV_AUTO_RECALL, 'true');
     assert.equal(selectDeploymentAgent(deployment, 'beta').ovRecallScope, undefined);
-    assert.equal(env.OPENVIKING_PENDING_DIR, '/srv/vika/data/beta/openviking/pending');
+    assert.equal(env.OPENVIKING_PENDING_DIR, '/srv/superagent/data/beta/openviking/pending');
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'cli_beta');
     applyDeploymentAgentEnv(env, deployment, 'gamma');
     assert.equal(selectDeploymentAgent(deployment, 'gamma').profile, null);
-    assert.equal(env.VIKA_LARK_PROFILE, undefined);
+    assert.equal(env.OV_SUPERAGENT_LARK_PROFILE, undefined);
     assert.equal(env.LARKSUITE_CLI_PROFILE, undefined);
   });
 });
@@ -491,31 +492,31 @@ test('explicit silence is on by default except on Ark, an explicit false opts ou
   delete manifest.agents[0].explicitSilence;
   manifest.agents[1].explicitSilence = false;
   withManifest(manifest, (manifestPath) => {
-    const env = { VIKA_CONFIG: manifestPath, VIKA_EXPLICIT_SILENCE: 'false' };
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_EXPLICIT_SILENCE: 'false' };
     const deployment = loadDeploymentManifest(env);
     assert.notEqual(selectDeploymentAgent(deployment, 'alpha').model, 'ark');
     assert.equal(selectDeploymentAgent(deployment, 'alpha').explicitSilence, true);
     assert.equal(selectDeploymentAgent(deployment, 'beta').explicitSilence, false);
     applyDeploymentAgentEnv(env, deployment, 'alpha');
-    assert.equal(env.VIKA_EXPLICIT_SILENCE, 'true');
+    assert.equal(env.OV_SUPERAGENT_EXPLICIT_SILENCE, 'true');
     applyDeploymentAgentEnv(env, deployment, 'beta');
-    assert.equal(env.VIKA_EXPLICIT_SILENCE, 'false');
+    assert.equal(env.OV_SUPERAGENT_EXPLICIT_SILENCE, 'false');
   });
   // Ark has no Core tools to offer stay_silent through: off unless set.
   const ark = validManifest();
   Object.assign(ark.agents[0], { model: 'ark', volcSessionId: 'sess', volcEnvironmentId: 'env' });
   delete ark.agents[0].explicitSilence;
   withManifest(ark, (manifestPath) => {
-    const env = { VIKA_CONFIG: manifestPath };
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath };
     const deployment = loadDeploymentManifest(env);
     assert.equal(selectDeploymentAgent(deployment, 'alpha').explicitSilence, false);
     applyDeploymentAgentEnv(env, deployment, 'alpha');
-    assert.equal(env.VIKA_EXPLICIT_SILENCE, 'false');
+    assert.equal(env.OV_SUPERAGENT_EXPLICIT_SILENCE, 'false');
   });
   const broken = validManifest();
   broken.agents[0].explicitSilence = 'true';
   withManifest(broken, (manifestPath) => {
-    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /agents\[0\]\.explicitSilence must be a boolean/);
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[0\]\.explicitSilence must be a boolean/);
   });
 });
 
@@ -523,18 +524,18 @@ test('staged replies are opt-in per instance and always pinned in the daemon env
   const manifest = validManifest();
   manifest.agents[1].stagedReplies = true;
   withManifest(manifest, (manifestPath) => {
-    const env = { VIKA_CONFIG: manifestPath, VIKA_STAGED_REPLIES: 'true' };
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_STAGED_REPLIES: 'true' };
     const deployment = loadDeploymentManifest(env);
     assert.equal(selectDeploymentAgent(deployment, 'alpha').stagedReplies, false);
     applyDeploymentAgentEnv(env, deployment, 'alpha');
-    assert.equal(env.VIKA_STAGED_REPLIES, 'false');
+    assert.equal(env.OV_SUPERAGENT_STAGED_REPLIES, 'false');
     applyDeploymentAgentEnv(env, deployment, 'beta');
-    assert.equal(env.VIKA_STAGED_REPLIES, 'true');
+    assert.equal(env.OV_SUPERAGENT_STAGED_REPLIES, 'true');
   });
   const broken = validManifest();
   broken.agents[0].stagedReplies = 1;
   withManifest(broken, (manifestPath) => {
-    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /agents\[0\]\.stagedReplies must be a boolean/);
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[0\]\.stagedReplies must be a boolean/);
   });
 });
 
@@ -545,21 +546,21 @@ test('Lark message access is the owner\'s unless an instance keeps to the bot\'s
   manifest.agents[2].connectors = ['weixin'];
   delete manifest.agents[2].profile;
   withManifest(manifest, (manifestPath) => {
-    const env = { VIKA_CONFIG: manifestPath, VIKA_LARK_MESSAGE_ACCESS: 'bot' };
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_LARK_MESSAGE_ACCESS: 'bot' };
     const deployment = loadDeploymentManifest(env);
     assert.equal(selectDeploymentAgent(deployment, 'alpha').larkMessageAccess, 'owner');
     applyDeploymentAgentEnv(env, deployment, 'alpha');
-    assert.equal(env.VIKA_LARK_MESSAGE_ACCESS, 'owner');
+    assert.equal(env.OV_SUPERAGENT_LARK_MESSAGE_ACCESS, 'owner');
     applyDeploymentAgentEnv(env, deployment, 'beta');
-    assert.equal(env.VIKA_LARK_MESSAGE_ACCESS, 'bot');
+    assert.equal(env.OV_SUPERAGENT_LARK_MESSAGE_ACCESS, 'bot');
     applyDeploymentAgentEnv(env, deployment, 'gamma');
     assert.equal(selectDeploymentAgent(deployment, 'gamma').larkMessageAccess, null);
-    assert.equal(env.VIKA_LARK_MESSAGE_ACCESS, undefined);
+    assert.equal(env.OV_SUPERAGENT_LARK_MESSAGE_ACCESS, undefined);
   });
   const wrong = validManifest();
   wrong.agents[0].larkMessageAccess = 'everyone';
   withManifest(wrong, (manifestPath) => {
-    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /agents\[0\]\.larkMessageAccess must be owner or bot/);
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[0\]\.larkMessageAccess must be owner or bot/);
   });
   const elsewhere = validManifest();
   elsewhere.agents[2].channel = 'weixin';
@@ -567,7 +568,7 @@ test('Lark message access is the owner\'s unless an instance keeps to the bot\'s
   delete elsewhere.agents[2].profile;
   elsewhere.agents[2].larkMessageAccess = 'bot';
   withManifest(elsewhere, (manifestPath) => {
-    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /agents\[2\]\.larkMessageAccess is only used by the lark connector/);
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[2\]\.larkMessageAccess is only used by the lark connector/);
   });
 });
 
@@ -575,51 +576,51 @@ test('meeting notes are opt-in for one Feishu/Lark instance at most, and always 
   const manifest = validManifest();
   manifest.agents[1].meetingNotes = true;
   withManifest(manifest, (manifestPath) => {
-    const env = { VIKA_CONFIG: manifestPath, VIKA_MEETING_NOTES: 'true' };
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_MEETING_NOTES: 'true' };
     const deployment = loadDeploymentManifest(env);
     assert.equal(selectDeploymentAgent(deployment, 'alpha').meetingNotes, false);
     applyDeploymentAgentEnv(env, deployment, 'alpha');
-    assert.equal(env.VIKA_MEETING_NOTES, 'false');
+    assert.equal(env.OV_SUPERAGENT_MEETING_NOTES, 'false');
     applyDeploymentAgentEnv(env, deployment, 'beta');
-    assert.equal(env.VIKA_MEETING_NOTES, 'true');
+    assert.equal(env.OV_SUPERAGENT_MEETING_NOTES, 'true');
   });
   const two = validManifest();
   two.agents[0].meetingNotes = true;
   two.agents[2].meetingNotes = true;
   withManifest(two, (manifestPath) => {
-    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /only one instance can store meeting notes; alpha and gamma both do/);
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /only one instance can store meeting notes; alpha and gamma both do/);
   });
   const weixin = validManifest();
   Object.assign(weixin.agents[1], { channel: 'weixin', connectors: ['weixin'], meetingNotes: true });
   delete weixin.agents[1].profile;
   withManifest(weixin, (manifestPath) => {
-    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /agents\[1\]\.meetingNotes requires the lark connector/);
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[1\]\.meetingNotes requires the lark connector/);
   });
   const broken = validManifest();
   broken.agents[0].meetingNotes = 'yes';
   withManifest(broken, (manifestPath) => {
-    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /agents\[0\]\.meetingNotes must be a boolean/);
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[0\]\.meetingNotes must be a boolean/);
   });
 });
 
 test('an instance names a shipped role or its own role file, and keeps natural writing unless it turns it off', () => {
   const manifest = validManifest();
   manifest.agents[0].role = 'assistant';
-  manifest.agents[1].role = '/srv/vika/roles/beta.md';
+  manifest.agents[1].role = '/srv/superagent/roles/beta.md';
   manifest.agents[1].naturalWriting = false;
   withManifest(manifest, (manifestPath) => {
-    const env = { VIKA_CONFIG: manifestPath, VIKA_ROLE: 'qa', VIKA_NATURAL_WRITING: 'false' };
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_ROLE: 'qa', OV_SUPERAGENT_NATURAL_WRITING: 'false' };
     const deployment = loadDeploymentManifest(env);
     assert.equal(selectDeploymentAgent(deployment, 'alpha').naturalWriting, true);
     applyDeploymentAgentEnv(env, deployment, 'alpha');
-    assert.equal(env.VIKA_ROLE, 'assistant');
-    assert.equal(env.VIKA_NATURAL_WRITING, 'true');
+    assert.equal(env.OV_SUPERAGENT_ROLE, 'assistant');
+    assert.equal(env.OV_SUPERAGENT_NATURAL_WRITING, 'true');
     applyDeploymentAgentEnv(env, deployment, 'beta');
-    assert.equal(env.VIKA_ROLE, '/srv/vika/roles/beta.md');
-    assert.equal(env.VIKA_NATURAL_WRITING, 'false');
+    assert.equal(env.OV_SUPERAGENT_ROLE, '/srv/superagent/roles/beta.md');
+    assert.equal(env.OV_SUPERAGENT_NATURAL_WRITING, 'false');
     // No role: neither the shell's nor another instance's leaks in.
     applyDeploymentAgentEnv(env, deployment, 'gamma');
-    assert.equal(env.VIKA_ROLE, undefined);
+    assert.equal(env.OV_SUPERAGENT_ROLE, undefined);
   });
   for (const [field, value, message] of [
     ['role', 'pirate', /agents\[0\]\.role must be colleague, assistant, qa or an absolute path/],
@@ -629,7 +630,7 @@ test('an instance names a shipped role or its own role file, and keeps natural w
     const broken = validManifest();
     broken.agents[0][field] = value;
     withManifest(broken, (manifestPath) => {
-      assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), message);
+      assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), message);
     });
   }
 });
@@ -673,7 +674,7 @@ test('rejects missing and invalid manifest fields instead of guessing', () => {
     fixture.mutate(manifest);
     withManifest(manifest, (manifestPath) => {
       assert.throws(
-        () => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }),
+        () => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }),
         fixture.error,
         fixture.name,
       );
@@ -687,7 +688,7 @@ test('an instance id cannot take the name of a shared control-plane app', () => 
     manifest.agents[1].id = id;
     manifest.defaultInstance = 'alpha';
     withManifest(manifest, (manifestPath) => {
-      assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /cannot be all, web, updater/, id);
+      assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /cannot be all, web, updater/, id);
     });
   }
 });
@@ -699,18 +700,18 @@ test('rejects duplicate agent identities, endpoints, and storage boundaries', ()
     ['port', (manifest) => { manifest.agents[1].port = 3738; }, /duplicate agent port: 3738/],
     [
       'dataDir',
-      (manifest) => { manifest.agents[1].dataDir = '/srv/vika/data/alpha'; },
-      /duplicate agent dataDir: \/srv\/vika\/data\/alpha/,
+      (manifest) => { manifest.agents[1].dataDir = '/srv/superagent/data/alpha'; },
+      /duplicate agent dataDir: \/srv\/superagent\/data\/alpha/,
     ],
     [
       'workspace',
-      (manifest) => { manifest.agents[1].workspace = '/srv/vika/workspaces/alpha'; },
-      /duplicate agent workspace: \/srv\/vika\/workspaces\/alpha/,
+      (manifest) => { manifest.agents[1].workspace = '/srv/superagent/workspaces/alpha'; },
+      /duplicate agent workspace: \/srv\/superagent\/workspaces\/alpha/,
     ],
     [
       'ovConfig',
-      (manifest) => { manifest.agents[1].ovConfig = '/srv/vika/ov/alpha.json'; },
-      /duplicate agent ovConfig: \/srv\/vika\/ov\/alpha\.json/,
+      (manifest) => { manifest.agents[1].ovConfig = '/srv/superagent/ov/alpha.json'; },
+      /duplicate agent ovConfig: \/srv\/superagent\/ov\/alpha\.json/,
     ],
   ];
 
@@ -719,7 +720,7 @@ test('rejects duplicate agent identities, endpoints, and storage boundaries', ()
     mutate(manifest);
     withManifest(manifest, (manifestPath) => {
       assert.throws(
-        () => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }),
+        () => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }),
         error,
         name,
       );
@@ -741,12 +742,12 @@ test('rejects invalid defaults, relative paths, and overlapping agent storage', 
     ],
     [
       'cross-agent overlap',
-      (manifest) => { manifest.agents[1].workspace = '/srv/vika/data/alpha/nested'; },
+      (manifest) => { manifest.agents[1].workspace = '/srv/superagent/data/alpha/nested'; },
       /agent storage paths overlap: agents\[0\]\.dataDir and agents\[1\]\.workspace/,
     ],
     [
       'same-agent overlap',
-      (manifest) => { manifest.agents[0].workspace = '/srv/vika/data/alpha/work'; },
+      (manifest) => { manifest.agents[0].workspace = '/srv/superagent/data/alpha/work'; },
       /agent storage paths overlap: agents\[0\]\.dataDir and agents\[0\]\.workspace/,
     ],
   ];
@@ -756,7 +757,7 @@ test('rejects invalid defaults, relative paths, and overlapping agent storage', 
     mutate(manifest);
     withManifest(manifest, (manifestPath) => {
       assert.throws(
-        () => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }),
+        () => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }),
         error,
         name,
       );
@@ -765,15 +766,17 @@ test('rejects invalid defaults, relative paths, and overlapping agent storage', 
 });
 
 
-test('default config refuses an unmigrated legacy home without blocking explicit overrides', (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ovsa-migration-'));
+test('a legacy pre-release home is neither an error nor read: the default is always ~/.ov-superagent', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-legacy-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const old = path.join(home, '.vika');
-  fs.mkdirSync(old);
-  const config = path.join(old, 'config.json');
-  fs.writeFileSync(config, '{}');
-  assert.throws(() => resolveDeploymentManifestPath({ HOME: home }), /Legacy ~\/\.vika/);
-  assert.equal(resolveDeploymentManifestPath({ HOME: home, VIKA_CONFIG: config }), config);
-  fs.renameSync(old, path.join(home, '.ovsa'));
-  assert.equal(resolveDeploymentManifestPath({ HOME: home }), path.join(home, '.ovsa', 'config.json'));
+  for (const name of ['.vika', '.ovsa', '.superagent']) {
+    fs.mkdirSync(path.join(home, name));
+    fs.writeFileSync(path.join(home, name, 'config.json'), '{}');
+    fs.writeFileSync(path.join(home, name, 'secrets.env'), 'OV_SUPERAGENT_TEST=legacy');
+  }
+  assert.equal(resolveDeploymentManifestPath({ HOME: home }), path.join(home, '.ov-superagent', 'config.json'));
+  assert.equal(resolveSecretsFilePath({ HOME: home }), path.join(home, '.ov-superagent', 'secrets.env'));
+  const config = path.join(home, '.vika', 'config.json');
+  assert.equal(resolveDeploymentManifestPath({ HOME: home, OV_SUPERAGENT_CONFIG: config }), config);
+  assert.equal(fs.readFileSync(config, 'utf8'), '{}', 'legacy data is left alone');
 });

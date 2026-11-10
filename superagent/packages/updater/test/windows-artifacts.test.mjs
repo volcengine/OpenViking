@@ -14,7 +14,7 @@ import { PLATFORMS, platform } from '../src/artifacts.mjs';
 test('Windows source dependency uses the checksum-verified zip/exe path, never a release build', async t => {
   assert.equal(platform('win32-x64').sourceOnly, true);
   assert.deepEqual(Object.keys(PLATFORMS).filter(id => !PLATFORMS[id].sourceOnly), ['linux-x64', 'linux-arm64', 'darwin-x64', 'darwin-arm64']);
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-artifact-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-artifact-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const archive = 'lark-cli-1.0.94-windows-amd64.zip';
   const body = Buffer.from('test archive payload');

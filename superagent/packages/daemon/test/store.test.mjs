@@ -40,7 +40,7 @@ describe('Store', () => {
   let store;
 
   beforeEach(() => {
-    directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-store-'));
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-store-'));
     store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
   });
 
@@ -585,7 +585,7 @@ describe('Store', () => {
 
 describe('decision ledger', () => {
   it('adds the table to an existing database, lets a delivery override silence, and prunes old decisions', (t) => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-decisions-'));
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-decisions-'));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
     const file = path.join(directory, 'state.sqlite3');
     // A database from before the ledger existed.

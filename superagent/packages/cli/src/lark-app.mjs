@@ -73,7 +73,7 @@ export async function scanApp({
   let result;
   try {
     result = await register({
-      source: 'vika',
+      source: 'ov-superagent',
       ...(mode === 'create' ? { createOnly: true } : {}),
       ...(mode === 'update' ? { appId } : { appPreset: { ...(name ? { name } : {}), ...(description ? { desc: description } : {}) } }),
       addons: {

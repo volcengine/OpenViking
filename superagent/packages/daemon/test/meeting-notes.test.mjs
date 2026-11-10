@@ -107,7 +107,7 @@ async function sync(t, { script = {} } = {}) {
   const clock = { now: NOW };
   const notes = new MeetingNoteSync({
     config: { meetingNotes: true, dataDir, tempDir: path.join(dataDir, 'tmp'), projectDir: dataDir, larkCliBin: '/fake/lark-cli', openVikingConfigPath: '/unused' },
-    registry: cli.registry, logger: log.logger, profile: 'vika-test',
+    registry: cli.registry, logger: log.logger, profile: 'superagent-test',
     archive: new MeetingNoteArchive(new OVConnection({ url: ov.url, user: 'owner' })),
     now: () => clock.now, setTimer: () => ({}), clearTimer: () => {},
   });
@@ -172,7 +172,7 @@ describe('meeting notes in OpenViking', () => {
     const { notes, cli, log, ov, row } = await sync(t);
     notes.start();
     await notes.running;
-    assert.ok(cli.calls.every((args) => args[1] === 'vika-test' && args.at(-3) === 'user'), 'every call is the owner\'s');
+    assert.ok(cli.calls.every((args) => args[1] === 'superagent-test' && args.at(-3) === 'user'), 'every call is the owner\'s');
     assert.equal(cli.searches()[0][cli.searches()[0].indexOf('--start') + 1], new Date(NOW - 30 * 24 * HOUR).toISOString(), 'the first scan reaches back 30 days');
     assert.deepEqual(log.named('meeting_notes_scanned').map(({ found, checked, notes: noted }) => [found, checked, noted]), [[1, 1, 1]]);
 
@@ -287,7 +287,7 @@ describe('meeting notes in OpenViking', () => {
     notes.start();
     await notes.running;
 
-    const store = new Store(path.join(dataDir, 'vika.sqlite3'), recorder().logger);
+    const store = new Store(path.join(dataDir, 'superagent.sqlite3'), recorder().logger);
     t.after(() => store.close());
     store.initializeCognition('codex', 'token');
     const ovConfig = path.join(dataDir, 'ov.json');

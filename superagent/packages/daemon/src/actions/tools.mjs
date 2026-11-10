@@ -163,7 +163,7 @@ export const TOOLS = [
   },
   {
     // A decision, not a delivery: sends nothing. Offered on every connector,
-    // but only on an instance with explicitSilence on (VIKA_EXPLICIT_SILENCE).
+    // but only on an instance with explicitSilence on (OV_SUPERAGENT_EXPLICIT_SILENCE).
     name: 'stay_silent',
     explicitSilence: true,
     title: 'Decide not to respond',

@@ -222,14 +222,14 @@ describe('non-Ark child environment', () => {
       LARK_APP_ID: 'keep-for-lark',
       ARK_API_KEY: 'remove',
       ARK_SESSION_ID: 'remove',
-      VIKA_VOLC_SESSION_ID: 'remove',
+      OV_SUPERAGENT_VOLC_SESSION_ID: 'remove',
       SESSION_ID: 'remove',
     });
     assert.equal(environment.PATH, '/bin');
     assert.equal(environment.LARK_APP_ID, 'keep-for-lark');
     assert.equal(environment.ARK_API_KEY, undefined);
     assert.equal(environment.ARK_SESSION_ID, undefined);
-    assert.equal(environment.VIKA_VOLC_SESSION_ID, undefined);
+    assert.equal(environment.OV_SUPERAGENT_VOLC_SESSION_ID, undefined);
     assert.equal(environment.SESSION_ID, undefined);
   });
 });

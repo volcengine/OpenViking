@@ -96,7 +96,7 @@ describe('dsh model selection state', () => {
     agent.setModel('deepseek-v4-pro');
     agent.deliver('refused once', 7);
     await waitFor(() => context.failures.length === 1, 'the refusal to be reported');
-    assert.equal(child.requests('vika/session/model/select').length, 1);
+    assert.equal(child.requests('superagent/session/model/select').length, 1);
     assert.deepEqual(agent.rejectedSelection, {
       model: 'deepseek-official/deepseek-v4-pro', effort: 'high',
     });
@@ -111,7 +111,7 @@ describe('dsh model selection state', () => {
     assert.equal(agent._selectionPending(), true);
 
     await agent._applyPendingSelection();
-    assert.equal(child.requests('vika/session/model/select').length, 2);
+    assert.equal(child.requests('superagent/session/model/select').length, 2);
     assert.equal(agent.appliedModel, 'deepseek-official/deepseek-v4-pro');
     assert.equal(agent._selectionPending(), false);
   });
@@ -127,7 +127,7 @@ describe('dsh model selection state', () => {
     agent.setModel('deepseek-v4-pro');
     agent.deliver('refused once', 7);
     await waitFor(() => context.failures.length === 1, 'the refusal to be reported');
-    assert.equal(child.requests('vika/session/model/select').length, 1);
+    assert.equal(child.requests('superagent/session/model/select').length, 1);
 
     // The user fixes the route and asks for the same pair explicitly.
     child.selectError = null;
@@ -139,10 +139,10 @@ describe('dsh model selection state', () => {
 
     // "Switched" must mean the next boundary actually asks DSH again.
     agent.deliver('second request', 8);
-    await waitFor(() => child.requests('vika/session/model/select').length === 2,
+    await waitFor(() => child.requests('superagent/session/model/select').length === 2,
       'the explicit re-selection to reach DSH');
     await waitFor(() => agent.appliedModel === 'deepseek-official/deepseek-v4-pro', 'the applied route');
-    assert.deepEqual(child.requests('vika/session/model/select')[1].params, {
+    assert.deepEqual(child.requests('superagent/session/model/select')[1].params, {
       sessionId: agent.threadId,
       provider: 'deepseek-official',
       model: 'deepseek-v4-pro',
@@ -198,9 +198,9 @@ describe('handshake and a newer selection', () => {
     assert.equal(agent._selectionPending(), true);
 
     agent.deliver('after the handshake', 7);
-    await waitFor(() => child.requests('vika/session/model/select').length === 1,
+    await waitFor(() => child.requests('superagent/session/model/select').length === 1,
       'the newer selection to be applied');
-    assert.deepEqual(child.requests('vika/session/model/select')[0].params, {
+    assert.deepEqual(child.requests('superagent/session/model/select')[0].params, {
       sessionId: agent.threadId,
       provider: 'deepseek-official',
       model: 'deepseek-v4-pro',
@@ -231,7 +231,7 @@ describe('handshake and a newer selection', () => {
     assert.equal(agent._selectionPending(), false);
     // The user's stored choice is untouched, so the next start tries it again.
     assert.equal(context.store.settings.get('dsh_model'), 'deepseek/deepseek-chat');
-    assert.equal(child.requests('vika/session/model/select').length, 0);
+    assert.equal(child.requests('superagent/session/model/select').length, 0);
   });
 });
 
@@ -412,10 +412,10 @@ describe('a refused selection is versioned by the request it answers', () => {
     const originalRequest = agent._request.bind(agent);
     let timeouts = 0;
     agent._request = (method, params, timeoutMs, extra) => {
-      if (method === 'vika/session/model/select') {
+      if (method === 'superagent/session/model/select') {
         timeouts += 1;
         // Written, never answered: DSH may or may not have recorded it.
-        return Promise.reject(Object.assign(new Error('dsh rpc timed out: vika/session/model/select'), {
+        return Promise.reject(Object.assign(new Error('dsh rpc timed out: superagent/session/model/select'), {
           code: 'DSH_RPC_TIMEOUT',
         }));
       }
@@ -481,10 +481,10 @@ describe('a refused selection is versioned by the request it answers', () => {
     await waitFor(() => child.requests('session/steer').length === 1, 'the input to run');
     // The input ran on the new session, and the selection it was waiting for
     // was asserted on that same session first.
-    const selectedAt = child.writes.findIndex((frame) => frame.method === 'vika/session/model/select');
+    const selectedAt = child.writes.findIndex((frame) => frame.method === 'superagent/session/model/select');
     const steeredAt = child.writes.findIndex((frame) => frame.method === 'session/steer');
     assert.ok(selectedAt >= 0 && selectedAt < steeredAt, `${selectedAt} < ${steeredAt}`);
-    assert.equal(child.requests('vika/session/model/select')[0].params.sessionId, rotated);
+    assert.equal(child.requests('superagent/session/model/select')[0].params.sessionId, rotated);
     assert.equal(child.requests('session/steer')[0].params.sessionId, rotated);
   });
 });

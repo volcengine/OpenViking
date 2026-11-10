@@ -12,7 +12,7 @@ import {
   withDshControl, writeControlPatch,
 } from '../src/dsh-control.mjs';
 
-// A stand-in for `dsh`: it speaks the vika bridge surface this client uses,
+// A stand-in for `dsh`: it speaks the superagent bridge surface this client uses,
 // keeps its state in FAKE_DSH_STATE, and appends every frame it receives so a
 // test can assert what was asked for (and, just as important, what was not).
 // It is a separate process on purpose: the client's job is a real subprocess
@@ -30,9 +30,9 @@ const mode = process.env.FAKE_DSH_MODE || 'normal';
 
 const METHODS = [
   'session/steer', 'session/cancel',
-  'vika/llm/models', 'vika/llm/model/info', 'vika/session/model/select',
-  'vika/settings/describe', 'vika/settings/mutate',
-  'vika/credentials/set', 'vika/credentials/unset',
+  'superagent/llm/models', 'superagent/llm/model/info', 'superagent/session/model/select',
+  'superagent/settings/describe', 'superagent/settings/mutate',
+  'superagent/credentials/set', 'superagent/credentials/unset',
 ];
 
 function load() {
@@ -67,19 +67,19 @@ function handle(frame) {
   const state = load();
   if (mode === 'silent') return;
   if (frame.method === 'shutdown') { respond(frame.id, {}); process.exit(0); }
-  if (state.notReady > 0 && frame.method !== 'vika/hello' && frame.method !== 'shutdown') {
+  if (state.notReady > 0 && frame.method !== 'superagent/hello' && frame.method !== 'shutdown') {
     state.notReady -= 1;
     save(state);
     fail(frame.id, -32002, 'settings is not ready');
     return;
   }
   switch (frame.method) {
-    case 'vika/hello':
+    case 'superagent/hello':
       respond(frame.id, mode === 'old-bridge'
-        ? { bridge: 'vika-dsh-bridge', version: 1, methods: ['vika/llm/models'] }
-        : { bridge: 'vika-dsh-bridge', version: 2, methods: METHODS });
+        ? { bridge: 'superagent-dsh-bridge', version: 1, methods: ['superagent/llm/models'] }
+        : { bridge: 'superagent-dsh-bridge', version: 2, methods: METHODS });
       return;
-    case 'vika/settings/describe':
+    case 'superagent/settings/describe':
       respond(frame.id, { ns: 'llm-pi-ai', descriptor: {
         ns: 'llm-pi-ai', autoGenerate: false, applies: 'live', schema: {},
         revision: state.revision,
@@ -88,7 +88,7 @@ function handle(frame) {
         secrets: [],
       } });
       return;
-    case 'vika/settings/mutate': {
+    case 'superagent/settings/mutate': {
       if (mode === 'overridden') {
         fail(frame.id, -32603, 'Configuration for "llm-pi-ai" is overridden by a home patch or command-line overlay');
         return;
@@ -116,17 +116,17 @@ function handle(frame) {
       respond(frame.id, { ok: true });
       return;
     }
-    case 'vika/credentials/set':
+    case 'superagent/credentials/set':
       state.credentials[frame.params.ref] = frame.params.value;
       save(state);
       respond(frame.id, { ok: true });
       return;
-    case 'vika/credentials/unset':
+    case 'superagent/credentials/unset':
       delete state.credentials[frame.params.ref];
       save(state);
       respond(frame.id, { ok: true });
       return;
-    case 'vika/llm/models': {
+    case 'superagent/llm/models': {
       const providers = Object.entries(state.providers || {}).map(([route, profile]) => {
         const ref = profile && typeof profile.apiKeyEnv === 'string' ? profile.apiKeyEnv : null;
         const present = ref ? Object.hasOwn(state.credentials, ref) : null;
@@ -193,7 +193,7 @@ function fakeDsh(t, { mode = 'normal', state = {} } = {}) {
 }
 
 function instanceDataDir(t) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-dsh-control-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-dsh-control-'));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   fs.chmodSync(dataDir, 0o700);
   return dataDir;
@@ -225,13 +225,13 @@ test('the control patch carries the bridge only, never a provider or MCP section
   const patch = JSON.parse(fs.readFileSync(patchPath, 'utf8'));
   const rows = patch.filter((row) => row && typeof row === 'object');
   assert.ok(rows.some((row) => Array.isArray(row.insert)
-    && row.insert.some((entry) => entry.id === 'vika-dsh-bridge')), 'the bridge must be inserted');
+    && row.insert.some((entry) => entry.id === 'superagent-dsh-bridge')), 'the bridge must be inserted');
   // A provider section here would make settings.mutate answer "overridden by a
   // home patch or command-line overlay", so the control patch must never carry
   // one — and it needs none: the document it edits is DSH's own.
   assert.ok(!rows.some((row) => row.id === 'llm-pi-ai'), 'no llm-pi-ai section');
   assert.ok(!rows.some((row) => Array.isArray(row.insert)
-    && row.insert.some((entry) => entry.id === 'vika-personal-agent')), 'no MCP client');
+    && row.insert.some((entry) => entry.id === 'superagent-personal-agent')), 'no MCP client');
   assert.ok(rows.some((row) => row.id === 'sdk-jsonrpc-server' && row.disabled === true));
 });
 
@@ -292,7 +292,7 @@ test('the client verifies the bridge, edits settings and credentials, and takes 
   // and initialize would drag a provider round-trip into a config command.
   assert.ok(!calls.some((call) => call.method === 'initialize'), 'initialize must not be sent');
   const methods = calls.filter((call) => call.method).map((call) => call.method);
-  assert.equal(methods[0], 'vika/hello');
+  assert.equal(methods[0], 'superagent/hello');
   assert.ok(methods.includes('shutdown'), 'shutdown is sent on close');
 });
 
@@ -314,7 +314,7 @@ test('NOT_READY is retried, other bridge errors are not', async (t) => {
     (await client.describeSettings()).descriptor
   ));
   assert.equal(descriptor.revision, 0);
-  const describes = fake.calls().filter((call) => call.method === 'vika/settings/describe');
+  const describes = fake.calls().filter((call) => call.method === 'superagent/settings/describe');
   assert.equal(describes.length, 3, 'two refusals then the answer');
 });
 
@@ -324,7 +324,7 @@ test('a request that exceeds its bound kills the process and reports why', async
   const startedAt = Date.now();
   await assert.rejects(
     DshControlClient.open({ dataDir, bin: fake.script, env: fake.env, helloTimeoutMs: 250 }),
-    (error) => error instanceof DshControlError && /did not answer vika\/hello within 250ms/.test(error.message),
+    (error) => error instanceof DshControlError && /did not answer superagent\/hello within 250ms/.test(error.message),
   );
   assert.ok(Date.now() - startedAt < 5000, 'the bound, not the process, decides how long this takes');
   const pid = fake.calls().find((call) => call.event === 'start').pid;

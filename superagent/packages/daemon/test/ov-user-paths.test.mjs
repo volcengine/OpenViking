@@ -31,10 +31,10 @@ for (const user of [undefined, 'old-owner']) {
     const canonical = (uri) => uri.replace('viking://~', 'viking://user/owner.asd');
     assert.deepEqual([...state.files.keys()], [canonical(mailUri), canonical(noteUri)]);
 
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-ov-user-paths-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-ov-user-paths-'));
     const configPath = path.join(dir, 'ov.json');
     fs.writeFileSync(configPath, JSON.stringify(config));
-    const store = new Store(path.join(dir, 'vika.sqlite3'), quiet);
+    const store = new Store(path.join(dir, 'superagent.sqlite3'), quiet);
     t.after(() => { store.close(); fs.rmSync(dir, { recursive: true, force: true }); });
     store.initializeCognition('codex', 'token');
     const actions = new ActionService({ config: { meetingNotes: true }, store,

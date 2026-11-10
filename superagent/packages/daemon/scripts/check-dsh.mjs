@@ -19,11 +19,11 @@ import { terminateProcessTree } from '../src/process-utils.mjs';
 // Keyless protocol smoke. The endpoint accepts TCP requests but never answers,
 // so a steer is guaranteed to remain live until the bridge cancels it, and no
 // assertion needs a real provider key or network.
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-dsh-check-'));
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-dsh-check-'));
 fs.chmodSync(dataDir, 0o700);
 const workspace = path.join(dataDir, 'workspace');
 fs.mkdirSync(workspace);
-// The two documents the DSH services own; vika neither writes nor parses the
+// The two documents the DSH services own; ov-superagent neither writes nor parses the
 // YAML, so the check asserts presence and content, never a second read path.
 const profilePatch = path.join(dataDir, 'dsh', 'home', 'profiles', 'sdk', 'cordis.patch.yml');
 const credentialsFile = path.join(dataDir, 'dsh', 'home', '.credentials.yaml');
@@ -144,7 +144,7 @@ try {
   // this is the only reliable window on the documented NOT_READY answer. The
   // initialize below is what gives the service time to activate before the
   // retry runs, keeping the retry assertion deterministic.
-  const coldAttempt = request('vika/credentials/set', { ref: 'CHECK_COLD_REF', value: 'check-cold' });
+  const coldAttempt = request('superagent/credentials/set', { ref: 'CHECK_COLD_REF', value: 'check-cold' });
   await rpc('initialize', { cwd: workspace, provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'high', approvalRequests: true });
   const startupMs = Date.now() - spawnedAt;
   const coldReply = await coldAttempt;
@@ -156,7 +156,7 @@ try {
     // The same retry helper the daemon and the CLI use, with extra headroom for
     // this machine's slower source-tree launcher.
     assert.deepEqual(
-      await retryDshNotReady(() => rpc('vika/credentials/set', { ref: 'CHECK_COLD_REF', value: 'check-cold' }), { ceilingMs: 15_000 }),
+      await retryDshNotReady(() => rpc('superagent/credentials/set', { ref: 'CHECK_COLD_REF', value: 'check-cold' }), { ceilingMs: 15_000 }),
       { ok: true },
     );
     process.stdout.write('DSH credentials NOT_READY was answered and retried successfully.\n');
@@ -164,25 +164,25 @@ try {
     process.stdout.write('DSH credentials service was already mounted for the first frame; NOT_READY was not observable.\n');
   }
 
-  const hello = await rpc('vika/hello');
+  const hello = await rpc('superagent/hello');
   assert.ok(bridgeHelloSupports(hello, DSH_BRIDGE_CLI_METHODS),
-    `vika/hello did not expose bridge v${DSH_BRIDGE_VERSION}: ${JSON.stringify(hello)}`);
+    `superagent/hello did not expose bridge v${DSH_BRIDGE_VERSION}: ${JSON.stringify(hello)}`);
   assert.equal(hello.bridge, DSH_BRIDGE_ID);
   assert.equal(hello.version, DSH_BRIDGE_VERSION);
   assert.deepEqual([...hello.methods].sort(), [...DSH_BRIDGE_CLI_METHODS].sort(),
     'hello must advertise exactly the methods this release routes');
 
-  const describedAtStart = await rpc('vika/settings/describe', { ns: 'llm-pi-ai' });
+  const describedAtStart = await rpc('superagent/settings/describe', { ns: 'llm-pi-ai' });
   assert.equal(describedAtStart.ns, 'llm-pi-ai');
   assert.ok(describedAtStart.descriptor, 'llm-pi-ai must be a configurable namespace');
   assert.equal(typeof describedAtStart.descriptor.revision, 'number');
   assert.equal(typeof describedAtStart.descriptor.value.providers, 'object');
   await assert.rejects(
-    () => rpc('vika/settings/describe', { ns: 'llm' }),
+    () => rpc('superagent/settings/describe', { ns: 'llm' }),
     /unsupported settings namespace/,
   );
 
-  const keylessModels = await rpc('vika/llm/models');
+  const keylessModels = await rpc('superagent/llm/models');
   const builtIn = (provider) => keylessModels.providers.find(entry => entry.provider === provider);
   // The dummy DEEPSEEK_API_KEY admits the official route's built-in catalog;
   // the account route is never signed in here, so it stays empty and is what
@@ -191,8 +191,8 @@ try {
   assert.ok(builtIn('deepseek-official').models.length >= 1, 'the keyed official route lists its built-in models');
   assert.deepEqual(builtIn('deepseek-account').models, [], 'the account route has no models without a sign-in');
 
-  await rpc('vika/settings/mutate', { ns: 'llm-pi-ai', ops: [{ op: 'set', path: ['providers', 'check-route'], value: routeProfile }] });
-  const described = await rpc('vika/settings/describe', { ns: 'llm-pi-ai' });
+  await rpc('superagent/settings/mutate', { ns: 'llm-pi-ai', ops: [{ op: 'set', path: ['providers', 'check-route'], value: routeProfile }] });
+  const described = await rpc('superagent/settings/describe', { ns: 'llm-pi-ai' });
   assert.equal(described.descriptor.revision, describedAtStart.descriptor.revision + 1);
   assert.equal(described.descriptor.value.providers['check-route'].apiKeyEnv, CREDENTIAL_REF);
   assert.ok(fs.existsSync(profilePatch), `the settings service must write ${profilePatch}`);
@@ -201,35 +201,35 @@ try {
   assert.match(profilePatchText, /check-route/);
   assert.doesNotMatch(fs.readFileSync(patchPath, 'utf8'), /llm-pi-ai/, 'the run patch must not overlay llm-pi-ai');
 
-  const uncredentialed = (await rpc('vika/llm/models')).providers.find(entry => entry.provider === 'check-route');
+  const uncredentialed = (await rpc('superagent/llm/models')).providers.find(entry => entry.provider === 'check-route');
   assert.ok(uncredentialed, 'the new route must appear in the catalogue');
   assert.deepEqual(uncredentialed.credential, { ref: CREDENTIAL_REF, present: false, known: true });
   assert.deepEqual(uncredentialed.models, [], 'a route without its credential lists no models');
 
-  const routeInfo = await rpc('vika/llm/model/info', { provider: 'check-route', model: 'deepseek-chat' });
+  const routeInfo = await rpc('superagent/llm/model/info', { provider: 'check-route', model: 'deepseek-chat' });
   assert.deepEqual(routeInfo.reasoning.efforts.map(effort => effort.id), ['low', 'high', 'max']);
   assert.deepEqual(routeInfo.inputModalities, ['text', 'image']);
 
   const sessionId = randomUUID();
   await rpc('session/working-directory/get', { sessionId });
   assert.deepEqual(
-    await rpc('vika/session/model/select', { sessionId, provider: 'check-route', model: 'deepseek-chat', reasoningEffort: 'max' }),
+    await rpc('superagent/session/model/select', { sessionId, provider: 'check-route', model: 'deepseek-chat', reasoningEffort: 'max' }),
     { provider: 'check-route', model: 'deepseek-chat', reasoningEffort: 'max' },
   );
   // Omitting the effort records null: the adapter default is not a selection.
   assert.deepEqual(
-    await rpc('vika/session/model/select', { sessionId, provider: 'check-route', model: 'deepseek-chat' }),
+    await rpc('superagent/session/model/select', { sessionId, provider: 'check-route', model: 'deepseek-chat' }),
     { provider: 'check-route', model: 'deepseek-chat', reasoningEffort: null },
   );
-  const unsupported = await request('vika/session/model/select', {
+  const unsupported = await request('superagent/session/model/select', {
     sessionId, provider: 'check-route', model: 'deepseek-chat', reasoningEffort: 'medium',
   });
   assert.equal(unsupported.error?.code, -32603, JSON.stringify(unsupported.error));
   assert.equal(unsupported.error?.data?.code, 'UNSUPPORTED_REASONING_EFFORT', JSON.stringify(unsupported.error));
   assert.match(unsupported.error.message, /does not support reasoning effort "medium"/);
 
-  await rpc('vika/credentials/set', { ref: CREDENTIAL_REF, value: CREDENTIAL_VALUE });
-  const configured = (await rpc('vika/llm/models')).providers.find(entry => entry.provider === 'check-route');
+  await rpc('superagent/credentials/set', { ref: CREDENTIAL_REF, value: CREDENTIAL_VALUE });
+  const configured = (await rpc('superagent/llm/models')).providers.find(entry => entry.provider === 'check-route');
   assert.deepEqual(configured.credential, { ref: CREDENTIAL_REF, present: true, known: true });
   assert.deepEqual(configured.models.map(model => model.id), ['deepseek-chat']);
   assert.ok(fs.existsSync(credentialsFile), `credentials/set must write ${credentialsFile}`);
@@ -238,7 +238,7 @@ try {
   assert.doesNotMatch(fs.readFileSync(profilePatch, 'utf8'), new RegExp(CREDENTIAL_VALUE),
     'the profile patch references the credential, never its value');
   await assert.rejects(
-    () => rpc('vika/credentials/set', { ref: 'not a ref', value: CREDENTIAL_VALUE }),
+    () => rpc('superagent/credentials/set', { ref: 'not a ref', value: CREDENTIAL_VALUE }),
     /POSIX shell identifier/,
   );
 
@@ -259,8 +259,8 @@ try {
     && event.params?.sessionId === sessionId && event.params.event?.type === 'turn/end'
     && event.params.event?.data?.reason?.kind === 'aborted'), 'expected a root turn/end aborted event');
 
-  await rpc('vika/credentials/unset', { ref: CREDENTIAL_REF });
-  const unconfigured = (await rpc('vika/llm/models')).providers.find(entry => entry.provider === 'check-route');
+  await rpc('superagent/credentials/unset', { ref: CREDENTIAL_REF });
+  const unconfigured = (await rpc('superagent/llm/models')).providers.find(entry => entry.provider === 'check-route');
   assert.deepEqual(unconfigured.credential, { ref: CREDENTIAL_REF, present: false, known: true });
   assert.deepEqual(unconfigured.models, []);
   assert.doesNotMatch(fs.readFileSync(credentialsFile, 'utf8'), new RegExp(CREDENTIAL_REF));

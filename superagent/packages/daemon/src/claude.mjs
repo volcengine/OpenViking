@@ -281,7 +281,7 @@ export class ClaudeAgent {
 
   _writeMcpConfig() {
     this._cleanupMcpConfig();
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-claude-mcp-'));
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-claude-mcp-'));
     try { fs.chmodSync(directory, 0o700); } catch {}
     const configPath = path.join(directory, 'mcp-config.json');
     fs.writeFileSync(configPath, JSON.stringify({

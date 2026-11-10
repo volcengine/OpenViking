@@ -10,7 +10,7 @@ if ($errors.Count) { throw ($errors | Out-String) }
 foreach ($definition in $ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
     . ([scriptblock]::Create($definition.Extent.Text))
 }
-$work = Join-Path ([IO.Path]::GetTempPath()) ('vika-transactions-' + [guid]::NewGuid().ToString('N'))
+$work = Join-Path ([IO.Path]::GetTempPath()) ('superagent-transactions-' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($work)
 $realMove = ${function:Move-Link}
 $realNew = ${function:New-Link}
@@ -98,10 +98,10 @@ try {
     # Same failure code as a previous native command must still fail self-check.
     $checkRoot = Join-Path $work 'check'
     [void][IO.Directory]::CreateDirectory($checkRoot)
-    Set-Content -LiteralPath (Join-Path $checkRoot 'vika-preview.ps1') -Value 'param($Action); exit 7'
+    Set-Content -LiteralPath (Join-Path $checkRoot 'superagent-preview.ps1') -Value 'param($Action); exit 7'
     $global:LASTEXITCODE = 7
     Expect-Throw { Test-Release $checkRoot } 'exited 7'
-    Set-Content -LiteralPath (Join-Path $checkRoot 'vika-preview.ps1') -Value 'param($Action)'
+    Set-Content -LiteralPath (Join-Path $checkRoot 'superagent-preview.ps1') -Value 'param($Action)'
     $global:LASTEXITCODE = 7
     Test-Release $checkRoot
     $passed += 2

@@ -30,7 +30,7 @@ async function waitFor(predicate, timeoutMs = 1_000) {
 const createdTempDirs = new Set();
 
 function tempDir() {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-dsh-agent-test-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-dsh-agent-test-'));
   createdTempDirs.add(directory);
   return directory;
 }
@@ -182,11 +182,11 @@ class FakeChild extends EventEmitter {
     // null models an `llm-pi-ai` document DSH could not activate.
     this.settingsDescriptor = settingsDescriptor;
     this.hello = hello ?? {
-      bridge: 'vika-dsh-bridge',
+      bridge: 'superagent-dsh-bridge',
       version: 2,
       methods: [
         'session/steer', 'session/cancel',
-        'vika/llm/models', 'vika/llm/model/info', 'vika/session/model/select',
+        'superagent/llm/models', 'superagent/llm/model/info', 'superagent/session/model/select',
       ],
     };
     this.synchronousAck = synchronousAck;
@@ -226,21 +226,21 @@ class FakeChild extends EventEmitter {
     const answer = () => {
       if (this.exitCode !== null) return;
       if (frame.method === 'initialize') this.feed({ id: frame.id, result: { serverInfo: { name: 'deepseek-harness-sdk-runtime', version: '0.2.2-rc.1' } } });
-      else if (frame.method === 'vika/hello') {
+      else if (frame.method === 'superagent/hello') {
         if (this.hello instanceof Error) this.feed({ id: frame.id, error: { code: -32601, message: this.hello.message } });
         else this.feed({ id: frame.id, result: this.hello });
       } else if (frame.method === 'session/resume') {
         if (this.resumeError) this.feed({ id: frame.id, error: { code: -32603, message: this.resumeError } });
         else this.feed({ id: frame.id, result: {} });
       } else if (frame.method === 'session/working-directory/get') {
-        this.feed({ id: frame.id, result: { cwd: '/tmp/vika-workspace' } });
-      } else if (frame.method === 'vika/settings/describe') {
+        this.feed({ id: frame.id, result: { cwd: '/tmp/superagent-workspace' } });
+      } else if (frame.method === 'superagent/settings/describe') {
         this.feed({ id: frame.id, result: { ns: 'llm-pi-ai', descriptor: this.settingsDescriptor } });
-      } else if (frame.method === 'vika/llm/models') {
+      } else if (frame.method === 'superagent/llm/models') {
         this.feed({ id: frame.id, result: { providers: this.models } });
-      } else if (frame.method === 'vika/llm/model/info') {
+      } else if (frame.method === 'superagent/llm/model/info') {
         this.feed({ id: frame.id, result: (this.modelInfo ?? defaultModelInfo)(frame.params.provider, frame.params.model) });
-      } else if (frame.method === 'vika/session/model/select') {
+      } else if (frame.method === 'superagent/session/model/select') {
         if (this.selectError) this.feed({ id: frame.id, error: this.selectError });
         else {
           this.feed({ id: frame.id, result: {
