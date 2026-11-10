@@ -20,6 +20,7 @@
 - 每个组件、业务模块或区块独占一个 kebab-case 目录，入口文件与目录同名。实现、样式、测试及私有子组件就近放置，例如 `components/<模块>/<模块>.tsx` 和同目录的 `<模块>.css`。模块私有的 Hook、类型和工具留在模块内，不提前提升到公共目录。
 - 根入口与子路径分别维护公开导出；组件子路径为 `@openviking/react/components/<组件>`，业务模块为 `@openviking/react/modules/<模块>`，从模块入口分别导出 Hook 与组合视图。不提供 `components`、`modules` 分类聚合 JS 入口。包导出显式列举，内部文件不开放；各入口共享实现，避免重复创建 Provider、Context 或状态对象。同步维护 Rslib 入口和声明路径。
 - 被多个组件共用的内部代码放在 `src/shared/`，**不设公开入口**：不进包根导出、不进子路径、不写进 `package.json` 的 `exports`。只有出现第二个真实消费者时才提升到这里；单个组件用到的东西留在该组件目录内。共享代码不得反向依赖 `components/`、`modules/` 或任何宿主契约。
+- 目录例外：内部通用 `Drawer` 按已确认的设计决定保留在 `src/shared/components/drawer/`，当前唯一直接消费者是 `FileBrowserEntries`。它通过 `children` 接收内容，业务内容与专属样式由调用方提供。此例外仅适用于 `Drawer`，其他内部代码仍遵循第二个真实消费者的门槛。
 - 目录按实际内容创建，不预建空目录，也不为单个简单模块增加不必要的转发层。
 
 ## 样式与交互
