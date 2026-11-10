@@ -12,6 +12,8 @@ Pass three API adapters directly to `ScopeCascade`. Requests, cascading, cancell
 
 The adapters return `Promise<readonly ScopeSwitcherOption[]>`, with `{ id, label, icon?, description?, disabled? }` options. Adapters own authentication, addresses and response mapping. Keep function references stable: changing an adapter cancels requests and resets all selections. Use a component `key` to isolate accounts.
 
+The default view ships three level icons: `LibraryIcon` for libraries (a round gradient swatch picked by id), and `SpaceIcon` / `UserIcon` for spaces and users. When an adapter returns an option without `icon`, the level's default is filled in; a host-supplied `icon` always wins.
+
 | Adapter         | Parameters                                                |
 | --------------- | --------------------------------------------------------- |
 | `loadLibraries` | `signal: AbortSignal`                                     |

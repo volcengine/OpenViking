@@ -16,14 +16,16 @@
     "lint": "npm run build:lib && node scripts/lint.mjs",
     "lint:fix": "npm run build:lib && node scripts/lint.mjs --fix",
     "typecheck": "npm run build:lib && tsc --noEmit -p packages/react/tsconfig.json && tsc --noEmit -p packages/react/tsconfig.config.json && tsc --noEmit -p docs/tsconfig.json",
-    "test": "npm run build:lib && node scripts/test.mjs",
+    "test": "npm run check:swatches && npm run build:lib && node scripts/test.mjs",
     "build:lib": "npm run build --workspace @openviking/react",
     "clean:lib": "node -e \"require('node:fs').rmSync('packages/react/dist',{recursive:true,force:true})\"",
     "build:docs": "npm run build --workspace @openviking/ui-docs",
     "build": "npm run build:lib && npm run build:docs",
     "preview": "npm run preview --workspace @openviking/ui-docs --",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "sync:swatches": "node scripts/sync-library-swatches.mjs",
+    "check:swatches": "node scripts/sync-library-swatches.mjs --check"
   },
   "devDependencies": {
     "@rsbuild/plugin-svgr": "^2.0.5",

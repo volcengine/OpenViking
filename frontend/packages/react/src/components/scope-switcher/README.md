@@ -48,6 +48,8 @@ Inside the panel a hovered row tints lightly and a selected row keeps the primar
 
 Each row's leading icon sits in a 24px well: white surface, 0.5px `#edeef2` outline, 12px radius, with the glyph itself at 14px. A host that renders round avatars sets `--ov-ui-scope-switcher-option-icon-radius: 50%`.
 
+Icons come from the host through `trigger.icon` and `option.icon`; the component ships no level icons and infers none from a level's meaning. For defaults, take `LibraryIcon`, `SpaceIcon` and `UserIcon` from `@openviking/react/icons`; `ScopeCascade`'s default view already fills these in when an adapter returns no `icon`, and a host-supplied icon always wins.
+
 Theme variables are declared on `.ov-scope-switcher` so a host can override any single one: `--ov-ui-scope-switcher-divider`, `-icon`, `-option-icon`, `-option-icon-size`, `-option-icon-radius`, `-row-hover`, `-tag-background`, `-tag-text`, `-panel-width`, `-option-height`, `-option-gap`, `-list-max-height`, `-panel-max-height`.
 
 Shared colours are read through the package theme baseline, written as `var(--ov-ui-color-<token>, var(--ov-ui-<token>-default, fallback))`. A host that sets `--ov-ui-color-*` on an ancestor wins; otherwise the baseline default applies. The component never assigns a public `--ov-ui-color-*` on its own root, because that would block the host's value from inheriting. Tokens used here: `text-1`, `text-3`, `text-disabled`, `border-1`, `border-2`, `border-3`, `bg-1`, `primary`, `primary-light`.
