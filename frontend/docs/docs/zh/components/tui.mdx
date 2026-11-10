@@ -32,9 +32,11 @@
 
 ```
 
-此示例从空记录开始，通过 `emptyState` 组合标题、说明和快捷命令，布局对齐火山版欢迎页。调用方从传给 `commands` 的同一份目录中选择、排序 `quickCommands`，也可替换标题和文案。点击快捷命令回填并聚焦输入区，在输入区补充参数并按 Enter 才提交；首次提交后，欢迎页由模拟执行结果替换。
+此示例从空记录开始，只传 `quickCommands` 就得到内置空态：标题、说明和快捷命令列表。调用方从传给 `commands` 的同一份目录中选择、排序 `quickCommands`，未命中的名称跳过。点击快捷命令回填并聚焦输入区，在输入区补充参数并按 Enter 才提交；首次提交后，欢迎页由模拟执行结果替换。
 
 悬停快捷命令时，箭头轻微后退、前进后回位，播放一次；启用系统的减少动态效果设置时保持静止。
+
+不传 `emptyState` 和 `quickCommands` 时不显示任何空态内容。需要完全自定义时传 `emptyState`，它替换整个内置空态。
 
 ## 组件边界
 
@@ -64,20 +66,21 @@ import type {
 
 下表说明已实现的行为。
 
-| 属性          | 类型                            | 默认值       | 说明                                                                                   |
-| ------------- | ------------------------------- | ------------ | -------------------------------------------------------------------------------------- |
-| records       | readonly TuiRecord[]            | 必填         | 当前展示的执行记录，按提交顺序排列；会话与历史切换后由宿主更新。                       |
-| value         | string                          | 必填         | 受控输入值。                                                                           |
-| disabled      | boolean                         | false        | 禁用命令输入与提交，提示文案由 `labels.unavailableMessage` 提供。                      |
-| emptyState    | ReactNode                       | labels.empty | 无记录时展示的完整空态，可包含标题、说明与快捷入口；传 `null` 时隐藏。                 |
-| `locale`      | `'zh-CN' \| 'en-US'`            | 必填         | 选择内置中英文文案。                                                                   |
-| commands      | readonly TuiCommandDefinition[] | `[]`         | 宿主命令目录，用于补全、帮助及等待骨架。                                               |
-| commandGroups | readonly TuiCommandGroup[]      | `[]`         | 宿主分组名称和顺序；未声明的组按目录顺序追加。                                         |
-| labels        | TuiLabels                       | —            | 统一的界面文案与引导提示。                                                             |
-| onValueChange | (value: string) => void         | —            | 上报输入变化，包含接受的命令和示例；行内占位不改变输入值，也不提交。省略时输入框只读。 |
-| onSubmit      | (command: string) => void       | —            | 显式提交时上报意图，由宿主执行；省略时不能提交。                                       |
-| onOpenUri     | (uri: string) => void           | —            | 链接激活时接收原始 URI，由宿主负责打开资源。                                           |
-| onCopy        | (text: string) => void          | —            | 复制成功后触发，参数为已复制的文本；失败时不触发。省略回调不影响复制。                 |
+| 属性          | 类型                            | 默认值 | 说明                                                                                   |
+| ------------- | ------------------------------- | ------ | -------------------------------------------------------------------------------------- |
+| records       | readonly TuiRecord[]            | 必填   | 当前展示的执行记录，按提交顺序排列；会话与历史切换后由宿主更新。                       |
+| value         | string                          | 必填   | 受控输入值。                                                                           |
+| disabled      | boolean                         | false  | 禁用命令输入与提交，提示文案由 `labels.unavailableMessage` 提供。                      |
+| emptyState    | ReactNode                       | —      | 无记录时的空态节点，完全替换内置空态；传 `null` 时同样不显示。                         |
+| quickCommands | readonly string[]               | `[]`   | 内置空态展示的快捷命令名称，按顺序取自 `commands`，未命中的名称跳过。                  |
+| `locale`      | `'zh-CN' \| 'en-US'`            | 必填   | 选择内置中英文文案。                                                                   |
+| commands      | readonly TuiCommandDefinition[] | `[]`   | 宿主命令目录，用于补全、帮助及等待骨架。                                               |
+| commandGroups | readonly TuiCommandGroup[]      | `[]`   | 宿主分组名称和顺序；未声明的组按目录顺序追加。                                         |
+| labels        | TuiLabels                       | —      | 统一的界面文案与引导提示。                                                             |
+| onValueChange | (value: string) => void         | —      | 上报输入变化，包含接受的命令和示例；行内占位不改变输入值，也不提交。省略时输入框只读。 |
+| onSubmit      | (command: string) => void       | —      | 显式提交时上报意图，由宿主执行；省略时不能提交。                                       |
+| onOpenUri     | (uri: string) => void           | —      | 链接激活时接收原始 URI，由宿主负责打开资源。                                           |
+| onCopy        | (text: string) => void          | —      | 复制成功后触发，参数为已复制的文本；失败时不触发。省略回调不影响复制。                 |
 
 `onSubmit` 上报提交的文本，不等待执行结果。宿主负责发送、权限和执行，并更新等待、成功或失败的记录；已有 `pending` 记录不阻止后续提交。
 
@@ -85,7 +88,7 @@ import type {
 
 未提供 `onValueChange` 时，输入、提交和帮助命令填入均为只读；`disabled` 同样禁止这些操作。结构化资源链接仅接受 `viking://`、`https://` 和 `http://`，不支持的目标显示为纯文本。搜索摘要、摘录、描述、元信息和写入结果消息等正文的 URI 链接排除句末标点；资源标识和结构化原始值使用字面值匹配。命令、编辑器和代码中的 URI 以空白和引号等引用分隔符为边界，保留文件名中的逗号、分号及括号。JSON 缩进保留数字等原始值，不通过反序列化后的值重写输出。
 
-`emptyState` 是完整自定义空态的唯一入口。标题、说明、快捷入口及其交互由宿主在节点内组合。省略时展示 `labels.empty`，传 `null` 时隐藏空态内容。
+`emptyState` 是完全自定义空态的入口：传节点时替换整个内置空态，传 `null` 时不显示空态。省略时由内置空态按 `quickCommands` 渲染标题、说明与快捷命令列表；没有可用快捷命令时不显示任何内容。
 
 ### 命令描述
 
@@ -125,7 +128,9 @@ import type {
 | ------------------------- | ------ | ------------------------------------------------------------- |
 | labels.unavailableMessage | string | `disabled` 为 `true` 时的不可用提示；仅修改文案不会禁用组件。 |
 | labels.pending            | string | 等待中的状态文本。                                            |
-| labels.empty              | string | 无记录且未提供 `emptyState` 时展示的默认提示。                |
+| labels.emptyTitle         | string | 内置空态的标题。                                              |
+| labels.emptyDescription   | string | 内置空态的说明。                                              |
+| labels.quickStart         | string | 快捷命令列表上方的引导文案。                                  |
 | labels.allCommands        | string | `/` 全部指令的快捷键说明。                                    |
 | labels.historyCommands    | string | `↑` 历史指令的快捷键说明，回填范围为当前 records。            |
 | labels.send               | string | `↵` 发送的快捷键说明。                                        |
