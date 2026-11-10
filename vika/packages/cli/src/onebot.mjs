@@ -13,12 +13,34 @@ import { GoBack, PromptAborted } from './prompt.mjs';
 // A QQ account that an OneBot v11 implementation (NapCat, LLOneBot,
 // Lagrange.OneBot) keeps logged in. Vika connects to that implementation's
 // WebSocket server; the owner is whoever sends the one-time code to the
-// account in a private friend message. Groups are connected by hand, in the
-// policy file, so a new account joins no group conversation by itself.
+// account in a private friend message. Every group the account is in is
+// followed unless the policy file sets it to "mention" or "off".
 
-const STARTER_POLICY = '{\n  "groups": {}\n}\n';
+const STARTER_POLICY = '{\n  "groups": {\n    "*": "ambient"\n  }\n}\n';
 
 export const policyPath = (dataDir) => new PolicyFile(dataDir).path;
+
+// What the policy file puts in force for the groups it does not name, read
+// as the daemon reads it: null when there is no file or it is the starter
+// file below (every group "ambient"), "invalid" for a file the daemon would
+// refuse, else the mode of "*".
+export function groupDefault(dataDir) {
+  const file = new PolicyFile(dataDir);
+  if (!fs.existsSync(file.path)) return null;
+  try {
+    const policy = file.current();
+    return fs.readFileSync(file.path, 'utf8') === STARTER_POLICY ? null : policy.otherGroups;
+  } catch { return 'invalid'; }
+}
+
+// An existing policy file is the owner's: say what it decides instead of the default.
+function keptPolicy(file, mode) {
+  if (mode === 'invalid') {
+    return t(`已有的 ${file} 保留不动；它读不成有效的策略文件。`, `The existing ${file} is kept as it is; it could not be read as a valid policy.`);
+  }
+  return t(`已有的 ${file} 保留不动：没写在里面的群按 "${mode}"，写在里面的群各按自己那一项。`,
+    `The existing ${file} is kept as it is: groups it does not name are "${mode}", and a group it names follows its own entry.`);
+}
 
 function explain(error) {
   if (error instanceof OneBotError && error.auth) {
@@ -52,6 +74,10 @@ export async function connectOneBot({ plan, prompter, WebSocketImpl = globalThis
     '2. Add that account as a friend from your own QQ: binding the owner takes a code in a private friend message.'));
   prompter.info(t('这个号可以同时接着别的 OneBot 程序；token 不能省，因为能连上这个服务器的程序就能操作这个 QQ 号。',
     'Other OneBot programs may use the same account. The token is required: any program that reaches the server can act as the account.'));
+  const file = policyPath(plan.dataDir);
+  const kept = groupDefault(plan.dataDir);
+  prompter.info(kept === null ? t(`绑定后，这个号会跟进它所在的每个群；不想让它进群，先在 ${file} 里写上 {"groups": {"*": "off"}}。`,
+    `Once bound, the account follows every group it is in; to keep it out, write {"groups": {"*": "off"}} to ${file} first.`) : keptPolicy(file, kept));
   if (canGoBack) prompter.info(t('输入地址、token 或等待绑定时，按 ← / Esc 可以返回。', 'While entering the address or token, or waiting, press ← / Esc to go back.'));
   let url = savedUrl(plan.dataDir);
   const navigable = prompter.navigable;
@@ -111,15 +137,18 @@ async function verify({ plan, prompter, url, token, WebSocketImpl, canGoBack }) 
   finally { keys.stop(); state.close(); }
 }
 
-// No group is connected until the owner lists it, so the ids to list are
-// shown here. An existing policy file is the owner's and is left as it is.
+// Every group is followed from the start, so the ids to change are shown
+// here. An existing policy file is the owner's and is left as it is.
 function showGroups(prompter, dataDir, groups) {
   const file = policyPath(dataDir);
+  const kept = groupDefault(dataDir);
   try { fs.writeFileSync(file, STARTER_POLICY, { flag: 'wx', mode: 0o600 }); } catch (error) {
     if (error.code !== 'EEXIST') throw error;
   }
-  prompter.info(t(`群聊在 ${file} 里接入：没写进 "groups" 的群都不接。"mention" 只在有人 @ 它、回复它，或说到 "names" 里列出的某个名字时回应；"ambient" 会看群里所有消息，自己决定要不要说话。保存后自动生效，不用重启。`,
-    `Groups are connected in ${file}: a group not listed under "groups" is not connected. "mention" answers only when someone @mentions it, replies to it or uses one of the names listed under "names"; "ambient" reads every message in the group and decides when to speak. Saved changes apply without a restart.`));
+  prompter.info(kept === null ? t(`这个账号所在的每个群默认都接入，按 "ambient"：看群里所有消息，自己决定要不要说话。在 ${file} 的 "groups" 里可以把某个群号改成 "mention"（只在有人 @ 它、回复它，或说到 "names" 里列出的某个名字时回应）或 "off"（不接）；"*" 改的是没写出来的群。保存后自动生效，不用重启。`,
+    `Every group the account is in is followed by default as "ambient": it reads every message and decides when to speak. Under "groups" in ${file}, set a group's number to "mention" (answers only when someone @mentions it, replies to it or uses one of the names listed under "names") or "off" (not connected); "*" sets the groups not listed. Saved changes apply without a restart.`)
+    : `${keptPolicy(file, kept)}${t('在 "groups" 里可以把某个群号改成 "ambient"（看群里所有消息，自己决定要不要说话）、"mention"（只在有人 @ 它、回复它，或说到 "names" 里列出的某个名字时回应）或 "off"（不接）；"*" 改的是没写出来的群。保存后自动生效，不用重启。',
+      ' Under "groups", set a group\'s number to "ambient" (reads every message and decides when to speak), "mention" (answers only when someone @mentions it, replies to it or uses one of the names listed under "names") or "off" (not connected); "*" sets the groups not listed. Saved changes apply without a restart.')}`);
   if (!groups.length) {
     prompter.info(t('没有读到这个账号所在的群；群号可以在 QQ 的群资料里看到。', 'Could not list the account\'s groups; a group\'s number is on its profile in QQ.'));
     return;
@@ -127,5 +156,6 @@ function showGroups(prompter, dataDir, groups) {
   prompter.info(t('这个账号所在的群：', 'The account\'s groups:'));
   const width = Math.max(...groups.map((group) => group.id.length));
   prompter.write(`${groups.map((group) => `   ${group.id.padEnd(width)}  ${group.name}`.trimEnd()).join('\n')}\n`);
-  prompter.info(t(`例如：{ "groups": { "${groups[0].id}": "mention" } }`, `For example: { "groups": { "${groups[0].id}": "mention" } }`));
+  prompter.info(t(`例如：{ "groups": { "${groups[0].id}": "mention" } }；只接写出来的群：{ "groups": { "*": "off", "${groups[0].id}": "ambient" } }`,
+    `For example: { "groups": { "${groups[0].id}": "mention" } }; to follow only the groups listed: { "groups": { "*": "off", "${groups[0].id}": "ambient" } }`));
 }

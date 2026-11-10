@@ -100,7 +100,7 @@ for (const language of ['zh', 'en']) test(`the address and token are checked, th
   assert.equal(ws.opened[0].url, URL_);
   assert.equal(ws.opened[0].readyState, 3);
   const policy = path.join(f.dataDir, 'onebot', 'config.json');
-  assert.deepEqual(JSON.parse(fs.readFileSync(policy, 'utf8')), { groups: {} });
+  assert.deepEqual(JSON.parse(fs.readFileSync(policy, 'utf8')), { groups: { '*': 'ambient' } });
   assert.equal(fs.statSync(policy).mode & 0o777, 0o600);
   const text = f.text();
   // The address saved before is offered again.
@@ -108,10 +108,15 @@ for (const language of ['zh', 'en']) test(`the address and token are checked, th
   assert.ok(text.includes(policy));
   assert.match(text, /\n {3}123456789 {2}Friends\n {3}987654321 {2}Work\n/);
   assert.match(text, /\{ "groups": \{ "123456789": "mention" \} \}/);
+  assert.match(text, /\{ "groups": \{ "\*": "off", "123456789": "ambient" \} \}/);
+  // The default is said before the code, with the way to keep the account out of every group.
+  assert.ok(text.indexOf(policy) < text.search(/\nvika-[a-z2-9]{8}\n/));
   if (language === 'zh') {
-    assert.match(text, /以 ws:\/\/ 或 wss:\/\/ 开头[\s\S]*以 ws:\/\/ 或 wss:\/\/ 开头[\s\S]*access token 不能为空[\s\S]*私聊 Vika（10001）[\s\S]*QQ（OneBot） 已接好（Vika，10001）[\s\S]*没写进 "groups" 的群都不接。"mention" 只在有人 @ 它、回复它，或说到 "names" 里列出的某个名字时回应/);
+    assert.ok(text.includes(`绑定后，这个号会跟进它所在的每个群；不想让它进群，先在 ${policy} 里写上 {"groups": {"*": "off"}}。`));
+    assert.match(text, /以 ws:\/\/ 或 wss:\/\/ 开头[\s\S]*以 ws:\/\/ 或 wss:\/\/ 开头[\s\S]*access token 不能为空[\s\S]*私聊 Vika（10001）[\s\S]*QQ（OneBot） 已接好（Vika，10001）[\s\S]*这个账号所在的每个群默认都接入，按 "ambient"[\s\S]*"mention"（只在有人 @ 它、回复它，或说到 "names" 里列出的某个名字时回应）或 "off"（不接）；"\*" 改的是没写出来的群/);
   } else {
-    assert.match(text, /starts with ws:\/\/ or wss:\/\/[\s\S]*cannot be empty[\s\S]*to Vika \(10001\) in a private QQ message[\s\S]*QQ \(OneBot\) is connected \(Vika, 10001\)[\s\S]*not listed under "groups" is not connected\. "mention" answers only when someone @mentions it, replies to it or uses one of the names listed under "names"/);
+    assert.ok(text.includes(`Once bound, the account follows every group it is in; to keep it out, write {"groups": {"*": "off"}} to ${policy} first.`));
+    assert.match(text, /starts with ws:\/\/ or wss:\/\/[\s\S]*cannot be empty[\s\S]*to Vika \(10001\) in a private QQ message[\s\S]*QQ \(OneBot\) is connected \(Vika, 10001\)[\s\S]*Every group the account is in is followed by default as "ambient"[\s\S]*"mention" \(answers only when someone @mentions it, replies to it or uses one of the names listed under "names"\) or "off" \(not connected\); "\*" sets the groups not listed/);
     assert.doesNotMatch(text, /[一-鿿]/);
   }
   assert.ok(!text.includes(TOKEN));
@@ -126,6 +131,27 @@ test('the owner\'s policy file is kept, and without a group list the owner is to
   assert.equal(fs.readFileSync(policy, 'utf8'), '{"groups":{"123456789":"ambient"}}\n');
   assert.equal(fs.statSync(policy).mode & 0o777, 0o644);
   assert.match(f.text(), /没有读到这个账号所在的群；群号可以在 QQ 的群资料里看到/);
+  assert.ok(f.text().includes(`已有的 ${policy} 保留不动：没写在里面的群按 "ambient"，写在里面的群各按自己那一项。`));
+  assert.doesNotMatch(f.text(), /每个群默认都接入|绑定后，这个号会跟进它所在的每个群/);
+});
+
+// What an existing file decides is said before and after binding, never the default.
+for (const [content, said] of [
+  ['{"groups": {"*": "off"}}\n', 'is kept as it is: groups it does not name are "off", and a group it names follows its own entry.'],
+  ['{"groups": {"123456789": "loud"}}\n', 'is kept as it is; it could not be read as a valid policy.'],
+]) test(`an existing policy file is described as it is: ${content.trim()}`, async (t) => {
+  setLanguage('en');
+  t.after(() => setLanguage('zh'));
+  const f = fixture(t, [URL_, TOKEN]);
+  const policy = path.join(f.dataDir, 'onebot', 'config.json');
+  fs.writeFileSync(policy, content);
+  await connectOneBot({ ...f.options, WebSocketImpl: server(f.text).Socket });
+  assert.equal(fs.readFileSync(policy, 'utf8'), content);
+  const text = f.text();
+  const line = `The existing ${policy} ${said}`;
+  assert.ok(text.indexOf(line) >= 0 && text.indexOf(line) < text.search(/\nvika-[a-z2-9]{8}\n/), 'before the code');
+  assert.ok(text.lastIndexOf(line) > text.indexOf('is connected'), 'and after binding');
+  assert.doesNotMatch(text, /followed by default|follows every group/);
 });
 
 for (const canGoBack of [true, false]) test(`a refused token keeps the old account and writes no policy file (back=${canGoBack})`, async (t) => {

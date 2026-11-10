@@ -464,7 +464,7 @@ test('adding OneBot to an existing instance connects only it, next to nothing el
   assert.match(h.written(), /接入QQ（OneBot）（需要 WebSocket 地址、access token 和私聊口令）/);
   assert.match(h.written(), /接下来接入：QQ（OneBot） WebSocket 地址 \+ access token \+ 私聊口令绑定/);
   assert.match(h.written(), /主渠道：飞书 → QQ（OneBot）/);
-  assert.ok(h.written().includes('把群号写进 ~/.vika/data/asd/onebot/config.json'));
+  assert.ok(h.written().includes('它会跟进所在的每个群，在 ~/.vika/data/asd/onebot/config.json 里可以把群改成 "mention" 或 "off"'));
 });
 
 test('setup detects a primary command that changed the manifest while it was connecting an IM', async (t) => {
@@ -1581,7 +1581,7 @@ test('English setup offers QQ and describes credentials and private-chat binding
   assert.match(h.written(), /QQ: Message the bot you just bound/);
 });
 
-test('English setup offers OneBot as a QQ of its own, last in the list, and says where groups are connected', async (t) => {
+test('English setup offers OneBot as a QQ of its own, last in the list, and says how groups are followed', async (t) => {
   const h = harness(t, ['OB Agent', '', '', '1', '7', 'y'], { runtimes: ENGLISH_RUNTIMES });
   h.options.env.VIKA_LANG = 'en';
   h.options.connect.onebot = async ({ plan }) => {
@@ -1596,7 +1596,19 @@ test('English setup offers OneBot as a QQ of its own, last in the list, and says
   assert.doesNotMatch(h.written(), /[一-鿿]|undefined/);
   assert.match(h.written(), /QQ \(OneBot\).*an ordinary QQ account logged in to NapCat, LLOneBot or Lagrange/);
   assert.match(h.written(), /Next, connecting: QQ \(OneBot\) WebSocket address \+ access token \+ a code in a private message/);
-  assert.match(h.written(), /QQ \(OneBot\): Message the account in a private QQ chat; to bring it into a group, list the group in \S+\/onebot\/config\.json/);
+  assert.match(h.written(), /QQ \(OneBot\): Message the account in a private QQ chat; it follows every group it is in, and \S+\/onebot\/config\.json can set a group to "mention" or "off"/);
+});
+
+test('setup says what an existing OneBot policy file decides instead of the default', async (t) => {
+  const h = harness(t, ['OB Agent', '', '', '1', '7', 'y'], { runtimes: ENGLISH_RUNTIMES });
+  h.options.env.VIKA_LANG = 'en';
+  h.options.connect.onebot = async ({ plan }) => {
+    fs.mkdirSync(path.join(plan.dataDir, 'onebot'), { recursive: true });
+    fs.writeFileSync(path.join(plan.dataDir, 'onebot', 'config.json'), '{"groups": {"*": "off"}}\n');
+  };
+  assert.equal(await setupCommand(h.options), 0);
+  assert.match(h.written(), /QQ \(OneBot\): Message the account in a private QQ chat; groups \S+\/onebot\/config\.json does not name are "off", and a group it names follows its own entry/);
+  assert.doesNotMatch(h.written(), /follows every group/);
 });
 
 test('in English, a first setup says it all in English, and the bot says hello in English', async (t) => {

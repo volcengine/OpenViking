@@ -823,19 +823,33 @@ test('onebot policy validates the owner file strictly', () => {
   const policy = parsePolicy(JSON.stringify({ groups: { 123456789: 'ambient', 987654321: 'mention' },
     commandPrefixes: ['gs', '/rss', 'gs'], names: ['Vika'], settleMs: 1500 }));
   assert.deepEqual([...policy.groups], [['123456789', 'ambient'], ['987654321', 'mention']]);
+  assert.equal(policy.otherGroups, 'ambient', 'a group not named is ambient');
   assert.deepEqual(policy.commandPrefixes, ['gs', '/rss']);
   assert.deepEqual(policy.names, ['Vika']);
   assert.equal(policy.settleMs, 1500);
   assert.ok(Object.isFrozen(policy) && Object.isFrozen(policy.commandPrefixes));
   assert.equal(EMPTY_POLICY.groups.size, 0);
+  assert.equal(EMPTY_POLICY.otherGroups, 'ambient');
   assert.equal(EMPTY_POLICY.settleMs, 3000);
   assert.equal(EMPTY_POLICY.private, 'owner');
   assert.equal(parsePolicy('{"private": "friends"}').private, 'friends');
+  // "*" sets the groups not named and is not a group itself; "off" is a mode like the others.
+  const starred = parsePolicy('{"groups": {"*": "off", "123456789": "ambient", "987654321": "off"}}');
+  assert.equal(starred.otherGroups, 'off');
+  assert.deepEqual([...starred.groups], [['123456789', 'ambient'], ['987654321', 'off']]);
+  assert.equal(parsePolicy('{"groups": {"*": "mention"}}').otherGroups, 'mention');
   const invalid = [
     ['{"private": "all"}', /private must be "owner" or "friends"/],
     ['{"private": null}', /private must be "owner" or "friends"/],
     ['{"group": {}}', /key "group" is unknown/],
-    ['{"groups": {"1": "all"}}', /"ambient" or "mention"/],
+    ['{"groups": {"1": "all"}}', /"ambient", "mention" or "off"/],
+    ['{"groups": {"1": "unlisted"}}', /"ambient", "mention" or "off"/],
+    ['{"groups": {"1": null}}', /"ambient", "mention" or "off"/],
+    ['{"groups": {"*": "on"}}', /group \* must be "ambient", "mention" or "off"/],
+    ['{"groups": {"*": "off", "*": "ambient"}}', /duplicate JSON key: \*/],
+    ['{"groups": {"**": "off"}}', /group id "\*\*" must be a group number or "\*"/],
+    ['{"groups": {"all": "off"}}', /group id "all" must be a group number or "\*"/],
+    ['{"groups": {"default": "ambient"}}', /must be a group number or "\*"/],
     ['{"groups": {"01": "ambient"}}', /group number/],
     ['{"groups": []}', /groups must be an object/],
     ['{"groups": null}', /groups must be an object/],
@@ -885,6 +899,17 @@ test('onebot policy file reloads on change and keeps the last good policy', (t) 
   assert.equal(warnings[0][0], 'onebot_policy_invalid');
   write('{"groups": {"2": "ambient"}}');
   assert.equal(groupMode(file.current(), 'group:2'), 'ambient');
+  // A mode or a key the file does not know keeps the last good policy, here
+  // the one that turned group 1 off; it does not fall back to the default.
+  write('{"groups": {"*": "mention", "1": "off"}}');
+  const off = file.current();
+  assert.equal(groupMode(off, 'group:1'), null);
+  assert.equal(groupMode(off, 'group:2'), 'mention');
+  write('{"groups": {"*": "mention", "1": "of"}}');
+  assert.equal(file.current(), off);
+  write('{"groups": {"*": "mention", "1": "off", "others": "off"}}');
+  assert.equal(file.current(), off);
+  assert.equal(warnings.length, 3);
   // A fresh reader (a restart, preflight) with an invalid file is an error that names the file.
   write('{"groups": {"1": "x"}, "token": "hunter2"}');
   const fresh = new PolicyFile(dataDir);
@@ -896,25 +921,45 @@ test('onebot policy file reloads on change and keeps the last good policy', (t) 
   assert.throws(() => new PolicyFile('relative'), /absolute/);
 });
 
-test('onebot admission covers the owner chat, or every friend with private friends, and listed groups only', () => {
+test('onebot admission covers the owner chat, or every friend with private friends, and every group that is not off', () => {
   const friends = parsePolicy('{"groups": {"123456789": "ambient"}, "private": "friends"}');
   assert.equal(admitted(friends, account, 'private:30003'), true);
   assert.equal(admitted(friends, account, `private:${OWNER}`), true);
-  assert.equal(admitted(friends, account, 'group:111'), false);
-  const policy = parsePolicy('{"groups": {"123456789": "ambient", "987654321": "mention"}}');
+  assert.equal(admitted(friends, account, 'group:555555555'), true);
+  // Without a policy file: every group, as ambient, and the owner's private chat only.
+  assert.equal(admitted(EMPTY_POLICY, account, 'group:555555555'), true);
+  assert.equal(groupMode(EMPTY_POLICY, 'group:555555555'), 'ambient');
+  assert.equal(admitted(EMPTY_POLICY, account, `private:${OWNER}`), true);
+  assert.equal(admitted(EMPTY_POLICY, account, 'private:30003'), false);
+  const policy = parsePolicy('{"groups": {"123456789": "ambient", "987654321": "mention", "555555555": "off"}}');
   assert.equal(admitted(policy, account, `private:${OWNER}`), true);
   assert.equal(admitted(policy, account, 'private:30003'), false);
   assert.equal(admitted(policy, account, 'group:123456789'), true);
   assert.equal(admitted(policy, account, 'group:987654321'), true);
-  assert.equal(admitted(policy, account, 'group:111'), false);
+  assert.equal(admitted(policy, account, 'group:555555555'), false, 'named off');
+  assert.equal(admitted(policy, account, 'group:666666666'), true, 'not named: ambient');
+  assert.equal(groupMode(policy, 'group:666666666'), 'ambient');
+  assert.equal(groupMode(policy, 'group:555555555'), null);
+  // "*" for the groups not named: "mention", or "off", the opt-in of a policy that names every group it wants.
+  const mention = parsePolicy('{"groups": {"*": "mention", "123456789": "ambient", "555555555": "off"}}');
+  assert.equal(groupMode(mention, 'group:666666666'), 'mention');
+  assert.equal(groupMode(mention, 'group:123456789'), 'ambient');
+  assert.equal(admitted(mention, account, 'group:555555555'), false);
+  const optIn = parsePolicy('{"groups": {"*": "off", "123456789": "ambient", "987654321": "mention"}}');
+  assert.equal(admitted(optIn, account, 'group:666666666'), false);
+  assert.equal(groupMode(optIn, 'group:123456789'), 'ambient');
+  assert.equal(groupMode(optIn, 'group:987654321'), 'mention');
+  assert.equal(admitted(optIn, account, `private:${OWNER}`), true);
   assert.equal(admitted(policy, null, `private:${OWNER}`), false);
   assert.equal(admitted(policy, account, 'garbage'), false);
-  assert.equal(groupMode(policy, 'group:111'), null);
-  assert.equal(groupMode(policy, `private:${OWNER}`), null);
+  for (const chat of ['group:0', 'group:0123', 'group:99999999999999999', 'group:', `private:${OWNER}`, null]) {
+    assert.equal(groupMode(EMPTY_POLICY, chat), null, String(chat));
+  }
+  assert.equal(admitted(EMPTY_POLICY, account, 'group:0123'), false);
 });
 
 test('onebot classification follows every row of the table', () => {
-  const policy = parsePolicy('{"groups": {"1": "ambient", "2": "mention"}, "commandPrefixes": ["gs", "/rss"], "names": ["Vika"]}');
+  const policy = parsePolicy('{"groups": {"1": "ambient", "2": "mention", "3": "off"}, "commandPrefixes": ["gs", "/rss"], "names": ["Vika"]}');
   // `spoken` is the text without @mentions; unless a row says otherwise there are none.
   const line = (fields) => classify({ kind: 'group', chat: 'group:1', self: false, own: false, fromOwner: false,
     text: 'hello', atSelf: false, replyToOwn: false, ...fields, spoken: fields.spoken ?? fields.text ?? 'hello' }, policy);
@@ -964,7 +1009,15 @@ test('onebot classification follows every row of the table', () => {
   // unaddressed group lines by mode.
   assert.equal(line({}), 'ambient');
   assert.equal(line({ chat: 'group:2' }), 'context');
-  assert.equal(line({ chat: 'group:3' }), 'drop', 'not a connected group');
+  assert.equal(line({ chat: 'group:3' }), 'drop', 'a group that is off');
+  assert.equal(line({ chat: 'group:3', atSelf: true }), 'drop', 'a group that is off');
+  assert.equal(line({ chat: 'group:4' }), 'ambient', 'a group not named');
+  // A group not named classifies by "*".
+  const others = (mode, fields) => classify({ kind: 'group', chat: 'group:4', self: false, own: false, fromOwner: false,
+    text: 'hello', spoken: 'hello', atSelf: false, replyToOwn: false, ...fields }, parsePolicy(JSON.stringify({ groups: { '*': mode } })));
+  assert.equal(others('mention', {}), 'context');
+  assert.equal(others('mention', { atSelf: true }), 'direct');
+  assert.equal(others('off', { atSelf: true }), 'drop');
   // A full-text line still classifies: only the typed start counts as a command.
   assert.equal(line({ text: 'I said gs yesterday' }), 'ambient');
 });
@@ -1242,6 +1295,31 @@ test('onebot gate does not re-enter a release that stages more lines or stops th
   assert.equal(stopping.released.length, 3, 'stop inside a release cancels the waiting chat');
 });
 
+test('onebot gate: a demoted chat no longer waits on its ambient lines, and a direct line still releases it', () => {
+  const time = fakeTime();
+  const { gate: g, released, stage, value } = gate(time);
+  stage('group:1', 'ambient', 'a1');
+  stage('group:2', 'ambient', 'a2');
+  g.demoted('group:1');
+  g.demoted('group:9');
+  assert.equal(time.timers.size, 1);
+  time.advance(MAX_HOLD_MS * 2);
+  assert.deepEqual(released.map(([chat]) => chat), ['group:2']);
+  stage('group:1', 'direct', 'd1');
+  assert.deepEqual([released.at(-1)[0], released.at(-1)[2]], ['group:1', ['a1', 'd1']]);
+
+  // A reload noticed while the gate reads settleMs demotes before any chat is released.
+  stage('group:3', 'ambient', 'a3');
+  let reloaded = false;
+  Object.defineProperty(value, 'settle', { get() {
+    if (!reloaded && time.timers.size === 0) { reloaded = true; g.demoted('group:3'); }
+    return 3000;
+  } });
+  time.advance(3000);
+  assert.equal(reloaded, true);
+  assert.deepEqual(released.map(([chat]) => chat), ['group:2', 'group:1']);
+});
+
 test('onebot gate exports its bounds', () => {
   assert.equal(MAX_HOLD_MS, 45_000);
   assert.equal(TURN_GRACE_MS, 20_000);
@@ -1258,11 +1336,12 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
 
 // A client on fake sockets. Actions answer from `actions` (the sockets()
 // helper adds the echo); an action without a handler is never answered.
+// `policy: null` writes no policy file.
 async function client(t, { actions = {}, policy = POLICY, time = null, fetchImpl, sendTimeoutMs = 5000, paceMs = 0 } = {}) {
   const { dir, state } = fixture(t);
   state.saveAccount({ url: URL_, token: TOKEN, selfId: SELF, selfName: 'Vika', ownerId: OWNER, activatedAt: 0 });
   state.close();
-  fs.writeFileSync(path.join(dir, 'onebot', 'config.json'), JSON.stringify(policy));
+  if (policy) fs.writeFileSync(path.join(dir, 'onebot', 'config.json'), JSON.stringify(policy));
   let mid = 500;
   const ws = sockets({ actions: {
     get_login_info: () => ok({ user_id: Number(SELF), nickname: 'Vika' }),
@@ -1367,14 +1446,14 @@ test('client drops its own echo even when message_sent precedes the send answer,
   assert.equal(lines.length, 7);
 
   // Paused, nothing is emitted, lines are staged and released on the next
-  // start; a group the policy no longer lists loses its waiting lines.
+  // start; a group the policy has since turned off loses its waiting lines.
   await c.stopSubscription();
   await push(group([text('later')], { message_id: 38, time: fresh() }));
   await push(group([text('Vika?')], { group_id: Number(QUIET_GROUP), message_id: 39, time: fresh() }));
   time.advance(60_000);
   assert.equal(lines.length, 7);
   const policyPath = path.join(dir, 'onebot', 'config.json');
-  fs.writeFileSync(policyPath, JSON.stringify({ groups: { [GROUP]: 'ambient' } }));
+  fs.writeFileSync(policyPath, JSON.stringify({ groups: { [GROUP]: 'ambient', [QUIET_GROUP]: 'off' } }));
   fs.utimesSync(policyPath, 1_700_000_000, 1_700_000_000);
   start();
   assert.deepEqual(lines.slice(7).map((line) => line.content.text), ['later']);
@@ -1504,7 +1583,8 @@ test('client looks up a few names per line and keeps a bounded memory of failed 
 });
 
 test('client neither stages nor answers chats that are not connected, and with private friends lets friends in without slash commands', async (t) => {
-  const { c, lines, start, push, sent } = await client(t);
+  // "*": "off": only the groups the policy names are connected, as before groups were followed by default.
+  const { c, lines, start, push, sent } = await client(t, { policy: { ...POLICY, groups: { ...POLICY.groups, '*': 'off' } } });
   start();
   await push(group([text('@everyone hi '), at('60006')], { group_id: 111, message_id: 1, time: fresh() }));
   await push(direct([text('hello')], { user_id: 30003, target_id: undefined, message_id: 2, time: fresh(),
@@ -1772,11 +1852,19 @@ test('client history is the newest page, newest first, with routes; chat lists s
   await assert.rejects(c.listChatMessages({ chat_id: `private:${OWNER}` }), /history message identity/);
   assert.equal(c.state.route(`ob:private:${OWNER}:77`), null);
 
+  // Every group the account is in, the one the policy does not name too.
   assert.deepEqual(await c.listChats(), { chats: [
-    { chat_id: chat, name: 'Friends', chat_status: 'normal' }, { chat_id: `group:${QUIET_GROUP}`, name: 'Quiet Room', chat_status: 'normal' },
+    { chat_id: chat, name: 'Friends', chat_status: 'normal' }, { chat_id: 'group:111', name: 'Other', chat_status: 'normal' },
+    { chat_id: `group:${QUIET_GROUP}`, name: 'Quiet Room', chat_status: 'normal' },
   ], has_more: false, next_cursor: null });
   assert.deepEqual((await c.listChats({ query: 'quiet' })).chats.map((item) => item.chat_id), [`group:${QUIET_GROUP}`]);
-  assert.equal((await c.listChats({ limit: 1 })).has_more, true);
+  assert.equal((await c.listChats({ limit: 2 })).has_more, true);
+  // A group turned off is not listed, at once; the group list itself is asked for once a minute.
+  const policyPath = path.join(c.config.dataDir, 'onebot', 'config.json');
+  fs.writeFileSync(policyPath, JSON.stringify({ ...POLICY, groups: { ...POLICY.groups, 111: 'off' } }));
+  fs.utimesSync(policyPath, 1_700_000_000, 1_700_000_000);
+  assert.deepEqual((await c.listChats()).chats.map((item) => item.chat_id), [chat, `group:${QUIET_GROUP}`]);
+  assert.equal(sent('get_group_list').length, 1);
 
   // Through the Core's tools: results take the shapes it renders.
   const store = new Store(':memory:', quietLogger);
@@ -1789,6 +1877,193 @@ test('client history is the newest page, newest first, with routes; chat lists s
   const call = (tool, input) => actions.call(tool, input, { authority: 'runtime-token' });
   assert.match((await call('list_chats', {})).text, /Friends \| chat_id=group:123456789 \| normal/);
   assert.match((await call('list_chat_messages', { chat_id: chat })).text, /ob:group:123456789:11 \| Vika \| text \| my answer/);
+});
+
+test('client follows every group without a policy file, and "*" or a named mode changes it', async (t) => {
+  const time = clock();
+  const OTHER = 555555555;
+  let groups = [{ group_id: Number(GROUP), group_name: 'Friends' }, { group_id: OTHER, group_name: 'Other' }];
+  const { c, dir, lines, start, push, sent } = await client(t, { time, policy: null, actions: {
+    get_group_list: () => ok(groups),
+    get_group_msg_history: () => ok({ messages: [] }),
+    set_msg_emoji_like: () => ok(null),
+  } });
+  start();
+  // No policy file: a group nobody named is ambient, the owner's private chat is connected and nobody else's.
+  await push(group([text('hi all')], { group_id: OTHER, message_id: 1, time: fresh() }));
+  assert.equal(lines.length, 0);
+  time.advance(3000);
+  assert.deepEqual(lines.map((line) => [line.conversation.id, line.content.text]), [[`group:${OTHER}`, 'hi all']]);
+  await push(direct([text('hello')], { user_id: 30003, target_id: undefined, message_id: 2, time: fresh(),
+    sender: { user_id: 30003, nickname: 'Stranger' } }));
+  assert.equal(lines.length, 1);
+  const markdown = { type: 'markdown', text: 'hi' };
+  await c.sendMessage({ chat_id: `group:${OTHER}`, content: markdown });
+  await c.reactMessage({ message_id: `ob:group:${OTHER}:1`, emoji_type: 'OK' });
+  assert.equal(sent('set_msg_emoji_like').length, 1);
+  assert.deepEqual((await c.listChatMessages({ chat_id: `group:${OTHER}` })).messages, []);
+  await assert.rejects(c.sendMessage({ chat_id: 'private:30003', content: markdown }), /not connected to private:30003/);
+  assert.deepEqual((await c.listChats()).chats.map((item) => item.chat_id), [`group:${GROUP}`, `group:${OTHER}`]);
+
+  const policyPath = path.join(dir, 'onebot', 'config.json');
+  let stamp = 1_700_000_000;
+  const write = (policy) => {
+    fs.writeFileSync(policyPath, JSON.stringify(policy));
+    stamp += 10;
+    fs.utimesSync(policyPath, stamp, stamp);
+  };
+  // "*": "mention": the group not named waits for an address; a named one keeps its own mode.
+  write({ groups: { '*': 'mention', [GROUP]: 'ambient' } });
+  await push(group([text('chatter')], { group_id: OTHER, message_id: 3, time: fresh() }));
+  await push(group([text('ambient here')], { message_id: 4, time: fresh() }));
+  time.advance(60_000);
+  assert.deepEqual(lines.slice(1).map((line) => line.content.text), ['ambient here']);
+  await push(group([at(SELF), text(' ping')], { group_id: OTHER, message_id: 5, time: fresh() }));
+  assert.deepEqual(lines.slice(2).map((line) => line.content.text), ['chatter', '@Vika ping']);
+
+  // "*": "off" with one group named "ambient": the old opt-in.
+  write({ groups: { '*': 'off', [GROUP]: 'ambient' } });
+  await push(group([at(SELF), text(' anyone?')], { group_id: OTHER, message_id: 6, time: fresh() }));
+  await push(group([at(SELF), text(' here')], { message_id: 7, time: fresh() }));
+  assert.deepEqual(lines.slice(4).map((line) => line.content.text), ['@Vika here']);
+  assert.equal(c.state.route(`ob:group:${OTHER}:6`), null, 'nothing is stored for a group that is off');
+  for (const attempt of [
+    () => c.sendMessage({ chat_id: `group:${OTHER}`, content: markdown }),
+    () => c.replyMessage({ message_id: `ob:group:${OTHER}:5`, content: markdown }),
+    () => c.reactMessage({ message_id: `ob:group:${OTHER}:5`, emoji_type: 'OK' }),
+    () => c.retractMessage({ message_id: `ob:group:${OTHER}:5` }),
+    () => c.getMedia({ message_id: `ob:group:${OTHER}:5` }),
+    () => c.listChatMessages({ chat_id: `group:${OTHER}` }),
+  ]) await assert.rejects(attempt(), new RegExp(`OneBot is not connected to group:${OTHER}`));
+  assert.deepEqual((await c.listChats()).chats.map((item) => item.chat_id), [`group:${GROUP}`]);
+
+  // A group named "off" under the default: that group alone is out.
+  write({ groups: { [GROUP]: 'off' } });
+  await push(group([at(SELF), text(' back')], { group_id: OTHER, message_id: 8, time: fresh() }));
+  await push(group([at(SELF), text(' muted')], { message_id: 9, time: fresh() }));
+  assert.deepEqual(lines.slice(5).map((line) => line.content.text), ['@Vika back']);
+  await assert.rejects(c.sendMessage({ chat_id: `group:${GROUP}`, content: markdown }), /not connected to group:123456789/);
+  assert.deepEqual((await c.listChats()).chats.map((item) => item.chat_id), [`group:${OTHER}`]);
+
+  // The group list is asked for again only after a minute.
+  const asked = sent('get_group_list').length;
+  groups = [...groups, { group_id: 666666666, group_name: 'New' }];
+  time.advance(59_000);
+  assert.deepEqual((await c.listChats()).chats.map((item) => item.chat_id), [`group:${OTHER}`]);
+  assert.equal(sent('get_group_list').length, asked);
+  time.advance(1000);
+  assert.deepEqual((await c.listChats()).chats.map((item) => item.chat_id), [`group:${OTHER}`, 'group:666666666']);
+  assert.equal(sent('get_group_list').length, asked + 1);
+});
+
+test('client: a policy that turns a group off drops the lines waiting there, now and after it is turned on again', async (t) => {
+  const time = clock();
+  const OTHER = 555555555;
+  const { c, dir, lines, start, push } = await client(t, { time });
+  start();
+  const policyPath = path.join(dir, 'onebot', 'config.json');
+  let stamp = 1_700_000_000;
+  const write = (policy) => {
+    fs.writeFileSync(policyPath, JSON.stringify(policy));
+    stamp += 10;
+    fs.utimesSync(policyPath, stamp, stamp);
+  };
+  // Waiting: ambient lines in a named group and in one that is not named, context in a mention group.
+  await push(group([text('named ambient')], { message_id: 1, time: fresh() }));
+  await push(group([text('default ambient')], { group_id: OTHER, message_id: 2, time: fresh() }));
+  await push(group([text('quiet context')], { group_id: Number(QUIET_GROUP), message_id: 3, time: fresh() }));
+  assert.equal(c.state.pendingChats().length, 3);
+  // The named group off, the mention group off, and "*" off for the one not named.
+  write({ ...POLICY, groups: { '*': 'off', [GROUP]: 'off', [QUIET_GROUP]: 'off' } });
+  time.advance(60_000);
+  assert.deepEqual(lines, [], 'nothing waiting is delivered');
+  assert.deepEqual(c.state.pendingChats(), []);
+  // On again: only what arrives from now on is delivered.
+  write(POLICY);
+  await push(group([at(SELF), text(' named')], { message_id: 4, time: fresh() }));
+  await push(group([at(SELF), text(' default')], { group_id: OTHER, message_id: 5, time: fresh() }));
+  await push(group([text('Vika, quiet')], { group_id: Number(QUIET_GROUP), message_id: 6, time: fresh() }));
+  assert.deepEqual(lines.map((line) => line.content.text), ['@Vika named', '@Vika default', 'Vika, quiet']);
+
+  // Also while paused: the lines staged then are dropped at the next start, not released.
+  await c.stopSubscription();
+  await push(group([text('while paused')], { group_id: OTHER, message_id: 7, time: fresh() }));
+  await push(group([text('kept')], { message_id: 8, time: fresh() }));
+  write({ ...POLICY, groups: { ...POLICY.groups, '*': 'off' } });
+  start();
+  assert.deepEqual(lines.slice(3).map((line) => line.content.text), ['kept']);
+  assert.deepEqual(c.state.pendingChats(), []);
+});
+
+test('client: restart drops the lines waiting in a group the policy turned off meanwhile', async (t) => {
+  const OTHER = 555555555;
+  const { c, dir, push } = await client(t);
+  await push(group([text('before the restart')], { group_id: OTHER, message_id: 1, time: fresh() }));
+  await push(group([text('still on')], { message_id: 2, time: fresh() }));
+  assert.equal(c.state.pendingChats().length, 2);
+  const policyPath = path.join(dir, 'onebot', 'config.json');
+  fs.writeFileSync(policyPath, JSON.stringify({ ...POLICY, groups: { ...POLICY.groups, [OTHER]: 'off' } }));
+  fs.utimesSync(policyPath, 1_700_000_000, 1_700_000_000);
+  await c.stop();
+  const ws = sockets({ actions: { get_login_info: () => ok({ user_id: Number(SELF), nickname: 'Vika' }) } });
+  const next = new OneBotClient({ dataDir: dir, retentionMs: 86400_000, instance: 'onebot' }, null, quietLogger, { WebSocketImpl: ws.Socket });
+  t.after(() => next.stop());
+  await next.preflight();
+  assert.deepEqual(next.state.pendingChats().map((item) => item.chat), [`group:${GROUP}`]);
+  const lines = [];
+  next.startSubscription((line) => lines.push(JSON.parse(line)), () => {});
+  assert.deepEqual(lines.map((line) => line.content.text), ['still on']);
+});
+
+// The policy file with a fresh mtime each time, so a rewrite of the same size is noticed.
+function policyWriter(dir) {
+  const policyPath = path.join(dir, 'onebot', 'config.json');
+  let stamp = 1_700_000_000;
+  return (policy) => {
+    fs.writeFileSync(policyPath, JSON.stringify(policy));
+    stamp += 10;
+    fs.utimesSync(policyPath, stamp, stamp);
+  };
+}
+
+for (const [how, OTHER, mention] of [
+  ['through "*"', 555555555, { ...POLICY, groups: { ...POLICY.groups, '*': 'mention' } }],
+  ['by its own entry', Number(GROUP), { ...POLICY, groups: { ...POLICY.groups, [GROUP]: 'mention' } }],
+]) test(`client: a group set to "mention" ${how} turns its waiting chatter into context`, async (t) => {
+  const time = clock();
+  const { c, dir, lines, start, push } = await client(t, { time });
+  start();
+  const write = policyWriter(dir);
+  await push(group([text('waiting chatter')], { group_id: OTHER, message_id: 1, time: fresh() }));
+  assert.deepEqual(c.state.pendingChats(), [{ chat: `group:${OTHER}`, classes: new Set(['ambient']) }]);
+  write(mention);
+  time.advance(MAX_HOLD_MS * 2);
+  assert.deepEqual(lines, [], 'neither settleMs nor MAX_HOLD releases it');
+  assert.deepEqual(c.state.pendingChats(), [{ chat: `group:${OTHER}`, classes: new Set(['context']) }]);
+  await push(group([at(SELF), text(' now')], { group_id: OTHER, message_id: 2, time: fresh() }));
+  assert.deepEqual(lines.map((line) => line.content.text), ['waiting chatter', '@Vika now']);
+  assert.deepEqual(c.state.pendingChats(), []);
+});
+
+test('client notices a policy change without traffic: lines in a group turned off and on again stay deleted', async (t) => {
+  const time = clock();
+  const { c, dir, lines, start, push, ws } = await client(t, { time });
+  start();
+  const write = policyWriter(dir);
+  await push(group([text('before off')], { group_id: Number(QUIET_GROUP), message_id: 1, time: fresh() }));
+  assert.deepEqual(c.state.pendingChats().map((item) => item.chat), [`group:${QUIET_GROUP}`]);
+  const frames = ws.opened.at(-1).sent.length;
+  write({ ...POLICY, groups: { ...POLICY.groups, [QUIET_GROUP]: 'off' } });
+  // Only the poll runs: no line arrives, nothing is sent or listed.
+  time.advance(2000);
+  assert.equal(ws.opened.at(-1).sent.length, frames);
+  assert.deepEqual(c.state.pendingChats(), []);
+  write(POLICY);
+  await push(group([at(SELF), text(' back')], { group_id: Number(QUIET_GROUP), message_id: 2, time: fresh() }));
+  assert.deepEqual(lines.map((line) => line.content.text), ['@Vika back']);
+  // The poll ends with the subscription.
+  await c.stopSubscription();
+  assert.equal(c.poll, null);
 });
 
 test('Harness delivers OneBot lines and the outbox keeps one reply per decision', async (t) => {

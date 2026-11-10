@@ -136,6 +136,12 @@ export class OneBotState {
 
   delivered(seq) { this.db.prepare('DELETE FROM pending WHERE seq = ?').run(seq); }
 
+  // Every line waiting in a chat that is no longer connected.
+  discard(chat) { this.db.prepare('DELETE FROM pending WHERE chat = ?').run(chat); }
+
+  // A group set to "mention": the chatter waiting there only rides along now.
+  demote(chat) { this.db.prepare(`UPDATE pending SET class = 'context' WHERE chat = ? AND class = 'ambient'`).run(chat); }
+
   // Context lines of a chat older than `before` are dropped unseen, then all
   // but the newest `maxLines` of the rest, so an old line does not take the
   // place of a fresh one.

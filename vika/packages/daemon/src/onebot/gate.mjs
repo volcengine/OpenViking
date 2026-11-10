@@ -14,9 +14,10 @@ export const CONTEXT_LINES = 30;
 export const CONTEXT_AGE_MS = 6 * 60 * 60 * 1000;
 
 export class ReleaseGate {
-  // `settleMs()` is read on every decision, so a policy reload applies to
-  // lines already waiting. `release(chat)` must deliver every line staged in
-  // that chat; the gate counts the chat as released when it calls it. The
+  // `settleMs()` is read on every decision, before any chat is looked at, so
+  // a policy reload applies to lines already waiting. `release(chat)` must
+  // deliver every line staged in that chat; the gate counts the chat as
+  // released when it calls it. The
   // clock is monotonic: a wall clock stepped back would re-arm a waiting chat
   // for as long as it stepped, past MAX_HOLD.
   constructor({ settleMs, release, now = () => performance.now(), setTimer = setTimeout, clearTimer = clearTimeout }) {
@@ -67,16 +68,25 @@ export class ReleaseGate {
     this.run();
   }
 
+  // The chat's ambient lines are context now (its group was set to
+  // "mention"), so they no longer make it due. A direct line still does.
+  demoted(chat) {
+    const state = this.chats.get(chat);
+    if (!state || state.firstAmbient === null) return;
+    state.firstAmbient = null;
+    this.run();
+  }
+
   stop() {
     this.chats.clear();
     this.cancel();
   }
 
-  due(state) {
+  due(state, settleMs) {
     if (state.immediate) return -Infinity;
     if (state.firstAmbient === null) return null;
     const grace = state.grace ? state.lastRelease + TURN_GRACE_MS : -Infinity;
-    return Math.min(Math.max(state.lastActivity + this.settleMs(), grace), state.firstAmbient + MAX_HOLD_MS);
+    return Math.min(Math.max(state.lastActivity + settleMs, grace), state.firstAmbient + MAX_HOLD_MS);
   }
 
   // Releases every chat that is due, earliest first, then arms one timer for
@@ -87,10 +97,12 @@ export class ReleaseGate {
     this.releasing = true;
     try {
       for (;;) {
+        // Read first: a reload it notices may demote a chat (demoted).
+        const settleMs = this.settleMs();
         const now = this.now();
         let next = null;
         for (const [chat, state] of this.chats) {
-          const due = this.due(state);
+          const due = this.due(state, settleMs);
           if (due !== null && due <= now && (!next || due < next.due)) next = { chat, state, due };
         }
         if (!next) break;
@@ -104,9 +116,10 @@ export class ReleaseGate {
   }
 
   schedule() {
+    const settleMs = this.settleMs();
     let next = null;
     for (const state of this.chats.values()) {
-      const due = this.due(state);
+      const due = this.due(state, settleMs);
       if (due !== null && (next === null || due < next)) next = due;
     }
     if (next === this.timerAt) return;

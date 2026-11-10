@@ -570,11 +570,17 @@ binding are dropped. OneBot implementations give every connection every event
 and split nothing, so there is no receiver lease; another client may share the
 account.
 
-Only connected chats exist: the groups listed in the hand-edited
-`<dataDir>/onebot/config.json` (`ambient` or `mention`), and the owner's private
-chat, or every friend's under `"private": "friends"`. Other messages are
-dropped before anything is looked up or stored, and actions to other chats are
-refused. Each admitted message is classified as `direct`, `ambient`, `context`
+Only connected chats exist: every group the account is in that the
+hand-edited `<dataDir>/onebot/config.json` does not set to `off` (its mode is
+the group's own entry, else `"*"`, else `"ambient"`; the connected modes are
+`"ambient"` and `"mention"`), and the owner's private chat, or every friend's
+under `"private": "friends"`. Other messages are dropped before anything is
+looked up or stored, and actions to other chats are refused. The mode is read
+from the current policy on every decision, and while the subscription runs the
+file is also looked at every 2 s. When the Connector sees a policy that
+disconnects a chat, the lines waiting there are deleted; when it sees one that
+sets a connected group to `mention`, that group's waiting ambient lines become
+context. Each admitted message is classified as `direct`, `ambient`, `context`
 or dropped, and held in the state database. A direct line releases its chat at
 once; an ambient line makes it due after `settleMs` (default 3 s) of quiet,
 held further until 20 s after the previous release unless the agent has sent
@@ -627,7 +633,8 @@ downloads ask `get_image` / `get_file` first, then the segment's `url` (never
 its file name), at most 20 MiB, without redirects, and never from `localhost`
 or a loopback, link-local, private, shared or unspecified address literal; a
 forwarded chat is fetched with `get_forward_msg` and saved as a transcript of
-at most 200 messages and 64 KiB. `chat.list` lists connected groups from `get_group_list`;
+at most 200 messages and 64 KiB. `chat.list` lists the groups from `get_group_list`
+(asked at most once a minute) that the current policy does not set to `off`;
 `chat.messages` returns the newest 1–50 messages from
 `get_group_msg_history` / `get_friend_msg_history`, newest first, without a
 cursor, as context only. There is no catch-up read after downtime.

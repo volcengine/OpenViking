@@ -22,6 +22,13 @@ side conservative: it sends one message at a time, at most one every 1.2 s per c
 never answers private chats you have not connected. This lowers the risk but does not remove it. Use an account you
 can afford to lose, not your main one.
 
+A newly connected account follows every group it is in, and may speak in any of them. Any member of a followed group
+can address the agent, which runs commands and changes files in its workspace (see [Security](#security)). If the
+account sits in groups you do not want the agent to take part in, set `{"groups": {"*": "off"}}` (no group unless
+you name it) or `{"groups": {"*": "mention"}}` (every group, but only when addressed) in the
+[policy file](#the-policy-file). A change applies without a restart; to have it apply from the first message, write
+the file before you bind the account, since setup keeps a policy file that already exists.
+
 ## How it connects
 
 Vika is the client of the implementation's WebSocket server (forward WebSocket; "WebSocket 服务器" in NapCat).
@@ -86,8 +93,10 @@ shows a one-time code `vika-xxxxxxxx`.
 Send that code to the account from your own QQ, as a private message. Your QQ must be a friend of the account:
 temporary sessions and group messages do not count. The sender of the exact code becomes the owner. Messages from
 before the login started, other text and other chats do not bind anyone. Setup then lists the account's groups with
-their numbers, for the [policy file](#the-policy-file). The login gives up after five minutes. Nothing is saved
-until the owner is bound; a failed or cancelled login keeps the previous account.
+their numbers, which the [policy file](#the-policy-file) uses to change a group, and writes a starter policy file
+(`{"groups": {"*": "ambient"}}`) if there is none. A file that is already there is kept, and setup says, before and
+after binding, which mode it gives the groups it does not name. The login gives up after five minutes. Nothing is
+saved until the owner is bound; a failed or cancelled login keeps the previous account.
 
 The address, token, account, owner and the time of the first binding live in `<dataDir>/onebot/state.sqlite3`
 (mode 0600, directory 0700), never in `config.json`. So do reply routes, the names the agent has been shown, the ids
@@ -102,12 +111,14 @@ approvals (`发送 N`) and `/primary` work there. `/primary status` shows it as 
 
 ## The policy file
 
-Which groups the agent is in, and how closely it listens there, is set by hand in `<dataDir>/onebot/config.json`.
-Without the file, no group is connected and only the owner's private chat is.
+How closely the agent listens in each group, and which groups it stays out of, is set by hand in
+`<dataDir>/onebot/config.json`. By default every group the account is in is connected as `ambient`, including groups
+it joins later. Without the file, every group is followed that way, and of the private chats only the owner's is
+connected.
 
 ```json
 {
-  "groups": { "123456789": "ambient", "987654321": "mention" },
+  "groups": { "*": "mention", "123456789": "ambient", "987654321": "off" },
   "private": "owner",
   "commandPrefixes": ["#", "/rss"],
   "names": ["Vika"],
@@ -115,9 +126,25 @@ Without the file, no group is connected and only the owner's private chat is.
 }
 ```
 
+An entry under `groups` names a group by its number and sets its mode:
+
+- `"ambient"`: the agent reads every message and decides when to speak.
+- `"mention"`: the agent is woken only when addressed (an @mention, a quote-reply to its message, or one of
+  `names`), and then sees the chatter before that line as context.
+- `"off"`: the group is not connected. Its messages are dropped before anything is stored or looked up, the agent
+  cannot send, reply, react or retract there or read its history, and `list_chats` does not show it.
+
+The key `"*"` sets the mode of every group that is not named, and is `"ambient"` when absent. `{"*": "off"}`
+connects only the groups you name; `{"*": "mention"}` keeps the agent in every group but quiet until addressed.
+Any other key that is not a group number, and any other mode, is an error.
+
+**Before connecting an account that is in groups you do not trust,** set `"*"` to `"off"` or `"mention"`. With the
+default, a new account follows every group it is in and may speak in any of them, and any member of those groups can
+address the agent.
+
 | Key | Meaning | Default |
 | --- | --- | --- |
-| `groups` | Group number → `"ambient"` or `"mention"`. A group that is not listed is not connected: its messages are dropped before anything is stored or looked up, and the agent cannot send there | `{}` |
+| `groups` | Group number, or `"*"` for every group not named → `"ambient"`, `"mention"` or `"off"` | `{}`: every group `"ambient"` |
 | `private` | `"owner"`: only the owner's private chat is connected. `"friends"`: every friend's private chat is connected (never temporary sessions or strangers) | `"owner"` |
 | `commandPrefixes` | Text that starts with one of these is addressed to another program on the same account. The check is an exact, case-sensitive "starts with" on what was typed, after a leading quote, @account and whitespace. At most 50 entries | `[]` |
 | `names` | Other names people call the agent by. A group message whose text contains one anywhere, in any case, is addressed to it; the names in its @mentions of other people do not count. At most 10 entries | `[]` |
@@ -127,20 +154,33 @@ Entries in `commandPrefixes` and `names` are 1–32 characters of one-line text 
 `names` entry is a substring match, so a short name also matches inside longer words. @account always addresses the
 agent. The account's nickname does not, unless you list it in `names`.
 
-Unknown keys, repeated keys and invalid values are errors, so a typo cannot quietly disconnect a group. The file is
-at most 256 KiB. The Connector reads it again whenever it changes, with no restart. A changed file that does not
-parse keeps the last good policy and logs `onebot_policy_invalid`. An invalid file at startup fails the Connector's
-`check` with an error that names the file. Lines still waiting in a group you remove are never delivered.
+Unknown keys, repeated keys and invalid values are errors, so a typo cannot quietly change a group. The file is at
+most 256 KiB. The Connector reads it again whenever it changes, with no restart. A changed file that does not parse
+keeps the last good policy and logs `onebot_policy_invalid`. An invalid file at startup fails the Connector's
+`check` with an error that names the file. A group's mode is worked out from the current file each time, whether it
+comes from the group's own entry or from `"*"`.
+
+The Connector reads the file whenever a message arrives or the agent acts, at every start, and, while it runs, every
+2 s besides, so a change reaches the lines already waiting within a few seconds even in a silent chat. When the
+Connector sees a policy that disconnects a chat (a group set to `"off"`, by its own entry or by `"*"`, or a friend's
+private chat when `"private"` goes back to `"owner"`), the lines waiting in that chat are deleted, and connecting the
+chat again does not bring them back. A change that is undone before the Connector sees it, for example while the
+daemon is stopped, is never seen, and the lines stay. When it sees a still connected group set to `"mention"`, the
+unaddressed lines waiting there become context: they no longer wake the agent and go out with the next addressed
+line. Setting a group to `"ambient"` does not wake the agent for lines that arrived before: the context lines
+waiting there keep riding along with the next release. Lines that arrive after a change follow the new mode, and a
+new `settleMs` applies at once to the lines already waiting.
 
 ## Which messages reach the agent
 
 ### Classes
 
-The Connector admits a message only from a connected chat: a listed group (`sub_type: normal`) or a connected
-private chat (`sub_type: friend`). It then gives the message one of four classes:
+The Connector admits a message only from a connected chat: a group that is not `"off"` (`sub_type: normal`) or a
+connected private chat (`sub_type: friend`). It then gives the message one of four classes:
 
 | Message | Class |
 | --- | --- |
+| Any message in a group set to `"off"`, or in a private chat that is not connected | dropped, before anything is stored or looked up |
 | The echo of a message this Connector sent | dropped |
 | Private, sent from this account by another program or by hand | dropped |
 | Group, sent from this account by another program or by hand | context, shown as `sender=bot` |
@@ -198,7 +238,9 @@ With the default `settleMs`, a single unaddressed line in a quiet `ambient` grou
 it was sent. In a group where someone writes every two seconds, it reaches the model after 45 s.
 
 Lines that arrive while the Connector is paused are held too. After a restart, chats that hold a direct or ambient
-line are released at once; chats that hold only context wait for their next release. The Core still drops a line
+line are released at once; chats that hold only context wait for their next release. The lines of a chat the policy
+has disconnected in the meantime are deleted instead, and in a group it has set to `"mention"` the unaddressed lines
+are context. The Core still drops a line
 older than `VIKA_MAX_EVENT_AGE_MS` (24 h by default).
 
 ## Sharing the account with another program
@@ -228,7 +270,7 @@ would answer.
 
 | Tool | On OneBot |
 | --- | --- |
-| `send_message` | To a connected group, the owner, or under `"private": "friends"` a friend who has written to the account. Never to an arbitrary QQ number |
+| `send_message` | To a group that is not `"off"`, the owner, or under `"private": "friends"` a friend who has written to the account. Never to an arbitrary QQ number |
 | `reply_message` | Quote-reply (a `reply` segment). QQ has no threads. A file other than an image goes out unquoted, as its own message |
 | Text | Plain text, 1–4000 characters; the Core refuses longer text before anything is sent. Markdown markers are removed: emphasis, heading `#`s, backticks and code fences go (the code stays), and `[label](url)` becomes `label (url)`. Longer output should be split or sent as a file |
 | Files | Workspace files up to 20 MiB. PNG, JPEG, GIF and WebP (detected from the file's bytes) are sent as images; anything else as a file. The bytes travel in the message (`base64://`), so the implementation never opens a path or an address the model chose |
@@ -236,7 +278,7 @@ would answer.
 | `react_to_message` | Group messages only, on NapCat and LLOneBot (`set_msg_emoji_like`). Names: `OK`, `THUMBSUP`, `LGTM`, `THANKS`, `OnIt`, `SMILE`, `HEART`, `CLAP`, `MUSCLE`, `FIRE`, `PARTY`, `SOB`. The temporary `OnIt` is removed after the final answer |
 | `retract_message` | Only messages this Connector sent (`delete_msg`). QQ allows a recall for about two minutes |
 | `get_message_media` | Every attachment of a message, by its `msg=` id: images, files and videos, up to 20 MiB each. A forwarded chat comes back as a text transcript (`name: text` per message, at most 200 messages and 64 KiB) |
-| `list_chats` | The connected groups the account is in, filtered by name. Private chats are not listed |
+| `list_chats` | The groups the account is in that are not `"off"`, filtered by name. The group list is asked for at most once a minute; a policy change shows at once. Private chats are not listed |
 | `list_chat_messages` | The newest 1–50 messages (default 20) of a connected chat, newest first, including the account's own as `sender.type: bot`. There is no cursor and no older page. History is context only and never a decision |
 
 Inbound messages are rendered as text. An @ shows the person's group card or nickname; an unknown name is looked
@@ -274,7 +316,9 @@ link-local, private, shared (`100.64.0.0/10`) or unspecified range; host names a
 
 - **Connect only chats you trust.** Every member of a connected group, and under `"private": "friends"` every friend,
   can talk to an agent that runs commands and changes files in its workspace. The agent's prompt is not a security
-  boundary: anyone who can write to it can try to talk it into something.
+  boundary: anyone who can write to it can try to talk it into something. Every group the account is in is connected
+  unless the policy file sets it to `"off"`: use `{"groups": {"*": "off"}}` and name the groups you trust, or put the
+  agent on an account that is only in those groups.
 - **Run the instance isolated.** Use its own OS user, container or VM, with a workspace and credentials that are
   scoped to what this agent should touch. Do not give it your personal SSH keys, cloud credentials or other chat
   accounts.

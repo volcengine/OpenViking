@@ -4,7 +4,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { OneBotError, OneBotSocket, ONEBOT_VERSION } from './api.mjs';
 import { OneBotState } from './state.mjs';
-import { PolicyFile, admitted, classify } from './policy.mjs';
+import { PolicyFile, admitted, classify, groupMode } from './policy.mjs';
 import { CONTEXT_AGE_MS, CONTEXT_LINES, ReleaseGate } from './gate.mjs';
 import {
   chatOf, cleanName, groupChat, historyMessage, messageId, namedUsers, normalizeMessage, parseChat, parseMessageId, privateChat,
@@ -18,6 +18,13 @@ const NAME_LOOKUP_MS = 2_000;
 const NAME_LOOKUPS = 5;
 const NAME_RETRY_MS = 10 * 60_000;
 const FAILED_NAMES = 1000;
+// chat.list asks the implementation for the account's groups at most once a
+// minute, and keeps no more of them than any QQ account can be in.
+const GROUP_LIST_MS = 60_000;
+const GROUP_LIST = 5000;
+// While the subscription runs, the policy file is looked at this often even
+// when nothing else reads it, so a change reaches the waiting lines without traffic.
+const POLICY_POLL_MS = 2000;
 // The model names reactions as Lark does; QQ wants a face id. Every id below
 // is in the QQ face table NapCat and LLOneBot ship (face_config.json): a
 // system face by QSid, or an emoji by its code point (QCid). DONE and
@@ -63,6 +70,39 @@ export class OneBotClient {
     this.nextSendAt = new Map();
     this.actions = new AbortController();
     this.failedNames = new Map();
+    this.seenPolicy = null;
+    this.groupList = null;
+    this.poll = null;
+  }
+
+  // The policy as it is now. A policy that disconnects a chat (a group set to
+  // "off", "*": "off" for the groups not named, "private" back to "owner")
+  // deletes the lines waiting there the first time it is read, so they are
+  // not delivered later, when the chat may be connected again. One that sets
+  // a still connected group to "mention" turns its waiting ambient lines into
+  // context, so they no longer wake the agent.
+  policy() {
+    const policy = this.policyFile.current();
+    if (policy !== this.seenPolicy) {
+      this.seenPolicy = policy;
+      for (const { chat, classes } of this.state.pendingChats()) {
+        if (!admitted(policy, this.account, chat)) this.state.discard(chat);
+        else if (classes.has('ambient') && groupMode(policy, chat) === 'mention') {
+          this.state.demote(chat);
+          this.gate?.demoted(chat);
+        }
+      }
+    }
+    return policy;
+  }
+
+  // Reads the policy every POLICY_POLL_MS while the subscription runs.
+  pollPolicy() {
+    this.poll = this.setTimer(() => {
+      try { this.policy(); } catch { this.logger.warn('onebot_policy_poll_failed'); }
+      if (this.poll !== null) this.pollPolicy();
+    }, POLICY_POLL_MS);
+    this.poll?.unref?.();
   }
 
   async preflight() {
@@ -70,7 +110,7 @@ export class OneBotClient {
     if (!this.account) throw new Error('OneBot is not connected; run vika login onebot <instance> first');
     // An invalid policy file is an error here, naming the file; later edits
     // that do not parse keep the last good policy.
-    this.policyFile.current();
+    this.policy();
     this.connection = new AbortController();
     this.socket = new OneBotSocket({ url: this.account.url, token: this.account.token, WebSocketImpl: this.WebSocketImpl,
       logger: this.logger, callTimeoutMs: this.config.sendTimeoutMs ?? 30_000 });
@@ -110,10 +150,13 @@ export class OneBotClient {
     this.stopping = false;
     this.onLine = onLine;
     this.onUnexpectedExit = onUnexpectedExit;
-    this.gate = new ReleaseGate({ settleMs: () => this.policyFile.current().settleMs, release: (chat) => this.release(chat),
+    this.gate = new ReleaseGate({ settleMs: () => this.policy().settleMs, release: (chat) => this.release(chat),
       now: this.now, setTimer: this.setTimer, clearTimer: this.clearTimer });
-    // Lines staged before a restart or while paused have waited long enough.
+    // Lines staged before a restart or while paused have waited long enough,
+    // unless the policy has since disconnected their chat.
+    this.policy();
     for (const { chat, classes } of this.state.pendingChats()) this.gate.resume(chat, classes);
+    this.pollPolicy();
   }
 
   // Frames arrive in order; each message is staged before the next is read.
@@ -130,7 +173,7 @@ export class OneBotClient {
     const account = this.account;
     const chat = chatOf(raw, account.selfId);
     // Chats that are not connected are dropped before anything is looked up or stored.
-    if (!chat || !admitted(this.policyFile.current(), account, chat)) return;
+    if (!chat || !admitted(this.policy(), account, chat)) return;
     const line = normalizeMessage(raw, { account, instance: this.config.instance ?? 'onebot', names: await this.names(raw, chat) });
     if (!line) return;
     // The echo of a send can arrive before the send's own answer: let the
@@ -142,7 +185,7 @@ export class OneBotClient {
       kind: parseChat(chat).kind, chat, self: line.self, own: line.self && this.state.isSent(chat, line.mid),
       fromOwner: line.userId === account.ownerId, text: line.bareText, spoken: line.spokenText, atSelf: line.atSelf,
       replyToOwn: Boolean(quoted && this.state.isSent(quoted.chat, quoted.mid)),
-    }, this.policyFile.current());
+    }, this.policy());
     if (cls === 'drop') return;
     this.state.recordRoute(line.id, { chat, mid: line.mid, files: line.files });
     for (const [user, name] of line.people) this.state.rememberPerson(chat, user, name);
@@ -153,11 +196,11 @@ export class OneBotClient {
   }
 
   // Every line staged in the chat, in arrival order. The gate calls this and
-  // must not see it throw. A chat the policy no longer lists loses its lines.
+  // must not see it throw. A chat the policy no longer connects loses its lines.
   release(chat) {
     try {
       this.state.pruneContext(chat, { maxLines: CONTEXT_LINES, before: Date.now() - CONTEXT_AGE_MS });
-      const connected = admitted(this.policyFile.current(), this.account, chat);
+      const connected = admitted(this.policy(), this.account, chat);
       for (const { seq, envelope } of this.state.pending(chat)) {
         if (connected) this.onLine(JSON.stringify(envelope));
         this.state.delivered(seq);
@@ -207,12 +250,12 @@ export class OneBotClient {
     return AbortSignal.any([this.actions.signal, AbortSignal.timeout(Math.max(1, (this.config.sendTimeoutMs ?? 30_000) - 500))]);
   }
 
-  // Outbound reaches connected chats only: a listed group, the owner, and
-  // under "private": "friends" a friend who has written to this account.
+  // Outbound reaches connected chats only: a group that is not "off", the
+  // owner, and under "private": "friends" a friend who has written to this account.
   target(chat) {
     const parsed = parseChat(chat);
     if (!parsed) throw new Error('OneBot chat_id must be group:<id> or private:<id>');
-    const open = admitted(this.policyFile.current(), this.account, chat) && (parsed.kind === 'group'
+    const open = admitted(this.policy(), this.account, chat) && (parsed.kind === 'group'
       || parsed.id === this.account.ownerId || this.state.people(chat).some((person) => person.id === parsed.id));
     if (!open) throw new Error(`OneBot is not connected to ${chat}`);
     return parsed;
@@ -356,20 +399,31 @@ export class OneBotClient {
     return { media };
   }
 
-  // The connected groups among those the account is in.
+  // The connected groups among those the account is in: every one that is not
+  // "off", by the policy at the time of the listing.
   async listChats({ query = '', limit = 100, cursor } = {}) {
     if (cursor !== undefined) throw new Error('OneBot chat lists have no cursor');
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error('OneBot limit must be between 1 and 500');
     if (typeof query !== 'string' || query.length > 200) throw new Error('Invalid OneBot chat query');
-    const list = await this.socket.call('get_group_list', {}, this.actionSignal());
-    if (!Array.isArray(list)) throw new Error('OneBot returned an invalid group list');
-    const policy = this.policyFile.current();
+    const groups = await this.groups();
+    const policy = this.policy();
     const needle = query.toLocaleLowerCase();
-    const chats = list.map((group) => ({ chat: groupChat(group?.group_id), name: cleanName(group?.group_name) }))
-      .filter(({ chat, name }) => parseChat(chat) && admitted(policy, this.account, chat)
-        && (name ?? '').toLocaleLowerCase().includes(needle))
+    const chats = groups.filter(({ chat, name }) => admitted(policy, this.account, chat) && (name ?? '').toLocaleLowerCase().includes(needle))
       .map(({ chat, name }) => ({ chat_id: chat, name, chat_status: 'normal' }));
     return { chats: chats.slice(0, limit), has_more: chats.length > limit, next_cursor: null };
+  }
+
+  // The account's groups from get_group_list, kept for a minute: the model
+  // may list chats several times in one turn, and a group the account has
+  // joined meanwhile is listed a minute later at most.
+  async groups() {
+    if (this.groupList && this.now() < this.groupList.until) return this.groupList.groups;
+    const list = await this.socket.call('get_group_list', {}, this.actionSignal());
+    if (!Array.isArray(list)) throw new Error('OneBot returned an invalid group list');
+    const groups = list.slice(0, GROUP_LIST).map((group) => ({ chat: groupChat(group?.group_id), name: cleanName(group?.group_name) }))
+      .filter(({ chat }) => parseChat(chat));
+    this.groupList = { groups, until: this.now() + GROUP_LIST_MS };
+    return groups;
   }
 
   // The newest messages of a connected chat, newest first. OneBot history
@@ -405,6 +459,8 @@ export class OneBotClient {
     this.running = false;
     this.gate?.stop();
     this.gate = null;
+    if (this.poll !== null) this.clearTimer(this.poll);
+    this.poll = null;
   }
 
   // Outstanding actions are cancelled first, so a send stuck on its answer

@@ -5,12 +5,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseUniqueJson } from '../unique-json.mjs';
 
-// The owner's hand-written policy: which groups the agent is in and how
-// closely it listens there. A typo must fail loudly rather than silently
-// disconnect a group, so unknown keys and repeated keys are errors.
+// The owner's hand-written policy: how closely the agent listens in each
+// group, and which groups it stays out of. A typo must fail loudly rather than
+// silently change a group, so unknown keys and repeated keys are errors.
 
 const KEYS = new Set(['groups', 'private', 'commandPrefixes', 'names', 'settleMs']);
-const MODES = new Set(['ambient', 'mention']);
+const MODES = new Set(['ambient', 'mention', 'off']);
 const PRIVATE = new Set(['owner', 'friends']);
 const FILE_BYTES = 256 * 1024;
 const ENTRY_CHARS = 32;
@@ -37,18 +37,23 @@ export function parsePolicy(text) {
   for (const key of Object.keys(value)) if (!KEYS.has(key)) throw new Error(`OneBot policy key ${label(key)} is unknown`);
   const groupsInput = value.groups === undefined ? {} : value.groups;
   if (!groupsInput || typeof groupsInput !== 'object' || Array.isArray(groupsInput)) throw new Error('OneBot policy groups must be an object');
+  // A group that is not named takes the mode of "*", which is "ambient" unless set.
   const groups = new Map();
+  let otherGroups = 'ambient';
   for (const [id, mode] of Object.entries(groupsInput)) {
-    if (!/^[1-9]\d{0,15}$/.test(id) || !Number.isSafeInteger(Number(id))) throw new Error(`OneBot policy group id ${label(id)} must be a group number`);
-    if (!MODES.has(mode)) throw new Error(`OneBot policy group ${id} must be "ambient" or "mention"`);
-    groups.set(id, mode);
+    if (id !== '*' && (!/^[1-9]\d{0,15}$/.test(id) || !Number.isSafeInteger(Number(id)))) {
+      throw new Error(`OneBot policy group id ${label(id)} must be a group number or "*"`);
+    }
+    if (!MODES.has(mode)) throw new Error(`OneBot policy group ${id} must be "ambient", "mention" or "off"`);
+    if (id === '*') otherGroups = mode;
+    else groups.set(id, mode);
   }
   const privateChats = value.private === undefined ? 'owner' : value.private;
   if (!PRIVATE.has(privateChats)) throw new Error('OneBot policy private must be "owner" or "friends"');
   const settleMs = value.settleMs === undefined ? 3000 : value.settleMs;
   if (!Number.isInteger(settleMs) || settleMs < 0 || settleMs > 60_000) throw new Error('OneBot policy settleMs must be an integer from 0 to 60000');
   return Object.freeze({
-    groups, private: privateChats, commandPrefixes: entries(value.commandPrefixes, 'commandPrefixes', 50),
+    groups, otherGroups, private: privateChats, commandPrefixes: entries(value.commandPrefixes, 'commandPrefixes', 50),
     names: entries(value.names, 'names', 10), settleMs,
   });
 }
@@ -57,8 +62,8 @@ export const EMPTY_POLICY = parsePolicy('{}');
 
 // `<dataDir>/onebot/config.json`, read again whenever it changes. A changed
 // file that does not parse keeps the last good policy, because a half-saved
-// edit must not drop every group; with no good policy yet it is an error.
-// Missing is the empty policy.
+// edit must not change every group; with no good policy yet it is an error.
+// Missing is the empty policy: every group ambient, the owner's private chat.
 export class PolicyFile {
   constructor(dataDir, logger = null) {
     if (!path.isAbsolute(dataDir)) throw new Error('OneBot data directory must be absolute');
@@ -96,19 +101,23 @@ export class PolicyFile {
   }
 }
 
+// A group's own entry, else "*". Null for a group that is "off" and for
+// anything that is not a group: neither is connected.
 export function groupMode(policy, chat) {
-  const match = /^group:(\d+)$/.exec(String(chat ?? ''));
-  return (match && policy.groups.get(match[1])) ?? null;
+  const match = /^group:([1-9]\d{0,15})$/.exec(String(chat ?? ''));
+  if (!match || !Number.isSafeInteger(Number(match[1]))) return null;
+  const mode = policy.groups.get(match[1]) ?? policy.otherGroups;
+  return mode === 'off' ? null : mode;
 }
 
-// Which chats exist for the agent: the groups the policy lists, and the
+// Which chats exist for the agent: every group that is not "off", and the
 // owner's private chat or, with `"private": "friends"`, every private chat
 // (normalizeMessage keeps friends only). Everything else is neither
 // delivered nor answered.
 export function admitted(policy, account, chat) {
   const match = /^(group|private):(\d+)$/.exec(String(chat ?? ''));
   if (!match || !account) return false;
-  if (match[1] === 'group') return policy.groups.has(match[2]);
+  if (match[1] === 'group') return groupMode(policy, chat) !== null;
   return match[2] === String(account.ownerId) || policy.private === 'friends';
 }
 

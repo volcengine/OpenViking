@@ -44,7 +44,7 @@ import { IM_LABELS, connectorsOf, ignoredFieldsNotice, imList, primaryMeaning } 
 import { connectTelegram } from './telegram.mjs';
 import { connectQQ } from './qq.mjs';
 import { connectSlack } from './slack.mjs';
-import { connectOneBot, policyPath } from './onebot.mjs';
+import { connectOneBot, groupDefault, policyPath } from './onebot.mjs';
 
 // `vika setup`: add, change or remove an instance. A new instance is asked
 // question by question; a change is a list of every setting with its current
@@ -2065,8 +2065,14 @@ async function setupFlow({
   }
   if (newIms.includes('onebot')) {
     const policy = shortenHome(policyPath(plan.dataDir), homeDir);
-    next.push([IM_LABELS.onebot, t(`在 QQ 里私聊这个号发任务；要它进群，把群号写进 ${policy}`,
-      `Message the account in a private QQ chat; to bring it into a group, list the group in ${policy}`)]);
+    // What is in force: the default, or what a policy file the owner wrote says.
+    const kept = groupDefault(plan.dataDir);
+    next.push([IM_LABELS.onebot, kept === null ? t(`在 QQ 里私聊这个号发任务；它会跟进所在的每个群，在 ${policy} 里可以把群改成 "mention" 或 "off"`,
+      `Message the account in a private QQ chat; it follows every group it is in, and ${policy} can set a group to "mention" or "off"`)
+      : kept === 'invalid' ? t(`在 QQ 里私聊这个号发任务；${policy} 保留不动，它读不成有效的策略文件`,
+        `Message the account in a private QQ chat; ${policy} is kept as it is, and could not be read as a valid policy`)
+        : t(`在 QQ 里私聊这个号发任务；${policy} 里没写的群按 "${kept}"，写了的群各按自己那一项`,
+          `Message the account in a private QQ chat; groups ${policy} does not name are "${kept}", and a group it names follows its own entry`)]);
   }
   if (!current) {
     next.push([t('控制台', 'Console'), t(`http://127.0.0.1:${WEB_PORT}  每一轮在做什么都在这里`, `http://127.0.0.1:${WEB_PORT}  what every turn did`)]);
