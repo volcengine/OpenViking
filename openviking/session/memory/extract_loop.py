@@ -994,6 +994,23 @@ class ExtractLoop:
                 )
                 if not replacement_uri:
                     replacement_uri = page_id_map.resolve(replacement_page_id)
+                if not replacement_uri:
+                    errors.append(
+                        f"Unresolved replacement page_id {replacement_page_id} for {delete_uri}"
+                    )
+                    continue
+                if replacement_uri == delete_uri:
+                    # Distinct proposed pages can resolve to the same existing file.
+                    if replacement_page_id == delete_id.delete_page_id or not any(
+                        op.page_id == replacement_page_id
+                        and op.uris == [delete_uri]
+                        and not op.resolution_skip
+                        for op in upsert_operations
+                    ):
+                        errors.append(
+                            f"Delete references its own URI without a surviving update: {delete_uri}"
+                        )
+                    continue
 
             if all(file.uri != old_content.uri for file in delete_file_contents):
                 delete_file_contents.append(old_content)

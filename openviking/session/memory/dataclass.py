@@ -166,6 +166,8 @@ class MemoryOperationSource(BaseModel):
     session_id: Optional[str] = None
     archive_uri: Optional[str] = None
     task_id: Optional[str] = None
+    # Contributing tasks for a merged write. Multiple contributors have no single task_id.
+    task_ids: List[str] = Field(default_factory=list)
     trace_id: Optional[str] = None
     extracted_at: Optional[str] = None
 
