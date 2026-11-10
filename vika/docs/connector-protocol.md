@@ -554,7 +554,10 @@ connection carries events and `echo`-correlated action calls. The token goes in
 an `Authorization: Bearer` header; an address carrying `access_token` is
 refused. A rejected token (retcode 1403, close 1008) fails the worker; other
 disconnects reconnect after 1, 2, 5, 10, then every 30 s, and a connection
-silent for twice the announced heartbeat interval plus 10 s is replaced. The
+silent for twice the announced heartbeat interval plus 10 s is replaced. Each
+connection asks `get_login_info` before events or actions pass through it;
+another account there fails the worker ("OneBot account changed"), and one
+that does not answer within 10 s is replaced, its events dropped. The
 socket opens at `check` and stays open until `stop`, so `pause` keeps actions
 available. Setup, the policy file and the implementation differences are in
 [OneBot Connector](onebot-connector.md).
@@ -605,7 +608,8 @@ kept), an event `<self>:<chat>:<message_id>:<time in seconds>` so that a reused
 hash is a new event, and `conversation.tenant_id` is the account. `time` is
 read as seconds, or as milliseconds above 10^11. Segments are rendered to text:
 @mentions by group card or nickname (`get_group_member_info` for at most 5
-people within 2 s per line, failures remembered for 10 minutes; at most 100
+people within 2 s per line, looked up as lines arrive with at most 5 lookups
+at once, failures remembered for 10 minutes; at most 100
 `mentions`, the account's own kept), a quote as `parent_id`,
 images, files, videos and forwarded chats as attachment references (at most
 10), stickers, faces, voice and share cards as short markers; text is cut at
@@ -637,4 +641,6 @@ at most 200 messages and 64 KiB. `chat.list` lists the groups from `get_group_li
 (asked at most once a minute) that the current policy does not set to `off`;
 `chat.messages` returns the newest 1–50 messages from
 `get_group_msg_history` / `get_friend_msg_history`, newest first, without a
-cursor, as context only. There is no catch-up read after downtime.
+cursor, as context only; private history leaves out what classification drops
+there live (command prefixes, the account's lines the Connector did not send,
+a stranger's `/`). There is no catch-up read after downtime.

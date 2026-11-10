@@ -16,6 +16,7 @@ import { sanitizeMemberName } from '../roster.mjs';
 const CONNECT_MS = 10_000;
 const NAME_LOOKUP_MS = 2_000;
 const NAME_LOOKUPS = 5;
+const NAME_LOOKUPS_AT_ONCE = 5;
 const NAME_RETRY_MS = 10 * 60_000;
 const FAILED_NAMES = 1000;
 // chat.list asks the implementation for the account's groups at most once a
@@ -39,6 +40,15 @@ function within(ms, promise, message) {
   let timer;
   const expired = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); });
   return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
+}
+
+// Settles as `promise` does, or rejects with `error()` once `signal` aborts.
+function unless(signal, promise, error) {
+  if (signal.aborted) return Promise.reject(error());
+  let aborted;
+  const cancelled = new Promise((_, reject) => { aborted = () => reject(error()); });
+  signal.addEventListener('abort', aborted, { once: true });
+  return Promise.race([promise, cancelled]).finally(() => signal.removeEventListener('abort', aborted));
 }
 
 // A QQ account over OneBot v11. The socket opens at preflight and stays open
@@ -70,6 +80,7 @@ export class OneBotClient {
     this.nextSendAt = new Map();
     this.actions = new AbortController();
     this.failedNames = new Map();
+    this.lookingUp = 0;
     this.seenPolicy = null;
     this.groupList = null;
     this.poll = null;
@@ -116,21 +127,19 @@ export class OneBotClient {
       logger: this.logger, callTimeoutMs: this.config.sendTimeoutMs ?? 30_000 });
     let ready;
     const opened = new Promise((resolve) => { ready = resolve; });
-    const run = this.socket.run((raw) => this.receive(raw), this.connection.signal, { onReady: () => ready() });
+    // Every connection, a reconnect too, is checked before anything goes through it.
+    const run = this.socket.run((raw) => this.receive(raw), this.connection.signal, { onReady: (reopen) => {
+      this.identity = this.verify(reopen);
+      ready();
+    } });
     // Plain disconnects reconnect inside the socket; what ends it (a rejected
     // token) fails a running worker.
-    this.socketDone = run.catch((error) => {
-      this.socketFailure = error;
-      if (this.running && !this.stopping) {
-        this.running = false;
-        this.onUnexpectedExit({ code: 1, signal: null, stderr: error.message });
-      }
-    });
+    this.socketDone = run.catch((error) => this.fail(error));
     try {
       await within(CONNECT_MS, Promise.race([opened, run]),
         'Could not connect to the OneBot WebSocket server; check its address, that it is running and the access token');
-      const info = await this.socket.call('get_login_info', {}, AbortSignal.timeout(CONNECT_MS));
-      if (String(info?.user_id ?? '') !== this.account.selfId) throw new Error('OneBot account changed; authorize again');
+      const unverified = await this.identity;
+      if (unverified) throw unverified;
       this.state.prune(Date.now() - this.config.retentionMs);
       return { version: ONEBOT_VERSION, self: { id: this.account.selfId },
         owner: { id: this.account.ownerId, target: { chat_id: privateChat(this.account.ownerId) } } };
@@ -139,6 +148,55 @@ export class OneBotClient {
       await this.socketDone;
       throw error;
     }
+  }
+
+  // Ends the socket for good: a running worker fails, a stopped one fails its next start.
+  fail(error) {
+    this.socketFailure ??= error;
+    if (this.running && !this.stopping) {
+      this.running = false;
+      this.onUnexpectedExit({ code: 1, signal: null, stderr: error.message });
+    }
+    return error;
+  }
+
+  // Asks a new connection who is logged in: the server at the stored address
+  // may come back as another QQ account, whose sends and history must not
+  // pass for this one's. Asked once per connection: resolves null once it is
+  // this account, else why not. A connection that does not answer within
+  // CONNECT_MS is closed, and the socket opens a new one, asked again.
+  verify(reopen) {
+    const timeout = new AbortController();
+    const timer = this.setTimer(() => timeout.abort(), CONNECT_MS);
+    return this.socket.call('get_login_info', {}, timeout.signal).then((info) => {
+      if (String(info?.user_id ?? '') === this.account.selfId) return null;
+      this.connection.abort();
+      return this.fail(new Error('OneBot account changed; authorize again'));
+    }, (error) => {
+      reopen();
+      return error;
+    }).finally(() => this.clearTimer(timer));
+  }
+
+  // Waits for the check of the current connection, or of the next one if it
+  // is reopened meanwhile, until `signal` gives up or the client stops; an
+  // action given up on here was not sent.
+  async verified(action, signal) {
+    const cancel = signal ? AbortSignal.any([signal, this.actions.signal]) : this.actions.signal;
+    for (;;) {
+      const seen = this.identity;
+      const unverified = await unless(cancel, seen, () => new OneBotError(`OneBot ${action} was cancelled before it was sent`));
+      if (this.socketFailure) throw this.socketFailure;
+      if (seen !== this.identity) continue;
+      if (!unverified) return;
+      throw new OneBotError(`OneBot could not confirm the logged-in account; ${action} was not sent`);
+    }
+  }
+
+  // Every action goes through here, so none reaches an unchecked connection.
+  async call(action, params, signal) {
+    await this.verified(action, signal);
+    return this.socket.call(action, params, signal);
   }
 
   get subscriptionRunning() { return this.running; }
@@ -159,13 +217,22 @@ export class OneBotClient {
     this.pollPolicy();
   }
 
-  // Frames arrive in order; each message is staged before the next is read.
+  // Frames arrive in order, and their messages are staged in that order,
+  // none before the account of the connection it came on is checked, and
+  // none from a connection whose check failed. A message's names are looked
+  // up as it arrives, beside those of the messages before it, so a slow
+  // lookup holds the next messages back by its own budget at most.
   receive(raw) {
     if (raw.post_type !== 'message' && raw.post_type !== 'message_sent') return;
-    this.inbound = this.inbound.then(() => this.stage(raw)).catch(() => this.logger.warn('onebot_message_rejected'));
+    const named = this.identity.then((unverified) => (unverified || this.socketFailure ? null : this.names(raw)));
+    named.catch(() => {});
+    this.inbound = this.inbound.then(async () => {
+      const names = await named;
+      if (names) await this.stage(raw, names);
+    }).catch(() => this.logger.warn('onebot_message_rejected'));
   }
 
-  async stage(raw) {
+  async stage(raw, names) {
     if (typeof raw.message === 'string' && !this.stringFormat) {
       this.stringFormat = true;
       this.logger.warn('onebot_string_format', { hint: 'set the OneBot message format (messagePostFormat) to array' });
@@ -174,7 +241,7 @@ export class OneBotClient {
     const chat = chatOf(raw, account.selfId);
     // Chats that are not connected are dropped before anything is looked up or stored.
     if (!chat || !admitted(this.policy(), account, chat)) return;
-    const line = normalizeMessage(raw, { account, instance: this.config.instance ?? 'onebot', names: await this.names(raw, chat) });
+    const line = normalizeMessage(raw, { account, instance: this.config.instance ?? 'onebot', names });
     if (!line) return;
     // The echo of a send can arrive before the send's own answer: let the
     // send on the socket settle, and its id be recorded, before deciding
@@ -189,6 +256,12 @@ export class OneBotClient {
     if (cls === 'drop') return;
     this.state.recordRoute(line.id, { chat, mid: line.mid, files: line.files });
     for (const [user, name] of line.people) this.state.rememberPerson(chat, user, name);
+    // A friend without a display name has written all the same, and target()
+    // knows that from this table; the empty name is shown nowhere. In a group
+    // a known entry would stop the person's card from being looked up.
+    if (parseChat(chat).kind === 'private' && !line.self && !line.people.some(([user]) => user === line.userId)) {
+      this.state.rememberPerson(chat, line.userId, '');
+    }
     const at = Date.now();
     this.state.stage({ chat, cls, at, envelope: line.envelope });
     this.state.pruneContext(chat, { maxLines: CONTEXT_LINES, before: at - CONTEXT_AGE_MS });
@@ -212,22 +285,29 @@ export class OneBotClient {
 
   // Display names for the line's @mentions: someone already shown in this
   // chat, else their group card, for a few people per line within a short
-  // budget, since every line waits for this. An id without a name stays an id.
-  async names(raw, chat) {
+  // budget, since every line waits for this, and while no more than a few
+  // lookups are under way, so a burst of new names cannot pile them up. An
+  // id without a name stays an id.
+  async names(raw) {
     const names = new Map();
+    const chat = chatOf(raw, this.account.selfId);
+    if (!chat || !admitted(this.policy(), this.account, chat)) return names;
     const ids = [...namedUsers(raw)].filter((id) => id !== this.account.selfId);
     if (!ids.length) return names;
     const { kind, id: group } = parseChat(chat);
     const known = new Map(this.state.people(chat).map((person) => [person.id, person.name]));
-    const signal = AbortSignal.timeout(NAME_LOOKUP_MS);
+    const budget = new AbortController();
+    const timer = this.setTimer(() => budget.abort(), NAME_LOOKUP_MS);
     let lookups = 0;
     for (const id of ids) {
       if (known.has(id)) { names.set(id, known.get(id)); continue; }
       const key = `${chat}:${id}`;
-      if (kind !== 'group' || (this.failedNames.get(key) ?? 0) > Date.now() || signal.aborted || lookups >= NAME_LOOKUPS) continue;
+      if (kind !== 'group' || (this.failedNames.get(key) ?? 0) > Date.now() || budget.signal.aborted || lookups >= NAME_LOOKUPS
+        || this.lookingUp >= NAME_LOOKUPS_AT_ONCE) continue;
       lookups += 1;
+      this.lookingUp += 1;
       try {
-        const member = await this.socket.call('get_group_member_info', { group_id: Number(group), user_id: Number(id) }, signal);
+        const member = await this.call('get_group_member_info', { group_id: Number(group), user_id: Number(id) }, budget.signal);
         const name = cleanName(member?.card) ?? cleanName(member?.nickname);
         if (!name) throw new Error('no name');
         names.set(id, name);
@@ -241,8 +321,9 @@ export class OneBotClient {
           this.failedNames.delete(entry);
         }
         this.failedNames.set(key, now + NAME_RETRY_MS);
-      }
+      } finally { this.lookingUp -= 1; }
     }
+    this.clearTimer(timer);
     return names;
   }
 
@@ -298,7 +379,7 @@ export class OneBotClient {
           const startedAt = this.now();
           let sent;
           try {
-            sent = await this.socket.call(kind === 'group' ? 'send_group_msg' : 'send_private_msg',
+            sent = await this.call(kind === 'group' ? 'send_group_msg' : 'send_private_msg',
               { [kind === 'group' ? 'group_id' : 'user_id']: Number(id), message }, signal);
           } finally { this.nextSendAt.set(chat, Date.now() + this.paceMs); }
           const raw = sent?.message_id;
@@ -306,7 +387,9 @@ export class OneBotClient {
           const mid = parseMessageId(result)?.mid;
           if (!mid) throw new Error('OneBot send returned no message id; delivery is uncertain');
           this.state.recordSent(chat, mid);
-          this.state.recordRoute(result, { chat, mid });
+          // A send has no attachments to download, whatever an older
+          // message with the same id had.
+          this.state.recordRoute(result, { chat, mid, files: [] });
           this.gate?.sent(chat, startedAt);
           return { message_id: result, chat_id: chat };
         } finally { settled(); }
@@ -370,7 +453,7 @@ export class OneBotClient {
   // set_msg_emoji_like is NapCat's and LLOneBot's; Lagrange has none.
   async reaction(mid, emoji, set) {
     try {
-      await this.socket.call('set_msg_emoji_like', { message_id: Number(mid), emoji_id: emoji, set }, this.actionSignal());
+      await this.call('set_msg_emoji_like', { message_id: Number(mid), emoji_id: emoji, set }, this.actionSignal());
     } catch (error) {
       if (error instanceof OneBotError && error.unsupported) throw new Error('Reactions are not available on this OneBot implementation');
       throw error;
@@ -381,7 +464,7 @@ export class OneBotClient {
   async retractMessage({ message_id: id }) {
     const { chat, mid } = this.message(id);
     if (!this.state.isSent(chat, mid)) throw new Error('OneBot retracts only messages this agent sent');
-    await this.socket.call('delete_msg', { message_id: Number(mid) }, this.actionSignal());
+    await this.call('delete_msg', { message_id: Number(mid) }, this.actionSignal());
     return { message_id: id, retracted: true };
   }
 
@@ -393,7 +476,7 @@ export class OneBotClient {
     const signal = this.actionSignal();
     const media = [];
     for (const file of files) {
-      media.push(await fetchMedia({ socket: this.socket, fetchImpl: this.fetchImpl, file, chat, account: this.account,
+      media.push(await fetchMedia({ socket: this, fetchImpl: this.fetchImpl, file, chat, account: this.account,
         directory: this.state.mediaDirectory, signal }));
     }
     return { media };
@@ -418,7 +501,7 @@ export class OneBotClient {
   // joined meanwhile is listed a minute later at most.
   async groups() {
     if (this.groupList && this.now() < this.groupList.until) return this.groupList.groups;
-    const list = await this.socket.call('get_group_list', {}, this.actionSignal());
+    const list = await this.call('get_group_list', {}, this.actionSignal());
     if (!Array.isArray(list)) throw new Error('OneBot returned an invalid group list');
     const groups = list.slice(0, GROUP_LIST).map((group) => ({ chat: groupChat(group?.group_id), name: cleanName(group?.group_name) }))
       .filter(({ chat }) => parseChat(chat));
@@ -433,16 +516,23 @@ export class OneBotClient {
     if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error('OneBot limit must be between 1 and 50');
     if (cursor !== undefined) throw new Error('OneBot history has no cursor; it returns the newest messages only');
     const { kind, id } = this.target(chat);
-    const page = await this.socket.call(kind === 'group' ? 'get_group_msg_history' : 'get_friend_msg_history',
+    const page = await this.call(kind === 'group' ? 'get_group_msg_history' : 'get_friend_msg_history',
       { [kind === 'group' ? 'group_id' : 'user_id']: Number(id), count: limit }, this.actionSignal());
     if (!Array.isArray(page?.messages)) throw new Error('OneBot returned an invalid message list');
     // The whole page is validated before any route is cached.
     for (const raw of page.messages) historyMessage(raw, { account: this.account, chat });
     const names = new Map(this.state.people(chat).map((person) => [person.id, person.name]));
+    // A private chat's history leaves out what its live lines leave out
+    // (classify): lines to another program on the account, what the account
+    // sent there that this connector did not, a stranger's `/` line. Neither
+    // their text nor their attachments are kept.
+    const policy = this.policy();
+    const hidden = ({ self, bareText, message, route }) => kind === 'private' && (self ? !this.state.isSent(chat, route.mid)
+      : classify({ kind, chat, self, fromOwner: message.sender.id === this.account.ownerId, text: bareText }, policy) === 'drop');
     // The page comes oldest first and QQ times are whole seconds: reversed
     // before the stable sort, messages of the same second are newest first too.
-    const items = page.messages.map((raw) => historyMessage(raw, { account: this.account, chat, names })).filter(Boolean)
-      .reverse().sort((a, b) => Number(b.message.create_time) - Number(a.message.create_time)).slice(0, limit);
+    const items = page.messages.map((raw) => historyMessage(raw, { account: this.account, chat, names }))
+      .filter((item) => item && !hidden(item)).reverse().sort((a, b) => Number(b.message.create_time) - Number(a.message.create_time)).slice(0, limit);
     for (const { message, route } of items) {
       this.state.recordRoute(message.message_id, route);
       if (message.sender.type === 'user' && message.sender.name) this.state.rememberPerson(chat, message.sender.id, message.sender.name);

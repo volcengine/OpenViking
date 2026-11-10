@@ -109,6 +109,8 @@ export class OneBotSocket {
 
   // One connection, from opening to its end: resolves with what ended it.
   // A connection is ready, and takes calls, once the server has spoken.
+  // onReady gets a function that ends this connection as one that failed,
+  // so it is reopened after the backoff of a failed attempt.
   session(onEvent, signal, onReady) {
     return new Promise((resolve) => {
       let ws;
@@ -173,7 +175,8 @@ export class OneBotSocket {
           ready = true;
           this.clearTimer(hello);
           this.ws = ws;
-          try { onReady(); } catch (error) { this.logger.warn('onebot_ready_failed', { error }); }
+          const reopen = () => { ready = false; end('unverified'); };
+          try { onReady(reopen); } catch (error) { this.logger.warn('onebot_ready_failed', { error }); }
         }
         if (frame.post_type === 'meta_event' && frame.meta_event_type === 'heartbeat'
           && Number.isSafeInteger(frame.interval) && frame.interval > 0 && frame.interval <= 3_600_000) {

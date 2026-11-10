@@ -1387,6 +1387,104 @@ test('client preflight reports the account, owner and self, and refuses a change
   assert.equal(rejected.c.subscriptionRunning, false);
 });
 
+// Answers get_login_info as `login` says at the time, so a reconnect can find
+// another account; on the reconnect only once `release` is called. `answer`
+// sets how later connections are answered.
+async function reconnecting(t, login, options = {}) {
+  let answer = () => ok({ user_id: Number(SELF), nickname: 'Vika' });
+  const opened = await client(t, { ...options, actions: {
+    get_login_info: () => answer(),
+    get_group_msg_history: () => ok({ messages: [] }),
+    get_group_member_info: ({ user_id: id }) => ok({ user_id: id, card: 'Carol' }),
+  } });
+  opened.start();
+  let release;
+  answer = () => new Promise((resolve) => { release = () => resolve(ok(login)); });
+  opened.ws.opened[0].close(1006);
+  await until(() => opened.ws.opened[1]?.sent.length === 1, 3000);
+  return { ...opened, release: () => release(), answer: (next) => { answer = next; } };
+}
+
+test('client checks the account again on a reconnect, and another account there fails the worker before anything goes through', async (t) => {
+  const { c, ws, lines, exits, release } = await reconnecting(t, { user_id: 99999, nickname: 'Other' });
+  const markdown = { type: 'markdown', text: 'hi' };
+  const sending = c.sendMessage({ chat_id: `group:${GROUP}`, content: markdown }).catch((error) => error);
+  const reading = c.listChatMessages({ chat_id: `group:${GROUP}` }).catch((error) => error);
+  // A frame without self_id passes the event's own check; it waits for the account's.
+  ws.opened[1].frame(group([at(SELF), at('60006'), text(' hi')], { self_id: undefined, message_id: 1, time: fresh() }));
+  await delay(20);
+  assert.deepEqual(ws.opened[1].sent.map((request) => request.action), ['get_login_info']);
+  release();
+  await until(() => exits.length === 1);
+  assert.match(exits[0].stderr, /OneBot account changed; authorize again/);
+  assert.equal(c.subscriptionRunning, false);
+  assert.match((await sending).message, /account changed/);
+  assert.match((await reading).message, /account changed/);
+  await assert.rejects(c.sendMessage({ chat_id: `private:${OWNER}`, content: markdown }), /account changed/);
+  await c.inbound;
+  assert.deepEqual(ws.opened[1].sent.map((request) => request.action), ['get_login_info']);
+  assert.equal(lines.length, 0);
+  assert.equal(ws.opened.length, 2, 'not reconnected');
+});
+
+test('client: on a reconnect to the same account, sends and lines wait for its check and then go through', async (t) => {
+  const { c, ws, lines, exits, release } = await reconnecting(t, { user_id: Number(SELF), nickname: 'Vika' });
+  const sending = c.sendMessage({ chat_id: `group:${GROUP}`, content: { type: 'markdown', text: 'hi' } });
+  ws.opened[1].frame(direct([text('hello')], { message_id: 2, time: fresh() }));
+  await delay(20);
+  assert.deepEqual(ws.opened[1].sent.map((request) => request.action), ['get_login_info']);
+  assert.equal(lines.length, 0);
+  release();
+  assert.match((await sending).message_id, /^ob:group:123456789:\d+$/);
+  await c.inbound;
+  assert.deepEqual(ws.opened[1].sent.map((request) => request.action), ['get_login_info', 'send_group_msg']);
+  assert.deepEqual(lines.map((line) => line.content.text), ['hello']);
+  assert.equal(exits.length, 0);
+  assert.equal(c.subscriptionRunning, true);
+});
+
+test('client: a reconnect that never confirms the account is asked once, fails sends in their own time, delivers nothing and is reopened', async (t) => {
+  const time = clock();
+  // An action times out after 500 ms; the connection's check only after 10 s on the test's clock.
+  const { c, ws, lines, exits, answer } = await reconnecting(t, null, { time, sendTimeoutMs: 1000 });
+  const socket = ws.opened[1];
+  for (let i = 0; i < 3; i += 1) socket.frame(direct([text(`waiting ${i}`)], { message_id: 10 + i, time: fresh() }));
+  const begun = Date.now();
+  await assert.rejects(c.sendMessage({ chat_id: `private:${OWNER}`, content: { type: 'markdown', text: 'hi' } }),
+    { message: 'OneBot send_private_msg was cancelled before it was sent' });
+  assert.ok(Date.now() - begun < 900, `the send took ${Date.now() - begun} ms`);
+  assert.deepEqual(socket.sent.map((request) => request.action), ['get_login_info'], 'neither the send nor a line asks again');
+  time.advance(10_000);
+  await until(() => socket.readyState === 3, 300);
+  assert.deepEqual(socket.sent.map((request) => request.action), ['get_login_info']);
+  await c.inbound;
+  assert.equal(lines.length, 0);
+  assert.deepEqual(c.state.pendingChats(), []);
+  // The next connection is checked as usual; the lines of the closed one never arrive.
+  answer(() => ok({ user_id: Number(SELF), nickname: 'Vika' }));
+  await until(() => ws.opened[2]?.sent.length === 1, 3000);
+  ws.opened[2].frame(direct([text('hello')], { message_id: 20, time: fresh() }));
+  await until(() => lines.length === 1);
+  await c.inbound;
+  assert.deepEqual(lines.map((line) => line.content.text), ['hello']);
+  assert.equal(exits.length, 0);
+});
+
+test('client: stop cancels at once the actions and lines waiting for a reconnect\'s account check', async (t) => {
+  const { c, ws, lines } = await reconnecting(t, { user_id: Number(SELF), nickname: 'Vika' });
+  const sending = c.sendMessage({ chat_id: `group:${GROUP}`, content: { type: 'markdown', text: 'hi' } }).catch((error) => error);
+  const reading = c.listChatMessages({ chat_id: `group:${GROUP}` }).catch((error) => error);
+  ws.opened[1].frame(direct([text('hello')], { message_id: 2, time: fresh() }));
+  await delay(20);
+  const begun = Date.now();
+  await c.stop();
+  assert.ok(Date.now() - begun < 500, `stop took ${Date.now() - begun} ms`);
+  assert.equal((await sending).message, 'OneBot send_group_msg was cancelled before it was sent');
+  assert.equal((await reading).message, 'OneBot get_group_msg_history was cancelled before it was sent');
+  assert.deepEqual(ws.opened[1].sent.map((request) => request.action), ['get_login_info']);
+  assert.equal(lines.length, 0);
+});
+
 test('client drops its own echo even when message_sent precedes the send answer, and shows another client as sender=bot context', async (t) => {
   const time = clock();
   let echo = null;
@@ -1582,6 +1680,27 @@ test('client looks up a few names per line and keeps a bounded memory of failed 
   assert.ok(!c.failedNames.has(`${chat}:0`) && c.failedNames.has(`${chat}:70002`));
 });
 
+test('client: lookups that are never answered hold a burst of lines back by one budget, not one per line', async (t) => {
+  const time = clock();
+  // get_group_member_info has no handler: the implementation never answers it.
+  const { c, ws, lines, start, sent } = await client(t, { time });
+  start();
+  const socket = ws.opened.at(-1);
+  for (let i = 0; i < 30; i += 1) socket.frame(group([text(`m${i} `), at(String(60_001 + i))], { message_id: 100 + i, time: fresh() }));
+  socket.frame(direct([text('hello')], { message_id: 200, time: fresh() }));
+  await until(() => sent('get_group_member_info').length === 5);
+  await delay(20);
+  assert.equal(sent('get_group_member_info').length, 5, 'no more than 5 lookups at once');
+  assert.equal(lines.length, 0);
+  time.advance(2000);
+  await until(() => lines.length === 1);
+  assert.equal(lines[0].content.text, 'hello');
+  // In arrival order, every name still a QQ number.
+  assert.deepEqual(c.state.pending(`group:${GROUP}`).map(({ envelope }) => envelope.content.text),
+    Array.from({ length: 30 }, (_, i) => `m${i} @${60_001 + i}`));
+  assert.equal(sent('get_group_member_info').length, 5);
+});
+
 test('client neither stages nor answers chats that are not connected, and with private friends lets friends in without slash commands', async (t) => {
   // "*": "off": only the groups the policy names are connected, as before groups were followed by default.
   const { c, lines, start, push, sent } = await client(t, { policy: { ...POLICY, groups: { ...POLICY.groups, '*': 'off' } } });
@@ -1638,6 +1757,39 @@ test('client neither stages nor answers chats that are not connected, and with p
   fs.utimesSync(policyPath, 1_700_000_000, 1_700_000_000);
   await assert.rejects(friends.c.sendMessage({ chat_id: 'private:30003', content: markdown }), /not connected to private:30003/);
   assert.equal(friends.sent('send_private_msg').length, 1);
+});
+
+test('client: a friend without a display name can be answered, and a group member without one is still looked up', async (t) => {
+  const friend = (id, sender, extra) => direct([text('hi')], { user_id: id, target_id: undefined, time: fresh(), sender, ...extra });
+  const { c, lines, start, push, sent } = await client(t, { policy: { ...POLICY, private: 'friends' }, actions: {
+    get_group_member_info: ({ user_id: id }) => ok({ user_id: id, card: 'Carol' }),
+    get_friend_msg_history: () => ok({ messages: [friend(30003, { user_id: 30003 }, { message_id: 1, time: T })] }),
+  } });
+  start();
+  await push(friend(30003, { user_id: 30003 }, { message_id: 1 }));
+  await push(friend(40004, { user_id: 40004, nickname: '  ' }, { message_id: 2 }));
+  // The QQ number is not made a display name.
+  assert.deepEqual(lines.map((line) => line.actor), [{ id: '30003', type: 'user' }, { id: '40004', type: 'user' }]);
+  const markdown = { type: 'markdown', text: 'hi' };
+  await c.sendMessage({ chat_id: 'private:30003', content: markdown });
+  await c.replyMessage({ message_id: 'ob:private:40004:2', content: markdown });
+  assert.deepEqual(sent('send_private_msg').map((request) => request.params.user_id), [30003, 40004]);
+  await assert.rejects(c.sendMessage({ chat_id: 'private:50005', content: markdown }), /not connected to private:50005/);
+  // History does not show the QQ number as a name either, nor keep it as one, and the friend can still be answered.
+  const page = await c.listChatMessages({ chat_id: 'private:30003' });
+  assert.deepEqual(page.messages.map((message) => [message.sender.id, message.sender.name ?? null]), [['30003', null]]);
+  assert.deepEqual(c.state.people('private:30003'), [{ id: '30003', name: '' }]);
+  await c.replyMessage({ message_id: 'ob:private:30003:1', content: markdown });
+  assert.equal(sent('send_private_msg').length, 3);
+  // A line without a name keeps the name a friend's earlier line gave.
+  await push(friend(30003, { user_id: 30003, nickname: 'Erin' }, { message_id: 5 }));
+  await push(friend(30003, { user_id: 30003 }, { message_id: 6 }));
+  assert.deepEqual(c.state.people('private:30003'), [{ id: '30003', name: 'Erin' }]);
+
+  await push(group([text('hello')], { message_id: 3, time: fresh(), user_id: 60006, sender: { user_id: 60006 } }));
+  await push(group([at('60006'), text(' look')], { message_id: 4, time: fresh() }));
+  assert.deepEqual(sent('get_group_member_info').map((request) => request.params.user_id), [60006]);
+  assert.equal(c.state.pending(`group:${GROUP}`).at(-1).envelope.content.text, '@Carol look');
 });
 
 test('client mentions only people seen in the chat, quotes the target of a reply and sends files as base64', async (t) => {
@@ -1790,6 +1942,34 @@ test('client media prefers the implementation copy, falls back to the event addr
   assert.equal(huge.message, 'OneBot media download failed or exceeded the size limit');
 });
 
+test('client: a message id reused without attachments loses the old ones, by an event or by a send', async (t) => {
+  const { c, start, push } = await client(t, { fetchImpl: async () => new Response('old'), actions: {
+    get_image: () => ({ status: 'failed', retcode: 1404, data: null }),
+    send_group_msg: () => ok({ message_id: 78 }),
+  } });
+  start();
+  const chat = `group:${GROUP}`;
+  const id = `ob:${chat}:77`;
+  await push(group([{ type: 'image', data: { file: 'old.png', url: 'https://multimedia.nt.qq.com.cn/download?rkey=OLD' } }],
+    { message_id: 77, time: fresh() }));
+  assert.equal((await c.getMedia({ message_id: id })).media.length, 1);
+  const [file] = c.state.route(id).files;
+  await push(group([text('just text')], { message_id: 77, time: fresh() + 1 }));
+  assert.deepEqual(c.state.route(id).files, []);
+  await assert.rejects(c.getMedia({ message_id: id }), /No OneBot attachment/);
+  // The agent's own text, under the id of an earlier image; its echo is never staged.
+  await push(group([{ type: 'image', data: { file: 'old.png', url: 'https://multimedia.nt.qq.com.cn/download?rkey=OLD' } }],
+    { message_id: 78, time: fresh() }));
+  assert.equal((await c.getMedia({ message_id: `ob:${chat}:78` })).media.length, 1);
+  assert.equal((await c.sendMessage({ chat_id: chat, content: { type: 'markdown', text: 'mine' } })).message_id, `ob:${chat}:78`);
+  assert.deepEqual(c.state.route(`ob:${chat}:78`).files, []);
+  await assert.rejects(c.getMedia({ message_id: `ob:${chat}:78` }), /No OneBot attachment/);
+  // A sighting that does not know the attachments keeps them.
+  c.state.recordRoute(`ob:${chat}:79`, { chat, mid: '79', files: [file] });
+  c.state.recordRoute(`ob:${chat}:79`, { chat, mid: '79' });
+  assert.deepEqual(c.state.route(`ob:${chat}:79`).files, [file]);
+});
+
 test('client media never takes an address from a file name, nor fetches one on this machine or a private network', async (t) => {
   const fetched = [];
   const fetchImpl = async (url) => { fetched.push(url); return new Response('SECRET'); };
@@ -1877,6 +2057,32 @@ test('client history is the newest page, newest first, with routes; chat lists s
   const call = (tool, input) => actions.call(tool, input, { authority: 'runtime-token' });
   assert.match((await call('list_chats', {})).text, /Friends \| chat_id=group:123456789 \| normal/);
   assert.match((await call('list_chat_messages', { chat_id: chat })).text, /ob:group:123456789:11 \| Vika \| text \| my answer/);
+});
+
+test('client: private history leaves out what live lines leave out there, with its attachments; group history keeps commands', async (t) => {
+  let history = [];
+  const { c } = await client(t, { actions: {
+    get_friend_msg_history: () => ok({ messages: history }),
+    get_group_msg_history: () => ok({ messages: [group([text('gs bind SECRET')], { message_id: 1, time: T })] }),
+  } });
+  const chat = `private:${OWNER}`;
+  const { message_id: mine } = await c.sendMessage({ chat_id: chat, content: { type: 'markdown', text: 'my reply' } });
+  const fromAccount = (message, extra) => direct(message, { post_type: 'message_sent', user_id: Number(SELF), sender: { user_id: Number(SELF), nickname: 'Vika' }, ...extra });
+  history = [
+    direct([text('gs bind SECRET_PASSWORD')], { message_id: 90, time: T }),
+    // The other program's answer, from the account but not sent by this connector.
+    fromAccount([text('gs bind ok, token SECRET_REPLY')], { message_id: 91, time: T + 1 }),
+    direct([text('gs upload'), { type: 'file', data: { file: 'secret.txt', file_id: '/f9' } }], { message_id: 92, time: T + 2 }),
+    direct([text('hello')], { message_id: 93, time: T + 3 }),
+    fromAccount([text('my reply')], { message_id: Number(parseMessageId(mine).mid), time: T + 4 }),
+  ];
+  const page = await c.listChatMessages({ chat_id: chat });
+  assert.deepEqual(page.messages.map((message) => [message.sender.type, message.content]), [['bot', 'my reply'], ['user', 'hello']]);
+  assert.doesNotMatch(JSON.stringify(page), /SECRET|secret\.txt/);
+  for (const mid of [90, 91, 92]) assert.equal(c.state.route(`ob:${chat}:${mid}`), null);
+  await assert.rejects(c.getMedia({ message_id: `ob:${chat}:92` }), /No OneBot attachment/);
+  // In a group a command is context live too.
+  assert.deepEqual((await c.listChatMessages({ chat_id: `group:${GROUP}` })).messages.map((message) => message.content), ['gs bind SECRET']);
 });
 
 test('client follows every group without a policy file, and "*" or a named mode changes it', async (t) => {

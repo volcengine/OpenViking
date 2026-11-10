@@ -76,12 +76,13 @@ export class OneBotState {
   }
 
   // A route seen again keeps the files it was first recorded with unless the
-  // new sighting knows them: a send knows none, an event or history entry does.
+  // new sighting knows them, as an event, a history entry and a send (none)
+  // do; an empty list too, so a reused message id loses the old files.
   recordRoute(id, { chat, mid, files = null }) {
     this.db.prepare(`INSERT INTO routes VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET saved_at = excluded.saved_at,
         files_json = COALESCE(excluded.files_json, routes.files_json)`)
-      .run(id, chat, String(mid), files?.length ? JSON.stringify(files) : null, Date.now());
+      .run(id, chat, String(mid), Array.isArray(files) ? JSON.stringify(files) : null, Date.now());
   }
 
   route(id) {
@@ -90,10 +91,12 @@ export class OneBotState {
   }
 
   // People this connector has named to the model in a chat, so a mention by
-  // that name resolves to the same person.
+  // that name resolves to the same person. An empty name says only that the
+  // person has written there, and keeps a name already known.
   rememberPerson(chat, userId, name) {
     this.db.prepare(`INSERT INTO people VALUES (?, ?, ?, ?)
-      ON CONFLICT(chat, user_id) DO UPDATE SET name = excluded.name, saved_at = excluded.saved_at`)
+      ON CONFLICT(chat, user_id) DO UPDATE SET name = COALESCE(NULLIF(excluded.name, ''), people.name),
+        saved_at = excluded.saved_at`)
       .run(chat, String(userId), name, Date.now());
   }
 

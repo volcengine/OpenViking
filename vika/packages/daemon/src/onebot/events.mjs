@@ -326,7 +326,7 @@ export function historyMessage(raw, { account, chat, names = new Map() }) {
     : parsed?.kind === 'private' && raw?.message_type === 'private' && (userId === parsed.id || userId === selfId);
   if (!mid || !userId || at === null || !inChat) throw new Error('Invalid OneBot history message identity');
   const self = isSelf(raw, selfId);
-  const { text, files } = render(raw, { chat, account, names });
+  const { text, bareText, files } = render(raw, { chat, account, names });
   if (!text && !files.length) return null;
   const attachments = attachmentsOf(files);
   const id = messageId(chat, mid);
@@ -340,5 +340,7 @@ export function historyMessage(raw, { account, chat, names = new Map() }) {
         type: self ? 'bot' : 'user' },
       content, attachments },
     route: { chat, mid, files },
+    // What the client classifies it by, as a live line.
+    self, bareText,
   };
 }

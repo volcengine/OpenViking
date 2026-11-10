@@ -41,6 +41,10 @@ listening port and no public address.
   interval, a connection that stays silent for twice that interval plus 10 s is closed and reopened.
 - A rejected token (retcode 1403, or close code 1008) stops the worker with "OneBot rejected the access token; run
   vika login onebot <instance>". The Core shows that in Activity and retries with its usual backoff.
+- Every connection, a reconnect too, asks `get_login_info` before any event is taken or action sent on it. If
+  another QQ account is logged in there, the worker stops with "OneBot account changed; authorize again" and does not
+  reconnect. A connection that does not answer within 10 s is closed and reopened, and the events it carried are
+  dropped; an action waiting for the check fails at its own timeout as not sent.
 - The socket opens at the Connector's `check` and stays open until `stop`. `pause` stops delivering events, but
   sends still work while the Core drains on shutdown.
 
@@ -279,11 +283,12 @@ would answer.
 | `retract_message` | Only messages this Connector sent (`delete_msg`). QQ allows a recall for about two minutes |
 | `get_message_media` | Every attachment of a message, by its `msg=` id: images, files and videos, up to 20 MiB each. A forwarded chat comes back as a text transcript (`name: text` per message, at most 200 messages and 64 KiB) |
 | `list_chats` | The groups the account is in that are not `"off"`, filtered by name. The group list is asked for at most once a minute; a policy change shows at once. Private chats are not listed |
-| `list_chat_messages` | The newest 1–50 messages (default 20) of a connected chat, newest first, including the account's own as `sender.type: bot`. There is no cursor and no older page. History is context only and never a decision |
+| `list_chat_messages` | The newest 1–50 messages (default 20) of a connected chat, newest first, including the account's own as `sender.type: bot`. A private chat's history leaves out what its live messages leave out, attachments included: lines that start with a `commandPrefixes` entry, what the account sent there other than through this Connector, and a `/` line from anyone but the owner. Such a page can hold fewer messages than asked for. There is no cursor and no older page. History is context only and never a decision |
 
 Inbound messages are rendered as text. An @ shows the person's group card or nickname; an unknown name is looked
-up with `get_group_member_info`, for at most 5 people and within 2 s per line, and the rest stay QQ numbers. A
-failed lookup is not repeated for 10 minutes. At most 100 @mentions of a message reach the Core, the agent's own
+up with `get_group_member_info`, for at most 5 people and within 2 s per line, and the rest stay QQ numbers. Lines
+are looked up side by side as they arrive, with at most 5 lookups under way at once, so lookups that go unanswered
+hold the lines after them back by 2 s, not by 2 s each. A failed lookup is not repeated for 10 minutes. At most 100 @mentions of a message reach the Core, the agent's own
 among them; the text still shows every one. A quote becomes `parent_id`, so a reply to the agent carries `reply_to=me`. Images, files, videos and forwarded chats
 become attachment references, at most 10 per message. Stickers, faces, voice messages and share cards become short
 markers (`[sticker]`, `[face]`, `[voice message]`, `[card] <title> <link>`); a card's JSON is never shown. Text is
