@@ -1,6 +1,6 @@
 {
   "name": "@openviking/react",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publishConfig": {
     "access": "public"
   },
@@ -122,6 +122,8 @@
     "react-focus-lock": "^2.13.7",
     "react-markdown": "^10.1.0",
     "react-transition-group": "^4.4.5",
+    "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1"
   }
 }

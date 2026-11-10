@@ -1,6 +1,6 @@
 # Console 交互面板
 
-必填 `locale: 'zh-CN' | 'en-US'` 选择内置中英文文案；已有 `labels` 可逐项覆盖，未覆盖项跟随当前语言。业务内容仍由宿主提供。
+可选 `locale: 'zh-CN' | 'en-US'` 覆盖最近的模块或 Provider；均未配置时默认 `en-US`。已有 `labels` 可逐项覆盖。业务内容仍由宿主提供。
 
 `Console` 组合 `Tui` 与 `VikingBot`，管理原生 API 命令、执行记录和两种模式的草稿。切换模式保留记录和草稿。
 
@@ -66,20 +66,20 @@
 
 根入口只导出 `Console` 与 `ConsoleProps`。模式、文案和插槽类型从 `@openviking/react/modules/console` 导出，同一模块入口还导出 `useConsole`、`ConsoleOptions`、`ConsoleState` 与 `ConsoleResult`。JS 不加载 CSS；组合视图使用 `@openviking/react/modules/console/style.css`，已包含 Tui 与 VikingBot 所需样式。
 
-| 属性                 | 类型                          | 默认值         | 说明                                                                                                             |
-| -------------------- | ----------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `mode`               | `ConsoleMode`                 | —              | 受控模式，只通过回调上报切换意图                                                                                 |
-| `defaultMode`        | `ConsoleMode`                 | `conversation` | 非受控初始模式                                                                                                   |
-| `locale`             | `'zh-CN' \| 'en-US'`          | 必填           | 选择内置中英文文案。                                                                                             |
-| `quickCommands`      | `readonly string[]`           | 内置五条       | 终端空态展示的快捷命令名称，按序取自命令目录，未命中的名称跳过，重复名称只保留首次出现；传空数组不展示内置空态。 |
-| `scopeKey`           | `string`                      | —              | 动态身份的显式隔离标识                                                                                           |
-| `onModeChange`       | `(mode: ConsoleMode) => void` | —              | 用户请求不同模式时触发；受控值仍由宿主更新                                                                       |
-| `onOpenUri`          | `(uri: string) => void`       | —              | 资源链接激活时上报打开意图，宿主负责实际导航                                                                     |
-| `conversation`       | `Partial<VikingBotProps>`     | —              | 对话数据、会话操作、快捷输入、引用与附件回调；省略草稿属性时使用 Console 的实例内草稿。                          |
-| `slots`              | `ConsoleSlots`                | —              | `toolbar`、`conversationContext`、`commandHelp`                                                                  |
-| `labels`             | `ConsoleLabels`               | —              | 面板文案；`tui` 与 `vikingBot` 继续定制内部视图文案                                                              |
-| `requestOptions`     | `OvRequestOptions`            | —              | 逐字段覆盖最近 Provider 的地址、身份和信号                                                                       |
-| `className`、`style` | 标准 HTML 属性                | —              | 根容器样式，其余 HTML 属性也透传                                                                                 |
+| 属性                 | 类型                          | 默认值           | 说明                                                                                                             |
+| -------------------- | ----------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `mode`               | `ConsoleMode`                 | —                | 受控模式，只通过回调上报切换意图                                                                                 |
+| `defaultMode`        | `ConsoleMode`                 | `conversation`   | 非受控初始模式                                                                                                   |
+| `locale`             | `'zh-CN' \| 'en-US'`          | 继承上层 / en-US | 选择内置中英文文案。                                                                                             |
+| `quickCommands`      | `readonly string[]`           | 内置五条         | 终端空态展示的快捷命令名称，按序取自命令目录，未命中的名称跳过，重复名称只保留首次出现；传空数组不展示内置空态。 |
+| `scopeKey`           | `string`                      | —                | 动态身份的显式隔离标识                                                                                           |
+| `onModeChange`       | `(mode: ConsoleMode) => void` | —                | 用户请求不同模式时触发；受控值仍由宿主更新                                                                       |
+| `onOpenUri`          | `(uri: string) => void`       | —                | 资源链接激活时上报打开意图，宿主负责实际导航                                                                     |
+| `conversation`       | `Partial<VikingBotProps>`     | —                | 对话数据、会话操作、快捷输入、引用与附件回调；省略草稿属性时使用 Console 的实例内草稿。                          |
+| `slots`              | `ConsoleSlots`                | —                | `toolbar`、`conversationContext`、`commandHelp`                                                                  |
+| `labels`             | `ConsoleLabels`               | —                | 面板文案；`tui` 与 `vikingBot` 继续定制内部视图文案                                                              |
+| `requestOptions`     | `OvRequestOptions`            | —                | 逐字段覆盖最近 Provider 的地址、身份和信号                                                                       |
+| `className`、`style` | 标准 HTML 属性                | —                | 根容器样式，其余 HTML 属性也透传                                                                                 |
 
 认证、权限、账号切换、页面布局与跨模块资源导航由宿主负责。
 

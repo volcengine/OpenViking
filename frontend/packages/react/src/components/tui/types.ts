@@ -504,8 +504,6 @@ export interface TuiProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
   'onCopy' | 'onSubmit'
 > {
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
   /**
    * 当前展示的执行记录，按提交顺序排列；会话与历史切换后由宿主更新。
    * Currently displayed execution records in submission order, updated by the
@@ -519,6 +517,8 @@ export interface TuiProps extends Omit<
   value: string;
   /** Safe command history for recall; defaults to command text from records. */
   history?: readonly string[];
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /**
    * 是否禁用命令输入与提交，缺省为 `false`。
    * 禁用时的提示文案由 `labels.unavailableMessage` 提供。

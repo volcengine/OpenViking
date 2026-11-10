@@ -1,6 +1,6 @@
 # ScopeSwitcher
 
-Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
 
 Compose independent selectors. `ScopeSwitcher` owns layout only; each host level owns its data requests, options, loading/error and search state, and renders a `ScopeSelector`.
 
@@ -94,6 +94,8 @@ A scope still needs a definite value, so check the selection after data arrives 
 Validity is decided from `options` alone: a value merely filtered out of `visibleOptions` by a search is still valid, so searching never switches the scope.
 
 Options require `id`, `label`; optional fields are `icon`, `description`, `disabled`. Labels include `loading`, `searchPlaceholder`, `empty`, `noMatch`, `error`, following locale. Pass optional overrides to each selector.
+
+Icons come from the host; the component ships none. For defaults, take `LibraryIcon`, `SpaceIcon` and `UserIcon` from `@openviking/react/icons`. With [ScopeCascade](../modules/scope-cascade), the default view fills those three in when an adapter returns no `icon`.
 
 Arrow keys and Home/End navigate; Enter/Space select; Escape closes and returns focus. Outside clicks and focus leaving dismiss the panel.
 

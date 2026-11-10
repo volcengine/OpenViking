@@ -8,6 +8,9 @@ const messages: typeof enUS = {
   instructions: '完整指令',
   copy: '复制并发送给 Agent',
   copyMarkdown: '复制为 Markdown',
+  copyCode: '复制代码',
+  showApiKey: '显示 API Key',
+  hideApiKey: '隐藏 API Key',
   copied: '已复制',
   failed: '复制失败，请重试',
   notice:

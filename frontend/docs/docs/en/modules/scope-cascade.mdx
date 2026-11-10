@@ -1,6 +1,6 @@
 # ScopeCascade
 
-Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
 
 Connect three API adapters without writing request state or cascading logic. `useScopeCascade` returns a stable instance controller and does not subscribe the caller to its data. `ScopeCascade` subscribes in its three leaf selectors, preserving independent renders without `memo`.
 
@@ -11,6 +11,8 @@ Connect three API adapters without writing request state or cascading logic. `us
 ```
 
 Only the three adapters are required. They return `Promise<readonly ScopeSwitcherOption[]>` (`{ id, label, icon?, description?, disabled? }`). Authentication, endpoint URLs, response mapping and permissions belong in those adapters. Supply stable function references; changing any adapter cancels requests and resets all selections. Use separate mounted instances (or a React `key`) for different accounts.
+
+The default view ships three level icons: `LibraryIcon` for libraries (a round gradient swatch picked by id), and `SpaceIcon` / `UserIcon` for spaces and users. When an adapter returns an option without `icon`, the level's default is filled in; a host-supplied `icon` always wins.
 
 | Adapter         | Arguments                                                 |
 | --------------- | --------------------------------------------------------- |
@@ -34,4 +36,4 @@ To consume the complete identity in a separate content component, subscribe to t
 
 ## View props
 
-`ScopeCascade` requires `controller` and `locale`. Optional `levelNames` is a library/space/user tuple, `labels` customizes loading/search/empty/error copy, and `retryLabel` changes the retry button. HTML attributes such as `className` and `style` are forwarded to the layout. Hooks need no CSS; the default view uses `@openviking/react/modules/scope-cascade/style.css`.
+`ScopeCascade` requires `controller`. Explicit `locale` overrides the nearest module or Provider; omission inherits that scope and ultimately defaults to `en-US`. Optional `levelNames` is a library/space/user tuple, `labels` customizes loading/search/empty/error copy, and `retryLabel` changes the retry button. HTML attributes such as `className` and `style` are forwarded to the layout. Hooks need no CSS; the default view uses `@openviking/react/modules/scope-cascade/style.css`.

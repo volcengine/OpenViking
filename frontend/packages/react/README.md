@@ -2,7 +2,7 @@
 
 English / [中文](README_CN.md)
 
-All public UI components and composed modules require an explicit `locale: 'zh-CN' | 'en-US'` for built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow the current locale and update when it changes. Hosts still provide business content, slots and callback messages.
+Public UI components, composed modules and standalone Hooks accept optional `locale: 'zh-CN' | 'en-US'`. Props override the nearest module or Provider; without a configured language, they use `en-US`. Existing `labels` override individual fields; omitted fields follow the current locale and update when it changes. Hosts still provide business content, slots and callback messages.
 
 React foundations for OpenViking AI application interfaces: build tooling, documentation, layered directories, and scoped styles. FileTree, Tui and FilePreview provide working views, alongside five file-type icons. FileBrowser supports early layout integration; Console provides a native command panel; ScopeCascade provides a working cascade Hook and composition.
 
@@ -23,7 +23,7 @@ This package inherits the repository's AGPL-3.0-only license. The release workfl
 | [client](./src/client/index.ts)                                        | `@openviking/react/client`                    | Framework-neutral request client: `createOvClient`, `OvClient`, `OvClientError`                     |
 | [hooks](./src/hooks/README.md), [utils](./src/utils/README.md)         | Internal only                                 | Cross-module Hooks and pure utilities                                                               |
 
-Components implement their reviewed contracts incrementally. FileTree renders every documented row type with keyboard interaction; FilePreview implements the tab shell, header actions and the plain-text preview and editing foundation, with its body not yet wired to FileViewer. ScopeSwitcher is a stateless layout container; independently rendered ScopeSelector children own visibility, with host-owned per-level data subscriptions, search and requests. Tui renders records, results and the input. AgentConnect follows the Figma layout with built-in bilingual agent and developer integration content, host-provided credentials and locale, optional controlled selection and clipboard feedback. VikingBot provides a working view pending design review. Limits are described in each component's own docs. The package also ships five file-type icons.
+Components implement their reviewed contracts incrementally. FileTree renders every documented row type with keyboard interaction; FilePreview implements the tab shell, header actions and the plain-text preview and editing foundation, with its body not yet wired to FileViewer. ScopeSwitcher is a stateless layout container; independently rendered ScopeSelector children own visibility, with host-owned per-level data subscriptions, search and requests. Tui renders records, results and the input. AgentConnect follows the Figma layout with built-in bilingual agent and developer integration content, host-provided credentials and locale, optional controlled selection and clipboard feedback. VikingBot provides a working view pending design review. Limits are described in each component's own docs. The package also ships five file-type icons, `ArrowRightIcon` and the three scope-level icons (`LibraryIcon`, `SpaceIcon`, `UserIcon`).
 
 Components receive view data and state through props and express user intent through callbacks, following the [component directory conventions](./src/components/AGENTS.md). [modules](./src/modules/README.md) plan Hooks and views per business capability: Hooks load data, hold state and expose operations, and composite views wire them into components. Full pages and product-specific flows belong to the host; the admin console is out of scope for this phase. `console` exports a native command panel; its orchestration Hook stays internal and conversation data and callbacks are supplied by the host. `file-browser` ships placeholder views and types.
 
@@ -79,7 +79,7 @@ import { PdfIcon } from '@openviking/react/icons';
 <PdfIcon width={20} height={20} className="file-icon" alt="PDF" />;
 ```
 
-Icons render as 16 × 16 images by default. Decorative icons can keep the empty `alt`, while icons that convey file type can provide a description. SVGs are inlined into the build output, and hosts consume them directly from the package exports.
+Icons render as inline SVG. Decorative icons stay `aria-hidden`, while an icon that conveys meaning on its own can take an `aria-label`. SVGs are inlined into the build output, and hosts consume them directly from the package exports. `LibraryIcon`, `SpaceIcon` and `UserIcon` are the scope-level defaults; `ScopeCascade`'s default view applies them automatically when an adapter returns no `icon`.
 
 React and ReactDOM are peer dependencies (`^18.2.0 || ^19.0.0`), automatically externalized by Rslib. Rslib emits shared ESM JavaScript and declarations, plus independently built CSS entries. The public `@openviking/react/style.css` entry resolves to `dist/style.css`. Styles are scoped and do not reset application styles.
 
@@ -94,3 +94,5 @@ Pass three stable API adapter functions to `useScopeCascade({ loadLibraries, loa
 Built-in translations live alongside each component or module in `locales/en-US.ts` and `locales/zh-CN.ts`. The internal `src/shared/locale.ts` contains only shared language types and resolution/override rules, with no business messages or public entry. Modules own workflow copy and reuse the defaults owned by their child components.
 
 Dynamic messages use typed formatter functions; dates and numbers use `Intl`. `npm test` checks matching keys, string placeholders and formatter arity across languages, while type checking validates parameter types. Undefined `labels` entries inherit the selected language; empty strings remain explicit overrides.
+
+Set `locale` on `OpenVikingProvider` for a subtree. Optional module and component Props override the nearest scope, then fall back to `en-US`. Standalone Hooks also inherit the Provider. The private `src/shared/locale-context.tsx` is shared across public entries and remains separate from request-client configuration, so language changes preserve requests and state.

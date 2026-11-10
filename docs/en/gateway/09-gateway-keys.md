@@ -68,17 +68,21 @@ A gateway key lets its holder use the user's memory, so the right to issue keys 
 
 **Allowed models** is empty by default, which allows every model the key's [upstreams](07-upstreams.md#upstreams) serve. To restrict a key, enter the model names clients send, including aliases. The key's model list then shows only those names, and requests for any other model are rejected before they reach a provider. A key with allowed models also needs every request to name its model; for the exact errors, see [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway).
 
+### Set a default peer {#default-peer}
+
+A key can carry a default [peer](03-connect-clients.md#peer), which requests use when they send no `X-OpenViking-Actor-Peer` header; a header on the request takes precedence. Set it with `default_peer_id` when you issue the key through the [management API](../api/25-gateway.md#gateway-keys). Studio does not show this field yet.
+
 ## After issuing {#after-issuing}
 
 A [gateway key](#gateway-keys) is fixed once issued, but the conversations it started belong to its user.
 
-- **Keys cannot be edited.** To change a key's context profile, upstreams, allowed models or user, issue a new key and revoke the old one.
+- **Keys cannot be edited.** To change a key's context profile, upstreams, allowed models, default peer or user, issue a new key and revoke the old one.
 - **Conversations belong to the user, not the key.** If the client sends the same session ID, a new key for the same user continues the existing [conversation](03-connect-clients.md#how-conversations-are-recognized), so replacing a key does not interrupt it.
 - **Revoking** a key (**Revoke** on the **Keys** tab, then **Revoke key**) stops it working at once. The user's conversation state and logs stay until they are explicitly deleted or expire. Turns not yet saved to OpenViking, such as the latest reply, are saved only if the conversation continues with a new key.
 
 ### One key per person {#one-key-per-person}
 
-Memory belongs to the OpenViking user behind a [gateway key](#gateway-keys), so everyone who shares a key shares that user's memory. Issue one key per person. Also issue separate keys per client if you want different context profiles, or want to revoke each client on its own.
+Memory belongs to the OpenViking user behind a [gateway key](#gateway-keys), so everyone who shares a key shares that user's memory. Issue one key per person. Also issue separate keys per client if you want different context profiles, or want to revoke each client on its own. A [peer](03-connect-clients.md#peer) tells one user's counterparts apart within that memory, but other peers' memories can still be recalled and anyone holding the key can choose the peer, so it does not replace separate keys.
 
 ### When the user's OpenViking API key changes {#when-the-openviking-key-changes}
 

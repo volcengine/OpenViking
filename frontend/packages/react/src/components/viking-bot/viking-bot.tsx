@@ -1,3 +1,4 @@
+import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import { useRef } from 'react';
 import { resolveVikingBotLabels } from './labels.js';
 import { VikingBotSessionActions } from './session-actions.js';
@@ -32,7 +33,7 @@ export function VikingBot({
   header,
   sessions,
   headerActions,
-  locale,
+  locale: localeProp,
   quickInputs,
   onQuickInputSelect,
   references,
@@ -55,6 +56,7 @@ export function VikingBot({
   labels: overrides,
   ...rest
 }: VikingBotProps) {
+  const locale = useLocale(localeProp);
   const labels = resolveVikingBotLabels(locale, overrides);
   const hasMessages = messages.length > 0;
   const localComposer = useRef<VikingBotComposerRef>(null);
@@ -90,98 +92,105 @@ export function VikingBot({
         className={['ov-viking-bot', className].filter(Boolean).join(' ')}
         {...rest}
       >
-        {children}
+        <LocaleProvider locale={locale}>{children}</LocaleProvider>
       </div>
     );
   }
 
   return (
     <QuickInputScope.Provider value={shortcuts.tracker}>
-      <div
-        className={['ov-viking-bot', className].filter(Boolean).join(' ')}
-        {...rest}
-      >
-        {renderedHeader ? (
-          <div className="ov-viking-bot__header">{renderedHeader}</div>
-        ) : null}
-        {!isAvailable ? (
-          <p className="ov-viking-bot__unavailable" role="status">
-            {unavailableMessage ?? labels.unavailable}
-          </p>
-        ) : null}
-        <div className="ov-viking-bot__body">
-          {messageList !== undefined ? (
-            messageList
-          ) : !hasMessages && !streaming ? (
-            <div
-              className={`ov-viking-bot__empty${emptyState === undefined ? ' ov-viking-bot__empty--welcome' : ''}`}
-            >
-              {emptyState === undefined ? (
-                <VikingBotWelcome
-                  labels={labels}
-                  quickInputs={quickInputs}
-                  onSelect={selectQuickInput}
-                  disabled={
-                    isSending ||
-                    !isAvailable ||
-                    (!onDraftChange && !onQuickInputSelect)
-                  }
-                />
-              ) : (
-                emptyState
-              )}
-            </div>
-          ) : (
-            <VikingBotMessageList
-              locale={locale}
-              messages={messages}
-              streaming={streaming}
-              listKey={listKey}
-              onOpenUri={onOpenUri}
-              onCopy={onCopy}
-              onMessageAction={onMessageAction}
-              labels={overrides}
-            />
-          )}
-        </div>
-        {footer ? <div className="ov-viking-bot__footer">{footer}</div> : null}
-        {interaction
-          ? (interactionSlot ?? (
-              <VikingBotInteraction {...interaction} locale={locale} />
-            ))
-          : (composer ??
-            // 省略 draft 表示只读会话，此时不渲染默认输入区。
-            (draft !== undefined ? (
-              <VikingBotComposer
+      <LocaleProvider locale={locale}>
+        <div
+          className={['ov-viking-bot', className].filter(Boolean).join(' ')}
+          {...rest}
+        >
+          {renderedHeader ? (
+            <div className="ov-viking-bot__header">{renderedHeader}</div>
+          ) : null}
+          {!isAvailable ? (
+            <p className="ov-viking-bot__unavailable" role="status">
+              {unavailableMessage ?? labels.unavailable}
+            </p>
+          ) : null}
+          <div className="ov-viking-bot__body">
+            {messageList !== undefined ? (
+              messageList
+            ) : !hasMessages && !streaming ? (
+              <div
+                className={`ov-viking-bot__empty${emptyState === undefined ? ' ov-viking-bot__empty--welcome' : ''}`}
+              >
+                {emptyState === undefined ? (
+                  <VikingBotWelcome
+                    labels={labels}
+                    quickInputs={quickInputs}
+                    onSelect={selectQuickInput}
+                    disabled={
+                      isSending ||
+                      !isAvailable ||
+                      (!onDraftChange && !onQuickInputSelect)
+                    }
+                  />
+                ) : (
+                  emptyState
+                )}
+              </div>
+            ) : (
+              <VikingBotMessageList
                 locale={locale}
-                ref={inputRef}
-                value={draft}
-                attachments={attachments}
-                disabled={!isAvailable}
-                isSending={isSending}
-                references={references}
-                quickInputs={
-                  hasMessages || streaming || emptyState !== undefined
-                    ? quickInputs
-                    : undefined
-                }
-                onQuickInputSelect={selectQuickInput}
-                onValueChange={
-                  onDraftChange
-                    ? (next) => {
-                        shortcuts.tracker.edit(next);
-                        onDraftChange(next);
-                      }
-                    : undefined
-                }
-                onFilesAdded={onFilesAdded}
-                onAttachmentRemove={onAttachmentRemove}
-                onSend={onSend}
-                onCancel={onCancel}
+                messages={messages}
+                streaming={streaming}
+                listKey={listKey}
+                onOpenUri={onOpenUri}
+                onCopy={onCopy}
+                onMessageAction={onMessageAction}
                 labels={overrides}
               />
-            ) : null))}
-      </div>
+            )}
+          </div>
+          {footer ? (
+            <div className="ov-viking-bot__footer">{footer}</div>
+          ) : null}
+          {interaction
+            ? (interactionSlot ?? (
+                <VikingBotInteraction
+                  {...interaction}
+                  locale={interaction.locale ?? locale}
+                />
+              ))
+            : (composer ??
+              // 省略 draft 表示只读会话，此时不渲染默认输入区。
+              (draft !== undefined ? (
+                <VikingBotComposer
+                  locale={locale}
+                  ref={inputRef}
+                  value={draft}
+                  attachments={attachments}
+                  disabled={!isAvailable}
+                  isSending={isSending}
+                  references={references}
+                  quickInputs={
+                    hasMessages || streaming || emptyState !== undefined
+                      ? quickInputs
+                      : undefined
+                  }
+                  onQuickInputSelect={selectQuickInput}
+                  onValueChange={
+                    onDraftChange
+                      ? (next) => {
+                          shortcuts.tracker.edit(next);
+                          onDraftChange(next);
+                        }
+                      : undefined
+                  }
+                  onFilesAdded={onFilesAdded}
+                  onAttachmentRemove={onAttachmentRemove}
+                  onSend={onSend}
+                  onCancel={onCancel}
+                  labels={overrides}
+                />
+              ) : null))}
+        </div>
+      </LocaleProvider>
     </QuickInputScope.Provider>
   );
 }

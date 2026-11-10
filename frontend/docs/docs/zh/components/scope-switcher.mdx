@@ -1,6 +1,6 @@
 # ScopeSwitcher 作用域选择
 
-必填 `locale: 'zh-CN' | 'en-US'` 选择内置中英文文案；已有 `labels` 可逐项覆盖，未覆盖项跟随当前语言。业务内容仍由宿主提供。
+可选 `locale: 'zh-CN' | 'en-US'` 覆盖最近的模块或 Provider；均未配置时默认 `en-US`。已有 `labels` 可逐项覆盖。业务内容仍由宿主提供。
 
 由独立选择器组合的作用域面包屑。`ScopeSwitcher` 只负责布局；每一级宿主独立维护请求、选项、加载/错误和搜索状态，并渲染一个 `ScopeSelector`。
 
@@ -60,7 +60,7 @@
 
 `ScopeSwitcherProps` 为标准 `HTMLAttributes<HTMLDivElement>`，包含 `children`、`className`、`style` 等，不再接收 `levels` 或共享文案。
 
-`ScopeSelectorProps` 按 `kind` 分成两种形态，公共必填字段是 `identity` 与 `locale`，另有可选的 `trigger` 和 `labels`。
+`ScopeSelectorProps` 按 `kind` 分成两种形态，公共必填字段是 `identity`，`locale` 可选并继承上层语言，另有可选的 `trigger` 和 `labels`。
 
 `identity` 是层级身份，不随请求变化：必填 `key`，可选 `ariaLabel`、`tag`。
 
@@ -93,6 +93,8 @@
 判定只看 `options`：当前值只是被搜索过滤出 `visibleOptions` 时仍然有效，不会因为搜索就切走作用域。
 
 选项必填 `id`、`label`，可选 `icon`、`description`、`disabled`。文案包含 `loading`、`searchPlaceholder`、`empty`、`noMatch`、`error`，默认跟随 locale，本地化覆盖传给各级选择器。
+
+图标由宿主传入，组件不内置。需要默认图标时从 `@openviking/react/icons` 取 `LibraryIcon`、`SpaceIcon`、`UserIcon`；使用 [ScopeCascade](../modules/scope-cascade) 时默认视图会在适配函数没给 `icon` 时自动补上这三个。
 
 方向键及 Home/End 移动焦点，Enter/空格选择，Escape 关闭并返回触发器。点击外部或焦点离开时关闭面板。
 

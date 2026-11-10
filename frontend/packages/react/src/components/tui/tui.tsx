@@ -1,3 +1,4 @@
+import { useLocale } from '../../shared/locale-context.js';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import { TuiAssist } from './tui-assist.js';
@@ -26,7 +27,7 @@ export function Tui({
   disabled = false,
   emptyState,
   quickCommands,
-  locale = 'en-US',
+  locale: localeProp,
   commands = [],
   commandGroups = [],
   onValueChange,
@@ -37,6 +38,7 @@ export function Tui({
   className,
   ...rest
 }: TuiProps) {
+  const locale = useLocale(localeProp);
   const text = resolveTuiLabels(labels, locale);
   const bodyRef = useRef<HTMLDivElement>(null);
   const followOutput = useRef(true);

@@ -633,8 +633,8 @@ export interface FilePreviewProps extends Omit<
    * component for format rendering or renders fully custom `content`.
    */
   tabs: readonly [FilePreviewTab, ...FilePreviewTab[]];
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /**
    * 受控的当前页签 key。传入时由宿主决定当前页签，组件只上报切换意图。
    * The controlled active tab key. When given, the host owns the active tab and

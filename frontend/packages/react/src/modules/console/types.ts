@@ -54,8 +54,8 @@ export interface ConsoleProps
   extends
     ConsoleOptions,
     Omit<HTMLAttributes<HTMLDivElement>, 'onSelect' | 'children'> {
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /**
    * 终端空态展示的快捷命令名称，按数组顺序取自命令目录，未命中的名称跳过，
    * 重复名称只保留首次出现。

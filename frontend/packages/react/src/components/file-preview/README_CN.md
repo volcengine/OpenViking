@@ -2,7 +2,7 @@
 
 [English](README.md) / 中文
 
-必填 `locale: 'zh-CN' | 'en-US'` 选择内置中英文文案；已有 `labels` 可逐项覆盖，未覆盖项跟随当前语言。业务内容仍由宿主提供。
+可选 `locale: 'zh-CN' | 'en-US'` 覆盖最近的模块或 Provider；均未配置时默认 `en-US`。已有 `labels` 可逐项覆盖。业务内容仍由宿主提供。
 
 控制台式文件页签、面包屑、分级内容、图片预览、源码与编辑。组件和类型从 `@openviking/react/components/file-preview` 导入，样式需显式导入 `@openviking/react/components/file-preview/style.css`。
 
