@@ -56,6 +56,7 @@ export function resolveWorkspaceSettings(
   provenance: Record<string, any>;
   warnings: string[];
   announced: string[];
+  connectionFile: string;
   value?: Record<string, any>;
 };
 

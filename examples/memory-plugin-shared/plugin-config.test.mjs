@@ -7,6 +7,8 @@ import test from "node:test";
 import { HARNESS_KEYS, KNOBS } from "./lib/config-schema.mjs";
 import { buildContextSearchBody } from "./lib/recall-core.mjs";
 import { buildPluginConfig } from "./lib/plugin-config.mjs";
+import { slotName } from "./lib/workspace-registry.mjs";
+import { resolveWorkspaceIdentity } from "./lib/workspace-identity.mjs";
 import { loadAgentHookConfig } from "./lib/agent-hook-runtime.mjs";
 import { loadConfig as loadClaudeCode } from "../claude-code-memory-plugin/scripts/config.mjs";
 import { loadConfig as loadCodex } from "../codex-memory-plugin/scripts/config.mjs";
@@ -396,3 +398,53 @@ for (const [name, loader] of Object.entries(LOADERS)) {
     });
   });
 }
+
+// --- the registry connection pointer -----------------------------------------
+
+test("a registry connection pointer feeds the chain; a workspace file's pointer does not", () => {
+  withFixture({ ov: { server: {} }, cli: {} }, ({ workspaceDir }) => {
+    const home = process.env.OPENVIKING_HOME;
+    const conf = join(home, "connections", "work-agent.conf");
+    mkdirSync(join(home, "connections"), { recursive: true });
+    writeFileSync(conf, JSON.stringify({
+      url: "http://127.0.0.1:2933",
+      api_key: "sk-work-agent",
+      account: "work",
+      user: "work-agent",
+    }));
+
+    // The stored entry omits `identity`, so any current identity reads it; the
+    // slot is the one the registry keys this workspace's identity into.
+    const identity = resolveWorkspaceIdentity({ cwd: workspaceDir });
+    mkdirSync(join(home, "workspaces"), { recursive: true });
+    writeFileSync(
+      join(home, "workspaces", slotName(workspaceDir, identity)),
+      JSON.stringify({
+        version: 1,
+        connection: { name: "work-agent" },
+      }),
+    );
+
+    // The fixture's OPENVIKING_CLI_CONFIG_FILE would outrank the pointer by
+    // design; clear it so the pointer is what selects the connection file.
+    const cliConfigFile = process.env.OPENVIKING_CLI_CONFIG_FILE;
+    delete process.env.OPENVIKING_CLI_CONFIG_FILE;
+    const cfg = buildPluginConfig("codex", { cwd: workspaceDir });
+    process.env.OPENVIKING_CLI_CONFIG_FILE = cliConfigFile;
+    assert.equal(cfg.connectionFile, conf);
+    assert.equal(cfg.baseUrl, "http://127.0.0.1:2933");
+    assert.equal(cfg.apiKey, "sk-work-agent");
+    assert.equal(cfg.account, "work");
+    assert.equal(cfg.user, "work-agent");
+  });
+});
+
+test("a pointer in a committed workspace file is stripped loudly", () => {
+  withFixture({
+    workspace: { version: 1, connection: { name: "sneaky" } },
+  }, ({ workspaceDir }) => {
+    const cfg = buildPluginConfig("codex", { cwd: workspaceDir });
+    assert.equal(cfg.connectionFile, "");
+    assert.equal(cfg.apiKey, CONNECTION.api_key, "the committed file cannot redirect the chain");
+  });
+});

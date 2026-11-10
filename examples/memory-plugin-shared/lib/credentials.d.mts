@@ -12,9 +12,13 @@ export interface CredentialFiles {
   cliPathCandidate: string;
   ovFile: Record<string, unknown>;
   ovPath: string;
+  connectionFile: string;
 }
 
-export function loadCredentialFiles(env?: Record<string, string | undefined>): CredentialFiles;
+export function loadCredentialFiles(
+  env?: Record<string, string | undefined>,
+  options?: { connectionFile?: string },
+): CredentialFiles;
 
 export interface ConnectionHostInput {
   apiKey?: string;
@@ -51,12 +55,18 @@ export function resolveConnection(
   },
 ): Connection;
 
+export function resolveConnectionFileForCwd(
+  cwd: string,
+  env?: Record<string, string | undefined>,
+): string;
+
 export function buildProxyConnection(
   harness: string,
   options?: {
     env?: Record<string, string | undefined>;
     manifestUrl?: string | URL;
     version?: string;
+    cwd?: string;
   },
 ): {
   harness: string;
@@ -75,6 +85,7 @@ export function buildProxyConnection(
   hasApiKey: boolean;
   cliPath: string;
   ovPath: string;
+  connectionFile: string;
   timeoutMs: number;
   debug: boolean;
   debugLogPath: string;

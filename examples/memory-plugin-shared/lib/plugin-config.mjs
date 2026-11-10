@@ -44,7 +44,7 @@ import {
 } from "./workspace-config.mjs";
 import { findWorkspaceRoot, resolveWorkspaceIdentity } from "./workspace-identity.mjs";
 import { resolveEffectivePeerId, resolvePluginPeerId } from "./workspace-peer.mjs";
-import { readEntry } from "./workspace-registry.mjs";
+import { readEntry, resolveConnectionPointer } from "./workspace-registry.mjs";
 
 const OVCLI_LAYER = "ovcli.conf";
 const OV_CONF_LAYER = "ov.conf";
@@ -120,7 +120,16 @@ export function resolveSettings(harness, options = {}) {
  * actually in — the caller resolves this again once it knows.
  */
 export function resolveWorkspaceSettings(cwd, env = process.env, { clientVersion = "" } = {}) {
-  const empty = { settings: {}, root: "", provenance: {}, warnings: [], announced: [] };
+  const empty = {
+    settings: {},
+    root: "",
+    provenance: {},
+    warnings: [],
+    announced: [],
+    // The registry connection pointer resolved to a file path, "" when there
+    // is none — the credential chain falls back to the default ovcli.conf.
+    connectionFile: "",
+  };
   try {
     const { root } = findWorkspaceRoot(cwd, env);
     if (!root) return empty;
@@ -133,7 +142,13 @@ export function resolveWorkspaceSettings(cwd, env = process.env, { clientVersion
     warnings.push(...registry.warnings);
     if (registry.entry?.settings) layers.push({ layer: "registry", data: registry.entry.settings });
     if (registry.entry?.peer) layers.push({ layer: "registry", data: { peer: registry.entry.peer } });
-    if (!layers.length) return { ...empty, root, warnings };
+    let connectionFile = "";
+    if (registry.entry?.connection) {
+      const pointer = resolveConnectionPointer(registry.entry.connection, { env });
+      warnings.push(...pointer.warnings);
+      connectionFile = pointer.path;
+    }
+    if (!layers.length) return { ...empty, root, warnings, connectionFile };
 
     const { value, provenance } = mergeConfigLayers(layers, warnings);
     normalizeWorkspaceConfig(value, warnings);
@@ -143,6 +158,7 @@ export function resolveWorkspaceSettings(cwd, env = process.env, { clientVersion
       provenance,
       warnings,
       announced: announcedOverrides(provenance),
+      connectionFile,
       value,
     };
   } catch {
@@ -200,10 +216,14 @@ export function buildPluginConfig(harness, {
   const name = String(harness || "");
   const key = harnessKey(name);
   const workspaceCwd = str(cwd) || process.cwd();
-  const files = loadCredentialFiles(env);
   // The version answers two questions: what the User-Agent reports, and whether
   // a workspace file asking for a newer client gets to say so.
   const clientVersion = str(version) || (manifestUrl ? readManifestVersion(manifestUrl) : "");
+  // Resolve the workspace once, before the credential files: the registry's
+  // connection pointer picks which user-private file feeds the chain, and the
+  // environment keeps its precedence over it inside `loadCredentialFiles`.
+  const workspace = resolveWorkspaceSettings(workspaceCwd, env, { clientVersion });
+  const files = loadCredentialFiles(env, { connectionFile: workspace.connectionFile });
   const { settings, configured, sources } = resolveSettings(key, {
     env,
     cwd: workspaceCwd,
@@ -246,6 +266,10 @@ export function buildPluginConfig(harness, {
     credentialSource: connection.credentialSource,
     apiKeySource: connection.apiKeySource,
     credentialPath: connection.credentialPath,
+    // The user-private connection file the registry pointer selected, "" when
+    // the chain ran on the environment or the default ovcli.conf. A doctor
+    // reports it the way it reports credentialPath.
+    connectionFile: connection.connectionFile,
     hasApiKey: connection.hasApiKey,
     configPath: connection.cliPath || connection.ovPath || null,
     cliConfigPath: connection.cliPath,
