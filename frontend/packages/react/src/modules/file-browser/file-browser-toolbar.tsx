@@ -2,11 +2,10 @@ import { Tooltip } from '../../shared/components/tooltip/index.js';
 import { RefreshIcon, SearchIcon } from './file-browser-icons.js';
 
 /**
- * 搜索行：搜索框与刷新按钮。两者都是模块自己的，宿主入口在上一行的
- * `toolbarActions` 里。
+ * 搜索行：搜索框与刷新按钮。内置的连接与导入入口位于上一行。
  *
- * The search row: the search box and the refresh button. Both belong to the module;
- * host entries live in `toolbarActions` on the row above.
+ * The search row: the search box and refresh button. Built-in connection and import
+ * entries occupy the row above.
  */
 export interface FileBrowserToolbarProps {
   searchId: string;

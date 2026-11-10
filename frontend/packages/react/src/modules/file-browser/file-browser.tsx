@@ -41,8 +41,10 @@ export function FileBrowser({
   rootUri = 'viking://',
   defaultExpandedUri,
   locale,
-  toolbarActions,
+  agentConnect,
   onUriChange,
+  onImportResources,
+  renderImportResources,
   labels,
   requestOptions,
   className,
@@ -140,7 +142,12 @@ export function FileBrowser({
     >
       <div className="ov-file-browser__tree">
         <FileBrowserTreePane
-          toolbarActions={toolbarActions}
+          entries={{
+            agentConnect,
+            onImportResources,
+            renderImportResources,
+            labels: labels?.entries,
+          }}
           searchId={searchId}
           browser={browser}
           treeLabels={text.tree}

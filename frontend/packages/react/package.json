@@ -110,7 +110,8 @@
   "devDependencies": {
     "@ark-design/ui": "0.0.0-beta.7",
     "@rsbuild/plugin-react": "^2.1.1",
-    "@rslib/core": "^1.0.5"
+    "@rslib/core": "^1.0.5",
+    "@types/react-transition-group": "^4.4.12"
   },
   "peerDependenciesMeta": {
     "@ark-design/ui": {
@@ -118,7 +119,9 @@
     }
   },
   "dependencies": {
+    "react-focus-lock": "^2.13.7",
     "react-markdown": "^10.1.0",
+    "react-transition-group": "^4.4.5",
     "remark-gfm": "^4.0.1"
   }
 }

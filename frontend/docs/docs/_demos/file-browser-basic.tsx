@@ -1,7 +1,6 @@
 import { useLang } from '@rspress/core/runtime';
+import { useState } from 'react';
 import { OpenVikingProvider } from '@openviking/react/client';
-import { FileBrowserEntries } from '@openviking/react/components/file-browser-entries';
-import '@openviking/react/components/file-browser-entries/style.css';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
 
@@ -185,21 +184,30 @@ function offlineFetch(
 
 export default function FileBrowserBasic() {
   const componentLocale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
+  const [notice, setNotice] = useState('点击导入资源，验证宿主自定义交互');
   return (
-    <div style={{ height: 720, minWidth: 720 }}>
+    <div
+      lang={componentLocale}
+      style={{
+        height: 720,
+        minWidth: 720,
+        display: 'grid',
+        gridTemplateRows: 'minmax(0, 1fr) auto',
+        gap: 8,
+      }}
+    >
       <OpenVikingProvider fetch={offlineFetch}>
         <FileBrowser
           locale={componentLocale}
           defaultExpandedUri={MEMORIES}
-          toolbarActions={
-            <FileBrowserEntries
-              locale={componentLocale}
-              onConnectAgent={() => {}}
-              onImportResources={() => {}}
-            />
-          }
+          agentConnect={{ apiKey: 'demo-api-key', locale: componentLocale }}
+          onImportResources={() => setNotice('宿主已收到导入事件')}
+          renderImportResources={(trigger) => (
+            <span data-file-browser-import-trigger>{trigger}</span>
+          )}
         />
       </OpenVikingProvider>
+      <span role="status">{notice}</span>
     </div>
   );
 }
