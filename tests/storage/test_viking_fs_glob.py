@@ -1035,3 +1035,24 @@ async def test_glob_uses_path_to_uri_when_request_mapping_differs(monkeypatch, f
     )
 
     assert result == {"matches": ["viking://resources/actual-root/demo.md"], "count": 1}
+
+
+@pytest.mark.asyncio
+async def test_glob_auto_backend_probe_failure_falls_back_to_fs(fs):
+    class _ProbeFailingVectorStore(_RemoteGlobVectorStore):
+        async def get_account_backend(self, account_id):
+            raise RuntimeError("vector backend unavailable")
+
+    fs.vector_store = _ProbeFailingVectorStore([])
+    fs.glob_config = SimpleNamespace(engine="auto")
+
+    # The count and collection-meta checks below degrade to the fs engine on
+    # failure; the backend probe must not be the one step that fails the glob.
+    should_use_remote = await fs._should_use_vikingdb_glob(
+        pattern="**/*.md",
+        uri="viking://resources",
+        node_limit=None,
+        ctx=_default_ctx(),
+    )
+
+    assert should_use_remote is False
