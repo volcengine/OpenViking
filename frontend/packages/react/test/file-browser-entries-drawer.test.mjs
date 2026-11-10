@@ -20,6 +20,10 @@ const click = async (element) => {
   });
 };
 const finishTransition = () => act(() => delay(350));
+const assertScrollLocked = () => {
+  assert.equal(document.body.style.overflowX, 'hidden');
+  assert.equal(document.body.style.overflowY, 'hidden');
+};
 const entry = (props = {}) =>
   createElement(FileBrowserEntries, {
     agentConnect: { apiKey: 'drawer-demo-key', locale: 'en', ...props },
@@ -62,7 +66,7 @@ test('the connection drawer exits before releasing scroll and follows scoped hos
       null,
       'no native browser dialog',
     );
-    assert.equal(document.body.style.overflow, 'hidden');
+    assertScrollLocked();
     assert.equal(
       layer.style.getPropertyValue('--ov-ui-color-bg-1'),
       'rgb(20, 30, 40)',
@@ -76,7 +80,7 @@ test('the connection drawer exits before releasing scroll and follows scoped hos
       panel,
       'closing content survives until the slide-out ends',
     );
-    assert.equal(document.body.style.overflow, 'hidden');
+    assertScrollLocked();
     await finishTransition();
     assert.equal(drawer(), null);
     assert.equal(document.body.style.overflow, initialOverflow);
@@ -124,7 +128,7 @@ for (const first of [0, 1]) {
             unmounted.add(index);
           } else {
             await click(panels[index].querySelector('.ov-drawer__close'));
-            assert.equal(body.style.overflow, 'hidden');
+            assertScrollLocked();
             await finishTransition();
           }
         };
@@ -137,7 +141,7 @@ for (const first of [0, 1]) {
           assert.equal(body.style.paddingRight, lockedPadding);
           await release(first, firstAction);
           assert.equal(document.querySelectorAll('[role="dialog"]').length, 1);
-          assert.equal(body.style.overflow, 'hidden');
+          assertScrollLocked();
           assert.equal(body.style.paddingRight, lockedPadding);
           await release(1 - first, lastAction);
           assert.equal(drawer(), null);
