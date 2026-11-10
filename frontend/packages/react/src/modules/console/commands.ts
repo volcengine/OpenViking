@@ -3,17 +3,21 @@ import type {
   TuiCommandDefinition,
   TuiRecordContent,
 } from '../../components/tui/index.js';
+import type { Locale } from '../../shared/locale.js';
 import { COMMAND_SPECS } from './command-specs.js';
 import { parseArguments, tokenize } from './command-parser.js';
+import { ConsoleCommandError } from './command-messages.js';
+import { resolveConsoleLocale } from './labels.js';
 import { formatResult } from './results.js';
 
 export function consoleCommands(
-  locale: 'en' | 'zh',
+  locale: Locale,
 ): readonly TuiCommandDefinition[] {
+  const text = resolveConsoleLocale(locale);
   return COMMAND_SPECS.map((spec) => ({
     name: spec.name,
     inputText: `ov ${spec.name}`,
-    description: spec.description[locale === 'zh' ? 1 : 0],
+    description: text.commands[spec.name],
     usage: [
       'ov',
       spec.name,
@@ -38,11 +42,28 @@ export function consoleCommands(
   }));
 }
 
+export function createCommandHelp(locale: Locale): TuiRecordContent {
+  return {
+    variant: 'command-help',
+    sections: [
+      {
+        key: 'commands',
+        label: resolveConsoleLocale(locale).availableCommands,
+        items: consoleCommands(locale).map((item) => ({
+          key: item.name,
+          name: item.usage,
+          description: item.description,
+        })),
+      },
+    ],
+  };
+}
+
 export async function executeCommand(
   input: string,
   client: OvClient,
   options: OvRequestOptions,
-  locale: 'en' | 'zh',
+  locale: Locale,
 ): Promise<TuiRecordContent> {
   const tokens = tokenize(input);
   const spec = [...COMMAND_SPECS]
@@ -52,12 +73,7 @@ export async function executeCommand(
         .split(' ')
         .every((part, index) => tokens[index]?.value === part),
     );
-  if (!spec)
-    throw new Error(
-      locale === 'zh'
-        ? '未知命令。输入 ov help 查看可用命令。'
-        : 'Unknown command. Enter ov help for available commands.',
-    );
+  if (!spec) throw new ConsoleCommandError('unknownCommand');
   let values;
   try {
     values = parseArguments(
@@ -66,26 +82,14 @@ export async function executeCommand(
       spec.flags,
     );
   } catch (error) {
-    throw new Error(
-      `${error instanceof Error ? error.message : String(error)}\n${consoleCommands(locale).find((item) => item.name === spec.name)!.usage}`,
-      { cause: error },
-    );
+    const usage = consoleCommands(locale).find(
+      (item) => item.name === spec.name,
+    )!.usage;
+    if (error instanceof ConsoleCommandError)
+      throw new ConsoleCommandError(error.code, error.value, usage);
+    throw error;
   }
-  if (!spec.request)
-    return {
-      variant: 'command-help',
-      sections: [
-        {
-          key: 'commands',
-          label: locale === 'zh' ? '可用命令' : 'Available commands',
-          items: consoleCommands(locale).map((item) => ({
-            key: item.name,
-            name: item.usage,
-            description: item.description,
-          })),
-        },
-      ],
-    };
+  if (!spec.request) return createCommandHelp(locale);
   const data = await client.request<unknown>({
     ...spec.request(values),
     options,

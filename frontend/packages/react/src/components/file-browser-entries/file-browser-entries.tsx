@@ -1,3 +1,4 @@
+import { resolveFileBrowserEntriesLabels } from './labels.js';
 import { Divider } from '../../shared/components/divider/index.js';
 import {
   ConnectAgentIcon,
@@ -9,11 +10,6 @@ export type {
   FileBrowserEntriesLabels,
   FileBrowserEntriesProps,
 } from './types.js';
-
-const DEFAULT_LABELS = {
-  connectAgent: 'Connect agent',
-  importResources: 'Import resources',
-};
 
 /**
  * 文件浏览入口条：连接 Agent 与导入资源。
@@ -27,13 +23,14 @@ const DEFAULT_LABELS = {
  * leaving an empty tinted strip would suggest something failed to load.
  */
 export function FileBrowserEntries({
+  locale = 'en-US',
   onConnectAgent,
   onImportResources,
   labels,
   className,
   ...rest
 }: FileBrowserEntriesProps) {
-  const text = { ...DEFAULT_LABELS, ...labels };
+  const text = resolveFileBrowserEntriesLabels(locale, labels);
   if (!onConnectAgent && !onImportResources) return null;
 
   return (

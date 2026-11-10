@@ -154,7 +154,7 @@ test('a new host command is discoverable without selecting it or opening its det
     examples: ['/brand-new-command 25'],
   };
   const html = renderToStaticMarkup(
-    createElement(Tui, { ...props, commands: [next], locale: 'zh' }),
+    createElement(Tui, { ...props, commands: [next], locale: 'zh-CN' }),
   );
   for (const text of ['brand-new-command', '宿主新增命令'])
     assert.ok(html.includes(text), text);
@@ -170,14 +170,14 @@ test('a new host command is discoverable without selecting it or opening its det
 
 test('locale changes generic UI, labels override it, and host command copy is preserved', () => {
   const chinese = renderToStaticMarkup(
-    createElement(Tui, { ...props, locale: 'zh' }),
+    createElement(Tui, { ...props, locale: 'zh-CN' }),
   );
   for (const text of ['宿主操作', '刷新宿主索引', '执行成功'])
     assert.ok(chinese.includes(text), text);
   const override = renderToStaticMarkup(
     createElement(Tui, {
       ...props,
-      locale: 'zh',
+      locale: 'zh-CN',
       labels: {
         success: 'Custom status',
         allCommands: 'Custom catalogue',

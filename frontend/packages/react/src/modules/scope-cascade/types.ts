@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes } from 'react';
 import type {
   ScopeSwitcherLabels,
@@ -48,6 +49,8 @@ export interface ScopeCascadeProps extends Omit<
   'children'
 > {
   controller: ScopeCascadeController;
+  /** 内置中英文文案的语言。Language of the built-in interface copy. */
+  locale: Locale;
   /** Accessible names and placeholders, in library / space / user order. */
   levelNames?: readonly [string, string, string];
   retryLabel?: string;

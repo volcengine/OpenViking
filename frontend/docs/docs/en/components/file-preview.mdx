@@ -1,5 +1,7 @@
 # FilePreview
 
+Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
+
 A tabbed file preview. The host supplies the content and file name; the component handles format detection, the tab row, the content header and the body.
 
 This is a placeholder implementation: the shell, editing flow and success notifications are in place and interactive, and the file body falls back to plain text until FileViewer is wired in. The view will be rewritten against the contract described here.
@@ -57,7 +59,7 @@ Execution capabilities and notifications are separate. Operation resolution trig
 | Property    | Type                                             | Default  | Description                                                    |
 | ----------- | ------------------------------------------------ | -------- | -------------------------------------------------------------- |
 | `tabs`      | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | Required | At least one tab; the first is shown initially.                |
-| `labels`    | `FilePreviewLabels`                              | English  | Default copy for every tab; a tab can override field by field. |
+| `labels`    | `FilePreviewLabels`                              | locale   | Default copy for every tab; a tab can override field by field. |
 | Other props | `HTMLAttributes<HTMLDivElement>`                 | —        | Standard div attributes.                                       |
 
 ### Per-tab fields
@@ -180,3 +182,5 @@ Colours come from the design system the OpenViking console uses — the values o
 ## Implementation scope
 
 The component renders the shell and reports successful operations. Reading, saving, downloading and navigation are supplied as execution capabilities by the host; success notifications do not execute them.
+
+`labels.showHiddenPath` overrides the collapsed-path menu button’s accessible name: “Show hidden path levels” in English and “显示隐藏的路径层级” in Chinese.

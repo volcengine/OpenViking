@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 import type {
   ViewerHandle,
@@ -43,7 +44,7 @@ export interface FilePreviewPanelsProps {
   panelProps: HTMLAttributes<HTMLDivElement>;
   panelClass: string;
   text: Required<FilePreviewLabels>;
-  locale?: 'en-US' | 'zh-CN';
+  locale?: Locale;
   actions: ReturnType<typeof useFilePreviewActions>;
   actionContext: FilePreviewActions;
   editing: ReturnType<typeof useFilePreviewEditing>;

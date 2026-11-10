@@ -218,8 +218,8 @@ onActiveKeyChange?: (key: string) => void;
 
 **组件的接口决定**：
 
-- 暴露 `locale?: 'en-US' | 'zh-CN'`，透传给 `FileViewerCore`
-- `labels` 只管组件外壳（页签、标题行、按钮、空态）
+- 必填 `locale: 'zh-CN' | 'en-US'` 选择组件内置中英文文案，直接透传给 `FileViewerCore`
+- `labels` 按项覆盖组件外壳文案（页签、标题行、按钮、空态），未覆盖项跟随 `locale`
 - 兜底态通过 `slots.loadingFallback` / `errorFallback` / `unsupportedFallback` 暴露；`confirm` 和 `downloadFallback` 因为带回调参数，用 `ComponentType<...>` 形态暴露，与底座对齐
 
 **代价**：底座文案不可逐条定制，只能整体跟随 `locale`。火山版接受了这个限制，我们照做。

@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes, ReactNode } from 'react';
 
 /**
@@ -373,8 +374,8 @@ export interface ScopeSwitcherScrollMetrics {
 }
 
 /**
- * 可替换文案，组件内置英文默认值。
- * Replaceable copy; the component ships English defaults.
+ * 可替换文案，组件内置中英文文案。
+ * Replaceable copy with built-in Chinese and English defaults.
  */
 export interface ScopeSwitcherLabels {
   /** Loading status text / 加载提示。 */
@@ -403,7 +404,10 @@ export interface ScopeSwitcherLabels {
 }
 
 /** Layout only: each child owns its state and data subscription. */
-export type ScopeSwitcherProps = HTMLAttributes<HTMLDivElement>;
+export interface ScopeSwitcherProps extends HTMLAttributes<HTMLDivElement> {
+  /** 内置中英文文案的语言。Language of the built-in interface copy. */
+  locale: Locale;
+}
 
 /**
  * 两种层级共有的入参：身份与触发器内容。
@@ -411,6 +415,8 @@ export type ScopeSwitcherProps = HTMLAttributes<HTMLDivElement>;
  * Props shared by both level forms: identity and what the trigger shows.
  */
 export interface ScopeSelectorBaseProps {
+  /** 内置中英文文案的语言。Language of the built-in interface copy. */
+  locale: Locale;
   /**
    * 层级身份：稳定标识、无障碍名与末尾标记。
    * Level identity: stable key, accessible name and trailing marker.
@@ -426,8 +432,8 @@ export interface ScopeSelectorBaseProps {
    */
   trigger?: ScopeSwitcherTrigger;
   /**
-   * 可替换文案，缺省为英文。
-   * Replaceable copy; English by default.
+   * 可替换文案，未提供的项使用当前 locale 的内置文案。
+   * Replaceable copy; omitted fields follow locale.
    */
   labels?: ScopeSwitcherLabels;
 }

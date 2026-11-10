@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes, ReactNode, RefObject } from 'react';
 
 import type { VikingBotInteractionProps } from './interaction/types.js';
@@ -17,8 +18,8 @@ import type {
 export interface VikingBotMessageListProps {
   /** 当前会话的消息。Messages in the current session. */
   messages: readonly VikingBotMessage[];
-  /** Locale used to format message timestamps. */
-  locale?: string;
+  /** 内置中英文文案的语言。Language of the built-in interface copy. */
+  locale: Locale;
   /** 附加到根元素的类名。Class name applied to the root element. */
   className?: string;
   /** 助手仍在生成时追加的片段。Parts appended while the assistant is still streaming. */
@@ -35,7 +36,7 @@ export interface VikingBotMessageListProps {
   onMessageAction?: (messageId: string, actionKey: string) => void;
   /** 消息正文的替换渲染，用于宿主自带 Markdown 渲染器。Replaces message bodies. */
   renderMessage?: (message: VikingBotMessage) => ReactNode;
-  /** 可替换文案，缺省为英文。Replaceable copy; English by default. */
+  /** 可替换文案，未提供的项使用当前 locale 的内置文案。Replaceable copy; omitted fields follow locale. */
   labels?: VikingBotLabels;
 }
 
@@ -59,6 +60,8 @@ export interface VikingBotComposerRef {
 export interface VikingBotComposerProps extends VikingBotInputFeatures {
   /** 受控的草稿文本。Controlled draft text. */
   value: string;
+  /** 内置中英文文案的语言。Language of the built-in interface copy. */
+  locale: Locale;
   /** 附加到根元素的类名。Class name applied to the root element. */
   className?: string;
   /** 宿主已选中的附件。Attachments already selected by the host. */
@@ -87,7 +90,7 @@ export interface VikingBotComposerProps extends VikingBotInputFeatures {
   onSend?: (draft: VikingBotDraft) => void;
   /** 停止正在进行的回复。省略时不展示停止动作。Stops the streaming reply. */
   onCancel?: () => void;
-  /** 可替换文案，缺省为英文。Replaceable copy; English by default. */
+  /** 可替换文案，未提供的项使用当前 locale 的内置文案。Replaceable copy; omitted fields follow locale. */
   labels?: VikingBotLabels;
 }
 
@@ -98,12 +101,12 @@ export interface VikingBotProps
     Omit<HTMLAttributes<HTMLDivElement>, 'onCopy' | 'onSubmit'> {
   /** 当前会话的消息。Messages in the current session. */
   messages: readonly VikingBotMessage[];
+  /** 内置中英文文案的语言。Language of the built-in interface copy. */
+  locale: Locale;
   /** Host-owned session history and actions. */
   sessions?: VikingBotSessions;
   /** Optional extension controls, such as a host-provided More menu. */
   headerActions?: ReactNode;
-  /** Locale used to format server-provided session dates. */
-  locale?: string;
   /** 附加到根元素的类名。Class name applied to the root element. */
   className?: string;
   /** 助手仍在生成时追加的片段。Parts appended while the assistant is still streaming. */
@@ -134,7 +137,7 @@ export interface VikingBotProps
    * 待确认交互的配置；存在时替代输入区。
    * Configuration of a pending interaction; replaces the composer.
    */
-  interaction?: VikingBotInteractionProps;
+  interaction?: Omit<VikingBotInteractionProps, 'locale'>;
   /**
    * 整块替换交互区；传值时忽略 `interaction` 的内置渲染，宿主自行渲染。
    * Replaces the whole interaction area; when set, the built-in rendering of
@@ -161,6 +164,6 @@ export interface VikingBotProps
   onCopy?: (text: string) => void;
   /** 触发一条消息声明的动作。Fires a message action. */
   onMessageAction?: (messageId: string, actionKey: string) => void;
-  /** 可替换文案，缺省为英文。Replaceable copy; English by default. */
+  /** 可替换文案，未提供的项使用当前 locale 的内置文案。Replaceable copy; omitted fields follow locale. */
   labels?: VikingBotLabels;
 }

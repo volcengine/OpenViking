@@ -2,13 +2,13 @@
 
 [English](README.md) / 中文
 
-按 [Figma 节点 10468:23946](https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=10468-23946) 实现的接入视图。标题、两个页签、十四个 Agent 与四个开发接入方式的名称、图标、说明、标签及正文均内置。调用方必须传入 `apiKey` 和 `locale: 'zh' | 'en'`，可通过 `baseUrl` 覆盖默认云服务地址。
+按 [Figma 节点 10468:23946](https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=10468-23946) 实现的接入视图。标题、两个页签、十四个 Agent 与四个开发接入方式的名称、图标、说明、标签及正文均内置。调用方必须传入 `apiKey` 和 `locale: 'zh-CN' | 'en-US'`，可通过 `baseUrl` 覆盖默认云服务地址。
 
 ```tsx
 import { AgentConnect } from '@openviking/react/components/agent-connect';
 import '@openviking/react/components/agent-connect/style.css';
 
-<AgentConnect apiKey={apiKey} locale="zh" />;
+<AgentConnect apiKey={apiKey} locale="zh-CN" />;
 ```
 
 ## 设计与交互约定

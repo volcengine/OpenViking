@@ -2,7 +2,7 @@ import { useId, useState } from 'react';
 
 import { AgentConnectDetailView } from './agent-connect-detail.js';
 import { getAgentConnectDesign } from './agent-connect-design.js';
-import { AGENT_CONNECT_COPY } from './agent-connect-copy.js';
+import { resolveAgentConnectLabels } from './agent-connect-copy.js';
 import { DEFAULT_BASE_URL } from './agent-connect-instructions.js';
 import type {
   AgentConnectItem,
@@ -40,7 +40,7 @@ export function AgentConnect({
   const activeTabId = controlledTabId ?? localTabId;
   const selectedId = controlledSelectedId ?? localSelection[activeTabId];
   const design = getAgentConnectDesign(locale);
-  const labels = AGENT_CONNECT_COPY[locale];
+  const labels = resolveAgentConnectLabels(locale);
   const tabs = design.tabs;
   const items = design[activeTabId];
   const activeIndex = Math.max(

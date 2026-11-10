@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react';
 
-import { DEFAULT_LABELS } from './labels.js';
+import { resolveVikingBotLabels } from './labels.js';
 import { toRenderItems } from './ark-adapter.js';
 import type { VikingBotMessageListProps } from './types.js';
 
@@ -29,7 +29,7 @@ function ListSkeleton() {
 
 /** 消息列表。The message list. */
 export function VikingBotMessageList(props: VikingBotMessageListProps) {
-  const labels = { ...DEFAULT_LABELS, ...props.labels };
+  const labels = resolveVikingBotLabels(props.locale, props.labels);
   const items = toRenderItems(props.messages, props.streaming);
 
   if (items.length === 0) {

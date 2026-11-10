@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type {
   FilePreviewLabels,
   FilePreviewTab,
@@ -19,6 +20,8 @@ import type { HTMLAttributes, ReactNode } from 'react';
  * it renders itself.
  */
 export interface FileBrowserLabels {
+  /** 预览底部字符数。Character count in the preview footer. */
+  formatCharacterCount?: (count: number) => string;
   /** 未选中资源时的提示。Message shown when no resource is selected. */
   empty?: string;
   /** 加载失败提示。Load failure message. */
@@ -96,6 +99,8 @@ export interface FileBrowserProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
   'onSelect' | 'children'
 > {
+  /** 内置中英文文案的语言。Language of the built-in interface copy. */
+  locale: Locale;
   /**
    * 受控的当前资源 URI。传入时由宿主决定当前资源，模块只上报切换意图。
    *
@@ -133,12 +138,6 @@ export interface FileBrowserProps extends Omit<
    */
   defaultExpandedUri?: string;
   /**
-   * 透传给预览底座的文案语言。组件自身文案仍由 `labels` 控制。
-   * Language of the preview base's built-in copy. The module's own copy stays
-   * with `labels`.
-   */
-  locale?: 'en-US' | 'zh-CN';
-  /**
    * 工具栏上方的宿主入口，例如连接 Agent、导入资源。
    *
    * 两个固定入口由 `FileBrowserEntries` 提供，外观、图标、分隔线与等分排布都
@@ -167,8 +166,8 @@ export interface FileBrowserProps extends Omit<
    */
   onUriChange?: (uri: string | null) => void;
   /**
-   * 可替换文案，缺省为英文。
-   * Replaceable copy; English by default.
+   * 可替换文案，未提供的项使用当前 locale 的内置文案。
+   * Replaceable copy; omitted fields follow locale.
    */
   labels?: FileBrowserLabels;
   /**

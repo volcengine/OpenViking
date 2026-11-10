@@ -25,7 +25,7 @@ export interface FilePreviewHeaderProps {
   /** The header action area: a node, or a function of the actions context. */
   slotActions?: ReactNode | ((actions: FilePreviewActions) => ReactNode);
   actions: FilePreviewActions;
-  text: { copyPath: string };
+  text: { copyPath: string; showHiddenPath: string };
   onOpenParent: (uri: string) => void;
 }
 
@@ -63,6 +63,7 @@ export function FilePreviewHeader({
     <div className="ov-file-preview__header">
       <div className="ov-file-preview__path-row">
         <FilePreviewBreadcrumb
+          hiddenPathLabel={text.showHiddenPath}
           segments={segments}
           title={title}
           canOpen={canOpenParent}

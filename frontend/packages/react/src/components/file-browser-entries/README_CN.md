@@ -2,6 +2,8 @@
 
 [English](README.md) / 中文
 
+必填 `locale: 'zh-CN' | 'en-US'` 选择内置中英文文案；已有 `labels` 可逐项覆盖，未覆盖项跟随当前语言。业务内容仍由宿主提供。
+
 文件浏览区域顶部的入口条：连接 Agent 与导入资源。
 
 固定两个入口。宿主只决定显示哪几个、点击后做什么；图标、文案、等分排布与两者之间的分隔线都由组件负责——这两项在每个宿主下外观都相同，差别只在点击行为。
@@ -11,6 +13,7 @@ import { FileBrowserEntries } from '@openviking/react/components/file-browser-en
 import '@openviking/react/components/file-browser-entries/style.css';
 
 <FileBrowserEntries
+  locale="zh-CN"
   onConnectAgent={openConnectDialog}
   onImportResources={openImportFlow}
 />;
@@ -26,15 +29,16 @@ import '@openviking/react/components/file-browser-entries/style.css';
 
 ```tsx
 // 只显示导入入口，没有分隔线
-<FileBrowserEntries onImportResources={openImportFlow} />
+<FileBrowserEntries locale="zh-CN" onImportResources={openImportFlow} />
 ```
 
 ## 文案
 
-两项文案都可替换，缺省为英文：
+两项文案都可替换，默认跟随 locale：
 
 ```tsx
 <FileBrowserEntries
+  locale="zh-CN"
   onConnectAgent={openConnectDialog}
   onImportResources={openImportFlow}
   labels={{ connectAgent: '连接 Agent', importResources: '导入资源' }}
@@ -46,9 +50,9 @@ import '@openviking/react/components/file-browser-entries/style.css';
 `FileBrowser` 的 `toolbarActions` 接受任意节点。用本组件放进去，入口条的外观就与模块其余部分一致：
 
 ```tsx
-<FileBrowser
+<FileBrowser locale="zh-CN"
   toolbarActions={
-    <FileBrowserEntries onConnectAgent={connect} onImportResources={import} />
+    <FileBrowserEntries locale="zh-CN" onConnectAgent={connect} onImportResources={import} />
   }
 />;
 ```
@@ -59,9 +63,10 @@ import '@openviking/react/components/file-browser-entries/style.css';
 
 | 属性                | 类型                       | 默认值 | 说明                               |
 | ------------------- | -------------------------- | ------ | ---------------------------------- |
+| `locale`            | `'zh-CN' \| 'en-US'`       | 必填   | 内置中英文文案。                   |
 | `onConnectAgent`    | `() => void`               | —      | 连接入口被点击；省略时不显示该入口 |
 | `onImportResources` | `() => void`               | —      | 导入入口被点击；省略时不显示该入口 |
-| `labels`            | `FileBrowserEntriesLabels` | —      | 两项文案，未提供的沿用英文默认值   |
+| `labels`            | `FileBrowserEntriesLabels` | —      | 两项文案，未提供的项跟随 locale    |
 | `className`         | `string`                   | —      | 容器附加类名                       |
 
 ## 主题

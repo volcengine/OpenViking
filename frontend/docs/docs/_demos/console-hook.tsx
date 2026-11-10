@@ -8,12 +8,12 @@ import { consoleTransport } from '#console-transport';
 const transport = consoleTransport();
 
 function CommandView() {
-  const locale = useLang() === 'zh' ? 'zh' : 'en';
+  const locale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   const state = useConsole({ defaultMode: 'command', locale });
   return (
     <div>
       <button type="button" onClick={state.clear}>
-        {locale === 'zh' ? '清空记录' : 'Clear records'}
+        {locale === 'zh-CN' ? '清空记录' : 'Clear records'}
       </button>
       <div style={{ height: 420 }}>
         <Tui

@@ -2,6 +2,8 @@
 
 [English](README.md) / 中文
 
+必填 `locale: 'zh-CN' | 'en-US'` 选择内置中英文文案；已有 `labels` 可逐项覆盖，未覆盖项跟随当前语言。业务内容仍由宿主提供。
+
 面向资源浏览的目录树。宿主把树状态展平成有序行列表传进来，通过 `operations` 提供异步执行能力；组件负责渲染、键盘交互，并在操作成功后通知。
 
 组件渲染五种行类型，按 `depth` 缩进并绘制祖先连线，处理键盘导航；选中、展开、分页与重试通过 `operations` 执行。
@@ -11,6 +13,7 @@ import { FileTree } from '@openviking/react/components/file-tree';
 import '@openviking/react/components/file-tree/style.css';
 
 <FileTree
+  locale="zh-CN"
   rows={rows}
   selectedId={selectedId}
   operations={{

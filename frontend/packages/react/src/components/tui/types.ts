@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes, ReactNode } from 'react';
 import type {
   TuiCommandDefinition,
@@ -390,8 +391,8 @@ export interface TuiRecord {
 }
 
 /**
- * 可替换的界面文案，默认英文。
- * Replaceable interface copy, defaulting to English.
+ * 可替换的界面文案，默认跟随 locale。
+ * Replaceable interface copy, following locale.
  */
 export interface TuiLabels {
   /**
@@ -493,6 +494,8 @@ export interface TuiProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
   'onCopy' | 'onSubmit'
 > {
+  /** 内置中英文文案的语言。Language of the built-in interface copy. */
+  locale: Locale;
   /**
    * 当前展示的执行记录，按提交顺序排列；会话与历史切换后由宿主更新。
    * Currently displayed execution records in submission order, updated by the
@@ -519,8 +522,6 @@ export interface TuiProps extends Omit<
    * passing `null` hides empty-state content.
    */
   emptyState?: ReactNode;
-  /** 内置界面文案的语言，默认英文；命令文案由宿主提供。 */
-  locale?: 'en' | 'zh';
   /** 宿主提供的命令目录；省略时无候选和参数帮助，仍可提交文本。 */
   commands?: readonly TuiCommandDefinition[];
   /** 宿主提供的分组名称与顺序；未声明的组按目录顺序追加。 */

@@ -12,8 +12,9 @@ import {
 
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 
+import { mergeLabels } from '../../shared/locale.js';
 import { FilePreviewPanels } from './file-preview-panels.js';
-import { DEFAULT_LABELS } from './file-preview-labels.js';
+import { resolveFilePreviewLabels } from './file-preview-labels.js';
 import { FilePreviewTabRow } from './file-preview-tab-row.js';
 import { useFilePreviewActions } from './use-file-preview-actions.js';
 import { useFilePreviewActionsContext } from './use-file-preview-actions-context.js';
@@ -84,7 +85,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   },
   ref,
 ) {
-  const text = { ...DEFAULT_LABELS, ...labels };
+  const text = resolveFilePreviewLabels(locale, labels);
   const [internalKey, setInternalKey] = useState(
     () => defaultActiveKey ?? tabs[0].key,
   );
@@ -101,7 +102,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   const editing = useFilePreviewEditing(activeTab.key);
   const actions = useFilePreviewActions();
 
-  const tabText = { ...text, ...activeTab.labels };
+  const tabText = mergeLabels<typeof text>(text, activeTab.labels);
   const fileTab = isFileTab(activeTab) ? activeTab : undefined;
   const directoryTab: FilePreviewDirectoryTab | undefined =
     activeTab.kind === 'directory' ? activeTab : undefined;

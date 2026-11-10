@@ -1,5 +1,7 @@
 # FileBrowser
 
+Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
+
 Directory navigation, search and content preview as one module. The module loads its own data; the host supplies configuration, the controlled current resource, the toolbar entries and copy.
 
 The component already wires the tree, the search and the preview together: directories expand on demand and page, clicking a file loads the preview, and a search result opens the preview too. `useFileBrowser` can be used on its own to assemble a different view.
@@ -42,8 +44,10 @@ import '@openviking/react/components/file-browser-entries/style.css';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 
 <FileBrowser
+  locale="en-US"
   toolbarActions={
     <FileBrowserEntries
+      locale="en-US"
       onConnectAgent={connect}
       onImportResources={openImport}
       labels={{
@@ -61,7 +65,7 @@ Because `toolbarActions` is a node, an entry that needs a menu wraps `FileBrowse
 
 ```tsx
 <Popover content={<ResourceMenu />} trigger="hover">
-  <FileBrowserEntries onImportResources={openImport} />
+  <FileBrowserEntries locale="en-US" onImportResources={openImport} />
 </Popover>
 ```
 
@@ -75,7 +79,7 @@ A draggable divider sits between the tree and the detail pane: drag it sideways 
 
 The module owns the width and publishes it as `--ov-file-browser-tree-width` on the container: read it to mirror the layout elsewhere, but overriding it does not change the actual width, because a drag writes straight back to the same variable. To fix the width, wrap the module in a sized container and let its width cap the tree.
 
-The divider's accessible name comes from `labels.resizeTree`; override it to follow the interface language.
+The divider's accessible name comes from `labels.resizeTree`; it follows locale and can be overridden.
 
 ## Failure states
 
@@ -102,7 +106,7 @@ The module exports `FileBrowserProps` from the subpath and the root entry; `File
 | `onUriChange`        | `(uri: string \| null) => void` | —           | Called after the current resource changes, with the new URI. The signature allows `null` (the upstream contract), but the module never reports it today: there is no deselect interaction, so a host must not rely on it to collapse the detail pane.                                                                                                                           |
 | `rootUri`            | `string`                        | `viking://` | Root of the tree, narrowing the browsed scope to a subtree.                                                                                                                                                                                                                                                                                                                     |
 | `defaultExpandedUri` | `string`                        | —           | Path to expand to after the first load, opening and loading each level. When omitted only the root is expanded.                                                                                                                                                                                                                                                                 |
-| `locale`             | `'en-US' \| 'zh-CN'`            | —           | Language of the preview base's built-in copy. The module's own copy stays with `labels`.                                                                                                                                                                                                                                                                                        |
+| `locale`             | `'zh-CN' \| 'en-US'`            | Required    | Built-in Chinese and English copy.                                                                                                                                                                                                                                                                                                                                              |
 | `labels`             | `FileBrowserLabels`             | —           | Replaceable copy: `searchPlaceholder`, `searchEmpty`, `searchFailed`, `loading`, `refresh`, `empty`, `error`, `retry`, `previewMode`, `sourceMode`, `history`, `copyPath`, `viewSwitch`, `resizeTree`, `summaryEmpty`, `summaryFailed` (the fallback when a summary level failed without a server message), plus `tree` / `preview` passed through to the tree and the preview. |
 | `className`          | `string`                        | —           | Additional container class.                                                                                                                                                                                                                                                                                                                                                     |
 | `style`              | `CSSProperties`                 | —           | Container style overrides.                                                                                                                                                                                                                                                                                                                                                      |
@@ -110,3 +114,7 @@ The module exports `FileBrowserProps` from the subpath and the root entry; `File
 Labels are plain text; the host maps its own translation system into these props. No prop carries data — the module loads it.
 
 The module loads its own data through `useFileBrowser`, so the host supplies no directory or preview data; `labels.tree` and `labels.preview` are passed through to the file tree and the file preview.
+
+`labels.formatCharacterCount(count)` overrides the preview footer’s character count. It follows `locale` by default.
+
+Standalone `useFileBrowser` accepts an optional `locale` (default `en-US`) and uses the same module resources as the composed view. `summaryLabels` and `formatCharacterCount` override summary titles, failure fallback and character counts. Changing language or copy updates presentation without reloading directory summaries or file content.

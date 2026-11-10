@@ -2,6 +2,8 @@
 
 English / [中文](README_CN.md)
 
+Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
+
 The view and interaction for command records, results and input. The record area, empty state, input, command suggestions and parameter help make up the TUI body. The host provides command descriptors and execution records. The component reports submission intent through `onSubmit` and copying completion through `onCopy`.
 
 `tui.tsx` maps to `@openviking/react/components/tui`. The view is implemented against the contract below: it renders the command records and results, the empty state, and the controlled input with completion and parameter hints. The type declarations remain the source of truth for the field list.
@@ -19,7 +21,7 @@ The view and interaction for command records, results and input. The record area
 - The editor and command records share a muted CLI prefix, an emphasized command name in the text color, and resource URIs in the link color. Links are underlined on hover. Records use the same `inputText` prefix and preserve their arguments. Timestamps appear on a separate line, aligned right. Copying and history recall use the same prefix; unknown commands retain their original text.
 - The host may supply `createdAtMs` (Unix milliseconds): the component shows “Just now”, whole minutes below one hour, whole hours below 24 hours, then a local `YYYY-MM-DD HH:mm` date. Invalid or absent timestamps fall back to the optional `createdAt` display string, which is never parsed. SSR/hydration use that fallback until the client takes over. Times recalculate on rendering without a periodic timer; `labels.justNow`, `labels.formatMinutesAgo` and `labels.formatHoursAgo` customize the localized copy.
 - Accepted commands use the host-provided `inputText` prefix (default: `name`), rendered with this hierarchy in the editor. Positional parameter hints appear directly after it, or required flags when no positional parameters exist. Hints disappear while entering arguments and never enter the controlled value. Detailed help appears only while the command list is open.
-- `locale` selects built-in English (`en`, default) or Chinese (`zh`) interface copy. `labels` overrides individual strings; hosts localize command and result content. The docs demo follows the site language.
+- `locale` selects built-in English (`en-US`) or Chinese (`zh-CN`) interface copy. `labels` overrides individual strings; hosts localize command and result content. The docs demo follows the site language.
 - `onSubmit` reports explicit submission intent. The host owns requests, permissions and execution, and updates pending, successful or failed records through `records`. A pending record does not block later submissions.
 - `onOpenUri` receives the raw URI when a link in the input, command bubble or results is activated. The host owns navigation; plain-text links use their native `href` when no handler is supplied.
 - Copying is performed by the component and reported through `onCopy` on success, with the copied text as the argument; the callback does not fire on failure. Omitting the callback does not affect copying.

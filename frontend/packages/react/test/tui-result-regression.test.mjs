@@ -94,7 +94,7 @@ test('mixed resource tables preserve each title, URI target and metadata, includ
         },
       ],
     },
-    { locale: 'zh', labels: { resource: 'Entry' } },
+    { locale: 'zh-CN', labels: { resource: 'Entry' } },
   );
   assert.equal(document.querySelector('th').textContent, 'Entry');
   const rows = document.querySelectorAll('tbody tr');

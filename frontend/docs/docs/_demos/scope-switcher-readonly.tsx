@@ -1,3 +1,4 @@
+import { useLang } from '@rspress/core/runtime';
 import { useState } from 'react';
 import { LibraryIcon, SpaceIcon, UserIcon } from '#scope-switcher-icons';
 import {
@@ -23,11 +24,13 @@ const users: ScopeSwitcherOption[] = [
 ];
 
 export default function ScopeSwitcherReadonly() {
+  const componentLocale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   const [user, setUser] = useState('default');
   return (
     <div style={{ minHeight: 240 }}>
-      <ScopeSwitcher>
+      <ScopeSwitcher locale={componentLocale}>
         <ScopeSelector
+          locale={componentLocale}
           kind="fixed"
           identity={{ key: 'library', ariaLabel: 'Current library' }}
           trigger={{
@@ -36,11 +39,13 @@ export default function ScopeSwitcherReadonly() {
           }}
         />
         <ScopeSelector
+          locale={componentLocale}
           kind="fixed"
           identity={{ key: 'space', ariaLabel: 'Current data space' }}
           trigger={{ label: 'default', icon: <SpaceIcon /> }}
         />
         <ScopeSelector
+          locale={componentLocale}
           kind="selectable"
           identity={{ key: 'user', ariaLabel: 'Switch user' }}
           trigger={{ label: user, icon: <UserIcon /> }}
