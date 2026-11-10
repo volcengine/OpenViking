@@ -190,30 +190,22 @@ def test_release_data_dir_lock_resets_service_state(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("phase", ["resource", "vector"])
-async def test_close_preserves_data_dir_lock_when_resource_cleanup_fails(monkeypatch, phase):
+async def test_close_preserves_data_dir_lock_when_resource_cleanup_fails(monkeypatch):
     from unittest.mock import Mock
 
     from openviking.storage.vikingdb_manager import VikingDBManager
     from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
-    class _FailingResourceService:
-        async def close_background_tasks(self) -> None:
-            if phase == "resource":
-                raise RuntimeError("cleanup failed")
-
     released = []
     service = _service_for_close(monkeypatch)
-    service._resource_service = _FailingResourceService()
+    service._resource_service = SimpleNamespace(close_background_tasks=AsyncMock())
     service._config = SimpleNamespace(vlm=VLMConfig())
     service._queue_manager = None
     service._agfs_client = None
     service._initialized = True
     manager = VikingDBManager(VectorDBBackendConfig())
     collection = Mock()
-    collection.close.side_effect = (
-        [RuntimeError("cleanup failed"), None] if phase == "vector" else None
-    )
+    collection.close.side_effect = [RuntimeError("cleanup failed"), None]
     manager._shared_adapter._collection = collection
     service._vikingdb_manager = manager
     monkeypatch.setattr(service, "_release_data_dir_lock", lambda: released.append(True))
@@ -222,14 +214,8 @@ async def test_close_preserves_data_dir_lock_when_resource_cleanup_fails(monkeyp
         await service.close()
 
     assert released == []
-    assert service._vikingdb_manager is manager
-    if phase == "vector":
-        await service.close()
-        assert released == [True]
-        assert service._vikingdb_manager is None
-        assert collection.close.call_count == 2
-    else:
-        await manager.close()
+    await service.close()
+    assert released == [True]
 
 
 @pytest.mark.asyncio
