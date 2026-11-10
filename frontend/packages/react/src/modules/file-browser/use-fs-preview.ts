@@ -8,6 +8,7 @@ import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { isBinaryFile, mimeTypeOf, toBinaryTab } from './fs-file-kind.js';
 import { fileTypeIcon } from './fs-icon.js';
+import { isMemoryUri, stripMemoryFieldsTrailer } from './fs-memory-fields.js';
 import { isAbort, nameFromUri, toFileTab } from './fs-model.js';
 import { readDirectory } from './fs-read-directory.js';
 import { abortError, resolveIsDirectory } from './fs-stat.js';
@@ -270,9 +271,16 @@ async function readFile(
     query: { uri, limit: MAX_LINES },
     options,
   });
+  // 记忆文件末尾的元数据尾注不属于正文：默认读取已由服务端剥掉，宿主把请求变成
+  // 原始读取时它会原样回来，这里按同一规则兜底。
+  //
+  // The metadata trailer of a memory file is not part of the body: a default read has
+  // the server strip it, and a host that turns the request into a raw read gets it
+  // back, so the same rule is applied here.
+  const text = typeof content === 'string' ? content : '';
   return toFileTab(
     { uri },
-    typeof content === 'string' ? content : '',
+    isMemoryUri(uri) ? stripMemoryFieldsTrailer(text) : text,
     MAX_LINES,
     icon,
     openParent,
