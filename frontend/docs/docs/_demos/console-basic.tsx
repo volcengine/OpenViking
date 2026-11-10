@@ -29,7 +29,7 @@ export default function ConsoleBasic() {
           }}
         >
           <Console
-            locale={zh ? 'zh' : 'en'}
+            locale={zh ? 'zh-CN' : 'en-US'}
             onOpenUri={setOpened}
             conversation={conversation}
           />

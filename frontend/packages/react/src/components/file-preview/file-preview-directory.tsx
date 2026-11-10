@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import { useLayoutEffect, useRef, useState } from 'react';
 
 import type {
@@ -34,7 +35,7 @@ import type {
 export interface FilePreviewDirectoryBodyProps {
   tab: FilePreviewDirectoryTab;
   text: Required<FilePreviewLabels>;
-  locale?: 'en-US' | 'zh-CN';
+  locale?: Locale;
   actions: FilePreviewActions;
   editing: ReturnType<typeof useFilePreviewEditing>;
   viewMode: FilePreviewViewMode;
@@ -59,6 +60,8 @@ function levelToFileTab(
     kind: 'file',
     key: `${tab.key}::${level.key}`,
     source: level.source,
+    resources: level.resources ?? tab.resources,
+    resolveImage: tab.resolveImage,
     operations: tab.operations,
     slots: tab.slots,
   };
@@ -227,6 +230,7 @@ export function FilePreviewDirectoryBody({
       <div className="ov-file-preview__body">
         {
           <FilePreviewBody
+            key={fileTab.key}
             fileTab={fileTab}
             text={text}
             locale={locale}

@@ -1,6 +1,8 @@
 # FileBrowser
 
-Directory navigation, search and content preview as one module. The module loads its own data; the host supplies configuration, the controlled current resource, the toolbar entries and copy.
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
+
+Directory navigation, search and content preview as one module. The module loads its own data; the host supplies configuration, the controlled current resource, connection configuration, import interactions and copy.
 
 The component already wires the tree, the search and the preview together: directories expand on demand and page, clicking a file loads the preview, and a search result opens the preview too. `useFileBrowser` can be used on its own to assemble a different view.
 
@@ -14,14 +16,14 @@ The example uses fixed data and makes no network request:
 
 ## Scope
 
-The module covers the file tree and the file preview only. The command panel belongs to `console`.
+The module includes the file tree, file preview and top entries. The command panel belongs to `console`.
 
 ## What the module owns
 
 - Directory, search, current URI and preview loading, coordinated inside the module: clicking a directory node or a search result moves the selection and loads the preview, and switching resources drops stale requests. Clicking a directory also expands it and makes it the current resource, with its L1 overview on the right (falling back to the L0 abstract when empty).
 - Refreshing the affected directory, search results and preview after a save, rename or delete.
 - The layout of the search, directory and preview area, including the draggable divider between the tree and the detail pane. The tree starts at 352px, resizes between 200px and a cap that leaves the detail pane its readable width, and the arrow keys work once the divider has focus.
-- The search box and refresh control in the toolbar, plus per-row state such as uploading progress, conflicts and retention settings.
+- The top connection and import entries, search box and refresh control, plus per-row state such as uploading progress, conflicts and retention settings.
 - The preview tabs. Which tabs a resource has follows from the resource itself, so the host does not supply them.
 - System metadata inside the body. The `MEMORY_FIELDS` comment at the end of a memory file is an internal field the server writes, not body text: a default read has the server strip it, and when a host turns the request into a raw read (`raw=true`) through a custom transport or a gateway it comes back verbatim, so the module applies the same rule once more — only the block that ends the file counts, a same-shaped comment in the middle survives, and it applies to the memory namespace only. "The end of the file" is decided by whether the end was actually read: a first page short of the preview cap is the whole file, while a full one reads the whole file again, strips, and applies the cap itself — so a body comment ending the first page is never mistaken for a trailer, and a trailer cut off before its closing marker is still recognised.
 - The search view. Search is a private view inside this module, not a published component or module: it opens from the toolbar or ⌘K, and picking a result moves the tree and loads the preview. Nothing about it is exported, because leaving the tree leaves it without a destination. `console` has its own `@` picker over the same kind of API; that is a separate view, not this one.
@@ -30,40 +32,33 @@ The module covers the file tree and the file preview only. The command panel bel
 
 - Request configuration through the Provider, overridable per module through `requestOptions`.
 - Sign-in, account scope, routing and permissions.
-- The entries in the top row: connect an agent, import resources. Compose them with `FileBrowserEntries` inside `toolbarActions`, which owns the icons, copy and divider. Wrap it in a popover or dropdown when a click alone is not enough.
-- Connection dialogs, import flows and onboarding. The module embeds none of them.
+- Connection credentials and product-specific import flows, supplied through `agentConnect`, `onImportResources` and optional `renderImportResources`.
 
 ## Entries and toolbar
 
-The top band holds the host's entries on a tinted background; under it sit the module's own search box and refresh button. The host adds entries through `toolbarActions`, using `FileBrowserEntries` so the styling matches:
+The module includes connection and import entries above search and refresh. The host supplies `Popover` and `ResourceMenu` below. Its default native button is the popover's direct child, allowing it to attach its ref and event handlers for positioning:
 
 ```tsx
-import { FileBrowserEntries } from '@openviking/react/components/file-browser-entries';
-import '@openviking/react/components/file-browser-entries/style.css';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
+import '@openviking/react/modules/file-browser/style.css';
 
 <FileBrowser
-  toolbarActions={
-    <FileBrowserEntries
-      onConnectAgent={connect}
-      onImportResources={openImport}
-      labels={{
-        connectAgent: 'Connect agent',
-        importResources: 'Import resources',
-      }}
-    />
-  }
+  locale="en-US"
+  agentConnect={{ apiKey: 'demo-api-key', locale: 'en-US' }}
+  renderImportResources={(trigger) => (
+    <Popover content={<ResourceMenu />} trigger="click">
+      {trigger}
+    </Popover>
+  )}
 />;
 ```
 
-`FileBrowserEntries` is fixed to two entries; omitting a callback hides that entry. The icons, the copy and the divider between the two belong to it, so the host only decides which appear and what a click does. With a single entry no divider is drawn.
+Providing `agentConnect` enables the connection entry and its drawer, which slides in from the right. Omitting it hides the entry. `renderImportResources(trigger)` receives the native button with its default icon and label; wrap it or return a replacement node. Replacement nodes own their interactions. For click-only interactions, `onImportResources` enables the default import button without a renderer. Wrapping the default button preserves that callback; returning `null` hides the entry. Omitting both `onImportResources` and `renderImportResources` hides the import entry. A single entry has no divider, and nothing renders when both entries are hidden. Use `labels.entries` to replace entry and drawer copy.
 
-Because `toolbarActions` is a node, an entry that needs a menu wraps `FileBrowserEntries` instead of asking for another prop:
+For a click callback without custom rendering:
 
 ```tsx
-<Popover content={<ResourceMenu />} trigger="hover">
-  <FileBrowserEntries onImportResources={openImport} />
-</Popover>
+<FileBrowser locale="en-US" onImportResources={openImport} />
 ```
 
 ## Tree width
@@ -76,7 +71,7 @@ A draggable divider sits between the tree and the detail pane: drag it sideways 
 
 The module owns the width and publishes it as `--ov-file-browser-tree-width` on the container: read it to mirror the layout elsewhere, but overriding it does not change the actual width, because a drag writes straight back to the same variable. To fix the width, wrap the module in a sized container and let its width cap the tree.
 
-The divider's accessible name comes from `labels.resizeTree`; override it to follow the interface language.
+The divider's accessible name comes from `labels.resizeTree`; it follows locale and can be overridden.
 
 ## Failure states
 
@@ -94,20 +89,26 @@ A retry reloads the listings, the current preview and an active search together 
 
 The module exports `FileBrowserProps` from the subpath and the root entry; `FileBrowserLabels` comes from the subpath only. The entry row `FileBrowserEntries` belongs to the component layer and is imported from `@openviking/react/components/file-browser-entries`.
 
-| Property             | Type                            | Default     | Description                                                                                                                                                                                                                                                                                                                                                                     |
-| -------------------- | ------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `requestOptions`     | `OvRequestOptions`              | —           | Request configuration override, applied field by field over the nearest Provider.                                                                                                                                                                                                                                                                                               |
-| `uri`                | `string`                        | —           | The controlled current resource URI. When given, the host owns the current resource and the module only reports switch intent.                                                                                                                                                                                                                                                  |
-| `defaultUri`         | `string`                        | —           | Initial resource URI when uncontrolled. Nothing is selected when omitted.                                                                                                                                                                                                                                                                                                       |
-| `toolbarActions`     | `ReactNode`                     | —           | Host entries above the search row, composed with `FileBrowserEntries`. The search box and the refresh button are rendered by the module itself.                                                                                                                                                                                                                                 |
-| `onUriChange`        | `(uri: string \| null) => void` | —           | Called after the current resource changes, with the new URI. The signature allows `null` (the upstream contract), but the module never reports it today: there is no deselect interaction, so a host must not rely on it to collapse the detail pane.                                                                                                                           |
-| `rootUri`            | `string`                        | `viking://` | Root of the tree, narrowing the browsed scope to a subtree.                                                                                                                                                                                                                                                                                                                     |
-| `defaultExpandedUri` | `string`                        | —           | Path to expand to after the first load, opening and loading each level. When omitted only the root is expanded.                                                                                                                                                                                                                                                                 |
-| `locale`             | `'en-US' \| 'zh-CN'`            | —           | Language of the preview base's built-in copy. The module's own copy stays with `labels`.                                                                                                                                                                                                                                                                                        |
-| `labels`             | `FileBrowserLabels`             | —           | Replaceable copy: `searchPlaceholder`, `searchEmpty`, `searchFailed`, `loading`, `refresh`, `empty`, `error`, `retry`, `previewMode`, `sourceMode`, `history`, `copyPath`, `viewSwitch`, `resizeTree`, `summaryEmpty`, `summaryFailed` (the fallback when a summary level failed without a server message), plus `tree` / `preview` passed through to the tree and the preview. |
-| `className`          | `string`                        | —           | Additional container class.                                                                                                                                                                                                                                                                                                                                                     |
-| `style`              | `CSSProperties`                 | —           | Container style overrides.                                                                                                                                                                                                                                                                                                                                                      |
+| Property                | Type                                   | Default           | Description                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------- | -------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `requestOptions`        | `OvRequestOptions`                     | —                 | Request configuration override, applied field by field over the nearest Provider.                                                                                                                                                                                                                                                                                                                  |
+| `uri`                   | `string`                               | —                 | The controlled current resource URI. When given, the host owns the current resource and the module only reports switch intent.                                                                                                                                                                                                                                                                     |
+| `defaultUri`            | `string`                               | —                 | Initial resource URI when uncontrolled. Nothing is selected when omitted.                                                                                                                                                                                                                                                                                                                          |
+| `agentConnect`          | `AgentConnectProps`                    | —                 | Enables the built-in connection entry and right-side drawer.                                                                                                                                                                                                                                                                                                                                       |
+| `onUriChange`           | `(uri: string \| null) => void`        | —                 | Called after the current resource changes, with the new URI. The signature allows `null` (the upstream contract), but the module never reports it today: there is no deselect interaction, so a host must not rely on it to collapse the detail pane.                                                                                                                                              |
+| `onImportResources`     | `() => void`                           | —                 | Click handler of the default import button; enables its entry on its own.                                                                                                                                                                                                                                                                                                                          |
+| `rootUri`               | `string`                               | `viking://`       | Root of the tree, narrowing the browsed scope to a subtree.                                                                                                                                                                                                                                                                                                                                        |
+| `defaultExpandedUri`    | `string`                               | —                 | Path to expand to after the first load, opening and loading each level. When omitted only the root is expanded.                                                                                                                                                                                                                                                                                    |
+| `locale`                | `'zh-CN' \| 'en-US'`                   | Inherited / en-US | Built-in Chinese and English copy.                                                                                                                                                                                                                                                                                                                                                                 |
+| `renderImportResources` | `(trigger: ReactElement) => ReactNode` | —                 | Optional wrapper or replacement for the default import button; return `null` to hide it.                                                                                                                                                                                                                                                                                                           |
+| `labels`                | `FileBrowserLabels`                    | —                 | Replaceable copy: `searchPlaceholder`, `searchEmpty`, `searchFailed`, `loading`, `refresh`, `empty`, `error`, `retry`, `previewMode`, `sourceMode`, `history`, `copyPath`, `viewSwitch`, `resizeTree`, `summaryEmpty`, `summaryFailed` (the fallback when a summary level failed without a server message), plus `entries` / `tree` / `preview` passed through to the entry row, tree and preview. |
+| `className`             | `string`                               | —                 | Additional container class.                                                                                                                                                                                                                                                                                                                                                                        |
+| `style`                 | `CSSProperties`                        | —                 | Container style overrides.                                                                                                                                                                                                                                                                                                                                                                         |
 
 Labels are plain text; the host maps its own translation system into these props. No prop carries data — the module loads it.
 
-The module loads its own data through `useFileBrowser`, so the host supplies no directory or preview data; `labels.tree` and `labels.preview` are passed through to the file tree and the file preview.
+The module loads its own data through `useFileBrowser`, so the host supplies no directory or preview data; `labels.entries`, `labels.tree` and `labels.preview` are passed through to the entry row, file tree and file preview.
+
+`labels.formatCharacterCount(count)` overrides the preview footer’s character count. It follows `locale` by default.
+
+Standalone `useFileBrowser` accepts an optional `locale` (default `en-US`) and uses the same module resources as the composed view. `summaryLabels` and `formatCharacterCount` override summary titles, failure fallback and character counts. Changing language or copy updates presentation without reloading directory summaries or file content.

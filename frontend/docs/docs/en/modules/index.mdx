@@ -25,6 +25,31 @@ JavaScript does not load CSS. Import `@openviking/react/modules/<module>/style.c
 
 Requests inherit `OpenVikingProvider` from `@openviking/react/client`; `useFileBrowser` and `useConsole` are also available independently. FileBrowser loads directories automatically; Console issues requests only when a command is submitted.
 
+## Provider
+
+Modules do not accept a client through props; their Hooks read it from context. Wrap every module in the `OpenVikingProvider` from `@openviking/react/client` and configure the service address, identity and credentials once there. A module outside a Provider cannot request with usable configuration: `FileBrowser` stays empty without sending anything, and `Console` falls back to a default same-origin client that carries no identity.
+
+```tsx
+import { OpenVikingProvider } from '@openviking/react/client';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import { Console } from '@openviking/react/modules/console';
+import '@openviking/react/modules/style.css';
+
+<OpenVikingProvider
+  locale="en-US"
+  baseURL={endpoint}
+  apiKey={apiKey}
+  accountId={accountId}
+  userId={userId}
+  resourceId={libraryId}
+>
+  <FileBrowser />
+  <Console />
+</OpenVikingProvider>;
+```
+
+The Provider distributes the configuration through context: modules do not take `baseURL` or credentials as props, and a module that addresses another library overrides only that field through `requestOptions`. Nesting another Provider overrides just the fields it declares and inherits the rest.
+
 ## Host responsibilities
 
 Hosts own page layout, authentication, account scope, routing, and permissions. Product onboarding, resource and Skill import flows, and synchronization settings remain in the host. Administration is outside these module boundaries.

@@ -85,6 +85,7 @@ Studio 无法为你加载网关时，会用一张设置卡片代替网关标签�
 | 400 "Request model is missing"、415 "Compressed request bodies are not supported" | 只出现在限定了模型的密钥上：请求体必须写明模型，且不能经过压缩编码。 |
 | 404 "This upstream is an exact endpoint for … only" | 密钥绑定的上游关闭了**拼接协议接口路径**（见[直接发往完整请求地址](07-upstreams.md#exact-endpoint)），只接受该协议的接口地址，而客户端调用了别的路径，例如 `/v1/models`。 |
 | 404 "No allowed upstream matches this protocol and model" | 密钥绑定的已启用上游中，没有一个使用客户端调用的 API 并提供所请求的模型。检查上游的协议、模型和别名、是否启用，以及密钥绑定了哪些上游。 |
+| 400 `peer_invalid` "X-OpenViking-Actor-Peer must be one path segment…" | 请求的 Peer 不是合法的 Peer ID，例如含有 `/` 或空格。见[按 Peer 区分记忆](03-connect-clients.md#peer)。 |
 | 403 "Upstream URL is not allowed" | `X-OpenViking-Upstream-URL` 与密钥绑定的任何上游的 Base URL 都不相同。见[按请求指定上游](07-upstreams.md#upstream-url-header)。 |
 | 401 "Upstream API key is missing" | 上游要求每个客户端在 `X-OpenViking-Upstream-Key` 中自带 API Key，或者由网关保管 API Key 的上游没有填写。见[凭证](07-upstreams.md#credentials)。 |
 | 403 "Coding Plan upstreams are disabled; configure a model API key" | 上游被标记为 [Coding Plan 密钥](07-upstreams.md#coding-plan-keys)。改用模型 API Key，或者有意勾选**允许通过网关使用这个套餐**。 |

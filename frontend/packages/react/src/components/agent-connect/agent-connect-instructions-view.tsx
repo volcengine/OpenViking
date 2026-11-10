@@ -1,12 +1,16 @@
-import { useCallback, useRef, useState } from 'react';
+import { useState } from 'react';
 
 import CopyIcon from '../../../../icons/svg/agent-connect/copy.svg?react';
-import { AGENT_CONNECT_COPY } from './agent-connect-copy.js';
+import { resolveAgentConnectLabels } from './agent-connect-copy.js';
 import { AgentConnectMarkdown } from './agent-connect-markdown.js';
 import type { AgentConnectLocale } from './types.js';
+import type { getAgentConnectInstructions } from './agent-connect-instructions.js';
+import { AgentConnectCodeBlock } from './agent-connect-code-block.js';
+import { useAgentConnectCopy } from './use-agent-connect-copy.js';
 
 interface InstructionsViewProps {
-  instructions: { fixed: boolean; display: string; copy: string };
+  instructions: ReturnType<typeof getAgentConnectInstructions>;
+  apiKey: string;
   locale: AgentConnectLocale;
   agreementUrl?: string;
   onCopy?: (text: string) => void;
@@ -15,20 +19,22 @@ interface InstructionsViewProps {
 /** 由父视图的 key 隔离指南及凭据的复制生命周期。 */
 export function AgentConnectInstructionsView({
   instructions,
+  apiKey,
   locale,
   agreementUrl,
   onCopy,
 }: InstructionsViewProps) {
-  const [status, setStatus] = useState<
-    'idle' | 'pending' | 'copied' | 'failed'
-  >('idle');
-  const pending = useRef(false);
-  const mounted = useRef(false);
-  // ref 在提交阶段立即失效，避免权限结果早于被动 Effect 清理完成。
-  const setRoot = useCallback((node: HTMLDivElement | null) => {
-    mounted.current = node !== null;
-  }, []);
-  const labels = AGENT_CONNECT_COPY[locale];
+  const [visibleBlockId, onReveal] = useState<string | null>(null);
+  const { status, setRoot, copy } = useAgentConnectCopy(
+    instructions.copy,
+    onCopy,
+  );
+  const controls = { locale, visibleBlockId, onReveal, onCopy };
+  const command = instructions.command;
+  const commandOffset = command
+    ? instructions.display.indexOf(command.display)
+    : -1;
+  const labels = resolveAgentConnectLabels(locale);
   const message =
     status === 'copied'
       ? labels.copied
@@ -36,23 +42,6 @@ export function AgentConnectInstructionsView({
         ? labels.failed
         : '';
   const copyLabel = instructions.fixed ? labels.copy : labels.copyMarkdown;
-
-  async function handleCopy() {
-    if (pending.current) return;
-    pending.current = true;
-    setStatus('pending');
-    try {
-      await navigator.clipboard.writeText(instructions.copy);
-    } catch {
-      if (mounted.current) setStatus('failed');
-      return;
-    } finally {
-      pending.current = false;
-    }
-    if (!mounted.current) return;
-    setStatus('copied');
-    onCopy?.(instructions.copy);
-  }
 
   return (
     <div ref={setRoot} className="ov-agent-connect__instructions">
@@ -64,17 +53,31 @@ export function AgentConnectInstructionsView({
           className="ov-agent-connect__copy"
           type="button"
           disabled={status === 'pending'}
-          onClick={() => void handleCopy()}
+          onClick={() => void copy()}
         >
           <CopyIcon aria-hidden="true" />
           {status === 'copied' ? labels.copied : copyLabel}
         </button>
       </div>
       <div className="ov-agent-connect__body">
-        {instructions.fixed ? (
-          instructions.display
+        {command ? (
+          <>
+            {instructions.display.slice(0, commandOffset)}
+            <AgentConnectCodeBlock
+              {...controls}
+              language="bash"
+              display={command.display}
+              copyText={command.copy}
+            />
+            {instructions.display.slice(commandOffset + command.display.length)}
+          </>
         ) : (
-          <AgentConnectMarkdown text={instructions.display} />
+          <AgentConnectMarkdown
+            {...controls}
+            text={instructions.markdown}
+            keyToken={instructions.keyToken}
+            apiKey={apiKey}
+          />
         )}
       </div>
       <span

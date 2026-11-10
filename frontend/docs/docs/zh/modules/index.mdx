@@ -25,6 +25,31 @@ JavaScript 不加载 CSS。单模块使用 `@openviking/react/modules/<模块>/s
 
 模块请求继承 `@openviking/react/client` 提供的 `OpenVikingProvider`，`useFileBrowser` 和 `useConsole` 均可独立使用。FileBrowser 自动加载目录；Console 挂载本身不发请求，提交命令后才访问服务。
 
+## Provider
+
+模块不通过 props 接收 Client，而是在内部 Hook 中从 Context 取用。所有模块都必须包在 `@openviking/react/client` 的 `OpenVikingProvider` 内，在 Provider 上统一配置服务地址、身份与凭证；没有 Provider，模块拿不到可用的请求配置：FileBrowser 不会发起请求、保持空态，Console 只能退回同源默认 Client 且不带身份配置。
+
+```tsx
+import { OpenVikingProvider } from '@openviking/react/client';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import { Console } from '@openviking/react/modules/console';
+import '@openviking/react/modules/style.css';
+
+<OpenVikingProvider
+  locale="zh-CN"
+  baseURL={endpoint}
+  apiKey={apiKey}
+  accountId={accountId}
+  userId={userId}
+  resourceId={libraryId}
+>
+  <FileBrowser />
+  <Console />
+</OpenVikingProvider>;
+```
+
+Provider 通过 Context 下发配置：模块不接收 `baseURL` 或凭证作为 props；访问其他知识库的模块只用 `requestOptions` 覆盖该字段。嵌套 Provider 时，内层只覆盖自己声明的字段，其余继承外层。
+
 ## 宿主职责
 
 页面布局、认证、账号作用域、路由和权限由宿主负责。产品引导、资源与 Skill 导入流程及同步配置留在宿主；管理后台不在这些模块的范围内。

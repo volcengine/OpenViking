@@ -1,4 +1,7 @@
+import { resolveScopeCascadeLabels } from './labels.js';
 import { useState } from 'react';
+import { useLocale } from '../../shared/locale-context.js';
+import type { Locale } from '../../shared/locale.js';
 import {
   ScopeSelector,
   ScopeSwitcher,
@@ -11,6 +14,7 @@ import type {
 } from './types.js';
 
 type LevelProps = Pick<ScopeCascadeProps, 'labels' | 'retryLabel'> & {
+  locale: Locale;
   level: ScopeCascadeLevel;
   name: string;
 };
@@ -20,14 +24,17 @@ function ConnectedLevel(props: LevelProps) {
 }
 function LevelView({
   level,
+  locale,
   state,
   name,
   labels,
   retryLabel,
 }: LevelProps & { state: ScopeCascadeSnapshot }) {
   const [keyword, setKeyword] = useState('');
+  const text = resolveScopeCascadeLabels(locale);
   return (
     <ScopeSelector
+      locale={locale}
       labels={labels}
       kind="selectable"
       identity={{ key: name, ariaLabel: name }}
@@ -63,9 +70,9 @@ function LevelView({
       slots={{
         errorFallback: (
           <>
-            {labels?.error ?? 'Unable to load options'}{' '}
+            {labels?.error ?? text.error}{' '}
             <button type="button" onClick={level.refresh}>
-              {retryLabel ?? 'Retry'}
+              {retryLabel ?? text.retry}
             </button>
           </>
         ),
@@ -74,29 +81,35 @@ function LevelView({
   );
 }
 
-/** Only leaf selectors subscribe. This wrapper stays outside the update path. */
+/** Only leaf selectors subscribe to request state; this wrapper resolves language. */
 export function ScopeCascade({
   controller,
+  locale: localeProp,
   labels,
-  levelNames = ['Library', 'Space', 'User'],
+  levelNames: names,
   retryLabel,
   ...props
 }: ScopeCascadeProps) {
+  const locale = useLocale(localeProp);
+  const levelNames = names ?? resolveScopeCascadeLabels(locale).levelNames;
   return (
-    <ScopeSwitcher {...props}>
+    <ScopeSwitcher {...props} locale={locale}>
       <ConnectedLevel
+        locale={locale}
         level={controller.levels[0]}
         name={levelNames[0]}
         labels={labels}
         retryLabel={retryLabel}
       />
       <ConnectedLevel
+        locale={locale}
         level={controller.levels[1]}
         name={levelNames[1]}
         labels={labels}
         retryLabel={retryLabel}
       />
       <ConnectedLevel
+        locale={locale}
         level={controller.levels[2]}
         name={levelNames[2]}
         labels={labels}

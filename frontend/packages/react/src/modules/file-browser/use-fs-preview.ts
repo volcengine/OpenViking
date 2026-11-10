@@ -1,20 +1,18 @@
 import { useEffect, useState } from 'react';
 
-import type {
-  FilePreviewFileTab,
-  FilePreviewTab,
-} from '../../components/file-preview/index.js';
-import { OV_PATHS } from '../../client/paths.js';
+import type { FilePreviewTab } from '../../components/file-preview/index.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { isBinaryFile, mimeTypeOf, toBinaryTab } from './fs-file-kind.js';
-import { fileTypeIcon } from './fs-icon.js';
-import { isMemoryUri, stripMemoryFieldsTrailer } from './fs-memory-fields.js';
-import { isAbort, nameFromUri, toFileTab } from './fs-model.js';
+import { directoryIcon } from './fs-icon.js';
+import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
+import {
+  isAbort,
+  nameFromUri,
+  toDirectoryTab,
+  type DirectorySummary,
+} from './fs-model.js';
 import { readDirectory } from './fs-read-directory.js';
+import { readFile } from './fs-read-file.js';
 import { abortError, resolveIsDirectory } from './fs-stat.js';
-
-/** 读取正文的行数上限；读满即按截断处理。 */
-const MAX_LINES = 2000;
 
 export interface PreviewState {
   tabs: readonly FilePreviewTab[] | null;
@@ -45,6 +43,8 @@ export interface UseFsPreviewOptions {
   resourceType?: 'directory' | 'file' | 'unknown';
   /** 目录两级摘要的标题。Titles of the two summary levels. */
   labels?: { l0: string; l1: string; failure: string };
+  /** 字符数文案；独立 Hook 默认英文。Character count copy; standalone Hooks default to English. */
+  formatCharacterCount?: (count: number) => string;
   /**
    * 打开路径上的某一级祖先。面包屑与目录页签共用它。
    * Opens one ancestor level; the breadcrumb and a directory tab share it.
@@ -74,25 +74,24 @@ export interface UseFsPreviewOptions {
  * A file reads its content and a directory reads its overview, falling back to the
  * abstract; both are Markdown and go through the same preview component.
  */
-const DEFAULT_SUMMARY_LABELS = {
-  l0: 'L0 Summary',
-  l1: 'L1 Overview',
-  failure: 'The summary could not be loaded.',
-};
-
 export function useFsPreview({
   client,
   uri,
   resourceType = 'file',
-  labels = DEFAULT_SUMMARY_LABELS,
+  labels = resolveSummaryLabels('en-US'),
+  formatCharacterCount = resolveLabels(undefined, 'en-US').formatCharacterCount,
   openParent,
   generation = 0,
   requestOptions,
 }: UseFsPreviewOptions): PreviewState {
+  const [directory, setDirectory] = useState<{
+    uri: string;
+    summary: DirectorySummary;
+  } | null>(null);
   const [tabs, setTabs] = useState<FilePreviewTab[] | null>(null);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
-  const [footer, setFooter] = useState<string | undefined>(undefined);
+  const [characterCount, setCharacterCount] = useState<number>();
 
   // 当前资源决定要读什么。资源切换必须取消上一次读取，否则慢的旧响应会覆盖新
   // 资源的页签；卸载时同样取消。
@@ -101,11 +100,12 @@ export function useFsPreview({
   // previous read, or a slow response would overwrite the new resource's tabs; the
   // same happens on unmount.
   useEffect(() => {
+    setDirectory(null);
     if (!client || !uri) {
       setTabs(null);
       setActiveKey(null);
       setError(null);
-      setFooter(undefined);
+      setCharacterCount(undefined);
       return;
     }
     const controller = new AbortController();
@@ -119,7 +119,7 @@ export function useFsPreview({
     setActiveKey(uri);
     setActiveKey(null);
     setError(null);
-    setFooter(undefined);
+    setCharacterCount(undefined);
     const options = { ...requestOptions, signal: controller.signal };
 
     // 类型未知时先问一次 `fs/stat`。仅凭「不在已知目录集合里」就按文件处理是错的：
@@ -132,15 +132,15 @@ export function useFsPreview({
     // directory URI the host passes directly, before it was ever expanded, is simply
     // absent — and the directory would be read as content and lose its L0/L1 summary.
     // What is missing is metadata, not evidence that it is a file.
-    const read: Promise<FilePreviewTab> = (async () => {
+    const read = (async () => {
       const isDir =
         resourceType === 'unknown'
           ? await resolveIsDirectory(client, uri, options)
           : resourceType === 'directory';
       if (controller.signal.aborted) throw abortError();
       return isDir
-        ? readDirectory(client, uri, options, labels, openParent)
-        : readFile(client, uri, options, openParent);
+        ? { summary: await readDirectory(client, uri, options) }
+        : { tab: await readFile(client, uri, options, openParent) };
     })();
 
     // 成功也要复查是否已被取消：目录的两级摘要里，一级先回来、另一级还在路上
@@ -155,18 +155,19 @@ export function useFsPreview({
     // overwrite the newly selected resource. Cancellation is the caller's intent and
     // no result may land after it.
     void read.then(
-      (tab) => {
+      (result) => {
         if (controller.signal.aborted) return;
+        if (result.summary) {
+          setDirectory({ uri, summary: result.summary });
+          setActiveKey(uri);
+          return;
+        }
+        const tab = result.tab;
         setTabs([tab]);
         setActiveKey(tab.key);
         // 设计稿底部显示字符数；接口不返回行数与更新时间，先给字符数。
-        const body =
-          tab.kind === 'directory'
-            ? (tab.levels[0].source.content ?? '')
-            : tab.kind === 'file'
-              ? (tab.source.content ?? '')
-              : '';
-        setFooter(`${body.length} characters`);
+        const body = tab.source.content ?? '';
+        setCharacterCount(body.length);
       },
       (cause: unknown) => {
         if (isAbort(cause) || controller.signal.aborted) return;
@@ -176,17 +177,28 @@ export function useFsPreview({
     );
 
     return () => controller.abort();
-  }, [
-    client,
-    uri,
-    resourceType,
-    labels,
-    openParent,
-    generation,
-    requestOptions,
-  ]);
+  }, [client, uri, resourceType, openParent, generation, requestOptions]);
 
-  return { tabs, activeKey, error, footer, setActiveKey };
+  const directoryTab =
+    directory?.uri === uri
+      ? toDirectoryTab(
+          directory.uri,
+          directory.summary,
+          labels,
+          openParent,
+          directoryIcon(),
+        )
+      : undefined;
+  const count = directoryTab
+    ? (directoryTab.levels[0].source.content ?? '').length
+    : characterCount;
+  return {
+    tabs: directoryTab ? [directoryTab] : tabs,
+    activeKey,
+    error,
+    footer: count === undefined ? undefined : formatCharacterCount(count),
+    setActiveKey,
+  };
 }
 
 /**
@@ -230,80 +242,4 @@ function loadingTab(uri: string, isDirectory: boolean): FilePreviewTab {
     loading: true,
     source: { fileName: nameFromUri(uri), path: uri, content: '' },
   };
-}
-
-/**
- * 读文件并包装成页签。文本走 `content/read`，二进制走 `content/download` 取原始
- * 字节——前者把内容当文本返回，二进制文件经过它只会得到一串乱码，图片与 PDF
- * 因此永远渲染不出来。
- *
- * Reads a file into a tab. Text goes through `content/read` and binary files
- * through `content/download` for the raw bytes: the former returns content as
- * text, so a binary file only yields mojibake and images or PDFs never render.
- */
-async function readFile(
-  client: OvClient,
-  uri: string,
-  options: OvRequestOptions,
-  openParent?: (uri: string) => Promise<void>,
-): Promise<FilePreviewFileTab> {
-  const name = nameFromUri(uri);
-  const icon = fileTypeIcon(name);
-
-  if (isBinaryFile(name)) {
-    const blob = await client.request<Blob>({
-      method: 'GET',
-      path: OV_PATHS.contentDownload,
-      query: { uri },
-      responseType: 'blob',
-      options,
-    });
-    // 接口返回 octet-stream，这里按扩展名补上真实类型：底座靠它选择 Adapter。
-    // The endpoint answers octet-stream; the real type is restored from the
-    // extension, which is what the base uses to pick an adapter.
-    const typed = new Blob([blob], { type: mimeTypeOf(name) });
-    return toBinaryTab(uri, name, typed, icon, openParent);
-  }
-
-  const read = (limit: number) =>
-    client
-      .request<string>({
-        method: 'GET',
-        path: OV_PATHS.contentRead,
-        query: { uri, limit },
-        options,
-      })
-      .then((value) => (typeof value === 'string' ? value : ''));
-
-  const first = await read(MAX_LINES);
-  if (!isMemoryUri(uri)) {
-    return toFileTab({ uri }, first, MAX_LINES, icon, openParent);
-  }
-
-  // 记忆文件末尾的元数据尾注不属于正文：默认读取已由服务端剥掉，宿主把请求变成
-  // 原始读取时它会原样回来，这里按同一规则兜底。
-  //
-  // 但「末尾」只有在确认读到文件末尾时才可信：没读满上限说明响应就是整个文件，
-  // 可以直接剥；读满了则可能还有后续内容，此时响应末尾的同形注释可能是正文（例如
-  // 文档里举例写出的这段标记），照剥会删掉真实内容、还会把截断状态报成未截断。
-  // 这种情况再取一次全文，剥完自己按上限切——顺带也让被上限截断在关闭标记之前的
-  // 尾注能被完整识别。
-  //
-  // The metadata trailer of a memory file is not part of the body: a default read has
-  // the server strip it, and a host that turns the request into a raw read gets it
-  // back, so the same rule is applied here.
-  //
-  // "The end" is only trustworthy once the end of the file has been seen: a response
-  // short of the cap is the whole file, so stripping is safe; a full one may continue,
-  // and a same-shaped comment at its end could be body text (such as the marker quoted
-  // in a document) — stripping it would delete real content and report the truncation
-  // as false. That case reads the whole file, strips, then applies the cap itself,
-  // which also lets a trailer cut off before its closing marker be recognised.
-  const full = first.split('\n').length < MAX_LINES ? first : await read(-1);
-  const lines = stripMemoryFieldsTrailer(full).split('\n');
-  const truncated = lines.length > MAX_LINES;
-  const visible = truncated
-    ? lines.slice(0, MAX_LINES).join('\n')
-    : lines.join('\n');
-  return toFileTab({ uri }, visible, MAX_LINES, icon, openParent, truncated);
 }

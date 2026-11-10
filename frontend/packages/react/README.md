@@ -2,23 +2,26 @@
 
 English / [中文](README_CN.md)
 
+Public UI components, composed modules and standalone Hooks accept optional `locale: 'zh-CN' | 'en-US'`. Props override the nearest module or Provider; without a configured language, they use `en-US`. Existing `labels` override individual fields; omitted fields follow the current locale and update when it changes. Hosts still provide business content, slots and callback messages.
+
 React foundations for OpenViking AI application interfaces: build tooling, documentation, layered directories, and scoped styles. FileTree, Tui and FilePreview provide working views, alongside five file-type icons. FileBrowser supports early layout integration; Console provides a native command panel; ScopeCascade provides a working cascade Hook and composition.
 
 This package inherits the repository's AGPL-3.0-only license. The release workflow publishes it to npm when a `react@<version>` tag matches the version in this package's manifest.
 
 ## Module map
 
-| Source directory                                                       | Public entry                                  | Responsibility                                                                        |
-| ---------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------- |
-| [components/file-tree](./src/components/file-tree/README.md)           | `@openviking/react/components/file-tree`      | Directory tree rendering, expansion, selection and event callbacks                    |
-| [components/file-preview](./src/components/file-preview/README.md)     | `@openviking/react/components/file-preview`   | Read-only preview state and extension tabs; view is a placeholder                     |
-| [components/tui](./src/components/tui/README.md)                       | `@openviking/react/components/tui`            | Command record, result and input views with host-provided command metadata            |
-| [components/scope-switcher](./src/components/scope-switcher/README.md) | `@openviking/react/components/scope-switcher` | Stateless scope layout and independent ScopeSelector options, panels and search       |
-| [components/agent-connect](./src/components/agent-connect/README.md)   | `@openviking/react/components/agent-connect`  | Fixed Figma connection view with original icons, built-in copy and clipboard feedback |
-| [components/viking-bot](./src/components/viking-bot/README.md)         | `@openviking/react/components/viking-bot`     | Controlled conversation views, session controls, Markdown replies and composer        |
-| [modules](./src/modules/README.md)                                     | `@openviking/react/modules/<module>`          | Console panel and ScopeCascade Hooks and composition, plus one placeholder            |
-| [client](./src/client/index.ts)                                        | `@openviking/react/client`                    | Framework-neutral request client: `createOvClient`, `OvClient`, `OvClientError`       |
-| [hooks](./src/hooks/README.md), [utils](./src/utils/README.md)         | Internal only                                 | Cross-module Hooks and pure utilities                                                 |
+| Source directory                                                       | Public entry                                  | Responsibility                                                                                      |
+| ---------------------------------------------------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| [components/directory-tour](./src/components/directory-tour/README.md) | `@openviking/react/components/directory-tour` | Directory anchor walkthrough with asynchronous host resolution, independent highlights and recovery |
+| [components/file-tree](./src/components/file-tree/README.md)           | `@openviking/react/components/file-tree`      | Directory tree rendering, expansion, selection and event callbacks                                  |
+| [components/file-preview](./src/components/file-preview/README.md)     | `@openviking/react/components/file-preview`   | Read-only preview state and extension tabs; view is a placeholder                                   |
+| [components/tui](./src/components/tui/README.md)                       | `@openviking/react/components/tui`            | Command record, result and input views with host-provided command metadata                          |
+| [components/scope-switcher](./src/components/scope-switcher/README.md) | `@openviking/react/components/scope-switcher` | Stateless scope layout and independent ScopeSelector options, panels and search                     |
+| [components/agent-connect](./src/components/agent-connect/README.md)   | `@openviking/react/components/agent-connect`  | Fixed Figma connection view with original icons, built-in copy and clipboard feedback               |
+| [components/viking-bot](./src/components/viking-bot/README.md)         | `@openviking/react/components/viking-bot`     | Controlled conversation views, session controls, Markdown replies and composer                      |
+| [modules](./src/modules/README.md)                                     | `@openviking/react/modules/<module>`          | Console panel and ScopeCascade Hooks and composition, plus one placeholder                          |
+| [client](./src/client/index.ts)                                        | `@openviking/react/client`                    | Framework-neutral request client: `createOvClient`, `OvClient`, `OvClientError`                     |
+| [hooks](./src/hooks/README.md), [utils](./src/utils/README.md)         | Internal only                                 | Cross-module Hooks and pure utilities                                                               |
 
 Components implement their reviewed contracts incrementally. FileTree renders every documented row type with keyboard interaction; FilePreview implements the tab shell, header actions and the plain-text preview and editing foundation, with its body not yet wired to FileViewer. ScopeSwitcher is a stateless layout container; independently rendered ScopeSelector children own visibility, with host-owned per-level data subscriptions, search and requests. Tui renders records, results and the input. AgentConnect follows the Figma layout with built-in bilingual agent and developer integration content, host-provided credentials and locale, optional controlled selection and clipboard feedback. VikingBot provides a working view pending design review. Limits are described in each component's own docs. The package also ships five file-type icons.
 
@@ -34,7 +37,7 @@ The same props are consumed by different hosts. Hosts differ in flows and interf
 
 - Components receive **already adapted data**: file entries, tabs and content sources are mapped into package types by module Hooks or the host, and components reference no host data model.
 - State is expressed with controlled fields, and callbacks only report intent without returning business data.
-- Copy is passed through labels, defaulting to English; hosts map i18next or Starling in their integration layer.
+- UI copy is built in for `locale: 'zh-CN' | 'en-US'`; existing labels override individual fields, and hosts may map i18next or Starling in their integration layer.
 - Icons, extension tabs, extra fields and toolbar actions come in as slots or nodes; components bind to no third-party UI library.
 - List components render the rows or items the caller has already expanded; paging, loading, error and empty states come from module Hooks or the host.
 
@@ -59,6 +62,7 @@ import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
 
 <FileBrowser
+  locale="en-US"
   labels={{ title: 'File browser', description: 'Placeholder component.' }}
 />;
 ```
@@ -84,3 +88,11 @@ From `frontend/`, run `npm run build:lib` to generate `packages/react/dist/`. Se
 ### ScopeCascade
 
 Pass three stable API adapter functions to `useScopeCascade({ loadLibraries, loadSpaces, loadUsers })`, then render `<ScopeCascade controller={controller} />`. Adapters return `{ id, label }` options and receive an `AbortSignal`. The module handles dependent requests, descendant resets, loading, errors, retries and stale responses. Each selector subscribes independently; the Hook caller does not subscribe to request state. Import the Hook and composition from `@openviking/react/modules/scope-cascade` and its CSS from the corresponding `/style.css` entry.
+
+## Maintaining built-in copy
+
+Built-in translations live alongside each component or module in `locales/en-US.ts` and `locales/zh-CN.ts`. The internal `src/shared/locale.ts` contains only shared language types and resolution/override rules, with no business messages or public entry. Modules own workflow copy and reuse the defaults owned by their child components.
+
+Dynamic messages use typed formatter functions; dates and numbers use `Intl`. `npm test` checks matching keys, string placeholders and formatter arity across languages, while type checking validates parameter types. Undefined `labels` entries inherit the selected language; empty strings remain explicit overrides.
+
+Set `locale` on `OpenVikingProvider` for a subtree. Optional module and component Props override the nearest scope, then fall back to `en-US`. Standalone Hooks also inherit the Provider. The private `src/shared/locale-context.tsx` is shared across public entries and remains separate from request-client configuration, so language changes preserve requests and state.

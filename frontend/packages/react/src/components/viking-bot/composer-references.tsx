@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type { RefObject } from 'react';
 import type { SenderInstance } from '@ark-design/ui/sender';
 import { VikingBotIcon } from '../../icons/viking-bot-icons.js';
@@ -26,6 +27,7 @@ export function composerMention(
   config: VikingBotReferences | undefined,
   disabled: boolean,
   labels: VikingBotLabels,
+  locale: Locale,
 ): MentionConfig | undefined {
   if (!config) return undefined;
   return {
@@ -48,6 +50,7 @@ export function composerMention(
     render: ({ query, command, editor }) =>
       disabled ? null : (
         <ReferencePicker
+          locale={locale}
           config={config}
           editor={editor}
           query={query}
@@ -61,6 +64,7 @@ export function composerMention(
 }
 
 export function ReferenceButton({
+  locale,
   config,
   disabled,
   labels,
@@ -69,6 +73,7 @@ export function ReferenceButton({
   config: VikingBotReferences;
   disabled?: boolean;
   labels: Required<VikingBotLabels>;
+  locale: Locale;
   senderRef: RefObject<SenderInstance | null>;
 }) {
   return (
@@ -95,6 +100,7 @@ export function ReferenceButton({
     >
       {(close) => (
         <ReferencePicker
+          locale={locale}
           config={config}
           labels={labels}
           onSelect={(item) => {

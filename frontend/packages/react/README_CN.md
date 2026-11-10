@@ -2,6 +2,8 @@
 
 [English](README.md) / 中文
 
+公开 UI 组件、组合模块和独立 Hook 均支持可选的 `locale: 'zh-CN' | 'en-US'`。Props 覆盖最近的模块或 Provider，均未配置时默认 `en-US`。已有 `labels` 保留逐项覆盖能力，业务内容、插槽和回调文案仍由宿主提供。
+
 OpenViking AI 应用界面的 React 基础：构建工具、文档、分层目录与局部化样式。FileTree、Tui 与 FilePreview 已提供可用视图，另附五种文件类型图标。Console 提供原生命令面板与受控对话视图，ScopeCascade 提供三级级联 Hook 与组合视图，FileBrowser 仍为布局占位。
 
 本包沿用仓库的 AGPL-3.0-only 许可证。当 `react@<version>` 标签与本包 manifest 中的版本一致时，发布工作流会将其发布到 npm。
@@ -10,6 +12,7 @@ OpenViking AI 应用界面的 React 基础：构建工具、文档、分层目�
 
 | 源码目录                                                                  | 公开入口                                      | 职责                                                                       |
 | ------------------------------------------------------------------------- | --------------------------------------------- | -------------------------------------------------------------------------- |
+| [components/directory-tour](./src/components/directory-tour/README.md)    | `@openviking/react/components/directory-tour` | 目录锚点引导，支持宿主异步定位、独立高亮与异常恢复                         |
 | [components/file-tree](./src/components/file-tree/README_CN.md)           | `@openviking/react/components/file-tree`      | 目录树渲染、展开、选中与事件回传；视图为占位实现                           |
 | [components/file-preview](./src/components/file-preview/README_CN.md)     | `@openviking/react/components/file-preview`   | 只读预览状态与扩展页签；视图为占位实现                                     |
 | [components/tui](./src/components/tui/README_CN.md)                       | `@openviking/react/components/tui`            | 已确认的命令记录、结果与输入区类型；视图仍为占位实现                       |
@@ -31,7 +34,7 @@ OpenViking AI 应用界面的 React 基础：构建工具、文档、分层目�
 
 - 组件只接收**已适配的数据**：文件条目、页签与内容来源由模块 Hook 或宿主映射成包内类型，组件不引用任一宿主的数据模型。
 - 状态用受控字段表达，回调只上报意图，不返回业务数据。
-- 文案通过 labels 传入，缺省为英文；动态文案由宿主在接入层映射 i18next 或 Starling。
+- 界面文案内置中英文，通过可选的 `locale: 'zh-CN' | 'en-US'` 选择；已有 labels 可逐项覆盖，动态文案由宿主在接入层映射 i18next 或 Starling。
 - 图标、扩展页签、额外字段、工具栏动作通过插槽或节点传入，组件不绑定第三方 UI 库。
 - 列表型组件按上层展开后的行/项渲染，分页、加载、错误、空态由模块 Hook 或宿主提供。
 
@@ -56,6 +59,7 @@ import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
 
 <FileBrowser
+  locale="zh-CN"
   labels={{ title: '文件浏览', description: '占位组件，待接入。' }}
 />;
 ```
@@ -83,3 +87,11 @@ React 与 ReactDOM 为 peer dependencies（`^18.2.0 || ^19.0.0`），由 Rslib �
 将三个引用稳定的接口适配函数传给 `useScopeCascade({ loadLibraries, loadSpaces, loadUsers })`，再渲染 `<ScopeCascade controller={controller} />`。接口返回 `{ id, label }` 选项并接收 `AbortSignal`；空间接口额外接收库 ID，用户接口接收库 ID 与空间 ID。模块负责级联请求、下级重置、加载、错误、重试和旧响应隔离。每一级独立订阅，调用 Hook 的根组件不订阅请求状态。
 
 从 `@openviking/react/modules/scope-cascade` 导入 Hook 和组合视图，并显式导入对应 `/style.css`。自定义界面可在叶子组件中使用 `useScopeCascadeLevel(controller.levels[index])`，无需 `memo`。适配函数引用变化会重置级联；当前按完整列表加载，不包含服务端搜索和分页。
+
+## 内置文案维护
+
+内置语言资源就近放在各组件、模块的 `locales/en-US.ts` 与 `locales/zh-CN.ts`，随代码一起维护。共同的语言类型、默认值和逐项覆盖规则位于内部 `src/shared/locale.ts`；该文件不存放业务词条，也不提供公开入口。模块仅维护流程文案，组件默认文案由组件自己维护。
+
+动态文案使用类型化格式化函数，日期与数字使用 `Intl`。`npm test` 自动检查中英文 key、字符串占位符和格式化函数参数数量，类型检查约束参数类型。已有 `labels` 的未定义项继承当前语言，空字符串作为显式覆盖保留。
+
+在 `OpenVikingProvider` 上配置子树语言。模块与组件的可选 `locale` Props 覆盖最近的语言作用域，最终默认 `en-US`；独立 Hook 同样继承 Provider。内部 `src/shared/locale-context.tsx` 由各公开入口共享，与请求 Client 配置分离，切换语言保留请求和状态。

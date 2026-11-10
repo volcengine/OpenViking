@@ -1,3 +1,4 @@
+import { useLang } from '@rspress/core/runtime';
 import {
   ScopeCascade,
   useScopeCascade,
@@ -13,10 +14,11 @@ const api = {
 };
 
 export default function ScopeSwitcherAsync() {
+  const componentLocale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   const controller = useScopeCascade(api);
   return (
     <div style={{ minHeight: 380 }}>
-      <ScopeCascade controller={controller} />
+      <ScopeCascade locale={componentLocale} controller={controller} />
     </div>
   );
 }

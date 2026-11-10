@@ -48,8 +48,8 @@ const { createTuiCommands } = await import(
 );
 
 test('every demo command returns its structured result instead of a generic execution message', () => {
-  for (const descriptor of createTuiCommands('zh')) {
-    const result = createTuiDemoRecord(`${descriptor.inputText} demo`, 'zh');
+  for (const descriptor of createTuiCommands('zh-CN')) {
+    const result = createTuiDemoRecord(`${descriptor.inputText} demo`, 'zh-CN');
     assert.equal(result.status, 'success', descriptor.name);
     const expected =
       descriptor.name === 'help'
@@ -69,7 +69,7 @@ test('every demo command returns its structured result instead of a generic exec
   }
   const compile = createTuiDemoRecord(
     'ov compile --from viking://resources/demo',
-    'zh',
+    'zh-CN',
   );
   assert.equal(compile.status, 'success');
   assert.ok(compile.content.lines.includes('Status: pending'));
@@ -86,9 +86,13 @@ test('demo execution recognizes documented aliases and whitespace-separated argu
     'ov ls\tviking://resources/acme',
     'ov\t session  get demo',
   ]) {
-    assert.equal(createTuiDemoRecord(command, 'zh').status, 'success', command);
+    assert.equal(
+      createTuiDemoRecord(command, 'zh-CN').status,
+      'success',
+      command,
+    );
   }
-  const descriptor = createTuiCommands('en').find(
+  const descriptor = createTuiCommands('en-US').find(
     (item) => item.name === 'session add-messages',
   );
   assert.match(descriptor.usage, /<session-id> <messages-json>/);

@@ -1,5 +1,7 @@
 # ScopeCascade
 
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
+
 Connect three API adapters without writing request state or cascading logic. `useScopeCascade` returns a stable instance controller and does not subscribe the caller to its data. `ScopeCascade` subscribes in its three leaf selectors, preserving independent renders without `memo`.
 
 ## Basic usage
@@ -32,4 +34,4 @@ To consume the complete identity in a separate content component, subscribe to t
 
 ## View props
 
-`ScopeCascade` requires `controller`. Optional `levelNames` is a library/space/user tuple, `labels` customizes loading/search/empty/error copy, and `retryLabel` changes the retry button. HTML attributes such as `className` and `style` are forwarded to the layout. Hooks need no CSS; the default view uses `@openviking/react/modules/scope-cascade/style.css`.
+`ScopeCascade` requires `controller`. Explicit `locale` overrides the nearest module or Provider; omission inherits that scope and ultimately defaults to `en-US`. Optional `levelNames` is a library/space/user tuple, `labels` customizes loading/search/empty/error copy, and `retryLabel` changes the retry button. HTML attributes such as `className` and `style` are forwarded to the layout. Hooks need no CSS; the default view uses `@openviking/react/modules/scope-cascade/style.css`.

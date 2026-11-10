@@ -2,13 +2,15 @@
 
 English / [中文](README_CN.md)
 
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
+
 `ScopeSwitcher` is an implemented, stateless breadcrumb layout. Compose independent `ScopeSelector` children from `@openviking/react/components/scope-switcher`; the old `levels` prop is no longer supported. Each child owns its local visibility and receives its own data, so the layout does not aggregate state or subscribe to requests.
 
 ```tsx
-<ScopeSwitcher>
-  <ScopeSelector kind="selectable" identity={...} data={...} state={...} actions={...} />
-  <ScopeSelector kind="selectable" identity={...} data={...} state={...} actions={...} />
-  <ScopeSelector kind="fixed" identity={...} trigger={{ label: 'default' }} />
+<ScopeSwitcher locale="en-US">
+  <ScopeSelector locale="en-US" kind="selectable" identity={...} data={...} state={...} actions={...} />
+  <ScopeSelector locale="en-US" kind="selectable" identity={...} data={...} state={...} actions={...} />
+  <ScopeSelector locale="en-US" kind="fixed" identity={...} trigger={{ label: 'default' }} />
 </ScopeSwitcher>
 ```
 

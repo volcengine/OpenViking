@@ -1,3 +1,4 @@
+import { useLocale } from '../../shared/locale-context.js';
 import { Sender } from '@ark-design/ui/sender';
 import type { SenderInstance } from '@ark-design/ui/sender';
 import {
@@ -8,7 +9,7 @@ import {
   useRef,
 } from 'react';
 
-import { DEFAULT_LABELS } from './labels.js';
+import { resolveVikingBotLabels } from './labels.js';
 import { VikingBotSubmit } from './composer-controls.js';
 import { ComposerAttachments } from './composer-attachments.js';
 import { composerMention, ReferenceTags } from './composer-references.js';
@@ -33,6 +34,7 @@ export const VikingBotComposerView = forwardRef<
 >(function VikingBotComposerView(
   {
     value,
+    locale: localeProp,
     className,
     attachments = [],
     disabled,
@@ -54,10 +56,12 @@ export const VikingBotComposerView = forwardRef<
   },
   ref,
 ) {
-  const labels = { ...DEFAULT_LABELS, ...overrides };
+  const locale = useLocale(localeProp);
+  const labels = resolveVikingBotLabels(locale, overrides);
   const senderRef = useRef<SenderInstance>(null);
   const writing = useRef(false);
   const readOnly = !onValueChange;
+  const locked = Boolean(disabled || readOnly || isSending);
   const remaining = Math.max(0, maxAttachments - attachments.length);
   const limitReached = remaining === 0;
 
@@ -190,11 +194,7 @@ export const VikingBotComposerView = forwardRef<
           )
         }
         richTextAreaProps={{
-          mentionConfig: composerMention(
-            references,
-            Boolean(disabled || readOnly || isSending),
-            labels,
-          ),
+          mentionConfig: composerMention(references, locked, labels, locale),
           placeholder: labels.placeholder,
           disabled,
           minRows: 1,
@@ -203,10 +203,11 @@ export const VikingBotComposerView = forwardRef<
         }}
         renderFooter={({ components }) => (
           <ComposerFooter
+            locale={locale}
             references={references}
             senderRef={senderRef}
             labels={labels}
-            disabled={Boolean(disabled || readOnly || isSending)}
+            disabled={locked}
             filesDisabled={Boolean(disabled || limitReached || isSending)}
             accept={accept}
             onFiles={onFilesAdded ? reportFiles : undefined}
