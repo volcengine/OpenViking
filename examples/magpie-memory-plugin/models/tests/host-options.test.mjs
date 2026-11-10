@@ -55,3 +55,48 @@ test("actual recovery CLI authenticates using Root key configured only in Magpie
   }
   assert.equal(authenticated, 2);
 });
+
+test("status reads local recovery diagnostics with unavailable credentials and invalid connection options", async (t) => {
+  const f = await fixture(t);
+  await f.write([{ spec: root, options: { serverUrl: "invalid-url", rootApiKeyFile: join(f.directory, "missing-key") } }]);
+  const last = { status: "restored", revision: "7", restartRequired: true };
+  await fs.writeFile(join(f.directory, "status.json"), JSON.stringify(last));
+  await fs.writeFile(join(f.directory, "state.json"), "{}");
+  const { stdout } = await execute(process.execPath, [join(root, "models/cli.mjs"), "status"], {
+    env: { ...process.env, PATH: "", XDG_CONFIG_HOME: f.directory, OPENVIKING_MAGPIE_MODELS_DIR: f.directory },
+  });
+  assert.deepEqual(JSON.parse(stdout), { last, recoveryPending: true, paused: false });
+});
+
+test("sync and restore exit unsuccessfully when external pending changes block recovery", async (t) => {
+  const f = await fixture(t);
+  let writes = 0;
+  const server = createServer((req, res) => {
+    if (req.method !== "GET") writes++;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ status: "ok", result: {
+      revision: "external", restart_required: true, writable: true,
+      file_path: "/fake/ov.conf", content: JSON.stringify({ vlm: { model: "manual" } }),
+    } }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const serverUrl = `http://127.0.0.1:${server.address().port}`;
+  const cliFile = join(f.directory, "ovcli.conf");
+  await fs.writeFile(cliFile, "{}");
+  await f.write([{ spec: root, options: { serverUrl, ovcliConfig: cliFile } }]);
+  await fs.writeFile(join(f.directory, "selection.json"), JSON.stringify({ model: "selected", gateway: { key: "fake", baseURL: `${serverUrl}/v1` } }));
+  const state = { version: 1, serverUrl, filePath: "/fake/ov.conf", records: {} };
+  await fs.writeFile(join(f.directory, "state.json"), JSON.stringify(state));
+  for (const action of ["sync", "restore"]) {
+    await assert.rejects(execute(process.execPath, [join(root, "models/cli.mjs"), action], {
+      env: { ...process.env, PATH: "", XDG_CONFIG_HOME: f.directory, OPENVIKING_MAGPIE_MODELS_DIR: f.directory, OPENVIKING_CLI_CONFIG_FILE: cliFile },
+    }), (error) => {
+      assert.equal(error.code, 1);
+      assert.equal(JSON.parse(error.stdout).status, "external_restart_required");
+      return true;
+    });
+  }
+  assert.equal(writes, 0);
+  assert.deepEqual(JSON.parse(await fs.readFile(join(f.directory, "state.json"), "utf8")), state);
+});

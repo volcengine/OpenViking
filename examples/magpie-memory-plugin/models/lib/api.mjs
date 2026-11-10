@@ -16,23 +16,29 @@ export async function detectBot(config, fetcher = fetch) {
   } catch { return { enabled: false, healthy: false, state: "unknown" }; }
 }
 
+function transportError(service, error, signal) {
+  const timedOut = error?.name === "TimeoutError" || signal.reason?.name === "TimeoutError";
+  return new AdapterError(`${service}_${timedOut ? "timeout" : "unreachable"}`);
+}
+
 export function createAPI(config, fetcher = fetch) {
   return async (route, body, method) => {
+    const signal = AbortSignal.timeout(config.timeoutMs);
     let response;
     try {
       response = await fetcher(`${config.serverUrl}${route}`, {
         method: method || (body === undefined ? "GET" : "PATCH"), redirect: "error",
         headers: { "Content-Type": "application/json", ...(config.apiKey ? { "X-API-Key": config.apiKey } : {}) },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(config.timeoutMs),
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal,
       });
-    } catch { throw new AdapterError("server_unreachable"); }
+    } catch (error) { throw transportError("server", error, signal); }
     if (response.status === 401) throw new AdapterError("root_authentication_required");
     if (response.status === 403) throw new AdapterError("root_permission_required");
     if (!response.ok) throw new AdapterError(`server_http_${response.status}`);
     // Reading can fail after headers arrive. Keep transport failures retryable
     // while treating a completely received but invalid document as definitive.
     let content;
-    try { content = await response.text(); } catch { throw new AdapterError("server_unreachable"); }
+    try { content = await response.text(); } catch (error) { throw transportError("server", error, signal); }
     let data;
     try { data = JSON.parse(content); } catch { throw new AdapterError("invalid_server_response"); }
     if (data?.status !== "ok" || !data.result) throw new AdapterError("invalid_server_response");
@@ -46,14 +52,17 @@ export async function validateSelection(selection, config, fetcher = fetch) {
   if (!baseURL.endsWith("/v1")) throw new AdapterError("invalid_gateway_base");
   // A catalog check spends no inference tokens. It also catches stale/deleted
   // models before any startup configuration is changed.
+  const signal = AbortSignal.timeout(config.timeoutMs);
   let response;
   try {
     response = await fetcher(`${baseURL}/models`, { redirect: "error",
-      headers: { Authorization: `Bearer ${selection.gateway.key}` }, signal: AbortSignal.timeout(config.timeoutMs) });
-  } catch { throw new AdapterError("gateway_unreachable"); }
+      headers: { Authorization: `Bearer ${selection.gateway.key}` }, signal });
+  } catch (error) { throw transportError("gateway", error, signal); }
   if (!response.ok) throw new AdapterError(`gateway_http_${response.status}`);
+  let content;
+  try { content = await response.text(); } catch (error) { throw transportError("gateway", error, signal); }
   let catalog;
-  try { catalog = await response.json(); } catch { throw new AdapterError("invalid_catalog"); }
+  try { catalog = JSON.parse(content); } catch { throw new AdapterError("invalid_catalog"); }
   if (!Array.isArray(catalog?.data)) throw new AdapterError("invalid_catalog");
   for (const id of [selection.model, ...(config.botMode === "independent" ? [config.botModel || selection.model] : []), ...(config.queryMode === "independent" ? [config.queryModel || selection.model] : [])]) {
     const model = catalog.data.find((entry) => entry.id === id);

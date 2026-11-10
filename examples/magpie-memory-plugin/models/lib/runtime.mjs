@@ -152,7 +152,7 @@ export function startAdapter(input, options = {}) {
     try { input?.client?.app?.log?.({ body: { service: "openviking-models", level: "info", message: `OpenViking models: ${code}` } })?.catch?.(() => {}); } catch {}
   };
   const tick = async () => {
-    let delay = 2000;
+    let delay = 2000, pendingRestoration;
     try {
       if (!await backgroundEnabled(options)) { log("disabled"); return; }
       const config = await settings(options); delay = config.pollMs;
@@ -161,7 +161,10 @@ export function startAdapter(input, options = {}) {
       if (selection !== lastSelection) lastSelection = selection;
       else {
         let result = await synchronize(config);
-        if (await backgroundEnabled(options) && config.restartOnChange && result.restartRequired && result.savedRevision && result.savedRevision === result.revision && ["saved", "restored"].includes(result.status)) result = await activate(config, { automatic: true });
+        if (await backgroundEnabled(options) && config.restartOnChange && result.restartRequired && result.savedRevision && result.savedRevision === result.revision && ["saved", "restored"].includes(result.status)) {
+          if (result.status === "restored") pendingRestoration = result;
+          result = await activate(config, { automatic: true });
+        }
         log([result.status, result.code, result.ovRuntime && `OV:${result.ovRuntime}`, result.botRuntime && `Bot:${result.botRuntime}`,
           ...(result.adjustments || []).map((entry) => `${entry.field}=${entry.value}`),
           ...(result.warnings || [])].filter(Boolean).join(" · "));
@@ -171,7 +174,16 @@ export function startAdapter(input, options = {}) {
       log(code);
       try {
         const config = await settings(options);
-        await withLock(config.directory, () => publish(config, { status: "error", code }));
+        await withLock(config.directory, async () => {
+          const last = await readJSON(config.statusFile);
+          if (pendingRestoration && last?.status === "restored" && last.revision === pendingRestoration.revision) {
+            // Restoration has released its ownership journal. Keep the saved
+            // revision actionable even if activation's initial read fails.
+            const retryable = ["server_unreachable", "server_timeout", "server_http_502", "server_http_503", "server_http_504"].includes(code);
+            return publish(config, { ...last, status: retryable ? "restored" : "apply_failed", restartRequired: true, code });
+          }
+          return publish(config, { status: "error", code });
+        });
       } catch {}
     } finally {
       if (!stopped) { timer = setTimeout(tick, delay); timer.unref?.(); }

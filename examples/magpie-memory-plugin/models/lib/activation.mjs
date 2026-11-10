@@ -65,14 +65,14 @@ export async function activate(config, { fetcher = fetch, retry = false, automat
         catch (error) {
           // A lost accepted response is ambiguous: observe the instance rather
           // than issuing a second restart. Definitive HTTP failures stop here.
-          if (error.code !== "server_unreachable") throw error;
+          if (!["server_unreachable", "server_timeout"].includes(error.code)) throw error;
         }
       }
       while (now() < deadline) {
         let current;
         try { current = await api(route); }
         catch (error) {
-          if (!["server_unreachable", "server_http_502", "server_http_503", "server_http_504"].includes(error.code)) throw error;
+          if (!["server_unreachable", "server_timeout", "server_http_502", "server_http_503", "server_http_504"].includes(error.code)) throw error;
           await wait(500); continue;
         }
         if (current.restart?.rolled_back) throw new AdapterError("server_restart_rolled_back");

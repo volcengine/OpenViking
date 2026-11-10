@@ -33,8 +33,13 @@ export function normalizeURL(value) {
   }
   return url.href.replace(/\/$/, "");
 }
-async function clientConfiguration(options, env) {
+export function statePaths(env = process.env) {
   const directory = expand(env.OPENVIKING_MAGPIE_MODELS_DIR || defaultDirectory);
+  return { directory, selectionFile: join(directory, "selection.json"), stateFile: join(directory, "state.json"),
+    statusFile: join(directory, "status.json") };
+}
+async function clientConfiguration(options, env) {
+  const { directory } = statePaths(env);
   const local = await readJSON(join(directory, "adapter.json")) || {};
   const customPath = Object.hasOwn(options, "ovcliConfig") ? options.ovcliConfig : local.ovcliConfig;
   const cliPath = expand(customPath || env.OPENVIKING_CLI_CONFIG_FILE || join(homedir(), ".openviking", "ovcli.conf"));
@@ -49,7 +54,7 @@ export async function backgroundEnabled(options = {}, env = process.env) {
 }
 
 export async function settings(options = {}, env = process.env) {
-  const { directory, local, cliPath } = await clientConfiguration(options, env);
+  const { local, cliPath } = await clientConfiguration(options, env);
   const config = { ...local, ...options };
   const cli = await readJSON(cliPath) || {};
   const discovered = await cliConnection(cliPath, env);
@@ -73,8 +78,7 @@ export async function settings(options = {}, env = process.env) {
   if (!Number.isSafeInteger(pollMs) || pollMs < 500 || pollMs > 60000) throw new AdapterError("invalid_poll_interval");
   const restartOnChange = config.restartOnChange ?? true;
   if (typeof restartOnChange !== "boolean") throw new AdapterError("invalid_restart_policy");
-  return { directory, selectionFile: join(directory, "selection.json"), stateFile: join(directory, "state.json"),
-    statusFile: join(directory, "status.json"), serverUrl, apiKey, manageVlm, botMode, botModel, queryMode, queryModel,
+  return { ...statePaths(env), serverUrl, apiKey, manageVlm, botMode, botModel, queryMode, queryModel,
     vlmParameters: validateParameters(config.vlmParameters), queryParameters: validateParameters(config.queryParameters), botParameters: validateParameters(config.botParameters, "bot"),
     restartOnChange, pollMs, timeoutMs: 10000 };
 }
