@@ -38,55 +38,75 @@ if (!Array.isArray(swatches) || swatches.length === 0) {
 }
 
 /**
- * 一条自定义属性的多行写法。渐变串都超过 Prettier 的折行宽度，它会把声明拆成
- * 多行；这里直接输出同样的形状，`prettier --check` 才不会被这段生成内容判为
- * 未格式化。
+ * 生成块的内容。每个值原样写出，不尝试拆解 CSS 函数——`linear-gradient` 里可能
+ * 嵌套 `rgb()` / `color-mix()` 等带逗号和括号的函数，手工按 `(` 或 `,` 切分会
+ * 把内层参数截断。折行交给 Prettier：下面统一格式化整份文件，生成结果与
+ * `prettier --check` 的期望一致。
  *
- * One custom-property declaration in the wrapped shape Prettier produces: every
- * gradient is past its print width, so it splits the declaration across lines.
- * Emitting the same shape keeps `prettier --check` from flagging generated output.
+ * The generated block. Each value is written verbatim rather than parsed: a
+ * `linear-gradient` may nest `rgb()`, `color-mix()` and other functions that
+ * contain their own commas and parentheses, and splitting on `(` or `,` would
+ * truncate those inner arguments. Line wrapping is left to Prettier — the whole
+ * file is formatted below, so the output matches what `prettier --check` expects.
  */
-const declaration = (gradient, index) => {
-  const [head, rest] = gradient.split('(');
-  const parts = rest.replace(/\)$/, '').split(',');
-  return [
-    `  --ov-ui-library-swatch-${index + 1}-default: ${head}(`,
-    ...parts.map((part) => `    ${part.trim()},`),
-    '  );',
-  ]
-    .join('\n')
-    .replace(/,\n {2}\);$/, '\n  );');
-};
-
-const block = swatches
-  .map((gradient, index) => declaration(gradient, index))
-  .join('\n');
-
-const theme = readFileSync(themePath, 'utf8');
-const beginAt = theme.indexOf(BEGIN);
-const endAt = theme.indexOf(END);
-
-if (beginAt === -1 || endAt === -1 || endAt < beginAt) {
-  throw new Error(`${themePath} is missing the ${BEGIN} … ${END} markers`);
+/**
+ * 把调色板渲染成自定义属性声明。导出为纯函数，测试可以直接断言嵌套函数的完整
+ * 性，不必真的改写文件。
+ *
+ * Render the palette into custom-property declarations. Exported as a pure
+ * function so a test can assert on nested functions without mutating files.
+ */
+export function renderDeclarations(values) {
+  return values
+    .map(
+      (gradient, index) =>
+        `  --ov-ui-library-swatch-${index + 1}-default: ${gradient};`,
+    )
+    .join('\n');
 }
 
-// Keep the END marker's own indentation: slice from the start of its line.
-const lineStart = theme.lastIndexOf('\n', endAt) + 1;
-const indent = theme.slice(lineStart, endAt);
-const next = `${theme.slice(0, beginAt + BEGIN.length)}\n${block}\n${indent}${theme.slice(endAt)}`;
+const declarations = renderDeclarations(swatches);
 
-if (process.argv.includes('--check')) {
-  if (next !== theme) {
-    console.error(
-      'library swatches are out of date: run `node scripts/sync-library-swatches.mjs`',
-    );
-    process.exitCode = 1;
-  } else {
-    console.log('library swatches are in sync');
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  await main();
+}
+
+async function main() {
+  const theme = readFileSync(themePath, 'utf8');
+  const beginAt = theme.indexOf(BEGIN);
+  const endAt = theme.indexOf(END);
+
+  if (beginAt === -1 || endAt === -1 || endAt < beginAt) {
+    throw new Error(`${themePath} is missing the ${BEGIN} … ${END} markers`);
   }
-} else if (next === theme) {
-  console.log('library swatches already in sync');
-} else {
-  writeFileSync(themePath, next);
-  console.log(`wrote ${swatches.length} swatches to ${themePath}`);
+
+  // Keep the END marker's own indentation: slice from the start of its line.
+  const lineStart = theme.lastIndexOf('\n', endAt) + 1;
+  const indent = theme.slice(lineStart, endAt);
+  const spliced = `${theme.slice(0, beginAt + BEGIN.length)}\n${declarations}\n${indent}${theme.slice(endAt)}`;
+
+  // Format through the workspace's own Prettier config, so the generated block is
+  // byte-identical to what `prettier --check` expects.
+  const prettier = await import('prettier');
+  const config = (await prettier.resolveConfig(themePath)) ?? {};
+  const next = await prettier.format(spliced, {
+    ...config,
+    filepath: themePath,
+  });
+
+  if (process.argv.includes('--check')) {
+    if (next !== theme) {
+      console.error(
+        'library swatches are out of date: run `node scripts/sync-library-swatches.mjs`',
+      );
+      process.exitCode = 1;
+    } else {
+      console.log('library swatches are in sync');
+    }
+  } else if (next === theme) {
+    console.log('library swatches already in sync');
+  } else {
+    writeFileSync(themePath, next);
+    console.log(`wrote ${swatches.length} swatches to ${themePath}`);
+  }
 }

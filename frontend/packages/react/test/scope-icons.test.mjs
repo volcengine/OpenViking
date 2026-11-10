@@ -89,6 +89,30 @@ test('the JS fallbacks and the CSS defaults share one palette', () => {
   }
 });
 
+test('the sync renderer keeps nested colour functions intact', async () => {
+  // A `linear-gradient` may nest `rgb()`, `color-mix()` and friends, which carry
+  // their own commas and parentheses. Splitting on the first `(` used to emit
+  // `linear-gradient(145deg, rgb)`, leaving the stylesheet path with invalid CSS
+  // while React still used the full value from the JSON.
+  const { renderDeclarations } =
+    await import('../../../scripts/sync-library-swatches.mjs');
+  const values = [
+    'linear-gradient(145deg, rgb(255 216 236) 8%, #d8cbff 100%)',
+    'linear-gradient(145deg, color-mix(in oklab, rgb(10 20 30) 40%, #abc) 8%, rgba(1, 2, 3, 0.5) 100%)',
+  ];
+  const rendered = renderDeclarations(values);
+  for (const [index, value] of values.entries()) {
+    assert.ok(
+      rendered.includes(
+        `--ov-ui-library-swatch-${index + 1}-default: ${value};`,
+      ),
+      `swatch ${index + 1} must be written verbatim`,
+    );
+  }
+  // The specific truncation the review reported: `rgb(` must not become `rgb)`.
+  assert.doesNotMatch(rendered, /rgb\)/);
+});
+
 test('every library swatch is reachable and numbered from one', () => {
   // Different names must be able to select different swatches; the index feeds a
   // variable name, so it has to stay within the five declared in theme.css.
