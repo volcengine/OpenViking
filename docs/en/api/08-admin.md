@@ -246,7 +246,7 @@ whether the User is named `default`.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | List the six editable templates, full defaults and effective values |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | List the four editable templates, full defaults and effective values |
 | GET | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Read one template |
 | PUT | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Complete and publish one template |
 | DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Remove that override and restore deployment defaults |
@@ -260,7 +260,7 @@ To update a template while keeping existing customizations:
 Use DELETE to restore deployment defaults for that type.
 
 The kernel accepts the existing memory YAML structure as a JSON object and enforces
-the following editing allowlist at the API boundary. Only these six types are
+the following editing allowlist at the API boundary. Only these four types are
 exposed. Experience, Cases, Trajectories and other types are not exposed for reading
 or editing. These APIs cannot create, delete or rename Memory Types; DELETE removes
 only the Account override.
@@ -271,8 +271,6 @@ only the Account override.
 | `events` | `description`; `fields.event_name.description`, `fields.summary.description`; `content_template` |
 | `preferences` | `description`; `fields.topic.description`, `fields.content.description` |
 | `entities` | `description`; `fields.category.description`, `fields.name.description`, `fields.content.description` |
-| `soul` | `description`; `fields.core_truths.description`, `fields.boundaries.description`, `fields.vibe.description`, `fields.continuity.description`; `content_template` |
-| `identity` | `description`; `fields.creature.description`, `fields.name.description`, `fields.vibe.description`, `fields.avatar.description`, `fields.emoji.description`, `fields.introduction.description`; `content_template` |
 
 Here `fields.<name>.description` selects an existing entry in the `fields` array
 by `name`; it does not replace that field. JSON keys are case-sensitive: use
@@ -284,8 +282,7 @@ All other configuration stays locked to deployment defaults: `memory_type`,
 `filename_template`, field names/types/merge operations/initial values,
 `embedding_template`, `overview_template`, and unlisted field descriptions.
 Profile keeps `profile.md` and content's `merge_op=patch`; Events keeps
-`add_only` and the descriptions of `goal` and `ranges`; Identity keeps Name's
-immutable merge rule. Profile, Preferences and Entities cannot edit
+`add_only` and the descriptions of `goal` and `ranges`. Profile, Preferences and Entities cannot edit
 `content_template`. Changing topic/category/name/event_name instructions can
 still indirectly affect future paths/names, without changing their templates.
 
@@ -447,8 +444,6 @@ retrieval input. Paths, field definitions and merge rules remain locked.
 | Type | Content variables |
 | --- | --- |
 | events | event_name, goal, summary, ranges |
-| soul | core_truths, boundaries, vibe, continuity |
-| identity | name, creature, vibe, emoji, avatar, introduction |
 
 `language` is a description variable, not a content variable. Only Events
 may call these read-only `extract_context` helpers with positional arguments:
@@ -501,7 +496,7 @@ multiplication/concatenation and reserved `MEMORY_FIELDS` comments are not allow
 Limits: 64 KiB UTF-8 source, 2048 AST nodes, 1 MiB rendered body excluding system
 metadata. Nonmatching Account bodies are checked at publication and extraction load,
 then rendered with a restricted Jinja environment and only approved fields/helpers.
-The built-in Events, Soul and Identity bodies also pass this restricted syntax,
+The built-in Events body also passes this restricted syntax,
 including after edits to headings, trailing newlines or CRLF line endings. These
 edits do not bypass validation or mark the edited body as deployment-owned.
 Runtime failures on this restricted path stop that file write instead of falling

@@ -88,8 +88,6 @@ results = client.find(
 | **preferences** | `~/memories/preferences/` | 按主题组织的用户偏好 |
 | **entities** | `~/memories/entities/` | 人物、项目、组织等实体知识 |
 | **events** | `~/memories/events/` | 决策、里程碑等事件记录 |
-| **identity** | `~/memories/identity.md` | 助手的名称、形象、气质和自我介绍 |
-| **soul** | `~/memories/soul.md` | 助手的核心原则、边界、风格和连续性 |
 | **cases** | `~/memories/cases/` | 用于训练和评估的任务案例 |
 | **trajectories** | `~/memories/trajectories/` | 可复用的任务执行轨迹 |
 | **experiences** | `~/memories/experiences/` | 从执行结果中提炼的可复用经验 |
@@ -97,6 +95,8 @@ results = client.find(
 表中的 `~/...` 使用家目录别名 `viking://~`，服务端会按认证身份将其展开为 `viking://user/{user_id}/...`。当记忆策略允许 Peer 记忆时，支持 Peer 的类型会写入 `viking://user/{user_id}/peers/{peer_id}/memories/...`。记忆类型可通过自定义模板扩展或调整。
 
 Schema 定义的 `memories/tools/` 和 `memories/skills/` 类型已禁用。它们与存放在 `viking://user/{user_id}/skills/{skill_name}/SKILL.md` 下的独立 Skill 不同，后者仍然保留并受支持。
+
+`memories/AGENT.md` 是静态 Agent 指令文件，创建用户工作区时按原 Soul 的默认正文初始化。可通过文件接口编辑，不参与 session commit 的自动提取或合并。已有用户在初始化或下次提取 Self 记忆时，若缺少 `AGENT.md` 则按默认内容补齐；已有 `AGENT.md`、`soul.md` 和 `identity.md` 均保持原样。
 
 ### 使用
 

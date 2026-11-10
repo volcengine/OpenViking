@@ -88,8 +88,6 @@ Memories are durable knowledge learned from interactions and task execution. The
 | **preferences** | `~/memories/preferences/` | User preferences organized by topic |
 | **entities** | `~/memories/entities/` | Knowledge about people, projects, organizations, and other entities |
 | **events** | `~/memories/events/` | Decisions, milestones, and other event records |
-| **identity** | `~/memories/identity.md` | Assistant name, persona, temperament, and self-introduction |
-| **soul** | `~/memories/soul.md` | Assistant principles, boundaries, style, and continuity |
 | **cases** | `~/memories/cases/` | Task cases used for training and evaluation |
 | **trajectories** | `~/memories/trajectories/` | Reusable task-execution trajectories |
 | **experiences** | `~/memories/experiences/` | Reusable experience distilled from execution outcomes |
@@ -97,6 +95,8 @@ Memories are durable knowledge learned from interactions and task execution. The
 The `~/...` entries above use the home alias `viking://~`, which the server expands to `viking://user/{user_id}/...` for the authenticated caller. When the memory policy permits Peer memory, supported types may instead be written under `viking://user/{user_id}/peers/{peer_id}/memories/...`. Applications can extend or adjust memory types with custom templates.
 
 The schema-defined `memories/tools/` and `memories/skills/` types are disabled. They are separate from standalone Skills stored under `viking://user/{user_id}/skills/{skill_name}/SKILL.md`, which remain supported.
+
+`memories/AGENT.md` contains static agent instructions, initialized with the former Soul defaults when the user workspace is created. It is editable through the file APIs and is not extracted or merged on session commit. For existing users, initialization or the next self-memory commit creates a missing `AGENT.md` from these defaults. Existing `AGENT.md`, `soul.md`, and `identity.md` files are left unchanged.
 
 ### Usage
 

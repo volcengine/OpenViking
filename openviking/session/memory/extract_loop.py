@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.models.vlm.base import ToolCall, VLMBase
 from openviking.server.identity import RequestContext
+from openviking.session.memory.agent_file import is_static_agent_memory
 from openviking.session.memory.dataclass import (
     DeleteId,
     MemoryFile,
@@ -962,6 +963,9 @@ class ExtractLoop:
                 continue
             delete_uri = page_id_map.resolve(delete_id.delete_page_id)
             if not delete_uri:
+                continue
+            if is_static_agent_memory(delete_uri):
+                logger.warning("Skipping automatic deletion of static agent memory %s", delete_uri)
                 continue
             old_content = self.context_provider.read_file_contents.get(delete_uri)
             if not old_content:

@@ -6,6 +6,7 @@ import {
   identifyMemoryPreset,
   memoryPresets,
   memoryScopeKeys,
+  normalizeMemoryPolicy,
   personalMemoryTypes,
 } from '#/shared/lib/user-memory-policy'
 import { Button } from '#/shared/ui/button'
@@ -228,18 +229,18 @@ export function MemoryDirectoryPreview({
   userId: string
 }) {
   const { t } = useTranslation('settings')
-  const types = value.memory_types ?? defaultMemoryTypes
+  const types = normalizeMemoryPolicy(value).memory_types ?? defaultMemoryTypes
   const nodes = (entries: string[]) =>
     entries.map((type) => (
       <li key={type} className="flex items-start gap-2 py-2">
-        {['profile', 'identity', 'soul'].includes(type) ? (
+        {['profile', 'AGENT'].includes(type) ? (
           <FileIcon className="mt-0.5 size-4 shrink-0" />
         ) : (
           <FolderIcon className="mt-0.5 size-4 shrink-0" />
         )}
         <span>
           {/* eslint-disable-next-line studio-i18n/no-literal-message -- Display the actual filename and extension. */}
-          {['profile', 'identity', 'soul'].includes(type) ? `${type}.md` : type}
+          {['profile', 'AGENT'].includes(type) ? `${type}.md` : type}
           <span className="ml-2 text-xs text-muted-foreground">
             {t(`memoryPolicy.directories.${type}`, { defaultValue: '' })}
           </span>
@@ -261,7 +262,7 @@ export function MemoryDirectoryPreview({
           memories
         </div>
         <ul className="ml-2 mt-2 border-l pl-4">
-          {nodes(value.self?.enabled === false ? [] : types)}
+          {nodes(['AGENT', ...(value.self?.enabled === false ? [] : types)])}
         </ul>
         {value.peer?.enabled !== false && (
           <div className="mt-2">

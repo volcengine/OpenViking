@@ -21,8 +21,6 @@ MAX_CONTENT_TEMPLATE_BYTES = 64 * 1024
 MAX_CONTENT_OUTPUT_BYTES = 1024 * 1024
 CONTENT_TEMPLATE_FIELDS = {
     "events": ("event_name", "goal", "summary", "ranges"),
-    "soul": ("core_truths", "boundaries", "vibe", "continuity"),
-    "identity": ("name", "creature", "vibe", "emoji", "avatar", "introduction"),
 }
 # Positional argument counts; these helpers only read the current extraction context.
 _EVENT_METHODS = {
