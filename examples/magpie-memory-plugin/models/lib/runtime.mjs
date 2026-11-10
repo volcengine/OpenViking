@@ -146,6 +146,8 @@ export async function status(config) {
 }
 export function startAdapter(input, options = {}) {
   let timer, stopped = false, lastSelection, previousMessage;
+  let activeTick = Promise.resolve();
+  const run = () => { activeTick = tick(); };
   const log = (code) => {
     if (code === previousMessage) return;
     previousMessage = code;
@@ -186,9 +188,10 @@ export function startAdapter(input, options = {}) {
         });
       } catch {}
     } finally {
-      if (!stopped) { timer = setTimeout(tick, delay); timer.unref?.(); }
+      if (!stopped) { timer = setTimeout(run, delay); timer.unref?.(); }
     }
   };
-  timer = setTimeout(tick, 0); timer.unref?.();
-  return () => { stopped = true; clearTimeout(timer); };
+  timer = setTimeout(run, 0); timer.unref?.();
+  // Callers may await shutdown before releasing state files or connection settings.
+  return async () => { stopped = true; clearTimeout(timer); await activeTick; };
 }

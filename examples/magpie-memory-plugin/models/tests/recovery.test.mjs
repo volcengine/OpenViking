@@ -15,7 +15,7 @@ for (const failure of ["transport", 503, 403]) {
     process.env.OPENVIKING_MAGPIE_MODELS_DIR = directory;
     process.env.OPENVIKING_CLI_CONFIG_FILE = join(directory, "ovcli.conf");
     process.env.PATH = ""; // Make optional CLI discovery deterministic.
-    let stop;
+    let stop, releaseJournal;
     let document = { vlm: { model: "original", provider: "openai", api_key: "original-key" } };
     const original = structuredClone(document);
     let revision = "r0", pending = false, instance = "initial", restarts = 0;
@@ -56,7 +56,8 @@ for (const failure of ["transport", 503, 403]) {
         restart: { supported: true, instance_id: instance, restarting: false } } });
     });
     t.after(async () => {
-      stop?.();
+      releaseJournal?.();
+      await stop?.();
       server.closeAllConnections();
       await new Promise((resolve) => server.close(resolve));
       for (const key of ["OPENVIKING_MAGPIE_MODELS_DIR", "OPENVIKING_CLI_CONFIG_FILE", "PATH"]) {
@@ -102,14 +103,36 @@ for (const failure of ["transport", 503, 403]) {
       await delay(1100);
       assert.equal(configurationReads, reads, "definitive failure must not automatically retry activation");
       assert.equal((await status()).status, "apply_failed");
-      stop();
+      await stop();
       failing = false;
       assert.equal((await activate(config, { retry: true })).status, "applied", "explicit recovery remains actionable");
     } else {
+      // Hold the final journal write after status.json announces "applied".
+      // Shutdown must wait for this write and the enclosing lock cleanup.
+      let journalEntered;
+      const entered = new Promise((resolve) => { journalEntered = resolve; });
+      const release = new Promise((resolve) => { releaseJournal = resolve; });
+      const rename = fs.rename.bind(fs);
+      t.mock.method(fs, "rename", async (from, to) => {
+        if (to === join(directory, "activation.json")) {
+          const journal = JSON.parse(await fs.readFile(from, "utf8"));
+          if (journal.status === "complete") { journalEntered(); await release; }
+        }
+        return rename(from, to);
+      });
       failing = false;
       await waitFor((value) => value.status === "applied");
-      stop();
+      await entered;
+      let drained = false;
+      const stopping = Promise.resolve(stop()).then(() => { drained = true; });
+      await delay(0);
+      assert.equal(drained, false, "shutdown must wait for the active journal write");
+      await fs.access(join(directory, "adapter.lock"));
+      releaseJournal();
+      await stopping;
+      assert.equal(JSON.parse(await fs.readFile(join(directory, "activation.json"), "utf8")).status, "complete");
     }
+    await assert.rejects(fs.access(join(directory, "adapter.lock")), { code: "ENOENT" });
     assert.equal(restarts, 1);
     assert.equal(pending, false);
     assert.equal((await status()).restartRequired, false);
