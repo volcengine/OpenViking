@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { Store } from '../src/store.mjs';
 import { ActionService } from '../src/actions/service.mjs';
 import { TOOLS, publicTool } from '../src/actions/tools.mjs';
-import { MAToolExecutor, maTools, maToolsHash, maInputSchema, maAgentModel, maAgentModelChanged, MA_DEFAULT_MODEL } from '../src/volc-tools.mjs';
+import { MAToolExecutor, maTools, maToolsHash, maInputSchema, maAgentModel, maAgentModelChanged, MA_DEFAULT_MODEL, gatewayDisabledTools } from '../src/volc-tools.mjs';
 import { MAFiles, outputRelative } from '../src/volc-files.mjs';
 import { VolcAgent } from '../src/volc.mjs';
 import { InstanceLock, sameProcess } from '../src/lock.mjs';
@@ -62,6 +62,25 @@ test('under the OpenViking gateway, MA leaves the OV read tools to it and keeps 
   for (const kept of ['openviking_remember', 'openviking_add_resource', 'read_openviking_session_context']) {
     assert.ok(gateway.includes(kept), kept);
   }
+});
+
+test('under the gateway, the hidden OV tools are exactly those whose names Vika\'s own tools would clash with', () => {
+  const tools = maTools({ tools: () => TOOLS.map(publicTool) }, { viaGateway: true });
+  const disabled = gatewayDisabledTools(tools);
+  assert.deepEqual(disabled, ['add_resource', 'remember']);
+  // The OpenViking MCP tools (openviking/server/mcp_endpoint.py) and the
+  // gateway's clash rule (openviking_gateway/protocols.py client_openviking_tools):
+  // a client tool named like openviking or mentioning viking:// that ends in
+  // _<name> of an offered tool turns the gateway's tools off.
+  const ov = ['add_resource', 'add_skill', 'cancel_watch', 'download', 'edit', 'find', 'forget', 'get_acl', 'glob',
+    'grep', 'health', 'list', 'list_groups', 'list_users', 'list_watches', 'privacy_resolve', 'privacy_tree',
+    'privacy_upsert', 'read', 'remember', 'search', 'set_acl', 'tree', 'write'];
+  const offered = ov.filter((name) => !disabled.includes(name));
+  const ending = new RegExp(`[^a-z0-9](?:${offered.join('|')})$`, 'i');
+  const clashes = tools.filter((tool) => ending.test(tool.name) && (/(?<![a-z0-9])openviking(?![a-z0-9])/i.test(tool.name)
+    || JSON.stringify(tool).toLowerCase().includes('viking://')));
+  assert.deepEqual(clashes.map((tool) => tool.name), []);
+  assert.ok(offered.every((name) => !tools.some((tool) => tool.name === `openviking_${name}`)));
 });
 
 test('real Core outbox sends once; DONE result survives restart and POSTED skips execution', async (t) => {

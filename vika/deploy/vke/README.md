@@ -75,6 +75,9 @@ or session: the daemon sends it as `X-User-Model-Header-Authorization: Bearer
 <key>` on each `POST /sessions/{id}/events` only, and strips it from every child
 process. With BYOK on, startup fails when any of the keys above or the model key
 is missing or invalid; with it off, the Agent body and requests are unchanged.
+With `agents[].ovViaGateway` as well, the same POSTs carry
+`X-User-Model-Header-X-OpenViking-Context`, the gateway tools to hide (see
+[usage-reference.md](../../docs/usage-reference.md#openviking-through-the-gateway-ma-cloudark)).
 
 Re-run `node scripts/volc-sync-agent.mjs` after changing any of these keys: it
 writes the model block (`id`, `provider`, `base_url`, `protocol`,

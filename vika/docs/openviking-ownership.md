@@ -9,7 +9,7 @@ Vika owns OpenViking memory for every agent it runs:
 - The model reads and writes through the Core's `openviking_*` tools (`ov-tools.mjs`, `actions/`).
 - Nothing else may touch the instance's OV memory.
 
-The one exception is `agents[].ovViaGateway`, for an MA Cloud/Ark instance whose model calls go through the OpenViking gateway: the gateway recalls, serves `openviking_find`, `openviking_search`, `openviking_read` and `openviking_list`, and extracts profile, entities and events, while the daemon keeps preferences, `openviking_remember`, `openviking_add_resource` and the session transcript, created with `memory_policy` self and peer disabled instead of `memory_types` (see [usage-reference.md](usage-reference.md#openviking-through-the-gateway-ma-cloudark)).
+The one exception is `agents[].ovViaGateway`, for an MA Cloud/Ark instance whose model calls go through the OpenViking gateway: the gateway recalls, serves its OpenViking tools (`openviking_find`, `openviking_search`, `openviking_read`, `openviking_list` and the rest, all but the ones the daemon keeps), and extracts profile, entities and events, while the daemon keeps preferences, `openviking_remember`, `openviking_add_resource` and the session transcript, created with `memory_policy` self and peer disabled instead of `memory_types` (see [usage-reference.md](usage-reference.md#openviking-through-the-gateway-ma-cloudark)).
 
 Keep these rules when you change any of it:
 

@@ -29,6 +29,19 @@ export function maTools(actions, { viaGateway = false } = {}) {
       type: 'custom', name, description, input_schema: maInputSchema(inputSchema),
     }));
 }
+// The gateway turns all of its tools off for a session whose client already
+// offers an OpenViking tool of the same name (openviking_<name>). Vika keeps a
+// few of its own under ovViaGateway (openviking_remember, ...), so it asks the
+// gateway, per request, to hide exactly those and offer every other one.
+const OV_PREFIX = 'openviking_';
+export function gatewayDisabledTools(tools) {
+  return [...new Set(tools.filter(({ type, name }) => type === 'custom' && name.startsWith(OV_PREFIX))
+    .map(({ name }) => name.slice(OV_PREFIX.length)))].sort();
+}
+// X-OpenViking-Context: its disabled_tools replaces the key profile's list.
+export function gatewayContextHeader(tools) {
+  return JSON.stringify({ disabled_tools: gatewayDisabledTools(tools) });
+}
 export function maToolsHash(tools) {
   return createHash('sha256').update(canonicalJson(tools.filter((tool) => tool.type === 'custom')
     .map(({ name, description, input_schema }) => ({ name, description, input_schema }))

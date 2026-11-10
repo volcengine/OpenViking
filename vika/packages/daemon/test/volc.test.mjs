@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { VolcAgent as BaseVolcAgent } from '../src/volc.mjs';
+import { TOOLS, publicTool } from '../src/actions/tools.mjs';
 
 const quietLogger = {
   child() { return this; },
@@ -890,7 +891,7 @@ describe('Volc managed-agent BYOK model key', () => {
 
   // One full turn (session GET, session create, events POST, stream, history),
   // then a custom tool result and a cancel, recording every request's headers.
-  async function runTurn(overrides) {
+  async function runTurn(overrides, options = {}) {
     const calls = [];
     const sse = [
       { id: 'evt-user', type: 'user.message', content: [{ type: 'text', text: 'hello' }] },
@@ -911,7 +912,7 @@ describe('Volc managed-agent BYOK model key', () => {
     };
     let succeeded;
     const completed = new Promise((resolve) => { succeeded = resolve; });
-    const agent = new VolcAgent(config(overrides), store(), quietLogger, { fetch, onTurnSucceeded: succeeded });
+    const agent = new VolcAgent(config(overrides), store(), quietLogger, { ...options, fetch, onTurnSucceeded: succeeded });
     await agent.start();
     assert.equal(agent.deliver('hello', 1), true);
     await completed;
@@ -945,6 +946,38 @@ describe('Volc managed-agent BYOK model key', () => {
   it('does not double the Bearer prefix of a configured key', async () => {
     const { posts } = await runTurn({ volcModelByok: byok, volcModelApiKey: 'Bearer model-test-key' });
     assert.ok(posts.every((post) => post.header === 'Bearer model-test-key'));
+  });
+
+  it('under the gateway, asks it on every events POST to hide only the OV tools Vika offers itself', async () => {
+    const CONTEXT_HEADER = 'X-User-Model-Header-X-OpenViking-Context';
+    const actions = { tools: () => TOOLS.map(publicTool) };
+    const { calls } = await runTurn({ volcModelByok: byok, volcModelApiKey: 'model-test-key', ovViaGateway: true }, { actions });
+    const posts = calls.filter((call) => call.method === 'POST' && /\/sessions\/[^/]+\/events$/.test(call.url));
+    assert.equal(posts.length, 3);
+    for (const call of posts) {
+      assert.deepEqual(JSON.parse(call.headers[CONTEXT_HEADER]), { disabled_tools: ['add_resource', 'remember'] });
+    }
+    for (const call of calls.filter((call) => !posts.includes(call))) assert.equal(call.headers[CONTEXT_HEADER], undefined, call.url);
+    // Without the gateway, or without BYOK, no gateway context is sent.
+    for (const overrides of [{ volcModelByok: byok, volcModelApiKey: 'model-test-key' }, { volcModelApiKey: 'model-test-key', ovViaGateway: true }]) {
+      const plain = await runTurn(overrides, { actions });
+      assert.ok(plain.calls.every((call) => call.headers[CONTEXT_HEADER] === undefined));
+    }
+  });
+
+  it('the gateway context is part of the session policy hash, and only under the gateway', async () => {
+    const hash = async (overrides, tools) => {
+      const agent = new VolcAgent(config({ volcModelByok: byok, volcModelApiKey: 'k', ...overrides }), store(), quietLogger, {
+        fetch: async (url) => json(url.endsWith('/sessions') ? templateSession('sesn-live12345678') : templateSession()),
+        actions: { tools: () => tools } });
+      await agent.start();
+      return agent.policyHash;
+    };
+    const all = TOOLS.map(publicTool);
+    const fewer = all.filter((tool) => tool.name !== 'openviking_remember');
+    assert.notEqual(await hash({ ovViaGateway: true }, all), await hash({ ovViaGateway: true }, fewer));
+    assert.equal(await hash({}, all), await hash({}, fewer));
+    assert.notEqual(await hash({ ovViaGateway: true }, all), await hash({}, all));
   });
 
   it('adds no model header without BYOK, even when a model key is configured', async () => {

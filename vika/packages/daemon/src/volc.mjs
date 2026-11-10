@@ -4,7 +4,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { assembleVolcCloudConversationPolicy } from './conversation-policy.mjs';
-import { MAToolExecutor, maTools, maToolsHash, maAgentModel, maAgentModelChanged } from './volc-tools.mjs';
+import { MAToolExecutor, maTools, maToolsHash, maAgentModel, maAgentModelChanged, gatewayContextHeader } from './volc-tools.mjs';
 import { MAFiles } from './volc-files.mjs';
 import { safeError as safe } from './logger.mjs';
 import { activityPayload } from './activity.mjs';
@@ -114,6 +114,13 @@ export class VolcAgent {
     // Authorization to the provider. Sent on events POSTs only, never stored.
     this.byok = Boolean(config.volcModelByok);
     this.modelApiKey = this.byok ? String(config.volcModelApiKey ?? '').trim() : '';
+    // A BYOK model through the OpenViking gateway: MA forwards
+    // X-User-Model-Header-X-OpenViking-Context to it as X-OpenViking-Context.
+    // A blacklist, so every gateway tool but the ones Vika offers itself
+    // (which would clash and close them all) reaches the model.
+    this.gatewayContext = this.byok && config.ovViaGateway && this.actions
+      ? gatewayContextHeader(maTools(this.actions, { viaGateway: true }))
+      : null;
     this.templateSessionId = config.volcSessionId ?? '';
     this.requestTimeoutMs = config.volcRequestTimeoutMs ?? 30_000;
     this.streamIdleTimeoutMs = config.volcStreamIdleTimeoutMs ?? 900_000;
@@ -201,13 +208,17 @@ export class VolcAgent {
     if (this.template.vault_ids?.length) {
       this.logger.warn('volc_template_vaults_attached', { count: this.template.vault_ids.length, message: 'Keep connector credentials on Channel; review template Vault contents.' });
     }
-    this.policyHashValue = createHash('sha256')
+    const policyHash = createHash('sha256')
       .update('volc-managed-agent-v3').update('\0').update('cloud').update('\0').update(this.toolsHash).update('\0')
       .update(this.baseUrl).update('\0')
       .update(String(this.template.agent.id)).update('\0')
       .update(String(this.template.agent.version ?? '')).update('\0')
       .update(String(this.template.environment_id)).update('\0')
-      .update(this.transportPolicy).digest('hex');
+      .update(this.transportPolicy);
+    // The gateway freezes a session's policy at its first request, so a
+    // changed gateway context needs a fresh session to take effect.
+    if (this.gatewayContext) policyHash.update('\0').update(this.gatewayContext);
+    this.policyHashValue = policyHash.digest('hex');
 
     const global = this.store.getGlobalSession?.() ?? {};
     const resumable = this.allowResume
@@ -735,6 +746,7 @@ export class VolcAgent {
       body: { events },
       headers: this.modelApiKey ? {
         'X-User-Model-Header-Authorization': /^Bearer\s/i.test(this.modelApiKey) ? this.modelApiKey : `Bearer ${this.modelApiKey}`,
+        ...(this.gatewayContext ? { 'X-User-Model-Header-X-OpenViking-Context': this.gatewayContext } : {}),
       } : null,
     });
   }
