@@ -177,7 +177,7 @@ async def test_directory_listing_keeps_matching_files_behind_the_directory_group
         ctx=ctx,
     )
 
-    cutoff = await _cutoff_between(client, root_uri, newer="file")
+    cutoff = await _cutoff_between(client, root_uri, older="directory")
     response = await client.get(
         "/api/v1/fs/ls",
         params={
@@ -218,7 +218,7 @@ async def test_directory_listing_keeps_matching_files_behind_the_directory_group
     for index in range(260):
         await service.viking_fs.mkdir(f"{root_uri}/dir-{index:04d}", ctx=ctx)
 
-    cutoff = await _cutoff_between(client, root_uri, newer="directory")
+    cutoff = await _cutoff_between(client, root_uri, older="file")
     response = await client.get(
         "/api/v1/fs/ls",
         params={
@@ -240,11 +240,14 @@ async def _cutoff_between(
     client: httpx.AsyncClient,
     root_uri: str,
     *,
-    newer: str,
+    older: str,
 ) -> str:
-    """Return a timestamp between the file and the directories of a listing.
+    """Return a timestamp between the older and the newer group of a listing.
 
-    ``newer`` names the group whose timestamps sit above the cutoff.
+    ``older`` names the group whose timestamps sit below the cutoff. The
+    cutoff is placed between the newest timestamp of that group and the
+    oldest timestamp of the other one, so the two groups land on opposite
+    sides of it and only the intended one is inside the window.
     """
     listing = await client.get(
         "/api/v1/fs/ls",
@@ -257,9 +260,9 @@ async def _cutoff_between(
     directory_times = [entry["modTime"] for entry in entries if entry.get("isDir")]
     assert file_times and directory_times
 
-    if newer == "file":
+    if older == "directory":
         earlier, later = max(directory_times), min(file_times)
     else:
-        earlier, later = min(file_times), max(directory_times)
+        earlier, later = max(file_times), min(directory_times)
     assert earlier < later, "the listing does not have two distinct timestamps"
     return _midpoint(earlier, later)
