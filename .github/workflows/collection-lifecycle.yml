@@ -1,0 +1,58 @@
+name: Collection lifecycle regressions
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'openviking/storage/vectordb/**'
+      - 'openviking/service/core.py'
+      - 'openviking/server/routers/system.py'
+      - 'tests/vectordb/**'
+      - 'tests/unit/service/test_core_embedder_lifecycle.py'
+      - 'tests/server/test_server_health.py'
+      - '.github/workflows/collection-lifecycle.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential
+      - name: Build native runtime from this checkout
+        uses: ./.github/actions/native-runtime
+      - name: Test collection persistence and shutdown
+        run: |
+          uv run --no-sync pytest -q -o addopts='' --confcutdir=tests/vectordb \
+            tests/vectordb/test_collection_shutdown.py \
+            tests/vectordb/test_delta_prune.py \
+            tests/vectordb/test_crash_recovery.py \
+            tests/vectordb/test_filter_ops.py \
+            --junitxml=collection-lifecycle.xml
+      - name: Test service cleanup and health diagnostics
+        run: |
+          uv run --no-sync pytest -q -o addopts='' \
+            tests/unit/service/test_core_embedder_lifecycle.py \
+            tests/server/test_server_health.py \
+            --junitxml=service-lifecycle.xml
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: collection-lifecycle-results
+          path: '*-lifecycle.xml'
+          if-no-files-found: ignore

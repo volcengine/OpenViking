@@ -426,3 +426,19 @@ async def test_initialize_runtime_state_skips_reconcile_without_account_manager(
 
     service.reconcile_system_assets.assert_not_awaited()
     assert setup.await_args.kwargs["manager"] is None
+
+
+async def test_health_reports_abandoned_collection_counts(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.server.routers.system.get_unclosed_collection_counts",
+        lambda: {"pending": 3, "closing": 1},
+    )
+    app = create_app(
+        config=ServerConfig(auth_mode="dev", host="127.0.0.1"), service=SimpleNamespace()
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["abandoned_collections"] == {"pending": 3, "closing": 1}

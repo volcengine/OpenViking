@@ -193,3 +193,140 @@ if __name__ == "__main__":
         _run_maintenance(sys.argv[1])
     else:
         _run(sys.argv[1], bool(int(sys.argv[2])))
+
+
+def test_drain_does_not_hold_registry_lock_while_closing():
+    import threading
+    from unittest.mock import Mock
+
+    from openviking.storage.vectordb.collection.collection import (
+        Collection,
+        ICollection,
+        close_unclosed_collections,
+        get_unclosed_collection_counts,
+    )
+
+    entered, release = threading.Event(), threading.Event()
+    first = Mock(spec=ICollection)
+
+    def close_first():
+        entered.set()
+        assert release.wait(5)
+
+    first.close.side_effect = close_first
+    wrapper = Collection(first)
+    del wrapper
+    thread = threading.Thread(target=close_unclosed_collections, daemon=True)
+    thread.start()
+    try:
+        assert entered.wait(5)
+        second = Mock(spec=ICollection)
+        wrapper = Collection(second)
+        del wrapper
+        # Probe from another thread: a lock held across first.close would hang.
+        observed = []
+        probe = threading.Thread(
+            target=lambda: observed.append(get_unclosed_collection_counts()), daemon=True
+        )
+        probe.start()
+        probe.join(1)
+        assert observed == [{"pending": 1, "closing": 1}]
+        close_unclosed_collections()
+        second.close.assert_called_once()
+    finally:
+        release.set()
+        thread.join(5)
+    first.close.assert_called_once()
+    assert get_unclosed_collection_counts() == {"pending": 0, "closing": 0}
+
+
+def test_project_group_drains_abandoned_collection():
+    from openviking.storage.vectordb.collection.local_collection import (
+        get_or_create_local_collection,
+    )
+    from openviking.storage.vectordb.project.project_group import get_or_create_project_group
+
+    group = get_or_create_project_group()
+    col = get_or_create_local_collection(
+        {
+            "CollectionName": "abandoned",
+            "Fields": [{"FieldName": "id", "FieldType": "int64", "IsPrimaryKey": True}],
+        }
+    )
+    inner = col._Collection__collection
+    scheduler_thread = inner.scheduler._thread
+    del col
+    group.close()
+    assert inner.scheduler is None and not scheduler_thread.is_alive()
+    assert inner.store_mgr is None
+
+
+@pytest.mark.parametrize("phase", ["persist", "close"])
+def test_explicit_close_retries_failed_index(tmp_path, phase):
+    from unittest.mock import Mock
+
+    from openviking.storage.vectordb.collection.local_collection import (
+        get_or_create_local_collection,
+    )
+
+    col = get_or_create_local_collection(
+        {
+            "CollectionName": "retry",
+            "Fields": [{"FieldName": "id", "FieldType": "int64", "IsPrimaryKey": True}],
+        },
+        path=str(tmp_path),
+    )
+    inner = col._Collection__collection
+    index = Mock()
+    index.persist.return_value = 0
+    getattr(index, phase).side_effect = [RuntimeError("temporary failure"), 0]
+    inner.indexes.set("failing", index)
+    with pytest.raises(RuntimeError):
+        col.close()
+    assert inner._closing and not inner._closed
+    assert inner.scheduler is None and inner.store_mgr is not None
+    assert inner.indexes.get("failing") is index
+    col.close()
+    assert inner._closed and inner.store_mgr is None
+    assert not inner.indexes.get_all()
+    col.close()
+    assert getattr(index, phase).call_count == 2
+
+
+def test_concurrent_explicit_close_closes_resources_once():
+    import threading
+    from unittest.mock import Mock
+
+    from openviking.storage.vectordb.collection.local_collection import (
+        get_or_create_local_collection,
+    )
+
+    col = get_or_create_local_collection(
+        {
+            "CollectionName": "concurrent",
+            "Fields": [{"FieldName": "id", "FieldType": "int64", "IsPrimaryKey": True}],
+        }
+    )
+    inner = col._Collection__collection
+    index = Mock()
+    inner.indexes.set("idx", index)
+    start = threading.Barrier(3)
+    errors = []
+
+    def close():
+        try:
+            start.wait(5)
+            col.close()
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=close, daemon=True) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    start.wait(5)
+    for thread in threads:
+        thread.join(5)
+    assert not errors and all(not thread.is_alive() for thread in threads)
+    index.close.assert_called_once()
+    assert inner._closed
+    col.close()

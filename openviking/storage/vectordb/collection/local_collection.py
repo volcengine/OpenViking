@@ -284,26 +284,37 @@ class LocalCollection(ICollection):
             self.scheduler = None
 
     def _close_unlocked(self) -> None:
-        self.store_mgr = None
-
-        # Close all indexes
-        def close_index(name, index):
+        failures = []
+        for name, index in self.indexes.get_all().items():
             try:
                 index.close()
-            except Exception as e:
-                logger.warning(f"Failed to close index {name}: {e}")
+            except Exception as exc:
+                failures.append(exc)
+            else:
+                self.indexes.remove(name)
+        if failures:
+            # Keep failed indexes and the Store for another explicit close.
+            raise RuntimeError("Failed to close collection indexes") from failures[0]
+        self.store_mgr = None
 
-        self.indexes.iterate(close_index)
-        self.indexes.clear()
+    def _persist_before_close(self):
+        self._persist_all_indexes()
 
     def close(self):
+        """Stop maintenance, then persist/release; retry unfinished phases on failure.
+
+        Shutdown waits for running jobs without a timeout. It cannot safely
+        destroy indexes still in use by a stalled job. On persistence/index
+        failure, maintenance stays stopped and remaining resources are retained
+        for a subsequent close(); the handle must no longer be used for work.
+        """
         with self._close_lock:
             if self._closed:
                 return
             self._closing = True
             self._stop_scheduler()
             with self._index_mutation_barrier.exclusive_mutation():
-                self._persist_all_indexes()
+                self._persist_before_close()
                 self._close_unlocked()
                 self._closed = True
 
@@ -1497,7 +1508,10 @@ class PersistCollection(LocalCollection):
         """
         self.flush_all_indexes()
 
-    def flush_all_indexes(self):
+    def _persist_before_close(self):
+        self.flush_all_indexes(raise_on_error=True)
+
+    def flush_all_indexes(self, *, raise_on_error: bool = False):
         """Manually trigger persistence of all indexes.
 
         Called when closing the collection or when immediate persistence is needed.
@@ -1506,6 +1520,7 @@ class PersistCollection(LocalCollection):
             int: Number of successfully persisted indexes
         """
         persisted_count = 0
+        failures = []
 
         def persist_index(index_name, index):
             nonlocal persisted_count
@@ -1515,9 +1530,12 @@ class PersistCollection(LocalCollection):
                     if version > 0:
                         persisted_count += 1
                 except Exception as e:
+                    failures.append(e)
                     logger.error(f"Failed to flush index {index_name}: {e}")
 
         self.indexes.iterate(persist_index)
+        if failures and raise_on_error:
+            raise RuntimeError("Failed to persist collection indexes") from failures[0]
         if persisted_count > 0:
             # Recovery only replays deltas newer than each index's snapshot, so
             # anything older than the oldest snapshot is dead weight.

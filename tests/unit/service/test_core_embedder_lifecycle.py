@@ -118,3 +118,46 @@ async def test_service_waits_for_account_embedder_before_closing_storage(monkeyp
         "storage-close",
     ]
     assert service._embedding_provider is None
+
+
+@pytest.mark.asyncio
+async def test_abandoned_drain_failure_continues_cleanup_and_can_retry(monkeypatch, caplog):
+    from unittest.mock import Mock
+
+    events = []
+    service = OpenVikingService.__new__(OpenVikingService)
+    for name in (
+        "_runtime_config_manager",
+        "_compile_scheduler",
+        "_ttl_adapter",
+        "_expiry_runtime",
+        "_watch_runtime",
+        "_watch_manager",
+        "_session_auto_commit_scheduler",
+        "_queue_manager",
+        "_vikingdb_manager",
+        "_embedding_provider",
+    ):
+        setattr(service, name, None)
+    service._config = SimpleNamespace(vlm=SimpleNamespace(close=lambda: None))
+    service._resource_service = SimpleNamespace(close_background_tasks=AsyncMock())
+    service._agfs_client = SimpleNamespace(close=lambda: events.append("ragfs"))
+    service._embedder = SimpleNamespace(close=lambda: events.append("embedder"))
+    service._initialized = True
+    monkeypatch.setattr(service, "_release_data_dir_lock", lambda: events.append("unlock"))
+    monkeypatch.setattr(service, "_stop_expiry", AsyncMock())
+    monkeypatch.setattr("openviking.ttl.wiring.get_ttl_adapter", lambda: None)
+    monkeypatch.setattr(
+        "openviking.service.core.get_task_tracker", lambda: SimpleNamespace(close=AsyncMock())
+    )
+    drain = Mock(side_effect=[RuntimeError("drain failed"), None])
+    monkeypatch.setattr("openviking.service.core.close_unclosed_collections", drain)
+    await service.close()
+    assert events == ["ragfs", "embedder"]
+    assert not service._initialized
+    assert service._agfs_client is None and service._embedder is None
+    assert "continuing service cleanup" in caplog.text
+    # Failed backend still owns storage: retry, then allow workspace reuse.
+    await service.close()
+    assert events == ["ragfs", "embedder", "unlock"]
+    assert drain.call_count == 2

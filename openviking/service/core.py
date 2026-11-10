@@ -962,7 +962,12 @@ class OpenVikingService:
             await self._vikingdb_manager.close()
             self._vikingdb_manager = None
         self._vector_config_resolver = None
-        await asyncio.to_thread(close_unclosed_collections)
+        abandoned_close_failed = False
+        try:
+            await asyncio.to_thread(close_unclosed_collections)
+        except Exception:
+            abandoned_close_failed = True
+            logger.exception("Failed to close abandoned collections; continuing service cleanup")
 
         if self._agfs_client:
             close_agfs = getattr(self._agfs_client, "close", None)
@@ -994,9 +999,16 @@ class OpenVikingService:
 
         # Keep embedded storage exclusive until cleanup succeeds. If cleanup
         # fails or is cancelled, this service may still own live storage state.
-        self._release_data_dir_lock()
-
-        logger.info("OpenVikingService closed")
+        if abandoned_close_failed:
+            # Failed backends can still own live storage. Complete independent
+            # cleanup, but do not allow another service to open this workspace.
+            # A later close() retries the deferred registry and releases the lock.
+            logger.warning(
+                "Service cleanup completed with abandoned collections; data-dir lock retained"
+            )
+        else:
+            self._release_data_dir_lock()
+            logger.info("OpenVikingService closed")
 
     async def reindex(
         self,

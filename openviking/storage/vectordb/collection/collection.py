@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 import atexit
 import importlib
+import logging
 import threading
 from abc import ABC, abstractmethod
 from collections import deque
@@ -16,29 +17,54 @@ from openviking.storage.vectordb.index.index import IIndex
 # lock. In particular, do not log, start threads or close resources in __del__.
 _unclosed_collections = deque()
 _unclosed_collections_lock = threading.Lock()
+_closing_unclosed_collections = 0
+logger = logging.getLogger(__name__)
+
+
+def get_unclosed_collection_counts() -> Dict[str, int]:
+    """Process-wide abandoned backends, including those being drained."""
+    with _unclosed_collections_lock:
+        return {"pending": len(_unclosed_collections), "closing": _closing_unclosed_collections}
 
 
 def close_unclosed_collections() -> None:
-    """Drain abandoned handles from normal shutdown code, outside finalizers.
+    """Close one snapshot of abandoned handles; retain failures for retry.
 
-    Explicit Collection.close() remains the preferred way to release resources.
-    Failed closes stay registered for a subsequent shutdown attempt.
+    Only bookkeeping holds the registry lock. Concurrent drains claim disjoint
+    batches; finalizers keep appending to the same deque without taking it.
+    Explicit Collection.close() remains necessary for timely resource release.
     """
+    global _closing_unclosed_collections
     with _unclosed_collections_lock:
-        failures = []
-        for _ in range(len(_unclosed_collections)):
-            collection = _unclosed_collections.popleft()
+        batch = [_unclosed_collections.popleft() for _ in range(len(_unclosed_collections))]
+        _closing_unclosed_collections += len(batch)
+    if not batch:
+        return
+    failures = []
+    completed = 0
+    try:
+        for collection in batch:
             try:
                 collection.close()
             except Exception as exc:
                 failures.append((collection, exc))
-        _unclosed_collections.extend(collection for collection, _ in failures)
-        if failures:
-            raise RuntimeError("Failed to close abandoned collections") from failures[0][1]
+            completed += 1
+    finally:
+        with _unclosed_collections_lock:
+            _unclosed_collections.extend(collection for collection, _ in failures)
+            # Preserve the current and unvisited backends on BaseException too.
+            _unclosed_collections.extend(batch[completed:])
+            _closing_unclosed_collections -= len(batch)
+    logger.info(
+        "Closed %d abandoned collections; %d failed", completed - len(failures), len(failures)
+    )
+    if failures:
+        raise RuntimeError("Failed to close abandoned collections") from failures[0][1]
 
 
-# Standalone vectordb callers may not have a service owner. Keep a last-resort
-# drain before logging's atexit shutdown; service shutdown drains explicitly.
+# logging is imported before this registration, so normal atexit LIFO order
+# drains before logging.shutdown. Service shutdown is the primary cleanup path;
+# this fallback does not guarantee ordering against other application's hooks.
 atexit.register(close_unclosed_collections)
 
 
@@ -258,6 +284,8 @@ class Collection:
         )
         self.__collection: Optional[ICollection] = collection
 
+    # Keep the original deque reachable even during module teardown. Never
+    # replace it when draining; a global helper may already be cleared at exit.
     def __del__(self, _pending=_unclosed_collections):
         collection = getattr(self, "_Collection__collection", None)
         if collection is not None:
@@ -754,6 +782,7 @@ class Collection:
         Close the connection to the collection and release associated resources.
         Should be called explicitly when the collection is no longer needed (in addition to destructor).
         """
-        if self.__collection:
-            self.__collection.close()
+        collection = self.__collection
+        if collection is not None:
+            collection.close()
             self.__collection = None

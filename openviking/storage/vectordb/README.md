@@ -938,6 +938,8 @@ result = collection.search_by_vector(
 - 合理设置 TTL 自动清理过期数据
 - 定期监控索引大小和内存使用
 
+升级时请阅读 [集合生命周期变更说明](../../../docs/en/guides/vectordb-lifecycle-upgrade.md)：`del` 不再立即释放数据库锁和线程，显式关闭失败后需要重试。`/health` 的 `abandoned_collections.pending` / `closing` 提供进程级待回收与回收中计数。
+
 ## API 参考
 
 ### Collection 方法

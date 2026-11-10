@@ -12,6 +12,7 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import AuthMode, RequestContext
 from openviking.server.models import Response
+from openviking.storage.vectordb.collection.collection import get_unclosed_collection_counts
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import UnauthenticatedError
 from openviking_cli.utils import get_logger
@@ -50,7 +51,12 @@ async def health_check(request: Request):
     """Health check endpoint (no authentication required)."""
     from openviking import __version__
 
-    result = {"status": "ok", "healthy": True, "version": __version__}
+    result = {
+        "status": "ok",
+        "healthy": True,
+        "version": __version__,
+        "abandoned_collections": get_unclosed_collection_counts(),
+    }
 
     try:
         config = getattr(request.app.state, "config", None)
