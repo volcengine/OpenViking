@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { DirectoryTourProps, DirectoryTourStep } from './types.js';
@@ -5,7 +6,6 @@ import { useTourAnchor } from './use-tour-anchor.js';
 import { useTourPosition } from './use-tour-position.js';
 import { useTourTheme } from './use-tour-theme.js';
 import { TourCard } from './tour-card.js';
-import { viewportMaximum } from './viewport-maximum.js';
 
 /** Data-free directory guidance. Unmounting a closed session resets its steps. */
 export function DirectoryTour(props: DirectoryTourProps) {
@@ -104,10 +104,24 @@ function TourStep({
   const unavailable = failed || position?.missing;
   const locating = !anchor && !failed;
   return createPortal(
-    <div className="ov-directory-tour-host">
+    <div
+      className="ov-directory-tour-host"
+      popover="manual"
+      style={
+        {
+          width: position?.maxWidth,
+          height: position?.layoutHeight,
+          '--ov-ui-directory-tour-viewport-height': position
+            ? `${position.maxHeight}px`
+            : undefined,
+          top: position?.top ?? 0,
+          left: position?.left ?? 0,
+          visibility: position?.visible ? 'visible' : 'hidden',
+        } as CSSProperties
+      }
+    >
       <div
         ref={setSurface}
-        popover="manual"
         role="dialog"
         aria-modal="false"
         aria-labelledby={titleId}
@@ -116,13 +130,8 @@ function TourStep({
         tabIndex={-1}
         className={['ov-directory-tour', className].filter(Boolean).join(' ')}
         style={{
-          width: step.cardWidth ?? 270,
+          width: step.cardWidth,
           ...style,
-          maxWidth: viewportMaximum(style?.maxWidth, position?.maxWidth),
-          maxHeight: viewportMaximum(style?.maxHeight, position?.maxHeight),
-          top: position?.top ?? 0,
-          left: position?.left ?? 0,
-          visibility: position?.visible ? 'visible' : 'hidden',
         }}
       >
         {anchor && !unavailable && position?.visible && (

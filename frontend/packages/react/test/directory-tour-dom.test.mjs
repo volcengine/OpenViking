@@ -138,17 +138,27 @@ test('visual viewport offsets bound both anchored and recovery cards', async () 
   const view = await mount(
     h(DirectoryTour, { ...props, locateTarget: async () => anchor }),
   );
-  assert.equal(surface().style.left, '104px');
-  assert.equal(surface().style.top, '232px');
-  assert.equal(surface().style.maxHeight, '284px');
-  assert.equal(surface().style.maxWidth, '384px');
+  assert.equal(surface().parentElement.style.left, '104px');
+  assert.equal(surface().parentElement.style.top, '232px');
+  assert.equal(
+    surface().parentElement.style.getPropertyValue(
+      '--ov-ui-directory-tour-viewport-height',
+    ),
+    '284px',
+  );
+  assert.equal(surface().parentElement.style.width, '384px');
   viewport.height = 180;
   await act(async () => viewport.dispatchEvent(new window.Event('resize')));
-  assert.equal(surface().style.top, '168px');
-  assert.equal(surface().style.maxHeight, '164px');
+  assert.equal(surface().parentElement.style.top, '168px');
+  assert.equal(
+    surface().parentElement.style.getPropertyValue(
+      '--ov-ui-directory-tour-viewport-height',
+    ),
+    '164px',
+  );
   await view.render(h(DirectoryTour, props));
   await frame();
-  assert.equal(surface().style.left, '145px');
+  assert.equal(surface().parentElement.style.left, '145px');
   await view.unmount();
   anchor.remove();
 });
@@ -160,10 +170,10 @@ test('a moved but unchanged-size anchor updates the card and highlight next fram
   const view = await mount(
     h(DirectoryTour, { ...props, locateTarget: async () => anchor }),
   );
-  assert.equal(surface().style.top, '84px');
+  assert.equal(surface().parentElement.style.top, '84px');
   top += 20;
   await frame();
-  assert.equal(surface().style.top, '104px');
+  assert.equal(surface().parentElement.style.top, '104px');
   assert.equal(
     document.querySelector('.ov-directory-tour__highlight').style.top,
     '120px',

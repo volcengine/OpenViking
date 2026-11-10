@@ -11,6 +11,7 @@ interface Position {
   missing: boolean;
   maxWidth: number;
   maxHeight: number;
+  layoutHeight: number;
 }
 
 export function useTourPosition(
@@ -21,11 +22,12 @@ export function useTourPosition(
 ) {
   const [position, setPosition] = useState<Position>();
   // Subscribe to external browser layout, scroll and DOM removal after both
-  // elements commit. Native popover supplies the top layer without a z-index
+  // elements commit. The private parent popover supplies the top layer without a z-index
   // override. Disconnect every observer/listener and close the popover on cleanup.
   useEffect(() => {
     if (!surface) return;
-    surface.showPopover?.();
+    const frameElement = surface.parentElement;
+    frameElement?.showPopover?.();
     const update = () => {
       const a = anchor?.getBoundingClientRect();
       const bounds = elements
@@ -112,6 +114,7 @@ export function useTourPosition(
         ),
         maxWidth: Math.max(0, width - margin * 2),
         maxHeight: Math.max(0, height - margin * 2),
+        layoutHeight: window.innerHeight,
         targetTop: highlight?.top ?? 0,
         targetLeft: highlight?.left ?? 0,
         targetWidth: highlight
@@ -159,7 +162,7 @@ export function useTourPosition(
       window.removeEventListener('resize', update);
       window.visualViewport?.removeEventListener('resize', update);
       window.visualViewport?.removeEventListener('scroll', update);
-      if (surface.isConnected) surface.hidePopover?.();
+      if (frameElement?.isConnected) frameElement.hidePopover?.();
     };
   }, [anchor, surface, placement, elements]);
   return position;

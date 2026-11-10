@@ -37,6 +37,7 @@
   );
   font-size: 12px;
   line-height: 20px;
+  white-space: nowrap;
   text-decoration: underline dotted;
   text-underline-offset: 3px;
 }
@@ -45,6 +46,7 @@
   height: 12px;
 }
 
-.ov-directory-tour-team__rules:lang(zh-CN) {
-  white-space: nowrap;
+.ov-directory-tour-team__rules {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }

@@ -1,5 +1,18 @@
+/* The native top-layer frame provides a definite percentage-height basis.
+   Flex shrinking caps width without overwriting the caller's surface CSS. */
 .ov-directory-tour-host {
-  display: contents;
+  position: fixed;
+  inset: auto;
+  display: flex;
+  align-items: flex-start;
+  width: calc(100vw - 16px);
+  height: 100dvh;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: visible;
+  background: transparent;
+  pointer-events: none;
 }
 .ov-directory-tour {
   --ov-ui-directory-tour-primary-fallback: var(
@@ -26,15 +39,20 @@
     --ov-ui-color-border-3,
     var(--ov-ui-border-3-default)
   );
-  position: fixed;
-  inset: auto;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 0;
   width: 270px;
   max-width: calc(100vw - 16px);
-  max-height: calc(100dvh - 16px);
+  max-height: 100%;
   margin: 0;
   padding: 0;
   border: 0;
   overflow: visible;
+  pointer-events: auto;
   background: transparent;
   color: var(
     --ov-ui-directory-tour-text,
@@ -65,7 +83,11 @@
     var(--ov-ui-directory-tour-background-fallback)
   );
   box-shadow: var(--ov-ui-color-tour-shadow, var(--ov-ui-tour-shadow-default));
-  max-height: inherit;
+  /* Shrink inside the surface's own maximum (including percentages/classes).
+     A separate viewport cap also works with intrinsic/CSS-wide maximums. */
+  min-height: 0;
+  flex: 1 1 auto;
+  max-height: var(--ov-ui-directory-tour-viewport-height, calc(100dvh - 16px));
   overflow: auto;
 }
 .ov-directory-tour__title {

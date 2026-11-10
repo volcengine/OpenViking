@@ -143,14 +143,8 @@ test('stricter numeric and CSS caller dimensions combine with changing viewport 
     }),
   );
   try {
-    assert.equal(
-      surface().style.maxWidth,
-      cssValue('maxWidth', 'min(200px, 984px)'),
-    );
-    assert.equal(
-      surface().style.maxHeight,
-      cssValue('maxHeight', 'min(130px, 784px)'),
-    );
+    assert.equal(surface().style.maxWidth, '200px');
+    assert.equal(surface().style.maxHeight, '130px');
     await view.render(
       h(DirectoryTour, {
         ...props,
@@ -158,24 +152,20 @@ test('stricter numeric and CSS caller dimensions combine with changing viewport 
         style: { maxWidth: '12rem', maxHeight: 'calc(100vh - 20px)' },
       }),
     );
-    assert.equal(
-      surface().style.maxWidth,
-      cssValue('maxWidth', 'min(12rem, 984px)'),
-    );
+    assert.equal(surface().style.maxWidth, '12rem');
     assert.equal(
       surface().style.maxHeight,
-      cssValue('maxHeight', 'min(calc(100vh - 20px), 784px)'),
+      cssValue('maxHeight', 'calc(100vh - 20px)'),
     );
     viewport.width = 180;
     viewport.height = 100;
     await act(async () => viewport.dispatchEvent(new window.Event('resize')));
+    assert.equal(surface().parentElement.style.width, '164px');
     assert.equal(
-      surface().style.maxWidth,
-      cssValue('maxWidth', 'min(12rem, 164px)'),
-    );
-    assert.equal(
-      surface().style.maxHeight,
-      cssValue('maxHeight', 'min(calc(100vh - 20px), 84px)'),
+      surface().parentElement.style.getPropertyValue(
+        '--ov-ui-directory-tour-viewport-height',
+      ),
+      '84px',
     );
   } finally {
     await view.unmount();
@@ -183,3 +173,32 @@ test('stricter numeric and CSS caller dimensions combine with changing viewport 
     host.remove();
   }
 });
+
+for (const keyword of [
+  'max-content',
+  'min-content',
+  'fit-content',
+  'inherit',
+]) {
+  test(`preserves valid CSS keyword ${keyword} without interpolating CSS math`, async () => {
+    const { host, anchor } = anchorInHost();
+    const view = await mount(
+      h(DirectoryTour, {
+        ...props,
+        locateTarget: async () => anchor,
+        className: 'host-sizing',
+        style: { maxWidth: keyword, maxHeight: keyword },
+      }),
+    );
+    try {
+      assert.equal(surface().style.width, '');
+      assert.equal(surface().style.maxWidth, keyword);
+      assert.equal(surface().style.maxHeight, keyword);
+      assert.ok(surface().classList.contains('host-sizing'));
+      assert.ok(surface().parentElement.style.width);
+    } finally {
+      await view.unmount();
+      host.remove();
+    }
+  });
+}

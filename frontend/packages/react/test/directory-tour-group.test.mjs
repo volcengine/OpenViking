@@ -96,7 +96,7 @@ test('custom single-step content highlights all rows, keeps selection and comple
       window.dispatchEvent(new window.Event('scroll'));
     });
     assert.equal(
-      dialog.style.visibility,
+      dialog.parentElement.style.visibility,
       'visible',
       'visible children keep a group callout visible',
     );

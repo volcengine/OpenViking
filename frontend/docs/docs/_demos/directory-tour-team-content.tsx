@@ -1,3 +1,4 @@
+import { withBase } from '@rspress/core/runtime';
 import { DirectoryTourIntro } from '@openviking/react/components/directory-tour';
 
 type Props = {
@@ -24,7 +25,7 @@ export function TeamTourContent({ locale, onDone, onAction }: Props) {
           onClick={() => onAction('video')}
         >
           <img
-            src="/ui/directory-tour/team/cover.png"
+            src={withBase('/directory-tour/team/cover.png')}
             width={246}
             height={159}
             alt=""
@@ -37,7 +38,7 @@ export function TeamTourContent({ locale, onDone, onAction }: Props) {
             将团队成员各自{' '}
             <img
               className="ov-directory-tour-team__folder"
-              src="/ui/directory-tour/team/folder-open.svg"
+              src={withBase('/directory-tour/team/folder-open.svg')}
               alt=""
             />{' '}
             <span className="ov-directory-tour-team__term">experiences</span>{' '}
@@ -70,7 +71,10 @@ export function TeamTourContent({ locale, onDone, onAction }: Props) {
             onClick={() => onAction('edit')}
           >
             {zh ? '编辑' : 'Edit'}
-            <img src="/ui/directory-tour/team/arrow-up-right.svg" alt="" />
+            <img
+              src={withBase('/directory-tour/team/arrow-up-right.svg')}
+              alt=""
+            />
           </button>
         </span>,
       ]}

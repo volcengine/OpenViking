@@ -47,3 +47,11 @@ A single step reuses `DirectoryTour` and hides the counter. `renderContent(conte
 `step.cardWidth` controls width per step (default 270px, viewport constrained). Content must wrap on narrow screens. The cover comes from Figma `10168:334213`; video and edit actions are demo callbacks. First appearance, read state and persistence per user/scope belong to the host; this demo remembers acknowledgement in memory only.
 
 Inherited theme tokens refresh for ancestor `class`, `style`, `data-theme` and viewport-driven media-query changes. Component-specific `--ov-ui-directory-tour-*` tokens are supported; explicit surface class/inline overrides win. Length/percentage limits in `style.maxWidth` and `style.maxHeight` are combined with the visual viewport cap so stricter host limits remain effective.
+
+### Size overrides and long content
+
+Inline and `className` size constraints retain their CSS semantics while the card stays within the visual viewport. Percentage heights resolve against the layout viewport; long content scrolls inside the card.
+
+```tsx file="../../_demos/directory-tour-sizing.tsx" preview
+
+```

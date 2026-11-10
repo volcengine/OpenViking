@@ -61,3 +61,11 @@ import '@openviking/react/components/directory-tour/style.css';
 `step.cardWidth` 可指定每步宽度（默认 270px，限制在视口内）；内容仍需支持窄屏换行。示例封面来自 Figma `10168:334213`，视频与编辑仅演示宿主回调。首次出现、已读状态及按用户/空间持久化由宿主决定，示例只在内存中记录。
 
 主题继承会响应祖先的 `class`、`style`、`data-theme` 以及视口变化带来的媒体查询更新；支持 `--ov-ui-directory-tour-*` 专用变量，显式浮层 class/内联覆盖优先。`style.maxWidth` 和 `style.maxHeight` 的长度/百分比限制会与可视视口上限取较小值，不覆盖宿主更严格的限制。
+
+### 尺寸覆盖与长内容
+
+内联样式与 `className` 的尺寸约束保留 CSS 原有语义，卡片始终限制在可视视口内。百分比高度相对于布局视口计算；长内容在卡片内滚动。
+
+```tsx file="../../_demos/directory-tour-sizing.tsx" preview
+
+```
