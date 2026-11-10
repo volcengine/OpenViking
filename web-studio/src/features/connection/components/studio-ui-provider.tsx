@@ -1,12 +1,17 @@
 import { OpenVikingProvider } from '@openviking/react/client'
 import type { ReactNode } from 'react'
 import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAppConnection } from '../hooks/use-app-connection'
 import { getOvClient, createOvClient } from '#/shared/api/ov-client'
 
 /** Keep the shared modules on Studio's data-plane transport and credential policy. */
 export function StudioUiProvider({ children }: { children: ReactNode }) {
   const { identityScopeKey } = useAppConnection()
+  const { i18n } = useTranslation()
+  const locale = (i18n.resolvedLanguage ?? i18n.language).startsWith('zh')
+    ? 'zh-CN'
+    : 'en-US'
   const transport = useMemo(() => {
     const adapter = getOvClient()
     const connection = adapter.getConnection()
@@ -59,6 +64,7 @@ export function StudioUiProvider({ children }: { children: ReactNode }) {
   return (
     <OpenVikingProvider
       key={identityScopeKey}
+      locale={locale}
       baseURL={transport.options.baseUrl}
       fetch={fetchAdapter}
     >
