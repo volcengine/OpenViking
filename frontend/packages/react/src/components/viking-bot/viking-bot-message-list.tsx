@@ -1,3 +1,4 @@
+import { useLocale } from '../../shared/locale-context.js';
 import { lazy, Suspense } from 'react';
 
 import { resolveVikingBotLabels } from './labels.js';
@@ -29,7 +30,8 @@ function ListSkeleton() {
 
 /** 消息列表。The message list. */
 export function VikingBotMessageList(props: VikingBotMessageListProps) {
-  const labels = resolveVikingBotLabels(props.locale, props.labels);
+  const locale = useLocale(props.locale);
+  const labels = resolveVikingBotLabels(locale, props.labels);
   const items = toRenderItems(props.messages, props.streaming);
 
   if (items.length === 0) {
@@ -38,7 +40,7 @@ export function VikingBotMessageList(props: VikingBotMessageListProps) {
 
   return (
     <Suspense fallback={<ListSkeleton />}>
-      <List {...props} />
+      <List {...props} locale={locale} />
     </Suspense>
   );
 }

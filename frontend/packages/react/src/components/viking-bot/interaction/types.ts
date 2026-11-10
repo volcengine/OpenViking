@@ -168,8 +168,8 @@ export interface VikingBotInteractionLabels {
 export interface VikingBotInteractionProps {
   /** 当前问题。The current question. */
   request: VikingBotInteractionRequest;
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /**
    * 问题的稳定身份；变化时重置表单状态。省略时按 `request.kind` 与序号判定。
    * Stable identity of the question; changes reset the form state. Defaults to

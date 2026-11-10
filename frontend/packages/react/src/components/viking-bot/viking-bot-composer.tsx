@@ -1,3 +1,4 @@
+import { useLocale } from '../../shared/locale-context.js';
 import { Sender } from '@ark-design/ui/sender';
 import type { SenderInstance } from '@ark-design/ui/sender';
 import {
@@ -33,7 +34,7 @@ export const VikingBotComposerView = forwardRef<
 >(function VikingBotComposerView(
   {
     value,
-    locale,
+    locale: localeProp,
     className,
     attachments = [],
     disabled,
@@ -55,6 +56,7 @@ export const VikingBotComposerView = forwardRef<
   },
   ref,
 ) {
+  const locale = useLocale(localeProp);
   const labels = resolveVikingBotLabels(locale, overrides);
   const senderRef = useRef<SenderInstance>(null);
   const writing = useRef(false);

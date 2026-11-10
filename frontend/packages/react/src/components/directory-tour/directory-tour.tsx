@@ -4,6 +4,7 @@ import type { DirectoryTourProps, DirectoryTourStep } from './types.js';
 import { useTourAnchor } from './use-tour-anchor.js';
 import { useTourPosition } from './use-tour-position.js';
 import { resolveLocale } from '../../shared/locale.js';
+import { useLocale } from '../../shared/locale-context.js';
 import enUS from './locales/en-US.js';
 import zhCN from './locales/zh-CN.js';
 
@@ -49,7 +50,7 @@ function TourStep({
   placement = 'right',
   onClose,
   labels,
-  locale,
+  locale: localeProp,
   className,
   style,
 }: DirectoryTourProps & {
@@ -57,6 +58,7 @@ function TourStep({
   index: number;
   advance: (skip: boolean) => void;
 }) {
+  const locale = useLocale(localeProp);
   const text = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale, labels);
   const [attempt, retry] = useState(0);
   const [surface, setSurface] = useState<HTMLDivElement | null>(null);

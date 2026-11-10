@@ -1,3 +1,4 @@
+import { useLocale } from '../../shared/locale-context.js';
 import { localizeConsoleRecords } from './localize-records.js';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { createOvClient } from '../../client/client.js';
@@ -11,11 +12,12 @@ import type { ConsoleMode, ConsoleOptions, ConsoleResult } from './types.js';
 export function useConsole({
   mode: controlledMode,
   defaultMode = 'conversation',
-  locale = 'en-US',
+  locale: localeProp,
   scopeKey,
   onModeChange,
   requestOptions = {},
 }: ConsoleOptions = {}): ConsoleResult {
+  const locale = useLocale(localeProp);
   const inherited = useOvClient();
   const inheritedSignal = useOvSignal();
   const [fallback] = useState(() => createOvClient());

@@ -49,8 +49,8 @@ export interface ScopeCascadeProps extends Omit<
   'children'
 > {
   controller: ScopeCascadeController;
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /** Accessible names and placeholders, in library / space / user order. */
   levelNames?: readonly [string, string, string];
   retryLabel?: string;

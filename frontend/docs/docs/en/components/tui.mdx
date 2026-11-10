@@ -1,6 +1,6 @@
 # Tui
 
-Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
 
 A command console body: current records, results and input, including suggestions and help. The host supplies the command catalogue and owns requests, permissions, execution and sessions. The component reports submission intent through `onSubmit` and successful copying through `onCopy`.
 
@@ -24,7 +24,7 @@ After accepting a command, its host-provided `inputText` prefix is rendered with
 
 The editor and command records share a muted CLI prefix, an emphasized command name in the text color, and resource URIs in the link color. Links are underlined on hover. Records use the same `inputText` prefix and preserve their arguments. Timestamps appear on a separate line, aligned right. Copying and history recall use the same prefix; unknown commands retain their original text.
 
-The shared demo follows the documentation language via `useLang()`, supplying localized command descriptors, groups and records. `locale="zh-CN"` selects Chinese interface copy; `locale` is required. `labels` overrides individual interface strings. Hosts localize their own command and result content.
+The shared demo follows the documentation language via `useLang()`, supplying localized command descriptors, groups and records. `locale="zh-CN"` selects Chinese interface copy; `locale` is optional. `labels` overrides individual interface strings. Hosts localize their own command and result content.
 
 ## Empty state and quick commands
 
@@ -66,21 +66,21 @@ import type {
 
 The table describes the implemented behaviour.
 
-| Property      | Type                            | Default  | Description                                                                                                                                                                                    |
-| ------------- | ------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| records       | readonly TuiRecord[]            | Required | Currently displayed execution records in submission order; the host updates them on session or history changes.                                                                                |
-| value         | string                          | Required | Controlled input value.                                                                                                                                                                        |
-| disabled      | boolean                         | false    | Disables command input and submission; the message comes from `labels.unavailableMessage`.                                                                                                     |
-| emptyState    | ReactNode                       | —        | Empty-state node shown without records, replacing the built-in empty state; `null` shows nothing.                                                                                              |
-| quickCommands | readonly string[]               | `[]`     | Quick command names rendered by the built-in empty state, resolved from `commands` in order; unknown names are skipped and repeats keep their first occurrence.                                |
-| `locale`      | `'zh-CN' \| 'en-US'`            | Required | Built-in Chinese and English copy.                                                                                                                                                             |
-| commands      | readonly TuiCommandDefinition[] | `[]`     | Host command catalogue for completion, help and pending skeletons.                                                                                                                             |
-| commandGroups | readonly TuiCommandGroup[]      | `[]`     | Host group labels and ordering; undeclared groups are appended.                                                                                                                                |
-| labels        | TuiLabels                       | —        | Interface copy and guidance.                                                                                                                                                                   |
-| onValueChange | (value: string) => void         | —        | Reports input changes, including accepted commands and examples; inline hints never change the value or submit. Omission makes the input read-only and disables submission and help insertion. |
-| onSubmit      | (command: string) => void       | —        | Reports explicit submission intent. The host executes it; omission disables submission.                                                                                                        |
-| onOpenUri     | (uri: string) => void           | —        | Receives the URI on link activation; the host opens the resource.                                                                                                                              |
-| onCopy        | (text: string) => void          | —        | Called after copying succeeds, with the copied text; not called on failure. Omission does not affect copying.                                                                                  |
+| Property      | Type                            | Default           | Description                                                                                                                                                                                    |
+| ------------- | ------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| records       | readonly TuiRecord[]            | Required          | Currently displayed execution records in submission order; the host updates them on session or history changes.                                                                                |
+| value         | string                          | Required          | Controlled input value.                                                                                                                                                                        |
+| disabled      | boolean                         | false             | Disables command input and submission; the message comes from `labels.unavailableMessage`.                                                                                                     |
+| emptyState    | ReactNode                       | —                 | Empty-state node shown without records, replacing the built-in empty state; `null` shows nothing.                                                                                              |
+| quickCommands | readonly string[]               | `[]`              | Quick command names rendered by the built-in empty state, resolved from `commands` in order; unknown names are skipped and repeats keep their first occurrence.                                |
+| `locale`      | `'zh-CN' \| 'en-US'`            | Inherited / en-US | Built-in Chinese and English copy.                                                                                                                                                             |
+| commands      | readonly TuiCommandDefinition[] | `[]`              | Host command catalogue for completion, help and pending skeletons.                                                                                                                             |
+| commandGroups | readonly TuiCommandGroup[]      | `[]`              | Host group labels and ordering; undeclared groups are appended.                                                                                                                                |
+| labels        | TuiLabels                       | —                 | Interface copy and guidance.                                                                                                                                                                   |
+| onValueChange | (value: string) => void         | —                 | Reports input changes, including accepted commands and examples; inline hints never change the value or submit. Omission makes the input read-only and disables submission and help insertion. |
+| onSubmit      | (command: string) => void       | —                 | Reports explicit submission intent. The host executes it; omission disables submission.                                                                                                        |
+| onOpenUri     | (uri: string) => void           | —                 | Receives the URI on link activation; the host opens the resource.                                                                                                                              |
+| onCopy        | (text: string) => void          | —                 | Called after copying succeeds, with the copied text; not called on failure. Omission does not affect copying.                                                                                  |
 
 Record updates follow the output only while the reader is near the bottom. Scrolling up preserves the reading position; an explicit submission resumes following. Resource tables retain each entry’s title, native URI target and metadata, including entries without detail rows.
 

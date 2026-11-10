@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
+import { OpenVikingProvider } from '@openviking/react/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { AgentConnect } from '@openviking/react/components/agent-connect';
 import { FileTree } from '@openviking/react/components/file-tree';
@@ -78,6 +79,20 @@ for (const [Component, props, zh, en] of cases) {
     assert.ok(chinese.includes(zh), chinese);
     assert.ok(english.includes(en), english);
     assert.ok(!chinese.includes(en), chinese);
+    const defaultEnglish = render(Component, props);
+    assert.ok(defaultEnglish.includes(en), defaultEnglish);
+    const inherited = renderToStaticMarkup(
+      h(OpenVikingProvider, { locale: 'zh-CN' }, h(Component, props)),
+    );
+    assert.ok(inherited.includes(zh), inherited);
+    const overridden = renderToStaticMarkup(
+      h(
+        OpenVikingProvider,
+        { locale: 'zh-CN' },
+        h(Component, { ...props, locale: 'en-US' }),
+      ),
+    );
+    assert.ok(overridden.includes(en), overridden);
   });
 }
 

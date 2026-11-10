@@ -540,8 +540,8 @@ export interface FileTreeProps extends Omit<
    * Visible rows in render order.
    */
   rows: readonly FileTreeRow[];
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /**
    * 操作的执行能力；省略对应方法时禁用该操作。
    * Operation capabilities; omitting a method disables its operation.

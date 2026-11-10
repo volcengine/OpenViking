@@ -1,4 +1,5 @@
 import { ChatMessageList } from '@ark-design/ui/message-list';
+import type { Locale } from '../../shared/locale.js';
 
 import { toRenderItems, type VikingBotRenderItem } from './ark-adapter.js';
 import { groupMessages } from './message-groups.js';
@@ -49,7 +50,7 @@ export function VikingBotMessageListView({
   renderMessage,
   locale,
   labels: overrides,
-}: VikingBotMessageListProps) {
+}: VikingBotMessageListProps & { locale: Locale }) {
   const labels = resolveVikingBotLabels(locale, overrides);
   // 同一轮的连续 assistant 消息先合并，列表才按轮次呈现而不是逐条堆叠。
   // 边界必须在原始消息序列上确定：先按 insertIndex 切分，两侧分别合并，
