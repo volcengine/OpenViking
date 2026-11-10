@@ -70,7 +70,11 @@ export async function activate(config, { fetcher = fetch, retry = false, automat
       }
       while (now() < deadline) {
         let current;
-        try { current = await api(route); } catch { await wait(500); continue; }
+        try { current = await api(route); }
+        catch (error) {
+          if (!["server_unreachable", "server_http_502", "server_http_503", "server_http_504"].includes(error.code)) throw error;
+          await wait(500); continue;
+        }
         if (current.restart?.rolled_back) throw new AdapterError("server_restart_rolled_back");
         if (current.revision !== file.revision) throw new AdapterError("config_changed_during_restart");
         if (current.restart?.instance_id !== previousInstance && current.restart?.instance_id && !current.restart.restarting && !current.restart_required) {

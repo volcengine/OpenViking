@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { pluginEnabled } from "../../config.mjs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { readJSON, AdapterError } from "./files.mjs";
@@ -32,11 +33,24 @@ export function normalizeURL(value) {
   }
   return url.href.replace(/\/$/, "");
 }
-export async function settings(options = {}, env = process.env) {
+async function clientConfiguration(options, env) {
   const directory = expand(env.OPENVIKING_MAGPIE_MODELS_DIR || defaultDirectory);
   const local = await readJSON(join(directory, "adapter.json")) || {};
+  const customPath = Object.hasOwn(options, "ovcliConfig") ? options.ovcliConfig : local.ovcliConfig;
+  const cliPath = expand(customPath || env.OPENVIKING_CLI_CONFIG_FILE || join(homedir(), ".openviking", "ovcli.conf"));
+  return { directory, local, cliPath };
+}
+
+// Resolve only the selected client file before touching connection options or
+// invoking the CLI. Explicit recovery settings do not consult this switch.
+export async function backgroundEnabled(options = {}, env = process.env) {
+  const { cliPath } = await clientConfiguration(options, env);
+  return pluginEnabled({ ...env, OPENVIKING_CLI_CONFIG_FILE: cliPath });
+}
+
+export async function settings(options = {}, env = process.env) {
+  const { directory, local, cliPath } = await clientConfiguration(options, env);
   const config = { ...local, ...options };
-  const cliPath = expand(config.ovcliConfig || env.OPENVIKING_CLI_CONFIG_FILE || join(homedir(), ".openviking", "ovcli.conf"));
   const cli = await readJSON(cliPath) || {};
   const discovered = await cliConnection(cliPath, env);
   const serverUrl = normalizeURL(config.serverUrl || discovered.url || cli.url || "http://127.0.0.1:1933");

@@ -74,6 +74,64 @@ test("changed config and unsupported lifecycle block restart before POST", async
   await assert.rejects(f.run(), /server_restart_unsupported/);
   assert.equal(f.backend.posts, 0);
 });
+test("restart polling preserves definitive failures and retries transient unavailability", async (t) => {
+  for (const [http, code] of [[401, "root_authentication_required"], [403, "root_permission_required"], [400, "server_http_400"], [200, "invalid_server_response"]]) {
+    const f = await fixture(t);
+    const fetcher = async (url, init) => f.backend.posts && init.method === "GET"
+      ? new Response("invalid response", { status: http }) : f.backend.fetcher(url, init);
+    const result = await f.run({ fetcher });
+    assert.equal(result.code, code);
+    assert.equal((await readJSON(join(f.config.directory, "activation.json"))).code, code);
+    assert.equal(f.backend.posts, 1);
+  }
+  for (const http of [null, 502, 503, 504]) {
+    const f = await fixture(t);
+    let unavailable = true;
+    const fetcher = async (url, init) => {
+      if (f.backend.posts && init.method === "GET" && unavailable) {
+        unavailable = false;
+        if (http === null) throw new Error("server restarting");
+        return new Response("server restarting", { status: http });
+      }
+      return f.backend.fetcher(url, init);
+    };
+    assert.equal((await f.run({ fetcher })).status, "applied");
+    assert.equal(f.backend.posts, 1);
+  }
+});
+test("interrupted response bodies recover without repeating the restart", async (t) => {
+  for (const phase of ["restart", "verification"]) {
+    for (const error of [new TypeError("terminated"), new DOMException("aborted", "AbortError"), new DOMException("timed out", "TimeoutError")]) {
+      const f = await fixture(t);
+      let interrupted = false;
+      const fetcher = async (url, init) => {
+        const response = await f.backend.fetcher(url, init);
+        const target = phase === "restart" ? init.method === "POST" : init.method === "GET";
+        if (f.backend.posts && target && !interrupted) {
+          interrupted = true;
+          return new Response(new ReadableStream({ start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"status":"ok",'));
+            controller.error(error);
+          } }), { status: 200 });
+        }
+        return response;
+      };
+      const result = await f.run({ fetcher });
+      assert.equal(interrupted, true);
+      assert.equal(result.status, "applied", `${phase}: ${error.name}`);
+      assert.equal(result.instanceId, "new-instance");
+      assert.equal((await readJSON(join(f.config.directory, "activation.json"))).status, "complete");
+      await f.run({ fetcher });
+      assert.equal(f.backend.posts, 1);
+    }
+  }
+});
+test("configuration API keeps malformed JSON and invalid envelopes definitive", async () => {
+  for (const body of ["invalid JSON", '{"status":"error","result":{}}', '{"status":"ok"}']) {
+    const api = createAPI({ serverUrl: "https://ov.example", timeoutMs: 100 }, async () => new Response(body));
+    await assert.rejects(api("/api/v1/admin/configuration?source=file"), /invalid_server_response/);
+  }
+});
 test("Bot-only changes cannot restart OV in place of a standalone/disabled Bot", async (t) => {
   const f = await fixture(t); f.backend.botStatus = 503;
   await writeJSON(f.config.statusFile, { status: "saved", revision: "rev-1", ovRuntime: "not_managed", botRuntime: "restart_or_verify_required" });

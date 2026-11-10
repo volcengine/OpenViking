@@ -135,6 +135,36 @@ test("failed save can be retried, but dry-run rejection never writes a journal o
   f.backend.failSave = false; await f.run(); await f.run({ restore: true });
   assert.deepEqual(f.backend.document, original);
 });
+test("a rejected consecutive save preserves ownership for retry and restore", async (t) => {
+  for (const restore of [false, true]) {
+    const f = await fixture(t);
+    await f.run();
+    await fs.writeFile(f.config.selectionFile, JSON.stringify({ ...selection, model: "vendor/bot" }));
+    f.backend.failSave = true;
+    await assert.rejects(f.run(), /server_http_400/);
+    f.backend.failSave = false;
+    const result = await f.run({ restore });
+    assert.equal(result.status, restore ? "restored" : "saved");
+    assert.equal(f.backend.document.vlm.model, restore ? original.vlm.model : "vendor/bot");
+    if (!restore) {
+      await f.run({ restore: true });
+      assert.deepEqual(f.backend.document, original);
+    }
+  }
+});
+test("consecutive ambiguous saves retain ownership and restore the initial snapshot", async (t) => {
+  const f = await fixture(t);
+  await f.run();
+  await fs.writeFile(f.config.selectionFile, JSON.stringify({ ...selection, model: "vendor/bot" }));
+  f.backend.lostResponse = true;
+  await assert.rejects(f.run(), /server_unreachable/);
+  assert.equal((await f.run()).status, "saved");
+  const saved = await readJSON(join(f.config.directory, "saved.json"));
+  assert.equal(saved.revision, "3");
+  assert.equal(saved.pending, undefined);
+  await f.run({ restore: true });
+  assert.deepEqual(f.backend.document, original);
+});
 test("disconnect restores missing sections, model reselection preserves the first original", async (t) => {
   const f = await fixture(t, { embedding: original.embedding });
   f.config.botMode = "independent"; await f.run();

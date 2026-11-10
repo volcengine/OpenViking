@@ -29,8 +29,12 @@ export function createAPI(config, fetcher = fetch) {
     if (response.status === 401) throw new AdapterError("root_authentication_required");
     if (response.status === 403) throw new AdapterError("root_permission_required");
     if (!response.ok) throw new AdapterError(`server_http_${response.status}`);
+    // Reading can fail after headers arrive. Keep transport failures retryable
+    // while treating a completely received but invalid document as definitive.
+    let content;
+    try { content = await response.text(); } catch { throw new AdapterError("server_unreachable"); }
     let data;
-    try { data = await response.json(); } catch { throw new AdapterError("invalid_server_response"); }
+    try { data = JSON.parse(content); } catch { throw new AdapterError("invalid_server_response"); }
     if (data?.status !== "ok" || !data.result) throw new AdapterError("invalid_server_response");
     return data.result;
   };
