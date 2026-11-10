@@ -35,6 +35,7 @@
  * `var(--ov-ui-color-primary, privateFallback)` — the host's value wins when set,
  * the fallback applies otherwise.
  */
+.ov-directory-tour,
 .ov-agent-connect,
 .ov-console,
 .ov-divider,
@@ -51,6 +52,9 @@
 .ov-viking-bot__popover,
 .ov-viking-bot__reference-picker--mention,
 .ov-viking-bot__interaction {
+  --ov-ui-tour-shadow-default:
+    0 15px 35px rgb(0 0 0 / 5%), 0 5px 15px rgb(0 0 0 / 5%);
+  --ov-ui-tour-highlight-default: rgb(82 82 255 / 8%);
   /* 主色：面包屑、焦点环、选中态与主要按钮。 */
   --ov-ui-primary-default: #5252ff;
   --ov-ui-primary-hover-default: #7075ff;
@@ -101,6 +105,7 @@
   --ov-ui-tooltip-text-default: #ffffff;
 }
 
+.dark .ov-directory-tour,
 .dark .ov-agent-connect,
 .dark .ov-console,
 .dark .ov-divider,

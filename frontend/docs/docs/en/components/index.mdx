@@ -12,6 +12,10 @@ The entry row at the top of the file browsing area: connect an agent, import res
 
 A flattened file tree with row rendering, selection, expansion, keyboard interaction, and pagination intent. The host supplies ordered rows and handles data loading. The current view is a placeholder; see the component page for its scope and limitations.
 
+### [DirectoryTour](./directory-tour)
+
+A six-step anchor walkthrough with async location, independent highlights, viewport collision handling, retry and skip. The host owns directory loading and completion state.
+
 ### [FilePreview](./file-preview)
 
 A tabbed file-preview view with header actions, tab switching, and plain-text preview and editing foundations. The current view is a placeholder: the file body is not wired to FileViewer yet and falls back to plain text. Applications provide content and save behavior.

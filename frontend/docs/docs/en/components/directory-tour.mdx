@@ -1,0 +1,32 @@
+# DirectoryTour
+
+A non-modal directory walkthrough, separate from FileTree. The six-step preset follows memories → sessions → personal resources → shared resources → experiences → peers, without changing the selected file.
+
+```tsx file="../../_demos/directory-tour-basic.tsx" preview
+
+```
+
+## Integration
+
+Import `DirectoryTour` and `openVikingDirectoryTourSteps` from `@openviking/react/components/directory-tour`, and load `@openviking/react/components/directory-tour/style.css`. Root exports contain the component and its main Props type only.
+
+The host supplies `locateTarget(target, signal)`: load the directory, expand ancestors, wait for the row to commit, and resolve its HTMLElement (for example with FileTree's `getRowElement`). Respect cancellation before changing the host tree. Use a stable callback. The component scrolls to the row, draws an independent highlight and positions the card beside it using the native Popover top layer. No business APIs, account state, persistence, full-screen mask or SVG are included.
+
+| Prop                          | Contract                                                                                             |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `open`, `steps`               | Required. Empty steps render nothing.                                                                |
+| `locateTarget`                | Optional async anchor resolver; null/rejection/timeout presents recovery UI.                         |
+| `currentStep`, `onStepChange` | Optional controlled zero-based index and change callback.                                            |
+| `defaultStep`                 | Uncontrolled starting index, defaults to 0; closing resets the session.                              |
+| `placement`                   | Preferred right or left, defaults to right; flips and clamps to the viewport.                        |
+| `locateTimeout`               | Anchor deadline in milliseconds, defaults to 10000.                                                  |
+| `onClose`                     | Close button/Escape. The host sets open=false.                                                       |
+| `onComplete`                  | Receives skippedStepIds on the last step. The host closes and decides whether to persist completion. |
+| `labels`                      | Replace next/done/close/loading/error/retry/skip and the progress formatter.                         |
+| `className`, `style`          | Surface root overrides, including inherited --ov-ui-color-\* theme variables.                        |
+
+Steps contain id, semantic target, title, description, optional illustration ReactNode and optional nextLabel. Personal and shared resources have different targets; the preset never assumes an account-specific URI. Illustrations are supplied by the host, without a private CDN dependency.
+
+## Accessibility and lifecycle
+
+The non-modal dialog supports keyboard controls and Escape, restores a still-connected previous focus target, and disables progression while locating. Retry, step changes and unmount cancel old anchor resolutions. Scroll/resize observers reposition the card; scrolling its row out of view hides it. Missing targets offer retry or skip, never automatic completion. Close or remount on account/scope changes. Import and server rendering are browser-global safe.

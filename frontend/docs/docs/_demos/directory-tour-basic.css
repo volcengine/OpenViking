@@ -1,0 +1,32 @@
+.ov-directory-tour-demo {
+  min-width: 0;
+}
+.ov-directory-tour-demo__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.ov-directory-tour-demo__controls button {
+  cursor: pointer;
+  padding: 6px 12px;
+}
+.ov-directory-tour-demo__controls label {
+  cursor: pointer;
+  font-size: 12px;
+}
+.ov-directory-tour-demo__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 336px) minmax(0, 1fr);
+  gap: 20px;
+}
+.ov-directory-tour-demo__layout > p {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .ov-directory-tour-demo__layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
