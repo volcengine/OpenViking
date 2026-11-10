@@ -157,7 +157,7 @@ impl MultiWriteWrappedFSBuilder {
             .await?;
         metrics.set_protocol_status(protocol.status);
         let configured_backups = backup_names.iter().collect::<BTreeSet<_>>();
-        for account in metadata_store.initialized_accounts().await? {
+        'accounts: for account in metadata_store.initialized_accounts().await? {
             let path = metadata_store.paths().account_manifest(&account)?.0;
             let manifest: PartitionsManifest = match metadata_store.read_json(&path).await {
                 Ok(manifest) => manifest,
@@ -169,7 +169,19 @@ impl MultiWriteWrappedFSBuilder {
                     .paths()
                     .segment_manifest(&account, partition_id)?
                     .0;
-                let segments: SegmentManifest = metadata_store.read_json(&path).await?;
+                let segments: SegmentManifest = match metadata_store.read_json(&path).await {
+                    Ok(segments) => segments,
+                    Err(Error::NotFound(_)) => {
+                        tracing::warn!(
+                            account = %account,
+                            partition_id = partition_id,
+                            path = %path,
+                            "skip incomplete multi-write account metadata during startup"
+                        );
+                        continue 'accounts;
+                    }
+                    Err(error) => return Err(error),
+                };
                 segments.validate()?;
                 let scope = ScopeKey {
                     account_id: account.clone(),
@@ -737,3 +749,7 @@ impl FileSystem for MultiWriteWrappedFS {
             .await
     }
 }
+
+#[cfg(test)]
+#[path = "tests/test_multibackend_wrapper.rs"]
+mod tests;
