@@ -107,7 +107,7 @@ export async function activateRelease(baseDir, release, previousRelease) {
 }
 
 export async function publishLatestRelease({
-  baseDir = path.join(os.homedir(), '.vika'),
+  baseDir = path.join(os.homedir(), '.ovsa'),
   env = process.env,
   platformId = hostPlatform(),
   fetchImpl = globalThis.fetch,

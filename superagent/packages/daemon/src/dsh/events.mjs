@@ -12,7 +12,7 @@ import { safeError as safe } from '../logger.mjs';
 import { activityPayload } from '../activity.mjs';
 import { number } from './shared.mjs';
 
-// `mcp__<server>__<tool>` is the flattened name the bridge exposes; Vika reports
+// `mcp__<server>__<tool>` is the flattened name the bridge exposes; OpenViking SuperAgent reports
 // the server and the tool separately, and labels them together for the activity.
 function toolNameParts(name) {
   const match = /^mcp__(.*?)__(.+)$/.exec(String(name ?? ''));
@@ -80,7 +80,7 @@ export default {
             inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0,
           };
           turn.usage = {
-            // DSH input/cache counters are disjoint; Vika inputTokens includes
+            // DSH input/cache counters are disjoint; OpenViking SuperAgent inputTokens includes
             // cached input and also retains the cache-specific breakdown.
             inputTokens: current.inputTokens + number(data.usage.inputTokens) + number(data.usage.cacheReadTokens),
             cachedInputTokens: current.cachedInputTokens + number(data.usage.cacheReadTokens),

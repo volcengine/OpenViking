@@ -65,7 +65,7 @@ test('the app manifest asks for Socket Mode, message events and a valid bot name
   const manifest = appManifest('小V Agent');
   assert.equal(manifest.display_information.name, '小V Agent');
   assert.equal(manifest.features.bot_user.display_name, 'v-agent');
-  assert.equal(appManifest('小').features.bot_user.display_name, 'vika');
+  assert.equal(appManifest('小').features.bot_user.display_name, 'openviking-superagent');
   assert.equal(manifest.settings.socket_mode_enabled, true);
   assert.equal(manifest.settings.token_rotation_enabled, false);
   assert.deepEqual(manifest.settings.event_subscriptions.bot_events, ['message.channels', 'message.groups', 'message.im', 'message.mpim']);
@@ -73,13 +73,13 @@ test('the app manifest asks for Socket Mode, message events and a valid bot name
   for (const scope of ['channels:read', 'groups:read', 'im:read', 'mpim:read', 'users:read']) {
     assert.ok(manifest.oauth_config.scopes.bot.includes(scope), `member lookup needs ${scope}`);
   }
-  assert.deepEqual(JSON.parse(new URL(createAppUrl('Vika')).searchParams.get('manifest_json')), appManifest('Vika'));
+  assert.deepEqual(JSON.parse(new URL(createAppUrl('OpenViking SuperAgent')).searchParams.get('manifest_json')), appManifest('OpenViking SuperAgent'));
 });
 
 test('tokens are checked, hidden, and saved only after the owner sends the code', async (t) => {
   const f = fixture(t, ['xoxb-bad', BOT_TOKEN, APP_TOKEN]);
   const posts = [];
-  await connectSlack({ plan: { dataDir: f.dataDir, displayName: 'Vika' }, prompter: f.prompter, fetchImpl: fetchImpl(posts),
+  await connectSlack({ plan: { dataDir: f.dataDir, displayName: 'OpenViking SuperAgent' }, prompter: f.prompter, fetchImpl: fetchImpl(posts),
     WebSocketImpl: sockets(f.text), receiver: { helloMs: 500, recheckMs: 10, backoffMs: [5] } });
   const state = new SlackState(f.dataDir);
   try {
@@ -87,7 +87,7 @@ test('tokens are checked, hidden, and saved only after the owner sends the code'
       ownerId: 'U0OWNER', ownerChannel: 'D0OWNER', botToken: BOT_TOKEN, appToken: APP_TOKEN, activatedAt: 0 });
   } finally { state.close(); }
   const manifestFile = path.join(f.dataDir, 'slack', 'app-manifest.json');
-  assert.deepEqual(JSON.parse(fs.readFileSync(manifestFile, 'utf8')), appManifest('Vika'));
+  assert.deepEqual(JSON.parse(fs.readFileSync(manifestFile, 'utf8')), appManifest('OpenViking SuperAgent'));
   assert.equal(fs.statSync(manifestFile).mode & 0o777, 0o600);
   assert.match(f.text(), /https:\/\/api\.slack\.com\/apps\?new_app=1&manifest_json=/);
   assert.match(f.text(), /以 xoxb- 开头[\s\S]*私聊 vika，发送 vika-[a-z2-9]{8}[\s\S]*Slack 已接好（Acme）/);

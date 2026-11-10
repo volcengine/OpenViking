@@ -247,7 +247,7 @@ function readJsonLines(file) {
 function fixture(t, { agents = ['primary'], state = null } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-dsh-model-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const config = path.join(home, '.vika', 'config.json');
+  const config = path.join(home, '.ovsa', 'config.json');
   fs.mkdirSync(path.dirname(config), { recursive: true, mode: 0o700 });
   fs.writeFileSync(config, `${JSON.stringify({
     version: 1,
@@ -345,7 +345,7 @@ test('the command group has help text, and the top-level usage names it', (t) =>
   const f = fixture(t);
   const help = run(f, ['--help']);
   assert.equal(help.status, 0);
-  assert.match(help.stdout, /vika dsh model \[list\]/);
+  assert.match(help.stdout, /ovsa dsh model \[list\]/);
   for (const line of ['remove <route>', 'import <models.json>', 'key set <REF>', 'key unset <REF>']) {
     assert.ok(help.stdout.includes(line), `help must document ${line}`);
   }
@@ -369,7 +369,7 @@ test('without a manifest the command says how to create an instance', (t) => {
   t.after(() => fs.rmSync(empty, { recursive: true, force: true }));
   const result = run(f, ['list'], { env: { HOME: empty, VIKA_CONFIG: path.join(empty, 'config.json') } });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /No instance yet: run vika setup/);
+  assert.match(result.stderr, /No instance yet: run ovsa setup/);
 });
 
 test('list shows declared routes, catalogue models and credential state', (t) => {
@@ -409,7 +409,7 @@ test('list shows declared routes, catalogue models and credential state', (t) =>
   assert.match(text.stdout, /key DEEPSEEK_API_KEY {2}credential ready/);
   // A declared route whose reference has no value lists no catalogue model,
   // but the declaration is still shown so the user can see why.
-  assert.match(text.stdout, /key IDLE_API_KEY {2}credential missing {2}→ vika dsh model key set IDLE_API_KEY/);
+  assert.match(text.stdout, /key IDLE_API_KEY {2}credential missing {2}→ ovsa dsh model key set IDLE_API_KEY/);
   assert.match(text.stdout, /idle-key\/not-served .*\(not in the catalogue\)/);
   assert.match(text.stdout, /key: none \(DSH resolves its own auth\)/);
 
@@ -437,7 +437,7 @@ test('list shows declared routes, catalogue models and credential state', (t) =>
   assert.equal(lastStart.home, path.join(f.home, 'data', 'secondary', 'dsh', 'home'));
 });
 
-// `vika dsh model add` no longer exists: the menu wizard is the only way to add
+// `ovsa dsh model add` no longer exists: the menu wizard is the only way to add
 // a model, and it writes through `addModelOps`. The rules that used to be
 // asserted through the flag form are asserted on that builder directly, so the
 // merge/idempotency/reference-allocation behaviour keeps its coverage.
@@ -769,7 +769,7 @@ test('a settings refusal becomes an instruction, and a concurrent write is retri
   const noEntry = run(f, ['list'], { env: { FAKE_DSH_MODE: 'no-entry' } });
   assert.equal(noEntry.status, 0, output(noEntry));
   assert.match(noEntry.stdout, /Could not read the settings: .*cannot read a writable llm-pi-ai entry/);
-  assert.match(noEntry.stdout, /vika dsh model repair/);
+  assert.match(noEntry.stdout, /ovsa dsh model repair/);
   // In JSON mode the same note moves to stderr so stdout stays parseable, and the
   // exit code carries what the note says: a caller parsing the array cannot tell
   // "no routes" from "the document could not be read", and would infer the first.
@@ -1033,7 +1033,7 @@ test('structured settings error codes pick the actionable message, not the text'
   assert.match(overridden.stderr, /overrides llm-pi-ai/, 'SETTINGS_OVERRIDDEN wins over a generic message');
   const notConfigurable = run(f, write, { env: { FAKE_DSH_MODE: 'not-configurable-code' } });
   assert.equal(notConfigurable.status, 1);
-  assert.match(notConfigurable.stderr, /vika dsh model repair/);
+  assert.match(notConfigurable.stderr, /ovsa dsh model repair/);
   const conflicted = run(f, write, { env: { FAKE_DSH_MODE: 'conflict-once-code' } });
   assert.equal(conflicted.status, 0, output(conflicted));
   assert.equal(f.state().providers.deepseek, undefined);
@@ -1049,7 +1049,7 @@ test('a "no longer configurable" text frame is not retried as a concurrent write
   const before = f.calls().length;
   const result = run(f, write, { env: { FAKE_DSH_MODE: 'no-longer-configurable' } });
   assert.equal(result.status, 1, output(result));
-  assert.match(result.stderr, /vika dsh model repair/, 'the actionable instruction, not a concurrency notice');
+  assert.match(result.stderr, /ovsa dsh model repair/, 'the actionable instruction, not a concurrency notice');
   assert.doesNotMatch(result.stderr, /changed after it was read/);
   const mutates = f.calls().slice(before).filter((call) => call.method === 'vika/settings/mutate');
   assert.equal(mutates.length, 1, 'no retry is spent on a state that cannot change by retrying');
@@ -1131,7 +1131,7 @@ test('import warns about a credential the DSH child environment withholds', (t) 
   assert.equal(state.providers.openai.apiKeyEnv, 'OPENAI_API_KEY', 'a variable the child inherits is kept silently');
   assert.match(result.stdout, /ARK_API_KEY/, 'the withheld reference is named');
   assert.match(result.stdout, /withhold/, 'the note says why it will not resolve');
-  assert.match(result.stdout, /vika dsh model key set ARK_API_KEY/, 'the note says how to store the value');
+  assert.match(result.stdout, /ovsa dsh model key set ARK_API_KEY/, 'the note says how to store the value');
   assert.ok(!output(result).includes('sk-'), 'a migration never prints a value');
 });
 
@@ -1186,10 +1186,10 @@ test('the model id is validated with the shared grammar', () => {
   // The wizard validates the id it is given with this helper; the flags are
   // gone, so the rule is asserted where it lives.
   // A control character is what the shared grammar refuses; a space is a legal
-  // id for a real dsh, so Vika must not invent a narrower rule.
+  // id for a real dsh, so OpenViking SuperAgent must not invent a narrower rule.
   assert.match(modelIdProblem('deepseek', 'model\x01'), /Invalid model name/);
   assert.equal(modelIdProblem('deepseek', 'model@2026-01'), null);
-  // A space is served by DSH but stays out of Vika's grammar: the id is refused
+  // A space is served by DSH but stays out of OpenViking SuperAgent's grammar: the id is refused
   // and the message says why, rather than writing an id `/model` could never
   // select.
   assert.match(modelIdProblem('deepseek', 'has space'), /Invalid model name/);

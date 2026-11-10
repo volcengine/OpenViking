@@ -39,7 +39,7 @@ function bucket(t) {
     const body = objects.get(url);
     return body ? new Response(body) : new Response('missing', { status: 404 });
   };
-  const baseDir = path.join(root, 'home', '.vika');
+  const baseDir = path.join(root, 'home', '.ovsa');
   fs.mkdirSync(baseDir, { recursive: true });
   const smoked = [];
   const options = {

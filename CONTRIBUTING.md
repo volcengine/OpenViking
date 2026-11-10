@@ -93,7 +93,7 @@ only the contacts relevant to the change.
 | Integration | VikingBot and agent compilation | `bot`, `ov compile` | `@yeshion23333`, `@fujiajie666` |
 | Client | SDKs, CLI, and LangChain | `sdk`, `crates/ov_cli`, `integrations/frameworks/langchain` | `@zhoujh01`, `@t0saki`, `@ehz0ah` |
 | Product | Web Studio | `web-studio` | `@yufeng201`, `@ZaynJarvis` |
-| Product | Vika personal agent | `vika` | `@krsish` |
+| Product | OpenViking SuperAgent personal agent | `vika` | `@krsish` |
 | Project | Documentation, CI, and plugin releases | `docs`, `.github/workflows` | `@yufeng201`, `@ZaynJarvis` |
 
 For cross-module changes or areas without a clear owner, identify the primary affected

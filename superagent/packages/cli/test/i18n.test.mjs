@@ -25,7 +25,7 @@ test('--lang beats VIKA_LANG, which beats the saved language, which beats Chines
   assert.deepEqual(languageChoice({ env: { HOME: home } }), { language: 'zh', settled: false, explicit: false });
   assert.deepEqual(languageChoice({ env: { HOME: home, LANG: 'zh_CN.UTF-8' } }), { language: 'zh', settled: true, explicit: false });
   saveLanguage('zh', env);
-  assert.equal(fs.readFileSync(path.join(home, '.vika', 'language'), 'utf8'), 'zh\n');
+  assert.equal(fs.readFileSync(path.join(home, '.ovsa', 'language'), 'utf8'), 'zh\n');
   assert.equal(savedLanguage(env), 'zh');
   assert.deepEqual(languageChoice({ env }), { language: 'zh', settled: true, explicit: false });
   assert.deepEqual(languageChoice({ env: { ...env, VIKA_LANG: 'en' } }), { language: 'en', settled: true, explicit: true });

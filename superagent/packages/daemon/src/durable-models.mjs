@@ -5,7 +5,7 @@
 // plus Pi's agent directory (~/.pi/agent, or PI_CODING_AGENT_DIR) — custom
 // providers in models.json (an OpenAI-compatible Volcengine Ark endpoint, for
 // instance), keys and logins in auth.json, the default model in settings.json.
-// A model that works in `vika pi` therefore works here, with no second config.
+// A model that works in `ovsa pi` therefore works here, with no second config.
 
 import fs from 'node:fs';
 import path from 'node:path';

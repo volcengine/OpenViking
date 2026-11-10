@@ -7,13 +7,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-// Vika owns OpenViking for the agents it runs (ov-session-context.mjs,
+// OpenViking SuperAgent owns OpenViking for the agents it runs (ov-session-context.mjs,
 // ov-recall.mjs, the Core's openviking_* tools). A runtime's own OpenViking
 // plugin would add a second tool surface that speaks as the whole process,
 // with no idea who sent a line, plus hooks that recall and capture on their
 // own. So every local runtime is launched with that plugin switched off, by
 // the runtime's own launch arguments or environment: never by asking the
-// plugin, whose version Vika does not control. Only OpenViking's pieces go;
+// plugin, whose version OpenViking SuperAgent does not control. Only OpenViking's pieces go;
 // the owner's other plugins, hooks and MCP servers stay.
 //
 // Each runtime declares its mechanism in the runtime catalog (`ovIsolation`),
@@ -57,7 +57,7 @@ function tomlTables(text, kind) {
 
 // Codex and TraeX read one TOML config (CODEX_HOME/config.toml,
 // TRAE_HOME/traecli.toml). Off go every OpenViking plugin, every MCP server
-// that names or runs OpenViking, and the runtime's own memory feature: Vika's
+// that names or runs OpenViking, and the runtime's own memory feature: OpenViking SuperAgent's
 // memory is OpenViking, through the daemon. Plugin hooks go with the plugin;
 // a hand-written hooks.json entry for OpenViking stays inert through the
 // OPENVIKING_* process variables (deployment-config.cjs).
@@ -108,7 +108,7 @@ export const PI_BUILTIN_EXTENSIONS = Object.freeze(['builtin:mcp', 'builtin:llam
 // agentDir/extensions loses configured/package/project extensions. Keeping the
 // original agent directory also preserves models, MCP configuration, OAuth
 // storage and its locks; no copied settings or credential symlinks are needed.
-// The project is trusted here just as it is by Vika's Pi --approve argument.
+// The project is trusted here just as it is by OpenViking SuperAgent's Pi --approve argument.
 export async function piIsolationArgs(env = process.env, workspace = process.cwd()) {
   const { DefaultPackageManager, SettingsManager } = await import('@earendil-works/pi-coding-agent');
   const agentDir = path.resolve(env.PI_CODING_AGENT_DIR || path.join(home(env), '.pi', 'agent'));
@@ -165,7 +165,7 @@ function piExtensionPackage(file) {
 
 // OpenCode loads every file plugin in its global config folder whatever its
 // config says, so the folder itself is replaced: XDG_CONFIG_HOME points at a
-// Vika-owned directory that links every other entry of the user's config home
+// OpenViking SuperAgent-owned directory that links every other entry of the user's config home
 // back, and whose opencode/ holds the user's global config without
 // OpenViking's plugins and MCP servers. The links keep every other tool the
 // agent runs reading its usual configuration. On Windows, directory junctions
@@ -357,7 +357,7 @@ function agyFilteredDeclaration(file, isOvItem, env, copyInherited, ancestors = 
 const escapePattern = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // agy also loads these folders at every level from the working directory up to
-// its git root, and has no switch for them. Vika's own workspace has none, so a
+// its git root, and has no switch for them. OpenViking SuperAgent's own workspace has none, so a
 // piece found there is warned about, not refused; the OPENVIKING_* variables
 // keep it inert meanwhile. Only reads.
 const AGY_WORKSPACE_FOLDERS = ['.agents', '.agent', '_agents', '_agent'];

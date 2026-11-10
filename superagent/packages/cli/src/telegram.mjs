@@ -23,8 +23,8 @@ function explain(error) {
 
 export async function connectTelegram({ plan, prompter, fetchImpl = globalThis.fetch, canGoBack = false }) {
   prompter.section('Telegram');
-  prompter.info(t('在官方 @BotFather 中发送 /newbot 创建独立 Bot，复制 Bot token。每个 Vika 实例使用一个 Bot。',
-    'Send /newbot to the official @BotFather to create a bot for Vika, and copy its token. Each Vika instance uses its own bot.'));
+  prompter.info(t('在官方 @BotFather 中发送 /newbot 创建独立 Bot，复制 Bot token。每个 OpenViking SuperAgent 实例使用一个 Bot。',
+    'Send /newbot to the official @BotFather to create a bot for OpenViking SuperAgent, and copy its token. Each OpenViking SuperAgent instance uses its own bot.'));
   prompter.info(t('接入后只接受你的私聊；普通 Bot 对话不是端到端加密对话。',
     'Once connected it only takes your private messages; bot chats are not end-to-end encrypted.'));
   const navigable = prompter.navigable;

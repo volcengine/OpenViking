@@ -86,7 +86,7 @@ test('DSH: without a servable route the note stays about the protocol', async t 
   // throwaway DSH home and can never see the routes a real instance has, so
   // hiding the runtime behind this catalogue would hide a configured instance.
   assert.equal(runtime.available, true);
-  assert.match(runtime.note, /vika dsh model list/, 'routes are pointed at DSH, not at a Vika file');
+  assert.match(runtime.note, /ovsa dsh model list/, 'routes are pointed at DSH, not at an OpenViking SuperAgent file');
   assert.match(runtime.note, /DEEPSEEK_API_KEY/);
   assert.match(runtime.note, /deepseek-official: 0 models/, 'the catalogue answer is surfaced');
   assert.doesNotMatch(runtime.note, /暂无可用模型|no usable model yet/);
@@ -96,8 +96,8 @@ test('DSH: a secrets-file key reaches the probe without a placeholder', async t 
   const bin = tempDir(t, 'vika-dsh-secret-');
   fs.writeFileSync(path.join(bin, 'dsh'), '#!/bin/sh\n', { mode: 0o755 });
   const home = tempDir(t, 'vika-dsh-home-');
-  fs.mkdirSync(path.join(home, '.vika'));
-  fs.writeFileSync(path.join(home, '.vika', 'secrets.env'), 'DEEPSEEK_API_KEY=sk-dsh-test\n');
+  fs.mkdirSync(path.join(home, '.ovsa'));
+  fs.writeFileSync(path.join(home, '.ovsa', 'secrets.env'), 'DEEPSEEK_API_KEY=sk-dsh-test\n');
   let probeEnv = null;
   const runtime = await detectDsh({
     env: { PATH: bin, HOME: home },

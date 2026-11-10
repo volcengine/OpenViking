@@ -14,16 +14,16 @@ const TARGETS = JSON.stringify({
   beta: { app: 'vika-beta', readyUrl: 'http://127.0.0.1:3739/ready', upgradeSharedWeb: false },
 });
 
-// ~/.vika with one installed release and a fake pm2 that tracks app state.
+// ~/.ovsa with one installed release and a fake pm2 that tracks app state.
 function fixture(t, online = []) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-control-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const release = path.join(home, '.vika', 'releases', '0.4.0-test');
+  const release = path.join(home, '.ovsa', 'releases', '0.4.0-test');
   fs.mkdirSync(path.join(release, 'packages', 'daemon', 'src'), { recursive: true });
   fs.writeFileSync(path.join(release, 'ecosystem.config.cjs'), 'module.exports = {};\n');
   const script = path.join(release, 'packages', 'daemon', 'src', 'main.mjs');
   fs.writeFileSync(script, '');
-  const releaseLink = path.join(home, '.vika', 'current');
+  const releaseLink = path.join(home, '.ovsa', 'current');
   fs.symlinkSync(release, releaseLink, windows ? 'junction' : 'dir');
   const apps = new Map(online.map((name) => [name, 'online']));
   const commands = [];
@@ -43,7 +43,7 @@ function fixture(t, online = []) {
   let output = '';
   const options = {
     env: { VIKA_UPDATER_TARGETS_JSON: TARGETS, HOME: home, USERPROFILE: home }, releaseLink, execFileImpl, fetchImpl,
-    pm2Bin: 'pm2', socketPath: path.join(home, '.vika', 'updater.sock'), readyOptions: { attempts: 1, intervalMs: 1 },
+    pm2Bin: 'pm2', socketPath: path.join(home, '.ovsa', 'updater.sock'), readyOptions: { attempts: 1, intervalMs: 1 },
     stdout: { write: (text) => { output += text; } },
   };
   return { options, commands, ready, apps, output: () => output };
@@ -112,7 +112,7 @@ test('start explains when no release is installed', async (t) => {
   const f = fixture(t);
   if (windows) fs.rmdirSync(f.options.releaseLink);
   else fs.unlinkSync(f.options.releaseLink);
-  await assert.rejects(startCommand('alpha', f.options), /no Vika release is installed/);
+  await assert.rejects(startCommand('alpha', f.options), /no OpenViking SuperAgent release is installed/);
 });
 
 test('start tolerates PM2 launching before the process becomes online', async (t) => {
@@ -188,7 +188,7 @@ test('status lists every app with its pm2 state and readiness', async (t) => {
 test('status names the manifest settings this version ignores', async (t) => {
   const f = fixture(t);
   const home = f.options.env.HOME;
-  fs.writeFileSync(path.join(home, '.vika', 'config.json'), JSON.stringify({
+  fs.writeFileSync(path.join(home, '.ovsa', 'config.json'), JSON.stringify({
     version: 1,
     defaultInstance: 'alpha',
     env: { VIKA_COGNITION_MAX_CHARS: '120000' },

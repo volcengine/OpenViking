@@ -11,7 +11,7 @@ import { list, t } from './i18n.mjs';
 import { writeManifest as saveManifest } from '../../daemon/src/deployment-manifest.mjs';
 export { validateManifest } from '../../daemon/src/deployment-manifest.mjs';
 
-// Setup edits ~/.vika/config.json as plain JSON, and only ever saves a file
+// Setup edits ~/.ovsa/config.json as plain JSON, and only ever saves a file
 // that the daemon's own loader accepts.
 
 const require = createRequire(import.meta.url);
@@ -44,7 +44,7 @@ export const WEB_PORT = 3737;
 const FIRST_INSTANCE_PORT = 3738;
 
 export function vikaHome(env = process.env) {
-  return path.join(platform.homeDir(env) || os.homedir(), '.vika');
+  return path.join(platform.homeDir(env) || os.homedir(), '.ovsa');
 }
 
 // setup persists the default so users can inspect/change it. A global or
@@ -56,7 +56,7 @@ export function withDefaultTempDir(agent, env = {}) {
   return { ...agent, tempDir: `/tmp/vika-${agent.id}` };
 }
 
-// How to call the vika command from here: by name once ~/.vika/bin is on
+// How to call the vika command from here: by name once ~/.ovsa/bin is on
 // PATH, by its full path in the shell the installer ran from. Where the platform
 // runs no shell scripts, that path is the batch launcher, not a ~ prefix.
 export function vikaCommand(env = process.env, implementation = platform) {
@@ -65,8 +65,8 @@ export function vikaCommand(env = process.env, implementation = platform) {
   const same = (entry) => implementation.environmentCaseSensitive
     ? entry === bin
     : entry.toLowerCase() === bin.toLowerCase();
-  if (entries.some(same)) return 'vika';
-  return implementation.supportsShellScripts ? '~/.vika/bin/vika' : path.join(bin, 'vika.cmd');
+  if (entries.some(same)) return 'ovsa';
+  return implementation.supportsShellScripts ? '~/.ovsa/bin/ovsa' : path.join(bin, 'ovsa.cmd');
 }
 
 export function manifestPath(env = process.env) {
@@ -150,7 +150,7 @@ export function withChangedInstance(manifest, agent, env = {}) {
 export function writeManifest(filePath, value, options) {
   try { return saveManifest(filePath, value, options); } catch (error) {
     if (error.code === 'manifest_conflict') {
-      error.message = t('实例配置已被其他操作修改，请重新运行 vika setup。', 'The instance configuration changed elsewhere; run vika setup again.');
+      error.message = t('实例配置已被其他操作修改，请重新运行 ovsa setup。', 'The instance configuration changed elsewhere; run ovsa setup again.');
     }
     throw error;
   }

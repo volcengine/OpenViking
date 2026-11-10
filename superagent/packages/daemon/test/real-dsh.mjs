@@ -29,7 +29,7 @@ import { terminateProcessTree } from '../src/process-utils.mjs';
 // cover the live contract sets.
 //   - `prepareLiveDshRoot()` / `hermeticDshEnv()`: a private data directory and
 //     an environment with no operator DEEPSEEK_* or DSH_* values, so a test
-//     never reaches the network, ~/.dsh, or ~/.vika.
+//     never reaches the network, ~/.dsh, or ~/.ovsa.
 //   - `startLiveDsh()`: the process, LF framing, request/response correlation,
 //     JSON-RPC error mapping (the same shape dsh.mjs produces), and a cleanup
 //     that kills the process group.

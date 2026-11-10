@@ -14,11 +14,11 @@ function fixture(t, ids = ['alpha', 'beta']) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-remove-'));
   t.after(() => fs.rmSync(home, { force: true, recursive: true }));
   const env = { HOME: home, PATH: '' };
-  const configPath = path.join(home, '.vika', 'config.json');
+  const configPath = path.join(home, '.ovsa', 'config.json');
   const agents = ids.map((id, index) => ({
     id, displayName: id.toUpperCase(), channel: 'weixin', connectors: ['weixin'], model: 'codex:', port: 3738 + index,
-    dataDir: path.join(home, '.vika', 'data', id), workspace: path.join(home, 'workspace', id),
-    ovConfig: path.join(home, '.vika', 'ov', `${id}.json`),
+    dataDir: path.join(home, '.ovsa', 'data', id), workspace: path.join(home, 'workspace', id),
+    ovConfig: path.join(home, '.ovsa', 'ov', `${id}.json`),
   }));
   const manifest = { version: 1, defaultInstance: ids[0], env: { CODEX_BIN: '/opt/codex' }, agents };
   writeManifest(configPath, manifest);
@@ -41,7 +41,7 @@ function fixture(t, ids = ['alpha', 'beta']) {
       restart: async (target) => { calls.push(['restart', target]); },
     },
   };
-  return { home, options, calls, output, keptFiles, lock: path.join(home, '.vika', 'deploy.lock') };
+  return { home, options, calls, output, keptFiles, lock: path.join(home, '.ovsa', 'deploy.lock') };
 }
 
 test('removing the default selects a remaining instance and preserves all files and shared env', async (t) => {
@@ -111,8 +111,8 @@ test('process/save failures retain the manifest for retry; Web failure reports r
 
 function managedFixture(t) {
   const f = fixture(t, ['alpha']);
-  const releaseLink = path.join(f.home, '.vika', 'current');
-  const release = path.join(f.home, '.vika', 'releases', 'older');
+  const releaseLink = path.join(f.home, '.ovsa', 'current');
+  const release = path.join(f.home, '.ovsa', 'releases', 'older');
   const processes = ['alpha', 'web', 'updater'].map((id, pm_id) => {
     const component = id === 'alpha' ? 'daemon' : id;
     const script = path.join(release, 'packages', component, 'src', 'main.mjs');

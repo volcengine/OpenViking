@@ -20,9 +20,9 @@ if the executable cannot start. At least one must be on the service PATH.
 Durable does not require Git Bash. Pi still requires Git Bash; this change
 does not replace the shell of other runtimes. Configure and
 log in to the model runtime you intend to use. No administrator rights are
-required by Vika, but Windows policy may restrict junctions or process management.
+required by OpenViking SuperAgent, but Windows policy may restrict junctions or process management.
 
-From the checkout's `vika` directory, in PowerShell:
+From the checkout's `superagent` directory, in PowerShell:
 
 ```powershell
 npm ci --ignore-scripts
@@ -30,8 +30,8 @@ node scripts/install-lark-cli.mjs
 npm run check:pi
 npm run check:durable
 $env:HOME = $env:USERPROFILE
-$env:PM2_HOME = Join-Path $env:USERPROFILE '.vika\pm2'
-$env:VIKA_CONFIG = Join-Path $env:USERPROFILE '.vika\windows-preview.json'
+$env:PM2_HOME = Join-Path $env:USERPROFILE '.ovsa\pm2'
+$env:VIKA_CONFIG = Join-Path $env:USERPROFILE '.ovsa\windows-preview.json'
 ```
 
 Create that manifest using [config.example.json](../config.example.json), keeping
@@ -50,10 +50,10 @@ pm2 logs vika-primary --lines 50 --nostream
 pm2 stop vika-primary vika-web
 ```
 
-PM2 is the user-installed, unmodified program. Vika does not patch its Windows
+PM2 is the user-installed, unmodified program. OpenViking SuperAgent does not patch its Windows
 pipes or promise isolation between multiple PM2 homes. Use only the named apps;
 never stop unrelated PM2 applications. These commands start the source checkout.
-The release-oriented `vika start` expects an installed `current` release and is
+The release-oriented `ovsa start` expects an installed `current` release and is
 not the source startup procedure. Updating a checkout requires restarting these
 apps; it does not update a separate installed release.
 
@@ -74,10 +74,10 @@ apps; it does not update a separate installed release.
   An occupied pipe must fail startup; authority tokens guard action calls.
   This is **not pipe-owner SID verification**. Multi-user/RDP isolation is not
   established, and localhost Web access is not per-user authentication.
-- Vika does not provision or verify Windows ACLs. Use private user-owned data,
+- OpenViking SuperAgent does not provision or verify Windows ACLs. Use private user-owned data,
   workspace and temporary directories. No filesystem sandbox is claimed.
 - Upgrade/updater and stable Windows release builds are disabled. Autostart is
-  available at the user level: `vika autostart enable` writes a script into the
+  available at the user level: `ovsa autostart enable` writes a script into the
   current user's own Startup folder, which the shell runs at logon. It is not a
   service, needs no administrator, and shows up in Task Manager's Startup tab.
 - Email is enabled. On Windows the email account file's mode is not checked
@@ -91,15 +91,15 @@ apps; it does not update a separate installed release.
 ## Migration and validation
 
 This replaces the full Windows fork's installation approach. That fork's
-installer, its `.vika/bin` launchers and its patched `pm2.cmd` are no longer
+installer, its `.ovsa/bin` launchers and its patched `pm2.cmd` are no longer
 provided; the preview package's installer adds only a `vika.cmd` shim that runs
 this release's CLI, and the release's own `bin\pm2.cmd`, which runs that release's
-Node on its bundled pm2, so `vika start` uses no system Node or PM2. Keep the old
+Node on its bundled pm2, so `ovsa start` uses no system Node or PM2. Keep the old
 checkout/commit and configuration for rollback; do not copy this tree over a
 running installation. The previous logs options and unrelated lock, logging,
 delivery, interruption and PM2 behavior fixes were split out for separate review.
 
-From `vika`, run `npm test` and `npm run check` in your usual terminal. The syntax
+From `superagent`, run `npm test` and `npm run check` in your usual terminal. The syntax
 check runs JavaScript through Node on every platform; POSIX shell scripts are
 checked with `sh -n` on POSIX hosts. Platform isolation and POSIX configuration snapshots
 run in the normal suite; macOS configuration selection on Linux is not a macOS
@@ -112,7 +112,7 @@ raw configuration, credentials, `pm2 jlist` output or conversation contents.
 
 ### Durable native shell acceptance
 
-From `vika`, run `node --test packages/daemon/test/durable-coding-tools.test.mjs`.
+From `superagent`, run `node --test packages/daemon/test/durable-coding-tools.test.mjs`.
 The Windows cases execute the native shell with an invalid Bash path and also
 force the Windows PowerShell fallback. On other systems these cases are skipped.
 For real acceptance, start a fresh Durable session with Git Bash unavailable to

@@ -536,7 +536,7 @@ test('upgradeTarget shares the deploy lock with the installer', async () => {
       releaseLink: fixture.releaseLink,
       execFileImpl: async () => { called = true; },
     }),
-    /another vika deploy or upgrade is running/,
+    /another ovsa deploy or upgrade is running/,
   );
   assert.equal(called, false);
 });
@@ -612,7 +612,7 @@ test('the replacement shell outlives the updater and starts it from the new rele
   scheduleUpdaterRestart({
     release: '/vika/releases/0.5.0',
     pm2Bin: '/vika/releases/0.4.0/bin/pm2',
-    pm2Env: { HOME: '/home/u', PM2_HOME: '/home/u/.vika/pm2' },
+    pm2Env: { HOME: '/home/u', PM2_HOME: '/home/u/.ovsa/pm2' },
     spawnImpl: (command, args, options) => { calls.push({ command, args, options }); return { unref() {} }; },
   });
   const [{ command, args, options }] = calls;
@@ -623,7 +623,7 @@ test('the replacement shell outlives the updater and starts it from the new rele
   assert.equal(options.detached, true);
   assert.equal(options.env.CONFIG, '/vika/releases/0.5.0/ecosystem.config.cjs');
   assert.equal(options.env.PM2, '/vika/releases/0.4.0/bin/pm2', 'falls back to the running pm2 when the release has none');
-  assert.equal(options.env.PM2_HOME, '/home/u/.vika/pm2');
+  assert.equal(options.env.PM2_HOME, '/home/u/.ovsa/pm2');
 });
 
 test('server accepts one allowlisted upgrade over its private socket', async (t) => {

@@ -468,7 +468,7 @@ and numbered mail approval paths use the existing Core authorization rules.
 ## Slack provider contract
 
 Slack uses one workspace-internal app per instance, created from the manifest
-`vika setup` prefills (Socket Mode on, token rotation off, bot scopes
+`ovsa setup` prefills (Socket Mode on, token rotation off, bot scopes
 `chat:write reactions:write files:read files:write users:read
 channels:read groups:read im:read mpim:read
 channels:history groups:history im:history mpim:history`, bot events

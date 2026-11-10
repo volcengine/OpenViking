@@ -23,7 +23,7 @@ import { startFakeProvider } from './fake-provider.mjs';
 // (Anthropic-shaped) at `${DEEPSEEK_BASE_URL}/v1/messages`. DEEPSEEK_BASE_URL is
 // the documented override for a built-in route's endpoint, so the fixture points
 // it at the fake provider and passes a placeholder key — the only credential the
-// route ever sees. Nothing here reaches the network, ~/.dsh, or ~/.vika: the
+// route ever sees. Nothing here reaches the network, ~/.dsh, or ~/.ovsa: the
 // temp root owns HOME and DSH_HOME, and `hermeticDshEnv` strips operator values.
 //
 // The suite is a scenario, not independent cases: each test starts the next
@@ -91,7 +91,7 @@ describe('live dsh applies a model switch on the next turn without restarting', 
     dsh = await startLiveDsh({
       root,
       env: hermeticDshEnv({ root, apiKey: API_KEY, baseURL: provider.baseURL }),
-      policy: 'vika dsh model switch e2e',
+      policy: 'ovsa dsh model switch e2e',
     });
     await dsh.initialize();
     sessionId = randomUUID();

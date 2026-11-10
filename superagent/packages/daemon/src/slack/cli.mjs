@@ -44,7 +44,7 @@ export class SlackCli {
         child.stdin?.end();
       });
       if (signal.aborted) throw new Error('Slack CLI query cancelled or timed out');
-      if (error?.code === 'ENOENT') throw new Error('Slack CLI is missing; run npm run setup or install a Vika release containing Slack CLI');
+      if (error?.code === 'ENOENT') throw new Error('Slack CLI is missing; run npm run setup or install an OpenViking SuperAgent release containing Slack CLI');
       let result;
       try { result = JSON.parse(stdout); } catch { /* Never expose CLI stderr, stdout or errors containing credentials. */ }
       if (result?.ok === false) throw new SlackError(method, result.error);

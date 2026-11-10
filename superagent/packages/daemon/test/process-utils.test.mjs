@@ -44,11 +44,11 @@ function shell(command, env, cwd) {
 for (const layout of ['source', 'release']) {
   test(`agent shell resolves the pinned CLI from a ${layout} outside the workspace`, posixShell, (t) => {
     const { root, workspace, systemBin } = fixture(t);
-    const install = layout === 'source' ? path.join(root, 'checkout', 'superagent') : path.join(root, '.vika', 'releases', '1.0');
+    const install = layout === 'source' ? path.join(root, 'checkout', 'superagent') : path.join(root, '.ovsa', 'releases', '1.0');
     const relativeBin = 'node_modules/@larksuite/cli/bin/lark-cli';
     executable(path.join(install, relativeBin), 'pinned');
     executable(path.join(install, 'bin', 'slack'), 'slack-pinned');
-    const current = path.join(root, '.vika', 'current');
+    const current = path.join(root, '.ovsa', 'current');
     if (layout === 'release') fs.symlinkSync(install, current, 'dir');
     const larkCliBin = path.join(layout === 'release' ? current : install, relativeBin);
     const slackCliBin = path.join(layout === 'release' ? current : install, 'bin', 'slack');

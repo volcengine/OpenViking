@@ -34,7 +34,7 @@ export function imList(connectors, mailboxes = 0) {
     ? `${IM_LABELS.email}×${mailboxes}` : IM_LABELS[connector] ?? connector)));
 }
 
-// The loaded manifest, or null while Vika has no instance yet.
+// The loaded manifest, or null while OpenViking SuperAgent has no instance yet.
 export function loadInstances(env = process.env) {
   if (!fs.existsSync(resolveDeploymentManifestPath(env))) return null;
   return loadDeploymentManifest(env);
@@ -53,7 +53,7 @@ export function describeInstances(deployment) {
 }
 
 export async function chooseInstance({ deployment, requested, prompter, question }) {
-  if (!deployment) throw new Error(t('还没有任何实例：先运行 vika setup', 'No instance yet: run vika setup first'));
+  if (!deployment) throw new Error(t('还没有任何实例：先运行 ovsa setup', 'No instance yet: run ovsa setup first'));
   const { agents } = deployment;
   if (requested) {
     const agent = agents.find((candidate) => candidate.id === requested);

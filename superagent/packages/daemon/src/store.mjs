@@ -1161,7 +1161,7 @@ export class Store {
   }
 
   // The runtime's own handle for the live session — pi-durable's conversation
-  // id, a provider-side session id — as opposed to the logical session id Vika
+  // id, a provider-side session id — as opposed to the logical session id OpenViking SuperAgent
   // mints and every runtime is told. It is stored together with the session it
   // belongs to and read back only while that session is still the global one,
   // so a leftover handle can never be handed to a different session.

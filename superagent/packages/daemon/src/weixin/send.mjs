@@ -34,7 +34,7 @@ export function weixinText(text) {
 
 export async function sendWeixinMessage({ state, to, content, idempotencyKey }) {
   const account = state.account();
-  if (!account?.token) throw new Error('Weixin is not logged in; run vika login weixin <instance> first');
+  if (!account?.token) throw new Error('Weixin is not logged in; run ovsa login weixin <instance> first');
   // The bot talks only with its owner, the account that scanned the login QR code.
   if (!account.userId || to !== account.userId) throw new Error('Weixin can only message the account that scanned the login QR code');
   // Weixin accepts a message without the context token of the owner's last

@@ -45,36 +45,38 @@ exit ${nodeWorks ? 0 : 1}
       env: { HOME: home, SHELL: '/bin/bash', PATH: `${bin}:${process.env.PATH}`, ...env },
     });
   };
-  const vika = path.join(home, '.vika');
+  const vika = path.join(home, '.ovsa');
   return { root, home, vika, archive, install, pm2Calls: () => fs.existsSync(path.join(root, 'pm2-calls')) };
 }
 
-test('installs a release under ~/.vika, adds the launcher and PATH, and never touches pm2', (t) => {
+test('installs a release under ~/.ovsa, adds the launcher and PATH, and never touches pm2', (t) => {
   const m = machine(t);
   const bashRc = path.join(m.home, process.platform === 'darwin' ? '.bash_profile' : '.bashrc');
   const first = m.install('--file', m.archive('0.5.0'));
   assert.equal(first.status, 0, first.stderr);
   assert.equal(fs.realpathSync(path.join(m.vika, 'current')), fs.realpathSync(path.join(m.vika, 'releases', '0.5.0')));
-  const launcher = fs.readFileSync(path.join(m.vika, 'bin', 'vika'), 'utf8');
-  assert.match(launcher, /exec "\$HOME\/\.vika\/current\/node\/bin\/node" "\$HOME\/\.vika\/current\/packages\/cli\/bin\/vika\.mjs" "\$@"/);
+  const launcher = fs.readFileSync(path.join(m.vika, 'bin', 'ovsa'), 'utf8');
+  assert.equal(fs.readFileSync(path.join(m.vika, 'bin', 'vika'), 'utf8'), launcher);
+  assert.equal(fs.statSync(path.join(m.vika, 'bin', 'ovsa')).mode & 0o111, 0o111);
+  assert.match(launcher, /exec "\$HOME\/\.ovsa\/current\/node\/bin\/node" "\$HOME\/\.ovsa\/current\/packages\/cli\/bin\/vika\.mjs" "\$@"/);
   assert.equal(fs.statSync(path.join(m.vika, 'bin', 'vika')).mode & 0o111, 0o111);
-  assert.match(fs.readFileSync(bashRc, 'utf8'), /export PATH="\$HOME\/\.vika\/bin:\$PATH"/);
+  assert.match(fs.readFileSync(bashRc, 'utf8'), /export PATH="\$HOME\/\.ovsa\/bin:\$PATH"/);
   assert.equal(fs.existsSync(path.join(m.vika, 'deploy.lock')), false, 'the lock is released');
-  assert.match(first.stderr, /下一步：运行 ~\/\.vika\/bin\/vika setup/);
+  assert.match(first.stderr, /下一步：运行 ~\/\.ovsa\/bin\/ovsa setup/);
   // Without an instance, running the installer again still leads to setup.
   const retried = m.install('--file', m.archive('0.5.0'));
-  assert.match(retried.stderr, /已经是 Vika 0\.5\.0[\s\S]*下一步：运行 ~\/\.vika\/bin\/vika setup/);
+  assert.match(retried.stderr, /已经是 OpenViking SuperAgent 0\.5\.0[\s\S]*下一步：运行 ~\/\.ovsa\/bin\/ovsa setup/);
 
   fs.writeFileSync(path.join(m.vika, 'config.json'), '{}');
   const second = m.install('--file', m.archive('0.6.0'));
   assert.equal(second.status, 0, second.stderr);
   assert.equal(fs.realpathSync(path.join(m.vika, 'rollback')), fs.realpathSync(path.join(m.vika, 'releases', '0.5.0')));
-  assert.match(second.stderr, /vika restart/);
+  assert.match(second.stderr, /ovsa restart/);
   assert.doesNotMatch(second.stderr, /下一步/);
   const again = m.install('--file', m.archive('0.6.0'));
-  assert.match(again.stderr, /已经是 Vika 0\.6\.0/);
-  assert.doesNotMatch(again.stderr, /vika restart|下一步/);
-  assert.equal(fs.readFileSync(bashRc, 'utf8').match(/\.vika\/bin/g).length, 1, 'PATH is added once');
+  assert.match(again.stderr, /已经是 OpenViking SuperAgent 0\.6\.0/);
+  assert.doesNotMatch(again.stderr, /ovsa restart|下一步/);
+  assert.equal(fs.readFileSync(bashRc, 'utf8').match(/\.ovsa\/bin/g).length, 1, 'PATH is added once');
   assert.equal(m.pm2Calls(), false);
 });
 
@@ -84,8 +86,8 @@ test('a shell rc file that cannot be written does not turn a completed install i
   const result = m.install('--file', m.archive('0.5.0'), { SHELL: '/bin/zsh' });
   assert.equal(result.status, 0, result.stderr);
   assert.ok(fs.existsSync(path.join(m.vika, 'bin', 'vika')));
-  assert.match(result.stderr, /写不了 ~\/\.zshrc；Vika 已安装完成/);
-  assert.match(result.stderr, /export PATH="\$HOME\/\.vika\/bin:\$PATH"/);
+  assert.match(result.stderr, /写不了 ~\/\.zshrc；OpenViking SuperAgent 已安装完成/);
+  assert.match(result.stderr, /export PATH="\$HOME\/\.ovsa\/bin:\$PATH"/);
 });
 
 test('refuses a corrupted archive, another platform, or a Node that cannot run here, leaving the install as it was', (t) => {
@@ -143,14 +145,35 @@ test('the installer speaks the language the vika command would: --lang or VIKA_L
   const m = machine(t);
   const english = m.install('--file', m.archive('0.5.0'), { LANG: 'en_US.UTF-8', VIKA_LANG: 'en' });
   assert.equal(english.status, 0, english.stderr);
-  assert.match(english.stderr, /^Installing Vika vika-0\.5\.0-[\s\S]*Verify +SHA-256 matches[\s\S]*next: run ~\/\.vika\/bin\/vika setup\n$/);
+  assert.match(english.stderr, /^Installing OpenViking SuperAgent vika-0\.5\.0-[\s\S]*Verify +SHA-256 matches[\s\S]*next: run ~\/\.ovsa\/bin\/ovsa setup\n$/);
   assert.doesNotMatch(english.stderr, /[一-鿿]/);
   const flagged = m.install('--lang', 'en', '--file', m.archive('0.6.0'));
-  assert.match(flagged.stderr, /^Installing Vika vika-0\.6\.0-/);
+  assert.match(flagged.stderr, /^Installing OpenViking SuperAgent vika-0\.6\.0-/);
   assert.equal(fs.readFileSync(path.join(m.vika, 'language'), 'utf8'), 'en\n', '--lang is kept');
   const saved = m.install('--file', m.archive('0.6.0'), { LANG: 'zh_CN.UTF-8' });
-  assert.match(saved.stderr, /Vika 0\.6\.0 is installed already/);
+  assert.match(saved.stderr, /OpenViking SuperAgent 0\.6\.0 is installed already/);
   const wrong = m.install('--lang', 'fr');
   assert.notEqual(wrong.status, 0);
-  assert.match(wrong.stderr, /vika install failed: --lang takes zh or en/);
+  assert.match(wrong.stderr, /OpenViking SuperAgent install failed: --lang takes zh or en/);
+});
+
+
+test('a legacy home is preserved until explicitly migrated, then both launchers are installed', (t) => {
+  const m = machine(t);
+  const legacy = path.join(m.home, '.vika');
+  fs.mkdirSync(legacy);
+  fs.writeFileSync(path.join(legacy, 'config.json'), '{}');
+  fs.writeFileSync(path.join(legacy, 'secrets.env'), 'TEST_SECRET=keep-me');
+  const archive = m.archive('0.5.0');
+  const refused = m.install('--file', archive);
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /Legacy ~\/\.vika installation found/);
+  assert.equal(fs.existsSync(m.vika), false);
+  assert.equal(fs.readFileSync(path.join(legacy, 'secrets.env'), 'utf8'), 'TEST_SECRET=keep-me');
+  fs.renameSync(legacy, m.vika);
+  fs.symlinkSync(m.vika, legacy, 'dir');
+  const installed = m.install('--file', archive);
+  assert.equal(installed.status, 0, installed.stderr);
+  assert.equal(fs.readFileSync(path.join(legacy, 'secrets.env'), 'utf8'), 'TEST_SECRET=keep-me');
+  for (const command of ['ovsa', 'vika']) assert.ok(fs.existsSync(path.join(m.vika, 'bin', command)));
 });

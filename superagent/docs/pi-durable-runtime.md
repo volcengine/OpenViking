@@ -13,7 +13,7 @@ ledger, outbox idempotency, decisions and the cognition journal stay in
 
 ## Choosing it
 
-- `vika setup` lists **Durable (built in)**; it can be chosen once at least one
+- `ovsa setup` lists **Durable (built in)**; it can be chosen once at least one
   model has credentials (see below). It ships with the release like Pi; there is
   no CLI to install or log in to.
 - `/runtime durable` (also `pi-durable`, `pidurable`) switches a running
@@ -32,15 +32,15 @@ offline at startup:
   endpoint), credentials saved by `/login` in `auth.json`, and the default model
   in `settings.json`.
 
-A model that works in `vika pi` therefore works in durable without a second
-configuration. Run `vika pi` and `/login`, or edit `~/.pi/agent/models.json`, to
+A model that works in `ovsa pi` therefore works in durable without a second
+configuration. Run `ovsa pi` and `/login`, or edit `~/.pi/agent/models.json`, to
 add one.
 
 Provider keys from the environment reach the host only through the daemon's
 secret fields: `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`,
 `GOOGLE_GENERATIVE_AI_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`,
 `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `XAI_API_KEY` and `ARK_API_KEY`. Set them
-in the operator environment or `~/.vika/secrets.env`, never in `config.json`.
+in the operator environment or `~/.ovsa/secrets.env`, never in `config.json`.
 `ARK_API_KEY` is kept for the same reason as for Pi: a `models.json` provider may
 name it as `"apiKey": "$ARK_API_KEY"`.
 
@@ -80,7 +80,7 @@ to its profile, and the configured `lark-cli` and Slack CLI directories come fir
 
 ## Sessions and recovery
 
-Vika mints the logical session id that every runtime is told. The durable
+OpenViking SuperAgent mints the logical session id that every runtime is told. The durable
 conversation id is the runtime's native handle: the daemon stores it in the
 `global_session_native` meta row together with the session it belongs to, and
 reads it back only while that session is still the global one.

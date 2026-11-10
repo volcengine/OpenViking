@@ -72,7 +72,7 @@ describe('document comment events', () => {
     const envelope = normalizeDocComment(parseCommentNotice(notice()), {
       comment: { quote: '本季度  目标\n是 100', is_whole: false }, replies: thread(),
       title: 'Q4 计划', url: 'https://example.feishu.cn/docx/TLLK', names,
-    }, { selfId: SELF, selfName: 'Vika' });
+    }, { selfId: SELF, selfName: 'OpenViking SuperAgent' });
     const event = normalizeEvent(envelope);
     assert.deepEqual([event.kind, event.chatId, event.chatType, event.threadId, event.messageId], [
       'message.created', `doc:docx:${TOKEN}`, 'doc_comment', '7618859513273112345', MSG,
@@ -82,9 +82,9 @@ describe('document comment events', () => {
     assert.equal(event.content, [
       '[on the text: "本季度 目标 是 100"]',
       '[earlier in this comment: Bob: 这个数对吗？ | you: 对的，来自 Q3 报表。]',
-      '@Vika 帮我把这条加到 @Bob 的任务',
+      '@OpenViking SuperAgent 帮我把这条加到 @Bob 的任务',
     ].join('\n'));
-    assert.deepEqual(event.mentions.map(({ id, name }) => [id, name]), [[SELF, 'Vika'], [BOB, 'Bob']]);
+    assert.deepEqual(event.mentions.map(({ id, name }) => [id, name]), [[SELF, 'OpenViking SuperAgent'], [BOB, 'Bob']]);
     // Right after the bot's own reply: shown as a reply to it.
     assert.equal(event.parentId, `comment:docx:${TOKEN}:7618859513273112345:7618859513273110002`);
     assert.deepEqual(event.replyRoute, { action: 'message.reply', input: { message_id: MSG } });
@@ -172,7 +172,7 @@ function client(answers = {}) {
     },
   }, logger);
   lark.selfId = SELF;
-  lark.selfName = 'Vika';
+  lark.selfName = 'OpenViking SuperAgent';
   return { lark, calls };
 }
 
@@ -188,7 +188,7 @@ describe('Lark client on document comments', () => {
     });
     const event = normalizeEvent(await lark.docCommentEvent(notice()));
     assert.equal(event.senderName, 'Alice');
-    assert.match(event.content, /^\[on the text: "目标"\]\n\[earlier in this comment: Bob: 这个数对吗？ \| you: .*\]\n@Vika 帮我把这条加到 @Bob 的任务$/);
+    assert.match(event.content, /^\[on the text: "目标"\]\n\[earlier in this comment: Bob: 这个数对吗？ \| you: .*\]\n@OpenViking SuperAgent 帮我把这条加到 @Bob 的任务$/);
     assert.deepEqual(calls.slice(0, 2), [
       ['drive', '+batch-query-comments', '--as', 'bot', '--token', TOKEN, '--type', 'docx',
         '--comment-ids', '7618859513273112345', '--format', 'json'],
@@ -212,7 +212,7 @@ describe('Lark client on document comments', () => {
         ? { items: thread().slice(2), has_more: false } : { items: thread().slice(0, 2), has_more: true, page_token: 'p2' }),
     });
     const event = normalizeEvent(await paged.lark.docCommentEvent(notice()));
-    assert.match(event.content, /@Vika 帮我把这条加到/);
+    assert.match(event.content, /@OpenViking SuperAgent 帮我把这条加到/);
     assert.equal(paged.calls.filter((args) => args.includes('+list-replies')).length, 2);
 
     const denied = client({ '+batch-query-comments': new Error('permission denied'), metas: new Error('permission denied') });

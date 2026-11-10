@@ -198,7 +198,7 @@ export async function upgradeTarget(target, {
   try {
     await mkdir(deployLock, { mode: 0o700 });
   } catch (error) {
-    if (error?.code === 'EEXIST') throw new Error('another vika deploy or upgrade is running');
+    if (error?.code === 'EEXIST') throw new Error('another ovsa deploy or upgrade is running');
     throw error;
   }
   try {

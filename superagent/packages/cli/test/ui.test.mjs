@@ -63,7 +63,7 @@ test('every banner frame fits the terminal; a narrow one drops the wordmark', ()
     const wide = bannerLines(t, { depth: 24, version: '0.4.0-cdb22789fc75', columns: 100 });
     assert.equal(wide.length, 16);
     assert.ok(wide.every((line) => width(line) < 100), `t=${t}`);
-    assert.ok(wide.some((line) => stripAnsi(line).includes('██╗   ██╗██╗██╗')));
+    assert.ok(wide.some((line) => stripAnsi(line).includes('OpenViking SuperAgent')));
     const narrow = bannerLines(t, { depth: 8, columns: 60 });
     assert.ok(narrow.every((line) => width(line) < 60) && !narrow.some((line) => line.includes('██╗')));
     for (const columns of [46, 47, 60, 72, 73, 80, 100]) {
@@ -76,14 +76,14 @@ test('every banner frame fits the terminal; a narrow one drops the wordmark', ()
 test('the banner is one plain title line on a terminal that is too small or has no colour', async () => {
   const small = screen({ columns: 40 });
   await playBanner({ output: small.output, input: new PassThrough(), env: {} });
-  assert.equal(stripAnsi(small.written()).trim(), 'VIKA  把本机的 coding agent 带上船');
+  assert.equal(stripAnsi(small.written()).trim(), 'OpenViking SuperAgent  把本机的 coding agent 带上船');
   const edge = screen({ columns: 46 });
   const edgeBanner = await openingBanner({ output: edge.output, input: new PassThrough(), env: {} });
   assert.equal(edgeBanner.top(), null);
-  assert.equal(stripAnsi(edge.written()).trim(), 'VIKA  把本机的 coding agent 带上船');
+  assert.equal(stripAnsi(edge.written()).trim(), 'OpenViking SuperAgent  把本机的 coding agent 带上船');
   const still = screen();
   await playBanner({ output: still.output, input: new PassThrough(), env: { VIKA_NO_ANIMATION: '1' } });
-  assert.equal(stripAnsi(still.written()).split('\n').filter((line) => line.includes('██╗   ██╗██╗██╗')).length, 1, 'one frame, drawn once');
+  assert.equal(stripAnsi(still.written()).split('\n').filter((line) => line.includes('OpenViking SuperAgent')).length, 1, 'one frame, drawn once');
 });
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -148,7 +148,7 @@ test('on a tall window the boat stays at the top and keeps sailing until release
 test('on a short window the scene plays, then a small boat stays at the top', async () => {
   const { output, written } = screen({ columns: 100, rows: 26 });
   const banner = await openingBanner({ output, input: new PassThrough(), env: {}, durationMs: 50 });
-  assert.match(stripAnsi(written()), /██╗   ██╗██╗██╗/, 'the full scene first');
+  assert.match(stripAnsi(written()), /OpenViking SuperAgent/, 'the full scene first');
   assert.match(written(), /\x1b\[4;26r/, 'then a two-row header');
   banner.release();
 });
@@ -160,7 +160,7 @@ test('on a colour terminal an answered question folds into one line', async () =
   const prompter = new Prompter({ input, output, env: {} });
   assert.equal(prompter.fancy, true);
   setImmediate(() => input.write('小V\r'));
-  assert.equal(await prompter.text('机器人名字', { initial: 'Vika' }), '小V');
+  assert.equal(await prompter.text('机器人名字', { initial: 'OpenViking SuperAgent' }), '小V');
   setImmediate(() => input.write('\x1b[B\r'));
   assert.equal(await prompter.select('运行时', [{ label: 'Codex', value: 'codex' }, { label: 'Pi', value: 'pi' }]), 'pi');
   const plain = stripAnsi(written());

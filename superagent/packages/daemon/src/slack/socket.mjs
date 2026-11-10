@@ -63,7 +63,7 @@ export class SocketModeReceiver {
       if (socket.hello.num_connections <= 1) return socket;
       socket.close();
       if (attempt >= 1) {
-        throw fatal('Another program is receiving events for this Slack app; each Vika instance needs its own Slack app');
+        throw fatal('Another program is receiving events for this Slack app; each OpenViking SuperAgent instance needs its own Slack app');
       }
       this.logger.warn('slack_second_receiver', { connections: socket.hello.num_connections });
       await delay(this.recheckMs, undefined, { signal });
@@ -77,7 +77,7 @@ export class SocketModeReceiver {
         if (signal.aborted) throw signal.reason ?? error;
         if (error.fatal) throw error;
         if (error instanceof SlackError && error.auth) {
-          throw fatal('Slack authorization failed; run vika login slack <instance>');
+          throw fatal('Slack authorization failed; run ovsa login slack <instance>');
         }
         const waitMs = error instanceof SlackError && error.retryAfter !== null
           ? error.retryAfter * 1000 : this.backoffMs[Math.min(failures, this.backoffMs.length - 1)];

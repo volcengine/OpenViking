@@ -11,9 +11,9 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { t } from './i18n.mjs';
 
-// `vika autostart enable|disable`: start Vika at login/boot without sudo.
+// `ovsa autostart enable|disable`: start OpenViking SuperAgent at login/boot without sudo.
 // Linux: a systemd user unit; macOS: a LaunchAgent; Windows: a script in the
-// user's own Startup folder. All three run `vika start`, the same path as by
+// user's own Startup folder. All three run `ovsa start`, the same path as by
 // hand, with the PATH of the shell that enabled it so the agent CLIs (codex,
 // claude) are found under a minimal service environment.
 
@@ -23,15 +23,15 @@ const STARTUP_ENTRY = 'vika-autostart.vbs';
 
 export function systemdUnit({ homeDir, pathValue }) {
   return `[Unit]
-Description=Vika (local agent instances)
+Description=OpenViking SuperAgent (local agent instances)
 After=network-online.target
 
 [Service]
 Type=forking
-PIDFile=${path.join(homeDir, '.vika', 'pm2', 'pm2.pid')}
+PIDFile=${path.join(homeDir, '.ovsa', 'pm2', 'pm2.pid')}
 Environment=PATH=${pathValue}
-ExecStart=${path.join(homeDir, '.vika', 'bin', 'vika')} start
-ExecStop=${path.join(homeDir, '.vika', 'bin', 'vika')} stop
+ExecStart=${path.join(homeDir, '.ovsa', 'bin', 'ovsa')} start
+ExecStop=${path.join(homeDir, '.ovsa', 'bin', 'ovsa')} stop
 Restart=on-failure
 
 [Install]
@@ -44,7 +44,7 @@ function xml(value) {
 }
 
 export function launchAgent({ homeDir, pathValue }) {
-  const log = path.join(homeDir, '.vika', 'logs', 'autostart.log');
+  const log = path.join(homeDir, '.ovsa', 'logs', 'autostart.log');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -52,7 +52,7 @@ export function launchAgent({ homeDir, pathValue }) {
   <key>Label</key><string>${LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${xml(path.join(homeDir, '.vika', 'bin', 'vika'))}</string>
+    <string>${xml(path.join(homeDir, '.ovsa', 'bin', 'ovsa'))}</string>
     <string>start</string>
   </array>
   <key>EnvironmentVariables</key>
@@ -84,12 +84,12 @@ function targets(homeDir, platform, env = process.env) {
 // anything else as ANSI and a profile path need not be ASCII.
 export function startupEntry(homeDir, pathValue = null) {
   const vb = (value) => String(value).replaceAll('"', '""');
-  const launcher = path.join(homeDir, '.vika', 'bin', 'vika.cmd');
-  const logs = path.join(homeDir, '.vika', 'logs');
+  const launcher = path.join(homeDir, '.ovsa', 'bin', 'ovsa.cmd');
+  const logs = path.join(homeDir, '.ovsa', 'logs');
   const log = path.join(logs, 'autostart.log');
   return [
-    "' Vika: start it when this user logs in. Written by `vika autostart enable`.",
-    "' Delete this file, or run `vika autostart disable`, to stop it.",
+    "' OpenViking SuperAgent: start it when this user logs in. Written by `ovsa autostart enable`.",
+    "' Delete this file, or run `ovsa autostart disable`, to stop it.",
     'Option Explicit',
     'Dim shell, q, command',
     'Set shell = CreateObject("WScript.Shell")',
@@ -116,7 +116,7 @@ export async function autostartCommand([action, ...extra], {
   uid = process.getuid?.(),
 } = {}) {
   if (!['enable', 'disable'].includes(action) || extra.length) {
-    output.write('usage: vika autostart <enable|disable>\n');
+    output.write('usage: ovsa autostart <enable|disable>\n');
     return 2;
   }
   if (!capabilitiesFor(platform).autostart) {
@@ -140,7 +140,7 @@ export async function autostartCommand([action, ...extra], {
   const pathValue = env.PATH || '/usr/bin:/bin';
   fs.mkdirSync(path.dirname(file), { recursive: true });
   if (platform.loginService === 'launchd') {
-    fs.mkdirSync(path.join(homeDir, '.vika', 'logs'), { recursive: true });
+    fs.mkdirSync(path.join(homeDir, '.ovsa', 'logs'), { recursive: true });
     fs.writeFileSync(file, launchAgent({ homeDir, pathValue }));
     await execFileImpl('launchctl', ['bootout', `gui/${uid}`, file]).catch(() => {});
     await execFileImpl('launchctl', ['bootstrap', `gui/${uid}`, file]);
@@ -151,8 +151,8 @@ export async function autostartCommand([action, ...extra], {
   await execFileImpl('systemctl', ['--user', 'daemon-reload']);
   await execFileImpl('systemctl', ['--user', 'enable', 'vika.service']);
   output.write(t(`开机自启已开启（${file}）\n`, `Autostart is on (${file})\n`));
-  output.write(t('服务器上还要执行一次 loginctl enable-linger，否则退出登录后 Vika 会停。\n',
-    'On a server, also run loginctl enable-linger once, or Vika stops when you log out.\n'));
+  output.write(t('服务器上还要执行一次 loginctl enable-linger，否则退出登录后 OpenViking SuperAgent 会停。\n',
+    'On a server, also run loginctl enable-linger once, or OpenViking SuperAgent stops when you log out.\n'));
   return 0;
 }
 
@@ -160,19 +160,19 @@ export async function autostartCommand([action, ...extra], {
 // Windows: the Startup folder needs no elevation, and the user can see, disable
 // or delete the entry themselves (Task Manager lists it on its Startup tab).
 function enableStartupEntry({ file, homeDir, env, output }) {
-  const launcher = path.join(homeDir, '.vika', 'bin', 'vika.cmd');
+  const launcher = path.join(homeDir, '.ovsa', 'bin', 'ovsa.cmd');
   if (!fs.existsSync(launcher)) {
     output.write(t(`没找到 ${launcher}：先运行安装脚本，再开启开机自启\n`,
       `${launcher} is missing: run the installer first, then enable autostart\n`));
     return 1;
   }
-  fs.mkdirSync(path.join(homeDir, '.vika', 'logs'), { recursive: true });
+  fs.mkdirSync(path.join(homeDir, '.ovsa', 'logs'), { recursive: true });
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const text = startupEntry(homeDir, env.PATH ?? env.Path ?? null);
   fs.writeFileSync(file, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]));
   output.write(t(`开机自启已开启（${file}）\n`, `Autostart is on (${file})\n`));
-  output.write(t('登录这个用户后自动启动，不是系统服务，也不需要管理员；输出在 ~/.vika/logs/autostart.log\n',
-    'It starts when this user logs in, as no service and with no administrator; output goes to ~/.vika/logs/autostart.log\n'));
+  output.write(t('登录这个用户后自动启动，不是系统服务，也不需要管理员；输出在 ~/.ovsa/logs/autostart.log\n',
+    'It starts when this user logs in, as no service and with no administrator; output goes to ~/.ovsa/logs/autostart.log\n'));
   return 0;
 }
 

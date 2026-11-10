@@ -49,7 +49,7 @@ function defined(values) {
 function buildEcosystem(sourceEnv = process.env) {
   const homeDir = platformHomeDir(sourceEnv);
   if (!homeDir || !path.isAbsolute(homeDir)) throw new Error('HOME must be an absolute path');
-  const baseDir = path.join(homeDir, '.vika');
+  const baseDir = path.join(homeDir, '.ovsa');
   const deployment = loadDeploymentManifest(sourceEnv);
   if (deployment.agents.some((agent) => agent.port === 3737)) {
     throw new Error('agent port 3737 conflicts with the shared Web port');

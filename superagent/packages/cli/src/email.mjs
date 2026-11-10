@@ -8,7 +8,7 @@ import { t } from './i18n.mjs';
 import { vikaHome } from './manifest.mjs';
 import { PromptAborted } from './prompt.mjs';
 
-// The mailbox steps of `vika setup` and `vika login email`: an address and the
+// The mailbox steps of `ovsa setup` and `ovsa login email`: an address and the
 // provider's client password, checked by logging in to IMAP and SMTP before
 // anything is saved. A known provider needs no server names. An instance may
 // watch several mailboxes; each is its own Connector instance, `email-<name>`.
@@ -69,7 +69,7 @@ export function providerFor(address) {
 function addressProblem(value, taken) {
   if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(value)) return t('邮箱地址不对', 'That is not an email address');
   if (OAUTH_ONLY.includes(value.split('@')[1].toLowerCase())) {
-    return t('Outlook / Hotmail 只能用 OAuth 登录，暂时接不了，换一个邮箱', 'Outlook / Hotmail only sign in with OAuth, which Vika cannot do yet; use another mailbox');
+    return t('Outlook / Hotmail 只能用 OAuth 登录，暂时接不了，换一个邮箱', 'Outlook / Hotmail only sign in with OAuth, which OpenViking SuperAgent cannot do yet; use another mailbox');
   }
   if (taken.includes(value.toLowerCase())) return t('这个邮箱已经接入了', 'This mailbox is connected already');
   return null;
@@ -110,7 +110,7 @@ export async function askEmail({ prompter, previous = null, fixed = null, taken 
   const out = (text) => prompter.write(text);
   out(fixed ? `\n── ${t('邮箱', 'Email')} ${fixed.address} ──\n` : t(
     '\n── 邮箱 ──\n  只读收件箱（不会标已读、不移动、不删除）；回信先发到主渠道给你确认，你同意了才发出。\n',
-    '\n── Email ──\n  Vika only reads the inbox (never marks, moves or deletes); a reply goes to your primary channel and is sent once you OK it.\n',
+    '\n── Email ──\n  OpenViking SuperAgent only reads the inbox (never marks, moves or deletes); a reply goes to your primary channel and is sent once you OK it.\n',
   ));
   let last = fixed ?? previous;
   for (;;) {
@@ -133,7 +133,7 @@ export async function askEmail({ prompter, previous = null, fixed = null, taken 
     try {
       const { idle } = await verify({ ...account, user: address });
       out(t(`  收信和发信都登录成功${idle ? '' : '（这个邮箱不推送新邮件，每分钟查一次）'}\n`,
-        `  Receiving and sending both work${idle ? '' : ' (this mailbox does not push new mail, so Vika checks every minute)'}\n`));
+        `  Receiving and sending both work${idle ? '' : ' (this mailbox does not push new mail, so OpenViking SuperAgent checks every minute)'}\n`));
       return account;
     } catch (error) {
       out(`  ${t('登录失败：', 'Login failed: ')}${explain(error, provider, password)}\n`);

@@ -167,7 +167,7 @@ export default {
     this.deliveredThroughSeq = this.syncedThroughSeq;
     this.needsHistoryPrefix = !resumable;
     // No credential pre-check: a route's key may live in DSH's own
-    // <DSH_HOME>/.credentials.yaml (written by `vika dsh model key set`), which
+    // <DSH_HOME>/.credentials.yaml (written by `ovsa dsh model key set`), which
     // this process cannot read, and a process without any key still starts and
     // answers the first turn with MISSING_CREDENTIAL -- naming the credentials
     // service and the export route. Refusing to spawn would block a working
@@ -642,7 +642,7 @@ export default {
       + ` ${model} at effort ${attempt.effort || 'default'} instead.`
       + (this.store.getSetting?.('dsh_model') === model
         ? ' That route is now the saved model for this instance.'
-        : ' The saved model choice is unchanged; fix it with /model or `vika dsh model list`.');
+        : ' The saved model choice is unchanged; fix it with /model or `ovsa dsh model list`.');
   },
 
   /**

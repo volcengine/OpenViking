@@ -21,11 +21,11 @@ export const BOT_SCOPES = Object.freeze(['chat:write', 'reactions:write', 'files
 export const BOT_EVENTS = Object.freeze(['message.channels', 'message.groups', 'message.im', 'message.mpim']);
 
 export function appManifest(name) {
-  const display = String(name || 'Vika').trim().slice(0, 35) || 'Vika';
+  const display = String(name || 'OpenViking SuperAgent').trim().slice(0, 35) || 'OpenViking SuperAgent';
   // The bot user's name allows only a-z, 0-9, -, _ and .
-  const handle = display.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'vika';
+  const handle = display.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'openviking-superagent';
   return {
-    display_information: { name: display, description: 'Vika personal agent' },
+    display_information: { name: display, description: 'OpenViking SuperAgent personal agent' },
     features: {
       app_home: { home_tab_enabled: false, messages_tab_enabled: true, messages_tab_read_only_enabled: false },
       bot_user: { display_name: handle, always_online: true },
@@ -46,7 +46,7 @@ function explain(error) {
   }
   if (error.name === 'TimeoutError') return t('绑定超时：请在 5 分钟内私聊机器人发送口令。', 'Binding timed out: send the code to the bot in a direct message within 5 minutes.');
   if (/belongs to another app/.test(error.message)) return t('两个 token 不属于同一个 Slack App：请从同一个 App 里复制。', 'The two tokens belong to different Slack apps; copy both from the same app.');
-  if (/Another program is receiving/.test(error.message)) return t('有别的程序在接收这个 App 的消息：先停掉原来用它的程序，或换一个 App；每个 Vika 实例要用独立的 Slack App。', 'Another program is receiving this app\'s events: stop the program that used it, or use another app; each Vika instance needs its own Slack app.');
+  if (/Another program is receiving/.test(error.message)) return t('有别的程序在接收这个 App 的消息：先停掉原来用它的程序，或换一个 App；每个 OpenViking SuperAgent 实例要用独立的 Slack App。', 'Another program is receiving this app\'s events: stop the program that used it, or use another app; each OpenViking SuperAgent instance needs its own Slack app.');
   if (/Socket Mode was turned off/.test(error.message)) return t('这个 App 没有打开 Socket Mode：在 App 设置的 Socket Mode 页面打开。', 'Socket Mode is off for this app; turn it on under Socket Mode in the app settings.');
   if (/already in use/.test(error.message)) return t('这个实例正在接收 Slack 消息，请先停止实例再重新授权。', 'This instance is receiving Slack messages; stop it before authorizing again.');
   return t('Slack 连接失败，请检查网络和 token 后重试。', 'Could not connect to Slack; check the network and the tokens, then try again.');
@@ -71,8 +71,8 @@ export async function connectSlack({ plan, prompter, fetchImpl = globalThis.fetc
   const manifestFile = path.join(plan.dataDir, 'slack', 'app-manifest.json');
   fs.mkdirSync(path.dirname(manifestFile), { recursive: true, mode: 0o700 });
   fs.writeFileSync(manifestFile, `${JSON.stringify(appManifest(plan.displayName), null, 2)}\n`, { mode: 0o600 });
-  prompter.info(t('1. 准备一个 Slack App（每个 Vika 实例一个）。新建：打开下面的链接，选择工作区，用预填的配置创建：',
-    '1. Get a Slack app (one per Vika instance). To create one, open the link below, pick the workspace and create it from the prefilled manifest:'));
+  prompter.info(t('1. 准备一个 Slack App（每个 OpenViking SuperAgent 实例一个）。新建：打开下面的链接，选择工作区，用预填的配置创建：',
+    '1. Get a Slack app (one per OpenViking SuperAgent instance). To create one, open the link below, pick the workspace and create it from the prefilled manifest:'));
   prompter.write(`   ${createAppUrl(plan.displayName)}\n`);
   prompter.info(t(`   链接打不开时，在 api.slack.com/apps 选 Create New App → From a manifest，粘贴 ${manifestFile} 的内容。`,
     `   If the link does not open, choose Create New App → From a manifest at api.slack.com/apps and paste ${manifestFile}.`));

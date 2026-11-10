@@ -149,7 +149,7 @@ function pathsOverlap(left, right) {
 
 export function getConfig() {
   const dataDir = path.resolve(
-    process.env.VIKA_DATA_DIR || path.join(os.homedir(), '.vika', 'data'),
+    process.env.VIKA_DATA_DIR || path.join(os.homedir(), '.ovsa', 'data'),
   );
   const configuredTempDir = (process.env.VIKA_TEMP_DIR ?? '').trim();
   if (configuredTempDir && !path.isAbsolute(configuredTempDir)) {
@@ -264,7 +264,7 @@ export function getConfig() {
     dshBin: process.env.DSH_BIN || 'dsh',
     // Model routes are DSH's own settings document, not a daemon setting and not
     // a manifest field: DSH's own settings service is the only writer, and
-    // `vika dsh model` plus `/model` are the only callers. This is the effort a
+    // `ovsa dsh model` plus `/model` are the only callers. This is the effort a
     // fresh instance starts with; the union is what DSH understands for a route
     // (llm-pi-ai/src/catalog.ts).
     dshEffort: enumEnv(

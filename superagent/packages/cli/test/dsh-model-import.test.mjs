@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
-// The migration half of `vika dsh model`: turning a legacy Pi `models.json`
+// The migration half of `ovsa dsh model`: turning a legacy Pi `models.json`
 // into native DSH routes without ever sending a request to the wrong provider.
 //
 // The write protocol is three invariants, and the tests assert the invariants
@@ -600,7 +600,7 @@ test('SESSION_ID is treated as a variable the DSH child does not inherit', () =>
   assert.equal(plan.routes[0].apiKeyEnv, 'SESSION_ID', 'the reference is kept so a stored value can resolve it');
   assert.match(notes(plan), /SESSION_ID/);
   assert.match(notes(plan), /withhold/);
-  assert.match(notes(plan), /vika dsh model key set SESSION_ID/);
+  assert.match(notes(plan), /ovsa dsh model key set SESSION_ID/);
 });
 
 test('a variable the child does inherit stays silent', () => {
@@ -808,7 +808,7 @@ function readJsonLines(file) {
 function fixture(t, { state = null } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-dsh-migrate-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const config = path.join(home, '.vika', 'config.json');
+  const config = path.join(home, '.ovsa', 'config.json');
   fs.mkdirSync(path.dirname(config), { recursive: true, mode: 0o700 });
   fs.writeFileSync(config, `${JSON.stringify({
     version: 1,
@@ -1099,7 +1099,7 @@ test('end to end: an unconfirmed settings write keeps the new reference and says
   const text = output(result);
   assert.match(text, /Cannot tell whether this import landed/, 'the uncertainty is stated, not hidden');
   assert.match(text, /GATEWAY_API_KEY/, 'the reference to inspect is named');
-  assert.match(text, /vika dsh model list/, 'the operator is told how to check');
+  assert.match(text, /ovsa dsh model list/, 'the operator is told how to check');
   assert.ok(!text.includes('sk-new'), 'a value is never printed');
 });
 

@@ -2,13 +2,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-# Vika installer.
+# OpenViking SuperAgent installer.
 #
 #   curl -fsSL <download base>/install.sh | sh
 #   sh scripts/install.sh --file dist/vika-<version>-<platform>.tar.gz   # a local build
 #
-# Installs the release for this machine under ~/.vika (releases/<version>,
-# the `current` link, bin/vika) and then runs `vika setup` when the machine
+# Installs the release for this machine under ~/.ovsa (releases/<version>,
+# the `current` link, bin/vika) and then runs `ovsa setup` when the machine
 # has no instance yet. Needs only sh, curl, tar and sha256sum or shasum: the
 # release brings its own Node, pm2 and lark-cli, so nothing else on the
 # machine is used or changed.
@@ -22,7 +22,7 @@ set -eu
 # UTF-8 lead bytes as name characters, so "$VERSION（" names another variable.
 
 BASE="${VIKA_DOWNLOAD_BASE:-__VIKA_DOWNLOAD_BASE__}"
-VIKA_HOME="$HOME/.vika"
+VIKA_HOME="$HOME/.ovsa"
 VERSION="${VIKA_VERSION:-}"
 FILE=""
 RUN_SETUP=1
@@ -54,7 +54,7 @@ ok() { if [ "$FANCY" = 1 ]; then say "  ${GREEN}✔${RESET} $*"; else say "$*"; 
 note() { if [ "$FANCY" = 1 ]; then say "  ${GRAY}›${RESET} $*"; else say "$*"; fi; }
 warn() { if [ "$FANCY" = 1 ]; then say "  ${YELLOW}⚠${RESET} $*"; else say "$*"; fi; }
 die() {
-  failed=$(m 'vika 安装失败：' 'vika install failed: ')
+  failed=$(m 'OpenViking SuperAgent 安装失败：' 'OpenViking SuperAgent install failed: ')
   if [ "$FANCY" = 1 ]; then say "  ${RED}✖${RESET} ${failed}$*"; else say "${failed}$*"; fi
   exit 1
 }
@@ -208,7 +208,7 @@ header() {
     say "  ${BOLD}${PINK}V${VIOLET}I${LILAC}K${SKY}A${RESET}  ${GRAY}$(m '安装' 'Installing') ${1} · ${PLATFORM}${RESET}"
     say ""
   else
-    say "$(m "安装 Vika ${1}（${PLATFORM}）" "Installing Vika ${1} (${PLATFORM})")"
+    say "$(m "安装 OpenViking SuperAgent ${1}（${PLATFORM}）" "Installing OpenViking SuperAgent ${1} (${PLATFORM})")"
   fi
 }
 
@@ -241,6 +241,9 @@ else
   note "$(m "注意：${FILE} 旁边没有 .sha256，跳过校验" "note: there is no .sha256 next to ${FILE}, so it is not verified")"
 fi
 
+if [ ! -e "$VIKA_HOME" ] && [ -e "$HOME/.vika" ]; then
+  die 'Legacy ~/.vika installation found. Stop the old services, move ~/.vika to ~/.ovsa and keep ~/.vika as a compatibility symlink, then rerun this installer. See superagent/docs/migration-to-ovsa.md.'
+fi
 mkdir -p "$VIKA_HOME/releases"
 # The updater takes the same lock while it upgrades.
 mkdir "$VIKA_HOME/deploy.lock" 2>/dev/null || die "$(m "另一个安装或升级正在进行（${VIKA_HOME}/deploy.lock）" "another install or upgrade is running (${VIKA_HOME}/deploy.lock)")"
@@ -284,7 +287,7 @@ TARGET="$VIKA_HOME/releases/$VERSION"
 PREVIOUS=$(physical "$VIKA_HOME/current")
 if [ -n "$PREVIOUS" ] && [ "$PREVIOUS" = "$(physical "$TARGET")" ]; then
   rm -rf "$PENDING"
-  ok "$(m "已经是 Vika ${VERSION}" "Vika ${VERSION} is installed already")"
+  ok "$(m "已经是 OpenViking SuperAgent ${VERSION}" "OpenViking SuperAgent ${VERSION} is installed already")"
   CHANGED=0
 else
   rm -rf "$TARGET"
@@ -292,19 +295,22 @@ else
   rmdir "$PENDING"
   [ -z "$PREVIOUS" ] || ln -sfn "$PREVIOUS" "$VIKA_HOME/rollback"
   ln -sfn "$(physical "$TARGET")" "$VIKA_HOME/current"
-  ok "$(m '安装' 'Install ')  ${GRAY}Vika $VERSION → $(short "$TARGET")${RESET}"
+  ok "$(m '安装' 'Install ')  ${GRAY}OpenViking SuperAgent $VERSION → $(short "$TARGET")${RESET}"
   CHANGED=1
 fi
 
-# --lang is kept, as `vika --lang` keeps it.
+# --lang is kept, as `ovsa --lang` keeps it.
 if [ -n "$LANG_FLAG" ]; then printf '%s\n' "$LANG_FLAG" > "$VIKA_HOME/language"; fi
 
 mkdir -p "$VIKA_HOME/bin"
-cat > "$VIKA_HOME/bin/vika" <<'LAUNCHER'
+cat > "$VIKA_HOME/bin/ovsa" <<'LAUNCHER'
 #!/bin/sh
 # Always the installed release: `current` moves on upgrade, this file does not.
-exec "$HOME/.vika/current/node/bin/node" "$HOME/.vika/current/packages/cli/bin/vika.mjs" "$@"
+exec "$HOME/.ovsa/current/node/bin/node" "$HOME/.ovsa/current/packages/cli/bin/vika.mjs" "$@"
 LAUNCHER
+chmod 755 "$VIKA_HOME/bin/ovsa"
+# Keep the old command working for existing scripts and autostart entries.
+cp "$VIKA_HOME/bin/ovsa" "$VIKA_HOME/bin/vika"
 chmod 755 "$VIKA_HOME/bin/vika"
 
 case ":$PATH:" in
@@ -315,11 +321,11 @@ case ":$PATH:" in
       bash) if [ "$os" = darwin ]; then RC="$HOME/.bash_profile"; else RC="$HOME/.bashrc"; fi ;;
       *) RC="$HOME/.profile" ;;
     esac
-    if ! grep -q '/.vika/bin' "$RC" 2>/dev/null; then
-      if { printf '\n# vika\nexport PATH="$HOME/.vika/bin:$PATH"\n' >> "$RC"; } 2>/dev/null; then
-        ok "$(m '命令' 'Command ')  ${GRAY}$(m "~/.vika/bin 已加进 $(short "$RC")，新开的终端里可以直接用 vika" "~/.vika/bin is added to $(short "$RC"); new terminals know vika")${RESET}"
+    if ! grep -q '/.ovsa/bin' "$RC" 2>/dev/null; then
+      if { printf '\n# vika\nexport PATH="$HOME/.ovsa/bin:$PATH"\n' >> "$RC"; } 2>/dev/null; then
+        ok "$(m '命令' 'Command ')  ${GRAY}$(m "~/.ovsa/bin 已加进 $(short "$RC")，新开的终端里可以直接用 ovsa" "~/.ovsa/bin is added to $(short "$RC"); new terminals know ovsa")${RESET}"
       else
-        warn "$(m "写不了 $(short "$RC")；Vika 已安装完成。新终端要直接用 vika，请手动加入：export PATH=\"\$HOME/.vika/bin:\$PATH\"" "Could not write $(short "$RC"); Vika is installed. To use vika directly in new terminals, add this yourself: export PATH=\"\$HOME/.vika/bin:\$PATH\"")"
+        warn "$(m "写不了 $(short "$RC")；OpenViking SuperAgent 已安装完成。新终端要直接用 ovsa，请手动加入：export PATH=\"\$HOME/.ovsa/bin:\$PATH\"" "Could not write $(short "$RC"); OpenViking SuperAgent is installed. To use ovsa directly in new terminals, add this yourself: export PATH=\"\$HOME/.ovsa/bin:\$PATH\"")"
       fi
     fi
     ;;
@@ -331,13 +337,13 @@ LOCK=""
 # however often the installer has run.
 if [ -f "$CONFIG_FILE" ]; then
   if [ "$CHANGED" = 1 ] && [ -n "$PREVIOUS" ]; then
-    note "$(m "运行中的实例还在旧版本上：执行 ${BOLD}vika restart${RESET} 换到 ${VERSION}" "running instances are on the old release: ${BOLD}vika restart${RESET} moves them to ${VERSION}")"
+    note "$(m "运行中的实例还在旧版本上：执行 ${BOLD}ovsa restart${RESET} 换到 ${VERSION}" "running instances are on the old release: ${BOLD}ovsa restart${RESET} moves them to ${VERSION}")"
   fi
 elif [ "$SETUP_NEXT" = 1 ]; then
   cleanup
   trap - EXIT INT TERM
-  if [ -n "$LANG_FLAG" ]; then exec "$VIKA_HOME/bin/vika" setup --lang "$LANG_FLAG" </dev/tty; fi
-  exec "$VIKA_HOME/bin/vika" setup </dev/tty
+  if [ -n "$LANG_FLAG" ]; then exec "$VIKA_HOME/bin/ovsa" setup --lang "$LANG_FLAG" </dev/tty; fi
+  exec "$VIKA_HOME/bin/ovsa" setup </dev/tty
 else
-  note "$(m '下一步：运行' 'next: run') $(short "$VIKA_HOME/bin/vika") setup"
+  note "$(m '下一步：运行' 'next: run') $(short "$VIKA_HOME/bin/ovsa") setup"
 fi

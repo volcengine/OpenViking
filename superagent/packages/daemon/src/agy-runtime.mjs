@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-// What an `agy acp` initialize answer must show before Vika drives it: the
+// What an `agy acp` initialize answer must show before OpenViking SuperAgent drives it: the
 // adapter delivers the conversation policy through the appended system prompt,
 // so an agent without it would run with no policy at all. Shared with setup's
 // probe, which must not load the daemon adapter. Returns '' when acceptable.

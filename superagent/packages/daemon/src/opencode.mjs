@@ -386,7 +386,7 @@ export class OpencodeAgent {
       // server without editing the user's own opencode.json.
       OPENCODE_CONFIG: configPath,
       // OpenCode's own OpenViking plugin stays off: its global config folder
-      // is a Vika-owned copy without it (ov-isolation.mjs).
+      // is an OpenViking SuperAgent-owned copy without it (ov-isolation.mjs).
       XDG_CONFIG_HOME: prepareOpencodeConfigHome(path.join(this.runtimeDir, 'config-home'), process.env),
     };
   }

@@ -6,6 +6,7 @@
   "description": "A local personal agent core with connector processes and an activity web module.",
   "type": "module",
   "bin": {
+    "ovsa": "packages/cli/bin/vika.mjs",
     "vika": "packages/cli/bin/vika.mjs"
   },
   "workspaces": [

@@ -329,15 +329,15 @@ test('the menu shows who a new instance would be: its own Trusted user, or a key
   fs.mkdirSync(path.join(h.home, '.openviking'));
   fs.writeFileSync(path.join(h.home, '.openviking', 'ovcli.conf'), JSON.stringify({ url: LOCAL_OV_URL, account: 'team', user: 'weihan.liu' }));
   fs.mkdirSync(path.dirname(savedOVConfigPath(h.home)), { recursive: true });
-  fs.writeFileSync(savedOVConfigPath(h.home), JSON.stringify({ url: remote, api_key: 'nv-key', user: 'Vika-Nvidia' }));
+  fs.writeFileSync(savedOVConfigPath(h.home), JSON.stringify({ url: remote, api_key: 'nv-key', user: 'OpenViking SuperAgent-Nvidia' }));
   const nvidia = path.join(h.home, 'vika-nvidia.json');
-  fs.writeFileSync(nvidia, JSON.stringify({ url: remote, api_key: 'nv-key', user: 'Vika-Nvidia' }));
+  fs.writeFileSync(nvidia, JSON.stringify({ url: remote, api_key: 'nv-key', user: 'OpenViking SuperAgent-Nvidia' }));
   const taken = takenIdentities({ agents: [{ id: 'vika-nvidia', ovConfig: nvidia }], homeDir: h.home });
-  const keys = fetchKeys({ 'nv-key': { user: 'Vika-Nvidia', role: 'user' } });
+  const keys = fetchKeys({ 'nv-key': { user: 'OpenViking SuperAgent-Nvidia', role: 'user' } });
   await assert.rejects(configureOpenViking({ ...h.options, taken, instanceId: 'agent3', fetchImpl: async (url, init) => (url.startsWith(LOCAL_OV_URL)
     ? Response.json({ status: 'ok', auth_mode: 'trusted', result: { initialized: true } })
     : keys(url, init)) }), { name: 'PromptAborted' });
-  assert.match(h.text(), /Use the connection entered in setup last time\s+https:\/\/ov\.example:9443 · user=Vika-Nvidia · also used by instance vika-nvidia · ready/);
+  assert.match(h.text(), /Use the connection entered in setup last time\s+https:\/\/ov\.example:9443 · user=OpenViking SuperAgent-Nvidia · also used by instance vika-nvidia · ready/);
   assert.match(h.text(), /Use the OpenViking CLI’s config\s+http:\/\/127\.0\.0\.1:1933 · user=weihan\.liu\.agent3 · ready/);
   assert.doesNotMatch(h.text(), /user=weihan\.liu ·/);
 });

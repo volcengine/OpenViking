@@ -185,7 +185,7 @@ export function sanitizeCodexEnv(environment, profile = '', actions = null, conf
   });
   // OpenViking's Codex/TraeCode plugin treats an app-server without a terminal
   // as a desktop client and asks the model to append its recall report to the final answer.
-  // In Vika, the model's final answer is the payload of an external message, so
+  // In OpenViking SuperAgent, the model's final answer is the payload of an external message, so
   // that UI-only footer would leak into chat. Keep recall enabled, but suppress
   // the report for this unattended transport.
   env.OPENVIKING_USAGE_VIEW = 'off';

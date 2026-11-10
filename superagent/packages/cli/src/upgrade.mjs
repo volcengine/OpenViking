@@ -6,7 +6,7 @@ import { capabilities } from '../../daemon/src/capabilities.mjs';
 import http from 'node:http';
 import { assertUpgradeTarget, defaultSocketPath, upgradeTargetNames } from '../../updater/src/targets.mjs';
 
-// `vika upgrade` only asks the updater process; the updater fetches, publishes
+// `ovsa upgrade` only asks the updater process; the updater fetches, publishes
 // and rolls the apps, so the upgrade survives the caller disconnecting.
 
 function requestUpgrade(socketPath, target) {
@@ -46,12 +46,12 @@ function requestUpgrade(socketPath, target) {
 
 export async function upgradeCommand(args, { stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
   if (!capabilities.updater) {
-    stderr.write('Windows source installations do not support automatic release upgrades. Stop Vika and install a new checkout manually.\n');
+    stderr.write('Windows source installations do not support automatic release upgrades. Stop OpenViking SuperAgent and install a new checkout manually.\n');
     return 1;
   }
   const [target, ...extra] = args;
   if (!target || extra.length > 0) {
-    stderr.write(`usage: vika upgrade <${upgradeTargetNames().join('|')}>\n`);
+    stderr.write(`usage: ovsa upgrade <${upgradeTargetNames().join('|')}>\n`);
     return 2;
   }
   assertUpgradeTarget(target);

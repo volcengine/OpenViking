@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 // A DeepSeek Harness runtime with no route that serves a model, reached through
-// `vika setup`. The wizard adds one route, the draft stays in memory until the
+// `ovsa setup`. The wizard adds one route, the draft stays in memory until the
 // instance is saved, and the manifest names the route fully qualified.
 //
 // The probe and the draft check are the only pieces faked: no real `dsh` and no
@@ -136,8 +136,8 @@ function harness(t, { runtimes, detectDsh, script = [], answers = [], onAsk = ()
   };
   return {
     home, options, prompter, calls, written: () => written,
-    dataDir: path.join(home, '.vika', 'data', 'primary'),
-    manifest: () => JSON.parse(fs.readFileSync(path.join(home, '.vika', 'config.json'), 'utf8')),
+    dataDir: path.join(home, '.ovsa', 'data', 'primary'),
+    manifest: () => JSON.parse(fs.readFileSync(path.join(home, '.ovsa', 'config.json'), 'utf8')),
   };
 }
 
@@ -145,7 +145,7 @@ function harness(t, { runtimes, detectDsh, script = [], answers = [], onAsk = ()
 // only IM (no Feishu scan, so the DSH questions are the only interactive ones).
 function dshAnswers({ add = true, pasteKey = 'sk-test-only' } = {}) {
   return [
-    { match: /Bot name/, answer: 'Vika' },
+    { match: /Bot name/, answer: 'OpenViking SuperAgent' },
     { match: /Its role/, answer: 'colleague' },
     { match: /Workspace/, answer: '' },
     { match: /Agent runtime/, answer: (choices) => choices.find((choice) => choice.value?.id === 'dsh').value },
@@ -243,8 +243,8 @@ test('without a terminal, setup prints the hint and continues instead of asking'
     answers: ['小V', '', '', '1', '2', 'y'],
   });
   assert.equal(await setupCommand(h.options), 0);
-  assert.match(h.written(), /vika dsh model --instance/);
-  assert.doesNotMatch(h.written(), /vika dsh model add /);
+  assert.match(h.written(), /ovsa dsh model --instance/);
+  assert.doesNotMatch(h.written(), /ovsa dsh model add /);
   assert.equal(h.manifest().agents[0].model, 'dsh');
 });
 
@@ -262,7 +262,7 @@ test('editing an instance that already has DSH routes probes its own home and do
   const script = [
     { match: /What to do/, answer: (choices) => choices.find((choice) => choice.value?.id === 'primary').value },
     {
-      match: /Change Vika \(primary\)/,
+      match: /Change OpenViking SuperAgent \(primary\)/,
       answer: (choices) => {
         menuCalls += 1;
         // First the "Agent runtime" row, then give up on the changes.
@@ -303,7 +303,7 @@ test('saving an instance whose own home serves a route replaces the bare dsh ali
   const script = [
     { match: /What to do/, answer: (choices) => choices.find((choice) => choice.value?.id === 'primary').value },
     {
-      match: /Change Vika \(primary\)/,
+      match: /Change OpenViking SuperAgent \(primary\)/,
       answer: (choices) => {
         menuCalls += 1;
         // Rename it (a change to save), then save.
@@ -311,7 +311,7 @@ test('saving an instance whose own home serves a route replaces the bare dsh ali
         return choices.find((choice) => choice.value === 'save').value;
       },
     },
-    { match: /Bot name/, answer: 'Vika Two' },
+    { match: /Bot name/, answer: 'OpenViking SuperAgent Two' },
   ];
   const output = new PassThrough();
   output.on('data', () => {});
@@ -320,7 +320,7 @@ test('saving an instance whose own home serves a route replaces the bare dsh ali
   assert.equal(await setupCommand(h.options), 0);
 
   const manifest = h.manifest();
-  assert.equal(manifest.agents[0].displayName, 'Vika Two');
+  assert.equal(manifest.agents[0].displayName, 'OpenViking SuperAgent Two');
   assert.equal(manifest.agents[0].model, 'dsh:deepseek/deepseek-chat');
   assert.equal(resolveRuntimeModelTarget(manifest.agents[0].model).runtime, 'dsh');
 });

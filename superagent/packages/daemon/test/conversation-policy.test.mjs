@@ -84,7 +84,7 @@ describe('conversation policy assemble', () => {
   it('fills in the instance name and upgrade target', () => {
     const text = assembleConversationPolicy({ connectors: ['lark'], agentName: '贝塔', upgradeTarget: 'beta' });
     assert.match(text, /directly calls `贝塔`/);
-    assert.match(text, /`vika upgrade beta`/);
+    assert.match(text, /`ovsa upgrade beta`/);
     assert.doesNotMatch(text, /\{\{[A-Z_]+\}\}/);
   });
 
@@ -95,7 +95,7 @@ describe('conversation policy assemble', () => {
   });
 
   it('routes @mentions by the authenticated mention= marker, by name only without it', () => {
-    const text = assembleConversationPolicy({ connectors: ['lark'], agentName: 'Vika' });
+    const text = assembleConversationPolicy({ connectors: ['lark'], agentName: 'OpenViking SuperAgent' });
     assert.match(text, /`mention=` says, by id, whom the message's @mentions call/);
     assert.match(text, /only then compare a visible @name with your name/);
     assert.match(text, /`mention=me` or `mention=mixed`, a visible @mention matching your name when there is no `mention=`/);

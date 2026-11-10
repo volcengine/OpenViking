@@ -5,12 +5,12 @@ function frozenStrings(values) {
   return Object.freeze([...values]);
 }
 
-// How a runtime keeps its own OpenViking plugin out, so that Vika's memory
+// How a runtime keeps its own OpenViking plugin out, so that OpenViking SuperAgent's memory
 // (the daemon and the Core's openviking_* tools) is the only one the agent
 // sees. Every runtime must declare one (see ov-isolation.mjs and
 // docs/openviking-ownership.md):
 // - launch-args: the launcher passes arguments that switch the plugin off;
-// - config-home: the launcher points the runtime at a Vika-owned config home;
+// - config-home: the launcher points the runtime at an OpenViking SuperAgent-owned config home;
 // - closed: the runtime loads no plugins at all (Durable's own registry);
 // - remote: the runtime runs elsewhere and loads nothing from this machine.
 export const OV_ISOLATION = Object.freeze(['launch-args', 'config-home', 'closed', 'remote']);
@@ -234,7 +234,7 @@ export const RUNTIME_CATALOG = Object.freeze({
   }),
   dsh: runtimeDefinition({
     id: 'dsh',
-    // Vika gives DSH a private DSH_HOME (`<dataDir>/dsh/home`) and its own
+    // OpenViking SuperAgent gives DSH a private DSH_HOME (`<dataDir>/dsh/home`) and its own
     // `--patch` overlay, so the runtime never reads the owner's `~/.dsh`
     // plugins, skills or credentials. That is config-home isolation: the flags
     // only select the profile and the patch file.

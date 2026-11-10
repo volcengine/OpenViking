@@ -50,7 +50,7 @@ export function ovAttribution(item) {
 //   calls openviking_remember (ov-person.mjs); this also keeps a later commit
 //   from extracting the same request a second time.
 // - the agent's own soul and identity: a line that talks the agent into a new
-//   name or a global rule would otherwise rewrite who it is (Vika's name and
+//   name or a global rule would otherwise rewrite who it is (OpenViking SuperAgent's name and
 //   role come from its configuration, and the owner's standing rules are the
 //   owner's preferences).
 // These exist in every OV release that has memory_policy, so a commit never

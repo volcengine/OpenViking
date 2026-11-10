@@ -31,7 +31,7 @@ import { t } from './i18n.mjs';
 import { padEnd, spinner, styler } from './ui.mjs';
 
 // start / stop / restart / status / logs run the release already installed
-// under ~/.vika/current. Nothing here fetches code or publishes a release.
+// under ~/.ovsa/current. Nothing here fetches code or publishes a release.
 
 const execFile = promisify(execFileCallback);
 const UPDATER_APP = 'vika-updater';
@@ -42,8 +42,8 @@ export function pm2Defaults(env = process.env) {
   const releasePm2 = platformPm2Bin(RELEASE_ROOT);
   return {
     pm2Bin: env.PM2_BIN || (fs.existsSync(releasePm2) ? releasePm2 : 'pm2'),
-    // Vika's own pm2 daemon, apart from any pm2 the user runs.
-    pm2Env: cleanPm2ControlEnv({ ...env, PM2_HOME: env.PM2_HOME || path.join(homeDir(env) || '', '.vika', 'pm2') }),
+    // OpenViking SuperAgent's own pm2 daemon, apart from any pm2 the user runs.
+    pm2Env: cleanPm2ControlEnv({ ...env, PM2_HOME: env.PM2_HOME || path.join(homeDir(env) || '', '.ovsa', 'pm2') }),
   };
 }
 
@@ -82,7 +82,7 @@ export function appsFor(target, targets = loadTargets()) {
 
 async function installedRelease(releaseLink) {
   if (!fs.existsSync(releaseLink)) {
-    throw new Error(`no Vika release is installed at ${releaseLink}; run the installer first (install.sh)`);
+    throw new Error(`no OpenViking SuperAgent release is installed at ${releaseLink}; run the installer first (install.sh)`);
   }
   const release = await resolveRelease(releaseLink);
   const configPath = await realpath(path.join(release, 'ecosystem.config.cjs'));

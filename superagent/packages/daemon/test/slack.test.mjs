@@ -97,7 +97,7 @@ async function client(t, handlers = {}, { calls = [], ws = sockets() } = {}) {
   const { dir, state } = fixture(t);
   state.saveAccount(account);
   state.close();
-  const c = new SlackClient({ dataDir: dir, retentionMs: 86400_000, instance: 'slack', agentName: 'Vika', sendTimeoutMs: 5000 },
+  const c = new SlackClient({ dataDir: dir, retentionMs: 86400_000, instance: 'slack', agentName: 'OpenViking SuperAgent', sendTimeoutMs: 5000 },
     null, logger, { fetchImpl: provider(handlers, calls), WebSocketImpl: ws.Socket, receiver: fast, paceMs: 20,
       queryApi: new SlackApi(BOT_TOKEN, { fetchImpl: provider(handlers, calls) }) });
   t.after(() => c.stop());
@@ -134,7 +134,7 @@ test('member query identifies an unseen person and a tool reply can mention them
   const c = await client(t, {
     'conversations.members': () => ({ members: ['U0BOT', 'U0OWNER', 'U0BOB12345', 'U0OTHERBOT', 'U0DELETED'], response_metadata: { next_cursor: '' } }),
     'users.info': ({ user }) => ({ user: { id: user, is_bot: ['U0BOT', 'U0OTHERBOT'].includes(user), deleted: user === 'U0DELETED',
-      profile: { display_name: { U0BOT: 'Vika', U0OWNER: 'Owner', U0BOB12345: 'Bob Smith', U0OTHERBOT: 'Another bot', U0DELETED: 'Former member' }[user] } } }),
+      profile: { display_name: { U0BOT: 'OpenViking SuperAgent', U0OWNER: 'Owner', U0BOB12345: 'Bob Smith', U0OTHERBOT: 'Another bot', U0DELETED: 'Former member' }[user] } } }),
     'chat.postMessage': (params) => { posts.push(params); return { channel: params.channel, ts: ts(900) }; },
   });
   const store = new Store(':memory:', logger);
@@ -278,7 +278,7 @@ test('history to thread, media and reply works in a mixed instance without repla
   const history = await call('list_chat_messages', { chat_id: channel });
   assert.match(history.text, /thread_id=sl:T0TEAM:C0ARCHIVE:1.000001/);
   assert.match(history.text, /older=/);
-  assert.equal(history.data.messages[0].content.split('\n')[0], 'Hi @Vika');
+  assert.equal(history.data.messages[0].content.split('\n')[0], 'Hi @OpenViking SuperAgent');
   assert.equal(history.data.messages[1].sender.type, 'bot');
   assert.equal(c.state.route(childId).threadTs, root);
   const thread = await call('list_thread_messages', { thread_id: childId });
@@ -340,10 +340,10 @@ test('history validates identity, pagination and thread membership before cachin
 test('normalizes channel, thread and direct messages with names, files and external channels', () => {
   const names = new Map([['U0ALICE', 'Alice Smith'], ['U0CAROL', 'Carol']]);
   const top = normalizeMessage(payload({ text: 'hi <@U0BOT> and <@U0CAROL|carol>, see <https://x.test/a?b=1&amp;c=2|docs> &lt;@U0EVIL&gt; <!channel>' }),
-    { account, agentName: 'Vika', names });
+    { account, agentName: 'OpenViking SuperAgent', names });
   assert.equal(top.envelope.id, `T0TEAM:C0GENERAL:${ts(1)}`);
   assert.equal(top.id, messageId('T0TEAM', 'C0GENERAL', ts(1)));
-  assert.equal(top.envelope.content.text, 'hi @Vika and @Carol, see docs (https://x.test/a?b=1&c=2) <@U0EVIL> @channel');
+  assert.equal(top.envelope.content.text, 'hi @OpenViking SuperAgent and @Carol, see docs (https://x.test/a?b=1&c=2) <@U0EVIL> @channel');
   assert.deepEqual(top.envelope.actor, { id: 'U0ALICE', type: 'user', name: 'Alice Smith' });
   assert.deepEqual(top.envelope.conversation, { id: 'C0GENERAL', type: 'group', tenant_id: 'T0TEAM', thread_id: null });
   assert.deepEqual(top.people, [['U0ALICE', 'Alice Smith'], ['U0CAROL', 'Carol']]);
@@ -430,7 +430,7 @@ test('Socket Mode acknowledges after handling, refreshes before closing, and ref
   await assert.rejects(off, /Socket Mode was turned off/);
   const revoked = new SlackApi(APP_TOKEN, { kind: 'app', fetchImpl: provider({ 'apps.connections.open': () => ({ error: 'invalid_auth' }) }) });
   await assert.rejects(new SocketModeReceiver({ api: revoked, appId: account.appId, WebSocketImpl: sockets().Socket, logger, ...fast })
-    .run(() => {}, AbortSignal.timeout(2000)), /vika login slack/);
+    .run(() => {}, AbortSignal.timeout(2000)), /ovsa login slack/);
 });
 
 test('binds the owner by a one-time code in a direct message and stages messages while re-binding', async (t) => {
@@ -492,7 +492,7 @@ test('receives through a staged queue, names senders and keeps replies in their 
   ws.opened[0].frame({ type: 'events_api', envelope_id: 'z', payload: payload({ ts: ts(2), thread_ts: ts(1), text: 'in thread' }) });
   await until(() => lines.length === 2);
   assert.deepEqual(ws.opened[0].sent.map((ack) => ack.envelope_id), ['x', 'y', 'z']);
-  assert.equal(lines[0].content.text, 'ask @Vika');
+  assert.equal(lines[0].content.text, 'ask @OpenViking SuperAgent');
   assert.equal(lines[0].actor.name, 'Alice Smith');
   assert.equal(calls.filter(([method]) => method === 'users.info').length, 1, 'names are cached');
   assert.deepEqual(c.state.pending(account.teamId), []);
@@ -714,7 +714,7 @@ test('real connector worker supports check/start/pause/reply/stop and releases i
   `);
   const registry = new ProcessRegistry(logger);
   const worker = new ConnectorProcess('slack', { dataDir: dir, projectDir: process.cwd(), connectorWorkerPath: workerFile, slackCliBin,
-    retentionMs: 86400_000, maxEventBytes: 100_000, sendTimeoutMs: 5000, agentName: 'Vika' }, registry, logger);
+    retentionMs: 86400_000, maxEventBytes: 100_000, sendTimeoutMs: 5000, agentName: 'OpenViking SuperAgent' }, registry, logger);
   t.after(async () => { await worker.stop(); await registry.stopAll(1000); });
   assert.equal((await worker.preflight()).manifest.name, 'slack');
   assert.deepEqual(worker.owner, { id: 'U0OWNER', target: { chat_id: 'D0OWNER' } });

@@ -323,7 +323,7 @@ export class ClaudeAgent {
         '--output-format', 'stream-json',
         '--input-format', 'stream-json',
         // No --strict-mcp-config: the owner's other MCP servers load alongside
-        // personal_agent. OpenViking's plugin and servers do not: Vika owns
+        // personal_agent. OpenViking's plugin and servers do not: OpenViking SuperAgent owns
         // OpenViking (ov-isolation.mjs).
         '--mcp-config', mcpConfigPath,
         '--settings', JSON.stringify(claudeIsolationSettings({ env: process.env, workspace: this.config.workspace })),

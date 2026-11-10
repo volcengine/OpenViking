@@ -114,7 +114,7 @@ class Host {
 
   async availableModel() {
     const [first] = await availableChatModels(this.models);
-    if (!first) throw new Error('durable runtime has no model with configured credentials; configure one in Pi (vika pi, then /login, or ~/.pi/agent/models.json) or set a provider API key such as OPENAI_API_KEY');
+    if (!first) throw new Error('durable runtime has no model with configured credentials; configure one in Pi (ovsa pi, then /login, or ~/.pi/agent/models.json) or set a provider API key such as OPENAI_API_KEY');
     return { provider: first.provider, modelId: first.id };
   }
 
@@ -168,7 +168,7 @@ class Host {
     // host tests); every real host must expose the Core tools or fail closed.
     if (!process.env.PERSONAL_AGENT_SOCKET) {
       if (process.env.DURABLE_FAUX === '1') return tools;
-      throw new Error('durable host requires PERSONAL_AGENT_SOCKET; start it through the Vika daemon');
+      throw new Error('durable host requires PERSONAL_AGENT_SOCKET; start it through the OpenViking SuperAgent daemon');
     }
     const endpoint = actionEndpoint('durable');
     let definitions;

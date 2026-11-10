@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-// The pure half of `vika dsh model`: what a route id, a model id and a
+// The pure half of `ovsa dsh model`: what a route id, a model id and a
 // credential reference may look like, which settings operations add or remove a
 // model, and how a Pi `models.json` translates into native routes.
 //
@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { t } from './i18n.mjs';
-// `vika dsh model` only ever writes a DSH configuration, so it validates with
+// `ovsa dsh model` only ever writes a DSH configuration, so it validates with
 // the rule the DSH path of `/model` applies — the wider one, which admits the
 // `+` a real dsh serves. Every other runtime keeps the narrower shared rule.
 import { DSH_MODEL_ID_PATTERN } from '../../daemon/src/runtime-catalog.mjs';
@@ -326,9 +326,9 @@ function modelProblem(model, fullId = model) {
   }
   throw new UsageError(t(
     `model ${model} 不合法：只能用字母、数字和 . _ : @ + / [ ] -，且完整 <route>/<model> 最长 ${MODEL_ID_MAX_LENGTH} 个字符。`
-    + `DSH 能服务更多字符（空格、#、非 ASCII），但 Vika 的 /model 只接受这一组；若你已有这类 ID，它仍留在配置里，用 /model 暂时选不了。`,
+    + `DSH 能服务更多字符（空格、#、非 ASCII），但 OpenViking SuperAgent 的 /model 只接受这一组；若你已有这类 ID，它仍留在配置里，用 /model 暂时选不了。`,
     `Invalid model name ${model}: use letters, digits and . _ : @ + / [ ] -, and keep the complete <route>/<model> within ${MODEL_ID_MAX_LENGTH} characters. `
-    + 'DSH serves more characters than this (spaces, #, non-ASCII), but Vika\'s /model accepts only this set; an existing id of that kind stays in your configuration and cannot be selected from /model yet.'));
+    + 'DSH serves more characters than this (spaces, #, non-ASCII), but OpenViking SuperAgent\'s /model accepts only this set; an existing id of that kind stays in your configuration and cannot be selected from /model yet.'));
 }
 
 export function routeProblem(route) {
@@ -424,9 +424,9 @@ export function addModelOps(providers, spec, { notes = [] } = {}) {
     if (others.length) {
       throw new UsageError(t(
         `credential reference ${spec.keyEnv} 已经被 ${others.join('、')} 解析，两个 route 不能共用同一个 reference：`
-        + `那样一个 route 会带上另一个的密钥。换一个 reference；要复用同一个密钥，用 vika dsh model key set <新 reference> 存同一个值。`,
+        + `那样一个 route 会带上另一个的密钥。换一个 reference；要复用同一个密钥，用 ovsa dsh model key set <新 reference> 存同一个值。`,
         `The reference ${spec.keyEnv} is already resolved by ${others.join(', ')}; two routes may not share one reference, `
-        + 'because one of them would then send the other\'s secret. Pick another reference; to reuse the same secret, store it under a new reference with vika dsh model key set <REF>.'));
+        + 'because one of them would then send the other\'s secret. Pick another reference; to reuse the same secret, store it under a new reference with ovsa dsh model key set <REF>.'));
     }
     profile.apiKeyEnv = spec.keyEnv;
   } else if (!existing && !text(profile.apiKeyEnv)) {
@@ -861,8 +861,8 @@ function resolveCredential(route, provider, { auth, notes }) {
     if (envRef) {
       const name = envRef[1];
       if (WITHHELD_ENV.test(name)) {
-        notes.push(t(`${route}：apiKey 指向 ${name}，这个变量会被 DSH 子进程环境过滤，只能从 credential 服务解析；迁移不带值，存一次才可用：vika dsh model key set ${name}`,
-          `${route}: apiKey names ${name}, which the DSH child environment withholds; only the credential service can resolve it, so the migration carries no value and the route works after: vika dsh model key set ${name}`));
+        notes.push(t(`${route}：apiKey 指向 ${name}，这个变量会被 DSH 子进程环境过滤，只能从 credential 服务解析；迁移不带值，存一次才可用：ovsa dsh model key set ${name}`,
+          `${route}: apiKey names ${name}, which the DSH child environment withholds; only the credential service can resolve it, so the migration carries no value and the route works after: ovsa dsh model key set ${name}`));
       }
       return { kind: 'explicit', ref: name, value: null };
     }

@@ -258,7 +258,7 @@ test('real Pi keeps Core OV, built-in, configured/package/project and other MCP 
     assert.ok(names.includes(name), `${name} is declared to the real model request`);
   }
   for (const name of ['find', 'search', 'read', 'list', 'add_resource', 'remember']) {
-    assert.ok(names.includes(`mcp__personal_agent__openviking_${name}`), `${name} is exposed by Vika`);
+    assert.ok(names.includes(`mcp__personal_agent__openviking_${name}`), `${name} is exposed by OpenViking SuperAgent`);
   }
   assert.equal(names.some((name) => name.startsWith('openviking_') || name === 'disabled_tool'), false);
   for (const marker of f.isolated.markers) assert.equal(fs.existsSync(marker), false, `${path.basename(marker)} never executed`);

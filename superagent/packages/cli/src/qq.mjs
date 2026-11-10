@@ -27,8 +27,8 @@ export async function connectQQ({ plan, prompter, fetchImpl = globalThis.fetch, 
     '1. Without a QQ Open Platform developer account, first register one at https://q.qq.com/#/ by following its steps; a bot cannot be created without it.'));
   prompter.info(t('2. 再到 https://q.qq.com/qqbot/openclaw/ 创建机器人，复制 AppID 和 AppSecret，并用 QQ 添加这个机器人。',
     '2. Then create a bot at https://q.qq.com/qqbot/openclaw/, copy its AppID and AppSecret, and add the bot in QQ.'));
-  prompter.info(t('每个 Vika 实例使用一个独立机器人；启用单聊消息权限，接入后只接受完成验证码绑定的本人私聊。',
-    'Use a separate bot for each Vika instance and enable private messages; only the owner who verifies the code can chat with it.'));
+  prompter.info(t('每个 OpenViking SuperAgent 实例使用一个独立机器人；启用单聊消息权限，接入后只接受完成验证码绑定的本人私聊。',
+    'Use a separate bot for each OpenViking SuperAgent instance and enable private messages; only the owner who verifies the code can chat with it.'));
   if (canGoBack) prompter.info(t('输入密钥或等待绑定时，按 ← / Esc 可以返回。', 'While entering credentials or waiting, press ← / Esc to go back.'));
   const navigable = prompter.navigable;
   try {

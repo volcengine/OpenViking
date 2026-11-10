@@ -110,7 +110,7 @@ test('passes timer storage selection from the manifest into the daemon environme
 test('defaults the manifest path under HOME and accepts an explicit absolute override', () => {
   assert.equal(
     resolveDeploymentManifestPath({ HOME: '/Users/test' }),
-    '/Users/test/.vika/config.json',
+    '/Users/test/.ovsa/config.json',
   );
   assert.equal(resolveDeploymentManifestPath({
     HOME: '/Users/test',
@@ -457,7 +457,7 @@ test('OV memory is the daemon\'s; per-line search is opt-in; any OV plugin that 
     assert.equal(env.VIKA_OV_AUTO_RECALL, 'false');
     assert.equal(env.VIKA_OV_RECALL_SCOPE, undefined);
     assert.equal(env.VIKA_OV_REMEMBER, undefined);
-    // Vika owns OV: a plugin that loads anyway writes and recalls nothing.
+    // OpenViking SuperAgent owns OV: a plugin that loads anyway writes and recalls nothing.
     assert.equal(env.OPENVIKING_AUTO_CAPTURE, '0');
     assert.equal(env.OPENVIKING_AUTO_COMMIT_ON_COMPACT, '0');
     assert.equal(env.OPENVIKING_TAKEOVER, '0');
@@ -762,4 +762,18 @@ test('rejects invalid defaults, relative paths, and overlapping agent storage', 
       );
     });
   }
+});
+
+
+test('default config refuses an unmigrated legacy home without blocking explicit overrides', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ovsa-migration-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const old = path.join(home, '.vika');
+  fs.mkdirSync(old);
+  const config = path.join(old, 'config.json');
+  fs.writeFileSync(config, '{}');
+  assert.throws(() => resolveDeploymentManifestPath({ HOME: home }), /Legacy ~\/\.vika/);
+  assert.equal(resolveDeploymentManifestPath({ HOME: home, VIKA_CONFIG: config }), config);
+  fs.renameSync(old, path.join(home, '.ovsa'));
+  assert.equal(resolveDeploymentManifestPath({ HOME: home }), path.join(home, '.ovsa', 'config.json'));
 });

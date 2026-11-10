@@ -22,7 +22,7 @@ export class TelegramClient {
 
   async preflight() {
     this.account = this.state.account();
-    if (!this.account) throw new Error('Telegram is not connected; run vika login telegram <instance> first');
+    if (!this.account) throw new Error('Telegram is not connected; run ovsa login telegram <instance> first');
     this.state.acquire();
     try {
       this.api = new TelegramApi(this.account.token, { fetchImpl: this.fetchImpl });
@@ -82,7 +82,7 @@ export class TelegramClient {
         if (signal.aborted) break;
         if (error instanceof TelegramError && [400, 401, 403, 404, 409].includes(error.code)) {
           throw new Error(error.code === 409 ? 'Telegram polling conflict; use one receiver per bot and remove conflicting webhooks'
-            : 'Telegram authorization or configuration failed; run vika login telegram <instance>');
+            : 'Telegram authorization or configuration failed; run ovsa login telegram <instance>');
         }
         failures += 1;
         const waitMs = error instanceof TelegramError && error.code === 429 && error.retryAfter !== null

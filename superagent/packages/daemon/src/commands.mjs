@@ -174,7 +174,7 @@ function modelMenuLines(models, runtime) {
   else if (models.length) lines.push('可选：无 — 目录里的 ID 都不符合当前 Runtime 的 /model 规则');
   else lines.push('模型列表暂不可用');
   if (refused.length) {
-    lines.push('以下模型在目录里但 Vika 当前规则不接受（配置不会改动）：');
+    lines.push('以下模型在目录里但 OpenViking SuperAgent 当前规则不接受（配置不会改动）：');
     for (const entry of refused) lines.push(`  ${entry.id}（${modelIdRefusal(entry.id, runtime)}）`);
   }
   return lines;
@@ -254,7 +254,7 @@ export async function executeCommand(command, runtime, { primary } = {}) {
     const problem = lookupName ? modelIdProblem(lookupName, current.runtime) : 'empty';
     if (problem) {
       // An id the catalogue reports but this rule refuses is not a typo: it is a
-      // real route the runtime serves and Vika cannot address. Say which of the
+      // real route the runtime serves and OpenViking SuperAgent cannot address. Say which of the
       // two it is, and never touch the configuration over it. `known` compares
       // the catalogue against the spelling the user typed, so a refusal can
       // never be blamed on a name that was silently rewritten on the way in.
@@ -265,7 +265,7 @@ export async function executeCommand(command, runtime, { primary } = {}) {
           ? `${lookupName} 有 ${lookupName.length} 个字符，上限是 ${MODEL_ID_MAX_LENGTH} 个`
           : `${modelIdRefusal(lookupName, current.runtime)}，只接受字母、数字和 ${modelIdSymbols(current.runtime).join(' ')}`;
         return { ok: false, text: [
-          `这个模型 ID 在当前 Runtime 的目录里，但 Vika 的 /model 不接受它：${lookupName}`,
+          `这个模型 ID 在当前 Runtime 的目录里，但 OpenViking SuperAgent 的 /model 不接受它：${lookupName}`,
           `原因：${reason}。配置本身不会被改动。`,
           '可选的模型：' + (selectable.length ? selectable.join('、') : '（无）'),
         ].join('\n') };

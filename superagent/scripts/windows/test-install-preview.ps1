@@ -124,7 +124,7 @@ try {
     $run = Invoke-Installer -Arguments @('-File', $valid, '-Destination', $destination, '-Lang', 'en')
     if ($run.Code -ne 0) { throw "isolated install failed:`n$($run.Output)" }
     if (-not (Test-Path -LiteralPath (Join-Path $destination 'windows-preview.json'))) { throw 'isolated install did not finish' }
-    if ($run.Output -notmatch 'Vika 0\.4\.0-windows-preview-test') { throw "the install line does not name the version:`n$($run.Output)" }
+    if ($run.Output -notmatch 'OpenViking SuperAgent 0\.4\.0-windows-preview-test') { throw "the install line does not name the version:`n$($run.Output)" }
     if (Test-Path -LiteralPath (Join-Path $testHome 'releases')) { throw 'an isolated install wrote into VIKA_HOME' }
     if (Test-Path -LiteralPath (Join-Path $testHome 'bin')) { throw 'an isolated install created a launcher' }
     Expect-Failure 'existing destination' @('-File', $valid, '-Destination', $destination, '-Lang', 'en') 'Destination already exists' | Out-Null
@@ -155,7 +155,7 @@ try {
     foreach ($name in @('bad', 'misnamed', 'escape', 'wrong', 'channel', 'broken')) {
         if (Test-Path -LiteralPath (Join-Path $work $name)) { throw "a failed install created $name" }
     }
-    if (Get-ChildItem -LiteralPath $work -Filter '.vika-pending-*' -Force) { throw 'staging directories were left behind' }
+    if (Get-ChildItem -LiteralPath $work -Filter '.ovsa-pending-*' -Force) { throw 'staging directories were left behind' }
 
     # Reject version traversal before running package code or changing releases.
     $sentinel = Join-Path $testHome 'outside.txt'
@@ -180,18 +180,19 @@ try {
     if ($run.Code -ne 0) { throw "the default install failed:`n$($run.Output)" }
     $one = [IO.Path]::GetFullPath((Join-Path $releases '0.5.0-windows-preview-test'))
     if ((Resolve-LinkOrFile (Join-Path $testHome 'current')) -ne $one) { throw 'current does not point at the release' }
-    $launcher = [IO.Path]::Combine($testHome, 'bin', 'vika.cmd')
-    if (-not (Test-Path -LiteralPath $launcher)) { throw 'no bin\vika.cmd was written' }
+    $launcher = [IO.Path]::Combine($testHome, 'bin', 'ovsa.cmd')
+    if (-not (Test-Path -LiteralPath ([IO.Path]::Combine($testHome, 'bin', 'vika.cmd')))) { throw 'no compatibility launcher' }
+    if (-not (Test-Path -LiteralPath $launcher)) { throw 'no bin\ovsa.cmd was written' }
     $launcherText = Get-Content -LiteralPath $launcher -Raw
     if ($launcherText -notmatch 'current') { throw 'the launcher does not go through current' }
     if ($launcherText -notmatch 'vika\.mjs') { throw 'the launcher does not run the CLI' }
     # The home may be HOME or the profile, so the launcher reads neither: it finds
-    # the .vika directory it was written into.
+    # the .ovsa directory it was written into.
     if ($launcherText -match 'USERPROFILE|%HOME%') { throw "the launcher guesses the home directory:`n$launcherText" }
     if ($launcherText -notmatch '%~dp0') { throw "the launcher does not resolve its own location:`n$launcherText" }
     # Redirected output uses the console code page, which can turn the arrow into ?/^Z.
-    if ($run.Output -notmatch 'Vika 0\.5\.0-windows-preview-test \S+ ') { throw "the install line is missing:`n$($run.Output)" }
-    if ($run.Output -notmatch 'next: run vika setup') { throw "no next step is named:`n$($run.Output)" }
+    if ($run.Output -notmatch 'OpenViking SuperAgent 0\.5\.0-windows-preview-test \S+ ') { throw "the install line is missing:`n$($run.Output)" }
+    if ($run.Output -notmatch 'next: run ovsa setup') { throw "no next step is named:`n$($run.Output)" }
     if (Test-Path -LiteralPath (Join-Path $testHome 'deploy.lock')) { throw 'the lock was not released' }
     if (-not (Test-Path -LiteralPath (Join-Path $testHome 'language'))) { throw '-Lang was not saved for later commands' }
     if ((Get-Content -LiteralPath (Join-Path $testHome 'language') -Raw).Trim() -ne 'en') { throw 'the saved language is not the one asked for' }
@@ -214,7 +215,7 @@ if ((`$env:PATH -split [IO.Path]::PathSeparator) -contains (Join-Path `$env:VIKA
     # English output: redirected streams use the console code page, which turns CJK into ?.
     $again = Invoke-Installer -Arguments @('-File', $first, '-Lang', 'en')
     if ($again.Code -ne 0) { throw "the repeated install failed:`n$($again.Output)" }
-    if ($again.Output -notmatch 'Vika 0\.5\.0-windows-preview-test is installed already') { throw "the repeated install is not idempotent:`n$($again.Output)" }
+    if ($again.Output -notmatch 'OpenViking SuperAgent 0\.5\.0-windows-preview-test is installed already') { throw "the repeated install is not idempotent:`n$($again.Output)" }
 
     # Same version but different bytes must not overwrite an existing release.
     $conflict = New-Fixture 'same-version-different-content' -Version '0.5.0-windows-preview-test' -Check 'param($Action) # different'
@@ -237,7 +238,7 @@ if ((`$env:PATH -split [IO.Path]::PathSeparator) -contains (Join-Path `$env:VIKA
     $third = New-Fixture 'third' -Version '0.7.0-windows-preview-test'
     $run = Invoke-Installer -Arguments @('-File', $third, '-Lang', 'en')
     if ($run.Code -ne 0) { throw "installing over an instance failed:`n$($run.Output)" }
-    if ($run.Output -notmatch 'vika restart') { throw "the running instance is not mentioned:`n$($run.Output)" }
+    if ($run.Output -notmatch 'ovsa restart') { throw "the running instance is not mentioned:`n$($run.Output)" }
     if ($run.Output -match 'next: ') { throw "a configured machine is told to set up again:`n$($run.Output)" }
 
     # -NoSetup never enters setup, and the next step is still named (as install.sh
@@ -247,10 +248,10 @@ if ((`$env:PATH -split [IO.Path]::PathSeparator) -contains (Join-Path `$env:VIKA
     $quiet = New-Fixture 'quiet' -Version '0.8.0-windows-preview-test'
     $run = Invoke-Installer -Arguments @('-File', $quiet, '-Lang', 'en', '-NoSetup') -Root $quietHome
     if ($run.Code -ne 0) { throw "-NoSetup failed:`n$($run.Output)" }
-    if ($run.Output -notmatch 'next: run vika setup') { throw "-NoSetup did not name the next step:`n$($run.Output)" }
+    if ($run.Output -notmatch 'next: run ovsa setup') { throw "-NoSetup did not name the next step:`n$($run.Output)" }
 
     # ---- the home is HOME when it is set, not %USERPROFILE% -----------------
-    # Vika explicitly prefers HOME; Windows Node os.homedir() does not.
+    # OpenViking SuperAgent explicitly prefers HOME; Windows Node os.homedir() does not.
     # Clear OS only in this test child to suppress persistent user PATH writes.
     $homeWins = Join-Path $work 'home-wins'
     $profileIgnored = Join-Path $work 'profile-ignored'
@@ -269,8 +270,8 @@ if ((`$env:PATH -split [IO.Path]::PathSeparator) -contains (Join-Path `$env:VIKA
         foreach ($key in $saved.Keys) { Set-Item -LiteralPath "Env:$key" -Value $saved[$key] }
     }
     if ($code -ne 0) { throw "installing with HOME set failed:`n$output" }
-    if (-not (Test-Path -LiteralPath (Join-Path $homeWins '.vika\releases'))) { throw "HOME was not used:`n$output" }
-    if (Test-Path -LiteralPath (Join-Path $profileIgnored '.vika')) { throw 'USERPROFILE won over HOME' }
+    if (-not (Test-Path -LiteralPath (Join-Path $homeWins '.ovsa\releases'))) { throw "HOME was not used:`n$output" }
+    if (Test-Path -LiteralPath (Join-Path $profileIgnored '.ovsa')) { throw 'USERPROFILE won over HOME' }
 
     # ---- OpenViking is reported, not required -------------------------------
     $ov = New-Fixture 'ov' -Version '0.9.0-windows-preview-test' -OvCheck

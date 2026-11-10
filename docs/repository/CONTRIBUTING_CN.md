@@ -79,7 +79,7 @@ OpenViking 重视聚焦且经过充分理解的改动。无论是否使用 AI �
 | Integration | VikingBot 与 Agent 编译 | `bot`、`ov compile` | `@yeshion23333`、`@fujiajie666` |
 | Client | SDK、CLI 与 LangChain | `sdk`、`crates/ov_cli`、`integrations/frameworks/langchain` | `@zhoujh01`、`@t0saki`、`@ehz0ah` |
 | Product | Web Studio | `web-studio` | `@yufeng201`、`@ZaynJarvis` |
-| Product | Vika personal agent | `vika` | `@krsish` |
+| Product | OpenViking SuperAgent personal agent | `vika` | `@krsish` |
 | Project | 文档、CI 与 Plugin 发布 | `docs`、`.github/workflows` | `@yufeng201`、`@ZaynJarvis` |
 
 跨模块改动或 Owner 不明确时，请先确认主要影响域，再 @ `@qin-ctx`、`@ZaynJarvis` 或 `@zhoujh01`。

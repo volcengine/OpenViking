@@ -56,7 +56,7 @@ export function validateManifest(filePath, value) {
 export function writeManifest(filePath, value, { expected } = {}) {
   return withManifestLock(filePath, () => {
     if (expected !== undefined && JSON.stringify(currentValue(filePath)) !== JSON.stringify(expected)) {
-      throw Object.assign(new Error('Configuration changed elsewhere; run vika setup again.'), { code: 'manifest_conflict' });
+      throw Object.assign(new Error('Configuration changed elsewhere; run ovsa setup again.'), { code: 'manifest_conflict' });
     }
     save(filePath, value);
   });

@@ -5,7 +5,7 @@ import readline from 'node:readline';
 import { list, t } from './i18n.mjs';
 import { SYMBOLS, padEnd, rowsOf, spinner, styler, width } from './ui.mjs';
 
-// Terminal questions for `vika setup`. On a TTY: arrow keys move, space ticks
+// Terminal questions for `ovsa setup`. On a TTY: arrow keys move, space ticks
 // a box, enter confirms, and an answered question folds into one line. On a
 // colour terminal the questions are drawn with symbols and colour. Without a
 // TTY (piped input): numbered choices read one line at a time, plain text, so

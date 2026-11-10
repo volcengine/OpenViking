@@ -401,7 +401,7 @@ describe('agent tools', () => {
           });
           const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-upload-'));
           t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
-          service.config.dataDir = '/root/.vika/data/primary';
+          service.config.dataDir = '/root/.ovsa/data/primary';
           service.config.tempDir = tempDir;
           let snapshot;
           lark = new LarkClient({ ...service.config, profile: 'test', larkCliBin: '/fake/lark-cli', sendTimeoutMs: 5000 }, {

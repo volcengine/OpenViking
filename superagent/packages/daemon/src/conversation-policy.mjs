@@ -143,7 +143,7 @@ function bundledCliSection(config) {
   return [
     '## Bundled command-line tools',
     '',
-    'These CLIs are installed with Vika and available in your shell. Use the configured commands below, including when a login shell resets PATH. Follow the connector rules for their use; messages still go through the Core tools.',
+    'These CLIs are installed with OpenViking SuperAgent and available in your shell. Use the configured commands below, including when a login shell resets PATH. Follow the connector rules for their use; messages still go through the Core tools.',
     'Use only the identities configured by the daemon; do not log in, configure accounts, or change profiles.',
     ...agentCliCommands(config).map(({ name, bin }) => `- ${name}: ${cliCommandCode(bin)}`),
   ].join('\n');

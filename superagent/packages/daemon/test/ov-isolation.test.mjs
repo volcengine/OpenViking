@@ -93,7 +93,7 @@ test('Pi loads its built-ins and the owner\'s extensions by path, never OpenViki
     ['-ne', ...PI_BUILTIN_EXTENSIONS]);
 });
 
-test('OpenCode reads a Vika-owned config home: the owner\'s config without OpenViking, every other tool\'s config linked', (t) => {
+test('OpenCode reads an OpenViking SuperAgent-owned config home: the owner\'s config without OpenViking, every other tool\'s config linked', (t) => {
   const { write, env, directory } = home(t);
   write('.config/opencode/opencode.jsonc', `{
     // the owner's providers
@@ -156,7 +156,7 @@ function agyHome(t) {
   return fixture;
 }
 
-test('Antigravity gets a Vika-owned gemini dir: the owner\'s login and config without OpenViking', (t) => {
+test('Antigravity gets an OpenViking SuperAgent-owned gemini dir: the owner\'s login and config without OpenViking', (t) => {
   const { directory, env } = agyHome(t);
   const owner = path.join(directory, '.gemini');
   const before = fs.readFileSync(path.join(owner, 'config/hooks.json'), 'utf8');

@@ -45,13 +45,13 @@ import { connectTelegram } from './telegram.mjs';
 import { connectQQ } from './qq.mjs';
 import { connectSlack } from './slack.mjs';
 
-// `vika setup`: add, change or remove an instance. A new instance is asked
+// `ovsa setup`: add, change or remove an instance. A new instance is asked
 // question by question; a change is a list of every setting with its current
 // value, where the owner opens the ones to change and saves. Then the QR scans
 // (only for a newly connected IM), then the manifest is written and the
 // instance (re)started. A new instance's OV config is prepared and checked
 // before IM setup, then removed on cancellation until its manifest is saved.
-// It is also the one place that connects an IM; `vika login` only renews.
+// It is also the one place that connects an IM; `ovsa login` only renews.
 
 const PERMISSIONS = new URL('../../../permission.json', import.meta.url);
 
@@ -184,18 +184,18 @@ function existingAppNotes(source) {
       `扫码后飞书的确认页会列出要给它补的权限（最多 ${tenant.length + user.length} 个）、消息事件和卡片回调，确认后发布一个新版本（企业可能要管理员审核）；它要是有版本正在审核，会先被撤回。不确认就什么都不改。`,
       `After the scan, Feishu/Lark's confirm page lists what it will add (up to ${tenant.length + user.length} permissions, the message event and the card callback); confirming publishes a new version (an organization may need admin approval), and a version under review is withdrawn first. Nothing changes unless you confirm.`,
     )] : []),
-    t('同一个飞书应用不能两处同时收消息：长连接每条消息只随机推给其中一个连接，确认它没被别的程序（OpenClaw、botmux、另一台机器上的 Vika）用着。',
-      'One Feishu/Lark app cannot receive messages in two places: the long connection hands each message to one of its connections at random, so make sure no other program (OpenClaw, botmux, Vika on another machine) uses it.'),
-    t('Vika 只接用长连接接收消息的机器人：用 webhook 的，先在开放平台「事件与回调」把事件和回调都改成长连接（原来的服务随之收不到），再来接。',
-      'Vika only takes bots that receive over the long connection: for one on a webhook, first switch its events and callbacks to the long connection under Events & Callbacks in the developer console (the webhook service then stops getting them).'),
+    t('同一个飞书应用不能两处同时收消息：长连接每条消息只随机推给其中一个连接，确认它没被别的程序（OpenClaw、botmux、另一台机器上的 OpenViking SuperAgent）用着。',
+      'One Feishu/Lark app cannot receive messages in two places: the long connection hands each message to one of its connections at random, so make sure no other program (OpenClaw, botmux, OpenViking SuperAgent on another machine) uses it.'),
+    t('OpenViking SuperAgent 只接用长连接接收消息的机器人：用 webhook 的，先在开放平台「事件与回调」把事件和回调都改成长连接（原来的服务随之收不到），再来接。',
+      'OpenViking SuperAgent only takes bots that receive over the long connection: for one on a webhook, first switch its events and callbacks to the long connection under Events & Callbacks in the developer console (the webhook service then stops getting them).'),
   ];
 }
 
-// Vika receives over the long connection only. No API tells how an app's
+// OpenViking SuperAgent receives over the long connection only. No API tells how an app's
 // events arrive; its callbacks on a webhook say it has one.
 const webhookRefusal = () => t(
-  '这个机器人的卡片回调走 webhook，事件多半也是，Vika 接不了：在开放平台「事件与回调」把事件和回调都改成长连接（原来用 webhook 的服务就收不到了）再来接它，或者换一个机器人。',
-  'This bot\'s card callbacks go to a webhook, and its events most likely do too, so Vika cannot take it: switch both to the long connection under Events & Callbacks in the developer console (the webhook service then stops getting them) and connect it again, or pick another bot.',
+  '这个机器人的卡片回调走 webhook，事件多半也是，OpenViking SuperAgent 接不了：在开放平台「事件与回调」把事件和回调都改成长连接（原来用 webhook 的服务就收不到了）再来接它，或者换一个机器人。',
+  'This bot\'s card callbacks go to a webhook, and its events most likely do too, so OpenViking SuperAgent cannot take it: switch both to the long connection under Events & Callbacks in the developer console (the webhook service then stops getting them) and connect it again, or pick another bot.',
 );
 
 // Feishu signed in with a Doubao account makes and publishes an app, but the
@@ -266,7 +266,7 @@ function initialState({ id, env, homeDir, current, runtimes, kept }) {
   return {
     id,
     dataDir: current?.dataDir ?? path.join(vikaHome(env), 'data', id),
-    displayName: current?.displayName ?? 'Vika',
+    displayName: current?.displayName ?? 'OpenViking SuperAgent',
     // A shipped role by name, or the absolute path of the owner's own file;
     // roleSeed is the role a new file of theirs starts from (written on save).
     role: current ? current.role ?? null : ROLE_PRESETS[0],
@@ -319,7 +319,7 @@ async function askWorkspace({ prompter, env, homeDir }, state) {
     validate: (value) => {
       const resolved = path.resolve(expandHome(value, homeDir));
       if (resolved === homeDir) return t('不要直接用 home 目录，换一个子目录', 'Not the home directory itself; use a folder inside it');
-      if (resolved.startsWith(`${vikaHome(env)}${path.sep}`)) return t('不能放在 ~/.vika 里', 'Not inside ~/.vika');
+      if (resolved.startsWith(`${vikaHome(env)}${path.sep}`)) return t('不能放在 ~/.ovsa 里', 'Not inside ~/.ovsa');
       return null;
     },
   }), homeDir));
@@ -381,7 +381,7 @@ async function askRole({ prompter, env, homeDir }, state) {
 // A role file of the owner's own, begun from a shipped role (or blank).
 function writeRoleFile({ role, roleSeed }, id) {
   if (roleSeed === null || fs.existsSync(role)) return;
-  const note = `<!-- ${roleSeed ? `Started from Vika's "${roleSeed}" role. ` : ''}This is ${id}'s role: edit it freely, then run vika restart ${id}. Comments like this one are not sent to the model. -->\n\n`;
+  const note = `<!-- ${roleSeed ? `Started from OpenViking SuperAgent's "${roleSeed}" role. ` : ''}This is ${id}'s role: edit it freely, then run ovsa restart ${id}. Comments like this one are not sent to the model. -->\n\n`;
   fs.mkdirSync(path.dirname(role), { recursive: true, mode: 0o700 });
   fs.writeFileSync(role, `${note}${roleSeed ? fs.readFileSync(resolveRolePromptPath(roleSeed), 'utf8') : ''}`, { mode: 0o600 });
 }
@@ -573,7 +573,7 @@ async function askMailboxes(ctx, state) {
 }
 
 // The instance's on/off settings, under 其他设置, and what each is when the
-// manifest does not say. OpenViking memory has no switch here: Vika always
+// manifest does not say. OpenViking memory has no switch here: OpenViking SuperAgent always
 // owns it (agents[].ovAutoRecall stays a config-file-only option).
 const SWITCH_DEFAULTS = Object.freeze({ stagedReplies: false, naturalWriting: true, explicitSilence: true, meetingNotes: false });
 // Explicit silence is on by default except on Ark, which has no Core tools to
@@ -855,7 +855,7 @@ export async function registerApp({
     mode,
     appId,
     name: plan.displayName,
-    description: t('Vika：把本机的 coding agent 接进飞书', 'Vika: the coding agent on your computer, in Feishu/Lark'),
+    description: t('OpenViking SuperAgent：把本机的 coding agent 接进飞书', 'OpenViking SuperAgent: the coding agent on your computer, in Feishu/Lark'),
     scopes,
     signal: controller.signal,
     ...(register ? { register } : {}),
@@ -908,7 +908,7 @@ async function step(prompter, text, run, done = text) {
   }
 }
 
-// What the app lacks of what Vika needs, said once each; resolves with it.
+// What the app lacks of what OpenViking SuperAgent needs, said once each; resolves with it.
 // `manual`: the app was not set up by a scan, so how its events arrive
 // (which no API tells) is left for the owner to check.
 export function reportApp(prompter, scopes, inspected, { manual = false } = {}) {
@@ -940,8 +940,8 @@ export function reportApp(prompter, scopes, inspected, { manual = false } = {}) 
   }
   // No API tells how events arrive; callbacks on a webhook say the app has one.
   if (inspected.callbacks.type === 'webhook') {
-    prompter.warn(t('应用的卡片回调走 webhook，事件多半也是：这样 Vika 收不到消息，卡片按钮也没反应。在开放平台「事件与回调」把事件和回调都改成长连接（原来用 webhook 的服务就收不到了）',
-      'The app\'s card callbacks go to a webhook, and its events most likely do too: then Vika gets no messages and card buttons do nothing. Switch both to the long connection under Events & Callbacks in the developer console (the webhook service then stops getting them)'));
+    prompter.warn(t('应用的卡片回调走 webhook，事件多半也是：这样 OpenViking SuperAgent 收不到消息，卡片按钮也没反应。在开放平台「事件与回调」把事件和回调都改成长连接（原来用 webhook 的服务就收不到了）',
+      'The app\'s card callbacks go to a webhook, and its events most likely do too: then OpenViking SuperAgent gets no messages and card buttons do nothing. Switch both to the long connection under Events & Callbacks in the developer console (the webhook service then stops getting them)'));
   } else if (missing.callbacks.length) {
     prompter.warn(t(`卡片回调（${list(missing.callbacks)}）没有用长连接订阅：卡片上的按钮点了没反应`,
       `The card callback (${list(missing.callbacks)}) is not subscribed over the long connection: card buttons do nothing`));
@@ -967,7 +967,7 @@ async function confirmUnshared({ prompter, larkCli, appId, others }) {
 }
 
 // The app from `source`: a scan, or `app` typed in with the questions. It is
-// checked against what Vika needs, written to the lark-cli profile, and the
+// checked against what OpenViking SuperAgent needs, written to the lark-cli profile, and the
 // owner authorizes as a user (the second scan). `access` is whose visibility
 // the bot reads with (larkScopes). `others` are the machine's other instances
 // with Feishu. Resolves with { profile, ownerOpenId, name }, name being the
@@ -1002,15 +1002,15 @@ export async function connectLark({
   await confirmUnshared({ prompter, larkCli, appId: app.appId, others });
   if (inspected && lacksAny(reportApp(prompter, scopes, inspected, { manual }))) {
     prompter.info(manual
-      ? t('缺的在飞书开放平台给应用补上；你是应用的所有者或管理员的话，也可以之后运行 vika setup 扫码补齐',
-        'Add what is missing in the developer console; if you own or administer the app, vika setup can add it with a scan later')
-      : t('之后运行 vika setup 可以扫码补齐', 'vika setup can add it with a scan later'));
+      ? t('缺的在飞书开放平台给应用补上；你是应用的所有者或管理员的话，也可以之后运行 ovsa setup 扫码补齐',
+        'Add what is missing in the developer console; if you own or administer the app, ovsa setup can add it with a scan later')
+      : t('之后运行 ovsa setup 可以扫码补齐', 'ovsa setup can add it with a scan later'));
   }
   await larkCli.configureProfile({ profile, ...app });
   const login = await larkCli.beginUserLogin({ profile, scopes: grantedUserScopes(scopes, inspected) });
   const what = access === 'bot'
-    ? t('授权 Vika 以你的身份用文档、日历等（不读你的消息）', 'let Vika use documents, calendar and more as you (not your messages)')
-    : t('授权 Vika 以你的身份读消息（用于搜索和读历史）', 'let Vika read messages as you (for search and history)');
+    ? t('授权 OpenViking SuperAgent 以你的身份用文档、日历等（不读你的消息）', 'let OpenViking SuperAgent use documents, calendar and more as you (not your messages)')
+    : t('授权 OpenViking SuperAgent 以你的身份读消息（用于搜索和读历史）', 'let OpenViking SuperAgent read messages as you (for search and history)');
   const scan = showScan(prompter, {
     url: login.url, where: IM_LABELS.lark, label: t('等待授权', 'Waiting for authorization'),
     title: source === 'manual' ? t(`扫码${what}`, `Scan to ${what}`) : t(`第 2 次扫码：${what}`, `Scan 2 of 2: ${what}`),
@@ -1032,14 +1032,14 @@ export async function connectLark({
 }
 
 // An app the owner once let read their messages keeps that grant, whatever
-// it asks for now: Vika itself reads as the bot, but the grant stays usable.
+// it asks for now: OpenViking SuperAgent itself reads as the bot, but the grant stays usable.
 async function warnOwnerReads(prompter, larkCli, profile) {
   let granted = null;
   try { granted = await larkCli.userScopes({ profile }); } catch {}
   const kept = (granted ?? []).filter((scope) => OWNER_MESSAGE_SCOPES.includes(scope));
   if (!kept.length) return;
-  prompter.warn(t(`你以前允许过这个应用以你的身份读消息（${list(kept)}），飞书不会收回：Vika 的工具只用机器人身份读消息，但机器人在命令行里用 lark-cli 仍能以你的身份搜到消息。要彻底隔开，换一个新建的机器人。`,
-    `You once let this app read messages as you (${list(kept)}), and Feishu/Lark keeps that grant: Vika's tools read only as the bot, but with lark-cli in its shell the bot can still search messages as you. To keep them apart for sure, use a newly created bot.`));
+  prompter.warn(t(`你以前允许过这个应用以你的身份读消息（${list(kept)}），飞书不会收回：OpenViking SuperAgent 的工具只用机器人身份读消息，但机器人在命令行里用 lark-cli 仍能以你的身份搜到消息。要彻底隔开，换一个新建的机器人。`,
+    `You once let this app read messages as you (${list(kept)}), and Feishu/Lark keeps that grant: OpenViking SuperAgent's tools read only as the bot, but with lark-cli in its shell the bot can still search messages as you. To keep them apart for sure, use a newly created bot.`));
 }
 
 // The app as its bot reads it, through the instance's profile.
@@ -1047,7 +1047,7 @@ const readInstanceApp = (larkCli, agent) => readApp((pathname, query) => larkCli
 
 // The user scopes the app has that the owner's login does not carry yet: a
 // release that asks for more needs the owner to authorize again. None when
-// the login cannot be read (`vika login lark` is for that).
+// the login cannot be read (`ovsa login lark` is for that).
 async function loginLacks(larkCli, agent, scopes, inspected) {
   const granted = await larkCli.userScopes({ profile: agent.profile }).catch(() => null);
   if (!granted || !inspected) return [];
@@ -1065,7 +1065,7 @@ export async function larkNeeds({ agent, larkCli, scopes = larkScopes(agent.lark
   return { inspected, missing, login, count: count + (login.length ? 1 : 0) };
 }
 
-// The app checked against what Vika needs; one `update` scan adds what it
+// The app checked against what OpenViking SuperAgent needs; one `update` scan adds what it
 // lacks, the platform's confirm page showing the change. Resolves with
 // { inspected, updated }: what was read last (null when the app's settings
 // cannot be read) and whether the platform confirmed a change.
@@ -1111,7 +1111,7 @@ export async function completeLarkApp({ agent, prompter, larkCli, scopes = larkS
   return { inspected: after ?? inspected, updated: true };
 }
 
-// The owner authorizes Vika as a user again (a scan), for the user scopes
+// The owner authorizes OpenViking SuperAgent as a user again (a scan), for the user scopes
 // the app has.
 export async function reauthorizeOwner({ agent, prompter, larkCli, scopes = larkScopes(agent.larkMessageAccess), inspected = null }) {
   const login = await larkCli.beginUserLogin({ profile: agent.profile, scopes: grantedUserScopes(scopes, inspected) });
@@ -1294,7 +1294,7 @@ const receivingChecklist = (id, vika) => [
   t('开放平台「事件与回调」里，事件订阅方式是长连接，并订阅了接收消息（im.message.receive_v1）',
     'Under Events & Callbacks in the developer console, events come over the long connection and the message event (im.message.receive_v1) is subscribed'),
   t('改过配置后创建了版本并发布（企业可能在等管理员审核）', 'After a change, a version was created and published (an organization may be awaiting admin approval)'),
-  t('这个应用没有同时被别的程序（OpenClaw、botmux、另一台机器上的 Vika）用长连接收消息', 'No other program (OpenClaw, botmux, Vika on another machine) receives with this app over the long connection'),
+  t('这个应用没有同时被别的程序（OpenClaw、botmux、另一台机器上的 OpenViking SuperAgent）用长连接收消息', 'No other program (OpenClaw, botmux, OpenViking SuperAgent on another machine) receives with this app over the long connection'),
   t(`运行 ${vika} logs ${id} 看飞书连接有没有报错`, `Run ${vika} logs ${id} for errors in the Feishu/Lark connection`),
 ];
 
@@ -1437,9 +1437,9 @@ function dshModelHint({ env, state }) {
   return t(
     `补一个 model route：${vika} dsh model${instance}\n`
     + `  在菜单里选「添加 model」，按提示填网关地址、protocol、model id 和 credential`
-    + `（和 vika setup 一样，写入前先用临时 DSH 验证）`,
+    + `（和 ovsa setup 一样，写入前先用临时 DSH 验证）`,
     `Add a model route: ${vika} dsh model${instance}\n`
-    + `  pick "Add a model" in the menu and answer the same questions vika setup asks`
+    + `  pick "Add a model" in the menu and answer the same questions ovsa setup asks`
     + ` (gateway URL, protocol, model id, credential; checked against a temporary DSH first)`);
 }
 
@@ -1461,7 +1461,7 @@ function instanceRouteNote(route) {
 }
 
 // Re-read one existing instance's DSH routes from its own home, the way
-// `vika dsh model list` starts a control process against it. Detection probed a
+// `ovsa dsh model list` starts a control process against it. Detection probed a
 // throwaway home, so without this a configured instance would report "no route"
 // even though its turns work.
 async function refreshDshRoutes({ prompter, env, detect, current, runtimes }) {
@@ -1657,7 +1657,7 @@ async function setupFlow({
   const { path: configPath, value: manifest, ignored } = readManifest(env);
   const probeEnv = detectionEnv(env, manifest);
   if (!memo.runtimes) {
-    if (!prompter.fancy) out(t('Vika setup：添加、修改或删除这台机器上的 agent 实例。\n\n', 'Vika setup: add, change or remove the agent instances on this machine.\n\n'));
+    if (!prompter.fancy) out(t('OpenViking SuperAgent setup：添加、修改或删除这台机器上的 agent 实例。\n\n', 'OpenViking SuperAgent setup: add, change or remove the agent instances on this machine.\n\n'));
     memo.runtimes = await step(prompter, t('看看这台机器上有哪些 agent', 'Looking for agents on this machine'),
       () => detect.runtimes({ env: probeEnv }), foundLine);
     memo.mark = prompter.mark();
@@ -1912,8 +1912,8 @@ async function setupFlow({
       // People @ the bot by its app's name, so that is the default; an owner
       // who has called it something else for long may keep that.
       if (lark?.name && lark.name !== state.displayName && lark.name.length <= 40
-        && await prompter.confirm(t(`这个机器人在飞书里叫「${lark.name}」，Vika 里也这么叫它？（选否就还叫「${state.displayName}」）`,
-          `This bot is called "${lark.name}" on Feishu/Lark; call it that in Vika too? (No keeps "${state.displayName}")`))) {
+        && await prompter.confirm(t(`这个机器人在飞书里叫「${lark.name}」，OpenViking SuperAgent 里也这么叫它？（选否就还叫「${state.displayName}」）`,
+          `This bot is called "${lark.name}" on Feishu/Lark; call it that in OpenViking SuperAgent too? (No keeps "${state.displayName}")`))) {
         state.displayName = lark.name;
         plan.displayName = lark.name;
         agent = build();
@@ -2060,7 +2060,7 @@ async function setupFlow({
     if (env.SSH_CONNECTION) {
       next.push(['', t(`远程机器：本地 ssh -L ${WEB_PORT}:127.0.0.1:${WEB_PORT} 再打开`, `Remote machine: ssh -L ${WEB_PORT}:127.0.0.1:${WEB_PORT} first, then open it`)]);
     }
-    next.push([t('常用命令', 'Commands'), 'vika status · vika logs · vika setup']);
+    next.push([t('常用命令', 'Commands'), 'ovsa status · ovsa logs · ovsa setup']);
   }
   const title = t(`${state.displayName}（${id}）${current ? '已更新' : '已就绪'}`, `${state.displayName} (${id}) is ${current ? 'updated' : 'ready'}`);
   if (prompter.fancy) {
@@ -2068,9 +2068,9 @@ async function setupFlow({
   } else {
     out(`\n${title}${t('。', '.')}\n${next.map(([key, value]) => `  ${key ? `${key}${t('：', ': ')}` : ''}${value}\n`).join('')}`);
   }
-  if (vika !== 'vika' && !current) {
-    prompter.info(t(`这个终端还找不到 vika：新开一个终端就行（安装时已加进 shell 配置），或先用 ${vika}`,
-      `This terminal does not know vika yet: open a new one (the installer added it to your shell setup), or use ${vika} for now`));
+  if (vika !== 'ovsa' && !current) {
+    prompter.info(t(`这个终端还找不到 ovsa：新开一个终端就行（安装时已加进 shell 配置），或先用 ${vika}`,
+      `This terminal does not know ovsa yet: open a new one (the installer added it to your shell setup), or use ${vika} for now`));
   }
   return 0;
 }
@@ -2078,7 +2078,7 @@ async function setupFlow({
 // Starting at login is one question at the end of a first setup. A machine
 // without a user service manager says so, and setup still succeeds.
 async function offerAutostart({ prompter, env, homeDir, control, vika }) {
-  if (!await prompter.confirm(t('开机后自动启动 Vika？', 'Start Vika when this computer starts?'), true)) {
+  if (!await prompter.confirm(t('开机后自动启动 OpenViking SuperAgent？', 'Start OpenViking SuperAgent when this computer starts?'), true)) {
     prompter.info(t(`之后想开：${vika} autostart enable`, `To turn it on later: ${vika} autostart enable`));
     return;
   }
@@ -2087,8 +2087,8 @@ async function offerAutostart({ prompter, env, homeDir, control, vika }) {
     () => {
       prompter.success(t('开机自启已开启', 'Autostart is on'));
       if (/loginctl/.test(said)) {
-        prompter.info(t('Linux 服务器上还要运行一次 loginctl enable-linger，否则退出登录后 Vika 会停。',
-          'On a Linux server, also run loginctl enable-linger once, or Vika stops when you log out.'));
+        prompter.info(t('Linux 服务器上还要运行一次 loginctl enable-linger，否则退出登录后 OpenViking SuperAgent 会停。',
+          'On a Linux server, also run loginctl enable-linger once, or OpenViking SuperAgent stops when you log out.'));
       }
     },
     (error) => prompter.warn(t(`这台机器开不了开机自启：${String(error.message).split('\n')[0]}`, `Autostart is not available here: ${String(error.message).split('\n')[0]}`)),

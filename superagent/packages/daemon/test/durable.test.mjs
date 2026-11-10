@@ -180,7 +180,7 @@ describe('DurableAgent host protocol', () => {
     // the one it got back; the host keeps no index of its own.
     assert.equal(hello.nativeSessionId, null);
     assert.equal(store.global().nativeSessionId, 2);
-    assert.match(hello.policy, /Vika|personal|agent/i);
+    assert.match(hello.policy, /OpenViking SuperAgent|personal|agent/i);
     assert.equal(agent.connected, true);
     assert.equal(agent.state.connected, true);
 

@@ -26,7 +26,7 @@ import { startFakeProvider } from './fake-provider.mjs';
 // failing: the bridge contract is then covered only by dsh-bridge.test.mjs.
 //
 // The fixture is hermetic: a 0700 temp dataDir, a temp HOME (so neither
-// ~/.dsh nor ~/.vika is touched), operator DEEPSEEK_*/DSH_* removed, and a
+// ~/.dsh nor ~/.ovsa is touched), operator DEEPSEEK_*/DSH_* removed, and a
 // local fake provider as the only reachable endpoint.
 
 const availability = await realDshAvailability();
@@ -415,7 +415,7 @@ describe('live dsh bridge v2 without a provider key', { skip: liveSkip }, () => 
 // Two settings states cannot be produced through the bridge, because producing
 // them is exactly what the bridge refuses: an overlay that shadows the
 // namespace, and an entry the operator disabled. Both are reached by writing
-// the patch DSH itself reads, which is the situation `vika dsh model repair`
+// the patch DSH itself reads, which is the situation `ovsa dsh model repair`
 // exists for. Each case owns its process, so a failed assertion cannot leave the
 // other case's child running.
 describe('live dsh settings states that need a hand-edited patch', { skip: liveSkip }, () => {

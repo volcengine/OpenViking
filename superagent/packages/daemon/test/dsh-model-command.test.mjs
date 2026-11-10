@@ -89,7 +89,7 @@ describe('the /model command', () => {
 });
 
 describe('an id the catalogue reports but the grammar refuses', () => {
-  // A DSH route may carry characters Vika's /model does not accept. The id stays
+  // A DSH route may carry characters OpenViking SuperAgent's /model does not accept. The id stays
   // valid configuration -- nothing rewrites it -- and the command says which of
   // the two situations it is instead of calling a real route a typo.
   function runtimeWith(models) {

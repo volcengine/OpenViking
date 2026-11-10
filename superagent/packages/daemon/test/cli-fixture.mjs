@@ -10,7 +10,7 @@ import { createRequire } from 'node:module';
 import { terminateProcessTree } from '../src/process-utils.mjs';
 
 // A throwaway "installation" for CLI end-to-end tests: a deployment manifest
-// with one or more instances, a temp HOME (so ~/.vika is never touched), and a
+// with one or more instances, a temp HOME (so ~/.ovsa is never touched), and a
 // fake `dsh` on PATH *and* in DSH_BIN. The CLI under test is the real entry
 // point (`node packages/cli/bin/vika.mjs`), so an argument-parsing or
 // dispatch regression fails here instead of in a unit test.

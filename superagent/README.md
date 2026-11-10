@@ -2,22 +2,22 @@
 
 **Bring Your Own Machine. Run your own agent.**
 
-Set up your machine (local or a cloud VM) with the software, projects, and tools you need. OpenViking SuperAgent (Vika) connects your agent to OpenViking and instant messaging: send a task in chat, let your agent work on your machine, and receive the results in the same conversation. OpenViking provides knowledge, memory, and context across sessions.
+Set up your machine (local or a cloud VM) with the software, projects, and tools you need. OpenViking SuperAgent connects your agent to OpenViking and instant messaging: send a task in chat, let your agent work on your machine, and receive the results in the same conversation. OpenViking provides knowledge, memory, and context across sessions.
 
-Vika supports runtimes such as Codex, Claude Code, DeepSeek Harness, and Pi, and connects to Feishu / Lark, WeChat, Telegram, Slack, QQ, and email. The CLI command is `vika`.
+OpenViking SuperAgent supports runtimes such as Codex, Claude Code, DeepSeek Harness, and Pi, and connects to Feishu / Lark, WeChat, Telegram, Slack, QQ, and email. The CLI command is `ovsa`. The previous `vika` command remains a compatibility alias. For an existing installation, follow the migration guide below, then rerun the installer to add the `ovsa` launcher; upgrading the release alone does not replace launchers.
 
 [Quick start](install.md) · [Features and architecture](docs/usage-reference.md) · [Configuration example](config.example.json) · [Contributing](../CONTRIBUTING.md)
 
-## Why Vika
+## Why OpenViking SuperAgent
 
-- **Bring Your Own Machine.** Your agent works with your software and projects, connected to OV and IM through Vika.
+- **Bring Your Own Machine.** Your agent works with your software and projects, connected to OV and IM through OpenViking SuperAgent.
 - **Use your agent.** Connect an authenticated local coding agent or use the bundled Pi / Durable runtime. See [runtime setup](docs/installation-reference.md#prerequisites).
 - **Keep context across sessions.** OpenViking stores session history for new sessions and runtime switches, and provides long-term memory and resource search. See [session context](docs/ov-session-context.md).
 - **Connect multiple channels.** One instance can serve several chat channels; separate instances have their own workspaces, data directories, and OV configuration. See [multiple instances](docs/installation-reference.md#multiple-agents).
 
 ## Quick start
 
-You need a configured model runtime and **an OpenViking service (required; local or remote)**. Choose the command for your system; both installers open the same `vika setup` on first interactive installation.
+You need a configured model runtime and **an OpenViking service (required; local or remote)**. Choose the command for your system; both installers open the same `ovsa setup` on first interactive installation.
 
 **macOS / Linux / WSL2 (x64 or arm64):**
 
@@ -33,7 +33,7 @@ This installs the latest release (currently `0.5.0-preview`). To pin a version, 
 irm https://ovrelease.tos-cn-beijing.volces.com/vika/install.ps1 | iex
 ```
 
-The package includes Node, PM2, chat CLIs, Pi, and Durable. On first installation, `vika setup` connects OV, selects a runtime and workspace, and authorizes your chat channels. You do not need to install lark-cli globally. For Codex or Claude Code, install and sign in to that CLI first. DeepSeek Harness is not bundled either: install `dsh` **0.2.x** (0.2.2-rc.1 or later) on Node 24.9+, then manage its model routes with `vika dsh model`.
+The package includes Node, PM2, chat CLIs, Pi, and Durable. On first installation, `ovsa setup` connects OV, selects a runtime and workspace, and authorizes your chat channels. You do not need to install lark-cli globally. For Codex or Claude Code, install and sign in to that CLI first. DeepSeek Harness is not bundled either: install `dsh` **0.2.x** (0.2.2-rc.1 or later) on Node 24.9+, then manage its model routes with `ovsa dsh model`.
 
 Once configured, send the bot a task in a direct chat:
 
@@ -46,9 +46,9 @@ See the [installation guide](install.md) for details.
 Send `/help` in a direct chat for commands, `/status` for status, `/model` and `/effort` to inspect or change model settings, and `/new` to start a new session. In your terminal:
 
 ```bash
-vika setup           # Add or edit an instance
-vika status
-vika logs primary
+ovsa setup           # Add or edit an instance
+ovsa status
+ovsa logs primary
 ```
 
 For upgrades, see the [platform-specific instructions](docs/installation-reference.md#upgrade-and-rollback).
@@ -73,3 +73,5 @@ The release-process guide is currently in Chinese.
 | Reliability and acceptance checks | [Reliability limits](docs/usage-reference.md#reliability-limits) · [Feishu acceptance](docs/usage-reference.md#feishu-acceptance-checks) |
 
 Features in the source tree may not yet be published. Check your installed release.
+
+Existing `~/.vika` installations: follow the [ovsa migration guide](docs/migration-to-ovsa.md) before installing this version.

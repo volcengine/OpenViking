@@ -7,8 +7,8 @@ import {
   HIDE_CURSOR, PALETTE, RESET, SHOW_CURSOR, bgCode, colorDepth, fgCode, mix, onInterrupt, scale, styler, width,
 } from './ui.mjs';
 
-// The Vika banner: pixel art of a tall-rigged sailboat (OpenViking's sail)
-// under a moon, on a moving sea, next to the VIKA wordmark. Every frame is
+// The OpenViking SuperAgent banner: pixel art of a tall-rigged sailboat (OpenViking's sail)
+// under a moon, on a moving sea, next to the OpenViking SuperAgent wordmark. Every frame is
 // drawn from the time t (seconds), so the animation is the same scene at any
 // frame rate.
 
@@ -17,15 +17,8 @@ const SCENE_HEIGHT = 16;
 // The wordmark's first row, so it sits beside the sails.
 const WORDMARK_TOP = 3;
 
-// "ANSI Shadow" letters.
-const WORDMARK = [
-  '██╗   ██╗██╗██╗  ██╗ █████╗ ',
-  '██║   ██║██║██║ ██╔╝██╔══██╗',
-  '██║   ██║██║█████╔╝ ███████║',
-  '╚██╗ ██╔╝██║██╔═██╗ ██╔══██║',
-  ' ╚████╔╝ ██║██║  ██╗██║  ██║',
-  '  ╚═══╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝',
-];
+const PRODUCT_NAME = 'OpenViking SuperAgent';
+const WORDMARK = [PRODUCT_NAME];
 
 // Beside the wordmark, short of an 80-column window's edge: at most 31 columns each.
 const tagline = () => t('把本机的 coding agent 带上船', 'Bring your coding agent aboard');
@@ -251,12 +244,12 @@ export function bannerLines(t, { depth = 24, version = '', columns = 80 } = {}) 
 
 export const BANNER_ROWS = SCENE_HEIGHT;
 
-// The small header for a short window: VIKA, and a little boat sailing the
+// The small header for a short window: OpenViking SuperAgent, and a little boat sailing the
 // width of a two-row strip of sea, over and over.
 const MINI_BOAT = ['...sm....', '..ssmj...', '.sssmjj..', 'hhhhhhhhh'];
 
 export function miniLines(t, { depth = 24, columns = 80 } = {}) {
-  const strip = Math.max(20, Math.min(columns - 1, 72) - 7);
+  const strip = Math.max(20, Math.min(columns - 1, 72) - (PRODUCT_NAME.length + 3));
   const pixels = canvas(strip, 4);
   [[3, 0], [17, 1], [30, 0], [44, 1], [58, 0]].forEach(([x, y], index) => {
     if (x < strip && Math.sin(t * (1.2 + index * 0.4) + index) > -0.2) dot(pixels, x, y, scale(COLORS.star, 0.7));
@@ -276,9 +269,9 @@ export function miniLines(t, { depth = 24, columns = 80 } = {}) {
   for (let k = 1; k <= 3; k += 1) if ((Math.floor(t * 8) + k) % 2) dot(pixels, at - k, 3, COLORS.foam);
   const rows = toCells(pixels);
   const sweep = (x) => Math.max(0, 1 - Math.abs(x - ((t * 3) % 8 - 2)) / 1.5);
-  const label = [...'VIKA'].map((ch, x) => ({ ch, rgb: mix([mix(PALETTE.sail, x / 4 + t * 0.08, { cycle: true }), [255, 255, 255]], sweep(x) * 0.6), bg: null }));
+  const label = [...PRODUCT_NAME].map((ch, x) => ({ ch, rgb: mix([mix(PALETTE.sail, x / 4 + t * 0.08, { cycle: true }), [255, 255, 255]], sweep(x) * 0.6), bg: null }));
   const blank = (n) => Array.from({ length: n }, () => ({ ch: ' ', rgb: null, bg: null }));
-  return render([[...blank(1), ...label, ...blank(2), ...rows[0]], [...blank(7), ...rows[1]]], depth);
+  return render([[...blank(1), ...label, ...blank(2), ...rows[0]], [...blank(PRODUCT_NAME.length + 3), ...rows[1]]], depth);
 }
 
 // The rows a pinned header leaves for setup's questions at the least: the
@@ -374,7 +367,7 @@ export async function playBanner({
   const animate = depth >= 8 && columns > SCENE_WIDTH && (output.rows ?? 24) > SCENE_HEIGHT + 2;
   if (!animate) {
     const s = styler(output, env);
-    output.write(`\n${s.bold(s.gradient('VIKA', PALETTE.sail))}  ${tagline()}${version ? s.gray(`  v${version}`) : ''}\n\n`);
+    output.write(`\n${s.bold(s.gradient(PRODUCT_NAME, PALETTE.sail))}  ${tagline()}${version ? s.gray(`  v${version}`) : ''}\n\n`);
     return;
   }
   const still = env.VIKA_NO_ANIMATION === '1' || env.CI;

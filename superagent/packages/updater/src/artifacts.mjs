@@ -10,10 +10,10 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
-// What a Vika release is made of and where it is downloaded from, shared by
+// What an OpenViking SuperAgent release is made of and where it is downloaded from, shared by
 // the build and publish scripts and the updater.
 
-// The platforms a Vika release ships for, and how Node.js and lark-cli name them.
+// The platforms an OpenViking SuperAgent release ships for, and how Node.js and lark-cli name them.
 // Source-only targets may download dependencies but cannot build releases.
 // musl (Alpine) remains unsupported.
 
@@ -21,7 +21,7 @@ export const PLATFORMS = Object.freeze(createRequire(import.meta.url)('../artifa
 
 export function hostPlatform() {
   const id = hostPlatformId;
-  if (!PLATFORMS[id]) throw new Error(`no Vika build for ${id}`);
+  if (!PLATFORMS[id]) throw new Error(`no OpenViking SuperAgent build for ${id}`);
   return id;
 }
 

@@ -41,7 +41,7 @@ describe('module boundaries', () => {
           displayName: 'Alpha',
           profile: 'cli_alpha',
           port: 3738,
-          dataDir: '/Users/test/.vika/data/alpha',
+          dataDir: '/Users/test/.ovsa/data/alpha',
           tempDir: '/tmp/vika-alpha',
           workspace: '/Users/test/Documents/work/alpha-workspace',
           ovConfig: '/Users/test/.openviking/ovcli.conf.alpha',
@@ -52,7 +52,7 @@ describe('module boundaries', () => {
           displayName: 'Beta',
           profile: 'cli_beta',
           port: 3740,
-          dataDir: '/Users/test/.vika/data/beta',
+          dataDir: '/Users/test/.ovsa/data/beta',
           workspace: '/Users/test/Documents/work/beta-workspace',
           ovConfig: '/Users/test/.openviking/ovcli.conf.beta',
           ovAutoRecall: true,
@@ -115,7 +115,7 @@ describe('module boundaries', () => {
     assert.equal(beta.env.OPENVIKING_AUTO_RECALL, '0');
     assert.equal(beta.env.OPENVIKING_RECALL_PEER_SCOPE, 'all');
     assert.equal(alpha.env.OPENVIKING_AUTO_CAPTURE, '0');
-    assert.equal(alpha.env.OPENVIKING_PENDING_DIR, '/Users/test/.vika/data/alpha/openviking/pending');
+    assert.equal(alpha.env.OPENVIKING_PENDING_DIR, '/Users/test/.ovsa/data/alpha/openviking/pending');
     assert.equal(alpha.env.VIKA_CODEX_MODEL, undefined);
     assert.equal(alpha.env.VIKA_MODEL, 'gpt-5.6-sol');
     assert.equal(alpha.env.VIKA_LOG_LEVEL, 'debug');
@@ -196,7 +196,7 @@ describe('module boundaries', () => {
       'utf8',
     );
     assert.match(prompt, /Never restart, stop, reconfigure, or redeploy the PM2 application you run in/);
-    assert.match(prompt, /The only self-update is `vika upgrade \{\{VIKA_UPGRADE_TARGET\}\}`/);
+    assert.match(prompt, /The only self-update is `ovsa upgrade \{\{VIKA_UPGRADE_TARGET\}\}`/);
     assert.match(prompt, /installs the latest published release/);
     assert.match(prompt, /Manage another named instance only when directly asked, after verifying that it is not the one you run in/);
     assert.match(prompt, /never use broad PM2 selectors or touch unrelated applications/);

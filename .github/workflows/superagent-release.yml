@@ -1,4 +1,4 @@
-name: Vika Release
+name: OpenViking SuperAgent Release
 
 # Tests, builds and publishes SuperAgent (superagent/) to the TOS release bucket, laid out
 # the way its installer and updater read it:
@@ -31,7 +31,7 @@ on:
   pull_request:
     paths:
       - "superagent/**"
-      - ".github/workflows/vika-release.yml"
+      - ".github/workflows/superagent-release.yml"
 
 permissions:
   contents: read
@@ -205,14 +205,14 @@ jobs:
           UPLOADED=false
           if fetch "${DIR}/release.json" published-release.json; then
             if ! cmp -s published-release.json dist/release.json; then
-              echo "::error::Vika ${VERSION} is published already"
+              echo "::error::OpenViking SuperAgent ${VERSION} is published already"
               exit 1
             fi
             UPLOADED=true
-            echo "Vika ${VERSION} is uploaded already; finishing its release"
+            echo "OpenViking SuperAgent ${VERSION} is uploaded already; finishing its release"
           fi
 
-          # `latest` only moves forward. Until Vika has a stable release a
+          # `latest` only moves forward. Until OpenViking SuperAgent has a stable release a
           # pre-release (a version with a "-") moves it too; once `latest`
           # holds a stable version, pre-releases of the same line leave it.
           # Versions compare by their base, and a stable version wins a tie.
@@ -253,7 +253,7 @@ jobs:
           fi
 
           {
-            echo "## Vika ${VERSION}"
+            echo "## OpenViking SuperAgent ${VERSION}"
             if [ "${MOVE_LATEST}" = true ]; then
               echo '```sh'
               echo "curl -fsSL ${VIKA_DOWNLOAD_BASE}/install.sh | sh"
@@ -267,7 +267,7 @@ jobs:
               echo '```sh'
               echo "curl -fsSL ${VIKA_DOWNLOAD_BASE}/releases/${VERSION}/install.sh | sh -s -- --version ${VERSION}"
               echo '```'
-              echo "then \`vika restart\` on a machine that already runs Vika; \`vika upgrade all\` returns it to the latest release."
+              echo "then \`ovsa restart\` on a machine that already runs OpenViking SuperAgent; \`ovsa upgrade all\` returns it to the latest release."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -305,7 +305,7 @@ jobs:
             --verify-tag \
             --latest=false \
             ${PRERELEASE[@]+"${PRERELEASE[@]}"} \
-            --title "Vika ${VERSION}" \
+            --title "OpenViking SuperAgent ${VERSION}" \
             --notes-file "${RUNNER_TEMP}/vika-release-notes.md"
 
   windows-preview:
@@ -346,7 +346,7 @@ jobs:
         run: |
           $dist = Join-Path $env:RUNNER_TEMP 'vika-windows-dist'
           $archive = (Get-ChildItem $dist -Filter '*.zip').FullName
-          $destination = Join-Path $env:RUNNER_TEMP 'Vika 测试 package'
+          $destination = Join-Path $env:RUNNER_TEMP 'OpenViking SuperAgent 测试 package'
           $originalPath = $env:PATH
           try {
             $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"

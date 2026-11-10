@@ -28,7 +28,7 @@ test('downloads and reads images outside /root, retaining them until maintenance
     if (previous === undefined) delete process.env.VIKA_TEMP_DIR;
     else process.env.VIKA_TEMP_DIR = previous;
   });
-  const config = { ...getConfig(), dataDir: '/root/.vika/data', retentionMs: 86_400_000 };
+  const config = { ...getConfig(), dataDir: '/root/.ovsa/data', retentionMs: 86_400_000 };
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aol8AAAAASUVORK5CYII=', 'base64');
   const lark = new LarkClient(config, {
     async run(command, args, { cwd }) {

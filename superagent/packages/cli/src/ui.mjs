@@ -10,7 +10,7 @@ export const RESET = `${ESC}0m`;
 export const HIDE_CURSOR = `${ESC}?25l`;
 export const SHOW_CURSOR = `${ESC}?25h`;
 
-// Vika's colours: the sail gradient (also the wordmark), the sea, and accents.
+// OpenViking SuperAgent's colours: the sail gradient (also the wordmark), the sea, and accents.
 export const PALETTE = Object.freeze({
   sail: [[255, 106, 213], [199, 116, 232], [173, 140, 255], [135, 149, 232], [148, 208, 255]],
   sea: [[28, 84, 178], [40, 146, 232], [64, 214, 232]],

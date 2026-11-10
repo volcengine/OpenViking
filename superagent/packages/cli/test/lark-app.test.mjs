@@ -14,7 +14,7 @@ test('one scan creates the app through the official SDK, with the full request',
   const statuses = [];
   const shown = [];
   const app = await scanApp({
-    name: 'Vika', description: 'desc', scopes: SCOPES,
+    name: 'OpenViking SuperAgent', description: 'desc', scopes: SCOPES,
     onQRCode: (qr) => shown.push(qr), onStatus: (status) => statuses.push(status),
     register: async (given) => {
       options = given;
@@ -26,7 +26,7 @@ test('one scan creates the app through the official SDK, with the full request',
   assert.deepEqual(app, { appId: 'cli_new', appSecret: 'secret', brand: 'feishu', ownerOpenId: 'ou_owner' });
   assert.equal(options.source, 'vika');
   assert.equal(options.createOnly, true);
-  assert.deepEqual(options.appPreset, { name: 'Vika', desc: 'desc' });
+  assert.deepEqual(options.appPreset, { name: 'OpenViking SuperAgent', desc: 'desc' });
   assert.deepEqual(options.addons, { scopes: SCOPES, events: { items: { tenant: EVENTS } }, callbacks: { items: CALLBACKS } });
   assert.deepEqual(shown, [{ url: 'https://open.feishu.cn/page/launcher?user_code=A', expiresIn: 3600 }]);
   assert.deepEqual(statuses, ['polling']);
@@ -38,12 +38,12 @@ test('picking an existing app leaves the page its app list; updating one names i
     seen.push(given);
     return { client_id: 'cli_old', client_secret: 's', user_info: { open_id: 'ou_owner' } };
   };
-  await scanApp({ mode: 'select', name: 'Vika', scopes: SCOPES, onQRCode() {}, register });
-  await scanApp({ mode: 'update', appId: 'cli_old', name: 'Vika', scopes: SCOPES, onQRCode() {}, register });
+  await scanApp({ mode: 'select', name: 'OpenViking SuperAgent', scopes: SCOPES, onQRCode() {}, register });
+  await scanApp({ mode: 'update', appId: 'cli_old', name: 'OpenViking SuperAgent', scopes: SCOPES, onQRCode() {}, register });
   const [select, update] = seen;
   assert.equal('createOnly' in select, false, 'the landing page offers the apps the scanner owns or administers');
   assert.equal('appId' in select, false);
-  assert.deepEqual(select.appPreset, { name: 'Vika' }, 'making a new one there still gets the name');
+  assert.deepEqual(select.appPreset, { name: 'OpenViking SuperAgent' }, 'making a new one there still gets the name');
   assert.equal(update.appId, 'cli_old');
   assert.equal('createOnly' in update, false, 'createOnly would turn the update back into a create');
   assert.equal('appPreset' in update, false, 'an update keeps the app\'s name');

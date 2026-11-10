@@ -59,7 +59,7 @@ const DAEMON_ENV_FIELDS = Object.freeze([
 ]);
 // Read from the operator environment only: forwarded to the daemon and updater
 // processes, but never accepted from the deployment manifest. DSH owns its model
-// configuration (`vika dsh model`, the instance's DSH settings document), so a
+// configuration (`ovsa dsh model`, the instance's DSH settings document), so a
 // manifest copy would be a second source that only some callers ever read.
 // The binary path is *not* here: `DSH_BIN` is a deployment fact like every other
 // runtime's `*_BIN`, so it stays in DAEMON_ENV_FIELDS.
@@ -71,7 +71,7 @@ const DAEMON_SHELL_ENV_FIELDS = Object.freeze([
 const DAEMON_SECRET_ENV_FIELDS = Object.freeze([
   'ARK_API_KEY',
   // Providers of the durable runtime (pi-ai) read their key from the child
-  // environment. They may come from the operator environment or ~/.vika/secrets
+  // environment. They may come from the operator environment or ~/.ovsa/secrets
   // but never from the deployment manifest.
   'ANTHROPIC_API_KEY',
   'DEEPSEEK_API_KEY',
@@ -133,12 +133,15 @@ function resolveDeploymentManifestPath(env = process.env) {
   }
   const home = typeof homeDir(env) === 'string' ? homeDir(env).trim() : '';
   if (!home || !path.isAbsolute(home)) throw new Error('HOME must be an absolute path');
-  return path.join(path.normalize(home), '.vika', 'config.json');
+  if (!fs.existsSync(path.join(home, '.ovsa')) && fs.existsSync(path.join(home, '.vika'))) {
+    throw new Error('Legacy ~/.vika installation found. Migrate it to ~/.ovsa before using ovsa; see docs/migration-to-ovsa.md.');
+  }
+  return path.join(path.normalize(home), '.ovsa', 'config.json');
 }
 
 // Secrets (DAEMON_SECRET_ENV_FIELDS) are deliberately kept out of config.json
 // so they never land in a file meant to be inspected/versioned. This sibling file
-// is the deterministic fallback: whoever runs `pm2 restart`/`vika upgrade`
+// is the deterministic fallback: whoever runs `pm2 restart`/`ovsa upgrade`
 // no longer needs the secret exported in their own shell for it to take effect.
 function resolveSecretsFilePath(env = process.env) {
   const override = typeof env.VIKA_SECRETS_FILE === 'string'
@@ -152,7 +155,7 @@ function resolveSecretsFilePath(env = process.env) {
   }
   const home = typeof homeDir(env) === 'string' ? homeDir(env).trim() : '';
   if (!home || !path.isAbsolute(home)) return null;
-  return path.join(path.normalize(home), '.vika', 'secrets.env');
+  return path.join(path.normalize(home), '.ovsa', 'secrets.env');
 }
 
 function loadSecretsFile(env = process.env) {
@@ -505,7 +508,7 @@ function selectDeploymentAgent(deployment, id = deployment.defaultInstance) {
   return agent;
 }
 
-// Vika owns OpenViking for the agents it runs: the daemon syncs the
+// OpenViking SuperAgent owns OpenViking for the agents it runs: the daemon syncs the
 // conversation and shows memory (ov-session-context.mjs, ov-recall.mjs), and
 // the Core's openviking_* tools read and write it. The runtimes' own OpenViking
 // plugins stay out: each runtime switches them off where it is launched

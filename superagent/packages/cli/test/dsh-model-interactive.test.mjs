@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
-// The interactive surface of `vika dsh model`: the menu a bare command opens in
+// The interactive surface of `ovsa dsh model`: the menu a bare command opens in
 // a terminal, its add wizard, and the edit flow that reuses it.
 //
 // The prompter is scripted (a terminal without a terminal), the DSH side is the
@@ -100,7 +100,7 @@ async function run(f, argv, { script = [], tty = true, env = {} } = {}) {
   return { code, out: io.state.out, err: io.state.err, prompter };
 }
 
-// Write an instance's settings document directly. `vika dsh model add` no
+// Write an instance's settings document directly. `ovsa dsh model add` no
 // longer exists, so tests that need a pre-existing route seed the document the
 // same way a fresh home is seeded (JSON is valid YAML) instead of asking the
 // wizard first.
@@ -175,7 +175,7 @@ async function menuEdit(f, pick, answers, { id = 'qa' } = {}) {
   });
 }
 
-test('a bare `vika dsh model` on a terminal shows the list once, then the menu', async (t) => {
+test('a bare `ovsa dsh model` on a terminal shows the list once, then the menu', async (t) => {
   const f = createCliFixture(t, { instances: ['qa'] });
   const result = await run(f, [], {
     script: [{ match: /^What to do$/, answer: 'quit' }],
@@ -208,7 +208,7 @@ test('without a terminal the bare command is exactly today\'s list and asks noth
   const plain = await run(f, [], { tty: false });
   const list = await run(f, ['list'], { tty: false });
   assert.equal(plain.code, 0);
-  assert.equal(plain.out, list.out, 'no terminal: byte-identical to `vika dsh model list`');
+  assert.equal(plain.out, list.out, 'no terminal: byte-identical to `ovsa dsh model list`');
   assert.equal(plain.prompter.asked, 0, 'no prompt is even attempted');
   // No prompter at all (a script, a pipe): the same output, no crash.
   const io = streams();
@@ -270,7 +270,7 @@ test('the menu\'s 添加 model runs the four questions and writes what was answe
   assert.deepEqual(providers.deepseek.models.map((model) => model.id), ['deepseek-chat']);
   assert.equal(f.credentials('qa').refs.get('DEEPSEEK_API_KEY'), 'sk-test-only');
   assert.match(result.out, /Wrote deepseek\/deepseek-chat/);
-  assert.match(result.out, /vika restart qa/);
+  assert.match(result.out, /ovsa restart qa/);
 });
 
 test('修改 model offers only declared entries and writes the edited values in place', async (t) => {
@@ -615,7 +615,7 @@ test('a credential reference typed at the prompt is the one stored and printed',
   const result = await menuAdd(f, { credential: 'ref', reference: 'ACME_TOKEN', keepAnyway: true });
   assert.equal(result.code, 0, result.err);
   assert.equal(f.patchProviders('qa').deepseek.apiKeyEnv, 'ACME_TOKEN');
-  assert.match(result.out, /vika dsh model key set ACME_TOKEN/);
+  assert.match(result.out, /ovsa dsh model key set ACME_TOKEN/);
   assert.equal(f.credentials('qa').refs.size, 0, 'a reference-only answer stores no value');
 });
 

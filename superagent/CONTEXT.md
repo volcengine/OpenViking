@@ -24,7 +24,7 @@ and OpenViking context preserve source instance, event kind/id, and subject.
 _Avoid_: daemon class, orchestrator, coordinator
 
 **OpenViking connection**:
-The instance's own OV user (`ovConfig`), which Vika owns for the agent: the daemon mirrors the session journal into OV with each line's speaker in `from=` and no peer, and before a turn shows the owner's and the sender's preferences (`ov-recall.mjs`); the model reads and writes through the Core's `openviking_*` tools. Extraction keeps profile, entities and events; preferences are written only by `openviking_remember`, into the directory the Core keeps for the sender (`ov-person.mjs`). The runtimes' own OpenViking plugins stay switched off (`ov-isolation.mjs`, `docs/openviking-ownership.md`).
+The instance's own OV user (`ovConfig`), which OpenViking SuperAgent owns for the agent: the daemon mirrors the session journal into OV with each line's speaker in `from=` and no peer, and before a turn shows the owner's and the sender's preferences (`ov-recall.mjs`); the model reads and writes through the Core's `openviking_*` tools. Extraction keeps profile, entities and events; preferences are written only by `openviking_remember`, into the directory the Core keeps for the sender (`ov-person.mjs`). The runtimes' own OpenViking plugins stay switched off (`ov-isolation.mjs`, `docs/openviking-ownership.md`).
 _Avoid_: OV client, memory service
 
 **Meeting plugin**:

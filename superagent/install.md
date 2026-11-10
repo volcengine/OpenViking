@@ -1,6 +1,6 @@
 # Install OpenViking SuperAgent
 
-Install Vika and verify that it can receive and answer messages. See the [README](README.md) for an overview and the [configuration reference](docs/installation-reference.md) for advanced setup. The CLI command is `vika`.
+Install OpenViking SuperAgent and verify that it can receive and answer messages. See the [README](README.md) for an overview and the [configuration reference](docs/installation-reference.md) for advanced setup. The CLI command is `ovsa`. The previous `vika` command remains a compatibility alias. For an existing installation, follow the migration guide below, then rerun the installer to add the `ovsa` launcher; upgrading the release alone does not replace launchers.
 
 ## Prerequisites
 
@@ -15,14 +15,14 @@ Install Vika and verify that it can receive and answer messages. See the [README
 | Codex | Install Codex CLI and sign in |
 | Claude Code | Install version 2.1.259 or later and sign in |
 | TraeX | Install and sign in to a version supporting `app-server` |
-| Pi / Durable | Bundled; reuses model configuration from `~/.pi/agent`. Without existing configuration, run `vika pi` after installation and use `/login` |
+| Pi / Durable | Bundled; reuses model configuration from `~/.pi/agent`. Without existing configuration, run `ovsa pi` after installation and use `/login` |
 | OpenCode | Install and sign in to **1.x**, version 1.15.7 or later; this release does not support 2.x |
 | Antigravity | Install the `agy` CLI and sign in; tested with 1.5.3 |
-| DeepSeek Harness | Install `dsh` **0.2.x**, 0.2.2-rc.1 or later, on Node 24.9+; model routes and credentials are managed with `vika dsh model` |
+| DeepSeek Harness | Install `dsh` **0.2.x**, 0.2.2-rc.1 or later, on Node 24.9+; model routes and credentials are managed with `ovsa dsh model` |
 
 See [runtime configuration](docs/installation-reference.md#prerequisites) for models, version detection, and environment variables. Do not put API keys in `config.json` or commit them to a repository.
 
-DeepSeek Harness has no separate sign-in. Its model routes and credentials belong to the instance's own DSH settings document, `<dataDir>/dsh/home/profiles/sdk/cordis.patch.yml`, with the key values in `<dataDir>/dsh/home/.credentials.yaml` beside it; `vika dsh model` adds, removes and imports routes, repairs an unreadable settings document, and stores or removes keys, all through DSH's own services, and the isolated DSH home never reads routes or credentials from your `~/.dsh`. Only the built-in `deepseek-official` route needs `DEEPSEEK_API_KEY`. `dsh` is found on PATH or named by `DSH_BIN`: like every other `*_BIN`, a bare command name also goes through PATH and a path is used as-is, and the value may come from the manifest `env` or from the shell (setup reads the manifest copy too). `VIKA_DSH_EFFORT` sets the effort a new instance starts with and is read from the process environment only. See [DSH runtime](docs/dsh-runtime.md).
+DeepSeek Harness has no separate sign-in. Its model routes and credentials belong to the instance's own DSH settings document, `<dataDir>/dsh/home/profiles/sdk/cordis.patch.yml`, with the key values in `<dataDir>/dsh/home/.credentials.yaml` beside it; `ovsa dsh model` adds, removes and imports routes, repairs an unreadable settings document, and stores or removes keys, all through DSH's own services, and the isolated DSH home never reads routes or credentials from your `~/.dsh`. Only the built-in `deepseek-official` route needs `DEEPSEEK_API_KEY`. `dsh` is found on PATH or named by `DSH_BIN`: like every other `*_BIN`, a bare command name also goes through PATH and a path is used as-is, and the value may come from the manifest `env` or from the shell (setup reads the manifest copy too). `VIKA_DSH_EFFORT` sets the effort a new instance starts with and is read from the process environment only. See [DSH runtime](docs/dsh-runtime.md).
 
 ## Install
 
@@ -42,10 +42,10 @@ irm https://ovrelease.tos-cn-beijing.volces.com/vika/install.ps1 | iex
 
 This downloads the latest Windows x64 preview. No separate ZIP or setup wrapper is needed. See [installer options](docs/installation-reference.md#one-command-installation) to pin a Windows version.
 
-Both installers verify the downloaded archive, install it under `~/.vika/releases/`, and open `vika setup` on a first interactive installation. Follow the same setup steps below on either platform. If your shell cannot find `vika`, reopen the terminal. On macOS / Linux you can also use `~/.vika/bin/vika`; on Windows the launcher is `bin\vika.cmd` under the Vika home (`$env:HOME` when set, otherwise `$env:USERPROFILE`).
+Both installers verify the downloaded archive, install it under `~/.ovsa/releases/`, and open `ovsa setup` on a first interactive installation. Follow the same setup steps below on either platform. If your shell cannot find `ovsa`, reopen the terminal. On macOS / Linux you can also use `~/.ovsa/bin/ovsa`; on Windows the launcher is `bin\ovsa.cmd` under the OpenViking SuperAgent home (`$env:HOME` when set, otherwise `$env:USERPROFILE`).
 
 ```bash
-vika setup
+ovsa setup
 ```
 
 Follow the wizard:
@@ -62,33 +62,35 @@ Other channel setup: [WeChat](docs/installation-reference.md#wechat-setup) · [Q
 ## Verify and manage
 
 ```bash
-vika status
-vika logs primary
-vika restart primary
+ovsa status
+ovsa logs primary
+ovsa restart primary
 ```
 
 Open `http://127.0.0.1:3737` to view activity. Send a specific task in a direct chat and verify both the reply and the workspace result. An online process alone does not prove that messaging works.
 
-- Add or edit instances and channels, or remove an instance: `vika setup`.
-- Renew expired authentication: `vika login <channel> [instance]`.
-- Upgrade on macOS / Linux: `vika upgrade primary`. On Windows, stop Vika, rerun the PowerShell installer, then run `vika restart`; automatic upgrades are not supported yet. See [upgrade and rollback](docs/installation-reference.md#upgrade-and-rollback).
-- Enable startup at login: `vika autostart enable`. On Linux, use `loginctl enable-linger` if the service must continue after logout; on Windows it adds a per-user Startup-folder entry, with no service or administrator.
-- Change the interface language: `vika --lang zh` or `vika --lang en`.
+- Add or edit instances and channels, or remove an instance: `ovsa setup`.
+- Renew expired authentication: `ovsa login <channel> [instance]`.
+- Upgrade on macOS / Linux: `ovsa upgrade primary`. On Windows, stop OpenViking SuperAgent, rerun the PowerShell installer, then run `ovsa restart`; automatic upgrades are not supported yet. See [upgrade and rollback](docs/installation-reference.md#upgrade-and-rollback).
+- Enable startup at login: `ovsa autostart enable`. On Linux, use `loginctl enable-linger` if the service must continue after logout; on Windows it adds a per-user Startup-folder entry, with no service or administrator.
+- Change the interface language: `ovsa --lang zh` or `ovsa --lang en`.
 
-Configuration defaults to `~/.vika/config.json`. For a custom location, set the same absolute `VIKA_CONFIG` path for related commands. Editing a source checkout does not update an installed service.
+Configuration defaults to `~/.ovsa/config.json`. For a custom location, set the same absolute `VIKA_CONFIG` path for related commands. Editing a source checkout does not update an installed service.
 
 ## Troubleshooting
 
 | Symptom | Check |
 |---|---|
-| OV validation fails | Address, connectivity, and credentials; private services must be reachable from the machine running Vika |
-| No runtime is available | CLI authentication, or configure the bundled model with `vika pi` |
+| OV validation fails | Address, connectivity, and credentials; private services must be reachable from the machine running OpenViking SuperAgent |
+| No runtime is available | CLI authentication, or configure the bundled model with `ovsa pi` |
 | Antigravity is not offered | `agy models` works for this user, and `AGY_BIN` points at the Antigravity CLI |
-| DeepSeek Harness is not offered, or a route is missing from `/model` | `dsh --version` is 0.2.x on Node 24.9+ and `DSH_BIN` points at it; `vika dsh model list` names unready routes and why |
+| DeepSeek Harness is not offered, or a route is missing from `/model` | `dsh --version` is 0.2.x on Node 24.9+ and `DSH_BIN` points at it; `ovsa dsh model list` names unready routes and why |
 | Feishu receives no messages | Long connection, message events, app publication / approval, and competing bot services |
 | Messages work but tools fail with permission errors | App permissions and user authorization; see [manual Feishu setup](docs/installation-reference.md#manual-feishu-setup) |
-| Startup or attachment operations fail | `vika logs primary`; see [attachment temporary directories](docs/installation-reference.md#attachment-temporary-directories) |
+| Startup or attachment operations fail | `ovsa logs primary`; see [attachment temporary directories](docs/installation-reference.md#attachment-temporary-directories) |
 
 The release-process guide below is currently in Chinese.
 
 [Source development](docs/installation-reference.md#running-from-source) · [Upgrade and rollback](docs/installation-reference.md#upgrade-and-rollback) · [Multiple instances and memory](docs/installation-reference.md#multiple-agents) · [Release process](../docs/repository/RELEASE_CN.md)
+
+Existing `~/.vika` installations: follow the [ovsa migration guide](docs/migration-to-ovsa.md) before installing this version.

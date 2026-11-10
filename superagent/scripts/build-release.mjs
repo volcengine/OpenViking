@@ -138,7 +138,7 @@ async function buildPlatform({ stage, platformId, version, commit, nodeVersion, 
 const opts = options(process.argv.slice(2));
 const version = releaseVersion(opts.ref, opts.version);
 const commit = git('rev-parse', opts.ref);
-const nodeVersion = JSON.parse(git('show', `${opts.ref}:./package.json`)).vika.node;
+const nodeVersion = JSON.parse(git('show', `${opts.ref}:./package.json`)).ovsa.node;
 fs.mkdirSync(opts.out, { recursive: true });
 const cache = path.join(os.homedir(), '.cache', 'vika-build');
 fs.mkdirSync(cache, { recursive: true });

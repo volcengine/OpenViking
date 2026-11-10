@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Vika is licensed under the GNU Affero General Public License v3.0; see
+OpenViking SuperAgent is licensed under the GNU Affero General Public License v3.0; see
 [LICENSE](./LICENSE). The source tree and the release archives also contain the
 third-party software below. Each part stays under its own license.
 

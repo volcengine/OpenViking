@@ -32,7 +32,7 @@ const UP = '\x1b[A';
 
 test('piped answers: defaults, numbered choices, and a retry after an invalid answer', async () => {
   const { prompter, written } = piped(['', 'bad id', 'agent2', '2', '1,2', 'y']);
-  assert.equal(await prompter.text('名字', { initial: 'Vika' }), 'Vika');
+  assert.equal(await prompter.text('名字', { initial: 'OpenViking SuperAgent' }), 'OpenViking SuperAgent');
   assert.equal(await prompter.text('实例', { validate: (value) => (/\s/.test(value) ? '不能有空格' : null) }), 'agent2');
   assert.match(written(), /不能有空格/);
   assert.equal(await prompter.select('运行时', [

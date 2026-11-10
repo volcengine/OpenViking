@@ -51,7 +51,7 @@ function npmShimEntrypoint(shim) {
   return match?.[1] ?? null;
 }
 
-// A Vika release ships bin\pm2.cmd, so `pm2` typed in a terminal uses that
+// An OpenViking SuperAgent release ships bin\pm2.cmd, so `pm2` typed in a terminal uses that
 // release's own pm2 and Node. It is our file, with a known layout: launch the
 // entrypoint it wraps instead of reading it as an npm shim, and never pass the
 // arguments to cmd.exe.
@@ -161,7 +161,7 @@ export const supportsPosixSignals = false;
 export const supportsFileModes = false;
 export const supportsShellScripts = false;
 export const pathDelimiter = ';';
-// No service manager to register with: `vika autostart` writes the user's own
+// No service manager to register with: `ovsa autostart` writes the user's own
 // Startup folder instead, which needs no elevation.
 export const loginService = 'startupFolder';
 export const systemEnvironmentKeys = Object.freeze(['USERPROFILE', 'SYSTEMROOT', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'COMSPEC', 'PATHEXT', 'HOMEDRIVE', 'HOMEPATH', 'USERNAME']);

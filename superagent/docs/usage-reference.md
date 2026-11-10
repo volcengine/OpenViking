@@ -4,7 +4,7 @@
 
 Connect your local coding agent to Feishu / Lark, WeChat, Telegram, Slack, QQ, and email events. Core maintains a shared Agent session and OpenViking space; independent Connector subprocesses handle message sources.
 
-Vika makes Codex, TraeX, Claude, Pi, DeepSeek Harness (DSH), OpenCode, or Antigravity a long-term collaborator. OpenViking retains context so you need not re-explain projects, while code, credentials, and local tools remain on your machine.
+OpenViking SuperAgent makes Codex, TraeX, Claude, Pi, DeepSeek Harness (DSH), OpenCode, or Antigravity a long-term collaborator. OpenViking retains context so you need not re-explain projects, while code, credentials, and local tools remain on your machine.
 
 ## Usage
 
@@ -33,7 +33,7 @@ Connectors establish the owner during self-check: Feishu's lark-cli user account
 
 ## Installation
 
-Use the pinned command in [install.md](../install.md), then `vika setup` to connect channels. Node is bundled, and the UI supports `--lang zh|en`. The unversioned installer and `latest` endpoint are currently unavailable. See the [configuration reference](installation-reference.md) for dependencies, setup, upgrades, rollback, autostart, multiple agents, and releases.
+Use the pinned command in [install.md](../install.md), then `ovsa setup` to connect channels. Node is bundled, and the UI supports `--lang zh|en`. The unversioned installer and `latest` endpoint are currently unavailable. See the [configuration reference](installation-reference.md) for dependencies, setup, upgrades, rollback, autostart, multiple agents, and releases.
 
 ## Chat channels and email
 
@@ -50,7 +50,7 @@ Add a WeChat instance to `config.json`. `channel` is the compatibility field; `c
   "channel": "weixin",
   "connectors": ["weixin"],
   "port": 3741,
-  "dataDir": "/Users/you/.vika/data/weixin",
+  "dataDir": "/Users/you/.ovsa/data/weixin",
   "workspace": "/Users/you/Documents/work/weixin-workspace",
   "ovConfig": "/Users/you/.openviking/ovcli.conf.weixin",
   "model": "pi"
@@ -67,13 +67,13 @@ Codex, TraeX, Claude, Pi, DSH, OpenCode, and Antigravity can be used. To share t
 }
 ```
 
-Run `vika login weixin`, choosing an instance if needed, or name it explicitly. Add WeChat to an existing instance through setup. Without `connectors`, the legacy single `channel` behavior remains.
+Run `ovsa login weixin`, choosing an instance if needed, or name it explicitly. Add WeChat to an existing instance through setup. Without `connectors`, the legacy single `channel` behavior remains.
 
 For source development:
 
 ```bash
 npm install
-vika login weixin weixin
+ovsa login weixin weixin
 VIKA_INSTANCE_ID=weixin npm run start:daemon
 ```
 
@@ -85,10 +85,10 @@ Inbound media is downloaded from Tencent CDN, AES-decrypted, and stored in `data
 
 QQ uses official Bot API v2 and WebSocket, not a personal-account protocol, and needs no public webhook. In a release with QQ support:
 
-1. Register at the [QQ developer platform](https://q.qq.com/#/) if needed, then create a separate bot at the [QQ bot entry](https://q.qq.com/qqbot/openclaw/), obtain AppID / AppSecret, and add it with your QQ account. These credentials work with Vika; OpenClaw need not be running.
+1. Register at the [QQ developer platform](https://q.qq.com/#/) if needed, then create a separate bot at the [QQ bot entry](https://q.qq.com/qqbot/openclaw/), obtain AppID / AppSecret, and add it with your QQ account. These credentials work with OpenViking SuperAgent; OpenClaw need not be running.
 2. Select QQ in setup, enter credentials (secret input is hidden), and ensure the bot is online with direct-message permission.
 3. Send the complete `vika-bind …` code shown in the terminal to the bot within three minutes. Only the matching direct message saves the account; another early sender does not become owner.
-4. Send tasks after startup. Use `vika login qq [instance]` to rebind or change keys; the instance pauses during verification, resumes afterward, and retains old credentials on failure.
+4. Send tasks after startup. Use `ovsa login qq [instance]` to rebind or change keys; the instance pauses during verification, resumes afterward, and retains old credentials on failure.
 
 Only the bound owner's direct chats are processed. Text, images, files, quoted replies, and slash commands are supported. Text is plain, up to 4,000 characters. Files/downloads are limited to 20 MiB, with multipart upload from 5 MB; sending generic files depends on bot permissions. Groups, personal-account interception, audio, video, interactive buttons, and history search are unsupported. Only Tencent's MIT Node SDK is used for WebSocket, not a separate QR credential SDK.
 
@@ -98,12 +98,12 @@ A QQ-only instance uses `"channel": "qq"`, `"connectors": ["qq"]`, and no `profi
 
 ### Telegram direct messages
 
-The official [Telegram Bot API](https://core.telegram.org/bots/api) uses long polling without public webhooks. Vika must reach `api.telegram.org` over HTTPS, and you need Telegram on your phone or desktop.
+The official [Telegram Bot API](https://core.telegram.org/bots/api) uses long polling without public webhooks. OpenViking SuperAgent must reach `api.telegram.org` over HTTPS, and you need Telegram on your phone or desktop.
 
 1. Send `/newbot` to official [@BotFather](https://t.me/BotFather), create a separate bot, and copy its token.
 2. Select Telegram in setup. It can be primary or share an instance with Feishu, WeChat, and email.
 3. Paste the token into hidden input, open the generated link or QR code, and click **Start** in the bot's direct chat within three minutes.
-4. After startup, send tasks. `vika login telegram [instance]` changes tokens or binding, pausing the instance during verification and retaining old credentials until success.
+4. After startup, send tasks. `ovsa login telegram [instance]` changes tokens or binding, pausing the instance during verification and retaining old credentials until success.
 
 Only the account completing the current random binding link can trigger the agent; other accounts, groups, and old binding commands are ignored. Ordinary bot direct chats are not end-to-end encrypted. Use one bot per instance with no competing poller. Existing webhooks cause refusal rather than automatic deletion of another service's configuration.
 
@@ -115,16 +115,16 @@ Tokens, owner/chat IDs, receive cursors, and reply routes live in `<dataDir>/tel
 
 ### Slack
 
-Use an internal app in your workspace with [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode), requiring HTTPS/WSS access to `slack.com` but no public callback. Use one app per instance: Slack distributes events randomly among an app's connections, so competing receivers lose messages. Vika stops with an explanation when it detects this.
+Use an internal app in your workspace with [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode), requiring HTTPS/WSS access to `slack.com` but no public callback. Use one app per instance: Slack distributes events randomly among an app's connections, so competing receivers lose messages. OpenViking SuperAgent stops with an explanation when it detects this.
 
 1. Select Slack in setup.
 2. Open the terminal link and create an app with its prefilled configuration. Alternatively use **Create New App → From a manifest** at [api.slack.com/apps](https://api.slack.com/apps) with `<dataDir>/slack/app-manifest.json`. Workspace approval may be required. For an existing app, enable Socket Mode and App Home messaging, add manifest subscriptions/scopes, and reinstall. Token Rotation is unsupported; stop any previous receiver.
 3. **Install to Workspace** and copy the Bot User OAuth Token (`xoxb-`) from OAuth & Permissions. Create an App-Level Token (`xapp-`) with `connections:write` under Basic Information. Paste both into hidden terminal input.
-4. Send the one-time `vika-xxxxxxxx` passphrase to the bot in a direct chat within five minutes; its sender becomes owner. `vika login slack [instance]` rebinds tokens or owner, pausing the instance during validation; messages received during this pause are replayed afterward.
+4. Send the one-time `vika-xxxxxxxx` passphrase to the bot in a direct chat within five minutes; its sender becomes owner. `ovsa login slack [instance]` rebinds tokens or owner, pausing the instance during validation; messages received during this pause are replayed afterward.
 
 Anyone in the workspace can directly message the bot. Invite it to channels with `/invite @bot`; mentioning it is not required, and the agent decides whether to answer. Slack Connect inputs carry `external=true` and follow external-group privacy boundaries. Other apps' messages carry `sender=bot` and `bots_since_human=N`. The agent decides whether another response helps. A fuse blocks further replies after 20 bot-message responses in a channel/thread with no intervening human message, notifying the owner once. Human input resets it. Set `VIKA_BOT_REPLY_FUSE` to change the threshold, or `0` to disable it. Feishu uses the same mechanism.
 
-Slack has no quoted replies: replying to a channel message starts/continues its thread; thread input stays there. Markdown converts to Slack syntax, with a 12,000-character limit and longer content sent as files. `@channel` and `@here` are suppressed. Text, files (workspace limit 20 MiB; incoming files downloaded on demand), mentions, reactions, and retraction are supported; button cards and search are not. Email approval uses numbered messages such as `发送 N` (send N). Slack intercepts slash commands, so prefix Vika commands with a space, e.g. ` /new`.
+Slack has no quoted replies: replying to a channel message starts/continues its thread; thread input stays there. Markdown converts to Slack syntax, with a 12,000-character limit and longer content sent as files. `@channel` and `@here` are suppressed. Text, files (workspace limit 20 MiB; incoming files downloaded on demand), mentions, reactions, and retraction are supported; button cards and search are not. Email approval uses numbered messages such as `发送 N` (send N). Slack intercepts slash commands, so prefix OpenViking SuperAgent commands with a space, e.g. ` /new`.
 
 `list_chat_members` pages through channel/direct-chat members and returns IDs, display names, and known bot/self/deactivated flags. Names can be used in `mention_names`; use IDs for duplicates. Page size defaults to 100, maximum 200, with `next_cursor`. Unavailable profiles retain their IDs and an explicit unknown marker rather than being classified as human. New-app templates include these permissions; existing apps need [additional authorization](installation-reference.md#slack-setup). Missing scopes affect this query only.
 
@@ -145,9 +145,9 @@ Before delivery to the agent, each email is stored in the instance's private OV 
 
 Only the owner can approve, once, within three days. Initial startup watches only subsequently arriving mail. List/subscription mail is marked `kind=email.list`; automatic replies, most bounces, and the bot's own replies are skipped. Automated alerts such as security or task-failure notifications still reach the agent.
 
-Select email in setup for new or existing instances and add one or more accounts. Gmail, QQ, and 163/126/yeah.net have presets; other servers are manual. IMAP and SMTP are tested before saving. The edit menu adds accounts, changes passwords, or removes accounts; `vika login email` is quicker for password changes. Replies use the receiving mailbox, shown on the draft.
+Select email in setup for new or existing instances and add one or more accounts. Gmail, QQ, and 163/126/yeah.net have presets; other servers are manual. IMAP and SMTP are tested before saving. The edit menu adds accounts, changes passwords, or removes accounts; `ovsa login email` is quicker for password changes. Replies use the receiving mailbox, shown on the draft.
 
-Account files are `~/.vika/email/<instance>/<account>.json` (0600), referenced by the instance:
+Account files are `~/.ovsa/email/<instance>/<account>.json` (0600), referenced by the instance:
 
 ```json
 {
@@ -155,8 +155,8 @@ Account files are `~/.vika/email/<instance>/<account>.json` (0600), referenced b
   "channel": "lark",
   "connectors": ["lark", "email"],
   "emailAccounts": [
-    { "id": "email-gmail", "config": "/Users/you/.vika/email/primary/email-gmail.json" },
-    { "id": "email-qq", "config": "/Users/you/.vika/email/primary/email-qq.json" }
+    { "id": "email-gmail", "config": "/Users/you/.ovsa/email/primary/email-gmail.json" },
+    { "id": "email-qq", "config": "/Users/you/.ovsa/email/primary/email-qq.json" }
   ]
 }
 ```
@@ -215,7 +215,7 @@ Enable long-connection `card.action.trigger` in Feishu callback configuration be
 - Group batching lasts 400 ms from the first pending message; later arrivals do not reset it. Chat/thread queues expire independently. Active Codex/TraeX/Claude/Pi/Durable/DSH turns receive immediate steering; OpenCode, Antigravity, and Ark follow-ups wait for the next turn.
 - Questions, tasks, corrections, and meaningful follow-ups usually receive replies. Acknowledgments, thanks, chatter, status broadcasts, conversations between people, and already answered questions usually do not.
 - Images, files, audio, and video enter as restricted resource references. Codex/TraeX/Claude/Pi/Durable/DSH/OpenCode/Antigravity use `get_message_media` with image/file keys (WeChat/Telegram/QQ use message ID; Slack uses message and file IDs). Images are supplied through tool results, not embedded in the inbound prompt. Self-hosted Ark needs equivalent Worker-local tools because it does not inherit daemon Agent tools. Unknown message types do not trigger replies.
-- Direct-chat slash commands are handled by the daemon without waiting for the model: `/new`, `/help`, `/status`, `/runtime` (alias `/run`), `/model`, `/effort`, and `/primary`. `/new` starts a clean session; Ark must first create the remote session successfully before committing the local epoch. Runtime switching supports Codex, TraeX, Claude, Pi, Durable, DSH, OpenCode, Antigravity, and Ark; selecting the same runtime preserves the session. Successful switches save both manifest and SQLite state and survive restart; setup reconciles desired configuration with actual runtime state. Cross-runtime switching retires the native session, restores the target's last model, and attaches recent raw OV history to the first real input; older raw messages are available through archive queries. `/model` affects only the current runtime (e.g. Claude `sonnet`, Antigravity `gemini-3.8-flash-low`, or Pi/Durable/DSH/OpenCode `provider/id`), without implicit runtime or session switching. Claude's CLI supplies names, version IDs, and efforts. Model/effort changes apply next turn, preserving the current turn and context. Effort candidates are validated against the model; unavailable capabilities are not guessed. When changing model, retain a supported effort, otherwise use its declared default, then supported medium or first option, and report the adjustment. Remove effort overrides for models explicitly lacking support. Unknown capabilities preserve settings and request retry. Unavailable saved models fall back to the runtime default, but discovery failure is not proof a model is absent; fallback is saved only after successful switching. Ark model/effort are configured remotely. `/status` reports main-model sampling and duration, showing idle while it waits for tools/subagents. Prompt/code updates require a published release via `vika upgrade <instance-id>`.
+- Direct-chat slash commands are handled by the daemon without waiting for the model: `/new`, `/help`, `/status`, `/runtime` (alias `/run`), `/model`, `/effort`, and `/primary`. `/new` starts a clean session; Ark must first create the remote session successfully before committing the local epoch. Runtime switching supports Codex, TraeX, Claude, Pi, Durable, DSH, OpenCode, Antigravity, and Ark; selecting the same runtime preserves the session. Successful switches save both manifest and SQLite state and survive restart; setup reconciles desired configuration with actual runtime state. Cross-runtime switching retires the native session, restores the target's last model, and attaches recent raw OV history to the first real input; older raw messages are available through archive queries. `/model` affects only the current runtime (e.g. Claude `sonnet`, Antigravity `gemini-3.8-flash-low`, or Pi/Durable/DSH/OpenCode `provider/id`), without implicit runtime or session switching. Claude's CLI supplies names, version IDs, and efforts. Model/effort changes apply next turn, preserving the current turn and context. Effort candidates are validated against the model; unavailable capabilities are not guessed. When changing model, retain a supported effort, otherwise use its declared default, then supported medium or first option, and report the adjustment. Remove effort overrides for models explicitly lacking support. Unknown capabilities preserve settings and request retry. Unavailable saved models fall back to the runtime default, but discovery failure is not proof a model is absent; fallback is saved only after successful switching. Ark model/effort are configured remotely. `/status` reports main-model sampling and duration, showing idle while it waits for tools/subagents. Prompt/code updates require a published release via `ovsa upgrade <instance-id>`.
 - After ten minutes without successful outbound delivery, subsequent trusted input metadata gets `idle=<seconds>s`; no reaction is sent automatically. For genuinely long work, Codex/TraeX/Claude/Pi/Durable/DSH/OpenCode/Antigravity may add temporary `OnIt` via `react_to_message`. Ark's Worker/CLI path supports final reactions only. Short tasks and ignored group messages create no extra noise; silence does not consume the idle window. Core tracks exact `reaction_id` values in memory per chat/thread and removes them on the next successful final text/reaction or when the turn ends, fails, or is abandoned. No polling/database scan is used. Deletion failure or SIGKILL may leave a reaction behind; this is best-effort UX. `VIKA_IDLE_REACTION_AFTER_MS=0` disables the hint.
 - `agents[].role` chooses `colleague` (AI coworker collaborating in work groups), `assistant` (owner-focused tasks, reminders, and notifications), `qa` (verified product answers with privacy and topic boundaries), or an absolute Markdown path. Setup can copy a built-in role as a custom starting point. Built-ins update with releases; custom files do not. Omission uses default rules only. Owner/product knowledge belongs in OV, not the role. Restarting after role edits starts a new session.
 - Natural-writing guidance defaults on; `agents[].naturalWriting: false` disables it.
@@ -267,24 +267,24 @@ The selected local lark-cli profile must exist with bot identity `ready`; user O
 
 ```bash
 cd superagent
-mkdir -p ~/.vika
-cp config.example.json ~/.vika/config.json
+mkdir -p ~/.ovsa
+cp config.example.json ~/.ovsa/config.json
 npm test
 npm run check
 npm run start:daemon   # 127.0.0.1:3738
 npm run start:web      # 127.0.0.1:3737
 ```
 
-Use a small, separate agent workspace so test coding agents cannot modify the daemon itself. Installed releases live under `~/.vika/releases/`, managed by Vika's PM2. Persistent manifests outside releases independently configure each workspace.
+Use a small, separate agent workspace so test coding agents cannot modify the daemon itself. Installed releases live under `~/.ovsa/releases/`, managed by OpenViking SuperAgent's PM2. Persistent manifests outside releases independently configure each workspace.
 
 ## Operations
 
 ```bash
-vika status
-vika logs <instance-id>
+ovsa status
+ovsa logs <instance-id>
 curl http://127.0.0.1:3737/ready
-vika upgrade <instance-id>
-vika upgrade all
+ovsa upgrade <instance-id>
+ovsa upgrade all
 ```
 
 `vika-updater` listens on a local Unix socket with mode 0600, not TCP, and never reads the agent's source checkout. It accepts only manifest IDs or `all`, rereading the manifest each time; requests cannot specify versions, paths, download URLs, or shell commands. It installs only the published `latest`, verifies SHA-256 and bundled-Node smoke checks, atomically switches `current`, rolls target daemons from the same ecosystem configuration (`all` also rolls shared Web), then restarts itself. Same-version requests reuse the release. It shares the installer's deployment lock. A published `latest` endpoint is required; see the current pinned-install limitation in [install.md](../install.md).
@@ -293,11 +293,11 @@ vika upgrade all
 
 OV is required. Before IM onboarding, setup lists detected connections and always offers Volcengine managed OV (API key from the OV console's User Management → API Key), manual URL/credentials, and file import, including remote/custom ports. API-key services derive identity from the key; manually changing the address does not reuse old Account/User fields. Editing an instance opens its settings directly; select OpenViking to edit and save to apply. Backing out/discarding preserves old configuration. The installer does not prompt: first interactive installation enters setup; other installs require OV before switching. Rejected startup credentials cause exit; temporary outages allow history-free startup and later sync.
 
-Each instance requires separate `ovConfig`. Vika owns OV memory for every runtime: only the daemon's session sync writes the conversation, each line naming its speaker in `from=`, with no peers; extraction keeps profile, entities, and events, each event once. Preferences are written only by `openviking_remember`, into the sender's own directory (`memories/preferences/owner/` for the owner, `<name>~<id>/` for anyone else); the owner's preferences are the agent's standing rules. Before forwarding direct chats, mentioned group messages, document comments, and non-chat events such as mail, the daemon attaches the owner's preferences and the sender's (about three seconds; failures/timeouts skip them). Boolean `agents[].ovAutoRecall` (default `false`) adds one semantic search on the line; results follow it with `who=` naming the owner, the sender, or another person. Extraction never changes the agent's own name or role: those come from configuration, and when someone else asks it to change how it behaves for everyone, or how it treats another person, it asks the owner first. Runtimes Vika starts do not load their own OpenViking plugins. Restart to apply changes.
+Each instance requires separate `ovConfig`. OpenViking SuperAgent owns OV memory for every runtime: only the daemon's session sync writes the conversation, each line naming its speaker in `from=`, with no peers; extraction keeps profile, entities, and events, each event once. Preferences are written only by `openviking_remember`, into the sender's own directory (`memories/preferences/owner/` for the owner, `<name>~<id>/` for anyone else); the owner's preferences are the agent's standing rules. Before forwarding direct chats, mentioned group messages, document comments, and non-chat events such as mail, the daemon attaches the owner's preferences and the sender's (about three seconds; failures/timeouts skip them). Boolean `agents[].ovAutoRecall` (default `false`) adds one semantic search on the line; results follow it with `who=` naming the owner, the sender, or another person. Extraction never changes the agent's own name or role: those come from configuration, and when someone else asks it to change how it behaves for everyone, or how it treats another person, it asks the owner first. Runtimes OpenViking SuperAgent starts do not load their own OpenViking plugins. Restart to apply changes.
 
 Core provides `openviking_*` tools with identical names, schemas, and behavior for every local runtime (Codex/TraeX/Claude/Pi/Durable/DSH/OpenCode/Antigravity) through the same ActionService: `openviking_find` / `openviking_search` (retrieval; a person's preference says whose it is), `openviking_read` / `openviking_list` (read and browse `viking://`), `openviking_add_resource` (asynchronously import a URL or workspace file someone asked to keep, by default into the private `viking://~/resources/inbox`, never into the daemon's mail, meeting-note, timer, memory, or session trees), and `openviking_remember` (when someone states how they want to be treated, asks that something about them stay private, or changes or withdraws such a wish, store, replace, or remove that preference by topic; the Core decides whose it is from the message's real sender, the model gives only topic and words). Ark (Volc) has no Core tools and is the only exception.
 
-New-instance connection lists include environment-selected, saved Vika, and OV CLI configurations, not other instances' configurations; editing additionally shows that instance's current connection. New instances create their own OV file and user identity. Request-identified dev/Trusted services use `<connection-user>.<instance-id>` or just the ID without a connection user. API-key services identify by key: if already used by another instance or CLI, explicitly choose shared memory or another key. An admin key can create a new user without being saved. Backtracking reuses newly created users; setup completion/cancellation/error deletes unused created users, reporting cleanup failures for administrators. Instance configuration has no peer, and the daemon attaches none. An existing default-local connection avoids repeated anonymous probing. Trusted mode requires Account and User and cannot proceed until identity checks pass.
+New-instance connection lists include environment-selected, saved OpenViking SuperAgent, and OV CLI configurations, not other instances' configurations; editing additionally shows that instance's current connection. New instances create their own OV file and user identity. Request-identified dev/Trusted services use `<connection-user>.<instance-id>` or just the ID without a connection user. API-key services identify by key: if already used by another instance or CLI, explicitly choose shared memory or another key. An admin key can create a new user without being saved. Backtracking reuses newly created users; setup completion/cancellation/error deletes unused created users, reporting cleanup failures for administrators. Instance configuration has no peer, and the daemon attaches none. An existing default-local connection avoids repeated anonymous probing. Trusted mode requires Account and User and cannot proceed until identity checks pass.
 
 Runtime OV failures do not exit the daemon or proactively notify chats. New native sessions can skip history; the local sync ledger remains for retry. Existing sessions do not suddenly receive recovered history; a later new session can load it. Archive-integrity errors still block incomplete handoff rather than replaying SQLite history.
 
@@ -307,11 +307,11 @@ Shared `env` accepts only listed keys and string JSON values, including numeric/
 
 Unknown manifest fields at any level are ignored and reported in `config_fields_ignored`, status, and setup, allowing older configuration to start. Known fields remain strict: relative paths, invalid IDs/ports, duplicate IDs/profiles/ports/directories/OV files, and nested dataDir/workspace pairs are rejected. The ecosystem creates `vika-<id>` apps, Web routes, and updater allowlists with fixed per-instance settings.
 
-`npm run start:daemon` uses `defaultInstance`; `VIKA_INSTANCE_ID=<id>` selects another for foreground development. After topology changes, save the manifest and run `vika upgrade all`, or `vika start <new-instance>` plus `vika restart web`. After all new apps are healthy, `upgrade all` removes obsolete apps from the same managed release without deleting data or touching unrelated prefix-matching processes. To reuse an old port immediately after an ID rename, verify executable ownership and stop/delete that exact old app; there is no alias/migration mechanism. Ordinary code upgrades use `vika upgrade <id>`.
+`npm run start:daemon` uses `defaultInstance`; `VIKA_INSTANCE_ID=<id>` selects another for foreground development. After topology changes, save the manifest and run `ovsa upgrade all`, or `ovsa start <new-instance>` plus `ovsa restart web`. After all new apps are healthy, `upgrade all` removes obsolete apps from the same managed release without deleting data or touching unrelated prefix-matching processes. To reuse an old port immediately after an ID rename, verify executable ownership and stop/delete that exact old app; there is no alias/migration mechanism. Ordinary code upgrades use `ovsa upgrade <id>`.
 
 Setup deletion defaults to cancellation. It removes the instance configuration and managed PM2 app, saves the process list, and refreshes Web, retaining workspaces, history, credentials, OV memory, and platform bots. Choose a new default if needed; the sole remaining one is automatic. Deleting the last instance removes Web/updater, backs up config to `.bak`, and removes the active file. Deletion is blocked during deployment/upgrades; process-removal failure retains configuration for retry.
 
-Maintainers must publish code before `vika upgrade <instance-id>`. The updater can finish a self-upgrade after its caller exits, but the current CLI/model connection may be lost. Verify through `/status` or local health afterward.
+Maintainers must publish code before `ovsa upgrade <instance-id>`. The updater can finish a self-upgrade after its caller exits, but the current CLI/model connection may be lost. Verify through `/status` or local health afterward.
 
 ## Activity page
 
@@ -345,7 +345,7 @@ The daemon and slash commands control models only through `AgentRuntime.start`, 
 
 ### Runtime tools
 
-`packages/daemon/src/agent-clis.mjs` registers bundled lark-cli and official Slack CLI (`slack`). Codex/TraeX/Claude/Pi/Durable/DSH/OpenCode/Antigravity children prepend their directories to PATH, and prompts list actual command paths. Releases and source `npm run setup` need no global installation or manual PATH changes. `LARK_CLI_BIN` / `SLACK_CLI_BIN` affect both discovery and prompt paths; renamed/spaced paths are shell-escaped and relative paths resolve from the Vika package root. Messaging, profile, and credential boundaries remain unchanged; the Slack Connector retains its token.
+`packages/daemon/src/agent-clis.mjs` registers bundled lark-cli and official Slack CLI (`slack`). Codex/TraeX/Claude/Pi/Durable/DSH/OpenCode/Antigravity children prepend their directories to PATH, and prompts list actual command paths. Releases and source `npm run setup` need no global installation or manual PATH changes. `LARK_CLI_BIN` / `SLACK_CLI_BIN` affect both discovery and prompt paths; renamed/spaced paths are shell-escaped and relative paths resolve from the OpenViking SuperAgent package root. Messaging, profile, and credential boundaries remain unchanged; the Slack Connector retains its token.
 
 Registering another pinned bundled CLI requires its name, binary path, and version-check arguments to reuse local-runtime discovery and release smoke checks. `node packages/daemon/scripts/check-agent-clis.mjs` checks sh/bash discovery/execution with temporary HOME, separate workspace, and clean PATH; release builds run it automatically.
 
@@ -360,7 +360,7 @@ Agent tools have one definition/implementation in Core `ActionService`. Codex/Tr
 - Messages first enter SQLite as DONE, then the resident runtime. Codex/TraeX use `turn/start` / `turn/steer`; Claude uses persistent stream-json input; Durable journals before model invocation; Ark uses session events/SSE and event-history/event-ID gap recovery. Ark persists its `user.message` fence and restores accepted remote turns without duplicate POST after daemon restart. If acceptance is uncertain, the old session is quarantined, a new one cloned, and epoch/authority atomically rotated before the queue resumes, preventing late output from crossing turns.
 - The 400 ms group window batches transport only; it creates no chat-specific native session/history/memory. A crash in the window can leave persisted messages undelivered to the runtime. This version adds no durable replay/delivery ledger for that gap.
 - Slash commands and subsequent input share an ingress barrier, but commands do not wait for the model. Read-only commands reply concurrently; session changes interrupt the old turn, prepare a new session, atomically CAS epoch/session/authority/model in SQLite, then perform non-failing local activation. Failed preparation/CAS preserves cognition. Cross-runtime switches preflight the destination before handoff. Model/effort changes save settings without interrupting or replacing sessions, applying next turn: Codex/TraeX per-turn parameters, Pi `set_model` / `set_thinking_level` RPC, Claude process replacement resuming the same session, DSH `vika/session/model/select` against the running session. Input is delivered only after successful application. Repeating current settings is a no-op.
-- SQLite retains active runtime/session, idempotency ledger, and OV sync outbox. Cross-runtime context comes only from recent raw OV session messages, with older raw archives queried on demand. Older OV services, including managed services, may generate Working Memory summaries; Vika neither changes that setting nor uses those summaries. Native sessions retain native compaction. OV failures allow new sessions without history, never replaying the local journal. See [OV session context](ov-session-context.md).
+- SQLite retains active runtime/session, idempotency ledger, and OV sync outbox. Cross-runtime context comes only from recent raw OV session messages, with older raw archives queried on demand. Older OV services, including managed services, may generate Working Memory summaries; OpenViking SuperAgent neither changes that setting nor uses those summaries. Native sessions retain native compaction. OV failures allow new sessions without history, never replaying the local journal. See [OV session context](ov-session-context.md).
 - Input is one line, `[chat=… msg=… event=… time=… from=…] body`. Full chat/message/event IDs serve as tool arguments; display-name/thread representations may be shortened. `msg=` identifies the reply target and `event=` the decision. Non-chat inputs may lack `msg=` and still use `event=` for notifications. New sessions receive prior cross-chat history separated by `--- history above, new messages below ---`.
 - Local runtimes use Core Agent tools for messaging.
 - Raw Feishu events are not stored wholesale, avoiding header tokens; bodies are retained for context.

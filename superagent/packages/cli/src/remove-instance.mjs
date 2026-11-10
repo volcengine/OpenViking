@@ -28,8 +28,8 @@ export async function removeInstance({ prompter, manifest, configPath, env, cont
   prompter.info(t(`保留工作目录 ${agent.workspace}、数据目录 ${agent.dataDir}、登录凭据和 OpenViking 记忆；各平台的机器人和账号不会删除。`,
     `Keep workspace ${agent.workspace}, data ${agent.dataDir}, login credentials and OpenViking memories; bots and accounts on connected platforms are kept.`));
   prompter.info(last
-    ? t('这是最后一个实例，也会停止控制台和自动升级服务；之后可以运行 vika setup 新建实例。',
-      'This is the last instance; the console and auto-upgrade service will also stop. Run vika setup afterwards to add an instance.')
+    ? t('这是最后一个实例，也会停止控制台和自动升级服务；之后可以运行 ovsa setup 新建实例。',
+      'This is the last instance; the console and auto-upgrade service will also stop. Run ovsa setup afterwards to add an instance.')
     : t(`删除后默认实例：${next.defaultInstance}。`, `Default instance after removal: ${next.defaultInstance}.`));
   if (!await prompter.confirm(t('确认删除这个实例？', 'Remove this instance?'), false)) {
     prompter.info(t('已取消，没有删除实例。', 'Cancelled; no instance was removed.'));

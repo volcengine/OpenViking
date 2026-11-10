@@ -88,9 +88,9 @@ export function shouldUpgradeSharedWeb(target, targets = loadTargets()) {
 }
 
 export function defaultSocketPath(homeDir = platformHomeDir() || os.homedir()) {
-  return path.join(homeDir, '.vika', 'updater.sock');
+  return path.join(homeDir, '.ovsa', 'updater.sock');
 }
 
 export function defaultReleaseLink(homeDir = platformHomeDir() || os.homedir()) {
-  return path.join(homeDir, '.vika', 'current');
+  return path.join(homeDir, '.ovsa', 'current');
 }

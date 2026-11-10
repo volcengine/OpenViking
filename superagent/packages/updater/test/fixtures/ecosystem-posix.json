@@ -110,9 +110,9 @@
       "env": {
         "NODE_ENV": "production",
         "VIKA_CONFIG": "<HOME>/config.json",
-        "VIKA_UPDATER_RELEASE_LINK": "<HOME>/.vika/current",
-        "VIKA_UPDATER_SOCKET": "<HOME>/.vika/updater.sock",
-        "PM2_HOME": "<HOME>/.vika/pm2",
+        "VIKA_UPDATER_RELEASE_LINK": "<HOME>/.ovsa/current",
+        "VIKA_UPDATER_SOCKET": "<HOME>/.ovsa/updater.sock",
+        "PM2_HOME": "<HOME>/.ovsa/pm2",
         "PM2_BIN": "<RELEASE>/bin/pm2",
         "PATH": "/fixture/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
       }

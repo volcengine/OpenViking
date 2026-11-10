@@ -212,7 +212,7 @@ function withHistory(store, { journalSeq = 5, inboundSeq = 6 } = {}) {
 }
 
 describe('AgyAgent ACP backend', () => {
-  it('launches agy acp unattended against a Vika-owned gemini dir and no OpenCode config', async () => {
+  it('launches agy acp unattended against an OpenViking SuperAgent-owned gemini dir and no OpenCode config', async () => {
     const { agent, spawnCalls, children } = newAgent();
     await startSession(agent, children);
     const call = spawnCalls[0];

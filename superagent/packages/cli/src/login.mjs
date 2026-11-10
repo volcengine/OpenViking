@@ -13,18 +13,18 @@ import { LarkCli } from './lark-cli.mjs';
 import { which } from './runtimes.mjs';
 import { completeLarkApp, connectWeixin, larkScopes, reauthorizeOwner, weixinFirstMessage } from './setup.mjs';
 
-// `vika login <lark|weixin|email|telegram|slack|qq> [instance]`: authorize again what an
+// `ovsa login <lark|weixin|email|telegram|slack|qq> [instance]`: authorize again what an
 // instance already has, after a login expired or a password changed. For
-// Feishu/Lark it first checks the app has what Vika needs, and an owner or
+// Feishu/Lark it first checks the app has what OpenViking SuperAgent needs, and an owner or
 // administrator of the app can add what it lacks with one scan.
-// Connecting something new is `vika setup` (change the instance). The
+// Connecting something new is `ovsa setup` (change the instance). The
 // instance may be left out when there is only one, and is chosen otherwise.
 
 const usage = () => t(
-  '用法：vika login <lark|weixin|email|telegram|slack|qq> [实例]\n'
-  + '  登录过期或改了密码后重新授权；要接入新的 IM，运行 vika setup 修改实例。只有一个实例时可以不写实例名。\n',
-  'Usage: vika login <lark|weixin|email|telegram|slack|qq> [instance]\n'
-  + '  Authorize again after a login expired or a password changed; to connect a new IM, change the instance with vika setup. With one instance the name can be left out.\n',
+  '用法：ovsa login <lark|weixin|email|telegram|slack|qq> [实例]\n'
+  + '  登录过期或改了密码后重新授权；要接入新的 IM，运行 ovsa setup 修改实例。只有一个实例时可以不写实例名。\n',
+  'Usage: ovsa login <lark|weixin|email|telegram|slack|qq> [instance]\n'
+  + '  Authorize again after a login expired or a password changed; to connect a new IM, change the instance with ovsa setup. With one instance the name can be left out.\n',
 );
 
 function larkCliBin(env, deployment) {
@@ -37,8 +37,8 @@ async function restart({ agent, prompter, env, control }) {
     await control.restart(agent.id, { env });
     return true;
   } catch (error) {
-    prompter.write(t(`\n配置已更新，但实例没能重启：${error.message}\n修好后运行 vika restart ${agent.id}\n`,
-      `\nSaved, but the instance did not restart: ${error.message}\nOnce that is fixed, run vika restart ${agent.id}\n`));
+    prompter.write(t(`\n配置已更新，但实例没能重启：${error.message}\n修好后运行 ovsa restart ${agent.id}\n`,
+      `\nSaved, but the instance did not restart: ${error.message}\nOnce that is fixed, run ovsa restart ${agent.id}\n`));
     return false;
   }
 }
@@ -55,15 +55,15 @@ export async function loginCommand([connector, requested, ...extra], {
   }
   const label = IM_LABELS[connector];
   const deployment = loadInstances(env);
-  if (!deployment) throw new Error(t('还没有任何实例：先运行 vika setup', 'No instance yet: run vika setup first'));
+  if (!deployment) throw new Error(t('还没有任何实例：先运行 ovsa setup', 'No instance yet: run ovsa setup first'));
   const named = requested && deployment.agents.find((agent) => agent.id === requested);
   if (named && !named.connectors.includes(connector)) {
-    throw new Error(t(`实例 ${requested} 没有接${label}；要接入，运行 vika setup，选择修改 ${requested}`,
-      `Instance ${requested} has no ${label}; to connect it, run vika setup and change ${requested}`));
+    throw new Error(t(`实例 ${requested} 没有接${label}；要接入，运行 ovsa setup，选择修改 ${requested}`,
+      `Instance ${requested} has no ${label}; to connect it, run ovsa setup and change ${requested}`));
   }
   // Only the instances that have it can renew it.
   const having = { ...deployment, agents: deployment.agents.filter((agent) => agent.connectors.includes(connector)) };
-  if (having.agents.length === 0) throw new Error(t(`还没有实例接${label}；要接入，运行 vika setup 修改实例`, `No instance has ${label}; to connect it, change an instance with vika setup`));
+  if (having.agents.length === 0) throw new Error(t(`还没有实例接${label}；要接入，运行 ovsa setup 修改实例`, `No instance has ${label}; to connect it, change an instance with ovsa setup`));
   const agent = await chooseInstance({ deployment: having, requested, prompter, question: t(`重新授权哪个实例的${label}`, `Which instance's ${label} to authorize again`) });
 
   // Only one receiver at a time: the instance stops while the new tokens are checked.
@@ -73,7 +73,7 @@ export async function loginCommand([connector, requested, ...extra], {
     await control.stop(agent.id, { env });
     try { await connect[connector]({ plan: agent, prompter }); } catch (error) {
       await control.restart(agent.id, { env }).catch(() => {
-        prompter.write(t(`实例没有恢复启动；请运行 vika restart ${agent.id}\n`, `The instance did not start again; run vika restart ${agent.id}\n`));
+        prompter.write(t(`实例没有恢复启动；请运行 ovsa restart ${agent.id}\n`, `The instance did not start again; run ovsa restart ${agent.id}\n`));
       });
       throw error;
     }

@@ -2,22 +2,22 @@
 
 For installation and first-run setup, use the shared [installation guide](../install.md). This page covers Windows build artifacts, offline installation and validation.
 
-The **Windows x64 preview** job in **Vika Release** builds a separate, experimental ZIP.
+The **Windows x64 preview** job in **OpenViking SuperAgent Release** builds a separate, experimental ZIP.
 It shares the POSIX workflow's pull-request, manual and `openviking-vika@*` tag
 triggers; Windows output is always a preview artifact, including on a release tag.
 Manual and tag runs also publish it to the release bucket under
 `vika/windows-preview/` (see [Download and install](#download-and-install));
 PR runs only keep the GitHub Actions artifact (sign-in required, expires after
 14 days). Either way it is not an entry in the stable updater feed: `vika/latest`
-and `vika upgrade` stay macOS/Linux only.
+and `ovsa upgrade` stay macOS/Linux only.
 The package's `release.json` identifies the exact built commit (a PR run normally
 builds GitHub's merge commit), Node version and ZIP SHA-256.
-For a manual Windows-only test run, select the branch under **Vika Release → Run
+For a manual Windows-only test run, select the branch under **OpenViking SuperAgent Release → Run
 workflow** and enable `windows_preview_only`. This skips the POSIX build and POSIX TOS
 publisher; the Windows preview is still published to TOS. Leaving that option off preserves the existing manual POSIX publishing
 behavior as well as building the Windows artifact.
 
-The ZIP includes committed Vika source, Windows Node/npm, production dependencies,
+The ZIP includes committed OpenViking SuperAgent source, Windows Node/npm, production dependencies,
 PM2 and the pinned Windows lark-cli. It needs no system Node/npm/PM2 installation.
 It does not install OpenViking, model runtimes or credentials. Pi requires Git
 Bash; Durable uses native PowerShell. Slack still needs an explicit, separately
@@ -42,7 +42,7 @@ The installer resolves `windows-preview/latest/version` once, downloads that
 version's ZIP and required SHA-256, verifies it, and uses the same install,
 self-check, PATH and first-run setup steps as the local installer. Download or
 verification failure leaves the installed release unchanged. Temporary downloads
-are removed on success and failure. The current terminal can run `vika` afterwards.
+are removed on success and failure. The current terminal can run `ovsa` afterwards.
 
 To pin a preview version or pass options without `iex`:
 
@@ -51,7 +51,7 @@ To pin a preview version or pass options without `iex`:
 ```
 
 `VIKA_VERSION` and `VIKA_DOWNLOAD_BASE` environment variables are also accepted
-by the one-line command. The download base is the Vika root (before
+by the one-line command. The download base is the OpenViking SuperAgent root (before
 `/windows-preview`), must use HTTPS, and defaults to the release bucket above.
 The existing `install-preview.ps1 -File <zip>` offline entry remains available.
 
@@ -59,13 +59,13 @@ The existing `install-preview.ps1 -File <zip>` offline entry remains available.
 
 Use a normal, non-administrator Windows 10/11 x64 account, in PowerShell 7 or
 Windows PowerShell 5.1. Extract the downloaded Actions artifact to a directory
-first: it contains the **inner** Vika ZIP, its `.sha256`, `release.json`,
+first: it contains the **inner** OpenViking SuperAgent ZIP, its `.sha256`, `release.json`,
 `install-preview.ps1` and these instructions. Keep the ZIP and checksum together,
 then from that directory:
 
 ```powershell
 $archive = (Get-ChildItem -File -Filter 'vika-*-win32-x64.zip').FullName
-if (@($archive).Count -ne 1) { throw 'Expected exactly one Vika ZIP' }
+if (@($archive).Count -ne 1) { throw 'Expected exactly one OpenViking SuperAgent ZIP' }
 ./install-preview.ps1 -File $archive
 ```
 
@@ -74,29 +74,29 @@ unpack, self-check, install, then say what is next. It verifies the SHA-256
 (a package without a `.sha256` beside it installs with a note instead of a
 check), unpacks into a staging directory while rejecting unsafe entries, runs the
 package's own runtime check, and only then installs. The layout is the POSIX one
-under `~\.vika`: `releases\<version>`, the `current` link, the `rollback` link
-to the version installed before, `bin\vika.cmd`, and `~\.vika\bin` on the PATH of
-the terminal that ran the installer and of new ones. The release also carries `bin\pm2.cmd`, so `vika start`
+under `~\.ovsa`: `releases\<version>`, the `current` link, the `rollback` link
+to the version installed before, `bin\ovsa.cmd`, and `~\.ovsa\bin` on the PATH of
+the terminal that ran the installer and of new ones. The release also carries `bin\pm2.cmd`, so `ovsa start`
 runs its PM2 with its own Node. Installing the same version again changes nothing;
 installing another one moves `current` and keeps the previous release.
 
-`-Lang en` picks the language for this run and saves it in `~\.vika\language`, as
-`vika --lang` does; `VIKA_LANG` overrides it for one run and `NO_COLOR` turns the
+`-Lang en` picks the language for this run and saves it in `~\.ovsa\language`, as
+`ovsa --lang` does; `VIKA_LANG` overrides it for one run and `NO_COLOR` turns the
 colours off. Colour and the unpacking spinner appear only on a terminal; piped
 output stays plain lines.
 
-Vika's home is `$env:HOME` when it is set, otherwise `%USERPROFILE%`: `vika`, the
+OpenViking SuperAgent's home is `$env:HOME` when it is set, otherwise `%USERPROFILE%`: `ovsa`, the
 installer and the release link all resolve it that way, so a machine that points
-`HOME` elsewhere still gets one installation. `bin\vika.cmd` reads neither — it
-finds the `.vika` directory it was written into — so `vika` keeps working if `HOME`
+`HOME` elsewhere still gets one installation. `bin\ovsa.cmd` reads neither — it
+finds the `.ovsa` directory it was written into — so `ovsa` keeps working if `HOME`
 changes later; only a new install follows it.
 
 With no manifest yet and a terminal to ask in, the installer goes straight into
-`vika setup`, as the POSIX installer does. `~\.vika\bin` is on the PATH of the
-terminal that ran it, so `vika setup` works in that same window; keep it open until
+`ovsa setup`, as the POSIX installer does. `~\.ovsa\bin` is on the PATH of the
+terminal that ran it, so `ovsa setup` works in that same window; keep it open until
 setup finishes. A `cmd.exe` window opened before the install does not see the new
 PATH. `-NoSetup`, or a run with no terminal, stops after the install and prints
-`next: run vika setup`.
+`next: run ovsa setup`.
 
 The package does not carry OpenViking. When setup runs next it asks for the
 connection itself, as install.sh leaves that to setup; otherwise the installer
@@ -116,36 +116,36 @@ $destination = Join-Path $env:LOCALAPPDATA 'VikaPreview\test-1'
 
 An existing destination is rejected, including on repeated installation. In
 neither mode does the installer write configuration, start services, or switch an
-existing `~\.vika\current` installation. The checksum detects corruption; obtain
+existing `~\.ovsa\current` installation. The checksum detects corruption; obtain
 both the package and installer from a trusted run. If local execution policy
 blocks downloaded scripts, review/unblock them under your organization's policy;
 administrator rights and a machine-wide policy change are not required.
 
 ## Configure and test
 
-A first install is configured by `vika setup`, which the installer starts in the
+A first install is configured by `ovsa setup`, which the installer starts in the
 same terminal: it picks the runtime, records an existing OpenViking service and
-connects a channel. Afterwards start the release with `vika`, which runs that
+connects a channel. Afterwards start the release with `ovsa`, which runs that
 release and, through its own `bin\pm2.cmd`, that release's PM2 and Node; no global
 Node or PM2 is used. The shared Web port is 3737: stop any conflicting instance
 first.
 
 ```powershell
-vika start
-vika status
-vika logs primary
-vika stop
+ovsa start
+ovsa status
+ovsa logs primary
+ovsa stop
 ```
 
-An isolated copy is not under `~\.vika\current`, so `vika` cannot manage it: write
+An isolated copy is not under `~\.ovsa\current`, so `ovsa` cannot manage it: write
 its manifest from `config.example.json` as [windows.md](windows.md) describes (only
 the `primary` agent, absolute Windows paths, an existing OpenViking service), then
 start it with the `vika-preview.ps1` inside the copy and an explicit `PM2_HOME`:
 
 ```powershell
 $destination = Join-Path $env:LOCALAPPDATA 'VikaPreview\test-1'   # as installed above
-$home = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }   # Vika's home
-$env:PM2_HOME = Join-Path $home '.vika\pm2'
+$home = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }   # OpenViking SuperAgent's home
+$env:PM2_HOME = Join-Path $home '.ovsa\pm2'
 $config = Join-Path $destination 'config.json'
 & "$destination\vika-preview.ps1" -Action start -Config $config
 & "$destination\vika-preview.ps1" -Action logs
@@ -170,23 +170,23 @@ actual PIDs, the configured `/ready` response and connector state, then one
 uniquely labelled message/reply with no duplicate delivery. Report the commit,
 Windows/PowerShell versions, results and sanitized errors. No automatic upgrade is
 provided: a default install keeps the version it replaced under
-`~\.vika\releases` and names it in `~\.vika\rollback`, so rolling back means
-pointing `current` at that release again and running `vika restart`; an isolated
+`~\.ovsa\releases` and names it in `~\.ovsa\rollback`, so rolling back means
+pointing `current` at that release again and running `ovsa restart`; an isolated
 copy is rolled back by stopping it and starting the preserved installation with its
-own configuration. `vika autostart enable` writes a script into the current user's
+own configuration. `ovsa autostart enable` writes a script into the current user's
 own Startup folder — no service, no administrator, visible in Task Manager's
-Startup tab — which runs `vika start` hidden at logon and logs to
-`~\.vika\logs\autostart.log`; an isolated copy is not covered by it.
-`vika start` needs `current` to be a directory link: on a
+Startup tab — which runs `ovsa start` hidden at logon and logs to
+`~\.ovsa\logs\autostart.log`; an isolated copy is not covered by it.
+`ovsa start` needs `current` to be a directory link: on a
 volume without junctions the installer writes a pointer file instead, which runs
-`vika` but cannot be resolved as a release.
+`ovsa` but cannot be resolved as a release.
 
 
 ### Installer recovery and HOME overrides
 
-Vika explicitly prefers `HOME` over `USERPROFILE`. This differs from Node's
+OpenViking SuperAgent explicitly prefers `HOME` over `USERPROFILE`. This differs from Node's
 Windows `os.homedir()`. Installation, setup, release lookup and login startup
-must use that same Vika home. The login entry stays in Windows' `APPDATA`
+must use that same OpenViking SuperAgent home. The login entry stays in Windows' `APPDATA`
 Startup folder and captures the chosen HOME and PATH for its child process.
 `VIKA_HOME` in the PowerShell fixture runner is an installer test override,
 not a supported runtime configuration directory override.

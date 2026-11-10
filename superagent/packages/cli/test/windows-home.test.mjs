@@ -19,6 +19,6 @@ test('manifest and release helpers use the same explicit HOME override', () => {
   const env = { ...process.env, HOME: home, USERPROFILE: profile };
   delete env.VIKA_CONFIG;
   const actual = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' }));
-  assert.deepEqual(actual, [path.join(home, '.vika'), path.join(home, '.vika', 'config.json'),
-    path.join(home, '.vika', 'current'), path.join(home, '.vika', 'updater.sock')]);
+  assert.deepEqual(actual, [path.join(home, '.ovsa'), path.join(home, '.ovsa', 'config.json'),
+    path.join(home, '.ovsa', 'current'), path.join(home, '.ovsa', 'updater.sock')]);
 });

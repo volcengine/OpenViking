@@ -1,14 +1,14 @@
 ﻿# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-# Vika installer for Windows x64. The steps and the words are scripts/install.sh's:
+# OpenViking SuperAgent installer for Windows x64. The steps and the words are scripts/install.sh's:
 # verify, unpack, self-check, install, then say what comes next.
 #
 #   .\install-preview.ps1 -File vika-<version>-win32-x64.zip
 #   .\install-preview.ps1 -File <zip> -Destination D:\vika-test   # isolated copy
 #
-# The default install uses the POSIX layout under ~\.vika: releases\<version>,
-# the `current` link, the `rollback` link, bin\vika.cmd, and ~\.vika\bin on the
+# The default install uses the POSIX layout under ~\.ovsa: releases\<version>,
+# the `current` link, the `rollback` link, bin\vika.cmd, and ~\.ovsa\bin on the
 # user PATH. -Destination instead installs exactly into that new directory and
 # changes nothing else, which is what side-by-side testing and CI use.
 #
@@ -17,8 +17,8 @@
 # Options: -File <zip>, -Version <version>, -DownloadBase <url>,
 # -Destination <dir>, -Lang <zh|en>, -NoSetup.
 # VIKA_VERSION and VIKA_DOWNLOAD_BASE also work with irm | iex.
-# Vika's home is HOME when it is set, otherwise the profile, as vika itself
-# resolves it; bin\vika.cmd finds its .vika directory instead of guessing one.
+# OpenViking SuperAgent's home is HOME when it is set, otherwise the profile, as vika itself
+# resolves it; bin\vika.cmd finds its .ovsa directory instead of guessing one.
 # Environment: VIKA_LANG picks the language, NO_COLOR turns the colours off,
 # VIKA_HOME overrides the installer destination for tests only.
 [CmdletBinding()]
@@ -38,13 +38,17 @@ $Platform = 'win32-x64'
 $Isolated = [bool]$Destination
 
 # ---- Home, language, colour ------------------------------------------------
-# Match Vika's platform homeDir(): HOME first, then USERPROFILE on Windows.
+# Match OpenViking SuperAgent's platform homeDir(): HOME first, then USERPROFILE on Windows.
 # Node's os.homedir() itself uses USERPROFILE on Windows, not HOME.
 # VIKA_HOME is an installer fixture override; it is not a runtime home setting.
 $HomeBase = if ($env:HOME) { $env:HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { [Environment]::GetFolderPath('UserProfile') }
 $HomeBase = [IO.Path]::GetFullPath($HomeBase)
-$VikaHome = if ($env:VIKA_HOME) { $env:VIKA_HOME } else { Join-Path $HomeBase '.vika' }
+$VikaHome = if ($env:VIKA_HOME) { $env:VIKA_HOME } else { Join-Path $HomeBase '.ovsa' }
 $VikaHome = [IO.Path]::GetFullPath($VikaHome)
+if (-not $Isolated -and -not $env:VIKA_HOME -and -not (Test-Path -LiteralPath $VikaHome) -and (Test-Path -LiteralPath (Join-Path $HomeBase '.vika'))) {
+    throw 'Legacy .vika installation found. Stop the old services, move .vika to .ovsa and keep .vika as a compatibility junction, then rerun this installer. See superagent/docs/migration-to-ovsa.md.'
+}
+
 # A .ps1 run with & shares this process's environment, so the terminal that runs
 # the installer can use vika as soon as it returns. VIKA_HOME keeps the tests off
 # the real profile's PATH; the persistent write is Windows-only.
@@ -158,7 +162,7 @@ function Header([string]$what) {
         Say "  ${BOLD}${PINK}V${VIOLET}I${LILAC}K${SKY}A${RESET}  ${GRAY}$(M '安装' 'Installing') $what · $Platform${RESET}"
         Say ''
     } else {
-        Say (M "安装 Vika $what（$Platform）" "Installing Vika $what ($Platform)")
+        Say (M "安装 OpenViking SuperAgent $what（$Platform）" "Installing OpenViking SuperAgent $what ($Platform)")
     }
 }
 
@@ -458,7 +462,7 @@ function Install-Release([string]$stageDir, [string]$version) {
         Remove-Item -LiteralPath $stageDir -Recurse -Force
         $InstallerState.Stage = ''
         if ($previous -and ([IO.Path]::GetFullPath($previous) -eq $place)) {
-            Ok (M "已经是 Vika $version" "Vika $version is installed already")
+            Ok (M "已经是 OpenViking SuperAgent $version" "OpenViking SuperAgent $version is installed already")
             return [pscustomobject]@{ Changed = $false; Previous = $previous }
         }
     } else {
@@ -466,12 +470,12 @@ function Install-Release([string]$stageDir, [string]$version) {
         $InstallerState.Stage = ''
     }
     Switch-ReleaseLinks $current (Join-Path $VikaHome 'rollback') $place $previous
-    Ok ("$(M '安装' 'Install ')  ${GRAY}Vika $version → $(Short $place)${RESET}")
+    Ok ("$(M '安装' 'Install ')  ${GRAY}OpenViking SuperAgent $version → $(Short $place)${RESET}")
     return [pscustomobject]@{ Changed = $true; Previous = $previous }
 }
 
 # `current` moves on upgrade; bin\vika.cmd does not. The batch file finds the
-# .vika directory from its own location, so no HOME or USERPROFILE is guessed
+# .ovsa directory from its own location, so no HOME or USERPROFILE is guessed
 # (a machine may have HOME pointing somewhere else) and the file stays ASCII
 # whatever the account is called.
 function Write-Launcher([string]$nodeRelative, [string]$mjsRelative) {
@@ -489,6 +493,8 @@ function Write-Launcher([string]$nodeRelative, [string]$mjsRelative) {
         '"%RELEASE%\__NODE__" "%RELEASE%\__MJS__" %*'
     ) -join "`r`n"
     $text = $text.Replace('__NODE__', $nodeRelative).Replace('__MJS__', $mjsRelative)
+    [IO.File]::WriteAllText((Join-Path $binDir 'ovsa.cmd'), $text + "`r`n")
+    # Compatibility for existing scripts and startup entries.
     [IO.File]::WriteAllText((Join-Path $binDir 'vika.cmd'), $text + "`r`n")
     return $binDir
 }
@@ -505,9 +511,9 @@ function Add-ToPath([string]$binDir) {
     if ($persistent -contains $binDir) { return }
     try {
         [Environment]::SetEnvironmentVariable('Path', (@($binDir) + $persistent) -join $separator, 'User')
-        Ok ("$(M '命令' 'Command ')  ${GRAY}$(M "$(Short $binDir) 已加进 PATH：这个终端和新开的终端都能直接用 vika" "$(Short $binDir) is on the PATH: this terminal and new ones know vika")${RESET}")
+        Ok ("$(M '命令' 'Command ')  ${GRAY}$(M "$(Short $binDir) 已加进 PATH：这个终端和新开的终端都能直接用 ovsa" "$(Short $binDir) is on the PATH: this terminal and new ones know ovsa")${RESET}")
     } catch {
-        Warn (M "写不了用户 PATH；Vika 已安装完成，这个终端里可以直接用 vika。新终端要直接用，请手动加入：$binDir" "Could not write the user PATH; Vika is installed and this terminal knows vika. For new terminals, add this yourself: $binDir")
+        Warn (M "写不了用户 PATH；OpenViking SuperAgent 已安装完成，这个终端里可以直接用 ovsa。新终端要直接用，请手动加入：$binDir" "Could not write the user PATH; OpenViking SuperAgent is installed and this terminal knows ovsa. For new terminals, add this yourself: $binDir")
     }
 }
 
@@ -530,7 +536,7 @@ function Download-Package {
     $InstallerState.DownloadDir = Join-Path ([IO.Path]::GetTempPath()) ('vika-download-' + [guid]::NewGuid().ToString('N'))
     [void][IO.Directory]::CreateDirectory($InstallerState.DownloadDir)
     $target = Join-Path $InstallerState.DownloadDir $name
-    Note (M "下载 Vika $Version" "Downloading Vika $Version")
+    Note (M "下载 OpenViking SuperAgent $Version" "Downloading OpenViking SuperAgent $Version")
     Invoke-WebRequest -UseBasicParsing -Uri "$base/$name.sha256" -OutFile "$target.sha256"
     Invoke-WebRequest -UseBasicParsing -Uri "$base/$name" -OutFile $target
     return $target
@@ -586,7 +592,7 @@ if (Test-Path -LiteralPath $checksumFile) {
 if ($Isolated) {
     try {
         [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Place))
-        $InstallerState.Stage = Join-Path ([IO.Path]::GetDirectoryName($Place)) ('.vika-pending-' + [guid]::NewGuid().ToString('N'))
+        $InstallerState.Stage = Join-Path ([IO.Path]::GetDirectoryName($Place)) ('.ovsa-pending-' + [guid]::NewGuid().ToString('N'))
         [void][IO.Directory]::CreateDirectory($InstallerState.Stage)
     } catch { Die (M "写不了 $Place：$($_.Exception.Message)" "cannot write $Place`: $($_.Exception.Message)") }
 } else {
@@ -652,7 +658,7 @@ if ($Isolated) {
     try { Move-Into $InstallerState.Stage $Place }
     catch { $detail = $_.Exception.Message; Die (M "装不到 $Place：$detail" "cannot install to $Place`: $detail") }
     $InstallerState.Stage = ''
-    Ok ("$(M '安装' 'Install ')  ${GRAY}Vika $version → $(Short $Place)${RESET}")
+    Ok ("$(M '安装' 'Install ')  ${GRAY}OpenViking SuperAgent $version → $(Short $Place)${RESET}")
     $changed = $true
     $previous = $null
 } else {
@@ -660,7 +666,7 @@ if ($Isolated) {
     catch { $detail = $_.Exception.Message; Die (M "装不到 $(Short $VikaHome)：$detail" "cannot install to $(Short $VikaHome)`: $detail") }
     $changed = $result.Changed
     $previous = $result.Previous
-    # -Lang is kept, as `vika --lang` keeps it.
+    # -Lang is kept, as `ovsa --lang` keeps it.
     if ($Lang) { Set-Content -LiteralPath (Join-Path $VikaHome 'language') -Value $Lang -Encoding ascii }
     if ($nodeRelative) {
         $binDir = Write-Launcher $nodeRelative ([IO.Path]::Combine('packages', 'cli', 'bin', 'vika.mjs'))
@@ -678,14 +684,14 @@ if ($Isolated) {
     Note (M "下一步：按 docs\windows-preview.md 写好 manifest，然后运行 $isolatedStart -Action start" "next: write the manifest as docs\windows-preview.md describes, then run $isolatedStart -Action start")
 } elseif (Test-Path -LiteralPath $configFile) {
     if ($changed -and $previous) {
-        Note (M "运行中的实例还在旧版本上：执行 vika restart 换到 $version" "running instances are on the old release: vika restart moves them to $version")
+        Note (M "运行中的实例还在旧版本上：执行 ovsa restart 换到 $version" "running instances are on the old release: ovsa restart moves them to $version")
     }
 } elseif ($setupNext) {
     # As install.sh does: the first install goes straight into setup, in the
-    # terminal that ran the installer, which now knows vika.
-    & (Join-Path (Join-Path $VikaHome 'bin') 'vika.cmd') setup
-    if ($LASTEXITCODE) { throw "vika setup exited $LASTEXITCODE" }
+    # terminal that ran the installer, which now knows ovsa.
+    & (Join-Path (Join-Path $VikaHome 'bin') 'ovsa.cmd') setup
+    if ($LASTEXITCODE) { throw "ovsa setup exited $LASTEXITCODE" }
 } else {
-    Note (M '下一步：运行 vika setup' 'next: run vika setup')
+    Note (M '下一步：运行 ovsa setup' 'next: run ovsa setup')
 }
 } finally { Cleanup }

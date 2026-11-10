@@ -55,7 +55,7 @@ with the topic are reused; missing constraints about other people require a
 lookup because only owner/sender preferences are injected. This is model policy,
 not an extra daemon search or a change to `ovAutoRecall`.
 
-Vika owns OpenViking for the agents it runs. This session transport writes
+OpenViking SuperAgent owns OpenViking for the agents it runs. This session transport writes
 the conversation, and its extraction keeps profile, entities and events, never
 preferences: extraction decides whose a preference is from names, so it merges
 namesakes and edits one person's file with another's request. Preferences are
@@ -72,12 +72,12 @@ with its own package manager, then runs with discovery off and every non-OV
 extension loaded by path, including configured paths and packages. Its built-in
 coding tools, codemode, tool search and other MCP servers remain available;
 OpenCode and Antigravity read a
-Vika-owned config home with OpenViking's plugins, servers and the like left out. The OPENVIKING_*
+OpenViking SuperAgent-owned config home with OpenViking's plugins, servers and the like left out. The OPENVIKING_*
 process variables of the instance (`openVikingAgentEnv` in
 `deployment-config.cjs`) are the second line: a plugin that loads anyway is
 inert, and its state lives under `<dataDir>/openviking/`. The owner's own
 clients are unaffected. How to add a runtime, and how to verify its switch
-against the real CLI, is in [OpenViking belongs to Vika](openviking-ownership.md).
+against the real CLI, is in [OpenViking belongs to OpenViking SuperAgent](openviking-ownership.md).
 
 Each cognition epoch owns a stable, private-to-this-daemon OV session. Switching
 providers keeps that session; `/new` starts a new epoch. Existing local ledger rows

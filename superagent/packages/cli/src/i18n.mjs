@@ -8,7 +8,7 @@ import path from 'node:path';
 // The vika command speaks Chinese or English, one language for the whole
 // run; `t` picks between the two texts, written side by side where they are
 // used. The language is --lang or VIKA_LANG when given, else the one setup
-// saved in ~/.vika/language, else Chinese. A Chinese locale leaves nothing
+// saved in ~/.ovsa/language, else Chinese. A Chinese locale leaves nothing
 // to ask; any other (servers often say en_US or C whatever their user
 // reads) has setup ask once on a terminal, Chinese first.
 
@@ -47,7 +47,7 @@ export function localeLanguage(env = process.env) {
 }
 
 function preferenceFile(env) {
-  return path.join(env.HOME || os.homedir(), '.vika', 'language');
+  return path.join(env.HOME || os.homedir(), '.ovsa', 'language');
 }
 
 export function savedLanguage(env = process.env) {

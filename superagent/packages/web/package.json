@@ -3,7 +3,7 @@
   "version": "0.5.0-preview",
   "license": "AGPL-3.0",
   "private": true,
-  "description": "Independent local Activity Console and fixed-route proxy for Vika.",
+  "description": "Independent local Activity Console and fixed-route proxy for OpenViking SuperAgent.",
   "type": "module",
   "engines": {
     "node": ">=22.5"

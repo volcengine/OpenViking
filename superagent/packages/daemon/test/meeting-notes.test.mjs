@@ -149,11 +149,11 @@ describe('meeting notes in OpenViking', () => {
 
   it('heads a note with what the AI note says the meeting was about, over a default topic', () => {
     assert.equal(noteTitle(SUMMARY), '飞书接入评审');
-    assert.equal(noteTitle('# 文字记录：Vika后续工作安排同步会议 2026年10月26日\n'), 'Vika后续工作安排同步会议');
+    assert.equal(noteTitle('# 文字记录：OpenViking SuperAgent后续工作安排同步会议 2026年10月26日\n'), 'OpenViking SuperAgent后续工作安排同步会议');
     assert.equal(noteTitle('no heading'), null);
     const text = noteMarkdown({ meeting: { id: MEETING, topic: '刘维汉的视频会议' }, note: { docToken: 'd' },
-      summary: '# 智能纪要：Vika后续工作安排同步会议 2026年10月26日\n# 总结\n安排', storedAtMs: 0 });
-    assert.match(text, /^# Vika后续工作安排同步会议\n\n- Meeting: 734000000000000301\n- Meeting topic: 刘维汉的视频会议\n/);
+      summary: '# 智能纪要：OpenViking SuperAgent后续工作安排同步会议 2026年10月26日\n# 总结\n安排', storedAtMs: 0 });
+    assert.match(text, /^# OpenViking SuperAgent后续工作安排同步会议\n\n- Meeting: 734000000000000301\n- Meeting topic: 刘维汉的视频会议\n/);
   });
 
   it('reads back only what is a stored meeting', () => {

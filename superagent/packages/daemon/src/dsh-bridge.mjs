@@ -7,8 +7,8 @@ import { wireDshBridge } from './dsh-bridge/protocol.mjs';
 
 const { realpathSync } = fs;
 
-// This module is loaded by DSH, not by Vika. Dependencies supplied by the SDK
-// server are loaded through DSH's own resolver; Vika's node_modules must not be
+// This module is loaded by DSH, not by OpenViking SuperAgent. Dependencies supplied by the SDK
+// server are loaded through DSH's own resolver; OpenViking SuperAgent's node_modules must not be
 // a runtime dependency of the published DSH installation.
 const BRIDGE_ID = 'vika-dsh-bridge';
 
@@ -22,10 +22,10 @@ export async function loadDshBridgeDependencies({ loader, serverPath = '@deepsee
   } else {
     // npm DSH 0.2.2 does not install the loader's optional internals package.
     // The SDK bundle has a public manifest and directly depends on the server;
-    // resolving through that manifest never borrows Vika's dependencies.
+    // resolving through that manifest never borrows OpenViking SuperAgent's dependencies.
     let bundleRequire;
     try {
-      // process.argv[1] is DSH's entry point, not Vika's: the DSH CLI invokes
+      // process.argv[1] is DSH's entry point, not OpenViking SuperAgent's: the DSH CLI invokes
       // the composed SDK profile in its own process. Anchor package resolution
       // there, then follow its public SDK bundle dependency.
       //

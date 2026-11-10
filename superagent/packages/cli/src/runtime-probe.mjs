@@ -17,8 +17,8 @@ import {
 } from '../../daemon/src/dsh-runtime.mjs';
 
 // What a read-only probe needs the bridge to expose. The daemon method set is
-// what `vika setup` is verifying -- the runtime this install will drive -- plus
-// `vika/settings/describe`, the one read that `vika dsh model list` and the
+// what `ovsa setup` is verifying -- the runtime this install will drive -- plus
+// `vika/settings/describe`, the one read that `ovsa dsh model list` and the
 // models page both start from. It is checked on the handshake rather than
 // exercised here, because this probe must not need a configured route.
 // The credential write methods (`vika/credentials/*`) and `vika/settings/mutate`
@@ -207,7 +207,7 @@ function catalogueNote(reply) {
 //
 // `dataDir` probes one existing home instead of a throwaway one: setup uses it
 // on an instance that already exists, because that instance's routes live there
-// (the same home `vika dsh model list` starts a control process against). The
+// (the same home `ovsa dsh model list` starts a control process against). The
 // directory belongs to the caller then -- nothing is removed, and the probe
 // starts from the same separate `control-patch.yml` the control client writes,
 // never from the daemon's `run/patch.yml`, so a live instance's launch patch is
@@ -223,8 +223,8 @@ export async function probeDsh(bin, { env = process.env, spawnImpl = spawn, time
       fs.chmodSync(directory, 0o700);
     }
     const patchPath = ownHome
-      ? writeDshPatch({ dataDir: directory, policy: 'Vika setup bridge probe', mcp: null })
-      : writeControlPatch({ dataDir: directory, policy: 'Vika setup bridge probe' });
+      ? writeDshPatch({ dataDir: directory, policy: 'OpenViking SuperAgent setup bridge probe', mcp: null })
+      : writeControlPatch({ dataDir: directory, policy: 'OpenViking SuperAgent setup bridge probe' });
     const command = dshCommand({ bin, patchPath });
     const result = await probeInitialize(bin, {
       args: command.args, label: 'DSH',

@@ -4,7 +4,7 @@
 export const BRIDGE_ID = 'vika-dsh-bridge';
 export const BRIDGE_VERSION = 2;
 
-// The only settings namespace Vika may write. The models page owns the same
+// The only settings namespace OpenViking SuperAgent may write. The models page owns the same
 // namespace, so a narrower bridge surface keeps both on one document.
 const SETTINGS_NS = 'llm-pi-ai';
 

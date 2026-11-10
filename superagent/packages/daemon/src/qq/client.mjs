@@ -24,7 +24,7 @@ export class QQClient {
 
   async preflight() {
     this.account = this.state.account();
-    if (!this.account) throw new Error('QQ is not connected; run vika login qq <instance> first');
+    if (!this.account) throw new Error('QQ is not connected; run ovsa login qq <instance> first');
     this.state.acquire();
     try {
       this.api = new QQApi(this.account, { fetchImpl: this.fetchImpl });
