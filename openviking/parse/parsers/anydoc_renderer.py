@@ -808,7 +808,7 @@ class _AnyDocMarkdownRenderer:
                 escape = next_char is None and trailing_active
             elif char == "|" and context == "table_cell":
                 escape = True
-            elif char in "#>" and start_of_line:
+            elif char in "#>=" and start_of_line:
                 escape = True
             elif char in "-+" and start_of_line:
                 escape = char == "-" or next_char is None or next_char.isspace()
