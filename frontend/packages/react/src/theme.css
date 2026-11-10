@@ -36,6 +36,8 @@
  * the fallback applies otherwise.
  */
 .ov-directory-tour,
+.ov-wiki-dashboard,
+.ov-experience-dashboard,
 .ov-agent-connect,
 .ov-console,
 .ov-divider,
@@ -157,6 +159,8 @@
 }
 
 .dark .ov-directory-tour,
+html.dark .ov-wiki-dashboard,
+html.dark .ov-experience-dashboard,
 .dark .ov-agent-connect,
 .dark .ov-console,
 .dark .ov-divider,
@@ -231,4 +235,32 @@
   --ov-ui-connect-outline-default: var(--ov-ui-border-2-default);
   --ov-ui-connect-muted-default: var(--ov-ui-text-3-default);
   --ov-ui-connect-notice-default: var(--ov-ui-text-2-default);
+}
+
+/* Shared dashboards: mapped from the 2026-11-12 console release, with host-overridable semantics. */
+.ov-wiki-dashboard,
+.ov-experience-dashboard,
+.ov-file-browser {
+  --ov-ui-dashboard-surface-default: #f8f8f8;
+  --ov-ui-dashboard-card-default: #fafafa;
+  --ov-ui-dashboard-muted-default: #787c91;
+  --ov-ui-dashboard-border-default: #edeef2;
+  --ov-ui-dashboard-warning-default: #eb7d00;
+  --ov-ui-dashboard-warning-light-default: #fff0e5;
+  --ov-ui-dashboard-danger-default: #d92d54;
+  --ov-ui-dashboard-danger-light-default: #ffecee;
+  --ov-ui-dashboard-success-default: #4f9c70;
+}
+html.dark .ov-wiki-dashboard,
+html.dark .ov-experience-dashboard,
+html.dark .ov-file-browser {
+  --ov-ui-dashboard-surface-default: var(--ov-ui-bg-3-default);
+  --ov-ui-dashboard-card-default: var(--ov-ui-bg-3-default);
+  --ov-ui-dashboard-muted-default: var(--ov-ui-text-3-default);
+  --ov-ui-dashboard-border-default: var(--ov-ui-border-1-default);
+  --ov-ui-dashboard-warning-default: var(--ov-ui-warning-default);
+  --ov-ui-dashboard-warning-light-default: var(--ov-ui-warning-light-default);
+  --ov-ui-dashboard-danger-default: var(--ov-ui-status-error-default);
+  --ov-ui-dashboard-danger-light-default: var(--ov-ui-bg-5-default);
+  --ov-ui-dashboard-success-default: var(--ov-ui-status-success-default);
 }

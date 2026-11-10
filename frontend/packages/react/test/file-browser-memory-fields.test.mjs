@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 
-import { OpenVikingProvider } from '@openviking/react/client';
-import { useFileBrowser } from '@openviking/react/modules/file-browser';
+import {
+  OpenVikingProvider,
+  useFileBrowser,
+} from './helpers/internal-hooks.mjs';
 import { mount, ok, recordingFetch } from './helpers/module-dom.mjs';
 
 const ROOT = 'viking://';

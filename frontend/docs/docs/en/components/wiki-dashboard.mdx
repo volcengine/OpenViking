@@ -1,0 +1,46 @@
+# WikiDashboard
+
+`WikiDashboard` is a pure UI component. It receives display data, loading/error states and callbacks, with no API knowledge or Provider requirement. Layout, SVGs and texture follow Volcano release `release/openviking/2026-11-12`.
+
+## Example
+
+```tsx file="../../_demos/wiki-dashboard-basic.tsx" preview
+
+```
+
+The example uses fixed display data. Directories show conflicted files; files show conflicts and resolution history. The severity picker reuses the internal Popover, with arrows, Home/End, Escape and outside dismissal. Filtering and detail expansion are local UI interactions. Clicking a path shows simulated open feedback in the demo; FileBrowser navigates to the content. An identified Wiki with no conflicts retains its empty board.
+
+## Integration
+
+```tsx
+import { WikiDashboard } from '@openviking/react/components/wiki-dashboard';
+import '@openviking/react/components/wiki-dashboard/style.css';
+
+<WikiDashboard kind="file" data={{ conflicts: [] }} />;
+```
+
+[FileBrowser](../modules/file-browser) loads and normalizes data internally before composing this view, including discovery and resource navigation. Standalone callers supply the display model.
+
+## Props
+
+| Prop                                          | Type / default                                                               | Description                                                                               |
+| --------------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `kind`                                        | Required `directory` / `file`                                                | Top-level discriminator; determines the view even while data is loading                   |
+| `data`                                        | `WikiDirectoryData` / `WikiFileData`                                         | Display data matching `kind`; may be omitted for loading and error states                 |
+| `loading`                                     | `boolean`, `false`                                                           | Loading state for an empty list                                                           |
+| `error`                                       | `Error \| null`                                                              | Error state for an empty list                                                             |
+| `locale`                                      | `en-US` / `zh-CN`, inherited or `en-US`                                      | Default copy                                                                              |
+| `onRetry`                                     | `() => void`                                                                 | Retry intent; the component sends no requests                                             |
+| `onOpenUri`                                   | Directory: `(uri: string) => void`; file: `() => void`                       | Directories identify the selected item; files express intent to open the current document |
+| `onOpenDashboard`                             | Directory: `(uri: string) => void`                                           | Open-file-board intent; falls back to `onOpenUri`                                         |
+| `onEdit`                                      | Directory: `(uri: string) => void`; file: `(conflict: WikiConflict) => void` | Edit intent; file mode reports only the conflict; omitted callbacks disable the button    |
+| `onDiscuss`                                   | File: `(conflict: WikiConflict) => void`                                     | Discussion intent; omitted callbacks disable the button                                   |
+| `editDisabledReason`, `discussDisabledReason` | File: `string`, defaults to `labels.unavailable`                             | Explains an omitted action handler; disabled buttons remain focusable for the hint        |
+| `labels`                                      | `Partial<WikiDashboardLabels>`                                               | Copy overrides                                                                            |
+| `className`, `style`                          | HTML attributes                                                              | Appearance and layout; other HTML attributes pass through                                 |
+
+Directory data contains only `files`, optional `conflictFileCount` and the truncation marker `limited`. File data contains only `conflicts` and an optional display `path`. Omitting `path` hides the path region; the path does not identify operation targets. There is no top-level `uri` prop.
+
+Modules or hosts bind request and operation URIs through closures. To reset filters and expanded details when changing documents, set `key={documentId}` on the component in the parent, as both the demo and FileBrowser do.
+
+Resolution history displays supplied reasons, timestamps, plans and evidence. This component neither reads content nor parses server protocols or writes resources. Supporting types are on the component subpath; the root exports only the component and main Props type.

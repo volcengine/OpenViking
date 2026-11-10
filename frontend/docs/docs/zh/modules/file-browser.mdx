@@ -4,7 +4,7 @@
 
 目录导航、搜索与内容预览作为一个模块。模块自己取数，宿主提供配置、受控的当前资源、接入配置、导入交互与文案。
 
-组件已实现目录树、搜索与预览的联动：目录按需展开并分页，点击文件加载预览，搜索结果选中后同样打开预览。`useFileBrowser` 可单独使用，自行组装视图。
+组件已实现目录树、搜索与预览的联动：目录按需展开并分页，点击文件加载预览，搜索结果选中后同样打开预览。取数和联动 Hook 内置，宿主直接使用组件。
 
 ## 基础用法
 
@@ -118,4 +118,16 @@ import '@openviking/react/modules/file-browser/style.css';
 
 `labels.formatCharacterCount(count)` 可覆盖预览底部的字符数文案，默认随 `locale` 切换。
 
-`useFileBrowser` 可独立接收可选的 `locale`（默认 `en-US`），使用与组合视图相同的模块语言资源。`summaryLabels` 和 `formatCharacterCount` 可覆盖摘要标题、失败兜底和字符数文案；切换语言或文案只更新展示，不重新加载目录摘要或文件正文。
+## 内置看板
+
+用户的 `memories/experiences` 目录与直接 `.md` 文件自动提供经验看板；Wiki 根据编译配置或 `compile_target=true` 资源标记识别，后代文件与目录复用 Wiki 看板。标记优先，不因配置列表缺失而隐藏。普通资源没有 Wiki 页签；已识别的 Wiki 在零冲突时仍保留看板。
+
+发现和配置匹配使用原生接口在当前身份下解析的 URI，支持 `viking://~/...` 根目录及 Wiki 子文件别名；宿主收到的看板 URI 与回调仍保留原始写法。示例底部可切换规范 URI 与 `~` 别名验证同一文件。
+
+文件树图标直接打开看板，预览页签可切回正文。看板样式已包含在 FileBrowser 的 `style.css` 内。查看独立 [WikiDashboard](../components/wiki-dashboard) 和 [ExperienceDashboard](../components/experience-dashboard) 的接口范围与宿主数据用法。
+
+`dashboardKinds?: readonly ('wiki' | 'experience')[]` 默认启用两类，传空数组禁用发现和入口。宿主据产品权限筛选类型；例如 `dashboardKinds={['experience']}` 关闭 Wiki 入口与编译配置查询。服务端仍执行资源权限。
+
+`renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode` 允许宿主接入网关数据或替换组合视图；返回空值使用原生默认视图。描述含 `kind`、`uri`，Wiki 还可含 `pendingConflicts` 与 `isRoot`。
+
+`labels.dashboard` 可覆盖两个页签标题、三个树入口名称及发现失败文案。看板内部文案由其自身的 `labels` 覆盖，宿主可通过 `renderDashboard` 传入。

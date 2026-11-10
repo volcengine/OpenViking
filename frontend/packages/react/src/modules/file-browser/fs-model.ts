@@ -20,6 +20,7 @@ export interface FsEntry {
   size?: number;
   modTime?: string;
   abstract?: string;
+  tags?: readonly string[];
 }
 
 /** 一个目录已加载的子节点与分页状态。 */
@@ -94,9 +95,10 @@ export function toEntryRow(
   expanded: boolean,
   index?: number,
   busy?: boolean,
-): FileTreeEntryRow {
+): FileTreeEntryRow & { tags?: readonly string[] } {
   const isDir = entry.isDir === true;
   return {
+    tags: entry.tags,
     kind: 'entry',
     id: index === undefined ? entry.uri : `${entry.uri}#${index}`,
     depth,

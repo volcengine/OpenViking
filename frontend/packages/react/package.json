@@ -96,7 +96,17 @@
       "types": "./dist/components/directory-tour/index.d.ts",
       "import": "./dist/components/directory-tour.js"
     },
-    "./components/directory-tour/style.css": "./dist/components/directory-tour/style.css"
+    "./components/directory-tour/style.css": "./dist/components/directory-tour/style.css",
+    "./components/wiki-dashboard": {
+      "types": "./dist/components/wiki-dashboard/index.d.ts",
+      "import": "./dist/components/wiki-dashboard.js"
+    },
+    "./components/wiki-dashboard/style.css": "./dist/components/wiki-dashboard/style.css",
+    "./components/experience-dashboard": {
+      "types": "./dist/components/experience-dashboard/index.d.ts",
+      "import": "./dist/components/experience-dashboard.js"
+    },
+    "./components/experience-dashboard/style.css": "./dist/components/experience-dashboard/style.css"
   },
   "scripts": {
     "dev": "rslib build --watch",

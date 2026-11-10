@@ -1,0 +1,6 @@
+@import '../../theme.css';
+@import '../../shared/dashboard/dashboard.css';
+@import '../../shared/components/popover/popover.css';
+@import '../../shared/components/tooltip/tooltip.css';
+@import './wiki-dashboard.css';
+@import './wiki-severity-filter.css';

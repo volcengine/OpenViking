@@ -17,28 +17,22 @@ const themeCss = readFileSync(
   'utf8',
 );
 
-/** A controller stand-in: the view only reads snapshots and subscribes. */
-const level = (options, selected) => {
-  const snapshot = {
-    options,
-    selected,
-    enabled: true,
-    loading: false,
-    error: null,
-    scopeKey: '[]',
-    parentIds: [],
-  };
-  return {
-    getSnapshot: () => snapshot,
-    subscribe: () => () => {},
-    select() {},
-    refresh() {},
-  };
-};
-const renderCascade = (levels) =>
-  renderToStaticMarkup(
-    createElement(ScopeCascade, { controller: { levels }, locale: 'en-US' }),
+const renderCascade = async (options) => {
+  const { mount } = await import('./helpers/module-dom.mjs');
+  const view = await mount(
+    createElement(ScopeCascade, {
+      loadLibraries: () => Promise.resolve(options[0]),
+      loadSpaces: () => Promise.resolve(options[1]),
+      loadUsers: () => Promise.resolve(options[2]),
+      locale: 'en-US',
+    }),
   );
+  try {
+    return view.container.innerHTML;
+  } finally {
+    await view.unmount();
+  }
+};
 
 test('the level icons are public and render without a host theme', () => {
   // The library icon is a gradient swatch picked by name, not an SVG glyph.
@@ -127,39 +121,22 @@ test('every library swatch is reachable and numbered from one', () => {
   assert.ok(seen.size > 1, 'different names should reach different swatches');
 });
 
-test('the cascade fills a default icon per level when adapters return none', () => {
-  // Panels are closed until a trigger is clicked, so the static markup carries
-  // the three trigger icons. The chevron is painted in currentColor too, so the
-  // outline glyphs are counted by their stroke.
-  const html = renderCascade([
-    level([{ id: 'a', label: 'Alpha' }], { id: 'a', label: 'Alpha' }),
-    level([{ id: 's', label: 'Space' }], { id: 's', label: 'Space' }),
-    level([{ id: 'u', label: 'User' }], { id: 'u', label: 'User' }),
+test('the cascade fills a default icon per level when adapters return none', async () => {
+  const html = await renderCascade([
+    [{ id: 'a', label: 'Alpha' }],
+    [{ id: 's', label: 'Space' }],
+    [{ id: 'u', label: 'User' }],
   ]);
-  // Library: the gradient swatch.
   assert.equal((html.match(/linear-gradient/g) ?? []).length, 1);
-  // Space and user: one stroked glyph each.
   assert.equal((html.match(/stroke="currentColor"/g) ?? []).length, 2);
 });
 
-test('a host-supplied icon wins over the built-in default', () => {
-  const hostIcon = createElement('em', null, 'HOST');
-  const html = renderCascade([
-    level([{ id: 'a', label: 'Alpha', icon: hostIcon }], {
-      id: 'a',
-      label: 'Alpha',
-      icon: hostIcon,
-    }),
-    level([{ id: 's', label: 'Space', icon: hostIcon }], {
-      id: 's',
-      label: 'Space',
-      icon: hostIcon,
-    }),
-    level([{ id: 'u', label: 'User', icon: hostIcon }], {
-      id: 'u',
-      label: 'User',
-      icon: hostIcon,
-    }),
+test('a host-supplied icon wins over the built-in default', async () => {
+  const icon = createElement('em', null, 'HOST');
+  const html = await renderCascade([
+    [{ id: 'a', label: 'Alpha', icon }],
+    [{ id: 's', label: 'Space', icon }],
+    [{ id: 'u', label: 'User', icon }],
   ]);
   assert.equal((html.match(/HOST/g) ?? []).length, 3);
   assert.doesNotMatch(html, /linear-gradient|stroke="currentColor"/);

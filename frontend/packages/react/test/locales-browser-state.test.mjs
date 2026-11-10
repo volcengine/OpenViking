@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
 import { OpenVikingProvider } from '@openviking/react/client';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
 import {
-  FileBrowser,
   useFileBrowser,
-} from '@openviking/react/modules/file-browser';
+  OpenVikingProvider as HookProvider,
+} from './helpers/internal-hooks.mjs';
 import { mount, ok, recordingFetch } from './helpers/module-dom.mjs';
 
 test('file-browser failure and retry copy update with locale while keeping the server reason', async () => {
@@ -90,7 +91,7 @@ test('standalone file-browser Hook localizes loaded summaries without refetching
   }
   const element = (locale, summaryLabels) =>
     h(
-      OpenVikingProvider,
+      HookProvider,
       { baseURL: 'https://ov.test', fetch },
       h(Demo, { locale, summaryLabels }),
     );
