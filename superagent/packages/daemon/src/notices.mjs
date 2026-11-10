@@ -32,8 +32,8 @@ export class FailurePolicy {
     this.isOwner = isOwner;
     this.mentionTarget = mentionTarget;
     this.isStopping = isStopping;
-    // In-memory: scopeKey -> { summary, atMs } of the delivered failure notice.
-    // A conversation that was told once stays quiet, whatever the error or
+    // In-memory: chatId (or scope for non-chat events) -> { summary, atMs } of the delivered failure notice.
+    // A chat that was told once stays quiet, whatever the error or
     // mention, until any turn succeeds (see onTurnSucceeded). Not persisted: a
     // restart may report once more.
     this.failureNoticeMutes = new Map();
@@ -133,7 +133,8 @@ export class FailurePolicy {
     const seq = seqs.at(-1) ?? null;
     const inbound = seq === null || seq === undefined ? null : this.store.inboundBySeq(seq);
     const errorSummary = safeError(error);
-    const scopeKey = inbound?.scopeKey ?? inbound?.conversationKey;
+    // Keyed by chat, not by thread: one notice per group (or direct chat).
+    const scopeKey = inbound?.chatId ?? inbound?.scopeKey ?? inbound?.conversationKey;
     if (scopeKey && this.failureNoticeMutes.has(scopeKey)) {
       this.recordActivity('agent.failure_notice', {
         summary: errorSummary,

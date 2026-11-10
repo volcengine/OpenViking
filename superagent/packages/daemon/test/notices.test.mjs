@@ -167,7 +167,7 @@ describe('failure notice mute', () => {
   it('stays muted however long the failure lasts', async () => {
     const { policy, replies } = makePolicy({ 1: inbound(1), 2: inbound(2) });
     await policy.notifyTurnFailure({ inboundSeqs: [1], error: 'model exploded' });
-    const key = inbound(1).conversationKey;
+    const key = inbound(1).chatId;
     const mute = policy.failureNoticeMutes.get(key);
     policy.failureNoticeMutes.set(key, { ...mute, atMs: mute.atMs - 24 * 60 * 60 * 1_000 });
     await policy.notifyTurnFailure({ inboundSeqs: [2], error: 'model exploded' });
@@ -181,6 +181,14 @@ describe('failure notice mute', () => {
     };
     const mentionTarget = (row) => mentionTargetOf(row.mentions, 'ou_bot123456');
     const { policy, replies } = makePolicy(rows, { mentionTarget });
+    await policy.notifyTurnFailure({ inboundSeqs: [1], error: 'model exploded' });
+    await policy.notifyTurnFailure({ inboundSeqs: [2], error: 'model exploded' });
+    assert.equal(replies.length, 1);
+  });
+
+  it('treats threads of the same group as one chat', async () => {
+    const threaded = inbound(2, { threadId: 'omt_thread1234', conversationKey: 'profile:tenant:oc_chat123456:omt_thread1234' });
+    const { policy, replies } = makePolicy({ 1: inbound(1), 2: threaded });
     await policy.notifyTurnFailure({ inboundSeqs: [1], error: 'model exploded' });
     await policy.notifyTurnFailure({ inboundSeqs: [2], error: 'model exploded' });
     assert.equal(replies.length, 1);
