@@ -617,15 +617,15 @@ function FilesystemWorkbench() {
       <div ref={layoutRef} className={styles.layout} style={layoutStyle}>
         <aside className={styles.explorer}>
           <ContextExplorerHeader
-            isRefreshing={listQuery.isFetching}
             onAddResource={
               canUseLocalTools ? () => setUploadDialogOpen(true) : undefined
             }
-            onOpenSearch={handleOpenSearch}
-            onRefresh={() => void handleRefreshContextTree()}
           />
           <div className="min-h-0 flex-1">
             <ContextTree
+              isRefreshing={listQuery.isFetching}
+              onOpenSearch={handleOpenSearch}
+              onRefresh={handleRefreshContextTree}
               refreshRef={contextRefreshRef}
               currentUri={currentUri}
               selectedFileUri={

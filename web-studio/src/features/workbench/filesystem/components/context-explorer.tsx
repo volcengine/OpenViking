@@ -1,8 +1,8 @@
 import studioI18n from '#/i18n/core'
 import { useQueryClient } from '@tanstack/react-query'
 import type { Ref, PointerEvent as ReactPointerEvent } from 'react'
-import { AgentConnectDialog } from './agent-connect-dialog'
-import { useState, useImperativeHandle, useRef, useEffect } from 'react'
+import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useImperativeHandle, useRef, useEffect } from 'react'
 import { useFileBrowser } from '@openviking/react/modules/file-browser'
 import { toast } from 'sonner'
 import { FileTree } from '@openviking/react/components/file-tree'
@@ -11,75 +11,45 @@ import { fetchFsStat } from '#/features/workbench/resources/lib/api'
 import { FileBrowserEntries } from '@openviking/react/components/file-browser-entries'
 import '@openviking/react/components/file-browser-entries/style.css'
 import styles from './context-explorer.module.css'
-import { RefreshCcwIcon, SearchIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
-import { cn } from '#/shared/lib/utils'
-import { Button } from '#/shared/ui/button'
 
 import { ROOT_URI } from '#/features/workbench/filesystem/lib/constants'
 
 export function ContextExplorerHeader({
-  isRefreshing,
   onAddResource,
-  onOpenSearch,
-  onRefresh,
 }: {
-  isRefreshing: boolean
   onAddResource?: () => void
-  onOpenSearch: () => void
-  onRefresh: () => void
 }) {
-  const { t } = useTranslation(['filesystem', 'resources'])
-  const [connectOpen, setConnectOpen] = useState(false)
-
+  const { t, i18n } = useTranslation('filesystem')
+  const { connection, identityScopeKey } = useAppConnection()
+  const locale = i18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'
   return (
     <div className={styles.header}>
       <FileBrowserEntries
-        locale={studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
-        onConnectAgent={() => setConnectOpen(true)}
+        key={identityScopeKey}
+        locale={locale}
+        agentConnect={{
+          apiKey: connection.apiKey,
+          baseUrl: connection.baseUrl,
+          locale,
+        }}
         onImportResources={onAddResource}
         labels={{
           connectAgent: t('ide.connectAgent'),
           importResources: t('explorer.addResource'),
         }}
       />
-      {connectOpen ? (
-        <AgentConnectDialog open={connectOpen} onOpenChange={setConnectOpen} />
-      ) : null}
-      <div className={styles.searchRow}>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className={styles.search}
-          title={t('explorer.search')}
-          onClick={onOpenSearch}
-        >
-          <SearchIcon className="size-4" />
-          <span className="truncate">{t('ide.search')}</span>
-        </Button>
-
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="outline"
-          title={t('explorer.refresh')}
-          className={styles.refresh}
-          onClick={onRefresh}
-        >
-          <RefreshCcwIcon
-            className={cn('size-4', isRefreshing && 'animate-spin')}
-          />
-        </Button>
-      </div>
     </div>
   )
 }
 
 export function ContextTree({
   refreshRef,
+  isRefreshing = false,
+  onOpenSearch,
+  onRefresh,
   currentUri,
   expandedKeys,
   onExpandedKeysChange,
@@ -88,6 +58,9 @@ export function ContextTree({
   selectedFileUri,
   rootUri = ROOT_URI,
 }: {
+  isRefreshing?: boolean
+  onOpenSearch?: () => void
+  onRefresh?: () => Promise<void>
   refreshRef?: Ref<{ refresh: () => Promise<void> }>
   currentUri: string
   expandedKeys: Set<string>
@@ -165,6 +138,8 @@ export function ContextTree({
     <FileTree
       locale={studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
       className={styles.tree}
+      search={Boolean(onOpenSearch)}
+      refresh={{ loading: isRefreshing }}
       rows={browser.rows}
       selectedId={browser.selectedId}
       isReady={browser.isReady}
@@ -172,6 +147,12 @@ export function ContextTree({
       aria-label={t('explorer.title')}
       operations={{
         ...browser.actions,
+        search: onOpenSearch
+          ? async () => {
+              onOpenSearch()
+            }
+          : undefined,
+        refresh: onRefresh ?? browser.actions.refresh,
         toggleExpand: async (row) => {
           const next = new Set(expandedKeys)
           if (next.has(row.uri)) next.delete(row.uri)
@@ -180,7 +161,12 @@ export function ContextTree({
           await browser.actions.toggleExpand(row)
         },
       }}
-      labels={{ empty: t('explorer.empty'), loading: t('explorer.loading') }}
+      labels={{
+        empty: t('explorer.empty'),
+        loading: t('explorer.loading'),
+        search: t('ide.search'),
+        refresh: t('explorer.refresh'),
+      }}
     />
   )
 }

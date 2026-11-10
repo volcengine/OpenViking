@@ -12,7 +12,12 @@ const m = vi.hoisted(() => ({
   stat: vi.fn(),
   hook: vi.fn(),
 }))
-vi.mock('./agent-connect-dialog', () => ({ AgentConnectDialog: () => null }))
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
+  useAppConnection: () => ({
+    connection: { apiKey: '', baseUrl: '' },
+    identityScopeKey: 'test',
+  }),
+}))
 vi.mock('#/features/workbench/resources/lib/api', () => ({
   fetchFsStat: m.stat,
 }))
@@ -36,6 +41,8 @@ const row = {
   expanded: false,
 }
 function setup() {
+  const onOpenSearch = vi.fn(),
+    onRefresh = vi.fn(async () => {})
   m.hook.mockReturnValue({
     rows: [row],
     selectedId: row.id,
@@ -55,6 +62,8 @@ function setup() {
   render(
     <QueryClientProvider client={client}>
       <ContextTree
+        onOpenSearch={onOpenSearch}
+        onRefresh={onRefresh}
         currentUri="viking://"
         expandedKeys={new Set()}
         onExpandedKeysChange={onExpandedKeysChange}
@@ -63,7 +72,14 @@ function setup() {
       />
     </QueryClientProvider>,
   )
-  return { client, onSelectDirectory, onSelectFile, onExpandedKeysChange }
+  return {
+    client,
+    onSelectDirectory,
+    onSelectFile,
+    onExpandedKeysChange,
+    onOpenSearch,
+    onRefresh,
+  }
 }
 it('uses module rows and delegates selection to the module', async () => {
   setup()
@@ -90,4 +106,14 @@ it('refreshes module data after a Studio filesystem mutation', async () => {
   const { client } = setup()
   await client.invalidateQueries({ queryKey: ['viking-fs-ls'] })
   await waitFor(() => expect(m.refresh).toHaveBeenCalledTimes(1))
+})
+
+it('opens Studio search and refreshes through the shared tree toolbar', async () => {
+  const { onOpenSearch, onRefresh } = setup()
+  await userEvent.click(screen.getByRole('button', { name: 'ide.search' }))
+  expect(onOpenSearch).toHaveBeenCalledOnce()
+  await userEvent.click(
+    screen.getByRole('button', { name: 'explorer.refresh' }),
+  )
+  expect(onRefresh).toHaveBeenCalledOnce()
 })

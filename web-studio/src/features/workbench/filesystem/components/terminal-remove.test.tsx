@@ -200,3 +200,22 @@ it('surfaces a copy conflict without reporting success or refreshing', async () 
   expect(m.refresh).not.toHaveBeenCalled()
   expect(screen.queryByText('terminal.cpCompleted')).toBeNull()
 })
+
+it('fills and focuses a shared quick command without executing it', () => {
+  render(
+    <TerminalPanel
+      currentUri="viking://resources"
+      entries={[]}
+      openingUri={null}
+      onOpenResource={vi.fn()}
+      onSessionChange={vi.fn()}
+      toolbarContainer={null}
+    />,
+  )
+  fireEvent.click(screen.getByRole('button', { name: /^add-resource/ }))
+  const input = screen.getByRole<HTMLTextAreaElement>('textbox')
+  expect(input.value).toMatch(/^\/add-resource/)
+  expect(document.activeElement).toBe(input)
+  expect(m.remove).not.toHaveBeenCalled()
+  expect(m.mkdir).not.toHaveBeenCalled()
+})

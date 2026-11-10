@@ -18,7 +18,6 @@ import i18n from '#/i18n/core'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
-  ArrowRightIcon,
   CheckCircle2Icon,
   HistoryIcon,
   Loader2Icon,
@@ -241,13 +240,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session delete <session_id>',
   },
 ]
-
-type TerminalQuickStartExample = {
-  action?: () => void
-  command: string
-  code: string
-  key: string
-}
 
 type ScopedSearchInput = {
   query: string
@@ -1542,12 +1534,6 @@ export function TerminalPanel({
   )
 
   const terminalRef = useRef<HTMLDivElement>(null)
-  const acceptSuggestion = useCallback((suggestion: { insertText: string }) => {
-    setCommand(suggestion.insertText)
-    requestAnimationFrame(() =>
-      terminalRef.current?.querySelector('textarea')?.focus(),
-    )
-  }, [])
   const resourceCompletions = commands
     .filter(
       (item) =>
@@ -1563,38 +1549,6 @@ export function TerminalPanel({
         group: 'resources',
       })),
     )
-  const quickStartExamples = useMemo<TerminalQuickStartExample[]>(
-    () => [
-      {
-        action: () => acceptSuggestion({ insertText: '/add-resource ' }),
-        code: t('terminal.quickStart.addResource.code'),
-        command: t('terminal.quickStart.addResource.command'),
-        key: 'add-resource',
-      },
-      {
-        action: () => acceptSuggestion({ insertText: '/add-skill ' }),
-        code: t('terminal.quickStart.addSkill.code'),
-        command: t('terminal.quickStart.addSkill.command'),
-        key: 'add-skill',
-      },
-      {
-        action: () => acceptSuggestion({ insertText: '/add-memory ' }),
-        code: t('terminal.quickStart.addMemory.code'),
-        command: t('terminal.quickStart.addMemory.command'),
-        key: 'add-memory',
-      },
-      {
-        code: t('terminal.quickStart.find.code'),
-        command: t('terminal.quickStart.find.command'),
-        key: 'find',
-        action: () =>
-          acceptSuggestion({
-            insertText: t('terminal.quickStart.find.command'),
-          }),
-      },
-    ],
-    [acceptSuggestion, t],
-  )
 
   return (
     <>
@@ -1686,14 +1640,7 @@ export function TerminalPanel({
             placeholder: t('terminal.placeholder'),
             send: t('terminal.inputHint'),
           }}
-          emptyState={
-            <TerminalQuickStart
-              examples={quickStartExamples}
-              title={t('terminal.quickStart.title')}
-              heading={t('terminal.quickStart.heading')}
-              description={t('terminal.quickStart.description')}
-            />
-          }
+          quickCommands={['add-resource', 'add-skill', 'add-memory', 'find']}
         />
       </div>
       <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
@@ -1741,74 +1688,6 @@ export function TerminalPanel({
         </DialogContent>
       </Dialog>
     </>
-  )
-}
-
-function TerminalQuickStart({
-  description,
-  examples,
-  heading,
-  title,
-}: {
-  description: string
-  examples: TerminalQuickStartExample[]
-  heading: string
-  title: string
-}) {
-  return (
-    <section className="py-10">
-      <h2 className="font-mono text-xl font-normal tracking-tight text-foreground">
-        {heading}
-        <span
-          aria-hidden="true"
-          className="ml-1 inline-block h-4 w-1 bg-muted-foreground/30"
-        />
-      </h2>
-      <p className="mt-1 text-xs text-muted-foreground">{description}</p>
-      <div className="mb-2 mt-8 text-xs text-muted-foreground">{title}</div>
-      <div className="space-y-2">
-        {examples.map((example) => {
-          const content = (
-            <>
-              <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
-                <ArrowRightIcon className="size-3" />
-              </span>
-              <span className="w-[13ch] shrink-0 truncate font-mono text-xs text-foreground">
-                {example.key}
-              </span>
-              <span
-                className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
-                title={example.code}
-              >
-                {example.code}
-              </span>
-            </>
-          )
-
-          if (!example.action) {
-            return (
-              <div
-                key={example.key}
-                className="flex h-[43px] min-w-0 items-center gap-3 rounded-2xl bg-muted/40 px-4"
-              >
-                {content}
-              </div>
-            )
-          }
-
-          return (
-            <button
-              key={example.key}
-              type="button"
-              className="flex h-[43px] w-full min-w-0 items-center gap-3 rounded-2xl bg-muted/40 px-4 text-left transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              onClick={example.action}
-            >
-              {content}
-            </button>
-          )
-        })}
-      </div>
-    </section>
   )
 }
 

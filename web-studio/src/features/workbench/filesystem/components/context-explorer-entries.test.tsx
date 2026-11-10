@@ -4,12 +4,6 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, expect, it, vi } from 'vitest'
 import { ContextExplorerHeader } from './context-explorer'
 
-const { agentConnect } = vi.hoisted(() => ({
-  agentConnect: vi.fn(() => <div>Agent setup</div>),
-}))
-vi.mock('@openviking/react/components/agent-connect', () => ({
-  AgentConnect: agentConnect,
-}))
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: {
@@ -34,25 +28,20 @@ afterEach(() => {
 it('opens AgentConnect with the current data credential and closes inside Studio', async () => {
   const user = userEvent.setup()
   const openWindow = vi.spyOn(window, 'open')
-  render(
-    <ContextExplorerHeader
-      isRefreshing={false}
-      onOpenSearch={vi.fn()}
-      onRefresh={vi.fn()}
-    />,
-  )
+  render(<ContextExplorerHeader />)
   await user.click(screen.getByRole('button', { name: 'ide.connectAgent' }))
   expect(screen.getByRole('dialog', { name: 'ide.connectAgent' })).toBeTruthy()
-  expect(agentConnect).toHaveBeenCalledWith(
-    expect.objectContaining({
-      apiKey: 'data-key',
-      baseUrl: 'https://example.com/ov',
-      locale: 'zh-CN',
-    }),
-    undefined,
-  )
+  expect(screen.getByRole('tab', { name: /主流/ })).toBeTruthy()
+  expect(
+    screen.getByText('https://example.com/ov', { exact: false }),
+  ).toBeTruthy()
+  expect(document.body.textContent).not.toContain('admin-key')
+  await user.click(screen.getByRole('button', { name: '复制并发送给 Agent' }))
+  const copied = await navigator.clipboard.readText()
+  expect(copied).toContain('data-key')
+  expect(copied).not.toContain('admin-key')
   expect(openWindow).not.toHaveBeenCalled()
-  await user.click(screen.getByRole('button', { name: 'ui.close' }))
-  expect(screen.queryByRole('dialog')).toBeNull()
+  await user.click(screen.getByRole('button', { name: '关闭' }))
+  await vi.waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   openWindow.mockRestore()
 })
