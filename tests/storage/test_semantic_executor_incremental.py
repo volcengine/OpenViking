@@ -10,7 +10,6 @@ import pytest
 from openviking.core.context import ContextLevel
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import (
-    deterministic_sample,
     freshness_metadata,
     parse_abstract_overview,
     parse_overview_file_summaries,

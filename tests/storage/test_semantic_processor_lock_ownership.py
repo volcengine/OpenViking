@@ -177,6 +177,10 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
     from tests.storage.test_semantic_executor_skip_files import _FakeVikingFS as TreeFS
     from tests.test_task_tracker import _FakeAgfs, _owner_kwargs
 
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
     root = (
         "viking://resources/demo"
         if context_type == "resource"
