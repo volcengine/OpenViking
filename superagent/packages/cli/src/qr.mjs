@@ -108,7 +108,7 @@ export function showScan(prompter, {
       const keysText = t(`（${hints.map(([key, text]) => `按 ${key} ${text}`).join('，')}）`, ` (${hints.map(([key, text]) => `${key}: ${text}`).join(', ')})`);
       return `  ${current} ${clock}${hints.length ? keysText : ''}`;
     }
-    const glyph = s.paint(FRAMES[frame % FRAMES.length], mix(PALETTE.sail, frame / 24, { cycle: true }));
+    const glyph = s.paint(FRAMES[frame % FRAMES.length], mix(PALETTE.sunset, frame / 24, { cycle: true }));
     const keysText = hints.map(([key, text]) => `${s.bold(key)} ${text}`).join(s.gray(' · '));
     return `  ${glyph} ${current} ${s.gray(clock)}${hints.length ? `   ${s.gray('│')} ${keysText}` : ''}`;
   };

@@ -10,9 +10,10 @@ export const RESET = `${ESC}0m`;
 export const HIDE_CURSOR = `${ESC}?25l`;
 export const SHOW_CURSOR = `${ESC}?25h`;
 
-// OpenViking SuperAgent's colours: the sail gradient (also the wordmark), the sea, and accents.
+// OpenViking SuperAgent's colours: the sunset gradient (also the wordmark), the sea, and accents.
 export const PALETTE = Object.freeze({
-  sail: [[255, 106, 213], [199, 116, 232], [173, 140, 255], [135, 149, 232], [148, 208, 255]],
+  // Gold -> orange -> orange-red -> crimson.
+  sunset: [[255, 206, 110], [255, 150, 72], [255, 96, 64], [226, 52, 74]],
   sea: [[28, 84, 178], [40, 146, 232], [64, 214, 232]],
   foam: [210, 245, 255],
   hull: [[214, 120, 98], [255, 170, 120]],
@@ -147,7 +148,7 @@ export function styler(stream = process.stdout, env = process.env) {
     underline: wrap(`${ESC}4m`, `${ESC}24m`),
     // Each character its own colour along the stops; `phase` slides the
     // gradient, so redrawing with a growing phase makes it flow.
-    gradient(text, stops = PALETTE.sail, { phase = 0, cycle = false } = {}) {
+    gradient(text, stops = PALETTE.sunset, { phase = 0, cycle = false } = {}) {
       if (!on) return String(text);
       const chars = [...String(text)];
       const visible = Math.max(1, chars.length - 1);
@@ -207,7 +208,7 @@ export function spinner(output, text, { env = process.env, indent = '', commit =
   let timer = null;
   const started = Date.now();
   const draw = () => {
-    const glyph = s.paint(SPINNER_FRAMES[frame % SPINNER_FRAMES.length], mix(PALETTE.sail, frame / 24, { cycle: true }));
+    const glyph = s.paint(SPINNER_FRAMES[frame % SPINNER_FRAMES.length], mix(PALETTE.sunset, frame / 24, { cycle: true }));
     const seconds = Math.floor((Date.now() - started) / 1000);
     const clock = seconds >= 3 ? s.gray(` ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`) : '';
     output.write(`\r${ESC}2K${indent}${glyph} ${label}${clock}`);
@@ -242,7 +243,7 @@ export function spinner(output, text, { env = process.env, indent = '', commit =
 export function box(lines, { output = process.stdout, env = process.env, title = '', padding = 2 } = {}) {
   const s = styler(output, env);
   const inner = Math.max(width(title) + 2, ...lines.map((line) => width(line))) + padding * 2;
-  const edge = (text) => s.gradient(text, PALETTE.sail);
+  const edge = (text) => s.gradient(text, PALETTE.sunset);
   const heading = title ? ` ${title} ` : '';
   const top = `╭─${heading}${'─'.repeat(Math.max(0, inner - width(heading) - 1))}╮`;
   const rows = lines.map((line) => `${edge('│')}${' '.repeat(padding)}${padEnd(line, inner - padding * 2)}${' '.repeat(padding)}${edge('│')}`);
