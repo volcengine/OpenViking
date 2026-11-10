@@ -1,17 +1,19 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import os
 import tempfile
 import zipfile
 from pathlib import Path
 
+import httpx
 import pytest
 from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
 from openviking_sdk.uploads import zip_directory
 
 
-@pytest.fixture
-def interrupted_archive(tmp_path, monkeypatch):
+@pytest.fixture(params=["read", "scan"])
+def interrupted_archive(tmp_path, monkeypatch, request):
     source = tmp_path / "source"
     source.mkdir()
     (source / "first.txt").write_text("first", encoding="utf-8")
@@ -19,6 +21,16 @@ def interrupted_archive(tmp_path, monkeypatch):
     archives = tmp_path / "archives"
     archives.mkdir()
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(archives))
+    if request.param == "scan":
+        if os.name == "nt" or os.geteuid() == 0:
+            pytest.skip("Directory permission failures require non-root POSIX permissions")
+        blocked = source / "blocked"
+        blocked.mkdir()
+        (blocked / "hidden.txt").write_text("must not be omitted", encoding="utf-8")
+        blocked.chmod(0)
+        request.addfinalizer(lambda: blocked.chmod(0o700))
+        return source, archives, PermissionError("directory scan denied"), "scan"
+
     original_write = zipfile.ZipFile.write
     error = FileNotFoundError("source disappeared during packing")
     writes = []
@@ -30,32 +42,48 @@ def interrupted_archive(tmp_path, monkeypatch):
         return original_write(self, filename, *args, **kwargs)
 
     monkeypatch.setattr(zipfile.ZipFile, "write", fail_second_write)
-    return source, archives, error
+    return source, archives, error, "read"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync", [False, True])
 @pytest.mark.parametrize("method", ["add_resource", "add_skill", "update_skill"])
 async def test_directory_import_removes_partial_zip(interrupted_archive, sync, method):
-    source, archives, error = interrupted_archive
+    source, archives, error, stage = interrupted_archive
     client = (SyncHTTPClient if sync else AsyncHTTPClient)(url="http://localhost:1933")
+    async_client = client._async_client if sync else client
+    calls = []
+
+    def handle(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json={"status": "ok", "result": {"temp_file_id": "partial.zip"}})
+
+    async_client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933", transport=httpx.MockTransport(handle)
+    )
     args = ("demo", str(source)) if method == "update_skill" else (str(source),)
-    with pytest.raises(FileNotFoundError) as raised:
-        if sync:
-            getattr(client, method)(*args)
-        else:
-            await getattr(client, method)(*args)
-    assert raised.value is error
+    try:
+        with pytest.raises(type(error)) as raised:
+            if sync:
+                getattr(client, method)(*args)
+            else:
+                await getattr(client, method)(*args)
+        if stage == "read":
+            assert raised.value is error
+        assert calls == []
+    finally:
+        await async_client.close()
     assert list(archives.iterdir()) == []
     assert (source / "first.txt").read_text(encoding="utf-8") == "first"
     assert (source / "second.txt").read_text(encoding="utf-8") == "second"
 
 
 def test_zip_helper_removes_partial_zip(interrupted_archive):
-    source, archives, error = interrupted_archive
-    with pytest.raises(FileNotFoundError) as raised:
+    source, archives, error, stage = interrupted_archive
+    with pytest.raises(type(error)) as raised:
         zip_directory(str(source))
-    assert raised.value is error
+    if stage == "read":
+        assert raised.value is error
     assert list(archives.iterdir()) == []
 
 
