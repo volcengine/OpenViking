@@ -11,7 +11,16 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const INSTALLER = fileURLToPath(new URL('../../../scripts/install.sh', import.meta.url));
+const WINDOWS_INSTALLER = fileURLToPath(new URL('../../../scripts/windows/install-preview.ps1', import.meta.url));
 const PLATFORM = `${process.platform}-${process.arch}`;
+
+test('installer headers use the OpenViking SuperAgent brand', () => {
+  for (const installer of [INSTALLER, WINDOWS_INSTALLER]) {
+    const source = fs.readFileSync(installer, 'utf8');
+    assert.match(source, /Open\$\{?VIOLET\}?Viking .*Super\$\{?SKY\}?Agent/);
+    assert.doesNotMatch(source, /\$\{?PINK\}?V\$\{?VIOLET\}?I\$\{?LILAC\}?K\$\{?SKY\}?A/);
+  }
+});
 
 // A home directory, a fake pm2 that records any call, and a release archive
 // laid out like build-release.mjs makes them.

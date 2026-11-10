@@ -205,7 +205,7 @@ spin() { # label command...
 header() {
   if [ "$FANCY" = 1 ]; then
     say ""
-    say "  ${BOLD}${PINK}V${VIOLET}I${LILAC}K${SKY}A${RESET}  ${GRAY}$(m '安装' 'Installing') ${1} · ${PLATFORM}${RESET}"
+    say "  ${BOLD}${PINK}Open${VIOLET}Viking ${LILAC}Super${SKY}Agent${RESET}  ${GRAY}$(m '安装' 'Installing') ${1} · ${PLATFORM}${RESET}"
     say ""
   else
     say "$(m "安装 OpenViking SuperAgent ${1}（${PLATFORM}）" "Installing OpenViking SuperAgent ${1} (${PLATFORM})")"
