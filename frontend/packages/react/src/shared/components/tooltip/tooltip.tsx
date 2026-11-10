@@ -116,11 +116,11 @@ export function Tooltip({
     }
   }, [disabled, clearTimer]);
 
-  // useEffect 必要性：`click` 触发时要响应浮层外的按下与 Esc，这是文档级
+  // useEffect 必要性：点击浮层响应外部按下，两种浮层都响应 Esc，这是文档级
   // 事件，只有挂到 document 才能捕获；浮层渲染在 portal 里，DOM 上不是触发
   // 元素的子孙，靠冒泡判断不了「点在外部」。关闭或卸载时移除监听。
   useEffect(() => {
-    if (!open || trigger !== 'click') return;
+    if (!open) return;
 
     const onPointerDown = (event: MouseEvent) => {
       const target = event.target as Node;
@@ -133,16 +133,21 @@ export function Tooltip({
       change(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') change(false);
+      if (event.key === 'Escape') {
+        clearTimer();
+        change(false);
+      }
     };
 
-    document.addEventListener('mousedown', onPointerDown);
+    if (trigger === 'click')
+      document.addEventListener('mousedown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
     return () => {
-      document.removeEventListener('mousedown', onPointerDown);
+      if (trigger === 'click')
+        document.removeEventListener('mousedown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [change, open, surfaceNode, trigger]);
+  }, [change, clearTimer, open, surfaceNode, trigger]);
 
   const show = () => {
     if (disabled) return;
@@ -160,7 +165,10 @@ export function Tooltip({
   const hide = () => {
     if (trigger === 'click') return;
     clearTimer();
-    change(false);
+    timerRef.current = window.setTimeout(() => {
+      change(false);
+      timerRef.current = undefined;
+    }, 120);
   };
 
   const child = children as React.ReactElement<Record<string, unknown>>;
@@ -171,7 +179,7 @@ export function Tooltip({
   const triggerElement = cloneElement(child, {
     ref: mergedRef,
     'aria-describedby': open && trigger === 'hover' ? id : undefined,
-    'aria-expanded': trigger === 'click' ? open : undefined,
+    'aria-expanded': trigger === 'click' ? open : childProps['aria-expanded'],
     onMouseEnter: (event: React.MouseEvent) => {
       (
         childProps.onMouseEnter as ((e: React.MouseEvent) => void) | undefined

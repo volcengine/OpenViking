@@ -36,9 +36,10 @@
  * the fallback applies otherwise.
  */
 .ov-agent-connect,
+.ov-console,
 .ov-divider,
-.ov-file-browser,
 .ov-file-browser-entries,
+.ov-file-browser,
 .ov-file-preview,
 .ov-file-tree,
 .ov-module-placeholder,
@@ -47,11 +48,15 @@
 .ov-tooltip,
 .ov-tui,
 .ov-viking-bot,
+.ov-viking-bot__popover,
+.ov-viking-bot__reference-picker--mention,
 .ov-viking-bot__interaction {
   /* 主色：面包屑、焦点环、选中态与主要按钮。 */
   --ov-ui-primary-default: #5252ff;
   --ov-ui-primary-hover-default: #7075ff;
   --ov-ui-primary-active-default: #3833d2;
+  --ov-ui-primary-disabled-default: #acb4ff;
+  --ov-ui-text-on-primary-default: #ffffff;
   /* 主色的浅色底，用于选中行与轻量高亮。 */
   --ov-ui-primary-light-default: #f5f7ff;
   /* Agent 接入背景光晕与主色按钮文字。 */
@@ -78,6 +83,9 @@
   --ov-ui-bg-4-default: #f6f7fa;
   --ov-ui-bg-5-default: #f1f2f9;
 
+  /* Code surfaces used by the reference conversation renderer. */
+  --ov-ui-code-bg-default: #fbfbfc;
+
   /* 语义色。 */
   --ov-ui-status-success-default: #1f9d55;
   --ov-ui-shadow-default: #0f172a;
@@ -93,9 +101,10 @@
 }
 
 .dark .ov-agent-connect,
+.dark .ov-console,
 .dark .ov-divider,
-.dark .ov-file-browser,
 .dark .ov-file-browser-entries,
+.dark .ov-file-browser,
 .dark .ov-file-preview,
 .dark .ov-file-tree,
 .dark .ov-module-placeholder,
@@ -104,6 +113,8 @@
 .dark .ov-tooltip,
 .dark .ov-tui,
 .dark .ov-viking-bot,
+.dark .ov-viking-bot__popover,
+.dark .ov-viking-bot__reference-picker--mention,
 .dark .ov-viking-bot__interaction {
   --ov-ui-primary-default: #5f5fff;
   --ov-ui-primary-hover-default: #7075ff;
@@ -136,6 +147,10 @@
 
   --ov-ui-tooltip-bg-default: #2a2d33;
   --ov-ui-tooltip-text-default: #f0f1f3;
+}
+
+.dark .ov-viking-bot {
+  --ov-ui-code-bg-default: var(--ov-ui-bg-3-default);
 }
 
 /* 接入设计稿的卡片、页签与说明语义；不改变其他组件的通用基线。 */

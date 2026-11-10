@@ -21,7 +21,7 @@ import { OpenVikingProvider } from '@openviking/react/client';
 </OpenVikingProvider>;
 ```
 
-The open-source edition adds `apiKey`; the commercial edition authenticates with the browser cookie, so it omits `apiKey` and sets `credentials: 'include'` for cross-origin calls.
+The open-source edition adds `apiKey`; the commercial edition authenticates with the browser cookie, so it omits `apiKey`. `credentials` defaults to `include` and can be omitted for cross-origin calls too. Server CORS and browser cookie policies still apply.
 
 Mounting the Provider sends no request and reads no credential stored in the browser.
 
@@ -29,16 +29,16 @@ Mounting the Provider sends no request and reads no credential stored in the bro
 
 Every field is a value. The Client assembles the headers, so no caller writes `X-API-Key`, `X-OpenViking-Account`, `X-OpenViking-User` or `V-Resource-Id` by hand.
 
-| Field         | Header                 | Notes                                                                                                |
-| ------------- | ---------------------- | ---------------------------------------------------------------------------------------------------- |
-| `baseURL`     | —                      | Service address with an optional gateway prefix, excluding `/api/v1`. Empty means same origin.       |
-| `apiKey`      | `X-API-Key`            | Open-source edition. A function is re-evaluated per request, so it can read a rotated key.           |
-| `accountId`   | `X-OpenViking-Account` | OpenViking account, which corresponds to the data space.                                             |
-| `userId`      | `X-OpenViking-User`    | User within the account.                                                                             |
-| `resourceId`  | `V-Resource-Id`        | Current library. Data-plane requests need it.                                                        |
-| `credentials` | —                      | `RequestCredentials` for `fetch`. Defaults to `same-origin`; the commercial edition needs `include`. |
-| `signal`      | —                      | The caller's `AbortSignal`.                                                                          |
-| `fetch`       | —                      | Transport override, for tests or platforms without a global `fetch`.                                 |
+| Field         | Header                 | Notes                                                                                                     |
+| ------------- | ---------------------- | --------------------------------------------------------------------------------------------------------- |
+| `baseURL`     | —                      | Service address with an optional gateway prefix, excluding `/api/v1`. Empty means same origin.            |
+| `apiKey`      | `X-API-Key`            | Open-source edition. A function is re-evaluated per request, so it can read a rotated key.                |
+| `accountId`   | `X-OpenViking-Account` | OpenViking account, which corresponds to the data space.                                                  |
+| `userId`      | `X-OpenViking-User`    | User within the account.                                                                                  |
+| `resourceId`  | `V-Resource-Id`        | Current library. Data-plane requests need it.                                                             |
+| `credentials` | —                      | `RequestCredentials` for `fetch`. Defaults to `include`; override with `same-origin` or `omit` as needed. |
+| `signal`      | —                      | The caller's `AbortSignal`.                                                                               |
+| `fetch`       | —                      | Transport override, for tests or platforms without a global `fetch`.                                      |
 
 An omitted or empty field sends no header. The commercial edition's control-plane requests need only the cookie, so it passes no `apiKey` and no identity headers there.
 

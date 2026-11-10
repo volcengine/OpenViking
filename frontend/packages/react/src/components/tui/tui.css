@@ -247,19 +247,23 @@
 }
 
 .ov-tui__copy {
+  display: inline-flex;
   flex: none;
-  border: 1px solid var(--ov-ui-tui-card-border);
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
+  border: 0;
   border-radius: 6px;
-  background: transparent;
-  padding: 2px 8px;
-  color: var(--ov-ui-tui-muted);
-  font: inherit;
-  font-size: 12px;
+  background: var(--ov-ui-tui-card-bg);
+  padding: 0;
+  color: var(--ov-ui-color-text-2);
   cursor: pointer;
 }
 
 .ov-tui__copy:hover {
-  color: inherit;
+  color: var(--ov-ui-tui-text);
   background: var(--ov-ui-tui-hover);
 }
 
@@ -308,13 +312,6 @@
   position: absolute;
   top: -2px;
   right: 0;
-  opacity: 0;
-  transition: opacity 120ms;
-}
-
-.ov-tui__code-block:hover .ov-tui__copy--inline,
-.ov-tui__copy--inline:focus-visible {
-  opacity: 1;
 }
 
 .ov-tui__markdown {
@@ -405,6 +402,7 @@
   max-inline-size: 100%;
   overflow: auto;
   margin: 0;
+  padding-inline-end: 36px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
@@ -854,7 +852,7 @@
 .ov-tui__help {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
 .ov-tui__help-lead {
@@ -872,7 +870,7 @@
 .ov-tui__help-section {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 12px;
 }
 
 .ov-tui__help-section-label {
@@ -884,7 +882,7 @@
 .ov-tui__help-items {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 8px;
 }
 
 .ov-tui__help-item {

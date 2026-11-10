@@ -1,0 +1,116 @@
+.ov-console__empty {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 32px;
+  padding: 40px 0 24px;
+}
+.ov-console__hero {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 8px;
+}
+.ov-console__hero .ov-console__title {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: var(--ov-ui-console-text);
+  font: 400 28px/40px var(--ov-ui-font-display, 'Trebuchet MS', sans-serif);
+  letter-spacing: 0.025em;
+}
+.ov-console__title::after {
+  content: '';
+  width: 6px;
+  height: 20px;
+  margin-inline-start: 4px;
+  background: var(--ov-ui-console-fill);
+}
+.ov-console__hero .ov-console__subtitle {
+  margin: 0;
+  color: var(--ov-ui-console-muted);
+  font-size: 13px;
+  line-height: 26px;
+}
+.ov-console__quick-start {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 8px;
+}
+.ov-console__quick-start .ov-console__quick-label {
+  margin: 0;
+  color: var(--ov-ui-console-muted);
+  font-size: 12px;
+  line-height: 24px;
+}
+.ov-console__quick-list {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ov-console__quick-list > li {
+  margin: 0;
+}
+.ov-console__quick-action {
+  display: flex;
+  width: 100%;
+  min-height: 43px;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  border-radius: 16px;
+  padding: 0 16px;
+  background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default));
+  color: var(--ov-ui-console-secondary);
+  text-align: start;
+  cursor: pointer;
+}
+.ov-console__quick-action > svg {
+  flex-shrink: 0;
+}
+.ov-console__quick-action:hover {
+  background: var(--ov-ui-console-fill);
+}
+.ov-console__quick-action:focus-visible {
+  outline: 2px solid var(--ov-ui-console-focus);
+  outline-offset: 2px;
+}
+.ov-console__quick-content {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  grid-template-columns: 13ch minmax(0, 1fr);
+  column-gap: 20px;
+}
+.ov-console__quick-name {
+  color: var(--ov-ui-console-text);
+  font: 400 14px/26px var(--ov-ui-font-mono, 'Roboto Mono', monospace);
+}
+.ov-console__quick-description {
+  min-width: 0;
+  color: var(
+    --ov-ui-color-text-description,
+    var(--ov-ui-text-description-default)
+  );
+  font-size: 12px;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+}
+@container (max-width: 360px) {
+  .ov-console__quick-content {
+    grid-template-columns: 8ch minmax(0, 1fr);
+    column-gap: 12px;
+  }
+  .ov-console__quick-action {
+    padding-inline: 12px;
+  }
+}

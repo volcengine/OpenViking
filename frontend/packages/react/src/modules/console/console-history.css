@@ -1,0 +1,135 @@
+.ov-console__history {
+  display: flex;
+}
+.ov-tooltip.ov-console__history-content {
+  inset: auto;
+  width: 320px;
+  min-width: 0;
+  max-width: min(320px, calc(100vw - 24px));
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  border-radius: 12px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  font: 12px/20px var(--ov-ui-font-family, 'PingFang SC', sans-serif);
+  box-shadow: 0 8px 24px
+    color-mix(
+      in srgb,
+      var(--ov-ui-color-shadow, var(--ov-ui-shadow-default)) 10%,
+      transparent
+    );
+}
+.ov-console__history-content[hidden] {
+  display: none;
+}
+.ov-console__history-content ul {
+  display: flex;
+  max-height: min(492px, calc(100dvh - 96px));
+  flex-direction: column;
+  gap: 2px;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ov-console__history-content li {
+  margin: 0;
+}
+.ov-console__history-content button {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 56px;
+  flex-direction: column;
+  gap: 2px;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.ov-console__history-content button:hover {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+.ov-console__history-content button:disabled {
+  cursor: not-allowed;
+}
+.ov-console__history-content button:focus-visible {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: -2px;
+}
+.ov-console__history-command {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-console__history-time {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  line-height: 18px;
+}
+.ov-console__history-empty {
+  display: flex;
+  box-sizing: border-box;
+  min-height: 180px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  text-align: center;
+}
+.ov-console__history-illustration {
+  display: block;
+  width: 120px;
+  max-width: 100%;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+.ov-console__history-illustration svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.ov-tooltip.ov-console__action-tooltip {
+  --ov-ui-tooltip-border: var(
+    --ov-ui-color-border-2,
+    var(--ov-ui-border-2-default)
+  );
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font: 12px/20px var(--ov-ui-font-family, 'PingFang SC', sans-serif);
+  box-shadow: 0 4px 12px
+    color-mix(
+      in srgb,
+      var(--ov-ui-color-shadow, var(--ov-ui-shadow-default)) 10%,
+      transparent
+    );
+}
+.ov-console__action-tooltip::after {
+  content: '';
+  position: absolute;
+  inset-inline-start: 50%;
+  inset-block-end: -5px;
+  width: 8px;
+  height: 8px;
+  border-inline-end: 1px solid var(--ov-ui-tooltip-border);
+  border-block-end: 1px solid var(--ov-ui-tooltip-border);
+  background: inherit;
+  transform: translateX(-50%) rotate(45deg);
+}
+.ov-console__action-tooltip[data-placement='bottom']::after {
+  inset-block-start: -5px;
+  inset-block-end: auto;
+  transform: translateX(-50%) rotate(225deg);
+}
