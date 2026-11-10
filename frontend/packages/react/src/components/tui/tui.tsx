@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import { TuiAssist } from './tui-assist.js';
 import { TuiComposer } from './tui-composer.js';
+import { pickTuiCommands, TuiEmptyRegion } from './tui-empty.js';
 import { resolveTuiLabels } from './tui-labels.js';
 import { TuiRecordItem } from './tui-record.js';
 import { useTuiCompletion } from './use-tui-completion.js';
@@ -9,36 +10,6 @@ import type { TuiProps } from './types.js';
 import { getTuiCommandQuery } from './command-completion.js';
 import { formatTuiCommandInput } from './command-input.js';
 import { findTuiCommand } from './command-definitions.js';
-
-export type {
-  TuiCommandDefinition,
-  TuiCommandExample,
-  TuiCommandGroup,
-  TuiCommandParam,
-  TuiCommandOption,
-  TuiSkeletonKind,
-} from './command-catalog.js';
-
-export type {
-  TuiCommandHelpContent,
-  TuiCommandHelpItem,
-  TuiCommandHelpSection,
-  TuiLabels,
-  TuiProps,
-  TuiRecord,
-  TuiRecordContent,
-  TuiRecordStatus,
-  TuiResourcePreviewContent,
-  TuiResourceTreeContent,
-  TuiResourceTreeDetailRow,
-  TuiResourceTreeItem,
-  TuiSearchListContent,
-  TuiSearchResultItem,
-  TuiStatusContent,
-  TuiStatusRow,
-  TuiTextContent,
-  TuiWriteResultContent,
-} from './types.js';
 
 /**
  * 命令记录、结果与输入区。宿主负责执行与会话，组件渲染传入的记录，
@@ -54,7 +25,8 @@ export function Tui({
   value,
   disabled = false,
   emptyState,
-  locale = 'en',
+  quickCommands,
+  locale = 'en-US',
   commands = [],
   commandGroups = [],
   onValueChange,
@@ -162,9 +134,13 @@ export function Tui({
             ),
           )
         ) : (
-          <div className="ov-tui__empty">
-            {emptyState === undefined ? text.empty : emptyState}
-          </div>
+          <TuiEmptyRegion
+            emptyState={emptyState}
+            commands={pickTuiCommands(quickCommands, commands)}
+            labels={text}
+            disabled={disabled || readOnly}
+            onPick={(command) => fillCommand(`${command.name} `)}
+          />
         )}
       </div>
       <TuiAssist

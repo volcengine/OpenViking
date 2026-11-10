@@ -47,7 +47,7 @@ it('opens AgentConnect with the current data credential and closes inside Studio
     expect.objectContaining({
       apiKey: 'data-key',
       baseUrl: 'https://example.com/ov',
-      locale: 'zh',
+      locale: 'zh-CN',
     }),
     undefined,
   )

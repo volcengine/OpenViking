@@ -51,7 +51,7 @@ export function ScopePanel({
   slots?: ScopeSwitcherSlots;
   actions?: ScopeSwitcherActions;
   onSelect: NonNullable<ScopeSwitcherActions['onSelect']>;
-  labels?: ScopeSwitcherLabels;
+  labels: Required<ScopeSwitcherLabels>;
 }) {
   const focusPanel = useCallback((node: HTMLDivElement | null) => {
     const target =
@@ -86,8 +86,8 @@ export function ScopePanel({
         type="search"
         className="ov-scope-switcher__search"
         value={keyword}
-        aria-label={labels?.searchPlaceholder ?? 'Search'}
-        placeholder={labels?.searchPlaceholder ?? 'Search'}
+        aria-label={labels.searchPlaceholder}
+        placeholder={labels.searchPlaceholder}
         onChange={(event) =>
           actions?.onSearchKeywordChange?.(event.currentTarget.value)
         }
@@ -98,22 +98,19 @@ export function ScopePanel({
   if (state?.loading) {
     list = (
       <div className="ov-scope-switcher__state" role="status">
-        {labels?.loading ?? 'Loading…'}
+        {labels.loading}
       </div>
     );
   } else if (state?.error) {
     list = (
       <div className="ov-scope-switcher__state" role="alert">
-        {slots?.errorFallback ?? labels?.error ?? 'Unable to load options'}
+        {slots?.errorFallback ?? labels.error}
       </div>
     );
   } else if (!options.length) {
     list = (
       <div className="ov-scope-switcher__state" role="status">
-        {slots?.emptyFallback ??
-          (hasKeyword
-            ? (labels?.noMatch ?? labels?.empty ?? 'No matches')
-            : (labels?.empty ?? 'No options'))}
+        {slots?.emptyFallback ?? (hasKeyword ? labels.noMatch : labels.empty)}
       </div>
     );
   } else {

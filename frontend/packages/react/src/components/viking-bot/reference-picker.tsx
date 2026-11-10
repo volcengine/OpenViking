@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import { useEffect, useId, useMemo, useState } from 'react';
 import type { SenderProps } from '@ark-design/ui/sender';
 import { usePortalTheme } from '../../shared/components/tooltip/use-portal-theme.js';
@@ -8,7 +9,7 @@ import type {
   VikingBotReference,
   VikingBotReferences,
 } from './capabilities.js';
-import { DEFAULT_LABELS } from './labels.js';
+import { resolveVikingBotLabels } from './labels.js';
 
 export type MentionConfig = NonNullable<
   NonNullable<SenderProps['richTextAreaProps']>['mentionConfig']
@@ -18,18 +19,20 @@ type Editor = Parameters<NonNullable<MentionConfig['render']>>[0]['editor'];
 /** The same host-owned tree serves the toolbar and Sender's mention extension. */
 export function ReferencePicker({
   config,
+  locale,
   query: externalQuery,
   editor,
   onSelect,
   labels: overrides,
 }: {
   config: VikingBotReferences;
+  locale: Locale;
   query?: string;
   editor?: Editor;
   onSelect: (reference: VikingBotReference) => void;
   labels?: VikingBotLabels;
 }) {
-  const labels = { ...DEFAULT_LABELS, ...overrides };
+  const labels = resolveVikingBotLabels(locale, overrides);
   const [search, setSearch] = useState('');
   const [active, setActive] = useState(0);
   const [surface, setSurface] = useState<HTMLDivElement | null>(null);
@@ -118,6 +121,7 @@ export function ReferencePicker({
         <p role="alert">{config.error}</p>
       ) : (
         <FileTree
+          locale={locale}
           aria-label={labels.reference}
           rows={rows}
           isReady={!config.isLoading}

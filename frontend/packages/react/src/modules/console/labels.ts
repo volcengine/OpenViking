@@ -1,73 +1,40 @@
+import {
+  resolveLocale,
+  mergeLabels,
+  type Locale,
+} from '../../shared/locale.js';
 import type { ConsoleLabels } from './types.js';
+import enUS from './locales/en-US.js';
+import zhCN from './locales/zh-CN.js';
 
-export function consoleLabels(locale: 'en' | 'zh', overrides?: ConsoleLabels) {
-  const defaults = {
-    ...(locale === 'zh'
-      ? {
-          conversation: 'VikingBot',
-          command: '终端',
-          mode: '面板模式',
-          description:
-            '连接你的资料、记忆与上下文，让每一份数据都成为可用的知识',
-          clear: '新建会话',
-          history: '命令历史',
-          emptyHistory: '暂无命令历史',
-          commandTitle: 'OpenViking CLI',
-          commandDescription: 'CLI 直接操作上下文',
-          quickStart: '快速体验：',
-        }
-      : {
-          conversation: 'VikingBot',
-          command: 'Terminal',
-          mode: 'Panel mode',
-          description:
-            'Connect your resources, memories and context to turn your data into usable knowledge.',
-          clear: 'New session',
-          history: 'Command history',
-          emptyHistory: 'No command history yet',
-          commandTitle: 'OpenViking CLI',
-          commandDescription: 'Work directly with your context through the CLI',
-          quickStart: 'Quick start:',
-        }),
+export function resolveConsoleLocale(locale: Locale) {
+  return resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale);
+}
+
+export function consoleLabels(locale: Locale, overrides?: ConsoleLabels) {
+  const defaults = resolveConsoleLocale(locale).labels;
+  const merged = mergeLabels(defaults, overrides);
+  // 终端空态由 Tui 内置渲染并自带默认文案；这里只转发宿主显式覆盖的三条旧字段，
+  // 避免 Console 复制一份默认值而挡住 Tui 后续的文案更新。
+  // Tui renders the terminal empty state with its own defaults; forward only the
+  // legacy fields the host overrides explicitly, so Console never shadows later
+  // Tui copy changes with a duplicate default.
+  const legacy = {
+    emptyTitle: overrides?.commandTitle,
+    emptyDescription: overrides?.commandDescription,
+    quickStart: overrides?.quickStart,
   };
   return {
-    ...defaults,
-    ...overrides,
-    vikingBot: {
-      welcomeTitle:
-        locale === 'zh' ? '欢迎使用 VikingBot' : 'Welcome to VikingBot',
-      welcomeDescription: overrides?.description ?? defaults.description,
-      ...(locale === 'zh'
-        ? {
-            placeholder: '我可以基于目录进行问答',
-            send: '发送',
-            copy: '复制',
-            copied: '已复制',
-            activityRunning: '执行中',
-            activityCompleted: '已执行',
-            toolInput: '输入',
-            toolOutput: '输出',
-            similarity: '相似度',
-            toolRunning: '正在调用',
-            toolCompleted: '已调用',
-            toolError: '调用失败',
-            stop: '停止',
-            sessionHistory: '历史会话',
-            newSession: '新建会话',
-            emptySessions: '暂无历史会话',
-            loading: '加载中…',
-            loadMore: '加载更多',
-            reference: '引用文件或目录',
-            searchReferences: '搜索文件或目录',
-            emptyReferences: '暂无匹配的文件或目录',
-            removeReference: '移除引用',
-            expandReference: '展开 {name}',
-            collapseReference: '收起 {name}',
-            attach: '添加资源',
-            removeAttachment: '移除附件',
-          }
-        : {}),
-      ...overrides?.vikingBot,
-    },
+    ...merged,
+    tui: mergeLabels<NonNullable<ConsoleLabels['tui']>>(
+      Object.fromEntries(
+        Object.entries(legacy).filter(([, value]) => value != null),
+      ),
+      overrides?.tui,
+    ),
+    vikingBot: mergeLabels<NonNullable<ConsoleLabels['vikingBot']>>(
+      { welcomeDescription: overrides?.description ?? defaults.description },
+      overrides?.vikingBot,
+    ),
   };
 }

@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type {
   ConfirmSlotProps,
   DownloadSlotProps,
@@ -170,6 +171,15 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    * textures of a 3D model.
    */
   resources?: readonly FileViewerResource[];
+  /** 可选的分级内容，宿主提供 L0/L1/L2 等视图与内容。 Optional host-supplied content levels. */
+  levels?: readonly FilePreviewLevel[];
+  /** 受控分级 key。 Controlled content-level key. */
+  activeLevelKey?: string;
+  /** Markdown 图片地址解析；宿主负责相对路径、鉴权与 URL 生命周期。
+   * Resolves Markdown images; the host owns relative paths, authentication and URL lifetime. */
+  resolveImage?: (src: string, source: FilePreviewSource) => Promise<string>;
+  /** 分级切换意图；受控时宿主更新 activeLevelKey。 Content-level selection intent. */
+  onLevelChange?: (key: string) => void;
   /**
    * 文件编辑配置；省略时只读。
    * File-editing options; omit them for a read-only preview.
@@ -201,6 +211,17 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    * failure. Only Markdown bodies fire this.
    */
   onOpenUri?: (uri: string) => void;
+}
+
+/** 一个资源的内容层级，使用独立 source 与资源表。 One content level with its own source and resources. */
+export interface FilePreviewLevel {
+  key: string;
+  label: ReactNode;
+  source: FilePreviewSource;
+  resources?: readonly FileViewerResource[];
+  disabled?: boolean;
+  /** 摘要默认只读；只有明确提供此能力时才可编辑。 Summaries are read-only unless explicitly editable. */
+  editing?: FilePreviewEditing;
 }
 
 /**
@@ -285,6 +306,10 @@ export interface FilePreviewDirectoryTab extends FilePreviewTabBase {
    * Initial level key when uncontrolled; the first level is selected when omitted.
    */
   defaultLevelKey?: string;
+  /** 目录摘要的伴随图片资源。 Companion images shared by directory summary levels. */
+  resources?: readonly FileViewerResource[];
+  /** 宿主解析当前摘要的 Markdown 图片。 Host resolution of Markdown images in the active summary. */
+  resolveImage?: FilePreviewFileTab['resolveImage'];
   /**
    * 当前层级变化后触发，参数为新的层级 key。
    * Called after the active level changes, with the new level key.
@@ -325,6 +350,8 @@ export interface FilePreviewDirectoryLevel {
    * to the component for format rendering.
    */
   source: FilePreviewSource;
+  /** 该级独立的伴随资源。 Companion resources specific to this level. */
+  resources?: readonly FileViewerResource[];
 }
 
 /**
@@ -525,10 +552,12 @@ export interface FilePreviewFileTabSlots extends FilePreviewHeaderSlots {
 }
 
 /**
- * 可替换文案，组件内置英文默认值。
- * Replaceable copy; the component ships English defaults.
+ * 可替换文案，组件内置中英文文案。
+ * Replaceable copy with built-in Chinese and English defaults.
  */
 export interface FilePreviewLabels {
+  /** 展开折叠路径层级的无障碍名称。Accessible name for hidden path levels. */
+  showHiddenPath?: string;
   /**
    * 复制路径按钮的文案。这是组件自己渲染的唯一按钮——其余动作按钮由宿主在
    * `slots.actions` 里自绘，文案也归宿主。
@@ -604,6 +633,8 @@ export interface FilePreviewProps extends Omit<
    * component for format rendering or renders fully custom `content`.
    */
   tabs: readonly [FilePreviewTab, ...FilePreviewTab[]];
+  /** 内置中英文文案的语言。Language of the built-in interface copy. */
+  locale: Locale;
   /**
    * 受控的当前页签 key。传入时由宿主决定当前页签，组件只上报切换意图。
    * The controlled active tab key. When given, the host owns the active tab and
@@ -616,19 +647,13 @@ export interface FilePreviewProps extends Omit<
    */
   defaultActiveKey?: string;
   /**
-   * 底座内置文案的语言。组件自身文案仍由 `labels` 控制。
-   * Language of the base component's built-in copy. The component's own copy is
-   * still controlled by `labels`.
-   */
-  locale?: 'en-US' | 'zh-CN';
-  /**
    * 当前页签变化后触发，参数为新的页签 key。
    * Called after the active tab changes, with the new tab key.
    */
   onActiveKeyChange?: (key: string) => void;
   /**
-   * 所有页签的默认文案，缺省为英文。页签可以逐项覆盖。
-   * Default copy for every tab, English by default. A tab can override it field
+   * 所有页签的默认文案，跟随 locale。页签可以逐项覆盖。
+   * Default copy for every tab, following locale. A tab can override it field
    * by field.
    */
   labels?: FilePreviewLabels;

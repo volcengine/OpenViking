@@ -2,7 +2,7 @@ import { useState } from 'react';
 
 import CodexDetailIcon from '../../../../icons/svg/agent-connect/codex-detail.svg?react';
 import type { AgentConnectEntry } from './agent-connect-design.js';
-import { AGENT_CONNECT_COPY } from './agent-connect-copy.js';
+import { resolveAgentConnectLabels } from './agent-connect-copy.js';
 import { getAgentConnectInstructions } from './agent-connect-instructions.js';
 import { AgentConnectInstructionsView } from './agent-connect-instructions-view.js';
 import type { AgentConnectLocale } from './types.js';
@@ -44,7 +44,7 @@ export function AgentConnectDetailView({
   if (credentials.apiKey !== apiKey || credentials.baseUrl !== baseUrl) {
     setCredentials({ apiKey, baseUrl, revision: credentials.revision + 1 });
   }
-  const labels = AGENT_CONNECT_COPY[locale];
+  const labels = resolveAgentConnectLabels(locale);
   const title = selected.name.endsWith(labels.integration)
     ? selected.name
     : `${selected.name} ${labels.integration}`;

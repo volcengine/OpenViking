@@ -1617,7 +1617,7 @@ export function TerminalPanel({
         : null}
       <div ref={terminalRef} className="flex min-h-0 flex-1 flex-col">
         <Tui
-          locale={translation.language.startsWith('zh') ? 'zh' : 'en'}
+          locale={translation.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
           value={command}
           onValueChange={setCommand}
           disabled={running}
@@ -1917,7 +1917,7 @@ export function TerminalHistoryItem({
             status: entry.kind === 'error' ? 'error' : 'success',
             content: { variant: 'text', text: entry.body },
           }}
-          locale={translation.language.startsWith('zh') ? 'zh' : 'en'}
+          locale={translation.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
           onOpenUri={(uri) => {
             void onOpenResource(uri)
           }}

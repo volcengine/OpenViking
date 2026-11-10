@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import { RecordBody } from './tui-record.js';
 import { resolveTuiLabels } from './tui-labels.js';
 import type { TuiRecord } from './types.js';
@@ -5,12 +6,12 @@ import type { TuiRecord } from './types.js';
 /** Result body without command input; hosts can retain task and session controls. */
 export function TuiResult({
   record,
-  locale = 'en',
+  locale = 'en-US',
   onOpenUri,
   onCopy,
 }: {
   record: TuiRecord;
-  locale?: 'en' | 'zh';
+  locale?: Locale;
   onOpenUri?: (uri: string) => void;
   onCopy?: (text: string) => void;
 }) {

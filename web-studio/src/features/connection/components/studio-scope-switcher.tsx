@@ -1,3 +1,4 @@
+import studioI18n from '#/i18n/core'
 import {
   ScopeSelector,
   ScopeSwitcher,
@@ -283,6 +284,7 @@ export function StudioScopeSwitcher({
   return (
     <>
       <ScopeSwitcher
+        locale={studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
         style={
           {
             '--ov-ui-scope-switcher-panel-width': '336px',
@@ -296,6 +298,7 @@ export function StudioScopeSwitcher({
         )}
       >
         <ScopeSelector
+          locale={studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
           kind="selectable"
           identity={{ key: 'service', ariaLabel: t('connections.switch') }}
           trigger={{
@@ -368,6 +371,9 @@ export function StudioScopeSwitcher({
           <>
             {managementMode && !canListAccounts ? (
               <ScopeSelector
+                locale={
+                  studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'
+                }
                 kind="fixed"
                 identity={{
                   key: 'account',
@@ -380,6 +386,9 @@ export function StudioScopeSwitcher({
               />
             ) : (
               <ScopeSelector
+                locale={
+                  studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'
+                }
                 kind="selectable"
                 identity={{
                   key: 'account',
@@ -452,6 +461,9 @@ export function StudioScopeSwitcher({
             {!managementMode ? (
               <>
                 <ScopeSelector
+                  locale={
+                    studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'
+                  }
                   kind="selectable"
                   identity={{ key: 'user', ariaLabel: t('scope.switchUser') }}
                   trigger={{

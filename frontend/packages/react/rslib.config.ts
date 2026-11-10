@@ -11,6 +11,8 @@ export default defineConfig({
       source: {
         entry: {
           index: './src/index.ts',
+          'components/directory-tour':
+            './src/components/directory-tour/index.ts',
           icons: './src/icons/index.tsx',
           client: './src/client/index.ts',
           'modules/scope-cascade': './src/modules/scope-cascade/index.ts',
@@ -35,7 +37,13 @@ export default defineConfig({
       // Inline bitmaps as data URIs instead of emitting separate asset files: the
       // package's JS entries must stay importable without a bundler (Node, SSR),
       // where an external .png cannot be resolved.
-      output: { emitCss: false, dataUriLimit: { image: 64 * 1024 } },
+      output: {
+        emitCss: false,
+        dataUriLimit: { image: 64 * 1024 },
+        // Normalize this CommonJS default during bundling for direct Node/SSR use.
+        // React and ReactDOM remain external peer dependencies.
+        autoExternal: { exclude: ['react-focus-lock'] },
+      },
       tools: {
         rspack: {
           optimization: { splitChunks: { chunks: 'all', minSize: 0 } },
@@ -45,6 +53,8 @@ export default defineConfig({
     // Build each stylesheet independently so every public CSS entry is complete.
     ...Object.entries({
       style: './src/style.css',
+      'components/directory-tour/style':
+        './src/components/directory-tour/style.css',
       'modules/scope-cascade/style': './src/modules/scope-cascade/style.css',
       'components/style': './src/components/style.css',
       'components/file-tree/style': './src/components/file-tree/style.css',

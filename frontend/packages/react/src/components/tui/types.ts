@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes, ReactNode } from 'react';
 import type {
   TuiCommandDefinition,
@@ -390,8 +391,8 @@ export interface TuiRecord {
 }
 
 /**
- * 可替换的界面文案，默认英文。
- * Replaceable interface copy, defaulting to English.
+ * 可替换的界面文案，默认跟随 locale。
+ * Replaceable interface copy, following locale.
  */
 export interface TuiLabels {
   /**
@@ -450,10 +451,20 @@ export interface TuiLabels {
    */
   copied?: string;
   /**
-   * 无记录时的提示。
-   * Message shown when there are no records.
+   * 内置空态的标题。
+   * Heading of the built-in empty state.
    */
-  empty?: string;
+  emptyTitle?: string;
+  /**
+   * 内置空态的说明。
+   * Description of the built-in empty state.
+   */
+  emptyDescription?: string;
+  /**
+   * 快捷命令列表上方的引导文案。
+   * Label above the quick command list.
+   */
+  quickStart?: string;
   /** 无返回结果时的提示。Message for an empty command result. */
   noResult?: string;
   /** 刚刚发送的时间文案。Time label for a just-sent record. */
@@ -493,6 +504,8 @@ export interface TuiProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
   'onCopy' | 'onSubmit'
 > {
+  /** 内置中英文文案的语言。Language of the built-in interface copy. */
+  locale: Locale;
   /**
    * 当前展示的执行记录，按提交顺序排列；会话与历史切换后由宿主更新。
    * Currently displayed execution records in submission order, updated by the
@@ -514,15 +527,25 @@ export interface TuiProps extends Omit<
    */
   disabled?: boolean;
   /**
-   * 无记录时展示的完整空态节点，可包含标题、说明与快捷入口。
-   * 省略时展示 `labels.empty`，传 `null` 时隐藏空态内容。
-   * Complete empty-state node when there are no records; may include a
-   * heading, description and shortcuts. Omission shows `labels.empty`;
-   * passing `null` hides empty-state content.
+   * 无记录时展示的空态节点，完全替换内置空态。
+   * 省略时按 `quickCommands` 展示内置空态，没有可用快捷命令时不显示任何空态内容；
+   * 传 `null` 时同样不显示。
+   * Empty-state node shown when there are no records, replacing the built-in
+   * empty state. When omitted, the built-in empty state renders the resolved
+   * `quickCommands`; without any resolved command nothing is shown. Passing
+   * `null` also shows nothing.
    */
   emptyState?: ReactNode;
-  /** 内置界面文案的语言，默认英文；命令文案由宿主提供。 */
-  locale?: 'en' | 'zh';
+  /**
+   * 内置空态展示的快捷命令名称，按数组顺序取自 `commands`，未命中的名称跳过，
+   * 重复名称只保留首次出现。
+   * 点击后填入输入框并聚焦，不提交命令。
+   * Quick command names rendered by the built-in empty state, resolved from
+   * `commands` in array order; unknown names are skipped and repeats keep their
+   * first occurrence. Selecting one fills
+   * and focuses the input without submitting.
+   */
+  quickCommands?: readonly string[];
   /** 宿主提供的命令目录；省略时无候选和参数帮助，仍可提交文本。 */
   commands?: readonly TuiCommandDefinition[];
   /** 宿主提供的分组名称与顺序；未声明的组按目录顺序追加。 */

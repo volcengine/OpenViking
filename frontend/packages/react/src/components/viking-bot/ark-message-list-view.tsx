@@ -6,7 +6,7 @@ import {
   VikingBotMessageRow,
   VikingBotStreamingRow,
 } from './ark-message-row.js';
-import { DEFAULT_LABELS } from './labels.js';
+import { resolveVikingBotLabels } from './labels.js';
 import type { VikingBotMessageListProps } from './types.js';
 
 const INITIAL_TARGET = { kind: 'end', behavior: 'auto' } as const;
@@ -50,7 +50,7 @@ export function VikingBotMessageListView({
   locale,
   labels: overrides,
 }: VikingBotMessageListProps) {
-  const labels = { ...DEFAULT_LABELS, ...overrides };
+  const labels = resolveVikingBotLabels(locale, overrides);
   // 同一轮的连续 assistant 消息先合并，列表才按轮次呈现而不是逐条堆叠。
   // 边界必须在原始消息序列上确定：先按 insertIndex 切分，两侧分别合并，
   // 否则先整体合并会让下标含义漂移，把边界两侧的助手消息并到一起。

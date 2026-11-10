@@ -1,5 +1,7 @@
 # 快速开始
 
+所有公开 UI 组件和组合模块均需显式传入 `locale: 'zh-CN' | 'en-US'`，选择内置中文或英文文案。已有的 `labels` 可逐项覆盖，未覆盖项跟随当前语言；切换 `locale` 会立即更新基础文案。业务数据、插槽与回调返回的文案仍由宿主提供。
+
 OpenViking UI 是构建 OpenViking AI 应用界面的 React 基础。OpenViking 是面向 AI 智能体的上下文数据库；本 workspace 提供 Rslib 构建、双语文档、分层目录约定与样式隔离方案。应用负责业务界面、数据、认证与流程编排。
 
 包提供 FileTree、FilePreview、Tui、ScopeSwitcher、AgentConnect 五个视图组件、五种文件类型图标，以及两个业务模块占位组件。FileTree、FilePreview 与 Tui 已按契约实现，ScopeSwitcher 为无状态布局，AgentConnect 仍为固定尺寸占位。当前范围见[组件概览](../components/)和[模块概览](../modules/)；业务 Hook 尚未实现。
@@ -37,7 +39,7 @@ workspace 开发插件会在文档服务器启动前运行 Rslib watch。文档�
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
 
-<FileBrowser />;
+<FileBrowser locale="zh-CN" />;
 ```
 
 两个模块的 props 已定型——请求配置、受控状态、回调、插槽与文案——但占位组件本体仍只消费 `className`、`style` 与一个文案字段，且均无需 Provider。可运行示例与完整属性表见[业务模块](../modules/)。
@@ -107,3 +109,9 @@ npm run preview
 ## 部署
 
 `frontend/` 下的变更触发 UI 检查。在 `main` 上，现有产品文档部署会将 UI 站点合并到同一完整产物或存储桶的 `/ui/` 路径。npm 发布使用独立的标签触发流程，本地构建与测试不会发布包。
+
+## 内置文案与语言切换
+
+组件和模块采用本地的类型化中英文语言包，共用轻量解析规则。译文在各自目录就近维护，不依赖宿主的 i18next 或翻译平台。已有 `labels` 的未定义项继承当前语言；空字符串保留为显式覆盖。
+
+独立使用 `useConsole`、`useFileBrowser` 时可传入 `locale`，默认 `en-US`。切换语言会更新库生成的提示、命令帮助和摘要标题，不重新发起请求，也不清空会话或草稿；服务端正文、错误原文和 AI 回复保持原值。

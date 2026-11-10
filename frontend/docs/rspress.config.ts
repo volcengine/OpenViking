@@ -62,6 +62,10 @@ export default defineConfig({
                 },
                 { text: 'FileTree 文件树', link: '/components/file-tree' },
                 {
+                  text: 'DirectoryTour 目录引导',
+                  link: '/components/directory-tour',
+                },
+                {
                   text: 'FilePreview 文件预览',
                   link: '/components/file-preview',
                 },
@@ -146,6 +150,10 @@ export default defineConfig({
                   link: '/en/components/scope-switcher',
                 },
                 { text: 'AgentConnect', link: '/en/components/agent-connect' },
+                {
+                  text: 'DirectoryTour',
+                  link: '/en/components/directory-tour',
+                },
                 { text: 'VikingBot', link: '/en/components/viking-bot' },
               ],
             },

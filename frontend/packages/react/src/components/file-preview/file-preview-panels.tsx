@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 import type {
   ViewerHandle,
@@ -40,10 +41,12 @@ export interface FilePreviewPanelsProps {
   contentTab?: FilePreviewContentTab;
   directoryTab?: FilePreviewDirectoryTab;
   fileTab?: FilePreviewFileTab;
+  levelKey?: string;
+  onLevelChange: (key: string) => void;
   panelProps: HTMLAttributes<HTMLDivElement>;
   panelClass: string;
   text: Required<FilePreviewLabels>;
-  locale?: 'en-US' | 'zh-CN';
+  locale?: Locale;
   actions: ReturnType<typeof useFilePreviewActions>;
   actionContext: FilePreviewActions;
   editing: ReturnType<typeof useFilePreviewEditing>;
@@ -56,6 +59,8 @@ export interface FilePreviewPanelsProps {
 }
 
 export function FilePreviewPanels({
+  levelKey,
+  onLevelChange,
   contentTab,
   directoryTab,
   fileTab,
@@ -111,6 +116,9 @@ export function FilePreviewPanels({
   return (
     <div {...panelProps} className={panelClass}>
       <FilePreviewHeader
+        levels={fileTab.levels}
+        levelKey={levelKey}
+        onLevelChange={onLevelChange}
         path={fileTab.source.path}
         fileName={fileTab.source.fileName}
         canOpenParent={Boolean(fileTab.operations?.openParent)}
@@ -122,6 +130,7 @@ export function FilePreviewPanels({
       />
       <div className="ov-file-preview__body">
         <FilePreviewBody
+          key={JSON.stringify([fileTab.key, levelKey])}
           fileTab={fileTab}
           text={text}
           locale={locale}

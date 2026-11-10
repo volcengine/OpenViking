@@ -11,6 +11,7 @@ const OVERFLOW_BUTTON_WIDTH = 36;
 const SHIFT_DURATION = 160;
 
 export interface FilePreviewBreadcrumbProps {
+  hiddenPathLabel: string;
   segments: readonly PathSegment[];
   title: string;
   canOpen: boolean;
@@ -72,6 +73,7 @@ function measureAvailable(root: HTMLElement) {
  * too, leaving the trailing name alone.
  */
 export function FilePreviewBreadcrumb({
+  hiddenPathLabel,
   segments,
   title,
   canOpen,
@@ -186,6 +188,7 @@ export function FilePreviewBreadcrumb({
   );
   const menu = hiddenSegments.length ? (
     <FilePreviewBreadcrumbMenu
+      hiddenPathLabel={hiddenPathLabel}
       segments={hiddenSegments}
       canOpen={canOpen}
       disabled={disabled}

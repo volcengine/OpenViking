@@ -1,4 +1,5 @@
 import { ConsoleModeSwitch } from './console-mode-switch.js';
+import type { Locale } from '../../shared/locale.js';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { TuiRecord } from '../../components/tui/index.js';
@@ -23,7 +24,7 @@ export function ConsoleToolbar({
 }: {
   mode: ConsoleMode;
   panelId: string;
-  locale: 'en' | 'zh';
+  locale: Locale;
   labels: ReturnType<typeof consoleLabels>;
   records: readonly TuiRecord[];
   isExecuting: boolean;

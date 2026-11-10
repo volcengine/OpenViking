@@ -1,0 +1,120 @@
+.ov-tui__empty--hero {
+  display: block;
+  inline-size: 100%;
+  min-inline-size: 0;
+  align-self: stretch;
+  min-height: 0;
+  padding: 32px 4px;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  text-align: start;
+}
+.ov-tui__empty--hero .ov-tui__empty-title {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  font-family: var(--ov-ui-font-display, 'Trebuchet MS', sans-serif);
+  font-size: clamp(1.5rem, 1.25rem + 2.5cqi, 2.25rem);
+  font-weight: 400;
+  line-height: 1.2;
+  letter-spacing: 0.035em;
+}
+.ov-tui__empty-title::after {
+  content: '';
+  inline-size: 0.32em;
+  block-size: 0.9em;
+  margin-inline-start: 0.15em;
+  background: currentColor;
+  opacity: 0.16;
+}
+.ov-tui__empty--hero .ov-tui__empty-subtitle {
+  margin: 16px 0 40px;
+  color: var(--ov-ui-tui-muted);
+  font-size: 15px;
+}
+.ov-tui__empty--hero .ov-tui__empty-quick-label {
+  margin: 0 0 12px;
+  color: var(--ov-ui-tui-muted);
+}
+.ov-tui__empty-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ov-tui__empty-list > .ov-tui__empty-item {
+  margin: 0;
+}
+.ov-tui__empty-action {
+  display: grid;
+  grid-template-columns: 14px minmax(132px, 0.8fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: 12px;
+  inline-size: 100%;
+  min-block-size: 52px;
+  border: 0;
+  border-radius: 16px;
+  padding: 12px 16px;
+  background: var(--ov-ui-tui-card-bg);
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.ov-tui__empty-action:hover:not(:disabled) {
+  background: var(--ov-ui-tui-bubble-bg);
+}
+.ov-tui__empty-action:disabled {
+  color: var(--ov-ui-tui-muted);
+  cursor: not-allowed;
+}
+.ov-tui__empty-action > svg {
+  translate: 0;
+}
+@keyframes ov-tui-empty-arrow-nudge {
+  0%,
+  100% {
+    translate: 0;
+  }
+  30% {
+    translate: -2px 0;
+  }
+  65% {
+    translate: 3px 0;
+  }
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .ov-tui__empty-action:hover:not(:disabled) > svg {
+    animation: ov-tui-empty-arrow-nudge 360ms ease-in-out;
+  }
+}
+.ov-tui__empty-action:focus-visible {
+  outline: 2px solid var(--ov-ui-tui-link);
+  outline-offset: 3px;
+}
+.ov-tui__empty-name {
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+.ov-tui__empty-desc {
+  color: var(
+    --ov-ui-color-text-description,
+    var(--ov-ui-text-description-default)
+  );
+  overflow-wrap: anywhere;
+}
+@container (max-width: 420px) {
+  .ov-tui__empty--hero {
+    padding-block: 16px;
+  }
+  .ov-tui__empty-action {
+    grid-template-columns: 14px minmax(0, 1fr);
+    gap: 4px 12px;
+  }
+  .ov-tui__empty-desc {
+    grid-column: 2;
+  }
+}

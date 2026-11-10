@@ -1,3 +1,5 @@
+import type { Locale } from '../../shared/locale.js';
+import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
 import { useMemo, useRef, useState } from 'react';
 
 import type {
@@ -16,6 +18,8 @@ export interface UseFileBrowserOptions {
   /** Disable preview loading when the host provides an editable detail pane. */
   loadPreview?: boolean;
   rootUri: string;
+  /** Built-in copy for standalone use; defaults to en-US. */
+  locale?: Locale;
   /**
    * 宿主是否受控地持有当前资源。受控时 `currentUri` 就是唯一事实；非受控时
    * `currentUri` 只是初始值，之后的选中由模块自己记在 `pendingUri` 里。
@@ -41,6 +45,8 @@ export interface UseFileBrowserOptions {
    * replaceable, or a host cannot localise it.
    */
   summaryLabels?: { l0: string; l1: string; failure: string };
+  /** 字符数文案；独立 Hook 默认英文。Character count copy; standalone Hooks default to English. */
+  formatCharacterCount?: (count: number) => string;
   /** 首次加载后自动展开到的路径。Path to expand to after the first load. */
   defaultExpandedUri?: string;
   currentUri: string | null;
@@ -60,8 +66,10 @@ export interface UseFileBrowserOptions {
 export function useFileBrowser({
   rootUri,
   loadPreview = true,
+  locale = 'en-US',
   controlled = false,
   summaryLabels,
+  formatCharacterCount,
   defaultExpandedUri,
   currentUri,
   requestOptions,
@@ -178,7 +186,10 @@ export function useFileBrowser({
     // the module owns would never load anything.
     uri: loadPreview ? activeUri : null,
     resourceType,
-    labels: summaryLabels,
+    labels: summaryLabels ?? resolveSummaryLabels(locale),
+    formatCharacterCount:
+      formatCharacterCount ??
+      resolveLabels(undefined, locale).formatCharacterCount,
     openParent,
     generation: refreshGeneration,
     requestOptions,

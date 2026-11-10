@@ -22,3 +22,6 @@ export { Console, ConsoleModeSwitch } from './modules/console/index.js';
 export type { ConsoleProps } from './modules/console/index.js';
 export { ScopeCascade } from './modules/scope-cascade/index.js';
 export type { ScopeCascadeProps } from './modules/scope-cascade/index.js';
+
+export { DirectoryTour } from './components/directory-tour/index.js';
+export type { DirectoryTourProps } from './components/directory-tour/index.js';

@@ -12,7 +12,6 @@ import {
 } from './file-browser-layout.js';
 import { FileBrowserTreePane } from './file-browser-tree-pane.js';
 import { resolveLabels, resolvePreviewLabels } from './file-browser-labels.js';
-import { resolveTreeLabels } from './tree-info-copy.js';
 import { useContainerWidth } from './use-container-width.js';
 import { useFileBrowser } from './use-file-browser.js';
 import type { FileBrowserProps } from './types.js';
@@ -42,8 +41,10 @@ export function FileBrowser({
   rootUri = 'viking://',
   defaultExpandedUri,
   locale,
-  toolbarActions,
+  agentConnect,
   onUriChange,
+  onImportResources,
+  renderImportResources,
   labels,
   requestOptions,
   className,
@@ -66,7 +67,7 @@ export function FileBrowser({
   // and there is no "deselect" interaction — so no separate `null` branch is needed.
   const isControlled = uri !== undefined;
   const currentUri = isControlled ? uri : internalUri;
-  const text = resolveLabels(labels);
+  const text = resolveLabels(labels, locale);
   const { ref: layoutRef, width: layoutWidth } =
     useContainerWidth<HTMLDivElement>();
 
@@ -94,8 +95,8 @@ export function FileBrowser({
     [isControlled, onUriChange],
   );
 
-  // 文案对象必须稳定：每次渲染都新建会让取数 effect 反复重跑并取消上一次请求。
-  // The copy object must be stable, or the loading effect re-runs and cancels itself.
+  // 摘要文案只影响展示，不作为预览请求的依赖。
+  // Summary copy changes presentation without restarting preview requests.
   const summaryLabels = useMemo(
     () => ({
       l0: text.l0Summary,
@@ -105,26 +106,19 @@ export function FileBrowser({
     [text.l0Summary, text.l1Overview, text.summaryFailed],
   );
 
-  // 依赖 `labels` 而不是解析后的 `text`：后者每次渲染都是新对象，会让这个 memo
-  // 失效，进而让预览的取数 effect 反复重跑并取消请求。
-  //
-  // Depend on `labels`, not on the resolved `text`: the latter is a fresh object
-  // every render, which would void this memo and make the preview's loading effect
-  // re-run and cancel itself.
+  // 宿主文案和语言未变时，保留预览覆盖对象的引用。
+  // Preserve the preview overrides while the host copy and language are unchanged.
   const previewLabels = useMemo(
-    () => resolvePreviewLabels(resolveLabels(labels)),
-    [labels],
-  );
-
-  const treeLabels = useMemo(
-    () => resolveTreeLabels(locale, text.tree),
-    [locale, text.tree],
+    () => resolvePreviewLabels(resolveLabels(labels, locale)),
+    [labels, locale],
   );
 
   const browser = useFileBrowser({
     rootUri,
+    locale,
     controlled: isControlled,
     summaryLabels,
+    formatCharacterCount: text.formatCharacterCount,
     defaultExpandedUri,
     currentUri,
     requestOptions,
@@ -148,10 +142,16 @@ export function FileBrowser({
     >
       <div className="ov-file-browser__tree">
         <FileBrowserTreePane
-          toolbarActions={toolbarActions}
+          entries={{
+            agentConnect,
+            onImportResources,
+            renderImportResources,
+            labels: labels?.entries,
+          }}
           searchId={searchId}
           browser={browser}
-          treeLabels={treeLabels}
+          treeLabels={text.tree}
+          locale={locale}
           searchPlaceholder={text.searchPlaceholder}
           refreshLabel={text.refresh}
           searchLoading={text.searchLoading}

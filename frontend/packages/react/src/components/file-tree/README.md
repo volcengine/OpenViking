@@ -2,6 +2,8 @@
 
 English / [中文](README_CN.md)
 
+Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
+
 A directory tree for resource browsing. The host flattens its tree state into an ordered list of rows and supplies async execution through `operations`; the component renders, handles keyboard interaction and notifies after an operation succeeds.
 
 It renders the five row kinds, indents by depth with a guide per ancestor level, and handles keyboard navigation; selection, expansion, paging and retry run through `operations`.
@@ -11,6 +13,7 @@ import { FileTree } from '@openviking/react/components/file-tree';
 import '@openviking/react/components/file-tree/style.css';
 
 <FileTree
+  locale="en-US"
   rows={rows}
   selectedId={selectedId}
   operations={{
@@ -58,7 +61,7 @@ The cost is that the host writes a "tree state → row array" transform. What th
 - It requests no data, opens no connections and judges no permissions.
 - It does not own the expansion set or the selection — both are controlled.
 - Clicking a directory and clicking a file share `operations.select`; the host branches on `row.type`, and `onSelect` notifies after a successful selection.
-- Toolbars, search, import sources and permission flows belong to the page layer and are injected through `slots.toolbar`.
+- The host owns search UI, imports and permission flows. `slots.toolbar` adds custom actions above the built-in controls.
 
 ## Extension points
 
@@ -79,3 +82,9 @@ Styles are scoped and never modify the application's global styles. Theme tokens
 - The props table and runnable example are in the [component docs](../../../../../docs/docs/en/components/file-tree.mdx) ([Chinese](../../../../../docs/docs/zh/components/file-tree.mdx)).
 - Development and build commands are in the [UI workspace README](../../../../../README.md); module conventions are in the [package README](../../../README.md).
 - The standalone stylesheet entry `@openviking/react/components/file-tree/style.css` is separate from the JS entry and can be imported on demand.
+
+## Optional search and refresh
+
+`search` and `refresh` are hidden by default; pass `true` to enable either. `operations.search` opens host search UI, and `operations.refresh` reloads data. Missing executors disable their buttons. Pending refresh automatically disables the button and spins its icon; failure restores it without a success notification.
+
+`search={{ disabled: true }}` controls search availability. `refresh={{ disabled, loading }}` adds host-controlled availability and pending state. Customize `labels.search` and `labels.refresh`; receive success notifications with `onSearch` and `onRefresh`. Search does not filter rows or register a global shortcut. `slots.toolbar` appears above built-in controls, and either control can be hidden independently.

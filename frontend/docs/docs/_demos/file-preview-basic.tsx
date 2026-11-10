@@ -15,7 +15,7 @@ import '@openviking/react/components/file-preview/style.css';
  * language.
  */
 const COPY = {
-  en: {
+  'en-US': {
     markdown: `# LLM Wiki
 
 Compile heterogeneous knowledge sources into durable, connected knowledge.
@@ -38,9 +38,6 @@ See [the compile notes](viking://system/compile/notes.md) and [a relative page](
     saved: 'Content saved',
     cancelled: 'Editing cancelled',
     previewLabel: 'File preview',
-    labels: {
-      copyPath: 'Copy path',
-    },
     // 动作按钮由示例自己渲染，文案也归示例，不经过组件的 labels。
     actions: {
       copyContent: 'Copy content',
@@ -51,7 +48,7 @@ See [the compile notes](viking://system/compile/notes.md) and [a relative page](
       cancel: 'Cancel',
     },
   },
-  zh: {
+  'zh-CN': {
     markdown: `# LLM Wiki
 
 把异构的知识来源编译成可长期使用、彼此关联的知识。
@@ -74,9 +71,6 @@ See [the compile notes](viking://system/compile/notes.md) and [a relative page](
     saved: '正文已保存',
     cancelled: '已取消编辑',
     previewLabel: '文件预览',
-    labels: {
-      copyPath: '复制路径',
-    },
     actions: {
       copyContent: '复制正文',
       preview: '预览',
@@ -100,7 +94,7 @@ const diagramSvg =
   );
 
 export default function FilePreviewBasic() {
-  const lang = useLang() === 'zh' ? 'zh' : 'en';
+  const lang = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   const t = COPY[lang];
   const [activeHint, setActiveHint] = useState('');
   // 正文按语言分别保存：切换语言时展示该语言的初始正文，编辑过的内容不丢。
@@ -258,12 +252,7 @@ export default function FilePreviewBasic() {
        * spacing belongs to which.
        */}
       <div className="ov-demo-surface" style={{ height: 560 }}>
-        <FilePreview
-          tabs={tabs}
-          locale={lang === 'zh' ? 'zh-CN' : 'en-US'}
-          labels={t.labels}
-          aria-label={t.previewLabel}
-        />
+        <FilePreview tabs={tabs} locale={lang} aria-label={t.previewLabel} />
       </div>
       {/* 示例自己的说明与操作回执，不属于组件。用主题变量而不是写死灰值，
           暗色下才可读。 */}

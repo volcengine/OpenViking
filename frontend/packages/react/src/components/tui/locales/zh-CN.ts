@@ -1,6 +1,6 @@
-import type { ResolvedTuiLabels } from './tui-labels.js';
+import type { ResolvedTuiLabels } from '../tui-labels.js';
 
-export const ZH_TUI_LABELS: ResolvedTuiLabels = {
+const messages = {
   placeholder: '>_ 输入 CLI 命令，如 ov find OpenViking',
   unavailableMessage: '当前无法执行命令。',
   send: '发送',
@@ -13,7 +13,9 @@ export const ZH_TUI_LABELS: ResolvedTuiLabels = {
   error: '执行失败',
   copy: '复制',
   copied: '复制成功',
-  empty: '运行命令后将在此显示结果。',
+  emptyTitle: 'OpenViking CLI',
+  emptyDescription: 'CLI 直接操作上下文',
+  quickStart: '快速体验：',
   noResult: '暂无返回结果',
   justNow: '刚刚',
   formatMinutesAgo: (minutes) => `${minutes} 分钟前`,
@@ -31,4 +33,6 @@ export const ZH_TUI_LABELS: ResolvedTuiLabels = {
   defaultValue: '默认值',
   yes: '是',
   no: '否',
-};
+} satisfies ResolvedTuiLabels;
+
+export default messages;

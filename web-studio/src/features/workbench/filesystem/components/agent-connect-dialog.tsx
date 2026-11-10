@@ -24,7 +24,7 @@ export function AgentConnectDialog({
           key={identityScopeKey}
           apiKey={connection.apiKey}
           baseUrl={connection.baseUrl}
-          locale={i18n.language.startsWith('zh') ? 'zh' : 'en'}
+          locale={i18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
         />
       </DialogContent>
     </Dialog>

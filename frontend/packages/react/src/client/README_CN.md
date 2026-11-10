@@ -17,7 +17,7 @@ import { OpenVikingProvider } from '@openviking/react/client';
   userId={userId}
   resourceId={libraryId}
 >
-  <FileBrowser />
+  <FileBrowser locale="zh-CN" />
 </OpenVikingProvider>;
 ```
 

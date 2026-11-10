@@ -29,7 +29,7 @@ export function MessageList({
     <div className="ov-viking-bot" style={{ height: 'auto', minHeight: 0 }}>
       <VikingBotMessageList
         messages={[...before, ...after]}
-        locale={i18n.language}
+        locale={i18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
         labels={{
           thinking: t('chat.generating'),
           reasoning: t('chat.reasoning'),

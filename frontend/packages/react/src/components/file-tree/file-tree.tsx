@@ -1,11 +1,10 @@
 import { forwardRef, useImperativeHandle, useRef } from 'react';
 
+import { resolveFileTreeLabels } from './file-tree-labels.js';
 import { FileTreeBody } from './file-tree-body.js';
 import { handleRowKeyDown } from './file-tree-keyboard.js';
-import type {
-  FileTreeRowContext,
-  ResolvedLabels,
-} from './file-tree-row-context.js';
+import type { FileTreeRowContext } from './file-tree-row-context.js';
+import { FileTreeToolbar } from './file-tree-toolbar.js';
 import type {
   FileTreeComponent,
   FileTreeHandle,
@@ -44,16 +43,6 @@ export type {
   FileTreeSlots,
 } from './types.js';
 
-const DEFAULT_LABELS: ResolvedLabels = {
-  empty: 'No files yet',
-  error: 'Failed to load',
-  retry: 'Retry',
-  loadMore: 'Load more',
-  loading: 'Loading…',
-  expand: 'Expand {name}',
-  collapse: 'Collapse {name}',
-};
-
 /** 按行 id 找到行元素。Finds a row element by id. */
 function findRow(root: HTMLElement | null, id: string) {
   return (
@@ -77,8 +66,11 @@ export const FileTree: FileTreeComponent = forwardRef<
 >(function FileTree(
   {
     rows,
+    locale,
     operations,
     selectedId,
+    search,
+    refresh,
     isReady = true,
     loadingFallback,
     errorFallback,
@@ -94,17 +86,15 @@ export const FileTree: FileTreeComponent = forwardRef<
     onLoadMore,
     onRetry,
     onOpenRetentionSettings,
+    onSearch,
+    onRefresh,
     className,
     ...rest
   },
   ref,
 ) {
   const rootRef = useRef<HTMLDivElement>(null);
-  const text: ResolvedLabels = {
-    ...DEFAULT_LABELS,
-    ...labels,
-    info: labels?.info ?? DEFAULT_LABELS.info,
-  };
+  const text = resolveFileTreeLabels(locale, labels);
   const actions = useFileTreeActions({
     operations,
     onSelect,
@@ -112,6 +102,8 @@ export const FileTree: FileTreeComponent = forwardRef<
     onLoadMore,
     onRetry,
     onOpenRetentionSettings,
+    onSearch,
+    onRefresh,
   });
 
   useImperativeHandle(
@@ -130,7 +122,7 @@ export const FileTree: FileTreeComponent = forwardRef<
 
   const ctx: FileTreeRowContext = {
     text,
-    infoLabels: labels?.info,
+    infoLabels: text.info,
     selectedId,
     getRowAttributes,
     renderDashboard,
@@ -156,6 +148,14 @@ export const FileTree: FileTreeComponent = forwardRef<
       {slots?.toolbar ? (
         <div className="ov-file-tree__toolbar">{slots.toolbar}</div>
       ) : null}
+      <FileTreeToolbar
+        search={search}
+        refresh={refresh}
+        text={text}
+        refreshing={actions.refreshing}
+        onSearch={actions.onSearch}
+        onRefresh={actions.onRefresh}
+      />
       <div
         role="tree"
         aria-label={rest['aria-label']}

@@ -17,7 +17,7 @@ const GROUPS: readonly TuiCommandGroup[] = [
   { key: 'interactive', label: 'Interactive & admin' },
 ];
 export function createTuiCommands(
-  locale: 'en' | 'zh',
+  locale: 'en-US' | 'zh-CN',
 ): readonly TuiCommandDefinition[] {
   return [
     ...CORE_COMMANDS,
@@ -42,7 +42,7 @@ export function createTuiCommands(
   });
 }
 export function createTuiCommandGroups(
-  locale: 'en' | 'zh',
+  locale: 'en-US' | 'zh-CN',
 ): readonly TuiCommandGroup[] {
   return GROUPS.map((group) => ({
     ...group,

@@ -1,7 +1,8 @@
+import type { Locale } from '../../shared/locale.js';
 import type { ReactNode } from 'react';
 import { VikingBotIcon } from '../../icons/viking-bot-icons.js';
 import { Tooltip } from '../../shared/components/tooltip/index.js';
-import { DEFAULT_LABELS } from './labels.js';
+import { resolveVikingBotLabels } from './labels.js';
 import type { VikingBotLabels } from './model.js';
 import type { VikingBotSessions } from './capabilities.js';
 import { BotPopover } from './bot-popover.js';
@@ -11,14 +12,14 @@ export function VikingBotSessionActions({
   sessions,
   extra,
   labels: overrides,
-  locale = 'en',
+  locale,
 }: {
   sessions?: VikingBotSessions;
   extra?: ReactNode;
   labels?: VikingBotLabels;
-  locale?: string;
+  locale: Locale;
 }) {
-  const labels = { ...DEFAULT_LABELS, ...overrides };
+  const labels = resolveVikingBotLabels(locale, overrides);
   return (
     <div className="ov-viking-bot__session-actions">
       {extra}

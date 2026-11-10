@@ -1,3 +1,4 @@
+import studioI18n from '#/i18n/core'
 import { SquareIcon } from 'lucide-react'
 import { VikingBotComposer } from '@openviking/react/components/viking-bot'
 import '@openviking/react/components/viking-bot/style.css'
@@ -42,6 +43,7 @@ export function Composer({
   return (
     <div className="ov-viking-bot" style={{ height: 'auto', minHeight: 0 }}>
       <VikingBotComposer
+        locale={studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
         value={value}
         variant={variant}
         disabled={isSubmitting}

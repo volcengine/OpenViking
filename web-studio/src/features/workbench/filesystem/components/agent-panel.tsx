@@ -1,3 +1,4 @@
+import studioI18n from '#/i18n/core'
 import { useDefaultConversationTitles } from '#/features/workbench/sessions/lib/use-default-conversation-titles'
 import type { VikingBotSessions } from '@openviking/react/components/viking-bot'
 import {
@@ -346,6 +347,7 @@ export function AgentToolbar({
   return createPortal(
     <div className="ov-viking-bot" style={{ height: 'auto', minHeight: 0 }}>
       <VikingBotSessionActions
+        locale={studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
         sessions={{
           items: [],
           onSelect: () => {},

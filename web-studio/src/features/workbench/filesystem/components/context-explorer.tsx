@@ -1,3 +1,4 @@
+import studioI18n from '#/i18n/core'
 import { useQueryClient } from '@tanstack/react-query'
 import type { Ref, PointerEvent as ReactPointerEvent } from 'react'
 import { AgentConnectDialog } from './agent-connect-dialog'
@@ -36,6 +37,7 @@ export function ContextExplorerHeader({
   return (
     <div className={styles.header}>
       <FileBrowserEntries
+        locale={studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
         onConnectAgent={() => setConnectOpen(true)}
         onImportResources={onAddResource}
         labels={{
@@ -110,6 +112,7 @@ export function ContextTree({
     currentUri: selectedFileUri || currentUri,
     defaultExpandedUri: currentUri,
     loadPreview: false,
+    locale: studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US',
     onUriChange: (uri) => {
       if (!uri) return
       const version = ++navigationVersion.current
@@ -160,6 +163,7 @@ export function ContextTree({
   )
   return (
     <FileTree
+      locale={studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
       className={styles.tree}
       rows={browser.rows}
       selectedId={browser.selectedId}
