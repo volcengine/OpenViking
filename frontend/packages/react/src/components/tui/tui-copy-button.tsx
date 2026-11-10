@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import { useEffect, useRef, useState } from 'react';
 
 import CopySvg from '../../../../icons/svg/tui/copy.svg?react';
@@ -40,8 +41,11 @@ export function TuiCopyButton({
 
   return (
     <Tooltip content={copied ? copiedLabel : label}>
-      <button
-        type="button"
+      <Button
+        size="mini"
+        type="text"
+        iconOnly
+        htmlType="button"
         className={['ov-tui__copy', className].filter(Boolean).join(' ')}
         aria-label={copied ? copiedLabel : label}
         onClick={handleCopy}
@@ -51,7 +55,7 @@ export function TuiCopyButton({
         ) : (
           <CopySvg aria-hidden="true" focusable="false" />
         )}
-      </button>
+      </Button>
     </Tooltip>
   );
 }

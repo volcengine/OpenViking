@@ -1,3 +1,4 @@
+import { Button } from '#demo-controls';
 import { useLang } from '@rspress/core/runtime';
 import { useState } from 'react';
 import {
@@ -65,33 +66,47 @@ export default function WikiDashboardBasic() {
     <div lang={locale}>
       <p>{text.description}</p>
       <p className="ov-demo-controls">
-        <button
-          type="button"
+        <Button
+          size="small"
+          type="default"
+          htmlType="button"
           onClick={() => {
             setUri(DEMO_WIKI);
             setEmpty(false);
           }}
         >
           {text.directory}
-        </button>{' '}
-        <button
-          type="button"
+        </Button>{' '}
+        <Button
+          size="small"
+          type="default"
+          htmlType="button"
           onClick={() => {
             setUri(DEMO_WIKI_FILE);
             setEmpty(false);
           }}
         >
           {text.file}
-        </button>{' '}
-        <button type="button" onClick={() => setEmpty(!empty)}>
+        </Button>{' '}
+        <Button
+          size="small"
+          type="default"
+          htmlType="button"
+          onClick={() => setEmpty(!empty)}
+        >
           {empty ? text.show : text.empty}
-        </button>
+        </Button>
         {uri !== DEMO_WIKI ? (
           <>
             {' '}
-            <button type="button" onClick={() => setShowPath(!showPath)}>
+            <Button
+              size="small"
+              type="default"
+              htmlType="button"
+              onClick={() => setShowPath(!showPath)}
+            >
               {showPath ? text.hidePath : text.showPath}
-            </button>
+            </Button>
           </>
         ) : null}
       </p>

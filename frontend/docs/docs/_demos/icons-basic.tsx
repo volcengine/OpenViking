@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Button } from '#demo-controls';
 import {
   ArrowRightIcon,
   AudioIcon,
@@ -41,14 +42,15 @@ export default function IconsExample() {
       </div>
       <div className="ov-demo-controls" role="group" aria-label="Icon size">
         {sizes.map((value) => (
-          <button
+          <Button
             key={value}
-            type="button"
+            size="small"
+            type={size === value ? 'primary' : 'default'}
             aria-pressed={size === value}
             onClick={() => setSize(value)}
           >
             {value}px
-          </button>
+          </Button>
         ))}
       </div>
       <div className="ov-demo-row">

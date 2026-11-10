@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import { useId } from 'react';
 import CopyIcon from '../../../../icons/svg/agent-connect/copy.svg?react';
 import EyeIcon from '../../../../icons/svg/agent-connect/eye.svg?react';
@@ -50,25 +51,31 @@ export function AgentConnectCodeBlock({
         <span>{language || 'text'}</span>
         <div className="ov-agent-connect__code-actions">
           {hasKey ? (
-            <button
-              type="button"
+            <Button
+              size="mini"
+              type="text"
+              iconOnly
+              htmlType="button"
               aria-pressed={revealed}
               aria-label={revealLabel}
               title={revealLabel}
               onClick={() => onReveal(revealed ? null : id)}
             >
               <RevealIcon aria-hidden="true" />
-            </button>
+            </Button>
           ) : null}
-          <button
-            type="button"
+          <Button
+            size="mini"
+            type="text"
+            iconOnly
+            htmlType="button"
             disabled={status === 'pending'}
             aria-label={copyLabel}
             title={copyLabel}
             onClick={() => void copy()}
           >
             <ClipboardIcon aria-hidden="true" />
-          </button>
+          </Button>
         </div>
       </div>
       <pre>

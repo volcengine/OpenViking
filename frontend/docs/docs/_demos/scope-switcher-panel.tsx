@@ -1,3 +1,4 @@
+import { Button } from '#demo-controls';
 import { useLang } from '@rspress/core/runtime';
 import { useState, type ReactNode } from 'react';
 import { LibraryIcon, SpaceIcon, UserIcon } from '@openviking/react/icons';
@@ -99,9 +100,14 @@ export default function ScopeSwitcherPanel() {
               <Shell
                 title="全部库"
                 action={
-                  <button type="button" className="demo-panel__action">
+                  <Button
+                    size="mini"
+                    type="text"
+                    htmlType="button"
+                    className="demo-panel__action"
+                  >
                     创建
-                  </button>
+                  </Button>
                 }
                 footer={
                   <>
@@ -167,9 +173,11 @@ export default function ScopeSwitcherPanel() {
         .demo-panel { display: flex; flex-direction: column; gap: 4px; width: 100%; }
         .demo-panel__header { display: flex; align-items: center; justify-content: space-between; padding: 0 8px; min-height: 22px; }
         .demo-panel__title { font-size: 12px; font-weight: 500; line-height: 20px; color: var(--ov-ui-text-muted, #6e718c); }
-        .demo-panel__action { padding: 0; border: 0; background: transparent; color: var(--ov-ui-primary, #5252ff); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
+
         .demo-panel__divider { height: 1px; margin: 4px 0; background: var(--ov-ui-border, #f0f2fa); }
         .demo-panel__footer { display: flex; flex-direction: column; }
+
+
         .demo-panel__footer-item { padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ov-ui-text-muted, #3f3f51); font: inherit; font-size: 13px; line-height: 22px; text-align: start; cursor: pointer; }
         .demo-panel__footer-item:hover { background: var(--ov-ui-scope-switcher-row-hover, #f6f7fa); }
       `}</style>

@@ -247,27 +247,10 @@
 }
 
 .ov-tui__copy {
-  display: inline-flex;
   flex: none;
-  align-items: center;
-  justify-content: center;
   box-sizing: border-box;
-  width: 32px;
-  height: 32px;
-  border: 0;
-  border-radius: 6px;
-  background: var(--ov-ui-tui-card-bg);
-  padding: 0;
-  color: var(--ov-ui-color-text-2);
-  cursor: pointer;
 }
 
-.ov-tui__copy:hover {
-  color: var(--ov-ui-tui-text);
-  background: var(--ov-ui-tui-hover);
-}
-
-.ov-tui__copy:focus-visible,
 .ov-tui__link:focus-visible {
   outline: 2px solid var(--ov-ui-tui-focus);
   outline-offset: 1px;
@@ -508,7 +491,7 @@
   inset: 0;
   content: '';
 }
-.ov-tui__search-item :is(button, a:not(.ov-tui__search-open)) {
+.ov-tui__search-item :is(button:not(.ov-button), a:not(.ov-tui__search-open)) {
   position: relative;
   z-index: 1;
 }
@@ -678,19 +661,6 @@
 
 .ov-tui__load-more {
   inline-size: 100%;
-  border: 1px solid var(--ov-ui-tui-card-border);
-  border-radius: 10px;
-  background: var(--ov-ui-tui-result-bg);
-  padding: 8px 12px;
-  color: var(--ov-ui-tui-link);
-  font: inherit;
-  font-size: 13px;
-  line-height: 22px;
-  cursor: pointer;
-}
-
-.ov-tui__load-more:hover {
-  background: var(--ov-ui-tui-hover);
 }
 
 .ov-tui__write-lines {

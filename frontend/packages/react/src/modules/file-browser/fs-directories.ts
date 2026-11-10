@@ -81,5 +81,14 @@ export function useTreeMetadata(
       ),
     [dirs],
   );
-  return { directoryUris, isKnownFile, metadataRows };
+  const accessOf = useCallback(
+    (uri: string | null) => {
+      const row = metadataRows.find((entry) => entry.uri === uri);
+      return row?.access === 'denied' || row?.access === 'container'
+        ? row.access
+        : undefined;
+    },
+    [metadataRows],
+  );
+  return { directoryUris, isKnownFile, metadataRows, accessOf };
 }

@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import type { Locale } from '../../shared/locale.js';
 import {
   useEffect,
@@ -105,9 +106,12 @@ export function ConsoleHistory({
   return (
     <div className="ov-console__history" ref={trigger}>
       <Tooltip content={labels.history} className="ov-console__action-tooltip">
-        <button
+        <Button
+          size="small"
+          type="text"
+          iconOnly
           {...invoker}
-          type="button"
+          htmlType="button"
           className="ov-console__action"
           aria-label={labels.history}
           aria-haspopup="dialog"
@@ -117,7 +121,7 @@ export function ConsoleHistory({
           onClick={native ? undefined : () => setOpen(!open)}
         >
           <ConsoleIcon name="history" />
-        </button>
+        </Button>
       </Tooltip>
       {mounted
         ? createPortal(

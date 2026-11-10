@@ -34,6 +34,7 @@ export interface FsTreeState {
    * {@link directoryUris} means the type is unknown.
    */
   isKnownFile: (uri: string) => boolean;
+  accessOf: (uri: string | null) => 'denied' | 'container' | undefined;
   toggleExpand: (row: FileTreeEntryRow) => Promise<void>;
   open: (uri: string) => Promise<void>;
   openPath: (uri: string) => Promise<void>;
@@ -281,6 +282,7 @@ export function useFsTree({
       },
       /** 在展开与折叠之间切换。Toggles between expanded and collapsed. */
       toggleExpand: async (row: FileTreeEntryRow) => {
+        if (row.disabled) return;
         const isOpen = expandedRef.current.has(row.uri);
         setExpanded((prev) => {
           const next = new Set(prev);
@@ -318,11 +320,9 @@ export function useFsTree({
     [rootUri, dirs, expanded],
   );
 
-  const metadata = useTreeMetadata(rootUri, dirs);
-
   return {
     rows,
-    ...metadata,
+    ...useTreeMetadata(rootUri, dirs),
     isReady,
     error,
     ...state,

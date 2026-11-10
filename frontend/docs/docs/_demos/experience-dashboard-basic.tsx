@@ -1,3 +1,4 @@
+import { Button } from '#demo-controls';
 import { useLang } from '@rspress/core/runtime';
 import { useState } from 'react';
 import { ExperienceDashboard } from '@openviking/react/components/experience-dashboard';
@@ -47,20 +48,29 @@ export default function ExperienceDashboardBasic() {
     <div lang={locale}>
       <p>{text.description}</p>
       <p className="ov-demo-controls">
-        <button
-          type="button"
+        <Button
+          size="small"
+          type="default"
+          htmlType="button"
           onClick={() => {
             setUri(DEMO_EXPERIENCES);
             setGateway(false);
           }}
         >
           {text.directory}
-        </button>{' '}
-        <button type="button" onClick={() => setUri(DEMO_EXPERIENCE)}>
+        </Button>{' '}
+        <Button
+          size="small"
+          type="default"
+          htmlType="button"
+          onClick={() => setUri(DEMO_EXPERIENCE)}
+        >
           {text.file}
-        </button>{' '}
-        <button
-          type="button"
+        </Button>{' '}
+        <Button
+          size="small"
+          type={gateway ? 'primary' : 'secondary'}
+          htmlType="button"
           aria-pressed={gateway}
           onClick={() => {
             setGateway(!gateway);
@@ -69,9 +79,11 @@ export default function ExperienceDashboardBasic() {
           }}
         >
           {text.host}
-        </button>{' '}
-        <button
-          type="button"
+        </Button>{' '}
+        <Button
+          size="small"
+          type={failure ? 'primary' : 'secondary'}
+          htmlType="button"
           aria-pressed={failure}
           onClick={() => {
             setFailure(!failure);
@@ -79,7 +91,7 @@ export default function ExperienceDashboardBasic() {
           }}
         >
           {text.failure}
-        </button>
+        </Button>
       </p>
       <ExperienceDashboard
         uri={uri}

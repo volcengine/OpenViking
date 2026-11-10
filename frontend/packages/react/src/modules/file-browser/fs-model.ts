@@ -21,6 +21,8 @@ export interface FsEntry {
   modTime?: string;
   abstract?: string;
   tags?: readonly string[];
+  access?: 'denied' | 'container';
+  permission?: 'read' | 'write' | 'manage';
 }
 
 /** 一个目录已加载的子节点与分页状态。 */
@@ -106,6 +108,10 @@ export function toEntryRow(
     name: nameFromUri(entry.uri),
     type: isDir ? 'directory' : 'file',
     expanded: isDir ? expanded : undefined,
+    disabled: entry.access === 'denied' || undefined,
+    selectable: entry.access === 'container' ? false : undefined,
+    access:
+      entry.access ?? (entry.permission === 'read' ? 'read-only' : undefined),
     // 正在取子节点时标记写入中，组件据此把展开箭头换成转圈。
     // While children load the row is marked busy, so the component swaps the
     // chevron for a spinner.
@@ -335,6 +341,5 @@ export function isAbort(error: unknown): boolean {
 }
 
 /** 把任意抛出物归一成 Error。Normalises a thrown value into an Error. */
-export function toError(cause: unknown): Error {
-  return cause instanceof Error ? cause : new Error(String(cause));
-}
+export const toError = (cause: unknown): Error =>
+  cause instanceof Error ? cause : new Error(String(cause));

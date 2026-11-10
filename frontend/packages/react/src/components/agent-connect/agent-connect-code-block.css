@@ -24,7 +24,7 @@
   align-items: center;
   gap: 12px;
 }
-.ov-agent-connect__code-actions button {
+.ov-agent-connect__code-actions button:not(.ov-button) {
   display: inline-flex;
   width: 24px;
   height: 24px;
@@ -37,10 +37,10 @@
   color: var(--ov-ui-agent-connect-secondary);
   font-size: 12px;
 }
-.ov-agent-connect__code-actions button:hover {
+.ov-agent-connect__code-actions button:not(.ov-button):hover {
   color: var(--ov-ui-agent-connect-primary);
 }
-.ov-agent-connect__code-actions button:disabled {
+.ov-agent-connect__code-actions button:not(.ov-button):disabled {
   opacity: 0.6;
   cursor: wait;
 }

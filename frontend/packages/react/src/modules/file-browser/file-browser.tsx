@@ -1,5 +1,5 @@
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
-import { useCallback, useId, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 
 import { ResizableHandle } from '../../shared/components/resizable/index.js';
@@ -12,9 +12,11 @@ import {
   resolveTreeMaxWidth,
 } from './file-browser-layout.js';
 import { FileBrowserTreePane } from './file-browser-tree-pane.js';
+import { FileBrowserSearch } from './file-browser-search.js';
 import { resolveLabels, resolvePreviewLabels } from './file-browser-labels.js';
 import { useContainerWidth } from './use-container-width.js';
 import { useFileBrowser } from './use-file-browser.js';
+import { useFileBrowserAcl } from './use-file-browser-acl.js';
 import type { FileBrowserProps } from './types.js';
 
 export type {
@@ -45,6 +47,7 @@ export function FileBrowser({
   agentConnect,
   dashboardKinds,
   renderDashboard,
+  acl,
   onUriChange,
   onImportResources,
   renderImportResources,
@@ -55,12 +58,12 @@ export function FileBrowser({
   ...rest
 }: FileBrowserProps) {
   const locale = useLocale(localeProp);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [internalUri, setInternalUri] = useState<string | null>(
     () => defaultUri ?? null,
   );
   const [preferredTreeWidth, setPreferredTreeWidth] =
     useState(TREE_DEFAULT_WIDTH);
-  const searchId = useId();
   // `uri !== undefined` 才是受控：传了空字符串也算宿主接管，而不是「没传」。
   // 模块自身不会主动清空选中——点目录行与点面包屑祖先都带具体 URI，没有「取消
   // 选中」的交互——因此这里不需要为 `null` 单独留一条分支。
@@ -126,10 +129,22 @@ export function FileBrowser({
     controlled: isControlled,
     summaryLabels,
     formatCharacterCount: text.formatCharacterCount,
+    accessLabels: {
+      accessDenied: text.accessDenied,
+      traverseOnly: text.traverseOnly,
+    },
     defaultExpandedUri,
     currentUri,
     requestOptions,
     onUriChange: changeUri,
+  });
+  const permissions = useFileBrowserAcl({
+    uri: browser.currentUri,
+    acl,
+    locale,
+    labels: labels?.acl,
+    requestOptions,
+    refresh: browser.actions.refresh,
   });
 
   return (
@@ -156,16 +171,13 @@ export function FileBrowser({
               renderImportResources,
               labels: labels?.entries,
             }}
-            searchId={searchId}
+            onSearch={() => setSearchOpen(true)}
             browser={browser}
             treeLabels={text.tree}
             locale={locale}
             dashboardLabels={labels?.dashboard}
             searchPlaceholder={text.searchPlaceholder}
             refreshLabel={text.refresh}
-            searchLoading={text.searchLoading}
-            searchEmpty={text.searchEmpty}
-            searchErrorLabel={text.searchFailed}
             retryLabel={text.retry}
           />
         </div>
@@ -186,6 +198,8 @@ export function FileBrowser({
             locale={locale}
             labels={previewLabels}
             footer={browser.previewFooter}
+            titleExtra={permissions.titleExtra}
+            extraActions={permissions.actions}
             viewLabels={{
               preview: text.previewMode,
               source: text.sourceMode,
@@ -219,6 +233,16 @@ export function FileBrowser({
           </div>
         )}
       </div>
+      {permissions.drawer}
+      <FileBrowserSearch
+        open={searchOpen}
+        locale={locale}
+        rootUri={rootUri}
+        triggerRef={layoutRef}
+        text={text}
+        requestOptions={requestOptions}
+        onClose={() => setSearchOpen(false)}
+      />
     </LocaleProvider>
   );
 }

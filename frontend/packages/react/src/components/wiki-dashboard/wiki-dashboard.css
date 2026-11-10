@@ -86,12 +86,12 @@
   margin: 0;
   font-weight: 500;
 }
-.ov-wiki-dashboard button {
+.ov-wiki-dashboard button:not(.ov-button) {
   cursor: pointer;
   font: inherit;
   color: inherit;
 }
-.ov-wiki-dashboard button:disabled {
+.ov-wiki-dashboard button:not(.ov-button):disabled {
   cursor: default;
 }
 .ov-wiki-dashboard__conflicts {
@@ -220,14 +220,14 @@
   border-bottom: 1px solid
     var(--ov-ui-color-dashboard-border, var(--ov-ui-dashboard-border-default));
 }
-.ov-wiki-dashboard__files button {
+.ov-wiki-dashboard__files button:not(.ov-button) {
   background: transparent;
   border: 0;
   min-width: 0;
   text-align: start;
   padding: 0;
 }
-.ov-wiki-dashboard__files button:first-child {
+.ov-wiki-dashboard__files button:not(.ov-button):first-child {
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -242,7 +242,7 @@
   );
   overflow-wrap: anywhere;
 }
-.ov-wiki-dashboard :is(button, summary):focus-visible {
+.ov-wiki-dashboard :is(button:not(.ov-button), summary):focus-visible {
   outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   outline-offset: 2px;
 }
@@ -256,7 +256,7 @@
 .ov-wiki-dashboard__files li > svg {
   flex: none;
 }
-.ov-wiki-dashboard__files button:first-of-type {
+.ov-wiki-dashboard__files button:not(.ov-button):first-of-type {
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -273,8 +273,8 @@
 .ov-wiki-dashboard__status svg {
   flex: none;
 }
-.ov-wiki-dashboard__issue > button,
-.ov-wiki-dashboard__path > button {
+.ov-wiki-dashboard__issue > button:not(.ov-button),
+.ov-wiki-dashboard__path > button:not(.ov-button) {
   display: block;
   width: 100%;
   overflow: hidden;
@@ -301,7 +301,7 @@
   gap: 8px;
   padding: 0 16px;
 }
-.ov-wiki-dashboard__actions button {
+.ov-wiki-dashboard__actions button:not(.ov-button) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -312,11 +312,12 @@
   border-radius: 6px;
   background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
 }
-.ov-wiki-dashboard__actions button[aria-disabled='true'] {
+.ov-wiki-dashboard__actions button:not(.ov-button)[aria-disabled='true'] {
   opacity: 0.4;
   cursor: not-allowed;
 }
-.ov-wiki-dashboard__actions button:hover:not([aria-disabled='true']) {
+.ov-wiki-dashboard__actions
+  button:not(.ov-button):hover:not([aria-disabled='true']) {
   background: var(--ov-ui-color-fill-hover, var(--ov-ui-fill-hover-default));
 }
 .ov-wiki-dashboard .ov-wiki-dashboard__link {

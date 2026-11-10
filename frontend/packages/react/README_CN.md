@@ -95,3 +95,5 @@ React 与 ReactDOM 为 peer dependencies（`^18.2.0 || ^19.0.0`），由 Rslib �
 动态文案使用类型化格式化函数，日期与数字使用 `Intl`。`npm test` 自动检查中英文 key、字符串占位符和格式化函数参数数量，类型检查约束参数类型。已有 `labels` 的未定义项继承当前语言，空字符串作为显式覆盖保留。
 
 在 `OpenVikingProvider` 上配置子树语言。模块与组件的可选 `locale` Props 覆盖最近的语言作用域，最终默认 `en-US`。内部 `src/shared/locale-context.tsx` 由各公开入口共享，与请求 Client 配置分离，切换语言保留请求和状态。
+
+内部 Input、Button、Modal 与 Drawer 参考 Arco Design 的交互逻辑（MIT），声明随包保留在 `LICENSE.arco-design`。Input、Button 的视觉规则裁剪自火山控制台使用的 `@arco-design/theme-ve-o-aml-design@0.0.36`（MIT），不使用 Arco 默认皮肤，也不提供公开组件入口。
