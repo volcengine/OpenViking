@@ -4,16 +4,13 @@
 import { formatInboundLine, resolveReplyTarget, eventDeliveryItem } from './runtime-input.mjs';
 import { safeChatLookupError, safeError } from './logger.mjs';
 
-// A failure-notice mute only suppresses rapid repeats: a persistent failure
-// re-notifies after this window instead of staying silent forever.
-export const FAILURE_NOTICE_MUTE_TTL_MS = 10 * 60 * 1_000;
 // After one automatic claude → codex fallback, no further automatic switch is
 // attempted within this window (prevents switch churn if the user moves back).
 export const MODEL_FALLBACK_COOLDOWN_MS = 5 * 60 * 1_000;
 
 // What happens when a model turn fails: one shot at the automatic
-// claude → codex fallback, then a muted-on-repeat failure notice to the sender
-// so failures are never silent.
+// claude → codex fallback, then one failure notice per conversation until the
+// runtime recovers, so a failure is reported once and never repeated.
 export class FailurePolicy {
   constructor({
     config,
@@ -35,25 +32,21 @@ export class FailurePolicy {
     this.isOwner = isOwner;
     this.mentionTarget = mentionTarget;
     this.isStopping = isStopping;
-    // scopeKey -> { summary, atMs } of the last delivered failure notice.
-    // Repeats of the same error stay muted until a turn for that conversation
-    // succeeds, the error changes, or the mute TTL expires (see notifyTurnFailure).
+    // In-memory: chatId (or scope for non-chat events) -> { summary, atMs } of
+    // the delivered failure notice. A chat that was told once stays quiet,
+    // whatever the error, until any turn succeeds (see onTurnSucceeded); an
+    // @-mention of the bot still gets a notice. Not persisted: a restart may
+    // report once more.
     this.failureNoticeMutes = new Map();
     // Automatic claude → codex fallback state (see tryModelFallback).
     this.fallbackInProgress = false;
     this.lastFallbackAtMs = 0;
   }
 
-  // A successful turn clears the failure-notice mute for every conversation it
-  // consumed messages from: the next failure there is news again.
-  onTurnSucceeded({ inboundSeqs }) {
-    if (this.failureNoticeMutes.size === 0) return;
-    for (const seq of Array.isArray(inboundSeqs) ? inboundSeqs : []) {
-      let inbound = null;
-      try { inbound = this.store.inboundBySeq(seq); } catch { continue; }
-      const scopeKey = inbound?.scopeKey ?? inbound?.conversationKey;
-      if (scopeKey) this.failureNoticeMutes.delete(scopeKey);
-    }
+  // Any successful turn means the runtime has recovered (a usage limit or a
+  // broken model is runtime-wide), so every conversation may be told again.
+  onTurnSucceeded() {
+    this.failureNoticeMutes.clear();
   }
 
   // A failed turn first gets one shot at the automatic claude → codex fallback;
@@ -133,9 +126,8 @@ export class FailurePolicy {
 
   // A failed turn consumes its messages without replying; tell the sender
   // programmatically. Best effort: reply to the last inbound message of the
-  // failed turn. Repeats of the same error in the same conversation are muted
-  // (activity only) until a turn succeeds or the error changes, so a persistent
-  // failure does not spam the chat.
+  // failed turn. A conversation gets this notice once; later failures there are
+  // recorded as activity only until the runtime recovers.
   async notifyTurnFailure({ inboundSeqs, error }) {
     if (this.isStopping()) return;
     const seqs = Array.isArray(inboundSeqs) ? inboundSeqs : [];
@@ -150,16 +142,15 @@ export class FailurePolicy {
       const target = row ? this.mentionTarget(row) : null;
       return target ? target !== 'other' : Array.isArray(row?.mentions) && row.mentions.length > 0;
     });
-    const scopeKey = inbound?.scopeKey ?? inbound?.conversationKey;
-    const mute = scopeKey ? this.failureNoticeMutes.get(scopeKey) : null;
-    if (mute && !mentioned && mute.summary === errorSummary
-      && Date.now() - mute.atMs < FAILURE_NOTICE_MUTE_TTL_MS) {
+    // Keyed by chat, not by thread: one notice per group (or direct chat).
+    const scopeKey = inbound?.chatId ?? inbound?.scopeKey ?? inbound?.conversationKey;
+    if (scopeKey && !mentioned && this.failureNoticeMutes.has(scopeKey)) {
       this.recordActivity('agent.failure_notice', {
         summary: errorSummary,
         status: 'MUTED',
         conversationKey: inbound.conversationKey,
         inboundSeq: seq ?? undefined,
-        metadata: { reason: 'repeat_failure_muted' },
+        metadata: { reason: 'already_notified_until_recovery' },
       });
       return;
     }
