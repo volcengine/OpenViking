@@ -96,7 +96,9 @@ class ChatChannel(BaseChannel):
             console.print()
         else:
             # Handle thinking events
-            if msg.event_type == OutboundEventType.REASONING:
+            if msg.event_type == OutboundEventType.PROGRESS:
+                console.print(f"  [dim]{msg.content}[/dim]")
+            elif msg.event_type == OutboundEventType.REASONING:
                 # Truncate long reasoning
                 content = msg.content.strip()
                 if content:

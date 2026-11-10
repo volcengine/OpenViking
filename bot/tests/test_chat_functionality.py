@@ -3,7 +3,7 @@
 """CLI response delivery and provider-compatible conversation history."""
 
 import pytest
-from vikingbot.bus.events import OutboundMessage
+from vikingbot.bus.events import OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
 from vikingbot.channels.single_turn import SingleTurnChannel, SingleTurnChannelConfig
@@ -38,6 +38,36 @@ async def test_cli_channel_receives_response(tmp_path, channel_cls, config_cls, 
     )
     assert channel._last_response == "test response"
     assert channel._response_received.is_set()
+
+
+async def test_interactive_cli_renders_progress_without_finishing_response(tmp_path, monkeypatch):
+    printed = []
+
+    class RecordingConsole:
+        def print(self, *objects, **_kwargs):
+            printed.append(" ".join(str(obj) for obj in objects))
+
+    monkeypatch.setattr("vikingbot.cli.commands.console", RecordingConsole())
+    channel = ChatChannel(
+        ChatChannelConfig(),
+        MessageBus(),
+        workspace_path=tmp_path,
+        session_id="test-session",
+        markdown=True,
+        logs=False,
+    )
+
+    await channel.send(
+        OutboundMessage(
+            session_key=SessionKey(type="cli", channel_id="default", chat_id="test-session"),
+            content="Compacting session memory...",
+            event_type=OutboundEventType.PROGRESS,
+        )
+    )
+
+    assert printed == ["  [dim]Compacting session memory...[/dim]"]
+    assert channel._last_response is None
+    assert not channel._response_received.is_set()
 
 
 @pytest.mark.parametrize("provider", ["deepseek", "openai"])
