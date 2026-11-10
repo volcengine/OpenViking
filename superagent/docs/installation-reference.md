@@ -94,7 +94,7 @@ Source development requires Node.js 22.19.0 or later.
 
 ```bash
 git clone https://github.com/volcengine/OpenViking.git
-cd OpenViking/vika
+cd OpenViking/superagent
 npm run setup          # Install locked dependencies, pinned lark-cli and Slack CLI, and check managed Pi
 npm test && npm run check
 mkdir -p ~/.ovsa && cp config.example.json ~/.ovsa/config.json

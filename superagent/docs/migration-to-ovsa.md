@@ -37,3 +37,16 @@ New-Item -ItemType Junction -Path $oldHome -Target $newHome
 Keep the junction for existing absolute paths. Rerun the PowerShell installer, open a new terminal, check `ovsa status`, and start with `ovsa start`. Re-enable autostart if desired. If creating the junction fails, restore the old directory before restarting services.
 
 If both directories already exist, stop and inspect them before choosing which installation to keep. Explicit `VIKA_CONFIG`, `VIKA_SECRETS_FILE`, and configured data paths remain explicit overrides; migration does not rewrite them. Upgrading release files alone does not migrate the home or create the new launcher.
+
+## Names retained for compatibility
+
+Use the actual identifiers below when configuring or troubleshooting an installation. The product name and `ovsa` command do not rename these interfaces:
+
+| Interface | Identifier |
+| --- | --- |
+| Installer and release storage | `https://ovrelease.tos-cn-beijing.volces.com/vika/install.sh`; default `VIKA_TOS_PREFIX=vika`. Do not substitute `/superagent/` in the published URL. |
+| Autostart | Linux `vika.service` (`systemctl --user status vika.service`), macOS `com.vika.agent`, Windows `vika-autostart.vbs` |
+| Environment variables | `VIKA_*`, including `VIKA_CONFIG`, `VIKA_TEMP_DIR`, `VIKA_LOG_LEVEL`, and `VIKA_DSH_EFFORT`; there are no corresponding `OVSA_*` aliases |
+| PM2 processes | `vika-<instance>`, `vika-web`, and `vika-updater`; `ovsa status` shows these names |
+| Default temporary directory | `/tmp/vika-<instance>` when setup assigns a temporary directory for instance data under `/root`; explicit per-instance `tempDir` or `VIKA_TEMP_DIR` takes precedence |
+| Default secrets file | `~/.ovsa/secrets.env`; an explicit `VIKA_SECRETS_FILE` overrides it |
