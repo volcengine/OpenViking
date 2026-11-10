@@ -114,7 +114,7 @@ test('delete and stop wait longer than the app kill_timeout', async (t) => {
   assert.equal(pm2StopTimeout({ pm2_env: { kill_timeout: 30000 } }), 60_000);
   assert.equal(pm2StopTimeout({ pm2_env: { kill_timeout: 5000 } }), 35_000);
   assert.equal(pm2StopTimeout(undefined), 60_000);
-  const f = fixture(t, ['vika-alpha']);
+  const f = fixture(t, ['superagent-alpha']);
   await restartCommand('alpha', f.options);
   await stopCommand('alpha', f.options);
   for (const verb of ['delete', 'stop']) {
