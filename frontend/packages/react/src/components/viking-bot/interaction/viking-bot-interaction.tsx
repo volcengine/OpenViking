@@ -1,3 +1,4 @@
+import { TextArea } from '../../../shared/components/input/input.js';
 import { useLocale } from '../../../shared/locale-context.js';
 import { AskHuman } from '@ark-design/ui/ask-human';
 import type { AskHumanStep } from '@ark-design/ui/ask-human';
@@ -28,7 +29,7 @@ const TextInput = ({
 }) => (
   <>
     {request.description ? <p>{request.description}</p> : null}
-    <textarea
+    <TextArea
       className="ov-viking-bot__interaction-input"
       defaultValue={request.initialValue}
       disabled={disabled}

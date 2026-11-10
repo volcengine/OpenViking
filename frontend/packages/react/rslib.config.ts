@@ -54,6 +54,19 @@ export default defineConfig({
         },
       },
     },
+    // Docs chrome is private and must not become a shared entry of the SDK graph.
+    {
+      id: 'docs-controls',
+      format: 'esm',
+      dts: { distPath: './dist/docs' },
+      source: {
+        entry: {
+          'shared/components/button/button':
+            './src/shared/components/button/button.tsx',
+        },
+      },
+      output: { distPath: { root: './dist/docs' }, emitCss: false },
+    },
     // Build each stylesheet independently so every public CSS entry is complete.
     ...Object.entries({
       style: './src/style.css',

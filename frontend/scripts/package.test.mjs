@@ -69,3 +69,19 @@ test('public stylesheets resolve through package exports', async () => {
     );
   }
 });
+
+// Internal overlays must stay inaccessible through the SDK.
+test('Modal remains internal and has no root or subpath API', async () => {
+  const root = await import('@openviking/react');
+  assert.equal('Modal' in root, false);
+  for (const path of [
+    'components/modal',
+    'components/modal/style.css',
+    'shared/components/modal/modal.js',
+    'shared/components/modal/style.css',
+  ]) {
+    assert.throws(() => import.meta.resolve(`@openviking/react/${path}`), {
+      code: 'ERR_PACKAGE_PATH_NOT_EXPORTED',
+    });
+  }
+});

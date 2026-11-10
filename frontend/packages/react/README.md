@@ -98,3 +98,5 @@ Built-in translations live alongside each component or module in `locales/en-US.
 Dynamic messages use typed formatter functions; dates and numbers use `Intl`. `npm test` checks matching keys, string placeholders and formatter arity across languages, while type checking validates parameter types. Undefined `labels` entries inherit the selected language; empty strings remain explicit overrides.
 
 Set `locale` on `OpenVikingProvider` for a subtree. Optional module and component Props override the nearest scope, then fall back to `en-US`. Standalone Hooks also inherit the Provider. The private `src/shared/locale-context.tsx` is shared across public entries and remains separate from request-client configuration, so language changes preserve requests and state.
+
+The internal Input, Button, Modal and Drawer adapt Arco Design logic (MIT); its notice ships in `LICENSE.arco-design`. Input and Button visual rules are adapted from the console's `@arco-design/theme-ve-o-aml-design@0.0.36` (MIT), rather than Arco's default skin. They have no public component entry.

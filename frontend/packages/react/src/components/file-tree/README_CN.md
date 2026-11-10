@@ -85,6 +85,8 @@ type FileTreeRow =
 
 ## 可选搜索与刷新
 
-`search`、`refresh` 默认隐藏，传 `true` 分别开启。通过 `operations.search` 打开宿主搜索界面，通过 `operations.refresh` 刷新数据；缺少执行方法时禁用按钮。刷新等待时自动禁用并显示旋转图标，失败后恢复且不触发成功通知。
+`search`、`refresh` 默认显示，传 `false` 分别隐藏。通过 `operations.search` 打开宿主搜索界面，通过 `operations.refresh` 刷新数据；缺少执行方法时禁用按钮。刷新等待时自动禁用并显示旋转图标，失败后恢复且不触发成功通知。
 
-`search={{ disabled: true }}` 控制搜索禁用态；`refresh={{ disabled, loading }}` 控制刷新禁用态与宿主加载态。用 `labels.search`、`labels.refresh` 替换文案，用 `onSearch`、`onRefresh` 接收成功通知。搜索不自行过滤行、不注册全局快捷键。`slots.toolbar` 位于内置控件上方，两个入口都可单独关闭。
+`search={{ disabled: true }}` 控制搜索禁用态；顶层 `loading` 控制刷新加载态，与异步刷新及 `refresh.loading` 合并。刷新提示支持悬停、聚焦和 Esc 关闭。`refresh={{ disabled, loading }}` 控制刷新禁用态与宿主加载态。用 `labels.search`、`labels.refresh` 替换文案，用 `onSearch`、`onRefresh` 接收成功通知。搜索不自行过滤行、不注册全局快捷键。`slots.toolbar` 位于内置控件上方，两个入口都可单独关闭。
+
+搜索默认提示为 `搜索文件 ⌘+K...`，可通过 `labels.search` 覆盖。基础示例展示搜索事件，并提供手动执行刷新成功与失败的 case。

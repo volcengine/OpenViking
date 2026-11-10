@@ -183,7 +183,7 @@
   );
   overflow-wrap: anywhere;
 }
-.ov-experience-dashboard__timeline button {
+.ov-experience-dashboard__timeline button:not(.ov-button) {
   display: block;
   max-width: 100%;
   padding: 4px 0;
@@ -205,7 +205,7 @@
   gap: 12px;
   padding: 16px 0;
 }
-.ov-experience-dashboard__pagination button {
+.ov-experience-dashboard__pagination button:not(.ov-button) {
   border: 1px solid
     var(--ov-ui-color-dashboard-border, var(--ov-ui-dashboard-border-default));
   border-radius: 6px;
@@ -214,16 +214,17 @@
   color: inherit;
   font: inherit;
 }
-.ov-experience-dashboard button {
+.ov-experience-dashboard button:not(.ov-button) {
   cursor: pointer;
 }
-.ov-experience-dashboard button:disabled {
+.ov-experience-dashboard button:not(.ov-button):disabled {
   cursor: default;
 }
-.ov-experience-dashboard__pagination button:disabled {
+.ov-experience-dashboard__pagination button:not(.ov-button):disabled {
   color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
 }
-.ov-experience-dashboard :is(button, select, [tabindex]):focus-visible {
+.ov-experience-dashboard
+  :is(button:not(.ov-button), select, [tabindex]):focus-visible {
   outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   outline-offset: 2px;
 }
@@ -272,7 +273,7 @@
 .ov-experience-dashboard__table tbody th {
   min-width: 180px;
 }
-.ov-experience-dashboard__table button {
+.ov-experience-dashboard__table button:not(.ov-button) {
   display: block;
   padding: 0;
   background: transparent;
@@ -314,7 +315,7 @@
   font-size: 13px;
   font-weight: 500;
 }
-.ov-experience-dashboard__table tbody th button:hover {
+.ov-experience-dashboard__table tbody th button:not(.ov-button):hover {
   color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
 }
 .ov-experience-dashboard__table th span {
@@ -403,7 +404,7 @@
   margin: 0;
   overflow-wrap: anywhere;
 }
-.ov-experience-dashboard__tests button {
+.ov-experience-dashboard__tests button:not(.ov-button) {
   flex: none;
   border: 1px solid
     var(--ov-ui-color-dashboard-border, var(--ov-ui-dashboard-border-default));
@@ -414,7 +415,7 @@
   font: inherit;
   cursor: pointer;
 }
-.ov-experience-dashboard__test-meta button {
+.ov-experience-dashboard__test-meta button:not(.ov-button) {
   padding: 0 2px;
   border: 0;
   background: transparent;

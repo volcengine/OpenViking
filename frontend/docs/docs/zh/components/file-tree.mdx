@@ -4,41 +4,19 @@
 
 展平后的文件树。树状态由宿主持有，宿主按顺序传入可见行；组件负责渲染并通知成功的操作。
 
-组件渲染宿主展平后的行列表，并处理选中、展开、分页与键盘交互。内置搜索入口与刷新按钮均可选；搜索弹窗、数据请求与导入流程由宿主提供。
-
-## 控制台样式与可选工具栏
-
-树行、缩进、浅色选中态以及 32px 搜索和刷新控件对齐火山版控制台。下面使用固定的公开示例数据；搜索弹窗与刷新请求由示例宿主模拟。
-
-```tsx file="../../_demos/file-tree-console.tsx" preview
-
-```
-
-通过 `search`、`refresh` 分别开启入口，默认均隐藏。`operations.search` 打开宿主搜索界面，`operations.refresh` 执行刷新；省略对应执行方法时按钮禁用。刷新 Promise 等待期间自动禁用按钮并旋转图标，重复点击不会重复执行；失败后恢复按钮且不触发 `onRefresh`，错误提示由宿主负责。
-
-```tsx
-<FileTree
-  locale="zh-CN"
-  rows={rows}
-  search
-  refresh={{ loading: isRefreshing, disabled: !canRefresh }}
-  operations={{ search: openSearch, refresh: reloadTree }}
-  labels={{ search: '搜索文件…', refresh: '刷新上下文目录' }}
-  onRefresh={() => notifySuccess()}
-/>
-```
-
-`search={{ disabled: true }}` 可禁用搜索。搜索是入口而非本地过滤框，组件不会假设当前已加载的行覆盖全部文件，也不会注册全局快捷键。如果宿主已提供快捷键，可以把提示加入 `labels.search`。`slots.toolbar` 保留，并显示在内置控件上方，适合放连接 Agent、导入资源等操作。
+组件渲染宿主展平后的行列表，并处理选中、展开、分页与键盘交互。搜索入口与刷新按钮默认显示，可分别关闭；搜索界面、数据请求与导入流程由宿主提供。
 
 ## 基础用法
 
-行来自 `rows`，展开由使用方控制。下面的示例自己维护展开集合，把树状态展平成 `FileTreeRow[]` 并渲染，演示五种行类型与内置目录说明的实际效果。
+行来自 `rows`，展开由使用方控制。下面的示例自己维护展开集合，把树状态展平成 `FileTreeRow[]` 并渲染，演示异步加载、分页、空目录与内置目录说明。
 
 ```tsx file="../../_demos/file-tree-basic.tsx" preview
 
 ```
 
-示例演示三种宿主职责：
+搜索只展示 `onSearch` 事件，不打开弹窗。选择刷新结果后点击刷新，可手动执行成功或失败 case；等待期间按钮显示 loading，失败后恢复且不触发 `onRefresh`，可切回成功重试。勾选「宿主控制 loading」可单独验证受控加载态。示例使用离线模拟数据。
+
+示例也演示以下宿主职责：
 
 - **异步加载**：展开目录先出现 `Loading…` 行，400ms 后换成子节点，对应 `FileTreeLoadingRow`。
 - **分页加载**：每次只加载 3 个子节点，还有剩余时出现 `Load more`，点一次追加一页，对应 `FileTreeLoadMoreRow`。`archive` 有 9 个文件，分三页加载完。
@@ -47,6 +25,26 @@
 目录名后跟着的是内置说明，`memories`、`peers`、`privacy` 等都有。
 
 示例直接挂载 `<FileTree />`，只保留树数据与展开、分页状态这些宿主该持有的部分。
+
+## 搜索与刷新
+
+`search`、`refresh` 默认都是 `true`，传 `false` 可单独隐藏。省略对应 `operations` 方法时按钮禁用；`slots.toolbar` 仍显示在内置控件上方。
+
+搜索入口默认文案与火山版一致：`搜索文件 ⌘+K...`，通过 `labels.search` 覆盖。组件仅触发宿主操作，搜索界面、快捷键和结果处理由宿主接入。
+
+刷新按钮支持悬停与键盘聚焦提示。顶层 `loading`、`refresh.loading` 与刷新 Promise 等待态合并：任意一项为 `true`，按钮都会旋转并禁用，重复点击不会重复执行。`labels.refresh` 同时覆盖提示和无障碍名称。
+
+```tsx
+<FileTree
+  locale="zh-CN"
+  rows={rows}
+  loading={isRefreshing}
+  operations={{ search: openSearch, refresh: reloadTree }}
+  labels={{ search: '搜索资料...', refresh: '刷新上下文目录' }}
+  onSearch={() => notifySearch()}
+  onRefresh={() => notifyRefresh()}
+/>
+```
 
 ## 行的组织方式
 
@@ -134,32 +132,33 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 
 ## 属性
 
-| 属性                      | 类型                                                   | 默认值           | 说明                                         |
-| ------------------------- | ------------------------------------------------------ | ---------------- | -------------------------------------------- |
-| `locale`                  | `'zh-CN' \| 'en-US'`                                   | 继承上层 / en-US | 内置中英文文案。                             |
-| `rows`                    | `readonly FileTreeRow[]`                               | 必填             | 按渲染顺序排列的可见行。                     |
-| `operations`              | `FileTreeOperations`                                   | —                | 异步执行能力；省略方法时禁用对应操作。       |
-| `selectedId`              | `string \| null`                                       | —                | 当前选中的行 id，由宿主持有。                |
-| `isReady`                 | `boolean`                                              | `true`           | 首次加载是否完成。                           |
-| `loadingFallback`         | `ReactNode`                                            | —                | 首次加载期间替代行列表显示。                 |
-| `errorFallback`           | `ReactNode`                                            | —                | 存在整树级错误行时显示。                     |
-| `emptyFallback`           | `ReactNode`                                            | —                | `rows` 为空时显示。                          |
-| `slots`                   | `FileTreeSlots`                                        | —                | `toolbar` 与 `spinner` 插槽。                |
-| `labels`                  | `FileTreeLabels`                                       | locale           | 可替换文案。                                 |
-| `getRowAttributes`        | `(row) => HTMLAttributes<HTMLDivElement>`              | —                | 按行追加属性，`className` 会与组件类名合并。 |
-| `renderDashboard`         | `(row) => ReactNode`                                   | —                | 行尾指示器，返回 `null` 不显示。             |
-| `renderRowIcon`           | `(row) => ReactNode`                                   | —                | 文件行的行首图标；省略时用通用文件图标。     |
-| `renderRowTooltip`        | `(row) => ReactNode`                                   | —                | 悬停内容，返回 `null` 不显示。               |
-| `onSelect`                | `(row: FileTreeEntryRow) => void`                      | —                | 选中成功后触发；失败时不触发。               |
-| `onToggleExpand`          | `(row: FileTreeEntryRow) => void`                      | —                | 展开或折叠成功后触发；失败时不触发。         |
-| `onLoadMore`              | `(row: FileTreeLoadMoreRow) => void`                   | —                | 下一页子节点加载成功后触发；失败时不触发。   |
-| `onRetry`                 | `(row: FileTreeErrorRow) => void`                      | —                | 重新加载成功后触发；重试失败时不触发。       |
-| `search`                  | `boolean \| { disabled?: boolean }`                    | `false`          | 显示内置搜索入口。                           |
-| `refresh`                 | `boolean \| { disabled?: boolean; loading?: boolean }` | `false`          | 显示内置刷新按钮。                           |
-| `onSearch`                | `() => void`                                           | —                | 搜索界面成功打开后通知。                     |
-| `onRefresh`               | `() => void`                                           | —                | 刷新成功后通知。                             |
-| `onOpenRetentionSettings` | `(uri: string) => void`                                | —                | 保留策略设置成功打开后触发；失败时不触发。   |
-| 其他属性                  | `HTMLAttributes<HTMLDivElement>`                       | —                | 标准 div 属性。                              |
+| 属性                      | 类型                                                   | 默认值           | 说明                                                                           |
+| ------------------------- | ------------------------------------------------------ | ---------------- | ------------------------------------------------------------------------------ |
+| `locale`                  | `'zh-CN' \| 'en-US'`                                   | 继承上层 / en-US | 内置中英文文案。                                                               |
+| `rows`                    | `readonly FileTreeRow[]`                               | 必填             | 按渲染顺序排列的可见行。                                                       |
+| `operations`              | `FileTreeOperations`                                   | —                | 异步执行能力；省略方法时禁用对应操作。                                         |
+| `selectedId`              | `string \| null`                                       | —                | 当前选中的行 id，由宿主持有。                                                  |
+| `isReady`                 | `boolean`                                              | `true`           | 首次加载是否完成。                                                             |
+| `loadingFallback`         | `ReactNode`                                            | —                | 首次加载期间替代行列表显示。                                                   |
+| `errorFallback`           | `ReactNode`                                            | —                | 存在整树级错误行时显示。                                                       |
+| `emptyFallback`           | `ReactNode`                                            | —                | `rows` 为空时显示。                                                            |
+| `slots`                   | `FileTreeSlots`                                        | —                | `toolbar` 与 `spinner` 插槽。                                                  |
+| `labels`                  | `FileTreeLabels`                                       | locale           | 可替换文案。                                                                   |
+| `getRowAttributes`        | `(row) => HTMLAttributes<HTMLDivElement>`              | —                | 按行追加属性，`className` 会与组件类名合并。                                   |
+| `renderDashboard`         | `(row) => ReactNode`                                   | —                | 行尾指示器，返回 `null` 不显示。                                               |
+| `renderRowIcon`           | `(row) => ReactNode`                                   | —                | 文件行的行首图标；省略时用通用文件图标。                                       |
+| `renderRowTooltip`        | `(row) => ReactNode`                                   | —                | 悬停内容，返回 `null` 不显示。                                                 |
+| `onSelect`                | `(row: FileTreeEntryRow) => void`                      | —                | 选中成功后触发；失败时不触发。                                                 |
+| `onToggleExpand`          | `(row: FileTreeEntryRow) => void`                      | —                | 展开或折叠成功后触发；失败时不触发。                                           |
+| `onLoadMore`              | `(row: FileTreeLoadMoreRow) => void`                   | —                | 下一页子节点加载成功后触发；失败时不触发。                                     |
+| `onRetry`                 | `(row: FileTreeErrorRow) => void`                      | —                | 重新加载成功后触发；重试失败时不触发。                                         |
+| `search`                  | `boolean \| { disabled?: boolean }`                    | `true`           | 显示内置搜索入口。                                                             |
+| `refresh`                 | `boolean \| { disabled?: boolean; loading?: boolean }` | `true`           | 显示内置刷新按钮。                                                             |
+| `loading`                 | `boolean`                                              | `false`          | 刷新按钮的受控加载态，与 Promise 等待态及 `refresh.loading` 合并；保留已有行。 |
+| `onSearch`                | `() => void`                                           | —                | 搜索操作成功后通知。                                                           |
+| `onRefresh`               | `() => void`                                           | —                | 刷新成功后通知。                                                               |
+| `onOpenRetentionSettings` | `(uri: string) => void`                                | —                | 保留策略设置成功打开后触发；失败时不触发。                                     |
+| 其他属性                  | `HTMLAttributes<HTMLDivElement>`                       | —                | 标准 div 属性。                                                                |
 
 ```tsx
 import { FileTree } from '@openviking/react/components/file-tree';
@@ -195,3 +194,15 @@ import '@openviking/react/components/file-tree/style.css';
 ## 实现范围
 
 目录加载、分页、搜索、权限与导航由宿主负责，通过 `operations` 提供异步执行能力；成功后组件才触发对应通知，失败时不触发。省略方法时禁用该操作，省略通知不影响执行。
+
+## 行级权限状态
+
+组件只呈现宿主提供的状态，不发鉴权请求。`FileBrowser` 会把原生列表结果映射为这些行属性：
+
+| `FileTreeEntryRow` 属性 | 默认值  | 说明                                                                                               |
+| ----------------------- | ------- | -------------------------------------------------------------------------------------------------- |
+| `disabled`              | `false` | 禁止选择和展开                                                                                     |
+| `selectable`            | `true`  | `false` 时禁止鼠标与键盘选择，仍允许目录展开                                                       |
+| `access`                | —       | 展示 `read-only`（只读）、`denied`（无权限）或 `container`（仅可遍历）标记；行为由上述两个属性控制 |
+
+标记文案可用 `labels.readOnly`、`labels.noAccess`、`labels.traverseOnly` 覆盖，默认随语言切换。

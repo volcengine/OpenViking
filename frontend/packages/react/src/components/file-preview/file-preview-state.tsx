@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import type { ReactNode } from 'react';
 
 import type { FilePreviewLabels } from './types.js';
@@ -84,13 +85,15 @@ export function LoadFailedState({
       description={description}
       action={
         onRetry ? (
-          <button
-            type="button"
+          <Button
+            size="small"
+            type="default"
+            htmlType="button"
             className="ov-file-preview__button"
             onClick={onRetry}
           >
             {text.retry}
-          </button>
+          </Button>
         ) : undefined
       }
     />
@@ -110,13 +113,15 @@ export function UnsupportedState({
       title={text.unsupported}
       action={
         onDownload ? (
-          <button
-            type="button"
+          <Button
+            size="small"
+            type="default"
+            htmlType="button"
             className="ov-file-preview__button"
             onClick={onDownload}
           >
             {text.download}
-          </button>
+          </Button>
         ) : undefined
       }
     />

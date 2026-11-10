@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 /* eslint-disable jsx-a11y/no-noninteractive-tabindex -- Labelled conflict region must support keyboard horizontal scrolling. */
 import { useState } from 'react';
 import { useLocale } from '../../shared/locale-context.js';
@@ -111,9 +112,9 @@ export function WikiDashboard(props: WikiDashboardProps) {
                   <span className="ov-wiki-dashboard__file-uri">{file}</span>
                 </button>
                 {onEdit ? (
-                  <button type="button" onClick={() => onEdit(file)}>
+                  <Button size="small" onClick={() => onEdit(file)}>
                     {t.edit}
-                  </button>
+                  </Button>
                 ) : null}
               </li>
             ))}

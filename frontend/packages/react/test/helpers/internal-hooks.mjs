@@ -15,3 +15,13 @@ const experience = await import(
   pathToFileURL(join(output, 'experience-pane.js'))
 );
 export const ExperienceDashboardPane = experience.ExperienceDashboardPane;
+
+const button = await import(pathToFileURL(join(output, 'button.js')));
+export const Button = button.Button;
+const input = await import(pathToFileURL(join(output, 'input.js')));
+export const Input = input.Input;
+export const TextArea = input.TextArea;
+const modal = await import(pathToFileURL(join(output, 'modal.js')));
+export const Modal = modal.Modal;
+const entries = await import(pathToFileURL(join(output, 'browser-entries.js')));
+export const FileBrowserEntries = entries.FileBrowserEntries;

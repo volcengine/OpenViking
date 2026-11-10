@@ -98,6 +98,7 @@ export function useBrowserDashboards({
   const dashboards = new Map(
     rows
       .filter((row) => row.kind === 'entry')
+      .filter((row) => !row.disabled && row.selectable !== false)
       .flatMap((row) => {
         const dashboard = resolve(row.uri);
         return dashboard &&

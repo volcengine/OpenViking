@@ -82,7 +82,7 @@
   font-size: 12px;
 }
 
-.ov-viking-bot__attachments button {
+.ov-viking-bot__attachments button:not(.ov-button) {
   border: none;
   background: none;
   padding: 0 2px;
@@ -91,11 +91,11 @@
   cursor: pointer;
 }
 
-.ov-viking-bot__attachments button:hover {
+.ov-viking-bot__attachments button:not(.ov-button):hover {
   color: var(--ov-viking-bot-text);
 }
 
-.ov-viking-bot__attachments button:focus-visible {
+.ov-viking-bot__attachments button:not(.ov-button):focus-visible {
   outline: 2px solid var(--ov-viking-bot-focus);
   outline-offset: 1px;
 }
@@ -121,47 +121,7 @@
 }
 .ov-viking-bot__attach,
 .ov-viking-bot__submit {
-  display: inline-flex;
-  width: 32px;
-  height: 32px;
   flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  padding: 0;
-  cursor: pointer;
-}
-.ov-viking-bot__attach {
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ov-viking-bot-text);
-}
-.ov-viking-bot__submit {
-  border-radius: 50%;
-  background: var(--ov-viking-bot-accent);
-  color: var(--ov-viking-bot-on-accent);
-}
-.ov-viking-bot__attach:hover:not(:disabled) {
-  background: var(--ov-viking-bot-surface-hover);
-}
-.ov-viking-bot__submit:hover:not(:disabled) {
-  background: var(--ov-viking-bot-accent-hover);
-}
-.ov-viking-bot__attach:focus-visible,
-.ov-viking-bot__submit:focus-visible {
-  outline: 2px solid var(--ov-viking-bot-focus);
-  outline-offset: 2px;
-}
-.ov-viking-bot__attach:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.ov-viking-bot__submit:disabled {
-  background: var(
-    --ov-ui-color-primary-disabled,
-    var(--ov-ui-primary-disabled-default)
-  );
-  cursor: not-allowed;
 }
 .ov-viking-bot__submit > svg {
   display: block;

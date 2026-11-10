@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import type { Locale } from '../../shared/locale.js';
 import type { RefObject } from 'react';
 import type { SenderInstance } from '@ark-design/ui/sender';
@@ -86,15 +87,18 @@ export function ReferenceButton({
           content={labels.reference}
           disabled={props['aria-expanded'] === true}
         >
-          <button
+          <Button
             {...props}
+            size="mini"
+            type="text"
+            iconOnly
             className="ov-viking-bot__attach"
-            type="button"
+            htmlType="button"
             aria-label={labels.reference}
             disabled={disabled}
           >
             @
-          </button>
+          </Button>
         </Tooltip>
       )}
     >
@@ -132,8 +136,11 @@ export function ReferenceTags({
           <Tooltip content={item.uri}>
             <span>{item.name}</span>
           </Tooltip>
-          <button
-            type="button"
+          <Button
+            size="mini"
+            type="text"
+            iconOnly
+            htmlType="button"
             disabled={disabled}
             aria-label={`${labels.removeReference}: ${item.name}`}
             onClick={() =>
@@ -143,7 +150,7 @@ export function ReferenceTags({
             }
           >
             <VikingBotIcon name="remove" width={12} height={12} />
-          </button>
+          </Button>
         </li>
       ))}
     </ul>
