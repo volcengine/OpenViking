@@ -452,6 +452,7 @@ Claude Code 上这是靠改写结果的第一行（守卫行）实现的，机�
 | 项 | 说明 |
 |---|---|
 | 其他 Harness | Codex（改写必须搭配 `allow`，审批按改写后的命令计算）；pi 和 OpenCode（可以直接注入环境变量，不必包裹命令）；Cursor 需要实测 |
+| runner 改由 CLI 承担 | [Discussion #7213](https://github.com/volcengine/OpenViking/discussions/7213) 提议新增 `ov privacy run`，做的事和 §7.2 的 runner 相同。它落地后，hook 可以把命令交给 `ov privacy run`，没有 hook 的 Harness 也能让模型直接调用它。前提是 CLI 满足 §7.2 的约束：遮罩换回引用而不是 `[REDACTED]`、取不到值不执行、跨块遮罩、和 Bash 工具用同一个 Shell。模型自己写 `ov privacy run` 时，hook 也要像对待 runner 一样返回 `ask`（附录 A.3） |
 | 编码变体 | 把整值的 Base64、base64url、hex、百分号编码也放进对照表 |
 | 铸造（mint） | 让 runner 把命令的输出登记成新密钥，只回显引用。例如 `gh auth token`、OAuth 换回来的 token。这样“产生密钥”也不经过模型 |
 | Skill 短格式引用 | `{{ov_privacy:skill:<name>:<field>}}` 映射成字段 URI 之后同样可以执行 |
