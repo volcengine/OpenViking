@@ -217,6 +217,10 @@ try {
   } else {
     if (lang !== null) saveLanguage(lang);
     process.exitCode = await main(args, lang);
+    // A finished setup must return the terminal even when a stray handle keeps
+    // the event loop alive (an interactive setup has done exactly that), or the
+    // installer never reaches the shell prompt it is supposed to return to.
+    if (args[0] === 'setup' && process.stdin.isTTY) process.exit(process.exitCode ?? 0);
   }
 } catch (error) {
   process.stderr.write(`${error.name === 'PromptAborted' ? t('已取消', 'Cancelled') : error.message}\n`);
