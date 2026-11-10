@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type {
   ViewerHandle,
   ViewerViewModeOption,
@@ -10,16 +10,23 @@ export function useFilePreviewViewState(identity: string) {
   const [previous, setPrevious] = useState(identity);
   const [viewMode, setViewMode] = useState<FilePreviewViewMode>('preview');
   const [viewModes, setViewModes] = useState<readonly string[]>([]);
-  const viewerHandle = useRef<ViewerHandle | null>(null);
+  // Each render identity owns its container: abandoned renders and late cleanup
+  // must never mutate the handle of the viewer that remains committed.
+  const viewerHandle = useMemo<{
+    identity: string;
+    current: ViewerHandle | null;
+  }>(() => ({ identity, current: null }), [identity]);
   if (previous !== identity) {
     setPrevious(identity);
     setViewMode('preview');
     setViewModes([]);
-    viewerHandle.current = null;
   }
-  const onHandleChange = useCallback((handle: ViewerHandle | null) => {
-    viewerHandle.current = handle;
-  }, []);
+  const onHandleChange = useCallback(
+    (handle: ViewerHandle | null) => {
+      viewerHandle.current = handle;
+    },
+    [viewerHandle],
+  );
   const onViewModesChange = useCallback(
     (modes: readonly ViewerViewModeOption[]) => {
       const next = modes.map((mode) => mode.value);
