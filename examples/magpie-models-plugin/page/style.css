@@ -21,6 +21,5 @@ button { padding: 8px 16px; cursor: pointer; }
 button:disabled { cursor: wait; }
 #message { font-size: 13px; margin: 0; flex: 1 1 200px; }
 .footnote { margin-bottom: 0; }
-.embedded { padding: 20px; }
-.embedded header, .embedded .connection, [hidden] { display: none !important; }
+[hidden] { display: none !important; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }

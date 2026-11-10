@@ -14,13 +14,15 @@ const root = await fs.mkdtemp(join(tmpdir(), "ov-models-magpie-"));
 const childHome = join(root, "home");
 assert.notEqual(resolve(childHome), resolve(homedir()));
 // Build from a small allowlist instead of inheriting credentials, config paths
-// or runtime overrides from the developer's actual Magpie / agent processes.
+// or implicit runtime overrides from the developer's actual agent processes.
+// An explicit MAGPIE_BUN can reuse the installed runtime without downloading.
 const env = {
   PATH: process.env.PATH, TMPDIR: process.env.TMPDIR || tmpdir(),
   HOME: childHome, USERPROFILE: childHome, XDG_CONFIG_HOME: join(childHome, ".config"),
   XDG_CACHE_HOME: join(childHome, ".cache"), XDG_DATA_HOME: join(childHome, ".local/share"),
   APPDATA: join(childHome, "AppData/Roaming"), LOCALAPPDATA: join(childHome, "AppData/Local"),
   MAGPIE_NO_ACCOUNTS: "1", DO_NOT_TRACK: "1",
+  ...(process.env.MAGPIE_BUN ? { MAGPIE_BUN: process.env.MAGPIE_BUN } : {}),
 };
 const initial = { vlm: { provider: "openai", model: "original", api_key: "fake-original" },
   embedding: { dense: { provider: "openai", model: "fixed-embedding", dimension: 1536 } },

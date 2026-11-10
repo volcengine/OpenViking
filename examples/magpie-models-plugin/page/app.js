@@ -3,7 +3,7 @@ const field = (id) => document.getElementById(id);
 await magpie.ready;
 const zh = magpie.theme?.lang?.startsWith("zh");
 const words = zh ? {
-  intro: "在 Agents → OpenViking 选择模型；支持新版 Magpie 时，这些设置也显示在 Agent 展开区域。",
+  intro: "在 Agents → OpenViking 选择模型，在本插件页面设置用途、参数和重启方式。",
   manage: "由 Magpie 管理 VLM", vlmHint: "使用上方 OpenViking 选中的模型。",
   botMode: "VikingBot 模型管理方式", preserveBot: "保留 VikingBot 现有配置", follow: "跟随 OpenViking VLM", independent: "独立选择模型",
   botModel: "模型 ID", botHint: "仅管理已启用的 Bot，不会自动开启。独立模式留空时使用上方选中的模型。",
@@ -14,7 +14,7 @@ const words = zh ? {
   saveFailed: "保存失败，请重试。", loadFailed: "无法读取设置，请重新展开或刷新后重试。", followError: "跟随 VLM 时，请先开启 VLM 管理。",
   scope: "未指定的参数沿用现有配置。输出预算会按模型已知上限调整；Thinking 需模型支持。Embedding、Rerank 等保持现有设置。保存成功不代表服务已生效。",
 } : {
-  intro: "Pick a model in Agents → OpenViking. Supported Magpie versions also show these settings in the expanded agent row.",
+  intro: "Pick a model in Agents → OpenViking; configure roles, parameters and activation on this plugin page.",
   manage: "Manage VLM with Magpie", vlmHint: "Uses the model selected for OpenViking above.",
   botMode: "VikingBot model management", preserveBot: "Keep VikingBot settings", follow: "Follow OpenViking VLM", independent: "Choose independently",
   botModel: "Model ID", botHint: "Only manages an enabled Bot; never enables it. Leave the independent model empty to use the Agent selection.",
@@ -26,7 +26,6 @@ const words = zh ? {
   scope: "Unspecified parameters keep existing settings. Output budgets follow known model limits; Thinking requires model support. Embedding and Rerank keep their settings. Saving does not confirm activation.",
 };
 for (const element of document.querySelectorAll("[data-i18n]")) element.textContent = words[element.dataset.i18n];
-document.body.classList.toggle("embedded", !!magpie.context?.agent);
 const button = field("saveSettings");
 function update() {
   const independent = field("botMode").value === "independent";
@@ -60,19 +59,21 @@ button.addEventListener("click", async () => {
     field("message").textContent = words.followError;
     return;
   }
-  button.disabled = true; button.textContent = words.saving;
+  // Freeze this plugin's own controls while its options bridge saves.
+  const controls = [...field("settings").querySelectorAll("input, select, button, fieldset")];
+  const disabled = controls.map((control) => control.disabled);
+  for (const control of controls) control.disabled = true;
+  button.textContent = words.saving;
   try {
     const next = { ...await magpie.options.get(), manageVlm: field("manageVlm").checked, botMode: field("botMode").value, restartOnChange: field("restartOnChange").checked };
     for (const key of ["vlmParameters", "botParameters"]) next[key] = readParameters(field(key), next[key]);
     for (const key of ["botModel", "serverUrl", "rootApiKeyFile"]) {
       const value = field(key).value.trim();
-      // Connection fields are not shown in the embedded panel.
-      if (document.body.classList.contains("embedded") && key !== "botModel") continue;
       if (value && (key !== "botModel" || next.botMode === "independent")) next[key] = value;
       else delete next[key];
     }
     await magpie.options.set(next);
     field("message").textContent = next.restartOnChange ? words.savedRestart : words.saved;
   } catch { field("message").textContent = words.saveFailed; }
-  finally { button.disabled = false; button.textContent = words.save; }
+  finally { controls.forEach((control, i) => { control.disabled = disabled[i]; }); button.textContent = words.save; }
 });

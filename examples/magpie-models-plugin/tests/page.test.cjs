@@ -5,8 +5,8 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { chromium, webkit } = require("playwright");
 const root = path.resolve(__dirname, "../page");
-const bridge = `let serial=0;const pending=new Map();addEventListener('message',e=>{const p=pending.get(e.data.id);if(p){pending.delete(e.data.id);e.data.error?p.reject(new Error(e.data.error)):p.resolve(e.data.value)}});const call=(method,options)=>new Promise((resolve,reject)=>{const id=++serial;pending.set(id,{resolve,reject});parent.postMessage({id,method,options},'*')});window.magpie={ready:Promise.resolve(),context:{agent:{id:'openviking-models'}},theme:{lang:new URLSearchParams(location.search).get('lang')},options:{get:()=>call('get'),set:options=>call('set',options)}};`;
-const parent = `<!doctype html><title>OpenViking settings test</title><style>body{margin:0}iframe{width:100%;height:1800px;border:0}</style><iframe sandbox="allow-scripts" src="/panel/index.html?lang=LANG"></iframe><script>let options=INITIAL;addEventListener('message',e=>{if(e.source!==document.querySelector('iframe').contentWindow)return;const {id,method}=e.data;if(method==='set')options=e.data.options;e.source.postMessage({id,value:options},'*')});</script>`;
+const bridge = `let serial=0;const pending=new Map();addEventListener('message',e=>{const p=pending.get(e.data.id);if(p){pending.delete(e.data.id);e.data.error?p.reject(new Error(e.data.error)):p.resolve(e.data.value)}});const call=(method,options)=>new Promise((resolve,reject)=>{const id=++serial;pending.set(id,{resolve,reject});parent.postMessage({id,method,options},'*')});window.magpie={ready:Promise.resolve(),context:{},theme:{lang:new URLSearchParams(location.search).get('lang')},options:{get:()=>call('get'),set:options=>call('set',options)}};`;
+const parent = `<!doctype html><title>OpenViking settings test</title><style>body{margin:0}iframe{width:100%;height:1800px;border:0}</style><iframe sandbox="allow-scripts" src="/panel/index.html?lang=LANG"></iframe><script>let options=INITIAL;addEventListener('message',e=>{if(e.source!==document.querySelector('iframe').contentWindow)return;const {id,method}=e.data;if(method==='set'&&window.holdSave){window.pendingSave={source:e.source,id,options:e.data.options};return}if(method==='set')options=e.data.options;e.source.postMessage({id,value:options},'*')});</script>`;
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
   test(`${engine}: VLM and Bot forms save independently in a sandbox`, async (t) => {
     const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || "chromium" }));
@@ -35,7 +35,18 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await f.locator("#vlmParameters-max_tokens").fill("16384");
       await f.locator("#vlmParameters-temperature-mode").selectOption("null");
       await f.locator("#botParameters-thinking-mode").selectOption("false");
+      await page.evaluate(() => { window.holdSave = true; });
       await f.locator("#saveSettings").click();
+      await page.waitForFunction(() => !!window.pendingSave, null, { polling: 50 });
+      assert.ok(await f.locator("#vlmParameters-max_concurrent").isDisabled());
+      assert.ok(await f.locator("#botMode").isDisabled());
+      await page.evaluate(() => {
+        window.holdSave = false;
+        const pending = window.pendingSave; options = pending.options;
+        pending.source.postMessage({ id: pending.id, value: options }, "*");
+        window.pendingSave = null;
+      });
+      await f.locator("#saveSettings:enabled").waitFor();
       await f.locator("#message").filter({ hasText: lang === "zh" ? "设置已保存" : "Settings saved" }).waitFor();
       const saved = await page.evaluate(() => options);
       assert.deepEqual(saved.vlmParameters, { max_concurrent: 4, max_tokens: 16384, temperature: null, thinking: false, timeout: 600 });

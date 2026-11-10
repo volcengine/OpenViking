@@ -72,9 +72,9 @@ magpie plugin add /absolute/path/to/OpenViking/examples/magpie-models-plugin
 
 ### 输出预算和生成参数
 
-支持 Agent 面板的 Magpie 在 **Agents → OpenViking → 设置** 中使用 Magpie 原生设置行、菜单和开关，提供 VLM 和 VikingBot 两组表单，可分别配置最大输出、温度、思考模式和超时（秒）。选择“沿用现有配置”不接管该参数；“模型默认”对应空值。旧版 Magpie 仍可从侧栏 OpenViking 模型页面配置。
+在 **Agents → OpenViking** 选择模型，在侧栏 **OpenViking 模型** 插件页面配置 VLM、VikingBot、生成参数和并发。选择“沿用现有配置”不接管该参数；“模型默认”对应空值。
 
-原生 Agent 设置入口目前依赖 [Magpie 开发分支](https://github.com/yufeng201/magpie/tree/feat/agent-settings-panels)。已发布的 Magpie 继续使用侧栏表单。
+插件只使用已发布的 Magpie 扩展接口，不修改或替换 Magpie 应用。原版 Agent 展开区域没有向外部插件开放自定义设置控件，参数设置保留在插件自己的页面中。
 
 Options / `adapter.json` 中对应 `vlmParameters` 与 `botParameters`，使用统一的 snake_case 字段：
 
@@ -141,6 +141,8 @@ npm test
 npm pack --dry-run
 MAGPIE_BIN=/path/to/magpie node tests/magpie-smoke.mjs
 ```
+
+可通过 `MAGPIE_BUN` 指定已有的 Bun 可执行文件，离线验证原版 Magpie。
 
 宿主测试使用临时 HOME/XDG 目录、模拟 OV 与模型供应商，不读取真实账号、不修改实际配置，也不发起模型推理。`tests/ov-contract.py` 可在仓库 Python 环境中读取标准输入的临时配置，检查真实 OV 与 Bot 配置解析。
 
