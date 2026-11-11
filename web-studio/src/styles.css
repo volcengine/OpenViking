@@ -1153,3 +1153,7 @@ button.users-space-trigger:focus-visible {
 [data-workbench='true'] .filesystem-preview [data-file-toolbar] button {
   height: 28px;
 }
+
+.studio-session-composer .ov-viking-bot__composer-tools {
+  margin-inline-start: auto;
+}

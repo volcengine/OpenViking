@@ -5,6 +5,8 @@ import '@openviking/react/components/viking-bot/style.css'
 import { useCallback, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { Button } from '#/shared/ui/button'
+
 interface ComposerProps {
   onSend: (message: string) => void | boolean | Promise<void | boolean>
   onCancel: () => void
@@ -20,13 +22,17 @@ export function Composer({
 }: ComposerProps) {
   const { t } = useTranslation('sessions')
   const [value, setValue] = useState('')
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  // Guard the request without toggling Ark's editor editability, which
+  // emits a content update and can restore the previous draft.
   const submittingRef = useRef(false)
+  // An empty draft uses the shared stop button. With a follow-up draft,
+  // keep both stop and send available.
+  const showStopAsSubmit = isStreaming && !value.trim()
+  const showStopBesideSend = isStreaming && !showStopAsSubmit
   const handleSend = useCallback(async () => {
     const trimmed = value.trim()
     if (!trimmed || submittingRef.current) return
     submittingRef.current = true
-    setIsSubmitting(true)
     try {
       const accepted = await onSend(trimmed)
       if (accepted === false) return
@@ -36,7 +42,6 @@ export function Composer({
       // The caller owns error reporting; keep the input available for retry.
     } finally {
       submittingRef.current = false
-      setIsSubmitting(false)
     }
   }, [value, onSend])
 
@@ -46,16 +51,20 @@ export function Composer({
         locale={studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
         value={value}
         variant={variant}
-        disabled={isSubmitting}
+        isSending={showStopAsSubmit}
+        className="studio-session-composer"
         actions={
-          isStreaming ? (
-            <button
+          showStopBesideSend ? (
+            <Button
               type="button"
+              size="icon-sm"
+              variant="secondary"
+              className="rounded-full"
               aria-label={t('chat.cancel')}
-              onClick={onCancel}
+              onClick={() => onCancel()}
             >
               <SquareIcon className="size-4" />
-            </button>
+            </Button>
           ) : undefined
         }
         onValueChange={setValue}
