@@ -765,14 +765,6 @@ impl HttpClient {
         self.get("/api/v1/fs/attrs", &params).await
     }
 
-    pub async fn attrs_batch(&self, uris: &[String]) -> Result<serde_json::Value> {
-        self.post(
-            "/api/v1/fs/attrs/batch",
-            &serde_json::json!({"uris": uris}),
-        )
-        .await
-    }
-
     // ============ Search Methods ============
 
     pub async fn find(

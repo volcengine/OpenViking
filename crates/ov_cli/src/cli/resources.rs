@@ -13,12 +13,6 @@ pub(crate) enum AttrsCommands {
         #[arg(value_name = "key")]
         key: Option<String>,
     },
-    /// Get logical extended attributes for multiple URIs
-    Batch {
-        /// Viking URIs to get attributes for
-        #[arg(value_name = "uri", required = true, num_args = 1..)]
-        uris: Vec<String>,
-    },
     /// Update explicit retrieval tags metadata for a file or directory
     SetTags {
         /// Viking URI

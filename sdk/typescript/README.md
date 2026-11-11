@@ -36,13 +36,10 @@ console.log(task.task_id);
 
 Query `client.getTask(task.task_id as string)` for import status and search the imported content after the task reaches `completed`.
 
-Batch attribute and tag operations use dedicated POST endpoints:
+Batch tag operations use a dedicated POST endpoint:
 
 ```ts
-const attrs = await client.attrsBatch([
-  "viking://resources/docs/a.md",
-  "viking://resources/docs/b.md",
-]);
+const attrs = await client.attrs("viking://resources/docs/a.md");
 const updated = await client.setTagsBatch(
   ["viking://resources/docs/a.md", "viking://resources/docs/b.md"],
   ["used_count+=1"],

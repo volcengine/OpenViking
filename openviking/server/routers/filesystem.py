@@ -5,7 +5,7 @@
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 
 from openviking.core.namespace import canonical_user_root
 from openviking.core.path_variables import resolve_path_variables
@@ -21,7 +21,7 @@ from openviking.server.routers.content import set_tags as content_set_tags
 from openviking.storage.acl import AclSpec
 from openviking.storage.vector_ids import is_vector_record_id
 from openviking.ttl.wiring import attach_expires_at
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, OpenVikingError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 router = APIRouter(prefix="/api/v1/fs", tags=["filesystem"])
 
@@ -196,14 +196,6 @@ async def stat(
         raise
 
 
-class GetAttrsRequest(BaseModel):
-    """Batch targets for reading logical extended attributes."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    uris: list[str] = Field(min_length=1, max_length=50)
-
-
 @router.get("/attrs")
 async def attrs(
     uri: str = Query(..., description="Viking URI"),
@@ -213,11 +205,7 @@ async def attrs(
     service = get_service()
     resolved = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        result = await service.fs.attrs_batch([resolved], ctx=_ctx)
-        if result["failed"]:
-            error = result["failed"][0]["error"]
-            raise OpenVikingError(error["message"], code=error["code"])
-        result = result["items"][0]
+        result = await service.fs.attrs(resolved, ctx=_ctx)
         return Response(status="ok", result=result)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -231,16 +219,6 @@ async def attrs(
         if mapped is not None:
             raise mapped from exc
         raise
-
-
-@router.post("/attrs/batch")
-async def attrs_batch(
-    request: GetAttrsRequest = Body(...),
-    _ctx: RequestContext = Depends(get_request_context),
-):
-    """Get logical extended attributes for a batch of URIs."""
-    result = await get_service().fs.attrs_batch(request.uris, ctx=_ctx)
-    return Response(status="ok", result=result)
 
 
 @router.post("/attrs/set_tags")

@@ -1962,39 +1962,6 @@ class FSService:
             result["attrs"]["memory"] = self._clean_memory_attrs(await self.read(uri, ctx=ctx))
         return result
 
-    async def attrs_batch(self, uris: list[str], ctx: RequestContext) -> Dict[str, Any]:
-        """规范化、去重并限制并发，逐项复用 attrs() 并汇总读取结果。"""
-        if not 1 <= len(uris) <= 50:
-            raise InvalidArgumentError("uris must contain between 1 and 50 items")
-        targets: dict[str, Exception | None] = {}
-        for uri in uris:
-            try:
-                uri = validate_request_viking_uri(resolve_path_variables(uri), ctx)
-                targets.setdefault(uri, None)
-            except Exception as exc:
-                targets.setdefault(uri, exc)
-
-        async def read(uri: str) -> tuple[bool, Dict[str, Any]]:
-            try:
-                if targets[uri] is not None:
-                    raise targets[uri]
-                return True, await self.attrs(uri, ctx=ctx)
-            except Exception as exc:
-                error = map_exception(exc, resource=uri)
-                if error is None:
-                    logger.exception("Batch attribute read failed for %s", uri)
-                    error = OpenVikingError("Attribute read failed", code="INTERNAL")
-                return False, {
-                    "uri": uri,
-                    "error": {"code": error.code, "message": error.message},
-                }
-
-        results = await bounded_map(targets, read, concurrency=8)
-        return {
-            "items": [result for success, result in results if success],
-            "failed": [result for success, result in results if not success],
-        }
-
     @staticmethod
     def _clean_memory_attrs(raw: str) -> Dict[str, Any]:
         from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils

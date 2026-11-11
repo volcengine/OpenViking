@@ -563,20 +563,15 @@ async def test_usage_reset_http_round_trip_for_file_and_directory(client, servic
 
     async def verify(count, last_used_at):
         before_read = await service.vikingdb_manager.get_strict(record_ids, ctx=ctx)
-        response = await client.post("/api/v1/fs/attrs/batch", json={"uris": targets})
-        assert response.status_code == 200, response.text
-        result = response.json()["result"]
-        assert result["failed"] == []
-        assert [item["uri"] for item in result["items"]] == targets
-        for item in result["items"]:
+        for uri in targets:
+            response = await client.get("/api/v1/fs/attrs", params={"uri": uri})
+            assert response.status_code == 200, response.text
+            item = response.json()["result"]
             tags = item["attrs"]["tags"]
             assert "team=search" in tags
             assert f"used_count={count}" in tags
             times = [tag for tag in tags if tag.startswith("last_used_at=")]
             assert times == [f"last_used_at={last_used_at}"]
-            single = await client.get("/api/v1/fs/attrs", params={"uri": item["uri"]})
-            assert single.status_code == 200, single.text
-            assert single.json()["result"] == item
         after_read = await service.vikingdb_manager.get_strict(record_ids, ctx=ctx)
         assert after_read == before_read
         for record, baseline in zip(after_read, original, strict=True):

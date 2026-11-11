@@ -174,18 +174,6 @@ func (c *Client) Attrs(ctx context.Context, uri string) (map[string]any, error) 
 	return result, err
 }
 
-// AttrsBatch returns logical attributes for multiple URIs.
-func (c *Client) AttrsBatch(ctx context.Context, uris []string) (map[string]any, error) {
-	normalized := make([]string, len(uris))
-	for index, uri := range uris {
-		normalized[index] = NormalizeURI(uri)
-	}
-	payload := map[string]any{"uris": normalized}
-	var result map[string]any
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/fs/attrs/batch", nil, payload, &result)
-	return result, err
-}
-
 // Mkdir creates a directory.
 func (c *Client) Mkdir(ctx context.Context, uri string, description string, acl ...ACLSpec) error {
 	payload := map[string]any{"uri": NormalizeURI(uri)}

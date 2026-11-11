@@ -365,7 +365,6 @@ JSON 输出 - 错误：
 | GET | `/api/v1/fs/tree` | 获取目录树 |
 | GET | `/api/v1/fs/stat` | 获取资源状态 |
 | GET | `/api/v1/fs/attrs` | 获取逻辑扩展属性 |
-| POST | `/api/v1/fs/attrs/batch` | 批量获取 1～50 个 URI 的逻辑扩展属性 |
 | POST | `/api/v1/fs/attrs/set_tags` | 设置检索标签（兼容别名） |
 | POST | `/api/v1/fs/mkdir` | 创建目录 |
 | DELETE | `/api/v1/fs` | 删除资源 |

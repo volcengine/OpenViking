@@ -2044,11 +2044,6 @@ pub async fn handle_attrs(uri: String, key: Option<String>, ctx: CliContext) -> 
     .await
 }
 
-pub async fn handle_attrs_batch(uris: Vec<String>, ctx: CliContext) -> Result<()> {
-    let client = ctx.get_client();
-    commands::filesystem::attrs_batch(&client, &uris, ctx.output_format, ctx.compact).await
-}
-
 pub async fn handle_acl(action: crate::cli::AclCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     match action {

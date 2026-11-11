@@ -555,7 +555,6 @@ pub(super) async fn dispatch(
         Commands::Stat { uri } => handlers::handle_stat(uri, ctx).await,
         Commands::Attrs { action } => match action {
             AttrsCommands::Get { uri, key } => handlers::handle_attrs(uri, key, ctx).await,
-            AttrsCommands::Batch { uris } => handlers::handle_attrs_batch(uris, ctx).await,
             AttrsCommands::SetTags {
                 uri,
                 tags,

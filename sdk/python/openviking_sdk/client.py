@@ -1519,14 +1519,6 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
-    async def attrs_batch(self, uris: List[str]) -> Dict[str, Any]:
-        response = await self._request(
-            "POST",
-            "/api/v1/fs/attrs/batch",
-            json={"uris": [VikingURI.normalize(uri) for uri in uris]},
-        )
-        return self._handle_response(response)
-
     async def mkdir(
         self, uri: str, description: Optional[str] = None, *, acl: Optional[Dict[str, Any]] = None
     ) -> None:
@@ -3272,9 +3264,6 @@ class SyncHTTPClient:
 
     def attrs(self, uri: str) -> Dict[str, Any]:
         return run_async(self._async_client.attrs(uri))
-
-    def attrs_batch(self, uris: List[str]) -> Dict[str, Any]:
-        return run_async(self._async_client.attrs_batch(uris))
 
     def mkdir(
         self, uri: str, description: Optional[str] = None, *, acl: Optional[Dict[str, Any]] = None

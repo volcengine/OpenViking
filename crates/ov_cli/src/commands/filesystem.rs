@@ -1014,17 +1014,6 @@ pub async fn attrs(
     Ok(())
 }
 
-pub async fn attrs_batch(
-    client: &HttpClient,
-    uris: &[String],
-    output_format: OutputFormat,
-    compact: bool,
-) -> Result<()> {
-    let result = client.attrs_batch(uris).await?;
-    output_success(&result, output_format, compact);
-    Ok(())
-}
-
 fn select_attr_key<'a>(result: &'a Value, key: &str) -> Option<&'a Value> {
     let mut current = result.get("attrs")?;
     for part in key.strip_prefix("attrs.").unwrap_or(key).split('.') {

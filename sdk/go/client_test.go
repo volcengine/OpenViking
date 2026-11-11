@@ -2299,35 +2299,24 @@ func TestSetTagsDefaultsModeAndOmitsTelemetry(t *testing.T) {
 	}
 }
 
-func TestBatchAttrsAndSetTagsUseDedicatedEndpoints(t *testing.T) {
-	calls := 0
+func TestBatchSetTagsUsesDedicatedEndpoint(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
 		body := readJSONBody(t, r)
 		uris, ok := body["uris"].([]any)
 		if !ok || len(uris) != 2 || uris[0] != "viking://resources/a.md" || uris[1] != "viking://resources/b.md" {
 			t.Fatalf("uris = %#v", body["uris"])
 		}
-		if calls == 1 {
-			if r.URL.Path != "/api/v1/fs/attrs/batch" {
-				t.Fatalf("attrs path = %s", r.URL.Path)
-			}
-		} else {
-			if r.URL.Path != "/api/v1/content/set_tags_batch" {
-				t.Fatalf("set tags path = %s", r.URL.Path)
-			}
-			if body["mode"] != "append" {
-				t.Fatalf("mode = %#v", body["mode"])
-			}
+		if r.URL.Path != "/api/v1/content/set_tags_batch" {
+			t.Fatalf("set tags path = %s", r.URL.Path)
+		}
+		if body["mode"] != "append" {
+			t.Fatalf("mode = %#v", body["mode"])
 		}
 		writeOK(t, w, map[string]any{"items": []any{}, "failed": []any{}})
 	}))
 	defer closeServer()
 
 	uris := []string{"resources/a.md", "viking://resources/b.md"}
-	if _, err := client.AttrsBatch(context.Background(), uris); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := client.SetTagsBatch(
 		context.Background(),
 		uris,

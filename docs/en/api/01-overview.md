@@ -370,7 +370,6 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/fs/tree` | Get a directory tree |
 | GET | `/api/v1/fs/stat` | Get resource status |
 | GET | `/api/v1/fs/attrs` | Get logical extended attributes |
-| POST | `/api/v1/fs/attrs/batch` | Get logical extended attributes for 1-50 URIs |
 | POST | `/api/v1/fs/attrs/set_tags` | Set retrieval tags (compatibility alias) |
 | POST | `/api/v1/fs/mkdir` | Create a directory |
 | DELETE | `/api/v1/fs` | Delete a resource |

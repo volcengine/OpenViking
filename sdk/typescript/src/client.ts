@@ -737,12 +737,6 @@ export class OpenVikingClient {
       query: { uri: normalizeURI(uri) },
     });
   }
-  /** Return logical attributes for multiple URIs. */
-  attrsBatch(uris: string[]): Promise<JsonObject> {
-    return this.request("POST", "/api/v1/fs/attrs/batch", {
-      body: { uris: uris.map(normalizeURI) },
-    });
-  }
   /** Create a directory. */
   mkdir(uri: string, description?: string, acl?: AclSpec): Promise<void> {
     return this.request("POST", "/api/v1/fs/mkdir", {
