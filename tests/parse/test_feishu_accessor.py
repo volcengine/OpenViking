@@ -8,7 +8,7 @@ import sys
 from contextlib import nullcontext
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -18,7 +18,7 @@ from openviking.parse.accessors.feishu_accessor import (
     _FeishuWikiTreeNode,
 )
 from openviking.parse.accessors.feishu_session import FeishuApiSession
-from openviking_cli.exceptions import OpenVikingError
+from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
 from openviking_cli.utils.config.parser_config import FeishuConfig
 
 
@@ -276,7 +276,11 @@ def _install_fake_lark_modules(monkeypatch):
     monkeypatch.setattr(
         FeishuAccessor,
         "_stream_download",
-        staticmethod(lambda config, request, option, max_bytes: _FakeTransport.execute(config, request, option)),
+        staticmethod(
+            lambda config, request, option, max_bytes: _FakeTransport.execute(
+                config, request, option
+            )
+        ),
     )
 
 
@@ -705,28 +709,40 @@ def test_download_image_advertises_user_token_when_provided(monkeypatch):
     assert args[1].user_access_token == "u-test"
 
 
-def test_access_downloads_drive_file_with_user_token(monkeypatch):
-    _install_fake_lark_modules(monkeypatch)
-    _FakeTransport.response = _FakeRawResponse(
-        b"%PDF-1.7",
-        headers={"content-type": "application/pdf"},
-    )
+def test_access_wiki_file_preserves_format_and_bounds_download(monkeypatch):
+    response = MagicMock(status_code=200, headers={"content-type": "application/pdf"})
+    response.__enter__.return_value = response
+    response.iter_content.return_value = iter([b"%PDF", b"-1.7"])
+    get = MagicMock(return_value=response)
+    monkeypatch.setattr("requests.get", get)
     accessor = FeishuAccessor()
-    _use_fake_client(monkeypatch, accessor, SimpleNamespace(_config=SimpleNamespace()))
-    url = "https://bytedance.larkoffice.com/file/file_token"
+    monkeypatch.setattr(
+        accessor, "_resolve_wiki_node", lambda *_args: ("file", "file_token", "产品方案 v1.2")
+    )
+    url = "https://bytedance.larkoffice.com/wiki/wiki_token"
 
     assert accessor.can_handle(url)
     resource = asyncio.run(accessor.access(url, feishu_access_token="u-test"))
     try:
         assert resource.path.read_bytes() == b"%PDF-1.7"
-        assert resource.path.name == "file_token.pdf"
+        assert resource.path.name == "产品方案 v1.2.pdf"
+        assert resource.original_source == url
+        assert resource.meta["feishu_content_kind"] == "file"
         assert resource.meta["feishu_doc_type"] == "file"
         assert resource.meta["feishu_token"] == "file_token"
-        _, raw_request, option = _FakeTransport.calls[-1]
-        assert raw_request.uri == "/open-apis/drive/v1/files/file_token/download"
-        assert option.user_access_token == "u-test"
+        assert get.call_args.args[0].endswith("/open-apis/drive/v1/files/file_token/download")
+        assert get.call_args.kwargs["headers"]["Authorization"] == "Bearer u-test"
+        response.__exit__.assert_called_once()
     finally:
         resource.cleanup()
+
+    chunks = iter([b"%PDF", b"-1.7", b"must-not-read"])
+    response.iter_content.return_value = chunks
+    response.__exit__.reset_mock()
+    with pytest.raises(InvalidArgumentError, match="byte limit"):
+        asyncio.run(accessor.access(url, feishu_access_token="u-test", feishu_max_download_bytes=6))
+    assert next(chunks) == b"must-not-read"
+    response.__exit__.assert_called_once()
 
 
 def test_access_downloads_json_drive_file_as_raw_bytes(monkeypatch):
@@ -974,7 +990,9 @@ def test_access_wiki_without_recursive_keeps_single_document_behavior(monkeypatc
     from openviking.parse.accessors.feishu_accessor import FeishuDocument
 
     accessor = FeishuAccessor()
-    monkeypatch.setattr(accessor, "_resolve_wiki_node", lambda *_args: ("docx", "doc_token", "Single Wiki"))
+    monkeypatch.setattr(
+        accessor, "_resolve_wiki_node", lambda *_args: ("docx", "doc_token", "Single Wiki")
+    )
     recursive_root = MagicMock()
 
     async def fake_fetch_document(*_args, **_kwargs):
@@ -1004,39 +1022,23 @@ def test_access_wiki_without_recursive_keeps_single_document_behavior(monkeypatc
         resource.cleanup()
 
 
-def test_access_wiki_keeps_existing_single_document_behavior(monkeypatch):
-    from openviking.parse.accessors.feishu_accessor import FeishuDocument
-
+def test_cancelled_folder_export_cleans_download_directory(monkeypatch, tmp_path):
     accessor = FeishuAccessor()
+    work = tmp_path / "download"
+    work.mkdir()
+    monkeypatch.setattr(
+        "openviking.parse.accessors.feishu_accessor.tempfile.mkdtemp", lambda **_kwargs: str(work)
+    )
+    monkeypatch.setattr(accessor, "_drive_folder_display_name", lambda *a, **k: "Folder")
     monkeypatch.setattr(
         accessor,
-        "_resolve_wiki_node",
-        lambda *_args, **_kwargs: ("docx", "doc", "Wiki"),
+        "_list_drive_folder_children",
+        lambda *a, **k: [SimpleNamespace(type="slides", token="slide", name="Deck")],
     )
-
-    async def fake_fetch_document(*_args, **_kwargs):
-        return FeishuDocument(
-            doc_type="docx",
-            token="doc_token",
-            markdown_content="# single",
-            title="Single Wiki",
-            meta={"wiki_resolved": True},
-        )
-
-    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
-    monkeypatch.setattr(
-        accessor,
-        "_resolve_image_refs",
-        lambda markdown, **_kwargs: (markdown, {}),
-    )
-
-    resource = asyncio.run(accessor.access("https://example.feishu.cn/wiki/wiki_token"))
-    try:
-        assert resource.path.is_file()
-        assert resource.path.read_text(encoding="utf-8") == "# single"
-        assert resource.meta["original_filename"] == "Single Wiki"
-    finally:
-        resource.cleanup()
+    monkeypatch.setattr(accessor, "_export_slides", AsyncMock(side_effect=asyncio.CancelledError))
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(accessor.access("https://example.feishu.cn/drive/folder/root"))
+    assert not work.exists()
 
 
 def test_access_offloads_synchronous_download_to_thread(monkeypatch):
