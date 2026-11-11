@@ -322,3 +322,20 @@ class TestSharedConnectorTargets:
         )
 
         assert (await watch_manager.get_task(moving.task_id)).to_uri == "viking://resources/target"
+
+
+@pytest.mark.parametrize("status", ["completed", "partial", "failed"])
+def test_partial_round_does_not_advance_source_checkpoint(status):
+    result = WatchManager._result(
+        status,
+        {
+            "import_complete": False,
+            "source_checkpoint": {"head_sha": "same"},
+            "meta": {"resolved_head_sha": "same"},
+        },
+        None,
+        connector=False,
+        instruction="",
+    )
+    assert result.status == ("partial" if status == "completed" else status)
+    assert result.source_checkpoint is None

@@ -188,7 +188,7 @@ Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源�
 | instruction | string | 否 | "" | 语义提取的处理指令（实验特性） |
 | wait | bool | 否 | False | 是否等待语义处理和向量化完成才返回 |
 | timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
-| strict | bool | 否 | False | 是否使用严格模式 |
+| strict | bool | 否 | False | true 严格扫描/解析并要求完整目录提交；false 允许原生导入安全提交成功部分 |
 | ignore_dirs | string | 否 | None | 要忽略的目录名（逗号分隔） |
 | include | string | 否 | None | 包含的文件模式（glob） |
 | exclude | string | 否 | None | 排除的文件模式（glob） |
@@ -246,6 +246,43 @@ Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源�
 - 如果要直接创建或更新纯文本内容，请使用 [content/write](12-content.md#write)，不要使用 `add_resource`。资源导入和内容写入后都会自动刷新语义与 embedding。
 
 #### 3. 使用示例
+
+##### 非严格目录导入
+
+`strict=false`（默认）在部分选中文档读取或解析失败时继续处理其他文档，并允许安全提交
+成功部分。`strict=true` 保留严格扫描/解析检查，拒绝残缺目录提交。不新增导入策略参数。
+主动过滤和不支持格式沿用原有扫描语义。
+
+部分结果返回 `status="partial"`、`import_complete=false` 和 `failed_files`。
+异步受理不等于导入完成，需要查询 Task 结果。Watch 将本轮记录为 `partial`，
+不推进本轮源 checkpoint，后续刷新可继续补齐。
+
+不完整快照不能证明缺项已在源端删除：未观察到的旧内容、未知子树及其索引保留。
+目录摘要复用保留的兄弟节点；缺少必要的可复用摘要时在内容写入前失败，避免生成
+误导性的残缺摘要。会清除未知子项的文件/目录类型替换也会被拒绝。
+后续完整刷新恢复正常源删除推断。
+
+非严格模式不是认证绕过：根节点不可访问、认证失败或没有成功文档仍整体失败。
+源明确返回 `PERMISSION_DENIED` 时，由于标题及拆分可能改变产物路径，先保守隔离
+整个旧目标快照到用户临时空间，移除其搜索记录并失效祖先派生摘要，再导入可读取内容。
+隔离仍校验权限并传播存储失败，不承诺跨存储原子事务或回滚。临时读取/解析失败不触发
+隔离；源列表静默隐藏的条目，没有明确证据时不能认定为撤权。
+委托 Connector 沿用原外部处理行为，本次修复针对原生导入链路。
+
+这是对旧提交层行为的修正：旧实现即使 `strict=false` 也拒绝含失败项的目录。
+需要完整导入的调用方须显式使用 `strict=true`。
+
+```python
+await client.add_resource(
+    "https://example.feishu.cn/wiki/your_node",
+    to="viking://resources/docs",
+    options={"strict": False, "args": {"feishu_recursive": True},
+             "watch_interval": 60},
+)
+```
+
+CLI 默认非严格，`--strict` 要求完整导入；REST 使用既有顶层 `strict` 字段。
+MCP 原生导入使用既有非严格默认行为。
 
 以下示例使用默认异步模式，不设置等待参数。提交后保存 `task_id`，通过 [任务 API](17-tasks.md) 查询状态；只有任务为 `completed` 时，才读取摘要或检索本次导入的内容。
 

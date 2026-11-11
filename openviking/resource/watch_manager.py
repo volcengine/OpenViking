@@ -595,7 +595,13 @@ class WatchManager:
             if actual_run.run_id is None:
                 if isinstance(result, WatchRunResult):
                     outcome = result
-                elif (result or {}).get("status") in {"completed", "failed", "error", "cancelled"}:
+                elif (result or {}).get("status") in {
+                    "completed",
+                    "partial",
+                    "failed",
+                    "error",
+                    "cancelled",
+                }:
                     outcome = self.result(run.task, result["status"], result, None)
                 else:
                     raise RuntimeError("Resource submission did not create a Task")
@@ -788,6 +794,8 @@ class WatchManager:
         instruction: str,
     ) -> WatchRunResult:
         result = result or {}
+        if status == "completed" and result.get("import_complete") is False:
+            status = "partial"
         states = result.get("connector_states")
         has_states = connector and status == "completed" and "connector_states" in result
         if has_states and not isinstance(states, dict):
@@ -797,7 +805,11 @@ class WatchManager:
             error = "; ".join(str(item) for item in errors) if errors else "watch ingestion failed"
         # A successful source import may later fail in semantic/embedding Work.
         # Its explicit checkpoint still describes the revision actually imported.
-        checkpoint = result.get("source_checkpoint") if status != "cancelled" else None
+        checkpoint = (
+            result.get("source_checkpoint")
+            if status != "cancelled" and result.get("import_complete") is not False
+            else None
+        )
         if status == "completed":
             from openviking.service.resource_service import ResourceService
 

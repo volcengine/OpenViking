@@ -2190,15 +2190,20 @@ class ResourceService:
             )
             source_plan = None
             if not resolve_watch_target_now:
-                source_plan = await self._prepare_standard_source_plan(
-                    path=path,
-                    ctx=ctx,
-                    mode=mode,
-                    allow_local_path_resolution=allow_local_path_resolution,
-                    processor_kwargs=kwargs,
-                    watch_auth_state=normalized_args.watch_auth_state,
-                    shared_source=shared_source,
-                )
+                try:
+                    source_plan = await self._prepare_standard_source_plan(
+                        path=path,
+                        ctx=ctx,
+                        mode=mode,
+                        allow_local_path_resolution=allow_local_path_resolution,
+                        processor_kwargs=kwargs,
+                        watch_auth_state=normalized_args.watch_auth_state,
+                        shared_source=shared_source,
+                    )
+                except OpenVikingError as exc:
+                    if not kwargs.get("strict", False) and to and exc.code == "PERMISSION_DENIED":
+                        await self._resource_processor._quarantine_revoked_snapshot(to, ctx)
+                    raise
         if source_plan is not None:
             result = await self._enqueue_source_plan(
                 source_plan,

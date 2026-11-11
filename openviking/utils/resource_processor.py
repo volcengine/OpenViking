@@ -427,6 +427,7 @@ class ResourceProcessor:
         is_code_repo: bool,
         ingest_options: IngestOptions,
         source_metadata: Optional[Dict[str, str]],
+        source_complete: bool = True,
     ) -> Any:
         """Resolve and commit one artifact through the canonical update plan."""
         from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
@@ -493,6 +494,8 @@ class ResourceProcessor:
                     artifact_inventory=artifact_inventory,
                     root_is_file=root_is_file,
                 )
+                if not source_complete:
+                    rnfv = replace(rnfv, new=replace(rnfv.new, complete=False, allow_partial=True))
             from collections import Counter
 
             n_files, n_dirs, _ = count_tree_entry_kinds(rnfv.new.entries)
@@ -830,6 +833,8 @@ class ResourceProcessor:
         target_validator rejects the resolved destination before reservation or
         source commit; its errors propagate after temporary artifact cleanup.
         """
+        strict = bool(kwargs.get("strict", False))
+        parse_failures = []
         result = {
             "status": "success",
             "errors": [],
@@ -885,9 +890,7 @@ class ResourceProcessor:
                 result["source_path"] = parse_result.source_path or path
                 result["meta"] = parse_result.meta
 
-                # Only abort when no temp content was produced at all.
-                # For directory imports partial success (some files failed) is
-                # normal - finalization should still proceed.
+                # Non-strict imports may commit readable content without inferring deletions.
                 if not parse_result.temp_dir_path:
                     result["status"] = "error"
                     result["errors"].extend(
@@ -905,7 +908,16 @@ class ResourceProcessor:
                         "failed_files",
                     )
                 )
+                parse_failures = self._directory_parse_failures(parse_meta)
                 if is_directory_aggregate and parse_meta.get("file_count") == 0:
+                    if (
+                        not strict
+                        and to
+                        and any(
+                            item.get("error_code") == "PERMISSION_DENIED" for item in parse_failures
+                        )
+                    ):
+                        await self._quarantine_revoked_snapshot(to, ctx, preacquired_lock)
                     result["status"] = "error"
                     result["errors"].append(self._empty_directory_error(parse_meta))
                     try:
@@ -920,8 +932,7 @@ class ResourceProcessor:
                         )
                     return result
 
-                parse_failures = self._directory_parse_failures(parse_meta)
-                if is_directory_aggregate and parse_failures:
+                if is_directory_aggregate and parse_failures and strict:
                     result["status"] = "error"
                     result["errors"].append(self._incomplete_directory_error(parse_failures))
                     try:
@@ -936,10 +947,29 @@ class ResourceProcessor:
                         )
                     return result
 
+                if is_directory_aggregate and parse_failures:
+                    result["status"] = "partial"
+                    result["import_complete"] = False
+                    result["failed_files"] = parse_failures
+                    result.setdefault("warnings", []).append(
+                        self._incomplete_directory_error(parse_failures)
+                    )
+                    if any(item.get("error_code") == "UNAUTHENTICATED" for item in parse_failures):
+                        await self._cleanup_parse_result_artifact(
+                            parse_result, output_store=output_store, viking_fs=viking_fs, ctx=ctx
+                        )
+                        result["status"] = "error"
+                        result["errors"].append(
+                            "Source authentication failed; partial commit refused"
+                        )
+                        return result
+
                 if parse_result.warnings and kwargs.get("strict", False):
                     result.setdefault("warnings", []).extend(parse_result.warnings)
 
-            except OpenVikingError:
+            except OpenVikingError as exc:
+                if not strict and to and exc.code == "PERMISSION_DENIED":
+                    await self._quarantine_revoked_snapshot(to, ctx, preacquired_lock)
                 raise
             except Exception as e:
                 result["status"] = "error"
@@ -1102,6 +1132,20 @@ class ResourceProcessor:
                             ingest_options,
                             acl_update=await viking_fs.prepare_acl_update(root_uri, acl, ctx),
                         )
+                    if (
+                        not strict
+                        and any(
+                            item.get("error_code") == "PERMISSION_DENIED" for item in parse_failures
+                        )
+                        and target_preexisting
+                    ):
+                        # Parsed filenames can change with titles and split modes.
+                        # Without a stable source->output mapping, isolate the entire
+                        # old snapshot rather than risk exposing a revoked document
+                        # through an old child, ancestor summary, or vector record.
+                        await self._quarantine_revoked_snapshot(root_uri, ctx, resource_lock)
+                        result["quarantined_previous_snapshot"] = True
+                        target_preexisting = False
                     artifact_ref = self._ensure_parse_artifact_ref(parse_result)
                     artifact_store = self._store_for_parse_artifact(
                         artifact_ref, output_store=output_store, viking_fs=viking_fs, ctx=ctx
@@ -1126,6 +1170,7 @@ class ResourceProcessor:
                             prepared_resource=prepared_resource,
                             source_format=parse_result.source_format,
                         ),
+                        source_complete=not bool(parse_failures),
                     )
                     incremental_noop = target_preexisting and context_update_plan.is_noop()
                     temp_uri = root_uri
@@ -1181,6 +1226,8 @@ class ResourceProcessor:
                 "is_code_repo": parse_result.source_format == "repository",
                 "root_is_file": root_is_file,
                 "incremental_noop": incremental_noop,
+                "import_complete": not bool(parse_failures),
+                "failed_files": parse_failures,
                 "acl_update": ingest_options.acl_update.model_dump(mode="json")
                 if ingest_options.acl_update
                 else None,
@@ -1214,6 +1261,68 @@ class ResourceProcessor:
                 result["temp_uri"] = original_temp_uri
 
             return result
+
+    async def _quarantine_revoked_snapshot(
+        self, root_uri: str, ctx: RequestContext, lease_ref: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Isolate revoked source content and remove its derived search records.
+
+        The old tree stays in user-scoped temporary storage, outside resources,
+        without semantic sidecars or indexed vectors. Failure is propagated.
+        Source paths are not reliable output identities across split/title changes,
+        so quarantine the entire previous snapshot, never guess a leaf mapping.
+        """
+        fs = get_viking_fs()
+        await fs._ensure_access(root_uri, ctx, action=AclAction.WRITE)
+        if not await fs.exists(root_uri, ctx=ctx):
+            return
+        owned = lease_ref is None
+        if owned:
+            stat = await fs.stat(root_uri, ctx=ctx, skip_count=True)
+            lease_ref = await self.acquire_resource_lock(
+                fs._uri_to_path(root_uri, ctx=ctx),
+                uri=root_uri,
+                root_is_file=not bool(stat.get("isDir")),
+            )
+        try:
+            quarantine_uri = fs.create_temp_uri(ctx=ctx)
+            # Root failures can precede any parse-temp allocation. mv requires
+            # the user-scoped destination parent to exist; prepare it before
+            # invalidating any old derived views.
+            await fs.mkdir(quarantine_uri.rsplit("/", 1)[0], exist_ok=True, ctx=ctx)
+            # Ancestor summaries may quote the revoked subtree even though
+            # their source bytes are outside this import's exact target.
+            # Remove those derived views before moving the old snapshot.
+            parent_uri = root_uri.rstrip("/").rsplit("/", 1)[0]
+            while parent_uri.startswith("viking://") and "/resources" in parent_uri:
+                await fs._ensure_access(parent_uri, ctx, action=AclAction.WRITE)
+                sidecars = [parent_uri + "/" + name for name in (".abstract.md", ".overview.md")]
+                # An exact directory lock protects its index metadata, not
+                # child files. Lock sidecars explicitly without taking a tree
+                # lock that would conflict with the held target-subtree lease.
+                parent_lease = await fs._async_agfs.pathlock_acquire_exact_batch(
+                    [fs._uri_to_path(uri, ctx=ctx) for uri in [parent_uri, *sidecars]],
+                    owner_lease_ref=lease_ref,
+                )
+                try:
+                    await fs._delete_from_vector_store([parent_uri], ctx=ctx)
+                    for sidecar in sidecars:
+                        if await fs.exists(sidecar, ctx=ctx):
+                            await fs.remove_files(sidecar, ctx=ctx, lease_ref=parent_lease)
+                finally:
+                    await fs._async_agfs.pathlock_release(parent_lease)
+                parent_uri = parent_uri.rsplit("/", 1)[0]
+            await fs.mv(
+                root_uri,
+                quarantine_uri,
+                ctx=ctx,
+                lease_ref=lease_ref,
+                vector_mode="delete_source",
+                copy_semantic_sidecars=False,
+            )
+        finally:
+            if owned and lease_ref is not None:
+                await fs._async_agfs.pathlock_release(lease_ref)
 
     async def finish_prepared_resource(
         self,
@@ -1291,6 +1400,12 @@ class ResourceProcessor:
             file_refresh = None
         should_refresh_file_parent = file_refresh is not None and not vectors_only
         result: Dict[str, Any] = {"status": "success", "root_uri": root_uri}
+        if prepared.get("import_complete") is False:
+            result.update(
+                status="partial",
+                import_complete=False,
+                failed_files=prepared.get("failed_files", []),
+            )
         artifact_cleaned = False
 
         async def cleanup_artifact_if_owned() -> None:

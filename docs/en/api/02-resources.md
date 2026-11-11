@@ -188,7 +188,7 @@ This endpoint is the core entry point for resource management. It supports vario
 | instruction | string | No | "" | Processing instructions for semantic extraction (experimental feature) |
 | wait | bool | No | False | Whether to wait for semantic processing and vectorization to complete before returning |
 | timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
-| strict | bool | No | False | Whether to use strict mode |
+| strict | bool | No | False | Strict scanner/parser checks and complete directory commits when true; safe partial native imports when false |
 | ignore_dirs | string | No | None | Directory names to ignore (comma-separated) |
 | include | string | No | None | File patterns to include (glob) |
 | exclude | string | No | None | File patterns to exclude (glob) |
@@ -246,6 +246,55 @@ This endpoint is the core entry point for resource management. It supports vario
 - To create or update plain text directly, use [content/write](12-content.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
 
 #### 3. Usage Examples
+
+##### Non-strict directory imports
+
+`strict=false` (the default) continues reading/parsing other selected documents
+and permits a safe partial commit when some documents fail. `strict=true` retains
+strict scanner/parser checks and refuses incomplete directory commits. No new
+import-policy parameter is required. Unsupported formats and intentionally
+filtered files retain their existing scanner behavior.
+
+Partial results carry `status="partial"`, `import_complete=false`, and
+`failed_files`. Async acceptance is not completion: inspect the Task result.
+Watch records the round as `partial` and does not advance its source checkpoint,
+so later refreshes can fill in missing documents.
+
+An incomplete snapshot never proves that a missing path was deleted: unobserved
+old content, unknown subtrees, and their indexes are retained. Directory summaries
+reuse retained siblings; if a necessary reusable abstract is unavailable, the
+import fails before content writes rather than producing a misleading summary.
+Ambiguous file/directory replacements that would erase unobserved children are
+refused. After a complete refresh, normal inferred deletion resumes.
+
+Non-strict mode is not an authentication bypass. Root access failures,
+authentication failures, and zero successful documents still fail. Explicit source
+`PERMISSION_DENIED` is handled conservatively: without a stable source-to-output
+identity across title/split changes, the previous target snapshot is quarantined
+to user-scoped temporary storage, its search records are removed, and ancestor
+derived views are invalidated before readable content is imported again.
+Quarantine still checks permissions and propagates storage failures; it is not a
+cross-store atomic transaction or rollback guarantee. Transient parse/read errors
+do not trigger quarantine. Silently hidden upstream items cannot be classified
+as revoked without explicit evidence. Delegated Connectors retain their existing
+external processing behavior; this fix covers native ingestion.
+
+This corrects the former commit-stage behavior, which rejected incomplete
+directories even with `strict=false`. Callers requiring complete imports must
+explicitly use `strict=true`.
+
+```python
+await client.add_resource(
+    "https://example.feishu.cn/wiki/your_node",
+    to="viking://resources/docs",
+    options={"strict": False, "args": {"feishu_recursive": True},
+             "watch_interval": 60},
+)
+```
+
+CLI uses non-strict mode by default; `--strict` requires complete imports.
+REST uses the existing top-level `strict` field. MCP native imports use the
+existing non-strict default.
 
 These examples use the default asynchronous mode without waiting parameters. Save the returned `task_id` and query the [Task API](17-tasks.md). Read summaries or search the imported content only after the task reaches `completed`.
 

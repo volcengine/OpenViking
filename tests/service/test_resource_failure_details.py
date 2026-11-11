@@ -99,9 +99,7 @@ async def test_failed_resource_wait_exposes_queue_work_errors(monkeypatch):
     task = TaskRecord(task_id="queue-error-test", task_type="add_resource")
     task.status = TaskStatus.FAILED
     task.error = work_error["message"]
-    task.result = {
-        "queue_status": {"Embedding": {"error_count": 1, "errors": [work_error]}}
-    }
+    task.result = {"queue_status": {"Embedding": {"error_count": 1, "errors": [work_error]}}}
 
     tracker = SimpleNamespace(wait=AsyncMock(return_value=task))
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
@@ -128,3 +126,57 @@ async def test_failed_resource_wait_exposes_queue_work_errors(monkeypatch):
     body = json.loads(response.body)
     assert body["error"]["code"] == "PROCESSING_ERROR"
     assert body["error"]["details"]["errors"] == [work_error]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [False, True])
+async def test_resource_completeness_survives_queue_wait_and_http(
+    monkeypatch, watch_vfs, watch_tracker, complete
+):
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.add_resource_processor.get_task_tracker", lambda: watch_tracker
+    )
+    result = {
+        "status": "success" if complete else "partial",
+        "root_uri": "viking://resources/docs",
+        "meta": {"resolved_head_sha": "revision"},
+    }
+    if not complete:
+        result.update(
+            import_complete=False,
+            failed_files=[{"path": "unreadable.md", "error": "temporary read failure"}],
+        )
+    service = ResourceService(
+        viking_fs=watch_vfs, resource_processor=object(), skill_processor=object()
+    )
+    service.execute_add_resource_job = AsyncMock(return_value=result)
+    processor = AddResourceProcessor(service, "add_resource", watch_vfs)
+    processor._record_watch_execution = AsyncMock()
+    msg = AddResourceMsg(
+        task_id="completeness-test",
+        root_uri=result["root_uri"],
+        account_id="default",
+        user_id="default",
+        role="user",
+        watch_task_id="completeness-watch",
+    )
+    await processor._process(msg, {})
+    task = await watch_tracker.get(msg.task_id, "default", "default")
+    assert task.status is TaskStatus.COMPLETED
+    assert task.result["status"] == result["status"]
+    assert ("source_checkpoint" in task.result) is complete
+    if not complete:
+        assert task.result["import_complete"] is False
+        assert task.result["failed_files"] == result["failed_files"]
+
+    service._prepare_standard_source_plan = AsyncMock(return_value=object())
+    service._enqueue_source_plan = AsyncMock(return_value={"task_id": msg.task_id})
+    waited = await service.add_resource(
+        path="https://example.com/docs",
+        to=msg.root_uri,
+        wait=True,
+        ctx=RequestContext(user=UserIdentifier("default", "default"), role=Role.USER),
+    )
+    response = response_from_result(waited)
+    assert response["status"] == "ok"
+    assert response["result"]["status"] == result["status"]
