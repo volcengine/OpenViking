@@ -11,8 +11,22 @@ export default defineConfig({
       source: {
         entry: {
           index: './src/index.ts',
+          'components/directory-tour':
+            './src/components/directory-tour/index.ts',
           icons: './src/icons/index.tsx',
           client: './src/client/index.ts',
+          'components/invitation-confirmation':
+            './src/components/invitation-confirmation/index.ts',
+          'components/login-method-selector':
+            './src/components/login-method-selector/index.ts',
+          'components/password-setup-form':
+            './src/components/password-setup-form/index.ts',
+          'components/password-reset-request-form':
+            './src/components/password-reset-request-form/index.ts',
+          'components/api-key-login-form':
+            './src/components/api-key-login-form/index.ts',
+          'components/email-login-form':
+            './src/components/email-login-form/index.ts',
           'modules/scope-cascade': './src/modules/scope-cascade/index.ts',
           'components/file-tree': './src/components/file-tree/index.ts',
           'components/file-preview': './src/components/file-preview/index.ts',
@@ -26,6 +40,10 @@ export default defineConfig({
           'components/viking-bot/interaction':
             './src/components/viking-bot/interaction/index.ts',
           'modules/file-browser': './src/modules/file-browser/index.ts',
+          'components/wiki-dashboard':
+            './src/components/wiki-dashboard/index.ts',
+          'components/experience-dashboard':
+            './src/components/experience-dashboard/index.ts',
           'modules/console': './src/modules/console/index.ts',
         },
       },
@@ -35,16 +53,50 @@ export default defineConfig({
       // Inline bitmaps as data URIs instead of emitting separate asset files: the
       // package's JS entries must stay importable without a bundler (Node, SSR),
       // where an external .png cannot be resolved.
-      output: { emitCss: false, dataUriLimit: { image: 64 * 1024 } },
+      output: {
+        emitCss: false,
+        dataUriLimit: { image: 64 * 1024 },
+        // Normalize this CommonJS default during bundling for direct Node/SSR use.
+        // React and ReactDOM remain external peer dependencies.
+        autoExternal: { exclude: ['react-focus-lock'] },
+      },
       tools: {
         rspack: {
           optimization: { splitChunks: { chunks: 'all', minSize: 0 } },
         },
       },
     },
+    // Docs chrome is private and must not become a shared entry of the SDK graph.
+    {
+      id: 'docs-controls',
+      format: 'esm',
+      dts: { distPath: './dist/docs' },
+      source: {
+        entry: {
+          'shared/components/button/button':
+            './src/shared/components/button/button.tsx',
+        },
+      },
+      output: { distPath: { root: './dist/docs' }, emitCss: false },
+    },
     // Build each stylesheet independently so every public CSS entry is complete.
     ...Object.entries({
       style: './src/style.css',
+      'components/directory-tour/style':
+        './src/components/directory-tour/style.css',
+
+      'components/invitation-confirmation/style':
+        './src/components/invitation-confirmation/style.css',
+      'components/login-method-selector/style':
+        './src/components/login-method-selector/style.css',
+      'components/password-setup-form/style':
+        './src/components/password-setup-form/style.css',
+      'components/password-reset-request-form/style':
+        './src/components/password-reset-request-form/style.css',
+      'components/api-key-login-form/style':
+        './src/components/api-key-login-form/style.css',
+      'components/email-login-form/style':
+        './src/components/email-login-form/style.css',
       'modules/scope-cascade/style': './src/modules/scope-cascade/style.css',
       'components/style': './src/components/style.css',
       'components/file-tree/style': './src/components/file-tree/style.css',
@@ -62,6 +114,10 @@ export default defineConfig({
         './src/components/viking-bot/viking-bot-interaction.css',
       'modules/style': './src/modules/style.css',
       'modules/file-browser/style': './src/modules/file-browser/style.css',
+      'components/wiki-dashboard/style':
+        './src/components/wiki-dashboard/style.css',
+      'components/experience-dashboard/style':
+        './src/components/experience-dashboard/style.css',
       'modules/console/style': './src/modules/console/style.css',
     }).map(([name, entry]) => ({
       id: name.replaceAll('/', '-'),

@@ -12,6 +12,10 @@ The entry row at the top of the file browsing area: connect an agent, import res
 
 A flattened file tree with row rendering, selection, expansion, keyboard interaction, and pagination intent. The host supplies ordered rows and handles data loading. The current view is a placeholder; see the component page for its scope and limitations.
 
+### [DirectoryTour](./directory-tour)
+
+A six-step anchor walkthrough with async location, independent highlights, viewport collision handling, retry and skip. The host owns directory loading and completion state.
+
 ### [FilePreview](./file-preview)
 
 A tabbed file-preview view with header actions, tab switching, and plain-text preview and editing foundations. The current view is a placeholder: the file body is not wired to FileViewer yet and falls back to plain text. Applications provide content and save behavior.
@@ -37,3 +41,15 @@ The conversation view: message list, composer and pending-interaction area. Rend
 Five file-type icons with configurable image dimensions and accessible labels: audio, PDF, presentation, video, and word-processing files.
 
 See [Getting started](../guide/getting-started) for public package entries, stylesheet choices, and application integration boundaries.
+
+### [WikiDashboard](./wiki-dashboard)
+
+Wiki generation, conflicts and resolution history with supplied loading states and retry callbacks.
+
+### [ExperienceDashboard](./experience-dashboard)
+
+Agent experience lists, effects and sources with supplied display data and state.
+
+### [Authentication forms](./auth-forms)
+
+Authentication views without requests, routing, storage or page layout. Built-in labels inherit the current language and can be overridden through props.

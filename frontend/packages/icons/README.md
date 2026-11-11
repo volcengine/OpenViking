@@ -29,14 +29,22 @@ React imports these SVG files directly during its build.
   Chevron: `I10325:138037;9343:425920` (14 × 14); check: `10325:138844`
   (16 × 16). Their paint was changed from the design's fixed colours to
   `currentColor` so a host theme can recolour them; the paths are unmodified.
-  `search.svg` is drawn for this workspace in the same 16 × 16 outline style.
-  All three render as inline `svg` through `?react`, so they inherit
-  `currentColor` and never appear as a scalable image element. They follow this
-  repository's license and are bundled by ScopeSwitcher; no private IconBox
-  dependency is used.
-  The level icons (library / data space / user) are **not** shipped here: the
-  component receives them from the host through `icon`, and the examples draw
-  their own.
+  `search.svg`, `space.svg` and `user.svg` are drawn for this workspace in the
+  same 14/16 outline style. All of them render as inline `svg` through `?react`,
+  so they inherit `currentColor` and never appear as a scalable image element.
+  They follow this repository's license and are bundled by ScopeSwitcher; no
+  private IconBox dependency is used.
+  `space.svg` and `user.svg` are the default level icons exported as `SpaceIcon`
+  and `UserIcon`. The library level icon has no glyph — the design draws a round
+  gradient swatch picked by name — so `LibraryIcon` is implemented in
+  `packages/react/src/icons/index.tsx` as a colour block instead of an SVG source
+  here. Its five gradients live in `library-swatches.json` next to this file and
+  are surfaced as `--ov-ui-library-swatch-1-default` … `-5-default` in
+  `packages/react/src/theme.css`, so a host can override them through the public
+  `--ov-ui-color-library-swatch-*` variables. That JSON is the single source: the
+  React fallbacks import it directly and the CSS block is generated from it by
+  `npm run sync:swatches`, so the two never drift. A host can still pass its own
+  icons through `icon`; the examples reuse these built-in ones.
 - `svg/file-type/` — the file-type icon set vendored from `@pierre/trees`
   (Apache-2.0, see that directory's `LICENSE.md`). One SVG per icon.
 - `empty-state.png` — the empty-state illustration for the file browser
@@ -59,3 +67,8 @@ React imports these SVG files directly during its build.
 `viking-bot/remove.svg` is an OpenViking-authored close glyph under the repository license.
 
 - `svg/viking-bot/tool.svg` — unchanged `IconTool` artwork from the public MIT-licensed `@arco-design/web-react` 2.66.18, matching the tool row in `vikingdb-fe` release/openviking/2026-11-12.
+
+- `svg/directory-tour/` — the folder and up-right arrow artwork from the
+  [OpenViking Console team experience introduction](https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=10168-334211).
+  The documentation demo uses `DirectoryTourFolderIcon` and `ArrowUpRightIcon`
+  from `@openviking/react/icons`; the design's paths and colors are unchanged. They follow this repository's license.

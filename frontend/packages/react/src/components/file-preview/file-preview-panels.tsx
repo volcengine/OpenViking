@@ -1,3 +1,5 @@
+import { Button } from '../../shared/components/button/button.js';
+import type { Locale } from '../../shared/locale.js';
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 import type {
   ViewerHandle,
@@ -40,10 +42,12 @@ export interface FilePreviewPanelsProps {
   contentTab?: FilePreviewContentTab;
   directoryTab?: FilePreviewDirectoryTab;
   fileTab?: FilePreviewFileTab;
+  levelKey?: string;
+  onLevelChange: (key: string) => void;
   panelProps: HTMLAttributes<HTMLDivElement>;
   panelClass: string;
   text: Required<FilePreviewLabels>;
-  locale?: 'en-US' | 'zh-CN';
+  locale?: Locale;
   actions: ReturnType<typeof useFilePreviewActions>;
   actionContext: FilePreviewActions;
   editing: ReturnType<typeof useFilePreviewEditing>;
@@ -56,6 +60,8 @@ export interface FilePreviewPanelsProps {
 }
 
 export function FilePreviewPanels({
+  levelKey,
+  onLevelChange,
   contentTab,
   directoryTab,
   fileTab,
@@ -111,17 +117,45 @@ export function FilePreviewPanels({
   return (
     <div {...panelProps} className={panelClass}>
       <FilePreviewHeader
+        levels={fileTab.levels}
+        levelKey={levelKey}
+        onLevelChange={onLevelChange}
         path={fileTab.source.path}
         fileName={fileTab.source.fileName}
         canOpenParent={Boolean(fileTab.operations?.openParent)}
         titleExtra={fileTab.slots?.titleExtra}
         slotActions={fileTab.slots?.actions}
+        extraActions={fileTab.slots?.extraActions}
         actions={actionContext}
         text={text}
         onOpenParent={(uri) => void actions.openParent(activeTab, uri)}
       />
+      {editing.editing && fileTab.slots?.actions === undefined ? (
+        <div className="ov-file-preview__edit-toolbar">
+          <span>{text.editFile}</span>
+          <div className="ov-file-preview__toolbar">
+            <Button
+              size="small"
+              type="default"
+              disabled={editing.saving}
+              onClick={actionContext.cancelEditing}
+            >
+              {text.leaveEditing}
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              loading={editing.saving}
+              onClick={() => void actionContext.saveEditing()}
+            >
+              {text.save}
+            </Button>
+          </div>
+        </div>
+      ) : null}
       <div className="ov-file-preview__body">
         <FilePreviewBody
+          key={JSON.stringify([fileTab.key, levelKey])}
           fileTab={fileTab}
           text={text}
           locale={locale}

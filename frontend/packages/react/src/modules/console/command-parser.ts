@@ -1,3 +1,5 @@
+import { ConsoleCommandError } from './command-messages.js';
+
 interface CommandToken {
   value: string;
   literal: boolean;
@@ -33,12 +35,12 @@ export function tokenize(input: string): CommandToken[] {
       literal = false;
     } else {
       if ('|;&<>`$'.includes(character))
-        throw new Error('Shell syntax is not supported.');
+        throw new ConsoleCommandError('shellSyntax');
       value += character;
       started = true;
     }
   }
-  if (quote || escaped) throw new Error('Unclosed quote or escape.');
+  if (quote || escaped) throw new ConsoleCommandError('unclosedQuote');
   if (started) tokens.push({ value, literal });
   if (tokens[0]?.value === 'ov') tokens.shift();
   if (tokens[0]?.value.startsWith('/'))
@@ -73,9 +75,9 @@ export function parseArguments(
     const argument = flag
       ? flags.find((item) => token === `--${item.name}`)
       : positional[index++];
-    if (!argument) throw new Error(`Unexpected argument: ${token}`);
+    if (!argument) throw new ConsoleCommandError('unexpectedArgument', token);
     if (Object.hasOwn(result, argument.name))
-      throw new Error(`Duplicate argument: ${token}`);
+      throw new ConsoleCommandError('duplicateArgument', token);
     const next =
       flag && argument.kind !== 'boolean' ? tokens[++cursor] : current;
     if (
@@ -85,12 +87,15 @@ export function parseArguments(
         !next.literal &&
         next.value.startsWith('--'))
     )
-      throw new Error(`Missing value: ${token}`);
+      throw new ConsoleCommandError('missingValue', token);
     const value = flag && argument.kind === 'boolean' ? 'true' : next.value;
     if (argument.kind === 'uri' && !/^viking:\/\//.test(value))
-      throw new Error(`Expected a Viking URI: ${value}`);
+      throw new ConsoleCommandError('expectedUri', value);
     if (argument.choices && !argument.choices.includes(value))
-      throw new Error(`Invalid ${argument.name}: ${value}`);
+      throw new ConsoleCommandError(
+        'invalidArgument',
+        `${argument.name}: ${value}`,
+      );
     if (argument.kind === 'integer') {
       const number = Number(value);
       if (
@@ -98,13 +103,16 @@ export function parseArguments(
         !Number.isSafeInteger(number) ||
         number < (argument.min ?? 0)
       )
-        throw new Error(`Invalid ${argument.name}: ${value}`);
+        throw new ConsoleCommandError(
+          'invalidArgument',
+          `${argument.name}: ${value}`,
+        );
       result[argument.name] = number;
     } else result[argument.name] = argument.kind === 'boolean' ? true : value;
   }
   for (const argument of positional) {
     if (!argument.optional && result[argument.name] === undefined)
-      throw new Error(`Missing ${argument.name}`);
+      throw new ConsoleCommandError('missingArgument', argument.name);
   }
   return result;
 }

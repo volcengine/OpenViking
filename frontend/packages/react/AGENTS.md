@@ -58,3 +58,5 @@
 - 按 [Synchronizing with Effects](https://react.dev/learn/synchronizing-with-effects) 对称地建立和清理订阅、连接、定时器等资源；异步请求取消或忽略过期结果，避免旧结果覆盖新状态。
 - 保证开发环境 Strict Mode 的建立、清理、再建立过程正确；不得用“只执行一次”的 ref 标记或全局变量掩盖缺失清理的问题。
 - 浏览器 API 在客户端的必要阶段访问，保持模块导入和服务端渲染安全；不要把副作用搬进渲染函数或 `useMemo` 来规避 Effect。
+
+业务 Hook 与控制器是模块内部实现，不从根入口或业务子路径导出；`components/` 保持纯 UI、接口无关。

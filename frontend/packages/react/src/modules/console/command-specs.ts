@@ -1,11 +1,11 @@
+import type enUS from './locales/en-US.js';
 import type { OvRequestSpec } from '../../client/types.js';
 import type { TuiSkeletonKind } from '../../components/tui/index.js';
 import type { Argument } from './command-parser.js';
 
 type Values = Record<string, string | number | boolean>;
 export interface CommandSpec {
-  name: string;
-  description: readonly [string, string];
+  name: keyof typeof enUS.commands;
   positional?: readonly Argument[];
   flags?: readonly Argument[];
   skeleton?: TuiSkeletonKind;
@@ -20,26 +20,23 @@ const taskId: Argument = { name: 'id' };
 
 /** One catalogue drives validation, execution, completion and help. */
 export const COMMAND_SPECS: readonly CommandSpec[] = [
-  { name: 'help', description: ['Show available commands', '查看可用命令'] },
-  { name: 'clear', description: ['Clear local records', '清空本地记录'] },
+  { name: 'help' },
+  { name: 'clear' },
   {
     name: 'health',
-    description: ['Check server health', '检查服务健康状态'],
+
     skeleton: 'status',
     request: () => ({ method: 'GET', path: '/health' }),
   },
   {
     name: 'status',
-    description: ['Show system status', '查看系统状态'],
+
     skeleton: 'status',
     request: () => ({ method: 'GET', path: '/api/v1/system/status' }),
   },
-  ...['ls', 'tree'].map((name): CommandSpec => ({
+  ...(['ls', 'tree'] as const).map((name): CommandSpec => ({
     name,
-    description:
-      name === 'ls'
-        ? ['List directory entries', '列出目录内容']
-        : ['List a resource tree', '查看资源树'],
+
     positional: [{ ...uri, optional: true }],
     flags: [
       limit,
@@ -57,19 +54,14 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   })),
   {
     name: 'stat',
-    description: ['Inspect a resource', '查看资源属性'],
+
     positional: [uri],
     skeleton: 'status',
     request: (query) => ({ method: 'GET', path: '/api/v1/fs/stat', query }),
   },
-  ...['read', 'abstract', 'overview'].map((name): CommandSpec => ({
+  ...(['read', 'abstract', 'overview'] as const).map((name): CommandSpec => ({
     name,
-    description:
-      name === 'read'
-        ? ['Read file content', '读取文件内容']
-        : name === 'abstract'
-          ? ['Read an L0 abstract', '读取 L0 摘要']
-          : ['Read an L1 overview', '读取 L1 概览'],
+
     positional: [uri],
     flags:
       name === 'read'
@@ -85,12 +77,9 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
       query,
     }),
   })),
-  ...['find', 'search'].map((name): CommandSpec => ({
+  ...(['find', 'search'] as const).map((name): CommandSpec => ({
     name,
-    description:
-      name === 'find'
-        ? ['Find matching context', '检索匹配上下文']
-        : ['Search with query planning', '通过查询规划检索'],
+
     positional: [{ name: 'query' }],
     flags: [{ name: 'target_uri', kind: 'uri' }, limit],
     skeleton: 'search',
@@ -100,12 +89,9 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
       body,
     }),
   })),
-  ...['grep', 'glob'].map((name): CommandSpec => ({
+  ...(['grep', 'glob'] as const).map((name): CommandSpec => ({
     name,
-    description:
-      name === 'grep'
-        ? ['Match text in resources', '匹配资源文本']
-        : ['Match resource paths', '匹配资源路径'],
+
     positional: [{ name: 'pattern' }],
     flags: [
       uri,
@@ -123,18 +109,15 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   })),
   {
     name: 'mkdir',
-    description: ['Create a directory', '创建目录'],
+
     positional: [uri],
     flags: [{ name: 'description' }],
     skeleton: 'write',
     request: (body) => ({ method: 'POST', path: '/api/v1/fs/mkdir', body }),
   },
-  ...['cp', 'mv'].map((name): CommandSpec => ({
+  ...(['cp', 'mv'] as const).map((name): CommandSpec => ({
     name,
-    description:
-      name === 'cp'
-        ? ['Copy a resource', '复制资源']
-        : ['Move a resource', '移动资源'],
+
     positional: [
       { name: 'from_uri', kind: 'uri' },
       { name: 'to_uri', kind: 'uri' },
@@ -145,7 +128,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   })),
   {
     name: 'rm',
-    description: ['Remove a resource', '删除资源'],
+
     positional: [uri],
     flags: [recursive, wait],
     skeleton: 'write',
@@ -153,7 +136,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   {
     name: 'write',
-    description: ['Write text content', '写入文本内容'],
+
     positional: [uri, { name: 'content' }],
     flags: [{ name: 'mode', choices: ['create', 'replace', 'append'] }, wait],
     skeleton: 'write',
@@ -165,14 +148,14 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   {
     name: 'task list',
-    description: ['List background tasks', '列出后台任务'],
+
     flags: [limit, { name: 'status' }, { name: 'task_type' }],
     skeleton: 'status',
     request: (query) => ({ method: 'GET', path: '/api/v1/tasks', query }),
   },
   {
     name: 'task status',
-    description: ['Inspect a background task', '查看后台任务'],
+
     positional: [taskId],
     skeleton: 'status',
     request: ({ id }) => ({
@@ -182,7 +165,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   {
     name: 'task cancel',
-    description: ['Request task cancellation', '请求取消后台任务'],
+
     positional: [taskId],
     skeleton: 'write',
     request: ({ id }) => ({

@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import copy
+import json
 import random
 import struct
 import zlib
@@ -10,15 +11,16 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from vikingbot.agent import loop as loop_module
 from vikingbot.agent.context import ContextBuilder
-from vikingbot.agent.loop import AgentLoop
-from vikingbot.agent.tools.base import MultimodalToolResult
+from vikingbot.agent.loop import AgentLoop, loop_tools
+from vikingbot.agent.loop import loop as loop_module
+from vikingbot.agent.tools.base import MultimodalToolResult, Tool
 from vikingbot.agent.tools.registry import ToolExecutionResult
 from vikingbot.bus.events import InboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config.schema import AgentsConfig, Config, SessionKey
 from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
+from vikingbot.hooks.manager import HookManager
 from vikingbot.openviking_mount.session_state import make_openviking_storage_session_id
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.session.manager import SessionManager
@@ -130,7 +132,7 @@ class _BlockingFirstProvider(_RecordingProvider):
 def make_loop(temp_dir, monkeypatch):
     """Construct a real loop with external integrations stubbed for these tests."""
     monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+    monkeypatch.setattr(loop_module, "SubagentManager", _FakeSubagentManager)
 
     def create(*, config=None, provider=None, bus=None, register_tools=False, **kwargs):
         with monkeypatch.context() as setup:
@@ -145,6 +147,20 @@ def make_loop(temp_dir, monkeypatch):
             )
 
     return create
+
+
+@pytest.fixture
+def legacy_commit(monkeypatch):
+    """Keep the real async HookManager/compact-hook path; stub only the OV client."""
+    commit = AsyncMock(return_value={"success": True})
+    client = SimpleNamespace(commit=commit, session_owner_user_id=lambda: None)
+    monkeypatch.setattr(
+        OpenVikingCompactHook, "_get_client", AsyncMock(return_value=(client, False))
+    )
+    manager = HookManager()
+    manager.register_path(["vikingbot.hooks.builtins.openviking_hooks.hooks"])
+    monkeypatch.setattr(loop_module.hook_manager, "execute_hooks", manager.execute_hooks)
+    return commit
 
 
 def _image_call(call_id, label=None):
@@ -566,7 +582,7 @@ async def test_agent_loop_accepts_legacy_detailed_outcome(make_loop, monkeypatch
 
 @pytest.mark.asyncio
 async def test_agent_loop_limits_media_across_parallel_tool_results(make_loop, monkeypatch):
-    monkeypatch.setattr(loop_module, "MAX_INLINE_TOOL_RESULT_MEDIA_BYTES", 5)
+    monkeypatch.setattr(loop_tools, "MAX_INLINE_TOOL_RESULT_MEDIA_BYTES", 5)
 
     provider = _MediaProvider([[_image_call("call-1", "first"), _image_call("call-2", "second")]])
     loop = make_loop(provider=provider, max_iterations=2)
@@ -587,7 +603,7 @@ async def test_agent_loop_limits_media_across_parallel_tool_results(make_loop, m
 
 @pytest.mark.asyncio
 async def test_agent_loop_prefers_new_media_across_consecutive_tool_rounds(make_loop, monkeypatch):
-    monkeypatch.setattr(loop_module, "MAX_INLINE_TOOL_RESULT_MEDIA_BYTES", 5)
+    monkeypatch.setattr(loop_tools, "MAX_INLINE_TOOL_RESULT_MEDIA_BYTES", 5)
 
     provider = _MediaProvider(
         [[_image_call("call-1", "image-1")], [_image_call("call-2", "image-2")]]
@@ -1760,7 +1776,7 @@ async def test_wm_compaction_only_clears_history_after_confirmation(
         storage_workspace=str(temp_dir),
         ov_server={"server_url": "http://ov.local"},
     )
-    loop = make_loop(config=config)
+    loop = make_loop(config=config, memory_window=1)
     key = SessionKey(type="cli", channel_id="default", chat_id="wm-compaction")
     session = loop.sessions.get_or_create(key, skip_heartbeat=True)
     session.add_message("user", "Keep this constraint")
@@ -1803,3 +1819,518 @@ async def test_wm_compaction_only_clears_history_after_confirmation(
         loop._get_ov_client = AsyncMock(side_effect=AssertionError("Keep the full local history"))
         history = await loop._build_prompt_history(session)
         assert [m["content"] for m in history] == [m["content"] for m in original]
+
+
+@pytest.mark.asyncio
+async def test_wm_compaction_does_not_reuse_previous_hook_success(make_loop, temp_dir, monkeypatch):
+    config = Config(
+        storage_workspace=str(temp_dir),
+        ov_server={"server_url": "http://ov.local"},
+        hooks=[],
+    )
+    loop = make_loop(config=config)
+    key = SessionKey(type="cli", channel_id="default", chat_id="wm-stale-success")
+    session = loop.sessions.get_or_create(key, skip_heartbeat=True)
+    session.add_message("user", "Keep this uncommitted message")
+    session.metadata["openviking"] = {
+        "last_sync_status": "success",
+        "last_commit_performed": True,
+    }
+    await loop.sessions.save(session)
+    original = copy.deepcopy(session.messages)
+    monkeypatch.setattr(loop_module.hook_manager, "execute_hooks", HookManager().execute_hooks)
+
+    response = await loop._process_message(
+        InboundMessage(session_key=key, sender_id="user", content="/compact")
+    )
+
+    assert "history was kept" in response.content
+    assert loop.sessions._load(key).messages == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("manual", [True, False])
+async def test_local_compaction_preserves_history_on_failure(make_loop, temp_dir, manual):
+    provider = _RecordingProvider()
+    provider.chat = AsyncMock(
+        side_effect=[
+            RuntimeError("model unavailable") if manual else LLMResponse(content="{}"),
+            LLMResponse(content="reply"),
+        ]
+    )
+    config = Config(storage_workspace=str(temp_dir), use_local_memory=True)
+    loop = make_loop(config=config, provider=provider, memory_window=3)
+    key = SessionKey(type="cli", channel_id="default", chat_id="local-compaction-failure")
+    session = loop.sessions.get_or_create(key, skip_heartbeat=True)
+    for role, content in [("user", "constraint"), ("assistant", "recorded")] * 2:
+        session.add_message(role, content)
+    await loop.sessions.save(session)
+    original = copy.deepcopy(session.messages)
+
+    response = await loop._process_message(
+        InboundMessage(session_key=key, sender_id="user", content="/compact" if manual else "next")
+    )
+
+    persisted = loop.sessions._load(key)
+    assert persisted.messages[: len(original)] == original
+    if manual:
+        assert persisted.messages == original
+        assert "history was kept" in response.content
+    else:
+        assert response.content == "reply"
+
+
+@pytest.mark.asyncio
+async def test_local_compaction_clears_history_after_saving_memory(make_loop, temp_dir):
+    config = Config(storage_workspace=str(temp_dir), use_local_memory=True)
+    provider = _RecordingProvider()
+    loop = make_loop(config=config, provider=provider)
+    key = SessionKey(type="cli", channel_id="default", chat_id="local-compaction-success")
+    session = loop.sessions.get_or_create(key, skip_heartbeat=True)
+    session.add_message("user", "Keep this constraint")
+    await loop.sessions.save(session)
+
+    async def summarize(**kwargs):
+        assert loop.sessions._load(key).messages == session.messages
+        assert session.messages
+        return LLMResponse(
+            content=json.dumps({"history_entry": "Saved constraint", "memory_update": "Constraint"})
+        )
+
+    provider.chat = AsyncMock(side_effect=summarize)
+    response = await loop._process_message(
+        InboundMessage(session_key=key, sender_id="user", content="/compact")
+    )
+
+    assert "Memory consolidated" in response.content
+    assert loop.sessions._load(key).messages == []
+    assert "Saved constraint" in (loop.workspace / "memory" / "HISTORY.md").read_text()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "manual, concurrent_feedback", [(True, False), (False, False), (False, True)]
+)
+async def test_local_compaction_preserves_concurrently_saved_messages(
+    make_loop, temp_dir, monkeypatch, manual, concurrent_feedback
+):
+    config = Config(storage_workspace=str(temp_dir), use_local_memory=True)
+    provider = _RecordingProvider()
+    loop = make_loop(config=config, provider=provider, memory_window=3)
+    key = SessionKey(type="cli", channel_id="default", chat_id="concurrent-compaction")
+    session = loop.sessions.get_or_create(key, skip_heartbeat=True)
+    for i in range(4):
+        session.add_message("user" if i % 2 == 0 else "assistant", f"old {i}")
+    session.messages[-1].update(response_id="resp-123", timestamp="2026-04-30T00:00:00")
+    session.metadata["response_outcomes"] = {"existing-response": {"outcome_label": "resolved"}}
+    await loop.sessions.save(session)
+    monkeypatch.setattr(
+        "vikingbot.agent.loop.LangfuseClient.get_instance",
+        staticmethod(lambda: _FakeLangfuseClient()),
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def chat(messages, **kwargs):
+        if messages[0]["content"].startswith("You are a memory consolidation agent"):
+            started.set()
+            await release.wait()
+            return LLMResponse(content=json.dumps({"history_entry": "Saved old messages"}))
+        return LLMResponse(content="reply")
+
+    provider.chat = AsyncMock(side_effect=chat)
+    task = asyncio.create_task(
+        loop._process_message(
+            InboundMessage(
+                session_key=key,
+                sender_id="user",
+                content="/compact" if manual else "that did not help",
+                timestamp=datetime.fromisoformat("2026-04-30T00:05:00"),
+            )
+        )
+    )
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        concurrent_manager = SessionManager(config.bot_data_path)
+        concurrent = concurrent_manager.get_or_create(key, skip_heartbeat=True)
+        concurrent.add_message("user", "scheduled reminder")
+        concurrent.add_message("assistant", "reminder delivered")
+        concurrent.metadata["feedback"] = {"saved": True}
+        concurrent.metadata["response_outcomes"] = {
+            "existing-response": {"outcome_label": "positive_feedback"},
+            "concurrent-response": {"outcome_label": "resolved"},
+        }
+        if concurrent_feedback:
+            concurrent.metadata["response_outcomes"]["resp-123"] = {
+                "outcome_label": "positive_feedback"
+            }
+        await concurrent_manager.save(concurrent)
+    finally:
+        release.set()
+        response = await asyncio.wait_for(task, timeout=2)
+
+    expected = ["scheduled reminder", "reminder delivered"]
+    if not manual:
+        expected = ["old 2", "old 3", *expected, "that did not help", "reply"]
+    persisted = loop.sessions._load(key)
+    assert [m["content"] for m in persisted.messages] == expected
+    assert session.messages == persisted.messages
+    assert persisted.metadata["feedback"] == {"saved": True}
+    outcomes = persisted.metadata["response_outcomes"]
+    assert outcomes["existing-response"]["outcome_label"] == "positive_feedback"
+    assert outcomes["concurrent-response"]["outcome_label"] == "resolved"
+    if manual:
+        assert "Memory consolidated" in response.content
+    else:
+        outcome_event = await loop.bus.consume_outbound()
+        assert outcome_event.event_type == OutboundEventType.RESPONSE_OUTCOME_EVALUATED
+        assert outcome_event.response_id == "resp-123"
+        assert outcome_event.metadata["response_outcome_evaluated"]["outcome_label"] == "reasked"
+        if concurrent_feedback:
+            assert outcomes["resp-123"]["outcome_label"] == "positive_feedback"
+        else:
+            assert outcomes["resp-123"] == outcome_event.metadata["response_outcome_evaluated"]
+
+
+@pytest.mark.asyncio
+async def test_local_compaction_does_not_clear_a_replaced_session(make_loop, temp_dir):
+    config = Config(storage_workspace=str(temp_dir), use_local_memory=True)
+    provider = _RecordingProvider()
+    loop = make_loop(config=config, provider=provider)
+    key = SessionKey(type="cli", channel_id="default", chat_id="replaced-compaction")
+    session = loop.sessions.get_or_create(key, skip_heartbeat=True)
+    session.add_message("user", "old constraint")
+    await loop.sessions.save(session)
+
+    async def summarize(**kwargs):
+        def replace(current):
+            current.clear()
+            current.add_message("user", "new session input")
+
+        await SessionManager(config.bot_data_path).update_session(key, replace)
+        return LLMResponse(content=json.dumps({"history_entry": "Saved old constraint"}))
+
+    provider.chat = AsyncMock(side_effect=summarize)
+    response = await loop._process_message(
+        InboundMessage(session_key=key, sender_id="user", content="/compact")
+    )
+
+    persisted = loop.sessions._load(key)
+    assert [m["content"] for m in persisted.messages] == ["new session input"]
+    assert session.messages == persisted.messages
+    assert "history was kept" in response.content
+
+
+@pytest.mark.asyncio
+async def test_repeated_compaction_keeps_inflight_session_writes(make_loop, temp_dir):
+    config = Config(storage_workspace=str(temp_dir), use_local_memory=True)
+    provider = _RecordingProvider()
+    provider.chat = AsyncMock(
+        return_value=LLMResponse(content=json.dumps({"history_entry": "Archived messages"}))
+    )
+    loop = make_loop(config=config, provider=provider)
+    key = SessionKey(type="cli", channel_id="default", chat_id="repeated-compaction")
+    inflight = loop.sessions.get_or_create(key, skip_heartbeat=True)
+    inflight.add_message("user", "old input")
+    await loop.sessions.save(inflight)
+
+    for i in range(2):
+        await loop._process_message(
+            InboundMessage(session_key=key, sender_id="user", content="/compact")
+        )
+        current = loop.sessions.get_or_create(key, skip_heartbeat=True)
+        current.add_message("user", f"latest input {i}")
+        await loop.sessions.save(current)
+
+    inflight.add_message("assistant", "background task finished")
+    await loop.sessions.save(inflight)
+
+    assert [m["content"] for m in loop.sessions._load(key).messages] == [
+        "latest input 1",
+        "background task finished",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_prompt_history_honors_memory_window(make_loop):
+    loop = make_loop(memory_window=100)
+    session = loop.sessions.get_or_create(
+        SessionKey(type="cli", channel_id="default", chat_id="local-history-window"),
+        skip_heartbeat=True,
+    )
+    for i in range(60):
+        session.add_message("user" if i % 2 == 0 else "assistant", f"message {i}")
+
+    history = await loop._build_prompt_history(session)
+
+    assert [m["content"] for m in history] == [m["content"] for m in session.messages]
+
+
+@pytest.mark.asyncio
+async def test_new_session_resets_experience_exclusions(make_loop, temp_dir):
+    loop = make_loop(
+        config=Config(storage_workspace=str(temp_dir), ov_server={"server_url": "http://ov.local"})
+    )
+    key = SessionKey(type="cli", channel_id="default", chat_id="new-experience")
+    session = loop.sessions.get_or_create(key, skip_heartbeat=True)
+    session.add_message("user", "[Experience Reminder] Old experience")
+    session.metadata["recalled_exp_uris"] = ["viking://agent/experience/old"]
+    session.metadata["response_facts"] = {"response": {"response_length": 1}}
+    session.metadata["openviking"] = {"session_id": "old-session"}
+    await loop.sessions.save(session)
+
+    await loop._process_message(InboundMessage(session_key=key, sender_id="user", content="/new"))
+
+    persisted = loop.sessions._load(key)
+    assert persisted.messages == []
+    assert not persisted.metadata.get("recalled_exp_uris")
+    assert persisted.metadata["response_facts"] == {"response": {"response_length": 1}}
+    assert persisted.metadata["openviking"]["session_id"] != "old-session"
+
+
+@pytest.mark.asyncio
+async def test_new_session_preserves_history_when_persistence_fails(make_loop, monkeypatch):
+    loop = make_loop()
+    key = SessionKey(type="cli", channel_id="default", chat_id="new-persistence-failure")
+    session = loop.sessions.get_or_create(key, skip_heartbeat=True)
+    session.add_message("user", "Keep this conversation")
+    session.metadata["recalled_exp_uris"] = ["viking://agent/experience/kept"]
+    await loop.sessions.save(session)
+    original = session.clone()
+
+    def fail_save(_session):
+        raise OSError("session write failed")
+
+    monkeypatch.setattr(loop.sessions, "_save_unlocked", fail_save)
+    with pytest.raises(OSError, match="session write failed"):
+        await loop._process_message(
+            InboundMessage(session_key=key, sender_id="user", content="/new")
+        )
+
+    persisted = loop.sessions._load(key)
+    cached = loop.sessions.get_or_create(key)
+    assert persisted.messages == original.messages
+    assert cached.messages == original.messages
+    assert session.messages == original.messages
+    assert cached.metadata == original.metadata
+
+
+@pytest.mark.asyncio
+async def test_remember_requires_storage(make_loop, monkeypatch):
+    loop = make_loop()
+    key = SessionKey(type="cli", channel_id="default", chat_id="remember-no-storage")
+    session = loop.sessions.get_or_create(key, skip_heartbeat=True)
+    session.add_message("user", "Remember this constraint")
+    commit = AsyncMock()
+    monkeypatch.setattr(loop, "_consolidate_viking_memory", commit)
+
+    response = await loop._process_message(
+        InboundMessage(session_key=key, sender_id="user", content="/remember")
+    )
+
+    assert "not enabled" in response.content
+    assert len(session.messages) == 1
+    commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("success", [True, False])
+async def test_remember_uses_commit_result(make_loop, temp_dir, legacy_commit, success):
+    loop = make_loop(
+        config=Config(
+            storage_workspace=str(temp_dir),
+            ov_server={"server_url": "http://ov.local"},
+            agents={"session_context_enabled": False},
+        )
+    )
+    key = SessionKey(type="cli", channel_id="default", chat_id="remember-result")
+    session = loop.sessions.get_or_create(key, skip_heartbeat=True)
+    session.add_message("user", "Remember this constraint")
+    session.metadata["openviking"] = {"last_sync_status": "success"}
+    if not success:
+        legacy_commit.side_effect = RuntimeError("remote commit failed")
+
+    response = await loop._process_message(
+        InboundMessage(session_key=key, sender_id="user", content="/remember")
+    )
+
+    assert ("has been submitted" in response.content) is success
+    legacy_commit.assert_awaited_once()
+    if not success:
+        assert "Failed to submit" in response.content
+    assert len(session.messages) == 1
+
+
+def test_message_options_use_request_overrides_and_channel_defaults(make_loop, monkeypatch):
+    loop = make_loop()
+    channel = SimpleNamespace(
+        profile_user_list=["profile"], memory_peer=["channel-peer"], memory_user=["channel-owner"]
+    )
+    monkeypatch.setattr(loop, "_get_channel_config", lambda _: channel)
+    connection = {"user_id": "request-user"}
+    msg = InboundMessage(
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="message-options"),
+        sender_id="sender",
+        actor_peer_id="actor",
+        content="question",
+        openviking_connection=connection,
+        metadata={"memory_peers": [" request-peer ", "request-peer"], "memory_users": []},
+    )
+
+    options = loop._resolve_message_options(msg, ov_tools_enable=True)
+
+    assert options.actor_peer_id == "actor"
+    assert options.openviking_connection is connection
+    assert options.profile_user_list == ["profile"]
+    assert options.memory_peer_ids == ["request-peer"]
+    assert options.memory_owner_user_ids == ["channel-owner"]
+    disabled = loop._resolve_message_options(msg, ov_tools_enable=False)
+    assert disabled.profile_user_list == []
+    assert disabled.memory_peer_ids == ["request-peer"]
+    assert disabled.memory_owner_user_ids == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remote_success", [True, False])
+async def test_legacy_compaction_commits_before_local_summary(
+    make_loop, temp_dir, legacy_commit, remote_success
+):
+    config = Config(
+        storage_workspace=str(temp_dir),
+        ov_server={"server_url": "http://ov.local"},
+        agents={"session_context_enabled": False},
+    )
+    provider = _RecordingProvider()
+    loop = make_loop(config=config, provider=provider)
+    if not remote_success:
+        legacy_commit.side_effect = RuntimeError("remote commit failed")
+
+    async def summarize(**kwargs):
+        legacy_commit.assert_awaited_once()
+        return LLMResponse(content=json.dumps({"history_entry": "Saved constraint"}))
+
+    provider.chat = AsyncMock(side_effect=summarize)
+    key = SessionKey(type="cli", channel_id="default", chat_id="legacy-compaction")
+    session = loop.sessions.get_or_create(key, skip_heartbeat=True)
+    session.add_message("user", "Keep this constraint")
+    await loop.sessions.save(session)
+    original = copy.deepcopy(session.messages)
+
+    response = await loop._process_message(
+        InboundMessage(session_key=key, sender_id="user", content="/compact")
+    )
+
+    legacy_commit.assert_awaited_once()
+    if remote_success:
+        provider.chat.assert_awaited_once()
+        assert loop.sessions._load(key).messages == []
+        assert "Saved constraint" in (loop.workspace / "memory" / "HISTORY.md").read_text()
+    else:
+        provider.chat.assert_not_awaited()
+        assert "history was kept" in response.content
+        assert loop.sessions._load(key).messages == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("connection_tools", [None, set(), {"first"}])
+async def test_loop_request_context_preserves_tool_scope_and_metadata_isolation(
+    make_loop, connection_tools
+):
+    contexts = {}
+
+    class RecordingTool(Tool):
+        name = "record"
+        description = "Record tool context"
+        parameters = {"type": "object", "properties": {}}
+
+        async def execute(self, tool_context, **kwargs):
+            contexts[self.name] = tool_context
+            tool_context.channel_metadata["tool"] = self.name
+            return "recorded"
+
+    calls = [
+        ToolCallRequest(id=name, name=name, arguments={}, tokens=1) for name in ("first", "second")
+    ]
+    provider = _MediaProvider([calls])
+    loop = make_loop(provider=provider)
+    for call in calls:
+        tool = RecordingTool()
+        tool.name = call.name
+        loop.tools.register(tool)
+    key = SessionKey(type="cli", channel_id="default", chat_id="tool-request-context")
+    connection = {"user_id": "request-user"}
+    metadata = {"message_id": "message"}
+
+    final, *_ = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "Record both contexts"}],
+        session_key=key,
+        publish_events=False,
+        sender_id="sender",
+        actor_peer_id="actor",
+        memory_peer_ids=["memory-peer"],
+        memory_owner_user_ids=["memory-owner"],
+        openviking_connection=connection,
+        openviking_tool_names=connection_tools,
+        channel_metadata=metadata,
+    )
+
+    assert final == "done"
+    assert metadata == {"message_id": "message"}
+    assert set(contexts) == {"first", "second"}
+    for name, context in contexts.items():
+        assert context.session_key == key
+        assert context.sender_id == "sender"
+        assert context.actor_peer_id == "actor"
+        assert context.memory_peer_ids == ["memory-peer"]
+        assert context.memory_owner_user_ids == ["memory-owner"]
+        assert context.channel_metadata == {"message_id": "message", "tool": name}
+        expected_connection = (
+            connection if connection_tools is None or name in connection_tools else None
+        )
+        assert context.openviking_connection == expected_connection
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("activation_success", [True, False])
+async def test_skill_activation_blocks_other_tools_until_next_turn(make_loop, activation_success):
+    activate = ToolCallRequest(id="activate", name="activate", arguments={}, tokens=1)
+    regular = ToolCallRequest(id="regular", name="regular", arguments={}, tokens=1)
+    retry = ToolCallRequest(id="retry", name="regular", arguments={}, tokens=1)
+    provider = _MediaProvider([[regular, activate], [retry]])
+    loop = make_loop(provider=provider)
+    registry = SimpleNamespace(
+        get_definitions=lambda **kwargs: [
+            {"type": "function", "function": {"name": name}} for name in ("activate", "regular")
+        ],
+        execute_detailed=AsyncMock(
+            side_effect=[
+                ToolExecutionResult(
+                    result="activated" if activation_success else "Error: activation failed",
+                    effective_params={},
+                ),
+                ToolExecutionResult(result="regular result", effective_params={}),
+            ]
+        ),
+    )
+    runtime = SimpleNamespace(
+        is_activation_call=lambda name, args: name == "activate",
+        activation_succeeded=lambda args: activation_success,
+    )
+
+    final, _reasoning, tools_used, *_ = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "Activate the Skill and use the tool"}],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="activation-order"),
+        publish_events=False,
+        tool_registry=registry,
+        skill_runtime=runtime,
+    )
+
+    assert final == "done"
+    assert [call.args[0] for call in registry.execute_detailed.await_args_list] == [
+        "activate",
+        "regular",
+    ]
+    assert [tool["tool_call_id"] for tool in tools_used] == ["regular", "activate", "retry"]
+    expected_error = "SKILL_CONTEXT_UPDATED" if activation_success else "SKILL_ACTIVATION_FAILED"
+    assert expected_error in tools_used[0]["result"]
+    assert tools_used[2]["result"] == "regular result"

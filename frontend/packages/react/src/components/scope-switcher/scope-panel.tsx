@@ -1,3 +1,4 @@
+import { Input } from '../../shared/components/input/input.js';
 import { useCallback, type ReactNode } from 'react';
 import { moveScopeFocus } from './scope-keyboard.js';
 import CheckIcon from '../../../../icons/svg/scope-switcher/check.svg?react';
@@ -51,7 +52,7 @@ export function ScopePanel({
   slots?: ScopeSwitcherSlots;
   actions?: ScopeSwitcherActions;
   onSelect: NonNullable<ScopeSwitcherActions['onSelect']>;
-  labels?: ScopeSwitcherLabels;
+  labels: Required<ScopeSwitcherLabels>;
 }) {
   const focusPanel = useCallback((node: HTMLDivElement | null) => {
     const target =
@@ -79,40 +80,36 @@ export function ScopePanel({
       Math.max(options.length, data.options.length, data.total ?? 0) >
         SCOPE_SWITCHER_SEARCH_THRESHOLD);
   const search = searchVisible ? (
-    <div className="ov-scope-switcher__search-field">
-      <SearchIcon className="ov-scope-switcher__search-icon" />
-      <input
-        type="search"
-        className="ov-scope-switcher__search"
-        value={keyword}
-        aria-label={labels?.searchPlaceholder ?? 'Search'}
-        placeholder={labels?.searchPlaceholder ?? 'Search'}
-        onChange={(event) =>
-          actions?.onSearchKeywordChange?.(event.currentTarget.value)
-        }
-      />
-    </div>
+    <Input
+      size="small"
+      prefix={<SearchIcon className="ov-scope-switcher__search-icon" />}
+      type="search"
+      className="ov-scope-switcher__search-field"
+      value={keyword}
+      aria-label={labels.searchPlaceholder}
+      placeholder={labels.searchPlaceholder}
+      onChange={(event) =>
+        actions?.onSearchKeywordChange?.(event.currentTarget.value)
+      }
+    />
   ) : null;
   let list;
   if (state?.loading) {
     list = (
       <div className="ov-scope-switcher__state" role="status">
-        {labels?.loading ?? 'Loading…'}
+        {labels.loading}
       </div>
     );
   } else if (state?.error) {
     list = (
       <div className="ov-scope-switcher__state" role="alert">
-        {slots?.errorFallback ?? labels?.error ?? 'Unable to load options'}
+        {slots?.errorFallback ?? labels.error}
       </div>
     );
   } else if (!options.length) {
     list = (
       <div className="ov-scope-switcher__state" role="status">
-        {slots?.emptyFallback ??
-          (hasKeyword
-            ? (labels?.noMatch ?? labels?.empty ?? 'No matches')
-            : (labels?.empty ?? 'No options'))}
+        {slots?.emptyFallback ?? (hasKeyword ? labels.noMatch : labels.empty)}
       </div>
     );
   } else {

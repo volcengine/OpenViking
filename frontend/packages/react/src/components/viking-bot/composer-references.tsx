@@ -1,3 +1,5 @@
+import { Button } from '../../shared/components/button/button.js';
+import type { Locale } from '../../shared/locale.js';
 import type { RefObject } from 'react';
 import type { SenderInstance } from '@ark-design/ui/sender';
 import { VikingBotIcon } from '../../icons/viking-bot-icons.js';
@@ -26,6 +28,7 @@ export function composerMention(
   config: VikingBotReferences | undefined,
   disabled: boolean,
   labels: VikingBotLabels,
+  locale: Locale,
 ): MentionConfig | undefined {
   if (!config) return undefined;
   return {
@@ -48,6 +51,7 @@ export function composerMention(
     render: ({ query, command, editor }) =>
       disabled ? null : (
         <ReferencePicker
+          locale={locale}
           config={config}
           editor={editor}
           query={query}
@@ -61,6 +65,7 @@ export function composerMention(
 }
 
 export function ReferenceButton({
+  locale,
   config,
   disabled,
   labels,
@@ -69,6 +74,7 @@ export function ReferenceButton({
   config: VikingBotReferences;
   disabled?: boolean;
   labels: Required<VikingBotLabels>;
+  locale: Locale;
   senderRef: RefObject<SenderInstance | null>;
 }) {
   return (
@@ -81,20 +87,24 @@ export function ReferenceButton({
           content={labels.reference}
           disabled={props['aria-expanded'] === true}
         >
-          <button
+          <Button
             {...props}
+            size="mini"
+            type="text"
+            iconOnly
             className="ov-viking-bot__attach"
-            type="button"
+            htmlType="button"
             aria-label={labels.reference}
             disabled={disabled}
           >
             @
-          </button>
+          </Button>
         </Tooltip>
       )}
     >
       {(close) => (
         <ReferencePicker
+          locale={locale}
           config={config}
           labels={labels}
           onSelect={(item) => {
@@ -126,8 +136,11 @@ export function ReferenceTags({
           <Tooltip content={item.uri}>
             <span>{item.name}</span>
           </Tooltip>
-          <button
-            type="button"
+          <Button
+            size="mini"
+            type="text"
+            iconOnly
+            htmlType="button"
             disabled={disabled}
             aria-label={`${labels.removeReference}: ${item.name}`}
             onClick={() =>
@@ -137,7 +150,7 @@ export function ReferenceTags({
             }
           >
             <VikingBotIcon name="remove" width={12} height={12} />
-          </button>
+          </Button>
         </li>
       ))}
     </ul>

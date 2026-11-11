@@ -1,3 +1,5 @@
+import { Button } from '../../shared/components/button/button.js';
+import type { Locale } from '../../shared/locale.js';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { TuiRecord } from '../../components/tui/index.js';
@@ -22,7 +24,7 @@ export function ConsoleToolbar({
 }: {
   mode: ConsoleMode;
   panelId: string;
-  locale: 'en' | 'zh';
+  locale: Locale;
   labels: ReturnType<typeof consoleLabels>;
   records: readonly TuiRecord[];
   isExecuting: boolean;
@@ -69,9 +71,12 @@ export function ConsoleToolbar({
             content={labels.clear}
             className="ov-console__action-tooltip"
           >
-            <button
+            <Button
+              size="small"
+              type="text"
+              iconOnly
               className="ov-console__action"
-              type="button"
+              htmlType="button"
               aria-label={labels.clear}
               onClick={() => {
                 setSessionVersion((version) => version + 1);
@@ -79,7 +84,7 @@ export function ConsoleToolbar({
               }}
             >
               <ConsoleIcon name="newSession" />
-            </button>
+            </Button>
           </Tooltip>
         </div>
       ) : (

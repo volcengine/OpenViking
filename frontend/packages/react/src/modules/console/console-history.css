@@ -36,7 +36,7 @@
 .ov-console__history-content li {
   margin: 0;
 }
-.ov-console__history-content button {
+.ov-console__history-content button:not(.ov-button) {
   display: flex;
   box-sizing: border-box;
   width: 100%;
@@ -53,13 +53,13 @@
   text-align: start;
   cursor: pointer;
 }
-.ov-console__history-content button:hover {
+.ov-console__history-content button:not(.ov-button):hover {
   background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
 }
-.ov-console__history-content button:disabled {
+.ov-console__history-content button:not(.ov-button):disabled {
   cursor: not-allowed;
 }
-.ov-console__history-content button:focus-visible {
+.ov-console__history-content button:not(.ov-button):focus-visible {
   outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   outline-offset: -2px;
 }

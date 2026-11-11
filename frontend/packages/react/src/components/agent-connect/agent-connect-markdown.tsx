@@ -1,110 +1,128 @@
-import { Fragment } from 'react';
+import ReactMarkdown, { type Components } from 'react-markdown';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize, { type Options } from 'rehype-sanitize';
+import remarkGfm from 'remark-gfm';
+import {
+  Children,
+  createContext,
+  isValidElement,
+  useContext,
+  type ReactNode,
+} from 'react';
+import {
+  AgentConnectCodeBlock,
+  type CodeBlockControls,
+} from './agent-connect-code-block.js';
+import { remarkMaskApiKey } from './agent-connect-mask.js';
 
-/** 本地指南的有限 Markdown 子集；不执行 HTML，也不自动加载截图或外链。 */
-function Inline({ text }: { text: string }) {
-  return text
-    .split(/(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\(https?:\/\/[^)]+\))/g)
-    .map((part, index) => {
-      const link = /^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/.exec(part);
-      if (link)
-        return (
-          <a
-            key={index}
-            href={link[2]}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {link[1]}
-          </a>
-        );
-      if (part.startsWith('`'))
-        return <code key={index}>{part.slice(1, -1)}</code>;
-      if (part.startsWith('**'))
-        return <strong key={index}>{part.slice(2, -2)}</strong>;
-      return <Fragment key={index}>{part}</Fragment>;
-    });
+// 与参考接入指南采用相同的 HTML 白名单；截图不属于当前接入视图。
+const markdownHtmlSchema: Options = {
+  attributes: {
+    a: ['href', 'title'],
+    code: [['className', /^language-[\w-]+$/]],
+    details: ['open'],
+    td: ['align', 'colSpan', 'rowSpan'],
+    th: ['align', 'colSpan', 'rowSpan'],
+  },
+  protocols: { href: ['http', 'https', 'mailto'] },
+  tagNames: [
+    'a',
+    'b',
+    'blockquote',
+    'br',
+    'code',
+    'del',
+    'details',
+    'em',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'hr',
+    'li',
+    'ol',
+    'p',
+    'pre',
+    's',
+    'strong',
+    'summary',
+    'table',
+    'tbody',
+    'td',
+    'th',
+    'thead',
+    'tr',
+    'ul',
+  ],
+};
+
+// 保持指令卡片原有标题尺寸，链接仍由用户主动打开。
+const components: Components = {
+  h1: ({ children }) => <h5>{children}</h5>,
+  h2: ({ children }) => <h5>{children}</h5>,
+  h3: ({ children }) => <h5>{children}</h5>,
+  h4: ({ children }) => <h5>{children}</h5>,
+  h5: ({ children }) => <h5>{children}</h5>,
+  h6: ({ children }) => <h5>{children}</h5>,
+  a: ({ children, href, title }) => (
+    <a href={href} title={title} target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
+  ),
+  pre: MarkdownCodeBlock,
+};
+
+/** 先解析原始 HTML，再清理不允许的标签、属性与协议。 */
+interface MarkdownProps extends CodeBlockControls {
+  text: string;
+  keyToken: string;
+  apiKey: string;
 }
 
-function Prose({ text }: { text: string }) {
-  // 截图属于原产品说明，当前接入视图保留文字步骤，不发起截图请求。
-  const lines = text.split('\n').filter((line) => !/^\s*!\[/.test(line));
-  const blocks: string[] = [];
-  let current = '';
-  for (const line of lines) {
-    if (!line.trim()) {
-      if (current) blocks.push(current);
-      current = '';
-    } else if (/^#{1,6}\s/.test(line)) {
-      if (current) blocks.push(current);
-      blocks.push(line);
-      current = '';
-    } else {
-      current += `${current ? '\n' : ''}${line}`;
-    }
+const codeBlockContext = createContext<Omit<MarkdownProps, 'text'> | null>(
+  null,
+);
+
+/** 稳定的渲染器身份保留代码块的显示状态及异步复制生命周期。 */
+function MarkdownCodeBlock({ children }: { children?: ReactNode }) {
+  const context = useContext(codeBlockContext);
+  const child = Children.toArray(children)[0];
+  if (
+    !context ||
+    !isValidElement<{ children?: string; className?: string }>(child) ||
+    typeof child.props.children !== 'string'
+  ) {
+    return <pre>{children}</pre>;
   }
-  if (current) blocks.push(current);
-  return blocks.map((block, index) => {
-    if (/^#{1,6}\s/.test(block)) {
-      return (
-        <h5 key={index}>
-          <Inline text={block.replace(/^#{1,6}\s/, '')} />
-        </h5>
-      );
-    }
-    if (block.startsWith('|')) {
-      const rows = block
-        .split('\n')
-        .filter((row) => !/^\|[\s:|-]+\|$/.test(row));
-      return (
-        <table key={index}>
-          <tbody>
-            {rows.map((row, rowIndex) => (
-              <tr key={rowIndex}>
-                {row
-                  .split('|')
-                  .slice(1, -1)
-                  .map((cell, column) =>
-                    rowIndex === 0 ? (
-                      <th key={column}>
-                        <Inline text={cell.trim()} />
-                      </th>
-                    ) : (
-                      <td key={column}>
-                        <Inline text={cell.trim()} />
-                      </td>
-                    ),
-                  )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      );
-    }
-    return (
-      <p key={index}>
-        <Inline text={block} />
-      </p>
-    );
-  });
+  const { keyToken, apiKey, ...controls } = context;
+  const code = child.props.children.replace(/\n$/, '');
+  return (
+    <AgentConnectCodeBlock
+      {...controls}
+      language={child.props.className?.replace(/^language-/, '')}
+      display={code.split(keyToken).join('••••••••')}
+      copyText={code.split(keyToken).join(apiKey)}
+    />
+  );
 }
 
-export function AgentConnectMarkdown({ text }: { text: string }) {
+export function AgentConnectMarkdown({ text, ...context }: MarkdownProps) {
   return (
     <div className="ov-agent-connect__markdown">
-      {text
-        .split(/(^[ \t]*```[^\n]*\n[\s\S]*?^[ \t]*```[ \t]*$)/gm)
-        .map((part, index) => {
-          const code = /^[ \t]*```[^\n]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/.exec(
-            part,
-          );
-          return code ? (
-            <pre key={index}>
-              <code>{code[1]}</code>
-            </pre>
-          ) : (
-            <Prose key={index} text={part} />
-          );
-        })}
+      <codeBlockContext.Provider value={context}>
+        <ReactMarkdown
+          remarkPlugins={[
+            [remarkGfm, { singleTilde: false }],
+            [remarkMaskApiKey, { keyToken: context.keyToken }],
+          ]}
+          rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownHtmlSchema]]}
+          components={components}
+        >
+          {text}
+        </ReactMarkdown>
+      </codeBlockContext.Provider>
     </div>
   );
 }

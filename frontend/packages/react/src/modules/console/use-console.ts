@@ -1,7 +1,10 @@
+import { useLocale } from '../../shared/locale-context.js';
+import { localizeConsoleRecords } from './localize-records.js';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { createOvClient } from '../../client/client.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
 import { consoleCommands } from './commands.js';
+import { ConsoleCommandError } from './command-messages.js';
 import { createConsoleController } from './controller.js';
 import type { ConsoleMode, ConsoleOptions, ConsoleResult } from './types.js';
 
@@ -9,11 +12,12 @@ import type { ConsoleMode, ConsoleOptions, ConsoleResult } from './types.js';
 export function useConsole({
   mode: controlledMode,
   defaultMode = 'conversation',
-  locale = 'en',
+  locale: localeProp,
   scopeKey,
   onModeChange,
   requestOptions = {},
 }: ConsoleOptions = {}): ConsoleResult {
+  const locale = useLocale(localeProp);
   const inherited = useOvClient();
   const inheritedSignal = useOvSignal();
   const [fallback] = useState(() => createOvClient());
@@ -58,8 +62,27 @@ export function useConsole({
   );
   const [internalMode, setInternalMode] = useState<ConsoleMode>(defaultMode);
   const mode = controlledMode ?? internalMode;
+  const records = useMemo(
+    () => localizeConsoleRecords(state.records, locale),
+    [state.records, locale],
+  );
+  // Format library errors at read time; server errors keep their original identity.
+  const error = useMemo(
+    () =>
+      state.error instanceof ConsoleCommandError
+        ? new ConsoleCommandError(
+            state.error.code,
+            state.error.value,
+            state.error.usage,
+            locale,
+          )
+        : state.error,
+    [state.error, locale],
+  );
   return {
     ...state,
+    records,
+    error,
     mode,
     commands: consoleCommands(locale),
     setMode(next: ConsoleMode) {

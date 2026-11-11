@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import { BubbleTools } from '@ark-design/ui/bubble';
 import { messageText } from './message-groups.js';
 import type { VikingBotLabels, VikingBotMessage } from './model.js';
@@ -35,13 +36,15 @@ export function MessageFooter({
       {time ? <time dateTime={message.createdAt}>{time}</time> : null}
       {canCopy ? (
         onCopy ? (
-          <button
-            type="button"
+          <Button
+            size="mini"
+            type="text"
+            htmlType="button"
             className="ov-viking-bot__copy"
             onClick={() => onCopy(text)}
           >
             {labels.copy}
-          </button>
+          </Button>
         ) : (
           <BubbleTools
             items={['copy']}

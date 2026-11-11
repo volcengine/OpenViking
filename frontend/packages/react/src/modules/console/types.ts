@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes, ReactNode } from 'react';
 import type { OvRequestOptions } from '../../client/types.js';
 import type {
@@ -26,8 +27,11 @@ export interface ConsoleLabels {
   clear?: string;
   history?: string;
   emptyHistory?: string;
+  /** 终端空态标题，转交 Tui 的 `emptyTitle`。Terminal empty-state heading, mapped to Tui `emptyTitle`. */
   commandTitle?: string;
+  /** 终端空态说明，转交 Tui 的 `emptyDescription`。Terminal empty-state description, mapped to Tui `emptyDescription`. */
   commandDescription?: string;
+  /** 快捷命令引导文案，转交 Tui 的 `quickStart`。Quick-command label, mapped to Tui `quickStart`. */
   quickStart?: string;
   mode?: string;
   tui?: TuiLabels;
@@ -36,10 +40,10 @@ export interface ConsoleLabels {
 
 /** Options shared by Console and useConsole. */
 export interface ConsoleOptions {
+  locale?: Locale;
   mode?: ConsoleMode;
   /** Initial uncontrolled mode. Defaults to VikingBot ('conversation'). */
   defaultMode?: ConsoleMode;
-  locale?: 'en' | 'zh';
   /** Change with the identity when using dynamic credential/identity functions. */
   scopeKey?: string;
   onModeChange?: (mode: ConsoleMode) => void;
@@ -50,6 +54,17 @@ export interface ConsoleProps
   extends
     ConsoleOptions,
     Omit<HTMLAttributes<HTMLDivElement>, 'onSelect' | 'children'> {
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
+  /**
+   * 终端空态展示的快捷命令名称，按数组顺序取自命令目录，未命中的名称跳过，
+   * 重复名称只保留首次出现。
+   * 省略时使用默认集合；传空数组不展示内置空态。
+   * Quick command names shown in the terminal empty state, resolved from the
+   * command catalogue in array order with unknown names skipped. Omitted uses
+   * the default set; an empty array shows no built-in empty state.
+   */
+  quickCommands?: readonly string[];
   /** Host-owned conversation state/capabilities. Omit draft callbacks to use Console's local draft. */
   conversation?: Partial<VikingBotProps>;
   /** Reports navigation intent; the host opens the resource. */
