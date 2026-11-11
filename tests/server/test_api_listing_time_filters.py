@@ -7,7 +7,7 @@ service dispatch, and the metadata lookup that decides the match.
 """
 
 import asyncio
-from datetime import timezone
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -260,6 +260,108 @@ async def test_directory_listing_keeps_matching_files_behind_the_directory_group
             "sort_by": "mtime",
             "sort_order": "asc",
             "until": cutoff,
+        },
+    )
+
+    assert response.status_code == 200
+    names = {entry["name"] for entry in response.json()["result"]}
+    assert "matching.md" in names, "the file inside the window was dropped"
+
+
+async def test_tag_projection_alone_does_not_change_the_node_limit(
+    client: httpx.AsyncClient,
+    service,
+):
+    """Projecting the tags must not turn a zero node limit into a match.
+
+    A projection on its own does not filter anything, so it must not change
+    what the listing returns.
+    """
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+    root_uri = f"viking://user/{DEFAULT_USER.user_id}/memories/projection-limit"
+    await service.viking_fs.mkdir(root_uri, exist_ok=True, ctx=ctx)
+    await service.viking_fs.write_file(
+        f"{root_uri}/only-file.md",
+        "# Only file\n",
+        ctx=ctx,
+    )
+
+    plain = await client.get(
+        "/api/v1/fs/ls",
+        params={"uri": root_uri, "output": "original", "node_limit": 0},
+    )
+    projected = await client.get(
+        "/api/v1/fs/ls",
+        params={
+            "uri": root_uri,
+            "output": "original",
+            "node_limit": 0,
+            "include_tags": "true",
+        },
+    )
+
+    assert plain.status_code == 200
+    assert projected.status_code == 200
+    assert plain.json()["result"] == []
+    assert projected.json()["result"] == []
+
+
+async def test_recursive_listing_keeps_matching_files_in_a_later_subtree(
+    client: httpx.AsyncClient,
+    service,
+):
+    """A recursive listing must not stop at the first entry outside the window.
+
+    A recursive listing walks the tree depth first, with the modification time
+    ordering the siblings. It is not one directory group followed by one file
+    group, so an entry outside the window says nothing about the subtrees
+    further down - a scan that stops there drops the entries of the later
+    subtrees.
+    """
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+    root_uri = f"viking://user/{DEFAULT_USER.user_id}/memories/mixed-tree-desc"
+    await service.viking_fs.mkdir(root_uri, exist_ok=True, ctx=ctx)
+
+    # A subtree that is written first, so it sits behind the newer one.
+    await service.viking_fs.mkdir(f"{root_uri}/later-in-tree/sub", exist_ok=True, ctx=ctx)
+    await service.viking_fs.write_file(
+        f"{root_uri}/later-in-tree/sub/matching.md",
+        "# Matching\n\nWritten before the bulk.\n",
+        ctx=ctx,
+    )
+    await asyncio.sleep(1.1)
+
+    # More entries than fit into the first raw page (256 entries).
+    await service.viking_fs.mkdir(f"{root_uri}/first-in-tree", exist_ok=True, ctx=ctx)
+    for index in range(260):
+        await service.viking_fs.write_file(
+            f"{root_uri}/first-in-tree/old-{index:04d}.md",
+            f"# Old {index}\n",
+            ctx=ctx,
+        )
+    await asyncio.sleep(1.1)
+
+    cutoff = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    await asyncio.sleep(1.1)
+
+    # Both writes land inside the window, the bulk of the tree does not.
+    await service.viking_fs.write_file(
+        f"{root_uri}/later-in-tree/sub/matching.md",
+        "# Matching\n\nRewritten inside the window.\n",
+        ctx=ctx,
+    )
+    await service.viking_fs.mkdir(f"{root_uri}/first-in-tree/recent-directory", exist_ok=True, ctx=ctx)
+
+    response = await client.get(
+        "/api/v1/fs/ls",
+        params={
+            "uri": root_uri,
+            "recursive": "true",
+            "output": "original",
+            "limit": 10,
+            "sort_by": "mtime",
+            "sort_order": "desc",
+            "since": cutoff,
         },
     )
 

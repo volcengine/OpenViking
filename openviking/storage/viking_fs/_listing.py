@@ -64,6 +64,11 @@ class _ListingMixin:
         before that the next batch can still hold directories, and further
         down the listing files, that belong inside the window. Stopping there
         would drop entries that are inside the window.
+
+        This holds for a flat listing only. A recursive listing walks the
+        tree depth first, with the modification time ordering the siblings,
+        so it is not one directory group followed by one file group: an entry
+        outside the window says nothing about the subtrees further down.
         """
         if sort_by != "mtime" or not entries:
             return False
@@ -197,7 +202,11 @@ class _ListingMixin:
                 remaining_offset = 0
             if len(entries) < batch_size:
                 break
-            if self._time_window_exhausted(entries, since_dt, until_dt, sort_by, sort_order):
+            if not recursive and self._time_window_exhausted(
+                entries, since_dt, until_dt, sort_by, sort_order
+            ):
+                # Only a flat listing is ordered in one mtime-ordered group,
+                # so only it can be cut short.
                 break
             source_offset += len(entries)
         return ListingPage(entries=result[:node_limit], has_more=len(result) > node_limit)

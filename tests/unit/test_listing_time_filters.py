@@ -229,6 +229,28 @@ async def test_ls_keeps_scanning_while_the_batch_is_still_in_the_directory_group
     assert fs.ls_calls == 2, "the scan must continue past the directory group"
 
 
+async def test_a_recursive_listing_does_not_stop_at_the_first_entry_outside_the_window():
+    # A recursive listing walks the tree depth first, with the modification
+    # time ordering the siblings. It is not one directory group followed by
+    # one file group, so an entry outside the window says nothing about the
+    # subtrees further down and the scan has to continue.
+    old = [_entry(f"old-{index:03d}.md", "2026-01-01T10:00:00Z") for index in range(256)]
+    fs = _FakeVikingFS(pages=[old, [_entry("inside.md", "2026-03-11T10:00:00Z")]])
+
+    page = await fs.list_page(
+        "viking://user/user/memories",
+        ctx=_ctx(),
+        recursive=True,
+        since="2026-03-10",
+        sort_by="mtime",
+        sort_order="desc",
+        node_limit=10,
+    )
+
+    assert [entry["name"] for entry in page.entries] == ["inside.md"]
+    assert fs.ls_calls == 2, "a recursive listing must not be cut short"
+
+
 async def test_ls_stops_scanning_an_ascending_listing_at_the_upper_bound():
     entries = [_entry(f"inside-{index}", "2026-03-05T10:00:00Z") for index in range(2)]
     entries += [_entry(f"new-{index}", "2027-01-01T10:00:00Z") for index in range(5000)]
@@ -328,6 +350,24 @@ async def test_ls_without_a_window_keeps_the_previous_behaviour():
 
     assert [entry["name"] for entry in page.entries] == ["old", "new"]
     assert fs.ls_calls == 1
+
+
+async def test_tag_projection_alone_does_not_change_the_limit_contract():
+    # A projection on its own must not turn the listing into a filtered one,
+    # otherwise a zero node limit would start returning entries.
+    fs = _FakeVikingFS([_entry("inside", "2026-03-11T10:00:00Z")])
+    service = FSService(viking_fs=fs)
+
+    plain = await service.ls("viking://user/user/memories", ctx=_ctx(), node_limit=0)
+    projected = await service.ls(
+        "viking://user/user/memories",
+        ctx=_ctx(),
+        node_limit=0,
+        include_tags=True,
+    )
+
+    assert plain.entries == []
+    assert projected.entries == []
 
 
 async def test_the_service_forwards_the_window_to_the_filesystem_layer():

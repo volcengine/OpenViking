@@ -330,7 +330,7 @@ class FSService:
         entry_filter: Optional[
             Callable[[List[Dict[str, Any]]], Awaitable[List[Dict[str, Any]]]]
         ] = None
-        if tags or include_tags:
+        if tags:
 
             async def filter_by_tags(
                 entries: List[Dict[str, Any]],
@@ -340,7 +340,7 @@ class FSService:
             entry_filter = filter_by_tags
 
         try:
-            return await viking_fs.list_page(
+            page = await viking_fs.list_page(
                 uri,
                 ctx=ctx,
                 recursive=recursive,
@@ -357,6 +357,15 @@ class FSService:
             )
         except ValueError as exc:
             raise InvalidArgumentError(str(exc)) from exc
+
+        if include_tags and not tags:
+            # Tag projection on its own must not change the limit contract, so
+            # it runs on the selected page instead of inside the filter.
+            return ListingPage(
+                entries=await self._attach_and_filter_tags(page.entries, ctx, None, True),
+                has_more=page.has_more,
+            )
+        return page
 
     async def ls(
         self,
