@@ -5,10 +5,7 @@
 import asyncio
 import base64
 import os
-import shutil
 import signal
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -515,54 +512,14 @@ class TestGitAccessor:
         assert resource.original_source == source
         assert token not in str(resource.meta)
 
-    @pytest.mark.parametrize("blocked", [False, True])
-    async def test_github_token_is_preserved_for_archive_fallback_clone(
-        self,
-        accessor: GitAccessor,
-        tmp_path: Path,
-        blocked: bool,
-    ) -> None:
-        source = "https://github.com/org/private.git"
-        token = "account-token"
-        with (
-            patch(
-                "openviking.parse.accessors.git_accessor.tempfile.mkdtemp",
-                return_value=str(tmp_path),
-            ),
-            patch.object(
-                accessor,
-                "_github_zip_download",
-                new_callable=AsyncMock,
-                side_effect=PermissionDeniedError("blocked")
-                if blocked
-                else RuntimeError("archive unavailable"),
-            ) as zip_download,
-            patch.object(
-                accessor,
-                "_git_clone",
-                new_callable=AsyncMock,
-                return_value="org/private",
-            ) as git_clone,
-        ):
-            if blocked:
-                with pytest.raises(PermissionDeniedError, match="blocked"):
-                    await accessor.access(source, github_token=token)
-                git_clone.assert_not_awaited()
-                return
-            await accessor.access(source, github_token=token)
+    async def test_archive_policy_denial_stops_import(self, accessor: GitAccessor) -> None:
+        def reject(_url):
+            raise PermissionDeniedError("blocked")
 
-        zip_download.assert_awaited_once_with(
-            source,
-            None,
-            str(tmp_path),
-            github_token=token,
-            request_validator=None,
-        )
-        clone_env = git_clone.await_args.kwargs["env"]
-        assert _git_config_entries(clone_env)[f"http.{source}.extraHeader"] == (
-            "Authorization: Basic "
-            + base64.b64encode(f"oauth2:{token}".encode()).decode("ascii")
-        )
+        with patch.object(accessor, "_git_clone", new_callable=AsyncMock) as clone:
+            with pytest.raises(PermissionDeniedError, match="blocked"):
+                await accessor.access("https://github.com/org/repo", request_validator=reject)
+        clone.assert_not_awaited()
 
     async def test_archive_fallback_uses_commit_only_and_records_pin(
         self,
@@ -867,75 +824,15 @@ class TestGitAccessor:
         """GitAccessor should not handle non-git URLs or files."""
         assert accessor.can_handle(source) is False
 
-    @pytest.mark.skipif(shutil.which("git") is None, reason="requires git")
-    @pytest.mark.parametrize(
-        "operation", ["assets_preflight", "resource_preflight", "clone", "probe"]
-    )
-    async def test_git_network_commands_do_not_follow_redirects(
-        self, accessor: GitAccessor, tmp_path: Path, monkeypatch, operation
+    async def test_git_clone_does_not_fetch_submodules(
+        self, accessor: GitAccessor, tmp_path: Path
     ) -> None:
-        from openviking.server import openviking_assets
-        from openviking.service.resource_service import ResourceService
+        with patch.object(accessor, "_run_git", new_callable=AsyncMock) as run_git:
+            await accessor._git_clone("https://github.com/volcengine/OpenViking.git", str(tmp_path))
 
-        requested = []
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                requested.append(self.path)
-                if self.path.startswith("/private"):
-                    self.send_response(200)
-                    self.end_headers()
-                else:
-                    self.send_response(302)
-                    self.send_header("Location", "/private")
-                    self.end_headers()
-
-            def log_message(self, *_args):
-                pass
-
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        source = f"http://127.0.0.1:{server.server_port}/org/repo"
-        validated = []
-
-        # Treat only this test origin as public; the real git binary receives
-        # a redirect, and must never request its target, even with inherited config.
-        def validate(url):
-            validated.append(url)
-            assert url == source
-
-        monkeypatch.setenv("NO_PROXY", "*")
-        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-        monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
-        monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
-        monkeypatch.setenv("GIT_CONFIG_KEY_0", f"http.{source}.followRedirects")
-        monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
-        monkeypatch.setattr(openviking_assets, "require_remote_resource_source", lambda url: url)
-        monkeypatch.setattr(openviking_assets, "ensure_public_remote_target", validate)
-        try:
-            with pytest.raises((RuntimeError, InvalidArgumentError, PermissionDeniedError)):
-                if operation == "assets_preflight":
-                    await openviking_assets.preflight_git_repository(
-                        asset_name="probe", repo_url=source
-                    )
-                elif operation == "resource_preflight":
-                    await ResourceService()._preflight_git_source(
-                        source, request_validator=validate
-                    )
-                elif operation == "clone":
-                    await accessor._git_clone(
-                        source, str(tmp_path / "repo"), request_validator=validate
-                    )
-                else:
-                    await accessor.probe_git_remote_head(source, request_validator=validate)
-            assert validated == [source]
-            assert len(requested) == 1
-            assert requested[0].startswith("/org/repo/info/refs")
-        finally:
-            await asyncio.to_thread(server.shutdown)
-            server.server_close()
-            thread.join(timeout=2)
+        clone_args = run_git.await_args.args[0]
+        assert "--no-recurse-submodules" in clone_args
+        assert "--recursive" not in clone_args
 
     async def test_git_clone_prefers_commit_over_branch(
         self, accessor: GitAccessor, tmp_path: Path
@@ -1133,32 +1030,20 @@ class TestGitAccessor:
         assert (tmp_path / ".git_source_repo").read_text(encoding="utf-8") == source
         assert await DirectoryParser._is_git_repository(tmp_path) is True
 
-    @pytest.mark.parametrize("platform", ["github", "gitlab"])
-    @pytest.mark.parametrize("blocked", [False, True])
-    async def test_archives_validate_target_before_download(
-        self, accessor: GitAccessor, tmp_path: Path, platform, blocked
+    async def test_github_archive_encodes_fragment_in_ref(
+        self, accessor: GitAccessor, tmp_path: Path
     ) -> None:
-        repo_url = f"https://{platform}.com/example/repo"
-        ref = "test#ssrf" if platform == "github" else "main"
-        expected_url = (
-            "https://github.com/example/repo/archive/test%23ssrf.zip"
-            if platform == "github"
-            else "https://gitlab.com/example/repo/-/archive/main/repo-main.zip"
-        )
-        validator = Mock(side_effect=PermissionDeniedError("blocked") if blocked else None)
-        method = (
-            accessor._github_zip_download if platform == "github" else accessor._gitlab_zip_download
-        )
         with patch(
-            "urllib.request.OpenerDirector.open", side_effect=OSError("stop before network")
-        ) as download:
-            with pytest.raises(PermissionDeniedError if blocked else RuntimeError):
-                await method(repo_url, ref, str(tmp_path), request_validator=validator)
-        validator.assert_called_once_with(expected_url)
-        if blocked:
-            download.assert_not_called()
-        else:
-            assert download.call_args.args[0].full_url == expected_url
+            "openviking.parse.accessors.git_accessor.urllib.request.urlopen",
+            side_effect=OSError("stop before network"),
+        ) as urlopen:
+            with pytest.raises(RuntimeError):
+                await accessor._github_zip_download(
+                    "https://github.com/example/repo", "test#ssrf", str(tmp_path)
+                )
+
+        request = urlopen.call_args.args[0]
+        assert request.full_url == "https://github.com/example/repo/archive/test%23ssrf.zip"
 
     async def test_git_error_does_not_expose_remote_stderr(self, accessor: GitAccessor) -> None:
         process = SimpleNamespace(

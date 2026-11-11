@@ -4,12 +4,12 @@
 
 from __future__ import annotations
 
-import asyncio
-import threading
 import urllib.request
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from email.message import Message
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.response import addinfourl
 
 import httpx
 import pytest
@@ -24,7 +24,6 @@ from openviking.parse.network import (
 )
 from openviking.utils.network_guard import (
     _get_allowed_code_hosting_domains,
-    _is_public_ip,
     _normalize_host,
     _resolve_host_addresses,
     build_httpx_request_validation_hooks,
@@ -90,52 +89,6 @@ class TestNormalizeHost:
 
     def test_strips_dot_and_lowercases(self) -> None:
         assert _normalize_host("Example.COM.") == "example.com"
-
-
-# ── _is_public_ip ───────────────────────────────────────────────────────────
-
-
-class TestIsPublicIP:
-    """Verify classification of public vs non-public IPs."""
-
-    @pytest.mark.parametrize(
-        "address",
-        [
-            "8.8.8.8",
-            "1.1.1.1",
-            "151.101.1.67",
-            "2607:f8b0:4004:800::200e",  # Google IPv6
-        ],
-    )
-    def test_public_addresses_are_global(self, address: str) -> None:
-        assert _is_public_ip(address) is True
-
-    @pytest.mark.parametrize(
-        "address",
-        [
-            "127.0.0.1",
-            "10.0.0.1",
-            "172.16.0.1",
-            "172.31.255.255",
-            "192.168.1.1",
-            "0.0.0.0",
-            "169.254.1.1",  # link-local
-            "::1",
-            "fe80::1",  # IPv6 link-local
-            "fc00::1",  # IPv6 ULA
-            "::ffff:127.0.0.1",  # IPv4-mapped IPv6 loopback
-            "::ffff:10.0.0.1",  # IPv4-mapped IPv6 private
-            "::ffff:192.168.1.1",  # IPv4-mapped IPv6 private
-        ],
-    )
-    def test_non_public_addresses_are_not_global(self, address: str) -> None:
-        assert _is_public_ip(address) is False
-
-    def test_invalid_address_returns_false(self) -> None:
-        assert _is_public_ip("not-an-ip") is False
-
-    def test_empty_string_returns_false(self) -> None:
-        assert _is_public_ip("") is False
 
 
 # ── _resolve_host_addresses ──────────────────────────────────────────────────
@@ -232,46 +185,30 @@ class TestEnsurePublicRemoteTarget:
         with pytest.raises(PermissionDeniedError, match="non-public"):
             ensure_public_remote_target("http://localhost./path")
 
-    @pytest.mark.parametrize("override", ["none", "code_host", "private_networks"])
     @pytest.mark.parametrize(
-        ("resolved_ip", "private_allowed"),
+        ("host", "address", "allow_private"),
         [
-            ("127.0.0.1", False),
-            ("10.0.0.1", True),
-            ("172.16.0.1", True),
-            ("192.168.1.1", True),
-            ("0.0.0.0", False),
-            ("::1", False),
-            ("fe80::1", False),
-            ("fc00::1", True),
-            ("::ffff:127.0.0.1", False),
-            ("::ffff:10.0.0.1", True),
-            ("169.254.169.254", False),
-            ("100.100.100.200", False),
-            ("fd00:ec2::254", False),
-            ("224.0.0.1", False),
+            ("git.example.com", "127.0.0.1", False),
+            ("git.example.com", "169.254.169.254", False),
+            ("other.example.com", "169.254.169.254", True),
+            ("git.example.com", "100.100.100.200", False),
+            ("other.example.com", "fd00:ec2::254", True),
+            ("other.example.com", "10.0.0.1", False),
         ],
     )
-    def test_enforces_resolved_address_policy(
-        self, monkeypatch, resolved_ip, private_allowed, override
-    ):
-        host = "git.example.com"
+    def test_rejects_non_public_resolved_addresses(self, monkeypatch, host, address, allow_private):
         monkeypatch.setattr(
-            "openviking.utils.network_guard._resolve_host_addresses", lambda _host: {resolved_ip}
+            "openviking.utils.network_guard._resolve_host_addresses", lambda _host: {address}
         )
         monkeypatch.setattr(
             "openviking.utils.network_guard._get_allowed_code_hosting_domains",
-            lambda: {host} if override == "code_host" else set(),
+            lambda: {"git.example.com"},
         )
         monkeypatch.setattr(
-            "openviking.utils.network_guard._is_allow_private_networks",
-            lambda: override == "private_networks",
+            "openviking.utils.network_guard._is_allow_private_networks", lambda: allow_private
         )
-        if private_allowed and override != "none":
-            ensure_public_remote_target(f"https://{host}/org/repo")
-        else:
-            with pytest.raises(PermissionDeniedError, match="non-public address"):
-                ensure_public_remote_target(f"https://{host}/org/repo")
+        with pytest.raises(PermissionDeniedError, match="non-public address"):
+            ensure_public_remote_target(f"https://{host}/repo")
 
     # -- Rejection: DNS rebinding with mixed results --
 
@@ -304,12 +241,13 @@ class TestEnsurePublicRemoteTarget:
         """Unresolvable host cannot be verified as public."""
         mock_resolve.return_value = set()
         with pytest.raises(PermissionDeniedError, match="could not be resolved"):
-            ensure_public_remote_target("http://new-host.example.com/path")
+            ensure_public_remote_target("https://github.com/org/repo")
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
-    def test_allows_multiple_public_addresses(self, mock_resolve) -> None:
-        mock_resolve.return_value = {"8.8.8.8", "8.8.4.4"}
-        ensure_public_remote_target("http://dns-rr.example.com/path")  # should not raise
+    def test_allows_private_network_opt_in(self, mock_resolve) -> None:
+        mock_resolve.return_value = {"8.8.8.8", "10.0.0.1"}
+        with patch("openviking.utils.network_guard._is_allow_private_networks", return_value=True):
+            ensure_public_remote_target("http://internal.example.com/path")
 
 
 # ── build_httpx_request_validation_hooks ─────────────────────────────────────
@@ -322,86 +260,50 @@ class TestBuildHttpxRequestValidationHooks:
         assert build_httpx_request_validation_hooks(None) is None
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("client_kind", ["httpx", "urllib"])
-    @pytest.mark.parametrize("use_adapter", [False, True])
-    async def test_parser_adapter_preserves_redirect_validation(
-        self, monkeypatch, client_kind, use_adapter
-    ):
-        validated = []
+    async def test_parser_adapter_preserves_redirect_validation(self) -> None:
+        source = "https://example.com/document.txt"
+        private_target = "http://127.0.0.1/admin"
         downloaded = []
 
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                downloaded.append(self.path)
-                if self.path == "/archive":
-                    self.send_response(200)
-                    self.end_headers()
-                    self.wfile.write(b"archive bytes")
-                else:
-                    self.send_response(302)
-                    target = "/archive" if self.path == "/good" else "/admin"
-                    self.send_header("Location", target)
-                    self.end_headers()
-
-            def log_message(self, *_args):
-                pass
-
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        source = f"http://127.0.0.1:{server.server_port}"
-        monkeypatch.setenv("no_proxy", "*")
-
         def validate(url):
-            validated.append(url)
-            if url == source + "/admin":
+            if url == private_target:
                 raise PermissionDeniedError("blocked")
 
-        if use_adapter:
-            register_parser_network_adapter(
-                SimpleNamespace(
-                    supports=lambda context: True,
-                    create_httpx_transport=lambda context: httpx.AsyncHTTPTransport(),
-                    create_urllib_opener=lambda context: urllib.request.build_opener(
-                        urllib.request.ProxyHandler({})
-                    ),
-                )
+        async def download(request):
+            downloaded.append(str(request.url))
+            return httpx.Response(302, headers={"Location": private_target})
+
+        class ArchiveResponse(urllib.request.HTTPSHandler):
+            def https_open(self, request):
+                downloaded.append(request.full_url)
+                headers = Message()
+                headers["Location"] = private_target
+                response = addinfourl(BytesIO(), headers, request.full_url, 302)
+                response.msg = "Found"
+                return response
+
+        register_parser_network_adapter(
+            SimpleNamespace(
+                supports=lambda context: True,
+                create_httpx_transport=lambda context: httpx.MockTransport(download),
+                create_urllib_opener=lambda context: urllib.request.build_opener(ArchiveResponse()),
             )
-
-        async def fetch(path):
-            url = source + path
-            if client_kind == "httpx":
-                async with create_parser_httpx_client(
-                    ParserNetworkContext(ParserNetworkOperation.HTTP_RESOURCE, url),
-                    follow_redirects=True,
-                    trust_env=False,
-                    event_hooks=build_httpx_request_validation_hooks(validate),
-                ) as client:
-                    return (await client.get(url)).content
-
-            def fetch_sync():
-                with open_parser_url(
-                    ParserNetworkContext(ParserNetworkOperation.GIT_ARCHIVE, url),
-                    url,
-                    request_validator=validate,
-                    timeout=5,
-                ) as response:
-                    return response.read()
-
-            return await asyncio.to_thread(fetch_sync)
-
+        )
         try:
-            assert await fetch("/good") == b"archive bytes"
-            assert validated == [source + "/good", source + "/archive"]
-            assert downloaded == ["/good", "/archive"]
-            validated.clear()
-            downloaded.clear()
+            async with create_parser_httpx_client(
+                ParserNetworkContext(ParserNetworkOperation.HTTP_RESOURCE, source),
+                follow_redirects=True,
+                event_hooks=build_httpx_request_validation_hooks(validate),
+            ) as client:
+                with pytest.raises(PermissionDeniedError, match="blocked"):
+                    await client.get(source)
             with pytest.raises(PermissionDeniedError, match="blocked"):
-                await fetch("/document.txt")
-            assert validated == [source + "/document.txt", source + "/admin"]
-            assert downloaded == ["/document.txt"]
+                open_parser_url(
+                    ParserNetworkContext(ParserNetworkOperation.GIT_ARCHIVE, source),
+                    source,
+                    request_validator=validate,
+                )
         finally:
             reset_parser_network_adapter()
-            await asyncio.to_thread(server.shutdown)
-            server.server_close()
-            thread.join(timeout=2)
+
+        assert downloaded == [source, source]

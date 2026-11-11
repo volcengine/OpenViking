@@ -93,13 +93,6 @@ def _resolve_host_addresses(host: str) -> set[str]:
     return addresses
 
 
-def _is_public_ip(address: str) -> bool:
-    try:
-        return ipaddress.ip_address(address).is_global
-    except ValueError:
-        return False
-
-
 def ensure_public_remote_target(source: str) -> None:
     """Reject unsafe destinations, including on configured code hosts.
 
@@ -126,6 +119,9 @@ def ensure_public_remote_target(source: str) -> None:
             f"host '{host}' could not be resolved to a verifiable public address."
         )
 
+    allow_private = _is_allow_private_networks() or normalized_host in {
+        _normalize_host(d) for d in _get_allowed_code_hosting_domains()
+    }
     for address in sorted(resolved_addresses):
         ip = ipaddress.ip_address(address)
         if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
@@ -144,21 +140,14 @@ def ensure_public_remote_target(source: str) -> None:
                 "code hosting domain lists and allow_private_networks cannot override this restriction."
             )
 
-    allowed_domains = _get_allowed_code_hosting_domains()
-    if _is_allow_private_networks() or normalized_host in {
-        _normalize_host(d) for d in allowed_domains
-    }:
-        return
-
-    non_public = sorted(addr for addr in resolved_addresses if not _is_public_ip(addr))
-    if non_public:
-        raise PermissionDeniedError(
-            "HTTP server only accepts public remote resource targets; "
-            f"host '{host}' resolves to non-public address '{non_public[0]}'. "
-            "To allow this, add the domain to its code.<platform>_domains list "
-            "or code.code_hosting_domains "
-            "or set allow_private_networks=true in your ov.conf."
-        )
+        if not allow_private and not ip.is_global:
+            raise PermissionDeniedError(
+                "HTTP server only accepts public remote resource targets; "
+                f"host '{host}' resolves to non-public address '{address}'. "
+                "To allow this, add the domain to its code.<platform>_domains list "
+                "or code.code_hosting_domains "
+                "or set allow_private_networks=true in your ov.conf."
+            )
 
 
 def build_httpx_request_validation_hooks(
