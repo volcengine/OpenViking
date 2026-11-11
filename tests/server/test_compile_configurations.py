@@ -458,6 +458,7 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     assert state["execution_context"]["owner_user_id"] == ctx.user.user_id
     assert state["conflict_num"] == 0
     assert state["progress"]["source_commit"] == run["meta"]["start_snapshot"]
+    assert state["progress"]["model_name"] == ""
     assert runtime.calls[-1]["args"]["changes"]["execution"]["mode"] == "full"
     assert "compile" not in runtime.calls[-1]
     assert "compile_name" not in runtime.calls[-1]
@@ -468,6 +469,13 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
         "last_run_time"
     ] == first.created_at
     assert len(runtime.calls) == 1
+
+    added_source = SOURCE + "-added"
+    await service.viking_fs.write_file(f"{added_source}/source.md", "source", ctx=ctx)
+    update = CompileConfigUpdate(**SAVED_INPUTS, auto_update=False)
+    for sources in ([SOURCE, added_source], [SOURCE]):
+        update.from_ = sources
+        await service.compile.update_config(update, ctx)
 
     noop = await execute({"compile_name": compile_name}, "compile-noop-execution")
     assert noop.status == "completed", noop.error
@@ -482,7 +490,14 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     incremental = await execute({"compile_name": compile_name}, "compile-updated-source")
     assert incremental.status == "completed", incremental.error
     assert runtime.calls[-1]["args"]["changes"]["execution"]["mode"] == "incremental"
+    update.args = {"model_name": "model-a"}
+    await service.compile.update_config(update, ctx)
+    modeled = await execute({"compile_name": compile_name}, "compile-model-change")
+    assert modeled.status == "completed", modeled.error
+    assert runtime.calls[-1]["args"]["changes"]["execution"]["mode"] == "full"
+
     state_before_full = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
+    assert state_before_full["progress"]["model_name"] == "model-a"
     runs_before_full = await store.list_runs(ctx.account_id, ctx.user.user_id, compile_name)
     full = await execute(INPUTS, "compile-full-execution")
     assert full.status == "completed", full.error
@@ -656,7 +671,7 @@ async def test_configuration_update_preserves_times_and_retry_payload(service, a
     assert updated["updated_by"] == "bob"
     assert updated["execution_context"]["executor"]["user_id"] == editor.user.user_id
     assert updated["task_first_create_time"] == updated["last_run_time"] == task.created_at
-    assert updated["progress"] == {}
+    assert updated["progress"] == {"source_commit": "old-success"}
     assert updated["conflict_num"] == 7
     assert updated["to"] == TARGET
     assert updated["from"] == [source]

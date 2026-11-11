@@ -484,6 +484,7 @@ async def test_changes_new_roots_and_updated_configuration_do_not_rewrite_frozen
         "source_commit": "a" * 40,
         "processed_roots": [SOURCE],
         "instruction": None,
+        "model_name": "",
         "skill_snapshot": {"uri": SKILL, "snapshot_id": None},
     }
     record["from"] = [SOURCE, "viking://resources/added"]
@@ -524,6 +525,7 @@ async def test_unsuccessful_runs_preserve_baseline_and_redact_persisted_errors(
         "source_commit": "a" * 40,
         "processed_roots": [SOURCE],
         "instruction": None,
+        "model_name": "",
         "skill_snapshot": {"uri": SKILL, "snapshot_id": None},
     }
     compile_name = await setup.store.create("acme", "alice", record, compile_name="wiki")

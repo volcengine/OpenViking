@@ -859,6 +859,7 @@ class CompileLifecycle:
             compile_name
             and progress.get("source_commit")
             and (request.get("instruction") or "") == (progress.get("instruction") or "")
+            and (request.get("args") or {}).get("model_name", "") == progress.get("model_name")
             and previous.get("uri") == request["skill"]
         )
         if incremental and not classify_uri(request["skill"]).is_system:
@@ -1131,6 +1132,8 @@ class CompileLifecycle:
                 "source_commit": run["meta"]["start_snapshot"],
                 "processed_roots": list(run["params"]["from"]),
                 "instruction": run["params"].get("instruction"),
+                # Empty means the successful request uses Runtime's default model selection.
+                "model_name": (run["params"].get("args") or {}).get("model_name", ""),
                 "skill_snapshot": {
                     "uri": run["params"]["skill"],
                     "snapshot_id": run["meta"]["skill_snapshot_id"],

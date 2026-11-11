@@ -43,7 +43,7 @@ def test_compile_builtin_skill_uri(skill, valid):
             "/SKILL.md"
         )
     else:
-        with pytest.raises(InvalidArgumentError, match="skill must resolve"):
+        with pytest.raises(InvalidArgumentError, match="The input skill is not"):
             service._normalize_request_uris(request, ctx)
 
 

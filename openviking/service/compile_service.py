@@ -941,7 +941,6 @@ class CompileService:
         lifecycle = self._require_lifecycle()
         async with lifecycle.store.edit(ctx.account_id, owner_user_id, body.compile_name) as record:
             await lifecycle._fs._ensure_access(record["to"], ctx, action=AclAction.WRITE)
-            previous_signature = execution_signature(record)
             replacement = deepcopy(replacement)
             replacement["updated_by"] = (
                 ctx.user.user_id if body.updated_by is None else body.updated_by
@@ -984,8 +983,7 @@ class CompileService:
             ):
                 for field in ("last_triggered_slot", "next_triggered_slot"):
                     replacement[field] = record[field]
-            if previous_signature == execution_signature(replacement):
-                replacement["progress"] = record["progress"]
+            replacement["progress"] = record["progress"]
             if self._scheduler is not None:
                 await self._scheduler.reschedule(
                     ctx.account_id,
@@ -1161,7 +1159,11 @@ class CompileService:
             resolve_path_variables(skill), ctx, field_name="skill"
         ).rstrip("/")
         if not classify_uri(skill).is_skill_root:
-            raise InvalidArgumentError("skill must resolve to a Skill directory or SKILL.md")
+            raise InvalidArgumentError(
+                "The input skill is not in a supported location. "
+                "Select a Skill directory or its SKILL.md, "
+                "e.g. viking://user/<user_id>/skills/<skill_name>."
+            )
         target = validate_request_viking_uri(
             resolve_path_variables(request.to), ctx, field_name="to"
         ).rstrip("/")
