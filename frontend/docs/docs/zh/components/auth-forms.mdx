@@ -1,6 +1,6 @@
 # 登录与认证表单
 
-六个不耦合接口、路由、登录态、存储和页面布局的 React 视图。默认英文文案可通过 `labels`、标题和操作配置覆盖。
+六个不耦合接口、路由、登录态、存储和页面布局的 React 视图。内置中英文文案，可通过 `labels`、标题和操作配置覆盖。
 
 ```tsx file="../../_demos/auth-forms.tsx" preview
 
@@ -17,7 +17,7 @@
 | `ApiKeyLoginForm`          | API Key 输入、显隐和校验   | `alternateLogin`、`onSubmit({ apiKey })`                                                             |
 | `PasswordResetRequestForm` | 请求或重新发送重置邮件     | `defaultEmail`、`sentMessage: { email, message }`、`retryAfter`、`onSubmit({ email })`               |
 | `PasswordSetupForm`        | 首次设置和重置密码共用表单 | `account`、`passwordHint`、`validatePassword`、`onSubmit({ password })`                              |
-| `InvitationConfirmation`   | 展示邀请信息、确认加入     | `details`、`onAccept`、`decline`、`defer`、`acceptLabel`                                             |
+| `InvitationConfirmation`   | 展示邀请信息、确认加入     | `details`、`onAccept`、`decline`、`defer`、`acceptLabel`、`locale`                                   |
 
 ## 导入
 
@@ -37,15 +37,16 @@ import '@openviking/react/components/email-login-form/style.css';
 
 以下通用属性适用于四个表单。登录方式选择和邀请确认的属性以对应类型为准。
 
-| 属性                    | 默认值         | 行为                                       |
-| ----------------------- | -------------- | ------------------------------------------ |
-| `loading` / `disabled`  | `false`        | 禁用输入和提交；`loading` 同时呈现忙碌状态 |
-| `error`                 | 不显示         | 展示宿主传入的错误，不解释后端错误码       |
-| `title` / `description` | 不显示         | 可选标题与描述                             |
-| `className`             | 无             | 根节点附加类名                             |
-| `back`                  | 不显示         | `{ label, onClick }` 返回操作              |
-| `agreements`            | 不显示、不拦截 | 配置非空 `items` 后才展示协议和确认逻辑    |
-| `labels`                | 英文文案       | 部分覆盖字段、校验、显隐和按钮文案         |
+| 属性                    | 默认值              | 行为                                                       |
+| ----------------------- | ------------------- | ---------------------------------------------------------- |
+| `loading` / `disabled`  | `false`             | 禁用输入和提交；`loading` 同时呈现忙碌状态                 |
+| `error`                 | 不显示              | 展示宿主传入的错误，不解释后端错误码                       |
+| `title` / `description` | 不显示              | 可选标题与描述                                             |
+| `className`             | 无                  | 根节点附加类名                                             |
+| `back`                  | 不显示              | `{ label, onClick }` 返回操作                              |
+| `agreements`            | 不显示、不拦截      | 配置非空 `items` 后才展示协议和确认逻辑                    |
+| `locale`                | Provider 或 `en-US` | 传 `zh-CN` 或 `en-US` 覆盖最近的语言作用域                 |
+| `labels`                | 当前语言文案        | `undefined` 继承默认文案，空字符串隐藏文案但不改变校验结果 |
 
 `forgotPassword`、`alternateLogin`、`decline` 和 `defer` 同样使用 `{ label, onClick }`。只有提供点击回调才展示入口，组件不会自动导航。
 

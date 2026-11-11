@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { Locale } from '../../shared/locale.js';
 import type { AuthAction } from '../../shared/auth/types.js';
 export interface InvitationConfirmationProps {
   details: readonly { label: string; value: ReactNode }[];
@@ -10,6 +11,7 @@ export interface InvitationConfirmationProps {
   className?: string;
   title?: ReactNode;
   description?: ReactNode;
+  locale?: Locale;
   acceptLabel?: string;
   onAccept?: () => void;
 }

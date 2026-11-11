@@ -1,19 +1,21 @@
 import { useId } from 'react';
 import { Field } from '../../shared/auth/fields.js';
 import { FormFrame } from '../../shared/auth/form-frame.js';
-import { defaultLabels } from '../../shared/auth/types.js';
+import { useAuthLabels } from '../../shared/auth/use-auth-labels.js';
 import { useForm } from '../../shared/auth/use-form.js';
 import type { ApiKeyLoginFormProps } from './types.js';
 
 export function ApiKeyLoginForm({
   alternateLogin,
   onSubmit,
+  locale,
+  labels: overrides,
   ...options
 }: ApiKeyLoginFormProps) {
   const id = useId();
-  const labels = { ...defaultLabels, ...options.labels };
+  const labels = useAuthLabels(locale, overrides);
   const form = useForm({ apiKey: '' }, ({ apiKey }) => ({
-    apiKey: apiKey.trim() ? undefined : labels.required,
+    apiKey: apiKey.trim() ? undefined : { key: 'required' },
   }));
   return (
     <FormFrame

@@ -1,3 +1,4 @@
+import { useAuthLabels } from '../../shared/auth/use-auth-labels.js';
 import { Action } from '../../shared/auth/fields.js';
 import type { InvitationConfirmationProps } from './types.js';
 export function InvitationConfirmation({
@@ -11,8 +12,10 @@ export function InvitationConfirmation({
   onAccept,
   title,
   description,
-  acceptLabel = 'Accept invitation',
+  locale,
+  acceptLabel,
 }: InvitationConfirmationProps) {
+  const labels = useAuthLabels(locale);
   return (
     <section
       className={`ov-auth ${className ?? ''}`}
@@ -39,7 +42,7 @@ export function InvitationConfirmation({
           className="ov-auth__primary ov-auth__submit"
           onClick={onAccept}
         >
-          {acceptLabel}
+          {acceptLabel ?? labels.acceptInvitation}
           {loading && ' …'}
         </button>
         <Action action={decline} />

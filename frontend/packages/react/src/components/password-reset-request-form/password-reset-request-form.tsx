@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import { Field } from '../../shared/auth/fields.js';
 import { FormFrame } from '../../shared/auth/form-frame.js';
-import { defaultLabels } from '../../shared/auth/types.js';
+import { useAuthLabels } from '../../shared/auth/use-auth-labels.js';
 import { useForm, validEmail } from '../../shared/auth/use-form.js';
 import type { PasswordResetRequestFormProps } from './types.js';
 
@@ -10,12 +10,14 @@ export function PasswordResetRequestForm({
   sentMessage,
   retryAfter = 0,
   onSubmit,
+  locale,
+  labels: overrides,
   ...options
 }: PasswordResetRequestFormProps) {
   const id = useId();
-  const labels = { ...defaultLabels, ...options.labels };
+  const labels = useAuthLabels(locale, overrides);
   const form = useForm({ email: defaultEmail }, ({ email }) => ({
-    email: validEmail(email) ? undefined : labels.invalidEmail,
+    email: validEmail(email) ? undefined : { key: 'invalidEmail' },
   }));
   const [sentEmail, message] = sentMessage
     ? [sentMessage.email, sentMessage.message]

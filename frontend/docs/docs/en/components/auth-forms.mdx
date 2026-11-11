@@ -1,6 +1,6 @@
 # Authentication forms
 
-Authentication views without requests, routing, storage or page layout. English labels can be replaced through props.
+Authentication views without requests, routing, storage or page layout. Built-in labels are available in English and Simplified Chinese.
 
 ```tsx file="../../_demos/auth-forms.tsx" preview
 
@@ -15,7 +15,7 @@ Authentication views without requests, routing, storage or page layout. English 
 | `ApiKeyLoginForm`          | API Key login                   | `alternateLogin`, `onSubmit({ apiKey })`                                                             |
 | `PasswordResetRequestForm` | Request or resend a reset email | `defaultEmail`, `sentMessage: { email, message }`, `retryAfter`, `onSubmit({ email })`               |
 | `PasswordSetupForm`        | First-time or reset password    | `account`, `passwordHint`, `validatePassword`, `onSubmit({ password })`                              |
-| `InvitationConfirmation`   | Confirm an invitation           | `details`, `onAccept`, `decline`, `defer`, `acceptLabel`                                             |
+| `InvitationConfirmation`   | Confirm an invitation           | `details`, `onAccept`, `decline`, `defer`, `acceptLabel`, `locale`                                   |
 
 ## Imports
 
@@ -33,15 +33,16 @@ Each component has its own kebab-case JS and `style.css` entry; `@openviking/rea
 
 ## Form options
 
-| Prop                    | Default        | Behavior                                                                    |
-| ----------------------- | -------------- | --------------------------------------------------------------------------- |
-| `loading` / `disabled`  | `false`        | Disable fields and submission; `loading` also exposes busy state            |
-| `error`                 | absent         | Host-provided visible error; no backend error-code interpretation           |
-| `title` / `description` | absent         | Optional form heading and description                                       |
-| `className`             | absent         | Additional root class                                                       |
-| `back`                  | absent         | Optional `{ label, onClick }` action                                        |
-| `agreements`            | absent         | No checkbox or agreement gate unless a nonempty items array is supplied     |
-| `labels`                | English labels | Partial `AuthLabels`; replace field, validation, visibility and button text |
+| Prop                    | Default             | Behavior                                                                                                      |
+| ----------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `loading` / `disabled`  | `false`             | Disable fields and submission; `loading` also exposes busy state                                              |
+| `error`                 | absent              | Host-provided visible error; no backend error-code interpretation                                             |
+| `title` / `description` | absent              | Optional form heading and description                                                                         |
+| `className`             | absent              | Additional root class                                                                                         |
+| `back`                  | absent              | Optional `{ label, onClick }` action                                                                          |
+| `agreements`            | absent              | No checkbox or agreement gate unless a nonempty items array is supplied                                       |
+| `locale`                | Provider or `en-US` | Override the nearest language scope with `zh-CN` or `en-US`                                                   |
+| `labels`                | Current locale      | Partial `AuthLabels`; `undefined` inherits, and an empty string hides the message without changing validation |
 
 Optional actions are shown only when they have an `onClick` handler. `forgotPassword`, `alternateLogin`, `decline` and `defer` use the same `{ label, onClick }` shape. Their callbacks do not imply any navigation or request.
 

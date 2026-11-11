@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useLang } from '@rspress/core/runtime';
 import {
   EmailLoginForm,
   ApiKeyLoginForm,
@@ -25,6 +26,7 @@ const agreements = {
   },
 };
 export default function AuthFormsDemo() {
+  const locale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   const [view, setView] = useState('email');
   const [withAgreements, setWithAgreements] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -41,11 +43,12 @@ export default function AuthFormsDemo() {
     setResult('Demo completed. No request was sent.');
   };
   const common = {
+    locale,
     loading,
     error,
     agreements: withAgreements ? agreements : undefined,
     back: { label: 'Back to methods', onClick: () => switchView('methods') },
-  };
+  } as const;
   const start = () => {
     setError('');
     setLoading(true);
@@ -153,6 +156,7 @@ export default function AuthFormsDemo() {
         )}
         {view === 'invitation' && (
           <InvitationConfirmation
+            locale={locale}
             title="Join a space"
             loading={loading}
             error={error}

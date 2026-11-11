@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { InputHTMLAttributes } from 'react';
-import type { AuthAction, AuthLabels } from './types.js';
+import type { AuthAction, AuthIssue, AuthLabels } from './types.js';
 
 export function Action({ action }: { action?: AuthAction }) {
   return action?.onClick ? (
@@ -14,7 +14,7 @@ interface FieldProps extends Omit<
   'onChange'
 > {
   label: string;
-  error?: string;
+  error?: AuthIssue;
   secret?: boolean;
   labels: AuthLabels;
   action?: AuthAction;
@@ -31,6 +31,7 @@ export function Field({
   ...input
 }: FieldProps) {
   const [visible, setVisible] = useState(false);
+  const message = error && ('key' in error ? labels[error.key] : error.message);
   return (
     <div className="ov-auth__field">
       <div className="ov-auth__label">
@@ -43,8 +44,8 @@ export function Field({
           id={id}
           onChange={(event) => onChange(event.target.value)}
           type={secret ? (visible ? 'text' : 'password') : input.type}
-          aria-invalid={Boolean(error)}
-          aria-describedby={error ? `${id}-error` : input['aria-describedby']}
+          aria-invalid={error !== undefined}
+          aria-describedby={message ? `${id}-error` : input['aria-describedby']}
         />
         {secret && (
           <button
@@ -68,9 +69,9 @@ export function Field({
           </button>
         )}
       </div>
-      {error && (
+      {message && (
         <p className="ov-auth__error" id={`${id}-error`} role="alert">
-          {error}
+          {message}
         </p>
       )}
     </div>

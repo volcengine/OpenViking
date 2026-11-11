@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import { Field } from '../../shared/auth/fields.js';
 import { FormFrame } from '../../shared/auth/form-frame.js';
-import { defaultLabels } from '../../shared/auth/types.js';
+import { useAuthLabels } from '../../shared/auth/use-auth-labels.js';
 import { useForm } from '../../shared/auth/use-form.js';
 import type { PasswordSetupFormProps } from './types.js';
 
@@ -10,20 +10,29 @@ export function PasswordSetupForm({
   passwordHint,
   validatePassword,
   onSubmit,
+  locale,
+  labels: overrides,
   ...options
 }: PasswordSetupFormProps) {
   const id = useId();
-  const labels = { ...defaultLabels, ...options.labels };
+  const labels = useAuthLabels(locale, overrides);
   const form = useForm(
     { password: '', confirmation: '' },
-    ({ password, confirmation }) => ({
-      password: !password ? labels.required : validatePassword?.(password),
-      confirmation: !confirmation
-        ? labels.required
-        : password !== confirmation
-          ? labels.mismatch
-          : undefined,
-    }),
+    ({ password, confirmation }) => {
+      const message = password ? validatePassword?.(password) : undefined;
+      return {
+        password: !password
+          ? { key: 'required' }
+          : message === undefined
+            ? undefined
+            : { message },
+        confirmation: !confirmation
+          ? { key: 'required' }
+          : password !== confirmation
+            ? { key: 'mismatch' }
+            : undefined,
+      };
+    },
   );
   return (
     <FormFrame

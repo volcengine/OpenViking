@@ -1,3 +1,4 @@
+import type { Locale } from '../locale.js';
 import type { ReactNode } from 'react';
 
 export interface AuthAction {
@@ -44,28 +45,13 @@ export interface AuthFormOptions {
   className?: string;
   title?: ReactNode;
   description?: ReactNode;
+  locale?: Locale;
   labels?: Partial<AuthLabels>;
 }
-export const defaultLabels: AuthLabels = {
-  email: 'Email',
-  password: 'Password',
-  apiKey: 'API Key',
-  newPassword: 'New password',
-  confirmation: 'Confirm new password',
-  showPassword: 'Show password',
-  hidePassword: 'Hide password',
-  required: 'This field is required.',
-  invalidEmail: 'Enter a valid email address.',
-  mismatch: 'Passwords do not match.',
-  login: 'Log in',
-  send: 'Send reset email',
-  resend: 'Resend email',
-  confirm: 'Confirm and log in',
-  agreementPrefix: 'I have read and agree to',
-  agreementTitle: 'Read and accept the agreements',
-  agreementDescription:
-    'Please read and accept the following agreements before continuing.',
-  agree: 'Agree and continue',
-  cancel: 'Cancel',
-  account: 'Login account',
-};
+export interface AuthMessages extends AuthLabels {
+  acceptInvitation: string;
+}
+
+/** Store a validation issue independently of its localized display text. */
+export type AuthIssue =
+  { key: 'required' | 'invalidEmail' | 'mismatch' } | { message: string };

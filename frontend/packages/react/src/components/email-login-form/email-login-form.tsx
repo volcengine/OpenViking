@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import { Field } from '../../shared/auth/fields.js';
 import { FormFrame } from '../../shared/auth/form-frame.js';
-import { defaultLabels } from '../../shared/auth/types.js';
+import { useAuthLabels } from '../../shared/auth/use-auth-labels.js';
 import { useForm, validEmail } from '../../shared/auth/use-form.js';
 import type { EmailLoginFormProps } from './types.js';
 
@@ -11,13 +11,15 @@ export function EmailLoginForm({
   forgotPassword,
   alternateLogin,
   onSubmit,
+  locale,
+  labels: overrides,
   ...options
 }: EmailLoginFormProps) {
   const id = useId();
-  const labels = { ...defaultLabels, ...options.labels };
+  const labels = useAuthLabels(locale, overrides);
   const form = useForm({ email: defaultEmail, password: '' }, (values) => ({
-    email: validEmail(values.email) ? undefined : labels.invalidEmail,
-    password: values.password ? undefined : labels.required,
+    email: validEmail(values.email) ? undefined : { key: 'invalidEmail' },
+    password: values.password ? undefined : { key: 'required' },
   }));
   return (
     <FormFrame
