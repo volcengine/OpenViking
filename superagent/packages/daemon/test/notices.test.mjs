@@ -66,7 +66,7 @@ describe('automatic claude fallback', () => {
     assert.equal(replies.length, 1);
     assert.equal(replies[0].messageId, 'om_failed_123456');
     assert.match(replies[0].text, /因 Claude API exploded 报错，已自动切换到 gpt-5\.6-sol 重试/);
-    assert.doesNotMatch(replies[0].text, /没有生成回复/); // no duplicate failure notice
+    assert.doesNotMatch(replies[0].text, /这一轮处理异常/); // no duplicate failure notice
     assert.equal(delivered.length, 1);
     assert.equal(delivered[0][0].seq, 1);
     assert.match(delivered[0][0].text, /^\[chat=oc_chat123456 source=lark msg=om_failed_123456 .*\] 帮我看下这个$/);
@@ -89,7 +89,7 @@ describe('automatic claude fallback', () => {
     );
     assert.equal(calls.length, 0);
     assert.equal(replies.length, 1);
-    assert.match(replies[0].text, /处理失败/);
+    assert.match(replies[0].text, /处理异常/);
   });
 
   it('attempts only one automatic fallback per cooldown window', async () => {
@@ -101,7 +101,7 @@ describe('automatic claude fallback', () => {
     await policy.onTurnFailed({ inboundSeqs: [1], error: 'boom again' });
     assert.equal(calls.length, 1); // no second automatic switch
     assert.equal(replies.length, 2);
-    assert.match(replies[1].text, /处理失败/);
+    assert.match(replies[1].text, /处理异常/);
     // After the cooldown expires the fallback becomes available again.
     policy.lastFallbackAtMs = Date.now() - 6 * 60 * 1_000;
     await policy.onTurnFailed({ inboundSeqs: [1], error: 'boom again' });
@@ -116,7 +116,7 @@ describe('automatic claude fallback', () => {
     assert.equal(calls.length, 1);
     assert.equal(delivered.length, 0);
     assert.equal(replies.length, 1);
-    assert.match(replies[0].text, /处理失败/);
+    assert.match(replies[0].text, /处理异常/);
     const fallback = activities.find((entry) => entry.kind === 'agent.fallback');
     assert.equal(fallback.status, 'FAILED');
   });
@@ -159,7 +159,7 @@ describe('failure notice mute', () => {
     await policy.notifyTurnFailure({ inboundSeqs: [2], error: 'model exploded' });
     await policy.notifyTurnFailure({ inboundSeqs: [3], error: 'quota exceeded' });
     assert.equal(replies.length, 1);
-    assert.match(replies[0].text, /处理失败/);
+    assert.match(replies[0].text, /处理异常/);
     const notices = activities.filter((entry) => entry.kind === 'agent.failure_notice');
     assert.deepEqual(notices.map((entry) => entry.status), ['NOTIFYING', 'MUTED', 'MUTED']);
   });

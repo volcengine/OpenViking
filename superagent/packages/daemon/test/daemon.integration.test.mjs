@@ -281,11 +281,11 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
     });
     try {
       env.receive(textMessage({ messageId: 'om-fail', text: 'hi' }));
-      await env.waitForReply(/处理失败/);
+      await env.waitForReply(/处理异常/);
 
       const reply = env.replies().at(-1).join(' ');
       assert.match(reply, /om-fail/);                       // replies to the failed message
-      assert.match(reply, /处理失败/);
+      assert.match(reply, /处理异常/);
       assert.match(reply, /Unsupported value/);             // unwrapped API error, not [object Object]
       assert.doesNotMatch(reply, /object Object/);
     } finally {
