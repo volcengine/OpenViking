@@ -4,6 +4,9 @@
 
 from unittest.mock import MagicMock, patch
 
+import httpx
+import pytest
+
 from openviking.models.rerank import CohereRerankClient
 
 
@@ -139,14 +142,41 @@ class TestUnifiedRerankDispatch:
         assert client.api_key == "cohere-key"
         assert client.model == "rerank-v3.5"
 
-    @patch("openviking.models.rerank.cohere_rerank.httpx.Client")
-    def test_from_config_cohere_explicit_provider(self, mock_client_class):
+    @pytest.mark.parametrize(
+        "api_base, timeout",
+        [(None, 30.0), ("https://rerank.example.test/proxy/", 30.0), (None, 2.5)],
+    )
+    def test_from_config_cohere_explicit_provider(self, api_base, timeout):
         from openviking.models.rerank import RerankClient
         from openviking_cli.utils.config.rerank_config import RerankConfig
 
-        config = RerankConfig(provider="cohere", api_key="key")
-        client = RerankClient.from_config(config)
+        requests = []
+
+        def respond(request):
+            requests.append(request)
+            return httpx.Response(200, json={"results": [{"index": 0, "relevance_score": 0.8}]})
+
+        http_client = httpx.Client
+        with patch(
+            "openviking.models.rerank.cohere_rerank.httpx.Client",
+            side_effect=lambda **kwargs: http_client(
+                transport=httpx.MockTransport(respond), **kwargs
+            ),
+        ):
+            config = RerankConfig(
+                provider="cohere", api_key="key", api_base=api_base, timeout=timeout
+            )
+            client = RerankClient.from_config(config)
         assert isinstance(client, CohereRerankClient)
+        try:
+            assert client.rerank_batch("query", ["document"]) == [0.8]
+            assert len(requests) == 1
+            expected_base = (api_base or "https://api.cohere.com").rstrip("/")
+            assert str(requests[0].url) == f"{expected_base}/v2/rerank"
+            assert requests[0].headers["Authorization"] == "Bearer key"
+            assert requests[0].extensions["timeout"]["read"] == timeout
+        finally:
+            client.close()
 
     def test_from_config_returns_none_when_unavailable(self):
         from openviking.models.rerank import RerankClient

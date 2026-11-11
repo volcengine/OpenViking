@@ -1292,7 +1292,9 @@ Choice 不受这个 Noul 专用开关影响，始终将全部候选放入共享 
 
 **支持的提供方:**
 - `vikingdb`: 火山引擎 VikingDB Rerank API (使用 AK/SK)
-- `cohere`: Cohere Rerank API
+- `cohere`: Cohere Rerank API。`api_base` 为基础地址（默认
+  `https://api.cohere.com`），客户端会追加 `/v2/rerank`。`timeout` 控制
+  HTTP 请求超时，单位为秒（默认 `30.0`）。
 - `openai`: OpenAI 兼容的 Rerank 接口
 - `litellm`: LiteLLM Rerank 接口
 - `jev`: Jev (TypeSafe System One) 结构化判定接口，支持 Choice 横向比较和 Noul 独立评分
