@@ -5,6 +5,7 @@ import { ErrorCard } from '@ark-design/ui/error-card';
 import { MessageBody } from './ark-message-body.js';
 import { messageText } from './message-groups.js';
 import { MessageFooter } from './message-footer.js';
+import { UserMessageGroup } from './user-message-group.js';
 import type { VikingBotMessage, VikingBotStreamingState } from './model.js';
 import type { VikingBotMessageListProps } from './types.js';
 
@@ -103,15 +104,12 @@ export function VikingBotMessageRow({
       className={`ov-viking-bot__message ov-viking-bot__message--${message.role}`}
     >
       {message.role === 'user' ? (
-        <Bubble
-          className="ov-viking-bot__user-bubble"
-          placement="end"
-          variant="filled"
-          maxHeight="9999px"
+        <UserMessageGroup
+          message={message}
+          labels={labels}
+          onOpenUri={onOpenUri}
           footer={footer}
-        >
-          {body}
-        </Bubble>
+        />
       ) : message.streaming && message.parts.length === 0 ? (
         <Bubble loading placement="start" variant="text" />
       ) : (

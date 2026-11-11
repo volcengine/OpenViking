@@ -2,7 +2,6 @@ import { Button } from '../../shared/components/button/button.js';
 import type { Locale } from '../../shared/locale.js';
 import type { RefObject } from 'react';
 import type { SenderInstance } from '@ark-design/ui/sender';
-import { VikingBotIcon } from '../../icons/viking-bot-icons.js';
 import { Tooltip } from '../../shared/components/tooltip/index.js';
 import type {
   VikingBotReferences,
@@ -116,43 +115,5 @@ export function ReferenceButton({
         />
       )}
     </BotPopover>
-  );
-}
-
-export function ReferenceTags({
-  config,
-  labels,
-  disabled,
-}: {
-  config?: VikingBotReferences;
-  labels: Required<VikingBotLabels>;
-  disabled?: boolean;
-}) {
-  if (!config?.selected.length) return null;
-  return (
-    <ul className="ov-viking-bot__reference-tags">
-      {config.selected.map((item) => (
-        <li key={item.uri}>
-          <Tooltip content={item.uri}>
-            <span>{item.name}</span>
-          </Tooltip>
-          <Button
-            size="mini"
-            type="text"
-            iconOnly
-            htmlType="button"
-            disabled={disabled}
-            aria-label={`${labels.removeReference}: ${item.name}`}
-            onClick={() =>
-              config.onChange(
-                config.selected.filter((entry) => entry.uri !== item.uri),
-              )
-            }
-          >
-            <VikingBotIcon name="remove" width={12} height={12} />
-          </Button>
-        </li>
-      ))}
-    </ul>
   );
 }

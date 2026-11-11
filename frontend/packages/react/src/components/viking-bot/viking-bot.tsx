@@ -184,6 +184,7 @@ export function VikingBot({
                   }
                   onFilesAdded={onFilesAdded}
                   onAttachmentRemove={onAttachmentRemove}
+                  onOpenUri={onOpenUri}
                   onSend={onSend}
                   onCancel={onCancel}
                   labels={overrides}
