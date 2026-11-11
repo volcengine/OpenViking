@@ -42,6 +42,7 @@ class SearchItemResult:
 @dataclass
 class SearchResult:
     data: List[SearchItemResult] = field(default_factory=list)
+    catalog_revision: Optional[str] = None
 
 
 def parse_remote_search_result(payload: Dict[str, Any]) -> SearchResult:

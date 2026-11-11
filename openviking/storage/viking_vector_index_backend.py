@@ -64,7 +64,11 @@ from openviking.utils.tags import (
 )
 from openviking.utils.time_decay import parse_duration_ms
 from openviking.utils.time_utils import get_current_timestamp
-from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
+from openviking_cli.exceptions import (
+    InvalidArgumentError,
+    PermissionDeniedError,
+    UnimplementedError,
+)
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME, VectorDBBackendConfig
 
@@ -992,6 +996,30 @@ class _SingleAccountBackend:
             raise
 
     @_backend_operation
+    async def search_item_groups(
+        self,
+        *,
+        query_vector: Optional[List[float]] = None,
+        sparse_query_vector: Optional[Dict[str, float]] = None,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        max_groups: int = 10,
+        aggregation: str = "max",
+        score_threshold: Optional[float] = None,
+        filter_only: bool = False,
+    ) -> Dict[str, Any]:
+        self._validate_vector_dimension(query_vector)
+        return await self._async_adapter.call(
+            "search_item_groups",
+            query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
+            filter=self._with_account_filter(filter),
+            max_groups=max_groups,
+            aggregation=aggregation,
+            score_threshold=score_threshold,
+            filter_only=filter_only,
+        )
+
+    @_backend_operation
     async def search_by_random(
         self,
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
@@ -1312,6 +1340,19 @@ class VikingVectorIndexBackend:
     async def _get_backend_for_context(self, ctx: RequestContext) -> _SingleAccountBackend:
         """根据上下文获取 backend"""
         return await self.get_account_backend(ctx.account_id)
+
+    async def catalog_execute(
+        self, request: Dict[str, Any], *, ctx: RequestContext
+    ) -> Dict[str, Any]:
+        backend = await self._get_backend_for_context(ctx)
+        try:
+            return await backend._async_adapter.call(
+                "catalog_execute", {**request, "scope": ctx.account_id}
+            )
+        except NotImplementedError as exc:
+            raise UnimplementedError(str(exc)) from exc
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
 
     def set_vector_config_resolver(self, resolver) -> None:
         self._vector_config_resolver = resolver
@@ -2032,6 +2073,44 @@ class VikingVectorIndexBackend:
     # Tenant-Aware 方法（保持向后兼容）
     # =========================================================================
 
+    async def search_items_in_tenant(
+        self,
+        ctx: RequestContext,
+        *,
+        query_vector: Optional[List[float]],
+        sparse_query_vector: Optional[Dict[str, float]] = None,
+        context_type: Optional[str] = None,
+        target_directories: Optional[List[str]] = None,
+        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        level: Optional[List[int]] = None,
+        limit: int = 10,
+        aggregation: str = "max",
+        score_threshold: Optional[float] = None,
+        filter_only: bool = False,
+    ) -> Dict[str, Any]:
+        acl_enabled = await self._acl_enabled(ctx)
+        scope_filter = self._build_scope_filter(
+            ctx=ctx,
+            context_type=context_type,
+            target_directories=target_directories,
+            extra_filter=extra_filter,
+            level=level,
+            acl_enabled=acl_enabled,
+        )
+        backend = await self._get_backend_for_context(ctx)
+        try:
+            return await backend.search_item_groups(
+                query_vector=query_vector,
+                sparse_query_vector=sparse_query_vector,
+                filter=scope_filter,
+                max_groups=limit,
+                aggregation=aggregation,
+                score_threshold=score_threshold,
+                filter_only=filter_only,
+            )
+        except NotImplementedError as exc:
+            raise UnimplementedError(str(exc)) from exc
+
     async def search_in_tenant(
         self,
         ctx: RequestContext,
@@ -2045,6 +2124,7 @@ class VikingVectorIndexBackend:
         offset: int = 0,
         events_time_decay_protection: Optional[str] = None,
         request_now: Optional[datetime] = None,
+        output_fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         acl_enabled = await self._acl_enabled(ctx)
         scope_filter = self._build_scope_filter(
@@ -2062,7 +2142,7 @@ class VikingVectorIndexBackend:
                 filter=scope_filter,
                 limit=limit,
                 offset=offset,
-                output_fields=RETRIEVAL_OUTPUT_FIELDS,
+                output_fields=output_fields or RETRIEVAL_OUTPUT_FIELDS,
                 ctx=ctx,
             )
 
@@ -2091,6 +2171,7 @@ class VikingVectorIndexBackend:
         limit: int = 10,
         offset: int = 0,
         keywords_args: Optional[Dict[str, Any]] = None,
+        output_fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         acl_enabled = await self._acl_enabled(ctx)
         scope_filter = self._build_scope_filter(
@@ -2120,7 +2201,7 @@ class VikingVectorIndexBackend:
             filter=scope_filter,
             limit=limit,
             offset=offset,
-            output_fields=RETRIEVAL_OUTPUT_FIELDS,
+            output_fields=output_fields or RETRIEVAL_OUTPUT_FIELDS,
             bm25_k1=bm25_k1,
             bm25_b=bm25_b,
             advance=advance,

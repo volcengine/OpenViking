@@ -184,6 +184,8 @@ async def temp_upload(
             tag_mode=signed.tag_mode,
             parse_mode=signed.parse_mode,
             acl=signed.acl,
+            as_item=signed.as_item,
+            **({"item_attrs": signed.item_attrs} if signed.item_attrs is not None else {}),
         )
 
     try:

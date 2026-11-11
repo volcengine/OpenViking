@@ -34,6 +34,7 @@ from .options import (
     RuleCompileOptions,
     RuleCompileSource,
     RuleSearchOptions,
+    SearchAsItemOptions,
     SearchContextOptions,
     SearchContextResult,
     SearchOptions,
@@ -45,6 +46,7 @@ from .options import (
 )
 
 __all__ = [
+    "SearchAsItemOptions",
     "AbortedError",
     "AddMessageOptions",
     "AddResourceOptions",

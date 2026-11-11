@@ -287,7 +287,8 @@ class _OpsMixin:
         """
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 
-        guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
+        real_ctx = self._ctx_or_default(ctx)
+        guard_ctx = replace(real_ctx, bypass_acl=True)
         await self._ensure_access(uri, guard_ctx, action=AclAction.MANAGE)
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
@@ -304,7 +305,10 @@ class _OpsMixin:
 
         async def _finish_missing_delete() -> Dict[str, Any]:
             """Clean orphan index records for an idempotent delete."""
+            from openviking.storage.catalog import delete_catalog_subtree
+
             estimated_count = await _delete_vectors()
+            await delete_catalog_subtree(self, target_uri, real_ctx)
             logger.info("rm target not found, cleaned orphan index: %s", safe_uri_for_log(str(uri)))
             return {"estimated_deleted_count": estimated_count}
 
@@ -381,6 +385,9 @@ class _OpsMixin:
                 raise
             # Add estimated_deleted_count to the result
             emit_file_change(target_uri, ctx, "deleted", is_dir=is_dir)
+            from openviking.storage.catalog import delete_catalog_subtree
+
+            await delete_catalog_subtree(self, target_uri, real_ctx)
             if isinstance(result, dict):
                 result["estimated_deleted_count"] = estimated_count
             else:

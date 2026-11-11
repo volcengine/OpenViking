@@ -5,7 +5,7 @@
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 
 from openviking.core.namespace import canonical_user_root
 from openviking.core.path_variables import resolve_path_variables
@@ -237,6 +237,8 @@ class MkdirRequest(BaseModel):
     uri: str
     description: Optional[str] = None
     acl: AclSpec | None = None
+    as_item: StrictBool = False
+    item_attrs: Optional[dict[str, str]] = None
 
 
 @router.post("/mkdir")
@@ -251,11 +253,18 @@ async def mkdir(
     _reject_managed_tools_uri("mkdir", [uri], _ctx)
     reject_generic_skill_mutation(uri, "mkdir")
     try:
+        options: dict[str, Any] = {}
+        if request.acl is not None:
+            options["acl"] = request.acl
+        if request.as_item:
+            options["as_item"] = True
+        if "item_attrs" in request.model_fields_set:
+            options["item_attrs"] = request.item_attrs
         await service.fs.mkdir(
             uri,
             ctx=_ctx,
             description=request.description,
-            **({"acl": request.acl} if request.acl is not None else {}),
+            **options,
         )
     except AGFSClientError as e:
         mapped = map_exception(e, resource=uri, resource_type="file")

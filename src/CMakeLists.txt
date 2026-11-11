@@ -101,6 +101,7 @@ if(NOT DEFINED Python3_INCLUDE_DIRS)
 endif()
 
 set(OV_COMMON_SOURCES
+    catalog/catalog_engine.cpp
     common/log_utils.cpp
     store/bytes_row.cpp
     store/persist_store.cpp
@@ -126,6 +127,13 @@ set(OV_INDEX_SOURCES
 
 add_library(engine_common STATIC ${OV_COMMON_SOURCES})
 target_compile_options(engine_common PRIVATE -fPIC)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # Vendored RapidJSON uses memcpy in its allocator-backed Value container.
+    check_cxx_compiler_flag("-Wno-error=nontrivial-memcall" HAVE_OV_NONTRIVIAL_MEMCALL_FLAG)
+    if(HAVE_OV_NONTRIVIAL_MEMCALL_FLAG)
+        target_compile_options(engine_common PRIVATE -Wno-error=nontrivial-memcall)
+    endif()
+endif()
 target_link_libraries(engine_common PUBLIC Threads::Threads leveldb)
 
 function(ov_link_filesystem_libs target_name)

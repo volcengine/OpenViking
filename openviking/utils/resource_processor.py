@@ -31,6 +31,11 @@ from openviking.resource.processing_mode import (
 )
 from openviking.server.identity import RequestContext
 from openviking.storage.acl import AclAction, AclSpec, AclUpdate
+from openviking.storage.catalog import (
+    ITEM_ATTRS_OMITTED,
+    declare_item,
+    validate_item_declaration,
+)
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.index_action import FieldPatch
@@ -853,6 +858,8 @@ class ResourceProcessor:
         acl: AclSpec | Dict[str, Any] | None = None,
         target_validator: Optional[Callable[[str, RequestContext], Awaitable[None]]] = None,
         target_was_reserved: bool = False,
+        as_item: bool = False,
+        item_attrs: Any = ITEM_ATTRS_OMITTED,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -870,6 +877,7 @@ class ResourceProcessor:
         """
         strict = bool(kwargs.get("strict", False))
         parse_failures = []
+        validate_item_declaration(as_item, item_attrs)
         result = {
             "status": "success",
             "errors": [],
@@ -1170,6 +1178,14 @@ class ResourceProcessor:
                     incremental_noop = target_preexisting and context_update_plan.is_noop()
                     temp_uri = root_uri
                     source_committed = True
+                    await declare_item(
+                        viking_fs,
+                        root_uri,
+                        ctx,
+                        as_item=as_item,
+                        item_attrs=item_attrs,
+                        is_dir=not root_is_file,
+                    )
                 except BaseException:
                     # Mirror the Phase 3 (finalize) on-error cleanup: a lock or
                     # persist failure here would otherwise orphan the

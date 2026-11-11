@@ -233,6 +233,16 @@ class LocalCollection(ICollection):
         self._bulk_ingest_depth = 0
         self.meta: CollectionMeta = meta
         self.collection_name = ""
+        self._catalog_lock = threading.RLock()
+        self._catalog: Any = None
+        self._catalog_enabled = False
+        self._catalog_path = (
+            str(safe_join(self.collection_dir, "catalog"))
+            if hasattr(self, "collection_dir")
+            else ""
+        )
+        if self._catalog_path and os.path.isdir(self._catalog_path):
+            self._open_catalog()
 
         self.ttl_cleanup_seconds = get_config_value(
             config, "ttl_cleanup_seconds", ENV_TTL_CLEANUP_SECONDS, DEFAULT_TTL_CLEANUP_SECONDS
@@ -257,6 +267,74 @@ class LocalCollection(ICollection):
         )
         self.scheduler.start()
 
+    def _open_catalog(self):
+        from openviking.storage.vectordb.engine import CatalogEngine
+
+        if self._catalog is None:
+            self._catalog = CatalogEngine(self._catalog_path)
+            self._catalog_enabled = self._catalog.execute(
+                {"op": "capabilities", "scope": "_engine"}
+            )["enabled"]
+        return self._catalog
+
+    def catalog_execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        if not self._catalog_enabled and request["op"] in (
+            "configure",
+            "upsert_nodes",
+            "declare_item",
+        ):
+            # Publish activation under the same barrier as vector writes. Item
+            # declarations may be introduced after unrelated ordinary records;
+            # only writes made after activation need Catalog node registration.
+            with self._index_mutation_barrier.exclusive_mutation():
+                with self._catalog_lock:
+                    result = self._open_catalog().execute(request)
+                    self._catalog_enabled = self._catalog.execute(
+                        {"op": "capabilities", "scope": "_engine"}
+                    )["enabled"]
+                    return result
+        with self._catalog_lock:
+            if not self._catalog_enabled and request["op"] == "resolve":
+                return {
+                    "data": [{"uri": uri} for uri in request["uris"]],
+                    "revision": "0",
+                }
+            if not self._catalog_enabled and request["op"] == "query_items":
+                return {"data": [], "revision": "0"}
+            if not self._catalog_enabled and request["op"] == "delete_subtree":
+                return {}
+            if self._catalog is None:
+                # Reads on an ordinary collection must not enable Catalog or
+                # change its future write path.
+                from openviking.storage.vectordb.engine import CatalogEngine
+
+                return CatalogEngine().execute(request)
+            return self._open_catalog().execute(request)
+
+    @staticmethod
+    def _catalog_scope(filters: Optional[Dict[str, Any]]) -> Optional[str]:
+        """Read only mandatory account predicates; never infer scope from an OR."""
+        if not filters:
+            return None
+        if "filter" in filters:
+            return LocalCollection._catalog_scope(filters["filter"])
+        if filters.get("op") == "and":
+            scopes = {
+                scope
+                for child in filters.get("conds", [])
+                if (scope := LocalCollection._catalog_scope(child)) is not None
+            }
+            if len(scopes) == 1:
+                return scopes.pop()
+        if (
+            filters.get("op") == "must"
+            and filters.get("field") == "account_id"
+            and len(filters.get("conds", [])) == 1
+            and isinstance(filters["conds"][0], str)
+        ):
+            return filters["conds"][0]
+        return None
+
     def update(self, fields: Optional[Dict[str, Any]] = None, description: Optional[str] = None):
         meta_data: Dict[str, Any] = {}
         if fields is not None:
@@ -277,6 +355,8 @@ class LocalCollection(ICollection):
     def close(self):
         with self._index_mutation_barrier.exclusive_mutation():
             self._persist_all_indexes()
+            with self._catalog_lock:
+                self._catalog = None
             self._delete_scheduler_job()
             if self.scheduler:
                 self.scheduler.shutdown(wait=False)
@@ -508,6 +588,21 @@ class LocalCollection(ICollection):
         ):
             raise NotImplementedError("Local advanced ranking supports time_decay only")
         search_result = SearchResult()
+        catalog_scope = None
+        catalog_revision = None
+        if getattr(self, "_catalog", None) is not None:
+            catalog_scope = self._catalog_scope(filters)
+            if catalog_scope:
+                compiled = self.catalog_execute(
+                    {
+                        "op": "compile_filter",
+                        "scope": catalog_scope,
+                        "filter": filters or {},
+                    }
+                )
+                filters = compiled["filter"]
+                catalog_revision = compiled.get("revision")
+                search_result.catalog_revision = catalog_revision
         index = self.indexes.get(index_name)
         if not index:
             return search_result
@@ -641,6 +736,64 @@ class LocalCollection(ICollection):
             )
         ]
         return search_result
+
+    def search_item_groups(
+        self,
+        index_name: str,
+        *,
+        dense_vector: Optional[List[float]] = None,
+        sparse_vector: Optional[Dict[str, float]] = None,
+        filters: Optional[Dict[str, Any]] = None,
+        max_groups: int = 10,
+        aggregation: str = "max",
+        score_threshold: Optional[float] = None,
+        filter_only: bool = False,
+    ) -> Dict[str, Any]:
+        """Recall candidates and delegate shadow grouping to the native Catalog."""
+        scope = self._catalog_scope(filters)
+        if scope is None:
+            raise ValueError("Item grouping requires a mandatory account scope")
+        with self._catalog_lock:
+            self._open_catalog()
+        candidate_limit = min(1000, max(100, max_groups * 20))
+        if filter_only:
+            dense_vector = [0.0] * self.meta.vector_dim
+
+        for attempt in range(3):
+            recalled = self.search_by_vector(
+                index_name=index_name,
+                dense_vector=dense_vector,
+                sparse_vector=sparse_vector,
+                limit=candidate_limit,
+                filters=filters,
+                output_fields=["uri"],
+            )
+            candidates = [
+                {
+                    "label": str(item.id),
+                    "uri": item.fields.get("uri") if item.fields else "",
+                    "score": 0.0 if filter_only else float(item.score or 0.0),
+                }
+                for item in recalled.data
+                if item.fields and item.fields.get("uri")
+            ]
+            request: Dict[str, Any] = {
+                "op": "group_candidates",
+                "scope": scope,
+                "candidates": candidates,
+                "aggregation": aggregation,
+                "max_groups": max_groups,
+            }
+            if score_threshold is not None:
+                request["score_threshold"] = score_threshold
+            grouped = self.catalog_execute(request)
+            if grouped.get("revision") == recalled.catalog_revision:
+                return grouped
+            if attempt == 2:
+                raise RuntimeError(
+                    "Catalog changed repeatedly during Item recall; retry the request"
+                )
+        raise AssertionError("unreachable")
 
     def search_by_id(
         self,
@@ -883,6 +1036,21 @@ class LocalCollection(ICollection):
         if not self.store_mgr:
             raise RuntimeError("Store manager is not initialized")
         with self._index_mutation_barrier.mutation() as mutation:
+            # Catalog must be enabled by an explicit declaration. Ordinary local
+            # collections keep their historical write path and are not backfilled.
+            if getattr(self, "_catalog_enabled", False):
+                scopes: Dict[str, List[Dict[str, str]]] = {}
+                for data in data_list:
+                    if data.get("uri") and data.get("account_id"):
+                        scopes.setdefault(data["account_id"], []).append(
+                            {
+                                "uri": data["uri"],
+                                "node_type": "dir" if data.get("level") in (0, 1) else "file",
+                            }
+                        )
+                for scope, nodes in scopes.items():
+                    self.catalog_execute({"op": "upsert_nodes", "scope": scope, "nodes": nodes})
+
             need_record_delta = True if self.indexes.count() > 0 else False
             delta_list = self.store_mgr.add_cands_data(cands_list, ttl, need_record_delta)
             mutation.mark_changed()

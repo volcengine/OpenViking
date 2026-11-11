@@ -345,6 +345,7 @@ async def test_resource_rm_authorizes_the_whole_subtree_at_its_root(storage, all
             ),
         ]
     )
+    backend.catalog_execute = AsyncMock(return_value={})
     storage.fs.vector_store = backend
     storage.fs.acl_manager = backend.acl_manager
     service = FSService(viking_fs=storage.fs)
@@ -360,8 +361,14 @@ async def test_resource_rm_authorizes_the_whole_subtree_at_its_root(storage, all
         await service._rm(RESOURCE_URI, ctx=storage.ctx, recursive=True)
         assert not backend.records
         storage.agfs.rm.assert_awaited_once()
+        backend.catalog_execute.assert_awaited_once()
+        assert backend.catalog_execute.await_args.args == (
+            {"op": "delete_subtree", "uri": RESOURCE_URI},
+        )
+        assert backend.catalog_execute.await_args.kwargs["ctx"].account_id == storage.ctx.account_id
     else:
         with pytest.raises(PermissionDeniedError):
             await service._rm(RESOURCE_URI, ctx=storage.ctx, recursive=True)
         assert set(backend.records) == {"root", "child"}
         storage.agfs.rm.assert_not_awaited()
+        backend.catalog_execute.assert_not_awaited()

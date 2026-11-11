@@ -481,6 +481,58 @@ class CollectionAdapter(ABC):
                 records.append(self._normalize_record_for_read(record))
         return records
 
+    def catalog_execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """Translate URI encoding only; Catalog semantics belong to the backend."""
+        request = dict(request)
+        for field in ("uri",):
+            if field in request:
+                request[field] = self._encode_uri_field_value(request[field])
+        if "uris" in request:
+            request["uris"] = [self._encode_uri_field_value(uri) for uri in request["uris"]]
+        if "nodes" in request:
+            request["nodes"] = [self._normalize_record_for_write(node) for node in request["nodes"]]
+        result = self.get_collection().catalog_execute(request)
+
+        def decode(row):
+            row = self._normalize_record_for_read(row)
+            if "sources" in row:
+                row["sources"] = {
+                    field: self._decode_uri_field_value(uri)
+                    for field, uri in row["sources"].items()
+                }
+            return row
+
+        if "data" in result:
+            result["data"] = [decode(row) for row in result["data"]]
+        return decode(result)
+
+    def search_item_groups(
+        self,
+        *,
+        query_vector: Optional[list[float]] = None,
+        sparse_query_vector: Optional[Dict[str, float]] = None,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        max_groups: int = 10,
+        aggregation: str = "max",
+        score_threshold: Optional[float] = None,
+        filter_only: bool = False,
+    ) -> Dict[str, Any]:
+        result = self.get_collection().search_item_groups(
+            self._index_name,
+            dense_vector=query_vector,
+            sparse_vector=sparse_query_vector,
+            filters=self._compile_filter(filter),
+            max_groups=max_groups,
+            aggregation=aggregation,
+            score_threshold=score_threshold,
+            filter_only=filter_only,
+        )
+        for group in result.get("groups", []):
+            group["candidate_members_uri"] = [
+                self._decode_uri_field_value(uri) for uri in group.get("candidate_members_uri", [])
+            ]
+        return result
+
     def query(
         self,
         *,
