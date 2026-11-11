@@ -92,6 +92,9 @@ class PrivacyRestorer:
             self.values[placeholder] = value
 
     async def restore_content(self, content: str, *, uri: str) -> str:
+        if "ov_privacy:" not in content and "\\" not in content:
+            # Escapes can encode the reference prefix inside JSON or YAML strings.
+            return content
         document = PrivacyContent(content, uri)
         for item in document.strings:
             self.collect_text(item.value)

@@ -400,3 +400,30 @@ async def test_credential_warnings_do_not_block_or_disclose_values(client, servi
         assert all(value not in json.dumps(result["warnings"]) for value in values.values())
     response = await client.patch(endpoint, json={"values": dict.fromkeys(weak, "abc12345")})
     assert response.status_code == 200 and "warnings" not in response.json()["result"]
+
+
+@pytest.mark.parametrize("method", ["POST", "PATCH"])
+async def test_credential_warning_failure_does_not_commit(
+    client, service, owner, monkeypatch, method
+):
+    from unittest.mock import AsyncMock
+
+    endpoint = "/api/v1/privacy-configs/credential/warning-failure"
+    if method == "PATCH":
+        response = await client.post(endpoint, json={"values": {"key": "before"}})
+        assert response.status_code == 200, response.text
+    with monkeypatch.context() as scope:
+        scope.setattr(
+            service.privacy_configs,
+            "get_settings",
+            AsyncMock(side_effect=OSError("temporary settings read failure")),
+        )
+        response = await client.request(method, endpoint, json={"values": {"key": "after"}})
+        assert response.status_code == 500
+    response = await client.get(endpoint)
+    if method == "POST":
+        assert response.status_code == 404
+    else:
+        current = response.json()["result"]["current"]
+        assert current["values"] == {"key": "before"}
+        assert current["version"] == 1

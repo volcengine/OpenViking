@@ -5,7 +5,10 @@
 from openviking.privacy.global_policy import UserGlobalPolicyService
 from openviking.privacy.models import UserPrivacyConfigMeta, UserPrivacyConfigVersion
 from openviking.privacy.service import UserPrivacyConfigService
-from openviking.privacy.skill_extractor import extract_skill_privacy_values
+from openviking.privacy.skill_extractor import (
+    SkillPrivacyExtractionResult,
+    extract_skill_privacy_values,
+)
 from openviking.privacy.skill_placeholder import (
     SkillPrivacyPlaceholderizationResult,
     build_placeholder,
@@ -19,6 +22,7 @@ __all__ = [
     "UserPrivacyConfigVersion",
     "UserPrivacyConfigService",
     "UserGlobalPolicyService",
+    "SkillPrivacyExtractionResult",
     "extract_skill_privacy_values",
     "SkillPrivacyPlaceholderizationResult",
     "build_placeholder",

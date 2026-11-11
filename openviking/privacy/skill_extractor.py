@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from openviking.config.vlm import VLMHandle
@@ -13,6 +14,7 @@ from openviking.privacy.sanitizer import (
     DEFAULT_SANITIZER_MAX_CONTENT_BYTES,
     DEFAULT_SANITIZER_MAX_REPLACEMENTS,
 )
+from openviking.privacy.skill_placeholder import build_placeholder
 from openviking.prompts import render_prompt
 from openviking.pyagfs import get_privacy_matcher_class
 from openviking_cli.exceptions import ResourceExhaustedError
@@ -22,6 +24,15 @@ if TYPE_CHECKING:
     from openviking.server.user_config import ResolvedPrivacyConfig
 
 
+@dataclass
+class SkillPrivacyExtractionResult:
+    values: dict[str, str]
+    original_content: str
+    sanitized_content: str
+    original_content_blocks: list[str] = field(default_factory=list)
+    replacement_content_blocks: list[str] = field(default_factory=list)
+
+
 async def extract_skill_privacy_values(
     *,
     skill_name: str,
@@ -29,7 +40,7 @@ async def extract_skill_privacy_values(
     content: str,
     vlm: VLMHandle,
     settings: ResolvedPrivacyConfig | None = None,
-) -> dict[str, str]:
+) -> SkillPrivacyExtractionResult:
     if vlm is None:
         raise ValueError("Skill privacy extraction requires an explicitly resolved VLM")
     prompt = render_prompt(
@@ -55,7 +66,26 @@ async def extract_skill_privacy_values(
                 and is_sensitive_value(value, settings=settings)
             }
 
-    return values
+    fields = {}
+    for name, value in values.items():
+        fields.setdefault(value, name)
+    chunks: list[str] = []
+    replaced: dict[str, str] = {}
+    cursor = 0
+    for match in find_skill_privacy_matches(content, fields):
+        value = content[match.start : match.end]
+        name = fields[value]
+        chunks.extend((content[cursor : match.start], build_placeholder(skill_name, name)))
+        replaced[name] = value
+        cursor = match.end
+    chunks.append(content[cursor:])
+    return SkillPrivacyExtractionResult(
+        values=replaced,
+        original_content=content,
+        sanitized_content="".join(chunks),
+        original_content_blocks=list(replaced.values()),
+        replacement_content_blocks=[build_placeholder(skill_name, name) for name in replaced],
+    )
 
 
 def find_skill_privacy_matches(content: str, values: Iterable[str]) -> list[PrivacyMatch]:

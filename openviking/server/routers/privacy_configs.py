@@ -380,6 +380,11 @@ async def upsert_privacy_config(
     service = get_service()
     privacy = service.privacy_configs
     result = None
+    warnings = (
+        await privacy.credential_warnings(_ctx, request.values)
+        if privacy is not None and category == "credential"
+        else []
+    )
     if privacy is not None:
         result = await privacy.upsert(
             ctx=_ctx,
@@ -391,10 +396,8 @@ async def upsert_privacy_config(
             labels=request.labels,
         )
     payload = None if result is None else result.to_dict()
-    if privacy is not None and payload is not None and category == "credential":
-        warnings = await privacy.credential_warnings(_ctx, request.values)
-        if warnings:
-            payload["warnings"] = warnings
+    if payload is not None and warnings:
+        payload["warnings"] = warnings
     return Response(status="ok", result=payload)
 
 
@@ -409,6 +412,11 @@ async def patch_privacy_config(
     service = get_service()
     privacy = service.privacy_configs
     result = None
+    warnings = (
+        await privacy.credential_warnings(_ctx, request.values)
+        if privacy is not None and category == "credential"
+        else []
+    )
     if privacy is not None:
         result = await privacy.patch_values(
             ctx=_ctx,
@@ -420,10 +428,8 @@ async def patch_privacy_config(
             labels=request.labels,
         )
     payload = None if result is None else result.to_dict()
-    if privacy is not None and payload is not None and category == "credential":
-        warnings = await privacy.credential_warnings(_ctx, request.values)
-        if warnings:
-            payload["warnings"] = warnings
+    if payload is not None and warnings:
+        payload["warnings"] = warnings
     return Response(status="ok", result=payload)
 
 

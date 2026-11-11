@@ -157,15 +157,20 @@ class PrivacyContent:
 
     @staticmethod
     def _yaml_shape(
-        node: yaml.Node | None, seen: dict[int, int] | None = None, *, key: bool = False
+        node: yaml.Node | None,
+        seen: dict[tuple[int, bool], int] | None = None,
+        *,
+        key: bool = False,
     ) -> object:
         if node is None:
             return None
         if seen is None:
             seen = {}
-        if id(node) in seen:
-            return ("alias", seen[id(node)])
-        seen[id(node)] = len(seen)
+        # An alias first visited as a value must still preserve its content as a key.
+        identity = (id(node), key)
+        if identity in seen:
+            return ("alias", seen[identity])
+        seen[identity] = len(seen)
         if isinstance(node, yaml.MappingNode):
             return (
                 node.tag,

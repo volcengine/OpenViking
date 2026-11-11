@@ -66,7 +66,7 @@ async def test_skill_preserves_metadata_and_protects_body_through_add_update_and
     await service.privacy_configs.upsert(ctx, "credential", "managed", {"key": "managed-secret"})
 
     async def candidates(**_kwargs):
-        return {"key": secret}
+        return SimpleNamespace(values={"key": secret})
 
     monkeypatch.setattr("openviking.utils.skill_processor.extract_skill_privacy_values", candidates)
     for verb, prefix in [("post", "initial"), ("put", "updated")]:

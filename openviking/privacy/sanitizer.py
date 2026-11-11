@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _AMBIGUOUS_PLACEHOLDER = "{{ov_privacy:ambiguous}}"
+MIN_PROTECTED_VALUE_CHARS = 6
 DEFAULT_MATCHER_CACHE_TTL_SECONDS = 3600.0
 DEFAULT_SANITIZER_MAX_CONTENT_BYTES = 16 * 1024 * 1024
 DEFAULT_SANITIZER_MAX_REPLACEMENTS = 10000
@@ -363,7 +364,11 @@ class PrivacySanitizer:
             if config is None:
                 continue
             for field_name, value in config.values.items():
-                if not isinstance(value, str) or len(value) < 6 or value in never_mask:
+                if (
+                    not isinstance(value, str)
+                    or len(value) < MIN_PROTECTED_VALUE_CHARS
+                    or value in never_mask
+                ):
                     continue
                 if category != "credential":
                     try:

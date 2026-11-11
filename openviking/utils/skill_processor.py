@@ -537,14 +537,16 @@ class SkillProcessor:
                         content, ctx=ctx, uri=skill_uri, settings=settings
                     )
                 ).content
-            values = await extract_skill_privacy_values(
+            extraction = await extract_skill_privacy_values(
                 skill_name=skill_dict["name"],
                 skill_description=skill_dict.get("description", ""),
                 content=protected_content,
                 vlm=await self._vlm_resolver.get_vlm(ctx.account_id),
                 settings=settings,
             )
-            matches = await asyncio.to_thread(find_skill_privacy_matches, content, values.values())
+            matches = await asyncio.to_thread(
+                find_skill_privacy_matches, content, extraction.values.values()
+            )
         return SkillPrivacyPreparation(settings, matches)
 
     @staticmethod
@@ -579,7 +581,11 @@ class SkillProcessor:
         delete_if_empty: bool,
         owner_lease_ref: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        if not self._privacy_config_service or preparation is None:
+        if (
+            not self._privacy_config_service
+            or preparation is None
+            or preparation.settings.mode == "off"
+        ):
             return skill_dict
 
         async with self._privacy_config_service._config_lock(

@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
 import sys
 import types
 import zipfile
@@ -8,6 +9,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 from starlette.responses import PlainTextResponse
+
+from openviking.server.config import UserSettingsPatch
+from openviking.server.identity import RequestContext, Role
+from openviking.server.user_config import patch_user_config
+from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.fixture(autouse=True)
@@ -56,6 +62,37 @@ async def test_skills_api_list_empty_collection(client):
     listed = response.json()["result"]
     assert listed["skills"] == []
     assert listed["total"] == 0
+
+
+async def test_skill_update_with_privacy_off_preserves_history_and_session_references(client):
+    from openviking.privacy.reference import build_privacy_field_reference
+
+    name = "privacy-off-update"
+    source = {"data": _skill_md(name, "Upgrade fixture", 'key="first-secret"'), "wait": True}
+    response = await client.post("/api/v1/skills", json=source)
+    assert response.status_code == 200, response.text
+    target = "/api/v1/privacy-configs/skill/" + name
+    for value in ("first-secret", "second-secret"):
+        response = await client.post(target, json={"values": {"key": value}})
+        assert response.status_code == 200, response.text
+    await client.post(target + "/activate", json={"version": 1})
+    snapshots = [(await client.get(target + f"/versions/{v}")).json()["result"] for v in (1, 2)]
+    reference = build_privacy_field_reference(
+        UserIdentifier.the_default_user().user_id, "skill", name, "key"
+    )
+    sid = "privacy-off-history"
+    response = await client.post("/api/v1/sessions", json={"session_id": sid})
+    messages_uri = response.json()["result"]["uri"] + "/messages.jsonl"
+    await client.post(
+        f"/api/v1/sessions/{sid}/messages", json={"role": "user", "content": reference}
+    )
+    response = await client.put("/api/v1/skills/" + name, json=source)
+    assert response.status_code == 200, response.text
+    assert [
+        (await client.get(target + f"/versions/{v}")).json()["result"] for v in (1, 2)
+    ] == snapshots
+    response = await client.get("/api/v1/content/read", params={"uri": messages_uri, "raw": True})
+    assert json.loads(response.json()["result"])["parts"][0]["text"] == "first-secret"
 
 
 async def test_skills_api_list_honors_node_limit(client):
@@ -303,7 +340,11 @@ async def test_skills_api_update_rolls_back_when_replace_fails(client, monkeypat
     assert "This update should be rolled back." not in shown["content"]
 
 
-async def test_skills_api_update_removes_privacy_when_replacement_has_no_secrets(client):
+async def test_skills_api_update_removes_privacy_when_replacement_has_no_secrets(client, service):
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await patch_user_config(
+        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": "auto"}})
+    )
     await _add_skill(client, "privacy-update-skill", "Original description")
 
     privacy_response = await client.post(

@@ -90,9 +90,18 @@ def test_markdown_frontmatter_and_body_use_their_own_encoding():
     assert body == "\n正文 " + REFERENCE + "\n"
 
 
-def test_yaml_alias_cannot_change_a_key_indirectly():
-    source = "? &key private-value\n: body\ncopy: *key\n"
-    with pytest.raises(InvalidArgumentError, match="document structure"):
-        PrivacyContent(source, "viking://resources/config.yaml").render(
-            lambda item: item.value.replace("private-value", REFERENCE)
-        )
+@pytest.mark.parametrize(
+    "source",
+    [
+        "? &key private-value\n: body\ncopy: *key\n",
+        "display: &key private-value\nlookup: {*key: 23}\n",
+        "display: &key [private-value]\nlookup: {? *key: 23}\n",
+    ],
+)
+def test_yaml_alias_cannot_change_a_key_indirectly(source, monkeypatch):
+    for loader in (yaml.SafeLoader, getattr(yaml, "CSafeLoader", yaml.SafeLoader)):
+        monkeypatch.setattr("openviking.privacy.content._YAML_LOADER", loader)
+        with pytest.raises(InvalidArgumentError, match="document structure"):
+            PrivacyContent(source, "viking://resources/config.yaml").render(
+                lambda item: item.value.replace("private-value", REFERENCE)
+            )

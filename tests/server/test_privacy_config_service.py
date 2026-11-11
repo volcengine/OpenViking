@@ -357,6 +357,8 @@ async def test_read_preserves_empty_privacy_references(client, service, entrypoi
 
 @pytest.mark.asyncio
 async def test_skill_filters_vlm_candidates_before_matching():
+    from openviking.privacy import SkillPrivacyExtractionResult
+
     values = {
         "api_key": SECRET,
         "password": "staging",
@@ -377,7 +379,35 @@ async def test_skill_filters_vlm_candidates_before_matching():
             {"get_completion_async": AsyncMock(return_value=json.dumps({"values": values}))},
         )(),
     )
-    assert result == {"api_key": SECRET}
+    assert isinstance(result, SkillPrivacyExtractionResult)
+    assert result.values == {"api_key": SECRET}
+    placeholder = "{{ov_privacy:skill:extract-block-skill:api_key}}"
+    assert result.sanitized_content == content.replace(SECRET, placeholder)
+
+
+async def test_raw_skill_attachment_skips_parsing_without_missing_escaped_references(
+    service, monkeypatch
+):
+    from unittest.mock import Mock
+
+    from openviking.privacy import restore
+
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    root = canonical_user_root(ctx) + "/skills/read-attachment"
+    await service.viking_fs.mkdir(root, exist_ok=True, ctx=ctx)
+    plain = "reports:\n  - name: report\n    enabled: true\n"
+    await service.viking_fs.write_file(root + "/catalog.yaml", plain, ctx=ctx)
+    with monkeypatch.context() as scope:
+        scope.setattr(restore, "PrivacyContent", Mock(side_effect=AssertionError("unneeded parse")))
+        assert await service.fs.read(root + "/catalog.yaml", ctx=ctx) == plain
+
+    await service.privacy_configs.upsert(ctx, "credential", "escaped", {"key": 'a"b\\c\n中文'})
+    reference = build_privacy_field_reference(ctx.user.user_id, "credential", "escaped", "key")
+    encoded = json.dumps({"secret": reference}).replace("ov_privacy:", r"\u006fv_privacy:")
+    for suffix in ("json", "yaml"):
+        uri = root + "/escaped." + suffix
+        await service.viking_fs.write_file(uri, encoded, ctx=ctx)
+        assert json.loads(await service.fs.read(uri, ctx=ctx)) == {"secret": 'a"b\\c\n中文'}
 
 
 @pytest.mark.asyncio

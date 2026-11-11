@@ -498,6 +498,39 @@ async def test_concurrent_same_values_reuse_fields_with_stale_worker_caches(
         assert parts[1]["tool_input"] == {"nested": [SECRET, SECOND_SECRET, False, 17]}
 
 
+async def test_short_discoveries_reuse_fields_across_messages_and_writers(service, ctx):
+    await patch_user_config(
+        service.viking_fs,
+        ctx,
+        UserSettingsPatch.model_validate(
+            {
+                "privacy": {
+                    "mode": "auto",
+                    "custom_rules": [{"id": "code", "prefix": "T", "min_length": 3}],
+                }
+            }
+        ),
+    )
+    value = "T7k9"
+    await service.privacy_configs.upsert(ctx, "session", "other", {"other001": value})
+    session = await service.sessions.create(ctx, "custom-repeat")
+    writers = [service.sessions.session(ctx, "custom-repeat") for _ in range(8)]
+    await asyncio.gather(
+        *(writer.add_message_async("user", [TextPart(value)]) for writer in writers)
+    )
+    for _ in range(3):
+        await session.add_message_async("user", [TextPart(value)])
+    current = await service.privacy_configs.get_current(ctx, "session", "custom-repeat")
+    assert current.version == 1 and list(current.values.values()) == [value]
+    stored = await service.viking_fs.read_file(session.uri + "/messages.jsonl", ctx=ctx)
+    texts = [json.loads(line)["parts"][0]["text"] for line in stored.split("\n") if line.strip()]
+    assert len(texts) == 11 and len(set(texts)) == 1
+    restored = await service.fs.read(session.uri + "/messages.jsonl", ctx=ctx)
+    assert [
+        json.loads(line)["parts"][0]["text"] for line in restored.split("\n") if line.strip()
+    ] == [value] * 11
+
+
 @pytest.mark.parametrize("mode", ["auto", "auto_strict"])
 async def test_concurrent_skill_preparations_reuse_current_fields_and_preserve_references(
     service, ctx, monkeypatch, mode

@@ -13,11 +13,15 @@ from secrets import token_urlsafe
 from typing import Any, TypeVar
 
 from openviking.message.part import ContextPart, ImagePart, Part, TextPart, ToolPart
-from openviking.privacy.reference import parse_privacy_field_reference
+from openviking.privacy.reference import (
+    build_privacy_field_reference,
+    parse_privacy_field_reference,
+)
 from openviking.privacy.rules import prepare_privacy_extractor
 from openviking.privacy.sanitizer import (
     DEFAULT_SANITIZER_MAX_CONTENT_BYTES,
     DEFAULT_SANITIZER_MAX_REPLACEMENTS,
+    MIN_PROTECTED_VALUE_CHARS,
     PrivacyReplacement,
     PrivacySanitizer,
 )
@@ -57,6 +61,21 @@ async def extract_and_store_session_privacy(
         if settings.discovery_enabled
         else nullcontext()
     ) as lease:
+        existing_references = {}
+        if settings.discovery_enabled and settings.custom_rules:
+            current = await privacy.get_current(ctx, "session", target_key)
+            values = current.values if current else {}
+            for field, value in sorted(values.items()):
+                if not isinstance(value, str) or not 0 < len(value) < MIN_PROTECTED_VALUE_CHARS:
+                    continue
+                reference = (
+                    build_session_placeholder(target_key, field)
+                    if re.fullmatch(r"[A-Za-z0-9_-]{8}", field)
+                    else build_privacy_field_reference(
+                        ctx.user.user_id, "session", target_key, field
+                    )
+                )
+                existing_references.setdefault(value, reference)
         matcher = await _prepare_session_matcher(sanitizer, ctx, target_key, settings=settings)
         for _ in range(MAX_FIELD_ID_ATTEMPTS):
             sanitized, added = await asyncio.to_thread(
@@ -65,6 +84,7 @@ async def extract_and_store_session_privacy(
                 messages_spec,
                 match_registered=matcher,
                 settings=settings,
+                existing_references=existing_references,
             )
             if not added:
                 return sanitized
@@ -96,9 +116,12 @@ def extract_session_privacy_values(
     *,
     match_registered: _Matcher | None = None,
     settings: ResolvedPrivacyConfig | None = None,
+    existing_references: dict[str, str] | None = None,
 ) -> tuple[list[dict], dict[str, str]]:
     """Return protected copies and discoveries without modifying caller-owned data."""
-    extraction = _SessionExtraction(target_key, match_registered or (lambda _: []), settings)
+    extraction = _SessionExtraction(
+        target_key, match_registered or (lambda _: []), settings, existing_references
+    )
     return extraction.transform_messages(messages_spec), extraction.values
 
 
@@ -246,7 +269,11 @@ class _SessionExtraction(_PayloadTransformer):
     budget: _ExtractionBudget
 
     def __init__(
-        self, target_key: str, value_matcher: _Matcher, settings: ResolvedPrivacyConfig | None
+        self,
+        target_key: str,
+        value_matcher: _Matcher,
+        settings: ResolvedPrivacyConfig | None,
+        existing_references: dict[str, str] | None = None,
     ):
         super().__init__(_ExtractionBudget())
         self.target_key = target_key
@@ -257,7 +284,8 @@ class _SessionExtraction(_PayloadTransformer):
         )
         self.value_matcher = value_matcher
         self.values: dict[str, str] = {}
-        self.text_references: dict[str, str] = {}
+        # Reuse discovered short values without enabling substring matching for them.
+        self.text_references = dict(existing_references or {})
 
     def transform_part(self, part: Part) -> Part:
         if not isinstance(part, (TextPart, ContextPart, ToolPart, ImagePart)):
