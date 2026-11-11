@@ -520,12 +520,24 @@ async def test_git_preflight_maps_missing_branch_to_not_found(monkeypatch):
         )
 
 
-async def test_git_preflight_rejects_server_local_paths():
-    with pytest.raises(PermissionDeniedError, match="only accepts remote"):
+@pytest.mark.parametrize(
+    ("repo_url", "message"),
+    [
+        ("file:///tmp/private.git", "only accepts remote"),
+        ("http://127.0.0.1/repo", "non-public address"),
+        ("http://169.254.169.254/repo", "non-public address"),
+        ("http://[::1]/repo", "non-public address"),
+    ],
+)
+async def test_git_preflight_rejects_server_local_paths(monkeypatch, repo_url, message):
+    execute = AsyncMock()
+    monkeypatch.setattr("asyncio.create_subprocess_exec", execute)
+    with pytest.raises(PermissionDeniedError, match=message):
         await preflight_git_repository(
             asset_name="local",
-            repo_url="file:///tmp/private.git",
+            repo_url=repo_url,
         )
+    execute.assert_not_awaited()
 
 
 async def test_resolve_endpoint_returns_standard_envelope(assets_client: httpx.AsyncClient):
