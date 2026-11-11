@@ -30,7 +30,7 @@ Supply original images through `source.url` or `source.file`, rather than binary
 
 For Markdown images, `resources` matches the original image target. For dynamic authenticated images, supply `resolveImage(src, source): Promise<string>`. The host resolves relative paths or Viking URIs using the active level's `source.path`, returning an accessible URL. The host owns requests, cancellation and blob URL cleanup. Each level can override `resources`; omission inherits the file tab's resources. The component does not translate Viking URIs into HTTP endpoints.
 
-Use `slots.footer` for modification time and parsing attribution in a two-sided footer, `slots.titleExtra` for permission badges and `slots.actions` for the host's menu.
+Use `slots.footer` for modification time and parsing attribution in a two-sided footer, `slots.titleExtra` for permission badges and `tab.actions` to inject commands, or `slots.actions` to replace the action area.
 
 ## Two tab kinds
 
@@ -39,9 +39,65 @@ Use `slots.footer` for modification time and parsing attribution in a two-sided 
 | `kind: 'file'`    | The component   | A file, its source, a document |
 | `kind: 'content'` | The host, as-is | Dashboards, graphs, summaries  |
 
-Both share the shell — tab row, path breadcrumb, copy path and the header action area. They differ in how the body arrives, and in that the preview/source switch is a file-tab capability: a content tab renders whatever views it needs inside `content`.
+Both share the shell — tab row, path breadcrumb and the header action area. They differ in how the body arrives, and in that the preview/source switch is a file-tab capability: a content tab renders whatever views it needs inside `content`.
 
-The default toolbar follows the active content: copy text, switch between preview and source for supported formats, and edit when the active file or level supplies `editing`. Editing provides Save and Cancel. Images have no source or text-copy controls. Set `slots.actions` to replace the toolbar (or `null` to hide it), or use `slots.extraActions` to append host actions. Copy path remains next to the breadcrumb.
+The default toolbar only provides preview/source switching and editing, including Save and Cancel. Hide either with `tab.toolbar.viewSwitch / edit`. Hosts supply copy, download, delete, history and other commands through `tab.actions`. The component does not execute business APIs. Use `slots.titleExtra` for buttons beside the path. `slots.actions` replaces the whole toolbar (`null` hides it); `slots.extraActions` appends custom nodes.
+
+Set `toolbar={{ viewSwitch: true, edit: true }}` on `FilePreview` to control visibility across all file/directory tabs. Both flags default to `true`. A top-level `false` always hides the control, even when a tab supplies the capability or sets its flag to `true`. Per-tab `toolbar` flags can further hide controls, but cannot re-enable a control hidden by the host.
+
+Capability checks still apply: view switching requires a renderer offering both preview and source, while editing requires the active file/level to provide `editing`, independently of the file extension. The following demo supplies simulated saving and checkboxes for both controls.
+
+## Injected actions
+
+```tsx file="../../_demos/file-preview-actions.tsx" preview
+
+```
+
+```tsx
+import type {
+  FilePreviewAction,
+  FilePreviewActionItems,
+} from '@openviking/react/components/file-preview';
+
+const copy: FilePreviewAction = {
+  key: 'copy',
+  icon: <CopyIcon />,
+  label: 'Copy content',
+  onClick: () => navigator.clipboard.writeText(content),
+};
+const actions: FilePreviewActionItems = [
+  copy,
+  {
+    key: 'history',
+    icon: <HistoryIcon />,
+    label: 'View history',
+    onClick: openHistory,
+  },
+  [
+    {
+      key: 'remove',
+      icon: <DeleteIcon />,
+      label: 'Delete document',
+      className: 'host-remove',
+      onClick: deleteFile,
+    },
+  ],
+];
+// tabs={[{ kind: 'file', key: 'file', source, actions }]}
+```
+
+The host supplies icons, style classes and workflows. `key / icon / label / onClick` are required; `disabled / className` are optional. There is no `group` or `danger`. `className` applies to both inline buttons and menu items. Use the `slots.actions` renderer for more custom rendering.
+
+- No commands: no extra entry.
+- One command: an icon-only button with a label Tooltip on hover or focus.
+- Multiple commands: an ellipsis button opens a menu on hover, click or keyboard input.
+- Consecutive individual commands form a group. Each nonempty nested array is a separate group. Empty arrays are ignored without splitting adjacent commands. Separators appear only between nonempty groups, preserving input order.
+
+An action factory `(context: FilePreviewActions) => FilePreviewActionItems` receives `context.source / context.path` for the active file or summary level, alongside view/edit state and controls. Content tabs do not consume this field.
+
+`onClick: () => unknown` accepts synchronous values and promises. The component awaits completion and ignores the returned value; only throws and rejections report failure. Pending commands prevent duplicate execution. Errors are displayed, controls unlock, and the user can retry. Override built-in copy with `labels.moreActions / actionFailed`.
+
+FileBrowser has not migrated yet. Deprecated `slots.menuItems`, `toolbar.copyContent / download` and copy helpers remain for compatibility. Only explicit legacy `menuItems` enables the old default menu and path-copy button. New `actions` takes precedence; the whole `slots.actions` override has the highest priority. Module migration will follow the component review.
 
 Control the active tab with `activeKey` / `onActiveKeyChange`, set its initial value with `defaultActiveKey`, or use the ref handle:
 
@@ -74,11 +130,12 @@ Execution capabilities and notifications are separate. Operation resolution trig
 
 ## Props
 
-| Property    | Type                                             | Default  | Description                                                    |
-| ----------- | ------------------------------------------------ | -------- | -------------------------------------------------------------- |
-| `tabs`      | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | Required | At least one tab; the first is shown initially.                |
-| `labels`    | `FilePreviewLabels`                              | locale   | Default copy for every tab; a tab can override field by field. |
-| Other props | `HTMLAttributes<HTMLDivElement>`                 | —        | Standard div attributes.                                       |
+| Property    | Type                                             | Default                            | Description                                                             |
+| ----------- | ------------------------------------------------ | ---------------------------------- | ----------------------------------------------------------------------- |
+| `tabs`      | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | Required                           | At least one tab; the first is shown initially.                         |
+| `toolbar`   | `{ viewSwitch?: boolean; edit?: boolean }`       | `{ viewSwitch: true, edit: true }` | Host visibility switches; tabs cannot re-enable controls disabled here. |
+| `labels`    | `FilePreviewLabels`                              | locale                             | Default copy for every tab; a tab can override field by field.          |
+| Other props | `HTMLAttributes<HTMLDivElement>`                 | —                                  | Standard div attributes.                                                |
 
 ### Per-tab fields
 
@@ -107,20 +164,22 @@ Shared by both kinds:
 
 File tabs add:
 
-| Property         | Type                               | Default             | Description                                                                                                        |
-| ---------------- | ---------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `source`         | `FilePreviewSource`                | Required            | The content and file name.                                                                                         |
-| `operations`     | `FilePreviewOperations`            | —                   | Async `openParent(path)` and `download()` capabilities, each returning `Promise<void>`.                            |
-| `resources`      | `readonly FileViewerResource[]`    | —                   | Companion resources, e.g. textures.                                                                                |
-| `levels`         | `readonly FilePreviewLevel[]`      | —                   | Content levels with individual sources and optional resources/editing.                                             |
-| `activeLevelKey` | `string`                           | First enabled level | Controlled content level.                                                                                          |
-| `onLevelChange`  | `(key: string) => void`            | —                   | Selection intent; the host updates activeLevelKey when controlled.                                                 |
-| `resolveImage`   | `(src, source) => Promise<string>` | —                   | Host resolution of Markdown images to accessible URLs.                                                             |
-| `editing`        | `FilePreviewEditing`               | —                   | Editing capability; omit for read-only.                                                                            |
-| `slots`          | `FilePreviewFileTabSlots`          | —                   | `actions` (node or renderer), `titleExtra`, `footer`, plus fallbacks for loading, failure and unsupported formats. |
-| `onCopyContent`  | `(text: string) => void`           | —                   | Called after content copying succeeds.                                                                             |
-| `onDownload`     | `() => void`                       | —                   | Called after the download operation succeeds; not called on failure.                                               |
-| `onOpenUri`      | `(uri: string) => void`            | —                   | Called after a content resource opens successfully; not called on failure.                                         |
+| Property         | Type                               | Default                | Description                                                                                                                        |
+| ---------------- | ---------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `source`         | `FilePreviewSource`                | Required               | The content and file name.                                                                                                         |
+| `operations`     | `FilePreviewOperations`            | —                      | Async `openParent(path)` and `download()` capabilities, each returning `Promise<void>`.                                            |
+| `resources`      | `readonly FileViewerResource[]`    | —                      | Companion resources, e.g. textures.                                                                                                |
+| `levels`         | `readonly FilePreviewLevel[]`      | —                      | Content levels with individual sources and optional resources/editing.                                                             |
+| `activeLevelKey` | `string`                           | First enabled level    | Controlled content level.                                                                                                          |
+| `onLevelChange`  | `(key: string) => void`            | —                      | Selection intent; the host updates activeLevelKey when controlled.                                                                 |
+| `resolveImage`   | `(src, source) => Promise<string>` | —                      | Host resolution of Markdown images to accessible URLs.                                                                             |
+| `editing`        | `FilePreviewEditing`               | —                      | Editing capability; omit for read-only.                                                                                            |
+| `actions`        | `FilePreviewActionSource`          | —                      | Injected file/directory commands, as an array or context factory.                                                                  |
+| `toolbar`        | `FilePreviewToolbarOptions`        | Available capabilities | Show/hide the built-in view switch and editing; ignored by content tabs.                                                           |
+| `slots`          | `FilePreviewFileTabSlots`          | —                      | `actions` (node or renderer), `extraActions`, `titleExtra`, `footer`, plus fallbacks for loading, failure and unsupported formats. |
+| `onCopyContent`  | `(text: string) => void`           | —                      | Called after content copying succeeds.                                                                                             |
+| `onDownload`     | `() => void`                       | —                      | Called after the download operation succeeds; not called on failure.                                                               |
+| `onOpenUri`      | `(uri: string) => void`            | —                      | Called after a content resource opens successfully; not called on failure.                                                         |
 
 Content tabs add:
 
@@ -135,7 +194,7 @@ import { FilePreview } from '@openviking/react/components/file-preview';
 import '@openviking/react/components/file-preview/style.css';
 ```
 
-Copying is handled by the component: the host renders the button and calls `actions.copyContent()` or `actions.copyPath()`, both resolving to whether it succeeded. `onCopyContent` / `onCopyPath` fire after a successful copy with the value already copied, and never on failure.
+For legacy integrations, copying can still be handled by the component: the host renders the button and calls `actions.copyContent()` or `actions.copyPath()`, both resolving to whether it succeeded. `onCopyContent` / `onCopyPath` fire after a successful copy with the value already copied, and never on failure.
 
 ## Accessibility
 

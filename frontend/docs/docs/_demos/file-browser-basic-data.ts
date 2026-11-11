@@ -168,6 +168,14 @@ export function offlineFetch(
   if (board) return Promise.resolve(board);
 
   switch (url.pathname) {
+    case '/api/v1/fs': {
+      if (init?.method !== 'DELETE')
+        return Promise.resolve(new Response(null, { status: 405 }));
+      delete FILES[uri];
+      for (const [directory, entries] of Object.entries(DIRS))
+        DIRS[directory] = entries.filter((entry) => entry.uri !== uri);
+      return Promise.resolve(ok({ uri }));
+    }
     case '/api/v1/fs/ls':
       return Promise.resolve(ok(DIRS[uri] ?? []));
     case '/api/v1/fs/stat':

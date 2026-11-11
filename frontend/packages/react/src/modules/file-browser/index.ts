@@ -3,6 +3,9 @@ export type {
   FileBrowserLabels,
   FileBrowserDashboardLabels,
   FileBrowserProps,
+  FileBrowserPreviewSlots,
+  FileBrowserPreviewActions,
+  FileBrowserPreviewActionContext,
 } from './types.js';
 
 export type { FileBrowserDashboard } from './dashboard-model.js';

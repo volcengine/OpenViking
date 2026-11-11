@@ -228,6 +228,7 @@ export function useFileBrowser({
           setRefreshing(false);
         }
       },
+      openUri: openResource,
       openDashboard: openDashboard,
       setPreviewKey: (key: string) => {
         if (activeUri && key === dashboardKey(activeUri))
@@ -246,6 +247,7 @@ export function useFileBrowser({
     // replace `actions` and with it the `operations` handed to `FileTree`.
     [
       setActiveKey,
+      openResource,
       open,
       toggleExpand,
       loadMore,

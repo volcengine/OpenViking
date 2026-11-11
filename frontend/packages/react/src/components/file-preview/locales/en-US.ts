@@ -2,6 +2,8 @@ import type { FilePreviewLabels } from '../types.js';
 
 const messages = {
   showHiddenPath: 'Show hidden path levels',
+  moreActions: 'More actions',
+  actionFailed: 'The action failed',
   copyPath: 'Copy path',
   copyContent: 'Copy content',
   copied: 'Copied',

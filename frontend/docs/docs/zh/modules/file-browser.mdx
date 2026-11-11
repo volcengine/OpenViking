@@ -6,7 +6,7 @@
 
 目录按需展开并分页，点击文件加载预览。模块内置基础搜索弹窗，提交关键词调用原生搜索接口并展示结果。目录和预览的取数与联动 Hook 内置。
 
-详情区与独立 FilePreview 共用工具栏。目录可查看 L0 摘要和 L1 总览，文本文件显示正文。支持编辑的文件使用原生正文读写接口，保存后重新加载。可设置 `readOnly` 禁用编辑；启用 `acl` 时，资源权限会决定是否显示编辑按钮。
+详情区与独立 FilePreview 共用工具栏。目录可查看 L0 摘要和 L1 总览，文本文件显示正文。支持编辑的文件使用原生正文读写接口，保存后重新加载。可设置 `readOnly` 禁用编辑、导入与删除；启用 `acl` 时，资源权限会决定是否显示编辑按钮。
 
 ## 基础用法
 
@@ -18,7 +18,7 @@
 
 ## ACL 权限管理
 
-通过 `acl` 开启共享资源（`viking://resources/` 下的非根节点）的权限入口。默认关闭，不额外请求 ACL。只有有效权限为 `manage` 时显示管理按钮，点击复用内部 Modal：
+通过 `acl` 开启共享资源（`viking://resources/` 下的非根节点）的权限入口。默认关闭，不额外请求 ACL。有效权限为 `manage` 时，可从权限标签的详情进入管理，复用内部 Modal：
 
 ```tsx file="../../_demos/file-browser-acl.tsx" preview
 
@@ -98,6 +98,47 @@ import '@openviking/react/modules/file-browser/style.css';
 <FileBrowser locale="zh-CN" onImportResources={openImport} />
 ```
 
+## 预览操作区
+
+标题行使用“预览 / 源码 + 编辑图标 + 更多菜单”。复制内容收进更多菜单，复制路径仍在面包屑旁。ACL 的管理入口位于权限标签的详情中。
+
+`previewActions` 配置内置能力：
+
+| 字段                              | 默认值     | 行为                                                                              |
+| --------------------------------- | ---------- | --------------------------------------------------------------------------------- |
+| `copyContent` / `edit` / `delete` | 可用时显示 | 分别设为 `false` 关闭复制、编辑、原生文件删除；删除不关闭页签，而是删除当前文件。 |
+| `onHistory(uri)`                  | 不显示     | 宿主接管“查看历史版本”流程。                                                      |
+| `onImportPack(parentUri)`         | 不显示     | 宿主接管“导入 .ovpack”；文件传父目录，目录传当前 URI。只读时隐藏。                |
+| `onExportPack(uri)`               | 不显示     | 宿主接管“导出 .ovpack”。                                                          |
+| `onDelete(uri)`                   | —          | 原生删除成功后的通知；回调报错不改变删除结果。                                    |
+
+原生删除先显示设计稿中的确认弹窗，确认后请求 `DELETE /api/v1/fs?uri=...&wait=true`，期间防重复提交。失败时保留当前资源和确认框，显示原因并允许重试；成功后选中父目录并刷新树。受控模式通过 `onUriChange` 上报父目录。当前只内置文件删除，不递归删除目录。
+
+`readOnly` 禁用编辑、导入与删除。启用 `acl` 时，编辑和导入要求 `write / manage`，删除要求 `manage`；未启用 ACL 时不额外探测权限，服务端仍负责鉴权。
+
+```tsx
+<FileBrowser
+  previewActions={{
+    copyContent: true,
+    edit: false,
+    delete: true,
+    onHistory: (uri) => openHistory(uri),
+    onImportPack: (parentUri) => openPackImport(parentUri),
+    onExportPack: (uri) => exportPack(uri),
+  }}
+/>
+```
+
+`previewSlots` 支持三种扩展，看板内容页签不受影响：
+
+- `menuItems`：追加更多菜单项，结构为 `{ key, label, icon?, disabled?, danger?, separatorBefore?, onSelect }`。`key` 必须唯一，并避开内置键 `copyContent / download / history / importPack / exportPack / delete`。异步 `onSelect` 执行期间防重复调用，失败显示错误并允许重试。
+- `extraActions`：在默认工具栏末尾追加节点，编辑态隐藏。
+- `actions`：节点或 `(context: FileBrowserPreviewActionContext) => ReactNode`，替换整个操作区；`null` 隐藏。自定义后需自行渲染保存、取消及追加项。
+
+上下文包含预览状态、复制与编辑方法，并增加 `canDelete` / `deleteFile()`；后者打开同一份原生删除确认框。`readOnly`、编辑开关与 ACL 限制仍生效。复制路径与权限标签不受整体操作插槽影响。插槽不授予额外权限；宿主自定义按钮的文案与反馈由宿主提供。
+
+`FileBrowserPreviewActions`、`FileBrowserPreviewActionContext` 与 `FileBrowserPreviewSlots` 从 `@openviking/react/modules/file-browser` 导出。基础示例可切换内置、追加、自定义、隐藏和逐项关闭模式，也可模拟删除失败；历史和 ovpack 示例仅演示宿主回调。
+
 ## 目录树宽度
 
 树与详情之间有一条可拖拽的分隔条，把指针放在上面左右拖就能改树宽；分隔条获得焦点后，左右方向键每次调整 16px。
@@ -139,6 +180,9 @@ import '@openviking/react/modules/file-browser/style.css';
 | `acl`                   | `boolean \| FileBrowserAclOptions`     | `false`          | 共享资源权限管理，详见上文。                                                                                                                                                                                                                                                                                                                                                                 |
 | `locale`                | `'zh-CN' \| 'en-US'`                   | 继承上层 / en-US | 内置中英文文案。                                                                                                                                                                                                                                                                                                                                                                             |
 | `renderImportResources` | `(trigger: ReactElement) => ReactNode` | —                | 可选，包装或替换默认导入按钮；省略时使用默认按钮，返回 `null` 隐藏入口。                                                                                                                                                                                                                                                                                                                     |
+| `readOnly`              | `boolean`                              | `false`          | 禁用预览编辑、导入与文件删除；权限标签仍可查看。                                                                                                                                                                                                                                                                                                                                             |
+| `previewActions`        | `FileBrowserPreviewActions`            | 按可用能力       | 逐项开关及宿主历史、ovpack 流程。                                                                                                                                                                                                                                                                                                                                                            |
+| `previewSlots`          | `FileBrowserPreviewSlots`              | —                | 替换、隐藏或追加文件与目录预览操作按钮，详见上文。                                                                                                                                                                                                                                                                                                                                           |
 | `labels`                | `FileBrowserLabels`                    | —                | 可替换文案：`searchTitle`、`searchAction`、`searchHint`、`searchPlaceholder`、`searchEmpty`、`searchFailed`、`loading`、`refresh`、`empty`、`error`、`retry`、`previewMode`、`sourceMode`、`history`、`copyPath`、`viewSwitch`、`resizeTree`，`summaryEmpty`、`summaryFailed`（某一级摘要请求失败且服务端没给消息时的兜底文案），以及透传给入口、树与预览的 `entries` / `tree` / `preview`。 |
 | `className`             | `string`                               | —                | 容器附加类名。                                                                                                                                                                                                                                                                                                                                                                               |
 | `style`                 | `CSSProperties`                        | —                | 容器样式覆盖。                                                                                                                                                                                                                                                                                                                                                                               |

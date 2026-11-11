@@ -49,6 +49,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
     tabs,
     activeKey,
     defaultActiveKey,
+    toolbar,
     locale: localeProp,
     labels,
     onActiveKeyChange,
@@ -223,6 +224,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
         onSelect={(key) => void switchTab(key)}
       />
       <FilePreviewPanels
+        toolbar={toolbar}
         contentTab={contentTab}
         directoryTab={level.directoryTab}
         fileTab={fileTab}

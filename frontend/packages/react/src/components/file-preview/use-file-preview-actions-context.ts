@@ -46,7 +46,7 @@ export function useFilePreviewActionsContext({
   operations: Operations;
 }): FilePreviewActions {
   const startEditing = useCallback(() => {
-    if (!fileTab) return;
+    if (!fileTab?.editing || editing.editing) return;
     setViewMode('source');
     void editing.start(fileTab);
   }, [editing, fileTab, setViewMode]);
@@ -93,6 +93,8 @@ export function useFilePreviewActionsContext({
   }, [fileTab, operations]);
 
   return {
+    source: currentSource,
+    path: currentPath,
     viewMode,
     setViewMode,
     canSwitchView,

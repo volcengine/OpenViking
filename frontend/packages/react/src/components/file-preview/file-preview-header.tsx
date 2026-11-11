@@ -7,8 +7,11 @@ import { FilePreviewCopyPath } from './file-preview-copy-path.js';
 import { getPathFileName, splitPathSegments } from './file-preview-path.js';
 import type {
   FilePreviewActions,
+  FilePreviewActionSource,
   FilePreviewLabels,
   FilePreviewLevel,
+  FilePreviewMenuItem,
+  FilePreviewToolbarOptions,
 } from './types.js';
 
 /**
@@ -31,6 +34,9 @@ export interface FilePreviewHeaderProps {
   /** The header action area: a node, or a function of the actions context. */
   slotActions?: ReactNode | ((actions: FilePreviewActions) => ReactNode);
   extraActions?: ReactNode;
+  actionItems?: FilePreviewActionSource;
+  menuItems?: readonly FilePreviewMenuItem[];
+  toolbar?: FilePreviewToolbarOptions;
   actions: FilePreviewActions;
   levels?: readonly FilePreviewLevel[];
   levelKey?: string;
@@ -49,6 +55,9 @@ export function FilePreviewHeader({
   titleExtra,
   slotActions,
   extraActions,
+  menuItems,
+  actionItems,
+  toolbar,
   actions,
   text,
   onOpenParent,
@@ -60,6 +69,10 @@ export function FilePreviewHeader({
       slotActions(actions)
     ) : slotActions === undefined ? (
       <FilePreviewToolbar
+        key={path ?? fileName}
+        options={toolbar}
+        menuItems={menuItems}
+        actionItems={actionItems}
         actions={actions}
         text={text}
         extraActions={extraActions}
@@ -80,7 +93,9 @@ export function FilePreviewHeader({
             disabled={actions.busy}
             onOpen={onOpenParent}
           />
-          {actions.canCopyPath ? (
+          {menuItems !== undefined &&
+          actionItems === undefined &&
+          actions.canCopyPath ? (
             <FilePreviewCopyPath
               label={text.copyPath}
               disabled={actions.busy}

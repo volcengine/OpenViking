@@ -14,3 +14,5 @@
 @import '../../components/experience-dashboard/style.css';
 @import './acl/acl.css';
 @import '../../shared/components/modal/modal.css';
+
+@import './file-browser-delete-dialog.css';

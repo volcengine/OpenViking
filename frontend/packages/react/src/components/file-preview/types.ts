@@ -1,4 +1,18 @@
+import type { FilePreviewActionSource } from './action-types.js';
+export type {
+  FilePreviewAction,
+  FilePreviewActionItems,
+  FilePreviewActionSource,
+} from './action-types.js';
 import type { Locale } from '../../shared/locale.js';
+import type {
+  FilePreviewMenuItem,
+  FilePreviewToolbarOptions,
+} from './toolbar-types.js';
+export type {
+  FilePreviewMenuItem,
+  FilePreviewToolbarOptions,
+} from './toolbar-types.js';
 import type {
   ConfirmSlotProps,
   DownloadSlotProps,
@@ -108,6 +122,8 @@ export interface FilePreviewTabBase {
    * Whether the tab is disabled.
    */
   disabled?: boolean;
+  /** 内置工具栏的逐项开关。Visibility of individual built-in toolbar controls. */
+  toolbar?: FilePreviewToolbarOptions;
   /**
    * 祖先导航成功打开后触发，参数为被点击那一级的完整 URI；失败时不触发。
    * Called after an ancestor opens, with the full URI of the clicked level;
@@ -141,6 +157,8 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    * Tab kind discriminator, always `file`.
    */
   kind: 'file';
+  /** Injected commands; no copy/download/delete commands are supplied by default. */
+  actions?: FilePreviewActionSource;
   /**
    * 正文是否还在读取。为真时组件渲染加载态而不是正文，外壳（页签行、路径行）
    * 照常显示——宿主切换文件时外壳因此不闪，只有正文区在等。
@@ -280,6 +298,8 @@ export interface FilePreviewDirectoryTab extends FilePreviewTabBase {
    * Tab kind discriminator, always `directory`.
    */
   kind: 'directory';
+  /** Commands for the current summary level; content tabs do not have actions. */
+  actions?: FilePreviewActionSource;
   /**
    * 摘要是否还在读取。与文件页签同义：为真时正文区显示加载态，外壳照常。
    * Whether the summary is still being read. Same as a file tab: the body shows
@@ -427,6 +447,9 @@ export interface FilePreviewEditing {
  * The default toolbar and host overrides in `slots.actions` share this context.
  */
 export interface FilePreviewActions {
+  /** Active source/path for host commands; changing levels updates these values. */
+  source?: FilePreviewSource;
+  path?: string;
   /** 当前视图模式。The current view mode. */
   viewMode: FilePreviewViewMode;
   /** 切换到指定视图模式。Switches to the given view mode. */
@@ -475,6 +498,8 @@ export interface FilePreviewHeaderSlots {
   actions?: ReactNode | ((actions: FilePreviewActions) => ReactNode);
   /** 追加到默认工具栏的宿主操作。Host actions appended to the default toolbar. */
   extraActions?: ReactNode;
+  /** @deprecated Use tab.actions. Temporary adapter for the existing FileBrowser. */
+  menuItems?: readonly FilePreviewMenuItem[];
   /**
    * 标题旁的额外内容，例如权限标记、状态徽标或版本号；不需要时不传。
    * Extra content next to the title, for example a permission tag, a status badge
@@ -550,6 +575,8 @@ export interface FilePreviewLabels {
   copyContent?: string;
   copied?: string;
   copyFailed?: string;
+  moreActions?: string;
+  actionFailed?: string;
   previewMode?: string;
   sourceMode?: string;
   viewSwitch?: string;
@@ -635,6 +662,9 @@ export interface FilePreviewProps extends Omit<
    * Initial tab key when uncontrolled; the first tab is selected when omitted.
    */
   defaultActiveKey?: string;
+  /** Host visibility switches, true by default when supported. False hides the
+   * control for every tab, even when that tab enables it. */
+  toolbar?: Pick<FilePreviewToolbarOptions, 'viewSwitch' | 'edit'>;
   /**
    * 当前页签变化后触发，参数为新的页签 key。
    * Called after the active tab changes, with the new tab key.

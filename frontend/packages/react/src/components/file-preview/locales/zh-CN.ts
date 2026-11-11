@@ -2,8 +2,10 @@ import type { FilePreviewLabels } from '../types.js';
 
 const messages = {
   showHiddenPath: '显示隐藏的路径层级',
+  moreActions: '更多操作',
+  actionFailed: '操作失败',
   copyPath: '复制路径',
-  copyContent: '复制正文',
+  copyContent: '复制内容',
   copied: '已复制',
   copyFailed: '复制失败',
   previewMode: '预览',

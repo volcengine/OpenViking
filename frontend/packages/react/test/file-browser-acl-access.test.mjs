@@ -172,7 +172,9 @@ test('permission lookup failures remain retryable instead of silently hiding ACL
         document.querySelector('.ov-file-browser-acl__lookup-error'),
       ),
     );
-    assert.ok(document.querySelector('.ov-file-browser-acl__manage'));
+    assert.ok(document.querySelector('.ov-file-browser-acl__tag'));
+    await open();
+    assert.ok(document.querySelector('.ov-file-browser-acl [role="dialog"]'));
   } finally {
     await view.unmount();
   }

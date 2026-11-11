@@ -89,6 +89,7 @@
 
 /* ── 右栏：详情 ─────────────────────────────────────────────────── */
 
+.ov-file-browser__preview-pane,
 .ov-file-browser__detail {
   display: flex;
   flex: 1;

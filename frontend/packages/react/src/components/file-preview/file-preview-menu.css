@@ -1,0 +1,19 @@
+.ov-file-preview__menu-item--danger,
+.ov-file-preview__action-error {
+  color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
+}
+.ov-file-preview__action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+.ov-file-preview__toolbar-button[aria-expanded='true'].ov-button {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+}
+.ov-file-preview__action-error {
+  max-width: 30ch;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}

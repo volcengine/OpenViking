@@ -30,6 +30,8 @@ export const OV_PATHS = {
   fsTree: '/api/v1/fs/tree',
   /** 新建目录。Create a directory. */
   fsMkdir: '/api/v1/fs/mkdir',
+  /** 删除文件或目录。Remove a file or directory. */
+  fsRemove: '/api/v1/fs',
   /** 移动或重命名。Move or rename. */
   fsMv: '/api/v1/fs/mv',
   /** 读取文件正文。Read file content. */
