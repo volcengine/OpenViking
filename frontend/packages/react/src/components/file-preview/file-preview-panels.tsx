@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import type { Locale } from '../../shared/locale.js';
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 import type {
@@ -124,10 +125,34 @@ export function FilePreviewPanels({
         canOpenParent={Boolean(fileTab.operations?.openParent)}
         titleExtra={fileTab.slots?.titleExtra}
         slotActions={fileTab.slots?.actions}
+        extraActions={fileTab.slots?.extraActions}
         actions={actionContext}
         text={text}
         onOpenParent={(uri) => void actions.openParent(activeTab, uri)}
       />
+      {editing.editing && fileTab.slots?.actions === undefined ? (
+        <div className="ov-file-preview__edit-toolbar">
+          <span>{text.editFile}</span>
+          <div className="ov-file-preview__toolbar">
+            <Button
+              size="small"
+              type="default"
+              disabled={editing.saving}
+              onClick={actionContext.cancelEditing}
+            >
+              {text.leaveEditing}
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              loading={editing.saving}
+              onClick={() => void actionContext.saveEditing()}
+            >
+              {text.save}
+            </Button>
+          </div>
+        </div>
+      ) : null}
       <div className="ov-file-preview__body">
         <FilePreviewBody
           key={JSON.stringify([fileTab.key, levelKey])}

@@ -1,5 +1,6 @@
 /* The console shell owns the border and background; the renderer fills it. */
 .ov-file-preview {
+  container-type: inline-size;
   background: var(--ov-ui-file-preview-surface);
   color: var(--ov-ui-file-preview-text);
 }
@@ -124,4 +125,117 @@
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
+}
+
+.ov-file-preview__tab-row {
+  padding-block-start: 8px;
+}
+
+.ov-file-preview__header {
+  box-sizing: border-box;
+  min-height: 44px;
+}
+
+.ov-file-preview__toolbar,
+.ov-file-preview__edit-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ov-file-preview__toolbar {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.ov-file-preview__toolbar-divider {
+  width: 1px;
+  height: 10px;
+  margin-inline: 8px;
+  background: var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+}
+
+.ov-file-preview__toolbar-button.ov-button {
+  height: 28px;
+  gap: 6px;
+  border-color: var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  background: var(--ov-ui-file-preview-row-hover);
+  color: var(--ov-ui-file-preview-text);
+}
+
+.ov-file-preview__switch-item {
+  height: 24px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ov-ui-file-preview-text-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ov-file-preview__switch-item[aria-pressed='true'] {
+  background: var(--ov-ui-file-preview-surface);
+  color: var(--ov-ui-file-preview-text);
+  box-shadow: 0 0 0 1px var(--ov-ui-file-preview-border);
+  font-weight: 500;
+}
+
+.ov-file-preview__switch-item:focus-visible {
+  outline: 2px solid var(--ov-ui-file-preview-focus-ring);
+  outline-offset: -2px;
+}
+
+.ov-file-preview__edit-toolbar {
+  flex: none;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--ov-ui-file-preview-border);
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+  font-weight: 500;
+}
+
+.ov-file-preview__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@container (max-width: 480px) {
+  .ov-file-preview__header {
+    flex-wrap: wrap;
+  }
+
+  .ov-file-preview__header-actions {
+    margin-inline-start: auto;
+    max-width: 100%;
+  }
+}
+
+.ov-file-preview .ark-agentic-file-viewer-code,
+.ov-file-preview__editor {
+  background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default));
+}
+
+.ov-file-preview__toolbar-button.ov-button {
+  border-radius: 6px;
+}
+
+.ov-file-preview__toolbar-button.ov-button:hover:not(:disabled) {
+  border-color: var(--ov-ui-file-preview-text-muted);
+}
+
+.ov-file-preview .ark-agentic-file-viewer-code__lines {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.ov-file-preview .ark-agentic-file-viewer-code__content {
+  flex: 1 1 auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

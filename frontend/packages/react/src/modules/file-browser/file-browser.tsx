@@ -48,6 +48,7 @@ export function FileBrowser({
   dashboardKinds,
   renderDashboard,
   acl,
+  readOnly,
   onUriChange,
   onImportResources,
   renderImportResources,
@@ -200,14 +201,7 @@ export function FileBrowser({
             footer={browser.previewFooter}
             titleExtra={permissions.titleExtra}
             extraActions={permissions.actions}
-            viewLabels={{
-              preview: text.previewMode,
-              source: text.sourceMode,
-              copyPath: text.copyPath,
-              copyContent: text.copyContent,
-              download: text.download,
-              viewSwitch: text.viewSwitch,
-            }}
+            readOnly={readOnly || !permissions.canEdit}
             onActiveKeyChange={browser.actions.setPreviewKey}
           />
         ) : // 读失败与「没选中」是两件事：前者有选中的资源却取不到内容，必须显示
