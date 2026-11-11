@@ -112,6 +112,8 @@ Every accepted execution returns `202 Accepted` with the ordinary TaskRecord:
 
 Use `Idempotency-Key` for execution retries and `/api/v1/tasks/{task_id}` for status or cancellation. Manual execution uses the current caller's identity and connection; it does not borrow the schedule's credentials.
 
+If a source directory has been deleted or moved, a new execution returns HTTP `404` / `NOT_FOUND` before creating a task. The error identifies the missing Viking URI with `details.type="compile source directory"` and asks the caller to update the configuration's source directories before retrying. Permission errors remain separate. Recovering an existing submission with the same `Idempotency-Key` does not revalidate its source directories.
+
 ### CLI and SDKs
 
 ```bash

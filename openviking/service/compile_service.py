@@ -1180,7 +1180,17 @@ class CompileService:
                 "Compile target must not be inside the user memories/experiences subtree"
             )
         for uri in request.from_:
-            stat = await self._fs.stat(uri, ctx, skip_count=True)
+            try:
+                stat = await self._fs.stat(uri, ctx, skip_count=True)
+            except NotFoundError as exc:
+                raise NotFoundError(
+                    uri,
+                    "compile source directory",
+                    reason=(
+                        "The source directory is not found. "
+                        "Update the Compile configuration's source directories before retrying."
+                    ),
+                ) from exc
             if not stat.get("isDir"):
                 raise InvalidArgumentError(f"Compile source must be a directory: {uri}")
         skill_stat = await self._fs.stat(request.skill, ctx, skip_count=True)

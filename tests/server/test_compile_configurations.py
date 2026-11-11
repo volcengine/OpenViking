@@ -27,6 +27,7 @@ from openviking.storage.queuefs.compile_target_tag_processor import CompileTarge
 from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking_cli.exceptions import (
     InvalidArgumentError,
+    NotFoundError,
     PermissionDeniedError,
     UnavailableError,
 )
@@ -376,7 +377,7 @@ async def test_configuration_list_metadata_and_cross_user_paging(
 
 
 @pytest.mark.parametrize("endpoint", ["/api/v1/compile/create", "/api/v1/compile"])
-async def test_compile_admission_rejects_invalid_targets_before_publication(
+async def test_compile_admission_rejects_invalid_inputs_before_publication(
     service, app, client, monkeypatch, endpoint
 ):
     ctx, runtime = await prepare(service, app, monkeypatch)
@@ -388,6 +389,11 @@ async def test_compile_admission_rejects_invalid_targets_before_publication(
     service.fs.ensure_compile_target.side_effect = UnavailableError("tags", "unavailable")
     response = await client.post(endpoint, json=inputs)
     assert response.status_code == 503, response.text
+    monkeypatch.setattr(service.fs, "stat", AsyncMock(side_effect=NotFoundError(SOURCE, "file")))
+    response = await client.post(endpoint, json=inputs)
+    assert response.status_code == 404, response.text
+    assert "The source directory is not found." in response.json()["error"]["message"]
+    assert response.json()["error"]["details"]["resource"] == SOURCE
     assert not runtime.calls
     assert not [r async for r in service.compile.lifecycle.store.iter_records(ctx.account_id)]
     assert not await get_task_tracker().list_tasks(

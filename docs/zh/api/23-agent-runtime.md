@@ -112,6 +112,8 @@ POST /api/v1/compile
 
 执行重试可使用 `Idempotency-Key`；查询和取消使用 `/api/v1/tasks/{task_id}`。手动执行使用当前调用者的权限和连接，不借用保存的调度凭据。
 
+源目录被删除或移动后，新执行在创建任务前返回 HTTP `404` / `NOT_FOUND`。错误标明缺失的 Viking URI，`details.type="compile source directory"`，并提示修改配置中的源目录后重试；权限错误保持独立。使用相同 `Idempotency-Key` 恢复已有提交时，不重新校验源目录。
+
 ### CLI 与 SDK
 
 ```bash
