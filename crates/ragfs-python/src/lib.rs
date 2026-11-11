@@ -16,7 +16,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
-use uuid::Uuid;
 
 /// Cached reference to the Python `openviking.storage.errors.LockAcquisitionError` class,
 /// imported at module init so that native and Python code share the same exception type.
@@ -190,7 +189,6 @@ use std::fmt;
 use std::fs;
 use std::future::Future;
 use std::time::{Duration, UNIX_EPOCH};
-use tokio::sync::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 
 /// Validate and convert a wait timeout from Python.
 ///
@@ -218,7 +216,8 @@ fn validate_leader_ttl_secs(v: f64) -> PyResult<Duration> {
     }
 }
 
-use ragfs::cache_runtime::{CacheError, CacheRuntime, DynamicProviderConfig, RedisProviderConfig};
+use ragfs::cache_runtime::{CacheRuntime, DynamicProviderConfig, RedisProviderConfig};
+use ragfs::coordination::{CoordinationConfig, CoordinationRuntime};
 use ragfs::core::builder::{
     CacheFsConfig, CacheRuntimeProviderConfig, CacheStackConfig, EncryptionConfig,
 };
@@ -228,7 +227,6 @@ use ragfs::core::{
     OperationStats, PathLockContext, PluginConfig, RagfsConfig, SortOrder, TreeEntry, WriteFlag,
     FS_CTX,
 };
-use ragfs::leader::{LeaderLease, LeaderManager};
 use ragfs::lock::types::PathLockError;
 use ragfs::lock::{
     BorrowedPathLockLease, OwnedPathLockLease, PathLockConfig, PathLockHandleMode,
@@ -594,7 +592,12 @@ fn cache_config_from_canonical_ov_conf(
         == Some("cache");
     cache_config_from_canonical_ov_conf_with_runtime(
         json,
-        pathlock_uses_cache || backups_use_cache,
+        pathlock_uses_cache
+            || backups_use_cache
+            || json
+                .pointer("/storage/agfs/coordination/provider")
+                .and_then(|v| v.as_str())
+                == Some("cache"),
         service_name,
     )
 }
@@ -681,7 +684,7 @@ fn cache_config_from_canonical_ov_conf_with_runtime(
     match config.provider {
         CacheProviderKind::Redis => parse_redis_config(&mut config.redis, &params, "cache.params")?,
         CacheProviderKind::Dynamic => {
-            if force_runtime {
+            if pathlock_config_from_canonical_ov_conf(json, service_name)?.provider == "cache" {
                 return Err(
                     "cache-backed PathLock requires top-level cache.provider=redis".to_string(),
                 );
@@ -1543,12 +1546,8 @@ struct RAGFSBindingClient {
     pathlock_manager: Arc<PathLockManager>,
     /// Shared cache runtime. Closed only after mounted QueueFS instances shut down.
     cache_runtime: Option<Arc<CacheRuntime>>,
-    /// Service namespace used for shared leader keys.
-    service_name: String,
-    /// Opaque public references to hidden leader ownership tokens.
-    leader_leases: Arc<AsyncMutex<HashMap<String, LeaderLease>>>,
-    /// Blocks leader operations during close and waits in-flight operations out.
-    leader_closing: Arc<AsyncRwLock<bool>>,
+    /// Service-scoped leases and revisions; backend selection stays inside Rust.
+    coordination: Arc<CoordinationRuntime>,
     /// Write-time hooks applied before any filesystem write.
     write_hooks: WriteHookRegistry,
 }
@@ -1573,16 +1572,6 @@ impl RAGFSBindingClient {
     /// Clone the PathLock manager shared by this binding client.
     fn clone_pathlock_manager(&self) -> Arc<PathLockManager> {
         self.pathlock_manager.clone()
-    }
-
-    /// Build the leader manager lazily so providers without scripting still construct normally.
-    fn clone_leader_manager(&self) -> PyResult<Arc<LeaderManager>> {
-        let runtime = self.cache_runtime.clone().ok_or_else(|| {
-            PyRuntimeError::new_err("distributed leadership requires an AGFS CacheRuntime")
-        })?;
-        LeaderManager::new(runtime, &self.service_name)
-            .map(Arc::new)
-            .map_err(|error| PyRuntimeError::new_err(error.to_string()))
     }
 }
 
@@ -1617,6 +1606,35 @@ impl RAGFSBindingClient {
             ),
             None => None,
         };
+        let coordination_value = config
+            .as_ref()
+            .and_then(|cfg| cfg.get("coordination"))
+            .map(|value| py_to_json_value(value.bind(py)))
+            .transpose()?;
+        let mut coordination_value = match coordination_value {
+            Some(value) => value,
+            None => {
+                let from_file = config_path
+                    .map(|path| -> PyResult<Option<serde_json::Value>> {
+                        let contents = fs::read_to_string(path)
+                            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                        let value: serde_json::Value = serde_json::from_str(&contents)
+                            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                        Ok(value.pointer("/storage/agfs/coordination").cloned())
+                    })
+                    .transpose()?
+                    .flatten();
+                from_file.unwrap_or_else(|| serde_json::json!({"provider": "memory"}))
+            }
+        };
+        if let Some(value) = coordination_value.as_object_mut() {
+            value
+                .entry("provider")
+                .or_insert_with(|| serde_json::json!("memory"));
+        }
+        let coordination_config: CoordinationConfig = serde_json::from_value(coordination_value)
+            .map_err(|e| PyValueError::new_err(format!("Invalid coordination config: {e}")))?;
+        let coordination_uses_cache = matches!(coordination_config, CoordinationConfig::Cache { .. });
         let inline_pathlock_configured = config
             .as_ref()
             .is_some_and(|config| config.contains_key("pathlock"));
@@ -1700,6 +1718,8 @@ impl RAGFSBindingClient {
                     .ok_or_else(|| "service_name is required".to_string())?;
                 if inline_cache_configured {
                     cache_config_from_ov_conf_with_runtime(path, false, service_name)
+                } else if coordination_uses_cache {
+                    cache_config_from_ov_conf_with_runtime(path, true, service_name)
                 } else if inline_pathlock_configured {
                     cache_config_from_ov_conf_with_runtime(path, pathlock_uses_cache, service_name)
                 } else {
@@ -1711,6 +1731,14 @@ impl RAGFSBindingClient {
         let mut cache_config = runtime_cache_config
             .or(file_cache_config)
             .unwrap_or_default();
+        if coordination_uses_cache && inline_cache_configured {
+            cache_config.runtime_enabled = true;
+        }
+        if coordination_uses_cache && !cache_config.runtime_enabled {
+            return Err(PyValueError::new_err(
+                "top-level cache config is required for cache coordination",
+            ));
+        }
         if pathlock_uses_cache {
             if cache_config.provider != CacheProviderKind::Redis {
                 return Err(PyValueError::new_err(
@@ -1755,6 +1783,14 @@ impl RAGFSBindingClient {
         let mut write_hooks = WriteHookRegistry::new();
         ragfs::global_policy::register_write_hooks(&mut write_hooks);
 
+        let coordination = Arc::new(
+            CoordinationRuntime::new(
+                stack.cache_runtime.clone(),
+                coordination_config,
+                service_name.unwrap_or_else(|| "ragfs".to_string()),
+            )
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+        );
         Ok(Self {
             mountable: stack.mountable,
             top: stack.top,
@@ -1763,9 +1799,7 @@ impl RAGFSBindingClient {
             git_backend,
             pathlock_manager: stack.pathlock_manager,
             cache_runtime: stack.cache_runtime,
-            service_name: service_name.unwrap_or_else(|| "ragfs".to_string()),
-            leader_leases: Arc::new(AsyncMutex::new(HashMap::new())),
-            leader_closing: Arc::new(AsyncRwLock::new(false)),
+            coordination,
             write_hooks,
         })
     }
@@ -1774,28 +1808,19 @@ impl RAGFSBindingClient {
     fn close(&self, py: Python<'_>) -> PyResult<()> {
         let mountable = Arc::clone(&self.mountable);
         let cache_runtime = self.cache_runtime.clone();
-        let service_name = self.service_name.clone();
-        let leader_leases = Arc::clone(&self.leader_leases);
-        let leader_closing = Arc::clone(&self.leader_closing);
+        let coordination = self.coordination.clone();
         py_detach_blocking(py, || {
             self.rt.block_on(async move {
-                let mut closing = leader_closing.write().await;
-                *closing = true;
+                let coordination_result = coordination.close().await;
                 let mount_result = mountable.shutdown().await;
                 let cache_result = match cache_runtime {
                     Some(runtime) => {
-                        if let Ok(manager) = LeaderManager::new(runtime.clone(), &service_name) {
-                            let leases = std::mem::take(&mut *leader_leases.lock().await);
-                            for lease in leases.into_values() {
-                                let _ = manager.release(&lease).await;
-                            }
-                        }
                         runtime.close().await.map_err(|error| error.to_string())
                     }
                     None => Ok(()),
                 };
-                drop(closing);
                 mount_result.map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+                coordination_result.map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
                 cache_result.map_err(PyRuntimeError::new_err)
             })
         })
@@ -2611,14 +2636,16 @@ impl RAGFSBindingClient {
         ))
     }
 
-    // ── PathLock API ──
+    // ── Coordination API ──
 
-    /// Validate that distributed leadership is available on this client.
+    /// Validate that the configured coordination service is available.
     fn leader_validate(&self) -> PyResult<()> {
-        self.clone_leader_manager().map(|_| ())
+        self.coordination
+            .validate()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Try to acquire a distributed leader lease and return an opaque local reference.
+    /// Try to acquire a leader term and return an opaque reference.
     #[pyo3(signature = (key, holder_id, ttl_secs))]
     fn leader_try_acquire_async<'py>(
         &self,
@@ -2628,21 +2655,9 @@ impl RAGFSBindingClient {
         ttl_secs: f64,
     ) -> PyResult<Bound<'py, PyAny>> {
         let ttl = validate_leader_ttl_secs(ttl_secs)?;
-        let manager = self.clone_leader_manager()?;
-        let leases = Arc::clone(&self.leader_leases);
-        let leader_closing = Arc::clone(&self.leader_closing);
+        let coordination = self.coordination.clone();
         let task = self.rt.spawn(async move {
-            let closing = leader_closing.read().await;
-            if *closing {
-                return Err(CacheError::Closed);
-            }
-            let lease = manager.try_acquire(&key, &holder_id, ttl).await?;
-            let Some(lease) = lease else {
-                return Ok(None);
-            };
-            let lease_ref = Uuid::new_v4().to_string();
-            leases.lock().await.insert(lease_ref.clone(), lease);
-            Ok::<Option<String>, CacheError>(Some(lease_ref))
+            coordination.try_acquire(&key, &holder_id, ttl).await
         });
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             task.await
@@ -2660,26 +2675,9 @@ impl RAGFSBindingClient {
         ttl_secs: f64,
     ) -> PyResult<Bound<'py, PyAny>> {
         let ttl = validate_leader_ttl_secs(ttl_secs)?;
-        let manager = self.clone_leader_manager()?;
-        let leases = Arc::clone(&self.leader_leases);
-        let leader_closing = Arc::clone(&self.leader_closing);
+        let coordination = self.coordination.clone();
         let task = self.rt.spawn(async move {
-            let closing = leader_closing.read().await;
-            if *closing {
-                return Err(CacheError::Closed);
-            }
-            let lease = {
-                let leases = leases.lock().await;
-                leases.get(&lease_ref).cloned()
-            };
-            let Some(lease) = lease else {
-                return Ok(false);
-            };
-            let renewed = manager.renew(&lease, ttl).await?;
-            if !renewed {
-                leases.lock().await.remove(&lease_ref);
-            }
-            Ok::<bool, ragfs::cache_runtime::CacheError>(renewed)
+            coordination.renew(&lease_ref, ttl).await
         });
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             task.await
@@ -2695,23 +2693,9 @@ impl RAGFSBindingClient {
         py: Python<'py>,
         lease_ref: String,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let manager = self.clone_leader_manager()?;
-        let leases = Arc::clone(&self.leader_leases);
-        let leader_closing = Arc::clone(&self.leader_closing);
+        let coordination = self.coordination.clone();
         let task = self.rt.spawn(async move {
-            let closing = leader_closing.read().await;
-            if *closing {
-                return Err(CacheError::Closed);
-            }
-            let lease = {
-                let leases = leases.lock().await;
-                leases.get(&lease_ref).cloned()
-            };
-            if let Some(lease) = lease {
-                manager.release(&lease).await?;
-                leases.lock().await.remove(&lease_ref);
-            }
-            Ok::<(), ragfs::cache_runtime::CacheError>(())
+            coordination.release(&lease_ref).await
         });
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             task.await
@@ -2719,6 +2703,56 @@ impl RAGFSBindingClient {
                 .map_err(|error| PyRuntimeError::new_err(error.to_string()))
         })
     }
+
+    /// Reserve a revision without changing the latest published work.
+    fn revision_allocate_async<'py>(
+        &self,
+        py: Python<'py>,
+        key: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let coordination = self.coordination.clone();
+        let task = self.rt.spawn(async move { coordination.allocate_revision(&key).await });
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            task.await
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Publish persisted work, taking the maximum published revision.
+    fn revision_publish_async<'py>(
+        &self,
+        py: Python<'py>,
+        key: String,
+        revision: i64,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let coordination = self.coordination.clone();
+        let task = self
+            .rt
+            .spawn(async move { coordination.publish_revision(&key, revision).await });
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            task.await
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Read the latest published revision, or zero for an unseen key.
+    fn revision_latest_async<'py>(
+        &self,
+        py: Python<'py>,
+        key: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let coordination = self.coordination.clone();
+        let task = self.rt.spawn(async move { coordination.latest_revision(&key).await });
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            task.await
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    // ── PathLock API ──
 
     /// Acquire an exact lock on a single path.
     #[pyo3(signature = (ctx, path, timeout_secs=0.0, owner_lease_ref=None))]

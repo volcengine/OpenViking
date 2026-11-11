@@ -1495,8 +1495,18 @@ ALTER TABLE ov_watch_tasks
 ```
 
 所有节点都提供 Watch API。`enable_watch_scheduler=true` 的节点可以运行后台 Watch
-调度器。`watch_leader_provider` 选择 leader 模式：`auto` 保持按存储类型推导的默认值，
-`local` 将 leader 限制在本进程内，`cache` 使用 AGFS CacheRuntime 的共享 leader 租约。
+调度器。`storage.agfs.coordination.provider` 替代 `watch_leader_provider`，
+选择同一 `service_name` 下的协调后端：`memory`（默认）在进程内共享；
+`sqlite` 在同机共享并持久化，必须指定本地磁盘上的绝对路径 `sqlite_path`，避免 EFS/NFS；
+`cache` 复用顶层 `cache` 配置，在多机间共享状态。
+cache 协调的 `operation_timeout_ms` 必须为正整数，默认 5000 毫秒。
+
+每个服务使用一个不设 TTL 的 64 位全局 revision 计数器，成功入队后发布 revision。
+每个 key 的最大发布值保留 1 天，发布刷新 TTL，查询不续期。
+记录过期、不存在或查询失败时，旧任务仍可执行。
+Memory 和 SQLite 在主动释放、客户端关闭时删除自有租约，并在正常操作期间回收过期记录；
+SQLite 启动时也会清理过期记录。
+
 leader 每 15 秒拉取到期 Watch 并结算已结束的运行。File 和 MySQL 共用 Runtime
 的轮询与有限并发派发流程。后台派发在 leader 内存中维护
 未结束的 Watch 运行和提交中的协程占用（默认上限 4）。接管时通过已有运行扫描

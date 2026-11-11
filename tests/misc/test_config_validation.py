@@ -1330,11 +1330,42 @@ def test_mysql_watch_store_requires_credential_encryption_key():
     assert config.storage.agfs.pathlock.provider == "filesystem"
 
 
-def test_watch_leader_provider_config():
-    assert OpenVikingConfig.from_dict({}).watch_leader_provider == "auto"
-    assert OpenVikingConfig.from_dict({"watch_leader_provider": "local"}).watch_leader_provider == "local"
-    with pytest.raises(ValueError, match="watch_leader_provider"):
-        OpenVikingConfig.from_dict({"watch_leader_provider": "redis"})
+def test_coordination_defaults_to_memory_and_sqlite_requires_local_path(tmp_path):
+    assert AGFSConfig().coordination.provider == "memory"
+    path = str(tmp_path / "host-disk" / "coordination.db")
+    AGFSConfig(path="/efs/workspace", coordination={"provider": "sqlite", "sqlite_path": path})
+    for coordination in [
+        {"provider": "sqlite"},
+        {"provider": "sqlite", "sqlite_path": "relative.db"},
+        {"provider": "memory", "sqlite_path": path},
+        {"provider": "unknown"},
+    ]:
+        with pytest.raises(ValueError):
+            AGFSConfig(coordination=coordination)
+
+
+def test_coordination_cache_activates_shared_runtime_without_cachefs():
+    agfs = AGFSConfig(coordination={"provider": "cache"})
+    with pytest.raises(ValueError, match="top-level cache"):
+        RagfsBindingConfig(agfs=agfs).to_binding_dict()
+    binding = RagfsBindingConfig(
+        agfs=agfs,
+        cache=CacheConfig(provider="redis", params={}),
+    ).to_binding_dict()
+    assert binding["cache"]["runtime_enabled"]
+    assert not binding["cache"]["enabled"]
+
+
+@pytest.mark.parametrize(
+    "coordination",
+    [
+        {"provider": "cache", "operation_timeout_ms": 0},
+        {"provider": "memory", "operation_timeout_ms": 100},
+    ],
+)
+def test_coordination_deadline_must_be_positive_and_cache_only(coordination):
+    with pytest.raises(ValueError):
+        AGFSConfig(coordination=coordination)
 
 
 def test_shared_redis_ttl_requires_shared_redis_backend(tmp_path):

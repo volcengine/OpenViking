@@ -566,7 +566,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 logger.warning("Skipping semantic generation for root URI: %s", msg.uri)
                 await self._cleanup_local_artifact(msg)
                 return ProcessResult.success()
-            if is_semantic_msg_stale(msg):
+            if msg.coalesce_key and await is_semantic_msg_stale(
+                msg, agfs=get_viking_fs()._async_agfs
+            ):
                 live_file_changes = {
                     kind: list(msg.changes.get(kind, []))
                     for kind in ("added", "modified")
@@ -1189,7 +1191,7 @@ class SemanticProcessor(DequeueHandlerBase):
             overview=overview,
             abstract=abstract,
             ctx=ctx,
-            is_stale=lambda: is_semantic_msg_stale(msg),
+            is_stale=lambda: is_semantic_msg_stale(msg, agfs=viking_fs._async_agfs),
             metadata={
                 **({"source": msg.source} if msg.source else {}),
                 "generated_by": {
@@ -1996,7 +1998,6 @@ class SemanticProcessor(DequeueHandlerBase):
                 overview=overview,
                 ctx=ctx,
                 lock=lock,
-                is_stale=lambda: False,
                 metadata={
                     "generated_by": {"component": "SkillProcessor", "trigger": "skill_refresh"}
                 },

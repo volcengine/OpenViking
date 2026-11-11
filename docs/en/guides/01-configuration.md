@@ -1503,10 +1503,20 @@ ALTER TABLE ov_watch_tasks
 ```
 
 Every node serves the Watch API. Nodes with `enable_watch_scheduler=true` may
-run the background Watch scheduler. `watch_leader_provider` selects leader
-mode: `auto` keeps the storage-derived default, `local` keeps leadership inside
-one process, and `cache` uses AGFS CacheRuntime for a shared leader lease. The
-leader polls due Watches every 15 seconds and settles finished runs. File and
+run the background Watch scheduler. `storage.agfs.coordination.provider` replaces
+`watch_leader_provider` and selects coordination within a `service_name`:
+`memory` (default) shares state within one process; `sqlite` shares persistent state
+on one machine and requires an absolute `sqlite_path` on local disk, outside EFS/NFS;
+`cache` shares state across machines using the top-level `cache` configuration.
+For cache coordination, `operation_timeout_ms` is a positive integer, defaulting to 5000.
+
+Each service uses one global 64-bit revision counter without a TTL. Successful enqueue
+publishes the revision; each key retains its maximum for one day. Publication refreshes
+the TTL, while reads do not. Missing, expired, or unavailable state keeps old work eligible.
+Memory and SQLite delete owned leases on release and client close, and reclaim expired
+records during normal operations. SQLite also cleans expired records at startup.
+
+The leader polls due Watches every 15 seconds and settles finished runs. File and
 MySQL use the same Runtime polling and bounded dispatch flow. Background
 dispatch tracks unfinished Watch runs and pending submissions in leader memory
 toward its concurrency limit (default 4). Taking leadership restores occupancy

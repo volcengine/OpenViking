@@ -7,17 +7,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import math
-import threading
-import time
-import uuid
 from dataclasses import dataclass
-from typing import AsyncIterator, Awaitable, Literal, Optional, Protocol
+from typing import AsyncIterator, Awaitable, Optional, Protocol
 
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-LeaderMode = Literal["distributed", "local"]
 _MIN_TTL_SECS = 0.001
 _MAX_TTL_SECS = (2**63 - 1) / 1000
 _LEADER_COMPONENT_CHARS = frozenset("._-:")
@@ -72,7 +68,7 @@ class _NativeLeaderBackend:
         ):
             if not callable(getattr(client, method_name, None)):
                 raise RuntimeError(
-                    f"AGFS native binding does not support distributed leadership: "
+                    f"AGFS native binding does not support coordination leadership: "
                     f"missing {method_name}"
                 )
         client.leader_validate()
@@ -111,62 +107,6 @@ class _NativeLeaderBackend:
 
     async def release(self, lease_ref: str) -> None:
         await self._client.leader_release_async(lease_ref)
-
-
-@dataclass
-class _LocalLease:
-    key: str
-    expires_at: float
-
-
-class _LocalLeaderBackend:
-    """One-process fallback for file-backed deployments."""
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._owners: dict[str, str] = {}
-        self._leases: dict[str, _LocalLease] = {}
-
-    async def acquire(self, key: str, holder_id: str, ttl_secs: float) -> Optional[str]:
-        del holder_id
-        with self._lock:
-            now = time.monotonic()
-            current_ref = self._owners.get(key)
-            if current_ref is not None:
-                current = self._leases.get(current_ref)
-                if current is not None and current.expires_at > now:
-                    return None
-                self._owners.pop(key, None)
-                self._leases.pop(current_ref, None)
-            lease_ref = str(uuid.uuid4())
-            self._owners[key] = lease_ref
-            self._leases[lease_ref] = _LocalLease(key=key, expires_at=now + ttl_secs)
-            return lease_ref
-
-    async def renew(self, lease_ref: str, ttl_secs: float) -> bool:
-        with self._lock:
-            lease = self._leases.get(lease_ref)
-            now = time.monotonic()
-            if (
-                lease is None
-                or lease.expires_at <= now
-                or self._owners.get(lease.key) != lease_ref
-            ):
-                self._leases.pop(lease_ref, None)
-                if lease is not None and self._owners.get(lease.key) == lease_ref:
-                    self._owners.pop(lease.key, None)
-                return False
-            lease.expires_at = now + ttl_secs
-            return True
-
-    async def release(self, lease_ref: str) -> None:
-        with self._lock:
-            lease = self._leases.pop(lease_ref, None)
-            if lease is not None and self._owners.get(lease.key) == lease_ref:
-                self._owners.pop(lease.key, None)
-
-
-_LOCAL_LEADER_BACKEND = _LocalLeaderBackend()
 
 
 @dataclass(frozen=True)
@@ -323,25 +263,16 @@ class LeaderCandidate(AsyncIterator[Leadership]):
 
 def leader_candidate(
     client: _NativeLeaderClient,
-    local_backend: _LocalLeaderBackend,
     *,
     key: str,
     holder_id: str,
     ttl_secs: float,
     renew_interval_secs: float,
     retry_interval_secs: float,
-    mode: LeaderMode,
 ) -> LeaderCandidate:
-    """Create a candidate over the requested AGFS leadership backend."""
-    backend: _LeaderBackend
-    if mode == "distributed":
-        backend = _NativeLeaderBackend(client)
-    elif mode == "local":
-        backend = local_backend
-    else:
-        raise ValueError("leader mode must be 'distributed' or 'local'")
+    """Create a candidate over the Rust coordination service."""
     return LeaderCandidate(
-        backend,
+        _NativeLeaderBackend(client),
         key=key,
         holder_id=holder_id,
         ttl_secs=ttl_secs,

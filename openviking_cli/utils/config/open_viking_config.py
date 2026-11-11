@@ -384,15 +384,6 @@ class OpenVikingConfig(BaseModel):
             "disable on nodes that should never run the background watch/refresh loop."
         ),
     )
-    watch_leader_provider: Literal["auto", "local", "cache"] = Field(
-        default="auto",
-        description=(
-            "Watch scheduler leader provider. 'auto' keeps the storage-derived default "
-            "(local for file WatchStore, cache-backed distributed leader otherwise); "
-            "'local' and 'cache' explicitly select the leader mode."
-        ),
-    )
-
     reconcile_system_assets_on_startup: bool = Field(
         default=True,
         description=(
@@ -459,6 +450,7 @@ class OpenVikingConfig(BaseModel):
             agfs.cachefs.backend == "cache"
             or agfs.queuefs.backend == "cache"
             or agfs.pathlock.provider == "cache"
+            or agfs.coordination.provider == "cache"
             or backups.get("provider", "filesystem") == "cache"
         )
         if uses_canonical_cache and self.cache is None:
