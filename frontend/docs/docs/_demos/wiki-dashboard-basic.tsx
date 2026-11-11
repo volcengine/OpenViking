@@ -6,6 +6,7 @@ import {
   type WikiDashboardProps,
 } from '@openviking/react/components/wiki-dashboard';
 import '@openviking/react/components/wiki-dashboard/style.css';
+import { WikiEditIcon, WikiHistoryIcon } from '@openviking/react/icons';
 import { wikiViewData, DEMO_WIKI, DEMO_WIKI_FILE } from '#dashboard-demo-data';
 
 export default function WikiDashboardBasic() {
@@ -20,7 +21,11 @@ export default function WikiDashboardBasic() {
         show: '显示冲突',
         hidePath: '隐藏文档路径',
         showPath: '显示文档路径',
-        readOnly: '示例仅供查看',
+        showActions: '显示宿主操作',
+        hideActions: '隐藏宿主操作',
+        edit: '模拟编辑冲突',
+        review: '模拟查看修复记录',
+        action: '已触发宿主操作',
         opened: '模拟打开文档',
       }
     : {
@@ -32,13 +37,19 @@ export default function WikiDashboardBasic() {
         show: 'Show conflicts',
         hidePath: 'Hide document path',
         showPath: 'Show document path',
-        readOnly: 'Read-only example',
+        showActions: 'Show host actions',
+        hideActions: 'Hide host actions',
+        edit: 'Simulate conflict editing',
+        review: 'Simulate resolution review',
+        action: 'Host action triggered',
         opened: 'Simulated document navigation',
       };
   const [uri, setUri] = useState(DEMO_WIKI);
   const [empty, setEmpty] = useState(false);
   const [showPath, setShowPath] = useState(true);
   const [openedPath, setOpenedPath] = useState('');
+  const [showActions, setShowActions] = useState(true);
+  const [selectedAction, setSelectedAction] = useState('');
   const dashboard: WikiDashboardProps =
     uri === DEMO_WIKI
       ? {
@@ -58,8 +69,21 @@ export default function WikiDashboardBasic() {
                 ...wikiViewData,
                 path: showPath ? wikiViewData.path : undefined,
               },
-          editDisabledReason: text.readOnly,
-          discussDisabledReason: text.readOnly,
+          defineActions: showActions
+            ? (conflict) => [
+                {
+                  key: 'inspect',
+                  icon:
+                    conflict.state === 'fixed' ? (
+                      <WikiHistoryIcon width={14} height={14} />
+                    ) : (
+                      <WikiEditIcon width={14} height={14} />
+                    ),
+                  tooltip: conflict.state === 'fixed' ? text.review : text.edit,
+                  onClick: () => setSelectedAction(conflict.description),
+                },
+              ]
+            : undefined,
           onOpenUri: () => setOpenedPath(DEMO_WIKI_FILE),
         };
   return (
@@ -106,6 +130,14 @@ export default function WikiDashboardBasic() {
               onClick={() => setShowPath(!showPath)}
             >
               {showPath ? text.hidePath : text.showPath}
+            </Button>{' '}
+            <Button
+              size="small"
+              type="default"
+              htmlType="button"
+              onClick={() => setShowActions(!showActions)}
+            >
+              {showActions ? text.hideActions : text.showActions}
             </Button>
           </>
         ) : null}
@@ -114,6 +146,11 @@ export default function WikiDashboardBasic() {
       {openedPath ? (
         <p role="status">
           {text.opened}: {openedPath}
+        </p>
+      ) : null}
+      {selectedAction ? (
+        <p role="status">
+          {text.action}: {selectedAction}
         </p>
       ) : null}
     </div>

@@ -108,11 +108,17 @@
 }
 .ov-wiki-dashboard__conflict-row {
   display: grid;
-  grid-template-columns: 78px minmax(140px, 1fr) 200px 74px 100px;
+  grid-template-columns: 78px minmax(140px, 1fr) 200px 74px;
   align-items: center;
 }
 .ov-wiki-dashboard__conflict-row--without-path {
-  grid-template-columns: 78px minmax(140px, 1fr) 74px 100px;
+  grid-template-columns: 78px minmax(140px, 1fr) 74px;
+}
+.ov-wiki-dashboard__conflict-row--with-actions {
+  grid-template-columns: 78px minmax(140px, 1fr) 200px 74px max-content;
+}
+.ov-wiki-dashboard__conflict-row--with-actions.ov-wiki-dashboard__conflict-row--without-path {
+  grid-template-columns: 78px minmax(140px, 1fr) 74px max-content;
 }
 .ov-wiki-dashboard__severity {
   justify-self: start;
@@ -298,6 +304,8 @@
 }
 .ov-wiki-dashboard__actions {
   display: flex;
+  flex: none;
+  align-items: center;
   gap: 8px;
   padding: 0 16px;
 }

@@ -42,6 +42,7 @@
 .ov-directory-tour,
 .ov-wiki-dashboard,
 .ov-experience-dashboard,
+.ov-auth,
 .ov-agent-connect,
 .ov-console,
 .ov-divider,
@@ -63,6 +64,9 @@
   --ov-ui-tour-shadow-default:
     0 15px 35px rgb(0 0 0 / 5%), 0 5px 15px rgb(0 0 0 / 5%);
   --ov-ui-tour-highlight-default: rgb(82 82 255 / 8%);
+
+  --ov-ui-auth-on-primary-default: #ffffff;
+  --ov-ui-auth-backdrop-default: rgb(0 0 0 / 40%);
   /* 主色：面包屑、焦点环、选中态与主要按钮。 */
   --ov-ui-primary-default: #5252ff;
   --ov-ui-primary-hover-default: #7075ff;
@@ -169,6 +173,7 @@ html.dark .ov-textarea,
 .dark .ov-directory-tour,
 html.dark .ov-wiki-dashboard,
 html.dark .ov-experience-dashboard,
+.dark .ov-auth,
 .dark .ov-agent-connect,
 .dark .ov-console,
 .dark .ov-divider,

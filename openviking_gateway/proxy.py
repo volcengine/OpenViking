@@ -154,10 +154,14 @@ def context_override(policy, header):
     if blocked := override.keys() & {"name", "client_overrides"}:
         raise context_error("X-OpenViking-Context cannot set " + ", ".join(sorted(blocked)))
     try:
-        merged = Policy.model_validate({**policy, **override}).model_dump()
+        merged = Policy.model_validate({**policy, **override})
+        saved = Policy.model_validate(policy)
     except ValidationError as error:
         raise context_error(validation_detail(error))
-    return {**policy, **merged}, sorted(override)
+    # Tool access only narrows: the header cannot offer a tool the profile withholds.
+    merged.gateway_tools = merged.gateway_tools and saved.gateway_tools
+    merged.disabled_tools = list(dict.fromkeys([*saved.disabled_tools, *merged.disabled_tools]))
+    return {**policy, **merged.model_dump()}, sorted(override)
 
 
 def request_peer(headers, credential):

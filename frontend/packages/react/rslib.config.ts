@@ -15,6 +15,18 @@ export default defineConfig({
             './src/components/directory-tour/index.ts',
           icons: './src/icons/index.tsx',
           client: './src/client/index.ts',
+          'components/invitation-confirmation':
+            './src/components/invitation-confirmation/index.ts',
+          'components/login-method-selector':
+            './src/components/login-method-selector/index.ts',
+          'components/password-setup-form':
+            './src/components/password-setup-form/index.ts',
+          'components/password-reset-request-form':
+            './src/components/password-reset-request-form/index.ts',
+          'components/api-key-login-form':
+            './src/components/api-key-login-form/index.ts',
+          'components/email-login-form':
+            './src/components/email-login-form/index.ts',
           'modules/scope-cascade': './src/modules/scope-cascade/index.ts',
           'components/file-tree': './src/components/file-tree/index.ts',
           'components/file-preview': './src/components/file-preview/index.ts',
@@ -72,6 +84,19 @@ export default defineConfig({
       style: './src/style.css',
       'components/directory-tour/style':
         './src/components/directory-tour/style.css',
+
+      'components/invitation-confirmation/style':
+        './src/components/invitation-confirmation/style.css',
+      'components/login-method-selector/style':
+        './src/components/login-method-selector/style.css',
+      'components/password-setup-form/style':
+        './src/components/password-setup-form/style.css',
+      'components/password-reset-request-form/style':
+        './src/components/password-reset-request-form/style.css',
+      'components/api-key-login-form/style':
+        './src/components/api-key-login-form/style.css',
+      'components/email-login-form/style':
+        './src/components/email-login-form/style.css',
       'modules/scope-cascade/style': './src/modules/scope-cascade/style.css',
       'components/style': './src/components/style.css',
       'components/file-tree/style': './src/components/file-tree/style.css',

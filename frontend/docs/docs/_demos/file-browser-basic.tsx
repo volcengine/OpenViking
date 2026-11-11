@@ -5,6 +5,7 @@ import { OpenVikingProvider } from '@openviking/react/client';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import {
   DEMO_WIKI_FILE,
+  DEMO_PREVIEW_FILE,
   MEMORIES,
   offlineFetch,
 } from '#file-browser-basic-data';
@@ -69,6 +70,20 @@ export default function FileBrowserBasic() {
         >
           {text.alias}
         </Button>
+        <Button
+          size="small"
+          type="default"
+          onClick={() => setUri(DEMO_PREVIEW_FILE)}
+        >
+          {componentLocale === 'zh-CN'
+            ? '预览可编辑文件'
+            : 'Preview editable file'}
+        </Button>{' '}
+        <Button size="small" type="default" onClick={() => setUri(MEMORIES)}>
+          {componentLocale === 'zh-CN'
+            ? '预览目录摘要'
+            : 'Preview directory summaries'}
+        </Button>{' '}
         <code>{uri}</code>
         <span role="status">{imported ? text.import : text.hint}</span>
       </div>

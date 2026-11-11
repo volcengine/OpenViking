@@ -6,6 +6,8 @@ Directory navigation, search and content preview as one module. The module loads
 
 Directories expand on demand and page; clicking a file loads its preview. The module includes a basic search dialog that submits queries to the native search endpoint and displays results. Directory and preview data Hooks remain internal.
 
+The detail pane uses the same toolbar as standalone FilePreview. Directories provide L0 abstract and L1 overview; text files show their body. Supported files can be edited using the native content read/write endpoints, and the pane reloads after saving. Use `readOnly` to disable editing, or enable `acl` to gate the edit button by the resource permission.
+
 ## Basic usage
 
 The example uses fixed data and makes no network request:

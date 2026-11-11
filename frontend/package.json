@@ -25,9 +25,12 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "sync:swatches": "node scripts/sync-library-swatches.mjs",
-    "check:swatches": "node scripts/sync-library-swatches.mjs --check"
+    "check:swatches": "node scripts/sync-library-swatches.mjs --check",
+    "changeset": "changeset",
+    "version:react": "changeset version && npm install --package-lock-only --ignore-scripts --no-audit --no-fund"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.31.1",
     "@rsbuild/plugin-svgr": "^2.0.5",
     "@rslint/core": "0.10.0",
     "@types/node": "^22.19.0",

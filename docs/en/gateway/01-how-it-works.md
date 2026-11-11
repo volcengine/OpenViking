@@ -108,7 +108,7 @@ When it compacts, which context window to set and what the summary contains are 
 
 ## OpenViking tools {#openviking-tools}
 
-With OpenViking tools on, the model can search, read and, if an admin allows it, write OpenViking memory itself while it answers; new context profiles turn them on with only the read-only tools selected. The gateway runs the calls and replays the rounds on later turns, so the client never declares or runs these tools and sees only a one-line notice per call. See [OpenViking tools in the gateway](04-openviking-tools.md#agentic-memory-for-any-client).
+With OpenViking tools on, the model can search, read and write OpenViking memory itself while it answers; new context profiles turn them on with every tool selected, and admins can uncheck any of them. The gateway runs the calls and replays the rounds on later turns, so the client never declares or runs these tools and sees only a one-line notice per call. See [OpenViking tools in the gateway](04-openviking-tools.md#agentic-memory-for-any-client).
 
 ## Behaviors to expect {#what-to-expect}
 

@@ -120,6 +120,7 @@ function ExperienceDashboardContent({
                 <ExperienceImpact
                   data={result}
                   labels={t}
+                  locale={locale}
                   days={days}
                   onDaysChange={setDays}
                   outcomesState={states.outcomes ?? {}}

@@ -1,4 +1,4 @@
-import type { HTMLAttributes } from 'react';
+import type { HTMLAttributes, ReactNode } from 'react';
 
 export interface WikiConflict {
   id: string;
@@ -28,10 +28,16 @@ export interface WikiFileData {
   path?: string;
 }
 export type WikiDashboardData = WikiDirectoryData | WikiFileData;
+export interface WikiDashboardAction {
+  key: string;
+  icon: ReactNode;
+  tooltip: string;
+  disabled?: boolean;
+  onClick?: () => void;
+}
 export interface WikiDashboardLabels {
   title: string;
   pendingLabel: string;
-  discuss: string;
   conflicts: string;
   conflictFiles: string;
   pending: string;
@@ -48,14 +54,10 @@ export interface WikiDashboardLabels {
   failed: string;
   retry: string;
   open: string;
-  edit: string;
   solution: string;
   occurred: string;
   fixedAt: string;
   evidence: string;
-  history: string;
-  historyHint: string;
-  unavailable: string;
   limited: string;
 }
 interface WikiDashboardCommonProps extends Omit<
@@ -74,23 +76,19 @@ export type WikiDashboardProps = WikiDashboardCommonProps &
     | {
         kind: 'directory';
         data?: WikiDirectoryData;
-        editDisabledReason?: never;
-        discussDisabledReason?: never;
         onOpenUri?: (uri: string) => void;
         onOpenDashboard?: (uri: string) => void;
-        onEdit?: (uri: string) => void;
-        onDiscuss?: never;
+        /** Omitted or empty actions hide the row's action area. */
+        defineActions?: (uri: string) => readonly WikiDashboardAction[];
       }
     | {
         kind: 'file';
         data?: WikiFileData;
-        /** Explanation shown when editing has no handler. Defaults to labels.unavailable. */
-        editDisabledReason?: string;
-        /** Explanation shown when discussion has no handler. Defaults to labels.unavailable. */
-        discussDisabledReason?: string;
         onOpenUri?: () => void;
         onOpenDashboard?: never;
-        onEdit?: (conflict: WikiConflict) => void;
-        onDiscuss?: (conflict: WikiConflict) => void;
+        /** Hosts choose actions, including how they vary by conflict state. */
+        defineActions?: (
+          conflict: WikiConflict,
+        ) => readonly WikiDashboardAction[];
       }
   );
