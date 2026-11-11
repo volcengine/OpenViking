@@ -28,6 +28,8 @@ try {
               'file-browser': './src/modules/file-browser/use-file-browser.ts',
               console: './src/modules/console/use-console.ts',
               provider: './src/client/provider.tsx',
+              'reference-tags':
+                './src/components/viking-bot/composer-reference-tags.tsx',
               'wiki-pane': './src/modules/file-browser/wiki-dashboard-pane.tsx',
               'experience-pane':
                 './src/modules/file-browser/experience-dashboard-pane.tsx',

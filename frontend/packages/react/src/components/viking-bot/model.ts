@@ -258,6 +258,7 @@ export interface VikingBotLabels {
   searchReferences?: string;
   emptyReferences?: string;
   removeReference?: string;
+  openReference?: string;
   expandReference?: string;
   collapseReference?: string;
   /** 欢迎标题。Welcome heading. */

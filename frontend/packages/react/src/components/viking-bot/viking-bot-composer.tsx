@@ -12,7 +12,8 @@ import {
 import { resolveVikingBotLabels } from './labels.js';
 import { VikingBotSubmit } from './composer-controls.js';
 import { ComposerAttachments } from './composer-attachments.js';
-import { composerMention, ReferenceTags } from './composer-references.js';
+import { composerMention } from './composer-references.js';
+import { ReferenceTags } from './composer-reference-tags.js';
 import { ComposerFooter } from './composer-footer.js';
 import { QuickInputs } from './quick-inputs.js';
 import { useQuickInput } from './use-quick-input.js';
@@ -50,6 +51,7 @@ export const VikingBotComposerView = forwardRef<
     onValueChange,
     onFilesAdded,
     onAttachmentRemove,
+    onOpenUri,
     onSend,
     onCancel,
     labels: overrides,
@@ -88,11 +90,9 @@ export const VikingBotComposerView = forwardRef<
   /** 按剩余额度截断并上报文件。 */
   const reportFiles = useCallback(
     (files: readonly File[]) => {
-      if (!onFilesAdded || files.length === 0 || limitReached) return;
-      const accepted = files.slice(0, remaining);
-      if (accepted.length) onFilesAdded(accepted);
+      if (files.length && remaining) onFilesAdded?.(files.slice(0, remaining));
     },
-    [limitReached, onFilesAdded, remaining],
+    [onFilesAdded, remaining],
   );
 
   useImperativeHandle(ref, () => ({
@@ -175,6 +175,7 @@ export const VikingBotComposerView = forwardRef<
             <ReferenceTags
               config={references}
               labels={labels}
+              onOpenUri={onOpenUri}
               disabled={disabled || isSending}
             />
             <ComposerAttachments

@@ -16,6 +16,14 @@
 
 ```
 
+### 用户消息布局
+
+用户消息沿用参考版的消息组结构：外层消息组统一限宽并靠右，附件在气泡外显示，正文气泡按内容收缩。仅有附件时不生成空气泡，时间与操作区单独显示。以下为固定示例数据，点击附件或复制按钮只在示例下方显示回调内容。
+
+```tsx file="../../_demos/viking-bot-user-messages.tsx" preview
+
+```
+
 ## 两版宿主怎么接
 
 | 差异           | 处理方式                                                             |
@@ -40,6 +48,16 @@
 `references` 包含 FileTree 的可见 `rows`、受控 `selected`、`onChange`，以及可选的 `onQueryChange`、`onExpand`、`isLoading` 和 `error`。按钮 `@` 与输入 `@` 共用选择器，按 URI 去重，发送时通过 `VikingBotDraft.references` 单独上报；不把引用混成普通文本。未配置时隐藏入口。查询、展开和权限过滤由宿主完成；更新账号或会话时，宿主同时更新选中引用和附件。`onFilesAdded` 启用 `+`，仅上报文件，由宿主上传。
 
 这些能力也可直接传给独立 `VikingBotComposer`。标题、说明、会话、引用、加载及移除按钮的文案均通过 `labels` 定制。
+
+### 文件与目录引用
+
+输入区引用与上传附件分别展示。引用标签显示文件类型或目录图标及完整 URI，路径过长时省略并保留完整标题；默认展示前 5 项，其余通过 `+N` 在悬停、聚焦或点击时展开。标签可独立移除，传入 `onOpenUri` 后可打开文件或目录。独立 `VikingBotComposer` 同样支持 `onOpenUri`。发送时引用仍保存在 `VikingBotDraft.references`，不改写草稿文本。
+
+以下使用固定公开示例数据，不访问真实资源；打开与发送操作仅展示回调内容。
+
+```tsx file="../../_demos/viking-bot-references.tsx" preview
+
+```
 
 ## 属性
 
@@ -70,7 +88,7 @@
 | `onAttachmentRemove` | `(attachment: VikingBotAttachment) => void`      | —                | 移除一个附件。                                                        |
 | `onSend`             | `(draft: VikingBotDraft) => void`                | —                | 上报发送意图；不传时不能发送。                                        |
 | `onCancel`           | `() => void`                                     | —                | 停止正在进行的回复。                                                  |
-| `onOpenUri`          | `(uri: string) => void`                          | —                | 打开消息中引用的资源。                                                |
+| `onOpenUri`          | `(uri: string) => void`                          | —                | 打开消息中的资源或输入区已选中的文件、目录引用。                      |
 | `onCopy`             | `(text: string) => void`                         | —                | 接管消息文本复制；省略时用户消息使用 Ark 内置复制。                   |
 | `onMessageAction`    | `(messageId: string, actionKey: string) => void` | —                | 触发一条消息声明的动作。                                              |
 | `labels`             | `VikingBotLabels`                                | locale           | 可替换文案。                                                          |
