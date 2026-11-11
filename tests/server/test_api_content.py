@@ -397,7 +397,6 @@ async def test_directory_index_preserves_summaries_and_tags(client, service):
 
 
 async def test_tagged_output_snapshots_writes_and_blocks_resource_replacement(client, service):
-    """Directory tags drive snapshots and ingestion protection without a saved compile task."""
     ctx = RequestContext(user=service.user, role=Role.ROOT)
     parent = "viking://resources/tagged-output-parent"
     output = f"{parent}/output"
@@ -407,7 +406,7 @@ async def test_tagged_output_snapshots_writes_and_blocks_resource_replacement(cl
     )
     uri = f"{output}/child/note.md"
 
-    await service.fs.write(uri, "tagged output", ctx, wait=True)
+    await service.fs.write(uri, "tagged output", ctx, wait=True, use_snapshot=True)
 
     history = await service.fs.file_versions(uri, ctx, limit=10)
     from openviking.storage.expr import Eq

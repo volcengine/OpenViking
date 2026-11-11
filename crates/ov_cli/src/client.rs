@@ -461,12 +461,16 @@ impl HttpClient {
         content: &str,
         mode: &str,
         wait: bool,
+        use_snapshot: bool,
         processing_mode: &str,
         tags: Vec<String>,
         tag_mode: &str,
         acl: Option<Value>,
     ) -> Result<serde_json::Value> {
         let mut body = Self::build_write_body(uri, content, mode, wait, processing_mode);
+        if use_snapshot {
+            body["use_snapshot"] = json!(true);
+        }
         add_resource_tag_fields(&mut body, &tags, tag_mode);
         if let Some(acl) = acl {
             body["acl"] = acl;

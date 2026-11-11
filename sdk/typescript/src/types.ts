@@ -168,6 +168,7 @@ export interface AddResourceOptions extends WaitOptions {
 }
 /** Content write options. */
 export interface WriteOptions extends WaitOptions {
+  useSnapshot?: boolean;
   acl?: AclSpec;
   mode?: string;
   processingMode?: ProcessingMode;
@@ -187,6 +188,7 @@ export interface BatchWriteOperation {
 }
 /** Batch-write request options. */
 export interface BatchWriteOptions extends WaitOptions {
+  useSnapshot?: boolean;
   deferProcessing?: boolean;
   processingMode?: ProcessingMode;
   extra?: JsonObject;

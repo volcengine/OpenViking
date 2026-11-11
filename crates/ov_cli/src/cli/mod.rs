@@ -642,6 +642,8 @@ pub(crate) enum Commands {
         /// Wait for async processing to finish
         #[arg(long, default_value = "false", help_heading = "Common options")]
         wait: bool,
+        #[arg(long, help_heading = "Advanced options")]
+        use_snapshot: bool,
         /// Content post-write processing mode
         #[arg(
             long = "processing-mode",

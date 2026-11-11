@@ -298,6 +298,7 @@ type WriteOptions struct {
 	ProcessingMode string
 	Tags           []string
 	TagMode        string
+	UseSnapshot    bool
 	Extra          map[string]any
 }
 
@@ -314,6 +315,7 @@ type BatchWriteOperation struct {
 
 // BatchWriteOptions controls BatchWrite.
 type BatchWriteOptions struct {
+	UseSnapshot     bool
 	DeferProcessing bool
 	Wait            *bool
 	// Deprecated: Timeout is accepted for compatibility and ignored.

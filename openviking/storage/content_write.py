@@ -2188,8 +2188,12 @@ class ContentWriteCoordinator:
             # materialized, while keeping the state check inside the exact lock.
             await self._classify_locked_write_target(uri, ctx=ctx)
             previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
-            await self._write_in_place(
-                uri, content, mode=mode, ctx=ctx, lease_ref=lease, existing_raw=previous_content
+            await self._commit_content(
+                [uri],
+                lease,
+                lambda: self._write_in_place(
+                    uri, content, mode=mode, ctx=ctx, lease_ref=lease, existing_raw=previous_content
+                ),
             )
             result = self._build_write_result(
                 uri=uri,
@@ -2350,13 +2354,17 @@ class ContentWriteCoordinator:
 
         try:
             target_state = await self._classify_locked_write_target(uri, ctx=ctx)
-            final_bytes = await self._write_in_place(
-                uri,
-                content,
-                mode=mode,
-                ctx=ctx,
-                lease_ref=lease,
-                is_new_file=target_state.is_new_file,
+            final_bytes = await self._commit_content(
+                [uri],
+                lease,
+                lambda: self._write_in_place(
+                    uri,
+                    content,
+                    mode=mode,
+                    ctx=ctx,
+                    lease_ref=lease,
+                    is_new_file=target_state.is_new_file,
+                ),
             )
             result = self._build_write_result(
                 uri=uri,

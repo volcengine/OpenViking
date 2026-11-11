@@ -1,5 +1,3 @@
-"""Tag-driven snapshots and native file restore do not require compile configuration."""
-
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock
@@ -28,6 +26,7 @@ def snapshot_service():
         commit=AsyncMock(return_value={"commit_oid": "b" * 40, "result": "created"}),
         log=AsyncMock(return_value=[{"oid": "a" * 40}]),
         show=AsyncMock(return_value=b"restored content"),
+        read_file_bytes=AsyncMock(return_value=b"restored content"),
         stat=AsyncMock(return_value={"isDir": True}),
         mkdir=AsyncMock(),
     )
@@ -37,11 +36,10 @@ def snapshot_service():
     return service, vfs, ctx
 
 
-async def test_tagged_ancestor_snapshot_uses_content_lease(snapshot_service):
+async def test_snapshot_uses_content_lease(snapshot_service):
     service, vfs, ctx = snapshot_service
     root = "viking://user/user/resources/output"
     uri = f"{root}/nested/file.md"
-    service._directory_has_compile_tag.side_effect = lambda parent, ctx: parent == root
     write = AsyncMock(return_value=b"written")
     lease = {"owner": "content"}
 
@@ -49,36 +47,13 @@ async def test_tagged_ancestor_snapshot_uses_content_lease(snapshot_service):
 
     assert result == b"written"
     write.assert_awaited_once()
-    assert [call.args[0] for call in service._directory_has_compile_tag.await_args_list] == [
-        f"{root}/nested",
-        root,
-    ]
     vfs.commit.assert_awaited_once_with(
         message="content write", paths=[uri], ctx=ctx, lease_ref=lease
     )
 
 
-async def test_untagged_write_stops_at_namespace_boundary(snapshot_service):
-    service, vfs, ctx = snapshot_service
-    uri = "viking://user/user/peers/peer/resources/output/file.md"
-    service._directory_has_compile_tag.side_effect = lambda parent, ctx: (
-        parent == "viking://user/user"
-    )
-    write = AsyncMock()
-
-    await service._snapshot_write([uri], ctx=ctx, lease_ref={}, write=write)
-
-    write.assert_awaited_once()
-    vfs.commit.assert_not_awaited()
-    assert [call.args[0] for call in service._directory_has_compile_tag.await_args_list] == [
-        "viking://user/user/peers/peer/resources/output",
-        "viking://user/user/peers/peer/resources",
-    ]
-
-
 async def test_snapshot_failure_is_returned_after_write(snapshot_service):
     service, vfs, ctx = snapshot_service
-    service._directory_has_compile_tag.return_value = True
     vfs.commit.side_effect = OSError("snapshot failed")
     write = AsyncMock()
 
@@ -102,27 +77,30 @@ async def test_native_versions_page_without_global_metadata_access(snapshot_serv
 
 
 @pytest.mark.parametrize("state,count", [("unfixed", 1), ("fixed", 0), (None, 0)])
-@pytest.mark.parametrize("stale", [False, True])
+@pytest.mark.parametrize("stale", ["none", "commit", "content"])
 async def test_file_restore_rechecks_commit_under_content_lock(
     snapshot_service, stale, state, count
 ):
     service, vfs, ctx = snapshot_service
     uri = "viking://resources/ordinary.md"
-    vfs.log.side_effect = [[{"oid": "a" * 40}], [{"oid": ("c" if stale else "a") * 40}]]
+    current = "c" if stale == "commit" else "a"
+    vfs.log.side_effect = [[{"oid": "a" * 40}], [{"oid": current * 40}]]
     write = AsyncMock()
     expected_content = "restored content"
     if state:
         expected_content += f'<!-- CONFLICTS_CONTENT {{"state":"{state}","match_text":"x"}} -->'
     vfs.show.return_value = expected_content.encode()
+    vfs.read_file_bytes.return_value = b"edit" if stale == "content" else vfs.show.return_value
 
-    async def locked_write(uri, content, ctx, *, mode, commit_content, tags, tag_mode):
+    async def locked_write(uri, content, ctx, *, mode, commit_content, tags, tag_mode, **kwargs):
         assert mode == "replace" and content == expected_content
+        assert kwargs == {"use_snapshot": True}
         assert tags == [f"has_conflict={str(bool(count)).lower()}", f"conflict_num={count}"]
         assert tag_mode == "append"
         return await commit_content([uri], lease_ref={"owner": "restore"}, write=write)
 
     service.write = locked_write
-    if stale:
+    if stale != "none":
         with pytest.raises(ConflictError):
             await service.restore_file_version(uri, "f" * 40, "a" * 40, ctx)
         write.assert_not_awaited()

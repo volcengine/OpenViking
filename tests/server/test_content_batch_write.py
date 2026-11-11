@@ -8,6 +8,7 @@ import pytest
 
 import openviking.storage.content_write as content_write_module
 from openviking.server.identity import RequestContext, Role
+from openviking.service.fs_service import FSService
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskTracker
 from openviking.session.memory.dataclass import MemoryFile
@@ -138,7 +139,7 @@ async def test_system_write_is_file_only_without_queue_work(
     root = "viking://system/memory/memory_templates/custom/demo"
     uri = f"{root}/template.md"
     vfs = _VFS(root)
-    coordinator = ContentWriteCoordinator(vfs)
+    coordinator = FSService(viking_fs=vfs)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ADMIN)
 
     result = await coordinator.write(
@@ -325,7 +326,6 @@ def _last_content_write_refresh(queue_fixture):
 
 @pytest.mark.asyncio
 async def test_batch_snapshots_tagged_files_once(service, monkeypatch):
-    """Tagged writes share one snapshot without creating compile configuration."""
     ctx = RequestContext(user=service.user, role=Role.USER)
     root = "viking://resources/batch-tagged"
     await service.viking_fs.write_file(f"{root}/seed.md", "seed", ctx=ctx)
@@ -337,7 +337,9 @@ async def test_batch_snapshots_tagged_files_once(service, monkeypatch):
     commit = AsyncMock(return_value={"result": "created", "commit_oid": "a" * 40})
     monkeypatch.setattr(service.viking_fs, "commit", commit)
     ops = [{"uri": f"{root}/{i}.md", "content": "changed"} for i in range(100)]
-    await service.fs.batch_write(root_uri=root, operations=ops, ctx=ctx, defer_processing=True)
+    await service.fs.batch_write(
+        root_uri=root, operations=ops, ctx=ctx, defer_processing=True, use_snapshot=True
+    )
     commit.assert_awaited_once()
     assert commit.await_args.kwargs["paths"] == sorted(operation["uri"] for operation in ops)
     assert commit.await_args.kwargs["lease_ref"] is not None

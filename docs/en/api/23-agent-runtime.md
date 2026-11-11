@@ -215,8 +215,6 @@ State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_updat
 
 `conflict_num` counts files tagged `has_conflict=true` that the execution identity can retrieve under `to` at finalization, including descendants. It does not count individual conflicts inside those files. One `find` call uses an empty query, the tag filter, `level=2`, and `limit=100`, without pagination. Counts at or above 100 are stored as 100; more conflicting files may exist. Successful runs count after output snapshot finalization without waiting for target tagging; failed or cancelled runs count after rollback completes. The field starts as null. Runs without a start snapshot skip retrieval and record null because another task may be modifying the target. Rollback index rebuilding is awaited for at most 30 seconds. Unavailable indexes or retrieval failures log a warning and record null without rolling back successfully generated output. Configuration updates preserve the count when `to` is unchanged and reset it to null when `to` changes.
 
-Ordinary `rm`, `mv`, `cp`, `mkdir`, writes, skill imports and restores do not update these files or follow configuration paths after a move. Ordinary writes use the nearest ancestor whose `compile_target=true` tag is visible in the index to take a snapshot under the content lock; batched writes share a snapshot. This automatic snapshot mechanism also has a gap before tags become searchable, so it does not guarantee a version for each ordinary write during that interval. Compile's explicit start/finish snapshots and output versions remain in place. File history uses native snapshots independently of saved configuration. Directory restore uses its existing forward commit.
-
 ### Check Compile availability
 
 ```http

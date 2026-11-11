@@ -842,6 +842,7 @@ export class OpenVikingClient {
       content,
       mode: options.mode,
       processing_mode: options.processingMode,
+      use_snapshot: options.useSnapshot,
       tags: options.tags,
       acl: options.acl,
       tag_mode:
@@ -877,6 +878,7 @@ export class OpenVikingClient {
       wait: options.wait,
       telemetry: options.telemetry,
       processing_mode: options.processingMode,
+      use_snapshot: options.useSnapshot,
       defer_processing: options.deferProcessing,
     });
     return this.request("POST", "/api/v1/content/batch-write", {

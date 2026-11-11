@@ -8,8 +8,6 @@ Multi-version management is powered by [gitoxide](https://github.com/Byron/gitox
 
 ## When to commit
 
-Ordinary `write` and `rm` operations change the live workspace directly. Enabling snapshots does not automatically create a version after every write. A prior file version is recoverable through snapshots only if a successful snapshot commit covered that path. Commit after an import, before and after a batch change, or at a business checkpoint, and retain the returned `commit_oid`.
-
 Snapshots version the file tree. They do not roll back current ACLs or preserve historical vector indexes. After restoring files, `restore` rebuilds indexes asynchronously when needed. It changes the workspace; inspect its plan with `dry_run` first.
 
 `client.snapshot.commit()` saves file versions, while a session's `commit()` archives conversation and processes memory. Some memory workflows call snapshot after updating experiences; this does not make snapshots automatic for every write.
