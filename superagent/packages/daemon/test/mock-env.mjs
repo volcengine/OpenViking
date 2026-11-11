@@ -215,6 +215,10 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
       try { msg = JSON.parse(line); } catch { return; }
       if (msg.method === 'initialize') { send({ id: msg.id, result: {} }); return; }
       if (msg.method === 'initialized') { return; }
+      if (msg.method === 'account/read') {
+        send({ id: msg.id, result: { account: { type: 'chatgpt', email: 'mock@example.com', planType: 'pro' }, requiresOpenaiAuth: true } });
+        return;
+      }
       if (msg.method === 'thread/start' || msg.method === 'thread/resume') {
         fs.appendFileSync(SPAWN_LOG + '.threads', JSON.stringify(msg.params) + '\\n');
         send({ id: msg.id, result: { thread: { id: 'thread-mock' } } });

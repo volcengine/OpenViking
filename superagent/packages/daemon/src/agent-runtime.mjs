@@ -129,6 +129,10 @@ export class AgentRuntime {
       onTurnSucceeded: (info) => this._turnEnded('succeeded', info),
       onTurnAbandoned: (info) => this._turnEnded('abandoned', info),
       onAvailable: this.onAvailable,
+      onAccountChanged: () => {
+        this.cachedModels = [];
+        this.revision += 1;
+      },
       authorityToken: cognition.authorityToken,
       cognitionEpoch: cognition.epoch,
       ...overrides,
@@ -401,8 +405,9 @@ export class AgentRuntime {
 
   async _listModels() {
     const backend = this.backend;
+    const revision = this.revision;
     const current = await backend?.listModels() ?? [];
-    if (backend !== this.backend) return this.cachedModels;
+    if (backend !== this.backend || revision !== this.revision) return this.cachedModels;
     const models = current.length ? current : this.cachedModels.length ? this.cachedModels
       : getRuntimeDefinition(this.runtime)?.capabilities.modelCatalog === 'static'
         ? staticModelEntries(this.runtime) : [];
@@ -436,6 +441,7 @@ export class AgentRuntime {
       session: Object.freeze({ id: this.threadId, connected: state.connected }),
       model: this.model,
       resolvedModel: this.backend?.resolvedModel ?? '',
+      ...(this.backend?.account ? { account: Object.freeze({ ...this.backend.account }) } : {}),
       effort: this.effort,
       capabilities: definition?.capabilities ?? Object.freeze({}),
       queued: state.queued ?? 0,

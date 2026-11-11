@@ -132,6 +132,12 @@ export function statusText(snapshot, nowMs = Date.now()) {
     `Runtime：${snapshot.runtime ?? 'codex'}`,
     `模型：${snapshot.model || '（默认）'}`,
   ];
+  if (snapshot.account) {
+    const account = snapshot.account;
+    lines.push(account.signedOut ? 'Codex 账号：未登录（新消息等待登录）'
+      : `Codex 账号：${account.email || account.type || '未确认'}${account.planType ? `（${account.planType}）` : ''}`);
+    if (account.switching) lines.push('账号切换：等待当前轮结束后重新连接');
+  }
   if ((status.queued ?? 0) > 0) lines.push(`排队消息：${status.queued}`);
   return lines.join('\n');
 }
