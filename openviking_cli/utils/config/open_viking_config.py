@@ -6,7 +6,7 @@ import logging
 import os
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -201,9 +201,6 @@ class CompileApiConfig(BaseModel):
     gateway_token: str = ""
     http_timeout_seconds: float = 10.0
     poll_interval_ms: int = 30000
-    # Run Redis-backed Compile scheduling on this instance.
-    scheduler_enabled: bool = False
-    scheduler_backend: Literal["redis"] = "redis"
 
     @model_validator(mode="after")
     def _validate(self) -> "CompileApiConfig":
@@ -533,19 +530,9 @@ class OpenVikingConfig(BaseModel):
         return self
 
     def _check_expiry_backend(self) -> None:
-        if self.uses_redis_expiry():
-            self.expiry.validate_for_runtime()
-
-    def uses_redis_session_expiry(self) -> bool:
         idle = self.memory.session_auto_commit
-        return idle.enabled and idle.idle_backend == "redis"
-
-    def uses_redis_compile_schedule(self) -> bool:
-        return self.compile_api.scheduler_enabled
-
-    def uses_redis_expiry(self) -> bool:
-        """Whether any feature needs the distributed ExpiryScheduler."""
-        return self.uses_redis_session_expiry() or self.uses_redis_compile_schedule()
+        if idle.enabled and idle.idle_backend == "redis":
+            self.expiry.validate_for_runtime()
 
     agent_evolution: AgentEvolutionConfig = RuntimeField(
         default_factory=AgentEvolutionConfig,

@@ -320,7 +320,6 @@ func (c *Client) BatchWrite(
 	}
 	if opts != nil {
 		setAny(payload, "wait", opts.Wait)
-		setAny(payload, "defer_processing", opts.DeferProcessing)
 		setAny(payload, "telemetry", opts.Telemetry)
 		setString(payload, "processing_mode", opts.ProcessingMode)
 		if err := mergeExtra(payload, opts.Extra); err != nil {

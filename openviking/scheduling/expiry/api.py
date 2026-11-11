@@ -9,11 +9,8 @@ from enum import Enum
 from typing import Protocol
 
 SESSION_ITEM_TYPE = "session"
-COMPILE_TARGET_ITEM_TYPE = "compile_target"
 TTL_ITEM_TYPE = "ttl"
-SUPPORTED_ITEM_TYPES: frozenset[str] = frozenset(
-    {SESSION_ITEM_TYPE, COMPILE_TARGET_ITEM_TYPE, TTL_ITEM_TYPE}
-)
+SUPPORTED_ITEM_TYPES: frozenset[str] = frozenset({SESSION_ITEM_TYPE, TTL_ITEM_TYPE})
 
 
 class ExpiryMode(str, Enum):

@@ -94,7 +94,6 @@ class UpdateSkillOptions(AddSkillOptions, total=False):
 
 
 class WriteOptions(_ExtraOptions, total=False):
-    edit_source: Literal["manual", "agent", "compile"]
     acl: Dict[str, Any]
     telemetry: Any
     processing_mode: ProcessingMode
@@ -103,13 +102,10 @@ class WriteOptions(_ExtraOptions, total=False):
 
 
 class BatchWriteOptions(_ExtraOptions, total=False):
-    edit_source: Literal["manual", "agent", "compile"]
     telemetry: Any
     processing_mode: ProcessingMode
     # Return target-state conflicts without overwriting them or blocking compatible writes.
     skip_conflicts: bool
-    # Save content without scheduling semantic or vector work.
-    defer_processing: bool
 
 
 class CompileOptions(_ExtraOptions, total=False):

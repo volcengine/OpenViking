@@ -370,7 +370,6 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
 
     app = SimpleNamespace(state=SimpleNamespace(api_key_manager=None))
     service = MockService()
-    service.compile_scheduler = SimpleNamespace(set_identity_resolver=Mock())
     config = ServerConfig(
         root_api_key="root-key-for-test",
         ttl_adapter={"enabled": True},
@@ -382,9 +381,6 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
     assert service._initialized is True
     assert setup.await_args.kwargs["manager"] is manager
     ttl_init.assert_awaited_once_with(app, service, config)
-    service.compile_scheduler.set_identity_resolver.assert_called_once_with(
-        manager.resolve_identity, manager.get_user_group_ids
-    )
 
     events.clear()
     ov_config.reconcile_system_assets_on_startup = False

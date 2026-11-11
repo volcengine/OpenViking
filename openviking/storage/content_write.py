@@ -9,11 +9,9 @@ import base64
 import binascii
 import hashlib
 import os
-import sys
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
-from functools import partial
 from typing import Any, Awaitable, Callable, Dict, Optional
 from uuid import uuid4
 
@@ -250,20 +248,10 @@ class ContentWriteCoordinator:
         viking_fs: VikingFS,
         vikingdb: Any = None,
         privacy_sanitizer: PrivacySanitizer | None = None,
-        commit_content: Callable[..., Awaitable[Any]] | None = None,
-        commit_batch: Callable[..., Awaitable[None]] | None = None,
     ):
         self._viking_fs = viking_fs
         self._vikingdb = vikingdb
         self._privacy_sanitizer = privacy_sanitizer
-        self._content_commit = commit_content
-        self._batch_commit = commit_batch
-
-    async def _commit_content(self, uris: list[str], lease: Any, write) -> Any:
-        """Write bytes and managed versions under the lease before refresh."""
-        if self._content_commit is not None:
-            return await self._content_commit(uris, lease_ref=lease, write=write)
-        return await write()
 
     async def _sanitize_text(
         self,
@@ -306,7 +294,7 @@ class ContentWriteCoordinator:
         self,
         *,
         uri: str,
-        content: str | bytes,
+        content: str,
         ctx: RequestContext,
         mode: str = "replace",
         wait: bool = False,
@@ -494,7 +482,7 @@ class ContentWriteCoordinator:
         self,
         *,
         uri: str,
-        content: str | bytes,
+        content: str,
         ctx: RequestContext,
         mode: str = "replace",
         wait: bool = False,
@@ -524,8 +512,7 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(f"tags are not supported for namespace: {normalized_uri}")
         if acl is not None and not namespace_policy.supports_acl:
             raise InvalidArgumentError(f"ACL is not supported for namespace: {normalized_uri}")
-        if isinstance(content, str):
-            content = await self._sanitize_text(content, uri=normalized_uri, ctx=ctx)
+        content = await self._sanitize_text(content, uri=normalized_uri, ctx=ctx)
         content = normalize_account_memory_template_write(normalized_uri, content, mode)
         ingest_options = IngestOptions.from_search_tags(tags, mode=tag_mode)
         if acl is not None:
@@ -605,7 +592,6 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         wait: bool = True,
         skip_conflicts: bool = False,
-        defer_processing: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Dict[str, Any]:
         task = None
@@ -633,7 +619,6 @@ class ContentWriteCoordinator:
                 ctx=ctx,
                 wait=wait,
                 skip_conflicts=skip_conflicts,
-                defer_processing=defer_processing,
                 processing_mode=processing_mode,
                 root_operation="content_batch_write",
                 root_task_factory=create_root_task,
@@ -671,20 +656,21 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         wait: bool = True,
         skip_conflicts: bool = False,
-        defer_processing: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         root_operation: str = "content_batch_write",
         root_task_factory: Callable[[], Awaitable[Any]] | None = None,
     ) -> Dict[str, Any]:
-        """Write validated files under locks, optionally deferring all index work.
+        """Write a bundle under one directory, then refresh it as a batch.
 
         Each operation follows the same create/replace/append semantics as ``write``;
         ``upsert`` is available for callers that already hold the desired final tree.
-        Target files stay locked through refresh while unrelated files remain writable.
-        Deferred batches reject index-dependent metadata and release their locks
-        before returning. Partial I/O failures preserve earlier successful writes.
-        skip_conflicts leaves conflicting targets untouched; permission, transport
-        and write failures remain errors.
+        All target files stay locked from state validation through the last write,
+        while unrelated files remain writable. Locks are released after refresh completes.
+        Derived summaries are generated once per batch. Operation count and content size have
+        no application-level quotas; all operations undergo access and path validation.
+        With skip_conflicts, changed, missing or occupied targets are returned in
+        conflicts and left untouched; compatible files still commit under the same locks.
+        Permission, transport and write failures remain errors, not skipped conflicts.
         """
         normalized_root = self._validate_uri_path(root_uri, field_name="root_uri")
         processing_mode = normalize_processing_mode(processing_mode)
@@ -692,10 +678,6 @@ class ContentWriteCoordinator:
         normalized_operations = await self._normalize_batch_operations(
             normalized_root, operations, ctx=ctx
         )
-        if defer_processing and any(
-            operation["ingest_options"] != IngestOptions() for operation in normalized_operations
-        ):
-            raise InvalidArgumentError("defer_processing does not support tags or ACL updates")
         await self._sanitize_batch_operations(normalized_operations, ctx=ctx)
         for operation in normalized_operations:
             operation["content"] = normalize_account_memory_template_write(
@@ -786,7 +768,7 @@ class ContentWriteCoordinator:
                     continue
                 pending.append((operation, exists, write_mode))
 
-            if not file_only and not defer_processing:
+            if not file_only:
                 prepared_resources = await self._prepare_batch_resource_plans(
                     pending=pending,
                     ctx=ctx,
@@ -804,76 +786,63 @@ class ContentWriteCoordinator:
                     ],
                     ctx=ctx,
                 )
-            try:
-                for operation, existed, write_mode in pending:
-                    uri = operation["uri"]
-                    try:
-                        prepared = prepared_resources.get(uri)
-                        if prepared is not None:
-                            write_content = partial(
-                                execute_content_tree_actions,
-                                prepared.plan.content_tree_actions,
-                                store=prepared.store,
-                                artifact_ref=prepared.artifact_ref,
-                                target=prepared.target,
-                            )
-                        else:
-                            write_content = partial(
-                                self._write_in_place,
-                                uri,
-                                operation["content"],
-                                mode=write_mode,
-                                ctx=ctx,
-                                lease_ref=lease,
-                                is_new_file=not existed,
-                            )
-                        final_content = await self._commit_content([uri], lease, write_content)
-                        if prepared is not None:
-                            final_content = prepared.final_bytes
-                            committed_resource_plans.append(prepared)
-                        if (
-                            not file_only
-                            and context_type_for_uri(uri)
-                            in {
-                                "resource",
-                                "skill",
-                            }
-                            and not is_abstract_overview_uri(uri)
-                        ):
-                            file_md5s[uri] = content_md5(final_content)
-                        options = operation["ingest_options"]
-                        if options.acl_update:
-                            await self._viking_fs.acl_manager.apply_indexed_update(
-                                options.acl_update, ctx
-                            )
-                    except Exception as exc:
-                        write_error = exc
-                        break
-                    if existed:
-                        updated.append(uri)
-                        if is_abstract_overview_uri(uri):
-                            parent = VikingURI(uri).parent
-                            if parent is not None:
-                                # Sidecars represent directory L0/L1 records. If
-                                # multiple sidecar writes share a directory, the
-                                # deterministic operation order matches sequential
-                                # write semantics: the last operation's options win.
-                                sidecar_directories[parent.uri] = options
-                        elif not file_only and prepared is None:
-                            refresh_kinds[uri] = "modified"
+
+            for operation, existed, write_mode in pending:
+                uri = operation["uri"]
+                try:
+                    prepared = prepared_resources.get(uri)
+                    if prepared is not None:
+                        await execute_content_tree_actions(
+                            prepared.plan.content_tree_actions,
+                            store=prepared.store,
+                            artifact_ref=prepared.artifact_ref,
+                            target=prepared.target,
+                        )
+                        final_content = prepared.final_bytes
+                        committed_resource_plans.append(prepared)
                     else:
-                        created.append(uri)
-                        if not file_only and prepared is None:
-                            refresh_kinds[uri] = "added"
-            finally:
-                if self._batch_commit is not None:
-                    error = sys.exc_info()[1]
-                    try:
-                        await run_to_completion(lambda: self._batch_commit(lease_ref=lease))
-                    except BaseException:
-                        if error is None and write_error is None:
-                            raise
-                        logger.exception("Failed to version partial batch writes")
+                        final_content = await self._write_in_place(
+                            uri,
+                            operation["content"],
+                            mode=write_mode,
+                            ctx=ctx,
+                            lease_ref=lease,
+                            is_new_file=not existed,
+                        )
+                    if (
+                        not file_only
+                        and context_type_for_uri(uri)
+                        in {
+                            "resource",
+                            "skill",
+                        }
+                        and not is_abstract_overview_uri(uri)
+                    ):
+                        file_md5s[uri] = content_md5(final_content)
+                    options = operation["ingest_options"]
+                    if options.acl_update:
+                        await self._viking_fs.acl_manager.apply_indexed_update(
+                            options.acl_update, ctx
+                        )
+                except Exception as exc:
+                    write_error = exc
+                    break
+                if existed:
+                    updated.append(uri)
+                    if is_abstract_overview_uri(uri):
+                        parent = VikingURI(uri).parent
+                        if parent is not None:
+                            # Sidecars represent directory L0/L1 records. If
+                            # multiple sidecar writes share a directory, the
+                            # deterministic operation order matches sequential
+                            # write semantics: the last operation's options win.
+                            sidecar_directories[parent.uri] = options
+                    elif not file_only and prepared is None:
+                        refresh_kinds[uri] = "modified"
+                else:
+                    created.append(uri)
+                    if not file_only and prepared is None:
+                        refresh_kinds[uri] = "added"
         except BaseException:
             await lock_guard.close()
             raise
@@ -893,12 +862,8 @@ class ContentWriteCoordinator:
                 if file_only:
                     result["semantic_status"] = "skipped"
                     result["vector_status"] = "skipped"
-                elif defer_processing:
-                    result.update(semantic_status="deferred", vector_status="deferred")
-                has_refresh_work = (
-                    not file_only
-                    and not defer_processing
-                    and bool(refresh_kinds or sidecar_directories or committed_resource_plans)
+                has_refresh_work = not file_only and bool(
+                    refresh_kinds or sidecar_directories or committed_resource_plans
                 )
                 if write_error is not None and not has_refresh_work:
                     await lock_guard.close()
@@ -1862,7 +1827,7 @@ class ContentWriteCoordinator:
         *,
         uri: str,
         root_uri: str,
-        content: str | bytes,
+        content: str,
         mode: str,
         response_mode: str,
         context_type: str,
@@ -1938,20 +1903,16 @@ class ContentWriteCoordinator:
                 ingest_options=ingest_options,
             )
 
-            await self._commit_content(
-                [uri],
-                lease,
-                lambda: execute_content_tree_actions(
-                    prepared.plan.content_tree_actions,
-                    store=prepared.store,
-                    artifact_ref=prepared.artifact_ref,
-                    target=prepared.target,
-                ),
-            )
             has_async_work = bool(
                 prepared.plan.direct_index_actions or prepared.plan.file_refresh is not None
             )
             if root_task_factory is not None:
+                await execute_content_tree_actions(
+                    prepared.plan.content_tree_actions,
+                    store=prepared.store,
+                    artifact_ref=prepared.artifact_ref,
+                    target=prepared.target,
+                )
                 if ingest_options.acl_update:
                     await self._viking_fs.acl_manager.apply_indexed_update(
                         ingest_options.acl_update, ctx
@@ -2620,8 +2581,10 @@ class ContentWriteCoordinator:
             }
             if is_new_file:
                 write_kwargs["is_new_file"] = True
-            final_bytes = await self._commit_content(
-                [uri], lease, lambda: self._write_in_place(uri, content, **write_kwargs)
+            final_bytes = await self._write_in_place(
+                uri,
+                content,
+                **write_kwargs,
             )
             written_bytes = len(final_bytes)
             if root_task_factory is not None:

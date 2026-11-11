@@ -419,15 +419,6 @@ async def test_diff_returns_unified_diff_for_path(client_with_resource, service)
     assert "-old line" in result["diff_text"]
     assert "+new line" in result["diff_text"]
 
-    response = await client.get(
-        "/api/v1/snapshot/diff-paths",
-        params={"paths": "viking://resources", "from": from_commit, "to": to_commit, "limit": 1},
-    )
-    assert response.status_code == 200, response.text
-    page = response.json()["result"]
-    assert page["changes"] == [{"uri": path, "change_type": "modified"}]
-    assert page["total"] == 1 and page["has_more"] is False
-
 
 async def test_diff_supports_first_version_without_from_commit(client_with_resource, service):
     client, _ = client_with_resource

@@ -1698,12 +1698,11 @@ async def test_batch_write_serializes_processing_mode_and_operation_metadata():
                 "acl": {"acl_mode": "restricted", "entries": []},
             }
         ],
-        options={"processing_mode": "vectors_only", "defer_processing": True},
+        options={"processing_mode": "vectors_only"},
     )
 
     payload = client._request.await_args.kwargs["json"]
     assert payload["processing_mode"] == "vectors_only"
-    assert payload["defer_processing"] is True
     assert payload["operations"][0]["tags"] == ["team=search"]
     assert payload["operations"][0]["tag_mode"] == "append"
     assert payload["operations"][0]["acl"] == {"acl_mode": "restricted", "entries": []}
