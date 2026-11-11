@@ -11,7 +11,9 @@ import { ConsoleToolbar } from './console-toolbar.js';
 import type { ConsoleProps } from './types.js';
 
 /** 终端空态默认展示的快捷命令，顺序即展示顺序。 */
-const DEFAULT_QUICK_COMMANDS = ['help', 'ls', 'find', 'read', 'status'];
+const DEFAULT_QUICK_COMMANDS = ['help', 'ls', 'find', 'read', 'status'].map(
+  (name) => ({ name, value: `ov ${name} ` }),
+);
 
 export function Console({
   mode,
