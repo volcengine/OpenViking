@@ -267,3 +267,5 @@ class Group:
     records: list[Record]
     # Authorized recalled files available for comparison and version-checked updates.
     target_uris: list[str] = field(default_factory=list)
+    # Outline mode locks one work set to exactly this output path; None is the legacy flow.
+    assigned_path: str | None = None

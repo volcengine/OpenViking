@@ -1096,6 +1096,7 @@ class BotCompileService:
             request=request,
             skill=skill_text,
             usage=usage,
+            compile_exec_enabled=self._compile_capabilities().exec_enabled,
         )
         pipeline.model.agent_runner = agent_runner
         pipeline.tools = {
@@ -1125,6 +1126,9 @@ class BotCompileService:
             else await self._list_pipeline_source_files(client, request)
         )
         if not resume:
+            # Pre-seed whitelist filter: shrink the inventory before any body is read, so
+            # dropped files never enter the manifest, seeding, outline or coverage contract.
+            ordered = await pipeline.apply_source_filter(ordered)
             await pipeline.files.put("inputs", dict.fromkeys(ordered, "pending"))
 
         source_limits = self.limits.model_copy(

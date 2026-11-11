@@ -348,6 +348,7 @@ def validate_relative_file_path(path: str) -> str:
         not relative
         or any(not segment or segment in {".", ".."} for segment in segments)
         or any(segment.startswith(".") for segment in segments)
+        or any(segment != segment.strip() for segment in segments)
     ):
         raise ValueError(f"invalid output file path: {path}")
     if segments[-1].lower() in _RESERVED_FILENAMES:

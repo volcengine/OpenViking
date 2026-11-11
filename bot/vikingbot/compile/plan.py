@@ -259,6 +259,79 @@ class PlanProposal(PlanModel):
     )
 
 
+class OutlineDecision(PlanModel):
+    """Whether the Skill mandates a pre-Map outline that deterministically assigns sources to pages.
+
+    The decision reads only the Skill text; provider is a script path quoted verbatim from
+    that text and is revalidated against the Skill bundle before any execution.
+    """
+
+    use_outline: bool = Field(
+        description="True only when the Skill requires a fixed page/chapter outline produced "
+        "before processing, with sources assigned to pages and output paths fixed in advance."
+    )
+    provider: str | None = Field(
+        default=None,
+        description="Skill-relative path of the script that produces the outline, copied "
+        "verbatim from the Skill text. Null when use_outline is false or no script is named.",
+    )
+    reason: str = Field(default="", max_length=600)
+
+
+class FilterDecision(PlanModel):
+    """Whether the Skill mandates a pre-seed whitelist filter run before any source read.
+
+    The decision reads only the Skill text; provider is a script path quoted verbatim from
+    that text and is revalidated against the Skill bundle before any execution.
+    """
+
+    use_filter: bool = Field(
+        description="True only when the Skill names a concrete script that shrinks the source "
+        "file list before any content is read, returning a whitelist of file ids to keep."
+    )
+    provider: str | None = Field(
+        default=None,
+        description="Skill-relative path of the pre-seed filter script, copied verbatim from "
+        "the Skill text. Null when use_filter is false or no script is named.",
+    )
+    reason: str = Field(default="", max_length=600)
+
+
+class SemanticOutlineDecision(PlanModel):
+    """Whether the Skill mandates an LLM semantic outline from the file tree and README.
+
+    Reads only the Skill text. Default-off: Skills that never describe this workflow
+    keep the deterministic/legacy outline flow with zero extra model calls.
+    """
+
+    use_semantic_outline: bool = Field(
+        description="True only when the Skill explicitly requires an LLM-produced page plan "
+        "from the repository file tree (paths only) plus the shortest-path README text, "
+        "with whole files assigned to a fixed small set of pages before source assignment."
+    )
+    reason: str = Field(default="", max_length=600)
+
+
+class SemanticOutlinePage(PlanModel):
+    """One semantically planned page with file-level assignments; no line spans."""
+
+    id: str = Field(min_length=1, description="Stable unique page identifier used as the group id.")
+    title: str = Field(default="", max_length=300)
+    path: str = Field(min_length=1, description="Output path relative to the compile target.")
+    page_kind: Literal["index", "landing", "deep", "mechanism"] = "landing"
+    file_paths: list[str] = Field(
+        min_length=1,
+        description="Repository-relative file paths assigned to this page, copied from the tree.",
+    )
+    related: list[str] = Field(default_factory=list)
+
+
+class SemanticOutline(PlanModel):
+    """The LLM page plan; the framework deterministically expands it into source spans."""
+
+    pages: list[SemanticOutlinePage] = Field(min_length=1, max_length=12)
+
+
 class ReviewDecision(PlanModel):
     """A future-plan proposal; acceptance never changes completed outputs or task failures."""
 

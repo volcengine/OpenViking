@@ -1,7 +1,13 @@
 ---
 name: code_wiki
-description: Build a low-cost, README-first repository Wiki in an unattended ov compile
-  (args.source_selection=readme_first). Ports the staruhub llm-wiki phased workflow
+description: Build a low-cost, README-first repository Wiki in an unattended ov compile.
+  Before processing any content this Skill requires a fixed, pre-Map page outline: the
+  bundled scripts/build_outline.py is run once on the framework-provided source manifest
+  (repository file tree + line spans, no file contents) and deterministically returns the
+  complete page list, assigning source spans to each page and locking every page's output
+  path in advance (index.md plus one entity/<package>.md per top-level module). Deterministic
+  source selection additionally uses bundled scripts/select_sources.py. Ports the
+  staruhub llm-wiki phased workflow
   (reconnaissance -> immediate skeleton -> priority article writing -> cross-link -> lint)
   to bounded compile evidence. Produces interlinked Markdown pages with OKF frontmatter,
   subsystem landing pages and anchor-grounded runtime-mechanism pages.
@@ -47,9 +53,56 @@ both, so follow the stage's own **Processing task** to tell them apart.
    your inputs, do NOT record "other shards missing" as a limitation, and do NOT write any
    Wiki page or skeleton. Other jobs own the other sources; the framework assembles them.
    Ignore the phased writing procedure, the page layout and the two-tier anchor contract
-   below entirely, and never call `read_skill_resource`. Keep `routing_text` short — subject,
-   key facts, and relevant relations only, never a Phase-0/landing/covers plan; it has a
-   hard length limit.
+   below entirely, and never call `read_skill_resource`. (The script and references are
+   used only by page-authoring jobs — job shape 2 below — in Phase 0 / while writing; an
+   extraction/processing job never does either, so this never applies to you.)
+   Keep `routing_text` short — subject, key facts, and relevant relations only, never a
+   Phase-0/landing/covers plan; it has a hard length limit.
+
+   **Routing granularity — group by COARSE subject, never by angle or file kind.** The
+   later reducer cannot see records outside its own group, so over-fine routing is the
+   main cause of duplicate pages and wasted reduce calls. When judging relations:
+   - The same class/function and all its variants belong together: a base class, its
+     subclasses, its decorators/constructors, flags/options of it, and its type
+     variants are ONE subject (e.g. `Option`/`Argument`/`Parameter`, or
+     `Choice`/`Path`/`IntRange`, never separate).
+   - A module's tests, examples, and docs describe that SAME module: a record about
+     `tests/test_types.py` or an examples walkthrough relates to the core module it
+     exercises, not to a "testing" or "examples" subject.
+   - Different angles on one mechanism (parsing vs error handling vs flags of the same
+     option flow) stay related; only genuinely independent modules/concepts split.
+   When in doubt whether two records are the same subject, mark them related.
+
+   **Evidence-span line numbers are SHARD-LOCAL and come from the line prefixes in your
+   input, never from the source file.** Every line in your assigned shard is prefixed in
+   the prompt as `1: …`, `2: …`, …, restarting at 1 for THIS shard. When you emit
+   `evidence_spans`, `start_line`/`end_line` MUST be those prefix numbers (1-based, counted
+   within this shard, and `end_line` no greater than the last prefixed line you can see).
+   Do NOT copy line numbers printed inside the prose/code itself (a doc may literally print
+   `docs/advanced.md:290-337`), and do NOT use the file's true absolute line numbers or the
+   shard's metadata range — those are different coordinate systems and a span outside the
+   shard is rejected, forcing a costly retry. Worked example: if a shard is the file's
+   absolute lines 290–421 but it is presented to you prefixed `1:`…`132:`, a symbol sitting
+   at absolute line 305 must be cited as shard line **16**, not 305. When unsure, count
+   prefixes from `1:` in the text you were actually given.
+
+   **Every path you emit MUST be a plain, target-relative POSIX path — this is a hard
+   format rule and getting it wrong rejects the whole call and forces a retry.** A legal
+   path looks like `entity/options.md`, `concept/runtime-mechanisms.md`, or
+   `method/testing.md`: lowercase POSIX separators, relative to the output root, no
+   leading slash or drive. NEVER emit any of:
+   - a `viking://` (or `http(s)://`) URI as a file path — a URI is an address, not a path
+     (writing `skills//viking://resources/...` or `viking://resources/x/entity/a.md` is
+     invalid);
+   - an absolute path (`/Users/...`, `/tmp/...`, a drive path);
+   - any `..` parent traversal or a path that escapes the output root
+     (`../../etc/x`, `a/../b`);
+   - a path containing backslashes, a leading `./`, or the literal strings
+     `__compile_staging__`, `skills/`, or the input/source root.
+   Source identity belongs inside record payload fields (e.g. source uri /
+   routing_text / evidence text), NEVER in an output file path. If you are about to write
+   a path that contains `://`, starts with `/`, or contains `..`, stop and convert it to
+   the bare target-relative page path before emitting.
 2. **Page-authoring job (output type = files).** The stage task asks you to produce Wiki
    **files**. Then follow the runtime contract, the skeleton-first pacing, the phases and
    the page contract below, using only the evidence assigned to this job. A page-authoring
@@ -110,6 +163,12 @@ both, so follow the stage's own **Processing task** to tell them apart.
    `entity/subsystem-map.md` so its `covers` includes every missing id (one edit), or add
    the ids to any landing you are allowed to write, then emit.
    (d) Or delete the page / merge it into a landing and update the index.
+   (e) For a flat package (the run profile has `canonical_topics[]`), when two present
+   pages address the SAME canonical topic or one has a path outside the canonical list,
+   keep the page with the most verified anchors, fold any unique anchors/content into it,
+   and delete the other page, updating the index. A tests/examples/docs/build walkthrough
+   page with no canonical topic is folded into the topic it exercises, never left
+   standalone.
    After applying (a)/(c) for each flagged path, `emit` at once. Never finish with a
    known failing page open, never spend rounds re-reading pages you will not change, and
    keep the whole review to roughly <=12 tool calls.
@@ -139,15 +198,28 @@ checkout yourself.
   <=200 lines per window). Grep narrowly and read small windows; never browse directories.
   When a tool raises `... budget exhausted`, stop investigating and write with the
   evidence already gathered.
+- **`exec` is NOT a research channel and does NOT bypass these budgets.** Its sole use in
+  page-authoring jobs is the single Phase-0 script invocation below. Never use `exec` for
+  `ov grep`/`ov read`/`ov ls`/`ov search`, for `grep`/`cat`/`sed`/`head`/`tail`/`find`/`ls`,
+  for `python3 -c`/heredoc parsing of `source_plan.json` or records, or for any other
+  repository/source inspection — those are exactly the unbounded shell-recon loops that
+  inflate a job to dozens of wasted turns. All source discovery goes through the bounded
+  `openviking_grep`/`openviking_multi_read`/`read_evidence` tools above; when their budget
+  is exhausted, stop and write, do not switch to `exec`.
 - **Do NOT look for `assignment.json`, `.wiki_records/`, or call `read_skill_resource`
   for those names.** They belong to a different (full-scan) mode and do not exist here;
   trying to open them only burns turns.
-- The only valid `read_skill_resource` paths are this Skill's own optional references:
-  `references/wiki-schema.md` and `references/article-templates.md`. The binding rules
-  are already in this file, so reading them is optional and never a prerequisite. A
-  page-authoring job reads at most the single template for the page it is currently
-  writing; it never reads references as a generic "research" step. Extraction jobs never
-  call `read_skill_resource` at all.
+- The valid `read_skill_resource` paths are an allow-list of exactly three:
+  `references/wiki-schema.md`, `references/article-templates.md`, and
+  `scripts/select_sources.py`. The first two are optional style references; the binding
+  rules are already in this file, so reading them is optional and never a prerequisite.
+  A page-authoring job reads at most the single template for the page it is currently
+  writing; it never reads references as a generic "research" step. EVERY page-authoring
+  job reads `scripts/select_sources.py` exactly once and runs it once in Phase 0 to get
+  its own identical copy of the deterministic profile (a shared on-disk cache collapses
+  parallel runs to a single server fetch, so re-running is cheap and never diverges).
+  Extraction/processing jobs (job shape 1) never call `read_skill_resource` for the
+  script and never run it.
 - Pages are created with `write_file` at the task-relative output paths in the layout
   below and submitted with the runtime's `emit` mechanism. The pipeline finalizes every
   page you write. Never write into the source repository and never create scratch files
@@ -165,8 +237,9 @@ do NOT apply to extraction/record jobs (see "Which job am I?").
    assigned sources establish. Do not try to see sources assigned to other jobs.
 2. **Phase 1 — Write the skeleton BEFORE any depth probing.** Immediately `write_file`
    `index.md` and the subsystem **landing pages** for the subjects assigned to this job
-   (one page may cover several related subsystems). Landing pages need only README/docs
-   grounding, so they exist before you spend any bounded budget.
+   (one page may cover several related subsystems); for a flat package write a short
+   skeleton at each assigned `canonical_topics[].path` instead. Landing pages / skeletons
+   need only README/docs grounding, so they exist before you spend any bounded budget.
 3. **Phase 2 — Verify while writing.** Only now use the bounded grep/read tools to obtain
    anchors for deep pages. Begin writing deep/mechanism pages as soon as you have the
    first anchors; do not batch all investigation up front.
@@ -176,21 +249,117 @@ You must have written your assigned landing pages before you exceed roughly 12 d
 calls. A page-authoring job that ends with no `write_file` call is a failure regardless of
 how much source was read.
 
-## Phase 0 — Reconnaissance
+## Phase 0 — Deterministic source plan (every page-authoring job runs the bundled script first)
 
-From the supplied evidence and the deterministic repository profile:
+Every **page-authoring job (job shape 2)** performs Phase 0 on its own, before any
+reconnaissance or page writing. The bundled, offline, standard-library-only script
+`scripts/select_sources.py` is deterministic: identical input always yields a byte-identical
+profile. Parallel jobs have isolated scratch and cannot share a computed file, so each job
+computes its own copy rather than waiting for another job. Repeated parallel runs are cheap
+and consistent because the script caches the fetched tree in one shared on-disk directory
+(file-locked; the first concurrent job fetches once, every other job reads the same cache).
+Do not guess subsystem ids or preload files by intuition.
+
+Run these two steps **via `exec`, exactly as written** (do not call `ov`, do not use
+heredoc Python / `grep` / manual line counting, do not pipe to `head`/`tail`). This is the
+**ONLY `exec` command a page-authoring job is allowed to run in its entire lifetime** — run
+the script once, read the resulting `source_plan.json` with the normal file-read tool, and
+do not invoke `exec` again for any reason (no re-running "to be sure", no shell parsing of
+the plan, no shell source lookups).
+`<input-root>` is the compile input URI from the request (e.g.
+`viking://resources/pallets/click`), never the output root.
+
+1. Materialize the script with `read_skill_resource`
+   (`path: "scripts/select_sources.py"`); the tool result gives a sandbox `local_path`.
+2. Run it with the input URI — the script fetches the file tree (and, with
+   `--print-topics`, the bounded set of package source files it parses) from the
+   OpenViking server itself (standard library only; it reads the already-injected
+   per-task `OPENVIKING_CLI_CONFIG_FILE` for the server URL and credentials, so no
+   `ov` binary, precomputed file, or extra environment is needed). Both the tree
+   and the parsed sources are cached in one shared, file-locked directory, so when
+   many parallel jobs run this, the sources are fetched once and every later job
+   reads the cache:
+   `python3 <local_path> --uri <input-root> --print-topics --pretty > source_plan.json`
+   A `tree cache HIT/MISS` line on stderr is normal; either outcome yields the same
+   profile. If it exits non-zero (e.g. `tree fetch failed`, connection refused, or the
+   URI lists zero files), stop and report that the source tree is unavailable instead of
+   inventing a profile. (Offline fallback `--input tree.json` accepts a `{"paths": [...]}`
+   file, a bare array, or raw `ov ls -o json` output — only if the server is unreachable;
+   flags `--cache-dir`, `--cache-ttl`, `--no-cache` control the shared cache.)
+3. Adopt the output as the run's single source of truth:
+   - `selected_files[]` is the bounded preload (README/manifest/entry-points + at most 8
+     docs; implementation detail must come from later bounded grep/multi_read probes, not
+     from enlarging the preload);
+   - `major_subsystems[].id` is the COMPLETE canonical id list for `covers`; every job sees
+     the same list, so ids are consistent across all pages without cross-job messaging;
+   - `file_tree.files` is the structural map used to plan pages and grep targets;
+   - `canonical_topics[]` is present ONLY for flat/degenerate packages and is the
+     deterministic page inventory for them — see step 4; for a multi-subsystem
+     repository (the common case) it is absent and the `major_subsystems` covers
+     contract below applies unchanged.
+4. If `breadth.flat_package` is `true` (a flat single-package library such as
+   `src/click/*.py`), `canonical_topics[]` is the COMPLETE, deterministic page inventory,
+   derived from class inheritance and module structure (identical in every job). Follow it
+   exactly:
+   - **One page per topic, at exactly the given path.** `canonical_topics[].path` is the
+     ONLY legal output path for that subject, and `index.md` is the only additional path.
+     Never invent a slug, a per-class page, or a per-angle page (no
+     `entity/option-flags.md` when `entity/parameter.md` exists). If two groups hold
+     records for the same topic, they write the SAME path — that is intended: the pipeline
+     merges same-path pages, which is how duplicates collapse.
+   - **Entity topics fold whole class families.** Each entity topic's `symbols` list names
+     every class/function that topic owns (e.g. `parameter` owns `Parameter`, `Option`,
+     `Argument`); cover them together on the one entity page with distinct anchors, never
+     on separate pages.
+   - **Concept topics fold an entire module** (and the private implementation modules
+     listed in `modules`): all of that module's types, exception subclasses, helpers and
+     platform shims belong on the single concept page.
+   - **The topic marked `protected_deep_chapter` stays deep.** Keep its full ordered
+     mechanism steps and multiple anchors; do not compress it into a short summary.
+   - **tests/, examples/, docs/, build and contribution walkthroughs never get their own
+     page.** Fold their evidence into the topic whose symbols they exercise.
+   - **Page count is bounded by `topic_inventory`**: the run has exactly
+     `core_topics` topic pages plus `index.md`; stay within
+     `recommended_total_range` total pages (only genuinely cross-topic workflows may use
+     the few extra slots, as `method/`/`analysis/` pages). Fewer is fine; exceeding the
+     range only duplicates an existing topic.
+   - Flat packages have no canonical subsystem ids, so these entity pages are ALWAYS the
+     **deep** shape (verified symbol + exact line anchor); `tier: landing` with `covers`
+     is impossible here and must not be used.
+   If `flat_package` is false AND `degenerate` is true without a usable topics table, fall
+   back to planning from `selected_files` + `file_tree` with deep/`method`/`analysis`
+   pages and no invented ids or empty-`covers` landings.
+
+Without `--print-topics` the script selects structure only, not prose; with
+`--print-topics` it additionally parses package `.py` files purely as AST (class
+inheritance and module/import shape) to derive `canonical_topics` — it never interprets
+prose and makes no model calls.
+
+**Coverage owner's extra duty.** Among the page-authoring jobs, exactly one — the single
+job whose assigned records contain the repository-root README and/or root build manifest —
+is the coverage owner. In addition to its own Phase 0, it writes `entity/subsystem-map.md`
+listing every `major_subsystems[].id` exactly once (the breadth backstop). When the profile
+is degenerate or flat (zero subsystem ids) it writes no subsystem-map and no
+empty-covers landing pages; for a flat package it instead follows the
+`canonical_topics[]` inventory like every other job.
+Other page-authoring jobs set `covers` only to the exact canonical id(s) their assignment
+is about, drawn from the same profile; never invent an id or assume another job covers a
+subject.
+
+## Phase 0b — Reconnaissance
+
+From the supplied evidence and `source_plan.json` (the deterministic repository profile):
 
 - identify language(s), framework(s), build system, entry point(s), test framework that
   the assigned evidence actually establishes;
-- the complete canonical subsystem list is ALWAYS available to a page-authoring call in
-  the **`# Deterministic repository profile`** section of its system prompt, as
-  `major_subsystems[].id`, even when the assigned records say nothing about most of those
+- the complete canonical subsystem list is the `major_subsystems[].id` array in
+  `source_plan.json`, even when the assigned records say nothing about most of those
   packages (readme_first selects only README/manifest/entry-point sources). Treat that list
   as the source of truth: **copy those exact strings character-for-character into
   `covers`.** Never paraphrase or invent ids — `db` is not `db_models`, `backends` is not
   `db_backends`, and names like `apps`/`extras`/`docs_tree` are only valid if they appear
-  verbatim in the profile. If a list ever seems present in both places and differs, the
-  `# Deterministic repository profile` block wins;
+  verbatim in the profile. If a list ever seems present in both places and differs,
+  `source_plan.json` wins;
 - scope your rich pages to your assigned subjects; breadth coverage is handled separately
   below.
 
@@ -202,8 +371,10 @@ Create (these describe the whole-run deliverable; if you are one of several page
 calls, produce the slices assigned to you and cover every subsystem id in that slice):
 
 1. `index.md` — a concise structured directory of every page;
-2. 6 to 12 focused **rich** pages across the run (fewer only if the evidence clearly
-   supports it);
+2. the run's focused **rich** pages: for a flat package these are EXACTLY the
+   `canonical_topics[]` pages (see Phase 0 step 4, count bounded by
+   `topic_inventory.recommended_total_range`); otherwise 6 to 12 rich pages (fewer only
+   if the evidence clearly supports it);
 3. **breadth landings** so every `major_subsystems` id appears in some page's frontmatter
    `covers`. Non-owner calls cover the ids of subjects they document; the coverage owner
    covers the ENTIRE list (see the checklist below). Finalize rejects the whole run if even
@@ -223,15 +394,18 @@ method/<topic>.md            # build / test / extend / onboarding workflows
 analysis/<topic>.md          # bounded cross-cutting architecture or newcomer map
 ```
 
-## Breadth coverage checklist (hard gate; coverage owner executes)
+## Breadth coverage checklist (self-verified; coverage owner executes)
 
-The publish gate computes the union of every page's frontmatter `covers` and compares it
-against `major_subsystems[].id` from `# Deterministic repository profile`. One missing id
-fails the ENTIRE compile, and no later stage can add it. The coverage owner (the authoring
-call holding the tree-root README / root manifest) must therefore:
+Coverage is a self-verified contract of this Skill (there is no framework-enforced gate in
+the script-based setup): before finalizing, compute the union of every page's frontmatter
+`covers` and compare it against `major_subsystems[].id` from `source_plan.json`. One
+missing id means the run is incomplete and must be repaired before final output; when
+`breadth.degenerate` or `breadth.flat_package` is true, skip this checklist entirely
+(there are no canonical ids — use the canonical-topics inventory instead).
+The coverage owner (the authoring call holding the tree-root README / root manifest) must
+therefore:
 
-1. Read every `id` out of the `# Deterministic repository profile` block and write them in
-   a checklist.
+1. Read every `id` out of `source_plan.json` and write them in a checklist.
 2. Put the ENTIRE id list, spelled exactly, in the `covers` of ONE dedicated landing
    page at the fixed path `entity/subsystem-map.md` (`type: entity`, `tier: landing`).
    Use this single complete page, never several per-layer `map-*.md` files: the merge
@@ -259,8 +433,12 @@ call holding the tree-root README / root manifest) must therefore:
    must be present, character-for-character. Link `entity/subsystem-map.md` from
    `index.md`. Emit only after the full list is ticked.
 
-For the current Django target the profile lists exactly these 39 ids (all must be ticked;
-if the live profile block differs, follow the live block):
+The following Django-derived ids are a REFERENCE EXAMPLE ONLY, carried over from the
+original r15 Django run. Never copy them for a different repository. The authoritative
+list for every run is the `major_subsystems[].id` array emitted by
+`scripts/select_sources.py`; if it is empty (`breadth.degenerate` or
+`breadth.flat_package` is true), skip this checklist and use
+`canonical_topics[]` instead. On Django the profile happened to list exactly these 39 ids:
 
 ```
 contrib_gis, contrib_admin, db_backends, utils, db_models, contrib_auth,
@@ -289,13 +467,20 @@ covers: [contrib_gis, contrib_admin, db_backends, utils, db_models, contrib_auth
 See `references/article-templates.md` for concrete templates.
 
 - **Priority 1 — breadth (no depth budget required):** `index.md` and the subsystem
-  landing pages, then a project/architecture overview.
+  landing pages, then a project/architecture overview. For a flat package this is
+  `index.md` plus a short skeleton at EVERY `canonical_topics[].path` your group owns, so
+  the paths exist before depth probing.
 - **Priority 2 — depth (consume the bounded budget):** one deep entity page per important
-  subsystem, each carrying at least one verified implementation anchor.
-- **Priority 3 — `concept/runtime-mechanisms.md`:** write it only when at least one
-  mechanism is actually verified; it needs at least 3 distinct verified anchors.
+  subsystem / canonical entity topic, each carrying at least one verified implementation
+  anchor.
+- **Priority 3 — mechanism chapter:** for non-flat repos this is
+  `concept/runtime-mechanisms.md`; for a flat package it is the topic marked
+  `protected_deep_chapter` (e.g. `concept/core-mechanics.md`). Write it only when at least
+  one mechanism is actually verified; it needs at least 3 distinct verified anchors and
+  keeps the full ordered step sequence.
 - **Priority 4 — guides:** setup/test/extension/onboarding grounded in manifests and
-  entry points.
+  entry points; for a flat package these use only the few extra slots inside
+  `recommended_total_range`, never a per-test or per-example walkthrough.
 
 ## Page model and the two-tier anchor contract
 

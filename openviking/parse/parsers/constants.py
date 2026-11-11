@@ -38,6 +38,7 @@ IGNORE_EXTENSIONS = {
     ".pyc",
     ".pyo",
     ".pyd",
+    ".mo",
     ".so",
     ".dll",
     ".dylib",

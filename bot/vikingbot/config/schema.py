@@ -801,6 +801,10 @@ class DirectBackendConfig(BaseModel):
     restrict_to_workspace: bool = False  # If true, restrict file access to workspace directory
     allow_exec: bool = Field(default=True, description="Allow agents to execute host commands")
     allow_compile_exec: bool = False
+    # Separate gate for the shell tool handed to compile child agents. Framework-run
+    # scripts (source filter, deterministic outline) keep using allow_compile_exec via
+    # the sandbox channel, so turning this off only removes the agent-facing exec tool.
+    allow_compile_agent_exec: bool = False
 
 
 class SrtBackendConfig(BaseModel):

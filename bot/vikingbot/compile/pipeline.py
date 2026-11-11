@@ -18,10 +18,12 @@ from vikingbot.compile.hashing import content_hash, digest
 from vikingbot.compile.models import CompileFailure, utc_now
 from vikingbot.compile.ops import finalize as finalize_op
 from vikingbot.compile.ops import map as map_op
+from vikingbot.compile.ops import outline as outline_op
 from vikingbot.compile.ops import reduce as reduce_op
+from vikingbot.compile.ops import source_filter as source_filter_op
 from vikingbot.compile.ops.shuffle import Shuffle
 from vikingbot.compile.pipeline_io import JsonModel, TaskFiles, bounded_jobs
-from vikingbot.compile.plan import PLANNING_RULES, Contract, PlanProposal, parse_plan
+from vikingbot.compile.plan import PLANNING_RULES, Contract, Node, PlanProposal, parse_plan
 from vikingbot.compile.renderer import RenderedBundle
 from vikingbot.compile.results import Record
 from vikingbot.compile.review import REVIEW_PROMPT
@@ -87,9 +89,11 @@ class Pipeline:
     """
 
     def __init__(
-        self, *, client, sandbox, provider, model, temperature, limits, request, skill, usage
+        self, *, client, sandbox, provider, model, temperature, limits, request, skill, usage,
+        compile_exec_enabled: bool = False,
     ):
         self.client, self.limits, self.request = client, limits, request
+        self.compile_exec_enabled = compile_exec_enabled
         self.target, self.skill = request.to, skill
         self.changes = dict(request.changes) if request.changes is not None else None
         self.tools = {}
@@ -195,6 +199,30 @@ class Pipeline:
             planning_context["source_summary"] = self.summarize_sources(sources)
             self.metrics["input_ranges"] = len(sources)
             self.metrics["input_files"] = len({x["uri"] for x in self.evidence.values()})
+
+            # The model decides from the Skill text whether a pre-Map outline is mandatory.
+            # Any failure, missing exec permission, or unusable script keeps the legacy flow.
+            outline_provider: str | None = None
+            decision = await outline_op.decide(self, planning_context["source_summary"])
+            if decision is not None and decision.use_outline and decision.provider:
+                if not self.compile_exec_enabled:
+                    self.warnings.append(
+                        "Outline requested but compile exec is disabled; using legacy flow."
+                    )
+                elif await outline_op.materialize_provider(self, decision.provider):
+                    outline_provider = decision.provider
+
+            # Optional DeepWiki-style semantic outline. Only reachable when an outline
+            # provider exists (it doubles as the deterministic fallback) and the Skill text
+            # explicitly opts in; standard Skills incur no extra model call here.
+            semantic_outline = False
+            if outline_provider is not None:
+                semantic = await outline_op.semantic_decide(
+                    self, planning_context["source_summary"]
+                )
+                semantic_outline = bool(semantic and semantic.use_semantic_outline)
+                self.metrics["semantic_outline_enabled"] = int(semantic_outline)
+
             proposal = await self.model.ask(
                 "plan",
                 planner_prompt,
@@ -232,6 +260,17 @@ class Pipeline:
                     "nodes": [asdict(n) for n in nodes],
                 },
             )
+            if outline_provider is not None:
+                # The planner Contract still supplies every operator's instructions; only the
+                # Map/Shuffle grouping decision is replaced by the deterministic outline.
+                result = await self.run_outline(
+                    outline_provider,
+                    sources,
+                    planning_context["source_summary"],
+                    semantic_outline,
+                )
+                complete = not self.failures
+                return result
             data: dict[str, Any] = {"sources": sources}
             shuffler = Shuffle(self)
             program, position, revisions = proposal.plan, 0, 0
@@ -355,6 +394,126 @@ class Pipeline:
                     "Compile state finalization failed; preserving the execution error"
                 )
 
+    async def run_outline(
+        self,
+        provider: str,
+        sources: list[Record],
+        source_summary: dict,
+        semantic: bool = False,
+    ):
+        """Execute the pre-Map outline flow, reusing Map/Shuffle/Reduce/Finalize unchanged.
+
+        The outline deterministically assigns seeded ranges to fixed-path pages, replacing
+        Map/Shuffle grouping. In the classic flow, uncovered ranges fall back to legacy Map
+        then Shuffle so no source is silently dropped. In semantic mode the LLM plan is the
+        intentional coverage boundary: unassigned ranges are dropped with metrics, matching
+        the DeepWiki probe design, and any semantic failure fails over to the script outline.
+        Reduce and Finalize run over the resulting groups, using the planner Contract as usual.
+        """
+        started = time.monotonic()
+        outline = None
+        semantic_active = False
+        if semantic:
+            try:
+                brief = await outline_op.export_planning_brief(
+                    self, sources, source_summary
+                )
+                planned = await outline_op.plan_semantic_outline(self, brief)
+                outline = await outline_op.expand_semantic_outline(
+                    self, sources, source_summary, planned
+                )
+                semantic_active = True
+            except Exception as exc:  # noqa: BLE001 - fail over to the deterministic script
+                self.warnings.append(
+                    "Semantic outline failed; falling back to deterministic outline script: "
+                    + str(exc)[:300]
+                )
+                self.metrics["semantic_outline_fallback"] = 1
+                outline = None
+        if outline is None:
+            outline = await outline_op.build_outline(self, provider, sources, source_summary)
+        groups, uncovered = outline_op.group_sources(self, sources, outline)
+        self.metrics["outline_pages"] = len(groups)
+        self.metrics["outline_uncovered_ranges"] = len(uncovered)
+
+        if uncovered and semantic_active:
+            # DeepWiki-style probe: no RAG net and no pull tools exist in this flow, so
+            # unassigned ranges have no admission path. Meter the loss instead of rerouting.
+            self.metrics["semantic_outline_ranges_dropped"] = len(uncovered)
+            self.warnings.append(
+                f"Semantic outline dropped {len(uncovered)} unassigned ranges; "
+                "legacy uncovered Map/Shuffle fallback suppressed."
+            )
+        elif uncovered:
+            map_node = Node(name="outline-map", op="map", source="sources", task="extract")
+            mapped = await map_op.run(self, map_node, uncovered)
+            routing_task = "routing" if self.contract.routing else "final_routing"
+            if not getattr(self.contract, routing_task):
+                raise CompileFailure(
+                    "COMPILE_INCOMPLETE",
+                    "Outline left sources uncovered but the Contract defines no routing rule",
+                    stage="outline",
+                )
+            shuffle_node = Node(
+                name="outline-shuffle", op="shuffle", source="outline-map", task=routing_task
+            )
+            groups += await Shuffle(self).run(shuffle_node, mapped)
+
+        reduce_transform = self.contract.reduce
+        if reduce_transform is None or reduce_transform.output != "files":
+            raise CompileFailure(
+                "COMPILE_INCOMPLETE",
+                "Outline flow requires contract.reduce with output=files",
+                stage="outline",
+            )
+        reduce_node = Node(
+            name="outline-reduce", op="reduce", source="outline-groups", task="reduce"
+        )
+        files = await reduce_op.run(self, reduce_node, groups)
+        files = await self._ensure_outline_pages(reduce_node, groups, files)
+        self.metrics["outline_milliseconds"] = round((time.monotonic() - started) * 1000)
+        return await finalize_op.run(self, files)
+
+    async def _ensure_outline_pages(self, node: Node, groups: list, files: list) -> list:
+        """Guarantee every path-locked outline page was produced before finalize.
+
+        Reduce retains a failed job only in ``runtime.failures`` and otherwise publishes
+        partial output. That is correct for free Map/Reduce, but an outline is a fixed
+        contract: every locked group must yield its assigned path. Retry the missing
+        pages once (a transient model/rate-limit failure often clears), then fail loudly
+        instead of silently publishing a wiki with a planned page missing.
+        """
+        locked = [group for group in groups if group.assigned_path is not None]
+        if not locked:
+            return files
+
+        async def paths_of(refs: list) -> set[str]:
+            paths: set[str] = set()
+            for ref in refs:
+                artifact = await self.files.get(ref)
+                paths.add(artifact["path"])
+            return paths
+
+        produced = await paths_of(files)
+        missing = [group for group in locked if group.assigned_path not in produced]
+        if not missing:
+            return files
+
+        self.metrics["outline_missing_pages_retried"] = len(missing)
+        retried = await reduce_op.run(self, node, missing)
+        files = files + retried
+        produced |= await paths_of(retried)
+        still_missing = sorted(
+            group.assigned_path for group in missing if group.assigned_path not in produced
+        )
+        if still_missing:
+            raise CompileFailure(
+                "COMPILE_INCOMPLETE",
+                f"Outline is missing locked page(s) after one retry: {still_missing}",
+                stage="reduce",
+            )
+        return files
+
     async def write_coverage(self, published=()):
         """Record every input's lineage disposition and acknowledged final files with hashes.
 
@@ -458,6 +617,22 @@ class Pipeline:
             "files_with_multiple_ranges": sum(n > 1 for n in ranges.values()),
             "max_ranges_per_file": max(ranges.values(), default=0),
         }
+
+    async def apply_source_filter(self, ordered: list[str]) -> list[str]:
+        """Pre-seed whitelist filter invoked before any source body is read.
+
+        The outer guard makes filtering strictly best-effort: regardless of what the op or
+        the Skill script does, a compile must never fail because a filter was unavailable.
+        """
+        if not self.compile_exec_enabled or not ordered:
+            return ordered
+        try:
+            return await source_filter_op.apply(self, ordered, self.request.from_ or [])
+        except Exception as exc:  # noqa: BLE001 - filtering must never break a compile
+            self.warnings.append(
+                f"Source filter failed; keeping all files: {str(exc)[:300]}"
+            )
+            return ordered
 
     async def seed(self, batches, *, notices=None) -> list[Record]:
         """Seed source ranges and deleted-file notices with stable, traceable input IDs."""

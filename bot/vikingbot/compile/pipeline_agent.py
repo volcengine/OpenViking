@@ -289,7 +289,7 @@ def agent_runner(loop, session_key, connection, limits):
         tool = loop.tools.get("exec")
         if (
             loop.config.sandbox.backend == "direct"
-            and not loop.config.sandbox.backends.direct.allow_compile_exec
+            and not loop.config.sandbox.backends.direct.allow_compile_agent_exec
         ):
             tool = None
         if tool is not None:

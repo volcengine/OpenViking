@@ -139,13 +139,44 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
                     "Preserve binary candidates using their supplied content_ref; never generate Base64."
                 ),
             )
+            merge_system = runtime.system + "\n" + transform.instructions
             retries = Counter()
+            # Capacity guard: a path attracting many same-path candidates (e.g. several
+            # groups each emitting index.md) can overflow the model window in one merge.
+            # Shrink the supporting evidence with Combine before sending; candidate file
+            # bodies stay intact because they are the objects being merged. This runs
+            # before the request so it does not depend on the provider classifying the
+            # 400 as INPUT_TOO_LARGE.
+            for _ in range(4):
+                projected = {
+                    "candidates": [file_ops.file_view(a, ref) for ref, a in items],
+                    "inputs": [await common.payload(runtime, r) for r in records],
+                }
+                if runtime.model.fits(merge_system, projected, FileResponse):
+                    break
+                chunks = await common.pack(
+                    runtime, records, common._COMBINE, CombineResponse
+                )
+                reduced = []
+                for chunk in chunks:
+                    reduced.extend(
+                        await common.transform(
+                            runtime, "combine", None, chunk, prompt=common._COMBINE
+                        )
+                    )
+                if not reduced:
+                    raise ValueError(
+                        "Overflow aggregation cannot discard all required contributions"
+                    )
+                if len(reduced) >= len(records):
+                    break
+                records = reduced
             while True:
                 unavailable = sorted(p for p, owner in reserved.items() if owner != path)
                 try:
                     response = await runtime.model.ask(
                         "reduce_merge",
-                        runtime.system + "\n" + transform.instructions,
+                        merge_system,
                         {
                             "candidates": [file_ops.file_view(a, ref) for ref, a in items],
                             "reserved_paths": unavailable,
@@ -249,7 +280,14 @@ async def reduce_group(
             return await file_ops.save_files(runtime, response, group, records, old)
     evidence = sorted({ref for r in records for ref in r.source_refs})
     extra = {
-        "group": {"id": group.group_id},
+        "group": {
+            "id": group.group_id,
+            **(
+                {"assigned_path": group.assigned_path}
+                if group.assigned_path is not None
+                else {}
+            ),
+        },
         "scope_fields": runtime.contract.distinguish,
         "unique_source_count": len({runtime.evidence[ref]["uri"] for ref in evidence}),
     }
@@ -294,6 +332,14 @@ async def reduce_group(
         """Resolve assigned ready drafts before ordinary lineage and revision validation."""
         file_ops.reuse_files(response, snapshots)
         file_ops.validate_files(runtime, response, group, records, old)
+        if group.assigned_path is not None:
+            # An outline page is locked to its planned path: exactly one file, no renaming.
+            paths = [draft.path for draft in response.files]
+            if paths != [group.assigned_path]:
+                raise ValueError(
+                    f"Outline page {group.group_id} must submit exactly one file at "
+                    f"{group.assigned_path}; got {paths}"
+                )
 
     for depth in range(4):
         data = {**extra, "inputs": [await common.payload(runtime, r) for r in records]}
