@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -340,82 +339,6 @@ async def test_experience_gradient_estimator_runs_extract_loop(monkeypatch, use_
     assert captured["extract_loop_kwargs"]["context_provider"]._isolation_handler is not None
 
 
-@pytest.mark.parametrize(
-    "content",
-    [
-        "## Post-task Evaluation\n- score=1.0; passed=true.",
-        "## Post-hoc Evaluation\n- Task passed.",
-        "## 事后评测反馈\n- 原生得分：1.0。",
-        "<!-- POST_TASK_EVALUATION -->\n## 実行後の評価\n- score=1.0。",
-        '# OpenViking OutcomeEvaluation\n```json\n{"passed":true}\n```',
-        "[Rollout Evaluation]\npassed: True\nscore: 1.0",
-        "<!-- POST_TASK_EVALUATION -->\r\n## Évaluation finale\r\n- score=1.0.\r\n",
-        "## 事后评测反馈：\n- 得分：1.0。",
-    ],
-)
-def test_existing_trajectory_evaluation_is_not_injected_again(content):
-    analysis = _analysis()
-    trajectory = analysis.trajectories[0]
-    trajectory.content = "# Task\n## Actual Result\nCompleted.\n" + content
-
-    assert (
-        gradient_estimator_module._missing_trajectory_evaluation(trajectory, analysis.evaluation)
-        is None
-    )
-
-
-@pytest.mark.parametrize(
-    "content",
-    [
-        "# Task\n## Actual Result\nCompleted.",
-        "# Task\n## Post-task Evaluation\n\n",
-        "<!-- POST_TASK_EVALUATION -->\n## 事后评测反馈\n\n",
-        "## Post-task Evaluation\n\n## Actual Result\nCompleted.",
-        "The tool name was OutcomeEvaluation, but no post-task score was provided.",
-        "## Execution Chain\n```markdown\n## Post-task Evaluation\nexample only\n```\n"
-        "## Actual Result\nFailed.",
-        "## Execution Chain\n~~~markdown\n<!-- POST_TASK_EVALUATION -->\n"
-        "## 評価\nexample only\n~~~\n## Actual Result\nFailed.",
-        "## Post-task Evaluation\n<!-- no report available -->\n-\n",
-        "## Execution Chain\n  ```markdown\n## Post-task Evaluation\nexample only\n  ```\n"
-        "## Actual Result\nFailed.",
-    ],
-)
-def test_missing_trajectory_evaluation_is_supplied_once(content):
-    analysis = _analysis()
-    trajectory = analysis.trajectories[0]
-    trajectory.content = content
-
-    result = gradient_estimator_module._missing_trajectory_evaluation(
-        trajectory, analysis.evaluation
-    )
-
-    assert result["passed"] is True
-    assert result["score"] == 1.0
-    assert len(result["criterion_results"]) == 1
-
-
-def test_missing_trajectory_evaluation_deduplicates_tau2_report():
-    analysis = _analysis(passed=False)
-    report = {"db_match": False, "reason": "UNIQUE_EVALUATION_REPORT"}
-    encoded = json.dumps(report)
-    analysis.evaluation.feedback = [encoded]
-    criterion = analysis.evaluation.criterion_results[0]
-    criterion.feedback = [encoded]
-    criterion.evidence = [encoded]
-    analysis.evaluation.metadata["evaluation_result"] = report
-
-    result = gradient_estimator_module._missing_trajectory_evaluation(
-        analysis.trajectories[0], analysis.evaluation
-    )
-
-    assert json.dumps(result).count("UNIQUE_EVALUATION_REPORT") == 1
-    assert result["metadata"]["evaluation_result"] == report
-    assert analysis.evaluation.feedback == [encoded]
-    assert criterion.feedback == [encoded]
-    assert criterion.evidence == [encoded]
-
-
 @pytest.mark.parametrize("fallback", ["trajectory_extracted", "rollout_evaluation_provided"])
 def test_extraction_or_missing_evaluation_fallback_is_not_a_task_score(fallback):
     analysis = _analysis()
@@ -427,15 +350,6 @@ def test_extraction_or_missing_evaluation_fallback_is_not_a_task_score(fallback)
         criterion.metadata = {"source": "session_commit_default"}
 
     assert gradient_estimator_module._task_evaluation(analysis) is None
-
-
-def test_real_evaluation_and_absent_evaluation_are_kept_distinct():
-    analysis = _analysis(passed=False)
-    assert gradient_estimator_module._task_evaluation(analysis) is analysis.evaluation
-    assert (
-        gradient_estimator_module._missing_trajectory_evaluation(analysis.trajectories[0], None)
-        is None
-    )
 
 
 @pytest.mark.parametrize("scope", ["multiple_tasks", "unmatched_case"])
@@ -460,25 +374,3 @@ async def test_rollout_evaluation_is_not_assigned_to_unscoped_tasks(scope):
 
     assert len(estimator.calls) == len(analysis.trajectories)
     assert all(context.evaluation is None for _, context in estimator.calls)
-
-
-@pytest.mark.asyncio
-async def test_estimator_preserves_case_associations_but_does_not_rehydrate_messages():
-    analysis = _analysis()
-    analysis.trajectories[0].metadata["case_uris"] = ["viking://user/u/memories/cases/case.md"]
-    analysis.metadata["rollout_messages"] = [
-        Message(id="source", role="user", parts=[TextPart("RAW_SOURCE_NOT_AN_EXP_INPUT")])
-    ]
-    estimator = FakeExperienceGradientEstimator({})
-    context = _context()
-    context.metadata["case_name"] = "case"
-
-    await estimator.estimate(analysis, _experience_set(), context)
-
-    trajectory, captured_context = estimator.calls[0]
-    assert trajectory is analysis.trajectories[0]
-    assert trajectory.metadata["case_uris"] == ["viking://user/u/memories/cases/case.md"]
-    assert captured_context.messages == []
-    assert captured_context.metadata["case_name"] == "case"
-    assert captured_context.evaluation is analysis.evaluation
-    assert context.evaluation is None

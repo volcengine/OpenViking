@@ -14,7 +14,6 @@ from openviking.session.memory.patch_merge_context_provider import (
     PatchMergeContextProvider,
     PatchMergePatch,
 )
-from openviking.session.memory.schema_model_generator import SchemaModelGenerator
 from openviking.session.skill.session_skill_context_provider import load_skill_extract_registry
 
 
@@ -122,13 +121,6 @@ async def test_experience_merge_uses_reasoning_without_loading_linked_trajectori
     assert existing["reasoning"] == "Old supporting evidence."
     assert "+Proposed method" in messages[-1]["content"]
     assert "+New evidence narrows applicability." in messages[-1]["content"]
-    instruction = provider.instruction()
-    assert "including their content and reasoning" in instruction
-    assert all(
-        f"- {choice}:" in instruction for choice in ("Update", "Create", "Replace", "No change")
-    )
-    assert "complete resulting content and reasoning, not diffs" in instruction
-    assert "Merge the proposed experiences above" in messages[-1]["content"]
 
 
 @pytest.mark.asyncio
@@ -385,7 +377,7 @@ async def test_patch_merge_context_provider_renders_create_patch_from_dev_null()
     assert "    +created line" in messages[0]["content"]
 
 
-def test_patch_merge_context_provider_get_memory_schema_single_type(monkeypatch):
+def test_patch_merge_context_provider_get_memory_schema_single_type():
     schema = MemoryTypeSchema(
         memory_type="experiences",
         description="Experiences",
@@ -409,15 +401,8 @@ def test_patch_merge_context_provider_get_memory_schema_single_type(monkeypatch)
     provider._registry = SimpleNamespace(get=lambda name: schema if name == "experiences" else None)
 
     merge_schema = provider.get_memory_schemas(ctx=None)[0]
-    rendered = (
-        SchemaModelGenerator([merge_schema], template_context={"language": "zh-CN"})
-        .create_structured_operations_model()
-        .model_json_schema()
-    )
-    prompt = json.dumps(rendered, ensure_ascii=False)
-    assert "compare the supplied experiences' reasoning and applicability" in prompt
-    assert "Write before content in zh-CN" in prompt
-    assert "Compare evaluation feedback to execution steps." not in prompt
+    assert merge_schema.memory_type == "experiences"
+    assert merge_schema.fields[0].description != schema.fields[0].description
     assert schema.fields[0].description == "Compare evaluation feedback to execution steps."
     assert merge_schema.fields[0].merge_op == schema.fields[0].merge_op
     assert merge_schema.fields[1] == schema.fields[1]

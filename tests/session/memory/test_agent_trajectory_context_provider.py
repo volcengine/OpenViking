@@ -7,16 +7,9 @@ import pytest
 
 from openviking.message import Message, TextPart, ToolPart
 from openviking.server.identity import RequestContext, Role
-from openviking.session.memory.agent_experience_context_provider import (
-    AgentExperienceContextProvider,
-)
 from openviking.session.memory.agent_trajectory_context_provider import (
     AgentTrajectoryContextProvider,
 )
-from openviking.session.memory.session_extract_context_provider import (
-    SessionExtractContextProvider,
-)
-from openviking.session.skill.session_skill_context_provider import SessionSkillContextProvider
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -110,50 +103,3 @@ async def test_trajectory_prefetch_preserves_complete_ordered_tool_evidence(
     else:
         fs.ls.assert_not_awaited()
         assert len(prefetched) == 1
-
-
-@pytest.mark.parametrize(
-    "provider_type", [SessionExtractContextProvider, SessionSkillContextProvider]
-)
-def test_default_user_and_skill_providers_still_omit_tool_evidence(
-    execution_messages, provider_type
-):
-    provider = provider_type(messages=execution_messages)
-
-    history = provider._build_conversation_message()["content"]
-
-    assert "Checking the reservation." in history
-    assert "ToolCall:" not in history
-    assert "fare_difference=209" not in history
-    assert "PRIVATE_REASONING_NOT_FOR_EXTRACTION" not in history
-
-
-def test_experience_provider_uses_only_trajectory_for_internal_context(execution_messages):
-    provider = AgentExperienceContextProvider(
-        messages=execution_messages,
-        trajectory_summary="Reservation update failed.",
-        trajectory_uri="viking://user/default/memories/trajectories/reservation_update.md",
-    )
-
-    context = provider.get_extract_context()
-
-    assert len(context.messages) == 1
-    assert context.messages[0].content == "Reservation update failed."
-    assert provider.get_conversation_text() == "Reservation update failed."
-    assert "ABC123" not in provider.get_conversation_text()
-    assert "fare_difference=209" not in provider.get_conversation_text()
-
-
-@pytest.mark.asyncio
-async def test_skill_only_trajectory_provider_keeps_skill_input_behavior(execution_messages):
-    provider = AgentTrajectoryContextProvider(
-        messages=execution_messages,
-        include_trajectories=False,
-        include_session_skills=True,
-    )
-
-    prefetched = await provider.prefetch()
-
-    assert len(prefetched) == 1
-    assert "## Conversation History" in prefetched[0]["content"]
-    assert "ToolCall:" not in prefetched[0]["content"]

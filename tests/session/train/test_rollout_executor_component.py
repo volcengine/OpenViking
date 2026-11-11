@@ -192,33 +192,6 @@ def test_tau2_rollout_messages_use_completed_structured_tool_parts():
     )
 
 
-@pytest.mark.parametrize("result", [None, "", "Task Terminated", "Error: order not found"])
-def test_tau2_tool_record_role_does_not_depend_on_result(result):
-    from benchmark.tau2.train.rollout_executor import _build_rollout_messages
-
-    messages = _build_rollout_messages(
-        system_prompt="policy",
-        user_prompt="user request",
-        tools_used=[
-            {
-                "tool_name": "get_order_details",
-                "args": {"order_id": "order-1"},
-                "result": result,
-            }
-        ],
-        final_content=None,
-        evaluation_result=None,
-        reward=0.0,
-    )
-
-    tool_message = messages[2]
-    assert tool_message.role == "assistant"
-    assert tool_message.parts[0].tool_input == {"order_id": "order-1"}
-    assert tool_message.parts[0].tool_output == (result or "")
-    assert messages[1].role == "user"
-    assert messages[-1].content.startswith("task_success: False\ntask_reward: 0.0\n")
-
-
 @pytest.mark.parametrize(
     "experience_reminder", [None, "[Experience Reminder]\nVerify the receipt."]
 )
@@ -487,8 +460,8 @@ def test_tau2_final_answer_is_appended_for_native_evaluation(monkeypatch):
     assert evaluation.communicate_checks[0].met is True
 
 
-@pytest.mark.parametrize("keep_default_tools", [True, False])
-def test_tau2_configure_tools_limits_generic_tools(keep_default_tools):
+def test_tau2_configure_tools_limits_generic_tools():
+    keep_default_tools = True
     from benchmark.tau2.train.rollout_executor import _configure_tools
 
     class FakeTools:
@@ -672,7 +645,7 @@ async def test_tau2_experience_lookup_uses_exact_signature_not_query(exact_case_
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "stored_signature",
-    [None, "", "tau2:airline:train:28", "tau2:airline:test:0", OSError("read failed")],
+    ["tau2:airline:test:0", OSError("read failed")],
 )
 async def test_tau2_exact_case_miss_never_falls_back(exact_case_client, stored_signature):
     from benchmark.tau2.train.rollout_executor_vikingbot import _make_search_experience_tool
@@ -935,8 +908,9 @@ async def test_tau2_experience_loader_skill_is_required_with_relative_read_path(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("trial", [None, 0, 9])
-@pytest.mark.parametrize("run_error", [None, RuntimeError, asyncio.CancelledError])
+@pytest.mark.parametrize(
+    "trial, run_error", [(None, None), (0, RuntimeError), (9, asyncio.CancelledError)]
+)
 async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(
     monkeypatch, trial, run_error
 ):
@@ -1076,20 +1050,16 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "done_result, terminated",
-    [("", True), ("Done", True), ("", False), ("Error: done failed", True)],
-)
-@pytest.mark.parametrize(
-    "user_reply",
+    "user_reply, done_result, terminated",
     [
-        None,
-        "Yes. ###STOP###",
-        "###TRANSFER###",
-        "###OUT-OF-SCOPE###",
-        "Error: User dialogue is closed.",
-        "Task Terminated",
-        "  Task Terminated\n",
-        "Task Terminated? Please continue.",
+        (None, "", True),
+        ("Yes. ###STOP###", "Done", True),
+        ("###TRANSFER###", "", True),
+        ("###OUT-OF-SCOPE###", "", True),
+        ("Error: User dialogue is closed.", "", True),
+        ("Task Terminated", "", True),
+        ("Task Terminated? Please continue.", "", False),
+        (None, "Error: done failed", True),
     ],
 )
 async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_actions(

@@ -90,7 +90,17 @@ def _case_operation() -> ResolvedOperation:
     )
 
 
-def test_factory_defaults_to_v3():
+@pytest.fixture
+def compressor_fs(monkeypatch):
+    monkeypatch.setattr("openviking.session.compressor_v3.get_viking_fs", lambda: SimpleNamespace())
+    monkeypatch.setattr(
+        "openviking.session.memory.account_templates.resolve_account_memory_registry",
+        AsyncMock(side_effect=lambda _fs, _account, registry: registry),
+    )
+    return SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace()))
+
+
+def test_factory_defaults_to_v3(compressor_fs):
     compressor = create_session_compressor(vikingdb=None)
     assert isinstance(compressor, SessionCompressorV3)
 
@@ -119,7 +129,7 @@ async def test_commit_extraction_propagates_template_conflict():
     compressor._write_final_memory_diff.assert_not_awaited()
 
 
-def test_factory_ignores_deprecated_memory_version():
+def test_factory_ignores_deprecated_memory_version(compressor_fs):
     assert isinstance(
         create_session_compressor(vikingdb=None, memory_version="v2"), SessionCompressorV3
     )
@@ -470,6 +480,7 @@ async def test_v3_initializes_only_allowed_memory_files(monkeypatch):
         ctx=_ctx(),
         allowed_memory_types={"profile"},
         agent_evolution_enabled=False,
+        strict_extract_errors=True,
     )
 
     assert initialized_with == [{"profile"}]
@@ -843,6 +854,7 @@ async def test_v3_extract_trains_only_canonical_case_after_patch_merge(monkeypat
         messages=_messages(),
         ctx=_ctx(),
         allowed_memory_types={"cases", "profile", "trajectories", "experiences"},
+        strict_extract_errors=True,
     )
 
     assert [context.uri for context in result] == [canonical_uri]
