@@ -58,8 +58,10 @@ test('workspace values win per server and configured roots follow the host roots
   const dataDir = path.join(root, 'data');
   const workspace = path.join(root, 'work');
   const paths = dshExtensionsPaths({ dataDir, workspace });
+  // 宿主平台上的一个真实绝对路径：`/x` 在 Windows 上是盘符相对路径，规范化后会变样。
+  const sharedSkillDir = path.resolve(path.parse(root).root, 'shared', 'skills');
   write(paths.global, {
-    skillDirs: ['./skills', '/shared/skills'],
+    skillDirs: ['./skills', sharedSkillDir],
     mcpServers: {
       github: { command: 'old-github', args: ['--old'] },
       files: { command: 'files-server', env: { TOKEN: 'x' } },
@@ -77,7 +79,7 @@ test('workspace values win per server and configured roots follow the host roots
     path.join(home, '.agents', 'skills'),
     path.join(home, '.dsh', 'skills'),
     path.join(dataDir, 'dsh', 'skills'),
-    '/shared/skills',
+    sharedSkillDir,
     path.join(root, 'project-skills'),
     path.join(workspace, 'skills'),
   ]);
