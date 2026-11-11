@@ -67,19 +67,6 @@ class VikingDBManager(VikingVectorIndexBackend):
         """
         self._closing = True
 
-    async def close(self) -> None:
-        """Close storage connection and release resources."""
-        self.mark_closing()
-        try:
-            # We do NOT stop the queue manager here as it is an injected dependency
-            # and should be managed by the creator (OpenVikingService).
-
-            # Then close the base backend
-            await super().close()
-
-        except Exception as e:
-            logger.error(f"Error closing VikingDB manager: {e}")
-
     @property
     def is_closing(self) -> bool:
         """Whether the manager is in shutdown flow."""

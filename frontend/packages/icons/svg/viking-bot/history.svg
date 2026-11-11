@@ -1,0 +1,18 @@
+<svg
+  width="1em"
+  height="1em"
+  preserveAspectRatio="none"
+  overflow="visible"
+  viewBox="0 0 12.667 12.667"
+  fill="none"
+  xmlns="http://www.w3.org/2000/svg"
+  display="block"
+>
+  <g stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M1.0303 1.29545V3.41667H3.15152"></path>
+    <path
+      d="M0.5 6.33333C0.5 9.555 3.11167 12.1667 6.33333 12.1667V12.1667C9.555 12.1667 12.1667 9.555 12.1667 6.33333C12.1667 3.11167 9.555 0.5 6.33333 0.5C4.17441 0.5 2.28942 1.67282 1.28072 3.4161"
+    ></path>
+    <path d="M6.3348 2.83333L6.33444 6.33591L8.8076 8.80907"></path>
+  </g>
+</svg>

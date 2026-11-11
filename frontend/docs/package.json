@@ -9,7 +9,7 @@
     "preview": "rspress preview --host 0.0.0.0"
   },
   "dependencies": {
-    "@openviking/react": "0.1.1",
+    "@openviking/react": "0.1.7",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
@@ -17,5 +17,24 @@
     "@rspress/core": "~2.1.0",
     "@rspress/plugin-preview": "~2.1.0",
     "rsbuild-plugin-workspace-dev": "^1.0.0"
+  },
+  "imports": {
+    "#console-conversation": "./docs/_demos/use-console-conversation.tsx",
+    "#console-transport": "./docs/_demos/console-transport.ts",
+    "#scope-switcher-source": "./docs/_demos/scope-switcher-source.ts",
+    "#scope-switcher-requests": "./docs/_demos/scope-switcher-requests.ts",
+    "#tui-records": "./docs/_demos/tui-records.tsx",
+    "#tui-commands": "./docs/_demos/tui-commands/index.ts",
+    "#tui-demo-result": "./docs/_demos/tui-demo-result.ts",
+    "#file-preview-console-data": "./docs/_demos/file-preview-console-data.ts",
+    "#directory-tour-basic.css": "./docs/_demos/directory-tour-basic.css",
+    "#directory-tour-team.css": "./docs/_demos/directory-tour-team.css",
+    "#directory-tour-team-content": "./docs/_demos/directory-tour-team-content.tsx",
+    "#dashboard-demo-data": "./docs/_demos/dashboard-demo-data.ts",
+    "#file-browser-acl-data": "./docs/_demos/file-browser-acl-data.ts",
+    "#file-tree-basic-data": "./docs/_demos/file-tree-basic-data.ts",
+    "#file-tree-basic-icons": "./docs/_demos/file-tree-basic-icons.tsx",
+    "#demo-controls": "./internal-controls.ts",
+    "#file-browser-basic-data": "./docs/_demos/file-browser-basic-data.ts"
   }
 }

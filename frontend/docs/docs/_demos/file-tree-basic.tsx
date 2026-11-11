@@ -1,139 +1,151 @@
 import { useState } from 'react';
+import { useLang } from '@rspress/core/runtime';
 import { FileTree } from '@openviking/react/components/file-tree';
-import type {
-  FileTreeEntryRow,
-  FileTreeRow,
-} from '@openviking/react/components/file-tree';
 import '@openviking/react/components/file-tree/style.css';
-
-/** Directories and the rows revealed when they are expanded. */
-const childrenOf: Record<string, FileTreeRow[]> = {
-  resources: [
-    {
-      kind: 'entry',
-      id: 'resources/guide.md',
-      uri: 'viking://resources/guide.md',
-      name: 'guide.md',
-      type: 'file',
-      depth: 1,
-      levelLabel: 'L1',
-    },
-    {
-      kind: 'entry',
-      id: 'resources/spec.pdf',
-      uri: 'viking://resources/spec.pdf',
-      name: 'spec.pdf',
-      type: 'file',
-      depth: 1,
-    },
-    {
-      kind: 'load-more',
-      id: 'load-more:resources',
-      parentId: 'resources',
-      depth: 1,
-    },
-  ],
-  memories: [
-    {
-      kind: 'entry',
-      id: 'memories/profile.md',
-      uri: 'viking://memories/profile.md',
-      name: 'profile.md',
-      type: 'file',
-      depth: 1,
-    },
-  ],
-  skills: [{ kind: 'empty', id: 'empty:skills', parentId: 'skills', depth: 1 }],
-};
-
-const topLevel: FileTreeRow[] = [
-  {
-    kind: 'entry',
-    id: 'resources',
-    uri: 'viking://resources',
-    name: 'resources',
-    type: 'directory',
-    depth: 0,
-    hasChildren: true,
-    description: 'Imported documents',
-  },
-  {
-    kind: 'entry',
-    id: 'memories',
-    uri: 'viking://memories',
-    name: 'memories',
-    type: 'directory',
-    depth: 0,
-    hasChildren: true,
-  },
-  {
-    kind: 'entry',
-    id: 'skills',
-    uri: 'viking://skills',
-    name: 'skills',
-    type: 'directory',
-    depth: 0,
-  },
-];
-
-/** Flattens the open directories into the ordered row list the tree expects. */
-function buildRows(expanded: ReadonlySet<string>): FileTreeRow[] {
-  const rows: FileTreeRow[] = [];
-  for (const row of topLevel) {
-    if (row.kind !== 'entry') {
-      rows.push(row);
-      continue;
-    }
-    const isOpen = expanded.has(row.id);
-    rows.push({ ...row, expanded: isOpen });
-    if (isOpen) rows.push(...(childrenOf[row.id] ?? []));
-  }
-  return rows;
-}
+import {
+  USER,
+  MEMORIES,
+  PAGE,
+  TREE,
+  COPY,
+  INDICATORS,
+  childrenOf,
+  flatten,
+  type Node,
+} from '#file-tree-basic-data';
+import { FileTypeIcon, Indicator } from '#file-tree-basic-icons';
 
 export default function FileTreeBasic() {
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(
-    new Set(['resources']),
+  const lang = useLang() === 'zh' ? 'zh-CN' : 'en-US';
+  const t = COPY[lang];
+  const [failRefresh, setFailRefresh] = useState(false);
+  const [externalLoading, setExternalLoading] = useState(false);
+  const [notice, setNotice] =
+    useState<
+      keyof Pick<
+        typeof t,
+        'idle' | 'searched' | 'refreshing' | 'refreshed' | 'failed'
+      >
+    >('idle');
+  // Directories expanded on first paint already carry their first page, so the
+  // initial view shows content instead of an empty or loading row.
+  const [open, setOpen] = useState<ReadonlySet<string>>(
+    new Set([USER, MEMORIES]),
   );
-  const [selectedId, setSelectedId] = useState<string | null>(
-    'resources/guide.md',
-  );
+  const [loaded, setLoaded] = useState<Record<string, Node[]>>(() => ({
+    [USER]: childrenOf(USER).slice(0, PAGE),
+    [MEMORIES]: childrenOf(MEMORIES).slice(0, PAGE),
+  }));
+  const [loading, setLoading] = useState<ReadonlySet<string>>(new Set());
+  // 默认选中一行，进页面就能看到选中态，不必先点一下。
+  const [selected, setSelected] = useState<string>(`${MEMORIES}/profile.md`);
 
-  const handleToggle = (row: FileTreeEntryRow) => {
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(row.id)) next.delete(row.id);
-      else next.add(row.id);
-      return next;
-    });
+  /** Fetches one more page of children, showing the loading row meanwhile. */
+  const loadPage = (uri: string) => {
+    if (loading.has(uri)) return;
+    setLoading((p) => new Set(p).add(uri));
+    window.setTimeout(() => {
+      setLoaded((p) => ({
+        ...p,
+        [uri]: childrenOf(uri).slice(0, (p[uri]?.length ?? 0) + PAGE),
+      }));
+      setLoading((p) => {
+        const next = new Set(p);
+        next.delete(uri);
+        return next;
+      });
+    }, 400);
   };
 
+  /** Opening fetches the first page; collapsing only hides rows. */
+  const toggle = (node: Node) => {
+    const next = new Set(open);
+    if (!next.delete(node.uri)) {
+      next.add(node.uri);
+      if (!loaded[node.uri] && childrenOf(node.uri).length) loadPage(node.uri);
+    }
+    setOpen(next);
+  };
+
+  const rows = flatten(TREE, 0, { open, loaded, loading });
+
   return (
-    <div style={{ height: 280 }}>
-      <FileTree
-        rows={buildRows(expanded)}
-        selectedId={selectedId}
-        slots={{
-          toolbar: (
-            <div style={{ color: '#8f959e', fontSize: 12 }}>
-              Toolbar is a slot — search, import and refresh live here.
-            </div>
-          ),
+    <div>
+      <div
+        style={{
+          display: 'flex',
+          gap: 16,
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          marginBottom: 12,
         }}
-        renderDashboard={(row) =>
-          row.id === 'resources' ? <span title="Has a dashboard">◧</span> : null
-        }
-        operations={{
-          select: (row) => {
-            setSelectedId(row.id);
-            return Promise.resolve();
-          },
-          toggleExpand: (row) => {
-            handleToggle(row);
-            return Promise.resolve();
-          },
-        }}
-      />
+      >
+        <label>
+          {t.caseLabel}{' '}
+          <select
+            value={failRefresh ? 'failure' : 'success'}
+            onChange={(event) =>
+              setFailRefresh(event.target.value === 'failure')
+            }
+          >
+            <option value="success">{t.successCase}</option>
+            <option value="failure">{t.failureCase}</option>
+          </select>
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={externalLoading}
+            onChange={(event) => setExternalLoading(event.target.checked)}
+            style={{ display: 'inline-block', appearance: 'auto' }}
+          />{' '}
+          {t.externalLoading}
+        </label>
+      </div>
+      <div style={{ height: 420 }}>
+        <FileTree
+          locale={lang}
+          rows={rows}
+          selectedId={selected}
+          loading={externalLoading}
+          onSearch={() => setNotice('searched')}
+          onRefresh={() => setNotice('refreshed')}
+          aria-label={t.treeLabel}
+          operations={{
+            search: async () => {},
+            refresh: async () => {
+              setNotice('refreshing');
+              await new Promise((resolve) => window.setTimeout(resolve, 800));
+              if (failRefresh) {
+                setNotice('failed');
+                throw new Error('Demo refresh failure');
+              }
+            },
+            select: (row) => {
+              setSelected(row.uri);
+              // 与宿主一致：点击行只展开，收起靠箭头。
+              if (row.type === 'directory' && !open.has(row.uri)) toggle(row);
+              return Promise.resolve();
+            },
+            toggleExpand: (row) => {
+              toggle(row);
+              return Promise.resolve();
+            },
+            loadMore: (row) => {
+              if (row.parentId) loadPage(row.parentId);
+              return Promise.resolve();
+            },
+          }}
+          renderRowIcon={(row) => <FileTypeIcon name={row.name} />}
+          renderDashboard={(row) => {
+            const indicator = INDICATORS[row.uri];
+            return indicator ? (
+              <Indicator indicator={indicator} text={t} />
+            ) : null;
+          }}
+        />
+      </div>
+      <p role={notice === 'failed' ? 'alert' : 'status'}>{t[notice]}</p>
     </div>
   );
 }

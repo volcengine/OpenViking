@@ -271,6 +271,7 @@ class StreamingMemoryUpdater:
                         request.ctx,
                         viking_fs,
                         lease_ref=lease,
+                        errors=result.apply_result.errors,
                     )
                     for uri in dict.fromkeys(updated_uris):
                         result.apply_result.add_edited(uri)
@@ -411,6 +412,21 @@ class StreamingMemoryUpdater:
         return result
 
     async def _process_batch(
+        self,
+        group_key: MemoryMergeGroupKey,
+        requests: list[MemoryUpdateRequest],
+        reason: str,
+    ) -> StreamingMemoryUpdateResult:
+        from openviking.observability.reporting.facts import bind_memory_batch
+
+        # The shared timer can retain a previous commit's root. Only this
+        # batch's persisted request metadata is evidence of Task ownership.
+        with bind_memory_batch(
+            requests[0].ctx, [request.metadata.get("task_id") for request in requests]
+        ):
+            return await self._process_group_batch(group_key, requests, reason)
+
+    async def _process_group_batch(
         self,
         group_key: MemoryMergeGroupKey,
         requests: list[MemoryUpdateRequest],
@@ -585,21 +601,29 @@ class StreamingMemoryUpdater:
             )
             if not _requests_span_sessions(kind_requests):
                 return operations
-            return await merge_memory_operations(
-                operations=operations,
-                messages=_combined_request_messages(kind_requests),
-                ctx=kind_requests[0].ctx,
-                registry=kind_requests[0].memory_registry
-                or self.registry
-                or get_default_registry(),
-                strict_extract_errors=any(
-                    request.strict_extract_errors for request in kind_requests
-                ),
-                trace_console=self.config.trace_console,
-                force_merge=True,
-                vlm_resolver=self.vlm_resolver,
-                output_language_override=output_language_override,
-            )
+            from openviking.observability.reporting.facts import bind_memory_batch
+
+            # Add/update/delete groups can have different submitters. A shared
+            # model call belongs only to the requests participating in this group.
+            with bind_memory_batch(
+                kind_requests[0].ctx,
+                [request.metadata.get("task_id") for request in kind_requests],
+            ):
+                return await merge_memory_operations(
+                    operations=operations,
+                    messages=_combined_request_messages(kind_requests),
+                    ctx=kind_requests[0].ctx,
+                    registry=kind_requests[0].memory_registry
+                    or self.registry
+                    or get_default_registry(),
+                    strict_extract_errors=any(
+                        request.strict_extract_errors for request in kind_requests
+                    ),
+                    trace_console=self.config.trace_console,
+                    force_merge=True,
+                    vlm_resolver=self.vlm_resolver,
+                    output_language_override=output_language_override,
+                )
 
         kind_batches = [
             (kind, kind_requests)
@@ -1328,11 +1352,9 @@ def _inherit_source_metadata_to_merged_operations(
 ) -> None:
     """Best-effort provenance restore after patch-merge LLM output.
 
-    Patch merge hides system provenance fields from the model, so generated
-    operations can lose source_extraction_id. Reattach it by exact URI match
-    where possible. If a merged output has no URI match but only one input
-    source exists, copy that source; otherwise record all input source IDs as an
-    ambiguous multi-source operation.
+    Patch merge hides system provenance from the model. Restore the complete
+    trusted source by extraction/URI match, including task_id. An ambiguous
+    output retains all source IDs without choosing a single Task owner.
     """
 
     input_by_uri: dict[str, list[ResolvedOperation]] = {}
@@ -1344,37 +1366,57 @@ def _inherit_source_metadata_to_merged_operations(
             if uri:
                 input_by_uri.setdefault(uri, []).append(input_op)
 
-    if not all_source_ids:
+    if not all_source_ids and not any(op.source is not None for op in input_operations):
         return
 
     for merged_op in merged_operations or []:
-        if _operation_source_extraction_ids(merged_op):
-            continue
+        existing_ids = _operation_source_extraction_ids(merged_op)
         matched_inputs: list[ResolvedOperation] = []
-        for uri in list(getattr(merged_op, "uris", []) or []):
-            matched_inputs.extend(input_by_uri.get(uri, []))
+        if existing_ids:
+            matched_inputs = [
+                op for op in input_operations if _operation_source_extraction_ids(op) & existing_ids
+            ]
+        else:
+            for uri in list(getattr(merged_op, "uris", []) or []):
+                matched_inputs.extend(input_by_uri.get(uri, []))
+        candidates = matched_inputs or input_operations
         matched_ids = {
             source_id
-            for input_op in matched_inputs
+            for input_op in candidates
             for source_id in _operation_source_extraction_ids(input_op)
         }
-        if len(matched_ids) == 1:
-            _set_operation_source_extraction_id(merged_op, next(iter(matched_ids)))
-        elif len(matched_ids) > 1:
-            merged_op.memory_fields["source_extraction_ids"] = sorted(matched_ids)
-        elif len(all_source_ids) == 1:
-            _set_operation_source_extraction_id(merged_op, next(iter(all_source_ids)))
+        # Restore the trusted runtime source, including task_id. Rebuilding only
+        # extraction_id loses Task provenance after the LLM merge. The model's
+        # output is never authoritative for Task ownership.
+        sources = [op.source for op in candidates if op.source is not None]
+        task_ids = sorted(
+            {
+                task_id
+                for source in sources
+                for task_id in ([source.task_id] if source.task_id else source.task_ids)
+                if task_id
+            }
+        )
+        if len(matched_ids) == 1 and sources:
+            merged_op.source = sources[0].model_copy(deep=True)
         else:
-            merged_op.memory_fields["source_extraction_ids"] = sorted(all_source_ids)
-
-
-def _set_operation_source_extraction_id(op: ResolvedOperation, extraction_id: str) -> None:
-    op.memory_fields["source_extraction_id"] = extraction_id
-    source = getattr(op, "source", None)
-    if source is None:
-        op.source = MemoryOperationSource(extraction_id=extraction_id)
-    elif not getattr(source, "extraction_id", None):
-        source.extraction_id = extraction_id
+            merged_op.source = MemoryOperationSource()
+        if len(matched_ids) == 1:
+            extraction_id = next(iter(matched_ids))
+            merged_op.memory_fields["source_extraction_id"] = extraction_id
+            merged_op.memory_fields.pop("source_extraction_ids", None)
+            merged_op.source.extraction_id = extraction_id
+        elif matched_ids:
+            merged_op.memory_fields.pop("source_extraction_id", None)
+            merged_op.memory_fields["source_extraction_ids"] = sorted(matched_ids)
+        merged_op.source.task_id = (
+            task_ids[0]
+            if len(task_ids) == 1
+            and len(sources) == len(candidates)
+            and all(source.task_id for source in sources)
+            else None
+        )
+        merged_op.source.task_ids = task_ids
 
 
 def enforce_merge_group_peer_id(
@@ -2201,13 +2243,15 @@ def _exclude_tree_covered_paths(exact_paths: set[str], tree_paths: set[str]) -> 
     }
 
 
-async def _persisted_replacement_relation_uris(
+async def _persisted_delete_relation_uris(
     operations: ResolvedOperations,
     viking_fs: Any,
     ctx: RequestContext,
 ) -> set[str]:
     uris: set[str] = set()
-    for deleted_uri in dict(operations.delete_replacements or {}):
+    deleted_uris = {file.uri for file in operations.delete_file_contents if file.uri}
+    deleted_uris.update(operations.delete_replacements or {})
+    for deleted_uri in sorted(deleted_uris):
         try:
             content = await viking_fs.read_file(deleted_uri, ctx=ctx)
         except (FileNotFoundError, NotFoundError):
@@ -2258,7 +2302,7 @@ async def acquire_memory_operation_lease(
                 timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
             )
         try:
-            relation_uris = await _persisted_replacement_relation_uris(
+            relation_uris = await _persisted_delete_relation_uris(
                 operations,
                 viking_fs,
                 ctx,

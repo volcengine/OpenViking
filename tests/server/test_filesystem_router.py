@@ -17,7 +17,7 @@ from openviking.core.namespace_policy import (
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import filesystem
-from openviking.service.fs_service import ListingPage
+from openviking.service.fs_service import FSService, ListingPage
 from openviking.storage.queuefs.queue_manager import get_queue_manager
 from openviking.system_assets import builtin_memory_templates_dir
 from openviking_cli.exceptions import InvalidURIError
@@ -412,7 +412,7 @@ async def test_http_stat_by_record_id_returns_resolved_uri(monkeypatch):
     resolved_uri = "viking://user/alice/resources/notes.md"
     seen = {}
 
-    async def fake_stat(uri, ctx=None, include_lock_status=False):
+    async def fake_stat(uri, ctx=None, include_lock_status=False, skip_count=False):
         seen.update(uri=uri, ctx=ctx, include_lock_status=include_lock_status)
         return {
             "uri": resolved_uri,
@@ -425,10 +425,14 @@ async def test_http_stat_by_record_id_returns_resolved_uri(monkeypatch):
             "id": record_id,
         }
 
+    viking_fs = SimpleNamespace(
+        resolve_uri=AsyncMock(return_value=resolved_uri),
+        stat=fake_stat,
+    )
     monkeypatch.setattr(
         filesystem,
         "get_service",
-        lambda: SimpleNamespace(fs=SimpleNamespace(stat=fake_stat)),
+        lambda: SimpleNamespace(fs=FSService(viking_fs=viking_fs)),
     )
 
     app = FastAPI()
@@ -442,7 +446,8 @@ async def test_http_stat_by_record_id_returns_resolved_uri(monkeypatch):
 
     assert response.status_code == 200, response.text
     assert response.json()["result"]["uri"] == resolved_uri
-    assert seen["uri"] == record_id
+    assert seen["uri"] == resolved_uri
+    viking_fs.resolve_uri.assert_awaited_once_with(record_id, ctx=seen["ctx"])
     assert seen["include_lock_status"] is True
 
 

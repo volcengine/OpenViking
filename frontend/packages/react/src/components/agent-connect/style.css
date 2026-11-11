@@ -1,1 +1,3 @@
-@import './agent-connect.module.css';
+@import '../../shared/components/button/button.css';
+@import '../../theme.css';
+@import './agent-connect.css';

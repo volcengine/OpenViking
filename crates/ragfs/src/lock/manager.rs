@@ -24,9 +24,9 @@ use super::provider::{
 };
 use super::resolver::{LockPathResolver, ResolvedExactPaths};
 use super::types::{
-    BorrowedPathLockLease, HandoffRecoveryReason, LockHolder, LockToken, OwnedPathLockLease,
-    PathLockConflict, PathLockError, PathLockHandoffRef, PathLockKind, PathLockLease,
-    PathLockObserveSnapshot, PathLockRequest, PathLockResult,
+    BorrowedPathLockLease, HandoffRecoveryReason, LockToken, OwnedPathLockLease, PathLockConflict,
+    PathLockError, PathLockHandoffRef, PathLockKind, PathLockLease, PathLockObserveSnapshot,
+    PathLockRequest, PathLockResult,
 };
 
 /// Configuration for the PathLockManager.
@@ -1251,17 +1251,20 @@ impl PathLockManager {
                 (AcquisitionChange::Upgraded { previous, .. }, Some(source))
                     if previous.owner_id == owner =>
                 {
-                    previous
-                        .holders
-                        .iter()
-                        .find(|h| h.id == source)
-                        .cloned()
+                    previous.holders.iter().find(|h| h.id == source).cloned()
                 }
                 _ => None,
             };
             let result = match restored {
                 Some(restored) => {
-                    self.replace_holder(&item.handle, owner, holder, restored)
+                    self.provider
+                        .replace_holder(
+                            &item.handle,
+                            owner,
+                            holder,
+                            restored,
+                            Self::now_ns().saturating_sub(self.lock_expire_ns()),
+                        )
                         .await
                 }
                 None => self
@@ -1275,48 +1278,6 @@ impl PathLockManager {
             }
         }
         first_error.map_or(Ok(()), Err)
-    }
-
-    /// Swap `holder` back to `restored` unless the source has since expired.
-    async fn replace_holder(
-        &self,
-        path: &str,
-        owner: &str,
-        holder: &str,
-        restored: LockHolder,
-    ) -> PathLockResult<()> {
-        for _ in 0..HOLDER_CAS_ATTEMPTS {
-            let Some(current) = self.provider.read_token(path).await? else {
-                return Ok(());
-            };
-            if current.owner_id != owner || !current.holders.iter().any(|h| h.id == holder) {
-                return Ok(());
-            }
-            let stale_before = Self::now_ns().saturating_sub(self.lock_expire_ns());
-            let mut next = current.clone();
-            next.holders
-                .retain(|h| h.id != holder && h.id != restored.id && h.time_ns >= stale_before);
-            if restored.time_ns >= stale_before {
-                next.holders.push(restored.clone());
-            }
-            next.recompute();
-            let changed = if next.holders.is_empty() {
-                self.provider
-                    .compare_and_remove_token(path, &current)
-                    .await?
-            } else {
-                self.provider
-                    .compare_and_write_token(path, &current, &next)
-                    .await?
-            };
-            if changed {
-                return Ok(());
-            }
-        }
-        Err(PathLockError::Busy {
-            lock_path: path.into(),
-            operation: "holder rollback".into(),
-        })
     }
 
     /// Add one holder with CAS. Lost races re-read the token, so a concurrent

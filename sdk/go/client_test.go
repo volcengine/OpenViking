@@ -647,6 +647,43 @@ func TestAdminEmptySeedPayloadsAreSent(t *testing.T) {
 	}
 }
 
+func TestAdminGroupMembersUseBatchEndpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		method string
+		result map[string]any
+		call   func(*Client, context.Context, string, string, string) (map[string]any, error)
+	}{
+		{"add", http.MethodPut, map[string]any{"added": true}, (*Client).AdminAddGroupMember},
+		{"remove", http.MethodDelete, map[string]any{"removed": true}, (*Client).AdminRemoveGroupMember},
+		{"remove non-member", http.MethodDelete, map[string]any{"removed": false}, (*Client).AdminRemoveGroupMember},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != tc.method || r.URL.Path != "/api/v1/admin/accounts/acct/groups/engineering/members" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+				if got := r.Header.Get("Content-Type"); got != "application/json" {
+					t.Errorf("Content-Type = %q", got)
+				}
+				if body := readJSONBody(t, r); !reflect.DeepEqual(body, map[string]any{"user_ids": []any{"alice"}}) {
+					t.Errorf("body = %#v", body)
+				}
+				writeOK(t, w, tc.result)
+			}))
+			defer closeServer()
+
+			result, err := tc.call(client, context.Background(), "acct", "engineering", "alice")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(result, tc.result) {
+				t.Fatalf("result = %#v, want %#v", result, tc.result)
+			}
+		})
+	}
+}
+
 func TestAdminGetAccount(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -1666,6 +1703,67 @@ func TestSkillManagementRequests(t *testing.T) {
 	}
 	if _, err := client.DeleteSkill(context.Background(), "demo"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSkillInputsPreserveInlineDataAndLocalUploads(t *testing.T) {
+	content := "---\nname: demo\ndescription: Inline skill\n---\n" + strings.Repeat("Instructions.\n", 400)
+	skillDir := t.TempDir()
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillFile, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{http.MethodPost, http.MethodPut} {
+		for kind, source := range map[string]string{"inline": content, "file": skillFile, "directory": skillDir} {
+			t.Run(method+"/"+kind, func(t *testing.T) {
+				requests := 0
+				client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					requests++
+					if r.URL.Path == "/api/v1/resources/temp_upload" {
+						writeOK(t, w, map[string]any{"temp_file_id": "skill-upload"})
+						return
+					}
+					path := "/api/v1/skills"
+					if method == http.MethodPut {
+						path += "/demo"
+					}
+					if r.Method != method || r.URL.Path != path {
+						t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+					}
+					body := readJSONBody(t, r)
+					if kind == "inline" {
+						if body["data"] != content {
+							t.Fatal("inline skill content changed")
+						}
+						requireBodyKeysAbsent(t, body, "temp_file_id")
+					} else {
+						if body["temp_file_id"] != "skill-upload" {
+							t.Fatalf("missing upload ID: %#v", body)
+						}
+						requireBodyKeysAbsent(t, body, "data")
+					}
+					writeOK(t, w, map[string]any{"name": "demo"})
+				}))
+				defer closeServer()
+				var result map[string]any
+				var err error
+				if method == http.MethodPost {
+					result, err = client.AddSkill(context.Background(), source, nil)
+				} else {
+					result, err = client.UpdateSkill(context.Background(), "demo", source, nil)
+				}
+				if err != nil || result["name"] != "demo" {
+					t.Fatalf("result = %#v, error = %v", result, err)
+				}
+				wantRequests := 2
+				if kind == "inline" {
+					wantRequests = 1
+				}
+				if requests != wantRequests {
+					t.Fatalf("requests = %d, want %d", requests, wantRequests)
+				}
+			})
+		}
 	}
 }
 

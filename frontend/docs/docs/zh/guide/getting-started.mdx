@@ -1,8 +1,10 @@
 # 快速开始
 
+公开 UI 组件、组合模块 均支持可选的 `locale: 'zh-CN' | 'en-US'`。Props 覆盖最近的模块或 Provider，均未配置时默认 `en-US`。已有 `labels` 保留逐项覆盖能力，业务内容、插槽和回调文案仍由宿主提供。
+
 OpenViking UI 是构建 OpenViking AI 应用界面的 React 基础。OpenViking 是面向 AI 智能体的上下文数据库；本 workspace 提供 Rslib 构建、双语文档、分层目录约定与样式隔离方案。应用负责业务界面、数据、认证与流程编排。
 
-包提供 FileTree、FilePreview、Tui、ScopeSwitcher、AgentConnect 五个占位视图组件、五种文件类型图标，以及四个业务模块占位组件。当前范围见[组件概览](../components/)和[模块概览](../modules/)；业务 Hook 尚未实现。
+包提供 FileTree、FilePreview、Tui、ScopeSwitcher、AgentConnect 五个视图组件、五种文件类型图标，以及两个业务模块占位组件。FileTree、FilePreview 与 Tui 已按契约实现，ScopeSwitcher 为无状态布局，AgentConnect 仍为固定尺寸占位。当前范围见[组件概览](../components/)和[模块概览](../modules/)；业务 Hook 尚未实现。
 
 ## 本地运行
 
@@ -14,14 +16,14 @@ npm ci
 npm run dev
 ```
 
-打开 Rspress 输出的 `/ui/` 地址。英文使用 `/ui/`，简体中文使用 `/ui/zh/`；顶部语言菜单支持在对应页面间切换。
+打开 Rspress 输出的 `/ui/` 地址。简体中文使用 `/ui/`，英文使用 `/ui/en/`；顶部语言菜单支持在对应页面间切换。
 
 workspace 开发插件会在文档服务器启动前运行 Rslib watch。文档示例通过公开导出使用构建产物，不使用源码别名。React 和 ReactDOM 为 peer dependencies，声明支持 React 18.2 和 React 19；文档应用使用 React 19。
 
 ## 组织应用代码
 
 - `packages/react/src/components/`：可复用视图，通过 props 接收处理后的数据，通过回调表达用户意图。
-- `packages/react/src/modules/`：四个可导入的占位组件，业务 Hook 与组合交互后续迁入。
+- `packages/react/src/modules/`：两个可导入的占位组件，业务 Hook 与组合交互后续迁入。
 - `packages/react/src/hooks/` 与 `utils/`：包内共享逻辑，没有公开子路径。
 - `docs/docs/en/` 与 `docs/docs/zh/`：对应的双语文档页面；共用的可运行示例放在 `docs/docs/_demos/`。
 
@@ -29,7 +31,7 @@ workspace 开发插件会在文档服务器启动前运行 Rslib watch。文档�
 
 ## 公开入口
 
-根入口 `@openviking/react` 当前导出 `FileTree`、`Tui`、`ScopeSwitcher`、`AgentConnect` 与四个业务模块占位组件及其主 Props 类型；`FilePreview` 只从 `components/file-preview` 子路径导出，因为它的类型依赖可选的 `@ark-design/ui`。行类型、选项类型、句柄与文案包等子类型一律从子路径导入。`@openviking/react/icons` 提供五种文件类型图标。
+根入口 `@openviking/react` 当前导出 `FileTree`、`Tui`、`ScopeSwitcher`、`AgentConnect` 与两个业务模块占位组件及其主 Props 类型；`FilePreview` 只从 `components/file-preview` 子路径导出，因为它的类型依赖可选的 `@ark-design/ui`。行类型、选项类型、句柄与文案包等子类型一律从子路径导入。`@openviking/react/icons` 提供五种文件类型图标。
 
 没有 `components` 或 `modules` 分类聚合 JavaScript 入口。业务占位组件使用独立的 `modules/<模块>` 入口：
 
@@ -37,20 +39,20 @@ workspace 开发插件会在文档服务器启动前运行 Rslib watch。文档�
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
 
-<FileBrowser />;
+<FileBrowser locale="zh-CN" />;
 ```
 
-四个模块的 props 已定型——请求配置、受控状态、回调、插槽与文案——但占位组件本体仍只消费 `className`、`style` 与一个文案字段，且均无需 Provider。可运行示例与完整属性表见[业务模块](../modules/)。
+两个模块的 props 已定型——请求配置、受控状态、回调、插槽与文案——但占位组件本体仍只消费 `className`、`style` 与一个文案字段，且均无需 Provider。可运行示例与完整属性表见[业务模块](../modules/)。
 
-业务模块将按具体能力组合取数 Hook 与视图，从对应模块入口分别导出 Hook 和组合视图，接入方可只复用 Hook 并自行组装 UI。认证、账号作用域、路由、权限及完整页面流程由宿主负责。业务 Hook 及跨模块公共 Hook 当前尚无实现或导出。
+业务模块将按具体能力组合取数 Hook 与视图，从对应模块入口导出组件和必要类型，Hook 为内部实现。认证、账号作用域、路由、权限及完整页面流程由宿主负责。当前不提供业务无头 Hook 公开入口。
 
-模块规划聚焦个人终端：`file-browser` 将目录、搜索和预览作为一个整体，统一维护资源选择、结果定位、内容加载与刷新联动；宿主可按需受控指定当前资源。`console` 将对话视图与 TUI 作为一个交互面板，内部协调模式切换、工具栏和公共上下文，各自保留会话与命令状态。Agent 接入、任务管理和当前 User 的用量统计分别接入。宿主负责模块间布局、导航与联动；产品引导、资源与 Skill 导入流程及同步配置由宿主负责，经验看板和会话内容通过文件浏览模块的预览扩展接入，管理后台不在此范围内。这些交互仍为规划，当前模块组件仅展示占位内容。
+模块规划聚焦个人终端：`file-browser` 将目录、搜索和预览作为一个整体，统一维护资源选择、结果定位、内容加载与刷新联动；宿主可按需受控指定当前资源。`console` 将对话视图与 TUI 作为一个交互面板，内部协调模式切换、工具栏和公共上下文，各自保留会话与命令状态。Agent 接入作为独立能力接入。宿主负责模块间布局、导航与联动；产品引导、资源与 Skill 导入流程及同步配置由宿主负责，经验看板和会话内容通过文件浏览模块的预览扩展接入，管理后台不在此范围内。这些交互仍为规划，当前模块组件仅展示占位内容。
 
-请求配置通过 `@openviking/react/client` 的 `OpenVikingProvider` 下发：`baseURL` 与身份字段（`apiKey`、`accountId`、`userId`、`resourceId`），请求头由 Client 组装。请求客户端已作为 `@openviking/react/client` 子路径落地：基于 `fetch` 的 `createOvClient`，以及 `OvRequestOptions`、`OvClient` 与 `OvClientError`。模块和独立 Hook 可通过 `requestOptions` 按字段覆盖，优先级为局部配置、最近的 Provider、库默认值；`baseURL` 为空表示同源请求。标准 API 接入无需逐模块实现 Adapter，非标准网关集中在宿主请求接入层适配。Provider 已实现并导出；模块 Hook 尚未实现。
+请求配置通过 `@openviking/react/client` 的 `OpenVikingProvider` 下发：`baseURL` 与身份字段（`apiKey`、`accountId`、`userId`、`resourceId`），请求头由 Client 组装。请求客户端已作为 `@openviking/react/client` 子路径落地：基于 `fetch` 的 `createOvClient`，以及 `OvRequestOptions`、`OvClient` 与 `OvClientError`。模块可通过 `requestOptions` 按字段覆盖，优先级为局部配置、最近的 Provider、库默认值；`baseURL` 为空表示同源请求。标准 API 接入无需逐模块实现 Adapter，非标准网关集中在宿主请求接入层适配。取数与状态 Hook 均内置，不提供无头公开接口。
 
 ## 样式
 
-样式通过 CSS Modules 隔离，变量使用 `--ov-ui-` 前缀，不引入全局 reset。JavaScript 导入不会自动加载 CSS；按需选择整包、分类集合或独立样式：
+样式使用 `ov-` 前缀的稳定类名，变量使用 `--ov-ui-` 前缀，不引入全局 reset。JavaScript 导入不会自动加载 CSS；按需选择整包、分类集合或独立样式：
 
 ```ts
 import '@openviking/react/style.css';
@@ -59,7 +61,34 @@ import '@openviking/react/style.css';
 // 独立入口：@openviking/react/<分类>/<模块>/style.css。
 ```
 
-Rslib 将 ESM JavaScript、TypeScript 声明和 CSS 输出到 `packages/react/dist/`。每个公开样式入口可独立使用；模块样式当前覆盖占位视图，组合视图迁入后须包含其组件依赖。后续单独使用 Hook 无需 CSS。
+Rslib 将 ESM JavaScript、TypeScript 声明和 CSS 输出到 `packages/react/dist/`。每个公开样式入口可独立使用；模块样式当前覆盖占位视图，组合视图迁入后须包含其组件依赖。
+
+### 主题
+
+颜色来自包级主题基线 `--ov-ui-color-*`（定义在 `packages/react/src/theme.css`），取值对齐 OpenViking 控制台的设计规范。所有组件私有变量都从基线派生，因此改基线即可整体换肤：
+
+```css
+.my-workbench {
+  --ov-ui-color-primary: #5252ff;
+  --ov-ui-color-bg-5: #f1f2f9;
+  --ov-ui-color-border-2: #e1e4f2;
+}
+```
+
+暗色只认宿主放在 `<html>` 上的 `.dark` 类，不读 `prefers-color-scheme`——系统偏好可能与宿主实际呈现的主题不一致。基线自带一套暗色取值，宿主切换 `.dark` 即可生效；需要精确配色时整组覆盖。
+
+只想调整单个组件时，覆盖它的 `--ov-ui-<组件>-*` 变量，或直接指定类名：
+
+```css
+.my-workbench {
+  --ov-ui-radius: 4px;
+}
+
+.my-workbench .ov-file-tree {
+  --ov-ui-file-tree-row-height: 28px;
+  width: 320px;
+}
+```
 
 ## 构建与检查
 
@@ -80,3 +109,19 @@ npm run preview
 ## 部署
 
 `frontend/` 下的变更触发 UI 检查。在 `main` 上，现有产品文档部署会将 UI 站点合并到同一完整产物或存储桶的 `/ui/` 路径。npm 发布使用独立的标签触发流程，本地构建与测试不会发布包。
+
+## 内置文案与语言切换
+
+组件和模块采用本地的类型化中英文语言包，共用轻量解析规则。译文在各自目录就近维护，不依赖宿主的 i18next 或翻译平台。已有 `labels` 的未定义项继承当前语言；空字符串保留为显式覆盖。
+
+独立使用 `useConsole`、`useFileBrowser` 时可传入 `locale`；省略时继承最近的 Provider，否则默认 `en-US`。切换语言会更新库生成的提示、命令帮助和摘要标题，不重新发起请求，也不清空会话或草稿；服务端正文、错误原文和 AI 回复保持原值。
+
+### 语言继承
+
+在 `OpenVikingProvider` 上统一设置 `locale`，组件、组合模块 均可省略该属性。模块 Props 覆盖 Provider，作用于模块内置视图和宿主插槽；组件显式 Props 再覆盖模块。嵌套 Provider 省略时继承外层，显式指定时覆盖。全链路均未配置时默认 `en-US`，`labels` 仍可逐项覆盖文案。
+
+示例使用固定离线服务。切换三个选择框，再提交 `ov read`，可对比错误提示的语言。语言变化保留请求、记录、草稿和服务端原文。
+
+```tsx file="../../_demos/locale-inheritance.tsx" preview
+
+```

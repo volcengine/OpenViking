@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { stateDir } from "./shared/workspace-identity.mjs";
+import { createRecallCompressor } from "./compressor.mjs";
 import { isCaptureEnabled } from "./shared/capture-utils.mjs";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
@@ -128,16 +132,28 @@ export class OpenVikingRuntime {
     return pluginMessage(state.profileBlock, { form: "instructions" });
   }
 
-  async recallMessage(agent, messages) {
+  async recallMessage(agent, messages, signal) {
     const state = await this.initialize(agent);
     if (!state.ready || !isRecallEnabled(state.config)) return null;
     const query = promptText(messages);
     if (!query || query.length < state.config.minQueryLength) return null;
+    if (signal?.aborted) return null;
+    const runCompressor = ["client", "auto"].includes(state.config.recallRewrite)
+      ? createRecallCompressor(agent, state.config, signal) : null;
+    const cacheId = createHash("sha256").update(JSON.stringify([
+      state.config.baseUrl, state.config.account, state.config.user, state.config.apiKey,
+      state.config.peerId, state.ovSessionId, agent.options?.provider,
+      state.config.recallCompressModel || agent.options?.model,
+      state.config.recallCompressThinking,
+    ])).digest("hex");
     const block = await buildRecallBlock(
       (path, init, options) => this.client.fetchJSON(path, init, options),
       state.config,
       query,
       {
+        runCompressor,
+        localCompressorAvailable: Boolean(runCompressor),
+        digestCachePath: join(stateDir(), `dsh-recall-${cacheId}.json`),
         actorPeerId: state.config.peerId,
         legacyPeerId: state.config.legacyPeerId,
         sessionId: state.ovSessionId,
@@ -145,7 +161,7 @@ export class OpenVikingRuntime {
         log: (stage, data) => this.log(stage, data),
       },
     );
-    return block ? pluginMessage(block, { form: "recall" }) : null;
+    return block && !signal?.aborted ? pluginMessage(block, { form: "recall" }) : null;
   }
 
   capture(session, event) {

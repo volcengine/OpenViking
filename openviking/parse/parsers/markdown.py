@@ -213,7 +213,7 @@ class MarkdownParser(BaseParser):
         self.extract_frontmatter = extract_frontmatter
 
         # Compile regex patterns for better performance
-        self._heading_pattern = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+        self._heading_pattern = re.compile(r"^(#{1,6})[ \t]+(.+)$", re.MULTILINE)
         self._code_block_pattern = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
         self._inline_code_pattern = re.compile(r"`([^`]+)`")
         self._link_pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
@@ -656,6 +656,8 @@ class MarkdownParser(BaseParser):
 
             level = len(match.group(1))
             title = match.group(2).strip()
+            if not title:
+                continue
             headings.append((match.start(), match.end(), title, level))
 
         return headings
@@ -1202,7 +1204,7 @@ class MarkdownParser(BaseParser):
         the same depth adjustment as document links so they stay valid after the
         document moves into its ingest directory.
         """
-        from openviking.parse.image_rewrite import HTML_IMG_PATTERN
+        from openviking.parse.image_rewrite import HTML_IMG_PATTERN, _protected_ranges
 
         src_dir = os.path.dirname(os.path.abspath(rewrite_ctx.source_path))
         import_root_abs = os.path.abspath(rewrite_ctx.import_root)
@@ -1213,9 +1215,12 @@ class MarkdownParser(BaseParser):
 
         out: List[str] = []
         last = 0
+        protected = _protected_ranges(content)
         for match in _MD_LINK_RE.finditer(content):
-            out.append(content[last : match.start()])
             bang, text, link = match.group(1), match.group(2), match.group(3)
+            if not bang and any(start <= match.start() < end for start, end in protected):
+                continue
+            out.append(content[last : match.start()])
             if bang and await self._ingest_will_handle_image(link, rewrite_ctx):
                 new_link = link
             else:

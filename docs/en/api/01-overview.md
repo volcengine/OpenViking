@@ -521,11 +521,12 @@ This catalog follows the routes actually mounted by the server. Each group headi
 
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | `/api/v1/admin/metric-inventory` | Stream a ROOT-only metadata inventory for offline reporting |
 | GET | `/api/v1/admin/configuration` | Get explicit Cluster runtime configuration |
 | PATCH | `/api/v1/admin/configuration` | Update Cluster runtime configuration |
 | POST | `/api/v1/admin/configuration/test-model` | Test a draft model or embedding connection without saving it |
 | POST | `/api/v1/admin/restart` | Request a graceful restart of a supported server process (ROOT only) |
-| GET | `/api/v1/admin/accounts/{account_id}/configuration` | Get explicit Account runtime configuration |
+| GET | `/api/v1/admin/accounts/{account_id}/configuration` | Get Account settings and the effective Agent Evolution switch |
 | PATCH | `/api/v1/admin/accounts/{account_id}/configuration` | Update Account runtime configuration |
 | GET | `/api/v1/admin/agent-evolution` | Get Agent Evolution status (deprecated) |
 | PUT | `/api/v1/admin/agent-evolution` | Update Agent Evolution status (deprecated) |
@@ -543,8 +544,11 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/admin/accounts/{account_id}/users` | Register a user |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | List users |
 | GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Get one user's credential-free membership info (user_id, role) |
-| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Get a user's memory policy |
-| PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Update a user's memory policy |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Get User add locations, memory policy, and TTL |
+| PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Update User add locations, memory policy, and TTL |
+| GET | `/api/v1/user-settings/add-locations` | Get current-user add locations (deprecated) |
+| PATCH | `/api/v1/user-settings/add-locations` | Update current-user add locations (deprecated) |
+| DELETE | `/api/v1/user-settings/add-locations` | Clear current-user add-location overrides (deprecated) |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Remove a user |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Change a user's role between USER and ADMIN |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | Regenerate a user key |
