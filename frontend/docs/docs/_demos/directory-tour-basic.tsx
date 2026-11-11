@@ -1,7 +1,7 @@
 import { Button } from '#demo-controls';
 import { useCallback, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
-import { useLang, withBase } from '@rspress/core/runtime';
+import { useLang } from '@rspress/core/runtime';
 import { FileTree } from '@openviking/react/components/file-tree';
 import type {
   FileTreeHandle,
@@ -90,14 +90,6 @@ export default function DirectoryTourBasic() {
     nextLabel: zh && index === 4 ? '下一个' : undefined,
     title: zh ? TITLES[index] : step.title,
     description: zh ? DESCRIPTIONS[index] : step.description,
-    illustration: (
-      <img
-        src={withBase(`/directory-tour/step-${index + 1}.png`)}
-        alt=""
-        width={212}
-        height={70}
-      />
-    ),
   }));
   const rows: FileTreeRow[] = [entry('user', 'Alice', 0, expanded.has('user'))];
   if (expanded.has('user')) {
@@ -188,21 +180,8 @@ export default function DirectoryTourBasic() {
         onComplete={({ skippedStepIds }) => {
           close();
           setSkipped(skippedStepIds.length);
-          setComplete(skippedStepIds.length === 0);
+          setComplete(true);
         }}
-        labels={
-          zh
-            ? {
-                close: '关闭指引',
-                next: '下一步',
-                done: '知道了',
-                locating: '正在定位目录…',
-                unavailable: '目录不存在或暂时无法加载，请重试或跳过。',
-                retry: '重试',
-                skip: '跳过',
-              }
-            : undefined
-        }
       />
     </div>
   );

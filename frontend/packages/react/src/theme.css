@@ -332,3 +332,20 @@ html.dark .ov-file-browser {
   --ov-ui-dashboard-danger-light-default: var(--ov-ui-bg-5-default);
   --ov-ui-dashboard-success-default: var(--ov-ui-status-success-default);
 }
+
+/* Directory guidance: six Figma popover illustrations and floating surface. */
+.ov-directory-tour {
+  --ov-ui-tour-surface-default: #ffffff;
+  --ov-ui-tour-border-default: #c9cbd4;
+  --ov-ui-tour-muted-default: #787c91;
+  --ov-ui-tour-illustration-default: #f5f4f7;
+  --ov-ui-tour-illustration-memories-default: #f4f4f7;
+  --ov-ui-tour-illustration-shared-default: #f6f5f8;
+  --ov-ui-tour-illustration-experiences-default: #f4f4f5;
+  --ov-ui-tour-illustration-peers-default: #f7f7fd;
+}
+html.dark .ov-directory-tour {
+  --ov-ui-tour-surface-default: var(--ov-ui-bg-1-default);
+  --ov-ui-tour-border-default: var(--ov-ui-border-3-default);
+  --ov-ui-tour-muted-default: var(--ov-ui-text-3-default);
+}
