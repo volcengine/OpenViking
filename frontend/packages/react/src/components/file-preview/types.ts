@@ -505,13 +505,13 @@ export interface FilePreviewFileTabSlots extends FilePreviewHeaderSlots {
   /**
    * 格式不支持时的兜底内容。格式是否可预览由底座判定，因此这个节点会交给
    * 底座，而不是在组件这边提前判断。传了就由它接管整个不支持态（含底座原本
-   * 会给出的下载入口）；不传时使用内置提示。
+   * 会给出的下载入口）；有来源时不传则保留底座默认下载兜底。
    *
    * Fallback when the format cannot be previewed. Whether a format can be
    * previewed is the base component's call, so this node is handed to it rather
    * than decided here. Supplying it takes over the whole unsupported state,
    * including the download entry the base would otherwise offer; omit it for the
-   * built-in message.
+   * base download fallback when a source is available.
    */
   unsupportedFallback?: ReactNode;
   /**

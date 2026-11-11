@@ -66,6 +66,26 @@
   background: var(--ov-ui-file-preview-surface);
   color: inherit;
 }
+/* FileViewer's fallback uses Arco buttons; keep their styling local to the viewer. */
+.ov-file-preview__viewer .ark-agentic-file-viewer__fallback > .arco-btn {
+  min-block-size: 28px;
+  padding: 4px 12px;
+  border: 1px solid var(--ov-ui-file-preview-border);
+  border-radius: 6px;
+  background: var(--ov-ui-file-preview-surface);
+  color: var(--ov-ui-file-preview-text);
+  font: inherit;
+  cursor: pointer;
+}
+.ov-file-preview__viewer .ark-agentic-file-viewer__fallback > .arco-btn:hover {
+  background: var(--ov-ui-file-preview-row-hover);
+}
+.ov-file-preview__viewer
+  .ark-agentic-file-viewer__fallback
+  > .arco-btn:focus-visible {
+  outline: 2px solid var(--ov-ui-file-preview-focus-ring);
+  outline-offset: 2px;
+}
 .ov-file-preview .ark-agentic-file-viewer-image {
   min-height: 0;
   overflow: hidden;

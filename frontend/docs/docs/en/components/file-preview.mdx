@@ -128,6 +128,16 @@ The host supplies asynchronous `editing.save` and optional `editing.loadContent`
 
 Execution capabilities and notifications are separate. Operation resolution triggers the corresponding `on…` callback; rejection does not. Missing methods hide or disable their controls, and notifications do not perform the operations. URI handling will be wired into the future FileViewer body.
 
+## State slots and download fallback
+
+Native images and videos also honor `loadingFallback` and `errorFallback`; a missing source uses `unsupportedFallback`. An unsupported format with a source retains FileViewer's default download fallback. Customize it with `downloadFallback`, which receives the base's `onDownload`, optional `onRetry` and file information independently of toolbar `actions`.
+
+This example deliberately uses invalid media to show the error state. Choose the unsupported format to download the original example bytes.
+
+```tsx file="../../_demos/file-preview-fallbacks.tsx" preview
+
+```
+
 ## Props
 
 | Property    | Type                                                           | Default                                            | Description                                                             |

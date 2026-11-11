@@ -1,6 +1,10 @@
 import { Button } from '../../shared/components/button/button.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FilePreviewLabels, FilePreviewSource } from './types.js';
+import type {
+  FilePreviewFileTabSlots,
+  FilePreviewLabels,
+  FilePreviewSource,
+} from './types.js';
 import {
   LoadFailedState,
   LoadingState,
@@ -31,10 +35,12 @@ export function FilePreviewMedia({
   source,
   kind,
   text,
+  slots,
 }: {
   source: FilePreviewSource;
   kind: 'image' | 'video';
   text: Required<FilePreviewLabels>;
+  slots?: FilePreviewFileTabSlots;
 }) {
   const blob = useMemo(
     () =>
@@ -77,22 +83,27 @@ export function FilePreviewMedia({
   const failed = status?.owner === owner && status.failed;
   if (failed)
     return (
-      <LoadFailedState
-        text={text}
-        onRetry={() => {
-          setStatus(undefined);
-          setAttempt((value) => value + 1);
-        }}
-      />
+      slots?.errorFallback ?? (
+        <LoadFailedState
+          text={text}
+          onRetry={() => {
+            setStatus(undefined);
+            setAttempt((value) => value + 1);
+          }}
+        />
+      )
     );
-  if (!blob && !url) return <UnsupportedState text={text} />;
+  if (!blob && !url)
+    return slots?.unsupportedFallback ?? <UnsupportedState text={text} />;
   const loaded = status?.owner === owner && status.loaded;
   const fail = () => setStatus({ owner, failed: true });
   const ready = () => setStatus({ owner, loaded: true });
   return (
     <FilePreviewImageFrame>
       <div className="ov-file-preview__media" aria-busy={!loaded}>
-        {!loaded ? <LoadingState text={text} /> : null}
+        {!loaded
+          ? (slots?.loadingFallback ?? <LoadingState text={text} />)
+          : null}
         {url ? (
           kind === 'image' ? (
             <>

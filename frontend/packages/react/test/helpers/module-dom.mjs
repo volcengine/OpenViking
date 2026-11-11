@@ -19,6 +19,7 @@ for (const name of [
   'Node',
   'Element',
   'HTMLElement',
+  'HTMLImageElement',
   'MutationObserver',
 ]) {
   globalThis[name] = name === 'window' ? dom.window : dom.window[name];

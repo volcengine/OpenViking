@@ -165,7 +165,6 @@ export function FilePreviewViewer({
   const slotPresence = [
     Boolean(tab.slots?.confirmFallback),
     Boolean(tab.slots?.downloadFallback),
-    Boolean(tab.slots?.unsupportedFallback),
   ].join();
   const slots = useMemo<FileViewerCoreProps['slots']>(() => {
     // 分支在调用时才决定，不在创建时决定：`slots` 只建一次（空依赖），而
@@ -190,27 +189,13 @@ export function FilePreviewViewer({
         <LoadFailedState text={latest.current.text} onRetry={retry} />
       );
     };
-    // `confirm` 与 `downloadFallback` 不能恒传一个 wrapper：底座只看这两个
-    // slot 是否存在，存在就直接渲染它，不会再看内置界面或 `unsupportedFallback`。
-    // 恒传一个返回 `null` 的 wrapper 会让大文件确认态与不支持态都变成空白。
-    //
-    // 所以按当前页签实际有没有宿主的插槽决定传不传；memo 依赖页签 key 与这两个
-    // 插槽的存在性，宿主增删插槽时重建。`unsupportedFallback` 存在时让出
-    // `downloadFallback`，底座才会走到它。
-    //
-    // `confirm` and `downloadFallback` must not be permanently wrapped: the base
-    // only checks whether the slot exists, and renders it directly when it does —
-    // it never falls through to the built-in UI or to `unsupportedFallback`. A
-    // permanent wrapper returning `null` blanks both the large-file confirmation and
-    // the unsupported state.
-    //
-    // So pass them only when the current tab actually supplies one; the memo keys on
-    // the tab key and on those slots' presence, so adding or removing a slot
-    // rebuilds it. `downloadFallback` also steps aside for `unsupportedFallback`.
+    // 只传宿主提供的插槽。省略下载插槽时保留底座的默认下载兜底；
+    // downloadFallback、unsupportedFallback、默认界面的优先级由底座决定。
+    // Only supply host slots: omission retains FileViewer's default download UI.
+    // The base owns precedence between downloadFallback, unsupportedFallback and its default.
     const own = tab.slots;
     const hasConfirm = Boolean(own?.confirmFallback);
     const hasHostDownload = Boolean(own?.downloadFallback);
-    const hasUnsupported = Boolean(own?.unsupportedFallback);
     // 传的是稳定 wrapper，内部从 `latest.current` 读当前组件并转发 props。
     // 直接把宿主组件本身传进去会把它冻在这一帧：同一个 key 下宿主换了组件
     // （新的文案或回调闭包），memo 不重建，界面仍停在旧组件上。
@@ -231,20 +216,13 @@ export function FilePreviewViewer({
       const tabSlots = latest.current.tabSlots;
       const Host = tabSlots?.downloadFallback;
       if (Host) return <Host {...props} />;
-      // 宿主没给下载插槽时用组件自己的不支持态；给了 `unsupportedFallback`
-      // 就让位（不传 `downloadFallback`，见下方）。
-      //
-      // Without a host download slot, this component's own unsupported state
-      // applies; a host `unsupportedFallback` takes over instead (see below).
-      return <UnsupportedState text={latest.current.text} />;
+      return null;
     };
     return {
       loading: loadingSlot,
       error: errorSlot,
       ...(hasConfirm ? { confirm: confirmSlot } : {}),
-      ...(hasHostDownload || !hasUnsupported
-        ? { downloadFallback: downloadSlot }
-        : {}),
+      ...(hasHostDownload ? { downloadFallback: downloadSlot } : {}),
     };
     // 依赖用「哪些插槽存在」而不是对象身份：宿主每次渲染都会重建 `slots`，
     // 用对象会让 memo 每帧重建、底座重挂渲染器（表现为点击后正文闪一下）。

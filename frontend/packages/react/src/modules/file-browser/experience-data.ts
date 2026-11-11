@@ -9,9 +9,13 @@ import type {
 
 export const EXPERIENCE_PAGE_SIZE = 20;
 export const isExperienceDirectory = (uri: string) =>
-  /^viking:\/\/(?:user\/[^/]+|~)\/memories\/experiences\/?$/.test(uri);
+  /^viking:\/\/(?:user\/[^/]+|~)(?:\/peers\/[^/]+)?\/memories\/experiences\/?$/.test(
+    uri,
+  );
 export const isExperienceFile = (uri: string) =>
-  /^viking:\/\/(?:user\/[^/]+|~)\/memories\/experiences\/[^/]+\.md$/i.test(uri);
+  /^viking:\/\/(?:user\/[^/]+|~)(?:\/peers\/[^/]+)?\/memories\/experiences\/[^/]+\.md$/i.test(
+    uri,
+  );
 
 /** Native API date bounds are UTC and inclusive. */
 export function experienceDateRange(days: number, now = new Date()) {

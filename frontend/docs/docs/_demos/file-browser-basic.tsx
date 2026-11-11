@@ -91,6 +91,18 @@ export default function FileBrowserBasic() {
         <Button size="small" onClick={() => setUri(DEMO_EXPERIENCE)}>
           {componentLocale === 'zh-CN' ? '预览经验文件' : 'Preview experience'}
         </Button>
+        <Button
+          size="small"
+          onClick={() =>
+            setUri(
+              'viking://user/alice/peers/demo_agent/memories/experiences/review.md',
+            )
+          }
+        >
+          {componentLocale === 'zh-CN'
+            ? '预览 Peer 经验文件'
+            : 'Preview peer experience'}
+        </Button>
         <Button size="small" onClick={() => setUri(DEMO_WIKI)}>
           {componentLocale === 'zh-CN'
             ? '预览编译目录'

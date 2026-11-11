@@ -33,20 +33,27 @@ const cases = [
   [`${rootUri}/folder`, true, [], ['importPack', 'exportPack'], false],
   ['viking://system/config.json', false, [], ['download'], false],
   ['viking://system/skills', true, [], [], false],
-  [
-    'viking://user/alice/memories/experiences/a.md',
-    false,
-    [],
-    ['download', 'history', 'exportPack', 'delete'],
-    false,
-  ],
-  [
-    'viking://user/alice/memories/experiences/nested/a.md',
-    false,
-    [],
-    ['download', 'exportPack', 'delete'],
-    true,
-  ],
+  ...[
+    'viking://user/alice',
+    'viking://~',
+    'viking://user/alice/peers/agent_x',
+    'viking://~/peers/agent_x',
+  ].flatMap((home) => [
+    [
+      `${home}/memories/experiences/a.md`,
+      false,
+      [],
+      ['download', 'history', 'exportPack', 'delete'],
+      false,
+    ],
+    [
+      `${home}/memories/experiences/nested/a.md`,
+      false,
+      [],
+      ['download', 'exportPack', 'delete'],
+      true,
+    ],
+  ]),
   [
     target,
     true,

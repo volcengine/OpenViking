@@ -128,6 +128,16 @@ previewRef.current?.setActiveTab('dashboard');
 
 执行能力与通知分开：操作成功后才触发对应的 `on…` 回调，失败时不触发。省略方法时隐藏或禁用对应入口，通知本身不承担操作。Markdown 链接通过 `operations.openUri` 交给宿主解析和导航。
 
+## 状态插槽与下载兜底
+
+原生图片、视频同样支持 `loadingFallback`、`errorFallback`；没有来源时使用 `unsupportedFallback`。有来源但格式不支持时，默认使用 FileViewer 自带的下载兜底。`downloadFallback` 可定制它的呈现，并接收底座提供的 `onDownload`、`onRetry` 等回调；它独立于工具栏 `actions`。
+
+下面的示例故意使用无效媒体内容来展示错误态；切换为不支持的格式，可以下载示例原始内容。
+
+```tsx file="../../_demos/file-preview-fallbacks.tsx" preview
+
+```
+
 ## 属性
 
 | 属性      | 类型                                                           | 默认值                                             | 说明                                                                                     |
