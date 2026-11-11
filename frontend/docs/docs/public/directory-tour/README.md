@@ -16,3 +16,10 @@ No temporary asset URL is used at runtime.
 
 The library itself has no image URL dependency; applications supply their own
 `illustration` React nodes and asset hosting, as demonstrated here.
+
+Team introduction assets:
+
+- `team/cover.png`: original media composition exported from Figma `10168:334213` (246 × 159). Includes the designed play affordance; rendered inside a host-owned button.
+- `team/folder-open.svg`: `10168:334234` (11.2 × 11.2).
+- `team/arrow-up-right.svg`: `10168:334540` (12 × 12).
+  Source: OpenViking Console, node `10168:334211`. These local demo assets do not introduce runtime Figma or private CDN dependencies.

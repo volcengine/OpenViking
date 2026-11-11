@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
 import { OpenVikingProvider } from '@openviking/react/client';
-import { DirectoryTour } from '@openviking/react/components/directory-tour';
+import {
+  DirectoryTour,
+  DirectoryTourIntro,
+} from '@openviking/react/components/directory-tour';
 import { mount } from './helpers/module-dom.mjs';
 
 globalThis.MutationObserver = window.MutationObserver;
@@ -45,6 +48,30 @@ test('a portalled tour inherits Provider changes without restarting its target l
     await view.render(element('zh-CN', 'en-US'));
     assert.equal(close().getAttribute('aria-label'), 'Close guide');
     assert.equal(calls, 1);
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('a tour introduction inherits Provider language and preserves explicit overrides', async () => {
+  const element = (locale, local) =>
+    h(
+      OpenVikingProvider,
+      { locale },
+      h(DirectoryTourIntro, {
+        title: 'Host title',
+        description: 'Host 原文',
+        locale: local,
+      }),
+    );
+  const view = await mount(element('zh-CN'));
+  try {
+    assert.equal(view.container.querySelector('button').textContent, '知道了');
+    await view.render(element('en-US'));
+    assert.equal(view.container.querySelector('button').textContent, 'Got it');
+    await view.render(element('en-US', 'zh-CN'));
+    assert.equal(view.container.querySelector('button').textContent, '知道了');
+    assert.match(view.container.textContent, /Host 原文/);
   } finally {
     await view.unmount();
   }
