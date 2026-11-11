@@ -36,6 +36,20 @@ console.log(task.task_id);
 
 Query `client.getTask(task.task_id as string)` for import status and search the imported content after the task reaches `completed`.
 
+Batch attribute and tag operations use dedicated POST endpoints:
+
+```ts
+const attrs = await client.attrsBatch([
+  "viking://resources/docs/a.md",
+  "viking://resources/docs/b.md",
+]);
+const updated = await client.setTagsBatch(
+  ["viking://resources/docs/a.md", "viking://resources/docs/b.md"],
+  ["used_count+=1"],
+  { mode: "append" },
+);
+```
+
 Event-memory tags can be configured as session defaults, updated later, or overridden per commit. Passing `[]` to `commitSession` explicitly skips the session defaults for that commit.
 
 ```ts

@@ -443,6 +443,22 @@ impl HttpClient {
         self.post("/api/v1/fs/attrs/set_tags", &body).await
     }
 
+    pub async fn set_tags_batch(
+        &self,
+        uris: &[String],
+        tags: Vec<String>,
+        mode: &str,
+        recursive: bool,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uris": uris,
+            "tags": tags,
+            "mode": mode,
+            "recursive": recursive,
+        });
+        self.post("/api/v1/content/set_tags_batch", &body).await
+    }
+
     pub async fn acl_get(&self, uri: &str) -> Result<Value> {
         self.get("/api/v1/acl", &[("uri".to_string(), uri.to_string())])
             .await
@@ -747,6 +763,14 @@ impl HttpClient {
     pub async fn attrs(&self, uri: &str) -> Result<serde_json::Value> {
         let params = vec![("uri".to_string(), uri.to_string())];
         self.get("/api/v1/fs/attrs", &params).await
+    }
+
+    pub async fn attrs_batch(&self, uris: &[String]) -> Result<serde_json::Value> {
+        self.post(
+            "/api/v1/fs/attrs/batch",
+            &serde_json::json!({"uris": uris}),
+        )
+        .await
     }
 
     // ============ Search Methods ============

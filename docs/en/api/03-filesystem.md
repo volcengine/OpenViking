@@ -436,12 +436,21 @@ Get logical extended attributes for a file or directory.
 ```python
 attrs = client.attrs(uri="viking://resources/docs/api.md")
 print(attrs["attrs"]["tags"])
+
+batch = client.attrs_batch([
+    "viking://resources/docs/api.md",
+    "viking://resources/docs/guide.md",
+])
 ```
 
 **TypeScript SDK**
 
 ```typescript
 const attributes = await client.attrs("viking://resources/docs/api.md");
+const batch = await client.attrsBatch([
+  "viking://resources/docs/api.md",
+  "viking://resources/docs/guide.md",
+]);
 console.log(attributes);
 ```
 
@@ -454,12 +463,18 @@ if err != nil {
 }
 metadata := attrs["attrs"].(map[string]any)
 fmt.Println(metadata["tags"])
+
+batch, err := client.AttrsBatch(ctx, []string{
+    "viking://resources/docs/api.md",
+    "viking://resources/docs/guide.md",
+})
 ```
 
 **HTTP API**
 
 ```
 GET /api/v1/fs/attrs?uri={uri}
+POST /api/v1/fs/attrs/batch
 POST /api/v1/fs/attrs/set_tags
 ```
 
@@ -471,16 +486,24 @@ curl -X POST "http://localhost:1933/api/v1/fs/attrs/set_tags" \
   -H "X-API-Key: your-key" \
   -H "Content-Type: application/json" \
   -d '{"uri":"viking://resources/docs","tags":["team=search"],"mode":"append","recursive":true}'
+
+curl -X POST "http://localhost:1933/api/v1/fs/attrs/batch" \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  -d '{"uris":["viking://resources/docs/api.md","viking://resources/docs/guide.md"]}'
 ```
 
 **CLI**
 
 ```bash
 ov attrs get viking://resources/docs/api.md
+ov attrs batch viking://resources/docs/api.md viking://resources/docs/guide.md
 ov attrs get viking://resources/docs/api.md tags
 ov attrs get viking://user/alice/memories/experiences/foo.md memory.resource_refs
 ov attrs set-tags viking://resources/docs/api.md --tags team=search,env=prod
 ov attrs set-tags viking://resources/docs --tags team=search --mode append --recursive
+ov attrs set-tags-batch viking://resources/docs/api.md viking://resources/docs/guide.md \
+  --tags count+=1 --mode append
 ```
 
 For `set-tags`, directory targets update the directory semantic records; `recursive=true` also updates existing descendant files and directory semantic records.
@@ -523,6 +546,8 @@ For `set-tags`, directory targets update the directory semantic records; `recurs
 ```
 
 `attrs.memory` is parsed from `MEMORY_FIELDS` metadata with content removed. `attrs.tags` is the explicit retrieval tag list used by `attrs set-tags` and search filters.
+
+Batch requests accept 1-50 URIs, deduplicate normalized URIs, and return `items` and `failed` in input order. Individual failures do not fail the whole HTTP request.
 
 ---
 

@@ -1519,6 +1519,14 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
+    async def attrs_batch(self, uris: List[str]) -> Dict[str, Any]:
+        response = await self._request(
+            "POST",
+            "/api/v1/fs/attrs/batch",
+            json={"uris": [VikingURI.normalize(uri) for uri in uris]},
+        )
+        return self._handle_response(response)
+
     async def mkdir(
         self, uri: str, description: Optional[str] = None, *, acl: Optional[Dict[str, Any]] = None
     ) -> None:
@@ -1697,6 +1705,33 @@ class AsyncHTTPClient:
         response = await self._request(
             "POST",
             "/api/v1/fs/attrs/set_tags",
+            json=payload,
+        )
+        return self._handle_response_data(response).get("result", {})
+
+    async def set_tags_batch(
+        self,
+        uris: List[str],
+        tags: Optional[List[str]] = None,
+        mode: str = "replace",
+        recursive: bool = False,
+        options: Optional[SetTagsOptions] = None,
+    ) -> Dict[str, Any]:
+        fixed: Dict[str, Any] = {
+            "uris": [VikingURI.normalize(uri) for uri in uris],
+            "mode": mode,
+            "recursive": recursive,
+        }
+        if tags is not None:
+            fixed["tags"] = tags
+        payload = self._build_options_payload(
+            options,
+            SetTagsOptions,
+            fixed=fixed,
+        )
+        response = await self._request(
+            "POST",
+            "/api/v1/content/set_tags_batch",
             json=payload,
         )
         return self._handle_response_data(response).get("result", {})
@@ -3238,6 +3273,9 @@ class SyncHTTPClient:
     def attrs(self, uri: str) -> Dict[str, Any]:
         return run_async(self._async_client.attrs(uri))
 
+    def attrs_batch(self, uris: List[str]) -> Dict[str, Any]:
+        return run_async(self._async_client.attrs_batch(uris))
+
     def mkdir(
         self, uri: str, description: Optional[str] = None, *, acl: Optional[Dict[str, Any]] = None
     ) -> None:
@@ -3327,6 +3365,24 @@ class SyncHTTPClient:
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.set_tags(uri, tags, mode=mode, recursive=recursive, options=options)
+        )
+
+    def set_tags_batch(
+        self,
+        uris: List[str],
+        tags: Optional[List[str]] = None,
+        mode: str = "replace",
+        recursive: bool = False,
+        options: Optional[SetTagsOptions] = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.set_tags_batch(
+                uris,
+                tags,
+                mode=mode,
+                recursive=recursive,
+                options=options,
+            )
         )
 
     def acl_get(self, uri: str) -> Dict[str, Any]:

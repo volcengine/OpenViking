@@ -174,6 +174,18 @@ func (c *Client) Attrs(ctx context.Context, uri string) (map[string]any, error) 
 	return result, err
 }
 
+// AttrsBatch returns logical attributes for multiple URIs.
+func (c *Client) AttrsBatch(ctx context.Context, uris []string) (map[string]any, error) {
+	normalized := make([]string, len(uris))
+	for index, uri := range uris {
+		normalized[index] = NormalizeURI(uri)
+	}
+	payload := map[string]any{"uris": normalized}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/fs/attrs/batch", nil, payload, &result)
+	return result, err
+}
+
 // Mkdir creates a directory.
 func (c *Client) Mkdir(ctx context.Context, uri string, description string, acl ...ACLSpec) error {
 	payload := map[string]any{"uri": NormalizeURI(uri)}
@@ -385,6 +397,37 @@ func (c *Client) SetTags(ctx context.Context, uri string, tags []string, opts *S
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/fs/attrs/set_tags", nil, payload, &result)
+	return result, err
+}
+
+// SetTagsBatch updates retrieval tags for multiple URIs.
+func (c *Client) SetTagsBatch(ctx context.Context, uris []string, tags []string, opts *SetTagsOptions) (map[string]any, error) {
+	if opts == nil {
+		opts = &SetTagsOptions{Mode: "replace"}
+	}
+	mode := opts.Mode
+	if mode == "" {
+		mode = "replace"
+	}
+	if tags == nil {
+		tags = []string{}
+	}
+	normalized := make([]string, len(uris))
+	for index, uri := range uris {
+		normalized[index] = NormalizeURI(uri)
+	}
+	payload := map[string]any{
+		"uris":      normalized,
+		"tags":      tags,
+		"mode":      mode,
+		"recursive": opts.Recursive,
+	}
+	setAny(payload, "telemetry", opts.Telemetry)
+	if err := mergeExtraProtected(payload, opts.Extra, "uris", "tags", "mode", "recursive", "telemetry"); err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/content/set_tags_batch", nil, payload, &result)
 	return result, err
 }
 

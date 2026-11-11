@@ -790,6 +790,39 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("uses dedicated POST endpoints for batch attrs and tags", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({ items: [], failed: [] }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.attrsBatch(["resources/a.md", "viking://resources/b.md"]);
+    await client.setTagsBatch(
+      ["resources/a.md", "viking://resources/b.md"],
+      ["count+=1"],
+      { mode: "append" },
+    );
+
+    expect(new URL(String(fetcher.mock.calls[0]![0])).pathname).toBe(
+      "/api/v1/fs/attrs/batch",
+    );
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      uris: ["viking://resources/a.md", "viking://resources/b.md"],
+    });
+    expect(new URL(String(fetcher.mock.calls[1]![0])).pathname).toBe(
+      "/api/v1/content/set_tags_batch",
+    );
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toEqual({
+      uris: ["viking://resources/a.md", "viking://resources/b.md"],
+      tags: ["count+=1"],
+      mode: "append",
+      recursive: false,
+    });
+  });
+
   it("converts an existing Node.js image path to a data URI", async () => {
     const directory = await mkdtemp(join(tmpdir(), "openviking-sdk-image-"));
     const path = join(directory, "photo.png");

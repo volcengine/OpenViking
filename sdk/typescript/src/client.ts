@@ -737,6 +737,12 @@ export class OpenVikingClient {
       query: { uri: normalizeURI(uri) },
     });
   }
+  /** Return logical attributes for multiple URIs. */
+  attrsBatch(uris: string[]): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/fs/attrs/batch", {
+      body: { uris: uris.map(normalizeURI) },
+    });
+  }
   /** Create a directory. */
   mkdir(uri: string, description?: string, acl?: AclSpec): Promise<void> {
     return this.request("POST", "/api/v1/fs/mkdir", {
@@ -913,6 +919,29 @@ export class OpenVikingClient {
     return this.request("POST", "/api/v1/fs/attrs/set_tags", {
       body: mergeExtra(body, options.extra, [
         "uri",
+        "tags",
+        "mode",
+        "recursive",
+        "telemetry",
+      ]),
+    });
+  }
+  /** Set retrieval tags for multiple URIs. */
+  setTagsBatch(
+    uris: string[],
+    tags?: string[],
+    options: SetTagsOptions = {},
+  ): Promise<JsonObject> {
+    const body = compact({
+      uris: uris.map(normalizeURI),
+      tags,
+      mode: options.mode ?? "replace",
+      recursive: options.recursive ?? false,
+      telemetry: options.telemetry,
+    });
+    return this.request("POST", "/api/v1/content/set_tags_batch", {
+      body: mergeExtra(body, options.extra, [
+        "uris",
         "tags",
         "mode",
         "recursive",

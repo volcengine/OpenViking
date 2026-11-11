@@ -14,6 +14,7 @@ from openviking.server.routers.content import (
     BatchWriteOperation,
     BatchWriteRequest,
     ReindexRequest,
+    SetTagsBatchRequest,
     SetTagsRequest,
     WriteContentRequest,
     batch_write,
@@ -27,12 +28,11 @@ from openviking_cli.session.user_id import UserIdentifier
     "targets",
     [
         {},
-        {"uri": "viking://resources/a.md", "uris": ["viking://resources/b.md"]},
-        {"uris": []},
-        {"uris": ["viking://resources/a.md"] * 51},
+        {"uris": ["viking://resources/a.md"]},
+        {"uri": "viking://resources/a.md", "unexpected": True},
     ],
 )
-def test_set_tags_request_rejects_invalid_targets(targets):
+def test_set_tags_request_requires_single_uri(targets):
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
@@ -40,9 +40,8 @@ def test_set_tags_request_rejects_invalid_targets(targets):
 
 
 @pytest.mark.parametrize("size", [1, 50])
-def test_set_tags_request_accepts_batch_boundaries(size):
-    request = SetTagsRequest(uris=["viking://resources/a.md"] * size)
-    assert request.uri is None
+def test_set_tags_batch_request_accepts_boundaries(size):
+    request = SetTagsBatchRequest(uris=["viking://resources/a.md"] * size)
     assert len(request.uris) == size
 
 
@@ -56,7 +55,7 @@ def test_set_tags_request_accepts_batch_boundaries(size):
     ],
 )
 async def test_set_tags_batch_invalid_request_http(client, targets):
-    response = await client.post("/api/v1/fs/attrs/set_tags", json=targets)
+    response = await client.post("/api/v1/content/set_tags_batch", json=targets)
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
 
@@ -372,9 +371,7 @@ async def test_ls_file_uri_returns_invalid_argument(client, service):
     assert "not a directory" in body["error"]["message"]
 
 
-async def test_set_tags_increase_http_persists_usage_and_preserves_resource(client, service):
-    import time
-
+async def test_set_tags_append_arithmetic_persists_values_and_preserves_resource(client, service):
     from openviking.storage.vector_ids import vector_record_id
     from openviking.utils.time_utils import get_current_timestamp
 
@@ -402,10 +399,9 @@ async def test_set_tags_increase_http_persists_usage_and_preserves_resource(clie
     original_record = (await service.vikingdb_manager.get_strict([record_id], ctx=ctx))[0]
 
     for count in (1, 2):
-        before = int(time.time() * 1000)
         response = await client.post(
             "/api/v1/fs/attrs/set_tags",
-            json={"uri": uri, "tags": ["used_count=1"], "mode": "increase"},
+            json={"uri": uri, "tags": ["used_count+=1"], "mode": "append"},
         )
         assert response.status_code == 200, response.text
         assert response.json()["result"]["success_count"] == 1
@@ -414,21 +410,20 @@ async def test_set_tags_increase_http_persists_usage_and_preserves_resource(clie
         values = dict(tag.split("=", 1) for tag in attrs.json()["result"]["attrs"]["tags"])
         assert values["team"] == "search"
         assert int(values["used_count"]) == count
-        assert before <= int(values["last_used_at"]) <= int(time.time() * 1000)
 
     response = await client.post(
         "/api/v1/fs/attrs/set_tags",
-        json={"uri": uri, "tags": ["score=0.2"], "mode": "increase"},
+        json={"uri": uri, "tags": ["score+=0.2", "score-=0.05"], "mode": "append"},
     )
     assert response.status_code == 200, response.text
     before_score = (await service.vikingdb_manager.get_strict([record_id], ctx=ctx))[0]
-    assert "score=0.3" in before_score["search_tags"]
-    assert f"last_used_at={values['last_used_at']}" in before_score["search_tags"]
+    assert "score=0.25" in before_score["search_tags"]
+    assert not any(tag.startswith("last_used_at=") for tag in before_score["search_tags"])
 
-    for invalid in ("used_count", "used_count=bad", "used_count=NaN", "used_count=Infinity"):
+    for invalid in ("used_count", "used_count+=bad", "used_count+=NaN", "used_count-=Infinity"):
         response = await client.post(
             "/api/v1/fs/attrs/set_tags",
-            json={"uri": uri, "tags": [invalid], "mode": "increase"},
+            json={"uri": uri, "tags": [invalid], "mode": "append"},
         )
         assert response.status_code == 400, response.text
 
@@ -440,8 +435,7 @@ async def test_set_tags_increase_http_persists_usage_and_preserves_resource(clie
     assert await service.viking_fs.read_file(uri, ctx=ctx) == "original content"
 
 
-@pytest.mark.parametrize("endpoint", ["/api/v1/content/set_tags", "/api/v1/fs/attrs/set_tags"])
-async def test_set_tags_batch_http_persists_actual_values(client, service, endpoint):
+async def test_set_tags_batch_http_persists_actual_values(client, service):
     from openviking.storage.vector_ids import vector_record_id
     from openviking.utils.time_utils import get_current_timestamp
 
@@ -471,33 +465,32 @@ async def test_set_tags_batch_http_persists_actual_values(client, service, endpo
     missing = f"{root}/missing.md"
     for count in (6, 7):
         response = await client.post(
-            endpoint,
+            "/api/v1/content/set_tags_batch",
             json={
                 "uris": [uris[0], missing, uris[0] + "/", uris[1], unindexed, "invalid"],
-                "tags": ["used_count=1"],
-                "mode": "increase",
+                "tags": ["used_count+=1"],
+                "mode": "append",
             },
         )
         assert response.status_code == 200, response.text
         result = response.json()["result"]
-        assert [item["uri"] for item in result["items"]] == uris
-        assert [item["uri"] for item in result["failed"]] == [missing, unindexed, "invalid"]
+        assert [item["uri"] for item in result["items"]] == [*uris, unindexed]
+        assert result["items"][-1]["tags_updated"] is False
+        assert [item["uri"] for item in result["failed"]] == [missing, "invalid"]
         assert [item["error"]["code"] for item in result["failed"]] == [
             "NOT_FOUND",
-            "FAILED_PRECONDITION",
             "INVALID_URI",
         ]
-        for item in result["items"]:
-            attrs = await client.get("/api/v1/fs/attrs", params={"uri": item["uri"]})
+        for uri in uris:
+            attrs = await client.get("/api/v1/fs/attrs", params={"uri": uri})
             assert attrs.status_code == 200, attrs.text
             tags = attrs.json()["result"]["attrs"]["tags"]
             values = dict(tag.split("=", 1) for tag in tags)
             assert values["used_count"] == str(count)
             assert values["team"] == "search"
-            assert int(values["last_used_at"]) > 0
 
     response = await client.post(
-        endpoint,
+        "/api/v1/content/set_tags_batch",
         json={"uris": uris, "tags": ["used_count=0", "last_used_at=0"], "mode": "append"},
     )
     assert response.status_code == 200, response.text
@@ -556,9 +549,8 @@ async def test_usage_reset_http_round_trip_for_file_and_directory(client, servic
     async def write(tags, mode):
         requests = [{"uris": targets}] if batch else [{"uri": uri} for uri in targets]
         for request in requests:
-            response = await client.post(
-                "/api/v1/fs/attrs/set_tags", json={**request, "tags": tags, "mode": mode}
-            )
+            endpoint = "/api/v1/content/set_tags_batch" if batch else "/api/v1/fs/attrs/set_tags"
+            response = await client.post(endpoint, json={**request, "tags": tags, "mode": mode})
             assert response.status_code == 200, response.text
             result = response.json()["result"]
             if batch:
@@ -569,9 +561,9 @@ async def test_usage_reset_http_round_trip_for_file_and_directory(client, servic
                 assert result["tags_updated"] is True
                 assert result["success_count"] == (2 if request["uri"] == root else 1)
 
-    async def verify(count):
+    async def verify(count, last_used_at):
         before_read = await service.vikingdb_manager.get_strict(record_ids, ctx=ctx)
-        response = await client.request("GET", "/api/v1/fs/attrs", json={"uris": targets})
+        response = await client.post("/api/v1/fs/attrs/batch", json={"uris": targets})
         assert response.status_code == 200, response.text
         result = response.json()["result"]
         assert result["failed"] == []
@@ -580,12 +572,8 @@ async def test_usage_reset_http_round_trip_for_file_and_directory(client, servic
             tags = item["attrs"]["tags"]
             assert "team=search" in tags
             assert f"used_count={count}" in tags
-            times = [int(tag.split("=", 1)[1]) for tag in tags if tag.startswith("last_used_at=")]
-            assert times
-            if count == 0:
-                assert all(value == 0 for value in times)
-            else:
-                assert all(value > 0 for value in times)
+            times = [tag for tag in tags if tag.startswith("last_used_at=")]
+            assert times == [f"last_used_at={last_used_at}"]
             single = await client.get("/api/v1/fs/attrs", params={"uri": item["uri"]})
             assert single.status_code == 200, single.text
             assert single.json()["result"] == item
@@ -597,23 +585,20 @@ async def test_usage_reset_http_round_trip_for_file_and_directory(client, servic
             else:
                 values = dict(tag.split("=", 1) for tag in record["search_tags"])
                 assert values["used_count"] == str(count)
-                if count == 0:
-                    assert values["last_used_at"] == "0"
-                else:
-                    assert int(values["last_used_at"]) > 0
+                assert values["last_used_at"] == str(last_used_at)
                 assert {key: value for key, value in record.items() if key != "search_tags"} == {
                     key: value for key, value in baseline.items() if key != "search_tags"
                 }
         for uri, content in contents.items():
             assert await service.viking_fs.read_file(uri, ctx=ctx) == content
 
-    await write(["used_count=1"], "increase")
-    await verify(6)
+    await write(["used_count+=1"], "append")
+    await verify(6, 123)
     for _ in range(2):
         await write(["used_count=0", "last_used_at=0"], "append")
-        await verify(0)
-    await write(["used_count=1"], "increase")
-    await verify(1)
+        await verify(0, 0)
+    await write(["used_count+=1"], "append")
+    await verify(1, 0)
 
 
 async def test_usage_reset_http_batch_reports_failures_without_touching_foreign_file(
@@ -655,7 +640,7 @@ async def test_usage_reset_http_batch_reports_failures_without_touching_foreign_
     app.dependency_overrides[get_request_context] = lambda: ctx
     try:
         response = await client.post(
-            "/api/v1/fs/attrs/set_tags",
+            "/api/v1/content/set_tags_batch",
             json={
                 "uris": [own, missing, foreign, unindexed],
                 "tags": ["used_count=0", "last_used_at=0"],
@@ -666,18 +651,18 @@ async def test_usage_reset_http_batch_reports_failures_without_touching_foreign_
         app.dependency_overrides.pop(get_request_context, None)
     assert response.status_code == 200, response.text
     result = response.json()["result"]
-    assert [item["uri"] for item in result["items"]] == [own]
+    assert [item["uri"] for item in result["items"]] == [own, unindexed]
+    assert result["items"][1]["tags_updated"] is False
     own_after = (await service.vikingdb_manager.get_strict([record_ids[0]], ctx=root_ctx))[0]
     assert set(own_after["search_tags"]) == {
         "team=search",
         "used_count=0",
         "last_used_at=0",
     }
-    assert [item["uri"] for item in result["failed"]] == [missing, foreign, unindexed]
+    assert [item["uri"] for item in result["failed"]] == [missing, foreign]
     assert [item["error"]["code"] for item in result["failed"]] == [
         "NOT_FOUND",
         "PERMISSION_DENIED",
-        "FAILED_PRECONDITION",
     ]
     foreign_after = (await service.vikingdb_manager.get_strict([record_ids[1]], ctx=root_ctx))[0]
     assert foreign_after == foreign_before

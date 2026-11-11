@@ -33,10 +33,11 @@ async def test_set_tags_batch_normalizes_deduplicates_and_collects_failures(monk
     good = "viking://user/alice/resources/demo/a.md"
     denied = "viking://user/bob/resources/demo/private.md"
     skipped = "viking://user/alice/resources/demo/skipped.md"
+    expected_ctx = ctx
 
-    async def update(uri, tags, mode, recursive, passed_ctx):
-        assert passed_ctx is ctx
-        assert (tags, mode, recursive) == (["used_count=1"], "increase", False)
+    async def update(uri, tags, mode, recursive, ctx):
+        assert ctx is expected_ctx
+        assert (tags, mode, recursive) == (["used_count+=1"], "append", False)
         if uri == denied:
             raise PermissionDeniedError("denied")
         return {"uri": uri, "tags_updated": uri != skipped}
@@ -45,16 +46,16 @@ async def test_set_tags_batch_normalizes_deduplicates_and_collects_failures(monk
     monkeypatch.setattr(fs, "set_tags", single)
     result = await fs.set_tags_batch(
         [good + "/", denied, good, skipped, "invalid"],
-        ["used_count=1"],
-        "increase",
+        ["used_count+=1"],
+        "append",
         False,
         ctx,
     )
-    assert [item["uri"] for item in result["items"]] == [good]
-    assert [item["uri"] for item in result["failed"]] == [denied, skipped, "invalid"]
+    assert [item["uri"] for item in result["items"]] == [good, skipped]
+    assert result["items"][1]["tags_updated"] is False
+    assert [item["uri"] for item in result["failed"]] == [denied, "invalid"]
     assert [item["error"]["code"] for item in result["failed"]] == [
         "PERMISSION_DENIED",
-        "FAILED_PRECONDITION",
         "INVALID_URI",
     ]
     assert single.await_count == 3
@@ -84,7 +85,7 @@ async def test_set_tags_batch_bounds_concurrency_and_preserves_order(monkeypatch
 
     monkeypatch.setattr(fs, "set_tags", update)
     result = await asyncio.wait_for(
-        fs.set_tags_batch(uris, ["used_count=1"], "increase", False, ctx), timeout=5
+        fs.set_tags_batch(uris, ["used_count+=1"], "append", False, ctx), timeout=5
     )
     assert peak == 8
     assert [item["uri"] for item in result["items"]] == uris
@@ -104,8 +105,8 @@ async def test_set_tags_batch_propagates_cancellation(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await fs.set_tags_batch(
             ["viking://user/alice/resources/demo/a.md"],
-            ["used_count=1"],
-            "increase",
+            ["used_count+=1"],
+            "append",
             False,
             ctx,
         )
@@ -923,7 +924,7 @@ async def test_set_tags_uses_store_update_api_without_fetch(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_set_tags_increase_forwards_mode_without_discarding_invalid_tags():
+async def test_set_tags_append_forwards_ordered_arithmetic_patches():
     from unittest.mock import AsyncMock
 
     file_uri = "viking://resources/demo/doc.md"
@@ -935,18 +936,24 @@ async def test_set_tags_increase_forwards_mode_without_discarding_invalid_tags()
     coordinator = ContentWriteCoordinator(viking_fs=fake_vfs)
 
     result = await coordinator.set_tags(
-        uri=file_uri, tags=["Used_Count=1"], mode="increase", ctx=ctx
+        uri=file_uri,
+        tags=["Used_Count+=1", "used_count-=0.5"],
+        mode="append",
+        ctx=ctx,
     )
 
-    assert result["mode"] == "increase"
+    assert result["mode"] == "append"
     assert result["success_count"] == 1
     fake_vfs.vector_store.update_search_tags.assert_awaited_once_with(
-        file_uri, ["used_count=1"], mode="increase", ctx=ctx
+        file_uri,
+        ["used_count+=1", "used_count-=0.5"],
+        mode="append",
+        ctx=ctx,
     )
 
     fake_vfs.vector_store.update_search_tags.reset_mock()
     with pytest.raises(InvalidArgumentError):
-        await coordinator.set_tags(uri=file_uri, tags=["used_count"], mode="increase", ctx=ctx)
+        await coordinator.set_tags(uri=file_uri, tags=["used_count+=bad"], mode="append", ctx=ctx)
     fake_vfs.vector_store.update_search_tags.assert_not_awaited()
 
 
@@ -972,11 +979,17 @@ async def test_set_tags_batch_updates_directory_levels(sidecar):
     vfs.vector_store = SimpleNamespace(update_search_tags=update)
     fs = FSService(viking_fs=vfs)
 
-    result = await fs.set_tags_batch([uri], ["used_count=1"], "increase", False, ctx)
+    result = await fs.set_tags_batch([uri], ["used_count+=1"], "append", False, ctx)
 
     assert result["failed"] == []
     assert result["items"][0]["updated_uris"] == [root] * len(levels)
-    update.assert_awaited_once_with(root, ["used_count=1"], mode="increase", levels=levels, ctx=ctx)
+    update.assert_awaited_once_with(
+        root,
+        ["used_count+=1"],
+        mode="append",
+        levels=levels,
+        ctx=ctx,
+    )
 
 
 @pytest.mark.asyncio

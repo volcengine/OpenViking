@@ -99,25 +99,63 @@ def merge_search_tags(existing: Iterable[str] | None, incoming: Iterable[str] | 
     return [f"{key}={value}" for key, value in ordered.items()]
 
 
-def increase_search_tags(
-    existing: Iterable[str] | None, incoming: Iterable[str] | None
+def normalize_search_tag_patches(patches: Iterable[str] | None) -> list[str]:
+    """Normalize append patches while preserving order and duplicate keys."""
+    normalized: list[str] = []
+    for patch in patches or []:
+        value = str(patch).strip().lower()
+        if not value or value.count("=") != 1:
+            raise InvalidArgumentError(
+                f"invalid search tag patch '{patch}': expected k=v, k+=number, or k-=number"
+            )
+        left, raw_value = value.split("=", 1)
+        operator = "="
+        key = left
+        if left.endswith(("+", "-")):
+            operator = f"{left[-1]}="
+            key = left[:-1]
+        if not key or not raw_value:
+            raise InvalidArgumentError(
+                f"invalid search tag patch '{patch}': key and value must both be non-empty"
+            )
+        if operator != "=":
+            try:
+                number = Decimal(raw_value)
+            except DecimalException as exc:
+                raise InvalidArgumentError(f"invalid numeric value for tag '{key}'") from exc
+            if not number.is_finite():
+                raise InvalidArgumentError(f"tag arithmetic requires a finite value for '{key}'")
+        normalized.append(f"{key}{operator}{raw_value}")
+    return normalized
+
+
+def apply_search_tag_patches(
+    existing: Iterable[str] | None, patches: Iterable[str] | None
 ) -> list[str]:
-    """Add finite decimal deltas by key, preserving unrelated tags."""
-    existing_tags = normalize_search_tags(existing)
-    values = dict(tag.split("=", 1) for tag in existing_tags)
-    updates: list[str] = []
-    for tag in normalize_search_tags(incoming):
-        key, delta = tag.split("=", 1)
-        current = values.get(key, "0")
+    """Apply ordered replacements and finite decimal arithmetic by key."""
+    values: OrderedDict[str, str] = OrderedDict()
+    for tag in normalize_search_tags(existing, discard_invalid=True):
+        key, value = tag.split("=", 1)
+        values[key] = value
+
+    for patch in normalize_search_tag_patches(patches):
+        left, raw_value = patch.split("=", 1)
+        if not left.endswith(("+", "-")):
+            values[left] = raw_value
+            continue
+
+        key = left[:-1]
         try:
-            current_number, delta_number = Decimal(current), Decimal(delta)
-            if not current_number.is_finite() or not delta_number.is_finite():
-                raise InvalidArgumentError(f"increase requires finite values for tag '{key}'")
-            value = current_number + delta_number
+            current = Decimal(values.get(key, "0"))
+            operand = Decimal(raw_value)
         except DecimalException as exc:
             raise InvalidArgumentError(f"invalid numeric value for tag '{key}'") from exc
-        updates.append(f"{key}={value}")
-    return merge_search_tags(existing_tags, updates)
+        if not current.is_finite() or not operand.is_finite():
+            raise InvalidArgumentError(f"tag arithmetic requires finite values for '{key}'")
+        result = current + operand if left.endswith("+") else current - operand
+        values[key] = str(result)
+
+    return [f"{key}={value}" for key, value in values.items()]
 
 
 def preserve_memory_type_tag(

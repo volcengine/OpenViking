@@ -113,18 +113,23 @@ class SetTagsRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    uri: str | None = None
-    uris: list[str] | None = Field(default=None, min_length=1, max_length=50)
+    uri: str
     tags: list[str] | None = None
     mode: str = "replace"
     recursive: bool = False
     telemetry: TelemetryRequest = False
 
-    @model_validator(mode="after")
-    def validate_targets(self) -> "SetTagsRequest":
-        if (self.uri is None) == (self.uris is None):
-            raise ValueError("exactly one of uri or uris is required")
-        return self
+
+class SetTagsBatchRequest(BaseModel):
+    """Request to update retrieval tags for a batch of files or directories."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    uris: list[str] = Field(min_length=1, max_length=50)
+    tags: list[str] | None = None
+    mode: str = "replace"
+    recursive: bool = False
+    telemetry: TelemetryRequest = False
 
 
 class EnsureDirectoryIndexRequest(BaseModel):
@@ -358,28 +363,33 @@ async def batch_write(
     ).model_dump(exclude_none=True)
 
 
-@router.post("/set_tags")
-async def set_tags(
-    request: SetTagsRequest = Body(...),
-    _ctx: RequestContext = Depends(get_request_context),
+async def _set_tags(
+    request: SetTagsRequest | SetTagsBatchRequest,
+    ctx: RequestContext,
 ):
-    """Set explicit k=v retrieval tags metadata for a file or directory."""
     service = get_service()
+    batch = isinstance(request, SetTagsBatchRequest)
     tags = [] if request.mode == "clear" else request.tags or []
-    single = request.uris is None
-    uris = request.uris
-    if single:
-        uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
-        uris = [uri]
+    uris = (
+        request.uris
+        if batch
+        else [
+            validate_request_viking_uri(
+                resolve_path_variables(request.uri),
+                ctx,
+            )
+        ]
+    )
+
     async def update_tags():
         result = await service.fs.set_tags_batch(
             uris=uris,
             tags=tags,
             mode=request.mode,
             recursive=request.recursive,
-            ctx=_ctx,
+            ctx=ctx,
         )
-        if single:
+        if not batch:
             if result["failed"]:
                 error = result["failed"][0]["error"]
                 raise OpenVikingError(error["message"], code=error["code"])
@@ -387,7 +397,7 @@ async def set_tags(
         return result
 
     execution = await run_operation(
-        operation="content.set_tags",
+        operation="content.set_tags_batch" if batch else "content.set_tags",
         telemetry=request.telemetry,
         fn=update_tags,
     )
@@ -396,6 +406,24 @@ async def set_tags(
         result=execution.result,
         telemetry=execution.telemetry,
     ).model_dump(exclude_none=True)
+
+
+@router.post("/set_tags")
+async def set_tags(
+    request: SetTagsRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Set explicit retrieval tags metadata for one file or directory."""
+    return await _set_tags(request, _ctx)
+
+
+@router.post("/set_tags_batch")
+async def set_tags_batch(
+    request: SetTagsBatchRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Set explicit retrieval tags metadata for a batch of files or directories."""
+    return await _set_tags(request, _ctx)
 
 
 @router.post("/ensure_directory_index")

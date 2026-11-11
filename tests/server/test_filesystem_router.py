@@ -311,18 +311,17 @@ async def test_system_attrs_returns_empty_tags_without_querying_vector_store(mon
 
 
 @pytest.mark.parametrize(
-    "params,body",
+    "body",
     [
-        ({}, None),
-        ({"uri": "viking://resources/a.md"}, {"uris": ["viking://resources/b.md"]}),
-        ({}, {"uris": []}),
-        ({}, {"uris": ["viking://resources/a.md"] * 51}),
-        ({}, {"uris": None}),
-        ({}, {"uris": ["viking://resources/a.md"], "unexpected": True}),
+        {},
+        {"uris": []},
+        {"uris": ["viking://resources/a.md"] * 51},
+        {"uris": None},
+        {"uris": ["viking://resources/a.md"], "unexpected": True},
     ],
 )
-async def test_attrs_batch_rejects_invalid_request_http(client, params, body):
-    response = await client.request("GET", "/api/v1/fs/attrs", params=params, json=body)
+async def test_attrs_batch_rejects_invalid_request_http(client, body):
+    response = await client.post("/api/v1/fs/attrs/batch", json=body)
     assert response.status_code == 400, response.text
     assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
 
@@ -340,8 +339,8 @@ async def test_attrs_reuses_stat_permission_check_before_querying_tags(monkeypat
         "get_service",
         lambda: SimpleNamespace(fs=fs),
     )
-    response = await filesystem.attrs(
-        uri=None, request=filesystem.GetAttrsRequest(uris=[uri]), _ctx=ctx
+    response = await filesystem.attrs_batch(
+        request=filesystem.GetAttrsRequest(uris=[uri]), _ctx=ctx
     )
     result = response.result
     assert result["items"] == []
@@ -374,7 +373,7 @@ async def test_attrs_batch_reuses_bounded_execution_and_preserves_failures(monke
     monkeypatch.setattr(filesystem, "get_service", lambda: SimpleNamespace(fs=fs))
     monkeypatch.setattr(fs, "attrs", read)
     response = await asyncio.wait_for(
-        filesystem.attrs(uri=None, request=filesystem.GetAttrsRequest(uris=uris), _ctx=ctx),
+        filesystem.attrs_batch(request=filesystem.GetAttrsRequest(uris=uris), _ctx=ctx),
         timeout=5,
     )
     result = response.result
@@ -392,8 +391,7 @@ async def test_attrs_batch_propagates_cancellation(monkeypatch):
     monkeypatch.setattr(filesystem, "get_service", lambda: SimpleNamespace(fs=fs))
     monkeypatch.setattr(fs, "attrs", AsyncMock(side_effect=asyncio.CancelledError))
     with pytest.raises(asyncio.CancelledError):
-        await filesystem.attrs(
-            uri=None,
+        await filesystem.attrs_batch(
             request=filesystem.GetAttrsRequest(uris=["viking://resources/a.md"]),
             _ctx=ctx,
         )
@@ -444,9 +442,8 @@ async def test_attrs_batch_http_reads_exact_levels_and_preserves_stored_usage(cl
         "X-OpenViking-Account": ctx.account_id,
         "X-OpenViking-User": ctx.user.user_id,
     }
-    response = await client.request(
-        "GET",
-        "/api/v1/fs/attrs",
+    response = await client.post(
+        "/api/v1/fs/attrs/batch",
         headers=headers,
         json={
             "uris": [
@@ -489,8 +486,8 @@ async def test_attrs_batch_denies_foreign_memory_and_keeps_own_memory(service, m
     await service.viking_fs.write_file(own_uri, raw, ctx=ctx)
     await service.viking_fs.write_file(foreign_uri, raw, ctx=foreign_ctx)
     monkeypatch.setattr(filesystem, "get_service", lambda: service)
-    response = await filesystem.attrs(
-        uri=None, request=filesystem.GetAttrsRequest(uris=[own_uri, foreign_uri]), _ctx=ctx
+    response = await filesystem.attrs_batch(
+        request=filesystem.GetAttrsRequest(uris=[own_uri, foreign_uri]), _ctx=ctx
     )
     result = response.result
     assert [item["uri"] for item in result["items"]] == [own_uri]
@@ -513,8 +510,8 @@ async def test_attrs_batch_reports_vector_read_errors_as_failures(monkeypatch):
     )
     ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
     first, second = "viking://resources/a.md", "viking://resources/b.md"
-    response = await filesystem.attrs(
-        uri=None, request=filesystem.GetAttrsRequest(uris=[first, second]), _ctx=ctx
+    response = await filesystem.attrs_batch(
+        request=filesystem.GetAttrsRequest(uris=[first, second]), _ctx=ctx
     )
     result = response.result
     assert result["items"] == [{"uri": second, "context_type": "resource", "attrs": {"tags": []}}]
@@ -551,8 +548,8 @@ async def test_attrs_batch_keeps_same_uri_isolated_between_accounts(service, mon
         )
     monkeypatch.setattr(filesystem, "get_service", lambda: service)
     for count, ctx in enumerate(contexts, start=1):
-        response = await filesystem.attrs(
-            uri=None, request=filesystem.GetAttrsRequest(uris=[uri]), _ctx=ctx
+        response = await filesystem.attrs_batch(
+            request=filesystem.GetAttrsRequest(uris=[uri]), _ctx=ctx
         )
         result = response.result
         assert result["failed"] == []

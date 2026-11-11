@@ -365,6 +365,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/fs/tree` | 获取目录树 |
 | GET | `/api/v1/fs/stat` | 获取资源状态 |
 | GET | `/api/v1/fs/attrs` | 获取逻辑扩展属性 |
+| POST | `/api/v1/fs/attrs/batch` | 批量获取 1～50 个 URI 的逻辑扩展属性 |
 | POST | `/api/v1/fs/attrs/set_tags` | 设置检索标签（兼容别名） |
 | POST | `/api/v1/fs/mkdir` | 创建目录 |
 | DELETE | `/api/v1/fs` | 删除资源 |
@@ -392,6 +393,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/content/write` | 写入内容并刷新语义索引 |
 | POST | `/api/v1/content/batch-write` | 写入多个文件并刷新索引 |
 | POST | `/api/v1/content/set_tags` | 设置检索标签 |
+| POST | `/api/v1/content/set_tags_batch` | 批量设置 1～50 个 URI 的检索标签 |
 | POST | `/api/v1/content/ensure_directory_index` | 确保既有目录的索引就绪，仅在两层摘要都缺失时创建 L0 |
 | POST | `/api/v1/content/reindex` | 重建语义或向量索引 |
 

@@ -103,7 +103,11 @@ from openviking.utils.embedding_utils import vectorize_directory_meta
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.path_safety import normalize_storage_target_uri, validate_safe_viking_uri_path
 from openviking.utils.summarizer import FileRefreshRequest, Summarizer
-from openviking.utils.tags import merge_search_tags, normalize_search_tags
+from openviking.utils.tags import (
+    merge_search_tags,
+    normalize_search_tag_patches,
+    normalize_search_tags,
+)
 from openviking_cli.exceptions import (
     ConflictError,
     DeadlineExceededError,
@@ -1452,11 +1456,12 @@ class ContentWriteCoordinator:
         self._validate_tag_mode(mode)
         normalized_uri = self._validate_uri_path(uri, field_name="uri")
         requested_mode = mode
-        normalized_tags = (
-            []
-            if requested_mode == "clear"
-            else normalize_search_tags(tags, discard_invalid=requested_mode != "increase")
-        )
+        if requested_mode == "clear":
+            normalized_tags = []
+        elif requested_mode == "append":
+            normalized_tags = normalize_search_tag_patches(tags)
+        else:
+            normalized_tags = normalize_search_tags(tags, discard_invalid=True)
         if not namespace_policy_for_uri(normalized_uri).supports_tags:
             raise InvalidArgumentError(f"tags are not supported for namespace: {normalized_uri}")
         await self._viking_fs._ensure_access(normalized_uri, ctx, action=AclAction.WRITE)
@@ -2295,7 +2300,7 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(f"unsupported batch-write mode: {mode}")
 
     def _validate_tag_mode(self, mode: str) -> None:
-        if mode not in {"replace", "append", "clear", "increase"}:
+        if mode not in {"replace", "append", "clear"}:
             raise InvalidArgumentError(f"unsupported tag mode: {mode}")
 
     def _ensure_content_write_policy(self, uri: str) -> None:

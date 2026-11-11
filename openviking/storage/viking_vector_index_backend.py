@@ -12,7 +12,6 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from decimal import Decimal
 from functools import wraps
 from typing import Any, AsyncIterator, Awaitable, Callable, Container, Dict, List, Mapping, Optional
 
@@ -46,7 +45,7 @@ from openviking.storage.vectordb.collection.result import UpdateResult
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vectordb_adapters import create_collection_adapter
 from openviking.utils.tags import (
-    increase_search_tags,
+    apply_search_tag_patches,
     merge_search_tags,
     normalize_search_tags,
     preserve_memory_type_tag,
@@ -1564,36 +1563,21 @@ class VikingVectorIndexBackend:
         levels: Optional[List[int]] = None,
         ctx: RequestContext,
     ) -> List[Dict[str, Any]]:
-        """Update tags for an exact record or directory summary records.
-
-        increase adds decimal deltas and timestamps positive used_count updates.
-        Like append, it is a read-modify-write operation, not an atomic increment.
-        """
-        if mode not in {"replace", "append", "increase"}:
+        """Update tags for an exact record or directory summary records."""
+        if mode not in {"replace", "append"}:
             raise ValueError(f"unsupported tag mode: {mode}")
 
         def resolve_tags(record: Dict[str, Any]) -> List[str]:
             """根据更新模式和已有记录，计算最终标签列表。"""
-            if mode == "increase":
-                resolved = increase_search_tags(record.get("search_tags"), tags)
-                deltas = dict(tag.split("=", 1) for tag in normalize_search_tags(tags))
-                if "used_count" in deltas:
-                    values = dict(tag.split("=", 1) for tag in resolved)
-                    if Decimal(values["used_count"]) < 0:
-                        raise InvalidArgumentError("used_count cannot be negative")
-                    if Decimal(deltas["used_count"]) > 0:
-                        resolved = merge_search_tags(
-                            resolved, [f"last_used_at={int(time.time() * 1000)}"]
-                        )
-            elif mode == "append":
-                resolved = merge_search_tags(record.get("search_tags"), tags)
+            if mode == "append":
+                resolved = apply_search_tag_patches(record.get("search_tags"), tags)
             else:
                 resolved = list(tags)
             if record.get("context_type") == "memory":
                 resolved = preserve_memory_type_tag(record.get("search_tags"), resolved)
             return resolved
 
-        async def update_increased_tags(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        async def update_appended_tags(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             record_id = record.get("id")
             if not record_id:
                 return None
@@ -1615,8 +1599,8 @@ class VikingVectorIndexBackend:
             if not record or not record.get("id"):
                 return []
 
-            if mode == "increase":
-                updated_record = await update_increased_tags(record)
+            if mode == "append":
+                updated_record = await update_appended_tags(record)
                 return [updated_record] if updated_record else []
 
             full_records = await self.get([str(record["id"])], ctx=ctx)
@@ -1633,8 +1617,6 @@ class VikingVectorIndexBackend:
             try:
                 updated_record["search_tags"] = resolve_tags(updated_record)
             except Exception as exc:
-                if mode == "increase":
-                    raise
                 logger.warning(
                     "update_search_tags failed to merge exact record tags uri=%s "
                     "account_id=%s existing_tags=%s incoming_tags=%s error=%s",
@@ -1659,10 +1641,10 @@ class VikingVectorIndexBackend:
         if not records:
             return []
 
-        if mode == "increase":
+        if mode == "append":
             updated_records = []
             for record in records:
-                updated_record = await update_increased_tags(record)
+                updated_record = await update_appended_tags(record)
                 if updated_record:
                     updated_records.append(updated_record)
             return updated_records
@@ -1693,8 +1675,6 @@ class VikingVectorIndexBackend:
             try:
                 updated_record["search_tags"] = resolve_tags(updated_record)
             except Exception as exc:
-                if mode == "increase":
-                    raise
                 logger.warning(
                     "update_search_tags failed to merge leveled record tags uri=%s "
                     "account_id=%s level=%s existing_tags=%s incoming_tags=%s error=%s",

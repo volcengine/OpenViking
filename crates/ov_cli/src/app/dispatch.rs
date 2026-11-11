@@ -555,12 +555,19 @@ pub(super) async fn dispatch(
         Commands::Stat { uri } => handlers::handle_stat(uri, ctx).await,
         Commands::Attrs { action } => match action {
             AttrsCommands::Get { uri, key } => handlers::handle_attrs(uri, key, ctx).await,
+            AttrsCommands::Batch { uris } => handlers::handle_attrs_batch(uris, ctx).await,
             AttrsCommands::SetTags {
                 uri,
                 tags,
                 mode,
                 recursive,
             } => handlers::handle_set_tags(uri, tags, mode, recursive, ctx).await,
+            AttrsCommands::SetTagsBatch {
+                uris,
+                tags,
+                mode,
+                recursive,
+            } => handlers::handle_set_tags_batch(uris, tags, mode, recursive, ctx).await,
         },
         Commands::Acl { action } => handlers::handle_acl(action, ctx).await,
         Commands::AddMemory { content } => handlers::handle_add_memory(content, ctx).await,

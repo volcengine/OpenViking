@@ -8,10 +8,11 @@ import pytest
 from openviking.server.routers.search import _resolve_search_filter
 from openviking.utils import tags as tags_module
 from openviking.utils.tags import (
+    apply_search_tag_patches,
     build_search_tags_filter,
-    increase_search_tags,
     merge_search_tags,
     normalize_search_tag,
+    normalize_search_tag_patches,
     normalize_search_tags,
 )
 from openviking_cli.exceptions import InvalidArgumentError
@@ -109,11 +110,11 @@ def test_merge_search_tags_discards_invalid_existing_tags(caplog):
     assert warnings[0].invalid_tags == ["bad-existing"]
 
 
-def test_increase_search_tags_adds_deltas_and_preserves_other_keys():
-    assert increase_search_tags(
+def test_apply_search_tag_patches_executes_in_order_and_preserves_other_keys():
+    assert apply_search_tag_patches(
         ["team=search", "count=10", "other=4"],
-        ["count=-2", "new_count=3", "other=0"],
-    ) == ["team=search", "count=8", "other=4", "new_count=3"]
+        ["count-=2", "new_count+=3", "other+=0", "count+=0.5", "count=4", "count-=1"],
+    ) == ["team=search", "count=3", "other=4", "new_count=3"]
 
 
 @pytest.mark.parametrize(
@@ -125,25 +126,33 @@ def test_increase_search_tags_adds_deltas_and_preserves_other_keys():
         ([], ["count=1e3"], ["count=1000"]),
     ],
 )
-def test_increase_search_tags_supports_decimal_values(existing, incoming, expected):
-    assert increase_search_tags(existing, incoming) == expected
+def test_apply_search_tag_patches_supports_decimal_values(existing, incoming, expected):
+    incoming = [tag.replace("=", "+=", 1) for tag in incoming]
+    assert apply_search_tag_patches(existing, incoming) == expected
 
 
 @pytest.mark.parametrize(
     "existing,incoming",
     [
-        (["count=unknown"], ["count=1"]),
-        (["count="], ["count=1"]),
+        (["count=unknown"], ["count+=1"]),
         ([], ["count"]),
-        ([], ["count=NaN"]),
-        ([], ["count=Infinity"]),
-        (["count=-Infinity"], ["count=1"]),
-        (["count=sNaN"], ["count=1"]),
+        ([], ["count+=NaN"]),
+        ([], ["count+=Infinity"]),
+        (["count=-Infinity"], ["count+=1"]),
+        (["count=sNaN"], ["count+=1"]),
     ],
 )
-def test_increase_search_tags_rejects_invalid_input_without_resetting_counts(existing, incoming):
+def test_apply_search_tag_patches_rejects_invalid_arithmetic(existing, incoming):
     with pytest.raises(InvalidArgumentError):
-        increase_search_tags(existing, incoming)
+        apply_search_tag_patches(existing, incoming)
+
+
+def test_normalize_search_tag_patches_preserves_duplicate_keys():
+    assert normalize_search_tag_patches([" Count+=1 ", "COUNT-=0.5", "count=7"]) == [
+        "count+=1",
+        "count-=0.5",
+        "count=7",
+    ]
 
 
 def test_find_tags_filter_requires_all_tags():

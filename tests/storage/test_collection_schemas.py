@@ -2993,7 +2993,7 @@ async def test_volcengine_backend_upsert_partial_update_creates_when_record_does
 async def test_viking_vector_index_backend_update_search_tags_updates_exact_uri_only():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     backend = object.__new__(VikingVectorIndexBackend)
-    calls = {"fetch_by_uri": [], "get": [], "upsert": []}
+    calls = {"fetch_by_uri": [], "update": []}
 
     resource_uri = "viking://resources/demo/doc.md"
 
@@ -3001,18 +3001,13 @@ async def test_viking_vector_index_backend_update_search_tags_updates_exact_uri_
         calls["fetch_by_uri"].append((uri, ctx.account_id))
         return {"id": "root-id", "uri": resource_uri, "search_tags": ["old=root"]}
 
-    async def _fake_get(ids, *, ctx):
-        calls["get"].append((list(ids), ctx.account_id))
-        return [{"id": "root-id", "uri": resource_uri, "search_tags": ["old=root"]}]
-
-    async def _fake_upsert(data, *, ctx, options=UpsertOptions()):
-        del ctx, options
-        calls["upsert"].append(dict(data))
-        return data["id"]
+    async def _fake_update(data, *, ctx):
+        del ctx
+        calls["update"].append(dict(data))
+        return UpdateResult(ok=True, ids=[data["id"]], updated_count=1)
 
     backend.fetch_by_uri = _fake_fetch_by_uri
-    backend.get = _fake_get
-    backend.upsert = _fake_upsert
+    backend.update = _fake_update
 
     updated = await backend.update_search_tags(
         resource_uri,
@@ -3025,17 +3020,14 @@ async def test_viking_vector_index_backend_update_search_tags_updates_exact_uri_
         {"id": "root-id", "uri": resource_uri, "search_tags": ["old=root", "team=search"]}
     ]
     assert calls["fetch_by_uri"] == [(resource_uri, ctx.account_id)]
-    assert calls["get"] == [(["root-id"], ctx.account_id)]
-    assert calls["upsert"] == [
-        {"id": "root-id", "uri": resource_uri, "search_tags": ["old=root", "team=search"]}
-    ]
+    assert calls["update"] == [{"id": "root-id", "search_tags": ["old=root", "team=search"]}]
 
 
 @pytest.mark.asyncio
 async def test_update_search_tags_for_leaf_uri_queries_exact_uri_only(monkeypatch):
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     overview_uri = "viking://resources/demo/doc.md/.overview.md"
-    calls = {"fetch_by_uri": [], "get": [], "upsert": []}
+    calls = {"fetch_by_uri": [], "update": []}
 
     backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
 
@@ -3044,18 +3036,13 @@ async def test_update_search_tags_for_leaf_uri_queries_exact_uri_only(monkeypatc
         assert uri == overview_uri
         return {"id": "overview-id", "uri": overview_uri, "search_tags": ["existing=1"]}
 
-    async def _fake_get(ids, *, ctx):
-        calls["get"].append((list(ids), ctx.account_id))
-        return [{"id": "overview-id", "uri": overview_uri, "search_tags": ["existing=1"]}]
-
-    async def _fake_upsert(data, *, ctx, options=UpsertOptions()):
-        del ctx, options
-        calls["upsert"].append(dict(data))
-        return data["id"]
+    async def _fake_update(data, *, ctx):
+        del ctx
+        calls["update"].append(dict(data))
+        return UpdateResult(ok=True, ids=[data["id"]], updated_count=1)
 
     backend.fetch_by_uri = _fake_fetch_by_uri
-    backend.get = _fake_get
-    backend.upsert = _fake_upsert
+    backend.update = _fake_update
 
     updated = await backend.update_search_tags(
         overview_uri,
@@ -3068,17 +3055,14 @@ async def test_update_search_tags_for_leaf_uri_queries_exact_uri_only(monkeypatc
         {"id": "overview-id", "uri": overview_uri, "search_tags": ["existing=1", "team=search"]}
     ]
     assert calls["fetch_by_uri"] == [(overview_uri, ctx.account_id)]
-    assert calls["get"] == [(["overview-id"], ctx.account_id)]
-    assert calls["upsert"] == [
-        {"id": "overview-id", "uri": overview_uri, "search_tags": ["existing=1", "team=search"]}
-    ]
+    assert calls["update"] == [{"id": "overview-id", "search_tags": ["existing=1", "team=search"]}]
 
 
 @pytest.mark.asyncio
 async def test_update_search_tags_with_levels_queries_directory_uri_only():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     directory_uri = "viking://resources/demo/doc.md"
-    calls = {"filter": [], "get": [], "upsert": []}
+    calls = {"filter": [], "update": []}
 
     backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
 
@@ -3096,21 +3080,13 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
             {"id": "dir-l1", "uri": directory_uri, "level": 1, "search_tags": ["old=1"]},
         ]
 
-    async def _fake_upsert(data, *, ctx, options=UpsertOptions()):
-        del ctx, options
-        calls["upsert"].append(dict(data))
-        return data["id"]
-
-    async def _fake_get(ids, *, ctx):
-        calls["get"].append((list(ids), ctx.account_id))
-        return [
-            {"id": "dir-l0", "uri": directory_uri, "level": 0, "search_tags": ["old=0"]},
-            {"id": "dir-l1", "uri": directory_uri, "level": 1, "search_tags": ["old=1"]},
-        ]
+    async def _fake_update(data, *, ctx):
+        del ctx
+        calls["update"].append(dict(data))
+        return UpdateResult(ok=True, ids=[data["id"]], updated_count=1)
 
     backend.filter = _fake_filter
-    backend.get = _fake_get
-    backend.upsert = _fake_upsert
+    backend.update = _fake_update
 
     updated = await backend.update_search_tags(
         directory_uri,
@@ -3122,20 +3098,15 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
 
     assert len(updated) == 2
     assert len(calls["filter"]) == 1
-    assert calls["get"] == [(["dir-l0", "dir-l1"], ctx.account_id)]
     assert calls["filter"][0]["limit"] == 2
     assert "id" in calls["filter"][0]["output_fields"]
-    assert calls["upsert"] == [
+    assert calls["update"] == [
         {
             "id": "dir-l0",
-            "uri": directory_uri,
-            "level": 0,
             "search_tags": ["old=0", "team=search"],
         },
         {
             "id": "dir-l1",
-            "uri": directory_uri,
-            "level": 1,
             "search_tags": ["old=1", "team=search"],
         },
     ]
@@ -3144,7 +3115,7 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
 @pytest.mark.asyncio
 async def test_update_search_tags_with_levels_skips_records_without_id_and_private_helper_is_removed():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    calls = {"filter": [], "get": [], "upsert": []}
+    calls = {"filter": [], "update": []}
 
     backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
 
@@ -3162,26 +3133,13 @@ async def test_update_search_tags_with_levels_skips_records_without_id_and_priva
             {"id": "r2", "uri": "viking://resources/demo/doc.md", "level": 2, "search_tags": None},
         ]
 
-    async def _fake_upsert(data, *, ctx, options=UpsertOptions()):
-        del ctx, options
-        calls["upsert"].append(dict(data))
-        return data["id"]
-
-    async def _fake_get(ids, *, ctx):
-        calls["get"].append((list(ids), ctx.account_id))
-        return [
-            {
-                "id": "r1",
-                "uri": "viking://resources/demo/doc.md",
-                "level": 0,
-                "search_tags": ["old=1"],
-            },
-            {"id": "r2", "uri": "viking://resources/demo/doc.md", "level": 2, "search_tags": None},
-        ]
+    async def _fake_update(data, *, ctx):
+        del ctx
+        calls["update"].append(dict(data))
+        return UpdateResult(ok=True, ids=[data["id"]], updated_count=1)
 
     backend.filter = _fake_filter
-    backend.get = _fake_get
-    backend.upsert = _fake_upsert
+    backend.update = _fake_update
 
     updated = await backend.update_search_tags(
         "viking://resources/demo/doc.md",
@@ -3193,7 +3151,6 @@ async def test_update_search_tags_with_levels_skips_records_without_id_and_priva
 
     assert not hasattr(VikingVectorIndexBackend, "_apply_search_tags_to_records")
     assert calls["filter"] == [True]
-    assert calls["get"] == [(["r1", "r2"], ctx.account_id)]
     assert updated == [
         {
             "id": "r1",
@@ -3208,7 +3165,10 @@ async def test_update_search_tags_with_levels_skips_records_without_id_and_priva
             "search_tags": ["team=search"],
         },
     ]
-    assert calls["upsert"] == updated
+    assert calls["update"] == [
+        {"id": "r1", "search_tags": ["old=1", "team=search"]},
+        {"id": "r2", "search_tags": ["team=search"]},
+    ]
 
 
 @pytest.mark.asyncio
@@ -3238,9 +3198,7 @@ async def test_update_search_tags_rejects_invalid_mode_before_fetch():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("levels", [None, [0], [0, 1]])
 @pytest.mark.parametrize("delta,counts", [("1", ["1", "2"]), ("0.5", ["0.5", "1.0"])])
-async def test_update_search_tags_increase_counts_and_time_without_changing_content(
-    monkeypatch, levels, delta, counts
-):
+async def test_update_search_tags_append_arithmetic_without_changing_content(levels, delta, counts):
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     uri = "viking://resources/demo"
     records = {
@@ -3267,16 +3225,13 @@ async def test_update_search_tags_increase_counts_and_time_without_changing_cont
         return UpdateResult(ok=True, ids=[data["id"]], updated_count=1)
 
     backend.update = AsyncMock(side_effect=update)
-    backend.get_strict = AsyncMock(
-        side_effect=AssertionError("increase must use projected records")
-    )
-    backend.get = AsyncMock(side_effect=AssertionError("increase must use projected records"))
-    backend.upsert = AsyncMock(side_effect=AssertionError("increase must use partial updates"))
-    monkeypatch.setattr("openviking.storage.viking_vector_index_backend.time.time", lambda: 1000.25)
+    backend.get_strict = AsyncMock(side_effect=AssertionError("append must use projected records"))
+    backend.get = AsyncMock(side_effect=AssertionError("append must use projected records"))
+    backend.upsert = AsyncMock(side_effect=AssertionError("append must use partial updates"))
 
     for count in counts:
         updated = await backend.update_search_tags(
-            uri, [f"used_count={delta}"], mode="increase", levels=levels, ctx=ctx
+            uri, [f"used_count+={delta}"], mode="append", levels=levels, ctx=ctx
         )
         assert len(updated) == len(records)
         for record in updated:
@@ -3284,7 +3239,6 @@ async def test_update_search_tags_increase_counts_and_time_without_changing_cont
                 "team=search",
                 "memory_type=preferences",
                 f"used_count={count}",
-                "last_used_at=1000250",
             }
             assert record["abstract"] == "unchanged content"
             assert record["updated_at"] == "2026-01-01T00:00:00Z"
@@ -3296,10 +3250,7 @@ async def test_update_search_tags_increase_counts_and_time_without_changing_cont
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "tags", [["used_count=0"], ["used_count=-1"], ["used_count=-0.5"], ["retrieved_count=1"]]
-)
-async def test_update_search_tags_increase_only_positive_usage_updates_time(tags):
+async def test_update_search_tags_append_has_no_special_usage_fields():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     uri = "viking://resources/demo/file.md"
     record = {"id": "r1", "uri": uri, "search_tags": ["used_count=2", "last_used_at=123"]}
@@ -3307,8 +3258,15 @@ async def test_update_search_tags_increase_only_positive_usage_updates_time(tags
     backend.fetch_by_uri = AsyncMock(return_value=record)
     backend.update = AsyncMock(return_value=UpdateResult(ok=True, ids=["r1"], updated_count=1))
 
-    updated = await backend.update_search_tags(uri, tags, mode="increase", ctx=ctx)
+    updated = await backend.update_search_tags(
+        uri,
+        ["used_count-=2.5", "retrieved_count+=1"],
+        mode="append",
+        ctx=ctx,
+    )
 
+    assert "used_count=-0.5" in updated[0]["search_tags"]
+    assert "retrieved_count=1" in updated[0]["search_tags"]
     assert "last_used_at=123" in updated[0]["search_tags"]
     backend.update.assert_awaited_once()
 
@@ -3317,13 +3275,12 @@ async def test_update_search_tags_increase_only_positive_usage_updates_time(tags
 @pytest.mark.parametrize(
     "stored_tags,tags",
     [
-        (["used_count=unknown"], ["used_count=1"]),
-        (["used_count=0"], ["used_count=-1"]),
-        (["used_count=2"], ["used_count=NaN"]),
-        (["used_count=0.2"], ["used_count=-0.3"]),
+        (["used_count=unknown"], ["used_count+=1"]),
+        (["used_count=2"], ["used_count+=NaN"]),
+        (["used_count=2"], ["used_count-=Infinity"]),
     ],
 )
-async def test_update_search_tags_increase_validation_error_does_not_write(stored_tags, tags):
+async def test_update_search_tags_append_validation_error_does_not_write(stored_tags, tags):
     from openviking_cli.exceptions import InvalidArgumentError
 
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
@@ -3334,13 +3291,13 @@ async def test_update_search_tags_increase_validation_error_does_not_write(store
     backend.update = AsyncMock()
 
     with pytest.raises(InvalidArgumentError):
-        await backend.update_search_tags(uri, tags, mode="increase", ctx=ctx)
+        await backend.update_search_tags(uri, tags, mode="append", ctx=ctx)
 
     backend.update.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_update_search_tags_increase_not_found_is_not_updated():
+async def test_update_search_tags_append_not_found_is_not_updated():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     backend = object.__new__(VikingVectorIndexBackend)
     backend.fetch_by_uri = AsyncMock(return_value={"id": "r1"})
@@ -3353,14 +3310,14 @@ async def test_update_search_tags_increase_not_found_is_not_updated():
     )
 
     updated = await backend.update_search_tags(
-        "viking://resources/demo/file.md", ["used_count=1"], mode="increase", ctx=ctx
+        "viking://resources/demo/file.md", ["used_count+=1"], mode="append", ctx=ctx
     )
 
     assert updated == []
 
 
 @pytest.mark.asyncio
-async def test_update_search_tags_increase_update_failure_is_raised():
+async def test_update_search_tags_append_update_failure_is_raised():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     backend = object.__new__(VikingVectorIndexBackend)
     backend.fetch_by_uri = AsyncMock(return_value={"id": "r1"})
@@ -3374,7 +3331,7 @@ async def test_update_search_tags_increase_update_failure_is_raised():
 
     with pytest.raises(RuntimeError, match="storage unavailable"):
         await backend.update_search_tags(
-            "viking://resources/demo/file.md", ["used_count=1"], mode="increase", ctx=ctx
+            "viking://resources/demo/file.md", ["used_count+=1"], mode="append", ctx=ctx
         )
 
 

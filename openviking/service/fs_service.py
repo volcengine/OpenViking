@@ -1920,11 +1920,13 @@ class FSService:
             try:
                 if targets[uri] is not None:
                     raise targets[uri]
-                result = await self.set_tags(uri, tags, mode, recursive, ctx)
-                if not result["tags_updated"]:
-                    raise OpenVikingError(
-                        "No semantic record was updated", code="FAILED_PRECONDITION"
-                    )
+                result = await self.set_tags(
+                    uri=uri,
+                    tags=tags,
+                    mode=mode,
+                    recursive=recursive,
+                    ctx=ctx,
+                )
                 return True, result
             except Exception as exc:
                 error = map_exception(exc, resource=uri)
