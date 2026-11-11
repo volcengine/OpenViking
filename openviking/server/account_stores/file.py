@@ -1442,10 +1442,9 @@ class FileStore(AccountStore):
         The hot-path ``get_user`` reads in-memory state directly; this admin
         probe first honors the persisted registry when the watcher is off, so a
         user created or re-roled by a peer process is visible cross-instance
-        instead of returning a stale 404 or role. Mirrors
-        ``list_users_page(fresh=False)``: the refresh raises
+        instead of returning a stale 404 or role. The refresh raises
         ``NotFoundError(account)`` for an unknown account and that bubbles up as
-        a 404, matching the list endpoint.
+        a 404, matching the list endpoint (which reads memory directly).
         """
         await self._refresh_users_for_management_read(account_id)
         return await self.get_user(account_id, user_id)
@@ -1544,8 +1543,8 @@ class FileStore(AccountStore):
             async with self._mutation_lock:
                 async with self._reload_lock:
                     await self._refresh_account_users_from_store_unlocked(account_id)
-        else:
-            await self._refresh_users_for_management_read(account_id)
+        # Non-fresh listing (HTTP/MCP list_users) reads the in-process registry
+        # directly; peer-process changes arrive via the watcher or a reload.
         return self._get_users_page(
             account_id,
             limit=limit,
