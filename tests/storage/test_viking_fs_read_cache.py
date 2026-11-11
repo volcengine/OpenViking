@@ -5,6 +5,8 @@
 import asyncio
 import json
 import time
+from datetime import datetime
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -215,7 +217,7 @@ async def test_cache_can_be_disabled_by_env(monkeypatch):
 
 
 class _FakeFs:
-    def __init__(self, value: str) -> None:
+    def __init__(self, value: Any) -> None:
         self.value = value
 
     async def read(self, uri, ctx, offset, limit):
@@ -231,7 +233,7 @@ class _FakeMcps:
 
 
 class _FakeService:
-    def __init__(self, value: str) -> None:
+    def __init__(self, value: Any) -> None:
         self.fs = _FakeFs(value)
         self.mcps = _FakeMcps()
 
@@ -256,6 +258,22 @@ async def test_read_fast_json_matches_native_response(monkeypatch):
     assert native.status == payload["status"]
     assert native.result == payload["result"]
     assert native.model_dump(exclude_none=True) == payload
+
+
+@pytest.mark.asyncio
+async def test_p1_non_str_result_falls_back_to_native(monkeypatch):
+    """Non-JSON-native payloads must not reach json.dumps."""
+    result = {"file": "profile.md", "updated_at": datetime(2023, 5, 8)}
+    monkeypatch.setattr(content_router, "get_service", lambda: _FakeService(result))
+    monkeypatch.delenv("OPENVIKING_READ_FAST_JSON", raising=False)
+    uri = "0123456789abcdef0123456789abcdef"
+
+    response = await content_router.read(uri=uri, offset=0, limit=-1, raw=False, _ctx=_ctx())
+
+    assert isinstance(response, ServerResponse)
+    assert response.result == result
+    encoded = json.loads(json.dumps(jsonable_encoder(response)))
+    assert encoded["result"]["updated_at"] == "2023-05-08T00:00:00"
 
 
 # ---------------------------------------------------------------------------

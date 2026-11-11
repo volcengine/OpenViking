@@ -41,6 +41,9 @@ logger = get_logger(__name__)
 # Fast path for /read: return pre-encoded JSON instead of constructing,
 # validating, and re-serializing the pydantic Response. Enabled by default;
 # set OPENVIKING_READ_FAST_JSON=0 to fall back to the native Response path.
+# It only applies when the payload is a plain str; any other type falls back
+# to the native path so jsonable_encoder can handle non-JSON-native values
+# (datetime, bytes, UUID, nested models) instead of raising.
 _FAST_JSON_OFF_VALUES = {"0", "false", "off", "no", "disable", "disabled"}
 
 
@@ -209,7 +212,7 @@ async def read(
             raise mapped from e
         raise
 
-    if _fast_json_read_enabled():
+    if _fast_json_read_enabled() and type(result) is str:
         return FastAPIResponse(
             content=json.dumps({"status": "ok", "result": result}, ensure_ascii=False),
             media_type="application/json",
