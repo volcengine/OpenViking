@@ -37,7 +37,7 @@ test('the five quick commands use scoped native requests and command-specific re
       host.records.at(-1).querySelector('.ov-tui__write').textContent,
       /Root uri: viking:\/\/agent\/skills\/wiki/,
     );
-    await host.execute('ov add-memory "Prefer tables" --session-id test');
+    await host.execute('ov add-memory "Prefer tables" --session-id "test/a b"');
     assert.match(
       host.records.at(-1).querySelector('.ov-tui__write').textContent,
       /memory-task/,
@@ -72,10 +72,10 @@ test('the five quick commands use scoped native requests and command-specific re
         },
       ],
       [
-        '/gateway/api/v1/sessions/test/messages',
+        '/gateway/api/v1/sessions/test%2Fa%20b/messages',
         { role: 'user', content: 'Prefer tables' },
       ],
-      ['/gateway/api/v1/sessions/test/commit', {}],
+      ['/gateway/api/v1/sessions/test%2Fa%20b/commit', {}],
       ['/gateway/api/v1/search/find', { query: 'notes' }],
       [
         '/gateway/api/v1/compile',

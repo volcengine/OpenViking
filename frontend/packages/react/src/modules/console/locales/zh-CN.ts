@@ -46,6 +46,45 @@ const messages: typeof enUS = {
     'task status': '查看后台任务',
     'task cancel': '请求取消后台任务',
   },
+  commandGuides: {
+    'add-resource': {
+      description:
+        '把网页 URL 或仓库地址导入 Resources，供后续检索、阅读和引用。浏览器终端不接收本地文件路径。',
+      examples: [
+        'ov add-resource https://github.com/volcengine/OpenViking/blob/main/docs/repository/README_CN.md',
+      ],
+    },
+    'add-skill': {
+      description: '从远程地址安装 Skill，可通过 -p 选择目标技能目录。',
+      examples: [
+        'ov add-skill https://github.com/volcengine/OpenViking/tree/skills/llm-wiki -p viking://agent/skills',
+      ],
+    },
+    'add-memory': {
+      description: '将事实、偏好或协作约定写入指定会话，再提交会话以提取记忆。',
+      examples: [
+        'ov add-memory "评审文档优先用表格对比方案" --session-id ov-tui-demo',
+      ],
+    },
+    find: {
+      description:
+        '按搜索词在当前上下文中做语义检索，返回匹配的资源、记忆或技能。',
+      examples: ['ov find "OpenViking 有什么价值？"'],
+    },
+    'compile create': {
+      description: '保存来源、目标和 Skill 的编译配置，不立即启动编译。',
+      examples: [
+        'ov compile create --from viking://resources/source --to viking://resources/wiki',
+      ],
+    },
+    compile: {
+      description:
+        '默认使用内置 llm-wiki Skill 整理资料，将 Wiki 写入目标目录。可通过 --skill 指定其他 Skill。',
+      examples: [
+        'ov compile --from viking://resources/source --to viking://resources/wiki',
+      ],
+    },
+  },
   parameters: {
     path: '要导入的远程路径或 URL',
     to: '写入的目标 URI',

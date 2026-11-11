@@ -6,12 +6,12 @@ import type {
   TuiRecordContent,
 } from '../../components/tui/index.js';
 import type { Locale } from '../../shared/locale.js';
-import { CORE_COMMAND_GUIDES } from './core-command-specs.js';
 import { COMMAND_SPECS, type CommandSpec } from './command-specs.js';
 import { parseArguments, tokenize } from './command-parser.js';
 import { ConsoleCommandError } from './command-messages.js';
 import { resolveConsoleLocale } from './labels.js';
 import { formatResult } from './results.js';
+import type { ConsoleCommandGuide } from './types.js';
 
 // Volcengine's command palette order, restricted to commands this Console can execute.
 const COMMAND_GROUPS = {
@@ -58,12 +58,10 @@ const DEFAULT_QUICK_COMMAND_NAMES = [
 export function consoleQuickCommands(
   locale: Locale,
 ): readonly TuiQuickCommand[] {
-  const guides = CORE_COMMAND_GUIDES[locale];
+  const guides = resolveConsoleLocale(locale).commandGuides;
   return DEFAULT_QUICK_COMMAND_NAMES.map((name) => ({
     name,
-    value:
-      (name === 'compile' ? undefined : guides[name].examples[0]) ??
-      `ov ${name} `,
+    value: name === 'compile' ? 'ov compile ' : guides[name].examples[0],
   }));
 }
 
@@ -71,11 +69,12 @@ export function consoleCommands(
   locale: Locale,
 ): readonly TuiCommandDefinition[] {
   const text = resolveConsoleLocale(locale);
-  const guides = CORE_COMMAND_GUIDES[locale];
+  const guides: Partial<Record<CommandSpec['name'], ConsoleCommandGuide>> =
+    text.commandGuides;
   const descriptions: Record<string, string> = text.parameters;
   const catalog = new Map(
     COMMAND_SPECS.map((spec) => {
-      const guide = guides[spec.name as keyof typeof guides];
+      const guide = guides[spec.name];
       return [
         spec.name,
         {
