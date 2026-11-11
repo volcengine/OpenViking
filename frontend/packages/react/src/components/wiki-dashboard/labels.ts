@@ -3,7 +3,6 @@ import { mergeLabels } from '../../shared/locale.js';
 const en: WikiDashboardLabels = {
   title: 'Generation results',
   pendingLabel: 'Pending',
-  discuss: 'VikingBot discussion',
   conflicts: 'All conflicts',
   conflictFiles: 'Conflicting files',
   pending: 'Pending conflicts',
@@ -20,20 +19,15 @@ const en: WikiDashboardLabels = {
   failed: 'Could not load conflicts',
   retry: 'Retry',
   open: 'Open',
-  edit: 'Manual edit',
   solution: 'Solution',
   occurred: 'Detected',
   fixedAt: 'Resolved',
   evidence: 'Resolution basis',
-  history: 'Resolution history',
-  historyHint: 'View the resolution plan and evidence',
-  unavailable: 'Action unavailable',
   limited: 'Showing up to 100 conflicting files',
 };
 const zh: WikiDashboardLabels = {
   title: '生成效果',
   pendingLabel: '待确认',
-  discuss: 'VikingBot 对话',
   conflicts: '全部冲突',
   conflictFiles: '冲突文件数',
   pending: '待确认冲突',
@@ -50,14 +44,10 @@ const zh: WikiDashboardLabels = {
   failed: '冲突加载失败',
   retry: '重试',
   open: '打开',
-  edit: '人工修改',
   solution: '修复方案',
   occurred: '检测时间',
   fixedAt: '修复时间',
   evidence: '修复依据',
-  history: '修复回溯',
-  historyHint: '查看修复方案与依据',
-  unavailable: '当前不可操作',
   limited: '最多展示 100 个存在待确认冲突的文件',
 };
 export const wikiLabels = (
