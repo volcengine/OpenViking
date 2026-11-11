@@ -1,3 +1,5 @@
+import { isCollection, parseDocument } from 'yaml';
+
 /** Fence a leading YAML metadata document for the Markdown preview only. */
 export function fenceMarkdownFrontmatter(source: string): string {
   const opening = /^\uFEFF?---[ \t]*\r?\n/.exec(source);
@@ -7,13 +9,9 @@ export function fenceMarkdownFrontmatter(source: string): string {
   if (!closing) return source;
 
   const yaml = rest.slice(0, closing.index);
-  const first = yaml.split(/\r?\n/).find((line) => !/^\s*(?:#|$)/.test(line));
-  // Ordinary Markdown rules around prose are not a metadata document.
-  if (
-    !first ||
-    !/^(?:[ \t]*[^:#]+:[ \t]|[ \t]*[^:#]+:$|[ \t]*-[ \t])/.test(first)
-  )
-    return source;
+  // Check the entire candidate: Markdown rules can also surround prose or links.
+  const { contents, errors } = parseDocument(yaml, { prettyErrors: false });
+  if (errors.length || !isCollection(contents)) return source;
 
   let length = 3;
   for (const marker of yaml.matchAll(/~+/g))

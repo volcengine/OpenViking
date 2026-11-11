@@ -165,6 +165,7 @@
     "react-transition-group": "^4.4.5",
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "yaml": "^2.9.1"
   }
 }
