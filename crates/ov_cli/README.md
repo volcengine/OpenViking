@@ -40,13 +40,17 @@ ov config
 
 `ov config` can add, edit, delete, validate, and switch saved configs. It writes the active client config to `~/.openviking/ovcli.conf`. Saved named configs are stored as `~/.openviking/ovcli.conf.<name>`, and `ov config switch <name>` copies the selected saved config to the active config path.
 
-Recent CLI versions require a saved display language before most commands run in non-interactive shells:
+Before most commands run in non-interactive shells, select a display language by saving it:
 
 ```bash
 ov language en
 # or
 ov language zh-CN
 ```
+
+Alternatively, set `OPENVIKING_LANG=en` or `OPENVIKING_LANG=zh-CN` in the command environment.
+A recognized value satisfies first-run language setup without writing a settings file.
+An existing saved language still takes precedence.
 
 For scripts and agents, prefer deterministic config commands and pass secrets through stdin or existing environment variables:
 
