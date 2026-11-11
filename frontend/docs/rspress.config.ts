@@ -147,7 +147,7 @@ export default defineConfig({
               items: [
                 { text: 'Overview', link: '/en/components/' },
                 { text: 'Icons', link: '/en/components/icons' },
-                { text: 'Authentication forms', link: '/en/components/auth-forms' },
+                { text: 'Auth forms', link: '/en/components/auth-forms' },
                 {
                   text: 'WikiDashboard',
                   link: '/en/components/wiki-dashboard',
