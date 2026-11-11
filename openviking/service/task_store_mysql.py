@@ -20,7 +20,6 @@ from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
 from openviking.service.task_domain import (
@@ -68,7 +67,7 @@ from openviking.storage.mysql_runtime import (
     mysql_runtime_store,
     wait_mysql_cleanup,
 )
-from openviking.storage.mysql_session import MySQLAsyncSession
+from openviking.storage.mysql_session import MySQLAsyncSession, create_mysql_engine
 from openviking_cli.utils.config.config_utils import DEFAULT_SERVICE_NAME, normalize_service_name
 
 
@@ -136,10 +135,13 @@ class MySQLTaskWorkStore(TaskWorkStore):
             "connect_timeout",
             "ssl",
             "unix_socket",
+            "require_writable",
         }
         unknown = values.keys() - allowed
         if unknown:
             raise ValueError(f"Unknown MySQL task store parameters: {', '.join(sorted(unknown))}")
+        if type(values.get("require_writable", False)) is not bool:
+            raise ValueError("MySQL require_writable must be boolean")
         missing = [name for name in ("user", "password", "database") if name not in values]
         if missing:
             raise ValueError(f"MySQL task store requires: {', '.join(missing)}")
@@ -178,6 +180,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             "max_overflow": 0,
             "pool_pre_ping": True,
             "pool_recycle": 3600,
+            **({"require_writable": True} if values.get("require_writable") else {}),
             "connect_args": connect_args,
             "isolation_level": "READ COMMITTED",
         }
@@ -201,7 +204,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                 await self._mysql_runtime.release()
 
         try:
-            engine = create_async_engine(self._url, **self._engine_options)
+            engine = create_mysql_engine(self._url, **self._engine_options)
             sessions: async_sessionmaker[AsyncSession] = async_sessionmaker(
                 engine, class_=MySQLAsyncSession, expire_on_commit=False
             )

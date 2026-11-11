@@ -182,9 +182,14 @@ async def readiness_check(request: Request):
 
     all_ok = all(_is_ready_check_ok(v) for v in checks.values())
     status_code = 200 if all_ok else 503
+    content = {"status": "ready" if all_ok else "not_ready", "checks": checks, "shared_state": state_backend}
+    # provider可报告已验证schema身份，私有化迁移准出使用；原生流程不在这里建表。
+    schema = getattr(service._agfs_client, "shared_schema", None)
+    if isinstance(schema, dict):
+        content["shared_schema"] = {key: schema.get(key) for key in ("version", "checksum")}
     return JSONResponse(
         status_code=status_code,
-        content={"status": "ready" if all_ok else "not_ready", "checks": checks, "shared_state": state_backend},
+        content=content,
     )
 
 

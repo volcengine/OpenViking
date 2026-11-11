@@ -283,15 +283,15 @@ class MySQLWatchStore(WatchStore):
     async def initialize(self) -> None:
         if self._engine is not None:
             return
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
-        from openviking.storage.mysql_session import MySQLAsyncSession
+        from openviking.storage.mysql_session import MySQLAsyncSession, create_mysql_engine
 
         await self._mysql_runtime.acquire()
         self._runtime_lease = True
         engine = None
         try:
-            engine = create_async_engine(self._url, **self._engine_options)
+            engine = create_mysql_engine(self._url, **self._engine_options)
             sessions = async_sessionmaker(engine, class_=MySQLAsyncSession, expire_on_commit=False)
             async with sessions() as session:
                 await session.execute(select(*self._tasks.c).limit(1))

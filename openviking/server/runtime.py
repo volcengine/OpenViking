@@ -196,6 +196,57 @@ class ServerRuntime:
         self.started = False
         self.stopped = False
 
+    @staticmethod
+    def _task_alive(task) -> bool:
+        return task is not None and not task.done()
+
+    def is_healthy(self) -> bool:
+        """Return whether configured roles and their owned loops are still running."""
+        if not self.started or self.stopped:
+            return False
+        tracker = get_task_tracker()
+        if not all(
+            self._task_alive(task)
+            for task in (tracker._cleanup_task, tracker._cancel_poll_task)
+        ):
+            return False
+        service = self.shared.service
+        if self.queue_worker is not None:
+            manager = getattr(service, "_queue_manager", None)
+            if manager is None or not manager.is_running():
+                return False
+            if any(not thread.is_alive() for thread in manager._queue_threads.values()):
+                return False
+        if self.scheduler is not None:
+            watch = getattr(service, "_watch_runtime", None)
+            if watch is not None and (
+                not watch.is_running
+                or watch._leader_enabled
+                and not self._task_alive(watch._loop_task)
+            ):
+                return False
+            for name in (
+                "_session_auto_commit_scheduler",
+                "_rule_cleanup_scheduler",
+                "_compile_scheduler",
+            ):
+                component = getattr(service, name, None)
+                if component is not None and (
+                    not getattr(component, "_running", True)
+                    or not self._task_alive(component._task)
+                ):
+                    return False
+            expiry = getattr(service, "_expiry_runtime", None)
+            if expiry is not None and (
+                not expiry._storage_started
+                or not expiry._state.accepting_calls
+                or expiry._io._thread is None
+                or not expiry._io._thread.is_alive()
+                or any(task.done() for task in expiry._tasks.values())
+            ):
+                return False
+        return True
+
     async def start(self) -> None:
         if self.started:
             return

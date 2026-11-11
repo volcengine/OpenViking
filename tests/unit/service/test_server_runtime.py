@@ -641,3 +641,63 @@ async def test_headless_cleanup_resources_close_after_drain(monkeypatch, tmp_pat
     if not enabled or app is not None:
         oauth.initialize.assert_not_awaited()
         gateway_close.assert_not_awaited()
+
+
+class _HealthTask:
+    def __init__(self, done=False):
+        self._done = done
+
+    def done(self):
+        return self._done
+
+
+class _HealthThread:
+    def __init__(self, alive=True):
+        self._alive = alive
+
+    def is_alive(self):
+        return self._alive
+
+
+def test_runtime_health_tracks_queue_worker_and_scheduler_loops(monkeypatch):
+    tracker = SimpleNamespace(
+        _cleanup_task=_HealthTask(), _cancel_poll_task=_HealthTask()
+    )
+    monkeypatch.setattr(
+        "openviking.server.runtime.get_task_tracker", lambda: tracker
+    )
+    manager = SimpleNamespace(
+        is_running=lambda: True, _queue_threads={"Semantic": _HealthThread()}
+    )
+    watch = SimpleNamespace(
+        is_running=True, _leader_enabled=True, _loop_task=_HealthTask()
+    )
+    cleanup = SimpleNamespace(_running=True, _task=_HealthTask())
+    service = SimpleNamespace(
+        _queue_manager=manager,
+        _watch_runtime=watch,
+        _session_auto_commit_scheduler=None,
+        _rule_cleanup_scheduler=cleanup,
+        _compile_scheduler=None,
+        _expiry_runtime=None,
+    )
+    runtime = ServerRuntime(service, ServerConfig(roles=["queue_worker", "scheduler"]))
+    runtime.started = True
+    assert runtime.is_healthy()
+    manager._queue_threads["Semantic"]._alive = False
+    assert not runtime.is_healthy()
+    manager._queue_threads["Semantic"]._alive = True
+    cleanup._task._done = True
+    assert not runtime.is_healthy()
+
+
+def test_runtime_health_requires_tracker_loops(monkeypatch):
+    tracker = SimpleNamespace(
+        _cleanup_task=_HealthTask(), _cancel_poll_task=_HealthTask(done=True)
+    )
+    monkeypatch.setattr(
+        "openviking.server.runtime.get_task_tracker", lambda: tracker
+    )
+    runtime = ServerRuntime(SimpleNamespace(), ServerConfig(roles=["api"]))
+    runtime.started = True
+    assert not runtime.is_healthy()
