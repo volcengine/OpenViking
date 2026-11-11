@@ -15,7 +15,7 @@ import { agentCliCommands, cliCommandCode } from './agent-clis.mjs';
 export const DEFAULT_PROMPT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'agent');
 
 // Connector sections, in the order they are assembled.
-const CONNECTOR_SECTIONS = Object.freeze(['lark', 'slack', 'weixin', 'telegram', 'qq', 'email']);
+const CONNECTOR_SECTIONS = Object.freeze(['lark', 'slack', 'weixin', 'telegram', 'qq', 'onebot', 'email']);
 
 function promptDir(config) {
   return config?.promptDir || DEFAULT_PROMPT_DIR;

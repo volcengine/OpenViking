@@ -1154,7 +1154,7 @@ describe('global Codex/Claude hard switch', () => {
     }
   });
 
-  for (const connector of ['weixin', 'telegram', 'qq']) it(`serves ${connector} through local agent tools and rejects a switch to Volc`, async () => {
+  for (const connector of ['weixin', 'telegram', 'qq', 'onebot']) it(`serves ${connector} through local agent tools and rejects a switch to Volc`, async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), `lark-runtime-${connector}-`));
     const store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
     const runtime = new AgentRuntime({ connectors: [connector] }, store, quietLogger, {

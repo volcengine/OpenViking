@@ -5,6 +5,7 @@ import { WEIXIN_CHANNEL_VERSION } from '../weixin/api.mjs';
 import { TELEGRAM_VERSION } from '../telegram/api.mjs';
 import { QQ_VERSION } from '../qq/api.mjs';
 import { SLACK_VERSION } from '../slack/api.mjs';
+import { ONEBOT_VERSION } from '../onebot/api.mjs';
 import { connectorManifest } from './protocol.mjs';
 import { DOC_COMMENT_CONVERSATION, MAX_COMMENT_CHARS } from '../lark-doc-comments.mjs';
 
@@ -57,6 +58,20 @@ const MANIFESTS = Object.freeze({
       'message.retract': {},
     },
     queries: ['message.media', 'chat.members.list', 'chat.list', 'chat.messages', 'thread.messages'], auth_schema: EMPTY_SCHEMA, config_schema: EMPTY_SCHEMA,
+  }),
+  // A QQ account driven by a OneBot v11 implementation (NapCat, LLOneBot,
+  // Lagrange.OneBot). A reply quotes its target; QQ has no threads. OneBot
+  // has no idempotency key, so an uncertain send stays blocked. Text over
+  // 4000 characters is refused by the Core before it reserves the outbox.
+  onebot: connectorManifest({
+    name: 'onebot', version: ONEBOT_VERSION, capabilities: ['events', 'actions'],
+    actions: {
+      'message.send': { content: ['markdown', 'file'], mentions: true, max_text_chars: 4000 },
+      'message.reply': { content: ['markdown', 'file'], mentions: true, max_text_chars: 4000 },
+      'message.react': {},
+      'message.retract': {},
+    },
+    queries: ['message.media', 'chat.list', 'chat.messages'], auth_schema: EMPTY_SCHEMA, config_schema: EMPTY_SCHEMA,
   }),
   lark: connectorManifest({
     name: 'lark',

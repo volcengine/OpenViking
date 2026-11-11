@@ -3,7 +3,7 @@
 
 import { updateManifest } from './deployment-manifest.mjs';
 
-const IM_NAMES = { lark: '飞书', weixin: '微信', telegram: 'Telegram', slack: 'Slack', qq: 'QQ' };
+const IM_NAMES = { lark: '飞书', weixin: '微信', telegram: 'Telegram', slack: 'Slack', qq: 'QQ', onebot: 'QQ' };
 const label = (id) => IM_NAMES[id] ? `${IM_NAMES[id]}（${id}）` : '未设置';
 const PRIMARY_NOTES = {
   weixin: '\n微信主动通知依赖会话上下文；长时间未互动后，可能需要再给机器人发一条消息才能恢复接收。',

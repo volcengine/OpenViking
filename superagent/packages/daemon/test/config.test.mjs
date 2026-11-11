@@ -61,6 +61,16 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.equal(config.qqAppSecret, undefined);
   });
 
+  it('accepts OneBot as the primary channel and next to the QQ bot connector', () => {
+    setEnv('OV_SUPERAGENT_CHANNEL', 'onebot');
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["onebot","qq"]');
+    const config = getConfig();
+    assert.equal(config.channel, 'onebot');
+    assert.deepEqual(config.connectors, ['onebot', 'qq']);
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["onebot","matrix"]');
+    assert.throws(() => getConfig(), /unsupported connector/);
+  });
+
   it('moves temporary files independently of persistent data and ignores TMPDIR', () => {
     setEnv('OV_SUPERAGENT_DATA_DIR', '/root/.local/share/superagent-primary');
     setEnv('OV_SUPERAGENT_WORKSPACE', '/work/superagent-primary');
