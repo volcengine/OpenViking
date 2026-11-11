@@ -2402,12 +2402,15 @@ class ContentWriteCoordinator:
         try:
             return await self._viking_fs.stat(uri, ctx=ctx, skip_count=True)
         except Exception as exc:
-            if self._is_not_found(exc):
-                if allow_not_found:
-                    return {"not_found": True}
-                if isinstance(exc, NotFoundError):
-                    raise
-                raise NotFoundError(uri, "file") from exc
+            if not self._is_not_found(exc):
+                # A storage failure (timeout, 5xx, permission error) is not a
+                # missing file: propagate it so callers can retry and clients
+                # do not mistake it for a 404.
+                raise
+            if allow_not_found:
+                return {"not_found": True}
+            if isinstance(exc, NotFoundError):
+                raise
             raise NotFoundError(uri, "file") from exc
 
     async def _classify_locked_write_target(
