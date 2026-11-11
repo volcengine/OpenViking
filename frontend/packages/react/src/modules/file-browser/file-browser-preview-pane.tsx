@@ -1,5 +1,6 @@
 import type { FilePreviewActions } from '../../components/file-preview/index.js';
 import { useRef } from 'react';
+import { previewActionContext } from './file-browser-preview-action-source.js';
 import type { Locale } from '../../shared/locale.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { FileBrowserDetail } from './file-browser-detail.js';
@@ -46,6 +47,11 @@ export function FileBrowserPreviewPane({
     uri: browser.currentUri,
     rootUri,
     isFile: tab?.kind === 'file',
+    enabled: Boolean(tab && tab.kind !== 'content' && !tab.loading),
+    dashboard: browser.previewDashboard,
+    onUpdated: () => {
+      void browser.actions.refresh().catch(() => {});
+    },
     canWrite: !readOnly && permissions.canEdit,
     canManage: !readOnly && permissions.canDelete,
     options: previewActions,
@@ -60,33 +66,84 @@ export function FileBrowserPreviewPane({
       void browser.actions.refresh().catch(() => {});
     },
   });
-  const actions = previewSlots?.actions;
+  const getContext = (context: FilePreviewActions) =>
+    previewActionContext(
+      context,
+      controls.context,
+      controls.actionItems,
+      {
+        ...previewActions,
+        copyContent:
+          controls.policy.copyContent && previewActions?.copyContent !== false,
+      },
+      text,
+    );
+  const actionItems = previewSlots?.actionItems;
+  const commandSource = (context: FilePreviewActions) => {
+    const extended = getContext(context);
+    return typeof actionItems === 'function'
+      ? actionItems(extended)
+      : (actionItems ?? extended.defaultActions);
+  };
+  const customActions = previewSlots?.actions;
   const slots = {
     ...previewSlots,
     actions:
-      typeof actions === 'function'
-        ? (context: FilePreviewActions) =>
-            actions({ ...context, ...controls.context })
-        : actions,
-    menuItems: [...controls.menuItems, ...(previewSlots?.menuItems ?? [])],
+      typeof customActions === 'function'
+        ? (context: FilePreviewActions) => customActions(getContext(context))
+        : customActions,
   };
   return (
     <div ref={ref} className="ov-file-browser__preview-pane">
       {browser.previewTabs?.length ? (
         <FileBrowserDetail
-          tabs={browser.previewTabs}
+          tabs={
+            controls.policy.system && tab?.kind === 'directory'
+              ? browser.previewTabs.map((item) =>
+                  item === tab
+                    ? {
+                        ...tab,
+                        labels: {
+                          ...tab.labels,
+                          fileEmpty: text.systemDirectory,
+                        },
+                        levels: [
+                          {
+                            ...tab.levels[0],
+                            key: 'system',
+                            label: '',
+                            source: {
+                              path: browser.currentUri ?? undefined,
+                              fileName:
+                                browser.currentUri?.split('/').pop() ||
+                                'system',
+                              content: '',
+                            },
+                          },
+                        ],
+                      }
+                    : item,
+                )
+              : browser.previewTabs
+          }
           activeKey={browser.previewKey}
           locale={locale}
           labels={previewLabels}
-          footer={browser.previewFooter}
-          titleExtra={permissions.titleExtra}
-          readOnly={
-            readOnly || !permissions.canEdit || previewActions?.edit === false
+          footer={
+            controls.policy.system && tab?.kind === 'directory'
+              ? undefined
+              : browser.previewFooter
           }
+          titleExtra={permissions.titleExtra}
+          readOnly={readOnly || !permissions.canEdit || !controls.policy.edit}
           toolbar={{
-            copyContent: previewActions?.copyContent,
+            copyPath: previewActions?.copyPath,
+            viewSwitch:
+              controls.policy.viewSwitch &&
+              previewActions?.viewSwitch !== false,
             edit: previewActions?.edit,
           }}
+          actions={commandSource}
           previewSlots={slots}
           onActiveKeyChange={browser.actions.setPreviewKey}
         />

@@ -630,3 +630,83 @@
     animation-duration: 2s;
   }
 }
+
+.ov-file-preview__media {
+  position: relative;
+  display: grid;
+  place-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  padding: 24px;
+  box-sizing: border-box;
+}
+.ov-file-preview__media > .ov-file-preview__state {
+  position: absolute;
+  inset: 0;
+}
+.ov-file-preview__media img,
+.ov-file-preview__media video {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.ov-file-preview__image-button {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+.ov-file-preview__image-button img {
+  max-height: 100%;
+}
+.ov-file-preview__image-button:focus-visible img {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: 2px;
+}
+.ov-file-preview__image-dialog {
+  max-width: 92vw;
+  max-height: 92vh;
+  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  border-radius: 8px;
+  color: var(--ov-ui-file-preview-text);
+  background: var(--ov-ui-file-preview-surface);
+}
+.ov-file-preview__image-dialog:modal {
+  overscroll-behavior: contain;
+}
+.ov-file-preview__image-dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background: var(--ov-ui-color-overlay, var(--ov-ui-overlay-default));
+}
+.ov-file-preview__image-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 16px;
+}
+.ov-file-preview__image-dialog img {
+  max-width: 100%;
+  max-height: 80vh;
+  object-fit: contain;
+}
+
+.ov-file-preview__media > video {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}

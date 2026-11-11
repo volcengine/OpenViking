@@ -239,3 +239,17 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.ov-file-preview__copy-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ov-file-preview__copy-path .ov-button {
+  min-inline-size: 24px;
+  min-block-size: 24px;
+}
+.ov-file-preview__copy-status {
+  font-size: 12px;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}

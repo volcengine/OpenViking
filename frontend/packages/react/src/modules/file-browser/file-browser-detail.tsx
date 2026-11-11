@@ -2,6 +2,7 @@ import type { Locale } from '../../shared/locale.js';
 import {
   FilePreview,
   type FilePreviewTab,
+  type FilePreviewActionSource,
   type FilePreviewToolbarOptions,
   type FilePreviewHeaderSlots,
 } from '../../components/file-preview/index.js';
@@ -19,6 +20,7 @@ export interface FileBrowserDetailProps {
   readOnly?: boolean;
   previewSlots?: FilePreviewHeaderSlots;
   toolbar?: FilePreviewToolbarOptions;
+  actions?: FilePreviewActionSource;
   onActiveKeyChange: (key: string) => void;
 }
 
@@ -32,6 +34,7 @@ export function FileBrowserDetail({
   readOnly,
   previewSlots,
   toolbar,
+  actions,
   onActiveKeyChange,
 }: FileBrowserDetailProps) {
   return (
@@ -44,9 +47,10 @@ export function FileBrowserDetail({
             titleExtra,
             readOnly,
             previewSlots,
-            toolbar,
+            actions,
           ) as [FilePreviewTab, ...FilePreviewTab[]]
         }
+        toolbar={toolbar}
         activeKey={activeKey ?? undefined}
         locale={locale}
         labels={labels}
@@ -62,7 +66,7 @@ function decorateTabs(
   titleExtra: ReactNode,
   readOnly?: boolean,
   previewSlots?: FilePreviewHeaderSlots,
-  toolbar?: FilePreviewToolbarOptions,
+  actions?: FilePreviewActionSource,
 ): readonly FilePreviewTab[] {
   return tabs.map((tab) => {
     if (tab.kind === 'content') return tab;
@@ -79,17 +83,13 @@ function decorateTabs(
         : tab;
     return {
       ...editableTab,
-      toolbar: { ...tab.toolbar, ...toolbar },
+      actions: actions ?? tab.actions,
       slots: {
         ...tab.slots,
         actions:
           previewSlots?.actions === undefined
             ? tab.slots?.actions
             : previewSlots.actions,
-        menuItems: [
-          ...(tab.slots?.menuItems ?? []),
-          ...(previewSlots?.menuItems ?? []),
-        ],
         footer: tab.slots?.footer ?? footer,
         titleExtra: (
           <>

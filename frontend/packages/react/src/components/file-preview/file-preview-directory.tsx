@@ -44,7 +44,6 @@ export interface FilePreviewDirectoryBodyProps {
   onViewModeChange: (mode: FilePreviewViewMode) => void;
   onHandleChange: (handle: ViewerHandle | null) => void;
   onViewModesChange: (modes: readonly ViewerViewModeOption[]) => void;
-  onDownload: () => void;
   onCancelEditing: () => void;
 }
 
@@ -80,7 +79,6 @@ export function FilePreviewDirectoryBody({
   onViewModeChange,
   onHandleChange,
   onViewModesChange,
-  onDownload,
   onCancelEditing,
 }: FilePreviewDirectoryBodyProps) {
   // 层级由外层持有（复制正文要跟着当前层级），这里只补一个非受控时的初值。
@@ -174,7 +172,6 @@ export function FilePreviewDirectoryBody({
       slotActions={tab.slots?.actions}
       extraActions={tab.slots?.extraActions}
       toolbar={toolbar}
-      menuItems={tab.slots?.menuItems}
       actionItems={tab.actions}
       actions={actions}
       text={text}
@@ -242,7 +239,6 @@ export function FilePreviewDirectoryBody({
           onViewModeChange={onViewModeChange}
           onHandleChange={onHandleChange}
           onViewModesChange={onViewModesChange}
-          onDownload={onDownload}
           onCancelEditing={onCancelEditing}
         />
       </div>

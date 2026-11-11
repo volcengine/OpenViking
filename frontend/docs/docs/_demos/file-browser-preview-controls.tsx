@@ -26,7 +26,7 @@ export function usePreviewControls(locale: 'zh-CN' | 'en-US') {
           exportPack: '导出 .ovpack',
           deleted: '已模拟删除',
           simulate: '模拟删除失败',
-          demo: '离线模拟：仅修改本页数据，刷新页面可恢复；历史和 ovpack 仅演示宿主回调。',
+          demo: '离线模拟：仅修改本页数据，刷新页面可恢复；历史、配置及 ovpack 使用原生接口形状的模拟数据。',
         }
       : {
           actions: 'Preview actions',
@@ -45,7 +45,7 @@ export function usePreviewControls(locale: 'zh-CN' | 'en-US') {
           exportPack: 'Export .ovpack',
           deleted: 'Simulated deletion',
           simulate: 'Simulate deletion failure',
-          demo: 'Offline simulation: only page data changes; reload to restore. History and ovpack demonstrate host callbacks.',
+          demo: 'Offline simulation: only page data changes; reload to restore. History, configuration and ovpack use simulated native API responses.',
         };
   const [mode, setMode] = useState('default');
   const [fail, setFail] = useState(false);
@@ -85,10 +85,6 @@ export function usePreviewControls(locale: 'zh-CN' | 'en-US') {
     ...(mode === 'limited'
       ? { copyContent: false, edit: false, delete: false }
       : {}),
-    onHistory: (uri) => setHint({ kind: 'history', uri }),
-    onImportPack: (uri) => setHint({ kind: 'importPack', uri }),
-    onExportPack: (uri) => setHint({ kind: 'exportPack', uri }),
-    onDelete: (uri) => setHint({ kind: 'deleted', uri }),
   };
   const previewSlots: FileBrowserPreviewSlots = {
     actions:
@@ -97,20 +93,22 @@ export function usePreviewControls(locale: 'zh-CN' | 'en-US') {
         : mode === 'custom'
           ? (actions) => (
               <>
-                {actions.canCopyContent ? (
-                  <Button
-                    disabled={actions.busy}
-                    onClick={() =>
-                      void actions
-                        .copyContent()
-                        .then((ok) =>
-                          setHint({ kind: ok ? 'copied' : 'copyFailed' }),
-                        )
-                    }
-                  >
-                    {text.copy}
-                  </Button>
-                ) : null}
+                {actions.defaultActions
+                  .flatMap((item) => ('key' in item ? [item] : item))
+                  .filter((item) => item.key === 'copyContent')
+                  .map((item) => (
+                    <Button
+                      key={item.key}
+                      disabled={actions.busy}
+                      onClick={() =>
+                        void Promise.resolve(item.onClick())
+                          .then(() => setHint({ kind: 'copied' }))
+                          .catch(() => setHint({ kind: 'copyFailed' }))
+                      }
+                    >
+                      {text.copy}
+                    </Button>
+                  ))}
                 {actions.canDelete ? (
                   <Button disabled={actions.busy} onClick={actions.deleteFile}>
                     {text.remove}
@@ -123,15 +121,18 @@ export function usePreviewControls(locale: 'zh-CN' | 'en-US') {
       mode === 'append' ? (
         <Button onClick={() => setHint({ kind: 'extra' })}>{text.extra}</Button>
       ) : undefined,
-    menuItems:
+    actionItems:
       mode === 'append'
-        ? [
-            {
-              key: 'host',
-              label: text.extra,
-              separatorBefore: true,
-              onSelect: () => setHint({ kind: 'extra' }),
-            },
+        ? (context) => [
+            ...context.defaultActions,
+            [
+              {
+                key: 'host',
+                icon: <span aria-hidden="true">↗</span>,
+                label: text.extra,
+                onClick: () => setHint({ kind: 'extra' }),
+              },
+            ],
           ]
         : undefined,
   };

@@ -2,6 +2,6 @@
 '@openviking/react': minor
 ---
 
-Add host-defined FilePreview actions with ordered groups, icon-only single actions, hover menus and asynchronous error feedback. The default toolbar now only provides view switching and editing. Keep the existing FileBrowser on a deprecated compatibility adapter until its separate migration.
+Replace component-specific content-copy/download commands with host-defined FilePreview actions, ordered array groups, icon-only single actions, hover menus and asynchronous feedback. Remove the legacy menu API and compatibility adapter. Keep built-in path copying, view switching and editing, with root/per-tab visibility switches and the shared internal Dropdown.
 
-Add host-controlled toolbar visibility switches with additional per-tab hiding, and share the internal dropdown interaction and styling.
+Render images and videos independently of FileViewer using native media elements. Retain image enlargement, loading/error/retry feedback and owned Blob URL cleanup; media previews have no source mode or text editing.

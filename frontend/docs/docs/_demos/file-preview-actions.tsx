@@ -25,6 +25,7 @@ export default function FilePreviewActionsDemo() {
     '# Guide\n\nOpenViking preview actions.',
   );
   const [showModes, setShowModes] = useState(true);
+  const [showPath, setShowPath] = useState(true);
   const [showEdit, setShowEdit] = useState(true);
   const command = (
     key: string,
@@ -82,6 +83,14 @@ export default function FilePreviewActionsDemo() {
           {text.showEdit}
         </label>
         <label>
+          <input
+            type="checkbox"
+            checked={showPath}
+            onChange={(event) => setShowPath(event.target.checked)}
+          />{' '}
+          {text.showPath}
+        </label>
+        <label>
           {text.mode}{' '}
           <select
             aria-label={text.mode}
@@ -111,7 +120,11 @@ export default function FilePreviewActionsDemo() {
         <FilePreview
           key={mode}
           locale={locale}
-          toolbar={{ viewSwitch: showModes, edit: showEdit }}
+          toolbar={{
+            copyPath: showPath,
+            viewSwitch: showModes,
+            edit: showEdit,
+          }}
           tabs={[
             {
               kind: 'file',

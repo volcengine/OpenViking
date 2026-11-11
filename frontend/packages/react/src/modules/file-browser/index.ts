@@ -1,6 +1,7 @@
 export { FileBrowser } from './file-browser.js';
 export type {
   FileBrowserLabels,
+  FileBrowserWorkflowLabels,
   FileBrowserDashboardLabels,
   FileBrowserProps,
   FileBrowserPreviewSlots,

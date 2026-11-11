@@ -46,23 +46,18 @@ const pointer = async (node, type) => {
   await act(async () => node.dispatchEvent(event));
 };
 
-test('only view and edit are built in, even when copying/downloading is available', async () => {
+test('path copy and edit are built in, while content commands are injected', async () => {
   const view = await mount(
     tree(undefined, {
       loading: true,
       source: { ...source, content: '# Guide' },
-      operations: { download: async () => {} },
       editing: { save: async () => {} },
     }),
   );
   try {
     assert.ok(button('Edit'));
-    for (const label of [
-      'Copy path',
-      'Copy content',
-      'Download',
-      'More actions',
-    ])
+    assert.ok(button('Copy path'));
+    for (const label of ['Copy content', 'Download', 'More actions'])
       assert.equal(button(label), undefined);
   } finally {
     await view.unmount();
@@ -147,26 +142,6 @@ test('hover opens and bridges to menu; keyboard skips disabled items and restore
     assert.equal(document.activeElement.textContent, 'c');
     await key(document.activeElement, 'Tab');
     assert.equal(menu(), null);
-  } finally {
-    await view.unmount();
-  }
-});
-
-test('new actions take precedence over legacy menus, including an explicit empty array', async () => {
-  const legacy = {
-    loading: true,
-    source: { ...source, content: '# Guide' },
-    slots: {
-      menuItems: [{ key: 'legacy', label: 'Legacy', onSelect: () => {} }],
-    },
-  };
-  const view = await mount(tree(undefined, legacy));
-  try {
-    assert.ok(button('More actions'));
-    assert.ok(button('Copy path'));
-    await view.render(tree([], legacy));
-    assert.equal(button('More actions'), undefined);
-    assert.equal(button('Copy path'), undefined);
   } finally {
     await view.unmount();
   }

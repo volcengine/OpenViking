@@ -62,7 +62,7 @@ for (const isDir of [false, true]) {
       assert.doesNotMatch(area()?.textContent ?? '', /Host/);
       assert.equal(
         Boolean(area()?.querySelector('.ov-file-preview__toolbar')),
-        !isDir,
+        true,
       );
     } finally {
       await view.unmount();

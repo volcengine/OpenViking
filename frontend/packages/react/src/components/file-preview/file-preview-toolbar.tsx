@@ -2,12 +2,10 @@ import type { ReactNode } from 'react';
 import { Button } from '../../shared/components/button/button.js';
 import EditIcon from '../../../../icons/svg/file-preview/edit.svg?react';
 import { FilePreviewActionList } from './file-preview-action-list.js';
-import { legacyFilePreviewActions } from './file-preview-legacy-actions.js';
 import type { FilePreviewActionSource } from './action-types.js';
 import type {
   FilePreviewActions,
   FilePreviewLabels,
-  FilePreviewMenuItem,
   FilePreviewToolbarOptions,
 } from './types.js';
 
@@ -16,25 +14,19 @@ export function FilePreviewToolbar({
   text,
   options,
   actionItems,
-  menuItems,
   extraActions,
 }: {
   actions: FilePreviewActions;
   text: Required<FilePreviewLabels>;
   options?: FilePreviewToolbarOptions;
   actionItems?: FilePreviewActionSource;
-  menuItems?: readonly FilePreviewMenuItem[];
   extraActions?: ReactNode;
 }) {
   if (actions.editing) return null;
-  const legacy = actionItems === undefined && menuItems !== undefined;
   const items =
     typeof actionItems === 'function'
       ? actionItems(actions)
-      : (actionItems ??
-        (legacy
-          ? legacyFilePreviewActions(menuItems, actions, text, options)
-          : []));
+      : (actionItems ?? []);
   const switchVisible = actions.canSwitchView && options?.viewSwitch !== false;
   const editVisible = actions.canEdit && options?.edit !== false;
   const hasItems = items.some(
@@ -81,7 +73,6 @@ export function FilePreviewToolbar({
         items={items}
         disabled={actions.busy}
         text={text}
-        legacy={legacy}
       />
       {extraActions}
     </div>

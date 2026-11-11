@@ -37,8 +37,12 @@ const menuItem = (name) =>
 const dialog = () =>
   document.querySelector('.ov-file-browser-delete [role="dialog"]');
 const openDelete = async () => {
-  await click(more());
-  await click(menuItem('Delete document'));
+  if (more()) {
+    await click(more());
+    await click(menuItem('Delete document'));
+  } else {
+    await click(document.querySelector('[aria-label="Delete document"]'));
+  }
 };
 const failure = () =>
   new Response(

@@ -279,6 +279,7 @@ export function useFileBrowser({
     treeError: tree.error,
     previewError,
     dashboards: boards.dashboards,
+    previewDashboard: boards.current,
     dashboardError: boards.error,
     previewTabs: mergeDashboardTab(preview.tabs, boards.tab, Boolean(blocked)),
     previewKey:

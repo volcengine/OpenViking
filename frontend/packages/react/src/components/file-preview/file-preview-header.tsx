@@ -10,7 +10,6 @@ import type {
   FilePreviewActionSource,
   FilePreviewLabels,
   FilePreviewLevel,
-  FilePreviewMenuItem,
   FilePreviewToolbarOptions,
 } from './types.js';
 
@@ -35,7 +34,6 @@ export interface FilePreviewHeaderProps {
   slotActions?: ReactNode | ((actions: FilePreviewActions) => ReactNode);
   extraActions?: ReactNode;
   actionItems?: FilePreviewActionSource;
-  menuItems?: readonly FilePreviewMenuItem[];
   toolbar?: FilePreviewToolbarOptions;
   actions: FilePreviewActions;
   levels?: readonly FilePreviewLevel[];
@@ -55,7 +53,6 @@ export function FilePreviewHeader({
   titleExtra,
   slotActions,
   extraActions,
-  menuItems,
   actionItems,
   toolbar,
   actions,
@@ -71,7 +68,6 @@ export function FilePreviewHeader({
       <FilePreviewToolbar
         key={path ?? fileName}
         options={toolbar}
-        menuItems={menuItems}
         actionItems={actionItems}
         actions={actions}
         text={text}
@@ -93,13 +89,14 @@ export function FilePreviewHeader({
             disabled={actions.busy}
             onOpen={onOpenParent}
           />
-          {menuItems !== undefined &&
-          actionItems === undefined &&
-          actions.canCopyPath ? (
+          {toolbar?.copyPath !== false && actions.canCopyPath ? (
             <FilePreviewCopyPath
+              key={path}
               label={text.copyPath}
+              successLabel={text.copied}
+              failureLabel={text.copyFailed}
               disabled={actions.busy}
-              onClick={() => void actions.copyPath()}
+              onClick={actions.copyPath}
             />
           ) : null}
           {titleExtra}

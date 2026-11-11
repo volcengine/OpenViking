@@ -4,6 +4,7 @@ const messages = {
   formatCharacterCount: (count) => `${count.toLocaleString('zh-CN')} 个字符`,
   accessDenied: '无权查看此节点。',
   traverseOnly: '此目录仅可展开以访问有权限的子节点。',
+  systemDirectory: '选择此目录中的文件以预览内容。',
   empty: '选择一个文件查看内容',
   error: '目录加载失败',
   retry: '重试',

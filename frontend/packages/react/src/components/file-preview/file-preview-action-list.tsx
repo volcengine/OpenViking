@@ -13,12 +13,10 @@ export function FilePreviewActionList({
   items,
   disabled,
   text,
-  legacy = false,
 }: {
   items: FilePreviewActionItems;
   disabled: boolean;
   text: Required<FilePreviewLabels>;
-  legacy?: boolean;
 }) {
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<{ reason: unknown }>();
@@ -43,7 +41,7 @@ export function FilePreviewActionList({
   if (!action) return null;
   return (
     <>
-      {count === 1 && !legacy ? (
+      {count === 1 ? (
         <Tooltip content={action.label}>
           <Button
             size="small"

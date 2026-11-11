@@ -4,7 +4,7 @@ Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; w
 
 A tabbed file preview. The host supplies the content and file name; the component handles format detection, the tab row, the content header and the body.
 
-Bodies use lazily loaded FileViewerCore adapters for Markdown, images, code, tables, PDF, Office and media, inside the console-style tab, breadcrumb and footer shell.
+Images and videos render independently through native image/video elements; they do not initialize FileViewer. Other supported formats use lazily loaded FileViewerCore adapters inside the console-style tab, breadcrumb and footer shell. Image and video previews have no source view or built-in text editing.
 
 ## Basic usage
 
@@ -16,6 +16,8 @@ Demo actions use internal documentation controls; use your host application’s 
 
 ```
 
+Native image/video previews return `null` from `getViewerHandle()`; playback and image enlargement use their own controls.
+
 ## Content levels and images
 
 ```tsx file="../../_demos/file-preview-console.tsx" preview
@@ -26,7 +28,7 @@ A file tab may supply `levels`, each with `key`, `label`, `source` and optional 
 
 The host loads each level: directories can expose L0 abstract and L1 overview, and files can add L2 content. The component does not request summaries. The required tab `source` remains the fallback when no level is available.
 
-Supply original images through `source.url` or `source.file`, rather than binary data decoded into `source.content`. Images fit proportionally in a plain panel, show their original pixel dimensions at the bottom right and open a larger preview on click.
+Supply original images through `source.url` or `source.file`, rather than binary data decoded into `source.content`. Images fit proportionally in a plain panel, show their original pixel dimensions at the bottom right and open a larger native dialog on click. Videos use native playback controls without autoplay. Blob URLs created by the component are released on source replacement or unmount; caller-provided URLs remain caller-owned.
 
 For Markdown images, `resources` matches the original image target. For dynamic authenticated images, supply `resolveImage(src, source): Promise<string>`. The host resolves relative paths or Viking URIs using the active level's `source.path`, returning an accessible URL. The host owns requests, cancellation and blob URL cleanup. Each level can override `resources`; omission inherits the file tab's resources. The component does not translate Viking URIs into HTTP endpoints.
 
@@ -41,11 +43,11 @@ Use `slots.footer` for modification time and parsing attribution in a two-sided 
 
 Both share the shell — tab row, path breadcrumb and the header action area. They differ in how the body arrives, and in that the preview/source switch is a file-tab capability: a content tab renders whatever views it needs inside `content`.
 
-The default toolbar only provides preview/source switching and editing, including Save and Cancel. Hide either with `tab.toolbar.viewSwitch / edit`. Hosts supply copy, download, delete, history and other commands through `tab.actions`. The component does not execute business APIs. Use `slots.titleExtra` for buttons beside the path. `slots.actions` replaces the whole toolbar (`null` hides it); `slots.extraActions` appends custom nodes.
+The component provides path copying beside the path, plus preview/source switching and editing in the toolbar, including Save and Cancel. Hide each with `tab.toolbar.copyPath / viewSwitch / edit`. Hosts supply content copying, download, delete, history and other commands through `tab.actions`. The component does not execute business APIs. Use `slots.titleExtra` for buttons beside the path. `slots.actions` replaces the whole toolbar (`null` hides it); `slots.extraActions` appends custom nodes.
 
-Set `toolbar={{ viewSwitch: true, edit: true }}` on `FilePreview` to control visibility across all file/directory tabs. Both flags default to `true`. A top-level `false` always hides the control, even when a tab supplies the capability or sets its flag to `true`. Per-tab `toolbar` flags can further hide controls, but cannot re-enable a control hidden by the host.
+Set `toolbar={{ copyPath: true, viewSwitch: true, edit: true }}` on `FilePreview` to control visibility across all file/directory tabs. All three flags default to `true`. A top-level `false` always hides the control, even when a tab supplies the capability or sets its flag to `true`. Per-tab `toolbar` flags can further hide controls, but cannot re-enable a control hidden by the host.
 
-Capability checks still apply: view switching requires a renderer offering both preview and source, while editing requires the active file/level to provide `editing`, independently of the file extension. The following demo supplies simulated saving and checkboxes for both controls.
+Capability checks still apply: view switching requires a renderer offering both preview and source, while editing requires the active file/level to provide `editing`, independently of the file extension. The following demo supplies simulated saving and checkboxes for all three controls.
 
 ## Injected actions
 
@@ -97,8 +99,6 @@ An action factory `(context: FilePreviewActions) => FilePreviewActionItems` rece
 
 `onClick: () => unknown` accepts synchronous values and promises. The component awaits completion and ignores the returned value; only throws and rejections report failure. Pending commands prevent duplicate execution. Errors are displayed, controls unlock, and the user can retry. Override built-in copy with `labels.moreActions / actionFailed`.
 
-FileBrowser has not migrated yet. Deprecated `slots.menuItems`, `toolbar.copyContent / download` and copy helpers remain for compatibility. Only explicit legacy `menuItems` enables the old default menu and path-copy button. New `actions` takes precedence; the whole `slots.actions` override has the highest priority. Module migration will follow the component review.
-
 Control the active tab with `activeKey` / `onActiveKeyChange`, set its initial value with `defaultActiveKey`, or use the ref handle:
 
 ```tsx
@@ -130,12 +130,12 @@ Execution capabilities and notifications are separate. Operation resolution trig
 
 ## Props
 
-| Property    | Type                                             | Default                            | Description                                                             |
-| ----------- | ------------------------------------------------ | ---------------------------------- | ----------------------------------------------------------------------- |
-| `tabs`      | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | Required                           | At least one tab; the first is shown initially.                         |
-| `toolbar`   | `{ viewSwitch?: boolean; edit?: boolean }`       | `{ viewSwitch: true, edit: true }` | Host visibility switches; tabs cannot re-enable controls disabled here. |
-| `labels`    | `FilePreviewLabels`                              | locale                             | Default copy for every tab; a tab can override field by field.          |
-| Other props | `HTMLAttributes<HTMLDivElement>`                 | —                                  | Standard div attributes.                                                |
+| Property    | Type                                                           | Default                                            | Description                                                             |
+| ----------- | -------------------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------- |
+| `tabs`      | `readonly [FilePreviewTab, ...FilePreviewTab[]]`               | Required                                           | At least one tab; the first is shown initially.                         |
+| `toolbar`   | `{ copyPath?: boolean; viewSwitch?: boolean; edit?: boolean }` | `{ copyPath: true, viewSwitch: true, edit: true }` | Host visibility switches; tabs cannot re-enable controls disabled here. |
+| `labels`    | `FilePreviewLabels`                                            | locale                                             | Default copy for every tab; a tab can override field by field.          |
+| Other props | `HTMLAttributes<HTMLDivElement>`                               | —                                                  | Standard div attributes.                                                |
 
 ### Per-tab fields
 
@@ -167,7 +167,7 @@ File tabs add:
 | Property         | Type                               | Default                | Description                                                                                                                        |
 | ---------------- | ---------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `source`         | `FilePreviewSource`                | Required               | The content and file name.                                                                                                         |
-| `operations`     | `FilePreviewOperations`            | —                      | Async `openParent(path)` and `download()` capabilities, each returning `Promise<void>`.                                            |
+| `operations`     | `FilePreviewOperations`            | —                      | Async `openParent(uri)` and `openUri(uri)` capabilities, each returning `Promise<void>`.                                           |
 | `resources`      | `readonly FileViewerResource[]`    | —                      | Companion resources, e.g. textures.                                                                                                |
 | `levels`         | `readonly FilePreviewLevel[]`      | —                      | Content levels with individual sources and optional resources/editing.                                                             |
 | `activeLevelKey` | `string`                           | First enabled level    | Controlled content level.                                                                                                          |
@@ -177,8 +177,6 @@ File tabs add:
 | `actions`        | `FilePreviewActionSource`          | —                      | Injected file/directory commands, as an array or context factory.                                                                  |
 | `toolbar`        | `FilePreviewToolbarOptions`        | Available capabilities | Show/hide the built-in view switch and editing; ignored by content tabs.                                                           |
 | `slots`          | `FilePreviewFileTabSlots`          | —                      | `actions` (node or renderer), `extraActions`, `titleExtra`, `footer`, plus fallbacks for loading, failure and unsupported formats. |
-| `onCopyContent`  | `(text: string) => void`           | —                      | Called after content copying succeeds.                                                                                             |
-| `onDownload`     | `() => void`                       | —                      | Called after the download operation succeeds; not called on failure.                                                               |
 | `onOpenUri`      | `(uri: string) => void`            | —                      | Called after a content resource opens successfully; not called on failure.                                                         |
 
 Content tabs add:
@@ -194,7 +192,7 @@ import { FilePreview } from '@openviking/react/components/file-preview';
 import '@openviking/react/components/file-preview/style.css';
 ```
 
-For legacy integrations, copying can still be handled by the component: the host renders the button and calls `actions.copyContent()` or `actions.copyPath()`, both resolving to whether it succeeded. `onCopyContent` / `onCopyPath` fire after a successful copy with the value already copied, and never on failure.
+Path copying is independent of `actions` and `slots.actions`: it appears whenever the active file or directory has a path, unless `toolbar.copyPath` is false. `actions.copyPath()` resolves to success; `onCopyPath` only reports successful copies. Hosts execute content copying and downloading through ordinary actions.
 
 ## Accessibility
 
@@ -262,6 +260,6 @@ Colours come from the design system the OpenViking console uses — the values o
 
 ## Implementation scope
 
-The component renders the shell and reports successful operations. Reading, saving, downloading and navigation are supplied as execution capabilities by the host; success notifications do not execute them.
+The component renders the shell and reports successful operations. Reading, saving and navigation are supplied as execution capabilities by the host; success notifications do not execute them.
 
 `labels.showHiddenPath` overrides the collapsed-path menu button’s accessible name: “Show hidden path levels” in English and “显示隐藏的路径层级” in Chinese.

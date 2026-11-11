@@ -328,3 +328,7 @@
   outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   outline-offset: 1px;
 }
+
+.ov-file-browser__preview-action--danger {
+  color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
+}

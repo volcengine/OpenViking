@@ -122,14 +122,20 @@ export default function FilePreviewBasic() {
   // Replace the default toolbar through the actions context, including Save/Cancel.
   const renderActions = (actions: FilePreviewActions) => (
     <>
-      {actions.canCopyContent ? (
+      {typeof actions.source?.content === 'string' &&
+      actions.source.content.length > 0 ? (
         <Button
           size="small"
           type="default"
           htmlType="button"
           className="ov-file-preview__button"
           disabled={actions.busy}
-          onClick={() => void actions.copyContent()}
+          onClick={() =>
+            void navigator.clipboard
+              .writeText(actions.source!.content!)
+              .then(() => setActiveHint(t.contentCopied))
+              .catch(() => setActiveHint(t.actions.copyContent))
+          }
         >
           {t.actions.copyContent}
         </Button>
@@ -203,7 +209,6 @@ export default function FilePreviewBasic() {
         fileName: 'SKILL.md',
         path: 'viking://system/compile/llm-wiki/SKILL.md',
       },
-      onCopyContent: () => setActiveHint(t.contentCopied),
       onCopyPath: () => setActiveHint(t.pathCopied),
       operations: {
         openParent: async () => {},

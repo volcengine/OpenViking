@@ -98,8 +98,8 @@ export function FilePreviewPanels({
     viewSwitch:
       toolbar?.viewSwitch !== false && activeTab.toolbar?.viewSwitch !== false,
     edit: toolbar?.edit !== false && activeTab.toolbar?.edit !== false,
-    copyContent: activeTab.toolbar?.copyContent,
-    download: activeTab.toolbar?.download,
+    copyPath:
+      toolbar?.copyPath !== false && activeTab.toolbar?.copyPath !== false,
   };
   if (directoryTab) {
     return (
@@ -115,7 +115,6 @@ export function FilePreviewPanels({
           onViewModeChange={setViewMode}
           onHandleChange={onHandleChange}
           onViewModesChange={onViewModesChange}
-          onDownload={() => {}}
           onCancelEditing={actionContext.cancelEditing}
         />
       </div>
@@ -137,7 +136,6 @@ export function FilePreviewPanels({
         slotActions={fileTab.slots?.actions}
         extraActions={fileTab.slots?.extraActions}
         toolbar={toolbarOptions}
-        menuItems={fileTab.slots?.menuItems}
         actionItems={fileTab.actions}
         actions={actionContext}
         text={text}
@@ -177,7 +175,6 @@ export function FilePreviewPanels({
           onViewModeChange={setViewMode}
           onHandleChange={onHandleChange}
           onViewModesChange={onViewModesChange}
-          onDownload={() => void actions.download(fileTab)}
           onLinkClick={linkClickHandler}
           onCancelEditing={actionContext.cancelEditing}
         />

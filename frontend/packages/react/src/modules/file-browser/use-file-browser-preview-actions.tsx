@@ -1,16 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import type { RefObject } from 'react';
-import { useOvClient, useOvSignal } from '../../client/provider.js';
+import { useOvClient } from '../../client/provider.js';
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvRequestOptions } from '../../client/types.js';
-import type { FilePreviewMenuItem } from '../../components/file-preview/index.js';
 import type { Locale } from '../../shared/locale.js';
-import HistoryIcon from '../../../../icons/svg/file-preview/history.svg?react';
-import ImportIcon from '../../../../icons/svg/file-preview/import.svg?react';
-import ExportIcon from '../../../../icons/svg/file-preview/export.svg?react';
-import DeleteIcon from '../../../../icons/svg/file-preview/delete.svg?react';
 import { FileBrowserDeleteDialog } from './file-browser-delete-dialog.js';
+import { FileBrowserNativeDialog } from './file-browser-native-dialog.js';
+import { PreviewMutationError } from './preview-query-state.js';
+import { usePreviewMutation } from './use-preview-mutation.js';
+import { previewPolicy } from './preview-policy.js';
+import { defaultPreviewActions } from './preview-default-actions.js';
+import { downloadPreview } from './preview-native.js';
+import { isBinaryFile } from './fs-file-kind.js';
 import { scopeKeyOf } from './fs-scope.js';
+import type { FileBrowserDashboard } from './dashboard-model.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 import type { FileBrowserPreviewActions } from './preview-types.js';
 
@@ -18,6 +21,8 @@ export function useFileBrowserPreviewActions({
   uri,
   rootUri,
   isFile,
+  enabled,
+  dashboard,
   canWrite,
   canManage,
   options,
@@ -26,10 +31,13 @@ export function useFileBrowserPreviewActions({
   requestOptions,
   triggerRef,
   onDeleted,
+  onUpdated,
 }: {
   uri: string | null;
   rootUri: string;
   isFile: boolean;
+  enabled: boolean;
+  dashboard?: FileBrowserDashboard;
   canWrite: boolean;
   canManage: boolean;
   options?: FileBrowserPreviewActions;
@@ -38,137 +46,110 @@ export function useFileBrowserPreviewActions({
   requestOptions?: OvRequestOptions;
   triggerRef: RefObject<HTMLElement | null>;
   onDeleted: (uri: string) => void;
+  onUpdated: () => void;
 }) {
   const client = useOvClient();
-  const inheritedSignal = useOvSignal();
-  const signal = requestOptions?.signal ?? inheritedSignal;
-  const key = `${scopeKeyOf(client, requestOptions, rootUri)}:${uri}`;
-  const scope = useRef(key);
-  scope.current = key;
-  const controller = useRef<AbortController | undefined>(undefined);
-  const [state, setState] = useState<{
+  const key = scopeKeyOf(client, requestOptions, `${rootUri}:${uri}`);
+  const policy = previewPolicy({
+    uri: uri ?? '',
+    rootUri,
+    isFile,
+    canWrite,
+    canManage,
+    dashboard,
+  });
+  const [opened, setOpened] = useState<{
     key: string;
-    open: boolean;
-    busy?: boolean;
-    error?: unknown;
+    kind: 'delete' | 'history' | 'importPack' | 'configure';
+    uri: string;
   }>();
-  // Abort requests and discard confirmations when the resource or account changes.
-  useEffect(
-    () => () => {
-      controller.current?.abort();
-      controller.current = undefined;
-    },
-    [key, signal],
-  );
-  const canDelete = Boolean(
-    client &&
-    uri &&
-    uri !== rootUri &&
-    isFile &&
-    canManage &&
-    options?.delete !== false,
-  );
-  const deleteFile = () => {
-    if (canDelete && !controller.current) setState({ key, open: true });
+  const deletion = usePreviewMutation(`${rootUri}:${uri}`, requestOptions);
+  const transfer = usePreviewMutation(`${rootUri}:${uri}`, requestOptions);
+  const canDelete = Boolean(client && enabled && policy.delete);
+  const show = (kind: NonNullable<typeof opened>['kind']) => {
+    if (!uri) return;
+    setOpened({
+      key,
+      kind,
+      uri: kind === 'configure' ? (dashboard?.targetUri ?? uri) : uri,
+    });
   };
-  const confirm = async () => {
-    if (!canDelete || !client || !uri || controller.current) return;
-    const pending = new AbortController();
-    controller.current = pending;
-    const composed = signal
-      ? AbortSignal.any([signal, pending.signal])
-      : pending.signal;
-    setState({ key, open: true, busy: true });
-    try {
-      await client.request({
-        method: 'DELETE',
-        path: OV_PATHS.fsRemove,
-        query: { uri, wait: true },
-        options: { ...requestOptions, signal: composed },
-      });
-      if (composed.aborted || scope.current !== key) return;
-      setState({ key, open: false });
-      try {
-        onDeleted(uri);
-      } catch {
-        /* Navigation cannot undo deletion. */
-      }
-      // Notifications do not change the result of a successful server operation.
-      try {
-        options?.onDelete?.(uri);
-      } catch {
-        /* Host notification only. */
-      }
-    } catch (error) {
-      if (!composed.aborted && scope.current === key)
-        setState({ key, open: true, error });
-    } finally {
-      if (controller.current === pending) {
-        controller.current = undefined;
-        setState((current) =>
-          current?.key === key ? { ...current, busy: false } : current,
-        );
-      }
+  const deleteFile = () => {
+    if (canDelete) {
+      deletion.reset();
+      show('delete');
     }
   };
-  const items: FilePreviewMenuItem[] = [];
-  if (uri) {
-    if (options?.onHistory)
-      items.push({
-        key: 'history',
-        label: text.history,
-        icon: <HistoryIcon width={16} height={16} />,
-        onSelect: () => options.onHistory!(uri),
-      });
-    if (options?.onImportPack && canWrite)
-      items.push({
-        key: 'importPack',
-        label: text.importPack,
-        icon: <ImportIcon width={16} height={16} />,
-        separatorBefore: true,
-        onSelect: () =>
-          options.onImportPack!(
-            isFile ? uri.slice(0, uri.lastIndexOf('/')) : uri,
-          ),
-      });
-    if (options?.onExportPack)
-      items.push({
-        key: 'exportPack',
-        label: text.exportPack,
-        icon: <ExportIcon width={16} height={16} />,
-        separatorBefore: !options.onImportPack || !canWrite,
-        onSelect: () => options.onExportPack!(uri),
-      });
-    if (canDelete)
-      items.push({
-        key: 'delete',
-        label: text.deleteFile,
-        icon: <DeleteIcon width={16} height={16} />,
-        danger: true,
-        separatorBefore: true,
-        onSelect: deleteFile,
-      });
-  }
+  const confirm = () => {
+    if (!canDelete || !uri) return;
+    void deletion.run(
+      (api, overrides) =>
+        api.request({
+          method: 'DELETE',
+          path: OV_PATHS.fsRemove,
+          query: { uri, wait: true },
+          options: overrides,
+        }),
+      () => {
+        setOpened(undefined);
+        onDeleted(uri);
+      },
+    );
+  };
+  const actionItems =
+    client && uri && enabled
+      ? defaultPreviewActions({
+          policy,
+          options,
+          text,
+          canDelete,
+          show,
+          deleteFile,
+          download: (pack) =>
+            transfer.run((api, overrides) =>
+              downloadPreview(api, uri, pack, overrides),
+            ),
+        })
+      : [];
+  const kind = opened?.key === key ? opened.kind : undefined;
   return {
-    menuItems: items,
+    policy,
+    actionItems,
     context: { canDelete, deleteFile },
-    dialog: uri ? (
-      <FileBrowserDeleteDialog
-        key={key}
-        open={state?.key === key && state.open && canDelete}
-        uri={uri}
-        busy={state?.key === key && Boolean(state.busy)}
-        error={state?.key === key ? state.error : undefined}
-        text={text}
-        locale={locale}
-        triggerRef={triggerRef}
-        onClose={() =>
-          setState((current) =>
-            current ? { ...current, open: false } : current,
-          )
-        }
-        onConfirm={() => void confirm()}
-      />
-    ) : null,
+    dialog: (
+      <>
+        <PreviewMutationError error={transfer.error} text={text.workflow} />
+        {uri && kind === 'delete' ? (
+          <FileBrowserDeleteDialog
+            key={key}
+            open={canDelete}
+            uri={uri}
+            busy={deletion.pending}
+            error={deletion.error}
+            text={text}
+            locale={locale}
+            triggerRef={triggerRef}
+            onClose={() => setOpened(undefined)}
+            onConfirm={confirm}
+          />
+        ) : null}
+        {uri && kind && kind !== 'delete' ? (
+          <FileBrowserNativeDialog
+            key={`${key}:${kind}`}
+            kind={kind}
+            uri={opened?.uri ?? uri}
+            canWrite={canWrite}
+            versioned={policy.versionedFile}
+            showContent={isFile && !isBinaryFile(uri)}
+            text={text}
+            locale={locale}
+            requestOptions={requestOptions}
+            triggerRef={triggerRef}
+            onClose={() => setOpened(undefined)}
+            onUpdated={onUpdated}
+          />
+        ) : null}
+      </>
+    ),
   };
 }

@@ -1,3 +1,4 @@
+import { mediaKind } from './file-preview-media.js';
 import { useLocale } from '../../shared/locale-context.js';
 import { forwardRef, useCallback, useImperativeHandle, useState } from 'react';
 
@@ -73,6 +74,12 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   const directory = useDirectoryLevel(
     activeTab.kind === 'directory' ? activeTab : undefined,
   );
+  const identity = JSON.stringify([
+    activeTab.key,
+    levelKey,
+    directory.activeLevel?.key,
+    activeTab.kind === 'file' ? mediaKind(activeTab.source) : undefined,
+  ]);
   const {
     viewMode,
     setViewMode,
@@ -81,15 +88,11 @@ export const FilePreview: FilePreviewComponent = forwardRef<
     viewerHandle,
     onHandleChange,
     onViewModesChange,
-  } = useFilePreviewViewState(
-    JSON.stringify([activeTab.key, levelKey, directory.activeLevel?.key]),
-  );
+  } = useFilePreviewViewState(identity);
   const { tabId, panelId, panelProps } = useFilePreviewIds(activeTab.key);
   // 编辑态跟着实际渲染的页签走，理由见 `switchTab`。
   // Editing follows the tab that actually renders; see `switchTab`.
-  const editing = useFilePreviewEditing(
-    JSON.stringify([activeTab.key, levelKey, directory.activeLevel?.key]),
-  );
+  const editing = useFilePreviewEditing(identity);
   const actions = useFilePreviewActions();
 
   const tabText = mergeLabels<typeof text>(text, activeTab.labels);
@@ -159,6 +162,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   // no source view.
   const canSwitchView =
     Boolean(fileTab || directoryTab) &&
+    !(fileTab && mediaKind(fileTab.source)) &&
     viewModes.includes('preview') &&
     viewModes.includes('source');
 

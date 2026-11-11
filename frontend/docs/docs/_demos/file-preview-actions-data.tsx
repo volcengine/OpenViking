@@ -23,6 +23,7 @@ export const messages = {
     mode: '操作布局',
     showModes: '显示模式切换',
     showEdit: '显示编辑',
+    showPath: '显示复制路径',
     modes: ['无操作', '单个操作', '多个操作', '显式分组', '混合与空分组'],
     copy: '复制正文',
     history: '查看历史',
@@ -37,6 +38,7 @@ export const messages = {
     mode: 'Action layout',
     showModes: 'Show view switch',
     showEdit: 'Show edit',
+    showPath: 'Show copy path',
     modes: [
       'No actions',
       'Single action',

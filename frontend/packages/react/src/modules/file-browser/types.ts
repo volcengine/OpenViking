@@ -1,3 +1,5 @@
+import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
+export type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
 import type {
   FileBrowserPreviewActions,
   FileBrowserPreviewSlots,
@@ -50,6 +52,8 @@ export interface FileBrowserDashboardLabels {
 }
 
 export interface FileBrowserLabels {
+  workflows?: Partial<FileBrowserWorkflowLabels>;
+  systemDirectory?: string;
   accessDenied?: string;
   traverseOnly?: string;
   /** 权限管理文案。Permission management copy. */
@@ -158,7 +162,7 @@ export interface FileBrowserProps extends Omit<
   acl?: boolean | FileBrowserAclOptions;
   /** 禁用预览编辑、导入与文件删除。Disables preview editing, import and file deletion. */
   readOnly?: boolean;
-  /** 内置预览操作配置；历史和 ovpack 由宿主流程接入。Preview controls and host workflows. */
+  /** 内置预览操作的显隐开关，默认按资源能力显示。Visibility flags for native preview operations. */
   previewActions?: FileBrowserPreviewActions;
   /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
   locale?: Locale;
@@ -267,6 +271,7 @@ export interface FileBrowserProps extends Omit<
  */
 export interface FileBrowserApi {
   dashboards: ReadonlyMap<string, FileBrowserDashboard>;
+  previewDashboard?: FileBrowserDashboard;
   dashboardError: Error | null;
   /** 按渲染顺序排列的可见行。Visible rows in render order. */
   rows: readonly FileTreeRow[];

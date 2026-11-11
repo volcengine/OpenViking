@@ -1,6 +1,8 @@
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type { FilePreviewEditing } from '../../components/file-preview/index.js';
+import { isExperienceFile } from './experience-data.js';
+import { isSummaryUri, isSystemUri } from './preview-policy.js';
 import { isMemoryUri, stripMemoryFieldsTrailer } from './fs-memory-fields.js';
 
 const EDITABLE_TEXT = /\.(?:md|json|jsonl|txt|yaml|yml)$/i;
@@ -15,9 +17,9 @@ export function createFileEditing(
 ): FilePreviewEditing | undefined {
   if (
     !EDITABLE_TEXT.test(name) ||
-    /(?:^viking:\/\/system(?:\/|$)|\/(?:experiences|\.abstract\.md|\.overview\.md)(?:\/|$))/i.test(
-      uri,
-    )
+    isSystemUri(uri) ||
+    isSummaryUri(uri) ||
+    isExperienceFile(uri)
   )
     return undefined;
   return {
@@ -37,7 +39,7 @@ export function createFileEditing(
       await client.request({
         method: 'POST',
         path: OV_PATHS.contentWrite,
-        body: { uri, content, mode: 'replace' },
+        body: { uri, content, mode: 'replace', edit_source: 'manual' },
         options,
       });
     },

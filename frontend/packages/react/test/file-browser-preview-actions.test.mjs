@@ -24,12 +24,10 @@ test('native deletion confirms the selected file, prevents duplicate requests an
         resolve = done;
       }),
   );
-  const deleted = [];
   const selected = [];
   const view = await mount(
     tree(fetch, {
       onUriChange: (next) => selected.push(next),
-      previewActions: { onDelete: (target) => deleted.push(target) },
     }),
   );
   try {
@@ -48,7 +46,6 @@ test('native deletion confirms the selected file, prevents duplicate requests an
     assert.deepEqual(writes[0].query, { uri, wait: 'true' });
     await act(async () => resolve(await ok({ uri })));
     await settle();
-    assert.deepEqual(deleted, [uri]);
     assert.equal(selected.at(-1), parent);
     assert.ok(
       fetch.calls.filter((call) => call.path.endsWith('/fs/ls')).length > 1,
@@ -64,13 +61,7 @@ test('deletion failure retains the confirmation, supports retry and preserves it
   const fetch = fixture(() =>
     fail ? Promise.resolve(failure()) : ok({ uri }),
   );
-  const props = {
-    previewActions: {
-      onDelete: () => {
-        throw new Error('host notification');
-      },
-    },
-  };
+  const props = {};
   const view = await mount(tree(fetch, props));
   try {
     await openDelete();
@@ -130,8 +121,8 @@ test('visibility, readOnly and ACL manage permission gate native deletion and cu
         previewSlots: slots,
       }),
     );
-    assert.equal(context.canDelete, false);
-    assert.equal(context.canEdit, false);
+    assert.equal(context.canDelete, true); // Flags hide defaults; readOnly and ACL govern capabilities.
+    assert.equal(context.canEdit, true); // Visibility does not revoke the capability of a custom toolbar.
     assert.equal(
       fetch.calls.filter((call) => call.path === '/api/v1/fs').length,
       0,

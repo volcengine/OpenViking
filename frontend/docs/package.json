@@ -38,6 +38,7 @@
     "#file-browser-preview-controls": "./docs/_demos/file-browser-preview-controls.tsx",
     "#file-browser-basic-data": "./docs/_demos/file-browser-basic-data.ts",
     "#file-preview-actions-data": "./docs/_demos/file-preview-actions-data.tsx",
-    "#file-preview-actions.css": "./docs/_demos/file-preview-actions.css"
+    "#file-preview-actions.css": "./docs/_demos/file-preview-actions.css",
+    "#file-browser-native-demo": "./docs/_demos/file-browser-native-demo.ts"
   }
 }

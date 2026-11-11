@@ -114,6 +114,7 @@ export interface OvRequestSpec {
    */
   path: string;
   query?: Readonly<Record<string, OvQueryValue>>;
+  /** JSON data or FormData for native multipart uploads; FormData sets its own boundary. */
   body?: unknown;
   /**
    * 响应体的读取方式。省略时为 `json`：解析原生外壳并返回 `result`。需要原始
