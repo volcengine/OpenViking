@@ -13,9 +13,14 @@ export function sessionIdFromDirectory(uri: string): string | null {
   return /^viking:\/\/user\/[^/]+\/sessions\/([^/]+)\/?$/.exec(uri)?.[1] ?? null
 }
 
+export function isSystemUri(uri: string): boolean {
+  return uri === 'viking://system' || uri.startsWith('viking://system/')
+}
+
 export function usesWorkbenchDirectoryView(uri: string): boolean {
   return (
     uri === 'viking://' ||
+    isSystemUri(uri) ||
     isExperienceDirectory(uri) ||
     /^viking:\/\/user\/[^/]+\/sessions\/?$/.test(uri) ||
     sessionIdFromDirectory(uri) !== null

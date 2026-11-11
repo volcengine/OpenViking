@@ -39,6 +39,9 @@
   border-radius: 0 12px 12px 0;
   margin-left: -8px;
 }
+.document :global(.ov-file-preview__tab-row) {
+  padding-block-start: 6px;
+}
 .previewActions {
   --studio-preview-control-bg: #f7f7f9;
   --studio-preview-control-border: #edeef2;
@@ -279,6 +282,7 @@
     > :global(.ov-file-preview__footer) .studioPreviewBody
   )
   > :global(.ov-file-preview__footer) {
+  display: block;
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;

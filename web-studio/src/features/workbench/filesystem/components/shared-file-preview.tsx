@@ -13,6 +13,8 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import styles from '../workbench.module.css'
+import { isSystemUri } from '../lib/document-kind'
+import { getErrorMessage } from '../lib/utils'
 import { FileTextIcon, PencilIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
@@ -84,8 +86,10 @@ export function SharedFilePreview({
     allowedUri !== file.uri
   const kind = detectFileType(file.uri)
   const binary = kind === 'image' || kind === 'binary'
+  const directoryListOnly =
+    file.isDir && Boolean(content) && isSystemUri(file.uri)
   const query = useQuery({
-    enabled: !needsLoad,
+    enabled: !needsLoad && !directoryListOnly,
     queryKey: [
       'studio-shared-preview',
       identityScopeKey,
@@ -391,9 +395,7 @@ export function SharedFilePreview({
       kind: 'content',
       content: (
         <div role="alert" className="p-4 text-sm text-destructive">
-          {query.error instanceof Error
-            ? query.error.message
-            : t('filePreview.editFailed')}
+          {getErrorMessage(query.error)}
           <Button
             variant="outline"
             onClick={() => {
@@ -429,7 +431,9 @@ export function SharedFilePreview({
             </div>
           ),
         },
-        { ...tab, title: t('filePreview.markdownSource') },
+        ...(directoryListOnly
+          ? []
+          : [{ ...tab, title: t('filePreview.markdownSource') }]),
       ]
     : [tab]
   return (

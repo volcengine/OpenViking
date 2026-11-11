@@ -12,6 +12,11 @@ describe('IDE document views', () => {
       false,
     )
     expect(usesWorkbenchDirectoryView('viking://resources/wiki/')).toBe(false)
+    expect(
+      usesWorkbenchDirectoryView(
+        'viking://system/compile/example-skills/daily-report/',
+      ),
+    ).toBe(true)
     expect(usesWorkbenchDirectoryView('viking://user/alice/sessions/')).toBe(
       true,
     )
