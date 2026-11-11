@@ -180,3 +180,76 @@ async def test_resource_completeness_survives_queue_wait_and_http(
     response = response_from_result(waited)
     assert response["status"] == "ok"
     assert response["result"]["status"] == result["status"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("local_deny", [False, True])
+async def test_source_preflight_denial_uses_persisted_watch_binding(
+    monkeypatch, watch_vfs, local_deny
+):
+    from openviking.utils.resource_processor import ResourceProcessor
+    from openviking_cli.exceptions import PermissionDeniedError
+    from tests.misc.test_resource_processor_mv import _revocation_evidence
+
+    root = "viking://resources/docs"
+    source = "https://example.feishu.cn/wiki/source"
+    ctx = RequestContext(user=UserIdentifier("default", "default"), role=Role.USER)
+    await watch_vfs.mkdir(root, exist_ok=True, ctx=ctx)
+    await watch_vfs.write_file(root + "/old.md", "must stay", ctx=ctx)
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: watch_vfs)
+    processor = ResourceProcessor(vikingdb=object(), media_storage=None)
+    watch = SimpleNamespace(
+        path="https://example.feishu.cn/wiki/different",
+        last_status=None,
+        last_task_id=None,
+    )
+    manager = SimpleNamespace(get_task_by_uri=AsyncMock(return_value=watch))
+    service = ResourceService(
+        viking_fs=watch_vfs,
+        resource_processor=processor,
+        skill_processor=object(),
+        watch_manager=manager,
+    )
+    error = (
+        PermissionDeniedError("local network denied")
+        if local_deny
+        else OpenVikingError(
+            "upstream denied",
+            code="PERMISSION_DENIED",
+            details=_revocation_evidence(source)[0]["error_details"],
+        )
+    )
+    service._prepare_standard_source_plan = AsyncMock(side_effect=error)
+    with pytest.raises(OpenVikingError):
+        await service.add_resource(source, ctx=ctx, to=root)
+    assert await watch_vfs.read_file(root + "/old.md", ctx=ctx) == "must stay"
+    if local_deny:
+        manager.get_task_by_uri.assert_not_awaited()
+    else:
+        manager.get_task_by_uri.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("successful", [False, True])
+async def test_watch_source_binding_requires_completed_import_not_registration(successful):
+    root, source = "viking://resources/docs", "https://example.feishu.cn/wiki/source"
+    watch = SimpleNamespace(
+        path=source,
+        last_status="completed" if successful else None,
+        last_task_id="previous" if successful else None,
+    )
+    record = TaskRecord(
+        task_id="previous",
+        task_type="add_resource",
+        status=TaskStatus.COMPLETED,
+        meta={"source_path": source},
+        result={"root_uri": root},
+    )
+    manager = SimpleNamespace(
+        get_task_by_uri=AsyncMock(return_value=watch),
+        tracker=SimpleNamespace(get=AsyncMock(return_value=record)),
+    )
+    service = ResourceService(watch_manager=manager)
+    ctx = RequestContext(user=UserIdentifier("default", "default"), role=Role.USER)
+    assert await service._read_watch_source_binding(root, ctx) == (source if successful else None)
+    assert manager.tracker.get.await_count == int(successful)

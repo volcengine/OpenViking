@@ -743,8 +743,6 @@ async def hydrate_context_plan_records(
     )
     result = dict(inventory)
     summary_hydrated_ids: set[str] = set()
-    if input_only_paths and request.processing_mode == "vectors_only":
-        return result, (set(), set(), set())
 
     def required_summary_ids() -> dict[str, Mapping[str, Any]]:
         required: dict[str, Mapping[str, Any]] = {}
@@ -778,7 +776,7 @@ async def hydrate_context_plan_records(
                 {**current.fields, **fields},
             )
 
-    while True:
+    while request.processing_mode != "vectors_only":
         required = required_summary_ids()
         hydrated = (
             await vikingdb.hydrate_incremental_records(
@@ -816,6 +814,8 @@ async def hydrate_context_plan_records(
     if request.vectorize:
         required_scalars: dict[str, Mapping[str, Any]] = {}
         for record_id, record in result.items():
+            if record.relative_path in input_only_paths:
+                continue
             kind = new_kinds.get(record.relative_path)
             if record.relative_path not in active:
                 continue

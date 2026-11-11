@@ -279,6 +279,14 @@ do not trigger quarantine. Silently hidden upstream items cannot be classified
 as revoked without explicit evidence. Delegated Connectors retain their existing
 external processing behavior; this fix covers native ingestion.
 
+Quarantine requires a server-classified upstream permission denial and a matching
+previous source binding (protected summary metadata, or a Watch with a completed
+import record for this exact target). Local network/target permission errors do
+not qualify; missing or mismatched bindings fail without mutating old content.
+Index deletion covers the account-scoped target URI subtree independently of the
+file tree, including orphan records. Partial `vectors_only` updates still hydrate
+existing scalar fields for observed files, preserving tags omitted by the caller.
+
 This corrects the former commit-stage behavior, which rejected incomplete
 directories even with `strict=false`. Callers requiring complete imports must
 explicitly use `strict=true`.

@@ -808,3 +808,93 @@ async def test_partial_plan_refuses_kind_replacement_that_erases_unknown_childre
             ctx=object(),
             root_preexisting=True,
         )
+
+
+@pytest.mark.asyncio
+async def test_partial_vectors_only_refresh_preserves_existing_search_tags(monkeypatch):
+    """Lightweight inventories must hydrate scalars for observed UPSERTs only."""
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: SimpleNamespace(
+            queue_workers=SimpleNamespace(
+                add_resource=SimpleNamespace(file_operation_concurrency=1)
+            )
+        ),
+    )
+    root = "viking://resources/docs"
+    snapshot = RNFVSnapshot(
+        RequestIntent(root, "vectors_only"),
+        NewArtifactSnapshot(
+            {"changed.md": NewEntry(md5="new")}, complete=False, allow_partial=True
+        ),
+        FormalTreeSnapshot({"changed.md": FormalEntry(), "unreadable.md": FormalEntry()}),
+        VectorIndexSnapshot(
+            {
+                "changed": VectorRecordSnapshot(
+                    "changed", root + "/changed.md", "changed.md", 2, {"md5": "old"}
+                ),
+                "unreadable": VectorRecordSnapshot(
+                    "unreadable", root + "/unreadable.md", "unreadable.md", 2, {"md5": "same"}
+                ),
+            },
+            frozenset({"id", "uri", "level", "md5"}),
+        ),
+    )
+    db = SimpleNamespace(
+        hydrate_incremental_records=AsyncMock(
+            return_value={
+                "changed": {"search_tags": ["topic=finance"], "business_priority": 7},
+            }
+        )
+    )
+    _, plan = await build_context_update_plan_from_snapshot(
+        snapshot=snapshot,
+        store=AsyncMock(),
+        artifact_ref=None,
+        target=AsyncMock(),
+        vikingdb=db,
+        context_type="resource",
+        is_code_repo=False,
+        account_id="test",
+        ctx=object(),
+        root_preexisting=True,
+        artifact_paths={"changed.md": "changed.md"},
+    )
+    assert len(plan.direct_index_actions) == 1
+    action = plan.direct_index_actions[0]
+    assert action.uri == root + "/changed.md"
+    assert action.upsert_fields["search_tags"] == ["topic=finance"]
+    assert action.upsert_fields["business_priority"] == 7
+    assert set(db.hydrate_incremental_records.await_args.args[0]) == {"changed"}
+    assert "output_fields" not in db.hydrate_incremental_records.await_args.kwargs
+
+    from openviking.server.identity import RequestContext, Role
+    from openviking.utils import embedding_utils
+    from openviking.utils.resource_processor import ResourceProcessor
+    from openviking_cli.session.user_id import UserIdentifier
+    from tests.unit.test_vectorize_file_strategy import DummyFS, DummyQueue
+
+    queue = DummyQueue()
+    manager = SimpleNamespace(EMBEDDING="embedding", get_queue=lambda *a, **kw: queue)
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: manager)
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS(b"changed body"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: SimpleNamespace(
+            embedding=SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+    ctx = RequestContext(user=UserIdentifier("test", "alice"), role=Role.USER)
+    processor = ResourceProcessor(vikingdb=object(), media_storage=None)
+    assert (
+        await processor._enqueue_index_actions(
+            plan.direct_index_actions,
+            ctx=ctx,
+            source_contents={(action.uri, 2): b"changed body"},
+        )
+        == 1
+    )
+    assert queue.items[0].context_data["search_tags"] == ["topic=finance"]
+    assert queue.items[0].context_data["business_priority"] == 7

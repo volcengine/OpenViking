@@ -133,6 +133,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "enforce_public_remote_targets",
         "resource_lock",
         "stage_callback",
+        "source_binding_reader",
         "args",
         "strict",
         "source_name",
@@ -272,6 +273,40 @@ class ResourceService:
 
     def _get_watch_manager(self) -> Optional["WatchManager"]:
         return self._watch_manager
+
+    async def _read_watch_source_binding(self, root_uri: str, ctx: RequestContext) -> Optional[str]:
+        """Read persisted target/source identity, never the current request's path."""
+        from openviking.service.task_domain import TaskStatus
+
+        manager = self._get_watch_manager()
+        if manager is None:
+            return None
+        task = await manager.get_task_by_uri(
+            to_uri=root_uri,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            role=str(ctx.role),
+        )
+        if (
+            task is None
+            or task.last_status not in {"completed", "partial"}
+            or not task.last_task_id
+        ):
+            return None
+        record = await manager.tracker.get(
+            task.last_task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+        )
+        # A newly registered/rebound Watch is not proof that its source was
+        # imported into this target. Require the completed ingestion record.
+        if (
+            record is None
+            or record.status != TaskStatus.COMPLETED
+            or not isinstance(record.result, dict)
+            or record.result.get("root_uri") != root_uri
+            or record.meta.get("source_path") != task.path
+        ):
+            return None
+        return task.path
 
     async def _ensure_resource_target_available(
         self, uri: str, ctx: RequestContext, *, is_parent: bool = False
@@ -2201,8 +2236,19 @@ class ResourceService:
                         shared_source=shared_source,
                     )
                 except OpenVikingError as exc:
-                    if not kwargs.get("strict", False) and to and exc.code == "PERMISSION_DENIED":
-                        await self._resource_processor._quarantine_revoked_snapshot(to, ctx)
+                    evidence = [{"error_code": exc.code, "error_details": exc.details}]
+                    if (
+                        not kwargs.get("strict", False)
+                        and to
+                        and ResourceProcessor._has_source_revocation_evidence(path, evidence)
+                    ):
+                        await self._resource_processor._quarantine_revoked_snapshot(
+                            to,
+                            ctx,
+                            source_uri=path,
+                            evidence=evidence,
+                            source_binding_reader=self._read_watch_source_binding,
+                        )
                     raise
         if source_plan is not None:
             result = await self._enqueue_source_plan(
@@ -2378,6 +2424,7 @@ class ResourceService:
                 allow_local_path_resolution=allow_local_path_resolution,
                 prepared_resource=prepared_resource,
                 target_validator=self._ensure_resource_target_available,
+                source_binding_reader=self._read_watch_source_binding,
                 defer_post_processing=True,
                 tags=tags,
                 tag_mode=tag_mode,

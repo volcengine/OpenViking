@@ -214,7 +214,15 @@ async def test_resource_processor_rejects_directory_when_every_file_failed(monke
 @pytest.mark.asyncio
 @pytest.mark.parametrize("build_index", [True, False])
 @pytest.mark.parametrize("strict", [None, False, True])
-@pytest.mark.parametrize("error_code", [None, "PERMISSION_DENIED", "UNAUTHENTICATED"])
+@pytest.mark.parametrize(
+    "error_code",
+    [
+        None,
+        "PERMISSION_DENIED",
+        "UNAUTHENTICATED",
+        "LOCAL_PERMISSION_DENIED",
+    ],
+)
 async def test_resource_processor_partial_directory_commit_policy(
     monkeypatch, build_index, strict, error_code
 ):
@@ -242,7 +250,27 @@ async def test_resource_processor_partial_directory_commit_policy(
                     "path": "missing.py",
                     "parser": "native",
                     "error": "parser failed",
-                    **({"error_code": error_code} if error_code else {}),
+                    **(
+                        {
+                            "error_code": (
+                                "PERMISSION_DENIED"
+                                if error_code == "LOCAL_PERMISSION_DENIED"
+                                else error_code
+                            )
+                        }
+                        if error_code
+                        else {}
+                    ),
+                    **(
+                        {
+                            "error_details": {
+                                "error_source": "upstream_feishu",
+                                "source_uri": "repo",
+                            }
+                        }
+                        if error_code == "PERMISSION_DENIED"
+                        else {}
+                    ),
                 }
             ],
         },
@@ -261,7 +289,7 @@ async def test_resource_processor_partial_directory_commit_policy(
     rp._commit_directory_artifact_with_plan = AsyncMock(
         return_value=_directory_plan("viking://resources/root")
     )
-    rp._quarantine_revoked_snapshot = AsyncMock()
+    rp._quarantine_revoked_snapshot = AsyncMock(return_value=True)
 
     rp.finish_prepared_resource = AsyncMock(return_value={"status": "success"})
     result = await rp.process_resource(
@@ -272,6 +300,13 @@ async def test_resource_processor_partial_directory_commit_policy(
     )
 
     if not strict:
+        if error_code == "LOCAL_PERMISSION_DENIED":
+            assert result["status"] == "error"
+            assert "verified source evidence" in result["errors"][0]
+            assert fake_fs.delete_temp_calls == [(ref.root, None)]
+            rp._commit_directory_artifact_with_plan.assert_not_awaited()
+            rp._quarantine_revoked_snapshot.assert_not_awaited()
+            return
         if error_code == "UNAUTHENTICATED":
             assert result["status"] == "error"
             assert result["errors"] == ["Source authentication failed; partial commit refused"]
@@ -769,25 +804,44 @@ async def test_resource_processor_releases_resolved_candidate_when_acl_denied(mo
 
 @pytest.mark.asyncio
 async def test_quarantine_revoked_snapshot_removes_ancestor_views_and_vectors(monkeypatch):
+    from openviking.storage.abstract_overview import render_abstract_overview
+
+    source = "https://example.feishu.cn/wiki/source"
+    root = "viking://resources/team/docs"
+    vector_store = SimpleNamespace(delete_uris=AsyncMock())
     fs = SimpleNamespace(
         _ensure_access=AsyncMock(),
         exists=AsyncMock(return_value=True),
         create_temp_uri=MagicMock(return_value="viking://user/alice/temp/quarantine"),
         mkdir=AsyncMock(),
+        stat=AsyncMock(return_value={"isDir": True}),
+        _prepare_transfer_entries=AsyncMock(),
         mv=AsyncMock(),
         _uri_to_path=lambda uri, **kw: uri,
         _delete_from_vector_store=AsyncMock(),
+        _get_vector_store=lambda: vector_store,
+        read_file=AsyncMock(
+            return_value=render_abstract_overview(
+                0, root, "old summary", {"source": {"kind": "feishu", "uri": source}}
+            )
+        ),
         remove_files=AsyncMock(),
         _async_agfs=SimpleNamespace(
             pathlock_release=AsyncMock(),
             pathlock_acquire_exact_batch=AsyncMock(return_value={"id": "parent"}),
+            pathlock_acquire_tree=AsyncMock(return_value={"id": "root-tree"}),
         ),
     )
     monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: fs)
     rp = ResourceProcessor(vikingdb=object(), media_storage=None)
     rp.acquire_resource_lock = AsyncMock(return_value={"id": "parent"})
-    await rp._quarantine_revoked_snapshot("viking://resources/team/docs", object(), {"id": "root"})
-    assert fs.mv.await_args.kwargs["vector_mode"] == "delete_source"
+    await rp._quarantine_revoked_snapshot(
+        root, object(), {"id": "root"}, source_uri=source, evidence=_revocation_evidence(source)
+    )
+    assert fs.mv.await_args.kwargs["vector_mode"] == "none"
+    vector_store.delete_uris.assert_awaited_once_with(
+        fs.mv.await_args.kwargs["ctx"], [root], recursive=True
+    )
     assert fs.mv.await_args.kwargs["copy_semantic_sidecars"] is False
     assert [c.args[0] for c in fs._delete_from_vector_store.await_args_list] == [
         ["viking://resources/team"],
@@ -798,43 +852,104 @@ async def test_quarantine_revoked_snapshot_removes_ancestor_views_and_vectors(mo
         parent, abstract, overview = call.args[0]
         assert abstract == parent + "/.abstract.md"
         assert overview == parent + "/.overview.md"
-        assert call.kwargs["owner_lease_ref"] == {"id": "root"}
+        assert call.kwargs["owner_lease_ref"] == {"id": "root-tree"}
 
 
 @pytest.mark.asyncio
 async def test_quarantine_failure_is_not_silenced(monkeypatch):
+    source = "https://example.feishu.cn/wiki/source"
     fs = SimpleNamespace(
         _ensure_access=AsyncMock(),
-        exists=AsyncMock(return_value=True),
-        create_temp_uri=MagicMock(return_value="viking://user/alice/temp/quarantine"),
-        mkdir=AsyncMock(),
-        mv=AsyncMock(side_effect=OpenVikingError("storage unavailable")),
+        exists=AsyncMock(return_value=False),
+        _get_vector_store=lambda: SimpleNamespace(
+            delete_uris=AsyncMock(side_effect=OpenVikingError("storage unavailable"))
+        ),
+        create_temp_uri=lambda **kw: "viking://temp/alice/quarantine",
+        _uri_to_path=lambda uri, **kw: uri,
+        _async_agfs=SimpleNamespace(
+            pathlock_acquire_tree=AsyncMock(return_value={"id": "root-tree"}),
+            pathlock_release=AsyncMock(),
+        ),
     )
     monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: fs)
     rp = ResourceProcessor(vikingdb=object(), media_storage=None)
     with pytest.raises(OpenVikingError, match="storage unavailable"):
-        await rp._quarantine_revoked_snapshot("viking://resources", object(), {"id": "root"})
+        await rp._quarantine_revoked_snapshot(
+            "viking://resources",
+            object(),
+            {"id": "root"},
+            source_uri=source,
+            evidence=_revocation_evidence(source),
+            source_binding_reader=AsyncMock(return_value=source),
+        )
+
+
+def _revocation_evidence(source):
+    return [
+        {
+            "error_code": "PERMISSION_DENIED",
+            "error_details": {
+                "error_source": "upstream_feishu",
+                "source_uri": source,
+            },
+        }
+    ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("preacquired", [False, True])
-async def test_quarantine_snapshot_with_real_storage_and_locks(monkeypatch, watch_vfs, preacquired):
+@pytest.mark.parametrize("target_exists", [False, True])
+async def test_quarantine_snapshot_with_real_storage_and_locks(
+    monkeypatch, watch_vfs, preacquired, target_exists
+):
     from openviking.server.identity import RequestContext, Role
+    from openviking.storage.abstract_overview import render_abstract_overview
     from openviking_cli.session.user_id import UserIdentifier
+    from tests.storage.test_vector_transfer import _matches_filter, _MemoryTransferBackend
 
     fs = watch_vfs
     ctx = RequestContext(user=UserIdentifier("test", "alice"), role=Role.ADMIN)
     root = "viking://resources/team/docs"
+    source = "https://example.feishu.cn/wiki/source"
     destination = fs.create_temp_uri(ctx=ctx)
     monkeypatch.setattr(fs, "create_temp_uri", lambda **kwargs: destination)
-    monkeypatch.setattr(fs, "_delete_from_vector_store", AsyncMock())
     monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: fs)
-    for uri in ("viking://resources", "viking://resources/team", root):
+    for uri in ("viking://resources", "viking://resources/team"):
         await fs.mkdir(uri, exist_ok=True, ctx=ctx)
         await fs.write_file(uri + "/.abstract.md", "revoked summary", ctx=ctx)
         await fs.write_file(uri + "/.overview.md", "revoked overview", ctx=ctx)
-    await fs.write_file(root + "/old.md", "revoked body", ctx=ctx)
+    if target_exists:
+        await fs.mkdir(root, exist_ok=True, ctx=ctx)
+        for level, name in ((0, ".abstract.md"), (1, ".overview.md")):
+            await fs.write_file(
+                root + "/" + name,
+                render_abstract_overview(
+                    level, root, "old summary", {"source": {"kind": "feishu", "uri": source}}
+                ),
+                ctx=ctx,
+            )
+        await fs.write_file(root + "/old.md", "revoked body", ctx=ctx)
+    records = [
+        {"id": "root", "uri": root, "account_id": "test"},
+        {"id": "body", "uri": root + "/old.md", "account_id": "test"},
+        {"id": "orphan", "uri": root + "/missing.md", "account_id": "test"},
+        {"id": "other-account", "uri": root + "/missing.md", "account_id": "other"},
+        {"id": "sibling", "uri": root + "2/a.md", "account_id": "test"},
+    ]
+    backend = _MemoryTransferBackend(records)
 
+    async def delete_by_filter(scope):
+        deleted = [key for key, value in backend.records.items() if _matches_filter(scope, value)]
+        for key in deleted:
+            del backend.records[key]
+        return len(deleted)
+
+    monkeypatch.setattr(
+        backend,
+        "_get_backend_for_context",
+        AsyncMock(return_value=SimpleNamespace(delete_by_filter=delete_by_filter)),
+    )
+    fs.vector_store = backend
     rp = ResourceProcessor(vikingdb=object(), media_storage=None)
     lease = (
         await rp.acquire_resource_lock(fs._uri_to_path(root, ctx=ctx), uri=root)
@@ -842,14 +957,70 @@ async def test_quarantine_snapshot_with_real_storage_and_locks(monkeypatch, watc
         else None
     )
     try:
-        await rp._quarantine_revoked_snapshot(root, ctx, lease)
+        assert await rp._quarantine_revoked_snapshot(
+            root,
+            ctx,
+            lease,
+            source_uri=source,
+            evidence=_revocation_evidence(source),
+            source_binding_reader=AsyncMock(return_value=source),
+        )
     finally:
         if lease is not None:
             await fs._async_agfs.pathlock_release(lease)
-
     assert not await fs.exists(root, ctx=ctx)
-    assert await fs.read_file(destination + "/old.md", ctx=ctx) == "revoked body"
+    assert set(backend.records) == {"other-account", "sibling"}
+    if target_exists:
+        assert await fs.read_file(destination + "/old.md", ctx=ctx) == "revoked body"
     for uri in ("viking://resources", "viking://resources/team", destination):
         assert not await fs.exists(uri + "/.abstract.md", ctx=ctx)
         assert not await fs.exists(uri + "/.overview.md", ctx=ctx)
-    assert any(root in call.args[0] for call in fs._delete_from_vector_store.await_args_list)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_source,binding",
+    [
+        ("local_network_policy", "https://example.feishu.cn/wiki/source"),
+        ("target_permission", "https://example.feishu.cn/wiki/source"),
+        ("upstream_feishu", "https://example.feishu.cn/wiki/different"),
+        ("upstream_feishu", None),
+    ],
+)
+async def test_unverified_denial_does_not_mutate_old_snapshot(
+    monkeypatch, watch_vfs, error_source, binding
+):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage.abstract_overview import render_abstract_overview
+    from openviking_cli.exceptions import FailedPreconditionError
+    from openviking_cli.session.user_id import UserIdentifier
+
+    fs = watch_vfs
+    ctx = RequestContext(user=UserIdentifier("test", "alice"), role=Role.ADMIN)
+    root, source = "viking://resources/docs", "https://example.feishu.cn/wiki/source"
+    await fs.mkdir(root, exist_ok=True, ctx=ctx)
+    await fs.write_file(root + "/old.md", "must stay", ctx=ctx)
+    if binding:
+        await fs.write_file(
+            root + "/.overview.md",
+            render_abstract_overview(
+                1, root, "old summary", {"source": {"kind": "feishu", "uri": binding}}
+            ),
+            ctx=ctx,
+        )
+    fs.vector_store = SimpleNamespace(delete_uris=AsyncMock())
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: fs)
+    evidence = _revocation_evidence(source)
+    evidence[0]["error_details"]["error_source"] = error_source
+    rp = ResourceProcessor(vikingdb=object(), media_storage=None)
+    if error_source == "upstream_feishu":
+        with pytest.raises(FailedPreconditionError, match="binding"):
+            await rp._quarantine_revoked_snapshot(root, ctx, source_uri=source, evidence=evidence)
+    else:
+        assert not await rp._quarantine_revoked_snapshot(
+            root, ctx, source_uri=source, evidence=evidence
+        )
+    assert await fs.read_file(root + "/old.md", ctx=ctx) == "must stay"
+    if binding:
+        assert await fs.exists(root + "/.overview.md", ctx=ctx)
+    fs.vector_store.delete_uris.assert_not_awaited()
