@@ -98,6 +98,7 @@
   --ov-ui-bg-3-default: #f7f8fd;
   --ov-ui-bg-4-default: #f6f7fa;
   --ov-ui-bg-5-default: #f1f2f9;
+  --ov-ui-plain-button-hover-default: #f5f5fc;
 
   /* Code surfaces used by the reference conversation renderer. */
   --ov-ui-code-bg-default: #fbfbfc;
@@ -214,6 +215,7 @@ html.dark .ov-experience-dashboard,
   --ov-ui-bg-3-default: #1b1d21;
   --ov-ui-bg-4-default: #202227;
   --ov-ui-bg-5-default: #23252a;
+  --ov-ui-plain-button-hover-default: var(--ov-ui-bg-4-default);
 
   --ov-ui-focus-default: #5f5fff;
   --ov-ui-fill-hover-default: #23252a;
