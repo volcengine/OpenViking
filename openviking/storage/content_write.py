@@ -2908,8 +2908,8 @@ class ContentWriteCoordinator:
                 levels=levels,
                 ctx=ctx,
             )
-        else:
-            updated_records = await store.update_search_tags(uri, tags, mode=mode, ctx=ctx)
+            return [str(record.get("uri")) for record in updated_records if record.get("uri")]
+        updated_records = await store.update_search_tags(uri, tags, mode=mode, ctx=ctx)
         if not updated_records:
             return []
         return [str(record.get("uri")) for record in updated_records if record.get("uri")]
