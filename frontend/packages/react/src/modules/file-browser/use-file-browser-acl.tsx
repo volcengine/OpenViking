@@ -101,6 +101,7 @@ export function useFileBrowserAcl({
     enabled && permission?.key === key ? permission.level : undefined;
   const text = aclLabels(locale, labels);
   return {
+    canEdit: !enabled || level === 'write' || level === 'manage',
     titleExtra:
       enabled && permission?.key === key && permission.error ? (
         <span className="ov-file-browser-acl__lookup-error" role="status">

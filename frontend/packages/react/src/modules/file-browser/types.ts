@@ -139,6 +139,8 @@ export interface FileBrowserProps extends Omit<
    * Shared-resource ACL, off by default. Shows effective permissions and manages grants in a Modal.
    */
   acl?: boolean | FileBrowserAclOptions;
+  /** 隐藏文件编辑入口。Disables editing in the preview. */
+  readOnly?: boolean;
   /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
   locale?: Locale;
   /**

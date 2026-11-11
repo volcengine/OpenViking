@@ -43,6 +43,10 @@ export function resolvePreviewLabels(text: ResolvedLabels): FilePreviewLabels {
   return {
     loading: text.loading,
     copyPath: text.copyPath,
+    previewMode: text.previewMode,
+    sourceMode: text.sourceMode,
+    copyContent: text.copyContent,
+    viewSwitch: text.viewSwitch,
     download: text.download,
     ...text.previewLabels,
   };

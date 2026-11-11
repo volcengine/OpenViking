@@ -157,7 +157,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   // Switchable only when the adapter declares both; images, media and PDFs have
   // no source view.
   const canSwitchView =
-    Boolean(fileTab) &&
+    Boolean(fileTab || directoryTab) &&
     viewModes.includes('preview') &&
     viewModes.includes('source');
 
