@@ -29,21 +29,29 @@ export function Composer({
   // keep both stop and send available.
   const showStopAsSubmit = isStreaming && !value.trim()
   const showStopBesideSend = isStreaming && !showStopAsSubmit
-  const handleSend = useCallback(async () => {
-    const trimmed = value.trim()
-    if (!trimmed || submittingRef.current) return
-    submittingRef.current = true
-    try {
-      const accepted = await onSend(trimmed)
-      if (accepted === false) return
-      // Do not erase text edited while the submission was pending.
-      setValue((current) => (current === value ? '' : current))
-    } catch {
-      // The caller owns error reporting; keep the input available for retry.
-    } finally {
-      submittingRef.current = false
-    }
-  }, [value, onSend])
+  const handleSend = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim()
+      if (!trimmed || submittingRef.current) return
+      submittingRef.current = true
+      try {
+        const accepted = await onSend(trimmed)
+        if (accepted === false) return
+        // Do not erase text edited while the submission was pending.
+        setValue((current) =>
+          current === value ||
+          (value.trim() !== trimmed && current.trim() === trimmed)
+            ? ''
+            : current,
+        )
+      } catch {
+        // The caller owns error reporting; keep the input available for retry.
+      } finally {
+        submittingRef.current = false
+      }
+    },
+    [value, onSend],
+  )
 
   return (
     <div className="ov-viking-bot" style={{ height: 'auto', minHeight: 0 }}>
@@ -68,8 +76,8 @@ export function Composer({
           ) : undefined
         }
         onValueChange={setValue}
-        onSend={() => {
-          void handleSend()
+        onSend={(draft) => {
+          void handleSend(draft.text)
         }}
         onCancel={onCancel}
         labels={{

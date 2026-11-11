@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, expect, it, vi } from 'vitest'
 import { ContextExplorerHeader } from './context-explorer'
 
+const connection = vi.hoisted(() => ({ serverMode: 'api_key' }))
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: {
@@ -12,6 +13,7 @@ vi.mock('#/features/connection/hooks/use-app-connection', () => ({
       adminApiKey: 'admin-key',
     },
     identityScopeKey: 'test-user',
+    serverMode: connection.serverMode,
   }),
 }))
 vi.mock('react-i18next', () => ({
@@ -22,7 +24,20 @@ vi.mock('react-i18next', () => ({
 }))
 afterEach(() => {
   cleanup()
+  connection.serverMode = 'api_key'
   vi.clearAllMocks()
+})
+
+it('keeps resource import available in trusted mode without offering API-key-only instructions', async () => {
+  connection.serverMode = 'trusted'
+  const onImport = vi.fn()
+  render(<ContextExplorerHeader onAddResource={onImport} />)
+
+  expect(screen.queryByRole('button', { name: 'ide.connectAgent' })).toBeNull()
+  await userEvent.click(
+    screen.getByRole('button', { name: 'explorer.addResource' }),
+  )
+  expect(onImport).toHaveBeenCalledOnce()
 })
 
 it('opens AgentConnect with the current data credential and closes inside Studio', async () => {

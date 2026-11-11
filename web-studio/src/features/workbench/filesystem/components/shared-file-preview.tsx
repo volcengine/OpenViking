@@ -239,8 +239,8 @@ export function SharedFilePreview({
     setViewMode: (mode) =>
       setSourceScope(mode === 'source' ? currentScope : null),
     canSwitchView: customFilePreview,
-    canCopyContent: Boolean(displayText),
-    copyContent: () => copy(displayText),
+    canCopyContent: Boolean(sourceMode ? fileText : displayText),
+    copyContent: () => copy(sourceMode ? fileText : displayText),
   }
   const renderActions = (actions: PreviewToolbarActions) => {
     actionsRef.current = actions
@@ -442,7 +442,7 @@ export function SharedFilePreview({
         </p>
       ) : sourceMode ? (
         <pre className="min-w-max whitespace-pre px-4 py-3 font-mono text-xs leading-5">
-          {displayText}
+          {fileText}
         </pre>
       ) : (
         (content ??

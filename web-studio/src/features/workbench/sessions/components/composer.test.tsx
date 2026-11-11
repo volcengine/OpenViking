@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from 'react'
+import type { VikingBotDraft } from '@openviking/react/components/viking-bot'
 
 import { Composer } from '#/features/workbench/sessions/components/composer'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -18,7 +19,7 @@ vi.mock('@openviking/react/components/viking-bot', () => ({
   }: {
     value: string
     onValueChange: (value: string) => void
-    onSend: () => void
+    onSend: (draft: VikingBotDraft) => void
     onCancel: () => void
     isSending: boolean
     labels: { placeholder: string; stop: string }
@@ -30,7 +31,8 @@ vi.mock('@openviking/react/components/viking-bot', () => ({
         value={value}
         onChange={(event) => onValueChange(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === 'Enter' && !isSending) onSend()
+          if (event.key === 'Enter' && !isSending)
+            onSend({ text: event.currentTarget.value, attachments: [] })
         }}
       />
       {actions}
@@ -46,6 +48,18 @@ vi.mock('react-i18next', () => ({
 afterEach(cleanup)
 
 describe('Composer', () => {
+  it('sends the text reported by the editor even before Studio receives a change event', () => {
+    const onSend = vi.fn(() => false)
+    render(<Composer onSend={onSend} onCancel={vi.fn()} isStreaming={false} />)
+
+    const input =
+      screen.getByPlaceholderText<HTMLInputElement>('chat.placeholder')
+    input.value = 'latest editor text'
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(onSend).toHaveBeenCalledExactlyOnceWith('latest editor text')
+  })
+
   it('sends text while streaming and keeps the cancel control available', async () => {
     const onSend = vi.fn()
     const onCancel = vi.fn()

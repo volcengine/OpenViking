@@ -3,6 +3,20 @@ import { expect, it } from 'vitest'
 import { sharedMessages } from './shared-messages'
 import type { Message } from './types/message'
 
+it('preserves literal user text and lets the assistant use Markdown', () => {
+  const text = '**literal**'
+  const messages: Message[] = (['user', 'assistant'] as const).map((role) => ({
+    id: role,
+    role,
+    parts: [{ type: 'text', text }],
+    created_at: '2026-11-11T00:00:00Z',
+  }))
+
+  const [user, assistant] = sharedMessages(messages)
+  expect(user.parts).toEqual([{ type: 'text', text, format: 'plain' }])
+  expect(assistant.parts).toEqual([{ type: 'text', text }])
+})
+
 it('keeps checkpoint boundaries through the shared message grouping', () => {
   const entry = (
     id: string,

@@ -50,7 +50,7 @@ export function AgentPanel({
   onSessionChange: (sessionId: string) => void
   toolbarContainer: HTMLDivElement | null
 }) {
-  const { t } = useTranslation('filesystem')
+  const { t } = useTranslation(['filesystem', 'sessions'])
   const { identityScopeKey } = useAppConnection()
   const [deleteSessionId, setDeleteSessionId] = useState<string | null>(null)
   const [sessionId, setSessionId] = useState(
@@ -89,7 +89,8 @@ export function AgentPanel({
     persistMessages: true,
     sessionId,
   })
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const followOutput = useRef(true)
 
   const handleNewSession = useCallback(() => {
     if (isCreatingSession) return
@@ -132,8 +133,16 @@ export function AgentPanel({
   }, [identityScopeKey, persistedSessionId])
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    followOutput.current = true
+  }, [sessionId])
+
+  useEffect(() => {
+    const scroller = scrollRef.current
+    if (scroller && followOutput.current) {
+      scroller.scrollTop = scroller.scrollHeight
+    }
   }, [
+    sessionId,
     chat.messages.length,
     chat.streamingContent,
     chat.streamingReasoning,
@@ -248,7 +257,17 @@ export function AgentPanel({
         />
       ) : null}
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+        <div
+          ref={scrollRef}
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
+          onScroll={({ currentTarget }) => {
+            followOutput.current =
+              currentTarget.scrollHeight -
+                currentTarget.scrollTop -
+                currentTarget.clientHeight <
+              100
+          }}
+        >
           {botHealth.isLoading ? (
             <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2Icon className="size-4 animate-spin" />
@@ -279,6 +298,7 @@ export function AgentPanel({
             <AgentEmptyState onSend={send} />
           ) : (
             <MessageList
+              key={sessionId}
               messages={chat.messages}
               onResourceClick={onOpenResource}
               streaming={
@@ -292,8 +312,13 @@ export function AgentPanel({
               }
             />
           )}
-          <div ref={bottomRef} />
         </div>
+
+        {chat.error && !sessionError && !botModeError ? (
+          <div role="alert" className="px-4 py-2 text-sm text-destructive">
+            {t('sessions:chat.sendFailed', { error: chat.error })}
+          </div>
+        ) : null}
 
         {botModeError ? (
           <div className="border-t bg-background/80 px-4 py-3 text-center text-sm text-muted-foreground">

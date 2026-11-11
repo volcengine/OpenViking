@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ContextTree } from './context-explorer'
 
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
@@ -18,9 +24,38 @@ vi.mock('react-i18next', () => ({
 afterEach(cleanup)
 
 const get = vi.hoisted(() => vi.fn())
+beforeEach(() => {
+  get.mockReset()
+})
 vi.mock('#/shared/api/ov-client', () => ({
   getOvClient: () => ({ instance: { get } }),
 }))
+
+it('shows a root request failure and recovers when refreshed', async () => {
+  get.mockRejectedValueOnce(new Error('Root request failed'))
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  render(
+    <QueryClientProvider client={client}>
+      <ContextTree
+        currentUri="viking://"
+        expandedKeys={new Set()}
+        onExpandedKeysChange={vi.fn()}
+        onSelectDirectory={vi.fn()}
+        onSelectFile={vi.fn()}
+      />
+    </QueryClientProvider>,
+  )
+
+  await screen.findByText('Root request failed')
+  get.mockResolvedValueOnce({
+    data: { result: [{ uri: 'viking://user', isDir: true }] },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'explorer.refresh' }))
+  await screen.findByRole('treeitem', { name: /user/ })
+  expect(screen.queryByText('Root request failed')).toBeNull()
+})
 
 it('keeps existing tree nodes and cached branches when Studio selects a directory', async () => {
   const names: Partial<Record<string, string[]>> = {

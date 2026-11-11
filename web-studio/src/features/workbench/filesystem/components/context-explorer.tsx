@@ -24,18 +24,18 @@ export function ContextExplorerHeader({
   onAddResource?: () => void
 }) {
   const { t, i18n } = useTranslation('filesystem')
-  const { connection, identityScopeKey } = useAppConnection()
+  const { connection, identityScopeKey, serverMode } = useAppConnection()
   const locale = i18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'
   return (
     <div className={styles.header}>
       <FileBrowserEntries
         key={identityScopeKey}
         locale={locale}
-        agentConnect={{
-          apiKey: connection.apiKey,
-          baseUrl: connection.baseUrl,
-          locale,
-        }}
+        agentConnect={
+          serverMode === 'trusted'
+            ? undefined
+            : { apiKey: connection.apiKey, baseUrl: connection.baseUrl }
+        }
         onImportResources={onAddResource}
         labels={{
           connectAgent: t('ide.connectAgent'),
@@ -107,7 +107,6 @@ export function ContextTree({
       rows={tree.rows}
       selectedId={normalizeFileUri(selectedFileUri || currentUri)}
       isReady={tree.isReady}
-      errorFallback={tree.error?.message}
       aria-label={t('explorer.title')}
       operations={{
         select: async (row) => {

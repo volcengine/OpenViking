@@ -83,6 +83,7 @@ export function useContextTree(rootUri: string, expandedKeys: Set<string>) {
     byDirectory.set(uri, group)
   })
   const rows: FileTreeRow[] = []
+  const rootQuery = queries[0]
   function append(uri: string, depth: number) {
     const directory = byDirectory.get(uri)
     if (!directory) return
@@ -134,7 +135,16 @@ export function useContextTree(rootUri: string, expandedKeys: Set<string>) {
       rows.push({ kind: 'load-more', id: `${uri}:more`, parentId: uri, depth })
     }
   }
-  append(root, 0)
+  if (rootQuery.isError && !rootQuery.data) {
+    rows.push({
+      kind: 'error',
+      id: `${root}:error`,
+      depth: 0,
+      message: rootQuery.error.message,
+    })
+  } else {
+    append(root, 0)
+  }
   const refresh = useCallback(
     () =>
       client.invalidateQueries({
@@ -147,8 +157,7 @@ export function useContextTree(rootUri: string, expandedKeys: Set<string>) {
   )
   return {
     rows,
-    isReady: !queries[0]?.isPending,
-    error: queries[0]?.error,
+    isReady: !rootQuery.isPending,
     refresh,
     loadMore: async (uri: string) =>
       setPages((current) => ({ ...current, [uri]: (current[uri] ?? 1) + 1 })),

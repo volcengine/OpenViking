@@ -13,6 +13,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 const m = vi.hoisted(() => ({
   remove: vi.fn(),
   health: vi.fn(),
+  stat: vi.fn(),
   write: vi.fn(),
   mkdir: vi.fn(),
   move: vi.fn(),
@@ -34,6 +35,10 @@ vi.mock('#/features/connection/hooks/use-app-connection', () => ({
 vi.mock('#/features/workbench/resources/hooks/viking-fm', () => ({
   useInvalidateVikingFs: () => ({ invalidateAll: m.refresh }),
 }))
+vi.mock('#/features/workbench/resources/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  fetchFsStat: m.stat,
+}))
 vi.mock('#/shared/api/ov-client/index', async (importOriginal) => ({
   ...(await importOriginal<typeof OvClient>()),
   deleteFs: m.remove,
@@ -52,6 +57,7 @@ beforeEach(() => {
   Element.prototype.scrollTo = vi.fn()
   m.remove.mockReset().mockResolvedValue({})
   m.health.mockReset().mockResolvedValue({ ok: true })
+  m.stat.mockReset().mockResolvedValue({})
   m.write.mockReset().mockResolvedValue({})
   m.mkdir.mockReset().mockResolvedValue({})
   m.move.mockReset().mockResolvedValue({})
@@ -135,6 +141,44 @@ it.each([
   expect(m.remove).toHaveBeenCalledExactlyOnceWith({
     query: { uri, recursive: false },
   })
+})
+it('passes the original URI to stat after accepting a quoted resource completion', async () => {
+  const name = "project's  notes.md"
+  const uri = `viking://resources/${name}`
+  m.stat.mockResolvedValue({ name, uri })
+  render(
+    <TerminalPanel
+      currentUri="viking://resources"
+      entries={[
+        {
+          uri,
+          name,
+          isDir: false,
+          size: '',
+          sizeBytes: null,
+          modTime: '',
+          modTimestamp: null,
+          abstract: '',
+        },
+      ]}
+      openingUri={null}
+      onOpenResource={vi.fn()}
+      onSessionChange={vi.fn()}
+      toolbarContainer={null}
+    />,
+  )
+
+  const input = screen.getByRole('textbox')
+  fireEvent.focus(input)
+  fireEvent.change(input, {
+    target: { value: '/stat viking://resources/project' },
+  })
+  fireEvent.keyDown(input, { key: 'Tab' })
+  fireEvent.keyDown(input, { key: 'Enter' })
+
+  await waitFor(() =>
+    expect(m.stat).toHaveBeenCalledExactlyOnceWith(uri, { throwOnError: true }),
+  )
 })
 it.each([
   '/rm --recursive',

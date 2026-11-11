@@ -66,6 +66,11 @@ export function sharedMessages(messages: Message[]): VikingBotMessage[] {
     // Studio already groups protocol records, including checkpoint boundaries.
     turnId: message.id,
     createdAt: message.created_at,
-    parts: message.parts.map(sharedPart),
+    parts: message.parts.map((part) => {
+      const mapped = sharedPart(part)
+      return message.role === 'user' && mapped.type === 'text'
+        ? { ...mapped, format: 'plain' }
+        : mapped
+    }),
   }))
 }

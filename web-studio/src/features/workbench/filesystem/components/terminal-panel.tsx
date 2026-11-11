@@ -378,6 +378,14 @@ function getBooleanFlag(flags: Map<string, string[]>, key: string): boolean {
   return flags.has(key) && getLastFlag(flags, key) !== 'false'
 }
 
+function readResourceArgument(body: string): string {
+  if (!body.startsWith("'") && !body.startsWith('"')) return body
+  const [, uri, ...extra] = tokenize(`/resource ${body}`)
+  if (!uri || extra.length)
+    throw new Error(i18n.t('filesystem:terminal.enterUri'))
+  return uri
+}
+
 function parseScopedSearchInput(
   body: string,
   currentUri: string,
@@ -896,6 +904,8 @@ export function TerminalPanel({
           : `/${normalized}`
         const [name = '', ...args] = commandInput.split(/\s+/)
         const body = args.join(' ').trim()
+        const resourceArgument = () =>
+          readResourceArgument(commandInput.slice(name.length).trim())
 
         if (trimmed.startsWith('viking://')) {
           await onOpenResource(trimmed)
@@ -941,7 +951,9 @@ export function TerminalPanel({
             return
           }
           case '/ls': {
-            const target = body ? normalizeDirUri(body) : currentUri
+            const target = body
+              ? normalizeDirUri(resourceArgument())
+              : currentUri
             const result = body
               ? await fetchFsList(target, {
                   nodeLimit: 60,
@@ -962,7 +974,9 @@ export function TerminalPanel({
             return
           }
           case '/tree': {
-            const target = body ? normalizeDirUri(body) : currentUri
+            const target = body
+              ? normalizeDirUri(resourceArgument())
+              : currentUri
             const result = await fetchFsTree(target, {
               nodeLimit: 80,
               output: 'agent',
@@ -982,7 +996,7 @@ export function TerminalPanel({
           }
           case '/stat': {
             if (!body) throw new Error(t('terminal.enterUri'))
-            const uri = cleanVikingUri(body)
+            const uri = cleanVikingUri(resourceArgument())
             if (!uri) throw new Error(t('terminal.enterUri'))
             const entry = await fetchFsStat(uri, { throwOnError: true })
             appendResult({
@@ -995,7 +1009,7 @@ export function TerminalPanel({
           }
           case '/read': {
             if (!body) throw new Error(t('terminal.readUsage'))
-            const uri = cleanVikingUri(body)
+            const uri = cleanVikingUri(resourceArgument())
             if (!uri) throw new Error(t('terminal.enterUri'))
             const content = await fetchFileContent(uri, {
               limit: 1200,
@@ -1013,7 +1027,7 @@ export function TerminalPanel({
           case '/abstract':
           case '/overview': {
             if (!body) throw new Error(t('terminal.enterUri'))
-            const uri = cleanVikingUri(body)
+            const uri = cleanVikingUri(resourceArgument())
             if (!uri) throw new Error(t('terminal.enterUri'))
             const level = name === '/abstract' ? 'abstract' : 'overview'
             const content = await fetchDirectoryLevelContent(uri, level)
@@ -1598,16 +1612,19 @@ export function TerminalPanel({
       },
     ]
   })
+  const acceptsResource = (commandName: string) =>
+    /^\/(?:rm|read|stat|ls|tree|abstract|overview)$/.test(commandName)
+  const resourceInput = (commandName: string, uri: string) =>
+    `${commandName} '${uri.replaceAll("'", "'\\''")}'`
   const resourceCompletions = commands
     .filter(
       (item) =>
-        /^\/(?:rm|read|stat|ls|tree|abstract|overview)$/.test(item.command) &&
-        command.startsWith(`${item.command} `),
+        acceptsResource(item.command) && command.startsWith(`${item.command} `),
     )
     .flatMap((item) =>
       resourceCandidates.map((uri) => ({
         name: `${item.command.slice(1)} ${uri}`,
-        inputText: `${item.command} '${uri.replaceAll("'", "'\\''")}'`,
+        inputText: resourceInput(item.command, uri),
         description: uri,
         usage: item.usage,
         group: 'resources',
@@ -1715,10 +1732,12 @@ export function TerminalPanel({
                   value: t(`terminal.commandExamples.${key}.code`),
                   label: t(`terminal.commandExamples.${key}.description`),
                 })),
-                ...resourceCandidates.slice(0, 20).map((uri) => ({
-                  value: `${item.command} ${uri}`,
-                  label: uri,
-                })),
+                ...(acceptsResource(item.command)
+                  ? resourceCandidates.slice(0, 20).map((uri) => ({
+                      value: resourceInput(item.command, uri),
+                      label: uri,
+                    }))
+                  : []),
               ],
             })),
           ]}
