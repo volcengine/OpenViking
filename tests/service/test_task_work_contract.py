@@ -5,6 +5,8 @@
 import asyncio
 import json
 import os
+import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, create_autospec
@@ -19,6 +21,347 @@ from openviking_cli.exceptions import FailedPreconditionError
 from tests.test_task_tracker import _FakeAgfs
 
 OWNER: dict[str, Any] = {"account_id": "account", "user_id": "user"}
+
+
+async def _waiting_after_read(tracker, monkeypatch, *, interval=60):
+    from openviking.service import task_tracker
+
+    monkeypatch.setattr(task_tracker, "_WAIT_INITIAL_POLL_INTERVAL", interval)
+    monkeypatch.setattr(task_tracker, "_WAIT_MAX_POLL_INTERVAL", interval)
+    queried = asyncio.Event()
+    read = tracker.get_task_status
+
+    async def status(*args, **kwargs):
+        result = await read(*args, **kwargs)
+        queried.set()
+        return result
+
+    monkeypatch.setattr(tracker, "get_task_status", status)
+    waiter = asyncio.create_task(tracker.wait("task", **OWNER))
+    await asyncio.wait_for(queried.wait(), 2)
+    return waiter
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "complete",
+        "foreign-complete",
+        "fail",
+        "cancel",
+        "done",
+        "foreign-done",
+        "work-failed",
+        "discard",
+        "settle",
+        "requeue",
+    ],
+)
+async def test_local_task_commit_wakes_all_waiters(task_stores, monkeypatch, operation):
+    store, _ = task_stores
+    writer, reader = TaskTracker(store), TaskTracker(store)
+    await writer.create("compile", task_id="task", **OWNER)
+    await writer.start("task", **OWNER)
+    work_operations = ("done", "foreign-done", "work-failed", "discard", "settle", "requeue")
+    if operation in work_operations:
+        await writer.register_work("task", "work", "Embedding", **OWNER)
+        await writer.start_work("task", "work", **OWNER)
+        if operation == "requeue":
+            await writer.cancel("task", **OWNER)
+        else:
+            await writer.complete("task", {"ok": True}, **OWNER)
+        assert (await reader.get("task", **OWNER)).status in (
+            TaskStatus.RUNNING,
+            TaskStatus.CANCELLING,
+        )
+    waiters = [await _waiting_after_read(reader, monkeypatch) for _ in range(3)]
+    try:
+        if operation == "complete":
+            await writer.complete("task", {"ok": True}, **OWNER)
+        elif operation == "foreign-complete":
+            await asyncio.to_thread(
+                lambda: asyncio.run(writer.complete("task", {"ok": True}, **OWNER))
+            )
+        elif operation == "fail":
+            await writer.fail("task", "failed", **OWNER)
+        elif operation == "cancel":
+            await writer.cancel("task", **OWNER)
+        elif operation == "done":
+            await writer.mark_work_done("task", "work", **OWNER)
+        elif operation == "foreign-done":
+            await asyncio.to_thread(
+                lambda: asyncio.run(writer.mark_work_done("task", "work", **OWNER))
+            )
+        elif operation == "work-failed":
+            await writer.mark_work_failed("task", "work", "failed", **OWNER)
+        elif operation == "discard":
+            await writer.discard_work("task", "work", **OWNER)
+        elif operation == "settle":
+            await writer.settle_work("task", "work", **OWNER)
+        else:
+            await writer.mark_work_requeued("task", "work", **OWNER)
+        results = await asyncio.wait_for(asyncio.gather(*waiters), 2)
+        expected = await reader.get("task", **OWNER)
+        assert all(task == expected for task in results)
+        assert expected.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED)
+        assert store._task_changes.waiter_count == 0
+    finally:
+        for waiter in waiters:
+            waiter.cancel()
+        await asyncio.gather(*waiters, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_completion_during_status_read_is_not_lost(task_stores, monkeypatch):
+    store, _ = task_stores
+    tracker = TaskTracker(store)
+    await tracker.create("compile", task_id="task", **OWNER)
+    read = tracker.get_task_status
+    first_read = True
+
+    async def racing_read(*args, **kwargs):
+        nonlocal first_read
+        status = await read(*args, **kwargs)
+        if first_read:
+            first_read = False
+            await tracker.complete("task", {"ok": True}, **OWNER)
+        return status
+
+    monkeypatch.setattr(tracker, "get_task_status", racing_read)
+    from openviking.service import task_tracker
+
+    monkeypatch.setattr(task_tracker, "_WAIT_INITIAL_POLL_INTERVAL", 60)
+    result = await asyncio.wait_for(tracker.wait("task", **OWNER), 2)
+    assert result.status is TaskStatus.COMPLETED
+    assert store._task_changes.waiter_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["withdraw", "delete"])
+async def test_removal_wakes_waiters_with_missing_record(task_stores, monkeypatch, operation):
+    store, _ = task_stores
+    tracker = TaskTracker(store)
+    await tracker.create("compile", task_id="task", **OWNER)
+    waiter = await _waiting_after_read(tracker, monkeypatch)
+    try:
+        if operation == "withdraw":
+            await store.withdraw_unaccepted("task", **OWNER)
+        else:
+            await store.delete_tasks("task", allow_active_types=("compile",), **OWNER)
+        with pytest.raises(KeyError, match="Task not found"):
+            await asyncio.wait_for(waiter, 2)
+        assert store._task_changes.waiter_count == 0
+    finally:
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_failed_publication_does_not_notify(task_stores, monkeypatch):
+    store, other = task_stores
+    tracker = TaskTracker(store)
+    await tracker.create("compile", task_id="task", **OWNER)
+    error = OSError("write/transaction failed")
+    if isinstance(store, PersistentTaskStore):
+
+        async def fail_write(*args):
+            raise error
+
+        monkeypatch.setattr(store, "_write_task", fail_write)
+    else:
+        transaction = store._transaction
+
+        @asynccontextmanager
+        async def fail_transaction():
+            async with transaction() as session:
+                yield session
+                raise error
+
+        monkeypatch.setattr(store, "_transaction", fail_transaction)
+    with store._subscribe_task("task", **OWNER) as changed:
+        with pytest.raises(OSError, match="write/transaction failed"):
+            await tracker.complete("task", {}, **OWNER)
+        await asyncio.sleep(0)
+        assert not changed.done()
+        assert (await other.get_task("task", **OWNER)).status is TaskStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_non_status_changes_do_not_wake_task_waiters(task_stores):
+    store, _ = task_stores
+    tracker = TaskTracker(store)
+    await tracker.create("compile", task_id="task", **OWNER)
+    await tracker.start("task", **OWNER)
+    await tracker.register_work("task", "work", "Embedding", **OWNER)
+    with store._subscribe_task("task", **OWNER) as changed:
+        await tracker.complete("task", {"ok": True}, **OWNER)
+        await tracker.patch_task("task", TaskPatch(stage="embedding"), **OWNER)
+        await tracker.start_work("task", "work", **OWNER)
+        await tracker.register_work("task", "work", "Embedding", **OWNER)
+        await asyncio.sleep(0)
+        assert not changed.done()
+        assert (await tracker.get("task", **OWNER)).status is TaskStatus.RUNNING
+        await tracker.mark_work_done("task", "work", **OWNER)
+        await asyncio.wait_for(changed, 2)
+    assert (await tracker.wait("task", timeout=0, **OWNER)).status is TaskStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_creation_and_expiry_publish_task_hints(task_stores):
+    store, _ = task_stores
+    tracker = TaskTracker(store)
+    with store._subscribe_task("task", **OWNER) as created:
+        await tracker.create("compile", task_id="task", **OWNER)
+        await asyncio.wait_for(created, 2)
+    await tracker.complete("task", {}, **OWNER)
+    task = await tracker.get("task", **OWNER)
+    with store._subscribe_task("task", **OWNER) as deleted:
+        result = await store.delete_expired(
+            TaskRetentionPolicy(completed_seconds=1, failed_seconds=1),
+            now=task.updated_at + 2,
+            limit=10,
+        )
+        assert result.deleted_count == 1
+        await asyncio.wait_for(deleted, 2)
+    assert await tracker.get("task", **OWNER) is None
+
+
+@pytest.mark.asyncio
+async def test_mysql_cancellation_before_commit_rolls_back_without_notification(
+    task_stores, monkeypatch
+):
+    store, other = task_stores
+    if isinstance(store, PersistentTaskStore):
+        pytest.skip("MySQL transaction boundary")
+    from sqlalchemy import event
+
+    tracker = TaskTracker(store)
+    await tracker.create("compile", task_id="task", **OWNER)
+    transaction = store._transaction
+
+    @asynccontextmanager
+    async def cancel_before_commit():
+        async with transaction() as session:
+
+            def cancel(_session):
+                raise asyncio.CancelledError
+
+            event.listen(session.sync_session, "before_commit", cancel)
+            yield session
+
+    monkeypatch.setattr(store, "_transaction", cancel_before_commit)
+    with store._subscribe_task("task", **OWNER) as changed:
+        with pytest.raises(asyncio.CancelledError):
+            await tracker.complete("task", {}, **OWNER)
+        await asyncio.sleep(0)
+        assert not changed.done()
+        assert (await other.get_task("task", **OWNER)).status is TaskStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_confirmed_commit_notifies_before_cancellation_escapes(task_stores, monkeypatch):
+    store, other = task_stores
+    tracker = TaskTracker(store)
+    await tracker.create("compile", task_id="task", **OWNER)
+    if isinstance(store, PersistentTaskStore):
+        write = store._write_task
+        committed, release = asyncio.Event(), asyncio.Event()
+
+        async def delayed_write(task):
+            await write(task)
+            committed.set()
+            await release.wait()
+
+        monkeypatch.setattr(store, "_write_task", delayed_write)
+    else:
+        from sqlalchemy import event
+
+        transaction = store._transaction
+
+        @asynccontextmanager
+        async def cancel_after_commit():
+            async with transaction() as session:
+
+                def cancel(_session):
+                    asyncio.current_task().cancel()
+
+                event.listen(session.sync_session, "after_commit", cancel, insert=True)
+                yield session
+
+        monkeypatch.setattr(store, "_transaction", cancel_after_commit)
+    waiter = await _waiting_after_read(tracker, monkeypatch)
+    writing = asyncio.create_task(tracker.complete("task", {"ok": True}, **OWNER))
+    try:
+        if isinstance(store, PersistentTaskStore):
+            await asyncio.wait_for(committed.wait(), 2)
+            writing.cancel()
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(writing, 2)
+        assert (await asyncio.wait_for(waiter, 2)).status is TaskStatus.COMPLETED
+        assert (await other.get_task("task", **OWNER)).status is TaskStatus.COMPLETED
+        assert store._task_changes.waiter_count == 0
+    finally:
+        if isinstance(store, PersistentTaskStore):
+            release.set()
+        writing.cancel()
+        waiter.cancel()
+        await asyncio.gather(writing, waiter, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("writer_kind", ["independent-store", "process", "missed-notification"])
+async def test_mysql_wait_reconciles_external_or_missed_commit(
+    task_stores, monkeypatch, writer_kind
+):
+    store, other = task_stores
+    if isinstance(store, PersistentTaskStore):
+        pytest.skip("Independent durable writers require MySQL")
+    reader = TaskTracker(store)
+    await reader.create("compile", task_id="task", **OWNER)
+    waiter = await _waiting_after_read(reader, monkeypatch, interval=0.02)
+    try:
+        if writer_kind == "process":
+            code = """
+import asyncio, json, sys
+from openviking.service.task_store_mysql import MySQLTaskWorkStore
+from openviking.service.task_tracker import TaskTracker
+async def main():
+    store = MySQLTaskWorkStore(params=json.load(sys.stdin))
+    await store.load()
+    try:
+        await TaskTracker(store).complete('task', {'external': True}, account_id='account', user_id='user')
+    finally:
+        await store.close()
+asyncio.run(main())
+"""
+            params = {
+                **json.loads(os.environ["OV_TEST_MYSQL"]),
+                "table": store._models.Task.__tablename__,
+            }
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-c",
+                code,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(json.dumps(params).encode()), 20
+            )
+            assert process.returncode == 0, (stdout, stderr)
+        else:
+            writer = store if writer_kind == "missed-notification" else other
+            if writer is store:
+                monkeypatch.setattr(store._task_changes, "notify", lambda *args: None)
+            await TaskTracker(writer).complete("task", {"external": True}, **OWNER)
+        assert (await asyncio.wait_for(waiter, 2)).result == {"external": True}
+        assert store._task_changes.waiter_count == 0
+    finally:
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
 
 
 @pytest.fixture(params=["file", "mysql"])

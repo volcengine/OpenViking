@@ -8,6 +8,102 @@ import weakref
 
 import pytest
 
+from openviking.service.task_tracker_concurrency import TaskChangeNotifier
+
+
+@pytest.mark.asyncio
+async def test_notification_before_suspension_and_independent_cancellation():
+    notifier = TaskChangeNotifier()
+    with notifier.subscribe("task", "account", "user") as cancelled:
+        with notifier.subscribe("task", "account", "user") as other:
+            cancelled.cancel()
+            await asyncio.to_thread(notifier.notify, "account", "user", "task")
+            await asyncio.wait_for(other, 1)
+            assert cancelled.cancelled()
+    assert notifier.waiter_count == 0
+
+
+@pytest.mark.asyncio
+async def test_notifications_respect_full_and_partial_owner_filters():
+    from contextlib import ExitStack
+
+    notifier = TaskChangeNotifier()
+    scopes = [("account", "user"), (None, None), ("account", None), (None, "user")]
+    with ExitStack() as stack:
+        matched = [stack.enter_context(notifier.subscribe("task", *scope)) for scope in scopes]
+        wrong = [
+            stack.enter_context(notifier.subscribe("task", *scope))
+            for scope in [("other", "user"), ("account", "other")]
+        ]
+        different_task = stack.enter_context(notifier.subscribe("other", "account", "user"))
+        notifier.notify("account", "user", "task")
+        await asyncio.wait_for(asyncio.gather(*matched), 1)
+        assert all(not future.done() for future in [*wrong, different_task])
+    assert notifier.waiter_count == 0
+
+
+@pytest.mark.asyncio
+async def test_notification_cross_loop_registration_race_and_release():
+    notifier = TaskChangeNotifier()
+    registered = threading.Event()
+
+    def foreign_wait():
+        async def wait():
+            with notifier.subscribe("task", "account", "user") as changed:
+                registered.set()
+                await asyncio.wait_for(changed, 2)
+
+        asyncio.run(wait())
+
+    foreign = asyncio.create_task(asyncio.to_thread(foreign_wait))
+    assert await asyncio.to_thread(registered.wait, 2)
+    notifier.notify("account", "user", "task")
+    await asyncio.wait_for(foreign, 3)
+    assert notifier.waiter_count == 0
+
+
+@pytest.mark.asyncio
+async def test_closed_subscriber_loop_does_not_break_other_delivery():
+    notifier = TaskChangeNotifier()
+    closed = asyncio.new_event_loop()
+
+    async def abandoned():
+        subscription = notifier.subscribe("task", "account", "user")
+        subscription.__enter__()
+        return subscription
+
+    subscription = await asyncio.to_thread(closed.run_until_complete, abandoned())
+    closed.close()
+    with notifier.subscribe("task", "account", "user") as live:
+        notifier.notify("account", "user", "task")
+        await asyncio.wait_for(live, 1)
+    subscription.__exit__(None, None, None)
+    assert notifier.waiter_count == 0
+
+
+@pytest.mark.asyncio
+async def test_notification_cancelled_after_delivery_is_queued():
+    notifier = TaskChangeNotifier()
+    with notifier.subscribe("task", "account", "user") as future:
+        notifier.notify("account", "user", "task")
+        future.cancel()
+    # The queued delivery must tolerate the subscriber's intervening cancellation.
+    await asyncio.sleep(0)
+    assert notifier.waiter_count == 0
+
+
+@pytest.mark.asyncio
+async def test_notification_registry_does_not_retain_released_futures():
+    notifier = TaskChangeNotifier()
+    references = []
+    for _ in range(100):
+        with notifier.subscribe("task", "account", "user") as future:
+            references.append(weakref.ref(future))
+    del future
+    gc.collect()
+    assert notifier.waiter_count == 0
+    assert all(reference() is None for reference in references)
+
 
 @pytest.mark.asyncio
 async def test_work_index_groups_and_cancels_active_tasks_by_owner():
@@ -16,21 +112,15 @@ async def test_work_index_groups_and_cancels_active_tasks_by_owner():
     index = TaskWorkIndex()
     first = asyncio.create_task(asyncio.Event().wait())
     second = asyncio.create_task(asyncio.Event().wait())
-    index.register_active(
-        "shared-id", first, account_id="account-a", user_id="user"
-    )
-    index.register_active(
-        "shared-id", second, account_id="account-b", user_id="user"
-    )
+    index.register_active("shared-id", first, account_id="account-a", user_id="user")
+    index.register_active("shared-id", second, account_id="account-b", user_id="user")
 
     assert index.active_tasks_by_owner() == {
         ("account-a", "user"): {"shared-id"},
         ("account-b", "user"): {"shared-id"},
     }
 
-    index.cancel_active(
-        "shared-id", account_id="account-a", user_id="user"
-    )
+    index.cancel_active("shared-id", account_id="account-a", user_id="user")
     await asyncio.gather(first, return_exceptions=True)
     assert first.cancelled()
     assert not second.done()
