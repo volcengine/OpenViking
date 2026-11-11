@@ -363,7 +363,7 @@ class PrivacySanitizer:
             if config is None:
                 continue
             for field_name, value in config.values.items():
-                if not isinstance(value, str) or not value or value in never_mask:
+                if not isinstance(value, str) or len(value) < 6 or value in never_mask:
                     continue
                 if category != "credential":
                     try:

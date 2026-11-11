@@ -335,7 +335,7 @@ class UserPrivacyConfigService:
         for field, value in values.items():
             if not isinstance(value, str):
                 continue
-            if len(value) > 6 and re.search(r"[A-Za-z]", value) and re.search(r"[0-9]", value):
+            if len(value) >= 6 and re.search(r"[A-Za-z]", value) and re.search(r"[0-9]", value):
                 continue
             try:
                 matches = discover(value)

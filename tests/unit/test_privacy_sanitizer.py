@@ -103,17 +103,40 @@ async def test_matching_requires_complete_format_or_explicit_credential():
             "session": {
                 "legacy": {"word": "ordinary", "embedded": f"key={secret}", "valid": secret}
             },
-            "credential": {"manual": {"short": "pin", "empty": "", "number": 42}},
+            "credential": {
+                "manual": {
+                    "five_ascii": "aB123",
+                    "six_ascii": "aB1234",
+                    "five_unicode": "🙂a1中文",
+                    "six_unicode": "🙂a1中文测",
+                    "empty": "",
+                    "number": 42,
+                }
+            },
         }
     )
-    result = await PrivacySanitizer(catalog).sanitize(
-        f"ordinary pin {secret} 42",
+    sanitizer = PrivacySanitizer(catalog)
+    content = f"ordinary aB123 aB1234 🙂a1中文 🙂a1中文测 {secret} 42"
+    result = await sanitizer.sanitize(
+        content,
         ctx=_ctx(),
         uri="viking://user/alice/sessions/legacy/messages.jsonl",
     )
-    manual = build_privacy_field_reference("alice", "credential", "manual", "short")
+    ascii_reference = build_privacy_field_reference("alice", "credential", "manual", "six_ascii")
+    unicode_reference = build_privacy_field_reference(
+        "alice", "credential", "manual", "six_unicode"
+    )
     detected = build_privacy_field_reference("alice", "session", "legacy", "valid")
-    assert result.content == f"ordinary {manual} {detected} 42"
+    assert (
+        result.content
+        == f"ordinary aB123 {ascii_reference} 🙂a1中文 {unicode_reference} {detected} 42"
+    )
+    query = await sanitizer.prepare_matcher(_ctx(), scope=("session", "legacy"))
+    assert [(content[m.start : m.end], m.reference) for m in query(content)] == [
+        ("aB1234", ascii_reference),
+        ("🙂a1中文测", unicode_reference),
+        (secret, detected),
+    ]
 
 
 async def test_sanitizer_bounds_dense_match_metadata_for_scans():

@@ -371,7 +371,8 @@ async def test_credential_warnings_do_not_block_or_disclose_values(client, servi
     )
     weak = {
         "ordinary": "sample",
-        "six_chars": "aB1234",
+        "five_chars": "aB123",
+        "five_unicode": "🙂a1中文",
         "letters_only": "lettersOnly",
         "digits_only": "1234567",
         "unicode_letters": "中文中文中12",
@@ -379,6 +380,8 @@ async def test_credential_warnings_do_not_block_or_disclose_values(client, servi
     }
     values = {
         **weak,
+        "six_chars": "aB1234",
+        "six_unicode": "🙂a1中文测",
         "seven_chars": "aB12345",
         "uppercase": "ABC1234",
         "lowercase": "abc1234",
