@@ -725,7 +725,10 @@ export class PiAgent {
       }
       const stop = message.message?.stopReason;
       if (stop && !['stop', 'toolUse'].includes(stop)) {
-        this.turnError = this.turnError ?? new Error(`pi stop: ${stop}`);
+        const detail = stop === 'error'
+          ? String(message.message?.errorMessage ?? '').replace(/\s+/g, ' ').trim().slice(0, 300)
+          : '';
+        this.turnError = this.turnError ?? new Error(`pi stop: ${stop}${detail ? `: ${detail}` : ''}`);
       }
       return;
     }

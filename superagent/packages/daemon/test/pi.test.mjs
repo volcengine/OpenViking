@@ -564,6 +564,25 @@ describe('PiAgent persistent rpc runtime', () => {
     await agent.stop();
   });
 
+  it('includes the redacted upstream error when Pi stops with error', async () => {
+    const { agent, persistent, failures } = harness();
+    await agent.start();
+    const child = persistent[0];
+    agent.deliver('request', 7);
+    child.feed({
+      type: 'message_end',
+      message: {
+        stopReason: 'error',
+        errorMessage: 'rate limited\nAuthorization: Bearer secret-token-value',
+      },
+    });
+    child.feed({ type: 'agent_settled' });
+    assert.deepEqual(failures.map((info) => info.error), [
+      'pi stop: error: rate limited Authorization: [REDACTED] [REDACTED]',
+    ]);
+    await agent.stop();
+  });
+
   it('interrupt emits turn-abandoned receipts and does not raise onTurnFailed', async () => {
     const abandoned = [];
     const { agent, persistent, failures } = harness({
