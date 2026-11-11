@@ -44,16 +44,24 @@
   padding: 8px 8px 12px;
 }
 
-/*
- * 分隔条紧贴左栏，把原来那根 0.5px 描边换成可拖动的命中区：描边留着会与分隔条
- * 自己的竖线重叠成两根。左右各留 4px 内缩，让命中区不压住树里的行尾内容。
- *
- * The divider hugs the left column and replaces the 0.5px border that used to sit
- * there — keeping both would show two vertical lines. A 4px inset on each side
- * keeps the hit area off the row-end content inside the tree.
- */
+/* Only the line participates in layout; the hit area overlaps each pane's inset. */
 .ov-file-browser__resizer {
-  margin: 0 4px;
+  position: relative;
+  z-index: 1;
+  width: var(--ov-ui-resizable-handle-line);
+}
+
+.ov-file-browser__resizer .ov-resizable-handle__line {
+  flex: none;
+}
+
+.ov-file-browser__resizer::before {
+  position: absolute;
+  inset-block: 0;
+  inset-inline: calc(
+    (var(--ov-ui-resizable-handle-line) - var(--ov-ui-resizable-handle-hit)) / 2
+  );
+  content: '';
 }
 
 /* 入口条：主色浅底，两个入口等分，中间一根半透明竖线。 */

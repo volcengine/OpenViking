@@ -510,8 +510,8 @@
   background: none;
   color: inherit;
   font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 14px;
+  line-height: 25px;
   resize: none;
 }
 

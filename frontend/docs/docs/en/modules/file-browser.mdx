@@ -8,6 +8,8 @@ Directories expand on demand and page; clicking a file loads its preview. The mo
 
 The detail pane uses the same toolbar as standalone FilePreview. Directories provide L0 abstract and L1 overview; text files show their body. Supported files can be edited using the native content read/write endpoints, and the pane reloads after saving. Use `readOnly` to disable editing, or enable `acl` to gate the edit button by the resource permission.
 
+Wiki board links are discovered through resource metadata. The Compile registry is loaded only when a Wiki board opens, and is not needed for ordinary file browsing.
+
 ## Basic usage
 
 The example uses fixed data and makes no network request:
