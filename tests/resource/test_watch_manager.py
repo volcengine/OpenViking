@@ -10,7 +10,7 @@ import pytest
 
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_store_file import FileWatchStore
-from openviking.resource.watch_types import WatchAuthority, WatchRunResult
+from openviking.resource.watch_types import WatchAuthority, WatchTask
 from openviking.storage.errors import ResourceBusyError
 from openviking_cli.exceptions import ConflictError, FailedPreconditionError
 
@@ -135,16 +135,28 @@ class TestWatchManager:
                 await _create(watch_manager, "viking://resources/held/new/doc.md")
 
     @pytest.mark.asyncio
-    async def test_finish_run_records_sanitized_result(self, watch_vfs, watch_manager):
-        task = await _create(watch_manager, initial_run_id="ingest-task-1")
+    async def test_partial_run_preserves_checkpoint_and_sanitizes_result(
+        self, watch_vfs, watch_manager
+    ):
+        checkpoint = {"kind": "git", "head_sha": "previous", "instruction": ""}
+        task = WatchTask(
+            path="/test/path", to_uri="viking://resources/test", source_checkpoint=checkpoint
+        )
+        await watch_manager.store.create_task(task, initial_run_id="ingest-task-1")
 
         applied = await watch_manager.finish_run(
             task.task_id,
             "ingest-task-1",
-            WatchRunResult(
-                status="failed",
-                execution_task_id="ingest-task-1",
-                error="pull failed with Bearer secret-token",
+            watch_manager.result(
+                task,
+                "completed",
+                {
+                    "task_id": "ingest-task-1",
+                    "import_complete": False,
+                    "source_checkpoint": {"kind": "git", "head_sha": "new"},
+                    "meta": {"resolved_head_sha": "new"},
+                },
+                "pull failed with Bearer secret-token",
             ),
         )
 
@@ -156,7 +168,9 @@ class TestWatchManager:
         finally:
             await reopened.close()
         assert loaded.last_task_id == "ingest-task-1"
-        assert loaded.last_status == "failed"
+        assert loaded.last_status == "partial"
+        assert loaded.source_checkpoint == checkpoint
+        assert await watch_manager.store.running() == []
         assert loaded.last_error == "pull failed with Bearer [REDACTED]"
 
     @pytest.mark.asyncio
@@ -322,20 +336,3 @@ class TestSharedConnectorTargets:
         )
 
         assert (await watch_manager.get_task(moving.task_id)).to_uri == "viking://resources/target"
-
-
-@pytest.mark.parametrize("status", ["completed", "partial", "failed"])
-def test_partial_round_does_not_advance_source_checkpoint(status):
-    result = WatchManager._result(
-        status,
-        {
-            "import_complete": False,
-            "source_checkpoint": {"head_sha": "same"},
-            "meta": {"resolved_head_sha": "same"},
-        },
-        None,
-        connector=False,
-        instruction="",
-    )
-    assert result.status == ("partial" if status == "completed" else status)
-    assert result.source_checkpoint is None

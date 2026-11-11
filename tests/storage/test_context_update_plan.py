@@ -3,6 +3,7 @@
 
 import asyncio
 from contextlib import nullcontext
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock
 
@@ -2188,48 +2189,103 @@ def test_builder_preserves_existing_record_identity_and_custom_scalars_on_upsert
 
 
 @pytest.mark.asyncio
-async def test_snapshot_builder_returns_one_canonical_context_plan():
+async def test_snapshot_plan_retains_unobserved_content_until_complete_refresh():
     from openviking.storage.context_update_plan import (
         ContentState,
         build_context_update_plan_from_snapshot,
     )
     from openviking.storage.resource_rnfv import (
+        FormalEntry,
         FormalTreeSnapshot,
         NewArtifactSnapshot,
         NewEntry,
         RequestIntent,
         RNFVSnapshot,
         VectorIndexSnapshot,
+        VectorRecordSnapshot,
     )
 
     root = "viking://resources/repo"
     snapshot = RNFVSnapshot(
         request=RequestIntent(root, "semantic_and_vectors"),
-        new=NewArtifactSnapshot({"a.py": NewEntry(md5="new")}),
-        formal=FormalTreeSnapshot({}),
-        vectors=VectorIndexSnapshot({}, frozenset({"id", "uri", "level", "md5"})),
+        new=NewArtifactSnapshot({"a.py": NewEntry(md5="new")}, complete=False, allow_partial=True),
+        formal=FormalTreeSnapshot(
+            {"unknown": FormalEntry(is_dir=True), "unknown/old.py": FormalEntry()}
+        ),
+        vectors=VectorIndexSnapshot(
+            {
+                "dir": VectorRecordSnapshot(
+                    "dir", root + "/unknown", "unknown", 0, {"abstract": "retained subtree"}
+                ),
+                "old": VectorRecordSnapshot("old", root + "/unknown/old.py", "unknown/old.py", 2),
+                "orphan": VectorRecordSnapshot("orphan", root + "/missing.py", "missing.py", 2),
+            },
+            frozenset({"id", "uri", "level", "md5", "abstract"}),
+        ),
     )
-    diff, plan = await build_context_update_plan_from_snapshot(
-        snapshot=snapshot,
-        store=AsyncMock(),
-        artifact_ref=object(),
-        target=AsyncMock(),
-        vikingdb=AsyncMock(),
-        context_type="resource",
-        is_code_repo=True,
-        account_id="acc",
-        ctx=object(),
-        root_preexisting=False,
-        artifact_paths={"a.py": "repository/a.py"},
-    )
+    kwargs = {
+        "store": AsyncMock(),
+        "artifact_ref": object(),
+        "target": AsyncMock(),
+        "vikingdb": AsyncMock(),
+        "context_type": "resource",
+        "is_code_repo": True,
+        "account_id": "acc",
+        "ctx": object(),
+        "root_preexisting": True,
+        "artifact_paths": {"a.py": "repository/a.py"},
+    }
+    kwargs["vikingdb"].hydrate_incremental_records.return_value = {}
+    diff, plan = await build_context_update_plan_from_snapshot(snapshot=snapshot, **kwargs)
 
     assert diff.entries["a.py"].content_state is ContentState.ADDED
-    assert [a.relative_path for a in plan.content_tree_actions] == ["", "a.py"]
-    assert plan.content_tree_actions[1].artifact_path == "repository/a.py"
+    assert [(a.operation.value, a.relative_path) for a in plan.content_tree_actions] == [
+        ("upsert", "a.py")
+    ]
+    assert plan.content_tree_actions[0].artifact_path == "repository/a.py"
+    assert diff.entries["unknown/old.py"].content_state is ContentState.UNCHANGED
+    assert not any(
+        a.uri.endswith(("unknown", "old.py", "missing.py")) for a in plan.direct_index_actions
+    )
     assert plan.semantic_plan is not None
     entries = {entry.relative_path: entry for entry in plan.semantic_plan.tree.entries}
     assert entries[""].semantic_action.value == "aggregate"
     assert entries["a.py"].semantic_action.value == "generate"
+    assert entries["unknown"].semantic_action.value == "reuse"
+    assert "unknown/old.py" not in entries
+
+    # A retained subtree cannot be re-summarized from unreadable bytes or overwritten.
+    missing_abstract = replace(snapshot.vectors.records_by_id["dir"], fields={})
+    with pytest.raises(ValueError, match="reusable abstracts"):
+        await build_context_update_plan_from_snapshot(
+            snapshot=replace(
+                snapshot,
+                vectors=replace(
+                    snapshot.vectors,
+                    records_by_id={**snapshot.vectors.records_by_id, "dir": missing_abstract},
+                ),
+            ),
+            **kwargs,
+        )
+    with pytest.raises(ValueError, match="retained children"):
+        await build_context_update_plan_from_snapshot(
+            snapshot=replace(
+                snapshot, new=replace(snapshot.new, entries={"unknown": NewEntry(md5="new")})
+            ),
+            **kwargs,
+        )
+
+    diff, complete_plan = await build_context_update_plan_from_snapshot(
+        snapshot=replace(snapshot, new=replace(snapshot.new, complete=True)), **kwargs
+    )
+    assert diff.entries["unknown/old.py"].content_state is ContentState.DELETED
+    assert any(
+        a.operation.value == "delete" and a.relative_path == "unknown"
+        for a in complete_plan.content_tree_actions
+    )
+    assert {
+        a.record_id for a in complete_plan.direct_index_actions if a.action.value == "delete"
+    } >= {"dir", "old", "orphan"}
 
 
 @pytest.mark.asyncio
@@ -2256,10 +2312,15 @@ async def test_snapshot_builder_hydrates_scalars_for_vectors_only_upsert():
     )
     snapshot = RNFVSnapshot(
         request=RequestIntent(root, "vectors_only"),
-        new=NewArtifactSnapshot({"a.py": NewEntry(md5="new")}),
-        formal=FormalTreeSnapshot({"a.py": FormalEntry()}),
+        new=NewArtifactSnapshot({"a.py": NewEntry(md5="new")}, complete=False, allow_partial=True),
+        formal=FormalTreeSnapshot({"a.py": FormalEntry(), "unreadable.py": FormalEntry()}),
         vectors=VectorIndexSnapshot(
-            {record.record_id: record},
+            {
+                record.record_id: record,
+                "unreadable": VectorRecordSnapshot(
+                    "unreadable", root + "/unreadable.py", "unreadable.py", 2, {"md5": "same"}
+                ),
+            },
             frozenset({"id", "uri", "level", "md5", "abstract"}),
         ),
     )
@@ -2272,6 +2333,7 @@ async def test_snapshot_builder_hydrates_scalars_for_vectors_only_upsert():
             "md5": "old",
             "abstract": "old summary",
             "business_priority": 7,
+            "search_tags": ["topic=finance"],
         }
     }
 
@@ -2289,9 +2351,11 @@ async def test_snapshot_builder_hydrates_scalars_for_vectors_only_upsert():
         artifact_paths={"a.py": "repository/a.py"},
     )
 
-    vikingdb.hydrate_incremental_records.assert_awaited_once()
+    assert set(vikingdb.hydrate_incremental_records.await_args.args[0]) == {record.record_id}
+    assert len(plan.direct_index_actions) == 1
     assert plan.direct_index_actions[0].record_id == record.record_id
     assert plan.direct_index_actions[0].upsert_fields["business_priority"] == 7
+    assert plan.direct_index_actions[0].upsert_fields["search_tags"] == ["topic=finance"]
 
 
 @pytest.mark.asyncio
