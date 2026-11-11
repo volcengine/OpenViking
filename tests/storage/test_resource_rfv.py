@@ -517,7 +517,7 @@ class _SnapshotDB:
 
 
 @pytest.mark.asyncio
-async def test_build_rfv_snapshot_reads_one_f_inventory_one_v_inventory_and_each_source_once():
+async def test_build_rfv_snapshot_reuses_inventory_and_reads_each_source_once():
     from openviking.storage.resource_rfv import build_rfv_snapshot
     from openviking.utils.content_hash import content_md5
 
@@ -525,6 +525,7 @@ async def test_build_rfv_snapshot_reads_one_f_inventory_one_v_inventory_and_each
     fs = _SnapshotFS(root)
     db = _SnapshotDB()
 
+    inventory = {"old": {"id": "old", "uri": f"{root}/gone.md", "level": 2, "md5": "old"}}
     snapshot = await build_rfv_snapshot(
         viking_fs=fs,
         vikingdb=db,
@@ -533,11 +534,13 @@ async def test_build_rfv_snapshot_reads_one_f_inventory_one_v_inventory_and_each
         request_intent=RequestIntent(root, "vectors_only"),
         recursive=True,
         root_is_dir=True,
+        vector_inventory=inventory,
     )
 
     fs.tree.assert_awaited_once()
     fs.stat.assert_not_awaited()
-    db.get_incremental_inventory_under_uri.assert_awaited_once()
+    db.get_incremental_inventory_under_uri.assert_not_awaited()
+    assert snapshot.vectors.records_by_id["old"].relative_path == "gone.md"
     assert fs.read_file_bytes.await_count == 3
     assert snapshot.formal.entries["docs"].level_md5s == {
         0: content_md5(b"docs abstract"),

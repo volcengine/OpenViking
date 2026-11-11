@@ -163,8 +163,8 @@ class UnifiedResourceProcessor:
     async def submit_understanding(self, source: str | Path | LocalResource, **kwargs) -> str:
         return await self._get_parser_router().submit(source, **kwargs)
 
-    async def upload_understanding_file(self, source: str | Path | LocalResource) -> str:
-        return await self._get_parser_router().upload_file(source)
+    async def upload_understanding_file(self, source: str | Path | LocalResource, **kwargs) -> str:
+        return await self._get_parser_router().upload_file(source, **kwargs)
 
     @staticmethod
     def _set_resolved_identity(resource: LocalResource, source_name: Optional[str]) -> None:

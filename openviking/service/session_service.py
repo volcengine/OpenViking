@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
+from openviking.privacy.sanitizer import PrivacySanitizer
+from openviking.privacy.service import UserPrivacyConfigService
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext
 from openviking.server.user_config import read_user_memory_policy
@@ -82,6 +84,8 @@ class SessionService:
         self._default_user_memory_policy: Optional[Dict[str, Any]] = None
         self._default_user_auto_commit_policy: Optional[Dict[str, Any]] = None
         self._usage_reporter: Optional["UsageReporter"] = None
+        self._privacy_config_service: Optional[UserPrivacyConfigService] = None
+        self._privacy_sanitizer: Optional[PrivacySanitizer] = None
         # Server-wide controls remain disabled until configured during app setup.
         self._session_auto_commit_config = SessionAutoCommitConfig()
         # Per-worker in-flight guard so bursts don't spawn duplicate commit
@@ -115,12 +119,16 @@ class SessionService:
         viking_fs: VikingFS,
         session_compressor: "SessionCompressorV3",
         vlm_resolver: Optional["VLMResolver"] = None,
+        privacy_config_service: Optional[UserPrivacyConfigService] = None,
+        privacy_sanitizer: Optional[PrivacySanitizer] = None,
     ) -> None:
         """Set dependencies (for deferred initialization)."""
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
         self._vlm_resolver = vlm_resolver
+        self._privacy_config_service = privacy_config_service
+        self._privacy_sanitizer = privacy_sanitizer
 
     def set_tool_output_externalization_config(
         self, config: ToolOutputExternalizationConfig
@@ -247,7 +255,10 @@ class SessionService:
             memory_policy_provider=lambda: self._get_user_memory_policy(ctx),
             usage_reporter=self._usage_reporter,
             vlm_resolver=self._vlm_resolver,
+            runtime_config_manager=self._runtime_config_manager,
             expiry_reporter=self._session_expiry_adapter,
+            privacy_config_service=self._privacy_config_service,
+            privacy_sanitizer=self._privacy_sanitizer,
         )
 
     async def _get_user_memory_policy(self, ctx: RequestContext) -> Optional[Dict[str, Any]]:
@@ -407,6 +418,25 @@ class SessionService:
         self._record_lifecycle_metric("delete", "ok")
         return True
 
+    async def retry_archive(
+        self,
+        session_id: str,
+        archive_id: str,
+        ctx: RequestContext,
+        *,
+        expected_messages_sha256: str,
+        allow_ownerless_ready: bool = False,
+        allow_cancelled_failure: bool = False,
+    ) -> Dict[str, Any]:
+        """Submit one hash-bound, server-verified archive recovery."""
+        session = await self.get(session_id, ctx)
+        return await session.retry_archive(
+            archive_id,
+            expected_messages_sha256=expected_messages_sha256,
+            allow_ownerless_ready=allow_ownerless_ready,
+            allow_cancelled_failure=allow_cancelled_failure,
+        )
+
     async def commit(
         self,
         session_id: str,
@@ -418,6 +448,10 @@ class SessionService:
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
+        session_window_context: Optional[int] = None,
+        summary_token_ratio: Optional[float] = None,
+        retained_token_ratio: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
         event_tags: Optional[List[str]] = None,
         reset_context: bool = False,
     ) -> Dict[str, Any]:
@@ -441,6 +475,10 @@ class SessionService:
             keep_recent_turn_count=keep_recent_turn_count,
             retained_message_token_budget=retained_message_token_budget,
             min_raw_tail_steps=min_raw_tail_steps,
+            session_window_context=session_window_context,
+            summary_token_ratio=summary_token_ratio,
+            retained_token_ratio=retained_token_ratio,
+            reasoning_effort=reasoning_effort,
             event_tags=event_tags,
             reset_context=reset_context,
         )
@@ -456,6 +494,10 @@ class SessionService:
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
+        session_window_context: Optional[int] = None,
+        summary_token_ratio: Optional[float] = None,
+        retained_token_ratio: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
         event_tags: Optional[List[str]] = None,
         reset_context: bool = False,
     ) -> Dict[str, Any]:
@@ -482,6 +524,10 @@ class SessionService:
             "keep_recent_turn_count": keep_recent_turn_count,
             "retained_message_token_budget": retained_message_token_budget,
             "min_raw_tail_steps": min_raw_tail_steps,
+            "session_window_context": session_window_context,
+            "summary_token_ratio": summary_token_ratio,
+            "retained_token_ratio": retained_token_ratio,
+            "reasoning_effort": reasoning_effort,
         }
         commit_kwargs.update(
             {key: value for key, value in optional_retention.items() if value is not None}

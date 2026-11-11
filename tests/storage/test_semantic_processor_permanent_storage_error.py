@@ -107,7 +107,9 @@ async def test_storage_error_finishes_request_and_respects_lock_ownership(
     env.retry_queue.enqueue.assert_not_awaited()
     env.processor._account_breaker(msg.account_id).check()
     if owned:
-        env.pathlock.pathlock_adopt.assert_awaited_once_with(msg.lock_handoff)
+        env.pathlock.pathlock_adopt.assert_awaited_once_with(
+            msg.lock_handoff, fs_ctx={"account_id": msg.account_id}
+        )
         env.pathlock.pathlock_release.assert_awaited_once_with(env.lease)
     else:
         env.pathlock.pathlock_as_borrowed.assert_awaited_once_with(env.lease)
@@ -228,12 +230,27 @@ async def test_lock_error_requeues_without_consuming_failure_budget(semantic_env
     result = await asyncio.wait_for(env.processor.on_dequeue(msg.to_dict()), timeout=1)
 
     assert result.outcome is ProcessOutcome.REQUEUED
-    env.retry_queue.enqueue.assert_awaited_once()
+    env.retry_queue.enqueue.assert_awaited_once_with(msg, deduplicate_memory=False)
     requeued = env.retry_queue.enqueue.call_args.args[0]
     assert requeued.id == msg.id
     assert requeued.failure_requeue_count == 0
     breaker.check()
     sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unknown_semantic_error_is_terminal_without_tripping_breaker(semantic_env):
+    env = semantic_env
+    msg = env.message()
+    error = RuntimeError("unexpected semantic invariant violation")
+    env.dag.run.side_effect = error
+
+    result = await asyncio.wait_for(env.processor.on_dequeue(msg.to_dict()), timeout=1)
+
+    assert result.outcome is ProcessOutcome.FAILED
+    assert result.error == str(error)
+    env.retry_queue.enqueue.assert_not_awaited()
+    env.processor._account_breaker(msg.account_id).check()
 
 
 @pytest.mark.asyncio

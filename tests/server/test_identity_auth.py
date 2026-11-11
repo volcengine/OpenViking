@@ -10,7 +10,7 @@ import pytest
 from starlette.requests import Request
 
 from openviking.server.account_stores.base import AccountStore
-from openviking.server.api_keys import APIKeyManager
+from openviking.server.api_keys import APIKeyManager, generate_api_key
 from openviking.server.auth import (
     get_request_context,
     get_session_request_context,
@@ -74,35 +74,46 @@ async def make_request(
     return request
 
 
-async def test_key_identity_and_groups_are_resolved_independently(runtime):
+@pytest.mark.parametrize("groups", [(), ("team",)])
+async def test_key_identity_supplies_groups_to_both_contexts(runtime, groups, monkeypatch):
     key = await runtime.register_user("acme", "bob")
-    await runtime.create_group("acme", "team")
-    await runtime.add_group_member("acme", "team", "bob")
+    for group in groups:
+        await runtime.create_group("acme", group)
+        await runtime.add_group_members("acme", group, ["bob"])
+
     request = await make_request(runtime, headers=[(b"x-openviking-user", b"spoof")])
     plugin = request.app.state.auth_plugin
     identity = await plugin.resolve_identity(
         request, api_key=key, x_openviking_user="spoof", x_openviking_account="spoof"
     )
+
+    async def redundant_read(*args):
+        pytest.fail("resolved API-key identity must supply its own groups and deletion proof")
+
+    monkeypatch.setattr(runtime, "get_user_group_ids", redundant_read)
+    monkeypatch.setattr(runtime, "get_deletion", redundant_read)
     ctx = await get_request_context(request, identity, "peer", key, None)
-    assert (ctx.user.user_id, ctx.role, ctx.group_ids) == ("bob", Role.USER, ("team",))
+    assert (ctx.user.user_id, ctx.role, ctx.group_ids) == ("bob", Role.USER, groups)
     assert ctx.actor_peer_id == "peer"
     assert ctx.api_key == key
     assert "x-openviking-user" not in request.headers
     session = await get_session_request_context(request, identity, key, None)
+    assert session.group_ids == groups
     assert session.actor_peer_id is None
 
 
 async def test_key_store_error_and_unknown_identity_fail_closed():
     store = AsyncMock(spec=AccountStore)
-    store.verify_api_key.return_value = ("acme", "missing")
-    store.get_user.return_value = None
+    store.get_auth_snapshot.return_value = None
     manager = APIKeyManager("root", store)
     request = await make_request(manager)
-    with pytest.raises(UnauthenticatedError, match="Unknown"):
-        await request.app.state.auth_plugin.resolve_identity(request, api_key="verified-key")
-    store.get_user.side_effect = OSError("database offline")
+    key = generate_api_key("acme", "missing")
+    with pytest.raises(UnauthenticatedError, match="Invalid"):
+        await request.app.state.auth_plugin.resolve_identity(request, api_key=key)
+    store.get_auth_snapshot.side_effect = OSError("database offline")
+
     with pytest.raises(OSError, match="database offline"):
-        await request.app.state.auth_plugin.resolve_identity(request, api_key="verified-key")
+        await request.app.state.auth_plugin.resolve_identity(request, api_key=key)
 
 
 async def test_trusted_explicit_user_role_with_root_key(runtime):
@@ -126,7 +137,7 @@ async def test_trusted_explicit_user_role_with_root_key(runtime):
 
 async def test_trusted_group_header_overrides_internal_group_lookup(runtime):
     await runtime.create_group("acme", "local-team")
-    await runtime.add_group_member("acme", "local-team", "alice")
+    await runtime.add_group_members("acme", "local-team", ["alice"])
     request = await make_request(
         runtime,
         "trusted",
@@ -146,7 +157,7 @@ async def test_trusted_group_header_overrides_internal_group_lookup(runtime):
 
 async def test_trusted_empty_group_header_falls_back_to_internal_group_lookup(runtime):
     await runtime.create_group("acme", "local-team")
-    await runtime.add_group_member("acme", "local-team", "alice")
+    await runtime.add_group_members("acme", "local-team", ["alice"])
     request = await make_request(
         runtime,
         "trusted",
@@ -338,23 +349,30 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
     from openviking.server.auth.plugins import oidc as oidc_module
 
     if mode == "oidc":
+        import time
+
+        jwt = pytest.importorskip("jose.jwt")
+        assert oidc_module._check_jwt_available()
         plugin = oidc_module.OIDCAuthPlugin()
-        config = OIDCConfig(issuer="https://issuer.test")
-        headers = [(b"authorization", b"Bearer external.token.value")]
-        monkeypatch.setattr(oidc_module, "_check_jwt_available", lambda: True)
-        monkeypatch.setattr(
-            plugin,
-            "_validate_token",
-            AsyncMock(return_value={"sub": "auth0|123", "org": "Team", "preferred": "Alice"}),
-        )
-        expected = ("default", "auth0_123")
+        config = OIDCConfig(issuer="https://issuer.test", audience="openviking")
+        claims = {
+            "iss": config.issuer,
+            "aud": config.audience,
+            "exp": int(time.time()) + 60,
+            "sub": "alice_prod",
+            "org": "Team",
+            "https://openviking.example/user_id": "Alice",
+        }
+        expected = ("default", "alice_prod")
         if custom:
+            claims["sub"] = "auth0|123"
             config.identity.account_id.source = "claim"
             config.identity.account_id.claim = "org"
             config.identity.account_id.normalize = "lowercase"
-            config.identity.user_id.claims = ["preferred", "sub"]
-            config.identity.user_id.prefix = "ext-"
-            expected = ("team", "ext-Alice")
+            config.identity.user_id.claim = "https://openviking.example/user_id"
+            expected = ("team", "Alice")
+        token = jwt.encode(claims, "test-secret", algorithm="HS256", headers={"kid": "test"})
+        headers = [(b"authorization", f"Bearer {token}".encode())]
     else:
         plugin = ldap_module.LDAPAuthPlugin()
         config = LDAPConfig(host="directory.test", base_dn="dc=test")
@@ -377,8 +395,14 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
             expected = ("Team", "alice")
     config.identity.role.source = "fixed"
     config.identity.role.value = "root"
-    plugin._config = config
-    plugin._mapper = IdentityMapper(config.identity)
+    if mode == "oidc":
+        server_config = SimpleNamespace(oidc=config)
+        plugin.validate_config(server_config)
+        await plugin.initialize(None, None, server_config)
+        plugin._jwks["test"] = oidc_module.jwk.construct("test-secret", "HS256")
+    else:
+        plugin._config = config
+        plugin._mapper = IdentityMapper(config.identity)
     request = await make_request(runtime, mode, headers=headers)
     request.app.state.auth_plugin = plugin
     identity = await plugin.resolve_identity(request)
@@ -386,6 +410,32 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
     assert identity.role == Role.USER
     ctx = await get_request_context(request, identity, None, None, None)
     assert ctx.role == Role.USER
+
+    if mode == "oidc":
+        # Validly signed tokens must not acquire another identity through
+        # implicit character replacement, including after an explicit mapping.
+        invalid_claims = [
+            ({config.identity.user_id.claim: value}, "user_id")
+            for value in ("alice|prod", "alice_prod\n", "")
+        ]
+        if custom:
+            invalid_claims.extend(
+                ({"org": value}, "account_id")
+                for value in ("Team|prod", "Team\n", "_system")
+            )
+        for changes, field in invalid_claims:
+            token = jwt.encode(
+                {**claims, **changes},
+                "test-secret",
+                algorithm="HS256",
+                headers={"kid": "test"},
+            )
+            request = await make_request(
+                runtime, mode, headers=[(b"authorization", f"Bearer {token}".encode())]
+            )
+            request.app.state.auth_plugin = plugin
+            with pytest.raises(UnauthenticatedError, match=field):
+                await plugin.resolve_identity(request)
 
 
 @pytest.mark.parametrize(
@@ -451,3 +501,35 @@ async def test_oidc_issuer_matches_exactly(configured_issuer, token_issuer, acce
     else:
         with pytest.raises(UnauthenticatedError, match="Invalid claims"):
             await plugin._validate_token(token)
+
+
+@pytest.mark.parametrize("role", ["root", "unknown"])
+async def test_snapshot_cannot_bypass_main_registered_role_validation(role):
+    store = AsyncMock(spec=AccountStore)
+    store.get_auth_snapshot.return_value = {
+        "account_id": "acme",
+        "user_id": "alice",
+        "role": role,
+        "group_ids": (),
+    }
+    manager = APIKeyManager("root-key", store)
+    with pytest.raises(UnauthenticatedError, match="invalid role"):
+        await manager.resolve_identity(generate_api_key("acme", "alice"))
+
+
+async def test_snapshot_accepts_a_registered_custom_role(monkeypatch):
+    monkeypatch.setitem(
+        Role._TOKEN_ROLE_ALLOWLIST, "snapshot-reviewer", frozenset({"snapshot-reviewer"})
+    )
+    store = AsyncMock(spec=AccountStore)
+    store.get_auth_snapshot.return_value = {
+        "account_id": "acme",
+        "user_id": "alice",
+        "role": "snapshot-reviewer",
+        "group_ids": (),
+    }
+    identity = await APIKeyManager("root-key", store).resolve_identity(
+        generate_api_key("acme", "alice")
+    )
+    assert identity.role == "snapshot-reviewer"
+    assert identity.group_ids == ()

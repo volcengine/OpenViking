@@ -11,9 +11,11 @@ invalidates an old replacement.
 
 import asyncio
 import copy
+import hashlib
 import logging
 import time
 import uuid
+from collections import Counter
 from itertools import pairwise
 
 import async_timeout
@@ -21,21 +23,30 @@ import orjson
 
 from .archives import TERMINAL, observe_archive
 from .capture_store import Document, LeaseLost
+from .client import VikingError
 from .models import Policy
 from .notices import without_notices
-from .protocols import clean_text, is_user, string_type, text_content, unwrap_client
+from .protocols import (
+    clean_text,
+    is_user,
+    normalize,
+    string_type,
+    text_content,
+    unwrap_client,
+)
 from .records import RecordKind as K
 from .tool_protocols import reply_chain
 
 logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 5
 RECOVERY_SECONDS = 300
+DELIVERY_SECONDS = 100  # below the 120 s claim lease
 MAX_PREVIOUS = 5
 SOURCE = "gateway:"
 
 
 def new_capture(reason="", old=None):
-    return {
+    value = {
         "ov_session": "gateway-" + uuid.uuid4().hex,
         "delivered": "",
         "pending": [],
@@ -47,6 +58,10 @@ def new_capture(reason="", old=None):
         "reason": reason,
         "previous": lineage(old or {})[:MAX_PREVIOUS],
     }
+    # A new OpenViking session receives the history again, from the same peers.
+    if (old or {}).get("peers"):
+        value["peers"] = old["peers"]
+    return value
 
 
 def lineage(value):
@@ -78,7 +93,7 @@ class CapturePipeline:
         self.queue = queue
 
     @staticmethod
-    def turns(messages, chain, start, stop, confirmed, idle_seconds):
+    def turns(messages, chain, start, stop, confirmed, idle_seconds, peers=None):
         """Split messages[start:stop] at real user messages into delivery segments.
 
         A segment that does not start at a user message continues the turn
@@ -88,7 +103,7 @@ class CapturePipeline:
         bounds = [start, *(i for i in range(start + 1, stop) if is_user(messages[i])), stop]
         turns = []
         for begin, end in pairwise(bounds):
-            captured = capture_messages(messages[begin:end], chain[begin:end])
+            captured = with_peers(capture_messages(messages[begin:end], chain[begin:end]), peers)
             if captured:
                 turns.append(
                     {
@@ -123,9 +138,10 @@ class CapturePipeline:
             value, held, ends = {**value, **new_capture(reason, value)}, [], []
         start = 1 + max((positions[a] for a in ends), default=-1)
         split = min(max(start, user), stop)
+        peers = peer_anchors(value.get("peers"), messages[:stop], chain[:stop])
         added = [
-            *cls.turns(messages, chain, start, split, True, 0),
-            *cls.turns(messages, chain, split, stop, confirmed, idle_seconds),
+            *cls.turns(messages, chain, start, split, True, 0, peers),
+            *cls.turns(messages, chain, split, stop, confirmed, idle_seconds, peers),
         ]
         return {**value, "pending": [*held, *added]}, added
 
@@ -140,6 +156,7 @@ class CapturePipeline:
             now = time.time()
             if any(t["anchor"] not in positions for t in value["pending"] if t["ready"] <= now):
                 value = new_capture("history_changed", value)
+            value = record_peers(value, request)
             value, _ = await asyncio.to_thread(
                 self.advance,
                 value,
@@ -312,7 +329,7 @@ class CaptureWorker:
         if item is None:
             return False
         try:
-            async with async_timeout.timeout(100):
+            async with async_timeout.timeout(DELIVERY_SECONDS):
                 await self.deliver(item)
         except (BranchChanged, LeaseLost):
             pass
@@ -322,6 +339,10 @@ class CaptureWorker:
                 previous = old.value.get("error", {})
                 attempts = previous.get("attempts", 0) + 1
                 reason = getattr(error, "reason", "delivery_failed")
+                if reason == "openviking_http_401" and await self.revoked(old.value):
+                    await self.management.delete(
+                        old.value["account"], "keys", old.value["credential_id"]
+                    )
                 failure = {
                     "attempts": attempts,
                     "reason": reason,
@@ -339,6 +360,20 @@ class CaptureWorker:
         finally:
             await self.queue.release(item)
         return True
+
+    async def revoked(self, state):
+        """Confirm a delivery 401 on /health, as authentication does, before dropping the key.
+
+        OpenViking also answers 401 for upstream model failures such as an invalid VLM key.
+        """
+        key = await self.management.get(state["account"], "keys", state["credential_id"])
+        if not key:
+            return False
+        try:
+            await self.viking.identify(key["openviking_key"])
+        except VikingError as error:
+            return error.reason == "openviking_http_401"
+        return False
 
     async def log(self, item, state, status, reason):
         await self.management.log(
@@ -382,7 +417,7 @@ class CaptureWorker:
         policy = Policy.model_validate(state["policy"])
         if state.get("error"):
             await self.viking.health(token)
-        await self.viking.create_session(token, session)
+        await self.viking.create_session(token, session, policy.capture_memory_types)
         # A write or commit whose response is lost is sent again; the rare
         # duplicate in OpenViking is accepted.
         while state["pending"] and state["pending"][0]["ready"] <= time.time():
@@ -432,6 +467,70 @@ class CaptureWorker:
         state["archive"] = archive if uri else None
         state["retained"] = state["retained"][len(archived) :]
         await self.save(item, doc, state)
+
+
+def peer_keys(messages, chain):
+    """A key for each user message: its content and how often that content came before.
+
+    Unlike the anchor, the key survives an edit or a dropped message earlier in the
+    history, as a client's sliding window drops them. Other messages have no key.
+    """
+    seen = Counter()
+    keys = []
+    for message, anchor in zip(messages, chain, strict=True):
+        if not anchor or message.get("role") != "user":
+            keys.append(None)
+            continue
+        canonical = orjson.dumps(normalize(message), option=orjson.OPT_SORT_KEYS)
+        content = hashlib.sha256(canonical).hexdigest()[:32]
+        keys.append(f"{content}#{seen[content]}")
+        seen[content] += 1
+    return keys
+
+
+def record_peers(value, request):
+    """Name the peer of each user message in the history the first time it is seen.
+
+    A session may hold several peers' messages, as a group chat does: a message keeps
+    the peer of the request that first brought it, None when that request had no peer,
+    and later requests leave it unchanged. The map covers the user messages of the
+    current history, so a new OpenViking session receiving the history again finds them.
+    User messages after the request's last one, such as text sent beside a tool
+    result, are not mapped and carry no peer.
+    """
+    peers = value.get("peers") or {}
+    stop = request.anchor + 1
+    keys = peer_keys(request.messages[:stop], request.capture_chain[:stop])
+    recorded = {key: peers.get(key, request.peer) for key in keys if key}
+    return {**value, "peers": recorded}
+
+
+def peer_anchors(peers, messages, chain):
+    """The recorded peer of each user message, keyed by its anchor."""
+    if not peers:
+        return {}
+    return {
+        anchor: peers[key]
+        for anchor, key in zip(chain, peer_keys(messages, chain), strict=True)
+        if key and peers.get(key)
+    }
+
+
+def with_peers(captured, peers):
+    """Captured messages with the user's naming their peer, by anchor; an assistant has none.
+
+    The queue holds these copies, so a delivered message compares equal to the same
+    message queued again.
+    """
+    if not peers:
+        return captured
+    return [
+        {**m, "peer_id": peer}
+        if m["role"] == "user"
+        and (peer := peers.get(m["source_message_ids"][0].removeprefix(SOURCE)))
+        else m
+        for m in captured
+    ]
 
 
 def remaining(pending, written):

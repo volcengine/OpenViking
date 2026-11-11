@@ -95,11 +95,11 @@ class ExpiryConfig(BaseModel):
     def validate_for_runtime(self) -> None:
         if not self.service_name.strip():
             raise ValueError(
-                "expiry.service_name is required when Redis session auto commit is enabled"
+                "expiry.service_name is required when Redis expiry scheduling is enabled"
             )
         if not self.redis.endpoints:
             raise ValueError(
-                "expiry.redis.endpoints is required when Redis session auto commit is enabled"
+                "expiry.redis.endpoints is required when Redis expiry scheduling is enabled"
             )
         if self.redis.mode == "standalone" and len(self.redis.endpoints) != 1:
             raise ValueError("standalone Redis requires exactly one endpoint")

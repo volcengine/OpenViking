@@ -24,12 +24,17 @@ async def run_to_completion(
 
     ``asyncio.to_thread`` cancellation cannot stop the underlying synchronous
     call. Waiting for the work to settle keeps lock and concurrency accounting
-    aligned with the physical I/O lifetime.
+    aligned with the physical I/O lifetime. Only cancellation received during
+    this call overrides a work failure.
     """
-    work: asyncio.Future[_ResultT] = asyncio.ensure_future(factory())
     caller: Any = asyncio.current_task()
+    initial_cancelling = (
+        caller.cancelling() if caller is not None and hasattr(caller, "cancelling") else 0
+    )
+    work: asyncio.Future[_ResultT] | None = None
     cancellation: asyncio.CancelledError | None = None
     try:
+        work = asyncio.ensure_future(factory())
         while not work.done():
             try:
                 await asyncio.shield(work)
@@ -38,11 +43,15 @@ async def run_to_completion(
                     raise
                 cancellation = exc
             except BaseException:
-                # A completion exception can race with delivery of caller
-                # cancellation. Honour the already-requested cancellation below.
-                if caller is None or not hasattr(caller, "cancelling") or caller.cancelling() == 0:
+                # A work failure can race with a new cancellation; historical
+                # requests do not suppress errors from cancellation cleanup.
+                if cancellation is None and (
+                    caller is None
+                    or not hasattr(caller, "cancelling")
+                    or caller.cancelling() <= initial_cancelling
+                ):
                     raise
-                cancellation = asyncio.CancelledError()
+                cancellation = cancellation or asyncio.CancelledError()
 
         if cancellation is not None:
             if not work.cancelled():

@@ -17,6 +17,10 @@ TEXT_SOURCES = SUMMARY_TEXT_SOURCES | {TEXT_SOURCE_CONTENT_ONLY}
 class EmbeddingCredential(BaseModel):
     """Single embedding credential configuration for multi-credential failover."""
 
+    cost_bearer: Optional[Literal["ov", "customer", "unknown"]] = Field(
+        default=None, description="Billing owner supplied by the credential provisioner"
+    )
+
     id: Optional[str] = Field(default=None, description="Unique identifier for this credential")
     provider: Optional[str] = Field(default=None, description="Provider type")
     model: Optional[str] = Field(
@@ -654,7 +658,7 @@ class EmbeddingConfig(BaseModel):
     max_concurrent: int = Field(
         default=10,
         ge=1,
-        description="Maximum number of concurrent embedding requests",
+        description="Maximum concurrent document embedding requests; retrieval queries bypass this limit",
     )
     max_retries: int = Field(
         default=3,
@@ -1111,7 +1115,17 @@ class EmbeddingConfig(BaseModel):
                 **({"input": config.input} if "input" in config.model_fields_set else {}),
             )
             provider = self._require_provider(merged_config.provider)
-            embedders.append(self._create_embedder(provider, embedder_type, merged_config))
+            embedder = self._create_embedder(provider, embedder_type, merged_config)
+            # Retry wrappers delegate the actual provider request to their child.
+            # Each failover candidate keeps its own owner, including failed calls.
+            if cred.cost_bearer is not None:
+                current = embedder
+                seen = set()
+                while current is not None and id(current) not in seen:
+                    seen.add(id(current))
+                    current.cost_bearer = cred.cost_bearer
+                    current = getattr(current, "inner", None)
+            embedders.append(embedder)
             credential_ids.append(cred.id or f"credential-{len(credential_ids)}")
 
         if len(embedders) == 1:

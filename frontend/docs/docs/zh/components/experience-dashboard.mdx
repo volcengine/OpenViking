@@ -1,0 +1,47 @@
+# ExperienceDashboard 经验看板
+
+`ExperienceDashboard` 是纯 UI 组件，展示 Agent 经验列表、应用效果、来源和可选测试材料。组件不感知接口，不需要 Provider；取数与数据适配由 [FileBrowser](../modules/file-browser) 的内部 Hook 或宿主完成。布局、卡片和 SVG 参考火山版 `release/openviking/2026-11-12`。
+
+## 示例
+
+```tsx file="../../_demos/experience-dashboard-basic.tsx" preview
+
+```
+
+固定展示数据可切换目录、文件、补充指标及失败状态。缺少指标时显示“—”，已提供的零值显示 `0`；只有提供 `testMaterials` 时显示测试页签。
+
+## 接入
+
+```tsx
+import { ExperienceDashboard } from '@openviking/react/components/experience-dashboard';
+import '@openviking/react/components/experience-dashboard/style.css';
+
+<ExperienceDashboard uri="experience-id" kind="file" data={{}} />;
+```
+
+组件只上报交互意图，不发起请求。URI 变化会重置本地交互；接口状态、分页及响应过期处理由外层完成。
+
+## 属性
+
+| 属性                 | 类型 / 默认值                                             | 说明                                                                                             |
+| -------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `uri`                | `string`，必填                                            | 当前资源标识                                                                                     |
+| `kind`               | `directory` / `file`，必填                                | 明确展示列表或文件看板；不根据 URI 猜测资源类型                                                  |
+| `data`               | `ExperienceDashboardData`                                 | 展示模型：经验、指标、结果分布、轨迹、来源、测试材料                                             |
+| `tab`                | `impact` / `source` / `test`                              | 受控页签；省略时组件本地维护，默认 `impact`                                                      |
+| `days`               | `number`                                                  | 受控时间范围；省略时本地维护，默认 `7`；`0` 表示全部                                             |
+| `page`               | `number`，默认 `0`                                        | 当前页，从零开始                                                                                 |
+| `hasMore`            | `boolean`，默认 `false`                                   | 是否还有下一页                                                                                   |
+| `startIndex`         | `number`，默认 `0`                                        | 当前列表之前已有多少条，用于行序号                                                               |
+| `states`             | 分区状态对象                                              | `list`、`outcomes`、`trajectories`、`sources`、`tests` 各自接收 `{ loading?, error?, onRetry? }` |
+| `locale`             | `en-US` / `zh-CN`，省略时继承语言作用域，最终默认 `en-US` | 默认文案与相对时间                                                                               |
+| `onTabChange`        | `(tab) => void`                                           | 页签切换意图                                                                                     |
+| `onDaysChange`       | `(days: number) => void`                                  | 时间范围切换意图                                                                                 |
+| `onPageChange`       | `(page: number) => void`                                  | 翻页意图；省略时翻页按钮禁用                                                                     |
+| `onOpenUri`          | `(uri: string) => void`                                   | 打开资源意图                                                                                     |
+| `labels`             | `Partial<ExperienceDashboardLabels>`                      | 覆盖文案                                                                                         |
+| `className`、`style` | HTML 属性                                                 | 布局与样式，其余 HTML 属性透传                                                                   |
+
+受控 `tab` 和 `days` 由调用方在回调后更新；组件不修改它们。各分区的错误和重试互相独立。UI 内置页签键盘交互、轨迹展示、测试材料复制和窄容器滚动，业务 Hook 不作为公开 API。
+
+文案覆盖为 `undefined` 时继承默认值，空字符串保留为显式覆盖。测试材料更新保留当前页签与时间范围；移除测试材料时，仅失效的测试页签回退到应用效果。

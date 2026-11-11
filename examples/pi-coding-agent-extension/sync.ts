@@ -31,6 +31,8 @@ export class SyncManager {
   private logger: ReturnType<typeof createLogger>;
   private ovSessionId: string | null = null;
   private syncedEntryCount = 0;
+  /** Entry at the numeric watermark; detects a same-length sibling branch. */
+  private syncedEntryId = "";
   /**
    * Messages this session lost for good: non-retryable (4xx) rejections and
    * queued entries whose retry budget ran out. They are counted as accepted so
@@ -70,9 +72,9 @@ export class SyncManager {
     return extracted.payloads.length;
   }
 
-  restoreWatermark(n: number): void {
-    const next = Math.max(0, Math.floor(Number(n) || 0));
-    this.syncedEntryCount = next;
+  restoreWatermark(n: number, branch: any[]): void {
+    this.syncedEntryCount = Math.max(0, Math.floor(Number(n) || 0));
+    this.syncedEntryId = branch[this.syncedEntryCount - 1]?.id || "";
   }
 
   async ensureSession(piSessionId: string): Promise<boolean> {
@@ -208,8 +210,16 @@ export class SyncManager {
       return { added: 0, tokens: 0, allDelivered: true, queued: 0, permanentFailures: 0 };
     }
 
-    const extracted = extractBranchCapturePayloads(branch, this.syncedEntryCount, this.config);
-    if (extracted.resetWatermark) this.syncedEntryCount = 0;
+    const extracted = extractBranchCapturePayloads(
+      branch,
+      this.syncedEntryCount,
+      this.config,
+      this.syncedEntryId,
+    );
+    if (extracted.resetWatermark) {
+      this.syncedEntryCount = 0;
+      this.syncedEntryId = "";
+    }
     const sent = await this.sendPayloads(extracted.payloads);
     const added = sent.accepted;
     let tokens = 0;
@@ -219,6 +229,7 @@ export class SyncManager {
     const allDelivered = sent.delivered === added && sent.permanentFailures === 0;
     if (added === extracted.payloads.length) {
       this.syncedEntryCount = extracted.nextEntryCount;
+      this.syncedEntryId = extracted.nextEntryId;
     }
     if (added > 0 && !this.config.takeoverEnabled) {
       await this.commitIfNeeded();

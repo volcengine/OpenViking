@@ -1,0 +1,59 @@
+# 业务模块
+
+FileBrowser 提供目录、搜索与预览联动；Console 提供原生命令面板，ScopeCascade 提供级联选择。取数与状态 Hook 均内置。对话服务由宿主接入。
+
+模块通过 Hook 读取原生接口，宿主提供配置、受控值与回调。两个看板还接受可选 `data`，供网关或宿主提供额外数据；传入后不发起原生请求。
+
+| 模块                             | 组件          | 目标能力   |
+| -------------------------------- | ------------- | ---------- |
+| [`file-browser`](./file-browser) | `FileBrowser` | 文件浏览。 |
+| [`console`](./console)           | `Console`     | 交互面板。 |
+
+## 预览
+
+示例使用公开模块入口和模块集合样式。网格布局属于文档示例，应用自行决定页面布局。
+
+```tsx file="../../_demos/modules-basic.tsx" preview
+
+```
+
+## 导入与样式
+
+从 `@openviking/react/modules/<模块>` 导入组件及其 Props / Labels / Slots 类型。模块组件的本体与主 Props 类型也从根入口 `@openviking/react` 导出；Labels、Slots 与枚举类型只从子路径导入。
+
+JavaScript 不加载 CSS。单模块使用 `@openviking/react/modules/<模块>/style.css`，全部模块使用 `@openviking/react/modules/style.css`，整库使用 `@openviking/react/style.css`，每个样式入口均可独立消费。没有 `@openviking/react/modules` 分类聚合 JavaScript 入口。
+
+模块请求继承 `@openviking/react/client` 提供的 `OpenVikingProvider`，Hook 不作为公开 API。FileBrowser 自动加载目录；Console 挂载本身不发请求，提交命令后才访问服务。
+
+## Provider
+
+模块不通过 props 接收 Client，而是在内部 Hook 中从 Context 取用。所有模块都必须包在 `@openviking/react/client` 的 `OpenVikingProvider` 内，在 Provider 上统一配置服务地址、身份与凭证；没有 Provider，模块拿不到可用的请求配置：FileBrowser 不会发起请求、保持空态，Console 只能退回同源默认 Client 且不带身份配置。
+
+```tsx
+import { OpenVikingProvider } from '@openviking/react/client';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import { Console } from '@openviking/react/modules/console';
+import '@openviking/react/modules/style.css';
+
+<OpenVikingProvider
+  locale="zh-CN"
+  baseURL={endpoint}
+  apiKey={apiKey}
+  accountId={accountId}
+  userId={userId}
+  resourceId={libraryId}
+>
+  <FileBrowser />
+  <Console />
+</OpenVikingProvider>;
+```
+
+Provider 通过 Context 下发配置：模块不接收 `baseURL` 或凭证作为 props；访问其他知识库的模块只用 `requestOptions` 覆盖该字段。嵌套 Provider 时，内层只覆盖自己声明的字段，其余继承外层。
+
+## 宿主职责
+
+页面布局、认证、账号作用域、路由和权限由宿主负责。产品引导、资源与 Skill 导入流程及同步配置留在宿主；管理后台不在这些模块的范围内。
+
+## 级联选择
+
+[ScopeCascade 级联选择](./scope-cascade) 内置请求与级联状态。只需传三个宿主接口，各级内部独立订阅。

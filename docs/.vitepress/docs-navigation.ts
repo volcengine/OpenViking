@@ -21,7 +21,7 @@ export function sectionSidebar(locale: Locale, section: DocSection, includeNextS
   return groups.map(group => ({
     text: group[locale],
     items: group.pages.map(page => {
-      const title = docPageTitle(locale, page.path)
+      const title = page[locale] ?? docPageTitle(locale, page.path)
       const crossSection = sectionForPage(`${locale}/${page.path}.md`)?.id !== section.id
       const hint = locale === 'zh' ? '跳转到其他章节' : 'Go to another section'
       const icon = `<span class="ov-sidebar-cross-link" role="img" aria-label="${hint}" title="${hint}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3h7v7m0-7L10 14M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5"/></svg></span>`
@@ -37,7 +37,7 @@ export function documentationSections(locale: Locale) {
 export function documentationNav(locale: Locale): DefaultTheme.NavItem[] {
   return sections.map(section => {
     const paths = [
-      ...section.groups.flatMap(group => group.pages.map(page => page.path)),
+      ...section.groups.flatMap(group => group.pages.filter(page => !page.reference).map(page => page.path)),
       ...Object.keys(legacyPages).filter(page => legacyPages[page] === section.id)
     ]
     const escaped = paths.map(page => page.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
@@ -54,7 +54,7 @@ export function documentationSidebars(locale: Locale): DefaultTheme.SidebarMulti
   for (const section of sections) {
     const items = sectionSidebar(locale, section)
     for (const group of section.groups) {
-      for (const page of group.pages) sidebar[`/${locale}/${page.path}`] = items
+      for (const page of group.pages.filter(page => !page.reference)) sidebar[`/${locale}/${page.path}`] = items
     }
     for (const [page, owner] of Object.entries(legacyPages)) {
       if (owner === section.id) sidebar[`/${locale}/${page}`] = items

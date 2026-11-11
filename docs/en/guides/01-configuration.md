@@ -102,11 +102,13 @@ Only fields explicitly declared as runtime fields are exposed by the runtime con
 | Cluster | `agent_evolution` | Dynamic | ROOT can update it through the Admin API; it is used as the cluster default. |
 | Account | `feishu`, `agent_evolution` | Dynamic | ROOT or the Account ADMIN can update them. Agent Evolution retains deprecated whole-section Cluster fallback for compatibility. Feishu defaulting is implemented by its business resolver: an unset Account section uses Cluster, while a configured section takes only `domain` from Cluster. |
 | Account | `github`, `acl` | Dynamic | ROOT or the Account ADMIN can update it. These sections have no Cluster fallback. |
+| Account | `output_language_override`, `memory.extraction_enabled` | Dynamic | ROOT or the Account ADMIN can update them. Generation uses the owning Account's settings; absent values use business-level Cluster defaults. |
 | Account | `vlm`, `query_planner` | Dynamic | ROOT-only. Each configured section requires `model` and a non-empty `credentials` array; `timeout` is optional. ADMIN callers cannot read or update these sections. |
+| Account | `parser_api.api_key` | Dynamic | ROOT-only. A configured section requires a nonblank key; external parser operations use the owning Account's credential. |
 | Account | `embedding` | Mixed | ROOT-only. Credentials, retries, concurrency, failback and circuit-breaker settings are dynamic; model identity, vector-space fields, text source and input token limit are create-only. |
 | Account | `vectordb` | Create-only | ROOT-only. Supply it in Account creation `settings`; later additions, changes and resets are rejected. Only remote backends `http`, `volcengine` and `vikingdb` are supported for Account-owned connections. |
 
-Cluster `embedding`, `vlm`, `query_planner`, `memory`, `feishu`, storage, parser, retrieval, and other ordinary configuration sections remain startup-only. Account `memory` is not on the current Account configuration API surface.
+Cluster `embedding`, `vlm`, `query_planner`, `memory`, `feishu`, storage, parser, retrieval, and other ordinary configuration sections remain startup-only. Account `memory` exposes only `extraction_enabled`.
 
 Account and Cluster configurations are independently stored and published.
 Any use of Cluster settings when Account settings are absent is a business
@@ -152,7 +154,40 @@ The request body wraps a PATCH document in `settings`:
 }
 ```
 
-PATCH uses three states: an omitted field is unchanged, a concrete value sets or replaces the value, and `null` removes that value from the addressed scope. Objects merge recursively and arrays replace as a whole. The response contains settings from that scope, not a business-effective Account/Cluster composition. Declarative `fallback` is deprecated, supports only complete sections, and remains solely for compatibility; new features must implement Cluster defaults in their business resolver. See [Admin API - Runtime Configuration](../api/08-admin.md#runtime-configuration) for details.
+PATCH uses three states: an omitted field is unchanged, a concrete value sets or replaces the value, and `null` removes that value from the addressed scope. Objects merge recursively and arrays replace as a whole. The response contains explicit settings from that scope, except that Account configuration always includes the effective `agent_evolution.enabled` value. Other fields are not expanded with defaults. Declarative `fallback` is deprecated, supports only complete sections, and remains solely for compatibility; new features must implement Cluster defaults in their business resolver. See [Admin API - Runtime Configuration](../api/08-admin.md#runtime-configuration) for details.
+
+## Account generation settings
+
+Supply defaults explicitly in Account creation `settings`, or update them through
+the Account configuration endpoint:
+
+```json
+{
+  "settings": {
+    "output_language_override": "en",
+    "memory": {"extraction_enabled": false}
+  }
+}
+```
+
+An absent or `null` language override uses the Cluster language. An explicit `""`
+enables automatic language detection even when Cluster specifies a language.
+Language identifiers follow the existing generation rules. Text resource summaries,
+directory overviews, Working Memory, extraction and memory consolidation use this
+setting. Image-summary prompts keep their existing language behavior. Audio/video
+summaries prefer the media's primary language and use the configured language only
+when the media has no identifiable language.
+
+An absent or `null` `memory` section uses the Cluster extraction switch. A present
+section uses its own `extraction_enabled` (default `true`); `{}` or deleting its
+last field leaves that program default. `false` disables SessionCommit long-term
+extraction; user/peer policies still apply when enabled. Working Memory and manual
+`compile --skill memory` remain available.
+
+Language generation and the extraction gate independently read their own Account
+setting when needed. Subsequent executions read updated settings; queued tasks
+store their owner identity rather than configuration values.
+Explicit Account values do not change with Cluster defaults.
 
 ## Account Embedding and VectorDB
 
@@ -342,7 +377,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`; must be `>= 1`) |
+| `max_concurrent` | int | Maximum concurrent document embedding requests (`embedding.max_concurrent`, default: `10`; must be `>= 1`). Retrieval query embeddings bypass this limit |
 | `max_retries` | int | Maximum retry attempts for transient embedding provider errors (`embedding.max_retries`, default: `3`; `0` disables retry) |
 | `text_source` | str | Text used for vectorizing text files. `content_only` reads raw content, `summary_first` uses summary when available and falls back to content, `summary_only` is a deprecated alias for `summary_first`; existing configurations still load, log a warning, and normalize to `summary_first`. Default: `content_only` |
 | `max_input_tokens` | int | Maximum estimated raw text tokens sent to the embedding model when content is used. Default: `4096` |
@@ -573,7 +608,7 @@ Version 1.39.0 is the minimum SDK version with the client context managers and c
     "dense": {
       "provider": "gemini",
       "api_key": "your-google-api-key",
-      "model": "gemini-embedding-2-preview",
+      "model": "gemini-embedding-2",
       "dimension": 3072
     }
   }
@@ -581,11 +616,17 @@ Version 1.39.0 is the minimum SDK version with the client context managers and c
 ```
 
 Available Gemini embedding models:
-- `gemini-embedding-2-preview`: 8192 token input limit, 1–3072 output dimension (MRL)
+- `gemini-embedding-2`: 8192 token input limit, 1–3072 output dimension (MRL)
 - `gemini-embedding-001`: 2048 token input limit, 1–3072 output dimension (MRL)
 - `text-embedding-004`: 2048 token input limit, 768 output dimension (fixed)
 
 Recommended dimensions: `768`, `1536`, or `3072` (default: `3072`).
+
+Gemini Embedding 2 represents task types as documented text instructions because
+the stable model does not accept the `task_type` request field. OpenViking applies
+these instructions when `query_param` or `document_param` is configured. If you
+change the model for an existing index, rebuild its vectors unless the provider
+explicitly guarantees that the two embedding spaces are compatible.
 
 Get your API key at https://aistudio.google.com/apikey
 
@@ -648,7 +689,7 @@ Get your API key at https://dashscope.console.aliyun.com/api-key
     "dense": {
       "provider": "gemini",
       "api_key": "your-google-api-key",
-      "model": "gemini-embedding-2-preview",
+      "model": "gemini-embedding-2",
       "dimension": 3072,
       "query_param": "RETRIEVAL_QUERY",
       "document_param": "RETRIEVAL_DOCUMENT"
@@ -772,6 +813,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `forward_api_key` | bool | LiteLLM only. Overrides whether `api_key` is forwarded to LiteLLM. By default, OpenViking does not forward placeholder keys for native AWS/GCP routes such as `bedrock/`, `sagemaker/`, and `vertex_ai/`; set to `true` when intentionally using a LiteLLM API-key route such as Bedrock bearer-token auth |
 | `model` | str | Model name |
 | `api_base` | str | API endpoint (optional) |
+| `temperature` | float or null | Sampling temperature (default: `null`). Omit or set to `null` to leave it out of requests and use the provider default |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `32`) |
 | `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
@@ -790,6 +832,8 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `media.file_processing_timeout` | float | Maximum provider-side preprocessing wait in seconds (default: `1800`) |
 | `media.file_poll_interval` | float | Provider-side preprocessing poll interval in seconds (default: `3`) |
 | `media.video_fps` | float | Video frame sampling rate when supported by the provider, from `0.2` through `5.0` (default: `1.0`) |
+
+The `vlm` and any dedicated `query_planner` configuration leave temperature unspecified by default. Omitting `temperature` or setting `"temperature": null` uses provider-default sampling for both fixed and routed models. The setting is shared by all credentials in that configuration; standalone VikingBot configuration and call interfaces also leave temperature unspecified by default. Explicit numeric settings retain each backend's existing behavior. To retain the previous VLM default, explicitly set `"temperature": 0.0` if the model supports it. Switching to provider defaults may change output randomness; the endpoint must support omitting temperature. Thinking mode and its supported settings remain model-specific.
 
 `vlm.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent authentication, authorization, and billing errors are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
 
@@ -1077,7 +1121,7 @@ The top-level `parser_api` section routes selected formats to the external Under
 | `enable` | `false` | Enable external parsing. |
 | `extensions` | `[]` | File extensions to route externally; normalized to lowercase without the leading dot. |
 | `host` | `""` | API host including scheme, such as `https://parser.example.com`; required when enabled. |
-| `api_key` | `""` | External API credential; required when enabled. |
+| `api_key` | `""` | Legacy standalone credential, used only when the Account has no `parser_api` section. A usable key must be available when an external parser operation starts. |
 | `enable_feishu_url` | `false` | Allow direct Feishu URL parsing when credentials are available. Feishu documents already normalized to Markdown by the accessor bypass external parsing; file attachments still use extension routing. |
 | `enable_resumable_upload` | `false` | Enable resumable uploads. |
 | `upload_simple_max_bytes` | `536870912` (512 MiB) | Simple-upload size threshold. |
@@ -1087,6 +1131,29 @@ The top-level `parser_api` section routes selected formats to the external Under
 | `poll_interval_ms` | `3000` | Response polling interval. |
 
 All size, timeout, and polling values must be greater than zero.
+
+Shared deployments should provision `settings.parser_api.api_key` for every Account
+through `POST /api/v1/admin/accounts`, or update it through
+`PATCH /api/v1/admin/accounts/{account_id}/configuration`. Only ROOT can read or
+write this section; ADMIN responses omit it, and ADMIN updates, including `null`,
+are rejected. Account settings contain only the credential; host, routing, upload
+and timeout settings remain Cluster-owned. A configured Account never falls back
+to the Cluster key after a remote authentication failure. Ordinary add-resource
+`args.api_key` and `args.parser_api` are rejected.
+
+Uploads, submission, polling, directory imports (including nested ZIP archives)
+and task recovery use the owning
+Account. Queue messages store the owner and remote file/response IDs, without the
+parser key. A running parser call keeps the key it acquired; a later call or
+recovery reads the current key. Rotation must preserve access to previously
+created remote IDs under the same remote identity. Permission failures propagate
+without resubmission or another credential attempt. Result ZIP URLs are fetched
+without attaching the parser Authorization header.
+
+The built-in file configuration source persists Account settings through AGFS.
+They use existing file encryption when `encryption.enabled=true`; encryption is
+off by default. This change does not encrypt the host's `ov.conf` file or alter
+encryption behavior for custom configuration sources.
 
 ### rerank
 
@@ -1131,6 +1198,8 @@ OpenAI-compatible APIs, LiteLLM, and Jev.
     "provider": "jev",
     "api_key": "your-typesafe-api-key",
     "model": "jev-latest",
+    "mode": "noul",
+    "candidates_visible": false,
     "timeout": 120,
     "log_payloads": false,
     "threshold": 0.1
@@ -1148,7 +1217,7 @@ TypeSafe direct access; the adapter does not special-case Vercel:
   "rerank": {
     "provider": "jev",
     "api_key": "your-vercel-ai-gateway-api-key",
-    "api_base": "https://ai-gateway.vercel.sh/typesafe",
+    "api_base": "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
     "model": "typesafe-ai/jev",
     "threshold": 0.1
   }
@@ -1165,14 +1234,29 @@ Notes for Vercel:
 - `api_base` must include the `/typesafe` suffix. `https://ai-gateway.vercel.sh/v1`
   is Vercel's own evaluate protocol and is not supported by the adapter.
 
-The Jev adapter sends the query and candidate documents as shared System One `state`
-and supports two modes:
+The Jev adapter supports two scoring modes:
 
 - `noul` (default): one independent relevance question per document, using its returned yes
   probability as the score. All questions are sent in one HTTP request, and document
   scores do not have to sum to 1.
 - `choice`: one question compares all candidate documents, with `candidate_{index}`
   mapped to input indices. Scores come from `probabilities` in document order.
+
+For Noul, candidate visibility is controlled by `rerank.candidates_visible`:
+
+- `false` (default, Noul only): shared `state` contains only the query; each question
+  carries its own document in `instructions.candidate_document`. Other candidates are
+  not included in that question or in shared state. All questions still use one HTTP
+  request, and scores retain the original document order.
+- `true`: the query and all candidate documents are in shared `state`.
+  Independent Noul answers do not mean the candidates are hidden from each other.
+
+For Noul, omitting `candidates_visible` now enables isolation. To retain shared
+candidate context, set `"candidates_visible": true` explicitly.
+
+Choice ignores this Noul-only option and always compares the full candidate set in
+shared `state`. With `"mode": "choice"`, omitting `candidates_visible` or setting it
+to either `false` or `true` produces the same request and scoring behavior.
 
 Select the mode with `rerank.mode`; omitting it or setting it to `null` keeps the
 default `noul` behavior. Choice scores are relative probabilities summing to 1 within
@@ -1190,13 +1274,14 @@ using Choice through MCP.
 | `sk` | str | VikingDB Secret Key (vikingdb provider only) |
 | `model_name` | str | Model name (vikingdb provider only, default: `doubao-seed-rerank`) |
 | `api_key` | str | API key (for `openai`, `cohere`, or `jev` providers) |
-| `api_base` | str | Endpoint URL (for `openai` or `jev`; Jev defaults to `https://api.typesafe.ai`, Vercel uses `https://ai-gateway.vercel.sh/typesafe`) |
+| `api_base` | str | Complete endpoint URL (for `openai` or `jev`; Jev defaults to `https://api.typesafe.ai/v1/systemone`, Vercel uses `https://ai-gateway.vercel.sh/typesafe/v1/systemone`; custom Jev URLs are used unchanged) |
 | `model` | str | Model name for OpenAI-compatible, LiteLLM, or Jev providers |
 | `mode` | `"noul"`, `"choice"`, or `null` | Jev rerank mode. `null` and omission use `"noul"` |
+| `candidates_visible` | bool | Jev Noul only. Default: `false`, isolating each candidate in its own question. Explicit `true` shares candidates in state. Choice ignores this option. |
 | `timeout` | float | HTTP request timeout in seconds for HTTP rerank providers, including Jev. Default: `30.0` |
 | `max_input_tokens` | int | Maximum estimated raw-text tokens in each query-document pair sent to the reranker. Oversized inputs retain their beginning and end. `0` disables. Default: `0` |
 | `log_payloads` | bool | Log complete rerank request and response payloads. May expose query and document content. Default: `false` |
-| `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
+| `threshold` | float | Rerank score threshold between `0.0` and `1.0`; reranked results below this are filtered out. It never filters vector scores (rerank not used, or failed), and a request `score_threshold` overrides it. Default: `0.1` |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 
 **Supported providers:**
@@ -1216,6 +1301,7 @@ Configuration for session intent analysis and context assembly timeouts.
 {
   "retrieval": {
     "enable_intent": true,
+    "apply_rerank_to_context": false,
     "recall_intent_timeout_s": 5.0,
     "recall_rewrite_timeout_s": 30.0
   }
@@ -1225,6 +1311,7 @@ Configuration for session intent analysis and context assembly timeouts.
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `enable_intent` | bool | Run intent analysis and query planning when `search()` receives a `session_id`. | `true` |
+| `apply_rerank_to_context` | bool | Rerank `mode="context"` candidates with the configured [`rerank`](#rerank) model, once per request against the original query and its expansions, before quotas and the token budget apply. Needs a usable `rerank` config; image queries keep vector scores. | `false` |
 
 Session intent analysis in ordinary `search()` and query expansion in `mode="context"` share `recall_intent_timeout_s`. Context digest rewriting uses a separate timeout:
 
@@ -1286,6 +1373,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 | `agfs` | object | RAGFS (Rust-based AGFS) configuration | {} |
 | `vectordb` | object | Vector database storage configuration | {} |
 | `task_store` | object | Durable Task/Work backend configuration | `{"provider":"file"}` |
+| `watch_store` | object | Watch store: `file` (single node) or `mysql` (shared) | `{"provider":"file"}` |
 
 
 ```json
@@ -1307,10 +1395,12 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 
 Task records use the local FileStore by default. To share Task/Work state across
 OpenViking processes, provision `openviking/service/sql/task_store_init.sql` in
-MySQL and select the relational backend:
+MySQL, apply the SQL changes under `openviking/service/sql/changes/`, configure
+a stable top-level `service_name`, and select the relational backend:
 
 ```json
 {
+  "service_name": "production",
   "storage": {
     "task_store": {
       "provider": "mysql",
@@ -1334,9 +1424,112 @@ Replace `ov_tasks` consistently in the provisioning SQL when using a custom pref
 
 The MySQL backend requires the `openviking[mysql]` extra. Its mutations,
 Task finalization, and execution-event updates commit in one database
-transaction. `task_id` is globally unique; `account_id` and `user_id` scope
-authorization and queries. Do not use the FileStore tables and MySQL tables as
-active writers for the same deployment.
+transaction. Top-level `service_name` is stored on every Task/Work/Event row and
+isolates multiple OpenViking deployments that share one table set. Within one
+`service_name`, `task_id` is unique; `account_id` and `user_id` scope
+authorization and queries. Fresh deployments should run the init SQL and then
+the change scripts in order; existing TaskStore tables created before
+`service_name` must run
+`openviking/service/sql/changes/0001_task_store_service_name.sql` before
+upgrading. Do not use the FileStore tables and MySQL tables as active writers
+for the same deployment.
+
+#### watch_store
+
+The default `file` provider keeps Watch tasks in the internal control file
+`viking://resources/.watch_tasks.json`, as earlier releases did; it belongs to
+a single OpenViking process. Tasks are loaded into memory once. Submission start
+and Task association only update process memory; creation, configuration,
+checkpoint, outcome, deletion and target changes write the full task snapshot.
+Unchanged patches do not write. Runtime occupancy is omitted even when another
+Watch changes, and a restart retries overdue Watches from their saved schedules,
+as in earlier releases. The snapshot and its tmp/backup files are internal
+control state.
+Use `mysql` when Watch metadata itself needs a
+shared store: install `openviking[mysql]` and provision
+`openviking/service/sql/001_watch_tasks.sql`. MySQL `params` take the same
+connection fields as `task_store`; `params.table` defaults to `ov_watch_tasks`.
+`params.credential_encryption_key` is required:
+a base64-encoded 32-byte key used to store each Watch's private `auth_state`
+(source tokens) and `connector_states` AES-GCM encrypted, bound to the task ID.
+Every node needs the same key, and changing it makes existing Watch
+credentials unreadable. In `file` mode this state is protected by VikingFS
+file encryption, as before.
+
+Watch list pagination uses the `list` and `list_all` indexes in that schema.
+Candidate queries read capacity-sized batches of Watch IDs, owner IDs and target
+URIs. Manager `due()` holds each target's PathLock while `begin_run()` reads the
+current Watch once and reserves it in the same transaction. Submission uses that
+snapshot without re-reading the Watch. Parameters changed after reservation apply
+to the next run. `running()` only reads owner/run identifiers, start time,
+the Connector flag and instruction, and database time; it does not
+transfer or decrypt authentication, Connector state or checkpoints.
+
+MySQL persists reservation, real Task association and terminal settlement. The
+run's checkpoint version remains in the payload, as before; checkpoint settlement
+cannot overwrite a newer source configuration. Missing Tasks
+retain the existing grace period and retry behavior. A crash after creating a Task
+but before associating it can still cause duplicate ingestion on retry.
+
+For Watch tables provisioned before pagination was added, update the indexes
+once (replace table and index names when using a custom table):
+
+```sql
+ALTER TABLE ov_watch_tasks
+  DROP INDEX ix_ov_watch_tasks_list,
+  ADD INDEX ix_ov_watch_tasks_list
+    (service_name(128), account_id(128), user_id(128), deleted, created_at, task_id),
+  ADD INDEX ix_ov_watch_tasks_list_all
+    (service_name, deleted, created_at, task_id);
+```
+
+```json
+{
+  "storage": {
+    "watch_store": {
+      "provider": "mysql",
+      "params": {
+        "user": "openviking",
+        "password": "change-me",
+        "database": "openviking",
+        "host": "127.0.0.1",
+        "port": 3306,
+        "table": "ov_watch_tasks",
+        "credential_encryption_key": "base64-encoded-32-byte-key"
+      }
+    }
+  }
+}
+```
+
+Every node serves the Watch API. Nodes with `enable_watch_scheduler=true` may
+run the background Watch scheduler. `watch_leader_provider` selects leader
+mode: `auto` keeps the storage-derived default, `local` keeps leadership inside
+one process, and `cache` uses AGFS CacheRuntime for a shared leader lease. The
+leader polls due Watches every 15 seconds and settles finished runs. File and
+MySQL use the same Runtime polling and bounded dispatch flow. Background
+dispatch tracks unfinished Watch runs and pending submissions in leader memory
+toward its concurrency limit (default 4). Taking leadership restores occupancy
+through the existing run sweep (process-local state for File, durable rows for
+MySQL); subsequent dispatches need no extra occupancy query.
+Manual triggers and first imports are admitted independently and enter the
+background occupancy count when observed by a sweep.
+File target moves have no 1000-Watch limit; MySQL retains that transaction limit.
+A run is the
+ingestion Task itself: the
+Watch row records its Task ID while the run occupies the target, and the run
+starts only while the target's Tree PathLock is held. A submission that stops
+before creating its Task (server shutdown, identity deletion, failure) settles
+the run at once; if its Task is still missing after 1 hour, further submission
+is fenced and the run is settled as an error. After 3 hours, cancellation is
+requested. If the Task remains nonterminal, TaskTracker records a timeout error.
+Connector imports have no local Work, so their Tasks become failed and the
+Watch is settled with its occupancy released. Tasks with open local Work keep
+their occupancy until that Work settles. Existing terminal states are preserved.
+This timeout ends local tracking; it does not guarantee that remote execution stops.
+
+`mv`, `cp`, `rm`, and `mkdir` on a path overlapping an occupied Watch target
+wait up to 10 seconds and then fail with a retryable busy error.
 
 #### agfs (RAGFS)
 
@@ -1370,6 +1563,7 @@ top-level backend remains the only direct read source.
       "backups": {
         "initial_partitions": 16,
         "checkpoint_interval_secs": 86400,
+        "reconcile_existing_data": false,
         "provider": "filesystem",
         "items": [
           {
@@ -1392,6 +1586,7 @@ Common `backups` fields:
 |-----------|------|-------------|---------|
 | `initial_partitions` | int | Initial metadata partitions; changes do not affect existing accounts | `16` |
 | `checkpoint_interval_secs` | int | Checkpoint discovery interval; minimum `60` | `86400` |
+| `reconcile_existing_data` | bool | Scan primary files that already exist when multi-write is first enabled and record them in V2 metadata. Keep `false` only when backups are already aligned or historical backfill is intentionally skipped. | `false` |
 | `provider` | str | Metadata provider: `filesystem` or top-level CacheRuntime-backed `cache` | `"filesystem"` |
 | `items` | array | Backups with `name`, `backend`, `params`, and optional `encryption` | `[]` |
 
@@ -1419,17 +1614,26 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `backend` | str | `local` keeps the original filesystem path; `cache` enables the CacheFS wrapper | `local` |
-| `max_file_size_bytes` | int | Maximum full-file object size admitted to cache | `1048576` |
-| `traversal_mode` | str | `backend` or `cached_traversal` | `backend` |
-| `bypass_prefixes` | array[str] | Path prefixes that bypass cache | `[]` |
+| `shared_redis_ttl_seconds` | int | TTL override for every query bucket; `0` keeps the provider default. Applied only when CacheFS shares a Redis service with QueueFS, cache-backed PathLock, or the expiry scheduler | `0` |
 
 `storage.agfs.pathlock` selects the PathLock storage provider:
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `provider` | str | `filesystem`, `memory`, or `cache`; `cache` uses the shared Redis CacheRuntime | `filesystem` |
+| `provider` | str | `filesystem`, `memory`, `sqlite`, or `cache`; `cache` uses the shared Redis CacheRuntime | `filesystem` |
+| `sqlite_path` | str / null | Optional absolute local shared lock database path. See [local SQLite setup](../configuration/01-server.md#storage) | `{storage.workspace}/_system/pathlock/pathlock.db` for `sqlite` |
 | `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale; must be at least `1.0` | `30.0` |
 | `lock_timeout_secs` | float | Deprecated and ignored; runtime wait timeout remains `0.0` | `0.0` |
+
+SQLite PathLock is limited to processes sharing one actual database file on the
+same machine's local disk. Do not put it on EFS/NFS/SMB or give each replica its
+own container-local database. A workspace on EFS also puts the default
+`sqlite_path` on EFS. See [SQLite deployment limits](../configuration/01-server.md#storage).
+
+For multiple containers or hosts sharing EFS, use shared Redis PathLock as in
+the example below. All replicas must use the same Redis deployment, top-level
+`service_name`, and lock expiry setting. The example also uses Redis QueueFS
+so its default SQLite database is not placed on EFS.
 
 ```json
 {
@@ -1713,9 +1917,9 @@ acl_direct_grants
 acl_inherited_grants
 ```
 
-Each element uses `{mask}:{principal}`: `1` means `read`, `3` means `write`, and `7` means `manage`.
+Each grant uses `{mask}:{principal}`: `1` means `read`, `3` means `write`, and `7` means `manage`. Empty grants are stored as `["none"]`, which is also the default value of both fields. This marker does not change `acl_mode`.
 
-Local backends add the fields to an existing collection and rebuild the scalar index during startup. Existing records are not rewritten; missing ACL fields read as `acl_mode=none` and empty lists.
+Local backends add the fields to an existing collection and rebuild the scalar index during startup. Existing records are not rewritten; missing ACL fields read as `acl_mode=none` and no grants.
 
 For existing remote collections, including Volcengine VikingDB, provision these fields and scalar indexes before startup; OpenViking validates but does not alter the remote schema. Volcengine API-key data-plane mode also requires the context collection and configured index to exist. See [Resource Access Control (ACL)](../concepts/15-acl.md) for permission semantics.
 
@@ -1976,6 +2180,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is required on every deployment, including localhost; it does not become the source of user identity | `null` |
 | `account_store.provider` | str | Complete Account store provider. Built-in values are `"file"`, `"mysql"`, and `"redis_mysql"`; it owns account, user, group, and API-key records. `"file"` preserves the existing AGFS JSON registry and owns its process-local lookup indexes. `"redis_mysql"` keeps MySQL authoritative and adds a shared Redis cache for authentication and request identity reads. | `"file"` |
 | `account_store.params` | object | Provider-specific startup parameters. Framework-owned filesystem and File-provider API-key hashing dependencies cannot be overridden here. | `{}` |
+| `account_store.params.read_only` | bool | File provider only. Load an existing writer-created registry without locks, bootstrap, or credential migrations, and reject identity mutations. Keep the replica's data mount read-only and set `reconcile_system_assets_on_startup=false`; enable `api_key_watch_enabled` to observe writer changes. A missing registry prevents startup. | `false` |
 | `profile_enabled` | bool | Whether to allow request-scoped cProfile via `profile=1` on HTTP requests. When disabled, the server ignores that query parameter. When enabled, the CLI can display the returned `profile`, while the Python HTTP client currently triggers profiling but does not automatically attach the top-level `profile` field to most SDK return values. | `false` |
 | `cors_origins` | list | Allowed CORS origins | `["*"]` |
 | `public_base_url` | str | Public-facing base URL emitted in MCP-issued upload instructions. Resolution order: env var `OPENVIKING_PUBLIC_BASE_URL` → this field → `X-Forwarded-Host`/`X-Forwarded-Proto` request headers → `Host` request header → listen-address fallback. Set this (or the env var) when the server runs behind a reverse proxy that does not forward `X-Forwarded-*` headers. | `null` |
@@ -2033,29 +2238,28 @@ separate table prefixes to isolate OpenViking clusters that share a database.
 }
 ```
 
-`redis_mysql` requires the `redis-mysql` extra and wraps the same MySQL
-parameters. Its `cache` block follows the top-level `cache` `provider/params`
-shape. The Python client currently supports `standalone`, `cluster`, and
-`sentinel` Redis deployments. It caches API-key bindings, users, per-user group
-IDs, and deletion records for a fixed 60 seconds by default. Cache fills and account mutations
-share an account-scoped Redis lease; normal cache hits do not acquire that
-lease. Mutations commit to MySQL first, then invalidate affected cache entries.
-If Redis is unavailable, the MySQL mutation still succeeds and stale cache
-entries remain valid only until their fixed TTL expires. Cache fills also
-maintain an
-account-scoped, expiry-scored key index. Each indexed cache fill removes expired
-index members, allowing account deletion or recreation to clear only that
-account's current cached users, groups, deletion records, and credential data.
-API-key bindings are checked against account and user credential fences, so
-normal key replacement, revocation, and user deletion invalidate old bindings.
-Redis automatically removes the index when its last sorted-set member is removed.
-Cleanup does not issue a separate index deletion, which could remove a newer
-fill's index after lease loss. Provisioning
-and key replacement clear negative lookups both with and without a user hint.
-Redis connection and command timeouts are configured with
-`cache.params.connect_timeout_ms` and `cache.params.command_timeout_ms`; both
-default to 5000 milliseconds when omitted. These are socket timeouts, not an
-overall request deadline.
+`redis_mysql` requires the `redis-mysql` extra. Its `mysql` block uses the
+same parameters as the MySQL provider; its `cache` block follows the top-level
+cache `provider/params` structure and supports `standalone`, `cluster`, and
+`sentinel` Redis deployments.
+
+MySQL remains the source of truth. Redis caches authentication results, user
+information, groups, and deletion status. Cache misses and Redis read failures
+fall back to MySQL. Configure `cache.params.ttl_seconds` to control cache lifetime;
+the default is 60 seconds. Hits do not extend the TTL.
+
+Credential, permission, and deletion changes invalidate the affected cache.
+If invalidation fails, cached data may remain stale until its TTL expires.
+Upgrade all instances sharing the cache together: old and new cache formats
+do not invalidate each other. Cache-version metadata does not expire automatically
+and should be included in Redis capacity planning. Legacy `lock_ttl_seconds` and
+`lock_wait_seconds` settings are accepted but no longer used.
+
+Redis connection and command timeouts use `cache.params.connect_timeout_ms` and
+`cache.params.command_timeout_ms`, both defaulting to 5000 milliseconds. These
+are socket timeouts, not an overall request deadline. Set `cache.params.pool_size`
+for the expected concurrent Redis requests; the default is 32, and the example
+below uses 100. Pool exhaustion causes connection errors and MySQL fallback.
 
 ```json
 {
@@ -2083,9 +2287,8 @@ overall request deadline.
             "password_env": "OPENVIKING_REDIS_PASSWORD",
             "sentinel_password_env": "OPENVIKING_SENTINEL_PASSWORD",
             "key_prefix": "ov:account-auth",
-            "ttl_seconds": 60,
-            "lock_ttl_seconds": 60,
-            "lock_wait_seconds": 30
+            "pool_size": 100,
+            "ttl_seconds": 60
           }
         }
       }
@@ -2102,9 +2305,8 @@ Explicit `auth_mode: "api_key"` requires a non-empty `root_api_key`, including o
 
 Supported add target URIs:
 
-- `resource_uri` is used as the default `add_resource` parent directory, equivalent to `parent=<uri>, create_parent=true`. It must be a writable resource directory URI for the request user. Supported forms are `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, and `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`. The `viking://~/...` home alias resolves per request user.
-- `skill_uri` is used as the default `add_skill` target root. In v1, only `viking://~/skills` and `viking://agent/skills` are accepted; explicit `viking://user/{user_id}/skills` is not accepted.
-- Legacy spellings: `viking://user/resources` and `viking://user/skills` written in earlier configs are auto-normalized to `viking://~/resources` and `viking://~/skills` when the config is loaded, and the server logs an info message. Prefer the `viking://~/...` form in new configs — outside `add_targets`, the uid-less spelling is rejected at the request boundary.
+- `resource_uri` is used as the default `add_resource` parent directory, equivalent to `parent=<uri>, create_parent=true`. It must be a writable resource directory URI for the request user. Supported forms are `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://~/peers/{peer_id}/resources` or `viking://~/peers/{peer_id}/resources/...`. The `viking://~/...` home alias resolves per request user.
+- `skill_uri` is used as the default `add_skill` target root. Supported forms are `viking://~/skills` and `viking://agent/skills`.
 
 ### Runtime configuration source {#runtime-configuration-source}
 
@@ -2266,7 +2468,7 @@ At-rest encryption protects newly written files with account-specific keys throu
 | `provider` | str | Key provider: `"local"`, `"vault"`, or `"volcengine_kms"` | - |
 | `api_key_hashing.enabled` | bool | File-provider only: whether to apply Argon2id one-way hashing to API key values (independent of file-level `enabled`); see [Encryption Guide](./08-encryption.md) | `false` |
 
-### Local (File)
+### Local
 
 Suitable for development environments and single-node deployments:
 
@@ -2285,6 +2487,11 @@ Suitable for development environments and single-node deployments:
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `local.key_file` | str | Root key file path | `~/.openviking/master.key` |
+| `local.root_key` | str | Inline 32-byte root key encoded as exactly 64 hexadecimal characters | - |
+
+Do not configure `local.key_file` and `local.root_key` together. If both are omitted,
+`local.key_file` defaults to `~/.openviking/master.key`. See the [Encryption Guide](./08-encryption.md)
+for inline-key handling and security requirements.
 
 ### Vault (HashiCorp Vault)
 

@@ -145,6 +145,43 @@ test("pre-compact catches up, commits and keeps the cursor", async () => {
   }
 });
 
+test("pre-compact is inert when auto-capture is disabled", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-pre-compact-off-"));
+  const transcriptPath = join(stateDir, "transcript.jsonl");
+  const calls = [];
+  try {
+    const now = Date.now();
+    await writeFile(join(stateDir, "pc-off.json"), JSON.stringify({
+      codexSessionId: "pc-off",
+      ovSessionId: "cx-pc-off",
+      capturedTurnCount: 2,
+      createdAt: now - 1000,
+      lastUpdatedAt: now,
+    }));
+    await writeFile(transcriptPath, [
+      turn("user", "turn-0"),
+      turn("assistant", "turn-1"),
+      turn("user", "turn-2"),
+      turn("assistant", "turn-3"),
+    ].join("\n"));
+
+    await withMockOpenViking(mockHandler(calls), async (baseUrl) => {
+      const { output } = await runPreCompact(
+        { session_id: "pc-off", transcript_path: transcriptPath, trigger: "auto" },
+        baseEnv(baseUrl, stateDir, { OPENVIKING_AUTO_CAPTURE: "0" }),
+      );
+      assert.deepEqual(output, {});
+    });
+
+    assert.deepEqual(calls, []);
+    const state = JSON.parse(await readFile(join(stateDir, "pc-off.json"), "utf-8"));
+    assert.equal(state.ovSessionId, "cx-pc-off");
+    assert.equal(state.capturedTurnCount, 2);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("pre-compact does not create or commit a startup-only session", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-pre-compact-startup-"));
   const transcriptPath = join(stateDir, "transcript.jsonl");

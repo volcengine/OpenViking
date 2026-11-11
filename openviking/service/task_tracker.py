@@ -35,6 +35,7 @@ from openviking.service.task_domain import (
     TERMINAL_WORK_STATES,
     DeleteExpiredResult,
     QueueWorkSummary,
+    TaskPatch,
     TaskRecord,
     TaskRetentionPolicy,
     TaskStatus,
@@ -43,6 +44,7 @@ from openviking.service.task_domain import (
     WorkRecoveryMode,
     WorkState,
     WorkSummary,
+    project_work_error,
     sanitize_error,
     sanitize_task_result,
 )
@@ -53,12 +55,17 @@ from openviking.service.task_store import (
     StoreOperationCode,
     StoreOperationResult,
     TaskAlreadyActive,
+    TaskCreationResult,
     TaskWorkStore,
     WorkRegistration,
 )
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import TaskWorkIndex
-from openviking_cli.exceptions import DeadlineExceededError, OpenVikingError
+from openviking_cli.exceptions import (
+    DeadlineExceededError,
+    FailedPreconditionError,
+    OpenVikingError,
+)
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -79,12 +86,16 @@ _CANCELLABLE_TASK_TYPES = {
     "add_resource",
     "add_skill",
     "compile",
+    "connector_import",
+    "rule_compile",
     "session_commit",
     "admin_reindex",
     "snapshot_restore_reindex",
 }
+_IDENTITY_CLEANUP_TASK_TYPES = {"account_delete", "user_delete"}
 _CANCEL_POLL_INTERVAL = 30
-_TASK_WAIT_POLL_INTERVAL = 0.05
+_WAIT_INITIAL_POLL_INTERVAL = 0.05
+_WAIT_MAX_POLL_INTERVAL = 10.0
 _PUBLIC_QUEUE_NAMES = ("Semantic", "Embedding")
 
 _sanitize_error = sanitize_error
@@ -98,6 +109,28 @@ class _WaitBudget:
 
 
 _wait_budget: ContextVar[Optional[_WaitBudget]] = ContextVar("task_wait_budget", default=None)
+
+
+_admission: ContextVar[Optional[tuple[str, Callable[[], Awaitable[bool]]]]] = ContextVar(
+    "task_admission", default=None
+)
+
+
+@contextmanager
+def task_admission(
+    task_id: str, admitted: Callable[[], Awaitable[bool]]
+) -> Generator[None, None, None]:
+    """Create *task_id* within this context only while *admitted* holds.
+
+    create checks before the insert and again after it. A confirmed revocation
+    withdraws an unused Task or cancels one that another caller has taken over.
+    A failed check or cancelled caller only withdraws an unused Task.
+    """
+    token = _admission.set((task_id, admitted))
+    try:
+        yield
+    finally:
+        _admission.reset(token)
 
 
 @contextmanager
@@ -147,12 +180,14 @@ async def run_tracked_operation(
     wait: bool,
     timeout: Optional[float] = None,
     resource_id: Optional[str] = None,
+    meta: Optional[Dict[str, Any]] = None,
     existing_task: Optional[TaskRecord] = None,
     accept_failed_result: Callable[[_OperationResult], bool] | None = None,
     return_terminal_result: bool = False,
 ) -> tuple[_OperationResult, str]:
     """Run a top-level operation under a Task, reusing an existing Task context.
 
+    ``meta`` applies only to a newly created Task; reused Tasks keep their metadata.
     ``accept_failed_result`` is reserved for operations whose result explicitly
     reports record-level failures while the Task retains its failed status.
     ``return_terminal_result`` returns the Task's final projected result after
@@ -174,6 +209,7 @@ async def run_tracked_operation(
             resource_id=resource_id,
             account_id=account_id,
             user_id=user_id,
+            meta=meta,
         )
 
     try:
@@ -209,6 +245,8 @@ async def run_tracked_operation(
                 account_id,
                 user_id,
                 enqueued_work=[],
+                task_type=task.task_type,
+                mode=task.meta.get("mode"),
                 work_id=running_work_id,
             ):
                 result = await operation()
@@ -287,16 +325,58 @@ class TaskTracker:
     def __init__(self, store: TaskWorkStore) -> None:
         self._store = store
         self._cleanup_task: Optional[asyncio.Task[Any]] = None
+        # Bound after Compile storage initialization; shares the cleanup clock and batch size.
+        self.compile_history_cleanup: Optional[Callable[..., Awaitable[int]]] = None
         self._cancel_poll_task: Optional[asyncio.Task[Any]] = None
         self._work_index = TaskWorkIndex()
         self._running: ContextVar[tuple[str, str, str, bool] | None] = ContextVar(
             "task_tracker_running_work", default=None
         )
+        self._deletion_guard: Optional[Callable[[str, str], Any]] = None
 
     @staticmethod
     def _validate_owner(account_id: str, user_id: str) -> None:
         if not account_id or not user_id:
             raise ValueError("Task ownership requires non-empty account_id and user_id")
+
+    def set_deletion_guard(self, guard: Optional[Callable[[str, str], Any]]) -> None:
+        """Reject new Tasks for identities the guard reports as being deleted.
+
+        Identity cleanup records its fence and then lists the Tasks to cancel;
+        create inserts the Task and then reads the fence again. One of the two
+        reads observes the other's write, so a Task inserted concurrently with
+        a deletion is either listed by cleanup or withdrawn/cancelled here.
+        """
+        self._deletion_guard = guard
+
+    async def _owner_deleting(self, account_id: str, user_id: str) -> bool:
+        guard = self._deletion_guard
+        if guard is None or account_id == SYSTEM_TASK_ACCOUNT_ID:
+            return False
+        result = guard(account_id, user_id)
+        return bool(await result if inspect.isawaitable(result) else result)
+
+    async def _withdraw(
+        self, task_id: str, *, account_id: str, user_id: str, refusal: Optional[str]
+    ) -> None:
+        withdrawn = await self._store.withdraw_unaccepted(
+            task_id, account_id=account_id, user_id=user_id
+        )
+        if withdrawn.is_applied:
+            self._work_index.forget_task(task_id, account_id=account_id, user_id=user_id)
+            return
+        if withdrawn.accepted or refusal is None:
+            return
+        cancellation = await self._request_cancellation(
+            task_id,
+            account_id=account_id,
+            user_id=user_id,
+            allow_terminal=False,
+        )
+        if cancellation.accepted:
+            self._work_index.cancel_active(task_id, account_id=account_id, user_id=user_id)
+        elif cancellation.code is StoreOperationCode.NOT_CANCELLABLE:
+            await self.fail(task_id, refusal, account_id=account_id, user_id=user_id)
 
     def attach_work_index(self, work_index: TaskWorkIndex) -> None:
         """Replace the process-local active-handle index."""
@@ -376,9 +456,15 @@ class TaskTracker:
                 logger.exception("[TaskTracker] cancel-poll error")
 
     async def delete_expired(self) -> DeleteExpiredResult:
+        now = time.time()
+        if self.compile_history_cleanup is not None:
+            try:
+                await self.compile_history_cleanup(now=now, limit=self.CLEANUP_BATCH)
+            except Exception:
+                logger.exception("[TaskTracker] Compile history cleanup error")
         result = await self._store.delete_expired(
             TaskRetentionPolicy(self.TTL_COMPLETED, self.TTL_FAILED),
-            now=time.time(),
+            now=now,
             limit=self.CLEANUP_BATCH,
         )
         for deleted in result.deleted:
@@ -406,7 +492,19 @@ class TaskTracker:
         if task_id is not None:
             existing = await self.get(task_id, account_id=account_id, user_id=user_id)
             if existing is not None:
+                from openviking.observability.reporting.facts import remember_request_task
+
+                remember_request_task(existing)
                 return existing
+        admission = _admission.get()
+        admitted = admission[1] if admission and admission[0] == task_id else None
+        # Identity cleanup may be owned by an actor that is itself being deleted;
+        # fencing it would strand the target deletion without a cleanup task.
+        enforce_identity_admission = task_type not in _IDENTITY_CLEANUP_TASK_TYPES
+        if enforce_identity_admission and await self._owner_deleting(account_id, user_id):
+            raise FailedPreconditionError("Identity deletion is in progress")
+        if admitted is not None and not await admitted():
+            raise FailedPreconditionError("Task creation is no longer admitted")
         task = TaskRecord(
             task_id=task_id or str(uuid4()),
             task_type=task_type,
@@ -416,10 +514,44 @@ class TaskTracker:
             meta=dict(meta or {}),
             auth=dict(auth or {}),
         )
-        stored = await run_to_completion(
-            lambda: self._store.create(task, reject_if_active=reject_if_active)
-        )
-        return self._public(stored or task)
+        creation: Optional[TaskCreationResult] = None
+        refusal: Optional[str] = None
+
+        async def persist() -> None:
+            nonlocal creation
+            # Retain the committed result even when the caller cancels during I/O.
+            creation = await self._store.create(task, reject_if_active=reject_if_active)
+
+        try:
+            await run_to_completion(persist)
+            assert creation is not None
+            created = self._public(creation.task)
+            if not creation.created:
+                return created
+            if enforce_identity_admission and await self._owner_deleting(account_id, user_id):
+                refusal = "Identity deletion is in progress"
+                raise FailedPreconditionError(refusal)
+            if admitted is not None and not await admitted():
+                refusal = "Task creation is no longer admitted"
+                raise FailedPreconditionError(refusal)
+        except BaseException:
+            if creation is not None and creation.created:
+                try:
+                    await run_to_completion(
+                        lambda: self._withdraw(
+                            task.task_id,
+                            account_id=account_id,
+                            user_id=user_id,
+                            refusal=refusal,
+                        )
+                    )
+                except BaseException:
+                    logger.exception("[TaskTracker] Failed to withdraw Task %s", task.task_id)
+            raise
+        from openviking.observability.reporting.facts import remember_request_task
+
+        remember_request_task(created)
+        return created
 
     async def create_if_no_running(
         self,
@@ -428,17 +560,27 @@ class TaskTracker:
         *,
         account_id: str,
         user_id: str,
+        task_id: Optional[str] = None,
     ) -> Optional[TaskRecord]:
+        """Create an operation atomically, or return None while another is active.
+
+        An explicit task_id replays the same operation; a task with a different
+        type or resource raises ValueError. Owner validation belongs to create.
+        """
         try:
-            return await self.create(
+            task = await self.create(
                 task_type,
                 resource_id,
                 account_id=account_id,
                 user_id=user_id,
+                task_id=task_id,
                 reject_if_active=True,
             )
         except TaskAlreadyActive:
             return None
+        if task.task_type != task_type or task.resource_id != resource_id:
+            raise ValueError("Task ID belongs to another operation")
+        return task
 
     async def start(
         self,
@@ -449,42 +591,19 @@ class TaskTracker:
     ) -> None:
         await self._store.start_task(task_id, stage=stage, account_id=account_id, user_id=user_id)
 
-    async def update_stage(
+    async def patch_task(
         self,
         task_id: str,
-        stage: str,
-        account_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        *,
-        meta: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        await self._store.update_stage(
-            task_id, stage, meta=meta, account_id=account_id, user_id=user_id
-        )
-
-    async def update_task_auth(
-        self,
-        task_id: str,
-        values: Dict[str, Any],
+        patch: TaskPatch,
         *,
         account_id: str,
         user_id: str,
-    ) -> None:
+    ) -> StoreOperationResult:
+        """Atomically apply permitted Task fields without changing task state."""
         self._validate_owner(account_id, user_id)
-        await self._store.update_auth(task_id, values, account_id=account_id, user_id=user_id)
-
-    async def record_feishu_response(
-        self,
-        task_id: str,
-        entry: str,
-        response_id: str,
-        account_id: str,
-        user_id: str,
-    ) -> None:
-        self._validate_owner(account_id, user_id)
-        await self._store.merge_meta(
+        return await self._store.patch_task(
             task_id,
-            {"feishu_responses": {entry: response_id}},
+            patch,
             account_id=account_id,
             user_id=user_id,
         )
@@ -573,6 +692,28 @@ class TaskTracker:
                 user_id=user_id,
             )
         )
+        await self._emit_terminal(task_id, account_id, user_id)
+
+    async def _emit_terminal(self, task_id, account_id, user_id):
+        from openviking.observability.reporting.runtime import is_reporting_enabled
+
+        if not is_reporting_enabled():
+            return
+        try:
+            from openviking.observability.reporting.facts import emit_terminal
+
+            if account_id and user_id:
+                # Work completion is a hot path. MySQL get_task also reads all
+                # started Work intervals to compute processing_seconds, which
+                # telemetry does not need while the Task is still running.
+                status = await self._store.get_task_status(
+                    task_id, account_id=account_id, user_id=user_id
+                )
+                if status not in TERMINAL_TASK_STATUSES:
+                    return
+            emit_terminal(await self.get(task_id, account_id=account_id, user_id=user_id))
+        except Exception:
+            logger.warning("Task terminal telemetry could not be projected")
 
     async def cancel(
         self,
@@ -622,7 +763,7 @@ class TaskTracker:
         user_id: str,
         allow_terminal: bool,
     ) -> StoreOperationResult:
-        return await run_to_completion(
+        result = await run_to_completion(
             lambda: self._store.request_cancellation(
                 task_id,
                 cancellable_types=_CANCELLABLE_TASK_TYPES,
@@ -631,6 +772,9 @@ class TaskTracker:
                 user_id=user_id,
             )
         )
+        if result.is_applied:
+            await self._emit_terminal(task_id, account_id, user_id)
+        return result
 
     async def register_running_task(
         self,
@@ -642,8 +786,7 @@ class TaskTracker:
     ) -> str:
         self._validate_owner(account_id, user_id)
         active_task = asyncio.current_task()
-        status = await self._store.get_task_status(task_id, account_id=account_id, user_id=user_id)
-        if active_task is None or status is None or status in TERMINAL_TASK_STATUSES:
+        if active_task is None:
             raise TaskWorkRejected(f"Task {task_id} is unavailable")
         inline = work_id is None
         running_work_id = work_id or f"inline:{uuid4()}"
@@ -658,12 +801,14 @@ class TaskTracker:
             if registration is WorkRegistration.REJECTED:
                 raise TaskWorkRejected(f"Task {task_id} rejects inline work")
             try:
-                await self.start_work(
+                accepted = await self.start_work(
                     task_id,
                     running_work_id,
                     account_id=account_id,
                     user_id=user_id,
                 )
+                if not accepted.is_applied:
+                    raise TaskWorkRejected(f"Task {task_id} rejects inline work")
             except BaseException:
                 if registration is WorkRegistration.CREATED:
                     await run_to_completion(
@@ -746,10 +891,10 @@ class TaskTracker:
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
         timeout: Optional[float] = None,
-        poll_interval: float = _TASK_WAIT_POLL_INTERVAL,
     ) -> TaskRecord:
         with _consume_wait_budget(task_id, timeout) as remaining:
             deadline = None if remaining is None else time.monotonic() + remaining
+            next_poll_interval = _WAIT_INITIAL_POLL_INTERVAL
             while True:
                 if account_id is not None and user_id is not None:
                     status = await self.get_task_status(
@@ -778,8 +923,9 @@ class TaskTracker:
                 if remaining is not None and remaining <= 0:
                     raise TimeoutError(f"Timed out waiting for Task {task_id}")
                 await asyncio.sleep(
-                    poll_interval if remaining is None else min(poll_interval, remaining)
+                    next_poll_interval if remaining is None else min(next_poll_interval, remaining)
                 )
+                next_poll_interval = min(_WAIT_MAX_POLL_INTERVAL, next_poll_interval * 2)
 
     async def list_tasks(
         self,
@@ -943,6 +1089,7 @@ class TaskTracker:
                 task_id, work_id, account_id=account_id, user_id=user_id
             )
         )
+        await self._emit_terminal(task_id, account_id, user_id)
 
     async def reconcile_delivery(
         self,
@@ -969,9 +1116,17 @@ class TaskTracker:
         return work.state if work is not None else None
 
     async def start_work(
-        self, task_id: str, work_id: str, *, account_id: str, user_id: str
-    ) -> None:
-        await self._store.start_work(task_id, work_id, account_id=account_id, user_id=user_id)
+        self,
+        task_id: str,
+        work_id: str,
+        *,
+        account_id: str,
+        user_id: str,
+        queue_name: Optional[str] = None,
+    ) -> StoreOperationResult:
+        return await self._store.start_work(
+            task_id, work_id, account_id=account_id, user_id=user_id, queue_name=queue_name
+        )
 
     async def mark_work_done(
         self,
@@ -1000,7 +1155,7 @@ class TaskTracker:
         work_id: str,
         error: Optional[str] = None,
         *,
-        errors: Optional[Collection[str]] = None,
+        errors: Optional[Collection[Any]] = None,
         account_id: str,
         user_id: str,
     ) -> None:
@@ -1031,6 +1186,7 @@ class TaskTracker:
             account_id=account_id,
             user_id=user_id,
         )
+        await self._emit_terminal(task_id, account_id, user_id)
 
     async def _finish_work(
         self,
@@ -1039,7 +1195,7 @@ class TaskTracker:
         state: WorkState,
         *,
         error: Optional[str],
-        errors: Optional[Collection[str]],
+        errors: Optional[Collection[Any]],
         context_count_delta: int,
         account_id: str,
         user_id: str,
@@ -1056,6 +1212,7 @@ class TaskTracker:
                 user_id=user_id,
             )
         )
+        await self._emit_terminal(task_id, account_id, user_id)
 
     async def record_work_error(
         self,
@@ -1082,6 +1239,7 @@ class TaskTracker:
                 task_id, work_id, account_id=account_id, user_id=user_id
             )
         )
+        await self._emit_terminal(task_id, account_id, user_id)
 
     async def is_cancelling(
         self,
@@ -1111,13 +1269,13 @@ class TaskTracker:
         user_id: Optional[str] = None,
         timeout: Optional[float] = None,
         stop_waiting: Optional[Callable[[], bool]] = None,
-        poll_interval: float = _TASK_WAIT_POLL_INTERVAL,
     ) -> None:
         wanted = set(work_ids)
         if not wanted:
             return
         with _consume_wait_budget(task_id, timeout) as remaining:
             deadline = None if remaining is None else time.monotonic() + remaining
+            next_poll_interval = _WAIT_INITIAL_POLL_INTERVAL
             while True:
                 works = await self._store.get_works(
                     task_id,
@@ -1136,8 +1294,9 @@ class TaskTracker:
                 if remaining is not None and remaining <= 0:
                     raise TimeoutError(f"Timed out waiting for Work in Task {task_id}")
                 await asyncio.sleep(
-                    poll_interval if remaining is None else min(poll_interval, remaining)
+                    next_poll_interval if remaining is None else min(next_poll_interval, remaining)
                 )
+                next_poll_interval = min(_WAIT_MAX_POLL_INTERVAL, next_poll_interval * 2)
 
     async def wait_for_task_work(
         self,
@@ -1147,10 +1306,10 @@ class TaskTracker:
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
         timeout: Optional[float] = None,
-        poll_interval: float = _TASK_WAIT_POLL_INTERVAL,
     ) -> None:
         with _consume_wait_budget(task_id, timeout) as remaining:
             deadline = None if remaining is None else time.monotonic() + remaining
+            next_poll_interval = _WAIT_INITIAL_POLL_INTERVAL
             while await self._store.has_open_work(
                 task_id,
                 exclude_work_id=exclude_work_id,
@@ -1161,23 +1320,9 @@ class TaskTracker:
                 if remaining is not None and remaining <= 0:
                     raise TimeoutError(f"Timed out waiting for Work in Task {task_id}")
                 await asyncio.sleep(
-                    poll_interval if remaining is None else min(poll_interval, remaining)
+                    next_poll_interval if remaining is None else min(next_poll_interval, remaining)
                 )
-
-    async def mark_enqueue_complete(
-        self,
-        task_id: str,
-        work_id: str,
-        *,
-        account_id: str,
-        user_id: str,
-    ) -> None:
-        await self._store.mark_enqueue_complete(
-            task_id,
-            work_id,
-            account_id=account_id,
-            user_id=user_id,
-        )
+                next_poll_interval = min(_WAIT_MAX_POLL_INTERVAL, next_poll_interval * 2)
 
     async def is_enqueue_complete(
         self,
@@ -1187,12 +1332,8 @@ class TaskTracker:
         account_id: str,
         user_id: str,
     ) -> bool:
-        return await self._store.is_enqueue_complete(
-            task_id,
-            work_id,
-            account_id=account_id,
-            user_id=user_id,
-        )
+        auth = await self.get_task_auth(task_id, account_id=account_id, user_id=user_id)
+        return work_id in set(auth.get("enqueue_complete_work_ids") or ())
 
     async def build_queue_status(
         self,
@@ -1222,8 +1363,7 @@ class TaskTracker:
                 "requeue_count": queue.requeue_count,
                 "error_count": queue.error_count,
                 "errors": [
-                    {"message": sanitize_error(str(error))}
-                    for error in queue.errors[:MAX_QUEUE_ERROR_DETAILS]
+                    project_work_error(error) for error in queue.errors[:MAX_QUEUE_ERROR_DETAILS]
                 ],
             }
         return result

@@ -41,12 +41,14 @@ from openviking.server.routers import (
     content_router,
     debug_router,
     filesystem_router,
+    mcps_router,
     metrics_router,
     observer_router,
     openviking_assets_router,
     pack_router,
     privacy_configs_router,
     resources_router,
+    rules_router,
     search_router,
     sessions_router,
     skills_router,
@@ -161,24 +163,71 @@ async def _initialize_auth_plugin(
     logger.info("Auth plugin initialized: %s", effective_auth_mode)
 
 
+async def _initialize_ttl_adapter(
+    app: FastAPI,
+    service: OpenVikingService,
+    config: ServerConfig,
+) -> None:
+    """Wire built-in Redis TTL when explicitly enabled.
+
+    The default configuration installs no hook, starts no TTL worker and leaves
+    the internal TTL routes unregistered.
+    """
+    from openviking.ttl.wiring import build_ttl_adapter, install_ttl_hook, set_ttl_adapter
+
+    adapter = build_ttl_adapter(config.ttl_adapter)
+    set_ttl_adapter(adapter)
+    app.state.ttl_adapter = adapter
+    if adapter is None:
+        return
+    adapter.bind_runtime(service, app.state.api_key_manager)
+    service.configure_ttl(adapter)
+    viking_fs = service.viking_fs
+    if viking_fs is not None:
+        install_ttl_hook(viking_fs, adapter)
+    if not getattr(app.state, "ttl_routes_registered", False):
+        from openviking.ttl.internal import router as ttl_internal_router
+
+        app.include_router(ttl_internal_router)
+        app.state.ttl_routes_registered = True
+    logger.info("TTL adapter initialized")
+
+
 async def _initialize_runtime_state(
     app: FastAPI,
     service: OpenVikingService,
     config: ServerConfig,
 ) -> None:
     """Initialize service and auth dependencies before traffic is accepted."""
-    await service.initialize()
-    await service.apply_agent_evolution_config()
-    await _initialize_auth_plugin(app, service, config)
-    from openviking.service.deletion import setup_deletion
 
-    app.state.deletion_service = await setup_deletion(
-        service=service,
-        manager=app.state.api_key_manager,
-        oauth_store=getattr(app.state, "oauth_store", None),
-        usage_audit_runtime=getattr(app.state, "usage_audit_runtime", None),
-        gateway_app=getattr(app.state, "gateway_app", None),
-    )
+    async def install_write_guards():
+        await _initialize_auth_plugin(app, service, config)
+        await _initialize_ttl_adapter(app, service, config)
+        from openviking.service.deletion import setup_deletion
+
+        app.state.deletion_service = await setup_deletion(
+            service=service,
+            manager=app.state.api_key_manager,
+            oauth_store=getattr(app.state, "oauth_store", None),
+            usage_audit_runtime=getattr(app.state, "usage_audit_runtime", None),
+            gateway_app=getattr(app.state, "gateway_app", None),
+            require_registered_identity=config.get_effective_auth_mode() == "api_key",
+        )
+
+    await service.initialize(before_background_start=install_write_guards)
+    await service.apply_agent_evolution_config()
+    manager = getattr(app.state, "api_key_manager", None)
+    if manager is not None:
+        service.compile.lifecycle.resolve_groups = manager.get_user_group_ids
+    if manager is not None and get_openviking_config().reconcile_system_assets_on_startup:
+        account_count = await service.reconcile_system_assets(manager)
+        logger.info("Reconciled system assets for %d active accounts", account_count)
+    compile_scheduler = getattr(service, "compile_scheduler", None)
+    if manager is not None and compile_scheduler is not None:
+        # Scheduled Compile re-verifies its saved key before every submission.
+        compile_scheduler.set_identity_resolver(
+            manager.resolve_identity, manager.get_user_group_ids
+        )
     logger.info("OpenVikingService initialization complete")
 
 
@@ -353,6 +402,9 @@ def create_app(
         if config.observability.metrics.enabled:
             logger.info("Prometheus metrics enabled at /metrics")
         await init_usage_audit_from_server_config(config, app=app, service=service)
+        from openviking.observability.reporting import start_reporting
+
+        app.state.event_reporter = await start_reporting(config.observability.reporting)
 
         # Initialize OAuth 2.1 store + provider when enabled in OpenViking config.
         # The store + provider instances were already constructed at app
@@ -447,6 +499,9 @@ def create_app(
                 logger.warning("Auth plugin shutdown failed: %s", e)
         if usage_reporter is not usage_reporter_unset and usage_reporter is not None:
             await usage_reporter.close()
+        from openviking.observability.reporting import stop_reporting
+
+        await stop_reporting()
 
     app = FastAPI(
         title="OpenViking API",
@@ -629,7 +684,9 @@ def create_app(
     app.include_router(agent_evolution_router)
     app.include_router(compile_router)
     app.include_router(resources_router)
+    app.include_router(rules_router)
     app.include_router(filesystem_router)
+    app.include_router(mcps_router)
     app.include_router(content_router)
     app.include_router(console_router)
     app.include_router(search_router)
@@ -692,11 +749,11 @@ def create_app(
                 or "http://127.0.0.1:1933"
             )
 
-            async def _current_role(account_id: str, user_id: str) -> Role:
+            async def _registered_account_role(account_id: str, user_id: str) -> Role | None:
                 manager = getattr(app.state, "api_key_manager", None)
                 if manager is None:
-                    return Role.USER
-                return await manager.get_registered_user_role(account_id, user_id) or Role.USER
+                    return None
+                return await manager.get_registered_user_role(account_id, user_id)
 
             _route_provider = OpenVikingOAuthProvider(
                 store=_route_store,
@@ -704,7 +761,7 @@ def create_app(
                 access_token_ttl_seconds=ov_cfg.oauth.access_token_ttl_seconds,
                 refresh_token_ttl_seconds=ov_cfg.oauth.refresh_token_ttl_seconds,
                 auth_code_ttl_seconds=ov_cfg.oauth.auth_code_ttl_seconds,
-                role_resolver=_current_role,
+                role_resolver=_registered_account_role,
             )
             # Stash the route-time instances; the lifespan replaces these with
             # initialized copies before the first request lands.

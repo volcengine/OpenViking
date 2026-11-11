@@ -6,12 +6,14 @@ on:
       - 'integrations/frameworks/microsoft-agent-framework/**'
       - 'examples/agent-framework/**'
       - '.github/workflows/python-agent-framework.yml'
+      - '.github/workflows/python-agent-framework-release.yml'
   push:
     branches: [main]
     paths:
       - 'integrations/frameworks/microsoft-agent-framework/**'
       - 'examples/agent-framework/**'
       - '.github/workflows/python-agent-framework.yml'
+      - '.github/workflows/python-agent-framework-release.yml'
 
 permissions:
   contents: read

@@ -19,8 +19,10 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, List, Optional
 from uuid import uuid4
 
+from openviking.config.generation import get_output_language_override
 from openviking.core.context import Context
 from openviking.message import Message
+from openviking.observability.reporting.facts import event_context
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater, StreamingMemoryUpdaterConfig
 from openviking.session.memory.constants import (
@@ -151,9 +153,7 @@ def _memory_type_by_uri(operations: ResolvedOperations) -> dict[str, str]:
     for file_content in getattr(operations, "delete_file_contents", []) or []:
         uri = str(getattr(file_content, "uri", "") or "")
         if uri:
-            types_by_uri[uri] = str(
-                getattr(file_content, "memory_type", "") or "unknown"
-            )
+            types_by_uri[uri] = str(getattr(file_content, "memory_type", "") or "unknown")
     return types_by_uri
 
 
@@ -261,10 +261,12 @@ class SessionCompressorV3:
         streaming_trainer_config: StreamingPolicyTrainerConfig | None = None,
         streaming_memory_updater_config: StreamingMemoryUpdaterConfig | None = None,
         vlm_resolver: VLMResolver | None = None,
+        runtime_config_manager: Any = None,
     ):
         self.vikingdb = vikingdb
         self.skill_processor = skill_processor
         self.vlm_resolver = vlm_resolver
+        self.runtime_config_manager = runtime_config_manager
         self.rollout_analyzer = rollout_analyzer or TrajectoryRolloutAnalyzer(
             viking_fs=get_viking_fs(),
             vikingdb=vikingdb,
@@ -284,11 +286,10 @@ class SessionCompressorV3:
         transaction_handle=None,
         context_provider: Optional[SessionExtractContextProvider] = None,
         vlm_config: VLMHandle | None = None,
+        output_language_override: str | None = None,
     ) -> ExtractLoop:
         if vlm_config is None:
-            raise RuntimeError(
-                "SessionCompressorV3 requires an explicitly resolved VLM config"
-            )
+            raise RuntimeError("SessionCompressorV3 requires an explicitly resolved VLM config")
         vlm = vlm_config
         viking_fs = get_viking_fs()
         if context_provider is None:
@@ -300,6 +301,7 @@ class SessionCompressorV3:
                 viking_fs=viking_fs,
                 transaction_handle=transaction_handle,
                 vlm_config=vlm_config,
+                output_language_override=output_language_override,
             )
         return ExtractLoop(
             vlm=vlm,
@@ -705,10 +707,11 @@ class SessionCompressorV3:
             )
 
         if self.vlm_resolver is None:
-            raise RuntimeError(
-                "SessionCompressorV3 requires a VLM resolver for account-owned work"
-            )
+            raise RuntimeError("SessionCompressorV3 requires a VLM resolver for account-owned work")
         vlm_config = await self.vlm_resolver.get_vlm(ctx.account_id)
+        output_language_override = await get_output_language_override(
+            self.runtime_config_manager, ctx.account_id
+        )
         context_provider = SessionExtractContextProvider(
             messages=messages,
             latest_archive_overview=latest_archive_overview,
@@ -718,6 +721,7 @@ class SessionCompressorV3:
             transaction_handle=None,
             memory_registry=registry,
             vlm_config=vlm_config,
+            output_language_override=output_language_override,
         )
         await context_provider.prepare_extraction_messages()
         extract_context = context_provider.get_extract_context()
@@ -752,6 +756,7 @@ class SessionCompressorV3:
 
         extraction_id = uuid4().hex
         extracted_at = datetime.now(timezone.utc).isoformat()
+        source_task_id = event_context("file_mutation").get("task_id")
 
         updater = await get_streaming_memory_updater(
             key=make_streaming_memory_updater_key(request_context=ctx),
@@ -759,6 +764,7 @@ class SessionCompressorV3:
             vikingdb=self.vikingdb,
             config=self.streaming_memory_updater_config,
             vlm_resolver=self.vlm_resolver,
+            runtime_config_manager=self.runtime_config_manager,
         )
         update_result = await updater.submit(
             MemoryUpdateRequest(
@@ -777,6 +783,7 @@ class SessionCompressorV3:
                     "source_extraction_id": extraction_id,
                     "session_id": session_id,
                     "archive_uri": archive_uri,
+                    "task_id": source_task_id,
                     "trace_id": tracer.get_trace_id(),
                     "extracted_at": extracted_at,
                 },
@@ -921,6 +928,7 @@ class SessionCompressorV3:
                 memory_type=SESSION_SKILL_MEMORY_TYPE,
                 memory_registry=load_skill_extract_registry(),
                 vlm_resolver=self.vlm_resolver,
+                runtime_config_manager=self.runtime_config_manager,
             ),
             policy_updater=SkillPolicyUpdater(
                 skill_processor=self.skill_processor,
@@ -1010,6 +1018,7 @@ class SessionCompressorV3:
                     viking_fs=viking_fs,
                     memory_type="experiences",
                     vlm_resolver=self.vlm_resolver,
+                    runtime_config_manager=self.runtime_config_manager,
                 ),
                 policy_updater=MemoryFilePolicyUpdater(viking_fs=viking_fs, vikingdb=self.vikingdb),
                 context=PipelineContext(
@@ -1071,11 +1080,20 @@ class SessionCompressorV3:
                 extraction_groups.setdefault(feedback, []).append(rollout)
 
             reported_trajectory_uris: set[str] = set()
+            training_failures = MemoryUpdateResult()
             for rollouts in extraction_groups.values():
                 rollout = rollouts[0]
                 candidates = [candidates_by_name[item.case.name] for item in rollouts]
                 case_context = replace(analysis_context, case_candidates=candidates)
-                analysis = await self.rollout_analyzer.analyze(rollout, case_context)
+                try:
+                    analysis = await self.rollout_analyzer.analyze(rollout, case_context)
+                except MemoryUpdateError as exc:
+                    training_failures.errors.extend(exc.result.errors)
+                    training_failures.written_uris.extend(exc.result.written_uris)
+                    training_failures.edited_uris.extend(exc.result.edited_uris)
+                    training_failures.deleted_uris.extend(exc.result.deleted_uris)
+                    logger.warning("Skipping failed trajectory group: %s", exc)
+                    continue
                 analysis.metadata["case_associations_required"] = len(candidates) > 1
                 if collect_memory_diff:
                     # Keep every extracted trajectory, including those with no matching case.
@@ -1140,7 +1158,14 @@ class SessionCompressorV3:
                         ctx=ctx,
                         archive_uri=archive_uri,
                     )
-                    submitted += len(training_rollouts)
+                    apply_result = exp_training_result.apply_result
+                    if apply_result.errors:
+                        for error in apply_result.errors:
+                            training_failures.add_error(exp_root_uri, RuntimeError(error))
+                        training_failures.written_uris.extend(apply_result.written_uris)
+                        training_failures.deleted_uris.extend(apply_result.deleted_uris)
+                    else:
+                        submitted += len(training_rollouts)
                     if collect_memory_diff:
                         memory_diff = await self._build_training_memory_diff(
                             training_result=exp_training_result,
@@ -1170,6 +1195,8 @@ class SessionCompressorV3:
                                 if uri:
                                     skill_uris.append(str(uri))
 
+            if training_failures.errors and strict_extract_errors:
+                raise MemoryUpdateError(training_failures)
             tracer.info(
                 "Submitted commit case memories to streaming train: "
                 f"case_count={len(cases)} submitted={submitted} "
@@ -1184,6 +1211,8 @@ class SessionCompressorV3:
                 "skill_uris": skill_uris,
                 "filtered_exp_gradient_count": filtered_exp_gradient_count,
             }
+            if training_failures.errors:
+                response["error"] = str(MemoryUpdateError(training_failures))
             if collect_memory_diff:
                 response["memory_diff"] = _merge_memory_diffs(
                     memory_diffs,
@@ -1225,14 +1254,10 @@ class SessionCompressorV3:
             persisted_result = getattr(batch_result, "batch_result", None) or batch_result
             apply_result = persisted_result.apply_result
             if apply_result.errors:
-                failed_result = MemoryUpdateResult()
-                failed_result.written_uris = list(apply_result.written_uris)
-                failed_result.deleted_uris = list(apply_result.deleted_uris)
-                for error in apply_result.errors:
-                    failed_result.add_error(
-                        apply_result.updated_policy_set.root_uri, RuntimeError(error)
-                    )
-                raise MemoryUpdateError(failed_result)
+                logger.warning(
+                    "Skipping experience snapshot for partial batch: %s", apply_result.errors
+                )
+                return
             snapshot_apply_result, experience_trajectory_map = _experience_snapshot_provenance(
                 batch_result,
                 fallback_trajectory_uris={trajectory.uri for trajectory in analysis.trajectories},

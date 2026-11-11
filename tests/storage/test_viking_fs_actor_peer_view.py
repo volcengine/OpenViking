@@ -24,28 +24,6 @@ class _MemoryAGFS:
                 b"zhang"
             ),
             "/local/acct/user/support_bot/resources/guide.md": b"guide",
-            "/local/acct/user/support_bot/sessions/duplicate/messages.jsonl": (
-                b'{"role":"user","content":"new"}\n'
-            ),
-            "/local/acct/user/support_bot/sessions/new-session/messages.jsonl": (
-                b'{"role":"user","content":"new only"}\n'
-            ),
-            "/local/acct/session/duplicate/messages.jsonl": (
-                b'{"role":"user","content":"legacy duplicate"}\n'
-            ),
-            "/local/acct/session/legacy-session/messages.jsonl": (
-                b'{"role":"user","content":"legacy"}\n'
-            ),
-            "/local/acct/session/legacy-session/.meta.json": (
-                b'{"created_by_user_id":"support_bot"}'
-            ),
-            "/local/acct/session/other-owned/.meta.json": b'{"created_by_user_id":"other"}',
-            "/local/acct/session/other-owned/messages.jsonl": (
-                b'{"role":"user","content":"other"}\n'
-            ),
-            "/local/acct/session/support_bot/nested-session/messages.jsonl": (
-                b'{"role":"user","content":"nested"}\n'
-            ),
         }
         self.dirs = set()
         for path in self.files:
@@ -209,100 +187,6 @@ async def test_agent_directories_are_shared_within_account(fs, actor_ctx):
     other_account = replace(actor_ctx, user=UserIdentifier("other-acct", "support_bot"))
     with pytest.raises(NotFoundError):
         await fs.read_file("viking://agent/skills/demo/SKILL.md", ctx=other_account)
-
-
-@pytest.mark.asyncio
-async def test_legacy_session_scope_merges_new_and_unmigrated_sessions(fs, actor_ctx):
-    session_root = "viking://user/support_bot/sessions"
-    entries = await fs.ls(session_root, ctx=actor_ctx)
-
-    assert [entry["uri"] for entry in entries] == [
-        f"{session_root}/duplicate",
-        f"{session_root}/new-session",
-        f"{session_root}/legacy-session",
-        f"{session_root}/nested-session",
-    ]
-
-    assert (
-        await fs.read_file(f"{session_root}/duplicate/messages.jsonl", ctx=actor_ctx)
-        == '{"role":"user","content":"new"}\n'
-    )
-    assert (
-        await fs.read_file(f"{session_root}/legacy-session/messages.jsonl", ctx=actor_ctx)
-        == '{"role":"user","content":"legacy"}\n'
-    )
-    assert (
-        await fs.read_file(f"{session_root}/nested-session/messages.jsonl", ctx=actor_ctx)
-        == '{"role":"user","content":"nested"}\n'
-    )
-    with pytest.raises(NotFoundError):
-        await fs.read_file(f"{session_root}/other-owned/messages.jsonl", ctx=actor_ctx)
-
-    for session_id in ("new-session", "legacy-session", "nested-session"):
-        children = await fs.ls(f"{session_root}/{session_id}", ctx=actor_ctx)
-        assert [entry["uri"] for entry in children] == [
-            f"{session_root}/{session_id}/messages.jsonl"
-        ]
-    with pytest.raises(NotFoundError):
-        await fs.ls(f"{session_root}/other-owned", ctx=actor_ctx)
-
-
-@pytest.mark.asyncio
-async def test_session_grep_preserves_legacy_merge_and_primary_shadow(fs, actor_ctx):
-    session_root = "viking://user/support_bot/sessions"
-
-    result = await fs.grep(
-        session_root,
-        pattern="new|legacy|nested|other",
-        ctx=actor_ctx,
-    )
-
-    assert result["matches"] == [
-        {
-            "uri": f"{session_root}/duplicate/messages.jsonl",
-            "line": 1,
-            "content": '{"role":"user","content":"new"}',
-        },
-        {
-            "uri": f"{session_root}/new-session/messages.jsonl",
-            "line": 1,
-            "content": '{"role":"user","content":"new only"}',
-        },
-        {
-            "uri": f"{session_root}/legacy-session/messages.jsonl",
-            "line": 1,
-            "content": '{"role":"user","content":"legacy"}',
-        },
-        {
-            "uri": f"{session_root}/nested-session/messages.jsonl",
-            "line": 1,
-            "content": '{"role":"user","content":"nested"}',
-        },
-    ]
-
-
-@pytest.mark.asyncio
-async def test_session_native_grep_gate_allows_primary_only_session(fs, actor_ctx):
-    assert await fs._session_native_grep_safe(
-        "viking://user/support_bot/sessions/new-session", actor_ctx
-    )
-
-
-@pytest.mark.asyncio
-async def test_session_native_grep_gate_rejects_visible_legacy_layouts(fs, actor_ctx):
-    assert not await fs._session_native_grep_safe(
-        "viking://user/support_bot/sessions/legacy-session", actor_ctx
-    )
-    assert not await fs._session_native_grep_safe(
-        "viking://user/support_bot/sessions/nested-session", actor_ctx
-    )
-
-
-@pytest.mark.asyncio
-async def test_session_native_grep_gate_ignores_other_owner_legacy_data(fs, actor_ctx):
-    assert await fs._session_native_grep_safe(
-        "viking://user/support_bot/sessions/other-owned", actor_ctx
-    )
 
 
 @pytest.mark.asyncio

@@ -74,13 +74,20 @@ def parse_ollama_url(api_base: str | None) -> tuple[str, int]:
 # ---------------------------------------------------------------------------
 
 
+def _ollama_tags_url(host: str, port: int) -> str:
+    """Keep IPv6 host literals bracketed in the tags endpoint URL."""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"http://{host}:{port}/api/tags"
+
+
 def check_ollama_running(
     host: str = OLLAMA_DEFAULT_HOST,
     port: int = OLLAMA_DEFAULT_PORT,
 ) -> bool:
     """Return ``True`` if Ollama is responding at *host*:*port*."""
     try:
-        url = f"http://{host}:{port}/api/tags"
+        url = _ollama_tags_url(host, port)
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=3):
             return True
@@ -94,7 +101,7 @@ def get_ollama_models(
 ) -> list[str]:
     """Fetch names of locally available Ollama models."""
     try:
-        url = f"http://{host}:{port}/api/tags"
+        url = _ollama_tags_url(host, port)
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode())

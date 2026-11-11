@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from openviking.privacy.reference import build_privacy_field_reference
 from openviking.pyagfs import get_privacy_matcher_class
 from openviking.server.identity import RequestContext
-from openviking_cli.exceptions import ResourceExhaustedError
+from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
 
 if TYPE_CHECKING:
     from openviking.privacy.service import UserPrivacyConfigService
@@ -68,13 +68,49 @@ class PrivacySanitizer:
         self._monotonic_clock = monotonic_clock
         matcher_class: Any = get_privacy_matcher_class()
         self._matcher_class = matcher_class
-        self._cache: dict[tuple[str, str, int], tuple[float, Any]] = {}
+        self._cache: dict[tuple[str, str, int, bool], tuple[float, Any]] = {}
         self._cache_lock = asyncio.Lock()
 
     @property
     def max_content_bytes(self) -> int:
         """Maximum UTF-8 input size accepted by this sanitizer."""
         return self._max_content_bytes
+
+    @property
+    def max_replacements(self) -> int:
+        return self._max_replacements
+
+    async def prepare_matcher(
+        self, ctx: RequestContext, *, prefer_credentials: bool = False
+    ) -> Callable[[str], list[PrivacyReplacement]]:
+        """Prepare a cached, bounded match query for a batch of original texts.
+
+        The callable may run in a worker thread. It returns positions and existing
+        references so rule extraction can combine hits before rewriting content.
+        """
+        matcher = await self._matcher(ctx, prefer_credentials=prefer_credentials)
+
+        def find(content: str) -> list[PrivacyReplacement]:
+            try:
+                replacements, ambiguous, exceeded = matcher.find_limited(
+                    content, self._max_replacements, self._max_content_bytes
+                )
+            except OverflowError:
+                raise ResourceExhaustedError(
+                    "Content exceeds the Privacy sanitizer size limit"
+                ) from None
+            if ambiguous:
+                raise InvalidArgumentError(
+                    "Content contains a Privacy value mapped to multiple fields; "
+                    "insert the intended owner-bound reference explicitly"
+                )
+            if exceeded:
+                raise ResourceExhaustedError(
+                    "Content exceeds the Privacy sanitizer replacement limit"
+                )
+            return [PrivacyReplacement(*item) for item in replacements]
+
+        return find
 
     async def sanitize(
         self,
@@ -84,6 +120,7 @@ class PrivacySanitizer:
         uri: str = "",
         max_replacements: int | None = None,
         fail_on_match_limit: bool = True,
+        prefer_credentials: bool = False,
     ) -> PrivacySanitizationResult:
         if not content or self._is_privacy_storage_uri(uri, ctx):
             return PrivacySanitizationResult(content=content)
@@ -97,7 +134,7 @@ class PrivacySanitizer:
                     "max_bytes": self._max_content_bytes,
                 },
             )
-        matcher = await self._matcher(ctx)
+        matcher = await self._matcher(ctx, prefer_credentials=prefer_credentials)
         effective_max_replacements = (
             self._max_replacements if max_replacements is None else max_replacements
         )
@@ -128,9 +165,9 @@ class PrivacySanitizer:
             match_limit_exceeded=match_limit_exceeded,
         )
 
-    async def _matcher(self, ctx: RequestContext) -> Any:
+    async def _matcher(self, ctx: RequestContext, *, prefer_credentials: bool = False) -> Any:
         revision = self._privacy.catalog_revision(ctx)
-        cache_key = (ctx.account_id, ctx.user.user_id, revision)
+        cache_key = (ctx.account_id, ctx.user.user_id, revision, prefer_credentials)
         now = self._monotonic_clock()
         cached = self._cache.get(cache_key)
         if cached is not None and now - cached[0] < self._cache_ttl_seconds:
@@ -145,16 +182,19 @@ class PrivacySanitizer:
             cached = self._cache.get(cache_key)
             if cached is not None and now - cached[0] < self._cache_ttl_seconds:
                 return cached[1]
-            matcher = await self._build_matcher(ctx)
+            matcher = await self._build_matcher(ctx, prefer_credentials=prefer_credentials)
             owner_key = cache_key[:2]
             self._cache = {
-                key: item for key, item in self._cache.items() if key[:2] != owner_key
+                key: item
+                for key, item in self._cache.items()
+                if key[:2] != owner_key or key[2] == revision
             }
             self._cache[cache_key] = (now, matcher)
             return matcher
 
-    async def _build_matcher(self, ctx: RequestContext) -> Any:
+    async def _build_matcher(self, ctx: RequestContext, *, prefer_credentials: bool = False) -> Any:
         references: dict[str, list[str]] = {}
+        credentials: dict[str, list[str]] = {}
         for category in await self._privacy.list_categories(ctx):
             for target_key in await self._privacy.list_targets(ctx, category):
                 current = await self._privacy.get_current(ctx, category, target_key)
@@ -177,10 +217,12 @@ class PrivacySanitizer:
                         field_name,
                     )
                     references.setdefault(value, []).append(reference)
+                    if prefer_credentials and category == "credential":
+                        credentials.setdefault(value, []).append(reference)
 
         targets: dict[str, list[str]] = {}
         for secret, candidates in references.items():
-            targets[secret] = sorted(set(candidates))
+            targets[secret] = sorted(set(credentials.get(secret, candidates)))
         return self._matcher_class(targets, _AMBIGUOUS_PLACEHOLDER)
 
     @staticmethod

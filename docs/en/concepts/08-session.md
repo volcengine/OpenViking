@@ -253,8 +253,7 @@ viking://~/memories/
 `viking://user/{user_id}/sessions/{session_id}` for the authenticated caller.
 The uid-less spelling `viking://user/sessions/{session_id}` is no longer accepted
 and returns an error pointing at the `viking://~/...` form. The old
-`viking://session/{session_id}` form is still accepted as a backward-compatible
-alias for the same session path and is not a separate storage root.
+`viking://session/{session_id}` form is also rejected.
 
 ## Related Documents
 

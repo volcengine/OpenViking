@@ -1,5 +1,7 @@
 """Native host history and capture remain independent of OV archive summaries."""
 
+import asyncio
+import threading
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -290,3 +292,53 @@ async def test_recall_preserves_existing_system_message(
     else:
         assert observed.content.startswith(f"{content}\n\n<openviking_context>")
         assert "Deployment uses azure." in observed.content
+
+
+@pytest.mark.parametrize("capture_mode", ["sync", "async-sync-client", "async-native-client"])
+@pytest.mark.parametrize("first_commits", [False, True])
+@pytest.mark.asyncio
+async def test_concurrent_capture_hooks_keep_their_commit_policies(capture_mode, first_commits):
+    entered = threading.Event()
+    release = threading.Event()
+
+    class PausedClient(NoContextClient):
+        def batch_add_messages(self, session_id, messages, **kwargs):
+            if session_id == "first":
+                entered.set()
+                assert release.wait(5), "other session did not finish its capture"
+            return super().batch_add_messages(session_id, messages, **kwargs)
+
+    class AsyncPausedClient(NoContextClient):
+        async def batch_add_messages(self, session_id, messages, **kwargs):
+            if session_id == "first":
+                entered.set()
+                assert await asyncio.to_thread(release.wait, 5), "other session did not finish"
+            return super().batch_add_messages(session_id, messages, **kwargs)
+
+    client = AsyncPausedClient() if capture_mode == "async-native-client" else PausedClient()
+    client_kwargs = {"async_client" if capture_mode == "async-native-client" else "client": client}
+    middleware = OpenVikingContextMiddleware(**client_kwargs, commit_on_after_agent=True)
+
+    async def capture(session_id, commit):
+        name = "after_agent" if commit else "before_model"
+        state = {"session_id": session_id, "messages": [HumanMessage(content=session_id)]}
+        if capture_mode != "sync":
+            await getattr(middleware, "a" + name)(state, None)
+        else:
+            await asyncio.to_thread(getattr(middleware, name), state, None)
+
+    first = asyncio.create_task(capture("first", first_commits))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        await capture("second", not first_commits)
+    finally:
+        release.set()
+        await first
+        await middleware.aclose()
+
+    committed, pending = ("first", "second") if first_commits else ("second", "first")
+    assert len(client.archives[committed]) == 1
+    assert client.archives[committed][0]["messages"][0]["parts"][0]["text"] == committed
+    assert not client.sessions[committed]
+    assert not client.archives[pending]
+    assert client.sessions[pending][0]["parts"][0]["text"] == pending

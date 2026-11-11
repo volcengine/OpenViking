@@ -16,7 +16,7 @@ import async_timeout
 import orjson
 
 from .capture_store import Document
-from .client import VikingError
+from .client import VikingError, peer_argument
 from .config import MOUNT_PATH
 from .protocols import string_type
 from .state_store import get_state
@@ -32,6 +32,7 @@ DOWNLOAD_URL = re.compile(r'https?://[^\s<>"\x27`]+/api/v1/content/download\?tok
 AUTO_DETECTED_NOTE = re.compile(
     r"\n*Note for the user: this (?:upload|download) URL was auto-detected[^\n]*"
 )
+UNKNOWN_OUTCOME = "Tool timed out or a previous attempt has an unknown outcome; inspect state before retrying writes"
 
 
 def error_result(text):
@@ -204,12 +205,16 @@ class ToolExecutor:
             Document(claim, 1) if won else await get_state(self.store.state, scope, receipt_key)
         )
         claim = receipt.value
+        if not claim:
+            return {**result, "content": UNKNOWN_OUTCOME, "failed": True}
         timeout = self.policy.get("tool_timeout_seconds", 30)
         try:
             async with async_timeout.timeout(timeout):
                 if claim["owner"] != owner:
                     while True:
                         saved = await get_state(self.store.state, scope, receipt_key)
+                        if not saved.value:
+                            raise asyncio.TimeoutError
                         if "content" in saved.value:
                             return {
                                 **result,
@@ -227,7 +232,7 @@ class ToolExecutor:
                 )
                 return {**result, "content": content, "failed": failed}
         except asyncio.TimeoutError:
-            content = "Tool timed out or a previous attempt has an unknown outcome; inspect state before retrying writes"
+            content = UNKNOWN_OUTCOME
         except (ValueError, TypeError, binascii.Error, VikingError, KeyError):
             # Validation and server errors can contain arguments and secrets.
             content = "Invalid tool arguments or OpenViking operation failed"
@@ -272,7 +277,14 @@ class ToolExecutor:
                 raise ValueError("A local path requires a client shell or attachment")
         elif name == "download" and not has_shell(self.request.original):
             return error_result("download requires a client shell tool to fetch the file")
-        value = await self.viking.mcp("tools/call", self.key, {"name": name, "arguments": args})
+        actor = self.policy.get("recall_peer_scope", "all") == "actor"
+        peer = self.request.peer if actor else None
+        # The peer hides other peers from every tool but context search, which must be told.
+        if peer and name == "search" and args.get("mode") == "context":
+            args["peer_scope"] = "actor"
+        value = await self.viking.mcp(
+            "tools/call", self.key, {"name": name, "arguments": args}, **peer_argument(peer)
+        )
         if upload:
             pattern, route = UPLOAD_URL, "/uploads"
         elif name == "download":

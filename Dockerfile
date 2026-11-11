@@ -48,6 +48,7 @@ ENV CARGO_TARGET_DIR=/cargo-target
 ENV UV_COMPILE_BYTECODE=1
 ENV UV_LINK_MODE=copy
 ENV UV_NO_DEV=1
+ENV OPENVIKING_TREE_SITTER_CACHE_DIR=/app/.cache/tree-sitter-language-pack
 WORKDIR /app
 
 # Copy source required for setup.py artifact builds and native extension build.
@@ -83,19 +84,48 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
     fi; \
     case "${UV_LOCK_STRATEGY}" in \
         locked) \
-            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini --extra opengauss --extra expiry \
+            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini --extra opengauss --extra expiry --extra mysql --extra redis-mysql --extra reporting \
             ;; \
         auto) \
             if ! uv lock --check; then \
                 uv lock; \
             fi; \
-            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini --extra opengauss --extra expiry \
+            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini --extra opengauss --extra expiry --extra mysql --extra redis-mysql --extra reporting \
             ;; \
         *) \
             echo "Unsupported UV_LOCK_STRATEGY: ${UV_LOCK_STRATEGY}" >&2; \
             exit 2 \
             ;; \
     esac
+
+# Preload every tree-sitter grammar at build time. The build network can reach
+# GitHub, while production usually cannot, so the populated cache is copied into
+# the runtime image and the first code parse never blocks on a download. Fail the
+# build if any language is missing instead of shipping an incomplete cache.
+RUN rm -rf "${OPENVIKING_TREE_SITTER_CACHE_DIR}" \
+ && mkdir -p "${OPENVIKING_TREE_SITTER_CACHE_DIR}" \
+ && /app/.venv/bin/python - <<'PY'
+import os
+from typing import get_args
+
+from tree_sitter_language_pack import (
+    PackConfig,
+    SupportedLanguage,
+    configure,
+    download_all,
+    downloaded_languages,
+)
+
+cache_dir = os.environ["OPENVIKING_TREE_SITTER_CACHE_DIR"]
+configure(PackConfig(cache_dir=cache_dir))
+download_all()
+missing = sorted(set(get_args(SupportedLanguage)) - set(downloaded_languages()))
+if missing:
+    raise SystemExit(
+        "tree-sitter parser preload incomplete; missing "
+        f"{len(missing)} languages: {', '.join(missing[:20])}"
+    )
+PY
 
 # Stage 4: runtime
 FROM python:3.13-slim-trixie
@@ -112,6 +142,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app/.openviking
 
 COPY --from=py-builder /app/.venv /app/.venv
+# Grammar cache preloaded in the builder stage; read directly at runtime.
+COPY --from=py-builder /app/.cache/tree-sitter-language-pack /app/.cache/tree-sitter-language-pack
 # Exercise SVG rendering so missing Python or Cairo runtime dependencies fail the build.
 RUN /app/.venv/bin/python -I - <<'PYCODE'
 import cairosvg
@@ -123,6 +155,8 @@ PYCODE
 # Fail the image build if VikingBot and the separately released SDK drift apart.
 RUN /app/.venv/bin/python -I -c "import inspect, typing; from importlib.metadata import version; from openviking_sdk.client import AsyncHTTPClient; from openviking_sdk.options import BatchWriteOptions; checks = {'get_skill.include_integrity': 'include_integrity' in inspect.signature(AsyncHTTPClient.get_skill).parameters, 'ls.offset': 'offset' in inspect.signature(AsyncHTTPClient.ls).parameters, 'grep.level_limit': 'level_limit' in inspect.signature(AsyncHTTPClient.grep).parameters, 'BatchWriteOptions.skip_conflicts': 'skip_conflicts' in typing.get_type_hints(BatchWriteOptions)}; missing = [name for name, ok in checks.items() if not ok]; raise SystemExit(f\"incompatible openviking-sdk {version('openviking-sdk')}: missing {', '.join(missing)}\" if missing else 0)"
 RUN /app/.venv/bin/python -I -c "from importlib.util import find_spec; from pathlib import Path; spec = find_spec('openviking.web_studio'); locations = list(spec.submodule_search_locations or ()) if spec else []; root = Path('/app/.venv').resolve(); p = (Path(locations[0]).resolve() / 'dist/index.html').resolve() if len(locations) == 1 else None; valid = p is not None and p.is_file() and p.is_relative_to(root); raise SystemExit(0 if valid else f'missing or misplaced Studio bundle: spec_found={spec is not None}, locations={locations!r}, resource={p}')"
+# Redis and the gateway Lua scripts must survive wheel packaging.
+RUN /app/.venv/bin/python -I -c "import redis; from importlib.resources import files; assert any(p.name.endswith('.lua') for p in files('openviking_gateway').joinpath('lua').iterdir()), 'gateway Lua scripts missing from installed package'"
 COPY deploy/docker/openviking-entrypoint.sh /usr/local/bin/openviking-entrypoint
 COPY deploy/docker/pending_health_server.py /usr/local/bin/openviking-pending-health
 RUN mkdir -p /app/.openviking \
@@ -130,6 +164,7 @@ RUN mkdir -p /app/.openviking \
  && chmod +x /usr/local/bin/openviking-entrypoint /usr/local/bin/openviking-pending-health
 ENV HOME="/app" \
     PATH="/app/.venv/bin:$PATH" \
+    OPENVIKING_TREE_SITTER_CACHE_DIR="/app/.cache/tree-sitter-language-pack" \
     OPENVIKING_CONFIG_FILE="/app/.openviking/ov.conf" \
     OPENVIKING_CLI_CONFIG_FILE="/app/.openviking/ovcli.conf"
 

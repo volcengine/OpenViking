@@ -26,7 +26,7 @@ export function registerTools(pi: any, client: OVClient, sync?: SyncManager): vo
         // so the examples name the two forms it does accept.
         description:
           "Viking URI prefix to scope search, e.g. 'viking://user/<space>/memories/' " +
-          "or 'viking://session/<session id>/'",
+          "or 'viking://~/sessions/<session id>/'",
       })),
       limit: Type.Optional(Type.Number({ description: "Max results (default: 10)" })),
     }),

@@ -19,6 +19,16 @@
 2. Run `/mcps` and confirm the list shows `openviking connected`.
 3. Explicitly ask OpenCode to call `openviking_search` and `openviking_read` to verify tool access. Automatic recall runs through hooks without those model tool calls; check it separately by asking about stored information in a new session.
 
+## Step 3: Start using
+
+Start a new OpenCode session and send:
+
+```text
+Follow https://docs.openviking.net/agents/en/onboarding.md to walk me through my first use of OpenViking.
+```
+
+The agent checks the connection and walks you through the first use.
+
 ## Troubleshoot
 
 | Problem | Fix |

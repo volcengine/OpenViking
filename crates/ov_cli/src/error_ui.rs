@@ -432,7 +432,6 @@ fn contextual_help_command(command: &str) -> Option<String> {
                 "create-account",
                 "list-accounts",
                 "delete-account",
-                "migrate",
                 "register-user",
                 "list-users",
                 "create-group",

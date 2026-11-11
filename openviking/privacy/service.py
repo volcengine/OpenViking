@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Optional
 
 from openviking.core.namespace import canonical_user_root
+from openviking.privacy.global_policy import UserGlobalPolicyService
 from openviking.privacy.helpers import (
     canonicalize_values,
     config_root_uri,
@@ -30,7 +31,7 @@ from openviking.privacy.validation import (
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.time_utils import get_current_timestamp
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import AlreadyExistsError, NotFoundError
 
 
 class UserPrivacyConfigService:
@@ -38,7 +39,13 @@ class UserPrivacyConfigService:
 
     def __init__(self, viking_fs: VikingFS):
         self._viking_fs = viking_fs
+        self._global_policies = UserGlobalPolicyService(viking_fs)
         self._catalog_revisions: dict[tuple[str, str], int] = {}
+
+    @property
+    def global_policies(self) -> UserGlobalPolicyService:
+        """Owner-scoped GLOBAL access policy cache with TTL and FIFO eviction."""
+        return self._global_policies
 
     def catalog_revision(self, ctx: RequestContext) -> int:
         """Return the process-local revision of the caller's active value catalog."""
@@ -251,10 +258,10 @@ class UserPrivacyConfigService:
         async with self._config_lock(
             ctx, category, target_key, owner_lease_ref=owner_lease_ref
         ) as lease:
+            current = await self.get_current(ctx, category, target_key)
             if preserve_fields:
                 # Resolve retained references under the write lock so a Skill
                 # prepared before a credential rotation keeps the latest value.
-                current = await self.get_current(ctx, category, target_key)
                 retained = (
                     {key: value for key, value in current.values.items() if key in preserve_fields}
                     if current is not None
@@ -270,6 +277,7 @@ class UserPrivacyConfigService:
                 change_reason=change_reason,
                 labels=labels,
                 lease_ref=lease,
+                current=current,
             )
 
     async def patch_values(
@@ -282,7 +290,7 @@ class UserPrivacyConfigService:
         change_reason: str = "",
         labels: Optional[dict[str, Any]] = None,
     ) -> UserPrivacyConfigVersion:
-        """Atomically merge fields into current values, creating the target if absent."""
+        """Atomically update named fields, preserving independent fields with equal values."""
         async with self._config_lock(ctx, category, target_key) as lease:
             current = await self.get_current(ctx, category, target_key)
             values = dict(current.values) if current is not None else {}
@@ -296,6 +304,36 @@ class UserPrivacyConfigService:
                 change_reason=change_reason,
                 labels=labels,
                 lease_ref=lease,
+                current=current,
+            )
+
+    async def insert_values(
+        self,
+        ctx: RequestContext,
+        category: str,
+        target_key: str,
+        updates: dict[str, Any],
+        updated_by: str = "",
+        change_reason: str = "",
+        labels: Optional[dict[str, Any]] = None,
+    ) -> UserPrivacyConfigVersion:
+        """Atomically add new fields; labels apply only when creating the target."""
+        async with self._config_lock(ctx, category, target_key) as lease:
+            current = await self.get_current(ctx, category, target_key)
+            values = dict(current.values) if current is not None else {}
+            if not values.keys().isdisjoint(updates):
+                raise AlreadyExistsError(f"{category}/{target_key}", "privacy field")
+            values.update(updates)
+            return await self._upsert_locked(
+                ctx=ctx,
+                category=category,
+                target_key=target_key,
+                values=values,
+                updated_by=updated_by,
+                change_reason=change_reason,
+                labels=labels if current is None else None,
+                lease_ref=lease,
+                current=current,
             )
 
     async def _upsert_locked(
@@ -309,14 +347,14 @@ class UserPrivacyConfigService:
         change_reason: str,
         labels: Optional[dict[str, Any]],
         lease_ref: Optional[dict[str, Any]],
+        current: Optional[UserPrivacyConfigVersion],
     ) -> UserPrivacyConfigVersion:
         """Persist a complete snapshot while the caller holds the target lock."""
-        validate_privacy_values(values)
+        validate_privacy_values(values, category=category)
         validate_privacy_metadata(change_reason=change_reason, labels=labels)
         await self._ensure_root(ctx, category, target_key, lease_ref)
         now = get_current_timestamp()
         meta = await self.get_meta(ctx, category, target_key)
-        current = await self.get_current(ctx, category, target_key)
 
         if current and canonicalize_values(current.values) == canonicalize_values(values):
             if meta is None:

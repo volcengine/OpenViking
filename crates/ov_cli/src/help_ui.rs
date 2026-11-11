@@ -4,7 +4,7 @@ use clap::{Arg, ArgAction, Command, CommandFactory};
 use colored::Colorize;
 
 use crate::{
-    Cli,
+    cli::Cli,
     cli_arg_scan::ValueOptions,
     i18n::{Language, copy},
     terminal_ui::{
@@ -64,6 +64,7 @@ const CORE_WORKFLOW: &[HelpCommand] = help_commands![
     "add-resource",
     "add-skill",
     "skills",
+    "mcps",
     "find",
     "read",
     "write",
@@ -207,6 +208,28 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Import a new skill.",
             },
         ],
+    },
+    CommandHelpSpec {
+        path: &["mcps"],
+        purpose: "Manage remote MCP servers, tools, and live context mounts.",
+        examples: &[
+            HelpItem {
+                label: "ov mcps add '{\"mcpServers\":{\"weather\":{\"url\":\"https://example.com/mcp\"}}}'",
+                description: "Register servers from standard MCP configuration JSON.",
+            },
+            HelpItem {
+                label: "ov mcps find \"current weather\"",
+                description: "Find a tool in registered catalogs.",
+            },
+            HelpItem {
+                label: "ov mcps mount viking://agent/tools/weather/current.json viking://resources/demo/weather.md --title \"Beijing Weather\" --description \"Current weather in Beijing\" --timeout-seconds 120 --args '{\"city\":\"Beijing\"}'",
+                description: "Mount a tool as a live context node.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov mcps <subcommand> --help",
+            description: "Show exact arguments for an MCP operation.",
+        }],
     },
     CommandHelpSpec {
         path: &["ls"],
@@ -584,7 +607,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     },
     CommandHelpSpec {
         path: &["snapshot"],
-        purpose: "Manage workspace snapshots: commit, restore, show, diff, and walk history.",
+        purpose: "Manage workspace snapshots: commit, restore, show, compare files or directories, and walk history.",
         examples: &[
             HelpItem {
                 label: "ov snapshot commit -m \"checkpoint before refactor\" --paths viking://resources/my_project",
@@ -702,6 +725,24 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         next_steps: &[HelpItem {
             label: "ov snapshot log --paths viking://docs/spec.md",
             description: "Find commits that changed this file.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "diff-paths"],
+        purpose: "List changed source files under directories between two snapshots, one page at a time.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot diff-paths --paths viking://resources/docs --from <old> --to <new> -o json",
+                description: "List added, modified, and deleted source files.",
+            },
+            HelpItem {
+                label: "ov snapshot diff-paths --paths viking://resources/docs --to <commit> --offset 100 --limit 100 -o json",
+                description: "List the next page against an empty tree; use next_offset until has_more is false.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot diff <file-uri> --from <old> --to <new>",
+            description: "Read a changed file's text diff.",
         }],
     },
     CommandHelpSpec {
@@ -900,7 +941,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     },
     CommandHelpSpec {
         path: &["compile"],
-        purpose: "Use a required VikingBot Skill to transform materials into reports, JSON, Wiki pages or other Skill-defined files, or `--skill memory` to consolidate existing memories in place.",
+        purpose: "Use a VikingBot Skill to transform materials into reports, JSON, Wiki pages or other Skill-defined files, or `ov compile memory` to consolidate existing memories in place.",
         examples: &[
             HelpItem {
                 label: "ov compile --from viking://resources/weekly --to viking://resources/wiki --skill viking://agent/skills/monthly_wiki",
@@ -911,8 +952,8 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Generate or update one shared Skill package.",
             },
             HelpItem {
-                label: "ov compile --to viking://user/me/memories/entities --skill memory",
-                description: "Consolidate one memory type in place (dedup/merge); takes no --from.",
+                label: "ov compile memory",
+                description: "Consolidate memories in place under viking://~/memories; takes no --from.",
             },
         ],
         next_steps: &[
@@ -1343,14 +1384,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov admin regenerate-key <account> <user> --seed <seed>",
                 description: "Regenerate a predictable API key from a seed.",
-            },
-            HelpItem {
-                label: "ov admin migrate --sudo",
-                description: "Start legacy agent/session migration.",
-            },
-            HelpItem {
-                label: "ov admin migrate --cleanup --sudo",
-                description: "Remove legacy agent/session directories after verifying migration.",
             },
         ],
         next_steps: &[
@@ -1942,6 +1975,7 @@ fn localized_command_purpose(spec: &CommandHelpSpec, language: Language) -> &str
         ["snapshot", "show"] => "查看某次提交的元数据，或指定路径下的单个文件内容。",
         ["snapshot", "log"] => "按分支遍历提交历史，最新的在前。",
         ["snapshot", "diff"] => "对比指定文件在两个快照中的内容差异。",
+        ["snapshot", "diff-paths"] => "分页列出目录中两个快照之间新增、修改和删除的源文件。",
         _ => spec.purpose,
     }
 }
@@ -2620,7 +2654,9 @@ fn is_bare_group_help_command(command: &str) -> bool {
     matches!(
         command,
         "task"
+            | "compile"
             | "skills"
+            | "mcps"
             | "session"
             | "snapshot"
             | "privacy"
@@ -2688,7 +2724,7 @@ mod tests {
         render_top_level_help_with_language_and_width,
     };
     use super::{command_spec, is_top_level_help_request};
-    use crate::Cli;
+    use crate::cli::Cli;
     use crate::i18n::Language;
     use clap::CommandFactory;
     use std::ffi::OsString;
@@ -3240,6 +3276,7 @@ mod tests {
     #[test]
     fn unsupported_nested_prefixed_help_falls_back_to_clap() {
         for args in [
+            ["ov", "compile", "memory", "--help"],
             ["ov", "task", "list", "--help"],
             ["ov", "session", "add-message", "--help"],
             ["ov", "privacy", "upsert", "--help"],

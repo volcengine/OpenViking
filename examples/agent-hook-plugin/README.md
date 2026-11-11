@@ -1,12 +1,12 @@
 # OpenViking Memory for thin hook hosts
 
-Cursor, TRAE, TRAE CN and ZCode use host configuration files. Kimi Code uses its native managed-plugin directory. They share the same dispatcher and memory runtime; the installer assembles the runtime at install time rather than committing a copy per host.
+Cursor, TRAE, TRAE CN and ZCode use host configuration files. Kimi Code uses its native managed-plugin directory, and CodeBuddy Code a local plugin marketplace. They share the same dispatcher and memory runtime; the installer assembles the runtime at install time rather than committing a copy per host.
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash
 ```
 
-The installer asks which harnesses to install and for your OpenViking credentials. To install from a repository checkout instead, run `bash examples/memory-plugin-shared/install.sh --harness <cursor|trae|trae-cn|zcode|kimicode>` from its root.
+The installer asks which harnesses to install and for your OpenViking credentials. To install from a repository checkout instead, run `bash examples/memory-plugin-shared/install.sh --harness <cursor|trae|trae-cn|zcode|kimicode|codebuddy>` from its root.
 
 > **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the caller's own context space through `viking://~/memories` and `viking://~/skills`; the uid-less `viking://user/memories` shorthand is rejected by newer servers.
 

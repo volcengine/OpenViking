@@ -14,6 +14,7 @@ from openviking_cli.exceptions import InvalidArgumentError
 PRIVACY_IDENTIFIER_MAX_CHARS = 255
 PRIVACY_FIELD_NAME_MAX_BYTES = 255
 PRIVACY_MAX_FIELDS = 128
+SESSION_PRIVACY_MAX_FIELDS = 1024
 PRIVACY_MAX_STRING_BYTES = 64 * 1024
 PRIVACY_VALUES_MAX_BYTES = 1024 * 1024
 PRIVACY_VALUES_MAX_DEPTH = 16
@@ -151,21 +152,22 @@ def _serialized_size(value: Mapping[str, Any]) -> int:
     )
 
 
-def validate_privacy_values(values: Mapping[str, Any]) -> None:
+def validate_privacy_values(values: Mapping[str, Any], *, category: str = "") -> None:
     """Validate the complete active values snapshot before persistence."""
     if not isinstance(values, Mapping):
         raise InvalidArgumentError(
             "Privacy values must be a JSON object.",
             details={"field": "values", "reason": "expected object"},
         )
-    if len(values) > PRIVACY_MAX_FIELDS:
+    max_fields = SESSION_PRIVACY_MAX_FIELDS if category == "session" else PRIVACY_MAX_FIELDS
+    if len(values) > max_fields:
         raise InvalidArgumentError(
-            f"Privacy values contain {len(values)} fields; at most {PRIVACY_MAX_FIELDS} are allowed.",
+            f"Privacy values contain {len(values)} fields; at most {max_fields} are allowed.",
             details={
                 "field": "values",
                 "reason": "too many fields",
                 "actual_fields": len(values),
-                "max_fields": PRIVACY_MAX_FIELDS,
+                "max_fields": max_fields,
             },
         )
     _validate_json_tree(values, location="values", depth=1)

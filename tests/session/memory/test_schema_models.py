@@ -85,7 +85,6 @@ class TestSchemaModelGenerator:
         """Create a registry with real schemas."""
         return get_default_registry()
 
-
     def test_peer_enabled_false_omits_peer_id_field(self):
         memory_type = MemoryTypeSchema(
             memory_type="cases",
@@ -197,7 +196,6 @@ class TestSchemaModelGenerator:
         assert "field1" in model.model_fields
         assert "field2" in model.model_fields
 
-
     def test_page_id_field_is_emitted_before_mutable_content(self, registry_with_sample):
         """page_id should appear before mutable fields so the model anchors target page first."""
         from unittest.mock import patch
@@ -295,8 +293,10 @@ class TestSchemaModelGenerator:
         assert "MUST be at least 100" in schema["properties"]["page_id"]["description"]
         # Runtime resolution normalizes bad model output instead of dropping the event.
         assert model.model_validate({"page_id": 5, "event_name": "demo"}).page_id == 5
+        with pytest.raises(ValueError, match="new memory item requires fields: event_name"):
+            model.model_validate({"page_id": 5, "event_name": None})
 
-    def test_non_event_add_only_page_id_schema_is_unchanged(self):
+    def test_add_only_page_id_schema_requires_new_page_range(self):
         memory_type = MemoryTypeSchema(
             memory_type="trajectories",
             operation_mode="add_only",
@@ -308,14 +308,10 @@ class TestSchemaModelGenerator:
         model = SchemaModelGenerator([memory_type]).create_flat_data_model(memory_type)
         page_id_schema = model.model_json_schema()["properties"]["page_id"]
 
-        assert "minimum" not in page_id_schema
-        assert page_id_schema["description"] == (
-            "Temporary page_id for identifying the target memory item."
-        )
+        assert page_id_schema["minimum"] == 100
+        assert "MUST be at least 100" in page_id_schema["description"]
 
-    def test_existing_patch_can_omit_immutable_fields_but_new_item_cannot(
-        self, real_registry
-    ):
+    def test_existing_patch_can_omit_immutable_fields_but_new_item_cannot(self, real_registry):
         entities = real_registry.get("entities")
         model = SchemaModelGenerator([entities]).create_flat_data_model(entities)
 
@@ -359,14 +355,10 @@ class TestSchemaModelGenerator:
                 "entities": [
                     {
                         "page_id": 2,
-                        "content": {
-                            "blocks": [{"search": "一周学习计划", "replace": ""}]
-                        },
+                        "content": {"blocks": [{"search": "一周学习计划", "replace": ""}]},
                     }
                 ],
-                "delete_ids": [
-                    {"delete_page_id": 1, "replacement_page_id": None}
-                ],
+                "delete_ids": [{"delete_page_id": 1, "replacement_page_id": None}],
             }
         )
 
@@ -510,6 +502,7 @@ class TestWikiLink:
 
         assert link_type_schema["type"] == "string"
         assert "enum" not in link_type_schema
+
 
 class TestIntegration:
     """Integration tests for the complete schema system."""

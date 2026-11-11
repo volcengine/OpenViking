@@ -332,8 +332,23 @@ def test_managed_group_tools_deny_local_and_unregistered_capabilities():
     from vikingbot.studio.policy import disabled_group_tools
 
     assert disabled_group_tools(
-        ["openviking_search", "exec", "read_file", "mcp_admin", "spawn"]
-    ) == ["exec", "read_file", "mcp_admin", "spawn"]
+        [
+            "openviking_search",
+            "openviking_find_mcp_tools",
+            "openviking_invoke_mcp_tool",
+            "exec",
+            "read_file",
+            "mcp_admin",
+            "spawn",
+        ]
+    ) == [
+        "openviking_find_mcp_tools",
+        "openviking_invoke_mcp_tool",
+        "exec",
+        "read_file",
+        "mcp_admin",
+        "spawn",
+    ]
 
 
 async def test_delete_connection_stops_runtime_and_cleans_owned_data(tmp_path):

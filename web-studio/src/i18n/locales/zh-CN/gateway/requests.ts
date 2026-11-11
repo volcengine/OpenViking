@@ -93,6 +93,7 @@ const requests = {
     toolsSkipped: '未提供：{{reason}}',
     toolRounds:
       '轮数 {{rounds}} · 额外模型调用 {{calls}} 次 · 约增加 {{tokens}} Token',
+    contextOverride: 'X-OpenViking-Context 中传入的配置项',
     whatHappened: '发生了什么',
     whatToDo: '如何处理',
     httpError: '上游返回了 HTTP {{status}}，客户端收到了这个错误。',

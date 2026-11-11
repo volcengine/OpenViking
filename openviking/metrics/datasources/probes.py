@@ -12,6 +12,7 @@ from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils import run_async
 
 from .base import ProbeMetricDataSource
+from .vikingdb import VikingDBEventDataSource
 
 
 class ServiceProbeDataSource(ProbeMetricDataSource):
@@ -92,7 +93,8 @@ class RetrievalBackendProbeDataSource(ProbeMetricDataSource):
                 )
             if vikingdb is None:
                 return False
-            return bool(run_async(vikingdb.health_check()))
+            with VikingDBEventDataSource.suppress_operations():
+                return bool(run_async(vikingdb.health_check()))
 
         return self.safe_bool_probe("vikingdb", _check)
 

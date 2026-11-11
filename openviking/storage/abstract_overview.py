@@ -786,8 +786,12 @@ async def read_abstract_overview_pending_snapshot(
     ctx: Optional[RequestContext],
     lock: Optional[Dict[str, Any]] = None,
     existing_raw: Optional[Mapping[int, str | bytes]] = None,
+    overview_body_out: Optional[Dict[str, str]] = None,
 ) -> int:
-    """Read the pending counter captured at the start of an aggregation."""
+    """Read pending and optionally retain the already-read overview body.
+
+    The body is only an input-summary cache, not a writeback metadata snapshot.
+    """
 
     uris = [
         f"{dir_uri.rstrip('/')}/.overview.md",
@@ -795,6 +799,10 @@ async def read_abstract_overview_pending_snapshot(
     ]
 
     def _pending_of(documents: Sequence[Optional[AbstractOverviewDocument]]) -> int:
+        if overview_body_out is not None:
+            overview_body_out[dir_uri.rstrip("/")] = (
+                documents[0].body if documents[0] is not None else ""
+            )
         pending_values = []
         for document in documents:
             freshness = document.metadata.get("freshness") if document else None
@@ -818,7 +826,7 @@ async def read_abstract_overview_pending_snapshot(
         # directory just to hold lock metadata (a deleted directory reappears).
         preliminary = [await _read_existing_document(viking_fs, uri, ctx) for uri in uris]
         if all(document is None for document in preliminary):
-            return 0
+            return _pending_of(preliminary)
         lock_paths = [viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris]
         snapshot_lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(lock_paths)
     try:

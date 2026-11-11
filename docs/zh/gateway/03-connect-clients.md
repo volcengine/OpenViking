@@ -4,7 +4,7 @@ description: 把 Claude Code、Codex、聊天应用、SDK 等客户端接入 Ope
 
 # 把客户端接入 OpenViking 网关
 
-本页按客户端给出具体配置，以及验证配置是否生效的方法。每个客户端都需要三样东西：网关地址、网关密钥，以及这把密钥绑定的一个已启用上游——它要支持客户端使用的协议，并提供客户端请求的模型。还没有网关密钥？先看[快速上手](02-quickstart.md)。
+本页按客户端给出具体配置，以及验证配置是否生效的方法。每个客户端都需要三样东西：网关地址、网关密钥（部署方开启 `openviking_keys` 时，也可以用用户的 OpenViking API 密钥，见[直接使用 OpenViking API 密钥](09-gateway-keys.md#openviking-keys)），以及这把密钥绑定的一个已启用上游——它要支持客户端使用的协议，并提供客户端请求的模型。还没有网关密钥？先看[快速上手](02-quickstart.md)。
 
 以下两条限制对所有客户端都适用：
 
@@ -32,12 +32,47 @@ description: 把 Claude Code、Codex、聊天应用、SDK 等客户端接入 Ope
 
 默认情况下，服务商的 API Key 由网关保管，客户端只需发送网关密钥。[上游](07-upstreams.md#upstreams)也可以把 **API Key 由谁提供**设为**每个客户端自带 API Key**（见[凭证](07-upstreams.md#credentials)）。这时客户端仍把网关密钥填在原来填 API Key 的地方，同时在每个请求里用 `X-OpenViking-Upstream-Key` 请求头带上自己的服务商 API Key。在 Studio 中，**接入**标签页的**客户端自带服务商 API Key**卡片会列出哪些上游需要它。
 
-缺了这个请求头，所有请求都会返回 401 `Upstream API key is missing`。各客户端的添加方式：
+缺了这个请求头，所有请求都会返回 401 `Upstream API key is missing`。各客户端的添加方式见[在客户端里添加请求头](#add-a-header)。
 
-| 客户端 | 如何发送 `X-OpenViking-Upstream-Key` |
+## 覆盖上下文配置 {#override-profile-settings}
+
+客户端可以用 `X-OpenViking-Context` 请求头，为新对话修改密钥所用上下文配置的设置。它的值是一个 JSON 对象，列出要修改的字段，例如 `{"recall":false}` 表示不召回，`{"disabled_tools":["forget","set_acl"]}` 表示不提供这两个工具；请求头只能比配置多排除工具，不能提供配置不提供的工具。配置需要开启**允许客户端覆盖设置**（默认开启）；请求头能包含什么、可能返回哪些错误，见[允许客户端覆盖设置](08-context-profiles.md#client-overrides)。各客户端的添加方式见[在客户端里添加请求头](#add-a-header)。
+
+对话会沿用开始时的设置，所以修改后的请求头从下一段新对话起生效，例如换一个新的 `X-OpenViking-Session` 值。与所有 `X-OpenViking-*` 请求头一样，它不会转发给服务商。
+
+## 按 Peer 区分记忆 {#peer}
+
+一把密钥服务多个交互对象时（例如一个机器人以同一个 OpenViking 用户的身份和很多人对话），客户端可以用 `X-OpenViking-Actor-Peer` 请求头写明每个请求的交互对象，例如 `X-OpenViking-Actor-Peer: review-agent`。它的值是 OpenViking 的 [Peer](../getting-started/20-peers.md) ID，请求头名称与 OpenViking 自身的 API 和 SDK 相同。带上 Peer 后，网关会：
+
+- 按这个 Peer 召回：召回在用户自己的记忆之外加上这个 Peer 的记忆。默认情况下，其他 Peer 的记忆仍可能被召回，只是分数会略微扣减，OpenViking 工具也不按 Peer 收窄；[只召回当前 Peer](#peer-scope) 会同时改变这两点；
+- 保存时给这个请求的用户消息标上这个 `peer_id`，OpenViking 提交会话时就能提取关于这个 Peer 的记忆。助手回复保存时不带 Peer。
+
+Peer 属于每个请求，不属于对话；带不带 Peer，网关[识别对话](#how-conversations-are-recognized)的方式都一样。同一段对话（例如机器人所在的群聊）可以包含来自多个 Peer 的用户消息：每条消息沿用第一次把它发到网关的那个请求的 Peer，客户端之后修改或删掉更早的消息也不变；每个请求按自己的 Peer 召回。
+
+请求不带这个请求头时，使用密钥的[默认 Peer](09-gateway-keys.md#default-peer)（如果签发时设置了）；两者都没有时，行为不变。请求头的值为空白时，同样回退到默认 Peer。值必须是单个路径段，只能包含字母、数字、`_`、`.`、`-`，最多一个 `@`。其他值在请求到达服务商之前返回 400 `peer_invalid`。与所有 `X-OpenViking-*` 请求头一样，它不会转发给服务商。
+
+### 只召回当前 Peer {#peer-scope}
+
+不希望为某个交互对象召回时带出其他交互对象的记忆，可以在上下文配置[召回记忆](08-context-profiles.md#recall-memory)部分的**高级设置**里，把 **Peer 范围**设为**仅当前 Peer**（`recall_peer_scope: "actor"`）。默认值是**所有 Peer，当前 Peer 优先**（`all`），即上文描述的行为。设为**仅当前 Peer**后：
+
+- 召回只返回用户自己的记忆和这个请求的 Peer 的记忆；
+- 网关替模型执行的 OpenViking 工具调用也带上这个请求的 Peer，因此同样查不到、读不到其他 Peer 的记忆；
+- 请求既没带请求头、密钥也没有默认 Peer 时，没有可以对齐的 Peer，召回和工具调用都与默认值相同。
+
+只想对某一段对话生效、不改配置时，发送 `X-OpenViking-Context: {"recall_peer_scope":"actor"}`（见[覆盖上下文配置](#override-profile-settings)）；关闭**允许客户端覆盖设置**后，客户端就改不了它。
+
+和所有配置项一样，它在对话开始时就固定下来，而 Peer 仍取自每个请求。它限定的是每个请求召回什么，而不是对话里已有的内容：为某个 Peer 召回的记忆会留在对话历史里，其他 Peer 之后的请求也会带着这段历史；保存到用户 OpenViking 会话里的对话包含所有 Peer 的消息，`openviking_grep`、`openviking_read` 等 OpenViking 工具仍然读得到。
+
+所以即使设为**仅当前 Peer**，Peer 也不是访问边界：持有密钥的人可以填任意 Peer，也可以不填。需要各自独立记忆的人，请各发一把密钥，见[每人一把密钥](09-gateway-keys.md#one-key-per-person)。
+
+## 在客户端里添加请求头 {#add-a-header}
+
+上面这些请求头都要随每个请求发送。各客户端的添加方式：
+
+| 客户端 | 如何添加请求头 |
 | --- | --- |
-| Claude Code | `export ANTHROPIC_CUSTOM_HEADERS='X-OpenViking-Upstream-Key: <provider-key>'` |
-| Codex CLI | 在服务商配置里使用 `env_http_headers`，例如 `env_http_headers = { "X-OpenViking-Upstream-Key" = "PROVIDER_API_KEY" }`，并把服务商 API Key 导出为 `PROVIDER_API_KEY` |
+| Claude Code | `export ANTHROPIC_CUSTOM_HEADERS='<Name>: <value>'`。有多个请求头时每行一个，例如 `export ANTHROPIC_CUSTOM_HEADERS=$'X-OpenViking-Upstream-Key: <provider-key>\nX-OpenViking-Context: {"recall":false}'` |
+| Codex CLI | 在服务商配置里，固定值用 `http_headers`，例如 `http_headers = { "X-OpenViking-Context" = '{"recall":false}' }`；从环境变量读取用 `env_http_headers`，例如 `env_http_headers = { "X-OpenViking-Upstream-Key" = "PROVIDER_API_KEY" }`，并把服务商 API Key 导出为 `PROVIDER_API_KEY` |
 | OpenAI 和 Anthropic SDK | 在客户端上设置 `default_headers`，或在每个请求里传 `extra_headers` |
 | Open WebUI | 加到连接的自定义请求头里，与会话请求头放在一起 |
 
@@ -228,7 +263,7 @@ pi 可以使用 Chat Completions、Anthropic Messages 或 Responses，Base URL �
 
 ## DSH {#dsh}
 
-[DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh)（`dsh`）的模型层基于 pi，`api` 和 Base URL 的取值与 pi 相同：`https://ov.example.com/gateway/v1`，Anthropic Messages 用 `https://ov.example.com/gateway`。在 profile 配置中添加一个服务商；`dsh web` 使用的 profile 是 `web`，所以文件是 `~/.dsh/profiles/web/cordis.patch.yml`：
+[DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh)（`dsh`）的模型层基于 pi，`api` 和 Base URL 的取值与 pi 相同：`https://ov.example.com/gateway/v1`，Anthropic Messages 用 `https://ov.example.com/gateway`。在 profile 配置中添加一个服务商；`dsh web` 使用的 profile 是 `web`，所以文件是 `~/.dsh/profiles/web/cordis.patch.yml`；DeepSeek Harness Desktop 桌面应用用的是 `~/.dsh/profiles/desktop/cordis.patch.yml`：
 
 ```yaml
 - id: llm-pi-ai
@@ -247,6 +282,7 @@ pi 可以使用 Chat Completions、Anthropic Messages 或 Responses，Base URL �
 把网关密钥导出为 `OPENVIKING_GATEWAY_KEY`（也就是 `apiKeyEnv` 填的变量名），然后启动 `dsh web`，在模型选择器中选择 `openviking` 服务商下的 `<model>`。
 
 - 也可以在 Web UI 的 Settings → Models → Add model provider → Custom model API 中添加，写入的是同一个文件。
+- Desktop 看不到在终端里 export 的变量。macOS 上把 `OPENVIKING_GATEWAY_KEY` 写进 shell 启动文件（`~/.zprofile` 或 `~/.zshrc`）；Windows 上用 `setx` 设置。然后用 ⌘Q 或托盘菜单退出 Desktop，再重新打开。Desktop 的恢复对话框会把 `cordis.patch.yml` 挪成 `.bak-<时间戳>` 文件，运行过恢复后需要重新添加服务商。
 - DSH 的一个服务商只使用一种协议。要通过多种协议使用网关，就为每种协议各声明一个服务商。
 - 除非 DSH 发送了某个会话请求头，否则网关根据历史匹配它的对话（见[网关如何识别对话](#how-conversations-are-recognized)）。
 - 同一个 profile 里装了 [OpenViking 的 DSH 插件](../agent-integrations/17-dsh.md)时，网关会让出这些对话，两者选一个即可。

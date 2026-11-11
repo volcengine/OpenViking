@@ -27,6 +27,7 @@ PLUGINS=(
   "examples/opencode-plugin:examples/opencode-plugin/package.json"
   "examples/dsh-memory-plugin:examples/dsh-memory-plugin/package.json"
   "examples/pi-coding-agent-extension:examples/pi-coding-agent-extension/package.json"
+  "examples/magpie-memory-plugin:examples/magpie-memory-plugin/package.json"
 )
 
 # A change to the shared library reaches every plugin, and it no longer reaches
@@ -53,14 +54,16 @@ process.stdin.on("end", () => {
 }
 
 # Each host-facing manifest must report the distributed agent-hook version.
-# Kimi also exposes kimi.plugin.json to the host and its marketplace, so keep
-# that version aligned with the integration and root manifests.
+# Kimi also exposes kimi.plugin.json to the host and its marketplace, and
+# CodeBuddy resolves its installed plugin by the manifest version, so keep
+# both aligned with the integration and root manifests.
 PAIRED=(
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/cursor/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/trae/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/zcode/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/kimicode/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/kimicode/kimi.plugin.json"
+  "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/codebuddy/plugin.json"
 )
 
 failed=0

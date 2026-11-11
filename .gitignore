@@ -157,6 +157,9 @@ RAGbenchmark/*.log
 CLAUDE.md
 *.so
 AGENTS.md
+!/frontend/AGENTS.md
+!/frontend/packages/react/src/components/AGENTS.md
+!/frontend/packages/react/src/pages/AGENTS.md
 AGENTS.md.local
 
 # Git worktrees
@@ -247,6 +250,7 @@ node_modules/
 # this repository keep their copies in git.
 examples/opencode-plugin/lib/shared/
 examples/dsh-memory-plugin/shared/
+examples/magpie-memory-plugin/shared/
 examples/pi-coding-agent-extension/shared/
 /.local/
 /benchmark/ark4-0/

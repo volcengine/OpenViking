@@ -561,7 +561,11 @@ describe("OpenVikingClient", () => {
           },
         },
       ],
-      { processingMode: "vectors_only", extra: { future_flag: 0 } },
+      {
+        processingMode: "vectors_only",
+        deferProcessing: true,
+        extra: { future_flag: 0 },
+      },
     );
     await expect(
       client.downloadBytes("resources/project/a.txt"),
@@ -590,6 +594,7 @@ describe("OpenVikingClient", () => {
       },
     ]);
     expect(batchWriteBody.processing_mode).toBe("vectors_only");
+    expect(batchWriteBody.defer_processing).toBe(true);
     expect(
       new URL(String(fetcher.mock.calls[1]![0])).searchParams.get("uri"),
     ).toBe("viking://resources/project/a.txt");
@@ -654,7 +659,7 @@ describe("OpenVikingClient", () => {
       fetch: fetcher,
     });
 
-    const listPage = await client.listPage("viking://session", {
+    const listPage = await client.listPage("viking://~/sessions", {
       nodeLimit: 200,
       offset: 4,
       limit: 5,
@@ -666,7 +671,7 @@ describe("OpenVikingClient", () => {
       extraFields: ["locked", "id"],
     });
     expect(listPage).toEqual({ result: entries, hasMore: true });
-    await expect(client.list("viking://session")).resolves.toEqual(entries);
+    await expect(client.list("viking://~/sessions")).resolves.toEqual(entries);
     const treePage = await client.treePage("viking://resources/docs", {
       levelLimit: 2,
       offset: 6,

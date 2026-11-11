@@ -4,13 +4,13 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
 
 from openviking.pyagfs import get_binding_client
-from openviking.resource.watch_manager import WatchManager
+from openviking.resource.watch_store_file import FileWatchStore
+from openviking.resource.watch_types import WatchAuthority, WatchPatch, WatchTask
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclAction, AclManager
 from openviking.storage.collection_schemas import CollectionSchemas
@@ -614,41 +614,6 @@ async def test_transfer_normalizes_uri_for_files_and_vectors(indexed_fs, operati
 
 
 @pytest.mark.asyncio
-async def test_acl_failure_restores_only_moved_vectors_after_directory_merge(
-    indexed_fs, monkeypatch
-):
-    fs, backend = indexed_fs
-    ctx = root_ctx()
-    source, target = "viking://resources/source", "viking://resources/target"
-    await fs.write_file_bytes(f"{source}/file.txt", b"new", ctx=ctx)
-    await fs.write_file_bytes(f"{target}/only.txt", b"keep", ctx=ctx)
-    await seed_vector(backend, f"{source}/file.txt", "new")
-    await seed_vector(backend, f"{target}/only.txt", "keep")
-    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
-    async def acl_enabled(_account_id):
-        return True
-
-    monkeypatch.setattr(
-        fs,
-        "acl_manager",
-        SimpleNamespace(
-            is_enabled=acl_enabled,
-            refresh_context_subtree=AsyncMock(side_effect=RuntimeError("injected ACL failure")),
-        ),
-    )
-
-    # Trailing slashes must not corrupt the reverse transfer manifest.
-    with pytest.raises(RuntimeError, match="injected ACL failure"):
-        await fs.mv(source + "/", target, ctx=ctx)
-
-    assert await fs.read_file_bytes(f"{source}/file.txt", ctx=ctx) == b"new"
-    assert await backend.get_context_by_uri(f"{source}/file.txt", ctx=ctx)
-    assert not await backend.get_context_by_uri(f"{source}/only.txt", ctx=ctx)
-    assert await backend.get_context_by_uri(f"{target}/only.txt", ctx=ctx)
-    assert not await fs.exists(target, ctx=ctx)
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["cp", "mv"])
 @pytest.mark.parametrize("target_exists", [False, True])
 async def test_directory_transfer_allows_sibling_lock_and_releases_own_locks(
@@ -713,22 +678,26 @@ async def test_directory_transfer_holds_both_subtrees_through_vector_phase(bindi
 @pytest.mark.asyncio
 async def test_watch_persistence_overwrites_after_backup_removal_failure(binding_fs, monkeypatch):
     fs = binding_fs
-    manager = WatchManager(viking_fs=fs)
+    store = FileWatchStore(fs)
+    await store.initialize()
     ctx = root_ctx()
-    await manager._save_tasks()
-    await manager._save_tasks()
-    assert await fs.exists(manager.STORAGE_BAK_URI, ctx=ctx)
+    task = WatchTask.from_dict(
+        {"path": "https://example.com/doc", "to_uri": "viking://resources/doc"}
+    )
+    await store.create_task(task)
+    await store.patch_task(task.task_id, WatchPatch({"reason": "before"}), WatchAuthority())
+    assert await fs.exists(store.STORAGE_BAK_URI, ctx=ctx)
     real_rm = fs.rm
 
     async def fail_backup_removal(uri, **kwargs):
-        if uri == manager.STORAGE_BAK_URI:
+        if uri == store.STORAGE_BAK_URI:
             raise RuntimeError("injected backup removal failure")
         return await real_rm(uri, **kwargs)
 
     monkeypatch.setattr(fs, "rm", fail_backup_removal)
-    task = await manager.create_task(path="https://example.com/doc", watch_interval=60)
-    stored = json.loads(await fs.read_file(manager.STORAGE_URI, ctx=ctx))
-    assert [item["task_id"] for item in stored["tasks"]] == [task.task_id]
-    backup = json.loads(await fs.read_file(manager.STORAGE_BAK_URI, ctx=ctx))
-    assert backup["tasks"] == []
-    assert not await fs.exists(manager.STORAGE_TMP_URI, ctx=ctx)
+    await store.patch_task(task.task_id, WatchPatch({"reason": "after"}), WatchAuthority())
+    stored = json.loads(await fs.read_file(store.STORAGE_URI, ctx=ctx))
+    assert stored["tasks"][0]["reason"] == "after"
+    backup = json.loads(await fs.read_file(store.STORAGE_BAK_URI, ctx=ctx))
+    assert backup["tasks"][0]["reason"] == "before"
+    assert not await fs.exists(store.STORAGE_TMP_URI, ctx=ctx)

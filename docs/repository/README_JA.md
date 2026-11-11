@@ -191,27 +191,17 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/en
 <summary><strong>エージェントにインストールしてもらう</strong></summary>
 
 ```text
-OpenViking メモリプラグインをインストールすること。次を実行する：
+OpenViking メモリプラグインをインストールして、使い始めるところまで手伝ってください。OpenViking は AI エージェント向けのコンテキストデータベースです（https://github.com/volcengine/OpenViking）。下のコマンドとリンクは公式ドキュメントに載っているものです。
 
-curl -fsSL https://openviking.ai/install | bash -s -- --yes --url <SERVER_URL>
+1. 公式インストーラーを実行してください。ネットワークに接続し、私のホームディレクトリに書き込みます。サンドボックスでブロックされたら、私に承認を求めてください：
+   curl -fsSL https://openviking.ai/install | bash -s -- --yes --lang en --url <SERVER_URL> --api-key <API_KEY>
+2. インストールが終わったら OpenViking のオンボーディングガイドを読み、それに沿って私のセットアップを進めてください。履歴のインポートや作業ルールの追加といった選択の前には、ガイドに従って私に確認することになっています。docs.openviking.ai と docs.openviking.net は同じドキュメントサイトなので、開けるほうを使ってください：
+   https://docs.openviking.ai/agents/en/onboarding.md
 
-<SERVER_URL> は私の OpenViking サーバーのアドレス。
-推測せずに私に確認すること。サーバーで認証が有効なら user key が必要
-（root key ではメモリを読み書きできない）：保存済みのキーがあるか確認し、
-なければ私に求めて --api-key で渡すこと。
-このチャットに貼りたくない場合の渡し方も伝えること。キーは復唱しないこと。
-認証が無効なら --api-key '' を付け、以前保存したキーを使い回さないこと。
-
-スクリプトはネットワークに接続し、ホームディレクトリに書き込む。
-サンドボックスでブロックされたら、
-サンドボックスの外で実行する許可を私に求めること。
-
-完了したら、どのツールにインストールしたかと、
-それぞれの次の手順を伝えること。そのうえで、
-ほかのツールにも入れるか私に確認すること。
+API キーは、私がそのサーバーで自分用に作成した user key です。インストーラーがこのマシンの ~/.openviking/ovcli.conf に保存します。コマンドではそのまま使ってください。返信の中で表示する必要はありません。ほかのファイルやルールにも書き込まないでください。やり取りは日本語でお願いします。
 ```
 
-サーバーのアドレスを用意しておいてください。認証が有効なら API キーも必要です。
+送信する前に、`<SERVER_URL>` をサーバーのアドレスに、`<API_KEY>` を user key に置き換えてください。root key ではメモリを読み書きできません。サーバーで認証が無効なら `--api-key ''` を使ってください。
 
 </details>
 
@@ -427,5 +417,5 @@ OpenViking プロジェクトは、コンポーネントごとに異なるライ
 - **メインプロジェクト**: AGPLv3 - 詳細は [LICENSE](../../LICENSE) ファイルを参照してください
 - **crates/ov\_cli**: Apache 2.0 - 詳細は [LICENSE](../../crates/LICENSE) を参照してください
 - **examples**: Apache 2.0 - 詳細は [LICENSE](../../examples/LICENSE) を参照してください。`examples/hermes-plugin` の Hermes プラグインは元の [MIT ライセンス](../../examples/hermes-plugin/LICENSE) を保持します。
-- **integrations/frameworks**: アダプターのパッケージメタデータとソースヘッダーは AGPLv3 を宣言しています。各パッケージの `LICENSE` を参照してください。実行可能なサンプルは Apache 2.0 を維持し、各パッケージの `examples/LICENSE` に記載されています。
+- **integrations/frameworks**: LangChain/LangGraph アダプターは AGPLv3、Microsoft Agent Framework アダプターは MIT を採用しています。各パッケージの `LICENSE` を参照してください。実行可能なサンプルは Apache 2.0 を維持し、各パッケージの `examples/LICENSE` に記載されています。
 - **third\_party**: 各サードパーティプロジェクトの元のライセンス

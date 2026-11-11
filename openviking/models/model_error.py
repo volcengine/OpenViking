@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Provider-neutral model API errors."""
+"""Provider-neutral model API errors and user-facing error briefs."""
 
 from __future__ import annotations
 
@@ -386,3 +386,48 @@ def model_error_boundary(func: F) -> F:
             raise converted from error
 
     return cast(F, _sync_wrapper)
+
+
+# ---------------------------------------------------------------------------
+# User-facing brief: model error kind -> one short, actionable sentence
+# ---------------------------------------------------------------------------
+
+#: Generic sentence for any failure the user cannot fix by changing input.
+UNKNOWN_BRIEF = "Failed to process the resource. Please try again."
+
+_MODEL_BRIEFS: dict["ModelErrorKind", str] = {
+    ModelErrorKind.AUTHENTICATION_ERROR: (
+        "Model authentication failed; check the API key configuration."
+    ),
+    ModelErrorKind.PERMISSION_DENIED: "Permission denied for the selected model.",
+    ModelErrorKind.QUOTA_EXHAUSTED: "Model service quota has been exhausted.",
+    ModelErrorKind.MODEL_NOT_FOUND: "The configured model is unavailable or does not exist.",
+    ModelErrorKind.UNSUPPORTED: "The model does not support this request.",
+    ModelErrorKind.INVALID_REQUEST: (
+        "The content could not be processed; it may be corrupted or unsupported."
+    ),
+    ModelErrorKind.INPUT_TOO_LARGE: "The content exceeds the model's size limit.",
+    ModelErrorKind.CONTENT_SAFETY: "The content was blocked by the model's safety filter.",
+    ModelErrorKind.RATE_LIMIT_ERROR: "The model service is rate-limited; please try again later.",
+    ModelErrorKind.UNKNOWN: UNKNOWN_BRIEF,
+}
+
+# Transient model failures are retried internally and carry no user action.
+_TRANSIENT_KINDS: frozenset[str] = frozenset(
+    [
+        ModelErrorKind.TRANSIENT_SERVICE_ERROR.value,
+        ModelErrorKind.TRANSIENT_NETWORK_ERROR.value,
+    ]
+)
+
+
+def brief_for(error_type: str | None) -> str | None:
+    """Map a model error kind to one short user brief, or ``None`` if unclassified."""
+    if not isinstance(error_type, str) or not error_type:
+        return None
+    for kind, brief in _MODEL_BRIEFS.items():
+        if kind.value == error_type:
+            return brief
+    if error_type in _TRANSIENT_KINDS:
+        return UNKNOWN_BRIEF
+    return None

@@ -134,3 +134,93 @@ PYTHONPATH=. python scripts/gateway_benchmark.py --concurrency 300 --profile --o
 `--profile` relies on `scripts/gateway_profile.py` and slows the burst, so compare
 timings from runs without it. Compare results only between runs on the same machine and Python
 version.
+
+## Redis storage contracts
+
+`test_storage_ports.py` runs each storage contract against SQLite, Redis standalone and
+Redis Cluster. Redis cases skip when their endpoint variable is absent; configured
+endpoints must be reachable. Install `pip install "redis>=5.3.1,<7"` and run:
+
+```bash
+export OV_TEST_REDIS=redis://127.0.0.1:6379
+export OV_TEST_REDIS_CLUSTER=redis://127.0.0.1:7000,redis://127.0.0.1:7001,redis://127.0.0.1:7002
+export OV_TEST_REDIS_USERNAME=gateway
+export OV_TEST_REDIS_PASSWORD=gateway-test-password
+PYTHONPATH=. pytest tests/gateway/test_storage_ports.py --confcutdir=tests/gateway -o addopts=''
+```
+
+The gateway workflow starts Redis 7.2 standalone and a three-node Cluster and creates
+the [documented ACL](../../docs/en/gateway/13-configuration.md#storage) on every node.
+Each fixture uses a random `ovgw:test:<uuid>:` prefix and removes only its own keys.
+CI runs the whole gateway suite on redis-py 6.4.0 and this file again on 5.3.1, the
+oldest supported client; the client options are explained in
+`openviking_gateway/redis_store.py`.
+
+## kind deployment acceptance
+
+`e2e/` runs the standalone Helm chart on a dedicated kind cluster with one control
+plane and two workers. It uses a mock OpenViking server with two libraries that
+both identify as `default/default`, three model protocols, and Redis with the
+minimum gateway ACL. All credentials are synthetic. Each case owns a fresh
+namespace, persistent Redis volume, and gateway release; cleanup only removes
+those resources. Do not point this suite at a shared production cluster.
+
+Install `kind` 0.27+, Docker 28+, kubectl, Helm 3, Python 3.10+, `pytest`, `httpx`,
+`openai`, `anthropic`, and Codex CLI (`@openai/codex@0.146.0`). The test
+clients run on the host; `kubectl port-forward` targets individual gateway Pods.
+The rolling-update load runs inside the cluster through its Service.
+
+```bash
+mkdir -p /tmp/ovgw-e2e
+kind create cluster --name ovgw-e2e --config tests/gateway/e2e/kind.yaml \
+  --kubeconfig /tmp/ovgw-e2e/kubeconfig --wait 120s
+python tests/gateway/e2e/build_overlay.py --tag ovgw-e2e:local
+docker pull redis:7.2-alpine
+python tests/gateway/e2e/load_images.py --cluster ovgw-e2e ovgw-e2e:local redis:7.2-alpine
+OV_TEST_KIND_KUBECONFIG=/tmp/ovgw-e2e/kubeconfig OV_TEST_GATEWAY_IMAGE=ovgw-e2e:local \
+  pytest tests/gateway/e2e --confcutdir=tests/gateway/e2e -o addopts='' -v \
+  --basetemp=/tmp/ovgw-e2e/results --junitxml=/tmp/ovgw-e2e/results.xml
+kind delete cluster --name ovgw-e2e
+```
+
+Without `OV_TEST_KIND_KUBECONFIG`, every deployment case skips before calling
+kubectl. Set `OV_TEST_KIND_REDIS=standalone` or `cluster` to select one backend;
+by default both run. `OV_TEST_GATEWAY_CHART` can point to the chart in a
+separate integration checkout. The image must include the
+Redis gateway changes; the overlay helper copies the gateway package and every
+changed Python dependency under `openviking/` and `openviking_cli/` relative to
+the supplied release tag. It does not rebuild native extensions or Studio.
+
+| Scenario | Standalone | Cluster |
+| --- | --- | --- |
+| 1. Eight alternating session turns | Yes | Yes |
+| 2. Graceful deletion during a stream | Yes | Yes |
+| 3. Truncation under a 25-second grace (negative control) | Yes | — |
+| 4. Rollout with short, chat, keep-alive, and 60-second stream traffic | Yes | Yes |
+| 5. Eviction under 30 MiB and credential reconstruction | Yes | — |
+| 6. AOF restart with pending capture | Yes | — |
+| 7. Data loss without AOF | Yes | — |
+| 8. Isolation of libraries with the same OV identity | Yes | Yes |
+| 9. Revocation, paused capture, and replacement key | Yes | — |
+| 10. Startup recovery from 503; refusal of dev mode and 404 | Yes | — |
+| 11. Forty-second silence with Python SDKs and Codex; compressed SSE | Yes | — |
+| 12. One hundred captures with eight workers | Yes | Yes |
+| 13. Existing unordered key returns 402 before upstream dispatch | Yes | — |
+| 14. Hidden tool deduplication, missing receipts, and Responses chains | Yes | Yes |
+| 15. Studio and management changes across the cache window | Yes | — |
+| 16. Shared root key and missing-key startup failure | Yes | — |
+
+Assertions inspect raw mock calls, source message IDs, Redis keys, Pod lifecycle,
+and client completion markers. Missing SDKs, incomplete streams, and failed
+infrastructure are failures when the suite is opted in. A Redis outage may
+produce either a logged `memory_store_failure` passthrough or a plaintext
+HTTP 500 at authentication; scenario 6 records the observed proportions.
+Scenario 7 asserts loss of an undelivered tail when persistence is disabled.
+
+The `gateway-e2e.yml` workflow runs nightly against `ghcr.io/volcengine/openviking:main`.
+Manual dispatch can build the selected ref over a release image. Both paths
+upload pytest results, per-scenario logs, and kind logs, then delete the cluster.
+Cloud Redis failover, TLS, and real OV/model providers remain separate acceptance
+checks. For a cgroup-v1 development host, use a local copy of `kind.yaml` with
+`KubeletConfiguration.cgroupDriver: cgroupfs` and containerd's
+`SystemdCgroup = false`; CI uses cgroup v2 without that host-specific patch.

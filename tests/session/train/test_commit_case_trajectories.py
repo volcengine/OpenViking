@@ -12,6 +12,7 @@ from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.compressor_v3 import SessionCompressorV3
 from openviking.session.memory.dataclass import MemoryFile, ResolvedOperation, ResolvedOperations
+from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train import (
     Case,
@@ -98,12 +99,13 @@ class CommitTrainer:
             self.policy_set = await ExperienceSetLoader(viking_fs=self.fs).load(
                 self.policy_set.root_uri, ctx=self.ctx
             )
+            # Keep one merged output name-only to exercise URI fallback during commit.
             operations = ResolvedOperations(
                 upsert_operations=[
                     ResolvedOperation(
                         memory_type=g.after_file.memory_type,
                         memory_fields=g.after_file.to_metadata(),
-                        uris=[g.target_uri],
+                        uris=[] if g.target_name == "book" else [g.target_uri],
                     )
                     for g in gradients
                 ],
@@ -205,10 +207,10 @@ def commit_runtime(monkeypatch):
     case_uris = {case.name: f"viking://user/u/memories/cases/{case.name}.md" for case in cases}
     for case in cases:
         uri = case_uris[case.name]
+        # Match the CaseSpec writer, which does not persist memory_type.
         fs.files[uri] = MemoryFileUtils.write(
             MemoryFile(
                 uri=uri,
-                memory_type="cases",
                 content=case.name,
                 extra_fields={"case_name": case.name},
             )
@@ -334,6 +336,12 @@ async def test_commit_extracts_once_and_persists_precise_case_links(
         assert targets == {trajectories[name].uri for name in names} | {
             f"{runtime.trainer.policy_set.root_uri}/{name}.md" for name in names
         }
+        case_body = files[runtime.case_uris[case.name]].content
+        linked_section = case_body.split("## Linked Experiences", 1)[1]
+        assert {
+            LinkRenderer.normalize_markdown_target(link.target)
+            for link in LinkRenderer.iter_markdown_links(linked_section)
+        } == {f"../experiences/{name}.md" for name in names}
         assert all(
             any(link["from_uri"] == runtime.case_uris[case.name] for link in files[uri].backlinks)
             for uri in targets
@@ -342,6 +350,43 @@ async def test_commit_extracts_once_and_persists_precise_case_links(
     adds = result["memory_diff"]["operations"]["adds"]
     assert len({item["uri"] for item in adds if item["memory_type"] == "trajectories"}) == len(rows)
     assert len([item for item in adds if item["memory_type"] == "trajectories"]) == len(rows)
+
+
+@pytest.mark.asyncio
+async def test_commit_finishes_other_training_groups_before_reporting_write_failure(
+    commit_runtime, monkeypatch
+):
+    from openviking.session.memory.memory_updater import MemoryUpdateError
+
+    runtime = commit_runtime
+    write_file = runtime.fs.write_file
+    failed_uri = f"{runtime.trainer.policy_set.root_uri}/book.md"
+
+    async def fail_one_experience(uri, content, **kwargs):
+        if uri == failed_uri:
+            raise OSError("experience write failed")
+        await write_file(uri, content, **kwargs)
+
+    monkeypatch.setattr(runtime.fs, "write_file", fail_one_experience)
+    runtime.fs.commit = AsyncMock()
+    evaluator = SimpleNamespace(
+        evaluate=AsyncMock(
+            side_effect=[
+                RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+                RubricEvaluation(passed=False, score=0.0, criterion_results=[], feedback=[]),
+            ]
+        )
+    )
+    with pytest.raises(MemoryUpdateError, match="experience write failed"):
+        await _commit(runtime, [[("book", None)], [("cancel", None)]], evaluator=evaluator)
+
+    assert len(runtime.trainer.calls) == 2
+    assert failed_uri not in runtime.fs.files
+    successful_uri = f"{runtime.trainer.policy_set.root_uri}/cancel.md"
+    assert successful_uri in runtime.fs.files
+    successful = MemoryFileUtils.read(runtime.fs.files[successful_uri], uri=successful_uri)
+    assert any(link["from_uri"] == runtime.case_uris["cancel"] for link in successful.backlinks)
+    assert runtime.fs.commit.await_count == 1
 
 
 @pytest.mark.asyncio

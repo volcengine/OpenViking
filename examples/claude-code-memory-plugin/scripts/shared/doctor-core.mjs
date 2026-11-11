@@ -171,7 +171,7 @@ function headTail(value, keep = 4) {
  * Describe an API key for display without revealing it.
  *
  *   three-segment key  →  account=<decoded> user=<decoded> secret=abcd…wxyz
- *   single-segment key →  abcd…wxyz (64 chars, legacy format)
+ *   other shapes       →  abcd…wxyz (N chars, unsupported format)
  *
  * The three-segment format is base64url(account).base64url(user).base64url(secret);
  * the first two segments carry no secret and are decoded so the operator can see
@@ -203,9 +203,9 @@ export function describeApiKey(rawKey) {
     if (!parts[2]) info.problems.push("secret segment is empty");
     info.display = `account=${accountText} user=${userText} secret=${headTail(parts[2])}`;
   } else {
-    info.format = "legacy";
-    if (parts.length !== 1) info.problems.push(`unexpected shape: ${parts.length} dot-separated segments (expected 1 or 3)`);
-    info.display = `${headTail(key)} (${key.length} chars, ${parts.length === 1 ? "legacy single-segment" : "unrecognised"} format)`;
+    info.format = "unsupported";
+    info.problems.push(`unsupported shape: ${parts.length} dot-separated segment(s); expected 3`);
+    info.display = `${headTail(key)} (${key.length} chars, unsupported format)`;
   }
   return info;
 }

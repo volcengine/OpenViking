@@ -5,7 +5,7 @@ import importlib
 import threading
 import weakref
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, PrivateAttr, ValidationInfo, model_validator
 
@@ -62,7 +62,13 @@ def _bind_token_usage_tracker(instance: Any, tracker: Any) -> None:
 class VLMCredential(BaseModel):
     """Single VLM credential configuration for multi-credential failover."""
 
-    id: Optional[str] = RuntimeField(default=None, description="Unique identifier for this credential")
+    cost_bearer: Optional[Literal["ov", "customer", "unknown"]] = RuntimeField(
+        default=None, description="Billing owner supplied by the credential provisioner"
+    )
+
+    id: Optional[str] = RuntimeField(
+        default=None, description="Unique identifier for this credential"
+    )
     provider: Optional[str] = RuntimeField(default=None, description="Provider type")
     model: Optional[str] = RuntimeField(
         default=None,
@@ -159,7 +165,9 @@ class VLMConfig(BaseModel):
         ),
     )
     api_base: Optional[str] = Field(default=None, description="API base URL")
-    temperature: float = Field(default=0.0, description="Generation temperature")
+    temperature: Optional[float] = Field(
+        default=None, description="Generation temperature; None uses the provider default"
+    )
     max_retries: int = Field(default=3, description="Maximum retry attempts")
     timeout: float = Field(
         default=600.0,
@@ -733,6 +741,7 @@ class VLMConfig(BaseModel):
         """Build VLM instance config dict for a specific credential."""
         result = {
             "model": credential.model or self.model,
+            "cost_bearer": credential.cost_bearer,
             "temperature": self.temperature,
             "max_retries": self.max_retries,
             "timeout": self.timeout,

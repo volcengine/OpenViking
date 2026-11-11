@@ -72,3 +72,22 @@ def test_connector_auth_does_not_enable_ingestion_delegation():
     config = ConnectorConfig(auth=" https://connector.example/oauth/access_token ")
     assert config.auth == "https://connector.example/oauth/access_token"
     assert config.enable is False
+
+
+@pytest.mark.parametrize(
+    ("auth", "expected"),
+    [
+        (
+            "https://connector.example/api/v1/inner/connector/oauth/access_token",
+            "https://connector.example/api/v1/inner/connector/credential/resolve",
+        ),
+        (
+            "https://connector.example/api/v1/inner/connector/credential/resolve",
+            "https://connector.example/api/v1/inner/connector/credential/resolve",
+        ),
+        ("", ""),
+        ("https://connector.example/some/other/path", ""),
+    ],
+)
+def test_credential_resolve_url_is_derived_from_auth(auth, expected):
+    assert ConnectorConfig(auth=auth).credential_resolve_url() == expected

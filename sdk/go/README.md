@@ -168,13 +168,14 @@ Implemented:
 |------|------------|
 | Resource and skill import | `AddResource`, `AddSkill`, `WaitProcessed` |
 | Skill management | `ListSkills`, `FindSkills`, `ValidateSkill`, `GetSkill`, `UpdateSkill`, `DeleteSkill` |
+| MCP servers and live context | `AddMCP`, `RemoveMCP`, `ListMCPs`, `FindMCPTools`, `ValidateMCP`, `GetMCP`, `SyncMCP`, `GetMCPStatus`, `InvokeMCPTool`, `MountMCPTool`, `BatchMountMCPTools`, `UnmountMCPTool`, `BatchUnmountMCPTools`, `ListMCPMounts` |
 | Watch management | `ListWatches`, `GetWatch`, `UpdateWatch`, `DeleteWatch`, `TriggerWatch` |
 | Filesystem and content | `List`, `ListPage`, `Tree`, `TreePage`, `Stat`, `Attrs`, `Mkdir`, `Remove`, `Move`, `Read`, `Abstract`, `Overview`, `Write`, `SetTags`, `Reindex` |
 | Retrieval | `Find`, `Search`, `Grep`, `Glob` |
 | Sessions and tasks | `CreateSession`, `ListSessions`, `GetSession`, `UpdateSessionConfig`, `SessionExists`, `GetSessionContext`, `GetSessionArchive`, `DeleteSession`, `AddMessage`, `BatchAddMessages`, `CommitSession`, `GetTask`, `ListTasks` |
 | Packs | `ExportOVPack`, `BackupOVPack`, `ImportOVPack`, `RestoreOVPack` |
 | System and observer | `Health`, `CheckConsistency`, `GetStatus`, `IsHealthy`, `QueueStatus`, `VikingDBStatus`, `ModelsStatus` |
-| Admin | `AdminCreateAccount`, `AdminCreateAccountWithOptions`, `AdminListAccounts`, `AdminGetAccount`, `AdminDeleteAccount`, `AdminRegisterUser`, `AdminRegisterUserWithOptions`, `AdminListUsers`, `AdminGetUser`, `AdminRemoveUser`, `AdminSetRole`, `AdminRegenerateKey`, `AdminRegenerateKeyWithOptions`, `AdminMigrate` |
+| Admin | `AdminCreateAccount`, `AdminCreateAccountWithOptions`, `AdminListAccounts`, `AdminGetAccount`, `AdminDeleteAccount`, `AdminRegisterUser`, `AdminRegisterUserWithOptions`, `AdminListUsers`, `AdminGetUser`, `AdminRemoveUser`, `AdminSetRole`, `AdminRegenerateKey`, `AdminRegenerateKeyWithOptions` |
 
 Not implemented in Go SDK v1:
 
@@ -219,6 +220,8 @@ an empty string that the server rejects.
 `AddResource` and `AddSkill` accept local files and directories. Directory
 uploads are zipped by the SDK, symlinks are skipped, and the resulting archive
 is uploaded to `/api/v1/resources/temp_upload` before the final API call.
+`AddSkill` and `UpdateSkill` also accept inline Markdown strings, including
+content that exceeds local filename limits.
 
 ```go
 skill, err := client.AddSkill(ctx, "./skills/search-web", nil)
@@ -244,6 +247,59 @@ restored, err := client.RestoreOVPack(ctx, exported, &openviking.ImportPackOptio
 
 _, _ = exported, restored
 ```
+
+## MCP Servers and Live Context
+
+```go
+_, err := client.AddMCP(
+	ctx,
+	"weather",
+	"https://mcp.example.com/api",
+	map[string]string{"Authorization": "Bearer token"},
+	&openviking.WaitOptions{TargetURI: "viking://agent/tools"},
+)
+// Tool summaries and indexing continue in the background by default.
+// Pass &openviking.WaitOptions{Wait: true} as the final argument to wait.
+tools, err := client.FindMCPTools(ctx, "current weather", 5)
+mounted, err := client.MountMCPTool(
+	ctx,
+	"viking://agent/tools/weather/current.json",
+	"viking://resources/arranger/beijing-weather.md",
+	"Beijing Weather",
+	&openviking.MountMCPToolOptions{
+		Description:    openviking.String("Current weather for the Beijing region."),
+		TimeoutSeconds: 60,
+		Arguments:      map[string]any{"city": "Beijing"},
+		Tags:           []string{"project=weather", "kind=live-context"},
+		Wait:           true,
+	},
+)
+batchMounted, err := client.BatchMountMCPTools(ctx, []openviking.MCPToolMount{
+	{
+		ToolURI:  "viking://agent/tools/weather/current.json",
+		NodeURI:  "viking://resources/arranger/shanghai-weather.md",
+		Title:    "Shanghai Weather",
+		Arguments: map[string]any{"city": "Shanghai"},
+	},
+}, &openviking.WaitOptions{Wait: true})
+batchUnmounted, err := client.BatchUnmountMCPTools(
+	ctx,
+	[]string{"viking://resources/arranger/shanghai-weather.md"},
+	&openviking.WaitOptions{Wait: true},
+)
+syncResult, err := client.SyncMCP(
+	ctx,
+	"weather",
+	&openviking.WaitOptions{TargetURI: "viking://agent/tools"},
+)
+
+_, _, _, _, _, _ = tools, mounted, batchMounted, batchUnmounted, syncResult, err
+```
+
+Registration defaults to `viking://~/tools`. Set `WaitOptions.TargetURI` to
+`viking://agent/tools` for account-shared servers. `ListMCPs` and
+`FindMCPTools` merge both spaces when no target URI is supplied; name-based
+operations default to the user space.
 
 ## Watch Management
 

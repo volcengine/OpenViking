@@ -16,6 +16,7 @@ from openviking.models.model_error import (
     model_error_kind,
 )
 from openviking.pyagfs.exceptions import AGFSNotADirectoryError
+from openviking.storage.errors import InvalidPathLockRequestError
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,7 @@ _PERMANENT_IO_ERRORS = (
     IsADirectoryError,
     NotADirectoryError,
     AGFSNotADirectoryError,
+    InvalidPathLockRequestError,
 )
 
 TRANSIENT_API_ERROR_PATTERNS = (

@@ -257,7 +257,18 @@ store = OpenVikingStore(url="http://localhost:1933", api_key="...")
 store.put(("users", "ada"), "preferences", {"color": "azure"})
 items = store.search(("users",), query="azure", limit=3)
 store.put(("users", "ada"), "preferences", None)  # a None value deletes the item
+store.close()
 ```
+
+Use `close()` after synchronous work or `await store.aclose()` after async work. The Store
+also supports `with OpenVikingStore(...) as store` and `async with` for automatic cleanup.
+Cleanup releases only internally created clients; injected clients remain caller-owned.
+Closing an unused Store creates no client, and a closed Store cannot be reused.
+Cleanup waits for active backend requests before releasing the owned client. Use `aclose()`
+in async code so this wait does not block the event loop.
+Calling `close()` or `aclose()` within a Store backend call raises `RuntimeError`.
+This also applies to callbacks or tasks that inherit that active call's context.
+A rejected attempt leaves the Store open; close it after the call finishes.
 
 Following LangGraph's `BaseStore` contract, passing `None` as the value deletes the item and is
 equivalent to `delete()`. Deleting a key that does not exist is a no-op.
@@ -268,8 +279,19 @@ succeeds, resolve the reported error and retry the operation to finish cleanup.
 
 Record reads return `None` only for a missing record; permission, backend, and invalid-JSON
 errors propagate, and `put()` does not overwrite a record after a failed read.
+Index creation falls back to replacement only for an explicit already-existing target.
+Other index-write errors propagate. The JSON record is written before its projection,
+so a failed projection can leave the stored value updated; these writes are not transactional.
+
 `list_namespaces(prefix=("users", "*"))` matches one namespace label per `*`, including
 when `root_uri` uses a peer home alias such as `viking://~/peers/support/memories/langgraph_store`.
+
+`search()` accepts nested JSON filters such as `filter={"metadata": {"color": "blue"}}`.
+Filter keys `eq`, `ne`, `gt`, `gte`, `lt`, `lte` and `in` are reserved operator aliases at every nesting level.
+Use `index=["items[*].text"]` to index selected array fields while retaining the complete
+stored value. Existing index projections are updated when the item is written again.
+An empty field list (`index=[]`), including a constructor default, removes the projection
+like `index=False`; the value remains available to `get()` and nonsemantic search.
 
 ### LangGraph middleware
 
@@ -282,6 +304,19 @@ middleware = OpenVikingContextMiddleware(
     capture_on_after_agent=True,
 )
 ```
+
+The middleware prepends recalled context to a copy of the current user message
+for the model request. System instructions and stored conversation messages
+remain unchanged. Recall is reused within tool loops and refreshed for each new
+user message.
+
+With a LangGraph checkpointer, the middleware saves exact recall blocks in
+internal graph state and replays them with their original messages after later
+turns or a restart. This preserves unchanged prompt prefixes for provider caching;
+actual cache hits depend on the provider. The ledger retains up to 500 entries
+per session/peer scope and follows the application's checkpoint retention policy.
+Pending structured context references are also checkpointed until their assistant
+message is captured, so resuming an interrupted tool loop preserves provenance.
 
 ### Session recorder
 
@@ -306,6 +341,13 @@ except OpenVikingPartialWriteError as exc:
 recorder.flush("support-thread-1")
 recorder.close()
 ```
+
+Pass `commit_policy=` to `record()` or `arecord()` to override the recorder's
+policy for that call without changing its default. `None` uses the default;
+`OpenVikingCommitPolicy(mode="never")` suppresses a new post-write commit, but
+still retries any previously failed commit. `history.clear()` and `aclear()`
+raise if deletion or recreation fails; a failed recreation leaves the old
+session deleted and does not acknowledge pending context references.
 
 `record()` writes only the messages supplied by the caller. It filters framework
 control messages, writes in server-safe batches, and applies the configured

@@ -1,14 +1,15 @@
 //! Garbage collection for versioned multi-write metadata.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::core::errors::{Error, Result};
-use crate::multibackend::constants::SEGMENT_FILE_EXTENSION;
+use crate::multibackend::constants::{HEAD_SEGMENT_FILE_PREFIX, SEGMENT_FILE_EXTENSION};
 use crate::multibackend::meta::{MetadataStore, MultiWriteWorker};
 use crate::multibackend::model::{is_checkpoint_directory_name, CheckpointsManifest, DirectoryEvent, LatestCheckpoint,PartitionState, PartitionsManifest, ProtocolStatus, ScopeKey, SegmentManifest,};
 use crate::multibackend::provider::MultiWriteProvider;
+use tracing::info;
 
 struct ScopeSnapshot { latest: Option<LatestCheckpoint>, segments: SegmentManifest}
 
@@ -26,13 +27,26 @@ impl MetadataGc {
 
     /// Collect one scope while treating concurrent account deletion as complete.
     pub async fn collect_scope(&self, scope: &ScopeKey) -> Result<()> {
+        info!(
+            account = %scope.account_id,
+            partition = scope.partition_id,
+            epoch = scope.epoch,
+            "multi-write metadata gc started"
+        );
         match self.collect_scope_inner(scope).await {
-            Err(Error::NotFound(_)) => Ok(()),
+            Ok(()) | Err(Error::NotFound(_)) => {
+                info!(
+                    account = %scope.account_id,
+                    partition = scope.partition_id,
+                    epoch = scope.epoch,
+                    "multi-write metadata gc completed"
+                );
+                Ok(())
+            }
             Err(error) => {
                 self.store.record_worker_error(MultiWriteWorker::Gc);
                 Err(error)
             }
-            result => result,
         }
     }
 
@@ -123,11 +137,16 @@ impl MetadataGc {
         finish_with_release(operation, release)
     }
 
-    /// Prune one eligible sealed prefix and remove every unreferenced segment blob.
+    /// Prune one eligible sealed prefix and remove heads replaced by sealed segments.
     async fn collect_segments(&self, scope: &ScopeKey, latest: Option<&LatestCheckpoint>,
         retained: &[DirectoryEvent]) -> Result<()> {
         let manifest = self.provider.read_manifest(scope).await?;
         manifest.validate()?;
+        let replaced_heads = manifest.segments.iter()
+            .filter(|descriptor| descriptor.segment_to_seq.is_some())
+            .map(|descriptor| format!("{HEAD_SEGMENT_FILE_PREFIX}{:020}{SEGMENT_FILE_EXTENSION}",
+                descriptor.segment_from_seq))
+            .collect::<BTreeSet<String>>();
         let removable = manifest.segments.iter().take_while(|descriptor| {
             descriptor.segment_to_seq.is_some_and(|to| {
                 latest.is_some_and(|checkpoint| checkpoint.checkpoint_to_seq >= to)
@@ -147,7 +166,7 @@ impl MetadataGc {
         let directory = self.store.paths().segments_dir(
             &scope.account_id, scope.partition_id)?.0;
         for entry in self.store.list_directory(&directory).await? {
-            if !entry.is_dir && entry.name.ends_with(SEGMENT_FILE_EXTENSION) {
+            if !entry.is_dir && replaced_heads.contains(&entry.name) {
                 self.remove_segment(scope, &entry.name).await?;
             }
         }

@@ -346,7 +346,7 @@ async def test_reindex_processor_cancellation_releases_root_lock_handoff():
 
 
 @pytest.mark.asyncio
-async def test_reindex_processor_does_not_release_lease_owned_by_failed_executor(monkeypatch):
+async def test_reindex_processor_releases_adopted_lease_when_executor_startup_fails(monkeypatch):
     from openviking.storage.queuefs.reindex_processor import ReindexProcessor
 
     tracker = SimpleNamespace(
@@ -354,32 +354,28 @@ async def test_reindex_processor_does_not_release_lease_owned_by_failed_executor
         start=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
-        wait_for_task_work=AsyncMock(),
     )
     monkeypatch.setattr(
-        "openviking.storage.queuefs.reindex_processor.get_task_tracker", Mock(return_value=tracker)
+        "openviking.storage.queuefs.reindex_processor.get_task_tracker", lambda: tracker
     )
-    monkeypatch.setattr(
-        "openviking.server.dependencies.get_service",
-        lambda: SimpleNamespace(_vlm_resolver=None, _vector_config_resolver=None),
+    agfs = SimpleNamespace(pathlock_release=AsyncMock(), pathlock_acquire_tree=AsyncMock())
+    fs = SimpleNamespace(
+        _async_agfs=agfs,
+        _uri_to_path=lambda uri, **kwargs: "/local/account-1/resources/demo",
+        stat=AsyncMock(side_effect=OSError("storage unavailable")),
     )
-    agfs = SimpleNamespace(pathlock_release=AsyncMock())
-
-    async def fail_after_releasing(_self, *, existing_lease, **_kwargs):
-        await agfs.pathlock_release(existing_lease)
-        raise RuntimeError("semantic plan enqueue failed")
-
-    monkeypatch.setattr(
-        "openviking.service.reindex_executor.ReindexExecutor._run",
-        fail_after_releasing,
+    service = SimpleNamespace(
+        viking_fs=fs, vikingdb_manager=SimpleNamespace(has_queue_manager=True)
     )
-    processor = ReindexProcessor(SimpleNamespace(_async_agfs=agfs))
-    processor._adopt_or_reacquire = AsyncMock(return_value={"lease": "root"})
+    monkeypatch.setattr("openviking.service.reindex_executor.get_service", lambda: service)
+    processor = ReindexProcessor(fs)
+    lease = {"lease": "root"}
+    processor._adopt_or_reacquire = AsyncMock(return_value=lease)
     message = ReindexMsg(
         task_id="task-1",
         uri="viking://resources/demo",
         object_type="resource",
-        mode="semantic_and_vectors",
+        mode="vectors_only",
         account_id="account-1",
         user_id="user-1",
         role="admin",
@@ -388,5 +384,6 @@ async def test_reindex_processor_does_not_release_lease_owned_by_failed_executor
     outcome = await processor.on_dequeue({"id": "queue-1", "data": message.to_dict()})
 
     assert outcome.outcome.value == "failed"
-    agfs.pathlock_release.assert_awaited_once_with({"lease": "root"})
-    tracker.fail.assert_awaited_once()
+    agfs.pathlock_release.assert_awaited_once_with(lease)
+    tracker.complete.assert_not_awaited()
+    assert tracker.fail.await_args.args[:2] == ("task-1", "storage unavailable")

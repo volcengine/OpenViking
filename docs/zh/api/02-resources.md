@@ -186,7 +186,8 @@ Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源�
 | source_name | string | 否 | None | 来源显示名；上传文件省略时使用原始文件名 |
 | reason | string | 否 | "" | 添加资源的原因；非空时会随资源 URI 进入常规 session 记忆抽取链路，并在生成的记忆中记录资源引用 |
 | instruction | string | 否 | "" | 语义提取的处理指令（实验特性） |
-| wait | bool | 否 | False | 是否等待语义处理和向量化完成才返回；不支持单独的 `timeout` 参数，HTTP 超时使用客户端配置 |
+| wait | bool | 否 | False | 是否等待语义处理和向量化完成才返回 |
+| timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | strict | bool | 否 | False | 是否使用严格模式 |
 | ignore_dirs | string | 否 | None | 要忽略的目录名（逗号分隔） |
 | include | string | 否 | None | 包含的文件模式（glob） |
@@ -501,6 +502,11 @@ fmt.Println(result["task_id"])
 ```
 
 **CLI**
+
+`ov add-resource --wait` 只提交一次，再轮询任务，不设置整体等待期限。
+状态查询超时、网络错误及 HTTP 429/502/503/504 会重试；连续 10 次失败后
+退出并提供任务查询命令。Ctrl+C 仅停止等待，不取消任务，退出码为 130。
+完成后 CLI 结果保留 `task_id`。
 
 ```bash
 # 添加本地文件

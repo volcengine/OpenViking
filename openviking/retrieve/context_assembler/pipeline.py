@@ -31,23 +31,47 @@ from openviking.retrieve.context_assembler.params import (
 from openviking.retrieve.context_assembler.render import render_context
 from openviking.retrieve.context_assembler.rewrite import rewrite_context, server_rewrite_enabled
 from openviking.retrieve.context_assembler.tiers import needs_content, prefetch_contents
+from openviking.retrieve.rerank_scoring import Reranker
 from openviking.server.identity import RequestContext
 from openviking.utils.time_decay import validate_event_time_decay_request
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-async def _load_session(service: Any, ctx: RequestContext, session_id: Optional[str]) -> Any:
+async def _load_session(
+    service: Any, ctx: RequestContext, session_id: Optional[str], *, auto_create: bool
+) -> Any:
     if not session_id:
         return None
     try:
-        session = await service.sessions.get(session_id, ctx, auto_create=True)
+        session = await service.sessions.get(session_id, ctx, auto_create=auto_create)
         if not await session.is_materialized():
             return None
         return session
+    except NotFoundError:
+        return None
     except Exception as exc:
         logger.info("Session %s unavailable for context assembly: %s", session_id, exc)
+        return None
+
+
+def _context_reranker(service: Any, params: AssembleParams) -> Optional[Reranker]:
+    """The server's opt-in context reranker, when it applies to this request.
+
+    Reranking scores text against text, so an image query keeps its vector
+    scores, as it does in search(); so does a filter-only one with no text.
+    """
+    if not params.query.strip() or params.image_url:
+        return None
+    factory = getattr(service.search, "context_reranker", None)
+    if not callable(factory):
+        return None
+    try:
+        return factory()
+    except Exception as exc:
+        logger.warning("Context rerank unavailable, keeping vector scores: %s", exc)
         return None
 
 
@@ -72,7 +96,12 @@ async def assemble_context(
     intent_enabled = intent_checker() if callable(intent_checker) else True
     expansion_mode = params.query_expansion if intent_enabled else "off"
     needs_session = bool(params.session_id) and (expansion_mode == "auto" or params.dedup_turns > 0)
-    session = await _load_session(service, ctx, params.session_id) if needs_session else None
+    # Only the dedup ledger needs to persist state before the first capture.
+    session = (
+        await _load_session(service, ctx, params.session_id, auto_create=params.dedup_turns > 0)
+        if needs_session
+        else None
+    )
     resolver = getattr(service, "vlm_resolver", None)
 
     if expansion_mode == "auto" and session is not None:
@@ -107,6 +136,7 @@ async def assemble_context(
     )
     cooled = ledger.cooled_uris() if ledger else set()
     excluded = normalize_exclude_uris(params.exclude_uris)
+    reranker = _context_reranker(service, params)
 
     # The fan-out below embeds each planned query once per (query, target)
     # find, so wrap it in the request-scoped query embedding cache: sibling
@@ -127,6 +157,10 @@ async def assemble_context(
             penalties=penalties,
             excluded=excluded,
             cooled=cooled,
+            reranker=reranker,
+            # An anaphoric query may only name its topic through a session
+            # expansion, so the one rerank call scores against every planned query.
+            rerank_query="\n".join(queries),
         )
 
     # Read only the candidates whose planned tier actually needs a body: with

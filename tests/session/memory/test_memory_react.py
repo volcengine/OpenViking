@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from openviking.session.memory.dataclass import (
     MemoryField,
     MemoryFile,
+    MemoryOperationSkipCode,
     MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
@@ -195,6 +196,44 @@ class TestExtractLoopFinalJsonRetry:
         extract_loop._extract_context = extract_context
         extract_loop._isolation_handler = MemoryIsolationHandler(ctx, extract_context)
         return extract_loop
+
+    @pytest.mark.asyncio
+    async def test_unrenderable_uri_skips_only_bad_item_and_reports_it(self):
+        class EventItem(BaseModel):
+            event_name: str | None = None
+
+        class Operations(BaseModel):
+            events: list[EventItem]
+
+        schema = MemoryTypeSchema(
+            memory_type="events",
+            operation_mode="add_only",
+            directory="viking://user/{{ user_space }}/memories/events",
+            filename_template="{{ event_name }}.md",
+            fields=[],
+        )
+        loop = self._invalid_peer_resolution_loop()
+        loop.context_provider.get_memory_schemas.return_value = [schema]
+        loop._extract_context.page_id_map = PageIdMap()
+        resolved, _ = await loop.resolve_operations(
+            Operations(events=[EventItem(), EventItem(event_name="kickoff")])
+        )
+
+        updater = MemoryUpdater(registry=MagicMock())
+        updater._get_viking_fs = MagicMock(return_value=MagicMock())
+        updater._apply_upsert = AsyncMock()
+        updater._sync_resource_refs_for_result = AsyncMock()
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+        result = await updater.apply_operations(operations=resolved, ctx=loop.ctx)
+
+        assert result.written_uris == ["viking://user/user_a/memories/events/kickoff.md"]
+        assert result.errors == []
+        assert len(result.skipped_operations) == 1
+        assert result.skipped_operations[0].reason_code == (
+            MemoryOperationSkipCode.INVALID_URI_TEMPLATE_VARS
+        )
+        assert "event_name" in result.skipped_operations[0].reason
 
     @pytest.mark.asyncio
     async def test_existing_page_id_keeps_write_target_without_invalid_peer_metadata(self):

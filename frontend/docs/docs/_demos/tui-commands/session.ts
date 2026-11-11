@@ -1,0 +1,96 @@
+import { URI_PARAM } from './shared';
+import type { TuiCommandEntry } from './shared';
+
+/** 状态、会话与交互命令。Status, session and interactive commands. */
+export const SESSION_COMMANDS: readonly TuiCommandEntry[] = [
+  {
+    name: 'task',
+    group: 'status',
+    description: 'Track async resource processing tasks',
+    usage: '/task <list|status|cancel> [id]',
+    skeleton: 'status',
+    params: [{ label: '<subcommand>', description: 'list, status or cancel' }],
+    examples: ['/task list'],
+  },
+  {
+    name: 'status',
+    group: 'status',
+    description: 'All OpenViking server components status',
+    usage: '/status [--verbose]',
+    skeleton: 'status',
+    options: [
+      { token: '--verbose', description: 'Show full component tables' },
+    ],
+    examples: ['/status'],
+  },
+  {
+    name: 'health',
+    group: 'status',
+    description: 'Quick health check',
+    usage: '/health',
+    skeleton: 'status',
+    examples: ['/health'],
+  },
+  {
+    name: 'session',
+    group: 'session',
+    description: 'Session management commands',
+    usage: '/session <subcommand>',
+    skeleton: 'status',
+    params: [{ label: '<subcommand>', description: 'Session operation' }],
+    examples: ['/session list'],
+  },
+  {
+    name: 'import',
+    group: 'session',
+    description: 'Import .ovpack into target URI',
+    usage: '/import <file.ovpack> <target-uri>',
+    skeleton: 'write',
+    params: [
+      { label: '<file.ovpack>', description: 'Input .ovpack file path' },
+      { label: '<target-uri>', description: 'Target parent URI' },
+    ],
+    options: [
+      {
+        token: '--on-conflict <policy>',
+        description: 'fail, overwrite or skip',
+      },
+    ],
+    examples: ['/import ./acme.ovpack viking://projects'],
+  },
+  {
+    name: 'export',
+    group: 'session',
+    description: 'Export context as .ovpack',
+    usage: '/export <uri> <output.ovpack>',
+    skeleton: 'write',
+    params: [
+      URI_PARAM,
+      { label: '<output.ovpack>', description: 'Output file path' },
+    ],
+    examples: ['/export viking://projects/acme ./acme.ovpack'],
+  },
+  {
+    name: 'compile',
+    group: 'interactive',
+    description: 'Compile source materials with a VikingBot skill',
+    usage: '/compile --from <uri> --to <uri> --skill <uri>',
+    skeleton: 'write',
+    options: [
+      {
+        token: '--from <uri>',
+        required: true,
+        description: 'Source file or directory',
+      },
+      { token: '--to <uri>', required: true, description: 'Target directory' },
+      {
+        token: '--skill <uri>',
+        required: true,
+        description: 'Skill URI or the literal memory',
+      },
+    ],
+    examples: [
+      '/compile --from viking://resources/acme --to viking://wiki --skill memory',
+    ],
+  },
+];

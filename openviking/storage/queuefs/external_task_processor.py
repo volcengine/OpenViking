@@ -4,10 +4,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Dict, Optional
 
 from openviking.service.external_task_service import ExternalTaskService
+from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_work_index import (
     TASK_WORK_ID_FIELD,
     TaskWorkRejected,
@@ -60,7 +62,14 @@ class ExternalTaskProcessor(DequeueHandlerBase):
                     replacement,
                 )
             except TaskWorkRejected:
-                # Cancellation only needs the current delivery to be ACKed.
+                await self._service.cancel_recovered(task_id, account_id, user_id)
+                return ProcessResult.cancelled()
+            except asyncio.CancelledError:
+                if not await get_task_tracker().is_cancellation_requested(
+                    task_id, account_id=account_id, user_id=user_id
+                ):
+                    raise
+                await self._service.cancel_recovered(task_id, account_id, user_id)
                 return ProcessResult.cancelled()
             else:
                 return ProcessResult.requeued()

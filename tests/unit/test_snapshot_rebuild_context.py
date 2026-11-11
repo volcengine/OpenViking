@@ -12,6 +12,19 @@ from openviking.storage.viking_fs import VikingFS
 from openviking_cli.session.user_id import UserIdentifier
 
 
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [("sqlite", "tree"), ("cache", "tree"), ("filesystem", None), ("memory", None)],
+)
+def test_missing_snapshot_target_uses_logical_provider_tree_lock(monkeypatch, provider, expected):
+    config = Mock()
+    config.storage.agfs.pathlock.provider = provider
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.open_viking_config.get_openviking_config", lambda: config
+    )
+    assert VikingFS._snapshot_missing_target_lock_kind() == expected
+
+
 @pytest.mark.asyncio
 async def test_fallback_rebuild_detaches_all_operations(monkeypatch):
     ctx = RequestContext(user=UserIdentifier("account", "user"), role=Role.ROOT)

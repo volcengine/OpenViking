@@ -71,6 +71,7 @@ Telemetry 是按需返回的。只有你显式请求时，OpenViking 才会在�
 - `POST /api/v1/content/write`
 - `POST /api/v1/content/batch-write`
 - `POST /api/v1/content/set_tags`
+- `POST /api/v1/content/ensure_directory_index`
 - `POST /api/v1/skills/find`
 - `PUT /api/v1/skills/{skill_name}`
 

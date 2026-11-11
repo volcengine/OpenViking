@@ -568,6 +568,9 @@ pub struct BackendsConfig {
     /// Checkpoint interval in seconds.
     #[serde(default = "default_checkpoint_interval_secs")]
     pub checkpoint_interval_secs: u64,
+    /// Whether to scan existing primary data and reconcile it into V2 metadata.
+    #[serde(default)]
+    pub reconcile_existing_data: bool,
     /// Metadata storage provider.
     #[serde(default = "default_backups_provider")]
     pub provider: String,

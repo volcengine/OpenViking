@@ -84,6 +84,9 @@ export const KNOBS = [
   { name: "recallMaxContentChars", type: "int", default: 500, min: 100, max: 5000, env: "OPENVIKING_RECALL_MAX_CONTENT_CHARS", capability: "recall" },
   { name: "recallPreferAbstract", type: "bool", default: true, env: "OPENVIKING_RECALL_PREFER_ABSTRACT", capability: "recall" },
   { name: "recallPeerScope", type: "enum", values: ["all", "actor"], default: "all", env: "OPENVIKING_RECALL_PEER_SCOPE", workspace: "recall.peer_scope", capability: "recall" },
+  // Sent as events_time_decay_protection ("7d", "12h"): event memories keep their score for
+  // that long and decay afterwards. Empty leaves decay off, as the server does by default.
+  { name: "recallEventsDecayProtection", type: "string", default: "", env: "OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION", capability: "recall" },
   { name: "recallDedupTurns", type: "int", default: 5, min: 0, max: 20, env: "OPENVIKING_RECALL_DEDUP_TURNS", workspace: "recall.dedup_turns", capability: "recall" },
   { name: "recallMaxTokens", type: "int", default: 1600, min: 64, max: 200000, env: "OPENVIKING_RECALL_MAX_TOKENS", sendOnlyWhenConfigured: true, capability: "recall" },
   { name: "recallQueryExpansion", type: "enum", values: ["auto", "off"], default: "auto", env: "OPENVIKING_RECALL_QUERY_EXPANSION", sendOnlyWhenConfigured: true, capability: "recall" },
@@ -135,6 +138,9 @@ export const KNOBS = [
     workspace: "capture.enabled",
     capability: "capture",
   },
+  // Magpie uses these for capture when its gateway has no session or yields to a native plugin.
+  { name: "captureWithoutSession", type: "bool", default: false, capability: "capture" },
+  { name: "nativeAgents", type: "list", default: [], capability: "capture" },
   { name: "captureMode", type: "enum", values: ["semantic", "keyword"], default: "semantic", env: "OPENVIKING_CAPTURE_MODE", capability: "capture" },
   { name: "captureMaxLength", type: "int", default: 24000, min: 200, max: 100000, env: "OPENVIKING_CAPTURE_MAX_LENGTH", capability: "capture" },
   // Tool output is reported verbatim; the server owns truncation via
@@ -259,6 +265,7 @@ export const WORKSPACE_RANGES = Object.fromEntries(
  */
 export const HARNESS_KEYS = {
   claudeCode: "claude_code",
+  codebuddy: "codebuddy",
   codex: "codex",
   cursor: "cursor",
   kimicode: "kimicode",
@@ -276,9 +283,10 @@ export function harnessKey(harness) {
 }
 
 /** Both accepted spellings of every harness, for the `plugin` section. */
-export const HARNESS_CONFIG_KEYS = new Set(
-  Object.values(HARNESS_KEYS).flatMap((key) => [key, key.replace(/_/g, "-")]),
-);
+export const HARNESS_CONFIG_KEYS = new Set([
+  ...Object.values(HARNESS_KEYS).flatMap((key) => [key, key.replace(/_/g, "-")]),
+  "magpie", // Magpie supports ovcli.conf only, with no legacy ov.conf section.
+]);
 
 export function knobDefault(knob, harness = "") {
   if (harness && knob.harness && knob.harness[harness] !== undefined) return knob.harness[harness];

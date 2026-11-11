@@ -139,12 +139,27 @@ async def _call_add_message_route(
     )
 
 
-async def test_create_session(client: httpx.AsyncClient):
-    resp = await client.post("/api/v1/sessions", json={})
+async def test_create_session(client: httpx.AsyncClient, service):
+    headers = {"X-OpenViking-Account": "session-only", "X-OpenViking-User": "alice"}
+    ctx = RequestContext(user=UserIdentifier("session-only", "alice"), role=Role.ROOT)
+    resp = await client.post("/api/v1/sessions", json={}, headers=headers)
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
     assert "session_id" in body["result"]
+    assert {
+        entry["name"] for entry in await service.viking_fs.ls("viking://user/alice", ctx=ctx)
+    } == {"sessions"}
+    session_id = body["result"]["session_id"]
+    assert (
+        await service.viking_fs.read_file(
+            f"viking://user/alice/sessions/{session_id}/messages.jsonl", ctx=ctx
+        )
+        == ""
+    )
+    retrieved = await client.get(f"/api/v1/sessions/{session_id}", headers=headers)
+    assert retrieved.status_code == 200
+    assert retrieved.json()["result"]["session_id"] == session_id
 
 
 async def test_list_sessions(client: httpx.AsyncClient):
@@ -168,23 +183,6 @@ async def test_get_session(client: httpx.AsyncClient):
     assert body["status"] == "ok"
     assert body["result"]["session_id"] == session_id
     assert body["result"]["uri"] == session_uri
-
-
-async def test_legacy_session_uri_alias_reads_current_user_session(client: httpx.AsyncClient):
-    session_id = "legacy-alias-read"
-    await client.post("/api/v1/sessions", json={"session_id": session_id})
-    await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json=_message_request("user", content="legacy alias message"),
-    )
-
-    resp = await client.get(
-        "/api/v1/content/read",
-        params={"uri": f"viking://session/{session_id}/messages.jsonl"},
-    )
-
-    assert resp.status_code == 200
-    assert "legacy alias message" in resp.json()["result"]
 
 
 @pytest.mark.parametrize("artifact", ["empty", "recall_ledger", "meta"])
@@ -1492,11 +1490,12 @@ async def test_commit_failed_when_long_term_extraction_fails_does_not_block_next
     assert not await _archive_marker_exists(session, archive_uri, ".done")
     assert not await _archive_marker_exists(session, archive_uri, ".partial.json")
 
-    # The failed archive is skipped, not retrievable as a completed archive.
+    # The failed archive is inspectable but has no Working Memory overview.
     archive_resp = await client.get(f"/api/v1/sessions/{session_id}/archives/archive_001")
-    archive_body = archive_resp.json()
-    assert archive_body["status"] == "error"
-    assert archive_body["error"]["code"] == "NOT_FOUND"
+    archive_result = archive_resp.json()["result"]
+    assert archive_result["status"] == "failed"
+    assert archive_result["overview"] == ""
+    assert archive_result["failure"]
 
     # A failed archive is a skippable terminal state; the next commit proceeds.
     await client.post(
@@ -1508,6 +1507,56 @@ async def test_commit_failed_when_long_term_extraction_fails_does_not_block_next
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["archived"] is True
+
+
+async def test_retry_failed_archive_with_hash_from_archive_inspection(
+    client: httpx.AsyncClient,
+    service,
+):
+    """API-only recovery: the retry hash comes from GET archive, not the filesystem."""
+    import hashlib
+
+    session_id = (await client.post("/api/v1/sessions", json={})).json()["result"]["session_id"]
+
+    async def failing_extract(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("synthetic extraction failure")
+
+    service.sessions._session_compressor.extract_long_term_memories = failing_extract
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="retry me"),
+    )
+    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    assert (await _wait_for_task(client, commit_resp.json()["result"]["task_id"]))[
+        "status"
+    ] == "failed"
+
+    archive_url = f"/api/v1/sessions/{session_id}/archives/archive_001"
+    archive = (await client.get(archive_url)).json()["result"]
+    assert archive["status"] == "failed"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    session = service.sessions.session(ctx, session_id)
+    raw = await session._viking_fs.read_file(
+        f"{session.uri}/history/archive_001/messages.jsonl", ctx=ctx
+    )
+    assert archive["messages_sha256"] == hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    async def _no_memories(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    service.sessions._session_compressor.extract_long_term_memories = _no_memories
+    retry_resp = await client.post(
+        f"/api/v1/sessions/{session_id}/archives/archive_001/retry",
+        json={"expected_messages_sha256": archive["messages_sha256"]},
+    )
+    assert retry_resp.status_code == 200, retry_resp.text
+    retry = retry_resp.json()["result"]
+    assert retry["status"] == "accepted"
+    assert (await _wait_for_task(client, retry["task_id"]))["status"] == "completed"
+    archive = (await client.get(archive_url)).json()["result"]
+    assert archive["status"] == "completed"
 
 
 async def test_commit_failed_when_summary_fails_does_not_block_next_commit(
@@ -1564,3 +1613,16 @@ def test_commit_working_memory_override_requires_boolean(invalid):
 
     with pytest.raises(ValidationError):
         sessions_router.CommitRequest.model_validate({"enable_working_memory": invalid})
+
+
+async def test_retry_archive_validates_request_and_missing_archive(client: httpx.AsyncClient):
+    session_id = (await client.post("/api/v1/sessions", json={})).json()["result"]["session_id"]
+    url = f"/api/v1/sessions/{session_id}/archives/archive_001/retry"
+
+    bad_hash = await client.post(url, json={"expected_messages_sha256": "not-a-digest"})
+    assert bad_hash.status_code == 400
+    assert bad_hash.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+    missing = await client.post(url, json={"expected_messages_sha256": "0" * 64})
+    assert missing.status_code == 404
+    assert missing.json()["error"]["details"] == {"type": "archive", "resource": "archive_001"}

@@ -1,7 +1,8 @@
 //! Thin PyO3 wrapper around RAGFS's compiled Privacy matcher.
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyOverflowError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyString;
 use ragfs::privacy_matcher::PrivacyMatcher;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -73,5 +74,33 @@ impl PyPrivacyMatcher {
             result.ambiguous_references,
             limit_exceeded,
         )
+    }
+
+    /// Return bounded match metadata without copying or rewriting the input.
+    ///
+    /// Borrow Python's UTF-8 representation for both the byte-size check and
+    /// matching. The immutable Python string stays alive while the GIL is
+    /// released. Oversized input raises OverflowError before matching begins.
+    fn find_limited(
+        &self,
+        py: Python<'_>,
+        content: &Bound<'_, PyString>,
+        max_replacements: usize,
+        max_content_bytes: usize,
+    ) -> PyResult<(Vec<(usize, usize, String)>, Vec<Vec<String>>, bool)> {
+        let content = content.to_str()?;
+        if content.len() > max_content_bytes {
+            return Err(PyOverflowError::new_err(
+                "Content exceeds the Privacy sanitizer size limit",
+            ));
+        }
+        let matcher = self.inner.clone();
+        let (result, exceeded) = py.detach(move || matcher.find_limited(content, max_replacements));
+        let replacements = result
+            .replacements
+            .into_iter()
+            .map(|replacement| (replacement.start, replacement.end, replacement.reference))
+            .collect();
+        Ok((replacements, result.ambiguous_references, exceeded))
     }
 }
