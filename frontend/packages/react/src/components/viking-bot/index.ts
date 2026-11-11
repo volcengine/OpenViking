@@ -54,5 +54,3 @@ export type {
   VikingBotRepairOption,
   VikingBotScheduleValue,
 } from './interaction/types.js';
-
-export { VikingBotWelcome } from './welcome.js';

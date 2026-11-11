@@ -60,7 +60,6 @@ function levelToFileTab(
     kind: 'file',
     key: `${tab.key}::${level.key}`,
     source: level.source,
-    preview: level.preview,
     resources: level.resources ?? tab.resources,
     resolveImage: tab.resolveImage,
     operations: tab.operations,

@@ -72,7 +72,3 @@ The root exports only `Console` and `ConsoleProps`. Import the mode, copy and sl
 Hosts own authentication, permissions, account switching, page layout and resource navigation across modules.
 
 Console inherits the nearest language scope, with `en-US` as the fallback. Changing language updates existing command help, argument errors and cancellation notices while preserving requests, record IDs and drafts. Server content and original error messages keep their original text.
-
-## Standalone mode switch
-
-`ConsoleModeSwitch` is exported from `@openviking/react/modules/console` and uses its stylesheet. Control it with `mode` (`conversation` / `command`) and `onModeChange`. Supply `labels` with `mode`, `conversation`, and `command`. Set `showConversation={false}` to hide conversation mode; optional `panelId` associates the controls with panels. It does not create a Client or issue requests.

@@ -18,6 +18,7 @@ import { fetchAdminAccounts, fetchAdminUsers } from '#/shared/api/admin'
 import { resolveConfiguredServiceProvider } from '#/shared/lib/studio-service'
 import { cn } from '#/shared/lib/utils'
 import { Button } from '#/shared/ui/button'
+import { Input } from '#/shared/ui/input'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -482,7 +483,6 @@ export function StudioScopeSwitcher({
                   }}
                   state={{
                     visible: open === 'user',
-                    alwaysShowSearch: trusted,
                     searchKeyword: search,
                     busy: pending,
                     loading: trusted && trustedUsers.isPending,
@@ -517,7 +517,20 @@ export function StudioScopeSwitcher({
                             },
                           )}
                         </p>
-                        {searchControl}
+                        {searchControl ??
+                          (trusted && !trustedUsers.isError ? (
+                            <div className="px-2 py-1">
+                              <Input
+                                type="search"
+                                aria-label={t('scope.searchUsers')}
+                                placeholder={t('scope.searchUsers')}
+                                value={search}
+                                onChange={(event) =>
+                                  setSearch(event.currentTarget.value)
+                                }
+                              />
+                            </div>
+                          ) : null)}
                         {list}
                         {trusted &&
                         search.trim() &&

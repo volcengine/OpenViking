@@ -5,5 +5,3 @@ export type {
   ConsoleProps,
   ConsoleSlots,
 } from './types.js';
-
-export { ConsoleModeSwitch } from './console-mode-switch.js';

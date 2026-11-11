@@ -28,9 +28,6 @@ export default defineConfig({
           'components/viking-bot/interaction':
             './src/components/viking-bot/interaction/index.ts',
           'modules/file-browser': './src/modules/file-browser/index.ts',
-          // The in-repo Studio consumes this build entry through its local alias.
-          'modules/file-browser/use-file-browser':
-            './src/modules/file-browser/use-file-browser.ts',
           'components/wiki-dashboard':
             './src/components/wiki-dashboard/index.ts',
           'components/experience-dashboard':

@@ -1,12 +1,14 @@
-import studioI18n from '#/i18n/core'
 import { useDefaultConversationTitles } from '#/features/workbench/sessions/lib/use-default-conversation-titles'
 import type { VikingBotSessions } from '@openviking/react/components/viking-bot'
-import {
-  VikingBotSessionActions,
-  VikingBotWelcome,
-} from '@openviking/react/components/viking-bot'
+import { VikingBot } from '@openviking/react/components/viking-bot'
 import '@openviking/react/components/viking-bot/style.css'
-import { CircleAlertIcon, Loader2Icon, Trash2Icon } from 'lucide-react'
+import {
+  CircleAlertIcon,
+  HistoryIcon,
+  Loader2Icon,
+  SquarePenIcon,
+  Trash2Icon,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
@@ -28,6 +30,7 @@ import {
   isVikingBotWebSession,
 } from '#/features/workbench/sessions/lib/vikingbot-sessions'
 import { Button } from '#/shared/ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '#/shared/ui/popover'
 
 import type { ResourceOpenHandler } from '#/features/workbench/filesystem/lib/types'
 import {
@@ -200,9 +203,6 @@ export function AgentPanel({
           currentId: sessionId,
           isLoading: isLoadingSessions,
           onSelect: handleSwitchSession,
-          onNew: () => {
-            void handleNewSession()
-          },
           renderAction: (session) => (
             <SessionDeleteAction
               title={session.title}
@@ -210,7 +210,6 @@ export function AgentPanel({
             />
           ),
         }}
-        onOpenHistory={() => {}}
         sessionTitle={displayedSessionTitle}
         showNewSession={Boolean(
           persistedSessionId || chat.messages.length || sessionError,
@@ -332,43 +331,76 @@ export function AgentToolbar({
   sessionTitle,
   showNewSession,
 }: {
-  sessions?: VikingBotSessions
+  sessions?: Omit<VikingBotSessions, 'onNew'> & {
+    renderAction?: (
+      session: VikingBotSessions['items'][number],
+    ) => React.ReactNode
+  }
   container: HTMLDivElement | null
   historyLabel: string
   isCreatingSession: boolean
   newSessionLabel: string
   onNewSession: () => void
-  onOpenHistory: () => void
+  onOpenHistory?: () => void
   sessionTitle: string
   showNewSession: boolean
 }) {
+  const [open, setOpen] = useState(false)
   if (!container) return null
 
   return createPortal(
-    <div className="ov-viking-bot" style={{ height: 'auto', minHeight: 0 }}>
-      <VikingBotSessionActions
-        locale={studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
-        sessions={{
-          items: [],
-          onSelect: () => {},
-          onNew: onNewSession,
-          ...sessions,
-          onOpenHistory,
-          isCreating: isCreatingSession,
-          canCreate: showNewSession,
-        }}
-        labels={{ sessionHistory: historyLabel, newSession: newSessionLabel }}
-        extra={
-          <span
-            className="min-w-0 max-w-48 truncate px-1 text-sm font-medium"
-            title={sessionTitle}
-            data-agent-session-title
-          >
-            {sessionTitle}
-          </span>
-        }
-      />
-    </div>,
+    <>
+      <span
+        className="min-w-0 max-w-48 truncate px-1 text-sm font-medium"
+        title={sessionTitle}
+        data-agent-session-title
+      >
+        {sessionTitle}
+      </span>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger
+          render={<Button variant="ghost" size="icon-sm" />}
+          aria-label={historyLabel}
+          title={historyLabel}
+          onClick={onOpenHistory}
+        >
+          <HistoryIcon className="size-3.5" />
+        </PopoverTrigger>
+        <PopoverContent align="end" className="max-h-72 w-64 overflow-auto p-1">
+          {sessions?.isLoading ? (
+            <Loader2Icon className="mx-auto size-4 animate-spin" />
+          ) : null}
+          {sessions?.items.map((session) => (
+            <div key={session.id} className="flex min-w-0 items-center gap-1">
+              <Button
+                variant="ghost"
+                className="min-w-0 flex-1 justify-start"
+                aria-current={session.id === sessions.currentId || undefined}
+                onClick={() => {
+                  sessions.onSelect(session.id)
+                  setOpen(false)
+                }}
+              >
+                <span className="truncate">{session.title}</span>
+              </Button>
+              {sessions.renderAction?.(session)}
+            </div>
+          ))}
+        </PopoverContent>
+      </Popover>
+      {showNewSession ? (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={newSessionLabel}
+          title={newSessionLabel}
+          disabled={isCreatingSession}
+          onClick={onNewSession}
+        >
+          <SquarePenIcon className="size-3.5" />
+        </Button>
+      ) : null}
+    </>,
     container,
   )
 }
@@ -428,23 +460,21 @@ export function AgentEmptyState({
     returnObjects: true,
   }) as string[]
   return (
-    <div
-      className="ov-viking-bot"
+    <VikingBot
+      messages={[]}
+      composer={null}
       style={{ minHeight: '100%', height: 'auto' }}
-    >
-      <VikingBotWelcome
-        labels={{
-          welcomeTitle: t('agent.empty.heading'),
-          welcomeDescription: t('agent.empty.body'),
-        }}
-        quickInputs={prompts.map((prompt) => ({
-          id: prompt,
-          label: prompt,
-          prompt,
-        }))}
-        onSelect={(input) => onSend(input.prompt)}
-      />
-    </div>
+      labels={{
+        welcomeTitle: t('agent.empty.heading'),
+        welcomeDescription: t('agent.empty.body'),
+      }}
+      quickInputs={prompts.map((prompt) => ({
+        id: prompt,
+        label: prompt,
+        prompt,
+      }))}
+      onQuickInputSelect={(input) => onSend(input.prompt)}
+    />
   )
 }
 

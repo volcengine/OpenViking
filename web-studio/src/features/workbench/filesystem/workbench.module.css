@@ -272,3 +272,39 @@
 .moreMenuContent .moreMenuDanger:hover {
   background: color-mix(in srgb, var(--destructive) 10%, transparent);
 }
+
+/* Shared FilePreview supplies the header and editor. Studio supplies structured
+   Markdown and JSONL as a scrolling body through the footer slot. */
+:global(.ov-file-preview__panel):has(
+    > :global(.ov-file-preview__footer) .studioPreviewBody
+  )
+  > :global(.ov-file-preview__footer) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  font-size: inherit;
+}
+
+:global(.ov-file-preview__panel):has(
+    > :global(.ov-file-preview__footer) .studioPreviewBody
+  ):not(
+    :has([data-native-body], > :global(.ov-file-preview__body) > [role='alert'])
+  )
+  > :global(.ov-file-preview__body),
+:global(.ov-file-preview__panel):has(
+    [data-native-body],
+    > :global(.ov-file-preview__body) > [role='alert']
+  )
+  > :global(.ov-file-preview__footer):has(.studioPreviewBody) {
+  display: none;
+}
+
+:global(.ov-file-preview__panel):has(
+    > :global(.ov-file-preview__footer) .studioPreviewBody
+  )
+  > :global(.ov-file-preview__notice) {
+  order: 1;
+}

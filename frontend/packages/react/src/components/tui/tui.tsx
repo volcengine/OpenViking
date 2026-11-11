@@ -12,6 +12,36 @@ import { getTuiCommandQuery } from './command-completion.js';
 import { formatTuiCommandInput } from './command-input.js';
 import { findTuiCommand } from './command-definitions.js';
 
+export type {
+  TuiCommandDefinition,
+  TuiCommandExample,
+  TuiCommandGroup,
+  TuiCommandParam,
+  TuiCommandOption,
+  TuiSkeletonKind,
+} from './command-catalog.js';
+
+export type {
+  TuiCommandHelpContent,
+  TuiCommandHelpItem,
+  TuiCommandHelpSection,
+  TuiLabels,
+  TuiProps,
+  TuiRecord,
+  TuiRecordContent,
+  TuiRecordStatus,
+  TuiResourcePreviewContent,
+  TuiResourceTreeContent,
+  TuiResourceTreeDetailRow,
+  TuiResourceTreeItem,
+  TuiSearchListContent,
+  TuiSearchResultItem,
+  TuiStatusContent,
+  TuiStatusRow,
+  TuiTextContent,
+  TuiWriteResultContent,
+} from './types.js';
+
 /**
  * 命令记录、结果与输入区。宿主负责执行与会话，组件渲染传入的记录，
  * 上报用户的提交意图与已完成的复制。
@@ -21,8 +51,6 @@ import { findTuiCommand } from './command-definitions.js';
  */
 export function Tui({
   records,
-  renderRecord,
-  history,
   value,
   disabled = false,
   emptyState,
@@ -116,25 +144,21 @@ export function Tui({
         }}
       >
         {records.length ? (
-          records.map((record) =>
-            renderRecord ? (
-              <div key={record.id}>{renderRecord(record)}</div>
-            ) : (
-              <TuiRecordItem
-                key={record.id}
-                record={record}
-                command={findTuiCommand(record.command, commands)}
-                labels={text}
-                onOpenUri={onOpenUri}
-                onCopy={onCopy}
-                onPickCommand={
-                  disabled || readOnly
-                    ? undefined
-                    : (command) => fillCommand(`${command} `)
-                }
-              />
-            ),
-          )
+          records.map((record) => (
+            <TuiRecordItem
+              key={record.id}
+              record={record}
+              command={findTuiCommand(record.command, commands)}
+              labels={text}
+              onOpenUri={onOpenUri}
+              onCopy={onCopy}
+              onPickCommand={
+                disabled || readOnly
+                  ? undefined
+                  : (command) => fillCommand(`${command} `)
+              }
+            />
+          ))
         ) : (
           <TuiEmptyRegion
             emptyState={emptyState}
@@ -166,12 +190,9 @@ export function Tui({
         anchorRef={composerRef}
         onFocus={() => setDismissedValue(null)}
         value={value}
-        history={
-          history ??
-          records.map((record) =>
-            formatTuiCommandInput(record.command, commands),
-          )
-        }
+        history={records.map((record) =>
+          formatTuiCommandInput(record.command, commands),
+        )}
         labels={text}
         completion={completion}
         disabled={disabled}

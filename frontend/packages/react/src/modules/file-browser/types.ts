@@ -298,8 +298,6 @@ export interface FileBrowserActions {
 /** Internal options for the composed FileBrowser loader. */
 export interface UseFileBrowserOptions {
   rootUri: string;
-  /** Disable preview loading when the host provides an editable detail pane. */
-  loadPreview?: boolean;
   accessLabels?: Pick<FileBrowserLabels, 'accessDenied' | 'traverseOnly'>;
   /** Built-in copy; inherits the Provider locale, otherwise en-US. */
   locale?: Locale;

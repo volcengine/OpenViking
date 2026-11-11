@@ -23,6 +23,7 @@ import {
 } from '#/features/workbench/resources/lib/api'
 import { useInvalidateVikingFs } from '#/features/workbench/resources/hooks/viking-fm'
 import { getContentDownload } from '#/shared/api/ov-client'
+import { copyTextToClipboard } from '#/shared/lib/clipboard'
 import { detectFileType } from '#/shared/lib/viking-fs'
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
 import { Button } from '#/shared/ui/button'
@@ -70,6 +71,12 @@ export function SharedFilePreview({
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
+  const [sourceScope, setSourceScope] = useState<string | null>(null)
+  const sourceMode = sourceScope === currentScope
+  const [directoryLevel, setDirectoryLevel] = useState<{
+    scope: string
+    key: string
+  }>()
   const [allowedUri, setAllowedUri] = useState<string | null>(null)
   const needsLoad =
     !file.isDir &&
@@ -128,11 +135,86 @@ export function SharedFilePreview({
       }
     },
   }
+  const summaries =
+    query.data && 'abstract' in query.data ? query.data : undefined
+  const level =
+    directoryLevel?.scope === currentScope
+      ? directoryLevel.key
+      : summaries && !summaries.abstract
+        ? 'l1'
+        : 'l0'
+  const summary = level === 'l1' ? summaries?.overview : summaries?.abstract
+  const fileText =
+    query.data && 'content' in query.data ? query.data.content : undefined
+  const displayText =
+    fileText !== undefined && kind === 'markdown'
+      ? memoryFieldsDisplayContent(fileText)
+      : fileText
+  const customFilePreview =
+    !file.isDir &&
+    Boolean(
+      content ||
+      (fileText !== undefined && (kind === 'jsonl' || kind === 'markdown')),
+    )
+  const customBody = file.isDir ? (
+    summary !== undefined ? (
+      <StudioMarkdownPreview
+        content={summary}
+        uri={`${file.uri.replace(/\/$/, '')}/${level === 'l1' ? '.overview.md' : '.abstract.md'}`}
+        onNavigate={onNavigate}
+        directory
+      />
+    ) : undefined
+  ) : sourceMode && customFilePreview ? (
+    <pre className="min-w-max whitespace-pre px-4 py-3 font-mono text-xs leading-5">
+      {displayText}
+    </pre>
+  ) : (
+    (content ??
+    (fileText !== undefined ? (
+      kind === 'jsonl' ? (
+        <JsonlPreview content={fileText} />
+      ) : kind === 'markdown' ? (
+        <StudioMarkdownPreview
+          content={fileText}
+          uri={file.uri}
+          onNavigate={onNavigate}
+        />
+      ) : undefined
+    ) : undefined))
+  )
+  const renderedBody = customBody ? (
+    <div className={styles.studioPreviewBody}>{customBody}</div>
+  ) : undefined
   const renderActions = (actions: FilePreviewActions) => {
     actionsRef.current = actions
+    const nativeBody = actions.busy || actions.editing
+    const showingSource = customFilePreview
+      ? sourceMode
+      : actions.viewMode === 'source'
+    const copyText = file.isDir ? summary : displayText
+    const menuActions =
+      renderedBody && copyText !== undefined
+        ? {
+            ...actions,
+            canCopyContent: Boolean(copyText),
+            copyContent: async () => {
+              if (!copyText) return false
+              try {
+                await copyTextToClipboard(copyText)
+                return true
+              } catch {
+                return false
+              }
+            },
+          }
+        : actions
     return (
-      <div className={styles.previewActions}>
-        {actions.canSwitchView && !actions.editing ? (
+      <div
+        className={styles.previewActions}
+        data-native-body={nativeBody || undefined}
+      >
+        {(customFilePreview || actions.canSwitchView) && !nativeBody ? (
           <div
             className={styles.previewModeSwitch}
             role="group"
@@ -141,20 +223,28 @@ export function SharedFilePreview({
             <Button
               variant="ghost"
               className={styles.previewModeButton}
-              data-active={actions.viewMode === 'preview' || undefined}
-              aria-pressed={actions.viewMode === 'preview'}
+              data-active={!showingSource || undefined}
+              aria-pressed={!showingSource}
               size="sm"
-              onClick={() => actions.setViewMode('preview')}
+              onClick={() =>
+                customFilePreview
+                  ? setSourceScope(null)
+                  : actions.setViewMode('preview')
+              }
             >
               {t('filePreview.markdownPreview')}
             </Button>
             <Button
               variant="ghost"
               className={styles.previewModeButton}
-              data-active={actions.viewMode === 'source' || undefined}
-              aria-pressed={actions.viewMode === 'source'}
+              data-active={showingSource || undefined}
+              aria-pressed={showingSource}
               size="sm"
-              onClick={() => actions.setViewMode('source')}
+              onClick={() =>
+                customFilePreview
+                  ? setSourceScope(currentScope)
+                  : actions.setViewMode('source')
+              }
             >
               {t('filePreview.markdownSource')}
             </Button>
@@ -195,7 +285,7 @@ export function SharedFilePreview({
           )
         ) : null}
         {typeof extraActions === 'function'
-          ? extraActions(actions)
+          ? extraActions(menuActions)
           : extraActions}
       </div>
     )
@@ -205,7 +295,7 @@ export function SharedFilePreview({
     title: file.name,
     icon: <FileTextIcon className="size-3.5" />,
     operations,
-    slots: { actions: renderActions },
+    slots: { actions: renderActions, footer: renderedBody },
   }
   let tab: FilePreviewTab
   if (file.isDir) {
@@ -213,47 +303,26 @@ export function SharedFilePreview({
       ...common,
       kind: 'directory',
       loading: query.isPending,
-      defaultLevelKey:
-        query.data && 'abstract' in query.data && !query.data.abstract
-          ? 'l1'
-          : 'l0',
+      activeLevelKey: level,
+      onActiveLevelChange: (key) =>
+        setDirectoryLevel({ scope: currentScope, key }),
       levels: [
         {
           key: 'l0',
           label: 'L0',
-          preview:
-            query.data && 'abstract' in query.data ? (
-              <StudioMarkdownPreview
-                content={query.data.abstract ?? ''}
-                uri={`${file.uri.replace(/\/$/, '')}/.abstract.md`}
-                onNavigate={onNavigate}
-                directory
-              />
-            ) : undefined,
           source: {
             fileName: `${file.name}.md`,
             path: file.uri,
-            content:
-              query.data && 'abstract' in query.data ? query.data.abstract : '',
+            content: '',
           },
         },
         {
           key: 'l1',
           label: 'L1',
-          preview:
-            query.data && 'overview' in query.data ? (
-              <StudioMarkdownPreview
-                content={query.data.overview ?? ''}
-                uri={`${file.uri.replace(/\/$/, '')}/.overview.md`}
-                onNavigate={onNavigate}
-                directory
-              />
-            ) : undefined,
           source: {
             fileName: `${file.name}.md`,
             path: file.uri,
-            content:
-              query.data && 'overview' in query.data ? query.data.overview : '',
+            content: '',
           },
         },
       ],
@@ -262,19 +331,6 @@ export function SharedFilePreview({
     tab = {
       ...common,
       kind: 'file',
-      preview:
-        content ??
-        (query.data && 'content' in query.data ? (
-          kind === 'jsonl' ? (
-            <JsonlPreview content={query.data.content} />
-          ) : kind === 'markdown' ? (
-            <StudioMarkdownPreview
-              content={query.data.content}
-              uri={file.uri}
-              onNavigate={onNavigate}
-            />
-          ) : undefined
-        ) : undefined),
       loading: query.isPending && !content,
       source: {
         fileName: file.name,
@@ -282,15 +338,11 @@ export function SharedFilePreview({
         ...(query.data && 'blob' in query.data
           ? { file: query.data.blob }
           : {}),
-        ...(query.data && 'content' in query.data
-          ? {
-              content:
-                kind === 'markdown'
-                  ? memoryFieldsDisplayContent(query.data.content)
-                  : query.data.content,
-              truncated: query.data.truncated,
-            }
-          : {}),
+        content: renderedBody ? '' : displayText,
+        truncated:
+          query.data && 'truncated' in query.data
+            ? query.data.truncated
+            : undefined,
       },
       editing:
         !readOnly && !binary && query.isSuccess

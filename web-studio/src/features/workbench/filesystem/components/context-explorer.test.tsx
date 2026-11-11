@@ -1,63 +1,46 @@
 // @vitest-environment jsdom
-import type { FileTreeRow } from '@openviking/react/components/file-tree'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, expect, it, vi } from 'vitest'
 import { ContextTree } from './context-explorer'
 
-const m = vi.hoisted(() => ({
-  select: vi.fn(),
-  toggleExpand: vi.fn(),
-  refresh: vi.fn(),
-  stat: vi.fn(),
-  hook: vi.fn(),
-}))
+const mocks = vi.hoisted(() => ({ list: vi.fn(), stat: vi.fn() }))
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
-  useAppConnection: () => ({
-    connection: { apiKey: '', baseUrl: '' },
-    identityScopeKey: 'test',
-  }),
+  useAppConnection: () => ({ identityScopeKey: 'test' }),
 }))
 vi.mock('#/features/workbench/resources/lib/api', () => ({
-  fetchFsStat: m.stat,
+  fetchFsStat: mocks.stat,
 }))
-vi.mock('@studio-file-browser', () => ({
-  useFileBrowser: m.hook,
+vi.mock('#/shared/api/ov-client', () => ({
+  getOvClient: () => ({ instance: { get: mocks.list } }),
 }))
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
 afterEach(() => {
   cleanup()
-  vi.clearAllMocks()
+  vi.resetAllMocks()
 })
-const row = {
-  kind: 'entry' as const,
-  id: 'viking://resources',
-  uri: 'viking://resources',
-  name: 'resources',
-  type: 'directory' as const,
-  depth: 0,
-  expanded: false,
-}
-function setup(rows: readonly FileTreeRow[] = [row]) {
-  const onOpenSearch = vi.fn(),
-    onRefresh = vi.fn(async () => {})
-  m.hook.mockReturnValue({
-    rows,
-    selectedId: row.id,
-    isReady: true,
-    treeError: null,
-    actions: {
-      select: m.select,
-      toggleExpand: m.toggleExpand,
-      refresh: m.refresh,
+
+function setup() {
+  const children: Partial<Record<string, string[]>> = {
+    'viking://': ['agent', 'resources', 'system', 'user'],
+    'viking://resources/': ['demo'],
+    'viking://user/': ['default'],
+  }
+  mocks.list.mockImplementation(async (_route, { params: { uri } }) => ({
+    data: {
+      result: (children[uri] ?? []).map((name) => ({
+        uri: `${uri}${name}`,
+        isDir: true,
+      })),
     },
-  })
-  const onSelectDirectory = vi.fn(),
-    onSelectFile = vi.fn(),
-    onExpandedKeysChange = vi.fn()
+  }))
+  const onOpenSearch = vi.fn()
+  const onRefresh = vi.fn(async () => {})
+  const onSelectDirectory = vi.fn()
+  const onExpandedKeysChange = vi.fn()
   const client = new QueryClient()
   client.setQueryData(['viking-fs-ls', 'viking://'], [])
   render(
@@ -66,47 +49,42 @@ function setup(rows: readonly FileTreeRow[] = [row]) {
         onOpenSearch={onOpenSearch}
         onRefresh={onRefresh}
         currentUri="viking://"
-        expandedKeys={new Set()}
+        expandedKeys={new Set(['viking://resources/', 'viking://user/'])}
         onExpandedKeysChange={onExpandedKeysChange}
         onSelectDirectory={onSelectDirectory}
-        onSelectFile={onSelectFile}
+        onSelectFile={vi.fn()}
       />
     </QueryClientProvider>,
   )
   return {
     client,
     onSelectDirectory,
-    onSelectFile,
     onExpandedKeysChange,
     onOpenSearch,
     onRefresh,
   }
 }
-it('uses module rows and delegates selection to the module', async () => {
-  setup()
-  await userEvent.click(screen.getByRole('treeitem', { name: /resources/ }))
-  expect(m.select).toHaveBeenCalledWith(
-    expect.objectContaining({ uri: row.uri }),
-  )
-  expect(m.hook).toHaveBeenCalledWith(
-    expect.objectContaining({ controlled: true, loadPreview: false }),
-  )
-})
+
 it('adapts the selected URI into Studio file metadata', async () => {
-  const { onSelectFile } = setup()
-  const file = {
-    uri: 'viking://resources/guide.md',
-    isDir: false,
-    name: 'guide.md',
+  const { onSelectDirectory } = setup()
+  const directory = {
+    uri: 'viking://resources',
+    isDir: true,
+    name: 'resources',
   }
-  m.stat.mockResolvedValue(file)
-  m.hook.mock.calls.at(-1)![0].onUriChange(file.uri)
-  await waitFor(() => expect(onSelectFile).toHaveBeenCalledWith(file))
+  mocks.stat.mockResolvedValue(directory)
+  await userEvent.click(await screen.findByText('resources', { exact: true }))
+  await waitFor(() => expect(onSelectDirectory).toHaveBeenCalledWith(directory))
 })
-it('refreshes module data after a Studio filesystem mutation', async () => {
+
+it('refreshes tree data after a Studio filesystem mutation', async () => {
   const { client } = setup()
+  await screen.findByRole('treeitem', { name: /demo/ })
+  const previousCalls = mocks.list.mock.calls.length
   await client.invalidateQueries({ queryKey: ['viking-fs-ls'] })
-  await waitFor(() => expect(m.refresh).toHaveBeenCalledTimes(1))
+  await waitFor(() =>
+    expect(mocks.list.mock.calls.length).toBeGreaterThan(previousCalls),
+  )
 })
 
 it('opens Studio search and refreshes through the shared tree toolbar', async () => {
@@ -119,35 +97,13 @@ it('opens Studio search and refreshes through the shared tree toolbar', async ()
   expect(onRefresh).toHaveBeenCalledOnce()
 })
 
-it('puts the complete user subtree first while preserving other branches', () => {
-  const entry = (name: string, depth = 0) => ({
-    ...row,
-    id: `viking://${name}`,
-    uri: `viking://${name}`,
-    name: name.split('/').at(-1)!,
-    depth,
-    expanded: true,
-  })
-  const rows = [
-    entry('agent'),
-    entry('resources'),
-    entry('resources/demo', 1),
-    entry('system'),
-    entry('user'),
-    entry('user/default', 1),
-  ]
-  setup(rows)
+it('puts the complete user subtree first while preserving other branches', async () => {
+  setup()
+  await screen.findByRole('treeitem', { name: /demo/ })
+  await screen.findByRole('treeitem', { name: /default/ })
   expect(
     screen
       .getAllByRole('treeitem')
       .map((item) => item.querySelector('.ov-file-tree__label')?.textContent),
   ).toEqual(['user', 'default', 'agent', 'resources', 'demo', 'system'])
-  expect(rows.map((item) => item.name)).toEqual([
-    'agent',
-    'resources',
-    'demo',
-    'system',
-    'user',
-    'default',
-  ])
 })

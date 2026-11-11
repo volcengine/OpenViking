@@ -7,7 +7,6 @@
     "module": "ESNext",
     "paths": {
       "@ov-server/*": ["./types/ov-server/*"],
-      "@studio-file-browser": ["../frontend/packages/react/dist/modules/file-browser/use-file-browser"],
       "#/*": ["./src/*"],
       "@/*": ["./src/*"]
     },

@@ -72,7 +72,3 @@
 认证、权限、账号切换、页面布局与跨模块资源导航由宿主负责。
 
 Console 省略 `locale` 时继承最近的语言作用域，最终默认 `en-US`。切换语言会更新已有命令帮助、参数错误和取消提示，保留请求、记录 ID 与草稿；服务端返回的正文和错误原文保持原值。
-
-## 独立模式切换
-
-`ConsoleModeSwitch` 从 `@openviking/react/modules/console` 导出，使用模块样式。通过 `mode`（`conversation` / `command`）和 `onModeChange` 受控切换；`labels` 包含 `mode`、`conversation`、`command` 三个文案。`showConversation={false}` 隐藏对话入口；可选 `panelId` 关联对应面板。宿主已有执行逻辑时可单独使用，不会创建 Client 或发起请求。

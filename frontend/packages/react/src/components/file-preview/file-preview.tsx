@@ -158,8 +158,8 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   // no source view.
   const canSwitchView =
     Boolean(fileTab) &&
-    (fileTab?.preview !== undefined ||
-      (viewModes.includes('preview') && viewModes.includes('source')));
+    viewModes.includes('preview') &&
+    viewModes.includes('source');
 
   // Markdown 正文里的链接：把原始目标交给宿主的 `openUri`，由它决定怎么解析
   // 与跳转。组件不做相对路径补全——那需要知道当前文档的地址，属于宿主。

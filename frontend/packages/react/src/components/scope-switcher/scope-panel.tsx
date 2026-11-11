@@ -76,8 +76,7 @@ export function ScopePanel({
   // set is well past the threshold, and searching is exactly what it needs.
   const searchVisible =
     actions?.onSearchKeywordChange &&
-    (state?.alwaysShowSearch ||
-      hasKeyword ||
+    (hasKeyword ||
       Math.max(options.length, data.options.length, data.total ?? 0) >
         SCOPE_SWITCHER_SEARCH_THRESHOLD);
   const search = searchVisible ? (

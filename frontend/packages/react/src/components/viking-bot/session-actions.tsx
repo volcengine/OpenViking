@@ -93,11 +93,6 @@ export function VikingBotSessionActions({
                               </time>
                             ) : null}
                           </button>
-                          {sessions.renderAction ? (
-                            <div className="ov-viking-bot__session-extra">
-                              {sessions.renderAction(item)}
-                            </div>
-                          ) : null}
                         </li>
                       );
                     })}
@@ -116,22 +111,19 @@ export function VikingBotSessionActions({
                 </div>
               )}
             </BotPopover>
-            {sessions.canCreate !== false ? (
-              <Tooltip content={labels.newSession}>
-                <Button
-                  size="mini"
-                  type="text"
-                  iconOnly
-                  htmlType="button"
-                  className="ov-viking-bot__header-action"
-                  aria-label={labels.newSession}
-                  disabled={sessions.isCreating}
-                  onClick={sessions.onNew}
-                >
-                  <VikingBotIcon name="newSession" />
-                </Button>
-              </Tooltip>
-            ) : null}
+            <Tooltip content={labels.newSession}>
+              <Button
+                size="mini"
+                type="text"
+                iconOnly
+                htmlType="button"
+                className="ov-viking-bot__header-action"
+                aria-label={labels.newSession}
+                onClick={sessions.onNew}
+              >
+                <VikingBotIcon name="newSession" />
+              </Button>
+            </Tooltip>
           </>
         ) : null}
       </div>

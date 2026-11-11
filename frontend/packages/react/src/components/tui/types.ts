@@ -515,8 +515,6 @@ export interface TuiProps extends Omit<
    * Controlled input value.
    */
   value: string;
-  /** Safe command history for recall; defaults to command text from records. */
-  history?: readonly string[];
   /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
   locale?: Locale;
   /**
@@ -550,8 +548,6 @@ export interface TuiProps extends Omit<
   commands?: readonly TuiCommandDefinition[];
   /** 宿主提供的分组名称与顺序；未声明的组按目录顺序追加。 */
   commandGroups?: readonly TuiCommandGroup[];
-  /** Optional host rendering for records with task controls; undefined uses the built-in renderer. */
-  renderRecord?: (record: TuiRecord) => ReactNode;
   /**
    * 输入值变化时触发，包括接受命令或示例；行内占位不改变值，也不提交。省略时输入框
    * 只读，用于展示历史记录。

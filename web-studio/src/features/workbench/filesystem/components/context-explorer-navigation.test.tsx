@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import { OpenVikingProvider } from '@openviking/react/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -18,32 +17,30 @@ vi.mock('react-i18next', () => ({
 }))
 afterEach(cleanup)
 
+const get = vi.hoisted(() => vi.fn())
+vi.mock('#/shared/api/ov-client', () => ({
+  getOvClient: () => ({ instance: { get } }),
+}))
+
 it('keeps existing tree nodes and cached branches when Studio selects a directory', async () => {
-  const requests: string[] = []
-  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
-    const url = new URL(input instanceof Request ? input.url : String(input))
-    const uri = url.searchParams.get('uri')!
-    requests.push(uri)
-    const names: Record<string, string[]> = {
-      'viking://': ['resources', 'user'],
-      'viking://resources': ['alpha', 'beta'],
-      'viking://resources/alpha': ['note.md'],
-      'viking://resources/beta': ['other.md'],
-    }
-    return new Response(
-      JSON.stringify({
-        status: 'ok',
-        result: (names[uri] ?? []).map((name) => ({
-          uri: `${uri}${uri.endsWith('/') ? '' : '/'}${name}`,
-          isDir: !name.endsWith('.md'),
-        })),
-      }),
-      { headers: { 'Content-Type': 'application/json' } },
-    )
-  })
+  const names: Partial<Record<string, string[]>> = {
+    'viking://': ['resources', 'user'],
+    'viking://resources/': ['alpha', 'beta'],
+    'viking://resources/alpha/': ['note.md'],
+    'viking://resources/beta/': ['other.md'],
+  }
+  get.mockImplementation(async (_route, { params: { uri } }) => ({
+    data: {
+      status: 'ok',
+      result: (names[uri] ?? []).map((name) => ({
+        uri: `${uri}${name}`,
+        isDir: !name.endsWith('.md'),
+      })),
+    },
+  }))
   function StudioNavigation() {
     const [uri, setUri] = useState('viking://resources')
-    const [expanded, setExpanded] = useState(new Set<string>())
+    const [expanded, setExpanded] = useState(new Set(['viking://resources/']))
     return (
       <ContextTree
         currentUri={uri}
@@ -56,9 +53,7 @@ it('keeps existing tree nodes and cached branches when Studio selects a director
   }
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <OpenVikingProvider baseURL="http://tree.test" fetch={fetcher}>
-        <StudioNavigation />
-      </OpenVikingProvider>
+      <StudioNavigation />
     </QueryClientProvider>,
   )
   const alpha = await screen.findByRole('treeitem', { name: /alpha/ })
@@ -89,7 +84,11 @@ it('keeps existing tree nodes and cached branches when Studio selects a director
     expect(removed).toHaveLength(0)
     expect(sibling.isConnected).toBe(true)
     expect(screen.getByRole('treeitem', { name: /note.md/ })).toBeTruthy()
-    expect(requests.filter((uri) => uri === 'viking://')).toHaveLength(1)
+    expect(
+      get.mock.calls.filter(
+        ([, options]) => options.params.uri === 'viking://',
+      ),
+    ).toHaveLength(1)
   } finally {
     observer.disconnect()
   }

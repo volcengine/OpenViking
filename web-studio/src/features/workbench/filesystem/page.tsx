@@ -1,4 +1,3 @@
-import { ConsoleModeSwitch } from '@openviking/react/modules/console'
 import '@openviking/react/modules/console/style.css'
 import { StudioHeaderActions } from '#/app/layouts/studio-header-actions'
 import { useQueryClient } from '@tanstack/react-query'
@@ -14,6 +13,8 @@ import { showErrorToast } from '#/shared/lib/error-toast'
 import { getRouteApi, useNavigate, useBlocker } from '@tanstack/react-router'
 import {
   GalleryVerticalEndIcon,
+  BotIcon,
+  TerminalIcon,
   MoreHorizontalIcon,
   ArrowLeftIcon,
   HistoryIcon,
@@ -1144,20 +1145,35 @@ function FilesystemActionTabs({
   showAgentTab: boolean
 }) {
   const { t } = useTranslation('filesystem')
+  const panels: FilesystemPanel[] = showAgentTab
+    ? ['agent', 'terminal']
+    : ['terminal']
 
   return (
-    <ConsoleModeSwitch
-      mode={activePanel === 'agent' ? 'conversation' : 'command'}
-      showConversation={showAgentTab}
-      onModeChange={(mode) =>
-        onPanelChange(mode === 'conversation' ? 'agent' : 'terminal')
-      }
-      labels={{
-        mode: t('actionPanel.expand'),
-        conversation: t('tabs.agent'),
-        command: t('tabs.terminal'),
-      }}
-    />
+    <div
+      className="ov-console__modes"
+      role="group"
+      aria-label={t('actionPanel.expand')}
+    >
+      {panels.map((panel) => {
+        const Icon = panel === 'agent' ? BotIcon : TerminalIcon
+        const label = t(`tabs.${panel}`)
+        return (
+          <button
+            key={panel}
+            type="button"
+            className="ov-console__mode"
+            aria-label={label}
+            title={label}
+            aria-pressed={activePanel === panel}
+            onClick={() => onPanelChange(panel)}
+          >
+            <Icon size={16} />
+            {activePanel === panel ? <span>{label}</span> : null}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 

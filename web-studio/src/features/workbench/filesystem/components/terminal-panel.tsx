@@ -1,4 +1,4 @@
-import { Tui, TuiResult } from '@openviking/react/components/tui'
+import { Tui } from '@openviking/react/components/tui'
 import '@openviking/react/components/tui/style.css'
 import { createRandomUuid } from '#/shared/lib/browser-crypto'
 import {
@@ -41,6 +41,7 @@ import {
   fetchSearch,
 } from '#/features/workbench/resources/lib/api'
 import { normalizeDirUri } from '#/shared/lib/viking-fs'
+import { VIKING_URI_RE } from '#/shared/lib/viking-uri'
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
 import {
   addMessage,
@@ -1533,7 +1534,11 @@ export function TerminalPanel({
     ],
   )
 
-  const terminalRef = useRef<HTMLDivElement>(null)
+  const recalledCommand = useRef<{
+    index: number
+    draft: string
+    value: string
+  } | null>(null)
   const resourceCompletions = commands
     .filter(
       (item) =>
@@ -1569,30 +1574,64 @@ export function TerminalPanel({
             toolbarContainer,
           )
         : null}
-      <div ref={terminalRef} className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col">
         <Tui
           locale={translation.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
           value={command}
-          onValueChange={setCommand}
+          onValueChange={(value) => {
+            recalledCommand.current = null
+            setCommand(value)
+          }}
           disabled={running}
-          history={commandHistory}
-          records={history.map((entry) => ({
-            id: entry.id,
-            command: entry.title,
-            status:
-              entry.kind === 'error'
-                ? ('error' as const)
-                : ('success' as const),
-          }))}
-          renderRecord={(record) => {
-            const entry = history.find((item) => item.id === record.id)!
-            return (
-              <TerminalHistoryItem
-                entry={entry}
-                onOpenResource={onOpenResource}
-                openingUri={openingUri}
-              />
+          records={[]}
+          emptyState={
+            history.length ? (
+              <div className="w-full space-y-2">
+                {history.map((entry) => (
+                  <TerminalHistoryItem
+                    key={entry.id}
+                    entry={entry}
+                    onOpenResource={onOpenResource}
+                    openingUri={openingUri}
+                  />
+                ))}
+              </div>
+            ) : undefined
+          }
+          onKeyDown={(event) => {
+            if (
+              running ||
+              event.defaultPrevented ||
+              event.shiftKey ||
+              !(event.target instanceof HTMLTextAreaElement) ||
+              !commandHistory.length
             )
+              return
+            const input = event.target
+            if (input.selectionStart !== input.selectionEnd) return
+            const previous = recalledCommand.current
+            const browsing = previous?.value === command
+            const up =
+              event.key === 'ArrowUp' &&
+              !command.slice(0, input.selectionStart).includes('\n')
+            const down =
+              event.key === 'ArrowDown' &&
+              browsing &&
+              !command.slice(input.selectionEnd).includes('\n')
+            if (!up && !down) return
+            event.preventDefault()
+            const index = Math.max(
+              0,
+              Math.min(
+                commandHistory.length,
+                (browsing ? previous.index : commandHistory.length) +
+                  (up ? -1 : 1),
+              ),
+            )
+            const draft = browsing ? previous.draft : command
+            const value = commandHistory[index] ?? draft
+            recalledCommand.current = { index, draft, value }
+            setCommand(value)
           }}
           commands={[
             ...resourceCompletions,
@@ -1690,6 +1729,8 @@ export function TerminalPanel({
     </>
   )
 }
+
+const TERMINAL_RESOURCE_LINK = new RegExp(`(${VIKING_URI_RE.source})`, 'g')
 
 export function TerminalHistoryItem({
   entry,
@@ -1789,18 +1830,22 @@ export function TerminalHistoryItem({
           onOpenResource={onOpenResource}
         />
       ) : entry.body ? (
-        <TuiResult
-          record={{
-            id: entry.id,
-            command: entry.title,
-            status: entry.kind === 'error' ? 'error' : 'success',
-            content: { variant: 'text', text: entry.body },
-          }}
-          locale={translation.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
-          onOpenUri={(uri) => {
-            void onOpenResource(uri)
-          }}
-        />
+        <pre className="whitespace-pre-wrap break-words rounded-md bg-muted/40 p-2 text-xs leading-5 text-muted-foreground">
+          {entry.body.split(TERMINAL_RESOURCE_LINK).map((part, index) =>
+            index % 2 ? (
+              <button
+                key={index}
+                type="button"
+                className="break-all text-primary hover:underline"
+                onClick={() => void onOpenResource(part)}
+              >
+                {part}
+              </button>
+            ) : (
+              part
+            ),
+          )}
+        </pre>
       ) : null}
       {entry.details?.length ? (
         <dl className="mt-2 space-y-2">

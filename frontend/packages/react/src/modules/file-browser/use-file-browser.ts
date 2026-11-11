@@ -26,7 +26,6 @@ import type {
  */
 export function useFileBrowser({
   rootUri,
-  loadPreview = true,
   locale: localeProp,
   dashboardKinds,
   renderDashboard,
@@ -140,7 +139,7 @@ export function useFileBrowser({
     // Under the uncontrolled mode `currentUri` is null and `pendingUri` holds the
     // real selection, so the preview follows that instead — otherwise a selection
     // the module owns would never load anything.
-    uri: loadPreview && !blocked ? activeUri : null,
+    uri: blocked ? null : activeUri,
     resourceType,
     labels: summaryLabels ?? resolveSummaryLabels(locale),
     formatCharacterCount: formatCharacterCount ?? text.formatCharacterCount,

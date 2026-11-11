@@ -136,8 +136,6 @@ export type FilePreviewTab =
  * A tab that previews `source` according to its file format.
  */
 export interface FilePreviewFileTab extends FilePreviewTabBase {
-  /** Optional domain-specific preview body. Source mode and editing remain shared. */
-  preview?: ReactNode;
   /**
    * 页签类型标记，固定为 `file`。
    * Tab kind discriminator, always `file`.
@@ -332,8 +330,6 @@ export interface FilePreviewDirectoryTab extends FilePreviewTabBase {
  * 目录的一级摘要。One summary level of a directory.
  */
 export interface FilePreviewDirectoryLevel {
-  /** Optional domain-specific summary rendering. */
-  preview?: ReactNode;
   /**
    * 层级唯一标识，用于切换与受控状态。
    * Unique level key, used for switching and controlled state.

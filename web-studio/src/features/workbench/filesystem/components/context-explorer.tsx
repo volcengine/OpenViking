@@ -2,8 +2,9 @@ import studioI18n from '#/i18n/core'
 import { useQueryClient } from '@tanstack/react-query'
 import type { Ref, PointerEvent as ReactPointerEvent } from 'react'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
-import { useImperativeHandle, useRef, useEffect, useMemo } from 'react'
-import { useFileBrowser } from '@studio-file-browser'
+import { useImperativeHandle, useRef, useEffect } from 'react'
+import { useContextTree } from '../lib/use-context-tree'
+import { normalizeDirUri, normalizeFileUri } from '#/shared/lib/viking-fs'
 import { toast } from 'sonner'
 import { FileTree } from '@openviking/react/components/file-tree'
 import '@openviking/react/components/file-tree/style.css'
@@ -16,8 +17,6 @@ import { useTranslation } from 'react-i18next'
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
 
 import { ROOT_URI } from '#/features/workbench/filesystem/lib/constants'
-
-const noSharedDashboards = [] as const
 
 export function ContextExplorerHeader({
   onAddResource,
@@ -73,64 +72,40 @@ export function ContextTree({
   rootUri?: string
 }) {
   const { t } = useTranslation('filesystem')
-  // This is an initial location, not a controlled expansion value. Changing it
-  // on selection reinitializes the shared module and discards all loaded branches.
-  // StudioUiProvider remounts this subtree when the connection identity changes.
-  const initialExpandedUri = useRef(currentUri)
   const navigationVersion = useRef(0)
-  // Invalidate pending stat requests when this identity-scoped tree unmounts.
   useEffect(
     () => () => {
       navigationVersion.current += 1
     },
     [],
   )
-  const browser = useFileBrowser({
-    rootUri,
-    controlled: true,
-    currentUri: selectedFileUri || currentUri,
-    defaultExpandedUri: initialExpandedUri.current,
-    loadPreview: false,
-    dashboardKinds: noSharedDashboards,
-    locale: studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US',
-    onUriChange: (uri) => {
-      if (!uri) return
-      const version = ++navigationVersion.current
-      void fetchFsStat(uri)
-        .then((entry) => {
-          if (navigationVersion.current !== version) return
-          entry.isDir ? onSelectDirectory(entry) : onSelectFile(entry)
-        })
-        .catch((error) =>
-          toast.error(
-            error instanceof Error
-              ? error.message
-              : t('dirBrowser.error', { ns: 'resources' }),
-          ),
+  const tree = useContextTree(rootUri, expandedKeys)
+  const expand = (uri: string, open: boolean) => {
+    const key = normalizeDirUri(uri)
+    const next = new Set([...expandedKeys].map(normalizeDirUri))
+    if (open) next.add(key)
+    else next.delete(key)
+    onExpandedKeysChange(next)
+  }
+  const select = async (uri: string) => {
+    const version = ++navigationVersion.current
+    try {
+      const entry = await fetchFsStat(uri)
+      if (navigationVersion.current !== version) return
+      if (entry.isDir) onSelectDirectory(entry)
+      else onSelectFile(entry)
+    } catch (error) {
+      if (navigationVersion.current === version)
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : t('dirBrowser.error', { ns: 'resources' }),
         )
-    },
-  })
-  const rows = useMemo(() => {
-    const source = browser.rows
-    if (rootUri !== ROOT_URI) return source
-    const start = source.findIndex(
-      (row) => row.kind === 'entry' && row.uri === 'viking://user',
-    )
-    if (start <= 0) return source
-    const next = source.findIndex(
-      (row, index) => index > start && row.depth <= source[start].depth,
-    )
-    const end = next < 0 ? source.length : next
-    // Rows are flattened: move the complete user subtree, including loading rows.
-    return [
-      ...source.slice(start, end),
-      ...source.slice(0, start),
-      ...source.slice(end),
-    ]
-  }, [browser.rows, rootUri])
+    }
+  }
   const cache = useQueryClient().getQueryCache()
-  const refresh = browser.actions.refresh
-  // Observe Studio mutations in the external query cache; the module owns its own data.
+  const refresh = tree.refresh
+  // Observe Studio mutations in the external query cache; refresh tree data after a Studio mutation.
   // Coalesce invalidations and unsubscribe on identity unmount to avoid stale refreshes.
   useEffect(() => {
     let active = true
@@ -154,37 +129,37 @@ export function ContextTree({
       unsubscribe()
     }
   }, [cache, refresh])
-  useImperativeHandle(
-    refreshRef,
-    () => ({ refresh: browser.actions.refresh }),
-    [browser.actions.refresh],
-  )
+  useImperativeHandle(refreshRef, () => ({ refresh }), [refresh])
   return (
     <FileTree
       locale={studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
       className={styles.tree}
       search={Boolean(onOpenSearch)}
       refresh={{ loading: isRefreshing }}
-      rows={rows}
-      selectedId={browser.selectedId}
-      isReady={browser.isReady}
-      errorFallback={browser.treeError?.message}
+      rows={tree.rows}
+      selectedId={normalizeFileUri(selectedFileUri || currentUri)}
+      isReady={tree.isReady}
+      errorFallback={tree.error?.message}
       aria-label={t('explorer.title')}
       operations={{
-        ...browser.actions,
+        select: async (row) => {
+          if (row.type === 'directory' && !row.expanded) expand(row.uri, true)
+          await select(row.uri)
+        },
+        loadMore: async (row) => {
+          if (row.parentId) await tree.loadMore(row.parentId)
+        },
+        retry: async (row) => {
+          if ('parentId' in row && row.parentId) await tree.retry(row.parentId)
+          else await refresh()
+        },
         search: onOpenSearch
           ? async () => {
               onOpenSearch()
             }
           : undefined,
-        refresh: onRefresh ?? browser.actions.refresh,
-        toggleExpand: async (row) => {
-          const next = new Set(expandedKeys)
-          if (next.has(row.uri)) next.delete(row.uri)
-          else next.add(row.uri)
-          onExpandedKeysChange(next)
-          await browser.actions.toggleExpand(row)
-        },
+        refresh: onRefresh ?? refresh,
+        toggleExpand: async (row) => expand(row.uri, !row.expanded),
       }}
       labels={{
         empty: t('explorer.empty'),

@@ -83,7 +83,7 @@ it('loads truncated previews but edits and saves full content, and clears the na
     expect((latest().tabs[0] as FilePreviewFileTab).editing).toBeTruthy(),
   )
   const tab = latest().tabs[0] as FilePreviewFileTab
-  expect(tab.source.content).toBe('# Preview')
+  expect(tab.source.truncated).toBe(true)
   expect(mocks.read).toHaveBeenCalledWith(file.uri, { limit: 10000, raw: true })
   await act(async () => {
     expect(await tab.editing!.loadContent!(tab.source)).toBe('# Full content')

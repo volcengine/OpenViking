@@ -108,9 +108,4 @@
 
 独立样式入口为 `@openviking/react/components/viking-bot/style.css`，已包含主题基线，可独立消费。
 
-## 独立欢迎页
-
-`VikingBotWelcome` 可从同一公开入口导入，并复用相同样式。传入 `labels`（可选）、`quickInputs` 和 `onSelect` 即可复用欢迎插画与推荐问题；`disabled` 禁用推荐问题。组件只上报选中的输入，由宿主决定填入草稿或提交。
-
-`VikingBotSessions.renderAction?: (session: VikingBotSession) => ReactNode` 可在每条会话旁添加删除等操作，由宿主负责确认和请求。`isCreating` 在创建期间禁用按钮；`canCreate: false` 隐藏创建入口（默认显示）。确认弹窗应挂载在历史浮层之外，避免浮层关闭时一并卸载。
 交互区的 `labels.answer` 设置文本答案的无障碍名称，`labels.other` 设置默认自定义输入提示；请求自带的 `allowCustomInput.placeholder` 优先。内嵌交互区继承 VikingBot 的 `locale`，也可通过 `interaction.locale` 局部覆盖。
