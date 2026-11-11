@@ -138,6 +138,9 @@ export const KNOBS = [
     workspace: "capture.enabled",
     capability: "capture",
   },
+  // Magpie uses these for capture when its gateway has no session or yields to a native plugin.
+  { name: "captureWithoutSession", type: "bool", default: false, capability: "capture" },
+  { name: "nativeAgents", type: "list", default: [], capability: "capture" },
   { name: "captureMode", type: "enum", values: ["semantic", "keyword"], default: "semantic", env: "OPENVIKING_CAPTURE_MODE", capability: "capture" },
   { name: "captureMaxLength", type: "int", default: 24000, min: 200, max: 100000, env: "OPENVIKING_CAPTURE_MAX_LENGTH", capability: "capture" },
   // Tool output is reported verbatim; the server owns truncation via
@@ -280,9 +283,10 @@ export function harnessKey(harness) {
 }
 
 /** Both accepted spellings of every harness, for the `plugin` section. */
-export const HARNESS_CONFIG_KEYS = new Set(
-  Object.values(HARNESS_KEYS).flatMap((key) => [key, key.replace(/_/g, "-")]),
-);
+export const HARNESS_CONFIG_KEYS = new Set([
+  ...Object.values(HARNESS_KEYS).flatMap((key) => [key, key.replace(/_/g, "-")]),
+  "magpie", // Magpie supports ovcli.conf only, with no legacy ov.conf section.
+]);
 
 export function knobDefault(knob, harness = "") {
   if (harness && knob.harness && knob.harness[harness] !== undefined) return knob.harness[harness];

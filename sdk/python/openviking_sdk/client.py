@@ -10,7 +10,20 @@ import os
 import tempfile
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Type, TypeVar, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+)
 from urllib.parse import quote
 
 import httpx
@@ -54,6 +67,7 @@ from .options import (
     ExperienceTrajectoryOptions,
     FindOptions,
     ListPage,
+    MCPToolMount,
     Message,
     PreflightAssetOptions,
     ReindexOptions,
@@ -957,6 +971,248 @@ class AsyncHTTPClient:
         if target_uri is not None:
             params["target_uri"] = target_uri
         response = await self._request("DELETE", f"/api/v1/skills/{skill_name}", params=params)
+        return self._handle_response(response)
+
+    async def add_mcp(
+        self,
+        name: str,
+        url: str,
+        headers: Optional[Mapping[str, str]] = None,
+        *,
+        target_uri: Optional[str] = None,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "name": name,
+            "url": url,
+            "headers": dict(headers or {}),
+            "wait": wait,
+        }
+        if target_uri is not None:
+            payload["target_uri"] = VikingURI.normalize(target_uri)
+        response = await self._request(
+            "POST",
+            "/api/v1/mcps",
+            json=payload,
+        )
+        return self._handle_response(response)
+
+    async def remove_mcp(
+        self,
+        name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        name_path = self._path_segment(name)
+        params = {"target_uri": VikingURI.normalize(target_uri)} if target_uri is not None else None
+        if params is None:
+            response = await self._request("DELETE", f"/api/v1/mcps/{name_path}")
+        else:
+            response = await self._request(
+                "DELETE",
+                f"/api/v1/mcps/{name_path}",
+                params=params,
+            )
+        return self._handle_response(response)
+
+    async def list_mcps(self, target_uri: Optional[str] = None) -> Dict[str, Any]:
+        params = {"target_uri": VikingURI.normalize(target_uri)} if target_uri is not None else None
+        if params is None:
+            response = await self._request("GET", "/api/v1/mcps")
+        else:
+            response = await self._request("GET", "/api/v1/mcps", params=params)
+        return self._handle_response(response)
+
+    async def find_mcp_tools(
+        self,
+        query: str,
+        limit: int = 10,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"query": query, "limit": limit}
+        if target_uri is not None:
+            payload["target_uri"] = VikingURI.normalize(target_uri)
+        response = await self._request(
+            "POST",
+            "/api/v1/mcps/find",
+            json=payload,
+        )
+        return self._handle_response(response)
+
+    async def validate_mcp(
+        self,
+        name: str,
+        url: str,
+        headers: Optional[Mapping[str, str]] = None,
+    ) -> Dict[str, Any]:
+        response = await self._request(
+            "POST",
+            "/api/v1/mcps/validate",
+            json={"name": name, "url": url, "headers": dict(headers or {})},
+        )
+        return self._handle_response(response)
+
+    async def get_mcp(
+        self,
+        name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        name_path = self._path_segment(name)
+        params = {"target_uri": VikingURI.normalize(target_uri)} if target_uri is not None else None
+        if params is None:
+            response = await self._request("GET", f"/api/v1/mcps/{name_path}")
+        else:
+            response = await self._request(
+                "GET",
+                f"/api/v1/mcps/{name_path}",
+                params=params,
+            )
+        return self._handle_response(response)
+
+    async def sync_mcp(
+        self,
+        name: str,
+        *,
+        target_uri: Optional[str] = None,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        name_path = self._path_segment(name)
+        payload: Dict[str, Any] = {"wait": wait}
+        if target_uri is not None:
+            payload["target_uri"] = VikingURI.normalize(target_uri)
+        response = await self._request(
+            "POST",
+            f"/api/v1/mcps/{name_path}/sync",
+            json=payload,
+        )
+        return self._handle_response(response)
+
+    async def get_mcp_status(
+        self,
+        name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {"name": name}
+        if target_uri is not None:
+            params["target_uri"] = VikingURI.normalize(target_uri)
+        response = await self._request("GET", "/api/v1/mcps/status", params=params)
+        return self._handle_response(response)
+
+    async def invoke_mcp_tool(
+        self,
+        tool_uri: str,
+        arguments: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        response = await self._request(
+            "POST",
+            "/api/v1/mcps/invoke",
+            json={
+                "uri": VikingURI.normalize(tool_uri),
+                "arguments": dict(arguments or {}),
+            },
+        )
+        return self._handle_response(response)
+
+    async def mount_mcp_tool(
+        self,
+        tool_uri: str,
+        node_uri: str,
+        title: str,
+        description: Optional[str] = None,
+        timeout_seconds: int = 60,
+        arguments: Optional[Mapping[str, Any]] = None,
+        tags: Optional[Sequence[str]] = None,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "tool_uri": VikingURI.normalize(tool_uri),
+            "node_uri": VikingURI.normalize(node_uri),
+            "title": title,
+            "description": description,
+            "timeout_seconds": timeout_seconds,
+            "arguments": dict(arguments or {}),
+            "wait": wait,
+        }
+        if tags is not None:
+            payload["tags"] = list(tags)
+        response = await self._request(
+            "POST",
+            "/api/v1/mcps/mount",
+            json=payload,
+        )
+        return self._handle_response(response)
+
+    async def batch_mount_mcp_tools(
+        self,
+        mounts: Sequence[MCPToolMount],
+        *,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        """Mount in order; inspect failed/not_attempted even after HTTP success."""
+        payloads = []
+        for mount in mounts:
+            payload: Dict[str, Any] = {
+                "tool_uri": VikingURI.normalize(str(mount["tool_uri"])),
+                "node_uri": VikingURI.normalize(str(mount["node_uri"])),
+                "title": mount["title"],
+                "description": mount.get("description"),
+                "timeout_seconds": mount.get("timeout_seconds", 60),
+                "arguments": dict(mount.get("arguments") or {}),
+            }
+            if mount.get("tags") is not None:
+                payload["tags"] = list(mount["tags"])
+            payloads.append(payload)
+        response = await self._request(
+            "POST",
+            "/api/v1/mcps/batch-mount",
+            json={"mounts": payloads, "wait": wait},
+        )
+        return self._handle_response(response)
+
+    async def unmount_mcp_tool(
+        self,
+        node_uri: str,
+        *,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        response = await self._request(
+            "DELETE",
+            "/api/v1/mcps/mount",
+            params={
+                "node_uri": VikingURI.normalize(node_uri),
+                "wait": wait,
+            },
+        )
+        return self._handle_response(response)
+
+    async def batch_unmount_mcp_tools(
+        self,
+        node_uris: Sequence[str],
+        *,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        """Unmount in order, retaining completed changes on partial failure."""
+        response = await self._request(
+            "POST",
+            "/api/v1/mcps/batch-unmount",
+            json={
+                "node_uris": [VikingURI.normalize(node_uri) for node_uri in node_uris],
+                "wait": wait,
+            },
+        )
+        return self._handle_response(response)
+
+    async def list_mcp_mounts(
+        self,
+        mcp: str,
+        tool: Optional[str] = None,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {"mcp": mcp}
+        if tool is not None:
+            params["tool"] = tool
+        if target_uri is not None:
+            params["target_uri"] = VikingURI.normalize(target_uri)
+        response = await self._request("GET", "/api/v1/mcps/mounts", params=params)
         return self._handle_response(response)
 
     async def list_watches(
@@ -2206,44 +2462,20 @@ class AsyncHTTPClient:
     async def admin_add_group_member(
         self, account_id: str, group_id: str, user_id: str
     ) -> Dict[str, Any]:
-        response = await self._http.put(
-            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}"
+        response = await self._request(
+            "PUT",
+            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members",
+            json={"user_ids": [user_id]},
         )
         return self._handle_response(response)
 
     async def admin_remove_group_member(
         self, account_id: str, group_id: str, user_id: str
     ) -> Dict[str, Any]:
-        response = await self._http.delete(
-            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}"
-        )
-        return self._handle_response(response)
-
-    async def admin_get_agent_evolution(self) -> Dict[str, Any]:
-        """Return the effective Agent Evolution switch for the caller's account."""
-        response = await self._request("GET", "/api/v1/admin/agent-evolution")
-        return self._handle_response(response)
-
-    async def admin_set_agent_evolution(self, enabled: bool) -> Dict[str, Any]:
-        """Persist and hot-reload Agent Evolution for the caller's account."""
         response = await self._request(
-            "PUT", "/api/v1/admin/agent-evolution", json={"enabled": enabled}
-        )
-        return self._handle_response(response)
-
-    async def admin_get_account_settings(self, account_id: str) -> Dict[str, Any]:
-        """Return effective and explicitly overridden settings for one account."""
-        response = await self._request("GET", f"/api/v1/admin/accounts/{account_id}/settings")
-        return self._handle_response(response)
-
-    async def admin_set_account_agent_evolution(
-        self, account_id: str, enabled: bool
-    ) -> Dict[str, Any]:
-        """Update the allowlisted Agent Evolution setting for one account."""
-        response = await self._request(
-            "PATCH",
-            f"/api/v1/admin/accounts/{account_id}/settings",
-            json={"agent_evolution": {"enabled": enabled}},
+            "DELETE",
+            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members",
+            json={"user_ids": [user_id]},
         )
         return self._handle_response(response)
 
@@ -2644,6 +2876,150 @@ class SyncHTTPClient:
         target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(self._async_client.delete_skill(skill_name, target_uri=target_uri))
+
+    def add_mcp(
+        self,
+        name: str,
+        url: str,
+        headers: Optional[Mapping[str, str]] = None,
+        *,
+        target_uri: Optional[str] = None,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.add_mcp(
+                name,
+                url,
+                headers=headers,
+                target_uri=target_uri,
+                wait=wait,
+            )
+        )
+
+    def remove_mcp(
+        self,
+        name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.remove_mcp(name, target_uri=target_uri))
+
+    def list_mcps(self, target_uri: Optional[str] = None) -> Dict[str, Any]:
+        return run_async(self._async_client.list_mcps(target_uri=target_uri))
+
+    def find_mcp_tools(
+        self,
+        query: str,
+        limit: int = 10,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.find_mcp_tools(
+                query,
+                limit=limit,
+                target_uri=target_uri,
+            )
+        )
+
+    def validate_mcp(
+        self,
+        name: str,
+        url: str,
+        headers: Optional[Mapping[str, str]] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.validate_mcp(name, url, headers=headers))
+
+    def get_mcp(
+        self,
+        name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.get_mcp(name, target_uri=target_uri))
+
+    def sync_mcp(
+        self,
+        name: str,
+        *,
+        target_uri: Optional[str] = None,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.sync_mcp(
+                name,
+                target_uri=target_uri,
+                wait=wait,
+            )
+        )
+
+    def get_mcp_status(
+        self,
+        name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.get_mcp_status(name, target_uri=target_uri))
+
+    def invoke_mcp_tool(
+        self,
+        tool_uri: str,
+        arguments: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.invoke_mcp_tool(tool_uri, arguments=arguments))
+
+    def mount_mcp_tool(
+        self,
+        tool_uri: str,
+        node_uri: str,
+        title: str,
+        description: Optional[str] = None,
+        timeout_seconds: int = 60,
+        arguments: Optional[Mapping[str, Any]] = None,
+        tags: Optional[Sequence[str]] = None,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.mount_mcp_tool(
+                tool_uri,
+                node_uri,
+                title,
+                description=description,
+                timeout_seconds=timeout_seconds,
+                arguments=arguments,
+                tags=tags,
+                wait=wait,
+            )
+        )
+
+    def unmount_mcp_tool(self, node_uri: str, *, wait: bool = False) -> Dict[str, Any]:
+        return run_async(self._async_client.unmount_mcp_tool(node_uri, wait=wait))
+
+    def batch_mount_mcp_tools(
+        self,
+        mounts: Sequence[MCPToolMount],
+        *,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.batch_mount_mcp_tools(mounts, wait=wait))
+
+    def batch_unmount_mcp_tools(
+        self,
+        node_uris: Sequence[str],
+        *,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.batch_unmount_mcp_tools(node_uris, wait=wait))
+
+    def list_mcp_mounts(
+        self,
+        mcp: str,
+        tool: Optional[str] = None,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.list_mcp_mounts(
+                mcp,
+                tool=tool,
+                target_uri=target_uri,
+            )
+        )
 
     def list_watches(
         self,
@@ -3350,18 +3726,6 @@ class SyncHTTPClient:
         return run_async(
             self._async_client.admin_remove_group_member(account_id, group_id, user_id)
         )
-
-    def admin_get_agent_evolution(self) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_get_agent_evolution())
-
-    def admin_set_agent_evolution(self, enabled: bool) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_set_agent_evolution(enabled))
-
-    def admin_get_account_settings(self, account_id: str) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_get_account_settings(account_id))
-
-    def admin_set_account_agent_evolution(self, account_id: str, enabled: bool) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_set_account_agent_evolution(account_id, enabled))
 
     def list_experience_trajectories(
         self,

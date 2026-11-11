@@ -173,6 +173,7 @@ async def test_assembly_returns_readable_entries_within_budget():
 
 async def test_query_expansion_fans_out_planned_queries(monkeypatch):
     queries_seen = []
+    auto_create_flags = []
 
     async def fake_expand(*, query, session, mode, **kwargs):
         del session, mode, kwargs
@@ -186,7 +187,7 @@ async def test_query_expansion_fans_out_planned_queries(monkeypatch):
     async def fake_get(session_id, ctx, *, auto_create=False):
         del ctx
         assert session_id == "s1"
-        assert auto_create is True
+        auto_create_flags.append(auto_create)
         return _fake_session()
 
     monkeypatch.setattr(pipeline_module, "expand_queries", fake_expand)
@@ -210,6 +211,7 @@ async def test_query_expansion_fans_out_planned_queries(monkeypatch):
         ),
     )
 
+    assert auto_create_flags == [False]
     assert queries_seen == ["short", "expanded query"]
     assert result.stats["query_expansion"] == "used"
 

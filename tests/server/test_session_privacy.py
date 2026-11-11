@@ -19,7 +19,7 @@ from openviking.privacy.session_extractor import (
     session_privacy_target,
 )
 from openviking.privacy.session_restore import restore_session_content
-from openviking.server.config import ToolOutputExternalizationConfig
+from openviking.server.config import ToolOutputExternalizationConfig, UserSettingsPatch
 from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import patch_user_config
 from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
@@ -36,14 +36,20 @@ def ctx():
 
 @pytest.fixture
 async def auto_privacy(service, ctx):
-    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": "auto"}})
+    await patch_user_config(
+        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": "auto"}})
+    )
 
 
 @pytest.mark.parametrize("batch", [False, True], ids=["single", "batch"])
 async def test_http_skips_discovery_but_protects_registered_values(
     client, service, ctx, monkeypatch, batch
 ):
-    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": "registered"}})
+    await patch_user_config(
+        service.viking_fs,
+        ctx,
+        UserSettingsPatch.model_validate({"privacy": {"mode": "registered"}}),
+    )
     sid = "registered-mode"
     session = await service.sessions.create(ctx, sid)
     service.sessions.set_tool_output_externalization_config(
@@ -242,7 +248,11 @@ async def test_markdown_restatement_reuses_references_without_new_versions(servi
 async def test_session_and_skill_choose_canonical_reference_or_reject_strictly(
     service, ctx, entrypoint, strict, monkeypatch
 ):
-    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": "registered"}})
+    await patch_user_config(
+        service.viking_fs,
+        ctx,
+        UserSettingsPatch.model_validate({"privacy": {"mode": "registered"}}),
+    )
     if strict:
         monkeypatch.setenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "1")
     else:
@@ -446,7 +456,9 @@ async def test_concurrent_same_values_reuse_fields_with_stale_worker_caches(
     from openviking.privacy.sanitizer import PrivacySanitizer
     from openviking.privacy.service import UserPrivacyConfigService
 
-    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": mode}})
+    await patch_user_config(
+        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": mode}})
+    )
     monkeypatch.setenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "1")
     await service.privacy_configs.upsert(ctx, "session", "other", {"other001": SECRET})
     await service.privacy_configs.upsert(ctx, "skill", "other", {"other001": SECRET})
@@ -495,7 +507,9 @@ async def test_concurrent_skill_preparations_reuse_current_fields_and_preserve_r
     from openviking.privacy.skill_restore import restore_skill_content
     from openviking.utils.skill_processor import SkillProcessor
 
-    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": mode}})
+    await patch_user_config(
+        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": mode}})
+    )
     monkeypatch.setenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "1")
     await service.privacy_configs.upsert(ctx, "session", "other", {"other001": SECRET})
     await service.privacy_configs.upsert(ctx, "skill", "other", {"other001": SECRET})
@@ -708,7 +722,7 @@ async def test_short_reference_resolves_only_current_users_session_config(servic
     assert json.loads(restored)["parts"][0]["text"] == "alice-private"
 
 
-async def test_session_discovery_follows_persisted_mode_changes(client, service, ctx, monkeypatch):
+async def test_session_discovery_follows_persisted_mode_changes(service, ctx, monkeypatch):
     session = await service.sessions.create(ctx, "mode-changes")
     settings = AsyncMock(wraps=service.privacy_configs.get_settings)
     monkeypatch.setattr(service.privacy_configs, "get_settings", settings)
@@ -722,8 +736,9 @@ async def test_session_discovery_follows_persisted_mode_changes(client, service,
     ]
     values = [value for _, value, _ in steps]
     for mode, value, expected in steps:
-        response = await client.patch("/api/v1/user-settings/privacy", json={"mode": mode})
-        assert response.status_code == 200, response.text
+        await patch_user_config(
+            service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": mode}})
+        )
         settings.reset_mock()
         await session.add_message_async("user", [TextPart(value)])
         settings.assert_awaited_once_with(ctx)

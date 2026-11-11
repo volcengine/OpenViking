@@ -28,6 +28,7 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 | 销毁/轮换 GLOBAL、变更其用户组 | Y | N | N | N |
 | 将现有角色与 GLOBAL 相互转换 | N | N | N | N |
 | 管理用户组和成员 | Y | Y（本 account） | N | N |
+| 读取/修改 User settings | Y | Y（本 account，非 GLOBAL） | Y（自身） | N |
 | 重新生成 User Key（仅 API Key 模式） | Y | Y（本 account） | Y（自身密钥） | N |
 | 在 USER 与 ADMIN 之间变更用户角色 | Y | Y（本 account） | N | N |
 
@@ -72,7 +73,7 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除组及其全部成员关系，允许组内仍有成员 |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 列出成员 |
 | PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 按 JSON 请求体 `{"user_ids": [...]}`（1–1000 个已有用户）原子地添加成员；已是成员的用户会跳过，结果为 `added=true` |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除成员；重复调用返回 `removed=false` |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 按 JSON 请求体 `{"user_ids": [...]}`（1–1000 个用户 ID）原子地移除成员；至少移除一个成员关系时返回 `removed=true`，否则返回 `removed=false` |
 
 ```bash
 ov --sudo admin create-group acme engineering
@@ -83,11 +84,58 @@ ov --sudo admin remove-group-member acme engineering alice
 ov --sudo admin delete-group acme engineering
 ```
 
+通过 HTTP 移除成员时，在请求体中传入用户 ID：
+
+```bash
+curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/groups/engineering/members \
+  -H "X-API-Key: your-admin-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"user_ids": ["alice", "bob"]}'
+```
+
 要直接删除仍有成员的组，可调用 `DELETE /api/v1/admin/accounts/acme/groups/engineering`。
 
 Python SDK 提供对应的 `admin_create_group`、`admin_list_groups`、`admin_list_group_members`、`admin_add_group_member`、`admin_remove_group_member` 和 `admin_delete_group`；Go SDK 使用相同名称的 PascalCase 方法。
 
 ## API 参考
+
+### metric_inventory
+
+流式导出供离线报表使用的元数据清单。即使只扫描一个账号，也要求 **ROOT** 认证。清单包含账号作用域、用户标识与角色、文件元数据、技能元数据及向量记录元数据；不包含文件正文、向量值或凭证。
+
+**HTTP API**
+
+```http
+GET /api/v1/admin/metric-inventory?account_id=acme&page_size=500
+X-API-Key: your-root-api-key
+```
+
+| 查询参数     | 类型    | 默认值 | 说明                                                     |
+| ------------ | ------- | ------ | -------------------------------------------------------- |
+| `account_id` | string  | 不传   | 可选的完整账号 ID；不传时扫描所有已注册账号。            |
+| `page_size`  | integer | `500`  | 内部扫描批次大小，范围 `1` 至 `1000`，不限制导出总行数。 |
+
+响应为流式 `application/x-ndjson`，每行一个 JSON 对象，不使用常规的 `status` / `result` 包装。每个对象带有 `event_name`，其值为 `inventory_scope`、`inventory_user`、`inventory_file`、`inventory_skill`、`inventory_vector_record`，或最终的 `inventory_batch_end` 标记。
+
+```bash
+curl --no-buffer 'http://localhost:1933/api/v1/admin/metric-inventory?account_id=acme&page_size=500' \
+  -H 'X-API-Key: your-root-api-key'
+```
+
+最后一行说明扫描是否完成：
+
+```json
+{
+  "event_name": "inventory_batch_end",
+  "status": "complete",
+  "row_count": 0,
+  "scan_started_at": 1794268800000,
+  "scan_finished_at": 1794268800010,
+  "consistency": "scan_window"
+}
+```
+
+以上标记仅为示例。导出描述一个扫描时间窗口，不是原子快照；`row_count` 为最终标记之前已输出的行数。扫描失败（包括指定的 `account_id` 不存在）时，最终标记的 `status` 为 `"failed"`，且没有 `consistency` 字段。开始流式响应后，仅有 HTTP 成功状态不足以证明扫描完整；消费方必须收到最终 `complete` 标记，才能替换现有清单。缺失最终标记或收到失败标记均表示导出不完整。
 
 ### account / user 存在性查询
 
@@ -170,7 +218,8 @@ curl http://localhost:1933/api/v1/admin/agent-evolution \
 `enabled` 依次解析 Account 运行时覆盖、Cluster 运行时覆盖，以及
 `server.agent_evolution.enabled` 提供的启动值。
 
-现有接口作为 deprecated 兼容适配器保留：
+现有接口本版本继续作为 deprecated 兼容适配器保留，计划下个版本移除。
+新调用使用 Account configuration；SDK 不再提供该旧接口的方法。
 
 ```http
 PUT /api/v1/admin/agent-evolution
@@ -181,7 +230,8 @@ Content-Type: application/json
 
 ### account_settings
 
-该接口已 deprecated。ROOT 可管理任意 account，ADMIN 仅可管理自己所属的 account。
+该接口已 deprecated，本版本继续兼容，计划下个版本移除。
+ROOT 可管理任意 account，ADMIN 仅可管理自己所属的 account。
 接口保留原有 ACL 与 Agent Evolution 请求和响应语义：
 
 ```http
@@ -201,6 +251,8 @@ Content-Type: application/json
 `acl.enabled` 默认为 `false`。关闭时，共享资源按原有规则完全共享，不执行 ACL
 鉴权。开启后，账号内新增共享资源会写入 ACL，并对带 ACL 的共享资源执行鉴权；
 已有且未设置 ACL 的内容不会迁移或改权。重新关闭后，已有 ACL 也不再参与访问判断。
+
+CLI 已改为调用 Account configuration：
 
 ```bash
 ov --sudo admin set-account-settings acme --acl-enabled true
@@ -442,8 +494,11 @@ Content-Type: application/json
 {"settings": {"agent_evolution": {"enabled": true}}}
 ```
 
-`settings` 始终表示目标层的显式设置值。PATCH 为三态语义：字段缺失表示不修改，
-`null` 表示删除当前层配置，具体值表示更新。
+Cluster 的 `settings` 返回显式运行时设置。Account 的 GET/PATCH 响应在显式
+设置之外，始终包含 `settings.agent_evolution.enabled`，其值按 Account 覆盖、
+Cluster 运行时覆盖、启动默认值解析。其他字段不补全默认值；读取不会写入配置。
+PATCH 为三态语义：字段缺失表示不修改，`null` 表示删除当前层配置，具体值表示更新。
+删除 Account 的 `agent_evolution` 覆盖后，响应立即返回重新解析出的生效开关值。
 
 当前 Cluster 运行时配置面仅包含 `agent_evolution`。Account 配置面包含
 `output_language_override`、`memory`、`feishu`、`parser_api`、`agent_evolution`、`github`、`acl`、`vlm` 和 `query_planner`，
@@ -628,8 +683,8 @@ Account 配置通过创建接口的 `settings` 初始化，并通过 configurati
 | 方法 | 路径 | 权限 | 返回值 |
 | --- | --- | --- | --- |
 | `POST` | `/api/v1/admin/accounts` | ROOT | 新 Account；可接受创建期 `settings` |
-| `GET` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT；或目标 Account 的 ADMIN | 该 Account 显式持久化的 `settings` |
-| `PATCH` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT；或目标 Account 的 ADMIN | 合并后的显式 `settings` |
+| `GET` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT；或目标 Account 的 ADMIN | Account 显式设置及生效的 `agent_evolution.enabled` |
+| `PATCH` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT；或目标 Account 的 ADMIN | 更新后的设置及生效的 `agent_evolution.enabled` |
 
 `vlm`、`query_planner`、`embedding`、`vectordb` 和 `parser_api` 是敏感基础设施配置：只有 ROOT
 可以创建、读取或修改。ADMIN 对自己的 Account 调用 GET 时，响应会移除这些段；若
@@ -680,7 +735,7 @@ Cluster `parser_api` 维护。Account 未配置该段时保留旧 Cluster Key �
 section 时使用完整 Cluster Feishu 配置；一旦设置，以上 Account 字段使用显式值或 Feishu
 默认值，只有 `domain` 仍来自 Cluster。`github` 和 `acl` 不回退到 Cluster。
 
-**读取 Account 显式配置**
+**读取 Account 配置**
 
 ```bash
 curl http://localhost:1933/api/v1/admin/accounts/acme/configuration \
@@ -695,13 +750,16 @@ curl http://localhost:1933/api/v1/admin/accounts/acme/configuration \
     "settings": {
       "embedding": {
         "max_retries": 5
+      },
+      "agent_evolution": {
+        "enabled": false
       }
     }
   }
 }
 ```
 
-响应不会展开 Cluster 值、默认值或最终生效的 Embedding/VectorDB 组合。例如上例没有
+除 Agent Evolution 开关外，响应不会展开 Cluster 值、默认值或最终生效的 Embedding/VectorDB 组合。例如上例没有
 Account 模型 binding 时，实际调用仍会使用 Cluster 模型 binding。
 
 **修改动态 Account 配置**
@@ -899,8 +957,9 @@ Account 路由，ROOT 代表某个 Account 执行业务时也遵守这一规则�
 
 ### user_settings
 
-ROOT 可管理任意 User，ADMIN 仅可管理所属 account 内的 User。User 配置接口当前
-仅允许修改 `memory_policy`。顶层统一的 `memory_types` 控制允许抽取的记忆类型。
+ROOT 可读写任意 User 的配置，ADMIN 可读写所属 account 内非 GLOBAL User 的配置，
+USER 仅可读写自己的配置：URL 中的 `account_id` 和 `user_id` 必须同时匹配认证身份。
+User 配置接口支持 `add_targets`、`memory_policy` 和 `ttl`。顶层统一的 `memory_types` 控制允许抽取的记忆类型。
 用户记忆根据每条 Message 的 `peer_id` 自动写入 Self 或 Peer；Agent 记忆始终只写入
 Self。
 
@@ -918,12 +977,37 @@ Content-Type: application/json
 
 响应直接返回 User 级 `memory_policy`，并展开默认记忆类型和 Agent 记忆依赖；配置
 `experiences` 时会展开为 `cases`、`trajectories`、`experiences`；
-该结果不受 account 级 Agent 进化开关影响，Account 开关由独立接口管理。
+该结果不受 account 级 Agent 进化开关影响，Account 开关通过 Account configuration 管理。
 更新前会备份到该 User 的 `settings/user_config.backup.json`。未显式配置策略的
 Session 在 commit 时读取该 User 最新策略；User 未覆盖时，依次回退到
 `server.user_config_defaults.memory_policy` 和内核默认策略。若要清除已持久化的
 User override 并重新继承上述默认值，请 PATCH `{"memory_policy": null}`。
 `{"memory_policy": {}}` 表示显式策略，不会清除 override。
+
+`add_targets` 在 GET/PATCH 响应中返回当前 User 生效的添加位置：User 未设置某个
+字段时使用 `server.user_config_defaults.add_targets`，`viking://~` 按被管理的 User
+展开。两处都未设置时，该字段为 `null`，由添加操作采用自身的默认目标规则。
+`add_resource` 的显式 `to` / `parent`、`add_skill` 的显式 `target_uri` 仍然优先。
+
+```http
+PATCH /api/v1/admin/accounts/acme/users/alice/settings
+Content-Type: application/json
+
+{"add_targets": {"resource_uri": "viking://~/resources/project-a", "skill_uri": "viking://~/skills"}}
+```
+
+`add_targets` 支持逐字段更新：省略字段表示保留，字段设为 `null` 恢复该项默认值，
+整个 `add_targets` 设为 `null` 清除用户的添加位置设置。返回的默认值不会写回存储。
+新调用通过此接口维护添加位置，USER 使用自身的 `account_id` 和 `user_id`。
+以下旧接口本版本继续保留普通用户管理自身添加位置的能力，已标记 deprecated，计划下个版本移除：
+
+```http
+GET /api/v1/user-settings/add-locations
+PATCH /api/v1/user-settings/add-locations
+DELETE /api/v1/user-settings/add-locations
+```
+
+`ttl` 仍返回用户显式设置的值，不在此接口补全其他层级的 TTL。
 
 ---
 
@@ -965,9 +1049,8 @@ User override 并重新继承上述默认值，请 PATCH `{"memory_policy": null
 - `settings` 在账号和目录创建前完成结构与有效 Embedding/VectorDB 联合校验。校验失败不会留下 Account、用户或配置文件。
 - Account `vlm`、`query_planner`、`embedding` 和 `vectordb` 是 ROOT-only 配置；字段 schema、生命周期和校验见上文 [Account Configuration 接口参考](#account-configuration-接口参考)。当前 Python SDK、CLI 及其他 SDK 的创建账号封装尚未暴露 `settings` 参数，使用此能力请直接调用 HTTP API。
 - 不再支持 account 级 namespace 隔离配置。用户记忆使用 user-scoped namespace，一对多外部参与者通过 `peer_id` 表达。
-- `user_config.add_targets.resource_uri` 必须是可写资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。
-- `user_config.add_targets.skill_uri` 只能是 `viking://~/skills` 或 `viking://agent/skills`。v1 不支持显式写成 `viking://user/{user_id}/skills`。
-- 旧写法兼容：`viking://user/resources[/...]` 和 `viking://user/skills` 在这里仍会被接受，并归一化为 `viking://~/...` 形式（服务端会打印一条 info 日志）。在其他位置，无 uid 的写法会在请求入口被拒绝——新配置请直接写 `viking://~/...`。
+- `user_config.add_targets.resource_uri` 必须是资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://~/peers/{peer_id}/resources` 或 `viking://~/peers/{peer_id}/resources/...`。
+- `user_config.add_targets.skill_uri` 只能是 `viking://~/skills` 或 `viking://agent/skills`。
 
 #### 3. 使用示例
 
@@ -1362,9 +1445,8 @@ ov --sudo task status <task_id>
 - ADMIN 只能在自己所属的 account 中注册用户
 - `"global"` 仅用于创建。只有 ROOT 可以创建、销毁、轮换或修改 GLOBAL 身份的用户组；任何身份（包括 ROOT）都不能将现有角色与 GLOBAL 相互转换，需要销毁后重建。ADMIN 和 USER 可以在用户列表中感知 GLOBAL 身份的存在，但不会获得其凭据或管理入口。
 - 无法通过用户注册接口直接创建 `"root"` 角色
-- `user_config.add_targets.resource_uri` 必须是可写资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。
-- `user_config.add_targets.skill_uri` 只能是 `viking://~/skills` 或 `viking://agent/skills`。v1 不支持显式写成 `viking://user/{user_id}/skills`。
-- 旧写法兼容：`viking://user/resources[/...]` 和 `viking://user/skills` 在这里仍会被接受，并归一化为 `viking://~/...` 形式（服务端会打印一条 info 日志）。在其他位置，无 uid 的写法会在请求入口被拒绝——新配置请直接写 `viking://~/...`。
+- `user_config.add_targets.resource_uri` 必须是资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://~/peers/{peer_id}/resources` 或 `viking://~/peers/{peer_id}/resources/...`。
+- `user_config.add_targets.skill_uri` 只能是 `viking://~/skills` 或 `viking://agent/skills`。
 
 #### 3. 使用示例
 

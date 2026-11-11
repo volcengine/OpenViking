@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 import uuid
 
 
@@ -138,16 +139,31 @@ class TestContentEdgeCases:
     def test_content_download_response_headers(self, api_client):
         test_uri = f"viking://resources/dl_header_test_{uuid.uuid4().hex[:8]}"
         try:
-            api_client.fs_mkdir(test_uri)
-            api_client.fs_write(
-                f"{test_uri}/test.md", "Download header test content", mode="create", wait=True
+            # Writing creates the parent directory without a separate mkdir lock.
+            for attempt in range(api_client.max_retries):
+                write_resp = api_client.fs_write(
+                    f"{test_uri}/test.md", "Download header test content", mode="create", wait=True
+                )
+                # Other parallel fixtures can briefly hold a shared ancestor lock.
+                if write_resp.status_code != 409:
+                    break
+                details = (write_resp.json().get("error") or {}).get("details") or {}
+                if (
+                    details.get("conflict_type") != "path_busy"
+                    or details.get("retryable") is not True
+                    or attempt == api_client.max_retries - 1
+                ):
+                    break
+                time.sleep(api_client.retry_delay * (attempt + 1))
+            assert write_resp.status_code == 200, (
+                f"write should return 200, got {write_resp.status_code}: {write_resp.text[:200]}"
             )
 
             dl_resp = api_client.content_download(f"{test_uri}/test.md")
             assert dl_resp.status_code == 200, (
-                f"download should return 200, got {dl_resp.status_code}"
+                f"download should return 200, got {dl_resp.status_code}: {dl_resp.text[:200]}"
             )
-            assert len(dl_resp.content) > 0, "downloaded content should not be empty"
+            assert dl_resp.content == b"Download header test content"
             assert "Content-Disposition" in dl_resp.headers, (
                 "should have Content-Disposition header"
             )

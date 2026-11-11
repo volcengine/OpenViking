@@ -11,6 +11,7 @@ import OpenVikingMemory from "../index.mjs";
 import { injectContext, loadConfig, recallRequest, request } from "../runtime.mjs";
 import { estimateTokens } from "../shared/profile-inject.mjs";
 import { buildOvHeaders } from "../shared/ov-http.mjs";
+import { onRequest } from "../hooks.mjs";
 
 async function fixture(t, handler = () => ({ rendered: "viking://~/memories/preference.md\nUse TypeScript." }), profile = "") {
   const dir = await mkdtemp(join(tmpdir(), "ov-magpie-test-"));
@@ -47,11 +48,33 @@ function context(patch = {}) {
 const body = () => ({ model: "test-model", stream: true, tools: [{ type: "function", function: { name: "test" } }],
   messages: [{ role: "user", content: "Which language do I prefer?" }] });
 
+test("model adapter traffic is native even when user nativeAgents is empty", async (t) => {
+  const f = await fixture(t);
+  const cfg = await loadConfig(f.env, { nativeAgents: [] });
+  assert.ok(cfg.nativeAgents.includes("openviking-models"));
+  const ctx = context({ agent: "openviking-models" });
+  assert.equal(await recallRequest(body(), ctx, f.env, cfg), undefined);
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.profileCalls.length, 0);
+});
+
 test("Magpie applies its defaults without changing shared plugin defaults", async (t) => {
   const f = await fixture(t);
   const cfg = await loadConfig(f.env);
   assert.equal(cfg.mcpEnabled, false);
-  assert.equal(cfg.recallContextTimeoutMs, 700);
+  assert.equal(cfg.recallContextTimeoutMs, 2000);
+  assert.equal(cfg.captureWithoutSession, false);
+  await f.save({ plugin: { captureWithoutSession: true, magpie: { captureWithoutSession: false } } });
+  assert.equal((await loadConfig(f.env)).captureWithoutSession, false);
+  assert.equal((await loadConfig(f.env, { captureWithoutSession: true })).captureWithoutSession, true);
+  await f.save({ plugin: { captureWithoutSession: true, magpie: { captureWithoutSession: null } } });
+  assert.equal((await loadConfig(f.env)).captureWithoutSession, true);
+  assert.equal((await loadConfig(f.env, { captureWithoutSession: false })).captureWithoutSession, false);
+  await assert.rejects(loadConfig(f.env, { captureWithoutSession: "true" }), /invalid/);
+  await f.save();
+  assert.equal((await loadConfig(f.env, { recallContextTimeoutMs: 4500 })).recallContextTimeoutMs, 4500);
+  await f.save({ plugin: { recallContextTimeoutMs: 700 } });
+  assert.equal((await loadConfig(f.env)).recallContextTimeoutMs, 700);
   await f.save({ plugin: { recallMaxTokens: 900, magpie: { recallMaxTokens: 1200, recallContextTimeoutMs: 350 } } });
   const custom = await loadConfig(f.env);
   assert.equal(custom.recallMaxTokens, 1200);
@@ -196,7 +219,7 @@ test("existing OIDC and LDAP client files authenticate both recall and tools", a
   const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
   process.env.OPENVIKING_CLI_CONFIG_FILE = f.path;
   t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
-  const { tool } = await OpenVikingMemory();
+  const { tool } = await OpenVikingMemory(undefined, { modelsEnabled: false });
   for (const [fields, authorization] of [
     [{ auth_mode: "oidc", api_key: null, oidc_token: "fixture-jwt" }, "Bearer fixture-jwt"],
     [{ auth_mode: "ldap", api_key: null, ldap_username: "alice", ldap_password: "p:a:ss" }, `Basic ${Buffer.from("alice:p:a:ss").toString("base64")}`],
@@ -251,7 +274,7 @@ test("remember places the configured project peer in message data, not just head
   const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
   process.env.OPENVIKING_CLI_CONFIG_FILE = f.path;
   t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
-  const { tool } = await OpenVikingMemory();
+  const { tool } = await OpenVikingMemory(undefined, { modelsEnabled: false });
   await tool.remember.execute({ text: "project setting" }, { abort: new AbortController().signal });
   assert.equal(f.calls[1].body.peer_id, "project-A");
 });
@@ -351,6 +374,66 @@ test("slow recall respects its timeout; redirects do not forward credentials", a
   assert.equal(target.calls.length, 0);
 });
 
+for (const { hostBudget, profileDelay, minimumWait } of [
+  { hostBudget: 1000, profileDelay: 1500, minimumWait: 600 },
+  { hostBudget: 3000, profileDelay: 2500, minimumWait: 1900 },
+]) {
+  test(`a ${hostBudget} ms host budget preserves completed search when profile times out`, async (t) => {
+    let searchReturned = false;
+    const f = await fixture(t, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      searchReturned = true;
+      return { rendered: "Completed search memory" };
+    }, async () => {
+      await new Promise((resolve) => setTimeout(resolve, profileDelay));
+      return "Late profile memory";
+    });
+    const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
+    process.env.OPENVIKING_CLI_CONFIG_FILE = f.path;
+    t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
+    const ctx = context({ session: "", signal: AbortSignal.timeout(hostBudget),
+      options: { autoCapture: false, gatewayTimeoutMs: hostBudget } });
+    const started = performance.now();
+    const output = await onRequest(body(), ctx);
+    const elapsed = performance.now() - started;
+    assert.ok(searchReturned);
+    assert.match(output.messages.at(-1).content, /Completed search memory/);
+    assert.doesNotMatch(output.messages.at(-1).content, /Late profile memory/);
+    assert.equal(ctx.signal.aborted, false);
+    assert.equal(ctx.reports.at(-1)[0], "ready");
+    assert.ok(elapsed >= minimumWait, `returned too early: ${elapsed} ms`);
+    assert.ok(elapsed < hostBudget, `exceeded host budget: ${elapsed} ms`);
+  });
+}
+
+test("host cancellation discards completed search while profile is still pending", async (t) => {
+  let searchReturned = false;
+  const f = await fixture(t, async () => {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    searchReturned = true;
+    return { rendered: "Completed search memory" };
+  }, async () => {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    return "Late profile memory";
+  });
+  const ctx = context({ session: "", options: { gatewayTimeoutMs: 3000 }, signal: AbortSignal.timeout(500) });
+  assert.equal(await recallRequest(body(), ctx, f.env), undefined);
+  assert.ok(searchReturned);
+  assert.equal(ctx.signal.aborted, true);
+  assert.deepEqual(ctx.reports, [["unavailable", 0]]);
+});
+
+test("host budget validation and elapsed setup time prevent requests below the HTTP minimum", async (t) => {
+  const f = await fixture(t);
+  for (const gatewayTimeoutMs of [undefined, "3000", 99, 10001, 1000.5, 100]) {
+    const ctx = context({ session: "", options: { gatewayTimeoutMs } });
+    assert.equal(await recallRequest(body(), ctx, f.env, undefined, performance.now() - 750), undefined);
+    assert.deepEqual(ctx.reports, [["unavailable", 0]]);
+  }
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.profileCalls.length, 0);
+});
+
 test("concurrent identities cannot share recalled results or credentials", async (t) => {
   const a = await fixture(t, () => ({ rendered: "memory-A" }));
   const b = await fixture(t, () => ({ rendered: "memory-B" }));
@@ -367,7 +450,7 @@ test("tools require opt-in, validate arguments and use the same file connection"
   const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
   process.env.OPENVIKING_CLI_CONFIG_FILE = f.path;
   t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
-  const { tool } = await OpenVikingMemory();
+  const { tool } = await OpenVikingMemory(undefined, { modelsEnabled: false });
   const ctx = { abort: new AbortController().signal };
   await assert.rejects(tool.find.execute({ query: "test" }, ctx), /disabled/);
   await f.save({ plugin: { mcpEnabled: true } });
@@ -392,6 +475,33 @@ test("tools require opt-in, validate arguments and use the same file connection"
   assert.ok(f.calls.every((c) => c.headers.authorization === "Bearer test-secret"));
 });
 
+test("Rule search preserves complete constraints, opt-in, identity and errors", async (t) => {
+  const rendered = "完整规则\n".repeat(17000) + "LAST RULE";
+  const f = await fixture(t, (call, res) => {
+    if (call.body?.task_context === "fail") res.statusCode = 503;
+    return { rendered };
+  });
+  const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
+  process.env.OPENVIKING_CLI_CONFIG_FILE = f.path;
+  t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
+  const { tool } = await OpenVikingMemory(undefined, { modelsEnabled: false });
+  const ctx = { abort: new AbortController().signal };
+  await assert.rejects(tool.rule_search.execute({ task_context: "deploy" }, ctx), /disabled/);
+  await f.save({ actor_peer_id: "project", plugin: { magpie: { mcpEnabled: true } } });
+  const task_context = "plan".repeat(10000);
+  assert.equal(await tool.rule_search.execute({ task_context, rule_probability_threshold: 0 }, ctx), rendered);
+  assert.equal(f.calls[0].path, "/api/v1/rules/search");
+  assert.deepEqual(f.calls[0].body, { task_context, rule_probability_threshold: 0 });
+  assert.equal(f.calls[0].headers.authorization, "Bearer test-secret");
+  assert.equal(f.calls[0].headers["x-openviking-user"], "test-user");
+  assert.equal(f.calls[0].headers["x-openviking-actor-peer"], "project");
+  for (const threshold of [null, -1, 2, "0.5", NaN]) {
+    await assert.rejects(tool.rule_search.execute({ task_context: "deploy", rule_probability_threshold: threshold }, ctx), /invalid/);
+  }
+  assert.equal(f.calls.length, 1);
+  await assert.rejects(tool.rule_search.execute({ task_context: "fail" }, ctx), /unavailable/);
+});
+
 test("actual Magpie Bun host loads package, runs recall and exposes working tools", {
   skip: !process.env.MAGPIE_PLUGIN_HOST,
 }, async (t) => {
@@ -399,7 +509,7 @@ test("actual Magpie Bun host loads package, runs recall and exposes working tool
   await f.save({ plugin: { magpie: { mcpEnabled: true } } });
   const target = process.env.MAGPIE_PLUGIN_TARGET || fileURLToPath(new URL("..", import.meta.url));
   const child = spawn(process.env.BUN_BIN || "bun", [process.env.MAGPIE_PLUGIN_HOST], {
-    env: { ...process.env, ...f.env, HOME: f.dir, XDG_CONFIG_HOME: join(f.dir, ".config") },
+    env: { ...process.env, ...f.env, HOME: f.dir, XDG_CONFIG_HOME: join(f.dir, ".config"), OPENVIKING_MAGPIE_MODELS_DIR: join(f.dir, "models-state") },
     stdio: ["pipe", "pipe", "pipe"],
   });
   const pending = new Map();
@@ -427,10 +537,10 @@ test("actual Magpie Bun host loads package, runs recall and exposes working tool
   };
   const spec = "openviking-test";
   const init = await rpc("init", { directory: f.dir, authPath: join(f.dir, "auth.json"), plugins: [
-    { spec, target, gateway: join(target, "hooks.mjs"), options: { gatewayTimeoutMs: 1500 } },
+    { spec, target, gateway: join(target, "hooks.mjs"), options: { gatewayTimeoutMs: 1500, memoryEnabled: true, modelsEnabled: true } },
   ] });
   assert.equal(init.plugins[0].error, undefined, JSON.stringify(init));
-  assert.equal(init.plugins[0].tools.length, 5);
+  assert.equal(init.plugins[0].tools.length, 6);
   for (const protocol of ["chat", "responses", "anthropic", "gemini"]) {
     const wire = body();
     if (protocol === "responses") { wire.store = false; wire.input = [{ role: "user", content: "TypeScript?" }]; delete wire.messages; }
@@ -441,6 +551,13 @@ test("actual Magpie Bun host loads package, runs recall and exposes working tool
     assert.deepEqual(run.body.tools, body().tools);
     await rpc("gatewayRequest", { operation: "close", id: run.id, token: run.token });
   }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const run = await rpc("gatewayRequest", { operation: "begin", body: body(),
+      context: { origin: "local", session: "", agent: "host-agent", protocol: "chat", query: "TypeScript?" } });
+    assert.match(JSON.stringify(run.body), /Use TypeScript/);
+    await rpc("gatewayRequest", { operation: "close", id: run.id, token: run.token });
+  }
+  assert.equal(stderr.split("OpenViking capture: no-session").length - 1, 1);
   const result = await rpc("tool", { spec, name: "find", args: { query: "TypeScript" }, ms: 5000 });
   assert.match(result.text, /Use TypeScript/);
   const states = await rpc("gatewayStates", {});

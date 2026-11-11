@@ -9,8 +9,14 @@ import pytest
 
 from openviking.core.namespace import canonical_user_root
 from openviking.server.auth import get_request_context
-from openviking.server.config import PrivacyConfig, UserConfig, load_server_config
+from openviking.server.config import (
+    PrivacyConfig,
+    UserConfig,
+    UserSettingsPatch,
+    load_server_config,
+)
 from openviking.server.identity import RequestContext, Role
+from openviking.server.store_assembly import build_api_key_manager
 from openviking.server.user_config import (
     patch_user_config,
     read_user_config,
@@ -22,7 +28,7 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
-URL = "/api/v1/user-settings/privacy"
+URL = "/api/v1/admin/accounts/default/users/alice/settings"
 
 
 @pytest.fixture(autouse=True)
@@ -52,7 +58,14 @@ def isolated_config(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def owner(app):
+async def owner(app, service):
+    manager = build_api_key_manager(
+        root_key="privacy-settings-test-root", viking_fs=service.viking_fs
+    )
+    await manager.load()
+    for user in ("alice", "bob"):
+        await manager.register_user("default", user)
+    app.state.api_key_manager = manager
     ctx = RequestContext(user=UserIdentifier("default", "alice"), role=Role.USER)
     app.dependency_overrides[get_request_context] = lambda: ctx
     yield ctx
@@ -64,9 +77,11 @@ async def test_privacy_settings_inherit_patch_and_reset(
 ):
     response = await client.get(URL)
     assert response.status_code == 200, response.text
-    assert response.json()["result"] == {
-        "override": {},
-        "effective": {"mode": "off", "restore": True, "custom_rules": [], "never_mask": []},
+    assert response.json()["result"]["privacy"] == {
+        "mode": "off",
+        "restore": True,
+        "custom_rules": [],
+        "never_mask": [],
     }
 
     app.state.config.user_config_defaults.privacy = PrivacyConfig(mode="auto", restore=False)
@@ -85,20 +100,23 @@ async def test_privacy_settings_inherit_patch_and_reset(
             {"mode": "auto_strict", "restore": True},
         ),
     ]:
-        response = await client.patch(URL, json=patch)
+        response = await client.patch(URL, json={"privacy": patch})
         assert response.status_code == 200, response.text
-        assert response.json()["result"] == {
-            "override": override,
-            "effective": {**effective, "custom_rules": [], "never_mask": []},
+        assert response.json()["result"]["privacy"] == {
+            **effective,
+            "custom_rules": [],
+            "never_mask": [],
         }
         persisted = json.loads(await service.viking_fs.read_file(user_config_uri(owner), ctx=owner))
         assert persisted["privacy"] == override
 
-    response = await client.delete(URL)
+    response = await client.patch(URL, json={"privacy": None})
     assert response.status_code == 200, response.text
-    assert response.json()["result"] == {
-        "override": {},
-        "effective": {"mode": "auto", "restore": False, "custom_rules": [], "never_mask": []},
+    assert response.json()["result"]["privacy"] == {
+        "mode": "auto",
+        "restore": False,
+        "custom_rules": [],
+        "never_mask": [],
     }
 
 
@@ -106,7 +124,7 @@ async def test_privacy_patch_rejects_invalid_input_before_persistence(
     client: httpx.AsyncClient, service, owner
 ):
     for patch in ({"mode": "enabled"}, {"restore": "false"}, {"unknown": True}):
-        response = await client.patch(URL, json=patch)
+        response = await client.patch(URL, json={"privacy": patch})
         assert response.status_code == 400, response.text
     assert not await service.viking_fs.exists(user_config_uri(owner), ctx=owner)
 
@@ -115,11 +133,13 @@ async def test_privacy_patches_are_locked_and_owner_scoped(
     client: httpx.AsyncClient, app, service, owner
 ):
     patches = [{"mode": "registered"}, {"restore": False}]
-    responses = await asyncio.gather(*(client.patch(URL, json=patch) for patch in patches))
+    responses = await asyncio.gather(
+        *(client.patch(URL, json={"privacy": patch}) for patch in patches)
+    )
     for patch, response in zip(patches, responses, strict=True):
         assert response.status_code in (200, 409), response.text
         if response.status_code == 409:
-            response = await client.patch(URL, json=patch)
+            response = await client.patch(URL, json={"privacy": patch})
             assert response.status_code == 200, response.text
     expected = {"mode": "registered", "restore": False}
     assert (await read_user_privacy(service.viking_fs, owner)).model_dump(
@@ -128,9 +148,9 @@ async def test_privacy_patches_are_locked_and_owner_scoped(
 
     other = RequestContext(user=UserIdentifier("default", "bob"), role=Role.USER)
     app.dependency_overrides[get_request_context] = lambda: other
-    response = await client.get(URL)
-    assert response.json()["result"]["override"] == {}
-    await client.delete(URL)
+    response = await client.get(URL.replace("alice", "bob"))
+    assert response.json()["result"]["privacy"]["mode"] == "off"
+    await client.patch(URL.replace("alice", "bob"), json={"privacy": None})
     assert (await read_user_privacy(service.viking_fs, owner)).model_dump(
         exclude_none=True
     ) == expected
@@ -138,7 +158,9 @@ async def test_privacy_patches_are_locked_and_owner_scoped(
 
 async def test_privacy_patch_rolls_back_failed_write(service, owner, monkeypatch):
     fs = service.viking_fs
-    await patch_user_config(fs, owner, {"privacy": {"mode": "registered"}})
+    await patch_user_config(
+        fs, owner, UserSettingsPatch.model_validate({"privacy": {"mode": "registered"}})
+    )
     uri = user_config_uri(owner)
     before = await read_user_config(fs, owner)
     original_write = fs.write_file
@@ -153,7 +175,9 @@ async def test_privacy_patch_rolls_back_failed_write(service, owner, monkeypatch
 
     monkeypatch.setattr(fs, "write_file", fail_once)
     with pytest.raises(OSError, match="injected write failure"):
-        await patch_user_config(fs, owner, {"privacy": {"restore": False}})
+        await patch_user_config(
+            fs, owner, UserSettingsPatch.model_validate({"privacy": {"restore": False}})
+        )
     assert await read_user_config(fs, owner) == before
     backup = json.loads(await fs.read_file(user_config_backup_uri(owner), ctx=owner))
     assert UserConfig.model_validate(backup) == before
@@ -166,7 +190,7 @@ async def test_settings_and_backups_preserve_registered_literals(
         owner, "credential", "settings-test", {"key": "auto_strict"}
     )
     for patch in ({"mode": "auto_strict"}, {"restore": False}):
-        response = await client.patch(URL, json=patch)
+        response = await client.patch(URL, json={"privacy": patch})
         assert response.status_code == 200, response.text
     for uri in (user_config_uri(owner), user_config_backup_uri(owner)):
         stored = json.loads(await service.viking_fs.read_file(uri, ctx=owner))
@@ -191,10 +215,10 @@ async def test_custom_rules_inherit_replace_and_validate_before_writing(
         custom_rules=defaults, never_mask=["public-value"]
     )
     response = await client.get(URL)
-    assert response.json()["result"]["effective"]["custom_rules"] == defaults
-    response = await client.patch(URL, json={"custom_rules": [], "never_mask": []})
+    assert response.json()["result"]["privacy"]["custom_rules"] == defaults
+    response = await client.patch(URL, json={"privacy": {"custom_rules": [], "never_mask": []}})
     assert response.status_code == 200, response.text
-    assert response.json()["result"]["effective"]["custom_rules"] == []
+    assert response.json()["result"]["privacy"]["custom_rules"] == []
     before = await service.viking_fs.read_file(user_config_uri(owner), ctx=owner)
     invalid_rules = [
         [{"id": "x", "regex": "("}],
@@ -209,14 +233,14 @@ async def test_custom_rules_inherit_replace_and_validate_before_writing(
         [{"id": "x", "regex": "[a-zA-Z0-9]{1000000000}"}],
     ]
     for rules in invalid_rules:
-        response = await client.patch(URL, json={"custom_rules": rules})
+        response = await client.patch(URL, json={"privacy": {"custom_rules": rules}})
         assert response.status_code == 400, response.text
         assert await service.viking_fs.read_file(user_config_uri(owner), ctx=owner) == before
-    response = await client.patch(URL, json={"custom_rules": None, "never_mask": None})
+    response = await client.patch(URL, json={"privacy": {"custom_rules": None, "never_mask": None}})
     assert response.status_code == 200, response.text
-    assert response.json()["result"]["override"] == {}
-    assert response.json()["result"]["effective"]["custom_rules"] == defaults
-    assert response.json()["result"]["effective"]["never_mask"] == ["public-value"]
+    assert (await read_user_privacy(service.viking_fs, owner)).model_dump(exclude_none=True) == {}
+    assert response.json()["result"]["privacy"]["custom_rules"] == defaults
+    assert response.json()["result"]["privacy"]["never_mask"] == ["public-value"]
 
 
 async def test_custom_rules_and_never_mask_apply_to_skill_session_and_registered_values(
@@ -230,7 +254,13 @@ async def test_custom_rules_and_never_mask_apply_to_skill_session_and_registered
     rules = [{"id": "company", "prefix": "company_", "min_length": 20}]
     response = await client.patch(
         URL,
-        json={"mode": "auto", "custom_rules": rules, "never_mask": [excluded, "managed-secret"]},
+        json={
+            "privacy": {
+                "mode": "auto",
+                "custom_rules": rules,
+                "never_mask": [excluded, "managed-secret"],
+            }
+        },
     )
     assert response.status_code == 200, response.text
     await service.privacy_configs.upsert(owner, "credential", "managed", {"key": "managed-secret"})
@@ -268,7 +298,7 @@ async def test_overlapping_rules_count_session_discoveries_once(client, service,
     from openviking.message import TextPart
 
     rules = [{"id": f"rule{i}", "prefix": "corp_", "min_length": 20} for i in range(64)]
-    response = await client.patch(URL, json={"mode": "auto", "custom_rules": rules})
+    response = await client.patch(URL, json={"privacy": {"mode": "auto", "custom_rules": rules}})
     assert response.status_code == 200, response.text
     value = "corp_A7b9C2d4E6f8G0h1J3k5"
     original = (value + " ") * 313
@@ -290,7 +320,7 @@ async def test_privacy_policy_applies_across_session_skill_and_content(
     from openviking.message import TextPart
     from openviking.privacy.reference import build_privacy_field_reference
 
-    response = await client.patch(URL, json={"mode": mode, "restore": restore})
+    response = await client.patch(URL, json={"privacy": {"mode": mode, "restore": restore}})
     assert response.status_code == 200, response.text
     known = "managed-secret"
     secret = "AKLT" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
@@ -335,7 +365,9 @@ async def test_credential_warnings_do_not_block_or_disclose_values(client, servi
     await patch_user_config(
         service.viking_fs,
         owner,
-        {"privacy": {"custom_rules": [{"id": "managed", "regex": "trustedword"}]}},
+        UserSettingsPatch.model_validate(
+            {"privacy": {"custom_rules": [{"id": "managed", "regex": "trustedword"}]}}
+        ),
     )
     weak = {
         "ordinary": "sample",

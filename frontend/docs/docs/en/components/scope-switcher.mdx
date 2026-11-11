@@ -1,0 +1,120 @@
+# ScopeSwitcher
+
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
+
+Compose independent selectors. `ScopeSwitcher` owns layout only; each host level owns its data requests, options, loading/error and search state, and renders a `ScopeSelector`.
+
+For three-API integration with automatic cascading and request state, use [ScopeCascade](../modules/scope-cascade). The examples below show the lower-level view API.
+
+## Basic usage
+
+```tsx file="../../_demos/scope-switcher-basic.tsx" preview
+
+```
+
+```tsx
+<ScopeSwitcher locale="en-US">
+  <LibrarySelector />
+  <SpaceSelector />
+  <UserSelector />
+</ScopeSwitcher>
+```
+
+Each host renders one `ScopeSelector` without an extra DOM wrapper. CSS adds separators between adjacent selectors. Fixed/selectable levels can be mixed; omit a level to hide it. The row never wraps: levels shrink and labels ellipsize instead, so the frame keeps its 32px height whatever the labels say. Phones use bottom panels.
+
+## Update boundaries
+
+The former `levels` array has been replaced by `children`. The root has no shared state, data subscription or changing Context value. A selector owns open/closed state unless `visible` is supplied; selection closes its panel. Its host owns search, options and requests. No `memo` is used.
+
+The static example creates an identity source per instance. Each host subscribes to its own channel with `useSyncExternalStore`; snapshots stay stable until its selection or ancestors change. Library selection updates the library and clears both descendants; space selection updates the space and clears the user; user selection affects only the user. All affected snapshots are written before notifications. Selecting the same identity is a no-op. Requests, search and visibility never enter the shared source.
+
+This source is a **host example**, not a mandatory library store or global singleton. Existing host data layers can supply equivalent subscriptions. Keying a dependent host subtree by ancestor identities resets stale options, search, errors and visibility and cancels its old request. Changing a level's own selection does not reload its options. Arbitrary ancestor renders outside this boundary can still trigger normal React rendering.
+
+## Host-owned panels
+
+`renderPanel` hands the rendered `search` and `list` blocks to the host, which arranges the heading, actions, footer entries and explanatory copy. The example builds the three console panels: all libraries, choose data space, choose user.
+
+Taking over the panel does not change its height cap: extra content scrolls inside the panel rather than making it taller.
+
+```tsx file="../../_demos/scope-switcher-panel.tsx" preview
+
+```
+
+## Read-only levels
+
+In a personal terminal the library and data space are fixed by the sign-in and only the user can be switched. A fixed level uses `kind: 'fixed'`: no button, no panel, the same geometry as a selectable level, so the row still reads as one breadcrumb.
+
+```tsx file="../../_demos/scope-switcher-readonly.tsx" preview
+
+```
+
+## Three asynchronous APIs
+
+```tsx file="../../_demos/scope-switcher-async.tsx" preview
+
+```
+
+This example now uses `ScopeCascade`: only three API adapters are supplied. Cascading resets, requests, cancellation, local search and retry are built in. See [ScopeCascade](../modules/scope-cascade) for the complete API and selection callback.
+
+## Props
+
+`ScopeSwitcherProps` extends `HTMLAttributes<HTMLDivElement>` with `children`, `className`, `style`, etc. It no longer accepts `levels` or shared labels.
+
+`ScopeSelectorProps` splits by `kind`. Both forms share `identity`, optional `trigger` and optional `labels`.
+
+`identity` is the level's identity and does not change with a request: required `key`, optional `ariaLabel` and `tag`.
+
+`trigger` is what the trigger shows: optional `label` and `icon`. When omitted they are read from `data.options` by `data.selectedId`; a fixed level has no `data`, so it supplies `trigger.label`.
+
+`kind: 'fixed'` shows a noninteractive label and takes no data, state, callbacks or slots.
+
+`kind: 'selectable'` additionally accepts four groups, split by how often they change so a caller can replace only the group that changed:
+
+| Group     | Field                                      | Behavior                                                                        |
+| --------- | ------------------------------------------ | ------------------------------------------------------------------------------- |
+| `data`    | `options`, `selectedId`                    | Required authoritative options and selection; use `''` before selecting.        |
+| `data`    | `visibleOptions`                           | Options actually rendered; `options` when omitted. Search and paging go here.   |
+| `data`    | `total`                                    | Search appears when loaded count or total exceeds 10, or a keyword is nonempty. |
+| `state`   | `loading`, `error`                         | Replace the list with loading/error content.                                    |
+| `state`   | `disabled`, `busy`                         | Disable the trigger or all option rows.                                         |
+| `state`   | `visible`, `searchKeyword`                 | Controlled visibility and keyword; omitted visibility is local.                 |
+| `actions` | `onSelect(option)`                         | Closes the panel and reports intent; the host updates identities.               |
+| `actions` | `onVisibleChange`, `onSearchKeywordChange` | Open/close and keyword notifications; no input without the keyword callback.    |
+| `actions` | `onScroll(metrics)`                        | Receives `scrollTop`, `scrollHeight`, `clientHeight`; host owns pagination.     |
+| `slots`   | `renderPanel({ search, list })`            | Compose with headings, controls and footer links.                               |
+| `slots`   | `renderOption(content, option)`            | Extend/replace rows; nested buttons/links do not select the row.                |
+| `slots`   | `emptyFallback`, `errorFallback`           | Custom empty/error content, including retry actions.                            |
+
+### Selection normalisation belongs to the host
+
+`ScopeSelector` renders `data.selectedId` exactly as given. When the id is empty or absent from `options`, no row is marked as selected; when it matches a disabled option, the row is still rendered as selected — disabled blocks interaction, it does not clear the selection — until the host normalises it. In neither case does the component change the value or call `actions.onSelect` on your behalf.
+
+A scope still needs a definite value, so check the selection after data arrives and pick the first selectable option when it is no longer valid, then write the result back to the URL and request parameters. `ScopeCascade` ships this: its controller falls back, resets descendants and loads the next level once the authoritative list arrives.
+
+Validity is decided from `options` alone: a value merely filtered out of `visibleOptions` by a search is still valid, so searching never switches the scope.
+
+Options require `id`, `label`; optional fields are `icon`, `description`, `disabled`. Labels include `loading`, `searchPlaceholder`, `empty`, `noMatch`, `error`, following locale. Pass optional overrides to each selector.
+
+Icons come from the host; the component ships none. For defaults, take `LibraryIcon`, `SpaceIcon` and `UserIcon` from `@openviking/react/icons`. With [ScopeCascade](../modules/scope-cascade), the default view fills those three in when an adapter returns no `icon`.
+
+Arrow keys and Home/End navigate; Enter/Space select; Escape closes and returns focus. Outside clicks and focus leaving dismiss the panel.
+
+## Appearance
+
+The row is 32px tall with no outline. Each level is its own 32px tall, 16px radius pill with 8px horizontal padding and an 8px icon-to-label gap; labels are 13px at weight 500. A level paints its outline in the primary colour on hover, focus and expand, and keeps a transparent outline at rest so nothing shifts when it appears.
+
+A level with a dropdown tints its button on hover, focus and expand — the same feedback an option row gives inside the panel. A level without one (`kind: 'fixed'`) keeps the identical geometry but drops the arrow and the hover feedback, so read-only scopes stay visually part of the breadcrumb. Adjacent levels are separated by a CSS `/` in `#c9cbd4`.
+
+Inside the panel a hovered row tints lightly and a selected row keeps the primary tint with a bold label and a check mark; the label colour is unchanged, since the design separates selection by weight and the tint. Search hits are tinted in the primary colour rather than highlighted in yellow.
+
+Each row's leading icon sits in a 24px well: white surface, 0.5px `#edeef2` outline, 12px radius, with the glyph itself at 14px. A host that renders round avatars sets `--ov-ui-scope-switcher-option-icon-radius: 50%`.
+
+Theme variables are declared on `.ov-scope-switcher` and each can be overridden alone: `--ov-ui-scope-switcher-divider`, `-icon`, `-option-icon`, `-option-icon-size`, `-option-icon-radius`, `-row-hover`, `-row-selected`, `-tag-background`, `-tag-text`, `-panel-width`, `-option-height`. Colours shared with the rest of the library come from the common `--ov-ui-text`, `--ov-ui-border`, `--ov-ui-surface`, `--ov-ui-primary` and `--ov-ui-text-muted` variables.
+
+```tsx
+import {
+  ScopeSwitcher,
+  ScopeSelector,
+} from '@openviking/react/components/scope-switcher';
+import '@openviking/react/components/scope-switcher/style.css';
+```

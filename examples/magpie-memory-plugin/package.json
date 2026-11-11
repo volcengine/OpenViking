@@ -1,7 +1,7 @@
 {
   "name": "@openviking/magpie-plugin",
-  "version": "0.1.1",
-  "description": "Bring OpenViking memory to agents using Magpie, with automatic context recall, optional conversation capture and memory tools. Reuses your existing OpenViking configuration.",
+  "version": "0.2.0",
+  "description": "OpenViking integration for Magpie: memory recall/capture and model switching with automatic restart.",
   "author": "OpenViking",
   "homepage": "https://github.com/volcengine/OpenViking/tree/main/examples/magpie-memory-plugin",
   "type": "module",
@@ -11,11 +11,23 @@
     "hooks": "./hooks.mjs",
     "icon": "https://raw.githubusercontent.com/volcengine/OpenViking/main/docs/images/ov-logo-icon.png",
     "options": {
+      "memoryEnabled": true,
+      "modelsEnabled": true,
+      "restartOnChange": true,
+      "queryMode": "preserve",
+      "queryModel": "",
       "autoRecall": true,
       "autoCapture": true,
+      "captureWithoutSession": false,
       "mcpEnabled": false,
-      "gatewayTimeoutMs": 1000,
+      "recallContextTimeoutMs": 2000,
+      "gatewayTimeoutMs": 3000,
       "nativeAgents": []
+    },
+    "agent": "./models/openviking.agent.js",
+    "summary": {
+      "zh": "为 Agent 召回和保存 OpenViking 记忆；切换 OV/VikingBot 模型并自动重启验证。记忆和模型管理可独立开关。",
+      "en": "OpenViking memory recall/capture and OV/VikingBot model switching with automatic restart; independently controlled."
     }
   },
   "files": [
@@ -35,12 +47,13 @@
     "shared/",
     "marketplace.json",
     "README.md",
-    "README_CN.md"
+    "README_CN.md",
+    "models/"
   ],
   "scripts": {
     "prepack": "node ../memory-plugin-shared/sync.mjs",
-    "check": "node --check index.mjs && node --check hooks.mjs && node --check runtime.mjs && node --check config.mjs && node --check http.mjs && node --check conversation.mjs && node --check recall-ledger.mjs && node --check private-state.mjs && node --check scope.mjs && node --check capture.mjs && node --check capture-messages.mjs && node --check capture-history.mjs && node --check capture-worker.mjs",
-    "test": "node --test tests/*.test.mjs"
+    "check": "node --check index.mjs && node --check hooks.mjs && node --check runtime.mjs && node --check config.mjs && node --check http.mjs && node --check conversation.mjs && node --check recall-ledger.mjs && node --check private-state.mjs && node --check scope.mjs && node --check capture.mjs && node --check capture-messages.mjs && node --check capture-history.mjs && node --check capture-worker.mjs && node --check models/index.mjs && node --check models/openviking.agent.js && node --check models/cli.mjs && node --check models/lib/runtime.mjs && node --check models/lib/host-options.mjs",
+    "test": "node --test tests/*.test.mjs models/tests/*.test.mjs"
   },
   "engines": {
     "node": ">=22.19.0"

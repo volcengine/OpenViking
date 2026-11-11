@@ -1,0 +1,35 @@
+# ScopeCascade 级联选择
+
+可选 `locale: 'zh-CN' | 'en-US'` 覆盖最近的模块或 Provider；均未配置时默认 `en-US`。已有 `labels` 可逐项覆盖。业务内容仍由宿主提供。
+
+直接向 `ScopeCascade` 传入三个 API 适配函数。请求、级联、取消、重试和各级订阅均内置，不需要创建控制器或调用 Hook。
+
+## 基础用法
+
+```tsx file="../../_demos/scope-cascade-basic.tsx" preview
+
+```
+
+三个接口返回 `Promise<readonly ScopeSwitcherOption[]>`，选项为 `{ id, label, icon?, description?, disabled? }`。鉴权、接口地址和响应映射由适配函数负责。保持函数引用稳定；适配函数变化会取消旧请求并重置全部选择。账号切换可用组件 `key` 隔离。
+
+默认视图内置三个层级图标：库用 `LibraryIcon`（按 id 取色的圆形渐变块），空间与用户用 `SpaceIcon`、`UserIcon`。适配函数返回的选项没有 `icon` 时自动补上本级默认图标，返回了 `icon` 就照用宿主的。
+
+| 接口            | 参数                                                      |
+| --------------- | --------------------------------------------------------- |
+| `loadLibraries` | `signal: AbortSignal`                                     |
+| `loadSpaces`    | `libraryId: string, signal: AbortSignal`                  |
+| `loadUsers`     | `libraryId: string, spaceId: string, signal: AbortSignal` |
+
+挂载后加载库列表，每级默认选择第一个可用项并继续加载下一级。切换上级时先清空下游，旧请求即使忽略 signal 也不能覆盖新结果。各级内部独立订阅，错误只影响本级；默认视图封装本地搜索、加载、空态、错误与重试。当前加载完整列表，不提供服务端搜索或分页。
+
+## 接收身份变化
+
+```tsx file="../../_demos/scope-cascade-selection.tsx" preview
+
+```
+
+`onChange(selection)` 返回完整的 `{ libraryId, spaceId, userId }`。初始化、上级切换或接口重置导致身份不完整时返回 `null`；同一身份的刷新不重复上报。宿主在非空时加载对应业务数据，不需要订阅内部状态。
+
+## 属性
+
+三个 `load*` 接口必填。`onChange` 可选，`levelNames` 按库、空间、用户顺序指定名称；`labels` 设置加载、搜索、空态和错误文案，`retryLabel` 设置重试按钮文案。`className`、`style` 等 HTML 属性透传给布局容器。引入 `@openviking/react/modules/scope-cascade/style.css` 使用默认样式。

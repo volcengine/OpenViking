@@ -8,7 +8,7 @@ import asyncio
 import base64
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol
 from uuid import uuid4
 
@@ -198,11 +198,17 @@ class ExternalTaskService:
         for task in tasks:
             if (
                 task.task_type not in self._providers
-                or task.result is not None
-                or task.error is not None
+                or (
+                    task.status != TaskStatus.CANCELLED
+                    and (task.result is not None or task.error is not None)
+                )
             ):
                 continue
-            if task.status not in {TaskStatus.RUNNING, TaskStatus.CANCELLING}:
+            if task.status not in {
+                TaskStatus.RUNNING,
+                TaskStatus.CANCELLING,
+                TaskStatus.CANCELLED,
+            }:
                 continue
             if task.status == TaskStatus.CANCELLING and task.stage in {None, "queued"}:
                 auth = await self._task_auth(task.task_id, task.account_id, task.user_id)
@@ -446,11 +452,10 @@ class ExternalTaskService:
             if task.status in {
                 TaskStatus.COMPLETED,
                 TaskStatus.FAILED,
-                TaskStatus.CANCELLED,
             }:
                 self._release(task)
                 return True
-            if task.status == TaskStatus.CANCELLING:
+            if task.status in {TaskStatus.CANCELLING, TaskStatus.CANCELLED}:
                 raise asyncio.CancelledError()
             # The outcome is persisted before QueueFS ACK removes the owned work.
             # After a crash in that window, let the recovered delivery ACK without
@@ -673,9 +678,11 @@ class ExternalTaskService:
         if task is None:
             return
         if (
-            task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
-            or task.result is not None
-            or task.error is not None
+            task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED}
+            or (
+                task.status != TaskStatus.CANCELLED
+                and (task.result is not None or task.error is not None)
+            )
         ):
             self._release(task)
             return
@@ -688,7 +695,8 @@ class ExternalTaskService:
             )
         auth = await self._task_auth(task_id, account_id, user_id)
         if (
-            task.status == TaskStatus.CANCELLING
+            task.status in {TaskStatus.CANCELLING, TaskStatus.CANCELLED}
+            and not auth.get("external_task_id")
             and "external_request_private" not in auth
             and "openviking_connection" not in auth
         ):
@@ -797,6 +805,29 @@ class ExternalTaskService:
         tracker = get_task_tracker()
         task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
         if task is None:
+            return True
+        if task.status == TaskStatus.CANCELLED:
+            if snapshot.status in _ACTIVE_STATUSES:
+                return False
+            if snapshot.status not in {"completed", "failed", "cancelled"}:
+                raise ExternalTaskError(
+                    "INVALID_RESPONSE",
+                    f"Unknown external task status: {snapshot.status}",
+                    transient=False,
+                )
+            task.auth = dict(auth)
+            finished = await self._provider(task.task_type).on_finish(
+                task, replace(snapshot, status="cancelled")
+            )
+            if finished.status in _ACTIVE_STATUSES:
+                return False
+            if finished.status not in {"completed", "failed", "cancelled"}:
+                raise ExternalTaskError(
+                    "INVALID_RESPONSE",
+                    f"Unknown external task status: {finished.status}",
+                    transient=False,
+                )
+            self._release(task)
             return True
         if task.is_terminal() or task.result is not None or task.error is not None:
             # The outcome may already be recorded while QueueFS still owns this Work.

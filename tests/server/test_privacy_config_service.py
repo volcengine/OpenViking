@@ -17,6 +17,7 @@ from openviking.privacy.skill_extractor import (
 )
 from openviking.privacy.skill_placeholder import placeholderize_skill_content_with_blocks
 from openviking.privacy.validation import PRIVACY_MAX_FIELDS, SESSION_PRIVACY_MAX_FIELDS
+from openviking.server.config import UserSettingsPatch
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import AlreadyExistsError, InvalidArgumentError, NotFoundError
@@ -253,7 +254,9 @@ async def test_skill_read_restores_placeholder(service, monkeypatch, name):
     await service.initialize_user_directories(ctx)
     from openviking.server.user_config import patch_user_config
 
-    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": "auto"}})
+    await patch_user_config(
+        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": "auto"}})
+    )
     resolver = SimpleNamespace(
         get_vlm=AsyncMock(side_effect=AssertionError("Privacy must not resolve VLM"))
     )

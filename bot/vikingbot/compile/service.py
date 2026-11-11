@@ -215,8 +215,9 @@ class _CompileProvider(LLMProvider):
                 async for event in stream:
                     yield event
 
-    def supports_tool_result_media(self, model: str | None = None) -> bool:
-        return self._provider.supports_tool_result_media(model)
+    def should_inline_tool_result_media(self, model: str | None = None) -> bool:
+        """Send original evidence; model capability is decided by the endpoint."""
+        return True
 
     def get_default_model(self) -> str:
         return self._provider.get_default_model()
@@ -1136,7 +1137,7 @@ class BotCompileService:
             for start in range(0, len(ordered), 8):
                 uris = ordered[start : start + 8]
                 contents = await asyncio.gather(
-                    *(read_source(client, uri, pipeline.model.provider) for uri in uris),
+                    *(read_source(client, uri) for uri in uris),
                     return_exceptions=True,
                 )
                 readable = []
@@ -1145,11 +1146,6 @@ class BotCompileService:
                         manifest = await pipeline.files.get("inputs")
                         manifest[uri] = "failed"
                         await pipeline.files.put("inputs", manifest)
-                        if (
-                            isinstance(content, CompileFailure)
-                            and content.code == "UNSUPPORTED_MEDIA"
-                        ):
-                            raise content
                         pipeline.failures.append(f"Source read failed: {uri}: {str(content)[:400]}")
                     elif isinstance(content, BaseException):
                         raise content
@@ -1602,9 +1598,7 @@ class BotCompileService:
         ordered = files if files is not None else await self._list_source_files(client, roots)
         for start in range(0, len(ordered), 8):
             uris = ordered[start : start + 8]
-            contents = await asyncio.gather(
-                *(read_source(client, uri, self.agent_loop.provider) for uri in uris)
-            )
+            contents = await asyncio.gather(*(read_source(client, uri) for uri in uris))
             sources.extend(zip(uris, contents, strict=True))
         return pack_source_batches(sources, self.limits)
 

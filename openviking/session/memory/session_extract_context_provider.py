@@ -575,6 +575,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             search_uris = await self.search_files(
                 query=search_query,
                 search_uris=dir_list,
+                limit=max(5, self._prefetch_search_topn),
             )
             result_value = search_uris
             if self._eager_prefetch:

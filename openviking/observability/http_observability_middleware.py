@@ -786,6 +786,9 @@ class HTTPObservabilityMiddleware:
         request.state.root_span_attrs = root_attrs
         error_token = bind_http_error_context()
         root_token = bind_root_observability_context(root_attrs)
+        from openviking.observability.reporting.facts import begin_request_reporting
+
+        begin_request_reporting()
         start = time.perf_counter()
         response_elapsed: float | None = None
 

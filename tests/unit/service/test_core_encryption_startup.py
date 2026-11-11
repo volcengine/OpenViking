@@ -101,9 +101,6 @@ async def test_build_ragfs_binding_config_works_inside_running_event_loop(monkey
             "enabled": False,
             "runtime_enabled": False,
             "provider": "redis",
-            "max_file_size_bytes": 1024 * 1024,
-            "traversal_mode": "backend",
-            "bypass_prefixes": [],
         },
         "pathlock": {
             "provider": "filesystem",
@@ -194,19 +191,31 @@ def test_release_data_dir_lock_resets_service_state(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_close_preserves_data_dir_lock_when_resource_cleanup_fails(monkeypatch):
-    class _FailingResourceService:
-        async def close_background_tasks(self) -> None:
-            raise RuntimeError("cleanup failed")
+    from unittest.mock import Mock
+
+    from openviking.storage.vikingdb_manager import VikingDBManager
+    from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
     released = []
     service = _service_for_close(monkeypatch)
-    service._resource_service = _FailingResourceService()
+    service._resource_service = SimpleNamespace(close_background_tasks=AsyncMock())
+    service._config = SimpleNamespace(vlm=VLMConfig())
+    service._queue_manager = None
+    service._agfs_client = None
+    service._initialized = True
+    manager = VikingDBManager(VectorDBBackendConfig())
+    collection = Mock()
+    collection.close.side_effect = [RuntimeError("cleanup failed"), None]
+    manager._shared_adapter._collection = collection
+    service._vikingdb_manager = manager
     monkeypatch.setattr(service, "_release_data_dir_lock", lambda: released.append(True))
 
     with pytest.raises(RuntimeError, match="cleanup failed"):
         await service.close()
 
     assert released == []
+    await service.close()
+    assert released == [True]
 
 
 @pytest.mark.asyncio

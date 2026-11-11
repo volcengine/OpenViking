@@ -8,6 +8,7 @@ import threading
 
 import pytest
 
+from openviking.server.config import UserSettingsPatch
 from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import patch_user_config
 from openviking.storage.queuefs import get_queue_manager
@@ -67,7 +68,9 @@ async def test_update_rollback_preserves_waiting_privacy_save(
         assert seeded.status_code == 200, seeded.text
     _, _, old_history = await _privacy_snapshot(client, endpoint)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": "auto"}})
+    await patch_user_config(
+        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": "auto"}})
+    )
     privacy = service.privacy_configs
     root = privacy.get_config_root(ctx, "skill", name)
     paused = asyncio.Event()
@@ -133,7 +136,9 @@ async def test_update_cancellation_restores_privacy_and_releases_both_locks(
     _, _, old_history = await _privacy_snapshot(client, endpoint)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     fs = service.viking_fs
-    await patch_user_config(fs, ctx, {"privacy": {"mode": "auto"}})
+    await patch_user_config(
+        fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": "auto"}})
+    )
     privacy_root = service.privacy_configs.get_config_root(ctx, "skill", name)
     started = threading.Event()
     cancelled = threading.Event()

@@ -30,10 +30,9 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.store_assembly import build_api_key_manager
 from openviking.server.user_config import (
-    patch_user_config,
-    read_user_add_targets,
     read_user_config,
     user_config_backup_uri,
+    user_config_uri,
 )
 from openviking.service.core import OpenVikingService
 from openviking.service.deletion import DeletionService, setup_deletion
@@ -83,6 +82,10 @@ class _FakeAGFS:
         if path not in self._files:
             raise AGFSNotFoundError(path)
         return self._files[path]
+
+    def stat(self, path, **_kwargs):
+        content = self.read(path)
+        return {"size": len(content), "modTime": hash(content)}
 
     def write(self, path, content, **_kwargs):
         self.ensure_parent_dirs(path)
@@ -2105,7 +2108,10 @@ async def test_create_account(
     stored = await admin_client.get(
         f"/api/v1/admin/accounts/{acct}/configuration", headers=root_headers()
     )
-    assert stored.json()["result"]["settings"] == settings
+    assert stored.json()["result"]["settings"] == {
+        **settings,
+        "agent_evolution": {"enabled": False},
+    }
     effective = await admin_service.vector_config_resolver.resolve(acct)
     assert effective.dedicated_vectordb
     assert effective.vectordb.name == "account_context"
@@ -2119,6 +2125,7 @@ async def test_create_account(
     assert visible.json()["result"]["settings"] == {
         "output_language_override": "en",
         "memory": {"extraction_enabled": False},
+        "agent_evolution": {"enabled": False},
     }
     updated = await admin_client.patch(
         url,
@@ -2186,8 +2193,7 @@ async def test_create_user_paths_accept_initial_user_config(
         json={
             "account_id": acct,
             "admin_user_id": "alice",
-            # Legacy uid-less spelling, normalized to the viking://~ home alias.
-            "user_config": {"add_targets": {"resource_uri": "viking://user/resources/admin"}},
+            "user_config": {"add_targets": {"resource_uri": "viking://~/resources/admin"}},
         },
         headers=root_headers(),
     )
@@ -2202,11 +2208,11 @@ async def test_create_user_paths_accept_initial_user_config(
     ):
         assert viking_fs.agfs.write_contexts[path]["lease_ref"] == "account-provisioning"
 
-    alice_settings = await read_user_add_targets(
+    alice_settings = await read_user_config(
         viking_fs,
         RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN),
     )
-    assert alice_settings.resource_uri == "viking://user/alice/resources/admin"
+    assert alice_settings.add_targets.resource_uri == "viking://user/alice/resources/admin"
 
     resp = await lightweight_admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
@@ -2219,11 +2225,23 @@ async def test_create_user_paths_accept_initial_user_config(
     )
     assert resp.status_code == 200, resp.text
 
-    bob_settings = await read_user_add_targets(
+    bob_settings = await read_user_config(
         viking_fs,
         RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
     )
-    assert bob_settings.resource_uri == "viking://user/bob/resources/bob"
+    assert bob_settings.add_targets.resource_uri == "viking://user/bob/resources/bob"
+
+    lightweight_admin_app.state.api_key_manager._store._read_only = True
+    locks_before = list(service.account_lock_events)
+    files_before = dict(viking_fs.agfs._files)
+    rejected = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "charlie"},
+        headers=root_headers(),
+    )
+    assert rejected.status_code == 403, rejected.text
+    assert service.account_lock_events == locks_before
+    assert viking_fs.agfs._files == files_before
 
 
 async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updates(
@@ -2233,6 +2251,7 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
 
     from openviking.ttl import wiring
     from openviking.ttl.runtime import DirectoryTTL
+    from openviking_cli.exceptions import PermissionDeniedError
     from openviking_cli.utils.config.open_viking_config import set_openviking_config
 
     client = lightweight_admin_client
@@ -2243,6 +2262,7 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         headers=root_headers(),
     )
     assert created.status_code == 200, created.text
+    admin_headers = {"X-API-Key": created.json()["result"]["user_key"]}
     created = await client.post(
         f"/api/v1/admin/accounts/{acct}/users",
         json={
@@ -2253,13 +2273,46 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         headers=root_headers(),
     )
     assert created.status_code == 200, created.text
+    user_headers = {"X-API-Key": created.json()["result"]["user_key"]}
     url = f"/api/v1/admin/accounts/{acct}/users/bob/settings"
     service = lightweight_admin_app.state.fake_service
     fs = service.viking_fs
+
+    async def check_access(uri, ctx, *, action):
+        if uri.startswith("viking://resources/"):
+            raise PermissionDeniedError("Shared resource directory is not writable")
+
+    monkeypatch.setattr(fs, "_ensure_access", check_access)
     user_ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
+    lightweight_admin_app.state.config.user_config_defaults = UserConfig(
+        add_targets={"resource_uri": "viking://resources/default", "skill_uri": "viking://~/skills"}
+    )
+    loaded = await client.get(url, headers=user_headers)
+    assert loaded.status_code == 200, loaded.text
+    assert loaded.json()["result"]["add_targets"]["resource_uri"] == "viking://resources/default"
+    other_acct = _uid()
+    created = await client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": other_acct, "admin_user_id": "bob"},
+        headers=root_headers(),
+    )
+    assert created.status_code == 200, created.text
+    before = dict(fs.files)
+    for method in ("GET", "PATCH"):
+        body = (
+            {"json": {"memory_policy": {"memory_types": ["events"]}}} if method == "PATCH" else {}
+        )
+        for headers, target in (
+            (user_headers, url.replace("/bob/", "/alice/")),
+            (user_headers, url.replace(acct, other_acct)),
+            (admin_headers, url.replace(acct, other_acct)),
+        ):
+            denied = await client.request(method, target, headers=headers, **body)
+            assert denied.status_code == 403, denied.text
+            assert fs.files == before
     monkeypatch.setattr(wiring, "_adapter", None)
     before = dict(fs.files)
-    rejected = await client.patch(url, json={"ttl": {"sessions": 7}}, headers=root_headers())
+    rejected = await client.patch(url, json={"ttl": {"sessions": 7}}, headers=user_headers)
     assert rejected.status_code == 501 and fs.files == before
 
     engine = DirectoryTTL(resource_id="settings-contract", timezone_name="UTC")
@@ -2278,13 +2331,22 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         patched = await client.patch(
             url,
             json={
+                "add_targets": {"resource_uri": "viking://~/peers/first/resources/project-a"},
                 "memory_policy": {"memory_types": ["experiences"]},
                 "ttl": {"sessions": 7, "peer_events": 3, "user_events": "disabled"},
             },
-            headers=root_headers(),
+            headers=user_headers,
         )
         assert patched.status_code == 200, patched.text
-        settings = (await client.get(url, headers=root_headers())).json()["result"]
+        loaded = await client.get(url, headers=user_headers)
+        assert loaded.status_code == 200, loaded.text
+        settings = loaded.json()["result"]
+        admin_view = await client.get(url, headers=admin_headers)
+        assert admin_view.status_code == 200 and admin_view.json()["result"] == settings
+        assert settings["add_targets"] == {
+            "resource_uri": "viking://user/bob/peers/first/resources/project-a",
+            "skill_uri": "viking://user/bob/skills",
+        }
         assert settings["ttl"] == {"sessions": 7, "peer_events": 3, "user_events": "disabled"}
         assert settings["memory_policy"]["memory_types"] == ["cases", "experiences", "trajectories"]
         persisted = await read_user_config(fs, user_ctx)
@@ -2292,6 +2354,8 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         assert persisted.memory_policy["memory_types"] == settings["memory_policy"]["memory_types"]
         backup = json.loads(fs.files[user_config_backup_uri(user_ctx)])
         assert backup["memory_policy"]["memory_types"] == ["profile"]
+        assert persisted.add_targets.resource_uri == settings["add_targets"]["resource_uri"]
+        assert persisted.add_targets.skill_uri is None
 
         first_peer = "viking://user/bob/peers/first/memories/events/2026/01/01"
         second_peer = "viking://user/bob/peers/second/memories/events/2026/01/01"
@@ -2310,7 +2374,7 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
 
         writes_before_noop = len(fs.writes)
         noop = await client.patch(
-            url, json={"memory_policy": persisted.memory_policy}, headers=root_headers()
+            url, json={"memory_policy": persisted.memory_policy}, headers=admin_headers
         )
         assert noop.status_code == 200 and len(fs.writes) == writes_before_noop
         patched = await client.patch(
@@ -2334,14 +2398,24 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
                 url, json={"ttl": {"user_events": 7}}, headers=root_headers()
             )
         assert rejected.status_code == 503 and fs.files == before
-        cleared = await client.patch(url, json={"ttl": None}, headers=root_headers())
+        cleared = await client.patch(
+            url, json={"ttl": None, "add_targets": None}, headers=root_headers()
+        )
         assert cleared.status_code == 200, cleared.text
         assert cleared.json()["result"]["ttl"] is None
+        assert cleared.json()["result"]["add_targets"] == {
+            "resource_uri": "viking://resources/default",
+            "skill_uri": "viking://user/bob/skills",
+        }
+        assert (await read_user_config(fs, user_ctx)).add_targets.model_dump(
+            exclude_none=True
+        ) == {}
         assert cleared.json()["result"]["memory_policy"] == settings["memory_policy"]
         assert (await engine.policy(acct, first_peer)).days == 14
 
         lightweight_admin_app.state.config.user_config_defaults = UserConfig(
-            memory_policy={"memory_types": ["events"]}
+            add_targets={"resource_uri": "viking://resources/default"},
+            memory_policy={"memory_types": ["events"]},
         )
         reset = await client.patch(url, json={"memory_policy": None}, headers=root_headers())
         assert reset.status_code == 200, reset.text
@@ -2350,48 +2424,100 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         assert json.loads(fs.files[user_config_backup_uri(user_ctx)])["memory_policy"][
             "memory_types"
         ] == ["cases", "experiences", "trajectories"]
+
+        # Old settings remain readable and do not block unrelated sparse updates.
+        stored_uri = user_config_uri(user_ctx)
+        stored = json.loads(fs.files[stored_uri])
+        stored["add_targets"] = {"resource_uri": "viking://user/resources/legacy"}
+        stored["memory_policy"] = {"memory_types": ["retired_type"]}
+        fs.files[stored_uri] = json.dumps(stored)
+        loaded = await client.get(url, headers=user_headers)
+        assert loaded.status_code == 200, loaded.text
+        patched = await client.patch(
+            url, json={"add_targets": {"skill_uri": "viking://~/skills"}}, headers=user_headers
+        )
+        assert patched.status_code == 200, patched.text
+        assert (
+            patched.json()["result"]["add_targets"]["resource_uri"]
+            == stored["add_targets"]["resource_uri"]
+        )
+        assert patched.json()["result"]["memory_policy"]["memory_types"] == ["retired_type"]
+        before_rejected = dict(fs.files)
+        rejected = await client.patch(
+            url, json={"memory_policy": stored["memory_policy"]}, headers=user_headers
+        )
+        assert rejected.status_code == 400 and fs.files == before_rejected
+        rejected = await client.patch(
+            url,
+            json={
+                "add_targets": {"resource_uri": "viking://user/bob/resources"},
+                "memory_policy": {"memory_types": ["profile"]},
+            },
+            headers=user_headers,
+        )
+        assert rejected.status_code == 422 and fs.files == before_rejected
+        patched = await client.patch(
+            url, json={"memory_policy": {"memory_types": ["events"]}}, headers=user_headers
+        )
+        assert patched.status_code == 200, patched.text
+        assert (
+            patched.json()["result"]["add_targets"]["resource_uri"]
+            == stored["add_targets"]["resource_uri"]
+        )
+        assert json.loads(fs.files[stored_uri])["memory_policy"]["memory_types"] == ["events"]
     finally:
         set_openviking_config(previous_config)
         await engine.aclose()
 
 
-async def test_admin_can_inspect_but_not_set_user_privacy(
-    lightweight_admin_client: httpx.AsyncClient,
-    lightweight_admin_app: FastAPI,
+async def test_privacy_settings_follow_user_settings_permissions(
+    lightweight_admin_client, lightweight_admin_app
 ):
     client = lightweight_admin_client
     account = _uid()
+    lightweight_admin_app.state.config.user_config_defaults.privacy = PrivacyConfig(restore=False)
     created = await client.post(
         "/api/v1/admin/accounts",
-        json={"account_id": account, "admin_user_id": "alice"},
+        json={
+            "account_id": account,
+            "admin_user_id": "alice",
+            "user_config": {"privacy": {"mode": "registered"}},
+        },
         headers=root_headers(),
     )
     assert created.status_code == 200, created.text
-    ctx = RequestContext(user=UserIdentifier(account, "alice"), role=Role.USER)
-    await patch_user_config(
-        lightweight_admin_app.state.fake_service.viking_fs,
-        ctx,
-        {"privacy": {"mode": "registered"}},
-    )
-    lightweight_admin_app.state.config.user_config_defaults.privacy = PrivacyConfig(restore=False)
-    url = f"/api/v1/admin/accounts/{account}/users/alice/settings"
-    response = await client.get(url, headers=root_headers())
-    assert response.status_code == 200, response.text
+    alice_url = f"/api/v1/admin/accounts/{account}/users/alice/settings"
+    response = await client.get(alice_url, headers=root_headers())
     assert response.json()["result"]["privacy"] == {
         "mode": "registered",
         "restore": False,
         "custom_rules": [],
         "never_mask": [],
     }
-    rejected = await client.patch(url, json={"privacy": {"mode": "auto"}}, headers=root_headers())
-    assert rejected.status_code == 422, rejected.text
-    for privacy in ({"mode": "auto"}, {"mode": "off"}, {"restore": False}):
-        rejected = await client.post(
-            f"/api/v1/admin/accounts/{account}/users",
-            json={"user_id": "bob", "user_config": {"privacy": privacy}},
-            headers=root_headers(),
-        )
-        assert rejected.status_code == 400, rejected.text
+    bob = await client.post(
+        f"/api/v1/admin/accounts/{account}/users",
+        json={"user_id": "bob", "role": "user", "user_config": {"privacy": {"mode": "auto"}}},
+        headers=root_headers(),
+    )
+    assert bob.status_code == 200, bob.text
+    headers = {"X-API-Key": bob.json()["result"]["user_key"]}
+    bob_url = f"/api/v1/admin/accounts/{account}/users/bob/settings"
+    response = await client.patch(bob_url, json={"privacy": {"restore": True}}, headers=headers)
+    assert response.status_code == 200, response.text
+    expected = {"mode": "auto", "restore": True, "custom_rules": [], "never_mask": []}
+    assert response.json()["result"]["privacy"] == expected
+    assert (await client.get(bob_url, headers=headers)).json()["result"]["privacy"] == expected
+    assert (await client.get(alice_url, headers=headers)).status_code == 403
+    rejected = await client.patch(alice_url, json={"privacy": None}, headers=headers)
+    assert rejected.status_code == 403, rejected.text
+    reset = await client.patch(bob_url, json={"privacy": None}, headers=headers)
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["result"]["privacy"] == {
+        "mode": "off",
+        "restore": False,
+        "custom_rules": [],
+        "never_mask": [],
+    }
 
 
 async def test_user_memory_policy_uses_server_default_without_user_override(
@@ -2547,7 +2673,7 @@ async def test_identity_settings_refreshes_a_stale_registry_on_demand(
     await writer.ensure_trusted_identities({acct: {"trusted-user"}})
 
     account_settings = await admin_client.get(
-        f"/api/v1/admin/accounts/{acct}/settings",
+        f"/api/v1/admin/accounts/{acct}/configuration",
         headers=root_headers(),
     )
     assert account_settings.status_code == 200, account_settings.text

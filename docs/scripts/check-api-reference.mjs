@@ -81,7 +81,6 @@ const internalRouterFiles = new Set([
   'console.py',
   'debug.py',
   'stats.py',
-  'user_settings.py',
 ])
 const routerFiles = fs.readdirSync(routerDir)
   .filter((name) => name.endsWith('.py') && !internalRouterFiles.has(name))
@@ -231,7 +230,7 @@ function tableReferences(source) {
       (match) => match[1]
     )
     const paths = Array.from(
-      cells[1].matchAll(/`(\/[A-Za-z0-9_{}./:-]+)`/g),
+      cells[1].matchAll(/`(\/[^`\s]+)`/g),
       (match) => match[1]
     )
     for (const method of methods) {

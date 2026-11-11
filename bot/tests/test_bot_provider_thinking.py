@@ -19,19 +19,27 @@ from openviking.models.vlm.backends.litellm_vlm import (
 from openviking.models.vlm.base import VLMResponse
 
 
-def test_provider_names_do_not_grant_undeclared_media_capabilities():
-    unknown = SimpleNamespace(provider="openai")
+@pytest.mark.asyncio
+async def test_unknown_media_transport_and_backup_do_not_block_images(monkeypatch):
+    completion = AsyncMock(return_value=VLMResponse(content="done"))
+    unknown = SimpleNamespace(provider="openai", get_completion_async=completion)
     adapter = VLMProviderAdapter(unknown, "vision", langfuse_client=LangfuseClient())
-    assert adapter.supports_tool_result_media() is False
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}
+    messages = [{"role": "tool", "tool_call_id": "read", "content": [image]}]
+    assert (await adapter.chat(messages)).content == "done"
+    assert completion.await_args.kwargs["messages"][-1]["content"][-1] == image
 
     primary = VLMFactory.create({"provider": "openai", "model": "gpt-4o"})
+    monkeypatch.setattr(primary, "get_completion_async", completion)
     backup = OpenVikingLiteLLMVLMProvider({"provider": "litellm", "model": "sagemaker/custom"})
     for chain in (
         FailoverVLM(primary, backup),
         MultiCredentialVLM([primary, backup], credential_ids=["primary", "backup"]),
     ):
         adapter = VLMProviderAdapter(chain, "vision", langfuse_client=LangfuseClient())
-        assert adapter.supports_tool_result_media() is False
+        assert adapter.supports_tool_result_media()
+        assert (await adapter.chat(messages)).content == "done"
+        assert completion.await_args.kwargs["messages"][-1]["content"][-1] == image
 
 
 @pytest.mark.asyncio
@@ -60,14 +68,6 @@ def test_provider_names_do_not_grant_undeclared_media_capabilities():
         ("mistral/pixtral-large-latest", "user_message"),
         ("cohere/command-a-vision-07-2025", "user_message"),
         ("groq/meta-llama/llama-4-scout-17b-16e-instruct", "user_message"),
-        ("deepseek/deepseek-chat", None),
-        ("sambanova/model", None),
-        ("heroku/model", None),
-        ("docker_model_runner/model", None),
-        ("azure_text/deployment", None),
-        ("future-claude-vision", None),
-        ("custom/my-model", None),
-        ("gemini/future-claude-vision", None),
     ],
 )
 async def test_litellm_declared_media_survives_actual_conversion(
@@ -83,8 +83,6 @@ async def test_litellm_declared_media_survives_actual_conversion(
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
     vlm = OpenVikingLiteLLMVLMProvider({"provider": "litellm", "model": model})
     assert vlm.tool_result_media_mode() == mode
-    if mode is None:
-        return
 
     encoded = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5XsAAAAASUVORK5CYII="
     image = {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}}
@@ -145,15 +143,16 @@ async def test_litellm_declared_media_survives_actual_conversion(
     assert messages == original
 
 
-def test_unverified_litellm_subclass_cannot_inherit_image_permission(monkeypatch):
+@pytest.mark.parametrize("model", ["openai/future-model", "custom/model", "unknown-model"])
+def test_unknown_litellm_transport_uses_user_images(monkeypatch, model):
     class UnverifiedConfig(litellm.OpenAIGPTConfig):
         pass
 
     monkeypatch.setattr(
         ProviderConfigManager, "get_provider_chat_config", lambda **kwargs: UnverifiedConfig()
     )
-    vlm = OpenVikingLiteLLMVLMProvider({"provider": "litellm", "model": "openai/future-model"})
-    assert vlm.tool_result_media_mode() is None
+    vlm = OpenVikingLiteLLMVLMProvider({"provider": "litellm", "model": model})
+    assert vlm.tool_result_media_mode() == "user_message"
 
 
 @pytest.mark.asyncio

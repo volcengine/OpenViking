@@ -407,6 +407,25 @@ JSON 输出 - 错误：
 | PUT | `/api/v1/skills/{skill_name}` | 更新技能 |
 | DELETE | `/api/v1/skills/{skill_name}` | 删除技能 |
 
+### [MCP 与实时上下文](26-mcp-live-context.md)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/mcps/validate` | 校验 MCP Server 连接并发现工具，不保存配置 |
+| POST | `/api/v1/mcps` | 注册 MCP Server 并发布工具目录 |
+| GET | `/api/v1/mcps` | 列出已注册 MCP Server |
+| GET | `/api/v1/mcps/{name}` | 查看 MCP Server 和当前工具定义 |
+| GET | `/api/v1/mcps/status` | 检查 MCP Server 是否可访问 |
+| POST | `/api/v1/mcps/{name}/sync` | 同步工具目录并报告受影响的实时上下文挂载 |
+| DELETE | `/api/v1/mcps/{name}` | 删除 MCP Server 和工具目录 |
+| POST | `/api/v1/mcps/find` | 语义检索 MCP 工具 |
+| POST | `/api/v1/mcps/invoke` | 调用 MCP 工具 |
+| POST | `/api/v1/mcps/mount` | 创建或替换一个 MCP 实时上下文节点 |
+| POST | `/api/v1/mcps/batch-mount` | 批量创建或替换实时上下文节点 |
+| DELETE | `/api/v1/mcps/mount` | 删除一个挂载及其节点 |
+| POST | `/api/v1/mcps/batch-unmount` | 批量删除挂载及其节点 |
+| GET | `/api/v1/mcps/mounts` | 查询 MCP Server 或工具的挂载 |
+
 ### [会话](05-sessions.md)、[记忆](16-memory.md)与 [Agent 进化](19-agent-evolution.md)
 
 | 方法 | 路径 | 说明 |
@@ -497,11 +516,12 @@ JSON 输出 - 错误：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| GET | `/api/v1/admin/metric-inventory` | 流式导出供离线报表使用的元数据清单（仅 ROOT） |
 | GET | `/api/v1/admin/configuration` | 获取 Cluster 层显式运行时配置 |
 | PATCH | `/api/v1/admin/configuration` | 更新 Cluster 层运行时配置 |
 | POST | `/api/v1/admin/configuration/test-model` | 测试草稿模型或 Embedding 连接，不保存配置 |
 | POST | `/api/v1/admin/restart` | 请求支持该能力的服务进程优雅重启（仅 ROOT） |
-| GET | `/api/v1/admin/accounts/{account_id}/configuration` | 获取 Account 层显式运行时配置 |
+| GET | `/api/v1/admin/accounts/{account_id}/configuration` | 获取 Account 配置及生效的 Agent 进化开关 |
 | PATCH | `/api/v1/admin/accounts/{account_id}/configuration` | 更新 Account 层运行时配置 |
 | GET | `/api/v1/admin/agent-evolution` | 获取 Agent 进化状态（deprecated） |
 | PUT | `/api/v1/admin/agent-evolution` | 更新 Agent 进化状态（deprecated） |
@@ -519,8 +539,11 @@ JSON 输出 - 错误：
 | POST | `/api/v1/admin/accounts/{account_id}/users` | 注册用户 |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | 列出用户 |
 | GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 获取单个用户的无凭据成员信息（user_id、role） |
-| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 获取用户记忆策略 |
-| PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 更新用户记忆策略 |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 获取用户添加位置、记忆策略和 TTL |
+| PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 更新用户添加位置、记忆策略和 TTL |
+| GET | `/api/v1/user-settings/add-locations` | 读取当前用户的添加位置（deprecated） |
+| PATCH | `/api/v1/user-settings/add-locations` | 更新当前用户的添加位置（deprecated） |
+| DELETE | `/api/v1/user-settings/add-locations` | 清除当前用户的添加位置设置（deprecated） |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 移除用户 |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 在 USER 与 ADMIN 之间变更用户角色 |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | 重新生成用户 Key |
@@ -529,7 +552,7 @@ JSON 输出 - 错误：
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除用户组 |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 列出用户组成员 |
 | PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 批量添加用户组成员 |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除用户组成员 |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 批量移除用户组成员 |
 | GET | `/api/v1/privacy-configs` | 列出隐私配置分类 |
 | GET | `/api/v1/privacy-configs/tree` | 树形列出当前目标和字段元数据，不返回值 |
 | POST | `/api/v1/privacy-configs/scan` | 扫描或修复正文中的登记值 |
@@ -619,4 +642,4 @@ JSON 输出 - 错误：
 | 数据生命周期 | Watch、快照、OVPack |
 | 运维与观测 | 系统、任务、Observer、Metrics |
 | 身份与治理 | 管理员、ACL、隐私配置 |
-| 协议与扩展 | OpenViking Assets、WebDAV、Agent Runtime API、VikingBot API |
+| 协议与扩展 | MCP 与实时上下文、OpenViking Assets、WebDAV、Agent Runtime API、VikingBot API |

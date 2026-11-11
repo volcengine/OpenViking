@@ -122,6 +122,13 @@ const profiles = {
       description:
         'Recall searches with the latest user message, cut to this length.',
     },
+    peerScope: {
+      label: 'Peer scope',
+      description:
+        "Which peers' memories recall and OpenViking tools can see besides the user's own.",
+      all: 'All peers, current peer first',
+      actor: 'Current peer only',
+    },
     quotas: {
       label: 'Limit by category',
       description:

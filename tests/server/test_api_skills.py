@@ -378,6 +378,7 @@ async def test_skills_api_update_restores_previous_privacy_on_failure(client, mo
 async def test_skills_api_update_restores_previous_privacy_after_privacy_write(
     client, service, monkeypatch
 ):
+    from openviking.server.config import UserSettingsPatch
     from openviking.server.identity import RequestContext, Role
     from openviking.server.user_config import patch_user_config
     from openviking.storage.queuefs import get_queue_manager
@@ -402,7 +403,7 @@ async def test_skills_api_update_restores_previous_privacy_after_privacy_write(
     await patch_user_config(
         service.viking_fs,
         RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
-        {"privacy": {"mode": "auto"}},
+        UserSettingsPatch.model_validate({"privacy": {"mode": "auto"}}),
     )
     secret = "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
     original_apply = SkillProcessor.apply_skill_privacy

@@ -329,9 +329,7 @@ async def test_privacy_field_list_returns_metadata_without_values(
     assert created.status_code == 200, created.text
     owner = created.json()["result"]["created_by"]
 
-    response = await client.get(
-        "/api/v1/privacy-configs/credential/github-fields/fields"
-    )
+    response = await client.get("/api/v1/privacy-configs/credential/github-fields/fields")
     assert response.status_code == 200, response.text
     result = response.json()["result"]
     assert result == {
@@ -361,9 +359,7 @@ async def test_privacy_field_list_returns_metadata_without_values(
     assert "github-secret-value" not in response.text
     assert all("value" not in field for field in result["fields"])
 
-    missing = await client.get(
-        "/api/v1/privacy-configs/credential/missing-fields/fields"
-    )
+    missing = await client.get("/api/v1/privacy-configs/credential/missing-fields/fields")
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "NOT_FOUND"
 
@@ -378,9 +374,7 @@ async def test_privacy_config_delete_is_idempotent_and_removes_history(
         )
         assert created.status_code == 200, created.text
 
-    deleted_response = await client.delete(
-        "/api/v1/privacy-configs/credential/delete-me"
-    )
+    deleted_response = await client.delete("/api/v1/privacy-configs/credential/delete-me")
     assert deleted_response.status_code == 200, deleted_response.text
     assert deleted_response.json()["result"] == {
         "category": "credential",
@@ -391,9 +385,7 @@ async def test_privacy_config_delete_is_idempotent_and_removes_history(
     get_response = await client.get("/api/v1/privacy-configs/credential/delete-me")
     assert get_response.status_code == 404
 
-    deleted_again = await client.delete(
-        "/api/v1/privacy-configs/credential/delete-me"
-    )
+    deleted_again = await client.delete("/api/v1/privacy-configs/credential/delete-me")
     assert deleted_again.status_code == 200, deleted_again.text
     assert deleted_again.json()["result"]["deleted"] is False
 
@@ -402,8 +394,6 @@ async def test_privacy_scan_is_dry_run_by_default_and_fix_rewrites_content(
     client: httpx.AsyncClient,
     service,
 ):
-    response = await client.patch("/api/v1/user-settings/privacy", json={"mode": "registered"})
-    assert response.status_code == 200, response.text
     secret = "legacy-value-to-repair"
     created = await client.post(
         "/api/v1/privacy-configs/credential/legacy-service",
@@ -447,17 +437,16 @@ async def test_privacy_scan_is_dry_run_by_default_and_fix_rewrites_content(
     assert fixed_report["repaired_files"] == 1
     stored = await service.viking_fs.read_file(uri, ctx=ctx)
     assert secret not in stored
-    assert build_privacy_field_reference(
-        owner, "credential", "legacy-service", "custom_field"
-    ) in stored
+    assert (
+        build_privacy_field_reference(owner, "credential", "legacy-service", "custom_field")
+        in stored
+    )
 
 
 async def test_privacy_scan_fix_repairs_skill_and_reindexes_package(
     client: httpx.AsyncClient,
     service,
 ):
-    response = await client.patch("/api/v1/user-settings/privacy", json={"mode": "registered"})
-    assert response.status_code == 200, response.text
     secret = "legacy-skill-registered-value"
     created = await client.post(
         "/api/v1/privacy-configs/credential/legacy-skill-service",
@@ -500,12 +489,15 @@ Use no credentials yet.
     assert report["reindex"]
     stored = await service.viking_fs.read_file(skill_uri, ctx=ctx)
     assert secret not in stored
-    assert build_privacy_field_reference(
-        owner,
-        "credential",
-        "legacy-skill-service",
-        "custom",
-    ) in stored
+    assert (
+        build_privacy_field_reference(
+            owner,
+            "credential",
+            "legacy-skill-service",
+            "custom",
+        )
+        in stored
+    )
 
 
 async def test_privacy_scan_requires_explicit_uri_and_caps_tree_at_1000_nodes(
@@ -531,9 +523,7 @@ async def test_privacy_resolve_accepts_reference_and_field_uri_and_checks_owner(
     )
     assert created.status_code == 200, created.text
     owner = created.json()["result"]["created_by"]
-    reference = build_privacy_field_reference(
-        owner, "credential", "selector-service", "api/key"
-    )
+    reference = build_privacy_field_reference(owner, "credential", "selector-service", "api/key")
 
     for selector in (
         reference,
@@ -550,9 +540,7 @@ async def test_privacy_resolve_accepts_reference_and_field_uri_and_checks_owner(
         assert result["value"] == "selector-secret"
         assert result["reference"] == reference
 
-    spaced_reference = reference.replace("{{ov_privacy:", "{{ ov_privacy:").replace(
-        "}}", " }}"
-    )
+    spaced_reference = reference.replace("{{ov_privacy:", "{{ ov_privacy:").replace("}}", " }}")
     normalized_delete = await client.request(
         "DELETE",
         "/api/v1/privacy-configs/selector",
@@ -589,14 +577,12 @@ async def test_privacy_field_delete_publishes_new_active_snapshot_and_keeps_hist
     assert result["target_deleted"] is False
     assert result["active_version"] == 2
 
-    current = (
-        await client.get("/api/v1/privacy-configs/credential/delete-field-service")
-    ).json()["result"]["current"]
+    current = (await client.get("/api/v1/privacy-configs/credential/delete-field-service")).json()[
+        "result"
+    ]["current"]
     assert current["values"] == {"region": "cn"}
     old = (
-        await client.get(
-            "/api/v1/privacy-configs/credential/delete-field-service/versions/1"
-        )
+        await client.get("/api/v1/privacy-configs/credential/delete-field-service/versions/1")
     ).json()["result"]
     assert old["values"]["api_key"] == "secret"
 
@@ -612,9 +598,7 @@ async def test_privacy_field_delete_publishes_new_active_snapshot_and_keeps_hist
     last_result = deleted_last.json()["result"]
     assert last_result["target_deleted"] is True
     assert last_result["active_version"] is None
-    missing_target = await client.get(
-        "/api/v1/privacy-configs/credential/delete-field-service"
-    )
+    missing_target = await client.get("/api/v1/privacy-configs/credential/delete-field-service")
     assert missing_target.status_code == 404
     missing_history = await client.get(
         "/api/v1/privacy-configs/credential/delete-field-service/versions/1"

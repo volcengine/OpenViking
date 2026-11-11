@@ -159,6 +159,48 @@ test("result conversion preserves images, avoids structured echoes, and bounds a
   }
 });
 
+test("unstructured oversized Rule search is explicitly incomplete and bounded", () => {
+  const text = "完整规则\n".repeat(17000) + "LAST RULE";
+  const result = toPiResult("rule_search", {
+    content: [{ type: "text", text }],
+    structuredContent: { result: text },
+  });
+  assert.equal(result.details.truncated, true);
+  assert.equal(result.details.delivery.complete, false);
+  assert.ok(Buffer.byteLength(result.content[0].text) <= MAX_RESULT_BYTES);
+  assert.match(result.content[0].text, /delivery.complete=false/);
+  assert.ok(!result.content[0].text.includes("完整规则"));
+  assert.throws(() => toPiResult("rule_search", { isError: true, content: [{ type: "text", text: "judge unavailable" }] }), /judge unavailable/);
+});
+
+for (const body of ["字".repeat(10000), "line\n".repeat(800)]) {
+  test("Rule delivery stops between complete blocks for bytes and lines " + body.length, () => {
+    const blocks = Array.from({ length: 6 }, (_, i) =>
+      `## [R${i}] Rule ${i}\n\nConstraint:\n${body}\n\nApplies when: Always.\nException: Only in a test.\n\nCompiled Rule URI: viking://rules/R${i}.md`);
+    const text = "# Applicable OpenViking Rules\n\nMatched 6 active Rule(s).\n\n" + blocks.join("\n\n");
+    const result = toPiResult("rule_search", { content: [{ type: "text", text }], structuredContent: { result: text } });
+    const output = result.content[0].text;
+    assert.equal(result.details.delivery.complete, false);
+    assert.ok(Buffer.byteLength(output) <= MAX_RESULT_BYTES);
+    assert.ok(output.split("\n").length <= MAX_RESULT_LINES);
+    assert.match(output, /delivery.complete=false/);
+    for (const block of blocks) {
+      if (output.includes(block.split("\n")[0])) assert.ok(output.includes(block));
+    }
+    assert.ok(output.includes(blocks[0]));
+    assert.ok(!output.includes("\ufffd"));
+  });
+}
+
+test("one Rule larger than the budget is omitted whole with its retrieval URI", () => {
+  const body = "secret constraint ".repeat(10000);
+  const text = `# Applicable OpenViking Rules\n\nMatched 1 active Rule(s).\n\n## [large] Large\n\nConstraint:\n${body}\n\nApplies when: Always.\n\nCompiled Rule URI: viking://rules/large.md`;
+  const result = toPiResult("rule_search", { content: [{ type: "text", text }] });
+  assert.equal(result.details.delivery.omitted_rules, 1);
+  assert.match(result.content[0].text, /viking:\/\/rules\/large.md/);
+  assert.ok(!result.content[0].text.includes("secret constraint"));
+});
+
 test("large tool errors are bounded and non-text content remains readable", () => {
   assert.throws(() => toPiResult("read", { isError: true, content: [{ type: "text", text: "error".repeat(20000) }] }),
     (error) => Buffer.byteLength(error.message) <= MAX_RESULT_BYTES && error.message.includes("Output truncated"));

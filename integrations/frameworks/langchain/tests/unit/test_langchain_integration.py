@@ -145,6 +145,24 @@ def test_retriever_passes_tags_to_retrieval():
     assert client.find_calls[-1]["tags"] == ["env=prod", "team=search"]
 
 
+def test_rule_search_forwards_options_and_preserves_complete_constraints():
+    class RuleClient:
+        def rule_search(self, task_context, options=None):
+            assert task_context == "deploy"
+            assert options == {"rule_probability_threshold": 0}
+            return {"rendered": "完整规则\n" * 17000 + "LAST RULE"}
+
+    for profile in ("retrieval", "agent", "admin"):
+        tools = create_openviking_tools(client=RuleClient(), profile=profile)
+        tool = next(tool for tool in tools if tool.name == "viking_rule_search")
+        assert (
+            tool.invoke({"task_context": "deploy", "rule_probability_threshold": 0})
+            == "完整规则\n" * 17000 + "LAST RULE"
+        )
+        with pytest.raises(ValueError):
+            tool.invoke({"task_context": "deploy", "rule_probability_threshold": 2})
+
+
 def test_create_openviking_tools_exposes_common_viking_primitives():
     client = InMemoryOpenVikingClient(
         {"viking://~/memories/profile.md": "The user likes LangGraph agents."}
@@ -1546,9 +1564,13 @@ def test_archive_tools_search_and_expand_committed_session():
     assert "Remember cobalt archive detail" in expanded
 
 
-def test_archive_search_without_archive_id_searches_raw_history():
+@pytest.mark.parametrize("query", ["hidden cobalt archive", "C++"])
+def test_archive_search_without_archive_id_searches_raw_history(query):
     client = InMemoryOpenVikingClient()
-    client.add_message("archive-search-session", "user", content="Hidden cobalt archive detail.")
+    client.add_message(
+        "archive-search-session", "user", content="Hidden cobalt archive C++ detail."
+    )
+    client.add_message("archive-search-session", "assistant", content="Unrelated cobalt detail.")
     commit = client.commit_session("archive-search-session")
     assert commit["archive_id"] == "archive_001"
     client.archives["archive-search-session"][0]["overview"] = "compressed summary"
@@ -1558,17 +1580,60 @@ def test_archive_search_without_archive_id_searches_raw_history():
     searched = tools["viking_archive_search"].invoke(
         {
             "session_id": "archive-search-session",
-            "query": "hidden cobalt archive",
+            "query": query,
         }
     )
 
-    assert "Hidden cobalt archive detail" in searched
+    assert "Hidden cobalt archive C++ detail" in searched
+    assert "Unrelated cobalt detail" not in searched
     assert "viking://user/default/sessions/archive-search-session/history" in searched
 
 
 def test_archive_grep_pattern_uses_backend_safe_token_regex():
     assert _archive_grep_pattern("hidden cobalt archive") == "hidden"
     assert "(?=" not in _archive_grep_pattern("hidden cobalt archive")
+
+
+@pytest.mark.parametrize("with_archive_id", [True, False])
+@pytest.mark.parametrize(
+    ("query", "matches"),
+    [
+        ("cobalt archive", True),
+        ("COBALT ARCHIVE", True),
+        ("quartz archive", False),
+        ("部署", True),
+        ("火星", False),
+        ("部署 cobalt", True),
+        ("火星 cobalt", False),
+        ("café", True),
+        ("cafè", False),
+        ("猫", True),
+        ("狗", False),
+        ("猫 cobalt", True),
+        ("狗 cobalt", False),
+        ("x cobalt", True),
+        ("q cobalt", True),  # Preserve the existing short ASCII token filter.
+    ],
+)
+def test_archive_search_preserves_query_terms(with_archive_id, query, matches):
+    client = InMemoryOpenVikingClient(enable_working_memory=True)
+    client.add_message(
+        "query-terms", "user", content="cobalt archive: 部署在月球。café notes. 猫和 x。"
+    )
+    archive_id = client.commit_session("query-terms")["archive_id"]
+    tool = next(
+        tool
+        for tool in create_openviking_tools(client=client)
+        if tool.name == "viking_archive_search"
+    )
+    args = {"session_id": "query-terms", "query": query}
+    if with_archive_id:
+        args["archive_id"] = archive_id
+
+    result = json.loads(tool.invoke(args))
+
+    assert bool(result["matches"]) is matches
+    assert result["count"] == len(result["matches"])
 
 
 def test_commit_policy_commits_when_threshold_is_reached():
@@ -1785,6 +1850,110 @@ def test_langgraph_store_unsupported_ttl_still_rejects_before_mutation(
             asyncio.run(store.aput(namespace, "item", value, ttl=60))
 
     assert store.get(namespace, "item").value == original
+
+
+def test_langgraph_store_round_trips_separator_keys_as_single_uri_segments():
+    client = InMemoryOpenVikingClient()
+    store = OpenVikingStore(client=client)
+    namespace = ("filesystem", "user-a")
+    cases = {
+        "profile": "profile",
+        "/docs/readme.md": "!sdocs!sreadme.md",
+        "notes/todo.md": "notes!stodo.md",
+        "/": "!s",
+        "/docs/": "!sdocs!s",
+        "docs//readme.md": "docs!s!sreadme.md",
+        r"docs\readme.md": "docs!breadme.md",
+        "!sAGENTS.md": "%21sAGENTS.md",
+        "!bAGENTS.md": "%21bAGENTS.md",
+        "%2F": "%252F",
+        ".": ".",
+        "..": "..",
+        "中/文": "%E4%B8%AD!s%E6%96%87",
+    }
+
+    for key, encoded in cases.items():
+        policy = "cobalt deployment" if key == "/docs/readme.md" else "amber checklist"
+        store.put(namespace, key, {"key": key, "policy": policy})
+        data_uri = f"viking://~/memories/langgraph_store/data/filesystem/user-a/{encoded}.json"
+        index_uri = f"viking://~/memories/langgraph_store/index/filesystem/user-a/{encoded}.md"
+        assert data_uri in client.records
+        assert index_uri in client.records
+
+    assert all("%2F" not in uri for uri in client.records)
+
+    for key in cases:
+        item = store.get(namespace, key)
+        assert item is not None
+        assert item.key == key
+        assert item.value["key"] == key
+
+    assert {item.key for item in store.search(namespace, limit=100)} == set(cases)
+    semantic = store.search(namespace, query="cobalt", limit=5)
+    assert [item.key for item in semantic] == ["/docs/readme.md"]
+    assert store.list_namespaces(prefix=("filesystem",)) == [namespace]
+
+    store.delete(namespace, "/docs/readme.md")
+    assert (
+        "viking://~/memories/langgraph_store/data/filesystem/user-a/!sdocs!sreadme.md.json"
+    ) not in client.records
+    assert (
+        "viking://~/memories/langgraph_store/index/filesystem/user-a/!sdocs!sreadme.md.md"
+    ) not in client.records
+
+
+def test_langgraph_store_distinguishes_separator_escapes_from_literal_markers():
+    client = InMemoryOpenVikingClient()
+    store = OpenVikingStore(client=client)
+    namespace = ("filesystem", "user-a")
+    cases = {
+        "/AGENTS.md": "!sAGENTS.md",
+        "!sAGENTS.md": "%21sAGENTS.md",
+        r"\AGENTS.md": "!bAGENTS.md",
+        "!bAGENTS.md": "%21bAGENTS.md",
+    }
+
+    for key in cases:
+        store.put(namespace, key, {"key": key})
+
+    expected_data_uris = {
+        f"viking://~/memories/langgraph_store/data/filesystem/user-a/{encoded}.json"
+        for encoded in cases.values()
+    }
+    assert expected_data_uris.issubset(client.records)
+    assert len(expected_data_uris) == len(cases)
+
+    for key in cases:
+        item = store.get(namespace, key)
+        assert item is not None
+        assert item.key == key
+        assert item.value["key"] == key
+
+
+def test_langgraph_store_keeps_namespace_and_key_identity_collision_free():
+    client = InMemoryOpenVikingClient()
+    store = OpenVikingStore(client=client)
+    marker = "__openviking_path_key_v1__"
+    path_identity = (("filesystem", "user-a"), "/docs")
+    namespace_identity = (("filesystem", "user-a", marker, "abs"), "docs")
+
+    store.put(*path_identity, {"identity": "path-key"})
+    store.put(*namespace_identity, {"identity": "namespace"})
+
+    path_uri = "viking://~/memories/langgraph_store/data/filesystem/user-a/!sdocs.json"
+    namespace_uri = (
+        "viking://~/memories/langgraph_store/data/filesystem/user-a/"
+        "__openviking_path_key_v1__/abs/docs.json"
+    )
+    assert path_uri in client.records
+    assert namespace_uri in client.records
+    assert path_uri != namespace_uri
+    assert store.get(*path_identity).value["identity"] == "path-key"
+    assert store.get(*namespace_identity).value["identity"] == "namespace"
+    assert store.list_namespaces(prefix=("filesystem",)) == [
+        ("filesystem", "user-a"),
+        ("filesystem", "user-a", marker, "abs"),
+    ]
 
 
 @pytest.mark.parametrize("use_batch", [False, True])

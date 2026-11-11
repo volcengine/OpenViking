@@ -1,0 +1,162 @@
+# FileBrowser 文件浏览
+
+可选 `locale: 'zh-CN' | 'en-US'` 覆盖最近的模块或 Provider；均未配置时默认 `en-US`。已有 `labels` 可逐项覆盖。业务内容仍由宿主提供。
+
+目录导航、搜索与内容预览作为一个模块。模块自己取数，宿主提供配置、受控的当前资源、接入配置、导入交互与文案。
+
+目录按需展开并分页，点击文件加载预览。模块内置基础搜索弹窗，提交关键词调用原生搜索接口并展示结果。目录和预览的取数与联动 Hook 内置。
+
+## 基础用法
+
+示例用固定数据，不访问网络：
+
+```tsx file="../../_demos/file-browser-basic.tsx" preview
+
+```
+
+## ACL 权限管理
+
+通过 `acl` 开启共享资源（`viking://resources/` 下的非根节点）的权限入口。默认关闭，不额外请求 ACL。只有有效权限为 `manage` 时显示管理按钮，点击复用内部 Modal：
+
+```tsx file="../../_demos/file-browser-acl.tsx" preview
+
+```
+
+- User / Group 可分别授予 `read`、`write`、`manage`；可搜索、多选添加、调整与移除。
+- 继承模式中只增加权限时直接保存；降低或移除现有权限时，在 Modal 内确认切换为受限模式。取消不会写入。
+- 恢复继承前列出不再生效的直接授权；确认后清空直接授权并恢复继承。保存中禁止重复提交和关闭；失败保留上次成功的授权与服务端原因。
+- 保存成功刷新目录和预览。原生服务的索引更新可能异步完成，以服务端鉴权结果为准。
+- `fs/ls` 的 `access: 'denied'` 节点不可选择或展开；`access: 'container'` 只能展开以访问有权限的子节点，不能预览本节点。`permission: 'read'` 显示只读标记。
+
+请求沿用 Provider 与 `requestOptions`。授权使用原生 `GET / PUT / DELETE /api/v1/acl`；成员目录使用账号用户与用户组接口，并明确 `include_credentials=false`。当前原生 `fs/stat` 尚未返回普通用户有效权限：缺失时仅通过管理接口探测 `manage`，403 不猜测成 `read` 或 `write`，也不按某个用户 ID 推断管理员。宿主可提供 `acl.resolvePermission(uri, { client, requestOptions })` 返回自己的有效权限；非标准网关仍由宿主传输层适配。用户组目录需要账号管理权限，资源管理者无权读取时展示失败和重试，可用 `acl.listPrincipals` 接入宿主目录。
+
+| `acl` 配置                                         | 默认值                   | 说明                                                                                        |
+| -------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------- |
+| `true`                                             | `false`                  | 开启原生 ACL 接入                                                                           |
+| `readOnly`                                         | `false`                  | 可查看授权，禁用修改                                                                        |
+| `resolvePermission`                                | 原生元数据与管理权限探测 | 返回当前节点有效 `read / write / manage`，未知返回 `undefined`                              |
+| `listPrincipals({ type, keyword, page }, context)` | 原生账号目录             | 返回 `{ principals: string[], hasMore: boolean }`，principal 格式为 `user:id` 或 `group:id` |
+| `onChange(report)`                                 | —                        | 授权保存成功后通知；返回值不参与保存流程                                                    |
+
+可用 `labels.acl` 逐项覆盖 Modal 文案，省略项继承当前语言。语言切换保留待确认的修改，不重新请求授权。身份与作用域由宿主提供，服务端始终负责鉴权。单独使用 `FileTree` / `FilePreview` 时仍由宿主通过行状态、标题和动作插槽组合权限流程。
+
+## 范围
+
+模块包含文件树、文件预览与顶部入口。命令面板属于 `console`。
+
+## 模块负责什么
+
+- 目录、当前 URI 与预览加载在模块内协调：点击目录节点即移动选中并加载预览，切换资源时丢弃过期请求。宿主可通过 `uri` 定位资源。
+- 保存、重命名或删除后刷新受影响的目录与预览。
+- 搜索、目录与预览区域的布局，包括树与详情之间的可拖拽分隔条。树默认 352px，可在 200px 到「给详情留出可读宽度」的上限之间拖动，分隔条获得焦点后方向键同样能改宽。
+- 顶部连接与导入入口、工具栏里的搜索入口与刷新按钮，以及行级状态，例如上传进度、冲突标记与保留策略设置。
+- 预览页签。某个资源有哪些页签由资源本身决定，宿主不需要提供。
+- 正文里的系统元数据。记忆文件末尾的 `MEMORY_FIELDS` 注释是服务端写的内部字段，不属于正文：默认读取已由服务端剥掉，宿主经自定义传输层或网关把请求变成原始读取（`raw=true`）时它会原样返回，模块按同一规则再剥一次——只认位于文件末尾的那一块，正文中间的同形注释保留，且只在记忆命名空间生效。判断「是不是文件末尾」以是否读到末尾为准：首屏没读满预览上限时响应就是整个文件；读满了会再取一次全文，剥完自己按上限切分，因此不会把首屏末尾的正文注释误当成尾注，也能认出被上限截断在关闭标记之前的尾注。行边界、空白与「单词字符」都按服务端（Python）的规则判定，而不是 JS 的 `split('\n')` / `trim()` / `\b`——这几组集合并不相同，照搬会在默认读取路径上删掉服务端已经保留的正文。
+- 搜索入口复用 FileTree 工具栏，点击打开模块内部的占位搜索弹窗，提交关键词后请求 `/api/v1/search/find`。
+
+## 宿主负责什么
+
+- 通过 Provider 提供请求配置，模块可用 `requestOptions` 逐字段覆盖。
+- 登录、账号作用域、路由与权限。
+- 接入凭证与产品专属的导入流程，通过 `agentConnect`、`onImportResources` 与可选的 `renderImportResources` 接入。
+
+## 入口与工具栏
+
+搜索弹窗是占位实现：目前支持提交关键词、加载态、错误提示和结果展示，暂不支持筛选、分页、结果定位或快捷键。实现旁已标注 TODO，后续补齐完整交互；不提供独立组件导出。示例通过离线 Adapter 响应同一个原生接口，输入 `profile` 查看结果，输入 `error` 手动触发模拟失败并可重新提交。
+
+模块内置连接与导入入口，其下是搜索框与刷新按钮。`Popover` 与 `ResourceMenu` 由宿主提供，默认原生按钮直接作为 `Popover` 的 `children`，供其接管 ref、事件与定位：
+
+```tsx
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import '@openviking/react/modules/file-browser/style.css';
+
+<FileBrowser
+  locale="zh-CN"
+  agentConnect={{ apiKey: 'demo-api-key', locale: 'zh-CN' }}
+  renderImportResources={(trigger) => (
+    <Popover content={<ResourceMenu />} trigger="click">
+      {trigger}
+    </Popover>
+  )}
+  labels={{
+    entries: {
+      connectAgent: '连接 Agent',
+      importResources: '导入资源',
+      close: '关闭',
+    },
+  }}
+/>;
+```
+
+传入 `agentConnect` 显示连接入口，点击后从右侧滑出接入抽屉；省略时隐藏。`renderImportResources(trigger)` 接收带默认图标与文案的原生按钮，宿主可包装按钮或返回替代节点；完全替换时由宿主绑定交互。仅需点击交互时，传入 `onImportResources` 即显示默认导入按钮，无需提供渲染插槽。插槽包装默认按钮时保留点击回调；返回 `null` 隐藏导入入口。同时省略 `onImportResources` 和 `renderImportResources` 时隐藏导入入口。只显示一个入口时不画分隔线，全部隐藏时不渲染入口条。
+
+只需点击回调时：
+
+```tsx
+<FileBrowser locale="zh-CN" onImportResources={openImport} />
+```
+
+## 目录树宽度
+
+树与详情之间有一条可拖拽的分隔条，把指针放在上面左右拖就能改树宽；分隔条获得焦点后，左右方向键每次调整 16px。
+
+- 默认 352px，与设计稿一致；最小 200px，再窄就只剩图标可辨。
+- 上限是 520px 与「容器宽度减去详情区 320px、分隔条 24px」中的较小值。宿主把模块放进窄栏时，树会跟着收窄，不会把详情挤没。
+- 拖动只改变当前实例的宽度，不写 `localStorage`：宽度属于布局，要不要记住是宿主的决定。
+
+宽度由模块自己持有，并以 `--ov-file-browser-tree-width` 写在容器上——想改默认值或另做布局联动时读它即可，但覆盖它不会改变实际宽度，因为拖动的结果会立刻写回同一个变量。要固定宽度，请把模块包在定宽容器里，由容器的宽度上限约束。
+
+分隔条的无障碍名称来自 `labels.resizeTree`，默认跟随 locale，也可单独覆盖。
+
+## 失败态
+
+读不到和读到空是两件事，模块分开呈现：
+
+- 目录列表失败时，树里显示失败行与重试按钮，而不是「没有文件」。根目录失败也一样——把它画成空态会让 403 看起来像目录本来就没有内容。
+- 预览失败时，右侧显示失败态：`labels.error` 作结论、服务端返回的原始消息作原因、`labels.retry` 作重试。有选中的资源却读不出来时不会回落到空态插画。
+- 只有真正没选中资源时才显示空态。
+- 搜索失败在弹窗中保留接口原因，可再次提交同一关键词重试；关闭弹窗会取消请求并清空草稿。
+- 目录的两级摘要各自可能失败。失败的一级保留失败原因而不是变成空正文——空正文意味着「还没生成」，与「取不到」（后端故障、权限不足）是两件事；两级都失败时整个预览进入失败态。服务端没给消息时用 `labels.summaryFailed` 兜底，因此这句提示也跟随界面语言。
+
+失败态的重试会重新取数目录与当前预览——外部改动之后，只刷树会让右侧继续显示旧正文。
+
+## 属性
+
+模块从子路径和根入口导出 `FileBrowserProps`；`FileBrowserLabels` 只从子路径导出。入口条 `FileBrowserEntries` 属于组件层，从 `@openviking/react/components/file-browser-entries` 导入。
+
+| 属性                    | 类型                                   | 默认值           | 说明                                                                                                                                                                                                                                                                                                                                                                                         |
+| ----------------------- | -------------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `requestOptions`        | `OvRequestOptions`                     | —                | 请求配置覆盖，逐字段覆盖最近的 Provider。                                                                                                                                                                                                                                                                                                                                                    |
+| `uri`                   | `string`                               | —                | 受控的当前资源 URI。传入时由宿主决定当前资源，模块只上报切换意图。                                                                                                                                                                                                                                                                                                                           |
+| `defaultUri`            | `string`                               | —                | 非受控时的初始资源 URI。省略时不选中任何资源。                                                                                                                                                                                                                                                                                                                                               |
+| `agentConnect`          | `AgentConnectProps`                    | —                | 启用内置连接入口与右侧接入抽屉。                                                                                                                                                                                                                                                                                                                                                             |
+| `onUriChange`           | `(uri: string \| null) => void`        | —                | 当前资源变化后触发，参数为新的 URI。签名允许 `null`（上游契约），但模块目前不会主动上报：没有取消选中的交互，宿主不要依赖它来收起详情区。                                                                                                                                                                                                                                                    |
+| `onImportResources`     | `() => void`                           | —                | 默认导入按钮的点击回调；单独传入即可显示入口。                                                                                                                                                                                                                                                                                                                                               |
+| `rootUri`               | `string`                               | `viking://`      | 目录树的根，宿主据此把浏览范围收敛到某个子树。                                                                                                                                                                                                                                                                                                                                               |
+| `defaultExpandedUri`    | `string`                               | —                | 首次加载后自动展开到的路径，逐级展开并加载。省略时只展开根，其余折叠。                                                                                                                                                                                                                                                                                                                       |
+| `acl`                   | `boolean \| FileBrowserAclOptions`     | `false`          | 共享资源权限管理，详见上文。                                                                                                                                                                                                                                                                                                                                                                 |
+| `locale`                | `'zh-CN' \| 'en-US'`                   | 继承上层 / en-US | 内置中英文文案。                                                                                                                                                                                                                                                                                                                                                                             |
+| `renderImportResources` | `(trigger: ReactElement) => ReactNode` | —                | 可选，包装或替换默认导入按钮；省略时使用默认按钮，返回 `null` 隐藏入口。                                                                                                                                                                                                                                                                                                                     |
+| `labels`                | `FileBrowserLabels`                    | —                | 可替换文案：`searchTitle`、`searchAction`、`searchHint`、`searchPlaceholder`、`searchEmpty`、`searchFailed`、`loading`、`refresh`、`empty`、`error`、`retry`、`previewMode`、`sourceMode`、`history`、`copyPath`、`viewSwitch`、`resizeTree`，`summaryEmpty`、`summaryFailed`（某一级摘要请求失败且服务端没给消息时的兜底文案），以及透传给入口、树与预览的 `entries` / `tree` / `preview`。 |
+| `className`             | `string`                               | —                | 容器附加类名。                                                                                                                                                                                                                                                                                                                                                                               |
+| `style`                 | `CSSProperties`                        | —                | 容器样式覆盖。                                                                                                                                                                                                                                                                                                                                                                               |
+
+文案为纯文本，宿主可将自身的翻译结果映射到这些属性。props 里没有数据字段——数据由模块自己加载。
+
+模块通过 `useFileBrowser` 自己取数，宿主无需提供目录或预览数据；`labels.entries`、`labels.tree` 与 `labels.preview` 分别透传给入口条、文件树与文件预览组件。
+
+`labels.formatCharacterCount(count)` 可覆盖预览底部的字符数文案，默认随 `locale` 切换。
+
+## 内置看板
+
+用户的 `memories/experiences` 目录与直接 `.md` 文件自动提供经验看板；Wiki 根据编译配置或 `compile_target=true` 资源标记识别，后代文件与目录复用 Wiki 看板。标记优先，不因配置列表缺失而隐藏。普通资源没有 Wiki 页签；已识别的 Wiki 在零冲突时仍保留看板。
+
+发现和配置匹配使用原生接口在当前身份下解析的 URI，支持 `viking://~/...` 根目录及 Wiki 子文件别名；宿主收到的看板 URI 与回调仍保留原始写法。示例底部可切换规范 URI 与 `~` 别名验证同一文件。
+
+文件树图标直接打开看板，预览页签可切回正文。看板样式已包含在 FileBrowser 的 `style.css` 内。查看独立 [WikiDashboard](../components/wiki-dashboard) 和 [ExperienceDashboard](../components/experience-dashboard) 的接口范围与宿主数据用法。
+
+`dashboardKinds?: readonly ('wiki' | 'experience')[]` 默认启用两类，传空数组禁用发现和入口。宿主据产品权限筛选类型；例如 `dashboardKinds={['experience']}` 关闭 Wiki 入口与编译配置查询。服务端仍执行资源权限。
+
+`renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode` 允许宿主接入网关数据或替换组合视图；返回空值使用原生默认视图。描述含 `kind`、`uri`，Wiki 还可含 `pendingConflicts` 与 `isRoot`。
+
+`labels.dashboard` 可覆盖两个页签标题、三个树入口名称及发现失败文案。看板内部文案由其自身的 `labels` 覆盖，宿主可通过 `renderDashboard` 传入。

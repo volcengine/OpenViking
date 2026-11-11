@@ -205,14 +205,14 @@ async def test_creator_postcheck_preserves_or_cancels_accepted_task(monkeypatch,
             await asyncio.wait_for(request, 1)
         task = await replay.get("task", **OWNER)
         assert task is not None
-        assert await replay.get_work_state("task", "work", **OWNER) is WorkState.PENDING
-
         if postcheck == "query-error":
             assert raised.value is query_error
             assert task.status is TaskStatus.PENDING
+            assert await replay.get_work_state("task", "work", **OWNER) is WorkState.PENDING
             await replay.cancel("task", **OWNER)
         else:
-            assert task.status is TaskStatus.CANCELLING
+            assert task.status is TaskStatus.CANCELLED
+            assert await replay.get_work_state("task", "work", **OWNER) is WorkState.CANCELLED
 
         await replay.mark_work_done("task", "work", **OWNER)
         assert (await replay.wait("task", timeout=0, **OWNER)).status is TaskStatus.CANCELLED
@@ -220,6 +220,103 @@ async def test_creator_postcheck_preserves_or_cancels_accepted_task(monkeypatch,
         release.set()
         request.cancel()
         await asyncio.gather(request, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "root_queue,running,child_running",
+    [
+        ("MemoryCompile", False, False),
+        ("MemoryCompile", True, False),
+        ("Inline", False, False),
+        ("Inline", True, False),
+        ("Inline", True, True),
+    ],
+)
+async def test_cancellation_closes_pending_work_and_waits_for_running_work(
+    task_stores, root_queue, running, child_running
+):
+    first, second = task_stores
+    tracker, observer = TaskTracker(first), TaskTracker(second)
+    await tracker.create("compile", task_id="task", **OWNER)
+    await tracker.register_work("task", "root", root_queue, **OWNER)
+    await tracker.register_work("task", "child", "Embedding", **OWNER)
+    if running:
+        assert (await tracker.start_work("task", "root", **OWNER)).is_applied
+        assert (await observer.start_work("task", "root", **OWNER)).is_applied
+        assert (await observer.get("task", **OWNER)).status is TaskStatus.RUNNING
+    if child_running:
+        assert (await tracker.start_work("task", "child", **OWNER)).is_applied
+    await tracker.cancel("task", **OWNER)
+    assert await observer.get_work_state("task", "child", **OWNER) is (
+        WorkState.RUNNING if child_running else WorkState.CANCELLED
+    )
+    assert not (await observer.start_work("task", "child", **OWNER)).is_applied
+    waits_for_running = running and root_queue != "Inline" or child_running
+    assert (await observer.get("task", **OWNER)).status is (
+        TaskStatus.CANCELLING if waits_for_running else TaskStatus.CANCELLED
+    )
+    assert await observer.get_work_state("task", "root", **OWNER) is (
+        WorkState.RUNNING if running and root_queue != "Inline" else WorkState.CANCELLED
+    )
+    await observer.cancel("task", **OWNER)
+    await tracker.mark_work_done("task", "root", **OWNER)
+    if child_running:
+        assert (await observer.get("task", **OWNER)).status is TaskStatus.CANCELLING
+        await tracker.mark_work_done("task", "child", **OWNER)
+    assert not await observer.has_work("task", **OWNER)
+    assert (await observer.wait("task", timeout=0, **OWNER)).status is TaskStatus.CANCELLED
+    assert await observer.get_work_state("task", "root", **OWNER) is WorkState.CANCELLED
+    cancelled = await observer.get("task", **OWNER)
+    await tracker.complete("task", {"late": True}, **OWNER)
+    await tracker.fail("task", "late failure", **OWNER)
+    await tracker.patch_task("task", TaskPatch(result={"late": True}), **OWNER)
+    terminal = await observer.get("task", **OWNER)
+    assert terminal.status is TaskStatus.CANCELLED
+    assert terminal.result == cancelled.result
+    assert terminal.error == cancelled.error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_method", ["cancel", "record_cancelled"])
+async def test_remote_inline_execution_observes_terminal_cancellation(
+    task_stores, monkeypatch, cancel_method
+):
+    first, second = task_stores
+    tracker, remote = TaskTracker(first), TaskTracker(second)
+    await tracker.create("compile", task_id="task", **OWNER)
+    started = asyncio.Event()
+    work_ids = []
+
+    async def execute():
+        work_ids.append(await remote.register_running_task("task", **OWNER))
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await remote.unregister_running_task("task")
+
+    worker = asyncio.create_task(execute())
+    polling = None
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        await getattr(tracker, cancel_method)("task", **OWNER)
+        assert (await tracker.get("task", **OWNER)).status is TaskStatus.CANCELLED
+        assert await tracker.get_work_state("task", work_ids[0], **OWNER) is WorkState.CANCELLED
+        assert not worker.done()
+        monkeypatch.setattr("openviking.service.task_tracker._CANCEL_POLL_INTERVAL", 0)
+        polling = asyncio.create_task(remote._cancel_poll_loop())
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(worker, 1)
+        assert remote._work_index.active_tasks_by_owner() == {}
+        assert (await tracker.get("task", **OWNER)).status is TaskStatus.CANCELLED
+    finally:
+        worker.cancel()
+        if polling is not None:
+            polling.cancel()
+        await asyncio.gather(
+            worker, *([polling] if polling is not None else []), return_exceptions=True
+        )
 
 
 @pytest.fixture

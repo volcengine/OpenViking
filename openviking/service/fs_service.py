@@ -11,7 +11,7 @@ from collections.abc import Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional, Sequence
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -527,7 +527,7 @@ class FSService:
                     f"directory descriptions are not supported for namespace: {directory_uri}"
                 )
             async with self._hold_watch_scope(
-                [await self._existing_tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
+                [self._tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
             ) as lease:
                 await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease)
                 return
@@ -541,7 +541,7 @@ class FSService:
             if managed:
                 await viking_fs._ensure_access(directory_uri, ctx, action=AclAction.WRITE)
             async with self._hold_watch_scope(
-                [await self._existing_tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
+                [self._tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
             ) as lease:
                 acl_update = (
                     await viking_fs.prepare_acl_update(directory_uri, acl, ctx)
@@ -595,19 +595,10 @@ class FSService:
         else:
             await create()
 
-    async def _existing_tree_lock_request(self, uri: str, ctx: RequestContext) -> Dict[str, str]:
-        """Tree-lock the deepest existing ancestor-or-self of *uri*.
-
-        Locking a missing path materializes it on some PathLock backends.
-        """
+    def _tree_lock_request(self, uri: str, ctx: RequestContext) -> Dict[str, str]:
+        """Lock the target subtree, including when the target does not exist."""
         viking_fs = self._ensure_initialized()
-        existing = uri
-        while not await viking_fs.exists(existing, ctx=ctx):
-            parent = VikingURI(existing).parent
-            if parent is None:
-                break
-            existing = parent.uri
-        return {"path": viking_fs._uri_to_path(existing, ctx=ctx), "kind": "tree"}
+        return {"path": viking_fs._uri_to_path(uri, ctx=ctx), "kind": "tree"}
 
     @staticmethod
     def _normalize_directory_description(description: Optional[str]) -> Optional[str]:
@@ -670,12 +661,19 @@ class FSService:
         context_type = context_type_for_uri(uri)
         refresh_parent_uri = self._semantic_refresh_parent_uri(uri, context_type)
         memory_overview_uri = self._memory_overview_parent_uri(uri, context_type)
-        async with self._hold_watch_scope(
-            [await self._existing_tree_lock_request(uri, ctx)], [uri], ctx
-        ) as watch_lease:
-            result = await viking_fs.rm(
-                uri, recursive=recursive, ctx=delete_ctx, lease_ref=watch_lease
-            )
+        parent_uri = VikingURI(uri).parent
+        if parent_uri is not None and await viking_fs.exists(parent_uri.uri, ctx=ctx):
+            async with self._hold_watch_scope(
+                [self._tree_lock_request(uri, ctx)], [uri], ctx
+            ) as watch_lease:
+                result = await viking_fs.rm(
+                    uri, recursive=recursive, ctx=delete_ctx, lease_ref=watch_lease
+                )
+                await self._sync_watch_after_rm(
+                    uri, account_id=ctx.account_id, context_type=context_type
+                )
+        else:
+            result = await viking_fs.rm(uri, recursive=recursive, ctx=delete_ctx)
             await self._sync_watch_after_rm(
                 uri, account_id=ctx.account_id, context_type=context_type
             )
@@ -1269,13 +1267,11 @@ class FSService:
             raise InvalidArgumentError(
                 f"{operation} destination for a file must include the target file name: {to_uri}"
             )
-        # Locking a missing path materializes it on some PathLock backends, so the
-        # native pre-lock checks run first and only existing paths are locked.
+        # Validate before acquiring the same source and target scopes as the
+        # native transfer, without extending a missing target to its parent.
         await viking_fs._ensure_transfer_parent_directory(target_path, to_uri, operation=operation)
         await viking_fs._ensure_transfer_target_type(target_path, to_uri, is_dir=is_dir)
         if is_dir:
-            if not await viking_fs.exists(to_uri, ctx=ctx):
-                target_path = viking_fs._transfer_parent_path(target_path)
             roots = sorted({source_path, target_path}, key=lambda path: (len(path), path))
             requests = [
                 {"path": path, "kind": "tree"}
@@ -1481,6 +1477,7 @@ class FSService:
     ) -> Dict[str, Any]:
         """Get resource status."""
         viking_fs = self._ensure_initialized()
+        uri = await self._resolve_uri(uri, ctx)
         namespace_policy = namespace_policy_for_uri(uri)
         kwargs = {
             "ctx": ctx,
@@ -1496,6 +1493,43 @@ class FSService:
         """Validate write access without mutating the target."""
         viking_fs = self._ensure_initialized()
         await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+
+    async def ensure_remove_access(self, uri: str, ctx: RequestContext) -> None:
+        """Validate the namespace and ACL checks used when removing a file."""
+        viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.MANAGE)
+
+    async def can_read_many(
+        self,
+        uris: Sequence[str],
+        ctx: RequestContext,
+    ) -> Dict[str, bool]:
+        """Return caller-specific read visibility for each URI."""
+        viking_fs = self._ensure_initialized()
+        return await viking_fs._can_access_many(uris, ctx, action=AclAction.READ)
+
+    async def get_tags_many(
+        self,
+        uris: Sequence[str],
+        ctx: RequestContext,
+        *,
+        check_access: bool = True,
+    ) -> Dict[str, List[str]]:
+        """Return vector-backed retrieval tags for each URI."""
+        unique_uris = list(dict.fromkeys(uris))
+        if not unique_uris:
+            return {}
+        if check_access:
+            access = await self.can_read_many(unique_uris, ctx)
+            unique_uris = [uri for uri in unique_uris if access.get(uri, False)]
+        entries = [{"uri": uri, "isDir": False} for uri in unique_uris]
+        tagged_entries = await self._attach_and_filter_tags(
+            entries,
+            ctx,
+            tags=None,
+            include_tags=True,
+        )
+        return {str(entry["uri"]): list(entry.get("tags") or []) for entry in tagged_entries}
 
     async def _read_content(
         self, uri: str, ctx: RequestContext, *, max_bytes: int | None = None

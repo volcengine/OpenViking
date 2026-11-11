@@ -1369,6 +1369,13 @@ def test_context_collection_uses_acl_mode_and_excludes_parent_uri():
         "DefaultValue": "none",
     }
     assert "acl_mode" in schema["ScalarIndex"]
+    for name in ("acl_direct_grants", "acl_inherited_grants"):
+        assert next(field for field in schema["Fields"] if field["FieldName"] == name) == {
+            "FieldName": name,
+            "FieldType": "list<string>",
+            "DefaultValue": ["none"],
+        }
+        assert name in schema["ScalarIndex"]
     assert "acl_enabled" not in field_names
     assert "acl_enabled" not in schema["ScalarIndex"]
     assert "parent_uri" not in field_names

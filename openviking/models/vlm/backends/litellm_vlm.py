@@ -14,7 +14,6 @@ os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import litellm
 from litellm import acompletion, completion
-from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.types.utils import LlmProviders, all_litellm_params
 from litellm.utils import ProviderConfigManager
 
@@ -238,53 +237,27 @@ class LiteLLMVLMProvider(VLMBase):
             return resolved_model.split("/", 1)[0].lower()
         return self._detected_provider or detect_provider_by_model(resolved_model) or self.provider
 
-    def tool_result_media_mode(self) -> ToolResultMediaMode | None:
-        """Select a verified image transport without resolving credentials."""
+    def tool_result_media_mode(self) -> ToolResultMediaMode:
+        """Select message placement, never infer a model's vision capability."""
         provider = self._declared_provider(self.model)
         if provider is None or not self.model:
-            return None
+            return "user_message"
         resolved = self._resolve_model(self.model)
         actual_provider, separator, model = resolved.partition("/")
         if not separator or actual_provider != provider:
-            return None
+            return "user_message"
         try:
             config = ProviderConfigManager.get_provider_chat_config(
                 model=model, provider=LlmProviders(provider)
             )
         except ValueError:
-            return None
-        config_type = config if isinstance(config, type) else type(config)
-        if issubclass(config_type, BaseTextCompletionConfig):
-            return None
-        image_protocols = (
-            "OpenAIGPTConfig",
-            "AzureOpenAIConfig",
-            "DashScopeChatConfig",
-            "MoonshotChatConfig",
-            "ZAIChatConfig",
-            "OpenrouterConfig",
-            "NvidiaNimConfig",
-            "HostedVLLMChatConfig",
-            "GithubCopilotConfig",
-            "DatabricksConfig",
-            "MinimaxChatConfig",
-            "MistralConfig",
-            "CohereV2ChatConfig",
-            "GroqChatConfig",
-            "VertexGeminiConfig",
-            "GoogleAIStudioGeminiConfig",
-            "OllamaConfig",
-            "OllamaChatConfig",
-            "AmazonConverseConfig",
-        )
-        # Match exact converters: subclasses may discard images or use another protocol.
-        if config_type in tuple(getattr(litellm, name, None) for name in image_protocols):
             return "user_message"
+        config_type = config if isinstance(config, type) else type(config)
         native_protocols = ("AnthropicConfig", "AzureAnthropicConfig", "VertexAIAnthropicConfig")
         return (
             "native"
             if config_type in tuple(getattr(litellm, name, None) for name in native_protocols)
-            else None
+            else "user_message"
         )
 
     def _should_forward_api_key(self, model: str) -> bool:

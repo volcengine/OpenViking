@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from openviking.privacy.reference import build_privacy_field_reference
+from openviking.server.config import UserSettingsPatch
 from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import patch_user_config
 from openviking_cli.exceptions import InvalidArgumentError
@@ -15,13 +16,17 @@ from openviking_cli.session.user_id import UserIdentifier
 @pytest.fixture(autouse=True)
 async def enabled_privacy(service):
     ctx = RequestContext(user=service.user, role=Role.USER)
-    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": "auto"}})
+    await patch_user_config(
+        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": "auto"}})
+    )
 
 
 @pytest.mark.parametrize("mode", ["auto", "auto_strict"])
 async def test_ordinary_writes_and_reads_follow_matching_scope(service, mode):
     ctx = RequestContext(user=service.user, role=Role.USER)
-    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": mode}})
+    await patch_user_config(
+        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": mode}})
+    )
     secret = "registered-custom-value"
     await service.privacy_configs.upsert(ctx, "credential", "external-system", {"key": secret})
     if mode == "auto":
@@ -53,7 +58,9 @@ async def test_skill_preserves_metadata_and_protects_body_through_add_update_and
     else:
         monkeypatch.setenv("OPENVIKING_SKILL_PRIVACY_EXTRACTION_METHOD", method)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": mode}})
+    await patch_user_config(
+        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": mode}})
+    )
     secret = "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
     description = f"metadata managed-secret and {secret}"
     await service.privacy_configs.upsert(ctx, "credential", "managed", {"key": "managed-secret"})
@@ -106,7 +113,9 @@ async def test_ambiguous_credential_does_not_rewrite_ordinary_content(service, m
         await service.privacy_configs.upsert(ctx, "credential", target, {"key": duplicate})
     uri = "viking://resources/ambiguous.md"
     await service.fs.write(uri, duplicate, ctx=ctx, wait=True)
-    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": mode}})
+    await patch_user_config(
+        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": mode}})
+    )
     if mode == "auto_strict":
         with pytest.raises(InvalidArgumentError, match="mapped to multiple fields"):
             await service.fs.read_visible(uri, ctx=ctx)
@@ -132,7 +141,9 @@ async def test_sanitizer_uses_only_the_writing_users_privacy_catalog(service, mo
     )
     owner_secret = "owner-only-registered-value"
     await service.initialize_user_directories(other)
-    await patch_user_config(service.viking_fs, other, {"privacy": {"mode": mode}})
+    await patch_user_config(
+        service.viking_fs, other, UserSettingsPatch.model_validate({"privacy": {"mode": mode}})
+    )
     await service.privacy_configs.upsert(
         owner,
         "credential",
@@ -176,7 +187,9 @@ async def test_visible_read_sanitizes_legacy_session_content(service):
 @pytest.mark.parametrize("mode", ["auto", "auto_strict"])
 async def test_resource_import_follows_matching_scope(service, tmp_path, mode):
     ctx = RequestContext(user=service.user, role=Role.USER)
-    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": mode}})
+    await patch_user_config(
+        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": mode}})
+    )
     secret = "resource-import-registered-value"
     await service.privacy_configs.upsert(
         ctx,

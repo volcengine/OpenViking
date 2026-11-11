@@ -20,12 +20,13 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, NoReturn, Optional, Tuple, Union
-from urllib.parse import parse_qs, unquote, urlparse, urlunparse
+from urllib.parse import parse_qs, quote, unquote, urlparse, urlunparse
 
 from lark_oapi.core.cache import ICache
 
 from openviking.parse.base import format_table_to_markdown
 from openviking.parse.feishu_import import FeishuImportPlan, recursive_wiki
+from openviking.parse.image_validation import IMAGE_MAX_FILE_BYTES, is_valid_image
 from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.utils.exceptions import error_code_from_http_status
 from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
@@ -38,6 +39,13 @@ from .mime_types import get_preferred_extension
 logger = get_logger(__name__)
 
 _FEISHU_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(feishu://image/([^)]+)\)")
+_FEISHU_WHITEBOARD_RE = re.compile(r"!\[([^\]]*)\]\(feishu://whiteboard/([^)]+)\)")
+_WHITEBOARD_READ_SCOPE = "board:whiteboard:node:read"
+_MAX_WHITEBOARDS = 100
+_MAX_WHITEBOARD_NODES = 10_000
+_MAX_WHITEBOARD_JSON_BYTES = 8 * 1024 * 1024
+_MAX_WHITEBOARD_PREVIEW_BYTES = IMAGE_MAX_FILE_BYTES
+_MAX_WHITEBOARD_MEDIA_BYTES = 64 * 1024 * 1024
 _FEISHU_DOCUMENT_FORBIDDEN = 1770032
 _FEISHU_WIKI_NODE_PERMISSION_DENIED = 131006
 _FEISHU_BITABLE_PERMISSION_REQUIRED = 99991672
@@ -217,6 +225,8 @@ def _raise_from_lark_response(
     }
     if resource:
         details["resource"] = resource
+    if required_scope:
+        details["required_scope"] = required_scope
 
     logger.error(
         "[FeishuAPI] %s failed: code=%s msg=%s http=%s",
@@ -227,9 +237,8 @@ def _raise_from_lark_response(
     )
     if code == _FEISHU_BITABLE_PERMISSION_REQUIRED:
         public_code = "FAILED_PRECONDITION"
-        message = (
-            f"Feishu application is missing required Bitable permissions: code={code}, msg={msg}"
-        )
+        permission = required_scope or "Bitable permissions"
+        message = f"Feishu application is missing required {permission}: code={code}, msg={msg}"
     elif code == _FEISHU_SCOPE_PERMISSION_REQUIRED and required_scope:
         public_code = "FAILED_PRECONDITION"
         message = (
@@ -283,6 +292,20 @@ class _FeishuWikiTreeNode:
     obj_token: Optional[str] = None
 
 
+@dataclass
+class _WhiteboardContent:
+    markdown: str
+    preview: Optional[Tuple[bytes, str]] = field(default=None, repr=False)
+
+
+@dataclass
+class _WhiteboardImportState:
+    cache: Dict[str, _WhiteboardContent] = field(default_factory=dict, repr=False)
+    nodes: int = 0
+    json_bytes: int = 0
+    media_bytes: int = 0
+
+
 class FeishuAccessor(DataAccessor):
     """
     Accessor for Feishu/Lark cloud documents.
@@ -325,6 +348,7 @@ class FeishuAccessor(DataAccessor):
         "image": "_handle_image",
         "table": "_table_block_to_markdown",
         "sheet": "_embedded_sheet_to_markdown",
+        "board": "_whiteboard_block_to_markdown",
     }
 
     # Attribute → markdown prefix template for text-bearing blocks.
@@ -362,6 +386,7 @@ class FeishuAccessor(DataAccessor):
         31: "table",
         32: "table_cell",
         34: "quote_container",
+        43: "board",
     }
 
     # All known content attribute names on SDK Block objects (for fallback detection).
@@ -394,6 +419,7 @@ class FeishuAccessor(DataAccessor):
             "task",
             "grid",
             "grid_column",
+            "board",
         }
     )
 
@@ -406,6 +432,8 @@ class FeishuAccessor(DataAccessor):
         """Initialize a shared selector or a request-scoped worker."""
         self._session = session
         self._tenant_token_cache = tenant_token_cache
+        self._whiteboards = _WhiteboardImportState()
+        self._source_url = ""
 
     def _new_operation(
         self,
@@ -418,6 +446,8 @@ class FeishuAccessor(DataAccessor):
             config=config,
         )
         worker = copy.copy(self)
+        worker._whiteboards = _WhiteboardImportState()
+        worker._source_url = str(source)
         worker._session = FeishuApiSession(
             context,
             tenant_token_cache=self._tenant_token_cache,
@@ -2340,13 +2370,30 @@ class FeishuAccessor(DataAccessor):
                     doc_title = self._extract_text_from_elements(b.page.elements)
                 break
 
+        # Table cells render their own descendants; the flat API list contains them too.
+        table_descendants: set[str] = set()
+        pending = [
+            child_id
+            for block in blocks
+            if self._detect_block_attr(block) == "table"
+            for child_id in (block.children or [])
+        ]
+        while pending:
+            block_id = pending.pop()
+            if block_id in table_descendants:
+                continue
+            table_descendants.add(block_id)
+            child = block_map.get(block_id)
+            if child is not None:
+                pending.extend(child.children or [])
+
         # Convert blocks to markdown
         markdown_lines = []
         ordered_counter: Dict[str, int] = {}
 
         for block in blocks:
-            if block.page is not None:
-                continue  # Skip page container
+            if block.page is not None or block.block_id in table_descendants:
+                continue
 
             line = self._block_to_markdown(
                 block,
@@ -2663,6 +2710,140 @@ class FeishuAccessor(DataAccessor):
         """Best-effort extraction of the Content-Type header from a lark raw response."""
         return cls._response_header(raw, "content-type")
 
+    @staticmethod
+    def _whiteboard_node_markdown(nodes: List[Dict[str, Any]]) -> str:
+        """Keep visible text, connector captions and raw diagram source without a VLM."""
+        lines: List[str] = []
+        for node in nodes:
+            pending: List[Tuple[Any, int]] = [(node, 0)]
+            while pending:
+                value, depth = pending.pop()
+                if depth > 64:
+                    raise InvalidArgumentError("Feishu whiteboard node nesting limit exceeded")
+                if isinstance(value, dict):
+                    for key, child in value.items():
+                        if key == "syntax" and isinstance(child, dict):
+                            code = child.get("code")
+                            if isinstance(code, str) and code.strip():
+                                syntax_type = child.get("syntax_type")
+                                language = (
+                                    {1: "plantuml", 2: "mermaid"}.get(syntax_type, "")
+                                    if isinstance(syntax_type, int)
+                                    else ""
+                                )
+                                fence = "`" * max(
+                                    3, max((len(m) + 1 for m in re.findall(r"`+", code)), default=0)
+                                )
+                                lines.append(f"{fence}{language}\n{code}\n{fence}")
+                        elif key in {"text", "title"} and isinstance(child, str) and child.strip():
+                            text = html.escape(child.strip(), quote=False).replace("\n", "\n  ")
+                            lines.append(f"- {text}")
+                        elif isinstance(child, (dict, list)) and key != "style":
+                            pending.append((child, depth + 1))
+                elif isinstance(value, list):
+                    pending.extend((item, depth + 1) for item in reversed(value))
+        return "\n\n".join(lines)
+
+    def _read_whiteboard(
+        self, board_token: str, feishu_access_token: Optional[str]
+    ) -> _WhiteboardContent:
+        from lark_oapi.api.board.v1 import (
+            DownloadAsImageWhiteboardRequest,
+            ListWhiteboardNodeRequest,
+        )
+
+        state = self._whiteboards
+        if board_token in state.cache:
+            return state.cache[board_token]
+        if len(state.cache) >= _MAX_WHITEBOARDS:
+            raise InvalidArgumentError("Feishu whiteboard count limit exceeded")
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        request = ListWhiteboardNodeRequest.builder().whiteboard_id(board_token).build()
+        # Typed WhiteboardNode in lark-oapi 1.5.3 discards fields such as `syntax`.
+        # Read the bounded raw response so diagram source and new node types survive.
+        response = self._call_api(client.request, request, feishu_access_token)
+        if not response.success():
+            _raise_from_lark_response(
+                response, operation="read whiteboard nodes", required_scope=_WHITEBOARD_READ_SCOPE
+            )
+        raw = getattr(getattr(response, "raw", None), "content", None)
+        if not isinstance(raw, bytes):
+            raise OpenVikingError("Invalid Feishu whiteboard response", code="PROCESSING_ERROR")
+        if state.json_bytes + len(raw) > _MAX_WHITEBOARD_JSON_BYTES:
+            raise InvalidArgumentError("Feishu whiteboard JSON byte limit exceeded")
+        try:
+            payload = json.loads(raw)
+            data = payload.get("data") if isinstance(payload, dict) else None
+            nodes = data.get("nodes") if isinstance(data, dict) else None
+        except (ValueError, RecursionError) as exc:
+            raise OpenVikingError(
+                "Invalid Feishu whiteboard JSON response", code="PROCESSING_ERROR"
+            ) from exc
+        if not isinstance(nodes, list) or any(not isinstance(node, dict) for node in nodes):
+            raise OpenVikingError("Invalid Feishu whiteboard nodes", code="PROCESSING_ERROR")
+        if state.nodes + len(nodes) > _MAX_WHITEBOARD_NODES:
+            raise InvalidArgumentError("Feishu whiteboard node limit exceeded")
+        state.nodes += len(nodes)
+        state.json_bytes += len(raw)
+        content = _WhiteboardContent(self._whiteboard_node_markdown(nodes))
+
+        if self._get_config().download_images:
+            image_request = (
+                DownloadAsImageWhiteboardRequest.builder().whiteboard_id(board_token).build()
+            )
+            image_response = self._call_api(
+                client.board.v1.whiteboard.download_as_image, image_request, feishu_access_token
+            )
+            if not image_response.success():
+                _raise_from_lark_response(
+                    image_response,
+                    operation="download whiteboard preview",
+                    required_scope=_WHITEBOARD_READ_SCOPE,
+                )
+            raw_image = getattr(image_response, "raw", None)
+            image = getattr(raw_image, "content", None)
+            if not isinstance(image, bytes) or not image:
+                raise InvalidArgumentError("Feishu whiteboard preview is empty")
+            if len(image) > _MAX_WHITEBOARD_PREVIEW_BYTES:
+                raise InvalidArgumentError("Feishu whiteboard preview byte limit exceeded")
+            if state.media_bytes + len(image) > _MAX_WHITEBOARD_MEDIA_BYTES:
+                raise InvalidArgumentError("Feishu whiteboard media byte limit exceeded")
+            ext = self._guess_image_ext(image, self._response_content_type(raw_image))
+            # Match Markdown's image acceptance policy; otherwise downstream parsing
+            # could silently discard a preview after we reported a complete import.
+            if not is_valid_image(image, Path(f"whiteboard-preview{ext}")):
+                raise InvalidArgumentError("Feishu whiteboard preview is not an ingestible image")
+            content.preview = (image, ext)
+            state.media_bytes += len(image)
+
+        state.cache[board_token] = content
+        return content
+
+    def _whiteboard_block_to_markdown(
+        self,
+        block,
+        block_map: Dict,
+        *,
+        document_id: str = "",
+        feishu_access_token: Optional[str] = None,
+    ) -> str:
+        token = getattr(getattr(block, "board", None), "token", None)
+        if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", token):
+            raise InvalidArgumentError("Feishu whiteboard block has an invalid token")
+        content = self._read_whiteboard(token, feishu_access_token)
+        host = urlparse(self._source_url).hostname or "feishu.cn"
+        source = (
+            f"https://{host}/docx/{quote(document_id, safe='')}"
+            f"#{quote(block.block_id or '', safe='')}"
+        )
+        parts = [f"[Whiteboard]({source})"]
+        if content.markdown:
+            parts.append(content.markdown)
+        if content.preview is not None:
+            parts.append(f"![Whiteboard preview](feishu://whiteboard/{token})")
+        return "\n\n".join(parts)
+
     def _resolve_image_refs(
         self,
         markdown: str,
@@ -2675,12 +2856,24 @@ class FeishuAccessor(DataAccessor):
         if not getattr(config, "download_images", True):
             return markdown, {}
 
+        downloaded_images: Dict[str, bytes] = {}
+
+        def _replace_whiteboard(match: re.Match[str]) -> str:
+            token = match.group(2)
+            board = self._whiteboards.cache.get(token)
+            if board is None or board.preview is None:
+                return match.group(0)
+            image_bytes, ext = board.preview
+            rel_path = f"images/whiteboard_{self._image_filename(token, ext)}"
+            downloaded_images[rel_path] = image_bytes
+            return f"![{match.group(1)}]({rel_path})"
+
+        markdown = _FEISHU_WHITEBOARD_RE.sub(_replace_whiteboard, markdown)
         matches = list(_FEISHU_IMAGE_RE.finditer(markdown))
         if not matches:
-            return markdown, {}
+            return markdown, downloaded_images
 
         token_to_rel_path: Dict[str, str] = {}
-        downloaded_images: Dict[str, bytes] = {}
         for match in matches:
             file_token = match.group(2)
             if file_token in token_to_rel_path:
@@ -2726,13 +2919,6 @@ class FeishuAccessor(DataAccessor):
             return f"![{alt_text}]({rel_path})"
 
         return _FEISHU_IMAGE_RE.sub(_replace, markdown), downloaded_images
-
-    def _extract_block_text(self, block, attr_name: str) -> str:
-        """Extract text from a block's named attribute (e.g. block.text, block.heading2)."""
-        content_obj = getattr(block, attr_name, None)
-        if content_obj and hasattr(content_obj, "elements") and content_obj.elements:
-            return self._extract_text_from_elements(content_obj.elements)
-        return ""
 
     def _extract_text_from_elements(self, elements) -> str:
         """Convert Feishu TextElement SDK objects to formatted text."""
@@ -2794,7 +2980,15 @@ class FeishuAccessor(DataAccessor):
             text = f"~~{text}~~"
         return text
 
-    def _table_block_to_markdown(self, block, block_map: Dict, **_) -> Optional[str]:
+    def _table_block_to_markdown(
+        self,
+        block,
+        block_map: Dict,
+        *,
+        document_id: str = "",
+        feishu_access_token: Optional[str] = None,
+        **_,
+    ) -> Optional[str]:
         """Convert table block to markdown table."""
         table = block.table
         children = block.children
@@ -2817,7 +3011,12 @@ class FeishuAccessor(DataAccessor):
                 if cell_idx < len(children):
                     cell_block_id = children[cell_idx]
                     cell_block = block_map.get(cell_block_id)
-                    cell_text = self._extract_cell_text(cell_block, block_map)
+                    cell_text = self._render_table_cell(
+                        cell_block,
+                        block_map,
+                        document_id=document_id,
+                        feishu_access_token=feishu_access_token,
+                    )
                     row.append(cell_text)
                 else:
                     row.append("")
@@ -2825,22 +3024,47 @@ class FeishuAccessor(DataAccessor):
 
         return format_table_to_markdown(rows, has_header=True) if rows else None
 
-    def _extract_cell_text(self, cell_block, block_map: Dict) -> str:
-        """Extract text from a table cell block by reading its children."""
+    def _render_table_cell(
+        self,
+        cell_block,
+        block_map: Dict,
+        *,
+        document_id: str = "",
+        feishu_access_token: Optional[str] = None,
+    ) -> str:
+        """Render cell blocks before the shared table formatter folds line breaks."""
         if not cell_block or not cell_block.children:
             return ""
-        texts = []
-        for child_id in cell_block.children:
+        parts = []
+        ordered_counter: Dict[str, int] = {}
+        pending = [(child_id, 0) for child_id in reversed(cell_block.children)]
+        seen = {cell_block.block_id}
+        while pending:
+            child_id, depth = pending.pop()
+            if child_id in seen:
+                continue
+            seen.add(child_id)
             child = block_map.get(child_id)
             if not child:
                 continue
-            # Use attribute-driven detection to find text in any block type
+            content = self._block_to_markdown(
+                child,
+                block_map,
+                ordered_counter,
+                document_id=document_id,
+                feishu_access_token=feishu_access_token,
+            )
+            if content is not None:
+                indent = "&nbsp;" * (4 * depth)
+                parts.append(indent + content.replace("\n", "\n" + indent))
+            # Nested tables already own their descendants through their cell renderer.
             attr = self._detect_block_attr(child)
-            if attr:
-                text = self._extract_block_text(child, attr)
-                if text:
-                    texts.append(text)
-        return " ".join(texts)
+            if attr != "table":
+                child_depth = depth + (attr in {"ordered", "bullet"})
+                pending.extend(
+                    (child_id, child_depth) for child_id in reversed(child.children or [])
+                )
+        return "\n".join(parts)
 
     def _embedded_sheet_to_markdown(
         self,

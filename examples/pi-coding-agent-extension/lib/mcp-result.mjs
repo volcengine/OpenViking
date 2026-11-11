@@ -63,11 +63,51 @@ export function mcpContentToPi(result) {
   return out;
 }
 
+/** Only canonical, unambiguous Rule blocks can be shortened safely. */
+function boundedRules(text) {
+  const matched = /^Matched (\d+) active Rule\(s\)\.$/m.exec(text);
+  const starts = [...text.matchAll(/^## \[[^\n]+\] [^\n]*\n\nConstraint:\n/gm)];
+  const blocks = starts.map((start, index) =>
+    text.slice(start.index, starts[index + 1]?.index ?? text.length).trimEnd());
+  const valid = text.startsWith("# Applicable OpenViking Rules\n")
+    && matched && Number(matched[1]) === blocks.length
+    && blocks.every((block) => /\nCompiled Rule URI: viking:\/\/[^\n]+(?:\nPolicy sources:\n(?:- [^\n]+\n?)+)?$/.test(block));
+  const total = valid ? blocks.length : null;
+  const header = valid && starts.length ? text.slice(0, starts[0].index).trimEnd() : "";
+  const fits = (value) => Buffer.byteLength(value) <= MAX_RESULT_BYTES
+    && value.split("\n").length <= MAX_RESULT_LINES;
+  const kept = [];
+  const notice = (count) => {
+    const uri = valid ? /\nCompiled Rule URI: ([^\n]+)/.exec(blocks[count] ?? "")?.[1] : null;
+    return `[OpenViking] delivery.complete=false; omitted_rules=${total === null ? "unknown" : total - count}. `
+      + "Output budget reached. Do not act until remaining Rules are checked. "
+      + "Retrieve smaller results or read compiled Rule URIs."
+      + (uri && uri.length <= 500 ? ` First omitted Rule: ${uri}` : "");
+  };
+  if (valid) {
+    for (const block of blocks) {
+      if (!fits([header, ...kept, block, notice(kept.length + 1)].join("\n\n"))) break;
+      kept.push(block);
+    }
+  }
+  let output = [header, ...kept, notice(kept.length)].filter(Boolean).join("\n\n");
+  // Even malformed/oversized headers must not evade the budget.
+  if (!fits(output)) {
+    kept.length = 0;
+    output = notice(0);
+  }
+  return { text: output, delivery: { complete: false, omitted_rules: total === null ? null : total - kept.length } };
+}
+
 /** All text blocks share one budget, including the truncation notice. */
 export function toPiResult(tool, result) {
   const content = mcpContentToPi(result);
   const text = joinText(content);
   const truncated = Buffer.byteLength(text) > MAX_RESULT_BYTES || text.split("\n").length > MAX_RESULT_LINES;
+  if (tool === "rule_search" && truncated && !result.isError) {
+    const bounded = boundedRules(text);
+    return { content: [{ type: "text", text: bounded.text }], details: { tool, truncated: true, delivery: bounded.delivery } };
+  }
   if (truncated) {
     const hint = "\n[OpenViking] Output truncated. Request fewer items or use a narrower URI, offset or limit.";
     const lines = text.split("\n").slice(0, MAX_RESULT_LINES - 1).join("\n");
@@ -83,5 +123,5 @@ export function toPiResult(tool, result) {
     };
   }
   if (result.isError) throw new Error(text.trim() || "OpenViking " + tool + " failed");
-  return { content, details: { tool, truncated: false } };
+  return { content, details: { tool, truncated: false, ...(tool === "rule_search" ? { delivery: { complete: true } } : {}) } };
 }

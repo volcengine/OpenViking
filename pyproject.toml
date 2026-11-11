@@ -37,6 +37,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "typing-extensions>=4.5.0",
     "pyyaml>=6.0",
+    "jsonschema>=4.23.0",
     "httpx>=0.25.0",
     "pdfplumber>=0.10.0",
     "scrapy>=2.11.0",
@@ -62,7 +63,7 @@ dependencies = [
     "protobuf>=6.33.5",
     "pdfminer-six>=20251230",
     "typer>=0.12.0",
-    "litellm>=1.83.7,<1.91.2",
+    "litellm>=1.102.4,<1.102.5",
     "python-multipart>=0.0.31",
     # Pin the parsing stack to avoid unvalidated upstream API and grammar changes.
     "tree-sitter==0.25.2",
@@ -95,6 +96,9 @@ dependencies = [
 
 
 [project.optional-dependencies]
+reporting = [
+    "kafka-python>=3.0.12,<4",
+]
 expiry = [
   "redis>=5.3.1,<7",
 ]
@@ -248,6 +252,7 @@ exclude = ["tests*", "docs*", "examples*"]
 openviking_gateway = ["client-rules.json", "lua/*.lua"]
 "openviking.scheduling.expiry" = ["lua/*.lua"]
 "vikingbot.studio.providers.feishu" = ["icon.png"]
+"openviking.parse.parsers.code.ast" = ["assets/parsers.ghproxy.json"]
 openviking = [
     "prompts/templates/**/*.yaml",
     "system_assets/**/*",

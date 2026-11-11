@@ -8,6 +8,7 @@ import yaml
 
 from openviking.privacy.reference import build_privacy_field_reference
 from openviking.privacy.scan import scan_privacy_content
+from openviking.server.config import UserSettingsPatch
 from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import patch_user_config
 from openviking.session.memory.dataclass import MemoryFile
@@ -19,7 +20,11 @@ from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedErr
 @pytest.fixture
 async def owner(service):
     ctx = RequestContext(user=service.user, role=Role.USER)
-    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": "registered"}})
+    await patch_user_config(
+        service.viking_fs,
+        ctx,
+        UserSettingsPatch.model_validate({"privacy": {"mode": "registered"}}),
+    )
     return ctx
 
 
@@ -63,7 +68,11 @@ async def test_structured_content_write_read_scan_and_rotation(
         owner, "credential", "structured", {"key": secret, "pem": pem, "public": excluded}
     )
     await patch_user_config(
-        service.viking_fs, owner, {"privacy": {"mode": "auto_strict", "never_mask": [excluded]}}
+        service.viking_fs,
+        owner,
+        UserSettingsPatch.model_validate(
+            {"privacy": {"mode": "auto_strict", "never_mask": [excluded]}}
+        ),
     )
     reference = build_privacy_field_reference(owner.user.user_id, "credential", "structured", "key")
     pem_reference = build_privacy_field_reference(
@@ -78,7 +87,9 @@ async def test_structured_content_write_read_scan_and_rotation(
     assert decode(await service.fs.read_visible(uri, ctx=owner)) == expected
     assert decode(await service.viking_fs.read_file(uri, ctx=owner)) == rows
 
-    await patch_user_config(service.viking_fs, owner, {"privacy": {"mode": "off"}})
+    await patch_user_config(
+        service.viking_fs, owner, UserSettingsPatch.model_validate({"privacy": {"mode": "off"}})
+    )
     report = await scan_privacy_content(
         service=service, ctx=owner, sanitizer=service.privacy_sanitizer, uri=uri, fix=True
     )
@@ -96,7 +107,9 @@ async def test_structured_content_write_read_scan_and_rotation(
 @pytest.mark.parametrize("path", ["content", "batch", "storage"])
 @pytest.mark.parametrize("mode", ["auto", "auto_strict"])
 async def test_ordinary_append_protection_across_write_paths(service, owner, path, mode):
-    await patch_user_config(service.viking_fs, owner, {"privacy": {"mode": mode}})
+    await patch_user_config(
+        service.viking_fs, owner, UserSettingsPatch.model_validate({"privacy": {"mode": mode}})
+    )
     secret = "registered-private-value"
     uri = "viking://resources/append/" + path + ".txt"
     await service.privacy_configs.upsert(owner, "credential", "append", {"key": secret})
@@ -129,7 +142,11 @@ async def test_strict_manual_resolution_protects_retained_conflict_history(servi
     )
     await service.fs.write(uri, source, ctx=owner, wait=True)
     await service.privacy_configs.upsert(owner, "credential", "history", {"key": secret})
-    await patch_user_config(service.viking_fs, owner, {"privacy": {"mode": "auto_strict"}})
+    await patch_user_config(
+        service.viking_fs,
+        owner,
+        UserSettingsPatch.model_validate({"privacy": {"mode": "auto_strict"}}),
+    )
     edited = "# Original\n\nresolved content\n\nAdditional context.\n\n"
     await service.fs.write(
         uri,
@@ -175,7 +192,11 @@ async def test_privacy_scan_skips_generated_sidecars(service, owner, scope):
 
 @pytest.mark.parametrize("kind", ["memory", "sidecar"])
 async def test_ordinary_append_preserves_body_and_metadata(service, owner, kind):
-    await patch_user_config(service.viking_fs, owner, {"privacy": {"mode": "auto_strict"}})
+    await patch_user_config(
+        service.viking_fs,
+        owner,
+        UserSettingsPatch.model_validate({"privacy": {"mode": "auto_strict"}}),
+    )
     secret = "registered-private-value"
     if kind == "memory":
         uri = f"viking://user/{owner.user.user_space_name()}/memories/preferences/append.md"

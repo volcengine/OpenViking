@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import os
 import sys
 from collections import defaultdict
@@ -304,34 +305,39 @@ class ContentWriteCoordinator:
                     user_id=ctx.user.user_id,
                     resource_id=uri,
                     task_id=task_id,
+                    meta={"mode": mode},
                 )
             if task is None:
                 raise RuntimeError("Content write Task was not created")
             return task
 
-        try:
-            result = await self._write(
-                uri=uri,
-                content=content,
-                ctx=ctx,
-                mode=mode,
-                wait=wait,
-                processing_mode=processing_mode,
-                tags=tags,
-                tag_mode=tag_mode,
-                acl=acl,
-                resolve_conflicts=resolve_conflicts,
-                root_operation="content_write",
-                root_task_factory=create_root_task,
-            )
-        except BaseException as exc:
-            if task_id is not None and not _root_owns_failure(exc):
-                await self._fail_content_write_task(
-                    task.task_id if task is not None else task_id, exc, ctx=ctx
+        from openviking.observability.reporting.facts import defer_file_changes
+
+        with defer_file_changes() as pending_file_changes:
+            try:
+                result = await self._write(
+                    uri=uri,
+                    content=content,
+                    ctx=ctx,
+                    mode=mode,
+                    wait=wait,
+                    processing_mode=processing_mode,
+                    tags=tags,
+                    tag_mode=tag_mode,
+                    acl=acl,
+                    resolve_conflicts=resolve_conflicts,
+                    root_operation="content_write",
+                    root_task_factory=create_root_task,
                 )
-            raise
-        if task is None:
-            raise RuntimeError("Content write completed without creating a root Task")
+            except BaseException as exc:
+                if task_id is not None and not _root_owns_failure(exc):
+                    await self._fail_content_write_task(
+                        task.task_id if task is not None else task_id, exc, ctx=ctx
+                    )
+                raise
+            if task is None:
+                raise RuntimeError("Content write completed without creating a root Task")
+            pending_file_changes.publish(task)
         return await self._return_or_wait_for_content_write_task(
             task.task_id,
             result,
@@ -433,6 +439,8 @@ class ContentWriteCoordinator:
                 ctx.account_id,
                 ctx.user.user_id,
                 enqueued_work=[],
+                task_type=task.task_type,
+                mode=task.meta.get("mode"),
             ):
                 return await self._enqueue_content_write_root(
                     operation=operation,
@@ -707,6 +715,7 @@ class ContentWriteCoordinator:
 
         created: list[str] = []
         updated: list[str] = []
+        unchanged: list[str] = []
         refresh_kinds: dict[str, str] = {}
         file_md5s: dict[str, str] = {}
         file_abstracts: dict[str, str] = {}
@@ -740,6 +749,26 @@ class ContentWriteCoordinator:
                 try:
                     if exists and stat.get("isDir"):
                         raise ConflictError(f"Target is a directory: {uri}")
+                    if operation["if_absent"] and exists:
+                        raise ConflictError(f"Target already exists: {uri}")
+                    expected = operation.get("expected_sha256")
+                    if expected is not None:
+                        if not exists:
+                            raise ConflictError(f"Expected content no longer exists: {uri}")
+                        current = await self._viking_fs.read_file_bytes(uri, ctx=ctx)
+                        if hashlib.sha256(current).hexdigest() != expected:
+                            raise ConflictError(f"Content revision changed: {uri}")
+                        desired = operation["content"]
+                        if isinstance(desired, str):
+                            desired = desired.encode("utf-8")
+                        if (
+                            skip_conflicts
+                            and write_mode == "replace"
+                            and current == desired
+                            and operation["ingest_options"] == IngestOptions()
+                        ):
+                            unchanged.append(uri)
+                            continue
                 except ConflictError as exc:
                     if not skip_conflicts:
                         raise
@@ -846,7 +875,7 @@ class ContentWriteCoordinator:
                     "root_uri": normalized_root,
                     "created": created,
                     "updated": updated,
-                    "unchanged": [],
+                    "unchanged": unchanged,
                     "queue_status": None,
                 }
                 if skip_conflicts:
@@ -1054,7 +1083,25 @@ class ContentWriteCoordinator:
                     ) from exc
 
             mode = raw.get("mode", "replace")
+            expected = raw.get("expected_sha256")
+            if expected is not None and (
+                not isinstance(expected, str)
+                or len(expected) != 64
+                or any(c not in "0123456789abcdef" for c in expected)
+            ):
+                raise InvalidArgumentError("expected_sha256 must be a lowercase SHA-256 digest")
             self._validate_batch_mode(mode)
+            if_absent = raw.get("if_absent", False)
+            if not isinstance(if_absent, bool):
+                raise InvalidArgumentError(f"batch-write if_absent must be a boolean: {uri}")
+            if if_absent and expected is not None:
+                raise InvalidArgumentError(
+                    f"batch-write if_absent cannot be combined with expected_sha256: {uri}"
+                )
+            if if_absent and mode == "append":
+                raise InvalidArgumentError(
+                    f"batch-write if_absent cannot be combined with append mode: {uri}"
+                )
             if has_content_base64 and mode == "append":
                 raise InvalidArgumentError(
                     f"batch-write append does not support binary content: {uri}"
@@ -1085,6 +1132,8 @@ class ContentWriteCoordinator:
                     "uri": uri,
                     "content": content,
                     "mode": mode,
+                    "expected_sha256": raw.get("expected_sha256"),
+                    "if_absent": if_absent,
                     "ingest_options": ingest_options,
                 }
             )

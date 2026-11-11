@@ -1,6 +1,9 @@
 # DeepSeek Harness
 
-为 [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh)（`dsh`）及 DeepSeek Harness Desktop 桌面应用接入跨项目、跨会话的长期记忆。安装后每次对话都会自动召回相关记忆并捕获新内容，模型也会直接拿到 OpenViking 工具以及 `openviking-memory`、`openviking-skills`、`ov-experience-memory` 三个技能，无需额外配置。
+为 [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh)（`dsh`）及 DeepSeek Harness Desktop 桌面应用接入跨项目、跨会话的长期记忆。安装后每次对话都会自动召回相关记忆并捕获新内容，模型也会直接拿到 OpenViking 工具以及 `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search` 四个技能，无需额外配置。
+
+Rule skill 需要 `0.5.33` 或更新的插件包，以及在 `/mcp` 发布 `rule_search`
+的服务端版本。升级两端后重连 DSH。
 
 源码：[examples/dsh-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/dsh-memory-plugin)
 
@@ -112,9 +115,35 @@ Windows 上安装器不可用，只能用这种方式；macOS 上不想跑安装
 
 每个 DSH 会话映射为 OpenViking 中的 `dsh-<session-id>`，子 agent 各自拥有独立会话。
 
-模型看到的工具面就是 OpenViking 的 MCP 工具集，经由与其他记忆集成相同的 stdio 代理接入，以 `mcp__openviking__` 前缀发布。由于该代理每个 profile 只起一个进程，`mcp__openviking__remember` 写入的是服务端一个短生命周期的会话而不是当前会话（对话本身仍由自动捕获记录）。设置 `OPENVIKING_RECALL_PEER_SCOPE=actor` 后，固定的 `OPENVIKING_PEER_ID` 才会把该 profile 的工具调用归属到同一个 peer；默认 `all` 不发送 actor-peer 头。多个工作区需要不同工具身份时，使用独立 profile/进程。插件同时附带三个共享技能：`openviking-memory` 让模型知道何时该检索、读取和写入，`openviking-skills` 讲如何查找、使用、创建、共享和迁移存放在 OpenViking 里的技能，`ov-experience-memory` 让模型在执行类任务前检索并应用以往任务的 Experience。插件默认捕获工具结果（`captureToolResults: true`），服务端据此把该技能的读取关联回所用的 Experience；设为 `false` 时，它只检索和应用 Experience。
+模型看到的工具面就是 OpenViking 的 MCP 工具集，经由与其他记忆集成相同的 stdio 代理接入，以 `mcp__openviking__` 前缀发布。由于该代理每个 profile 只起一个进程，`mcp__openviking__remember` 写入的是服务端一个短生命周期的会话而不是当前会话（对话本身仍由自动捕获记录）。设置 `OPENVIKING_RECALL_PEER_SCOPE=actor` 后，固定的 `OPENVIKING_PEER_ID` 才会把该 profile 的工具调用归属到同一个 peer；默认 `all` 不发送 actor-peer 头。多个工作区需要不同工具身份时，使用独立 profile/进程。插件同时附带四个共享技能：`openviking-memory` 让模型知道何时该检索、读取和写入，`openviking-skills` 讲如何查找、使用、创建、共享和迁移存放在 OpenViking 里的技能，`ov-experience-memory` 让模型在执行类任务前检索并应用以往任务的 Experience，`openviking-rule-search` 则调用服务端发布的 `mcp__openviking__rule_search` 工具检查任务相关 Rule。插件默认捕获工具结果（`captureToolResults: true`），服务端据此把该技能的读取关联回所用的 Experience；设为 `false` 时，它只检索和应用 Experience。
 
 文件工具误把 `viking://` URI 当本地路径时，调用会被拦截，并提示改用对应的 OpenViking 工具；写入或编辑的若是 `viking://~/skills/<name>/` 这类技能目录，提示的工具是 `mcp__openviking__add_skill`，它用完整的 `SKILL.md` 文本创建或替换整个技能。shell 命令带 `viking://` URI 时照常执行，模型会收到一条改用 OpenViking 工具的提示，URI 是有意传入的数据时可以忽略。
+
+### 客户端召回压缩
+
+压缩默认关闭。要让 DSH 配置的模型承担摘要生成，而不使用服务端 query planner，
+将下面字段合并到 `~/.openviking/ovcli.conf`，然后重启 DSH：
+
+```json
+{"plugin":{"dsh":{"recallCompress":"client","recallCompressTimeoutMs":10000}}}
+```
+
+插件通过 `ctx.llm.stream()` 发起一次不带工具的请求，使用 agent 的
+`options.provider` 和 `options.model`。可用 `recallCompressModel` 指定同一 provider
+下的其他模型，用 `recallCompressThinking` 指定 provider 支持的推理级别。
+凭据和端点由 DSH 的 provider 配置管理，不使用 OpenViking 服务端凭据。
+DSH 不使用 `recallCompressBaseUrl` 或 CLI 压缩器探测配置。“客户端”指由 DSH
+调用模型；只有 DSH provider 指向本地模型服务时，推理才在本机执行。
+插件不会推断仅由宿主请求中间件实现的模型切换；这种情况下应明确配置压缩模型，
+或使用目标模型重启会话。
+
+`client` 不请求服务端 rewrite。`auto` 在宿主模型和接口可用时优先客户端压缩，
+否则仍使用服务端 `rewrite: "auto"`。`server` 和 `off` 保持原有行为。
+`client` 下宿主压缩器不可用时保留未压缩片段。短输入跳过模型调用，输入上限、
+带引用摘要处理和失败回退复用共享实现。超时、失败流或格式错误回退到预算内的
+原片段，明确无关才不注入。取消会结束等待并通知 adapter；不遵守取消信号的
+adapter 可能继续请求，但迟到的结果不会注入。辅助消息不追加到会话，也不采集为
+记忆。摘要缓存按连接、身份、会话和模型隔离，压缩状态通过 DSH 日志记录。
 
 <details>
 <summary><b>配置</b></summary>

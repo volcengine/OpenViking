@@ -1,0 +1,56 @@
+name: React UI Release
+
+on:
+  push:
+    tags:
+      - "react@*"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: react-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'volcengine/OpenViking'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./packages/react/package.json').version")"
+          test "$RELEASE_TAG" = "react@$PACKAGE_VERSION"
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run check
+      - run: npm run build:docs
+      - run: npm pack --dry-run --workspace @openviking/react
+      - name: Check whether version already exists
+        id: published
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./packages/react/package.json').version")"
+          if npm view "@openviking/react@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "@openviking/react@$PACKAGE_VERSION already exists; skipping."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish React UI
+        if: steps.published.outputs.exists == 'false'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --workspace @openviking/react --access public --provenance

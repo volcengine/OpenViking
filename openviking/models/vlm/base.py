@@ -27,14 +27,12 @@ ToolResultMediaMode = Literal["native", "user_message"]
 
 
 def _common_tool_result_media_mode(backends: List["VLMBase"]) -> ToolResultMediaMode | None:
-    """Choose an image representation supported by every possible fallback."""
+    """Use tool images only for all-native chains; otherwise use user images."""
     modes = []
     for backend in backends:
         capability = getattr(backend, "tool_result_media_mode", None)
         modes.append(capability() if callable(capability) else None)
-    if not modes or any(mode not in ("native", "user_message") for mode in modes):
-        return None
-    return "user_message" if "user_message" in modes else "native"
+    return "native" if modes and all(mode == "native" for mode in modes) else "user_message"
 
 
 class UnsupportedMediaInputError(RuntimeError):
@@ -79,6 +77,7 @@ class VLMBase(ABC):
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
+        self.cost_bearer = config.get("cost_bearer")
         self.provider = config.get("provider", "openai")
         self.model = config.get("model")
         self.api_key = config.get("api_key")
@@ -299,6 +298,7 @@ class VLMBase(ABC):
                 completion_tokens=int(completion_tokens),
                 account_id=root_context.account_id if root_context is not None else None,
                 source_type=get_ingestion_source_type(),
+                cost_bearer=self.cost_bearer,
             )
         except Exception as e:
             # Metrics must never break model inference.
@@ -325,6 +325,7 @@ class VLMBase(ABC):
                 prompt_tokens=0,
                 completion_tokens=0,
                 error_code=extract_metric_error_code(error),
+                cost_bearer=self.cost_bearer,
                 account_id=root_context.account_id if root_context is not None else None,
             )
         except Exception as metrics_error:

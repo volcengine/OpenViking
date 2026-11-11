@@ -23,7 +23,7 @@ from openviking.models.model_error import UNKNOWN_BRIEF, ModelErrorKind, brief_f
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_domain import make_work_error
 from openviking.service.task_tracker_concurrency import run_to_completion
-from openviking.storage.acl import ACL_GRANT_FIELDS, ACL_MODE_FIELD, AclMode
+from openviking.storage.acl import ACL_GRANT_FIELDS, ACL_MODE_FIELD, EMPTY_ACL_GRANT, AclMode
 from openviking.storage.errors import (
     CollectionNotFoundError,
     EmbeddingConfigurationError,
@@ -137,7 +137,7 @@ class CollectionSchemas:
                     {
                         "FieldName": field,
                         "FieldType": "list<string>",
-                        "DefaultValue": [],
+                        "DefaultValue": [EMPTY_ACL_GRANT],
                     }
                     for field in ACL_GRANT_FIELDS
                 ],
@@ -763,7 +763,13 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         import time as _time
 
                         _embed_t0 = _time.monotonic()
-                        with bind_ingestion_source_type(embedding_msg.source_type):
+                        from openviking.observability.reporting.facts import bind_embedding_purpose
+
+                        purpose = embedding_msg.context_data.get("context_type", "unknown")
+                        with (
+                            bind_ingestion_source_type(embedding_msg.source_type),
+                            bind_embedding_purpose(purpose),
+                        ):
                             result = await embed_compat(
                                 embedder,
                                 embedding_msg.message,

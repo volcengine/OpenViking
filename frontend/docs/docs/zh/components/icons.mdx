@@ -1,0 +1,78 @@
+# 图标
+
+操作图标、文件类型图标与作用域层级图标通过公开入口 `@openviking/react/icons` 提供。它们复用工作区的 SVG 源文件，随 React 包一起交付。
+
+## 可运行示例
+
+通过尺寸按钮调整装饰性图标。单独的 PDF 图标演示有意义的 `aria-label` 描述，尺寸为 24 × 24 像素。下方一行是三个作用域层级图标。中英文文档共用同一份示例，示例说明使用英文；应用可自行提供本地化的 `aria-label` 文案。
+
+```tsx file="../../_demos/icons-basic.tsx" preview
+
+```
+
+## 可用图标
+
+| 导出             | 用途                            |
+| ---------------- | ------------------------------- |
+| `ArrowRightIcon` | 火山版 CLI 快捷命令使用的右箭头 |
+| `AudioIcon`      | 音频                            |
+| `PdfIcon`        | PDF                             |
+| `PptIcon`        | 演示文稿                        |
+| `VideoIcon`      | 视频                            |
+| `WordIcon`       | 文本文档                        |
+| `LibraryIcon`    | 库（按名称取色的圆形渐变块）    |
+| `SpaceIcon`      | 数据空间                        |
+| `UserIcon`       | 账号 / User                     |
+
+`LibraryIcon` 没有固定字形，按 `name` 取一种圆形渐变块，同一个名字始终取到同一种渐变；它渲染为 `span` 色块，不接收 SVG 属性。`SpaceIcon` 与 `UserIcon` 是 14 × 14 的 `currentColor` 描边图形，随文字颜色变化。
+
+`ScopeCascade` 的默认视图已内置这三个层级图标：适配函数返回的选项没有 `icon` 时自动补上本级默认图标，返回了 `icon` 就照用宿主的。单独使用 `ScopeSelector` 时图标完全由调用方传入。
+
+## 属性
+
+文件类型图标、`ArrowRightIcon`、`SpaceIcon` 与 `UserIcon` 渲染为内联 `svg`，接收不含 `children` 的标准 SVG 属性。`LibraryIcon` 只接收 `name`。
+
+| 属性         | 类型               | 默认值                         | 说明                                       |
+| ------------ | ------------------ | ------------------------------ | ------------------------------------------ |
+| `width`      | `number \| string` | `16`；`ArrowRightIcon` 为 `14` | 图标宽度。                                 |
+| `height`     | `number \| string` | `16`；`ArrowRightIcon` 为 `14` | 图标高度。                                 |
+| `aria-label` | `string`           | —                              | 无障碍描述；装饰性图标省略，SVG 保持隐藏。 |
+| `className`  | `string`           | —                              | 为 SVG 元素添加类名。                      |
+| 其他属性     | SVG 属性           | —                              | 标准 SVG 属性，包括 `aria-*` 与 `role`。   |
+
+`LibraryIcon` 的 `name` 决定渐变取值，默认空字符串，即第一种渐变。
+
+```tsx
+import { PdfIcon } from '@openviking/react/icons';
+
+export default function Example() {
+  return (
+    <PdfIcon
+      width={24}
+      height={24}
+      className="file-icon"
+      aria-label="PDF 文档"
+    />
+  );
+}
+```
+
+## 无障碍
+
+相邻文字已经说明文件类型时省略 `aria-label`，SVG 保持 `aria-hidden`，避免重复播报。图标独立传达信息时，提供应用语言下的 `aria-label`。图标本身不具有交互行为；放入操作控件时，由应用负责按钮语义、键盘交互和焦点样式。
+
+## 资源与样式
+
+图标以内联 SVG 元素的形式打包进 JavaScript，没有独立资源请求，也不需要为它们导入样式表或配置内容安全策略。
+
+通过 `width`、`height`、`className` 或 `style` 调整尺寸与位置。文件类型图标保留固定配色；`ArrowRightIcon`、`SpaceIcon` 与 `UserIcon` 使用 `currentColor`，随 CSS `color` 改色。`LibraryIcon` 的尺寸写死在组件内，需要别的尺寸时在外面套一层容器。
+
+`LibraryIcon` 的五组渐变来自主题基线，宿主可以用公开变量逐组覆盖，不必改组件：
+
+```css
+:root {
+  --ov-ui-color-library-swatch-1: linear-gradient(145deg, #e0f7fa, #80deea);
+}
+```
+
+基线里的 `--ov-ui-library-swatch-1-default` … `-5-default` 是私有默认值，亮暗主题共用同一套——它们是设计稿的身份色，不随主题变化。宿主未加载库样式表时，组件仍用同一份调色板绘制：颜色只维护在 `packages/icons/library-swatches.json`，CSS 侧由 `npm run sync:swatches` 从它生成，因此两条路径不会出现配色差异。

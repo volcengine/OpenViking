@@ -574,3 +574,77 @@ function userEvent(text) {
     },
   };
 }
+
+test("DSH recall modes use host digests, preserve fallbacks, and isolate session caches", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "dsh-compression-"));
+  tempDirs.push(dir);
+  process.env.OPENVIKING_STATE_DIR = dir;
+  const uri = "viking://user/test/memories/decision.md";
+  for (const mode of ["off", "client", "auto", "server"]) {
+    for (const outcome of ["ok", "invalid", "unrelated", "error"]) {
+      const bodies = [];
+      const calls = [];
+      const cfg = { ...config(), recallRewrite: mode, recallCompressMinInputChars: 0, recallCompressTimeoutMs: 1000 };
+      const runtime = new OpenVikingRuntime({
+        async fetchJSON(path, init) {
+          bodies.push(JSON.parse(init.body));
+          return { ok: true, result: {
+            rendered: `Keep PostgreSQL. source: ${uri}`,
+            entries: [{ uri, text: "Keep PostgreSQL." }], stats: {},
+          } };
+        },
+      }, cfg, { debug() {} });
+      const agent = {
+        session: { id: `${mode}-${outcome}`, header: { cwd: dir } },
+        options: { provider: "local", model: "strong" },
+        ctx: { llm: { async *stream(request) {
+          calls.push(request);
+          if (outcome === "error") throw new Error("provider failed");
+          yield { type: "text-delta", index: 0, text: outcome === "ok"
+            ? `- PostgreSQL was chosen. source: ${uri}`
+            : outcome === "unrelated" ? "NO_RELEVANT_MEMORY" : "invalid output" };
+          yield { type: "finish", reason: { kind: "stop" } };
+        } } },
+      };
+      runtime.stateFor(agent.session).ready = true;
+      const message = await runtime.recallMessage(agent, [{ role: "user", content: "which database" }]);
+      const local = mode === "client" || mode === "auto";
+      assert.equal(calls.length, local ? 1 : 0, `${mode}/${outcome}`);
+      assert.equal(bodies[0].rewrite, mode === "server" ? true : undefined);
+      if (local && outcome === "unrelated") assert.equal(message, null);
+      else {
+        const text = message.content[0].text;
+        assert.ok(text.includes(uri));
+        assert.match(text, local && outcome === "ok" ? /PostgreSQL was chosen/ : /Keep PostgreSQL/);
+      }
+      if (local && outcome === "ok") {
+        await runtime.recallMessage(agent, [{ role: "user", content: "which database" }]);
+        assert.equal(calls.length, 1, "same-session digest is cached");
+        agent.session = { id: `${mode}-other-session`, header: { cwd: dir } };
+        runtime.stateFor(agent.session).ready = true;
+        await runtime.recallMessage(agent, [{ role: "user", content: "which database" }]);
+        assert.equal(calls.length, 2, "another session does not reuse the digest cache");
+      }
+    }
+  }
+});
+
+test("missing DSH model only permits server rewrite in auto mode", async () => {
+  for (const mode of ["client", "auto"]) {
+    let body;
+    const cfg = { ...config(), recallRewrite: mode };
+    const runtime = new OpenVikingRuntime({
+      async fetchJSON(path, init) {
+        body = JSON.parse(init.body);
+        return { ok: true, result: { rendered: "original fragments", entries: [], stats: {} } };
+      },
+    }, cfg, { debug() {} });
+    runtime.initialize = async () => ({ ready: true, config: cfg });
+    const message = await runtime.recallMessage({}, [{ role: "user", content: "which database" }]);
+    assert.equal(body.rewrite, mode === "auto" ? "auto" : undefined);
+    assert.match(message.content[0].text, /original fragments/);
+    const controller = new AbortController();
+    controller.abort();
+    assert.equal(await runtime.recallMessage({}, [{ role: "user", content: "which database" }], controller.signal), null);
+  }
+});

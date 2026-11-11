@@ -1,14 +1,31 @@
 # OpenViking for Magpie
 
-Adds automatic OpenViking context recall to model requests passing through
-[Magpie](https://github.com/yetone/magpie). Reads the existing OpenViking client
-configuration; no second copy of your server address or credentials is needed.
+One OpenViking plugin provides two independently controlled capabilities:
+
+- **Memory:** context recall, optional conversation capture, and memory tools for requests through Magpie.
+- **Model management:** select OV/VikingBot models in **Agents → OpenViking**, then automatically save, restart and verify activation. Query Planner can use a separate model through plugin Options (`queryMode` / `queryModel`); existing Query settings are preserved by default.
+
+The package remains `@openviking/magpie-plugin`. Discovery uses the middleware category; Installed recognizes both Agent and request-hook capabilities. No extra page, settings panel or Magpie host modification is required.
 
 [中文](README_CN.md)
 
-The npm package is `@openviking/magpie-plugin`. Its marketplace display name is
-**OpenViking**; the npm package name is a separate distribution identifier.
-After the first npm publication, install it with:
+## Feature switches and migration
+
+Set `memoryEnabled` and `modelsEnabled` independently in plugin Options (both default to true):
+
+```json
+{ "memoryEnabled": false, "modelsEnabled": true, "restartOnChange": true }
+```
+
+This enables only model management: disabled memory performs no recall/capture and registers no memory tools. `modelsEnabled: false` pauses model synchronization; disconnect the Agent first to restore the original model. Existing memory configuration and credential rules remain compatible. Root credentials are used only for model administration.
+
+When migrating two existing installations, preserve the old memory plugin's on/off state as `memoryEnabled` and the model plugin's state as `modelsEnabled`, retaining their respective options. Enabling the unified package must not implicitly enable previously disabled memory.
+
+The standalone `@openviking/magpie-models-plugin` is no longer packaged. For manual migration: back up options; disconnect the old model Agent and wait for restoration; remove both old installations; install the unified package; restore switches/options; then select the desired model. Do not install both model Agents together. For an in-place migration, retain the Agent ID, install path, selection file and recovery journals, and verify that `ov.conf` and the OV instance remain unchanged.
+
+See [Model management](models/README.md) for Root permissions, Bot detection, restart and recovery limits. Model management never enables Bot automatically.
+
+Version 0.2.0 has not been published. Install from source below; after publication:
 
 ```sh
 magpie plugin add @openviking/magpie-plugin
@@ -30,8 +47,8 @@ magpie plugin add ./examples/magpie-memory-plugin
 
 The generator prepares shared modules before a source-folder installation.
 `npm pack` runs it automatically and produces a self-contained package. The
-package release workflow publishes on main; installing by npm name requires the first
-publication to have completed. Adding the whole OpenViking git repository as a
+package release workflow publishes on main; installing by npm name requires the requested version
+to have been published. Adding the whole OpenViking git repository as a
 Magpie plugin does not select this subdirectory.
 
 ## Connection
@@ -50,7 +67,7 @@ environment; editing the file applies to the next operation without restarting.
       "enabled": true,
       "autoRecall": true,
       "autoCapture": true,
-      "recallContextTimeoutMs": 700,
+      "recallContextTimeoutMs": 2000,
       "recallMaxTokens": 1600,
       "recallPeerScope": "all",
       "mcpEnabled": false
@@ -80,12 +97,12 @@ own adapter applies its file-only policy, hook timeout and opt-in tools without
 changing other plugins. Behavior keys use the
 existing shared plugin names. `plugin.magpie` overrides
 the corresponding `plugin` values; global `plugin.enabled: false` disables the
-plugin. Tools require explicit `plugin.magpie.mcpEnabled: true`. Capture defaults
+memory integration and automatic model synchronization/restarts. The explicit recovery CLI remains available. Tools require explicit `plugin.magpie.mcpEnabled: true`. Capture defaults
 to enabled; explicit `autoCapture: false` in host options or client settings is
 preserved. Host options override scoped settings, which override shared settings.
 
 Magpie's **Options** editor now accepts `autoRecall`, `autoCapture`, `mcpEnabled`,
-`recallMaxTokens`, `recallContextTimeoutMs` and `nativeAgents`. These behavior
+`captureWithoutSession`, `recallMaxTokens`, `recallContextTimeoutMs` and `nativeAgents`. These behavior
 options override the corresponding file settings for this plugin; connection
 credentials and identity always remain file-owned. `gatewayTimeoutMs` controls
 the host's hook budget. The package supplies an example, not saved defaults;
@@ -93,6 +110,33 @@ omitted keys retain the file/default behavior. Hooks and tools use the same
 options. Memory tools are disabled by default; set `mcpEnabled: true` to enable
 them. Automatic capture is enabled by default and needs no additional setting;
 set `autoCapture: false` to disable it.
+
+`captureWithoutSession` is a Magpie-only boolean, default `false`. If the client
+cannot send a stable session ID, opt in through Magpie's Options:
+
+```json
+{
+  "autoCapture": true,
+  "captureWithoutSession": true
+}
+```
+
+It can also be set in `ovcli.conf` under `plugin.magpie` (or shared `plugin`),
+with the same host → scoped → shared precedence. A real session ID always takes
+priority. Only capture uses the derived ID; recall remains stateless without a
+host session. The fallback hashes the agent, working directory, protocol and
+first user message after the existing capture shaping/filters. Model changes do
+not change this ID; existing connection/credential isolation still applies.
+
+This is approximate grouping: independent conversations with identical opening
+messages in the same client scope may merge. If their histories diverge, capture
+skips snapshots that conflict with the history already written. Rewriting or
+removing the opening message can split a conversation or skip unknown history.
+Start a new conversation after enabling it; existing histories are not backfilled.
+`autoCapture: false` still disables all automatic capture. For file settings without
+a host override, turning this option off pauses queued derived-session snapshots;
+turning it back on lets them resume. Queued snapshots retain their enqueue-time
+host overrides, just as they do for `autoCapture`.
 
 File settings `plugin.magpie.bypassSession: true` or `bypassSessionPatterns`
 matching the Magpie session ID or working directory skip automatic recall and
@@ -113,8 +157,17 @@ controlled by `mcpEnabled`.
   turn. Retries and later turns replay the original snapshot.
 - Only host-classified `local` and `magpie-key` origins receive memory. Shared
   gateway keys, forwarded traffic and unknown origins are skipped. Without a
-  session ID, new user requests use stateless recall: no persisted ledger, profile
-  replay or conversation capture. Repeated requests may retrieve different context.
+  session ID, new user requests use stateless recall: no persisted recall ledger or
+  profile replay. Capture is also skipped unless `captureWithoutSession: true`.
+  Repeated requests may retrieve different context.
+  With capture enabled and the fallback off, the first eligible sessionless user request logs
+  `OpenViking capture: no-session` once per plugin-host process, explaining that
+  capture is unavailable and suggesting a stable session header or explicit
+  `captureWithoutSession` opt-in with its grouping limitation. Check Magpie's
+  plugin-host logs; this warning contains no message text or credentials and does
+  not replace the recall status. Current Magpie hosts ignore custom `report()`
+  codes, so a separate capture status in the UI requires host support.
+  Native-owned, disabled, bypassed and auxiliary requests do not trigger the warning.
   The file's OV credentials remain the authority.
 - Only a new textual user message triggers retrieval. Tool continuations replay
   known context without retrieving. Magpie skips its own internal title/classifier
@@ -141,11 +194,37 @@ controlled by `mcpEnabled`.
   against every duplicate. Disabling `autoRecall` prevents new searches while
   replaying known history; disabling the plugin entirely disables both.
 - The shared context builder owns query settings, budgets and result relevance.
-  Default recall timeout is 700 ms inside Magpie's default 1000 ms hook budget.
-  Increasing it requires raising Magpie's `gatewayTimeoutMs` with I/O margin.
-  Cancellation reaches the HTTP request. Query filters use the shared parser.
+  Default recall timeout is 2000 ms. Set `recallContextTimeoutMs` in Magpie's
+  Options or `plugin.magpie` to customize it; explicit existing values are preserved.
+  The actual HTTP timeout is also capped by the client `timeout`, 9000 ms, and
+  the host hook budget minus elapsed setup time and a 200 ms allowance for result
+  assembly, state I/O and serialization. Search and profile share this internal
+  deadline; a timed-out read does not discard the other read's completed result.
+  If less than 100 ms remains, no new HTTP requests start. Host cancellation still
+  discards the hook result. The host exposes no remaining chain deadline, so the
+  allowance cannot guarantee completion before an earlier external cancellation.
+  Query filters use the shared parser.
 - Default peer scope is the configured user's cross-project context. Actor scope
   requires an explicit `actor_peer_id`; a missing peer skips enhancement.
+
+For hosted/remote services, save both budgets in Magpie's **Options** (merge these
+keys into existing options):
+
+```json
+{
+  "recallContextTimeoutMs": 2000,
+  "gatewayTimeoutMs": 3000
+}
+```
+
+The package's Options example includes these values, but upgrading does not rewrite
+saved options. Magpie defaults to a 1000 ms hook budget when `gatewayTimeoutMs` is
+omitted; the plugin then shortens its HTTP wait to fit that budget. Existing
+installations must set it explicitly to use the full 2000 ms recall budget. Keep
+it above the recall budget with room for configuration and state I/O (Magpie permits up to 10000 ms).
+If increasing recall beyond 2000 ms, increase both budgets and ensure the client
+`timeout` in `ovcli.conf` (seconds) is sufficient. Failed recall still lets the
+model request continue.
 
 ### Local replay state
 
@@ -265,13 +344,18 @@ in Magpie's combined `/mcp/magpie/tools` server. Tools are:
 | --- | --- |
 | `status` | Authenticated connectivity check; fixed status without secrets |
 | `find` | Search accessible memories, resources and skills |
+| `rule_search` | Check constraints before a planned action or response; return complete compiled Rules |
 | `read` | Read up to 200 lines from a `viking://` URI |
 | `ls` | List up to 100 entries under a `viking://` directory |
 | `remember` | On explicit user request, create a session, add the supplied text and submit memory extraction |
 
+`rule_search` takes `task_context` and optional `rule_probability_threshold`
+(default `0.65`), requires a server with `POST /api/v1/rules/search`, and preserves
+all returned Rule text. Check conditions and exceptions before acting.
+
 With the npm installation, Magpie's current tool naming rules produce
 `magpie-plugin_status`, `magpie-plugin_find`, `magpie-plugin_read`,
-`magpie-plugin_ls` and `magpie-plugin_remember`.
+`magpie-plugin_ls`, `magpie-plugin_rule_search` and `magpie-plugin_remember`.
 Source-folder installations use the folder's name as the prefix instead.
 The tool callback has
 no authenticated caller identity: **enabling tools delegates this file's OV
