@@ -1,6 +1,6 @@
 {
   "name": "superagent",
-  "version": "0.5.1-preview",
+  "version": "0.5.2-preview",
   "license": "AGPL-3.0",
   "private": true,
   "description": "A local personal agent core with connector processes and an activity web module.",
