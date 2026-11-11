@@ -76,8 +76,8 @@ function TourStep({
   useTourTheme(anchor, surface);
   const titleId = useId();
   const bodyId = useId();
-  // Escape is a document event, so subscribe after commit and remove the current
-  // handler on callback changes/unmount instead of keeping a stale host callback.
+  // Handle Escape at the window bubble phase, after document-level overlays
+  // have had a chance to claim it. Remove the listener on change or unmount.
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !event.defaultPrevented && onClose) {
@@ -85,8 +85,8 @@ function TourStep({
         onClose?.();
       }
     };
-    document.addEventListener('keydown', close);
-    return () => document.removeEventListener('keydown', close);
+    window.addEventListener('keydown', close);
+    return () => window.removeEventListener('keydown', close);
   }, [onClose]);
   // Capture browser focus before this step takes it. Restore only on unmount,
   // not when a host passes a fresh onClose callback during an unrelated render.

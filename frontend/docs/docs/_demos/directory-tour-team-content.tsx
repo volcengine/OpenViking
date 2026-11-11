@@ -1,5 +1,7 @@
-import arrowUpRight from '../../../packages/icons/svg/directory-tour/arrow-up-right.svg';
-import folderOpen from '../../../packages/icons/svg/directory-tour/folder-open.svg';
+import {
+  ArrowUpRightIcon,
+  DirectoryTourFolderIcon,
+} from '@openviking/react/icons';
 import { withBase } from '@rspress/core/runtime';
 import { DirectoryTourIntro } from '@openviking/react/components/directory-tour';
 
@@ -38,11 +40,7 @@ export function TeamTourContent({ locale, onDone, onAction }: Props) {
         zh ? (
           <>
             将团队成员各自{' '}
-            <img
-              className="ov-directory-tour-team__folder"
-              src={folderOpen}
-              alt=""
-            />{' '}
+            <DirectoryTourFolderIcon className="ov-directory-tour-team__folder" />{' '}
             <span className="ov-directory-tour-team__term">experiences</span>{' '}
             目录下的文档沉淀为可共享、可复用的团队经验库，成员提问时，会优先检索团队经验库中的内容作答，提升团队协作效率。
           </>
@@ -73,7 +71,7 @@ export function TeamTourContent({ locale, onDone, onAction }: Props) {
             onClick={() => onAction('edit')}
           >
             {zh ? '编辑' : 'Edit'}
-            <img src={arrowUpRight} alt="" />
+            <ArrowUpRightIcon />
           </button>
         </span>,
       ]}

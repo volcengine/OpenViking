@@ -70,5 +70,5 @@ React imports these SVG files directly during its build.
 
 - `svg/directory-tour/` — the folder and up-right arrow artwork from the
   [OpenViking Console team experience introduction](https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=10168-334211).
-  The documentation demo bundles these local SVGs directly; the design's paths
-  and colors are unchanged. They follow this repository's license.
+  The documentation demo uses `DirectoryTourFolderIcon` and `ArrowUpRightIcon`
+  from `@openviking/react/icons`; the design's paths and colors are unchanged. They follow this repository's license.
