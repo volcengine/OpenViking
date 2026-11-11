@@ -155,7 +155,7 @@ export class FailurePolicy {
       return;
     }
     const chatMessage = inbound?.chatId && inbound?.messageId && inbound.kind?.startsWith('message.');
-    const notice = `⚠️ 这一轮处理失败，没有生成回复：${error}`.slice(0, 600)
+    const notice = `⚠️ 这一轮处理异常：${error}`.slice(0, 600)
       + (chatMessage ? '\n（消息不会自动重试；可再发一次，或用 /effort、/model 调整后重试）'
         : '\n（事件不会自动重试，请检查运行状态后决定是否重试。）');
     this.recordActivity('agent.failure_notice', {
