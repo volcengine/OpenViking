@@ -152,12 +152,12 @@
   font-weight: 500;
   vertical-align: middle;
 }
-button.ov-scope-switcher__trigger {
+button:not(.ov-button).ov-scope-switcher__trigger {
   cursor: pointer;
 }
-button.ov-scope-switcher__trigger:hover:not(:disabled),
-button.ov-scope-switcher__trigger:focus-visible,
-button.ov-scope-switcher__trigger[aria-expanded='true'] {
+button:not(.ov-button).ov-scope-switcher__trigger:hover:not(:disabled),
+button:not(.ov-button).ov-scope-switcher__trigger:focus-visible,
+button:not(.ov-button).ov-scope-switcher__trigger[aria-expanded='true'] {
   border-color: var(
     --ov-ui-color-primary,
     var(--ov-ui-primary-default, #5252ff)
@@ -316,45 +316,19 @@ button.ov-scope-switcher__trigger[aria-expanded='true'] {
   min-height: 0;
 }
 
-.ov-scope-switcher__search-field {
-  display: flex;
+.ov-scope-switcher .ov-scope-switcher__search-field {
   flex-shrink: 0;
-  align-items: center;
   gap: 4px;
-  height: 28px;
-  padding: 3px 8px;
-  border: 1px solid
-    var(--ov-ui-color-border-3, var(--ov-ui-border-3-default, #d7daea));
-  border-radius: 6px;
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #ffffff));
-}
-.ov-scope-switcher__search-field:focus-within {
-  border-color: var(
-    --ov-ui-color-primary,
-    var(--ov-ui-primary-default, #5252ff)
-  );
+  padding-inline: 8px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  font-size: 12px;
+  line-height: 22px;
 }
 .ov-scope-switcher__search-icon {
   flex: 0 0 16px;
   width: 16px;
   height: 16px;
   color: var(--ov-ui-scope-switcher-icon);
-}
-.ov-scope-switcher__search {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  padding: 0;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: 12px;
-  line-height: 22px;
-}
-.ov-scope-switcher__search::placeholder {
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
 }
 
 /**
@@ -502,7 +476,7 @@ button.ov-scope-switcher__trigger[aria-expanded='true'] {
   text-align: center;
 }
 
-.ov-scope-switcher button:disabled {
+.ov-scope-switcher button:not(.ov-button):disabled {
   cursor: default;
 }
 .ov-scope-switcher__option[aria-disabled='true'] {
@@ -523,8 +497,7 @@ button.ov-scope-switcher__trigger[aria-expanded='true'] {
     var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
   outline-offset: 2px;
 }
-.ov-scope-switcher__trigger:focus-visible,
-.ov-scope-switcher__search:focus-visible {
+.ov-scope-switcher__trigger:focus-visible {
   outline: none;
 }
 .ov-scope-switcher__option:focus-visible {

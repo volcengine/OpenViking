@@ -1,0 +1,46 @@
+# WikiDashboard Wiki 看板
+
+`WikiDashboard` 是纯 UI 组件，只接收展示数据、加载/错误状态和回调，不感知接口，不需要 Provider。布局、间距、图标和纹理参考火山版 `release/openviking/2026-11-12`。
+
+## 示例
+
+```tsx file="../../_demos/wiki-dashboard-basic.tsx" preview
+
+```
+
+示例使用固定展示数据。目录展示有冲突的文件；文件展示冲突详情和修复记录。严重程度筛选复用内部 Popover，支持方向键、Home/End、Esc 和点击外部关闭。筛选与详情展开属于组件本地交互，不发送请求。路径点击在示例中显示模拟打开反馈，FileBrowser 则定位到正文。已识别的零冲突 Wiki 仍显示空看板。
+
+## 接入
+
+```tsx
+import { WikiDashboard } from '@openviking/react/components/wiki-dashboard';
+import '@openviking/react/components/wiki-dashboard/style.css';
+
+<WikiDashboard kind="file" data={{ conflicts: [] }} />;
+```
+
+[FileBrowser](../modules/file-browser) 在模块内部取数、解析冲突并组合这个组件，自动处理入口识别和资源定位。单独使用组件时由调用方提供展示模型。
+
+## 属性
+
+| 属性                                          | 类型 / 默认值                                                           | 说明                                                   |
+| --------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------ |
+| `kind`                                        | `directory` / `file`，必填                                              | 判别联合的顶层字段；加载时也能确定展示模式             |
+| `data`                                        | `WikiDirectoryData` / `WikiFileData`                                    | 与 `kind` 对应的展示数据，未提供时可显示加载或错误状态 |
+| `loading`                                     | `boolean`，默认 `false`                                                 | 空列表的加载状态                                       |
+| `error`                                       | `Error \| null`                                                         | 空列表的错误状态                                       |
+| `locale`                                      | `en-US` / `zh-CN`，省略时继承语言作用域，最终默认 `en-US`               | 默认文案                                               |
+| `onRetry`                                     | `() => void`                                                            | 重试意图；不在组件内执行请求                           |
+| `onOpenUri`                                   | 目录：`(uri: string) => void`；文件：`() => void`                       | 目录返回点击项的标识；文件表达打开当前文档的意图       |
+| `onOpenDashboard`                             | 目录：`(uri: string) => void`                                           | 打开文件看板意图；未提供时回退到 `onOpenUri`           |
+| `onEdit`                                      | 目录：`(uri: string) => void`；文件：`(conflict: WikiConflict) => void` | 编辑意图；文件模式只上报冲突，省略时禁用按钮           |
+| `onDiscuss`                                   | 文件：`(conflict: WikiConflict) => void`                                | 讨论意图；省略时禁用按钮                               |
+| `editDisabledReason`、`discussDisabledReason` | 文件：`string`，默认 `labels.unavailable`                               | 对应回调省略时的禁用说明；按钮可聚焦查看提示           |
+| `labels`                                      | `Partial<WikiDashboardLabels>`                                          | 覆盖文案                                               |
+| `className`、`style`                          | HTML 属性                                                               | 外观与布局，其余 HTML 属性透传                         |
+
+目录数据只包含 `files`、可选的 `conflictFileCount` 和截断标记 `limited`；文件数据只包含 `conflicts` 和可选展示路径 `path`。未传 `path` 时不渲染路径区域；路径不参与操作定位。组件没有顶层 `uri` 入参。
+
+请求和操作定位所需的 URI 由模块或宿主通过闭包绑定。切换文档需要重置筛选和展开状态时，在外层为组件设置 `key={documentId}`；demo 和 FileBrowser 均如此处理。
+
+修复回溯展示调用方提供的原因、时间、方案与依据。组件不读取正文、不解析服务端协议、不写入资源。类型从组件子路径导出，根入口只导出组件及主 Props 类型。

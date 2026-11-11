@@ -1,3 +1,5 @@
+@import '../../shared/components/input/input.css';
+@import '../../shared/components/button/button.css';
 @import '../../theme.css';
 @import '../../shared/components/popover/popover.css';
 @import '../../shared/components/tooltip/tooltip.css';
@@ -6,3 +8,9 @@
 @import '../../components/file-tree/style.css';
 @import '../../components/file-preview/style.css';
 @import './file-browser.css';
+@import './file-browser-search.css';
+
+@import '../../components/wiki-dashboard/style.css';
+@import '../../components/experience-dashboard/style.css';
+@import './acl/acl.css';
+@import '../../shared/components/modal/modal.css';

@@ -5,6 +5,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from openviking.core.peer_id import normalize_peer_id
+
 ProtocolName = Literal["anthropic", "chat", "responses"]
 KEY_PLACEHOLDER = "{api_key}"
 # Largest integer JSON readers, Studio included, hold exactly.
@@ -51,6 +53,8 @@ class Policy(BaseModel):
     score_threshold: float = Field(default=0.35, ge=0, le=1)
     recall_timeout: float = Field(default=2, gt=0, le=30)
     query_max_chars: int = Field(default=8000, ge=3, le=32000)
+    # "actor" keeps recall and OpenViking tools to the user's own and the request peer's memories.
+    recall_peer_scope: Literal["all", "actor"] = "all"
     # Start each turn's reply with a summary of what OpenViking injected; the model never sees it.
     show_recall: bool = False
     commit_tokens: int = Field(default=20000, ge=1, le=JSON_INT_MAX)
@@ -187,3 +191,11 @@ class KeyRequest(BaseModel):
     policy_id: str
     upstream_ids: list[str] = Field(min_length=1)
     models: list[str] = Field(default_factory=list)
+    # The peer requests use when they send no X-OpenViking-Actor-Peer header.
+    default_peer_id: str | None = None
+
+    @field_validator("default_peer_id")
+    @classmethod
+    def validate_default_peer_id(cls, value: str | None) -> str | None:
+        # The rule OpenViking applies to a message's peer_id; blank means none.
+        return normalize_peer_id(value)

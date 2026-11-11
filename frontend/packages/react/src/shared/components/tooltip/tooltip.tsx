@@ -105,10 +105,12 @@ export function Tooltip({
     }
   }, []);
 
-  // 卸载时清掉未触发的定时器。 Clear a pending timer on unmount.
+  // useEffect 必要性：浏览器延迟打开/关闭定时器可能晚于组件卸载；
+  // 只有卸载清理能释放最后一次事件创建的 timer，避免过期回调。
   useEffect(() => clearTimer, [clearTimer]);
 
-  // `disabled` 变真时立即收起，避免浮层留在屏幕上。 Collapse as soon as `disabled` turns true.
+  // useEffect 必要性：宿主可在事件外禁用触发器，需同步撤销浏览器 timer 和 Portal；
+  // props 提交后清理旧 timer 并收起浮层，无额外订阅需要释放。
   useEffect(() => {
     if (disabled) {
       clearTimer();
@@ -178,7 +180,11 @@ export function Tooltip({
 
   const triggerElement = cloneElement(child, {
     ref: mergedRef,
-    'aria-describedby': open && trigger === 'hover' ? id : undefined,
+    'aria-describedby':
+      childProps['aria-describedby'] ??
+      (open && trigger === 'hover' && content !== childProps['aria-label']
+        ? id
+        : undefined),
     'aria-expanded': trigger === 'click' ? open : childProps['aria-expanded'],
     onMouseEnter: (event: React.MouseEvent) => {
       (

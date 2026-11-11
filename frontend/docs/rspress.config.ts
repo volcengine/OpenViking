@@ -57,6 +57,14 @@ export default defineConfig({
                 { text: '概览', link: '/components/' },
                 { text: '图标', link: '/components/icons' },
                 {
+                  text: 'WikiDashboard Wiki 看板',
+                  link: '/components/wiki-dashboard',
+                },
+                {
+                  text: 'ExperienceDashboard 经验看板',
+                  link: '/components/experience-dashboard',
+                },
+                {
                   text: 'FileBrowserEntries 入口条',
                   link: '/components/file-browser-entries',
                 },
@@ -138,6 +146,14 @@ export default defineConfig({
               items: [
                 { text: 'Overview', link: '/en/components/' },
                 { text: 'Icons', link: '/en/components/icons' },
+                {
+                  text: 'WikiDashboard',
+                  link: '/en/components/wiki-dashboard',
+                },
+                {
+                  text: 'ExperienceDashboard',
+                  link: '/en/components/experience-dashboard',
+                },
                 {
                   text: 'FileBrowserEntries',
                   link: '/en/components/file-browser-entries',

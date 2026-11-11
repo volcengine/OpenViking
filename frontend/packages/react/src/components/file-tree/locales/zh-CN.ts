@@ -1,7 +1,10 @@
 import type { ResolvedLabels } from '../file-tree-row-context.js';
 
 const messages = {
-  search: '搜索文件…',
+  readOnly: '只读',
+  noAccess: '无权限',
+  traverseOnly: '仅可遍历',
+  search: '搜索文件 ⌘+K...',
   refresh: '刷新文件树',
   empty: '暂无文件',
   error: '加载失败',

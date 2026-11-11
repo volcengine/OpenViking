@@ -1,6 +1,6 @@
 # FilePreview
 
-Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
 
 A tabbed file preview. The host supplies the content and file name; the component handles format detection, the tab row, the content header and the body.
 
@@ -9,6 +9,8 @@ Bodies use lazily loaded FileViewerCore adapters for Markdown, images, code, tab
 ## Basic usage
 
 Pass at least one tab. A file tab carries `source`; a content tab carries a node the host renders itself.
+
+Demo actions use internal documentation controls; use your host application’s buttons when integrating.
 
 ```tsx file="../../_demos/file-preview-basic.tsx" preview
 

@@ -1045,6 +1045,28 @@ async def test_one_off_connector_import_leaves_existing_watch_untouched(
 
 
 @pytest.mark.asyncio
+async def test_native_one_off_import_does_not_pause_connector_watch(ctx, watch_service):
+    service = watch_service
+    watch_manager = service._get_watch_manager()
+    to_uri = "viking://resources/x/y"
+    existing = await watch_manager.create_task(
+        path="https://git.example/org/repo",
+        account_id="acct",
+        user_id="alice",
+        original_role=str(Role.USER),
+        to_uri=to_uri,
+        watch_interval=5,
+        auth_state={"provider": "connector_encrypted", "ciphertext": "unused"},
+    )
+
+    await service._handle_watch_task_cancellation(to_uri, ctx)
+
+    existing = await watch_manager.get_task(existing.task_id)
+    assert existing.is_active is True
+    assert existing.path == "https://git.example/org/repo"
+
+
+@pytest.mark.asyncio
 async def test_connector_watch_keeps_running_when_target_is_missing(watch_service, watch_vfs):
     """A Connector target only exists once the plugin writes into it: an empty
     first round (or a deleted target) must not deactivate the watch."""

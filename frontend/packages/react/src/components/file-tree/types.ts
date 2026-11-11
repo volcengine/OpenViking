@@ -111,6 +111,10 @@ export interface FileTreeEntryRow extends FileTreeRowBase {
    * without detail permission.
    */
   disabled?: boolean;
+  /** 允许展开但不选中，例如仅能遍历的目录。Allows expansion without selection. */
+  selectable?: boolean;
+  /** 权限状态的纯展示标签，不执行鉴权。Display-only permission status. */
+  access?: 'read-only' | 'denied' | 'container';
   /**
    * 名称下方的次要说明，例如摘要或行内描述。
    * Secondary line under the name, for example an abstract or inline
@@ -407,6 +411,9 @@ export interface FileTreeInfoLabels {
  * Replaceable copy with built-in Chinese and English defaults.
  */
 export interface FileTreeLabels {
+  readOnly?: string;
+  noAccess?: string;
+  traverseOnly?: string;
   /** 搜索入口文案。Search trigger label. */
   search?: string;
   /** 刷新按钮的无障碍名称。Accessible refresh button label. */
@@ -540,8 +547,8 @@ export interface FileTreeProps extends Omit<
    * Visible rows in render order.
    */
   rows: readonly FileTreeRow[];
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /**
    * 操作的执行能力；省略对应方法时禁用该操作。
    * Operation capabilities; omitting a method disables its operation.
@@ -553,15 +560,17 @@ export interface FileTreeProps extends Omit<
    */
   selectedId?: string | null;
   /**
-   * 显示内置搜索入口；默认隐藏，未提供 operations.search 时禁用。
-   * Shows the built-in search trigger. Hidden by default; disabled without operations.search.
+   * 显示内置搜索入口；默认显示，未提供 operations.search 时禁用。
+   * Shows the built-in search trigger. Visible by default; disabled without operations.search.
    */
   search?: boolean | { disabled?: boolean };
   /**
-   * 显示内置刷新按钮；默认隐藏。loading 可表达宿主额外的刷新状态。
-   * Shows the refresh button. Hidden by default; loading adds a host-controlled pending state.
+   * 显示内置刷新按钮；默认显示。loading 可表达宿主额外的刷新状态。
+   * Shows the refresh button. Visible by default; loading adds a host-controlled pending state.
    */
   refresh?: boolean | { disabled?: boolean; loading?: boolean };
+  /** 刷新按钮的受控加载态，与异步刷新、refresh.loading 合并。Host-controlled refresh pending state. */
+  loading?: boolean;
   /**
    * 首次加载是否已完成。
    * Whether the tree has finished its first load.

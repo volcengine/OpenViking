@@ -22,6 +22,8 @@ export type Vendor =
 export type AuthMode = 'managed' | 'passthrough'
 /** Header the upstream key is sent in. */
 export type KeyHeader = 'authorization' | 'api-key' | 'x-api-key'
+/** Peers whose memories recall may return: every peer, or the request's peer only. */
+export type RecallPeerScope = 'all' | 'actor'
 
 /** Sources recall searches, in display order. */
 export const CONTEXT_TYPES = ['memory', 'resource', 'skill'] as const
@@ -118,6 +120,7 @@ export type ProfileSettings = {
   score_threshold: number
   recall_timeout: number
   query_max_chars: number
+  recall_peer_scope: RecallPeerScope
   show_recall: boolean
   commit_tokens: number
   keep_recent_messages: number

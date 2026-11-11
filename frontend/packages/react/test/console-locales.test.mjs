@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { act, createElement as h } from 'react';
-import { OpenVikingProvider } from '@openviking/react/client';
-import { useConsole } from '@openviking/react/modules/console';
+import { OpenVikingProvider, useConsole } from './helpers/internal-hooks.mjs';
 import { mount } from './helpers/module-dom.mjs';
 
 test('standalone Console Hook translates existing help and errors without changing data or drafts', async () => {

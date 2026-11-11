@@ -1,3 +1,5 @@
+import { Button } from '../../shared/components/button/button.js';
+import { useLocale } from '../../shared/locale-context.js';
 import { useId, useRef, useState } from 'react';
 import { resolveFileBrowserEntriesLabels } from './labels.js';
 
@@ -27,7 +29,7 @@ export type {
  * Nothing renders without visible entries; hosts can wrap the default import button.
  */
 export function FileBrowserEntries({
-  locale = 'en-US',
+  locale: localeProp,
   agentConnect,
   onConnectAgent,
   onImportResources,
@@ -36,14 +38,15 @@ export function FileBrowserEntries({
   className,
   ...rest
 }: FileBrowserEntriesProps) {
+  const locale = useLocale(localeProp);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const drawerId = useId();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const text = resolveFileBrowserEntriesLabels(locale, labels);
   const showConnect = Boolean(agentConnect || onConnectAgent);
   const importButton = (
-    <button
-      type="button"
+    <Button
+      htmlType="button"
       className="ov-file-browser-entries__entry"
       onClick={onImportResources}
     >
@@ -53,7 +56,7 @@ export function FileBrowserEntries({
       <span className="ov-file-browser-entries__label">
         {text.importResources}
       </span>
-    </button>
+    </Button>
   );
   const importEntry = renderImportResources
     ? renderImportResources(importButton)
@@ -71,9 +74,9 @@ export function FileBrowserEntries({
         .join(' ')}
     >
       {showConnect ? (
-        <button
+        <Button
           ref={triggerRef}
-          type="button"
+          htmlType="button"
           className="ov-file-browser-entries__entry"
           aria-haspopup={agentConnect ? 'dialog' : undefined}
           aria-controls={agentConnect ? drawerId : undefined}
@@ -89,7 +92,7 @@ export function FileBrowserEntries({
           <span className="ov-file-browser-entries__label">
             {text.connectAgent}
           </span>
-        </button>
+        </Button>
       ) : null}
       {/* 分隔线只在两个入口都在时出现：一个入口没有相邻项可分隔。 */}
       {/* The divider appears only when both entries are present: a single entry has
@@ -117,10 +120,13 @@ export function FileBrowserEntries({
           closeLabel={text.close}
           triggerRef={triggerRef}
           className="ov-file-browser-entries__drawer"
-          lang={agentConnect.locale}
+          lang={agentConnect.locale ?? locale}
           onClose={() => setDrawerOpen(false)}
         >
-          <AgentConnect {...agentConnect} />
+          <AgentConnect
+            {...agentConnect}
+            locale={agentConnect.locale ?? locale}
+          />
         </Drawer>
       ) : null}
       {showImport ? (

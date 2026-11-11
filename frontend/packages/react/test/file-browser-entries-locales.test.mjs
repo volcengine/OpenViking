@@ -64,3 +64,40 @@ for (const module of [false, true]) {
     }
   });
 }
+
+test('Provider, module and AgentConnect overrides propagate through the open drawer', async () => {
+  const fetch = () => ok([]);
+  const element = (provider, module, component) =>
+    createElement(
+      OpenVikingProvider,
+      { locale: provider, fetch },
+      createElement(FileBrowser, {
+        locale: module,
+        agentConnect: { apiKey: 'demo-key', locale: component },
+      }),
+    );
+  const host = await mount(element('zh-CN'));
+  try {
+    const trigger = host.container.querySelector(
+      '.ov-file-browser-entries button',
+    );
+    assert.equal(trigger.textContent, '连接 Agent');
+    await act(() => trigger.click());
+    const panel = document.querySelector('[aria-modal="true"]');
+    assert.equal(panel.closest('.ov-drawer').lang, 'zh-CN');
+    assert.match(panel.textContent, /连接 Agent/);
+    await host.render(element('en-US'));
+    assert.equal(document.querySelector('[aria-modal="true"]'), panel);
+    assert.equal(panel.closest('.ov-drawer').lang, 'en-US');
+    assert.match(panel.textContent, /Connect Agent/);
+    await host.render(element('en-US', 'zh-CN'));
+    assert.equal(trigger.textContent, '连接 Agent');
+    assert.equal(panel.closest('.ov-drawer').lang, 'zh-CN');
+    await host.render(element('en-US', 'zh-CN', 'en-US'));
+    assert.equal(trigger.textContent, '连接 Agent');
+    assert.equal(panel.closest('.ov-drawer').lang, 'en-US');
+    assert.match(panel.textContent, /Connect Agent/);
+  } finally {
+    await host.unmount();
+  }
+});

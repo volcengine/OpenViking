@@ -5,6 +5,7 @@ import contentEn from './content-en.js';
 import type { AgentConnectLocale } from './types.js';
 import {
   getInstallerInstructions,
+  getInstallerCommand,
   INSTALLER_HARNESSES,
 } from './agent-connect-installer.js';
 
@@ -36,6 +37,10 @@ export function getAgentConnectInstructions(
       fixed: true,
       display: instructions('••••••••'),
       copy: instructions(apiKey),
+      command: {
+        display: getInstallerCommand(harness, locale, '••••••••', baseUrl),
+        copy: getInstallerCommand(harness, locale, apiKey, baseUrl),
+      },
     };
   }
   const guide = content.guides.find((item) => item.id === guideId);
@@ -57,6 +62,13 @@ export function getAgentConnectInstructions(
       '\n\nBase URL: {{OPENVIKING_BASE_URL}}\n\nAPI Key:\n\n{{OPENVIKING_API_KEY_BLOCK}}';
   }
   const pathBaseUrl = baseUrl.replace(/\/+$/, '');
+  // 只解析占位符；真实密钥不参与 Markdown 或 HTML 解析。
+  let keyToken = 'OV_API_KEY_TOKEN';
+  while (
+    [template, baseUrl, apiKey].some((value) => value.includes(keyToken))
+  ) {
+    keyToken += '_';
+  }
   function hydrate(key: string) {
     return template.replace(
       /\{\{OPENVIKING_BASE_URL\}\}|\{\{OPENVIKING_API_KEY_BLOCK\}\}|\{\{OPENVIKING_API_KEY\}\}|<API_KEY>|https:\/\/api\.vikingdb\.cn-beijing\.volces\.com\/openviking/g,
@@ -77,5 +89,7 @@ export function getAgentConnectInstructions(
     fixed: false,
     display: hydrate('••••••••'),
     copy: hydrate(apiKey),
+    markdown: hydrate(keyToken),
+    keyToken,
   };
 }

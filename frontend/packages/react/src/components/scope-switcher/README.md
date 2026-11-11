@@ -2,7 +2,7 @@
 
 English / [中文](README_CN.md)
 
-Required `locale: 'zh-CN' | 'en-US'` selects built-in Chinese or English copy. Existing `labels` override individual fields; omitted fields follow locale. Hosts provide business content.
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
 
 `ScopeSwitcher` is an implemented, stateless breadcrumb layout. Compose independent `ScopeSelector` children from `@openviking/react/components/scope-switcher`; the old `levels` prop is no longer supported. Each child owns its local visibility and receives its own data, so the layout does not aggregate state or subscribe to requests.
 
@@ -47,6 +47,8 @@ A level with a dropdown tints its button on hover, focus and expand — the same
 Inside the panel a hovered row tints lightly and a selected row keeps the primary tint with a bold label and a check mark; the label colour is unchanged, since the design separates selection by weight and the tint. Search hits are tinted in the primary colour rather than highlighted in yellow.
 
 Each row's leading icon sits in a 24px well: white surface, 0.5px `#edeef2` outline, 12px radius, with the glyph itself at 14px. A host that renders round avatars sets `--ov-ui-scope-switcher-option-icon-radius: 50%`.
+
+Icons come from the host through `trigger.icon` and `option.icon`; the component ships no level icons and infers none from a level's meaning. For defaults, take `LibraryIcon`, `SpaceIcon` and `UserIcon` from `@openviking/react/icons`; `ScopeCascade`'s default view already fills these in when an adapter returns no `icon`, and a host-supplied icon always wins.
 
 Theme variables are declared on `.ov-scope-switcher` so a host can override any single one: `--ov-ui-scope-switcher-divider`, `-icon`, `-option-icon`, `-option-icon-size`, `-option-icon-radius`, `-row-hover`, `-tag-background`, `-tag-text`, `-panel-width`, `-option-height`, `-option-gap`, `-list-max-height`, `-panel-max-height`.
 

@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import { useState } from 'react';
 
 import type { TuiResourceTreeContent, TuiResourceTreeItem } from './types.js';
@@ -125,13 +126,15 @@ export function TuiResourceTree({
         </div>
       )}
       {hiddenCount > 0 ? (
-        <button
-          type="button"
+        <Button
+          size="small"
+          type="default"
+          htmlType="button"
           className="ov-tui__load-more"
           onClick={() => setVisibleCount((count) => count + PAGE_SIZE)}
         >
           {loadMoreLabel} ({hiddenCount})
-        </button>
+        </Button>
       ) : null}
     </div>
   );

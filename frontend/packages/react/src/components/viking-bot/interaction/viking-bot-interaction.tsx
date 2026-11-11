@@ -1,3 +1,5 @@
+import { TextArea } from '../../../shared/components/input/input.js';
+import { useLocale } from '../../../shared/locale-context.js';
 import { AskHuman } from '@ark-design/ui/ask-human';
 import type { AskHumanStep } from '@ark-design/ui/ask-human';
 
@@ -27,7 +29,7 @@ const TextInput = ({
 }) => (
   <>
     {request.description ? <p>{request.description}</p> : null}
-    <textarea
+    <TextArea
       className="ov-viking-bot__interaction-input"
       defaultValue={request.initialValue}
       disabled={disabled}
@@ -55,9 +57,10 @@ export function VikingBotInteractionView({
   error,
   onSubmit,
   onCancel,
-  locale,
+  locale: localeProp,
   labels: overrides,
 }: VikingBotInteractionProps) {
+  const locale = useLocale(localeProp);
   const labels = resolveInteractionLabels(locale, overrides);
   const blocked = Boolean(disabled || submitting);
   // 问题身份变化时必须重挂表单，否则字段的实例状态会把上一题答案带到新题。

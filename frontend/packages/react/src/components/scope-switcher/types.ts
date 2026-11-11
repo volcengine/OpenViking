@@ -403,10 +403,10 @@ export interface ScopeSwitcherLabels {
   error?: string;
 }
 
-/** Layout only: each child owns its state and data subscription. */
+/** Layout and language scope: each child owns its state and data subscription. */
 export interface ScopeSwitcherProps extends HTMLAttributes<HTMLDivElement> {
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
 }
 
 /**
@@ -415,13 +415,13 @@ export interface ScopeSwitcherProps extends HTMLAttributes<HTMLDivElement> {
  * Props shared by both level forms: identity and what the trigger shows.
  */
 export interface ScopeSelectorBaseProps {
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
   /**
    * 层级身份：稳定标识、无障碍名与末尾标记。
    * Level identity: stable key, accessible name and trailing marker.
    */
   identity: ScopeSwitcherIdentity;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /**
    * 触发器展示的当前值文本与图标。不传时从 `data.options` 里按 `data.selectedId`
    * 取对应项；固定层级没有 `data`，因此固定层级需要在这里给出 `label`。

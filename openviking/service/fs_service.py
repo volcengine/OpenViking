@@ -1475,6 +1475,7 @@ class FSService:
     ) -> Dict[str, Any]:
         """Get resource status."""
         viking_fs = self._ensure_initialized()
+        uri = await self._resolve_uri(uri, ctx)
         namespace_policy = namespace_policy_for_uri(uri)
         kwargs = {
             "ctx": ctx,

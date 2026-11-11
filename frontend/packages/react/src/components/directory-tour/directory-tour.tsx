@@ -1,9 +1,11 @@
+import { Button } from '../../shared/components/button/button.js';
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { DirectoryTourProps, DirectoryTourStep } from './types.js';
 import { useTourAnchor } from './use-tour-anchor.js';
 import { useTourPosition } from './use-tour-position.js';
 import { resolveLocale } from '../../shared/locale.js';
+import { useLocale } from '../../shared/locale-context.js';
 import enUS from './locales/en-US.js';
 import zhCN from './locales/zh-CN.js';
 
@@ -49,7 +51,7 @@ function TourStep({
   placement = 'right',
   onClose,
   labels,
-  locale,
+  locale: localeProp,
   className,
   style,
 }: DirectoryTourProps & {
@@ -57,6 +59,7 @@ function TourStep({
   index: number;
   advance: (skip: boolean) => void;
 }) {
+  const locale = useLocale(localeProp);
   const text = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale, labels);
   const [attempt, retry] = useState(0);
   const [surface, setSurface] = useState<HTMLDivElement | null>(null);
@@ -131,14 +134,17 @@ function TourStep({
       )}
       <div className="ov-directory-tour__card">
         {onClose && (
-          <button
+          <Button
+            size="mini"
+            type="text"
+            iconOnly
             className="ov-directory-tour__close"
-            type="button"
+            htmlType="button"
             aria-label={text.close}
             onClick={onClose}
           >
             ×
-          </button>
+          </Button>
         )}
         {!locating && !unavailable && step.illustration && (
           <div className="ov-directory-tour__illustration">
@@ -165,23 +171,35 @@ function TourStep({
           </span>
           {unavailable ? (
             <>
-              <button type="button" onClick={() => retry((value) => value + 1)}>
+              <Button
+                size="small"
+                type="default"
+                htmlType="button"
+                onClick={() => retry((value) => value + 1)}
+              >
                 {text.retry}
-              </button>
-              <button type="button" onClick={() => advance(true)}>
+              </Button>
+              <Button
+                size="small"
+                type="default"
+                htmlType="button"
+                onClick={() => advance(true)}
+              >
                 {text.skip}
-              </button>
+              </Button>
             </>
           ) : (
-            <button
-              type="button"
+            <Button
+              size="small"
+              type="primary"
+              htmlType="button"
               className="ov-directory-tour__primary"
               disabled={locating}
               onClick={() => advance(false)}
             >
               {step.nextLabel ??
                 (index === steps.length - 1 ? text.done : text.next)}
-            </button>
+            </Button>
           )}
         </footer>
       </div>

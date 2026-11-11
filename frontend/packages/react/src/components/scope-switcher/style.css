@@ -1,2 +1,4 @@
+@import '../../shared/components/input/input.css';
+@import '../../shared/components/button/button.css';
 @import '../../theme.css';
 @import './scope-switcher.css';

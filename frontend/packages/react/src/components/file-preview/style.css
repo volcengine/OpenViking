@@ -1,3 +1,4 @@
+@import '../../shared/components/button/button.css';
 @import '../../theme.css';
 @import '../../shared/components/tooltip/tooltip.css';
 @import './file-preview.css';

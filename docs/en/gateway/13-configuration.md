@@ -188,6 +188,7 @@ Explained in [Recall memory](08-context-profiles.md#recall-memory).
 | Relevance threshold | `score_threshold` | `0.35` | 0–1 | Lowest relevance score accepted. |
 | Time limit | `recall_timeout` | `2` (seconds) | More than 0, up to 30 | How long a search may take before the message goes on without memory. |
 | Query length | `query_max_chars` | `8000` | 3–32,000 | Characters of the message used as the search query. |
+| Peer scope | `recall_peer_scope` | `all` | `all`, `actor` | `all`: the request's peer comes first, and other peers' memories can still be recalled. `actor`: recall and OpenViking tools reach only the user's own memories and the request's peer's; see [Recall only the current peer](03-connect-clients.md#peer-scope). |
 | Limit by category | `quotas` | `{}` (off) | Keys: `events`, `entities`, `preferences`, `experiences`, `resources`, `skills`; when set, at least one above 0 (checked by Studio only) | Most entries per category; only categories above 0 are searched. |
 
 The management API saves `context_types` and the `quotas` keys without checking them. An unknown `quotas` key makes every recall fail, because OpenViking rejects it.

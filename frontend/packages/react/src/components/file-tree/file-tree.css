@@ -138,6 +138,23 @@
   transition: background-color 120ms;
 }
 
+/* Keep the anchor out of row layout so it cannot share metadata's auto margins. */
+.ov-file-tree__popover-anchor-container {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+
+/* Keep the card's anchor at the visible row edge while the content scrolls. */
+.ov-file-tree__popover-anchor {
+  position: sticky;
+  right: 0;
+  flex: none;
+  width: 0;
+}
+
 .ov-file-tree__row:hover {
   background-color: var(--ov-ui-file-tree-row-hover);
 }
@@ -420,23 +437,6 @@
  * text that turns into the primary colour on hover, with no underline — the same
  * treatment the host's tree uses.
  */
-.ov-file-tree__action {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  transition: color 120ms;
-}
-
-.ov-file-tree__action:hover:not(:disabled) {
-  color: var(--ov-ui-file-tree-action);
-}
-
-.ov-file-tree__action:disabled {
-  cursor: default;
-}
 
 @media (prefers-reduced-motion: reduce) {
   .ov-file-tree__chevron,
@@ -464,4 +464,15 @@
 
 .dark .ov-file-tree__file-type-icon {
   color: var(--ov-file-tree-icon-dark, var(--ov-ui-file-tree-icon));
+}
+.ov-file-tree .ov-button.ov-file-tree__action,
+.ov-file-tree .ov-button.ov-file-tree__action:disabled,
+.ov-file-tree .ov-button.ov-file-tree__action[aria-disabled='true'] {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-file-tree
+  .ov-button.ov-file-tree__action:not(:disabled):not(
+    [aria-disabled='true']
+  ):hover {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
 }

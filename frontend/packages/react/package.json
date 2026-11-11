@@ -1,6 +1,6 @@
 {
   "name": "@openviking/react",
-  "version": "0.1.4",
+  "version": "0.1.7",
   "publishConfig": {
     "access": "public"
   },
@@ -15,7 +15,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE.arco-design"
+    "LICENSE.arco-design",
+    "!dist/docs/**"
   ],
   "sideEffects": [
     "**/*.css"
@@ -96,7 +97,17 @@
       "types": "./dist/components/directory-tour/index.d.ts",
       "import": "./dist/components/directory-tour.js"
     },
-    "./components/directory-tour/style.css": "./dist/components/directory-tour/style.css"
+    "./components/directory-tour/style.css": "./dist/components/directory-tour/style.css",
+    "./components/wiki-dashboard": {
+      "types": "./dist/components/wiki-dashboard/index.d.ts",
+      "import": "./dist/components/wiki-dashboard.js"
+    },
+    "./components/wiki-dashboard/style.css": "./dist/components/wiki-dashboard/style.css",
+    "./components/experience-dashboard": {
+      "types": "./dist/components/experience-dashboard/index.d.ts",
+      "import": "./dist/components/experience-dashboard.js"
+    },
+    "./components/experience-dashboard/style.css": "./dist/components/experience-dashboard/style.css"
   },
   "scripts": {
     "dev": "rslib build --watch",
@@ -122,6 +133,8 @@
     "react-focus-lock": "^2.13.7",
     "react-markdown": "^10.1.0",
     "react-transition-group": "^4.4.5",
+    "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1"
   }
 }
