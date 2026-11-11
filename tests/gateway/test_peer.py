@@ -368,18 +368,14 @@ async def test_actor_scope_narrows_recall_to_the_peer(running_gateway, via):
     assert calls["search"] and all(header(h) == "review-agent" for h in calls["search"])
     for body in calls["search_body"]:
         assert body["peer_scope"] == "actor"
-        assert "viking://user/alice/peers" not in body["exclude_uris"]
 
 
-async def test_actor_scope_without_a_peer_excludes_every_peer(running_gateway):
+async def test_actor_scope_without_a_peer_recalls_like_all(running_gateway):
     app, client, _, key, _, _ = running_gateway
     calls = observe(app)
     await two_turns(client, key["key"], ACTOR)
     assert calls["search"] and all(header(h) is None for h in calls["search"])
-    for body in calls["search_body"]:
-        assert body["peer_scope"] == "actor"
-        # Last, so the client's cap on the list never drops it.
-        assert body["exclude_uris"][-1] == "viking://user/alice/peers"
+    assert all("peer_scope" not in body for body in calls["search_body"])
 
 
 async def test_actor_scope_gives_tool_calls_the_peer(setup_kernel, credential, policy):

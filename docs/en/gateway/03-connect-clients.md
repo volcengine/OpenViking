@@ -57,7 +57,7 @@ When recall for one counterpart should not bring up another's memories, set **Pe
 
 - recall returns only the user's own memories and the request's peer's;
 - OpenViking tools the gateway runs for the model carry the request's peer, so they do not find or read other peers' memories either;
-- a request with no peer, neither from the header nor from the key's default, recalls only the user's own memories, and its tool calls are not narrowed.
+- a request with no peer, neither from the header nor from the key's default, has nothing to narrow to, so it recalls and runs tools as with the default.
 
 To use it for one conversation without changing the profile, send `X-OpenViking-Context: {"recall_peer_scope":"actor"}` (see [Override profile settings](#override-profile-settings)); with **Let clients override settings** off, clients cannot change it.
 

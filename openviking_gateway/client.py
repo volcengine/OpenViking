@@ -12,7 +12,8 @@ from packaging.version import InvalidVersion, Version
 from .cache import TTLCache
 
 # Recall adds this peer's memories; other peers' still come back with a small score penalty
-# unless the body sets peer_scope "actor". Tool calls carry it only under "actor".
+# unless the body sets peer_scope "actor". Tool calls carry it only under "actor". Without a
+# peer there is nothing to narrow to, so "actor" sends what "all" does.
 PEER_HEADER = "X-OpenViking-Actor-Peer"
 
 
@@ -116,7 +117,7 @@ class VikingClient:
                 "score_threshold": policy.score_threshold,
                 "exclude_uris": exclude[-200:],
                 "rewrite": False,
-                **({"peer_scope": "actor"} if policy.recall_peer_scope == "actor" else {}),
+                **({"peer_scope": "actor"} if peer and policy.recall_peer_scope == "actor" else {}),
             },
             timeout=policy.recall_timeout,
             peer=peer,
