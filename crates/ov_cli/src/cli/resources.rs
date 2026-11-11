@@ -38,7 +38,7 @@ pub(crate) enum AttrsCommands {
         /// Viking URIs
         #[arg(value_name = "uri", required = true, num_args = 1..)]
         uris: Vec<String>,
-        /// Comma-separated tag patches
+        /// Comma-separated tag updates
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Vec<String>,
         /// Tag update mode: replace, append, or clear; append supports k=v, k+=number, k-=number

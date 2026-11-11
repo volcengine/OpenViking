@@ -85,77 +85,53 @@ def build_search_tags_filter(tags: Iterable[str] | None) -> dict[str, Any] | Non
 
 
 def merge_search_tags(existing: Iterable[str] | None, incoming: Iterable[str] | None) -> list[str]:
-    """Merge normalized search tags by key, replacing old values with incoming ones."""
+    """Merge by key with ordered assignment and finite decimal arithmetic."""
     ordered: OrderedDict[str, str] = OrderedDict()
 
     for item in normalize_search_tags(existing, discard_invalid=True):
         key, value = item.split("=", 1)
         ordered[key] = value
 
-    for item in normalize_search_tags(incoming, discard_invalid=True):
-        key, value = item.split("=", 1)
-        ordered[key] = value
-
-    return [f"{key}={value}" for key, value in ordered.items()]
-
-
-def normalize_search_tag_patches(patches: Iterable[str] | None) -> list[str]:
-    """Normalize append patches while preserving order and duplicate keys."""
-    normalized: list[str] = []
-    for patch in patches or []:
-        value = str(patch).strip().lower()
-        if not value or value.count("=") != 1:
-            raise InvalidArgumentError(
-                f"invalid search tag patch '{patch}': expected k=v, k+=number, or k-=number"
-            )
-        left, raw_value = value.split("=", 1)
-        operator = "="
-        key = left
-        if left.endswith(("+", "-")):
-            operator = f"{left[-1]}="
-            key = left[:-1]
-        if not key or not raw_value:
-            raise InvalidArgumentError(
-                f"invalid search tag patch '{patch}': key and value must both be non-empty"
-            )
-        if operator != "=":
-            try:
-                number = Decimal(raw_value)
-            except DecimalException as exc:
-                raise InvalidArgumentError(f"invalid numeric value for tag '{key}'") from exc
-            if not number.is_finite():
-                raise InvalidArgumentError(f"tag arithmetic requires a finite value for '{key}'")
-        normalized.append(f"{key}{operator}{raw_value}")
-    return normalized
-
-
-def apply_search_tag_patches(
-    existing: Iterable[str] | None, patches: Iterable[str] | None
-) -> list[str]:
-    """Apply ordered replacements and finite decimal arithmetic by key."""
-    values: OrderedDict[str, str] = OrderedDict()
-    for tag in normalize_search_tags(existing, discard_invalid=True):
-        key, value = tag.split("=", 1)
-        values[key] = value
-
-    for patch in normalize_search_tag_patches(patches):
-        left, raw_value = patch.split("=", 1)
-        if not left.endswith(("+", "-")):
-            values[left] = raw_value
+    invalid_tags: list[str] = []
+    for item in incoming or []:
+        if item is None:
+            continue
+        try:
+            normalized = normalize_search_tag(item)
+        except InvalidArgumentError:
+            invalid_tags.append(str(item))
+            continue
+        key, raw_value = normalized.split("=", 1)
+        if not key.endswith(("+", "-")):
+            ordered[key] = raw_value
             continue
 
-        key = left[:-1]
+        operator = key[-1]
+        key = key[:-1]
+        if not key:
+            invalid_tags.append(str(item))
+            continue
         try:
-            current = Decimal(values.get(key, "0"))
+            current = Decimal(ordered.get(key, "0"))
             operand = Decimal(raw_value)
         except DecimalException as exc:
             raise InvalidArgumentError(f"invalid numeric value for tag '{key}'") from exc
         if not current.is_finite() or not operand.is_finite():
             raise InvalidArgumentError(f"tag arithmetic requires finite values for '{key}'")
-        result = current + operand if left.endswith("+") else current - operand
-        values[key] = str(result)
+        result = current + operand if operator == "+" else current - operand
+        ordered[key] = str(result)
 
-    return [f"{key}={value}" for key, value in values.items()]
+    if invalid_tags:
+        logger.warning(
+            "Discarded invalid search tags: %s",
+            invalid_tags,
+            extra={
+                "invalid_tags": invalid_tags,
+                "invalid_tag_count": len(invalid_tags),
+            },
+        )
+
+    return [f"{key}={value}" for key, value in ordered.items()]
 
 
 def preserve_memory_type_tag(

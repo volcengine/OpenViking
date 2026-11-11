@@ -45,7 +45,6 @@ from openviking.storage.vectordb.collection.result import UpdateResult
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vectordb_adapters import create_collection_adapter
 from openviking.utils.tags import (
-    apply_search_tag_patches,
     merge_search_tags,
     normalize_search_tags,
     preserve_memory_type_tag,
@@ -1570,7 +1569,7 @@ class VikingVectorIndexBackend:
         def resolve_tags(record: Dict[str, Any]) -> List[str]:
             """根据更新模式和已有记录，计算最终标签列表。"""
             if mode == "append":
-                resolved = apply_search_tag_patches(record.get("search_tags"), tags)
+                resolved = merge_search_tags(record.get("search_tags"), tags)
             else:
                 resolved = list(tags)
             if record.get("context_type") == "memory":

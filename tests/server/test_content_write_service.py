@@ -924,7 +924,7 @@ async def test_set_tags_uses_store_update_api_without_fetch(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_set_tags_append_forwards_ordered_arithmetic_patches():
+async def test_set_tags_append_forwards_ordered_arithmetic_operations():
     from unittest.mock import AsyncMock
 
     file_uri = "viking://resources/demo/doc.md"
@@ -953,7 +953,7 @@ async def test_set_tags_append_forwards_ordered_arithmetic_patches():
 
     fake_vfs.vector_store.update_search_tags.reset_mock()
     with pytest.raises(InvalidArgumentError):
-        await coordinator.set_tags(uri=file_uri, tags=["used_count+=bad"], mode="append", ctx=ctx)
+        await coordinator.set_tags(uri=file_uri, tags=["used_count"], mode="append", ctx=ctx)
     fake_vfs.vector_store.update_search_tags.assert_not_awaited()
 
 

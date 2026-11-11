@@ -105,7 +105,7 @@ from openviking.utils.path_safety import normalize_storage_target_uri, validate_
 from openviking.utils.summarizer import FileRefreshRequest, Summarizer
 from openviking.utils.tags import (
     merge_search_tags,
-    normalize_search_tag_patches,
+    normalize_search_tag,
     normalize_search_tags,
 )
 from openviking_cli.exceptions import (
@@ -1459,7 +1459,7 @@ class ContentWriteCoordinator:
         if requested_mode == "clear":
             normalized_tags = []
         elif requested_mode == "append":
-            normalized_tags = normalize_search_tag_patches(tags)
+            normalized_tags = [normalize_search_tag(tag) for tag in tags]
         else:
             normalized_tags = normalize_search_tags(tags, discard_invalid=True)
         if not namespace_policy_for_uri(normalized_uri).supports_tags:
