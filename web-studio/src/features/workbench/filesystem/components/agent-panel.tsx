@@ -89,7 +89,6 @@ export function AgentPanel({
     persistMessages: true,
     sessionId,
   })
-  const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   const handleNewSession = useCallback(() => {
@@ -249,10 +248,7 @@ export function AgentPanel({
         />
       ) : null}
       <div className="flex min-h-0 flex-1 flex-col">
-        <div
-          ref={scrollRef}
-          className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
-        >
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
           {botHealth.isLoading ? (
             <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2Icon className="size-4 animate-spin" />
@@ -283,7 +279,6 @@ export function AgentPanel({
             <AgentEmptyState onSend={send} />
           ) : (
             <MessageList
-              layout="expanded"
               messages={chat.messages}
               onResourceClick={onOpenResource}
               streaming={
@@ -327,7 +322,6 @@ export function AgentToolbar({
   isCreatingSession,
   newSessionLabel,
   onNewSession,
-  onOpenHistory,
   sessionTitle,
   showNewSession,
 }: {
@@ -341,7 +335,6 @@ export function AgentToolbar({
   isCreatingSession: boolean
   newSessionLabel: string
   onNewSession: () => void
-  onOpenHistory?: () => void
   sessionTitle: string
   showNewSession: boolean
 }) {
@@ -362,7 +355,6 @@ export function AgentToolbar({
           render={<Button variant="ghost" size="icon-sm" />}
           aria-label={historyLabel}
           title={historyLabel}
-          onClick={onOpenHistory}
         >
           <HistoryIcon className="size-3.5" />
         </PopoverTrigger>

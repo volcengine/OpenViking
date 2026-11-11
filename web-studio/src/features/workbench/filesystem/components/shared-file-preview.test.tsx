@@ -78,22 +78,30 @@ afterEach(() => {
 it('loads truncated previews but edits and saves full content, and clears the navigation guard', async () => {
   mocks.read.mockResolvedValue({ content: '# Preview', truncated: true })
   mocks.download.mockResolvedValue({ data: '# Full content' })
-  const props = setup({ defaultReadLimit: 10000 })
+  const textFile = {
+    ...file,
+    name: 'profile.txt',
+    uri: file.uri.replace(/\.md$/, '.txt'),
+  }
+  const props = setup({ file: textFile, defaultReadLimit: 10000 })
   await waitFor(() =>
     expect((latest().tabs[0] as FilePreviewFileTab).editing).toBeTruthy(),
   )
   const tab = latest().tabs[0] as FilePreviewFileTab
   expect(tab.source.truncated).toBe(true)
-  expect(mocks.read).toHaveBeenCalledWith(file.uri, { limit: 10000, raw: true })
+  expect(mocks.read).toHaveBeenCalledWith(textFile.uri, {
+    limit: 10000,
+    raw: true,
+  })
   await act(async () => {
     expect(await tab.editing!.loadContent!(tab.source)).toBe('# Full content')
   })
   expect(props.onDirtyChange).toHaveBeenLastCalledWith(true)
   await tab.editing!.save('# Updated')
-  expect(mocks.save).toHaveBeenCalledWith(file.uri, '# Updated')
+  expect(mocks.save).toHaveBeenCalledWith(textFile.uri, '# Updated')
   act(() => tab.editing!.onSave!('# Updated'))
-  expect(mocks.invalidate).toHaveBeenCalledWith(file.uri)
-  expect(props.onSaved).toHaveBeenCalledWith(file.uri)
+  expect(mocks.invalidate).toHaveBeenCalledWith(textFile.uri)
+  expect(props.onSaved).toHaveBeenCalledWith(textFile.uri)
   expect(props.onDirtyChange).toHaveBeenLastCalledWith(false)
   act(() => tab.editing!.onCancel!('draft'))
   expect(props.onDirtyChange).toHaveBeenLastCalledWith(false)

@@ -6,7 +6,6 @@ import { sharedMessages, sharedPart } from '../lib/shared-messages'
 import type { Message, MessagePart } from '../lib/types/message'
 
 interface MessageListProps {
-  layout?: 'default' | 'expanded'
   messages: Message[]
   streaming?: { parts?: MessagePart[]; insertIndex?: number; iteration: number }
   onResourceClick?: (uri: string) => void

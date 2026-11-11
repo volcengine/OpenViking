@@ -6,6 +6,7 @@ import {
 import { FilePreview } from '@openviking/react/components/file-preview'
 import type {
   FilePreviewActions,
+  FilePreviewEditing,
   FilePreviewTab,
 } from '@openviking/react/components/file-preview'
 import '@openviking/react/components/file-preview/style.css'
@@ -14,8 +15,9 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import styles from '../workbench.module.css'
 import { isSystemUri } from '../lib/document-kind'
-import { getErrorMessage } from '../lib/utils'
-import { FileTextIcon, PencilIcon } from 'lucide-react'
+import { getAncestorUris, getErrorMessage } from '../lib/utils'
+import { useCustomPreviewEditing } from '../lib/use-custom-preview-editing'
+import { CopyIcon, FileTextIcon, PencilIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import {
@@ -26,16 +28,44 @@ import {
 import { useInvalidateVikingFs } from '#/features/workbench/resources/hooks/viking-fm'
 import { getContentDownload } from '#/shared/api/ov-client'
 import { copyTextToClipboard } from '#/shared/lib/clipboard'
-import { detectFileType } from '#/shared/lib/viking-fs'
+import {
+  detectFileType,
+  fileNameFromUri,
+  parentUri,
+} from '#/shared/lib/viking-fs'
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
 import { Button } from '#/shared/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/shared/ui/tabs'
+import { Textarea } from '#/shared/ui/textarea'
+
+const DIRECTORY_LEVELS = [
+  { key: 'l0', label: 'L0', sidecar: '.abstract.md' },
+  { key: 'l1', label: 'L1', sidecar: '.overview.md' },
+] as const
+
+type PreviewMenuActions = Pick<
+  FilePreviewActions,
+  'busy' | 'canCopyContent' | 'copyContent'
+>
+type PreviewToolbarActions = Pick<
+  FilePreviewActions,
+  | 'viewMode'
+  | 'setViewMode'
+  | 'canSwitchView'
+  | 'editing'
+  | 'canEdit'
+  | 'startEditing'
+  | 'saveEditing'
+  | 'cancelEditing'
+> &
+  PreviewMenuActions
 
 interface Props {
   file: VikingFsEntry
   onNavigate?: (uri: string) => void
   onDirtyChange: (dirty: boolean) => void
   onSaved: (uri: string) => void
-  extraActions?: ReactNode | ((actions: FilePreviewActions | null) => ReactNode)
+  extraActions?: ReactNode | ((actions: PreviewMenuActions | null) => ReactNode)
   content?: ReactNode
   readOnly?: boolean
   defaultReadLimit?: number
@@ -57,7 +87,7 @@ export function SharedFilePreview({
   const currentScope = `${identityScopeKey}:${file.uri}`
   const scopeRef = useRef(currentScope)
   scopeRef.current = currentScope
-  const actionsRef = useRef<FilePreviewActions | null>(null)
+  const actionsRef = useRef<PreviewToolbarActions | null>(null)
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const actions = actionsRef.current
@@ -147,7 +177,6 @@ export function SharedFilePreview({
       : summaries && !summaries.abstract
         ? 'l1'
         : 'l0'
-  const summary = level === 'l1' ? summaries?.overview : summaries?.abstract
   const fileText =
     query.data && 'content' in query.data ? query.data.content : undefined
   const displayText =
@@ -160,65 +189,65 @@ export function SharedFilePreview({
       content ||
       (fileText !== undefined && (kind === 'jsonl' || kind === 'markdown')),
     )
-  const customBody = file.isDir ? (
-    summary !== undefined ? (
-      <StudioMarkdownPreview
-        content={summary}
-        uri={`${file.uri.replace(/\/$/, '')}/${level === 'l1' ? '.overview.md' : '.abstract.md'}`}
-        onNavigate={onNavigate}
-        directory
-      />
-    ) : undefined
-  ) : sourceMode && customFilePreview ? (
-    <pre className="min-w-max whitespace-pre px-4 py-3 font-mono text-xs leading-5">
-      {displayText}
-    </pre>
-  ) : (
-    (content ??
-    (fileText !== undefined ? (
-      kind === 'jsonl' ? (
-        <JsonlPreview content={fileText} />
-      ) : kind === 'markdown' ? (
-        <StudioMarkdownPreview
-          content={fileText}
-          uri={file.uri}
-          onNavigate={onNavigate}
-        />
-      ) : undefined
-    ) : undefined))
+  const copy = async (value: string | undefined) => {
+    if (!value) return false
+    try {
+      await copyTextToClipboard(value)
+      return true
+    } catch {
+      return false
+    }
+  }
+  const editing: FilePreviewEditing | undefined =
+    !file.isDir && !readOnly && !binary && query.data !== undefined
+      ? {
+          loadContent: async () => {
+            const response = await getContentDownload({
+              query: { uri: file.uri },
+              responseType: 'text',
+              throwOnError: true,
+            })
+            if (scopeRef.current !== currentScope) return undefined
+            if (
+              typeof response.data !== 'string' ||
+              new Blob([response.data]).size > 2 * 1024 * 1024
+            )
+              throw new Error(t('filePreview.editFailed'))
+            return response.data
+          },
+          save: async (value) => {
+            await saveFileContent(file.uri, value)
+          },
+          onSave: () => {
+            if (scopeRef.current !== currentScope) return
+            onDirtyChange(false)
+            void invalidatePreview(file.uri)
+            onSaved(file.uri)
+          },
+          onCancel: () => onDirtyChange(false),
+        }
+      : undefined
+  const customEdit = useCustomPreviewEditing(
+    currentScope,
+    { fileName: file.name, path: file.uri },
+    customFilePreview ? editing : undefined,
+    onDirtyChange,
   )
-  const renderedBody = customBody ? (
-    <div className={styles.studioPreviewBody}>{customBody}</div>
-  ) : undefined
-  const renderActions = (actions: FilePreviewActions) => {
+  const customToolbar: PreviewToolbarActions = {
+    ...customEdit,
+    viewMode: sourceMode ? 'source' : 'preview',
+    setViewMode: (mode) =>
+      setSourceScope(mode === 'source' ? currentScope : null),
+    canSwitchView: customFilePreview,
+    canCopyContent: Boolean(displayText),
+    copyContent: () => copy(displayText),
+  }
+  const renderActions = (actions: PreviewToolbarActions) => {
     actionsRef.current = actions
-    const nativeBody = actions.busy || actions.editing
-    const showingSource = customFilePreview
-      ? sourceMode
-      : actions.viewMode === 'source'
-    const copyText = file.isDir ? summary : displayText
-    const menuActions =
-      renderedBody && copyText !== undefined
-        ? {
-            ...actions,
-            canCopyContent: Boolean(copyText),
-            copyContent: async () => {
-              if (!copyText) return false
-              try {
-                await copyTextToClipboard(copyText)
-                return true
-              } catch {
-                return false
-              }
-            },
-          }
-        : actions
+    const showingSource = actions.viewMode === 'source'
     return (
-      <div
-        className={styles.previewActions}
-        data-native-body={nativeBody || undefined}
-      >
-        {(customFilePreview || actions.canSwitchView) && !nativeBody ? (
+      <div className={styles.previewActions}>
+        {actions.canSwitchView && !actions.busy && !actions.editing ? (
           <div
             className={styles.previewModeSwitch}
             role="group"
@@ -230,11 +259,7 @@ export function SharedFilePreview({
               data-active={!showingSource || undefined}
               aria-pressed={!showingSource}
               size="sm"
-              onClick={() =>
-                customFilePreview
-                  ? setSourceScope(null)
-                  : actions.setViewMode('preview')
-              }
+              onClick={() => actions.setViewMode('preview')}
             >
               {t('filePreview.markdownPreview')}
             </Button>
@@ -244,11 +269,7 @@ export function SharedFilePreview({
               data-active={showingSource || undefined}
               aria-pressed={showingSource}
               size="sm"
-              onClick={() =>
-                customFilePreview
-                  ? setSourceScope(currentScope)
-                  : actions.setViewMode('source')
-              }
+              onClick={() => actions.setViewMode('source')}
             >
               {t('filePreview.markdownSource')}
             </Button>
@@ -282,6 +303,7 @@ export function SharedFilePreview({
               className={styles.previewIconAction}
               title={t('filePreview.edit')}
               aria-label={t('filePreview.edit')}
+              disabled={actions.busy}
               onClick={actions.startEditing}
             >
               <PencilIcon className="size-3.5" />
@@ -289,7 +311,7 @@ export function SharedFilePreview({
           )
         ) : null}
         {typeof extraActions === 'function'
-          ? extraActions(menuActions)
+          ? extraActions(actions)
           : extraActions}
       </div>
     )
@@ -298,86 +320,182 @@ export function SharedFilePreview({
     key: file.uri,
     title: file.name,
     icon: <FileTextIcon className="size-3.5" />,
-    operations,
-    slots: { actions: renderActions, footer: renderedBody },
+  }
+  const header = (actions: ReactNode) => (
+    <div className="flex min-h-11 shrink-0 items-center justify-between gap-2 border-b px-2 py-1">
+      <div className="flex min-w-0 items-center gap-1 font-mono text-xs text-muted-foreground">
+        {onNavigate && (
+          <div className="flex min-w-0 items-center overflow-hidden whitespace-nowrap">
+            {getAncestorUris(file.isDir ? file.uri : parentUri(file.uri))
+              .filter(
+                (uri) => uri.replace(/\/$/, '') !== file.uri.replace(/\/$/, ''),
+              )
+              .map((uri) => (
+                <button
+                  type="button"
+                  key={uri}
+                  className="shrink-0 hover:underline"
+                  onClick={() => onNavigate(uri)}
+                >
+                  {uri === 'viking://' ? uri : `${fileNameFromUri(uri)}/`}
+                </button>
+              ))}
+          </div>
+        )}
+        <span className="truncate text-foreground" title={file.uri}>
+          {onNavigate ? file.name : file.uri}
+        </span>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={t('filesystem:copyUri')}
+          onClick={() => void copy(file.uri)}
+        >
+          <CopyIcon className="size-3.5" />
+        </Button>
+      </div>
+      {actions}
+    </div>
+  )
+  const renderContent = (body: ReactNode, actions: ReactNode) => (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {header(actions)}
+      <div className="min-h-0 flex-1 overflow-auto">{body}</div>
+    </div>
+  )
+  const nativeSource = {
+    fileName: file.name,
+    path: file.uri,
+    ...(query.data && 'blob' in query.data ? { file: query.data.blob } : {}),
+    content: displayText,
+    truncated:
+      query.data && 'truncated' in query.data
+        ? query.data.truncated
+        : undefined,
   }
   let tab: FilePreviewTab
   if (file.isDir) {
+    const summary = level === 'l1' ? summaries?.overview : summaries?.abstract
+    const summaryActions =
+      typeof extraActions === 'function'
+        ? extraActions({
+            busy: false,
+            canCopyContent: Boolean(summary),
+            copyContent: () => copy(summary),
+          })
+        : extraActions
     tab = {
       ...common,
-      kind: 'directory',
-      loading: query.isPending,
-      activeLevelKey: level,
-      onActiveLevelChange: (key) =>
-        setDirectoryLevel({ scope: currentScope, key }),
-      levels: [
-        {
-          key: 'l0',
-          label: 'L0',
-          source: {
-            fileName: `${file.name}.md`,
-            path: file.uri,
-            content: '',
-          },
-        },
-        {
-          key: 'l1',
-          label: 'L1',
-          source: {
-            fileName: `${file.name}.md`,
-            path: file.uri,
-            content: '',
-          },
-        },
-      ],
+      kind: 'content',
+      content: renderContent(
+        summaries ? (
+          <Tabs
+            value={level}
+            onValueChange={(key) =>
+              setDirectoryLevel({ scope: currentScope, key })
+            }
+          >
+            <TabsList variant="line" className="mx-4 mt-1">
+              {DIRECTORY_LEVELS.map(({ key, label }) => (
+                <TabsTrigger key={key} value={key}>
+                  {label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            {DIRECTORY_LEVELS.map(({ key, sidecar }) => (
+              <TabsContent key={key} value={key}>
+                <StudioMarkdownPreview
+                  content={
+                    key === 'l1'
+                      ? (summaries.overview ?? '')
+                      : (summaries.abstract ?? '')
+                  }
+                  uri={`${file.uri.replace(/\/$/, '')}/${sidecar}`}
+                  onNavigate={onNavigate}
+                  directory
+                />
+              </TabsContent>
+            ))}
+          </Tabs>
+        ) : (
+          <p role="status" className="p-4 text-sm">
+            {t('filePreview.loadingContent')}
+          </p>
+        ),
+        summaryActions,
+      ),
+    }
+  } else if (customFilePreview) {
+    const customBody =
+      customEdit.draft !== undefined ? (
+        <Textarea
+          aria-label={t('filePreview.edit')}
+          value={customEdit.draft}
+          readOnly={customEdit.busy}
+          spellCheck={false}
+          className="min-h-full resize-none rounded-none border-0 bg-background p-4 font-mono"
+          onChange={(event) => customEdit.changeDraft(event.target.value)}
+        />
+      ) : customEdit.busy ? (
+        <p role="status" className="p-4 text-sm">
+          {t('filePreview.loadingEditor')}
+        </p>
+      ) : sourceMode ? (
+        <pre className="min-w-max whitespace-pre px-4 py-3 font-mono text-xs leading-5">
+          {displayText}
+        </pre>
+      ) : (
+        (content ??
+        (kind === 'jsonl' ? (
+          <JsonlPreview content={fileText ?? ''} />
+        ) : (
+          <StudioMarkdownPreview
+            content={fileText ?? ''}
+            uri={file.uri}
+            onNavigate={onNavigate}
+          />
+        )))
+      )
+    tab = {
+      ...common,
+      kind: 'content',
+      content: renderContent(
+        <>
+          {customEdit.error ? (
+            <p role="alert" className="p-4 text-sm text-destructive">
+              {customEdit.error === 'editFailed'
+                ? t('filePreview.editFailed')
+                : t('filePreview.saveFailed')}
+            </p>
+          ) : null}
+          {customBody}
+          {nativeSource.truncated && !customEdit.editing && !customEdit.busy ? (
+            <p className="px-4 py-1 text-xs text-muted-foreground">
+              {t('filePreview.truncated')}
+            </p>
+          ) : null}
+        </>,
+        renderActions(customToolbar),
+      ),
     }
   } else {
     tab = {
       ...common,
       kind: 'file',
-      loading: query.isPending && !content,
-      source: {
-        fileName: file.name,
-        path: file.uri,
-        ...(query.data && 'blob' in query.data
-          ? { file: query.data.blob }
-          : {}),
-        content: renderedBody ? '' : displayText,
-        truncated:
-          query.data && 'truncated' in query.data
-            ? query.data.truncated
-            : undefined,
-      },
-      editing:
-        !readOnly && !binary && query.isSuccess
-          ? {
-              loadContent: async () => {
-                const response = await getContentDownload({
-                  query: { uri: file.uri },
-                  responseType: 'text',
-                  throwOnError: true,
-                })
-                if (typeof response.data !== 'string')
-                  throw new Error(t('filePreview.editFailed'))
-                if (scopeRef.current !== currentScope) return undefined
-                if (new Blob([response.data]).size > 2 * 1024 * 1024)
-                  throw new Error(t('filePreview.editFailed'))
-                onDirtyChange(true)
-                return response.data
-              },
-              save: async (value) => {
-                await saveFileContent(file.uri, value)
-              },
-              onSave: () => {
-                if (scopeRef.current !== currentScope) return
-                onDirtyChange(false)
-                invalidatePreview(file.uri)
-                void query.refetch()
-                onSaved(file.uri)
-              },
-              onCancel: () => onDirtyChange(false),
-            }
-          : undefined,
+      operations,
+      slots: { actions: renderActions },
+      loading: query.isPending,
+      source: nativeSource,
+      editing: editing
+        ? {
+            ...editing,
+            loadContent: async (source) => {
+              const draft = await editing.loadContent?.(source)
+              if (draft !== undefined) onDirtyChange(true)
+              return draft
+            },
+          }
+        : undefined,
     }
   }
   if (needsLoad)
@@ -389,7 +507,7 @@ export function SharedFilePreview({
         </Button>
       </div>
     )
-  if (query.isError) {
+  if (query.isError && query.data === undefined) {
     tab = {
       ...common,
       kind: 'content',
@@ -415,20 +533,11 @@ export function SharedFilePreview({
           key: `${file.uri}:content`,
           kind: 'content',
           title: file.name,
-          content: (
-            <div className="flex min-h-0 flex-1 flex-col">
-              <div className="flex min-h-11 items-center justify-between gap-2 border-b px-3 py-1">
-                <span className="truncate text-xs text-muted-foreground">
-                  {file.uri}
-                </span>
-                {typeof extraActions === 'function'
-                  ? extraActions(null)
-                  : extraActions}
-              </div>
-              <div className="min-h-0 flex-1 overflow-auto">
-                {customContent}
-              </div>
-            </div>
+          content: renderContent(
+            customContent,
+            typeof extraActions === 'function'
+              ? extraActions(null)
+              : extraActions,
           ),
         },
         ...(directoryListOnly

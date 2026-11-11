@@ -51,8 +51,9 @@ it('keeps existing tree nodes and cached branches when Studio selects a director
       />
     )
   }
+  const client = new QueryClient()
   render(
-    <QueryClientProvider client={new QueryClient()}>
+    <QueryClientProvider client={client}>
       <StudioNavigation />
     </QueryClientProvider>,
   )
@@ -89,6 +90,21 @@ it('keeps existing tree nodes and cached branches when Studio selects a director
         ([, options]) => options.params.uri === 'viking://',
       ),
     ).toHaveLength(1)
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Collapse resources' }),
+    )
+    expect(screen.queryByRole('treeitem', { name: /note.md/ })).toBeNull()
+    get.mockClear()
+    await client.invalidateQueries({ queryKey: ['viking-fs-ls'] })
+    expect(get.mock.calls.map(([, options]) => options.params.uri)).toEqual([
+      'viking://',
+    ])
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Expand resources' }),
+    )
+    expect(
+      await screen.findByRole('treeitem', { name: /note.md/ }),
+    ).toBeTruthy()
   } finally {
     observer.disconnect()
   }

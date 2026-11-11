@@ -299,7 +299,6 @@ export function StudioScopeSwitcher({
         )}
       >
         <ScopeSelector
-          locale={studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
           kind="selectable"
           identity={{ key: 'service', ariaLabel: t('connections.switch') }}
           trigger={{
@@ -371,9 +370,6 @@ export function StudioScopeSwitcher({
           <>
             {managementMode && !canListAccounts ? (
               <ScopeSelector
-                locale={
-                  studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'
-                }
                 kind="fixed"
                 identity={{
                   key: 'account',
@@ -386,9 +382,6 @@ export function StudioScopeSwitcher({
               />
             ) : (
               <ScopeSelector
-                locale={
-                  studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'
-                }
                 kind="selectable"
                 identity={{
                   key: 'account',
@@ -460,9 +453,6 @@ export function StudioScopeSwitcher({
             {!managementMode ? (
               <>
                 <ScopeSelector
-                  locale={
-                    studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'
-                  }
                   kind="selectable"
                   identity={{ key: 'user', ariaLabel: t('scope.switchUser') }}
                   trigger={{
@@ -517,8 +507,8 @@ export function StudioScopeSwitcher({
                             },
                           )}
                         </p>
-                        {searchControl ??
-                          (trusted && !trustedUsers.isError ? (
+                        {trusted ? (
+                          !trustedUsers.isError ? (
                             <div className="px-2 py-1">
                               <Input
                                 type="search"
@@ -530,7 +520,10 @@ export function StudioScopeSwitcher({
                                 }
                               />
                             </div>
-                          ) : null)}
+                          ) : null
+                        ) : (
+                          searchControl
+                        )}
                         {list}
                         {trusted &&
                         search.trim() &&

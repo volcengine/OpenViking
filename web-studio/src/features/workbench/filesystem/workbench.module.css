@@ -42,6 +42,52 @@
 .document :global(.ov-file-preview__tab-row) {
   padding-block-start: 6px;
 }
+.actionModes {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 20px;
+  background: #f1f2f9;
+}
+:global(.dark) .actionModes {
+  background: var(--muted);
+}
+.actionMode {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 10px;
+  border-radius: 20px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.actionMode[aria-pressed='false'] {
+  width: 36px;
+}
+.actionMode[aria-pressed='true'] {
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 2px 6px rgb(15 23 42 / 5%);
+}
+.actionMode:hover {
+  color: var(--foreground);
+}
+.actionMode:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.actionMode svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
 .previewActions {
   --studio-preview-control-bg: #f7f7f9;
   --studio-preview-control-border: #edeef2;
@@ -274,41 +320,4 @@
 }
 .moreMenuContent .moreMenuDanger:hover {
   background: color-mix(in srgb, var(--destructive) 10%, transparent);
-}
-
-/* Shared FilePreview supplies the header and editor. Studio supplies structured
-   Markdown and JSONL as a scrolling body through the footer slot. */
-:global(.ov-file-preview__panel):has(
-    > :global(.ov-file-preview__footer) .studioPreviewBody
-  )
-  > :global(.ov-file-preview__footer) {
-  display: block;
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  padding: 0;
-  border: 0;
-  color: inherit;
-  font-size: inherit;
-}
-
-:global(.ov-file-preview__panel):has(
-    > :global(.ov-file-preview__footer) .studioPreviewBody
-  ):not(
-    :has([data-native-body], > :global(.ov-file-preview__body) > [role='alert'])
-  )
-  > :global(.ov-file-preview__body),
-:global(.ov-file-preview__panel):has(
-    [data-native-body],
-    > :global(.ov-file-preview__body) > [role='alert']
-  )
-  > :global(.ov-file-preview__footer):has(.studioPreviewBody) {
-  display: none;
-}
-
-:global(.ov-file-preview__panel):has(
-    > :global(.ov-file-preview__footer) .studioPreviewBody
-  )
-  > :global(.ov-file-preview__notice) {
-  order: 1;
 }

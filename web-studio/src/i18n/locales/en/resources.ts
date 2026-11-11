@@ -440,6 +440,7 @@ const resources = {
       jsonFormatFailed: 'JSON formatting failed. Showing the raw content.',
       loadFile: 'Load anyway',
       loadingContent: 'Reading content...',
+      truncated: 'The preview shows only part of this file.',
       loadingEditor: 'Loading editor...',
       markdownPreview: 'Preview',
       markdownSource: 'Source',

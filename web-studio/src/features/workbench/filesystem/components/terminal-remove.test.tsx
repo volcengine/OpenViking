@@ -12,6 +12,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 const m = vi.hoisted(() => ({
   remove: vi.fn(),
+  health: vi.fn(),
+  write: vi.fn(),
   mkdir: vi.fn(),
   move: vi.fn(),
   copy: vi.fn(),
@@ -35,6 +37,8 @@ vi.mock('#/features/workbench/resources/hooks/viking-fm', () => ({
 vi.mock('#/shared/api/ov-client/index', async (importOriginal) => ({
   ...(await importOriginal<typeof OvClient>()),
   deleteFs: m.remove,
+  getHealth: m.health,
+  postContentWrite: m.write,
   postFsMkdir: m.mkdir,
   postFsMv: m.move,
   ovClient: { client: { post: m.copy } },
@@ -47,6 +51,8 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
   Element.prototype.scrollTo = vi.fn()
   m.remove.mockReset().mockResolvedValue({})
+  m.health.mockReset().mockResolvedValue({ ok: true })
+  m.write.mockReset().mockResolvedValue({})
   m.mkdir.mockReset().mockResolvedValue({})
   m.move.mockReset().mockResolvedValue({})
   m.copy.mockReset().mockResolvedValue({})
@@ -218,4 +224,25 @@ it('fills and focuses a shared quick command without executing it', () => {
   expect(document.activeElement).toBe(input)
   expect(m.remove).not.toHaveBeenCalled()
   expect(m.mkdir).not.toHaveBeenCalled()
+})
+
+it('uses shared JSON result controls and recalls only eligible commands', async () => {
+  submit('/health')
+  const input = screen.getByRole<HTMLTextAreaElement>('textbox')
+  if (!m.health.mock.calls.length) {
+    fireEvent.keyDown(input, { key: 'Escape' })
+    fireEvent.keyDown(input, { key: 'Enter' })
+  }
+  await screen.findByRole('button', { name: 'Copy' })
+  fireEvent.change(input, {
+    target: {
+      value: '/write viking://resources/private --content private-draft',
+    },
+  })
+  fireEvent.keyDown(input, { key: 'Enter' })
+  await waitFor(() => expect(m.write).toHaveBeenCalledOnce())
+  await waitFor(() => expect(input.disabled).toBe(false))
+  expect(screen.queryByText(/private-draft/)).toBeNull()
+  fireEvent.keyDown(input, { key: 'ArrowUp' })
+  expect(input.value).toBe('/health')
 })

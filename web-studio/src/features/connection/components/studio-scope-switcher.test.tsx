@@ -208,12 +208,14 @@ it('accepts an unlisted trusted User ID without asking for another key', async (
   state.apiKey = ''
   mount()
   fireEvent.click(screen.getByRole('button', { name: 'scope.switchUser' }))
-  fireEvent.change(
-    screen.getByRole('searchbox', { name: 'scope.searchUsers' }),
-    {
-      target: { value: 'new-user' },
-    },
+  const input = screen.getByRole('searchbox', { name: 'scope.searchUsers' })
+  input.focus()
+  fireEvent.change(input, { target: { value: 'n' } })
+  expect(screen.getByRole('searchbox', { name: 'scope.searchUsers' })).toBe(
+    input,
   )
+  expect(document.activeElement).toBe(input)
+  fireEvent.change(input, { target: { value: 'new-user' } })
   fireEvent.click(screen.getByRole('button', { name: 'scope.useTrustedUser' }))
   expect(state.switchIdentity).toHaveBeenCalledWith(
     expect.objectContaining({

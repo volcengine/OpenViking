@@ -4,7 +4,11 @@ import type { FileTreeRow } from '@openviking/react/components/file-tree'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { ROOT_URI } from './constants'
 import { getOvClient } from '#/shared/api/ov-client'
-import { fileNameFromUri, normalizeDirUri } from '#/shared/lib/viking-fs'
+import {
+  fileNameFromUri,
+  normalizeDirUri,
+  parentUri,
+} from '#/shared/lib/viking-fs'
 
 const PAGE_SIZE = 200
 
@@ -26,7 +30,13 @@ async function fetchContextTreePage(
     error?: { message?: string }
     status?: string
   }>('/api/v1/fs/ls', {
-    params: { uri, output: 'agent', node_limit: PAGE_SIZE, offset },
+    params: {
+      uri,
+      output: 'agent',
+      include_abstract: false,
+      node_limit: PAGE_SIZE,
+      offset,
+    },
     signal,
   })
   if (response.data.status === 'error')
@@ -43,16 +53,24 @@ export function useContextTree(rootUri: string, expandedKeys: Set<string>) {
   const [pages, setPages] = useState<Record<string, number>>({})
   const root = normalizeDirUri(rootUri)
   const expanded = new Set([...expandedKeys].map(normalizeDirUri))
-  const directories = [
-    root,
-    ...[...expanded].filter((uri) => uri !== root && uri.startsWith(root)),
-  ]
+  const isVisible = (uri: string) => {
+    if (uri === root || !uri.startsWith(root)) return false
+    for (
+      let parent = parentUri(uri);
+      parent !== root;
+      parent = parentUri(parent)
+    ) {
+      if (!expanded.has(parent)) return false
+    }
+    return true
+  }
+  const directories = [root, ...[...expanded].filter(isVisible)]
   const requests = directories.flatMap((uri) =>
     Array.from({ length: pages[uri] ?? 1 }, (_, page) => ({ uri, page })),
   )
   const queries = useQueries({
     queries: requests.map(({ uri, page }) => ({
-      queryKey: ['studio-context-tree', identityScopeKey, uri, page],
+      queryKey: ['viking-fs-ls', uri, 'context-tree', identityScopeKey, page],
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         fetchContextTreePage(uri, page * PAGE_SIZE, signal),
       staleTime: 30_000,
@@ -110,6 +128,8 @@ export function useContextTree(rootUri: string, expandedKeys: Set<string>) {
       })
     } else if (last?.isPending && depth > 0) {
       rows.push({ kind: 'loading', id: `${uri}:loading`, parentId: uri, depth })
+    } else if (last?.isSuccess && depth > 0 && entries.length === 0) {
+      rows.push({ kind: 'empty', id: `${uri}:empty`, parentId: uri, depth })
     } else if (last?.data?.hasMore) {
       rows.push({ kind: 'load-more', id: `${uri}:more`, parentId: uri, depth })
     }
@@ -118,7 +138,10 @@ export function useContextTree(rootUri: string, expandedKeys: Set<string>) {
   const refresh = useCallback(
     () =>
       client.invalidateQueries({
-        queryKey: ['studio-context-tree', identityScopeKey],
+        predicate: ({ queryKey }) =>
+          queryKey[0] === 'viking-fs-ls' &&
+          queryKey[2] === 'context-tree' &&
+          queryKey[3] === identityScopeKey,
       }),
     [client, identityScopeKey],
   )

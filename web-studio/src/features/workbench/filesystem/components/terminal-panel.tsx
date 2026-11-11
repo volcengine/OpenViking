@@ -1,4 +1,5 @@
 import { Tui } from '@openviking/react/components/tui'
+import type { TuiRecord } from '@openviking/react/components/tui'
 import '@openviking/react/components/tui/style.css'
 import { createRandomUuid } from '#/shared/lib/browser-crypto'
 import {
@@ -779,7 +780,9 @@ export function TerminalPanel({
               remember: false,
             }
           : { title: trimmed, remember: true }
-      append({ kind: 'command', title: trimmed })
+      const commandId = append({ kind: 'command', title: safeHistory.title })
+      const appendResult = (entry: Omit<TerminalEntry, 'id' | 'commandId'>) =>
+        append({ ...entry, commandId })
       if (safeHistory.remember) rememberCommand(safeHistory.title)
       setCommand('')
       setRunning(true)
@@ -806,7 +809,7 @@ export function TerminalPanel({
                 false,
               )
             } else {
-              append({
+              appendResult({
                 kind: 'success',
                 title: '/add-memory',
                 body: joinBodyLines([
@@ -832,7 +835,7 @@ export function TerminalPanel({
               t('terminal.skillCompleted'),
             )
           } else {
-            append({
+            appendResult({
               kind: 'success',
               title: '/add-skill',
               body: t('terminal.addSkillSubmitted'),
@@ -842,7 +845,7 @@ export function TerminalPanel({
         }
         if (isCompile) {
           if (/^(?:ov\s+)?\/?compile$/.test(trimmed)) {
-            append({
+            appendResult({
               kind: 'info',
               title: 'compile',
               body: t('compile:terminalHelp'),
@@ -879,7 +882,7 @@ export function TerminalPanel({
               }),
           )
           if (identityRef.current !== identityScopeKey) return
-          append({
+          appendResult({
             kind: 'success',
             title: 'compile',
             body: result.body,
@@ -896,7 +899,7 @@ export function TerminalPanel({
 
         if (trimmed.startsWith('viking://')) {
           await onOpenResource(trimmed)
-          append({
+          appendResult({
             kind: 'success',
             refs: [{ uri: trimmed }],
             title: t('terminal.opened'),
@@ -909,7 +912,7 @@ export function TerminalPanel({
             const root = await fetchFsList(ROOT_URI, { nodeLimit: 12 })
             const status =
               await getOvResult<Record<string, unknown>>(getSystemStatus())
-            append({
+            appendResult({
               body: `${t('terminal.onlineBody', { count: root.entries.length })}\n\n${formatJson(status)}`,
               kind: 'success',
               refs: root.entries.slice(0, 6).map(entryToRef),
@@ -920,7 +923,7 @@ export function TerminalPanel({
           case '/health': {
             const health =
               await getOvResult<Record<string, unknown>>(getHealth())
-            append({
+            appendResult({
               body: formatJson(health),
               kind: 'success',
               title: 'health',
@@ -930,7 +933,7 @@ export function TerminalPanel({
           case '/wait': {
             if (body) throw new Error(t('terminal.waitUsage'))
             const result = await getOvResult<unknown>(postSystemWait())
-            append({
+            appendResult({
               body: formatJson(result),
               kind: 'success',
               title: 'wait',
@@ -947,7 +950,7 @@ export function TerminalPanel({
                 })
               : { entries, uri: currentUri }
             const visibleEntries = visibleContextEntries(result.entries)
-            append({
+            appendResult({
               body: t('terminal.lsBody', {
                 count: visibleEntries.length,
                 uri: target,
@@ -966,7 +969,7 @@ export function TerminalPanel({
               showAllHidden: true,
             })
             const visibleEntries = visibleContextEntries(result.nodes)
-            append({
+            appendResult({
               body: t('terminal.lsBody', {
                 count: visibleEntries.length,
                 uri: target,
@@ -982,7 +985,7 @@ export function TerminalPanel({
             const uri = cleanVikingUri(body)
             if (!uri) throw new Error(t('terminal.enterUri'))
             const entry = await fetchFsStat(uri, { throwOnError: true })
-            append({
+            appendResult({
               body: formatJson(entry),
               kind: 'success',
               refs: [entryToRef(entry)],
@@ -999,7 +1002,7 @@ export function TerminalPanel({
               raw: true,
             })
             await onOpenResource(uri)
-            append({
+            appendResult({
               body: content.content.slice(0, 1200) || t('terminal.fileEmpty'),
               kind: 'success',
               refs: [{ uri }],
@@ -1015,7 +1018,7 @@ export function TerminalPanel({
             const level = name === '/abstract' ? 'abstract' : 'overview'
             const content = await fetchDirectoryLevelContent(uri, level)
             await onOpenResource(uri)
-            append({
+            appendResult({
               body: content || t('terminal.fileEmpty'),
               kind: 'success',
               refs: [{ uri }],
@@ -1052,7 +1055,7 @@ export function TerminalPanel({
               resources: result.resources.length,
               skills: result.skills.length,
             })
-            append({
+            appendResult({
               body: joinBodyLines([
                 t('terminal.searchScopeLine', { scope: scopeText }),
                 result.query_plan?.reasoning || summary,
@@ -1093,7 +1096,7 @@ export function TerminalPanel({
               name === '/grep'
                 ? await fetchGrep(pattern, { uri, limit, caseInsensitive })
                 : await fetchGlob(pattern, { uri, limit })
-            append({
+            appendResult({
               body: t('terminal.patternHits', {
                 count: result.resources.length,
                 uri,
@@ -1108,7 +1111,7 @@ export function TerminalPanel({
             const request = parseMkdir(trimmed)
             await getOvResult<unknown>(postFsMkdir({ body: request }))
             if (identityRef.current !== identityScopeKey) return
-            append({
+            appendResult({
               kind: 'success',
               title: `/mkdir ${request.uri}`,
               body: t('terminal.mkdirCreated', { uri: request.uri }),
@@ -1131,7 +1134,7 @@ export function TerminalPanel({
                   }),
             )
             if (identityRef.current !== identityScopeKey) return
-            append({
+            appendResult({
               kind: 'success',
               title: `${name} ${request.from_uri} ${request.to_uri}`,
               body: t(
@@ -1157,13 +1160,13 @@ export function TerminalPanel({
                 ),
               )
             ) {
-              append({ kind: 'info', title: t('terminal.rmCancelled') })
+              appendResult({ kind: 'info', title: t('terminal.rmCancelled') })
               return
             }
             if (identityRef.current !== identityScopeKey) return
             await getOvResult<unknown>(deleteFs({ query: request }))
             if (identityRef.current !== identityScopeKey) return
-            append({
+            appendResult({
               kind: 'success',
               title: `/rm ${request.uri}`,
               body: t('terminal.rmDeleted', { uri: request.uri }),
@@ -1177,7 +1180,7 @@ export function TerminalPanel({
               postContentWrite({ body: request }),
             )
             if (identityRef.current !== identityScopeKey) return
-            append({
+            appendResult({
               body: formatJson(result),
               kind: 'success',
               refs: [{ uri: request.uri }],
@@ -1205,7 +1208,7 @@ export function TerminalPanel({
             if (!taskId) {
               await invalidateAll()
               if (rootUri) await onOpenResource(rootUri)
-              append({
+              appendResult({
                 body: t('terminal.resourceCompleted', {
                   uri: rootUri || request.path,
                 }),
@@ -1245,7 +1248,7 @@ export function TerminalPanel({
             switch (subcommand) {
               case 'current': {
                 const id = requireCurrentSession()
-                append({
+                appendResult({
                   body: t('terminal.sessionCurrentBody', { id }),
                   kind: 'success',
                   refs: [sessionRef(id)],
@@ -1255,7 +1258,7 @@ export function TerminalPanel({
               }
               case 'list': {
                 const sessions = await fetchSessions()
-                append({
+                appendResult({
                   body: t('terminal.sessionListBody', {
                     count: sessions.length,
                   }),
@@ -1273,7 +1276,7 @@ export function TerminalPanel({
                   identityScopeKey,
                 )
                 onSessionChange(result.session_id)
-                append({
+                appendResult({
                   body: joinBodyLines([
                     t('terminal.sessionCreatedBody', {
                       id: result.session_id,
@@ -1291,7 +1294,7 @@ export function TerminalPanel({
                 if (!id) throw new Error(t('terminal.sessionUsage'))
                 registerFilesystemAgentSessionId(id, identityScopeKey)
                 onSessionChange(id)
-                append({
+                appendResult({
                   body: t('terminal.sessionSwitchedBody', { id }),
                   kind: 'success',
                   refs: [sessionRef(id)],
@@ -1302,7 +1305,7 @@ export function TerminalPanel({
               case 'get': {
                 const id = resolveSessionId()
                 const result = await fetchSession(id)
-                append({
+                appendResult({
                   body: formatJson(result),
                   kind: 'success',
                   refs: [sessionRef(id)],
@@ -1316,7 +1319,7 @@ export function TerminalPanel({
                   id,
                   getNumberFlag(flags, 'token-budget'),
                 )
-                append({
+                appendResult({
                   body: formatJson(result),
                   kind: 'success',
                   refs: [sessionRef(id)],
@@ -1327,7 +1330,7 @@ export function TerminalPanel({
               case 'messages': {
                 const id = resolveSessionId()
                 const result = await fetchSessionMessages(id)
-                append({
+                appendResult({
                   body: formatJson(result),
                   kind: 'success',
                   refs: [sessionRef(id)],
@@ -1343,7 +1346,7 @@ export function TerminalPanel({
                 const archiveId = positional.shift()
                 if (!archiveId) throw new Error(t('terminal.sessionUsage'))
                 const result = await fetchSessionArchive(id, archiveId)
-                append({
+                appendResult({
                   body: formatJson(result),
                   kind: 'success',
                   refs: [
@@ -1372,7 +1375,7 @@ export function TerminalPanel({
                   )
                   return
                 }
-                append({
+                appendResult({
                   body: formatJson(result),
                   kind: 'success',
                   refs: [sessionRef(id)],
@@ -1396,7 +1399,7 @@ export function TerminalPanel({
                   .trim()
                 if (!content) throw new Error(t('terminal.sessionUsage'))
                 const result = await addMessage(id, role, content)
-                append({
+                appendResult({
                   body: joinBodyLines([
                     t('terminal.sessionMessageAddedBody', { id }),
                     formatJson(result),
@@ -1413,7 +1416,7 @@ export function TerminalPanel({
                   limit: getNumberFlag(flags, 'limit'),
                   toolName: getLastFlag(flags, 'tool-name'),
                 })
-                append({
+                appendResult({
                   body: formatJson(result),
                   kind: 'success',
                   refs: [sessionRef(id)],
@@ -1433,7 +1436,7 @@ export function TerminalPanel({
                   limit: getNumberFlag(flags, 'limit'),
                   offset: getNumberFlag(flags, 'offset'),
                 })
-                append({
+                appendResult({
                   body: formatJson(result),
                   kind: 'success',
                   refs: [
@@ -1466,7 +1469,7 @@ export function TerminalPanel({
                     limit: getNumberFlag(flags, 'limit'),
                   },
                 )
-                append({
+                appendResult({
                   body: formatJson(result),
                   kind: 'success',
                   refs: [
@@ -1484,7 +1487,7 @@ export function TerminalPanel({
                 const id = positional.shift()
                 if (!id) throw new Error(t('terminal.sessionDeleteUsage'))
                 const result = await deleteSession(id)
-                append({
+                appendResult({
                   body: joinBodyLines([
                     t('terminal.sessionDeletedBody', { id }),
                     formatJson(result),
@@ -1503,7 +1506,7 @@ export function TerminalPanel({
         }
       } catch (error) {
         if (identityRef.current !== identityScopeKey) return
-        append({
+        appendResult({
           body:
             error instanceof CompileCommandError
               ? t(`compile:commandErrors.${error.code}`)
@@ -1539,6 +1542,62 @@ export function TerminalPanel({
     draft: string
     value: string
   } | null>(null)
+  const firstResultByCommand = new Map<string, TerminalEntry>()
+  const commandById = new Map<string, TerminalEntry>()
+  for (const entry of history) {
+    if (entry.kind === 'command') commandById.set(entry.id, entry)
+    else if (entry.commandId && !firstResultByCommand.has(entry.commandId))
+      firstResultByCommand.set(entry.commandId, entry)
+  }
+  const records: TuiRecord[] = history.flatMap((entry) => {
+    const commandEntry = entry.kind === 'command'
+    const parent = entry.commandId
+      ? commandById.get(entry.commandId)
+      : undefined
+    if (parent && firstResultByCommand.get(parent.id) === entry) return []
+    const result = commandEntry ? firstResultByCommand.get(entry.id) : entry
+    const richResult =
+      result &&
+      (result.compileTaskId ||
+        result.resourceTaskId ||
+        result.compileForm ||
+        result.details?.length ||
+        result.refs?.length ||
+        result.backgroundTaskSource)
+    const status =
+      result?.kind === 'error'
+        ? 'error'
+        : running && !result && history.at(-1) === entry
+          ? 'pending'
+          : 'success'
+    return [
+      {
+        id: entry.id,
+        command: parent?.title ?? entry.title,
+        createdAtMs: entry.createdAt,
+        status,
+        content: !result
+          ? undefined
+          : richResult
+            ? {
+                variant: 'write-result',
+                lines: [
+                  <TerminalHistoryItem
+                    key={result.id}
+                    entry={result}
+                    onOpenResource={onOpenResource}
+                    openingUri={openingUri}
+                  />,
+                ],
+              }
+            : {
+                variant: 'text',
+                text:
+                  result.body ?? (commandEntry || parent ? result.title : ''),
+              },
+      },
+    ]
+  })
   const resourceCompletions = commands
     .filter(
       (item) =>
@@ -1583,30 +1642,23 @@ export function TerminalPanel({
             setCommand(value)
           }}
           disabled={running}
-          records={[]}
-          emptyState={
-            history.length ? (
-              <div className="w-full space-y-2">
-                {history.map((entry) => (
-                  <TerminalHistoryItem
-                    key={entry.id}
-                    entry={entry}
-                    onOpenResource={onOpenResource}
-                    openingUri={openingUri}
-                  />
-                ))}
-              </div>
-            ) : undefined
-          }
-          onKeyDown={(event) => {
+          records={records}
+          onKeyDownCapture={(event) => {
+            // The shared history derives from every displayed record. Studio's history
+            // excludes sensitive commands and result titles. Let completion handle its arrows.
             if (
               running ||
               event.defaultPrevented ||
+              event.nativeEvent.isComposing ||
+              event.nativeEvent.keyCode === 229 ||
               event.shiftKey ||
+              (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') ||
               !(event.target instanceof HTMLTextAreaElement) ||
-              !commandHistory.length
+              event.target.hasAttribute('aria-controls')
             )
               return
+            event.stopPropagation()
+            if (!commandHistory.length) return
             const input = event.target
             if (input.selectionStart !== input.selectionEnd) return
             const previous = recalledCommand.current
@@ -1629,7 +1681,8 @@ export function TerminalPanel({
               ),
             )
             const draft = browsing ? previous.draft : command
-            const value = commandHistory[index] ?? draft
+            const value =
+              commandHistory[commandHistory.length - 1 - index] ?? draft
             recalledCommand.current = { index, draft, value }
             setCommand(value)
           }}

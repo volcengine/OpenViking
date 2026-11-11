@@ -1,4 +1,3 @@
-import '@openviking/react/modules/console/style.css'
 import { StudioHeaderActions } from '#/app/layouts/studio-header-actions'
 import { useQueryClient } from '@tanstack/react-query'
 import styles from './workbench.module.css'
@@ -230,7 +229,6 @@ function FilesystemWorkbench() {
   })
   const { activeTaskCount, hasActiveTasks, isRefreshingTasks } =
     useResourceUpload()
-  const contextRefreshRef = useRef<{ refresh: () => Promise<void> }>(null)
   const { invalidateAll, invalidateList } = useInvalidateVikingFs()
   const handleDocumentSaved = useCallback(
     (uri: string) => {
@@ -241,7 +239,6 @@ function FilesystemWorkbench() {
         queryKey: ['agent-experience-list', identityScopeKey],
       })
       void invalidateAll()
-      void contextRefreshRef.current?.refresh()
     },
     [identityScopeKey, queryClient, invalidateAll],
   )
@@ -447,7 +444,6 @@ function FilesystemWorkbench() {
   const handleRefreshContextTree = useCallback(async () => {
     const refreshedFile = selectedFileRef.current
     await invalidateList()
-    await contextRefreshRef.current?.refresh()
     if (!refreshedFile || refreshedFile.isDir) return
 
     try {
@@ -636,7 +632,6 @@ function FilesystemWorkbench() {
               isRefreshing={listQuery.isFetching}
               onOpenSearch={handleOpenSearch}
               onRefresh={handleRefreshContextTree}
-              refreshRef={contextRefreshRef}
               currentUri={currentUri}
               selectedFileUri={
                 selectedFile && !selectedFile.isDir ? selectedFile.uri : null
@@ -1151,7 +1146,7 @@ function FilesystemActionTabs({
 
   return (
     <div
-      className="ov-console__modes"
+      className={styles.actionModes}
       role="group"
       aria-label={t('actionPanel.expand')}
     >
@@ -1162,7 +1157,7 @@ function FilesystemActionTabs({
           <button
             key={panel}
             type="button"
-            className="ov-console__mode"
+            className={styles.actionMode}
             aria-label={label}
             title={label}
             aria-pressed={activePanel === panel}

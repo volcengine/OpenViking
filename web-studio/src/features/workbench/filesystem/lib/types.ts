@@ -28,6 +28,7 @@ export type ResourceRef = {
 }
 
 export type TerminalEntry = {
+  commandId?: string
   backgroundTaskCompletedBody?: string
   backgroundTaskNotify?: boolean
   backgroundTaskFallbackUri?: string

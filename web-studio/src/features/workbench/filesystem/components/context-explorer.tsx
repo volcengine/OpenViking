@@ -1,9 +1,9 @@
 import studioI18n from '#/i18n/core'
-import { useQueryClient } from '@tanstack/react-query'
-import type { Ref, PointerEvent as ReactPointerEvent } from 'react'
+import type { PointerEvent as ReactPointerEvent } from 'react'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
-import { useImperativeHandle, useRef, useEffect } from 'react'
+import { useRef, useEffect } from 'react'
 import { useContextTree } from '../lib/use-context-tree'
+import { getErrorMessage } from '../lib/utils'
 import { normalizeDirUri, normalizeFileUri } from '#/shared/lib/viking-fs'
 import { toast } from 'sonner'
 import { FileTree } from '@openviking/react/components/file-tree'
@@ -47,7 +47,6 @@ export function ContextExplorerHeader({
 }
 
 export function ContextTree({
-  refreshRef,
   isRefreshing = false,
   onOpenSearch,
   onRefresh,
@@ -62,7 +61,6 @@ export function ContextTree({
   isRefreshing?: boolean
   onOpenSearch?: () => void
   onRefresh?: () => Promise<void>
-  refreshRef?: Ref<{ refresh: () => Promise<void> }>
   currentUri: string
   expandedKeys: Set<string>
   onExpandedKeysChange: (next: Set<string>) => void
@@ -90,46 +88,16 @@ export function ContextTree({
   const select = async (uri: string) => {
     const version = ++navigationVersion.current
     try {
-      const entry = await fetchFsStat(uri)
+      const entry = await fetchFsStat(uri, { throwOnError: true })
       if (navigationVersion.current !== version) return
       if (entry.isDir) onSelectDirectory(entry)
       else onSelectFile(entry)
     } catch (error) {
       if (navigationVersion.current === version)
-        toast.error(
-          error instanceof Error
-            ? error.message
-            : t('dirBrowser.error', { ns: 'resources' }),
-        )
+        toast.error(getErrorMessage(error))
     }
   }
-  const cache = useQueryClient().getQueryCache()
-  const refresh = tree.refresh
-  // Observe Studio mutations in the external query cache; refresh tree data after a Studio mutation.
-  // Coalesce invalidations and unsubscribe on identity unmount to avoid stale refreshes.
-  useEffect(() => {
-    let active = true
-    let queued = false
-    const unsubscribe = cache.subscribe((event) => {
-      if (
-        event.type !== 'updated' ||
-        event.action.type !== 'invalidate' ||
-        !String(event.query.queryKey[0]).startsWith('viking-fs-') ||
-        queued
-      )
-        return
-      queued = true
-      queueMicrotask(() => {
-        queued = false
-        if (active) void refresh()
-      })
-    })
-    return () => {
-      active = false
-      unsubscribe()
-    }
-  }, [cache, refresh])
-  useImperativeHandle(refreshRef, () => ({ refresh }), [refresh])
+  const { refresh } = tree
   return (
     <FileTree
       locale={studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}

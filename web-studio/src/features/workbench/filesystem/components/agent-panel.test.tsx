@@ -22,7 +22,6 @@ describe('AgentToolbar', () => {
   it('portals the active session title beside the panel controls', () => {
     const container = document.createElement('div')
     const onNewSession = vi.fn()
-    const onOpenHistory = vi.fn()
     document.body.append(container)
 
     render(
@@ -32,7 +31,6 @@ describe('AgentToolbar', () => {
         isCreatingSession={false}
         newSessionLabel="New session"
         onNewSession={onNewSession}
-        onOpenHistory={onOpenHistory}
         sessionTitle="Current session"
         showNewSession
       />,
@@ -41,7 +39,6 @@ describe('AgentToolbar', () => {
     expect(container.textContent).toContain('Current session')
     fireEvent.click(screen.getByRole('button', { name: 'History' }))
     fireEvent.click(screen.getByRole('button', { name: 'New session' }))
-    expect(onOpenHistory).toHaveBeenCalledOnce()
     expect(onNewSession).toHaveBeenCalledOnce()
 
     container.remove()
