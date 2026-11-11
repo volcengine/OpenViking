@@ -13,12 +13,13 @@ import shutil
 import tempfile
 import time
 import zipfile
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from secrets import token_urlsafe
 from typing import Any, Dict, List, Optional
+from urllib.parse import unquote
 
 import yaml
 
@@ -50,7 +51,7 @@ from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.telemetry import get_current_telemetry, register_telemetry
 from openviking.utils.path_safety import safe_join_viking_uri
 from openviking.utils.zip_safe import safe_extract_zip
-from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
+from openviking_cli.exceptions import ConflictError, InvalidArgumentError, ResourceExhaustedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -567,7 +568,9 @@ class SkillProcessor:
                         fields.add(reference.field)
                 elif placeholder.startswith(legacy_prefix):
                     field_name = placeholder[len(legacy_prefix) : -2]
-                    if field_name and ":" not in field_name:
+                    if field_name.startswith(":"):
+                        fields.add(unquote(field_name[1:]))
+                    elif field_name and ":" not in field_name:
                         fields.add(field_name)
         return fields
 
@@ -579,6 +582,7 @@ class SkillProcessor:
         *,
         change_reason: str,
         owner_lease_ref: Optional[Dict[str, Any]] = None,
+        previous_versions: Iterable[UserPrivacyConfigVersion] = (),
     ) -> Dict[str, Any]:
         if (
             not self._privacy_config_service
@@ -667,6 +671,21 @@ class SkillProcessor:
             if not preparation.settings.discovery_enabled:
                 return skill_dict
             if values:
+                if current is not None:
+                    new_values = set(values.values())
+                    for version in previous_versions:
+                        for field, previous_value in version.values.items():
+                            if (
+                                field in current.values
+                                and isinstance(previous_value, str)
+                                and previous_value in new_values
+                                and current.values[field] != previous_value
+                            ):
+                                raise ConflictError(
+                                    "Skill update contains a previous value of a rotated field; "
+                                    "use its current value or an explicit field reference.",
+                                    resource=f"skill/{skill_dict['name']}/{field}",
+                                )
                 await self._privacy_config_service.upsert(
                     ctx=ctx,
                     category="skill",

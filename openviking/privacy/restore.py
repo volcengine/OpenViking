@@ -4,6 +4,7 @@
 
 import re
 from typing import Any, Literal
+from urllib.parse import unquote
 
 from openviking.privacy.content import PrivacyContent
 from openviking.privacy.models import UserPrivacyConfigVersion
@@ -31,7 +32,7 @@ class PrivacyRestorer:
         self._ctx = ctx
         self._category = category or ""
         self._target_key = target_key
-        field = r"([^}:]+)" if category == "skill" else r"([A-Za-z0-9_-]{8})"
+        field = r"(:?[^}:]+)" if category == "skill" else r"([A-Za-z0-9_-]{8})"
         self._placeholder = (
             re.compile(
                 r"\{\{ov_privacy:" + category + ":" + re.escape(target_key) + ":" + field + r"\}\}"
@@ -57,8 +58,9 @@ class PrivacyRestorer:
                 if location is None:
                     own = self._placeholder.fullmatch(placeholder) if self._placeholder else None
                     if own is not None:
+                        field_name = unquote(own[1][1:]) if own[1].startswith(":") else own[1]
                         location = PrivacyFieldReference(
-                            self._ctx.user.user_id, self._category, self._target_key, own[1]
+                            self._ctx.user.user_id, self._category, self._target_key, field_name
                         )
                 if location is None or location.owner_user_id != self._ctx.user.user_id:
                     continue

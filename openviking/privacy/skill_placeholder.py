@@ -5,6 +5,7 @@
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from urllib.parse import quote
 
 
 @dataclass
@@ -16,6 +17,9 @@ class SkillPrivacyPlaceholderizationResult:
 
 
 def build_placeholder(skill_name: str, field_name: str) -> str:
+    if ":" in field_name or "{" in field_name or "}" in field_name:
+        # The extra colon distinguishes encoded names from legacy literal names.
+        field_name = ":" + quote(field_name, safe="")
     return f"{{{{ov_privacy:skill:{skill_name}:{field_name}}}}}"
 
 

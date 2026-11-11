@@ -976,6 +976,11 @@ async def update_skill(
                         _ctx,
                         change_reason="auto-extracted from update_skill",
                         owner_lease_ref=privacy_lease,
+                        previous_versions=(
+                            UserPrivacyConfigVersion.from_dict(json.loads(raw))
+                            for path, raw in (deleted_privacy_snapshot or {}).items()
+                            if path.startswith("history/")
+                        ),
                     )
                 )
                 result = await service.resources.add_skill(

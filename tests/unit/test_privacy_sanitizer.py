@@ -529,3 +529,21 @@ async def test_skill_frontmatter_is_preserved_and_spans_address_original_text():
         header + body, ctx=_ctx(), uri="viking://user/alice/skills/demo/"
     )
     assert text.content == (header + body).replace("managed-secret", reference)
+
+
+async def test_skill_field_names_restore_without_decoding_legacy_percent_names():
+    from openviking.privacy.restore import PrivacyRestorer
+    from openviking.privacy.skill_placeholder import build_placeholder
+
+    names = ["simple", "deploy:eu", "slot{blue}", "%3A", ":", "部署:{蓝}%20", "api/key"]
+    values = {name: f"private-value-{i}" for i, name in enumerate(names)}
+    catalog = _PrivacyCatalog({"skill": {"manual-fields": values}})
+    content = " | ".join(build_placeholder("manual-fields", name) for name in names)
+    legacy_names = ["simple", "%3A", "api/key"]
+    content += " | " + " | ".join(
+        f"{{{{ov_privacy:skill:manual-fields:{name}}}}}" for name in legacy_names
+    )
+    restored = await PrivacyRestorer(
+        catalog, _ctx(), category="skill", target_key="manual-fields"
+    ).restore_content(content, uri="viking://agent/skills/manual-fields/SKILL.md")
+    assert restored == " | ".join(values[name] for name in names + legacy_names)

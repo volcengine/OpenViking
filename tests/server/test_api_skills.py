@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import io
 import json
 import sys
 import types
@@ -550,6 +551,7 @@ async def test_skills_api_update_restores_previous_privacy_after_privacy_write(
         *,
         change_reason,
         owner_lease_ref=None,
+        previous_versions=(),
     ):
         result = await original_apply(
             self,
@@ -558,6 +560,7 @@ async def test_skills_api_update_restores_previous_privacy_after_privacy_write(
             ctx,
             change_reason=change_reason,
             owner_lease_ref=owner_lease_ref,
+            previous_versions=previous_versions,
         )
         if skill_dict.get("name") == "rollback-privacy-after-write-skill":
             current = await self._privacy_config_service.get_current(
@@ -973,3 +976,145 @@ async def test_mcp_skill_import_and_vector_rebuild_preserve_l1_frontmatter(clien
     assert rebuilt.json()["result"]["failed_records"] == 0
     assert rebuilt.json()["result"]["rebuilt_records"] == 3
     await assert_indexed_body()
+
+
+async def test_skill_reupload_restores_manual_fields_for_each_member(client, service):
+    from openviking.privacy.reference import build_privacy_field_reference
+
+    owner = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    reader = RequestContext(user=UserIdentifier(owner.account_id, "reader"), role=Role.USER)
+    await patch_user_config(
+        service.viking_fs,
+        owner,
+        UserSettingsPatch.model_validate(
+            {
+                "privacy": {
+                    "mode": "auto",
+                    "custom_rules": [{"id": "short", "prefix": "T", "min_length": 3}],
+                }
+            }
+        ),
+    )
+    name = "manual-fields"
+    values = {
+        field: "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1r" + str(i)
+        for i, field in enumerate(("deploy:eu", "slot{blue}", "%3A", ":", "部署:{蓝}%20"))
+    }
+    values["slot{blue}"] = "T7k9"
+    await service.privacy_configs.upsert(owner, "skill", name, values)
+    reader_values = {field: f"reader-value-{i}" for i, field in enumerate(values)}
+    await service.privacy_configs.upsert(reader, "skill", name, reader_values)
+
+    def rows(fields):
+        return "\n".join(f'row{i}="{value}"' for i, value in enumerate(fields.values()))
+
+    explicit = {
+        field: build_privacy_field_reference(owner.user.user_id, "skill", name, field)
+        for field in values
+    }
+    source = {
+        "data": _skill_md(name, "Manual field fixture", rows(explicit)),
+        "target_uri": "viking://agent/skills",
+        "wait": True,
+    }
+    response = await client.post("/api/v1/skills", json=source)
+    assert response.status_code == 200, response.text
+    uri = response.json()["result"]["uri"] + "/SKILL.md"
+    assert rows(values) in await service.fs.read(uri, ctx=owner)
+    source["data"] = _skill_md(name, "Manual field fixture", rows(values))
+    response = await client.put("/api/v1/skills/" + name, json=source)
+    assert response.status_code == 200, response.text
+    assert rows(values) in await service.fs.read(uri, ctx=owner)
+    assert rows(reader_values) in await service.fs.read(uri, ctx=reader)
+
+
+@pytest.mark.parametrize("mode", ["auto", "auto_strict"])
+@pytest.mark.parametrize("source_kind", ["original", "current", "reference"])
+async def test_shared_zip_update_rejects_rotated_plaintext(client, service, mode, source_kind):
+    from openviking.privacy.reference import build_privacy_field_reference
+    from openviking.privacy.skill_placeholder import build_placeholder
+
+    owner = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    reader = RequestContext(user=UserIdentifier(owner.account_id, "reader"), role=Role.USER)
+    await patch_user_config(
+        service.viking_fs, owner, UserSettingsPatch.model_validate({"privacy": {"mode": mode}})
+    )
+    name = "shared-zip"
+    original = "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    rotated = "ghp_" + "cD4fG6hJ8kM0nP2qR5sU7vW9xY1zA3bE"
+    member = "MemberSetting42"
+
+    def package(value):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("SKILL.md", _skill_md(name, "Shared ZIP fixture", f'key="{value}"'))
+            archive.writestr("assets/data.bin", bytes(range(24)))
+        return buffer.getvalue()
+
+    async def submit(method, content):
+        response = await client.post(
+            "/api/v1/resources/temp_upload",
+            files={"file": ("fixture.zip", content, "application/zip")},
+        )
+        assert response.status_code == 200, response.text
+        return await client.request(
+            method,
+            "/api/v1/skills" + ("/" + name if method == "PUT" else ""),
+            json={
+                "temp_file_id": response.json()["result"]["temp_file_id"],
+                "target_uri": "viking://agent/skills",
+                "wait": True,
+            },
+        )
+
+    original_zip = package(original)
+    response = await submit("POST", original_zip)
+    assert response.status_code == 200, response.text
+    root = response.json()["result"]["uri"]
+    current = await service.privacy_configs.get_current(owner, "skill", name)
+    field = next(iter(current.values))
+    await service.privacy_configs.patch_values(owner, "skill", name, {field: rotated})
+    await service.privacy_configs.upsert(reader, "skill", name, {field: member})
+    current = await service.privacy_configs.get_current(owner, "skill", name)
+    history = [
+        await service.privacy_configs.get_version(owner, "skill", name, version)
+        for version in (1, 2)
+    ]
+    paths = ["SKILL.md", "assets/data.bin", ".source.json"]
+    before = {
+        path: await service.viking_fs.read_file_bytes(root + "/" + path, ctx=owner)
+        for path in paths
+    }
+    reference = build_privacy_field_reference(owner.user.user_id, "skill", name, field)
+    session = await client.post("/api/v1/sessions", json={"session_id": "zip-consumer"})
+    assert session.status_code == 200, session.text
+    messages_uri = session.json()["result"]["uri"] + "/messages.jsonl"
+    response = await client.post(
+        "/api/v1/sessions/zip-consumer/messages", json={"role": "user", "content": reference}
+    )
+    assert response.status_code == 200, response.text
+
+    content = (
+        original_zip
+        if source_kind == "original"
+        else package(rotated if source_kind == "current" else build_placeholder(name, field))
+    )
+    response = await submit("PUT", content)
+    if source_kind == "original":
+        assert response.status_code == 409, response.text
+        assert response.json()["error"]["code"] == "CONFLICT"
+        assert original not in response.text and rotated not in response.text
+        assert {
+            path: await service.viking_fs.read_file_bytes(root + "/" + path, ctx=owner)
+            for path in paths
+        } == before
+    else:
+        assert response.status_code == 200, response.text
+    assert (await service.privacy_configs.get_current(owner, "skill", name)) == current
+    assert [
+        await service.privacy_configs.get_version(owner, "skill", name, version)
+        for version in (1, 2)
+    ] == history
+    assert f'key="{rotated}"' in await service.fs.read(root + "/SKILL.md", ctx=owner)
+    assert f'key="{member}"' in await service.fs.read(root + "/SKILL.md", ctx=reader)
+    assert json.loads(await service.fs.read(messages_uri, ctx=owner))["parts"][0]["text"] == rotated
