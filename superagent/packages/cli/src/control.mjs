@@ -71,6 +71,7 @@ function defaults(options = {}) {
     socketPath: options.socketPath ?? env.OV_SUPERAGENT_UPDATER_SOCKET ?? defaultSocketPath(homeDir(env)),
     pm2Env: options.pm2Env ?? pm2.pm2Env,
     stdout: options.stdout ?? process.stdout,
+    stderr: options.stderr ?? process.stderr,
   };
 }
 
@@ -143,32 +144,78 @@ async function step(context, label, done, run) {
   }
 }
 
+// Registers one app with PM2 and returns as soon as PM2 has the entry: `pm2
+// start` creates it before the command returns, and waiting for anything more
+// here would let a slow instance hold back the shared Web. Readiness is
+// reported after every app is registered; PM2 retries a failing one on its own.
+async function launchApp(spec, context) {
+  await context.execFileImpl(context.pm2Bin, ['start', context.configPath, '--only', spec.app, '--update-env'], {
+    timeout: 60_000, env: appControlEnv(spec.app, context.pm2Env),
+  });
+}
 
-// Starts what is not running; an app that is online already is left alone.
+// Readiness after every app is registered: used for the report only.
+async function awaitAppReady(spec, context) {
+  if (spec.app === UPDATER_APP) await waitForUpdater(context.socketPath, context.readyOptions);
+  else await waitUntilReady(spec.readyUrl, context.fetchImpl, context.readyOptions);
+}
+
+
+// Starts every app without waiting for readiness, snapshots the whole list, and
+// only then reports readiness. An instance that cannot come up must not keep the
+// shared Web out of PM2, and must not stop this command from saving the list.
 export async function startCommand(target, options) {
   const context = defaults(options);
   const apps = appsFor(target, loadTargets(context.env));
   Object.assign(context, await installedRelease(context.releaseLink));
   const running = new Map((await pm2Processes(context)).map((processInfo) => [processInfo?.name, processInfo]));
   const s = styler(context.stdout, context.env);
+  const failures = [];
+  const record = (app, error) => failures.push({ app, reason: String(error?.message ?? error) });
+
+  // 1. Register everything that is not online yet: every instance first, then
+  // the shared Web, without waiting for any of them to become ready.
   for (const spec of apps) {
     const current = running.get(spec.app);
     if (current?.pm2_env?.status === 'online') {
-      await verifyPm2App({ ...context, app: spec.app });
-      if (spec.app === UPDATER_APP) await waitForUpdater(context.socketPath, context.readyOptions);
-      else await waitUntilReady(spec.readyUrl, context.fetchImpl, context.readyOptions);
-      context.stdout.write(`${s.gray('·')} ${t(`${spec.app} 已经在运行，已就绪`, `${spec.app} is running already and ready`)}\n`);
+      try {
+        await verifyPm2App({ ...context, app: spec.app });
+      } catch (error) {
+        record(spec.app, error);
+      }
       continue;
     }
-    await step(context, t(`启动 ${spec.app}`, `Starting ${spec.app}`), t(`${spec.app} 已就绪`, `${spec.app} is ready`), async () => {
-      if (current) {
-        await context.execFileImpl(context.pm2Bin, ['delete', spec.app], { timeout: pm2StopTimeout(current), env: appControlEnv(spec.app, context.pm2Env) });
-      }
-      await startOne(spec, context);
-    });
+    try {
+      await step(context, t(`启动 ${spec.app}`, `Starting ${spec.app}`), t(`${spec.app} 已启动`, `${spec.app} started`), async () => {
+        if (current) {
+          await context.execFileImpl(context.pm2Bin, ['delete', spec.app], { timeout: pm2StopTimeout(current), env: appControlEnv(spec.app, context.pm2Env) });
+        }
+        await launchApp(spec, context);
+      });
+    } catch (error) {
+      record(spec.app, error);
+    }
   }
+
+  // 2. Snapshot before reporting: the dump has to contain the shared Web even
+  // when an instance failed, or a later resurrect cannot bring the Web back.
   await context.execFileImpl(context.pm2Bin, ['save'], { timeout: 30_000, env: context.pm2Env });
-  return 0;
+
+  // 3. Readiness is the report, not a gate. A failed app stays registered for
+  // PM2 to retry; nothing here stops or deletes it.
+  for (const spec of apps) {
+    if (failures.some(({ app }) => app === spec.app)) continue;
+    try {
+      await awaitAppReady(spec, context);
+      context.stdout.write(`${s.green('●')} ${spec.app} ${t('已就绪', 'is ready')}\n`);
+    } catch (error) {
+      record(spec.app, error);
+    }
+  }
+
+  if (failures.length === 0) return 0;
+  for (const { app, reason } of failures) context.stderr.write(`${app}: ${reason}\n`);
+  return 1;
 }
 
 export async function restartCommand(target, options) {
