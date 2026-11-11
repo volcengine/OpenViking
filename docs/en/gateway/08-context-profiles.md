@@ -19,7 +19,7 @@ Besides its name and the [Let clients override settings](#client-overrides) swit
 | Recall memory | Searches OpenViking with each new user message and appends what is relevant to that message. | Sources: memories, resources, skills · Budget per message: 1,600 tokens · Budget per context window: 30,000 tokens · Relevance threshold: 0.35 · Time limit: 2 s |
 | Save conversations | Writes finished turns to an OpenViking session and commits it, so OpenViking can extract memories. | Save the latest reply after: 600 s · Commit after: 20,000 tokens · Keep recent messages: 10 |
 | Long conversations | When a conversation nears the context window, has the same model write a summary that replaces the earlier messages. | Compaction: on · Compact at: 0.9 of the window · Summary length: 8,000 tokens · Agent-managed context windows: off |
-| OpenViking tools | Lets the model use OpenViking's tools while it answers. | On · read-only tools selected; see [OpenViking tools](04-openviking-tools.md) |
+| OpenViking tools | Lets the model use OpenViking's tools while it answers. | On · every tool selected; see [OpenViking tools](04-openviking-tools.md) |
 
 Each section has its own switch, and Long conversations has one each for compaction and agent-managed context windows. Recall and saving are independent: a profile can recall without saving, or save without recalling.
 
@@ -102,7 +102,7 @@ The **Save conversations** section (on by default) controls [saving](../guides/1
 The last two sections of the editor each have their own page:
 
 - **Long conversations** holds **Compaction** with **Compact at** and **Summary length**, the experimental **Agent-managed context windows** with **Soft reminder at** and **Hard reminder at**, and **Default context window** under **Advanced settings**. See [Long conversations in the gateway](05-long-conversations.md#long-conversations); for models with a smaller window, set the window as described in [Set the model's context window](05-long-conversations.md#context-window).
-- **OpenViking tools** holds the **Tools** list and **Show tool calls**, with **Rounds per request**, **Time limit per call**, **Result size**, **Total time** and **Token budget** under **Advanced settings**. See [Choose tools](04-openviking-tools.md#choose-tools) and [Limits](04-openviking-tools.md#limits). The gateway runs the selected tools without the client's permission prompts; read [Risks and controls](04-openviking-tools.md#risks-and-controls) before checking tools that change data.
+- **OpenViking tools** holds the **Tools** list and **Show tool calls**, with **Rounds per request**, **Time limit per call**, **Result size**, **Total time** and **Token budget** under **Advanced settings**. See [Choose tools](04-openviking-tools.md#choose-tools) and [Limits](04-openviking-tools.md#limits). The gateway runs the selected tools without the client's permission prompts; before you leave tools that change data selected, read [Risks and controls](04-openviking-tools.md#risks-and-controls).
 
 The API name and range of every setting are in the [Configuration reference](13-configuration.md#context-profile-settings).
 
@@ -114,7 +114,7 @@ The API name and range of every setting are in the [Configuration reference](13-
 X-OpenViking-Context: {"recall":false,"max_tokens":800,"context_types":["memory"]}
 ```
 
-- **What it can change.** Every setting except `name` and `client_overrides`. Fields the header leaves out keep the profile's values. `{"disabled_tools":[]}` offers every OpenViking tool, including the ones that change data and any the server adds later.
+- **What it can change.** Every setting except `name` and `client_overrides`. Fields the header leaves out keep the profile's values. `{"disabled_tools":[]}` offers every OpenViking tool even when the profile unchecks some, including any the server adds later.
 - **When it applies.** As with a saved profile change, a conversation keeps the settings it started with: only the header on a conversation's first request shapes it. Later headers are still checked, so an invalid one, or any header once the switch is off, still fails.
 - **Errors.** With the switch off, any request that carries the header gets 403 `context_override_not_allowed` instead of being served with the saved settings. With it on, the request gets 400 `context_override_invalid` when the header:
   - is not a JSON object;

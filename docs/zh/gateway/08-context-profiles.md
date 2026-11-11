@@ -19,7 +19,7 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 | 召回记忆 | 用每条新的用户消息检索 OpenViking，把相关内容附加到这条消息上。 | 检索范围：记忆、资源、技能 · 单条消息预算：1,600 token · 单个上下文窗口预算：30,000 token · 相关度阈值：0.35 · 超时时间：2 秒 |
 | 保存对话 | 把完成的轮次写入 OpenViking 会话并提交，供 OpenViking 提取记忆。 | 最新回复等待时长：600 秒 · 提交阈值：20,000 token · 保留最近消息：10 |
 | 长对话 | 对话接近上下文窗口时，让同一个模型写摘要，替换之前的消息。 | 压缩：开启 · 压缩时机：窗口的 0.9 · 摘要长度上限：8,000 token · Agent 自管上下文窗口：关闭 |
-| OpenViking 工具 | 让模型在回答时使用 OpenViking 的工具。 | 开启 · 只勾选只读工具，见 [OpenViking 工具](04-openviking-tools.md) |
+| OpenViking 工具 | 让模型在回答时使用 OpenViking 的工具。 | 开启 · 勾选全部工具，见 [OpenViking 工具](04-openviking-tools.md) |
 
 每个部分都有自己的开关，长对话部分的压缩和 Agent 自管上下文窗口各有一个。召回和保存相互独立，只召回不保存、只保存不召回都可以。
 
@@ -102,7 +102,7 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 编辑页的最后两个部分各有专门的页面：
 
 - **长对话**部分包括**压缩**及其**压缩时机**和**摘要长度上限**、实验性的 **Agent 自管上下文窗口**及其**软提醒时机**和**硬提醒时机**，以及**高级设置**中的**默认上下文窗口**。详见[网关中的长对话](05-long-conversations.md#long-conversations)；窗口较小的模型需要设置窗口大小，见[设置模型的上下文窗口](05-long-conversations.md#context-window)。
-- **OpenViking 工具**部分包括**工具**清单和**显示工具调用**，**高级设置**中还有**每次请求的工具轮数**、**单次调用超时**、**结果大小上限**、**总时长**和 **Token 预算**。详见[选择工具](04-openviking-tools.md#choose-tools)和[上限](04-openviking-tools.md#limits)。网关执行所选工具时不经过客户端的权限确认，勾选会修改数据的工具之前，请先阅读[风险和控制点](04-openviking-tools.md#risks-and-controls)。
+- **OpenViking 工具**部分包括**工具**清单和**显示工具调用**，**高级设置**中还有**每次请求的工具轮数**、**单次调用超时**、**结果大小上限**、**总时长**和 **Token 预算**。详见[选择工具](04-openviking-tools.md#choose-tools)和[上限](04-openviking-tools.md#limits)。网关执行所选工具时不经过客户端的权限确认，决定让模型使用会修改数据的工具之前，请先阅读[风险和控制点](04-openviking-tools.md#risks-and-controls)。
 
 每项设置的 API 名称和取值范围见[配置参考](13-configuration.md#context-profile-settings)。
 
@@ -114,7 +114,7 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 X-OpenViking-Context: {"recall":false,"max_tokens":800,"context_types":["memory"]}
 ```
 
-- **能改什么。** 除 `name` 和 `client_overrides` 以外的所有设置。请求头没有给出的字段沿用配置中的值。`{"disabled_tools":[]}` 表示提供全部 OpenViking 工具，包括会修改数据的工具和服务端以后新增的工具。
+- **能改什么。** 除 `name` 和 `client_overrides` 以外的所有设置。请求头没有给出的字段沿用配置中的值。即使配置取消勾选了部分工具，`{"disabled_tools":[]}` 也会提供全部 OpenViking 工具，包括服务端以后新增的工具。
 - **何时生效。** 与保存配置的修改一样，对话会沿用开始时的设置：只有对话第一个请求里的请求头决定设置。之后的请求头仍会校验，所以无效的请求头，或开关关闭后的任何请求头，仍会报错。
 - **错误。** 开关关闭时，带这个请求头的请求一律返回 403 `context_override_not_allowed`，而不是按已保存的设置处理。开关开启时，请求头有下列情况之一会返回 400 `context_override_invalid`：
   - 不是 JSON 对象；
