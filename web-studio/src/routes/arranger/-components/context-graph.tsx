@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import dagre from '@dagrejs/dagre'
 import {
   Background,
@@ -28,6 +29,7 @@ type GraphData = {
   expanded: boolean
   isLive: boolean
   label: string
+  onToggle: (uri: string) => void
 }
 
 type ContextGraphProps = {
@@ -41,6 +43,7 @@ type ContextGraphProps = {
 }
 
 function ResourceNode({ data, selected }: NodeProps) {
+  const { t } = useTranslation('arranger')
   const value = data as GraphData
   const Icon: LucideIcon = value.isLive
     ? CableIcon
@@ -61,13 +64,31 @@ function ResourceNode({ data, selected }: NodeProps) {
           value.isLive ? 'text-emerald-600' : 'text-muted-foreground',
         )}
       />
-      <span className="truncate">{value.label}</span>
-      {value.entry.isDir &&
-        (value.expanded ? (
-          <ChevronDownIcon className="ml-auto size-3.5 shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronRightIcon className="ml-auto size-3.5 shrink-0 text-muted-foreground" />
-        ))}
+      <span className="min-w-0 flex-1 truncate">{value.label}</span>
+      {value.entry.isDir && (
+        <button
+          type="button"
+          className="nodrag nopan -mr-1 flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted"
+          aria-label={t(
+            value.expanded
+              ? 'actions.collapseDirectory'
+              : 'actions.expandDirectory',
+            { name: value.label },
+          )}
+          aria-expanded={value.expanded}
+          onClick={(event) => {
+            event.stopPropagation()
+            value.onToggle(value.entry.uri)
+          }}
+          onDoubleClick={(event) => event.stopPropagation()}
+        >
+          {value.expanded ? (
+            <ChevronDownIcon className="size-3.5" />
+          ) : (
+            <ChevronRightIcon className="size-3.5" />
+          )}
+        </button>
+      )}
       <Handle type="source" position={Position.Right} className="opacity-0" />
     </div>
   )
@@ -118,6 +139,7 @@ export function ContextGraph({
             expanded: expanded.has(entry.uri),
             isLive: isLive(entry.uri),
             label: entry.name || entry.uri,
+            onToggle,
           } satisfies GraphData,
           position: { x: position.x - 88, y: position.y - 22 },
           selected:
@@ -127,7 +149,7 @@ export function ContextGraph({
         }
       }),
     }
-  }, [entries, expanded, isLive, root, selectedUri])
+  }, [entries, expanded, isLive, onToggle, root, selectedUri])
 
   return (
     <ReactFlow

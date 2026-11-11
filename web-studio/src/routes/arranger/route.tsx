@@ -32,6 +32,7 @@ import {
   FolderPlusIcon,
   Loader2Icon,
   Maximize2Icon,
+  MoveRightIcon,
   PencilIcon,
   PlayIcon,
   PlusIcon,
@@ -102,6 +103,7 @@ import {
   unmountLiveContext,
 } from './-lib/api'
 import { formatLiveContextResult } from './-lib/live-result'
+import { relocateResource, RelocationError } from './-lib/relocate'
 import type {
   LiveContextMount,
   LiveMountIndex,
@@ -111,6 +113,7 @@ import type {
 import { initialSchemaArguments, validateSchemaArguments } from './-lib/schema'
 import type { SchemaFormObject } from './-lib/schema'
 import {
+  isWithinRoot,
   joinVikingUri,
   nameFromVikingUri,
   normalizeVikingUri,
@@ -130,7 +133,7 @@ type ArrangerSearch = {
   uri?: string
 }
 
-type ActionKind = 'copy' | 'file' | 'mkdir' | 'mount'
+type ActionKind = 'copy' | 'file' | 'mkdir' | 'mount' | 'move' | 'rename'
 
 type ActionState = {
   kind: ActionKind
@@ -612,8 +615,28 @@ function ArrangerWorkbench() {
           liveIndex={liveIndex}
           rootUri={rootUri}
           onClose={() => setAction(null)}
+          onRefresh={refresh}
           onComplete={async (entryUri) => {
             setAction(null)
+            if (entryUri) {
+              setExpanded((current) => {
+                const next = new Set(
+                  [...current].filter((uri) =>
+                    action.kind === 'move' || action.kind === 'rename'
+                      ? !isWithinRoot(uri, action.source?.uri || rootUri)
+                      : true,
+                  ),
+                )
+                let parent = parentVikingUri(entryUri)
+                while (isWithinRoot(parent, rootUri)) {
+                  next.add(parent)
+                  if (parent === rootUri) break
+                  parent = parentVikingUri(parent)
+                }
+                if (action.source?.isDir) next.add(entryUri)
+                return next
+              })
+            }
             await refresh()
             if (entryUri) {
               try {
@@ -815,7 +838,7 @@ function ResourceInspector({
   isRoot: boolean
   liveMount?: LiveContextMount
   mountsComplete: boolean
-  onAction: (kind: 'copy' | 'mount') => void
+  onAction: (kind: 'copy' | 'mount' | 'move' | 'rename') => void
   onDelete: () => Promise<void>
   onSaved: () => Promise<void>
 }) {
@@ -847,6 +870,24 @@ function ResourceInspector({
                   {t('actions.editMount')}
                 </Button>
               )}
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!mountsComplete}
+                onClick={() => onAction('rename')}
+              >
+                <PencilIcon />
+                {t('actions.rename')}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!mountsComplete}
+                onClick={() => onAction('move')}
+              >
+                <MoveRightIcon />
+                {t('actions.move')}
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -1184,6 +1225,7 @@ function ActionDialog({
   liveIndex,
   onClose,
   onComplete,
+  onRefresh,
   rootUri,
 }: {
   action: NonNullable<ActionState>
@@ -1193,14 +1235,19 @@ function ActionDialog({
   liveIndex: LiveMountIndex
   onClose: () => void
   onComplete: (uri?: string) => Promise<void>
+  onRefresh: () => Promise<void>
   rootUri: string
 }) {
   const { t } = useTranslation('arranger')
-  const [name, setName] = useState('')
+  const [name, setName] = useState(
+    action.kind === 'rename' ? action.source?.name || '' : '',
+  )
   const [target, setTarget] = useState(
     action.kind === 'copy'
       ? joinVikingUri(defaultParent, action.source?.name || '')
-      : defaultParent,
+      : action.kind === 'move' && action.source
+        ? parentVikingUri(action.source.uri)
+        : defaultParent,
   )
   const [toolUri, setToolUri] = useState('')
   const [serverUri, setServerUri] = useState('')
@@ -1215,6 +1262,7 @@ function ActionDialog({
   )
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const [relocationFailed, setRelocationFailed] = useState(false)
   const initializedMountRef = useRef<string | null>(null)
   const initializedArgumentsRef = useRef<string | null>(null)
   const previewResultRef = useRef<HTMLElement | null>(null)
@@ -1369,6 +1417,15 @@ function ActionDialog({
       // Internal invariant: every non-create action has a source resource.
       // eslint-disable-next-line studio-i18n/no-literal-message
       if (!action.source) throw new Error('Missing source resource')
+      if (action.kind === 'move' || action.kind === 'rename') {
+        const uri =
+          action.kind === 'rename'
+            ? joinVikingUri(parentVikingUri(action.source.uri), name)
+            : joinVikingUri(target, action.source.name)
+        await relocateResource({ rootUri, source: action.source, target: uri })
+        await onComplete(uri)
+        return
+      }
       const mount = liveIndex.mounts.get(action.source.uri)
       if (mount) {
         const document = await readTextDocument(mount.node_uri)
@@ -1396,13 +1453,17 @@ function ActionDialog({
       await onComplete(normalizeVikingUri(target))
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
+      if (caught instanceof RelocationError) {
+        setRelocationFailed(true)
+        await onRefresh().catch(() => undefined)
+      }
     } finally {
       setSubmitting(false)
     }
   }
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
+    <Dialog open onOpenChange={(open) => !open && !submitting && onClose()}>
       <DialogContent
         className={cn(
           action.kind === 'mount' &&
@@ -1424,6 +1485,7 @@ function ActionDialog({
         >
           {(action.kind === 'mkdir' ||
             action.kind === 'file' ||
+            action.kind === 'rename' ||
             action.kind === 'mount') && (
             <Field label={t('fields.name')} required>
               <Input
@@ -1438,8 +1500,14 @@ function ActionDialog({
               />
             </Field>
           )}
-          {action.kind === 'copy' && (
-            <Field label={t('fields.targetUri')}>
+          {(action.kind === 'copy' || action.kind === 'move') && (
+            <Field
+              label={t(
+                action.kind === 'move'
+                  ? 'fields.targetDirectory'
+                  : 'fields.targetUri',
+              )}
+            >
               <Input
                 value={target}
                 onChange={(event) => setTarget(event.target.value)}
@@ -1691,12 +1759,13 @@ function ActionDialog({
               </span>
             </div>
           )}
-          <Button variant="outline" onClick={onClose}>
+          <Button variant="outline" disabled={submitting} onClick={onClose}>
             {t('actions.cancel')}
           </Button>
           <Button
             disabled={
               submitting ||
+              relocationFailed ||
               previewMutation.isPending ||
               (action.kind === 'mount' && !argumentsValid)
             }

@@ -32,6 +32,8 @@ const arranger = {
     load: '加载',
     loadMore: '加载更多',
     mount: '挂载上下文',
+    move: '移动',
+    rename: '重命名',
     newDirectory: '新建目录',
     newFile: '新建文档',
     refresh: '刷新',
@@ -50,6 +52,7 @@ const arranger = {
     tagsHint: '多个标签使用英文逗号分隔。',
     tagsPlaceholder: 'production, observability',
     targetUri: '目标 URI',
+    targetDirectory: '目标目录 URI',
     timeout: '超时（秒）',
     title: '标题',
     tool: '工具',
@@ -141,6 +144,15 @@ const arranger = {
       title: '挂载实时上下文',
       description: '将 MCP 工具绑定为 Markdown 上下文节点。',
     },
+    move: {
+      title: '移动资源',
+      description:
+        '选择当前根目录内的已有目录。保留资源名称，实时上下文节点会重新挂载。',
+    },
+    rename: {
+      title: '重命名资源',
+      description: '输入新名称。目录内容会一起迁移，实时上下文节点会重新挂载。',
+    },
   },
   apiResources: {
     filesystemStat: '文件系统状态',
@@ -149,6 +161,11 @@ const arranger = {
     mcpToolCatalog: 'MCP 工具目录',
   },
   errors: {
+    directoryChanged: '移动期间源目录新增了内容：{{uri}}，已停止清理。',
+    destinationExists: '目标位置已存在资源：{{uri}}',
+    destinationParentNotDirectory: '目标父路径必须是已有目录。',
+    relocationFailed:
+      '移动在 {{source}} → {{target}} 处停止，已移动 {{completed}} 个文件：{{detail}}。部分变更可能已生效，请刷新并检查两处内容后再操作。',
     destinationLiveContext: '目标位置已有实时上下文节点',
     directoryContainsLiveContext: '此目录包含实时上下文节点',
     invalidApiResponse: 'OpenViking 返回的{{resource}}响应无效',

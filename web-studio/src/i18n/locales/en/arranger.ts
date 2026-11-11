@@ -33,6 +33,8 @@ const arranger = {
     load: 'Load',
     loadMore: 'Load more',
     mount: 'Mount context',
+    move: 'Move',
+    rename: 'Rename',
     newDirectory: 'New directory',
     newFile: 'New document',
     refresh: 'Refresh',
@@ -51,6 +53,7 @@ const arranger = {
     tagsHint: 'Separate multiple tags with commas.',
     tagsPlaceholder: 'production, observability',
     targetUri: 'Destination URI',
+    targetDirectory: 'Destination directory URI',
     timeout: 'Timeout (seconds)',
     title: 'Title',
     tool: 'Tool',
@@ -147,6 +150,16 @@ const arranger = {
       title: 'Mount live context',
       description: 'Bind an MCP tool to a Markdown context node.',
     },
+    move: {
+      title: 'Move resource',
+      description:
+        'Choose an existing directory inside the loaded root. The resource keeps its name; live context nodes are remounted.',
+    },
+    rename: {
+      title: 'Rename resource',
+      description:
+        'Enter a new name. Directory contents move with it; live context nodes are remounted.',
+    },
   },
   apiResources: {
     filesystemStat: 'filesystem stat',
@@ -155,6 +168,13 @@ const arranger = {
     mcpToolCatalog: 'MCP tool catalog',
   },
   errors: {
+    directoryChanged:
+      'The source directory gained content during the move: {{uri}}. Cleanup stopped.',
+    destinationExists: 'The destination already exists: {{uri}}',
+    destinationParentNotDirectory:
+      'The destination parent must be an existing directory.',
+    relocationFailed:
+      'Move stopped at {{source}} → {{target}} after moving {{completed}} files: {{detail}}. Changes may have been applied. Refresh and inspect both locations before trying again.',
     destinationLiveContext: 'The destination is a live context node',
     directoryContainsLiveContext: 'This directory contains live context nodes',
     invalidApiResponse: 'Invalid {{resource}} response from OpenViking',
