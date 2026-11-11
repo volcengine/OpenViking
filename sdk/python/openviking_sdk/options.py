@@ -16,6 +16,10 @@ class _ExtraOptions(TypedDict, total=False):
     extra: ExtraFields
 
 
+class SearchAsItemOptions(TypedDict, total=False):
+    aggregation: Literal["max", "sum"]
+
+
 class FindOptions(_ExtraOptions, total=False):
     image: Any
     node_limit: int
@@ -31,6 +35,7 @@ class FindOptions(_ExtraOptions, total=False):
     read_content: bool
     telemetry: Any
     events_time_decay_protection: Optional[str]
+    search_as_item: Optional[SearchAsItemOptions]
 
 
 class SearchOptions(FindOptions, total=False):
@@ -65,6 +70,8 @@ class SearchContextOptions(_ExtraOptions, total=False):
 
 
 class AddResourceOptions(_ExtraOptions, total=False):
+    as_item: bool
+    item_attrs: Dict[str, str]
     acl: Dict[str, Any]
     reason: str
     instruction: str

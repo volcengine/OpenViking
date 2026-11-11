@@ -91,6 +91,8 @@ async def test_token_upload_auto_ingests_and_returns_result(
         # Exercise the actual kernel authorization, without an embedding/native stack.
         assert ctx.user == UserIdentifier("acct", "user")
         assert ctx.actor_peer_id == "bot-a"
+        assert _kwargs["as_item"] is True
+        assert _kwargs["item_attrs"] == {"asset_id": "business-hello"}
         await fs.prepare_acl_update(to, acl, ctx)
         imported.append(Path(path).read_bytes())
         return {"root_uri": to}
@@ -106,7 +108,13 @@ async def test_token_upload_auto_ingests_and_returns_result(
     async def issue():
         identity_token = mcp_endpoint._mcp_ctx.set(identity)
         try:
-            instruction = await mcp_endpoint.add_resource(path="/tmp/hello.md", to=target, acl=acl)
+            instruction = await mcp_endpoint.add_resource(
+                path="/tmp/hello.md",
+                to=target,
+                acl=acl,
+                as_item=True,
+                item_attrs={"asset_id": "business-hello"},
+            )
         finally:
             mcp_endpoint._mcp_ctx.reset(identity_token)
         upload_url = next(line.strip() for line in instruction.splitlines() if "?token=" in line)

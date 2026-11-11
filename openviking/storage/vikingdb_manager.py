@@ -255,6 +255,9 @@ class VikingDBManagerProxy:
     async def get_collection_meta(self) -> Optional[Dict[str, Any]]:
         return await self._manager.get_collection_meta(ctx=self._ctx)
 
+    async def catalog_execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        return await self._manager.catalog_execute(request, ctx=self._ctx)
+
     async def update_collection_description(self, description: str) -> bool:
         backend = await self._manager.get_account_backend(self._ctx.account_id)
         return await backend.update_collection_description(description)
@@ -410,6 +413,9 @@ class VikingDBManagerProxy:
     # Tenant-Aware 方法（自动携带 ctx）
     # =========================================================================
 
+    async def search_items_in_tenant(self, **kwargs: Any) -> Dict[str, Any]:
+        return await self._manager.search_items_in_tenant(self._ctx, **kwargs)
+
     async def search_in_tenant(
         self,
         query_vector: Optional[List[float]],
@@ -422,6 +428,7 @@ class VikingDBManagerProxy:
         offset: int = 0,
         events_time_decay_protection: Optional[str] = None,
         request_now: Optional[datetime] = None,
+        output_fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         kwargs: Dict[str, Any] = {
             "query_vector": query_vector,
@@ -438,6 +445,8 @@ class VikingDBManagerProxy:
                 events_time_decay_protection=events_time_decay_protection,
                 request_now=request_now,
             )
+        if output_fields is not None:
+            kwargs["output_fields"] = output_fields
         return await self._manager.search_in_tenant(self._ctx, **kwargs)
 
     async def search_by_keywords_in_tenant(
@@ -449,6 +458,7 @@ class VikingDBManagerProxy:
         level: Optional[List[int]] = None,
         limit: int = 10,
         offset: int = 0,
+        output_fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         return await self._manager.search_by_keywords_in_tenant(
             self._ctx,
@@ -459,6 +469,7 @@ class VikingDBManagerProxy:
             level=level,
             limit=limit,
             offset=offset,
+            **({"output_fields": output_fields} if output_fields is not None else {}),
         )
 
     async def filter_in_tenant(

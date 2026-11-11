@@ -87,6 +87,13 @@ class LocalCollectionAdapter(CollectionAdapter):
         result = collection.update_data(data_list)
         return list(result.ids or [])
 
+    def catalog_execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        if request["op"] == "delete_subtree" and self._collection is None:
+            path = self._collection_path()
+            if not path or not (Path(path) / "catalog").is_dir():
+                return {}
+        return super().catalog_execute(request)
+
     def begin_bulk_ingest(self) -> None:
         self.get_collection().begin_bulk_ingest()
 

@@ -8,6 +8,7 @@ Provides search operations: search, find.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.core.item_search import SearchAsItemOptions
 from openviking.core.namespace_policy import is_system_uri
 from openviking.core.retrieval_types import SearchType
 from openviking.models.rerank import RerankClient
@@ -160,6 +161,7 @@ class SearchService:
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
         context_types: Optional[List[ContextType]] = None,
+        search_as_item: Optional[SearchAsItemOptions | Dict[str, Any]] = None,
     ) -> Any:
         """Search with session context.
 
@@ -175,10 +177,14 @@ class SearchService:
         Returns:
             FindResult
         """
+        if search_as_item is not None:
+            search_as_item = SearchAsItemOptions.model_validate(search_as_item)
+            if events_time_decay_protection is not None:
+                raise InvalidArgumentError("Item Search does not support event time decay")
         if search_type == "keywords" and image_url:
             raise InvalidArgumentError("image_url is not supported when search_type='keywords'")
         resolved_image_url = await self._resolve_image_url(image_url, ctx)
-        _validate_query(query, resolved_image_url)
+        _validate_query(query, resolved_image_url, filter)
         _reject_system_targets(target_uri)
         if search_type == "keywords":
             await self.ensure_keywords_search_supported(ctx)
@@ -202,6 +208,7 @@ class SearchService:
             events_time_decay_protection=events_time_decay_protection,
             search_type=search_type,
             context_types=context_types,
+            **({"search_as_item": search_as_item} if search_as_item is not None else {}),
         )
         return result
 
@@ -218,6 +225,7 @@ class SearchService:
         image_url: str | list[str] | None = None,
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
+        search_as_item: Optional[SearchAsItemOptions | Dict[str, Any]] = None,
     ) -> Any:
         """Search without session context.
 
@@ -234,6 +242,10 @@ class SearchService:
         """
         if search_type == "keywords" and image_url:
             raise InvalidArgumentError("image_url is not supported when search_type='keywords'")
+        if search_as_item is not None:
+            search_as_item = SearchAsItemOptions.model_validate(search_as_item)
+            if events_time_decay_protection is not None:
+                raise InvalidArgumentError("Item Search does not support event time decay")
         resolved_image_url = await self._resolve_image_url(image_url, ctx)
         _validate_query(query, resolved_image_url, filter)
         _reject_system_targets(target_uri)
@@ -249,6 +261,7 @@ class SearchService:
             image_url=resolved_image_url,
             events_time_decay_protection=events_time_decay_protection,
             search_type=search_type,
+            **({"search_as_item": search_as_item} if search_as_item is not None else {}),
         )
         return result
 

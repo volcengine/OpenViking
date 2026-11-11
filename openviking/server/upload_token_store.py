@@ -70,6 +70,8 @@ class _TokenInfo:
     acl: AclSpec | None = None
     from_oauth: bool = False
     uri: str = ""
+    as_item: bool = False
+    item_attrs: Optional[dict[str, str]] = None
 
 
 @dataclass(frozen=True)
@@ -94,6 +96,8 @@ class ConsumedUploadToken:
     acl: AclSpec | None = None
     from_oauth: bool = False
     uri: str = ""
+    as_item: bool = False
+    item_attrs: Optional[dict[str, str]] = None
 
 
 class UploadTokenStore:
@@ -122,6 +126,8 @@ class UploadTokenStore:
         acl: AclSpec | None = None,
         from_oauth: bool = False,
         uri: str = "",
+        as_item: bool = False,
+        item_attrs: Optional[dict[str, str]] = None,
     ) -> Tuple[str, float]:
         """Mint a fresh token bound to the caller identity and ingestion parameters.
 
@@ -152,6 +158,8 @@ class UploadTokenStore:
             acl,
             from_oauth,
             uri,
+            as_item,
+            dict(item_attrs) if item_attrs is not None else None,
         )
         for _ in range(8):
             token = "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(_TOKEN_LENGTH))
@@ -188,6 +196,8 @@ class UploadTokenStore:
             acl=info.acl,
             from_oauth=info.from_oauth,
             uri=info.uri,
+            as_item=info.as_item,
+            item_attrs=dict(info.item_attrs) if info.item_attrs is not None else None,
         )
 
     def peek(self, token: str) -> Optional[_TokenInfo]:

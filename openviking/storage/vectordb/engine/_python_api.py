@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from __future__ import annotations
 
+import json
 import struct
 from dataclasses import dataclass
 from enum import IntEnum
@@ -583,6 +584,22 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
         def get_state(self) -> StateResult:
             return StateResult.from_backend(self._backend._index_engine_get_state(self._handle))
 
+    class CatalogEngine:
+        """Thin ABI adapter. Persistence and inheritance live in C++."""
+
+        def __init__(self, path: str = ""):
+            factory = getattr(backend, "_new_catalog_engine", None)
+            if factory is None:
+                raise NotImplementedError("Rebuild the local C++ engine for Catalog support")
+            self._handle = factory(path)
+
+        def execute(self, request: dict[str, Any]) -> dict[str, Any]:
+            return json.loads(
+                backend._catalog_engine_execute(
+                    self._handle, json.dumps(request, ensure_ascii=False, allow_nan=False)
+                )
+            )
+
     class _StoreBase:
         def __init__(self, handle: Any):
             self._backend = backend
@@ -652,6 +669,7 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
         "StateResult": StateResult,
         "StorageOp": StorageOp,
         "IndexEngine": IndexEngine,
+        "CatalogEngine": CatalogEngine,
         "PersistStore": PersistStore,
         "VolatileStore": VolatileStore,
         "init_logging": init_logging,

@@ -44,6 +44,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from openviking.core.item_search import ItemSearchResult, SearchAsItemOptions
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.core.retrieval_types import SearchType
@@ -842,6 +843,7 @@ async def search(
         Optional[str],
         Field(description=_EVENTS_TIME_DECAY_DESCRIPTION),
     ] = None,
+    search_as_item: Optional[SearchAsItemOptions] = None,
 ) -> str:
     """Retrieval with optional session context and intent analysis.
 
@@ -856,6 +858,10 @@ async def search(
         validate_event_time_decay_request(events_time_decay_protection)
     except ValueError as exc:
         raise InvalidArgumentError(str(exc)) from exc
+    if search_as_item is not None and (mode != "list" or read_content):
+        raise InvalidArgumentError(
+            "search_as_item requires mode='list' and does not support read_content"
+        )
     service = get_service()
     ctx = _get_ctx()
     if search_type == "keywords" and not query.strip():
@@ -967,11 +973,14 @@ async def search(
         target_uri=target_uri,
         session=session,
         limit=limit,
-        score_threshold=0.35 if min_score is None else min_score,
+        score_threshold=min_score
+        if search_as_item is not None
+        else (0.35 if min_score is None else min_score),
         filter=context_filter,
         context_types=[ContextType(value) for value in resolve_context_types(context_type)],
         level=level,
         events_time_decay_protection=events_time_decay_protection,
+        **({"search_as_item": search_as_item} if search_as_item is not None else {}),
     )
     return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
@@ -1050,6 +1059,8 @@ async def _describe_skills_by_package(items: List[Dict[str, Any]], *, service, c
 
 
 async def _format_search_result(result, *, service, ctx, read_content: bool = False) -> str:
+    if isinstance(result, ItemSearchResult):
+        return json.dumps(result.to_dict(), ensure_ascii=False)
     items: List[Dict[str, Any]] = []
     seen: dict[str, int] = {}
     for ctx_type, contexts in [
@@ -1974,6 +1985,8 @@ async def add_resource(
     tag_mode: str = "replace",
     args: Optional[dict[str, Any]] = None,
     acl: Optional[AclSpec] = None,
+    as_item: bool = False,
+    item_attrs: Optional[dict[str, str]] = None,
 ) -> str:
     """Add a resource to OpenViking. Asynchronous — processing happens in the background.
 
@@ -2054,6 +2067,16 @@ async def add_resource(
     service = get_service()
     ctx = _get_ctx()
 
+    from openviking.storage.catalog import ITEM_ATTRS_OMITTED, validate_item_declaration
+
+    try:
+        validate_item_declaration(
+            as_item,
+            item_attrs if item_attrs is not None else ITEM_ATTRS_OMITTED,
+        )
+    except InvalidArgumentError as exc:
+        return _mcp_failure(exc)
+
     try:
         to = resolve_path_variables(to).strip() if to else ""
         if to:
@@ -2112,6 +2135,8 @@ async def add_resource(
                 tags=tags,
                 tag_mode=tag_mode,
                 acl=acl,
+                as_item=as_item,
+                **({"item_attrs": item_attrs} if item_attrs is not None else {}),
             )
         except OpenVikingError as exc:
             return _mcp_failure(exc)
@@ -2165,6 +2190,8 @@ async def add_resource(
                 tags=tags,
                 tag_mode=tag_mode,
                 acl=acl,
+                as_item=as_item,
+                **({"item_attrs": item_attrs} if item_attrs is not None else {}),
             )
         except OpenVikingError as exc:
             return _mcp_failure(exc)
@@ -2224,6 +2251,8 @@ async def add_resource(
         tag_mode=tag_mode,
         parse_mode=mode.value,
         acl=acl,
+        as_item=as_item,
+        item_attrs=item_attrs,
     )
     base_url, url_source = _resolve_public_base_url()
     upload_url = f"{base_url}/api/v1/resources/temp_upload?token={quote(token, safe='')}"

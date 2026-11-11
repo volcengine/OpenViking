@@ -278,7 +278,8 @@ class _OpsMixin:
         """
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 
-        guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
+        real_ctx = self._ctx_or_default(ctx)
+        guard_ctx = replace(real_ctx, bypass_acl=True)
         await self._ensure_access(uri, guard_ctx, action=AclAction.MANAGE)
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
@@ -299,17 +300,20 @@ class _OpsMixin:
 
         async def _finish_missing_delete() -> Dict[str, Any]:
             """Clean orphan index records for an idempotent delete."""
+            from openviking.storage.catalog import delete_catalog_subtree
+
             if no_vector:
+                await delete_catalog_subtree(self, target_uri, real_ctx)
                 return {"estimated_deleted_count": 0}
             uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
             uris_to_delete.append(target_uri)
-            real_ctx = self._ctx_or_default(ctx)
             estimated_count = await _estimate_deleted_count(path, real_ctx)
             vector_store = self._get_vector_store()
             if recursive and vector_store is not None:
                 await vector_store.delete_uris(real_ctx, [target_uri], recursive=True)
             else:
                 await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            await delete_catalog_subtree(self, target_uri, real_ctx)
             logger.info("rm target not found, cleaned orphan index: %s", safe_uri_for_log(str(uri)))
             return {"estimated_deleted_count": estimated_count}
 
@@ -410,6 +414,9 @@ class _OpsMixin:
                 raise
             # Add estimated_deleted_count to the result
             emit_file_change(target_uri, ctx, "deleted", is_dir=is_dir)
+            from openviking.storage.catalog import delete_catalog_subtree
+
+            await delete_catalog_subtree(self, target_uri, real_ctx)
             if isinstance(result, dict):
                 result["estimated_deleted_count"] = estimated_count
             else:
