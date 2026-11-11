@@ -86,7 +86,7 @@ from openviking.utils.git_auth import (
 )
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.media_processor import _smart_stem
-from openviking.utils.network_guard import ensure_public_remote_target
+from openviking.utils.network_guard import RequestValidator, ensure_public_remote_target
 from openviking.utils.path_safety import normalize_storage_target_uri
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessingPreparation, SkillProcessor
@@ -1174,6 +1174,7 @@ class ResourceService:
             source_info = await self._preflight_git_source(
                 path,
                 auth_config=preflight_git_auth,
+                request_validator=processor_kwargs.get("request_validator"),
                 branch=processor_kwargs.get("branch") or processor_kwargs.get("ref"),
                 commit=processor_kwargs.get("commit"),
             )
@@ -1663,6 +1664,7 @@ class ResourceService:
         source: str,
         *,
         auth_config: Optional[GitHttpAuthConfig] = None,
+        request_validator: Optional[RequestValidator] = None,
         branch: Optional[str] = None,
         commit: Optional[str] = None,
     ) -> _ResourceSourceInfo:
@@ -1692,15 +1694,15 @@ class ResourceService:
             ref = "HEAD"
             ls_remote_args = ["git", "ls-remote", repo_url, "HEAD"]
 
+        env = build_git_http_auth_env(auth_config, repo_url) if auth_config is not None else None
+        env = overlay_parser_subprocess_env(
+            ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, repo_url),
+            env,
+            request_validator=request_validator,
+        )
+
         proc = None
         try:
-            env = (
-                build_git_http_auth_env(auth_config, repo_url) if auth_config is not None else None
-            )
-            env = overlay_parser_subprocess_env(
-                ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, repo_url),
-                env,
-            )
             proc = await asyncio.create_subprocess_exec(
                 *ls_remote_args,
                 env=env,
