@@ -11,8 +11,46 @@
   flex: none;
   flex-direction: column;
   gap: 6px;
-  border-top: 1px solid var(--ov-viking-bot-border);
-  padding: 8px 12px 12px;
+  width: 100%;
+  min-width: 0;
+  padding: 0 16px 16px;
+}
+
+.ov-viking-bot__composer .ov-viking-bot__sender {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 0.5px solid var(--ov-viking-bot-border-strong);
+  border-radius: 20px;
+  background: var(--ov-viking-bot-bg);
+  box-shadow: 0 2px 6px
+    color-mix(
+      in srgb,
+      var(--ov-ui-color-shadow, var(--ov-ui-shadow-default)) 5%,
+      transparent
+    );
+  padding: 12px;
+}
+.ov-viking-bot__sender .ark-agentic-sender-richTextArea {
+  --ark-sender-rich-textarea-line-height: 22px;
+  margin: 0;
+  padding-top: 0;
+}
+.ov-viking-bot__sender .tiptap.ProseMirror {
+  outline: none;
+  color: var(--ov-viking-bot-text);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: 0.3px;
+  line-height: 22px;
+}
+.ov-viking-bot__sender .tiptap p {
+  margin: 0;
+}
+.ov-viking-bot__sender .tiptap p.is-editor-empty:first-child::before {
+  color: var(--ov-viking-bot-text-muted);
+  font: inherit;
 }
 
 .ov-viking-bot__composer--compact {
@@ -44,7 +82,7 @@
   font-size: 12px;
 }
 
-.ov-viking-bot__attachments button {
+.ov-viking-bot__attachments button:not(.ov-button) {
   border: none;
   background: none;
   padding: 0 2px;
@@ -53,11 +91,11 @@
   cursor: pointer;
 }
 
-.ov-viking-bot__attachments button:hover {
+.ov-viking-bot__attachments button:not(.ov-button):hover {
   color: var(--ov-viking-bot-text);
 }
 
-.ov-viking-bot__attachments button:focus-visible {
+.ov-viking-bot__attachments button:not(.ov-button):focus-visible {
   outline: 2px solid var(--ov-viking-bot-focus);
   outline-offset: 1px;
 }
@@ -66,74 +104,38 @@
   color: var(--ov-viking-bot-danger);
 }
 
-.ov-viking-bot__input {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 64px;
-  max-height: 200px;
-  border: 1px solid var(--ov-viking-bot-border);
-  border-radius: var(--ov-viking-bot-radius);
-  padding: 8px;
-  color: inherit;
-  font: inherit;
-  line-height: 1.6;
-  resize: vertical;
-}
-
-.ov-viking-bot__input::placeholder {
-  color: var(--ov-viking-bot-text-muted);
-}
-
-.ov-viking-bot__input:focus-visible {
-  outline: 2px solid var(--ov-viking-bot-focus);
-  outline-offset: -1px;
-}
-
-.ov-viking-bot__input:disabled {
-  background: var(--ov-viking-bot-surface);
-  color: var(--ov-viking-bot-text-muted);
-  cursor: not-allowed;
-}
-
 .ov-viking-bot__composer-actions {
   display: flex;
+  width: 100%;
+  min-height: 32px;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+}
+.ov-viking-bot__composer-tools {
+  display: flex;
+  min-width: 0;
+  align-items: center;
   gap: 8px;
 }
-
-.ov-viking-bot__composer-actions > button {
-  border: 1px solid var(--ov-viking-bot-border);
-  border-radius: var(--ov-viking-bot-radius);
-  background: none;
-  padding: 4px 12px;
-  color: var(--ov-viking-bot-text);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
+.ov-viking-bot__attach,
+.ov-viking-bot__submit {
+  flex-shrink: 0;
 }
-
-.ov-viking-bot__composer-actions > button:last-child {
-  border-color: var(--ov-viking-bot-accent);
-  background: var(--ov-viking-bot-accent);
-  color: var(--ov-viking-bot-on-accent);
+.ov-viking-bot__submit > svg {
+  display: block;
+  width: 9px;
+  height: 10.3334px;
 }
-
-.ov-viking-bot__composer-actions > button:hover:not(:disabled) {
-  background: var(--ov-viking-bot-surface-hover);
+.ov-viking-bot__attach > svg {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
-
-.ov-viking-bot__composer-actions > button:last-child:hover:not(:disabled) {
-  border-color: var(--ov-viking-bot-accent-hover);
-  background: var(--ov-viking-bot-accent-hover);
-}
-
-.ov-viking-bot__composer-actions > button:focus-visible {
-  outline: 2px solid var(--ov-viking-bot-focus);
-  outline-offset: 2px;
-}
-
-.ov-viking-bot__composer-actions > button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.ov-viking-bot__stop-icon {
+  width: 10px;
+  height: 10px;
+  border-radius: 1px;
+  background: currentColor;
 }

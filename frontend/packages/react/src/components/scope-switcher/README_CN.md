@@ -2,13 +2,15 @@
 
 [English](README.md) / 中文
 
+可选 `locale: 'zh-CN' | 'en-US'` 覆盖最近的模块或 Provider；均未配置时默认 `en-US`。已有 `labels` 可逐项覆盖。业务内容仍由宿主提供。
+
 `ScopeSwitcher` 是已实现的无状态面包屑布局。通过 `@openviking/react/components/scope-switcher` 导出的独立 `ScopeSelector` 子组件组合层级，不再支持旧的 `levels` 属性。每个子组件维护自己的展开状态、接收本级数据，布局根组件不汇总状态或订阅请求。
 
 ```tsx
-<ScopeSwitcher>
-  <ScopeSelector kind="selectable" identity={...} data={...} state={...} actions={...} />
-  <ScopeSelector kind="selectable" identity={...} data={...} state={...} actions={...} />
-  <ScopeSelector kind="fixed" identity={...} trigger={{ label: 'default' }} />
+<ScopeSwitcher locale="zh-CN">
+  <ScopeSelector locale="zh-CN" kind="selectable" identity={...} data={...} state={...} actions={...} />
+  <ScopeSelector locale="zh-CN" kind="selectable" identity={...} data={...} state={...} actions={...} />
+  <ScopeSelector locale="zh-CN" kind="fixed" identity={...} trigger={{ label: 'default' }} />
 </ScopeSwitcher>
 ```
 
@@ -45,6 +47,8 @@
 面板内悬停行铺浅底，选中行常驻主色浅底、文字加粗、行尾显示勾选；文字颜色不变，设计稿用字重和底色区分选中。搜索命中片段染主色，不加黄底。
 
 选项行首图标装在一个 24px 的底槽里：纯白底、0.5px `#edeef2` 描边、12px 圆角，图形本身保持 14px。宿主渲染圆形头像时把 `--ov-ui-scope-switcher-option-icon-radius` 设为 `50%`。
+
+图标由宿主通过 `trigger.icon` 与 `option.icon` 传入，组件本身不内置任何层级图标，也不按层级语义推断。需要默认图标时从 `@openviking/react/icons` 取 `LibraryIcon`、`SpaceIcon`、`UserIcon`；`ScopeCascade` 的默认视图已经在适配函数没给 `icon` 时自动补上这三个，宿主给了就照用宿主的。
 
 主题变量声明在 `.ov-scope-switcher` 上，宿主可只覆盖其中一条：`--ov-ui-scope-switcher-divider`、`-icon`、`-option-icon`、`-option-icon-size`、`-option-icon-radius`、`-row-hover`、`-tag-background`、`-tag-text`、`-panel-width`、`-option-height`、`-option-gap`、`-list-max-height`、`-panel-max-height`。
 

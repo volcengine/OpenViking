@@ -1,16 +1,36 @@
 # FilePreview 文件预览
 
+可选 `locale: 'zh-CN' | 'en-US'` 覆盖最近的模块或 Provider；均未配置时默认 `en-US`。已有 `labels` 可逐项覆盖。业务内容仍由宿主提供。
+
 带页签的文件预览。宿主给出内容与文件名，组件负责格式识别、页签行、内容区标题行与正文。
 
-当前是占位实现：页签外壳、编辑流程与成功通知已就位并可交互，文件正文尚未接入渲染器，先以纯文本降级展示。视图后续按本文契约重写。
+正文已接入按需加载的 FileViewerCore，支持 Markdown、图片、代码、表格、PDF、Office 和音视频。组件保留控制台式文件标签、路径栏和页脚。
 
 ## 基础用法
 
 至少传入一个页签。文件页签携带 `source`，内容页签携带由宿主自行渲染的节点。
 
+示例操作按钮使用文档站的内部控件；宿主接入时使用自己的按钮组件。
+
 ```tsx file="../../_demos/file-preview-basic.tsx" preview
 
 ```
+
+## 分级内容与图片
+
+```tsx file="../../_demos/file-preview-console.tsx" preview
+
+```
+
+文件页签可提供 `levels`：每项包含 `key`、`label`、`source`，可选 `resources`、`disabled`、`editing`。组件在路径下方显示分级切换，未指定时选第一个可用层级。`activeLevelKey` 与 `onLevelChange` 可控制当前层级；禁用项不可选。切换层级会丢弃草稿、恢复预览模式；读取或保存期间禁止切换。层级默认只读，只有该项明确提供 `editing` 才可编辑。
+
+各级内容由宿主加载；目录可提供 L0 摘要与 L1 总览，文件可增加 L2 正文。组件不自行读取服务端摘要。`source` 仍为必填，作为没有可用层级时的回落来源。
+
+原始图片用 `source.url` 或 `source.file`，不要把二进制图片当成 `source.content` 文本传入。图片在白色面板内按比例居中，右下角显示原始像素尺寸；点击可放大。
+
+Markdown 内图片可通过 `resources` 按原始图片地址匹配；动态鉴权图片使用 `resolveImage(src, source): Promise<string>`，宿主根据当前层级的 `source.path` 解析相对路径或 Viking URI 并返回可访问地址。宿主管理请求、取消和 blob URL 回收。每层可提供独立 `resources`，省略时继承文件页签资源。组件不会自动把 `viking://` 转成 HTTP 地址。
+
+`slots.footer` 可放更新时间与内容解析说明，采用左右对齐布局；权限徽标继续使用 `slots.titleExtra`，动作菜单由 `slots.actions` 提供。
 
 ## 两类页签
 
@@ -21,11 +41,11 @@
 
 两类共享外壳——页签行、路径面包屑与标题行动作区。差异在正文怎么来，以及预览/源码切换只属于文件页签：内容页签需要多种视图时在 `content` 里自行实现。
 
-**组件不内置动作按钮。** 复制正文、下载、预览/源码切换、编辑这些按钮依赖宿主的产品语义与文案，放在组件里既无法裁剪也难换形态，因此由宿主在 `slots.actions` 里渲染。组件通过该插槽的函数形式给出 `FilePreviewActions` 上下文——当前视图模式、编辑态、各项能力是否可用，以及改变它们的方法；状态仍由组件维护，宿主不需要接管。
+默认工具栏按当前内容显示：文本可复制，支持双视图的格式可切换预览／源码，文件或层级提供 `editing` 时可编辑并保存或取消。图片没有源码和正文复制按钮。`slots.actions` 可替换工具栏，传 `null` 可隐藏；`slots.extraActions` 用于追加宿主操作。复制路径仍在面包屑旁。
 
 复制路径是例外：有 `source.path` 的文件在任何宿主下都需要它，因此内置在面包屑末尾。
 
-当前激活哪个页签由组件内部维护。需要从外部切换时用 ref 句柄：
+当前页签可通过 `activeKey` / `onActiveKeyChange` 受控，也可通过 `defaultActiveKey` 指定初始值；支持 ref 句柄：
 
 ```tsx
 const previewRef = useRef<FilePreviewHandle>(null);
@@ -36,7 +56,7 @@ previewRef.current?.setActiveTab('dashboard');
 
 `source` 接受三种互斥输入，按顺序取第一个有值的：
 
-- `content` —— 内联文本，会被包成以 `fileName` 命名的 `File`。
+- `content` —— 内联文本，会编码成字节交给底座。
 - `file` —— `File` 或 `Blob`，直接透传。
 - `url` —— 可访问链接，组件不自行鉴权。
 
@@ -52,14 +72,14 @@ previewRef.current?.setActiveTab('dashboard');
 
 宿主提供异步 `editing.save` 执行保存，可选提供 `editing.loadContent` 读取完整文本；返回 `undefined` 表示放弃编辑，拒绝时显示读取失败提示。保存失败时保留草稿并显示错误。`editing.onSave` 仅通知保存成功，`editing.onCancel` 通知草稿已被丢弃。保存中阻止重复提交与页签切换。
 
-执行能力与通知分开：操作成功后才触发对应的 `on…` 回调，失败时不触发。省略方法时隐藏或禁用对应入口，通知本身不承担操作。正文 URI 交互待接入 FileViewer 时启用。
+执行能力与通知分开：操作成功后才触发对应的 `on…` 回调，失败时不触发。省略方法时隐藏或禁用对应入口，通知本身不承担操作。Markdown 链接通过 `operations.openUri` 交给宿主解析和导航。
 
 ## 属性
 
 | 属性     | 类型                                             | 默认值 | 说明                                                                                     |
 | -------- | ------------------------------------------------ | ------ | ---------------------------------------------------------------------------------------- |
 | `tabs`   | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | 必填   | 至少一个页签，初始展示第一个。                                                           |
-| `labels` | `FilePreviewLabels`                              | 英文   | 组件自渲染部分的文案（复制路径、加载与失败态、空文件与截断提示）；动作按钮的文案归宿主。 |
+| `labels` | `FilePreviewLabels`                              | locale | 组件自渲染部分的文案（复制路径、加载与失败态、空文件与截断提示）；动作按钮的文案归宿主。 |
 | 其余属性 | `HTMLAttributes<HTMLDivElement>`                 | —      | 标准 div 属性。                                                                          |
 
 ### 页签字段
@@ -89,16 +109,20 @@ previewRef.current?.setActiveTab('dashboard');
 
 文件页签额外提供：
 
-| 属性            | 类型                            | 默认值 | 说明                                                                                              |
-| --------------- | ------------------------------- | ------ | ------------------------------------------------------------------------------------------------- |
-| `source`        | `FilePreviewSource`             | 必填   | 内容与文件名。                                                                                    |
-| `operations`    | `FilePreviewOperations`         | —      | 异步执行能力：`openParent(path)`、`download()`，均返回 `Promise<void>`。                          |
-| `resources`     | `readonly FileViewerResource[]` | —      | 伴随资源，例如 3D 贴图。                                                                          |
-| `editing`       | `FilePreviewEditing`            | —      | 编辑能力；不传即只读。                                                                            |
-| `slots`         | `FilePreviewFileTabSlots`       | —      | `actions`（节点或接收上下文的函数）、`titleExtra`、`footer`，以及加载、失败、格式不支持三类兜底。 |
-| `onCopyContent` | `(text: string) => void`        | —      | 正文复制成功后通知。                                                                              |
-| `onDownload`    | `() => void`                    | —      | 下载操作成功后触发；失败时不触发。                                                                |
-| `onOpenUri`     | `(uri: string) => void`         | —      | 正文资源成功打开后触发；失败时不触发。                                                            |
+| 属性             | 类型                               | 默认值         | 说明                                                                                              |
+| ---------------- | ---------------------------------- | -------------- | ------------------------------------------------------------------------------------------------- |
+| `source`         | `FilePreviewSource`                | 必填           | 内容与文件名。                                                                                    |
+| `operations`     | `FilePreviewOperations`            | —              | 异步执行能力：`openParent(path)`、`download()`，均返回 `Promise<void>`。                          |
+| `resources`      | `readonly FileViewerResource[]`    | —              | 伴随资源，例如 3D 贴图。                                                                          |
+| `levels`         | `readonly FilePreviewLevel[]`      | —              | 分级内容，每项独立提供 source，可覆盖 resources 与 editing。                                      |
+| `activeLevelKey` | `string`                           | 第一个可用层级 | 受控层级。                                                                                        |
+| `onLevelChange`  | `(key: string) => void`            | —              | 切换意图；受控时由宿主更新 activeLevelKey。                                                       |
+| `resolveImage`   | `(src, source) => Promise<string>` | —              | 宿主解析 Markdown 图片，返回可访问 URL。                                                          |
+| `editing`        | `FilePreviewEditing`               | —              | 编辑能力；不传即只读。                                                                            |
+| `slots`          | `FilePreviewFileTabSlots`          | —              | `actions`（节点或接收上下文的函数）、`titleExtra`、`footer`，以及加载、失败、格式不支持三类兜底。 |
+| `onCopyContent`  | `(text: string) => void`           | —              | 正文复制成功后通知。                                                                              |
+| `onDownload`     | `() => void`                       | —              | 下载操作成功后触发；失败时不触发。                                                                |
+| `onOpenUri`      | `(uri: string) => void`            | —              | 正文资源成功打开后触发；失败时不触发。                                                            |
 
 内容页签额外提供：
 
@@ -182,3 +206,5 @@ import '@openviking/react/components/file-preview/style.css';
 ## 实现范围
 
 组件渲染外壳并通知成功的操作。读取、保存、下载与导航由宿主提供执行能力，成功通知不执行这些操作。
+
+`labels.showHiddenPath` 可覆盖折叠路径菜单按钮的无障碍名称，默认中文为“显示隐藏的路径层级”、英文为“Show hidden path levels”。

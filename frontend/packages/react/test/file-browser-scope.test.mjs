@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 
-import { OpenVikingProvider } from '@openviking/react/client';
+import { OpenVikingProvider } from './helpers/internal-hooks.mjs';
 // 从打包产物导入：Hook 内部的相对引用带 `.js` 后缀，只有构建后的目录能解析。
 // Import from the built package: the Hook's relative imports carry a `.js` suffix,
 // which only resolves inside the build output.
-import { useFileBrowser } from '@openviking/react/modules/file-browser';
+import { useFileBrowser } from './helpers/internal-hooks.mjs';
 import { deferred, mount, ok, recordingFetch } from './helpers/module-dom.mjs';
 
 const ROOT = 'viking://';

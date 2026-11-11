@@ -16,7 +16,7 @@ const render = (content, extra = {}) =>
     createElement(Tui, {
       value: '',
       commands: [command],
-      locale: 'zh',
+      locale: 'zh-CN',
       records: [
         {
           id: 'result',

@@ -235,8 +235,8 @@ class _AsyncVectorAdapter:
             while self._active:
                 self._condition.wait()
             if not self._closed:
-                self._closed = True
                 self._adapter.close()
+                self._closed = True
 
     async def collection_meta(
         self, index_name: str, *, raise_on_error: bool = False
@@ -1150,14 +1150,11 @@ class _SingleAccountBackend:
         await run_to_completion(self._close_after_operations)
 
     async def _close_after_operations(self) -> None:
-        try:
-            await asyncio.to_thread(self._wait_for_operations)
-            await self._async_adapter.call("close")
-            self._collection_config = {}
-            self._meta_data_cache = {}
-            logger.info("_SingleAccountBackend closed")
-        except Exception as e:
-            logger.error("Error closing backend: %s", e)
+        await asyncio.to_thread(self._wait_for_operations)
+        await self._async_adapter.call("close")
+        self._collection_config = {}
+        self._meta_data_cache = {}
+        logger.info("_SingleAccountBackend closed")
 
     @_backend_operation
     async def health_check(self) -> bool:
@@ -1316,10 +1313,8 @@ class VikingVectorIndexBackend:
             self._account_backends.pop(account_id, None)
         if backend and backend._adapter is not self._shared_adapter:
             self._retiring_backends.add(backend)
-            try:
-                await backend.close()
-            finally:
-                self._retiring_backends.discard(backend)
+            await backend.close()
+            self._retiring_backends.discard(backend)
 
     def _get_root_backend(self) -> _SingleAccountBackend:
         """获取 root 特权 backend"""
@@ -1952,36 +1947,29 @@ class VikingVectorIndexBackend:
             id(self._shared_adapter): self._shared_async_adapter
         }
         backends: set[_SingleAccountBackend] = set()
-        try:
-            backends.update(self._account_backends.values())
-            backends.update(self._retiring_backends)
-            if self._root_backend is not None:
-                backends.add(self._root_backend)
-            for account_id in set(self._resolved_backends) | self._initializing_accounts:
-                async with self._account_backend_locks.acquire(account_id):
-                    backend = self._resolved_backends.get(account_id)
-                    if backend is not None:
-                        backends.add(backend)
-            for backend in backends:
-                with backend._operation_condition:
-                    backend._retired = True
-                adapters[id(backend._adapter)] = backend._async_adapter
-            for backend in backends:
-                await asyncio.to_thread(backend._wait_for_operations)
-        except Exception as e:
-            logger.error("Error preparing vector facade close: %s", e)
-        finally:
-            for adapter in adapters.values():
-                try:
-                    await adapter.call("close")
-                except Exception as e:
-                    logger.error("Error closing vector adapter: %s", e)
-            self._account_backends.clear()
-            self._resolved_backends.clear()
-            self._retiring_backends.clear()
-            self._initializing_accounts.clear()
-            self._root_backend = None
-            logger.info("VikingVectorIndexBackend facade closed")
+        backends.update(self._account_backends.values())
+        backends.update(self._retiring_backends)
+        if self._root_backend is not None:
+            backends.add(self._root_backend)
+        for account_id in set(self._resolved_backends) | self._initializing_accounts:
+            async with self._account_backend_locks.acquire(account_id):
+                backend = self._resolved_backends.get(account_id)
+                if backend is not None:
+                    backends.add(backend)
+        for backend in backends:
+            with backend._operation_condition:
+                backend._retired = True
+            adapters[id(backend._adapter)] = backend._async_adapter
+        for backend in backends:
+            await asyncio.to_thread(backend._wait_for_operations)
+        for adapter in adapters.values():
+            await adapter.call("close")
+        self._account_backends.clear()
+        self._resolved_backends.clear()
+        self._retiring_backends.clear()
+        self._initializing_accounts.clear()
+        self._root_backend = None
+        logger.info("VikingVectorIndexBackend facade closed")
 
     async def health_check(self) -> bool:
         return await self._get_default_backend().health_check()

@@ -2,6 +2,8 @@
 
 English / [中文](README_CN.md)
 
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
+
 The conversation view: message list, composer and the pending-interaction area. It renders with **Ark Design** (`@ark-design/ui`) — the same library the commercial console uses — and takes an already normalized message model so neither host's protocol leaks in.
 
 > **Status: placeholder.** The API contract is settled and a working view renders against it, but the view has not been through design review and will be rewritten. Treat the props and the interaction model as the deliverable; treat the visuals as provisional.
@@ -41,6 +43,7 @@ Host-specific protocol adaptation stays in each host repository: the component n
 
 ```tsx
 <VikingBot
+  locale="en-US"
   messages={messages}
   streaming={streaming}
   draft={draft}

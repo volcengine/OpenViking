@@ -105,10 +105,12 @@ export function Tooltip({
     }
   }, []);
 
-  // 卸载时清掉未触发的定时器。 Clear a pending timer on unmount.
+  // useEffect 必要性：浏览器延迟打开/关闭定时器可能晚于组件卸载；
+  // 只有卸载清理能释放最后一次事件创建的 timer，避免过期回调。
   useEffect(() => clearTimer, [clearTimer]);
 
-  // `disabled` 变真时立即收起，避免浮层留在屏幕上。 Collapse as soon as `disabled` turns true.
+  // useEffect 必要性：宿主可在事件外禁用触发器，需同步撤销浏览器 timer 和 Portal；
+  // props 提交后清理旧 timer 并收起浮层，无额外订阅需要释放。
   useEffect(() => {
     if (disabled) {
       clearTimer();
@@ -116,11 +118,11 @@ export function Tooltip({
     }
   }, [disabled, clearTimer]);
 
-  // useEffect 必要性：`click` 触发时要响应浮层外的按下与 Esc，这是文档级
+  // useEffect 必要性：点击浮层响应外部按下，两种浮层都响应 Esc，这是文档级
   // 事件，只有挂到 document 才能捕获；浮层渲染在 portal 里，DOM 上不是触发
   // 元素的子孙，靠冒泡判断不了「点在外部」。关闭或卸载时移除监听。
   useEffect(() => {
-    if (!open || trigger !== 'click') return;
+    if (!open) return;
 
     const onPointerDown = (event: MouseEvent) => {
       const target = event.target as Node;
@@ -133,16 +135,21 @@ export function Tooltip({
       change(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') change(false);
+      if (event.key === 'Escape') {
+        clearTimer();
+        change(false);
+      }
     };
 
-    document.addEventListener('mousedown', onPointerDown);
+    if (trigger === 'click')
+      document.addEventListener('mousedown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
     return () => {
-      document.removeEventListener('mousedown', onPointerDown);
+      if (trigger === 'click')
+        document.removeEventListener('mousedown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [change, open, surfaceNode, trigger]);
+  }, [change, clearTimer, open, surfaceNode, trigger]);
 
   const show = () => {
     if (disabled) return;
@@ -160,7 +167,10 @@ export function Tooltip({
   const hide = () => {
     if (trigger === 'click') return;
     clearTimer();
-    change(false);
+    timerRef.current = window.setTimeout(() => {
+      change(false);
+      timerRef.current = undefined;
+    }, 120);
   };
 
   const child = children as React.ReactElement<Record<string, unknown>>;
@@ -170,8 +180,12 @@ export function Tooltip({
 
   const triggerElement = cloneElement(child, {
     ref: mergedRef,
-    'aria-describedby': open && trigger === 'hover' ? id : undefined,
-    'aria-expanded': trigger === 'click' ? open : undefined,
+    'aria-describedby':
+      childProps['aria-describedby'] ??
+      (open && trigger === 'hover' && content !== childProps['aria-label']
+        ? id
+        : undefined),
+    'aria-expanded': trigger === 'click' ? open : childProps['aria-expanded'],
     onMouseEnter: (event: React.MouseEvent) => {
       (
         childProps.onMouseEnter as ((e: React.MouseEvent) => void) | undefined

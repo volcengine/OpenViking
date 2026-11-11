@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import { useLayoutEffect, useRef, useState } from 'react';
 
 import type {
@@ -34,7 +35,7 @@ import type {
 export interface FilePreviewDirectoryBodyProps {
   tab: FilePreviewDirectoryTab;
   text: Required<FilePreviewLabels>;
-  locale?: 'en-US' | 'zh-CN';
+  locale?: Locale;
   actions: FilePreviewActions;
   editing: ReturnType<typeof useFilePreviewEditing>;
   viewMode: FilePreviewViewMode;
@@ -59,6 +60,8 @@ function levelToFileTab(
     kind: 'file',
     key: `${tab.key}::${level.key}`,
     source: level.source,
+    resources: level.resources ?? tab.resources,
+    resolveImage: tab.resolveImage,
     operations: tab.operations,
     slots: tab.slots,
   };
@@ -103,7 +106,10 @@ export function FilePreviewDirectoryBody({
     const measure = () => {
       const active = root.querySelector<HTMLElement>('[aria-selected="true"]');
       if (!active) return;
-      setIndicator({ left: active.offsetLeft, width: active.offsetWidth });
+      setIndicator({
+        left: active.offsetLeft + (active.offsetWidth - 14) / 2,
+        width: 14,
+      });
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -167,6 +173,7 @@ export function FilePreviewDirectoryBody({
           canOpenParent={Boolean(tab.operations?.openParent)}
           titleExtra={tab.slots?.titleExtra}
           slotActions={tab.slots?.actions}
+          extraActions={tab.slots?.extraActions}
           actions={actions}
           text={text}
           onOpenParent={(uri) => void tab.operations?.openParent?.(uri)}
@@ -186,6 +193,7 @@ export function FilePreviewDirectoryBody({
         canOpenParent={Boolean(tab.operations?.openParent)}
         titleExtra={tab.slots?.titleExtra}
         slotActions={tab.slots?.actions}
+        extraActions={tab.slots?.extraActions}
         actions={actions}
         text={text}
         onOpenParent={(uri) => void tab.operations?.openParent?.(uri)}
@@ -225,20 +233,19 @@ export function FilePreviewDirectoryBody({
         </div>
       ) : null}
       <div className="ov-file-preview__body">
-        {
-          <FilePreviewBody
-            fileTab={fileTab}
-            text={text}
-            locale={locale}
-            viewMode={viewMode}
-            editing={editing}
-            onViewModeChange={onViewModeChange}
-            onHandleChange={onHandleChange}
-            onViewModesChange={onViewModesChange}
-            onDownload={onDownload}
-            onCancelEditing={onCancelEditing}
-          />
-        }
+        <FilePreviewBody
+          key={fileTab.key}
+          fileTab={fileTab}
+          text={text}
+          locale={locale}
+          viewMode={viewMode}
+          editing={editing}
+          onViewModeChange={onViewModeChange}
+          onHandleChange={onHandleChange}
+          onViewModesChange={onViewModesChange}
+          onDownload={onDownload}
+          onCancelEditing={onCancelEditing}
+        />
       </div>
       {tab.slots?.footer ? (
         <div className="ov-file-preview__footer">{tab.slots.footer}</div>

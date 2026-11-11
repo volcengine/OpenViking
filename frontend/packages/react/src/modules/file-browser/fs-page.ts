@@ -26,6 +26,7 @@ export async function loadPage(
     query: {
       uri,
       output: 'agent',
+      include_tags: true,
       node_limit: PAGE_SIZE,
       offset,
       // 不传 `show_all_hidden`：默认列表已排除 `.abstract.md` / `.overview.md`

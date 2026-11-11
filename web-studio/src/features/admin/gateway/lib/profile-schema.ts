@@ -3,6 +3,7 @@ import type {
   Profile,
   ProfileSettings,
   QuotaBucket,
+  RecallPeerScope,
 } from '#/features/admin/gateway/lib/api'
 import { QUOTA_BUCKETS } from '#/features/admin/gateway/lib/api'
 import type {
@@ -15,17 +16,7 @@ import {
   collect,
 } from '#/features/admin/gateway/lib/validation'
 
-/** OpenViking MCP tools that change data; mirrors `WRITE_TOOLS` in `models.py`. */
-export const WRITE_TOOLS = [
-  'remember',
-  'write',
-  'edit',
-  'add_resource',
-  'add_skill',
-  'forget',
-  'set_acl',
-  'cancel_watch',
-]
+export const RECALL_PEER_SCOPES: RecallPeerScope[] = ['all', 'actor']
 
 /** Recommended settings; identical to the gateway's own defaults. */
 export const PROFILE_DEFAULTS: ProfileSettings = {
@@ -41,9 +32,11 @@ export const PROFILE_DEFAULTS: ProfileSettings = {
   score_threshold: 0.35,
   recall_timeout: 2,
   query_max_chars: 8000,
+  recall_peer_scope: 'all',
   show_recall: false,
   commit_tokens: 20000,
   keep_recent_messages: 10,
+  capture_memory_types: null,
   idle_seconds: 600,
   compaction: true,
   compaction_threshold: 0.9,
@@ -54,7 +47,7 @@ export const PROFILE_DEFAULTS: ProfileSettings = {
   window_hard_ratio: 0.85,
   gateway_tools: true,
   show_tool_calls: true,
-  disabled_tools: WRITE_TOOLS,
+  disabled_tools: [],
   tool_max_rounds: null,
   tool_timeout_seconds: 30,
   tool_result_bytes: 65536,

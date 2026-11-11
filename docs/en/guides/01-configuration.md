@@ -1614,6 +1614,7 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `backend` | str | `local` keeps the original filesystem path; `cache` enables the CacheFS wrapper | `local` |
+| `shared_redis_ttl_seconds` | int | TTL override for every query bucket; `0` keeps the provider default. Applied only when CacheFS shares a Redis service with QueueFS, cache-backed PathLock, or the expiry scheduler | `0` |
 
 `storage.agfs.pathlock` selects the PathLock storage provider:
 

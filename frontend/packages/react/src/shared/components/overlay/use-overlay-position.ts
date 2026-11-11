@@ -1,6 +1,9 @@
-import { useLayoutEffect, useState } from 'react';
-
+import { useEffect, useLayoutEffect, useState } from 'react';
 import type { OverlayPlacement } from './types.js';
+
+// Measure before paint in browsers; server renderers have no viewport.
+const usePositionEffect =
+  typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 /** 浮层与触发元素之间的间隙。 Gap between the surface and its trigger. */
 export const OVERLAY_OFFSET = 6;
@@ -34,6 +37,7 @@ export function resolvePosition(
   trigger: DOMRect,
   surface: { width: number; height: number },
   placement: OverlayPlacement,
+  alignment: 'center' | 'end' = 'center',
 ): OverlayPosition {
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
@@ -67,7 +71,10 @@ export function resolvePosition(
       side === 'top'
         ? trigger.top - surface.height - OVERLAY_OFFSET
         : trigger.bottom + OVERLAY_OFFSET;
-    const left = trigger.left + trigger.width / 2 - surface.width / 2;
+    const left =
+      alignment === 'end'
+        ? trigger.right - surface.width
+        : trigger.left + trigger.width / 2 - surface.width / 2;
     return {
       top: clamp(top, surface.height, viewportHeight),
       left: clamp(left, surface.width, viewportWidth),
@@ -108,6 +115,7 @@ export function useOverlayPosition(
   triggerRef: React.RefObject<HTMLElement | null>,
   surface: HTMLElement | null,
   placement: OverlayPlacement,
+  alignment: 'center' | 'end' = 'center',
 ) {
   const [position, setPosition] = useState<OverlayPosition>({
     top: 0,
@@ -115,7 +123,9 @@ export function useOverlayPosition(
     placement,
   });
 
-  useLayoutEffect(() => {
+  // Sync committed geometry and scoped theme; release both on close or unmount.
+  // The server uses an inert effect instead of attempting layout measurement.
+  usePositionEffect(() => {
     if (!open) return;
     const trigger = triggerRef.current;
     if (!trigger || !surface) return;
@@ -184,6 +194,7 @@ export function useOverlayPosition(
         triggerRect,
         { width: surfaceRect.width, height: surfaceRect.height },
         placement,
+        alignment,
       );
       // 坐标没变就不写 state：每次写入新对象都会触发一次重渲染，而重渲染
       // 又会让本 effect 重跑，形成无限循环。
@@ -208,10 +219,11 @@ export function useOverlayPosition(
     return () => {
       observer.disconnect();
       themeObserver.disconnect();
+      written.forEach((name) => surface.style.removeProperty(name));
       window.removeEventListener('scroll', update, true);
       window.removeEventListener('resize', update);
     };
-  }, [open, placement, surface, triggerRef]);
+  }, [open, placement, surface, triggerRef, alignment]);
 
   return position;
 }

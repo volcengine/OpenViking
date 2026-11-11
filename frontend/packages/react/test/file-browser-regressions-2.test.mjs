@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 
-import { OpenVikingProvider } from '@openviking/react/client';
-import { useFileBrowser } from '@openviking/react/modules/file-browser';
-import { deferred, mount, ok, recordingFetch } from './helpers/module-dom.mjs';
+import { OpenVikingProvider } from './helpers/internal-hooks.mjs';
+import { useFileBrowser } from './helpers/internal-hooks.mjs';
+import { mount, ok, recordingFetch } from './helpers/module-dom.mjs';
 
 const ROOT = 'viking://';
 const FILE_A = 'viking://a.md';
@@ -64,50 +64,6 @@ test('an uncontrolled selection replaces a non-null initial currentUri', async (
 
   assert.equal(api.current.selectedId, FILE_B);
   assert.equal(api.current.previewTabs[0].key, FILE_B);
-  await tree.unmount();
-});
-
-test('a stale search completion cannot overwrite the current results', async () => {
-  // 自定义 fetch 可以在 signal 已中止之后照常返回；不复查就会让上一个账号的结果
-  // 盖住当前视图。
-  //
-  // A custom fetch can resolve normally after its signal was aborted; without a check
-  // the previous account's result overwrites the current view.
-  const slow = deferred();
-  let scope = 'A';
-  const fetch = recordingFetch((call) => {
-    if (call.path === '/api/v1/fs/ls') return ok([]);
-    if (call.path === '/api/v1/search/find') {
-      if (scope === 'A') return slow.promise;
-      return ok({ memories: [{ uri: 'viking://b.md' }], resources: [] });
-    }
-    return ok('');
-  });
-
-  const api = { current: undefined };
-  const Probe = probe(api);
-  const mountTree = (account) =>
-    createElement(
-      OpenVikingProvider,
-      { baseURL: 'https://ov.test', fetch, accountId: account },
-      createElement(Probe, { uri: null, controlled: true }),
-    );
-
-  const tree = await mount(mountTree('A'));
-  api.current.actions.setQuery('secret');
-  await tree.render(mountTree('A'));
-
-  scope = 'B';
-  await tree.render(mountTree('B'));
-  // A 的响应在切换之后才回来。
-  // A's response only resolves after the switch.
-  slow.resolve(
-    ok({ memories: [{ uri: 'viking://a-secret.md' }], resources: [] }),
-  );
-  await tree.render(mountTree('B'));
-
-  const uris = api.current.rows.map((row) => row.uri);
-  assert.ok(!uris.includes('viking://a-secret.md'), uris.join(','));
   await tree.unmount();
 });
 

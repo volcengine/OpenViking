@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useMemo } from 'react';
 import type { KeyboardEvent, RefObject } from 'react';
 import {
   getTuiCommandInputText,
@@ -41,7 +41,12 @@ export function useTuiComposerKeyboard({
   onDismiss,
   onRequestPalette,
 }: KeyboardOptions) {
-  const historyRef = useRef({ offset: -1, draft: '', value: '' });
+  // Keyboard drafts belong to this history, including its empty/reset state.
+  const historyKey = JSON.stringify(history);
+  const historyRef = useMemo(
+    () => ({ current: { historyKey, offset: -1, draft: '', value: '' } }),
+    [historyKey],
+  );
   const change = (next: string) => {
     historyRef.current.offset = -1;
     onValueChange?.(next);
@@ -158,7 +163,7 @@ export function useTuiComposerKeyboard({
       );
       const draft = browsing ? previous.draft : value;
       const next = offset < 0 ? draft : history[history.length - 1 - offset]!;
-      historyRef.current = { offset, draft, value: next };
+      historyRef.current = { historyKey, offset, draft, value: next };
       onValueChange?.(next);
       onDismiss(next);
       inputRef.current?.focus({ preventScroll: true });

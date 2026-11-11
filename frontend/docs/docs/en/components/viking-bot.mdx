@@ -1,8 +1,14 @@
 # VikingBot
 
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
+
 The conversation view: message list, composer and the pending-interaction area. The open-source and managed-agent hosts speak different protocols, so the component takes an already normalized message model and lets each host replace the regions it renders differently.
 
-**This is a placeholder.** The API contract is settled and a working view renders against it, but the view has not been through design review and will be rewritten. Treat the props and the interaction model as the deliverable; treat the visuals as provisional.
+The welcome state and composer follow the Volcengine layout; the message list and composer reuse Ark Design. Props supply data and callbacks report user actions; the host owns sessions, streaming requests and uploads. Customize the welcome copy through `labels.welcomeTitle` and `labels.welcomeDescription`, or replace the entire welcome area with `emptyState`.
+
+Message rendering follows Volcengine `release/openviking/2026-11-12`: ordinary answers use `MDRenderer` directly with 13px / 22px text, 8px paragraph spacing and no long-answer collapse. The final answer in each turn shows its timestamp on hover; resource URIs in Markdown, inline code and text code blocks invoke `onOpenUri`. `ActivityTimeline` owns status, elapsed time and completion collapse, with separate input/output details. `locale` controls built-in copy and timestamp formatting.
+
+The `tool` and `tool_result` parts accept `results: readonly VikingBotToolResultLink[]`. Each item has a `uri`, optional `label` and `score`, rendered as a file/resource/similarity card. The host adapts its search response; the view does not inspect tool names or API protocols. Cards invoke `onOpenUri` and are disabled without that callback. Omit `results` or pass an empty array to show the raw output.
 
 ## Basic usage
 
@@ -25,38 +31,54 @@ The conversation view: message list, composer and the pending-interaction area. 
 
 Protocol adaptation stays in each host repository; the component imports no backend event type.
 
+## Session and input extensions
+
+`sessions` supplies items, the current ID, loading/error state and callbacks for creation, selection and pagination. Dates use host-provided ISO timestamps. `headerActions` accepts optional controls such as a More menu. The component neither loads nor persists sessions. Use `VikingBotSessionActions` independently in a shared host header.
+
+The host supplies `quickInputs` as `{ id, label, prompt, icon? }`; no business commands are built in. They appear at the bottom of the welcome state or above Sender when messages exist. Selecting one fills and focuses the draft without sending. Another shortcut replaces the previously inserted prompt, preserving custom text before and after it, including identical text typed separately. Editing inside the inserted prompt makes it custom text; the next shortcut appends to it. An external draft replacement that cannot be mapped unambiguously also releases ownership. Override this behavior with `onQuickInputSelect`.
+
+`references` supplies visible FileTree `rows`, controlled `selected`, `onChange`, and optional `onQueryChange`, `onExpand`, `isLoading` and `error`. The toolbar and typed `@` use the same picker. Selections are deduplicated by URI and reported separately in `VikingBotDraft.references`, rather than flattened into text. Omitting the configuration hides the entry point. The host handles queries, expansion and permissions, and resets references and attachments when identity or session changes. `onFilesAdded` enables `+`; it reports files for the host to upload.
+
+Input extensions also work with standalone `VikingBotComposer`. Customize welcome, session, reference, loading and removal text through `labels`.
+
 ## Props
 
 ### VikingBotProps
 
-| Prop                 | Type                                             | Default  | Description                                         |
-| -------------------- | ------------------------------------------------ | -------- | --------------------------------------------------- |
-| `messages`           | `readonly VikingBotMessage[]`                    | required | Messages in the current session.                    |
-| `className`          | `string`                                         | —        | Class name applied to the root element.             |
-| `streaming`          | `VikingBotStreamingState`                        | —        | Parts appended while the assistant is streaming.    |
-| `draft`              | `string`                                         | —        | Controlled draft; omit to hide the composer.        |
-| `attachments`        | `readonly VikingBotAttachment[]`                 | —        | Attachments already selected by the host.           |
-| `isSending`          | `boolean`                                        | —        | Whether a reply is streaming.                       |
-| `isAvailable`        | `boolean`                                        | `true`   | Whether the bot can accept input.                   |
-| `unavailableMessage` | `string`                                         | —        | Message shown while the bot is unavailable.         |
-| `emptyState`         | `ReactNode`                                      | —        | Shown instead of the list before the first message. |
-| `header`             | `ReactNode`                                      | —        | Header slot.                                        |
-| `footer`             | `ReactNode`                                      | —        | Slot above the composer.                            |
-| `children`           | `ReactNode`                                      | —        | Replaces the whole body.                            |
-| `messageList`        | `ReactNode`                                      | —        | Replaces the message list.                          |
-| `composer`           | `ReactNode`                                      | —        | Replaces the composer.                              |
-| `interaction`        | `VikingBotInteractionProps`                      | —        | A pending interaction; replaces the composer.       |
-| `listKey`            | `string`                                         | —        | Identity scope; changes reset display state.        |
-| `composerRef`        | `RefObject<VikingBotComposerRef \| null>`        | —        | Imperative handle of the composer.                  |
-| `onDraftChange`      | `(value: string) => void`                        | —        | Invoked when the draft changes.                     |
-| `onFilesAdded`       | `(files: readonly File[]) => void`               | —        | Reports files the user picked or dropped.           |
-| `onAttachmentRemove` | `(attachment: VikingBotAttachment) => void`      | —        | Removes an attachment.                              |
-| `onSend`             | `(draft: VikingBotDraft) => void`                | —        | Reports the send intent; omission disables sending. |
-| `onCancel`           | `() => void`                                     | —        | Stops the streaming reply.                          |
-| `onOpenUri`          | `(uri: string) => void`                          | —        | Opens a resource referenced by a message.           |
-| `onCopy`             | `(text: string) => void`                         | —        | Called after a copy; the host performs it.          |
-| `onMessageAction`    | `(messageId: string, actionKey: string) => void` | —        | Fires a message action.                             |
-| `labels`             | `VikingBotLabels`                                | English  | Replaceable copy.                                   |
+| Prop                 | Type                                             | Default           | Description                                                                                         |
+| -------------------- | ------------------------------------------------ | ----------------- | --------------------------------------------------------------------------------------------------- |
+| `messages`           | `readonly VikingBotMessage[]`                    | required          | Messages in the current session.                                                                    |
+| `className`          | `string`                                         | —                 | Class name applied to the root element.                                                             |
+| `locale`             | `'zh-CN' \| 'en-US'`                             | Inherited / en-US | Built-in Chinese and English copy.                                                                  |
+| `streaming`          | `VikingBotStreamingState`                        | —                 | Parts appended while the assistant is streaming.                                                    |
+| `draft`              | `string`                                         | —                 | Controlled draft; omit to hide the composer.                                                        |
+| `attachments`        | `readonly VikingBotAttachment[]`                 | —                 | Attachments already selected by the host.                                                           |
+| `isSending`          | `boolean`                                        | —                 | Whether a reply is streaming.                                                                       |
+| `isAvailable`        | `boolean`                                        | `true`            | Whether the bot can accept input.                                                                   |
+| `unavailableMessage` | `string`                                         | —                 | Message shown while the bot is unavailable.                                                         |
+| `emptyState`         | `ReactNode`                                      | —                 | Shown instead of the list before the first message.                                                 |
+| `header`             | `ReactNode`                                      | —                 | Header slot.                                                                                        |
+| `footer`             | `ReactNode`                                      | —                 | Slot above the composer.                                                                            |
+| `children`           | `ReactNode`                                      | —                 | Replaces the whole body.                                                                            |
+| `messageList`        | `ReactNode`                                      | —                 | Replaces the message list.                                                                          |
+| `composer`           | `ReactNode`                                      | —                 | Replaces the composer.                                                                              |
+| `interaction`        | `VikingBotInteractionProps`                      | —                 | A pending interaction; replaces the composer. Its optional `locale` overrides VikingBot’s language. |
+| `listKey`            | `string`                                         | —                 | Identity scope; changes reset display state.                                                        |
+| `composerRef`        | `RefObject<VikingBotComposerRef \| null>`        | —                 | Imperative handle of the composer.                                                                  |
+| `onDraftChange`      | `(value: string) => void`                        | —                 | Invoked when the draft changes.                                                                     |
+| `onFilesAdded`       | `(files: readonly File[]) => void`               | —                 | Reports files the user picked or dropped.                                                           |
+| `onAttachmentRemove` | `(attachment: VikingBotAttachment) => void`      | —                 | Removes an attachment.                                                                              |
+| `onSend`             | `(draft: VikingBotDraft) => void`                | —                 | Reports the send intent; omission disables sending.                                                 |
+| `onCancel`           | `() => void`                                     | —                 | Stops the streaming reply.                                                                          |
+| `onOpenUri`          | `(uri: string) => void`                          | —                 | Opens a resource referenced by a message.                                                           |
+| `onCopy`             | `(text: string) => void`                         | —                 | Handles message-text copy; user messages use Ark copy when omitted.                                 |
+| `onMessageAction`    | `(messageId: string, actionKey: string) => void` | —                 | Fires a message action.                                                                             |
+| `labels`             | `VikingBotLabels`                                | locale            | Replaceable copy.                                                                                   |
+| `sessions`           | `VikingBotSessions`                              | —                 | Host-owned session data and actions                                                                 |
+| `headerActions`      | `ReactNode`                                      | —                 | Optional header extension controls                                                                  |
+| `quickInputs`        | `readonly VikingBotQuickInput[]`                 | —                 | Host-provided quick inputs                                                                          |
+| `onQuickInputSelect` | `(input: VikingBotQuickInput) => void`           | —                 | Override default draft filling                                                                      |
+| `references`         | `VikingBotReferences`                            | —                 | Controlled references and resource rows                                                             |
 
 ## Pending interaction
 
@@ -68,19 +90,22 @@ An interaction is host state, not a backend pause: the host derives the question
 
 ### VikingBotInteractionProps
 
-| Prop         | Type                                | Default  | Description                                      |
-| ------------ | ----------------------------------- | -------- | ------------------------------------------------ |
-| `request`    | `VikingBotInteractionRequest`       | required | The current question.                            |
-| `className`  | `string`                            | —        | Class name applied to the root element.          |
-| `index`      | `number`                            | `0`      | Current step index, starting at 0.               |
-| `total`      | `number`                            | `1`      | Total steps; progress shows when greater than 1. |
-| `disabled`   | `boolean`                           | —        | Whether the form is disabled.                    |
-| `submitting` | `boolean`                           | —        | Whether a submission is in flight.               |
-| `error`      | `ReactNode`                         | —        | Why the last submission failed.                  |
-| `onSubmit`   | `(answer) => void \| Promise<void>` | —        | Reports an answer.                               |
-| `onCancel`   | `() => void`                        | —        | Abandons the interaction; omission hides cancel. |
-| `labels`     | `VikingBotInteractionLabels`        | English  | Replaceable copy.                                |
+| Prop         | Type                                | Default           | Description                                      |
+| ------------ | ----------------------------------- | ----------------- | ------------------------------------------------ |
+| `locale`     | `'zh-CN' \| 'en-US'`                | Inherited / en-US | Built-in Chinese and English copy.               |
+| `request`    | `VikingBotInteractionRequest`       | required          | The current question.                            |
+| `className`  | `string`                            | —                 | Class name applied to the root element.          |
+| `index`      | `number`                            | `0`               | Current step index, starting at 0.               |
+| `total`      | `number`                            | `1`               | Total steps; progress shows when greater than 1. |
+| `disabled`   | `boolean`                           | —                 | Whether the form is disabled.                    |
+| `submitting` | `boolean`                           | —                 | Whether a submission is in flight.               |
+| `error`      | `ReactNode`                         | —                 | Why the last submission failed.                  |
+| `onSubmit`   | `(answer) => void \| Promise<void>` | —                 | Reports an answer.                               |
+| `onCancel`   | `() => void`                        | —                 | Abandons the interaction; omission hides cancel. |
+| `labels`     | `VikingBotInteractionLabels`        | locale            | Replaceable copy.                                |
 
 ## Development entry
 
 The standalone style entry is `@openviking/react/components/viking-bot/style.css`, which already includes the theme baseline and can be consumed on its own.
+
+Interaction `labels.answer` sets the text answer’s accessible name; `labels.other` sets the default custom-input prompt. A request’s `allowCustomInput.placeholder` takes precedence. Embedded interactions inherit VikingBot’s `locale` unless `interaction.locale` overrides it.

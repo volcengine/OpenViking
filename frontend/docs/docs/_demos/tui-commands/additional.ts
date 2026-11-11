@@ -110,7 +110,7 @@ const ENTRIES: readonly Entry[] = [
 ];
 
 export function createAdditionalTuiCommands(
-  locale: 'en' | 'zh',
+  locale: 'en-US' | 'zh-CN',
 ): TuiCommandDefinition[] {
   return ENTRIES.map(([name, en, zh, skeleton, args, flags]) => ({
     name,
@@ -119,7 +119,7 @@ export function createAdditionalTuiCommands(
       : name === 'help'
         ? 'interactive'
         : 'session',
-    description: locale === 'zh' ? zh : en,
+    description: locale === 'zh-CN' ? zh : en,
     inputText: `ov ${name}`,
     usage:
       `ov ${name} ${[...args, ...flags.map((flag) => (flag.endsWith('!') ? flag.slice(0, -1) : `[${flag}]`))].join(' ')}`.trim(),

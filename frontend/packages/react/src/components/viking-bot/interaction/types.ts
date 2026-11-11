@@ -1,3 +1,4 @@
+import type { Locale } from '../../../shared/locale.js';
 import type { ReactNode } from 'react';
 
 /** 可选项。An option offered by a question. */
@@ -123,11 +124,13 @@ export type VikingBotInteractionAnswer =
   | { kind: 'custom'; value: unknown };
 
 /**
- * 交互区文案。组件内置英文默认值，宿主可按需覆盖。
- * Copy of the interaction area. The component ships English defaults; a host
+ * 交互区文案。组件内置中英文文案，宿主可按需覆盖。
+ * Copy of the interaction area. The component ships Chinese and English defaults; a host
  * overrides any field it needs.
  */
 export interface VikingBotInteractionLabels {
+  /** 文本答案的无障碍名称。Accessible name of a text answer. */
+  answer?: string;
   /** 区域标题，缺省为「待确认」。Area title, "Needs your input" by default. */
   title?: string;
   /** 提交按钮。Submit button. */
@@ -165,6 +168,8 @@ export interface VikingBotInteractionLabels {
 export interface VikingBotInteractionProps {
   /** 当前问题。The current question. */
   request: VikingBotInteractionRequest;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /**
    * 问题的稳定身份；变化时重置表单状态。省略时按 `request.kind` 与序号判定。
    * Stable identity of the question; changes reset the form state. Defaults to
@@ -187,6 +192,6 @@ export interface VikingBotInteractionProps {
   onSubmit?: (answer: VikingBotInteractionAnswer) => void | Promise<void>;
   /** 放弃本次交互。Abandons this interaction. */
   onCancel?: () => void;
-  /** 可替换文案，缺省为英文。Replaceable copy; English by default. */
+  /** 可替换文案，未提供的项使用当前 locale 的内置文案。Replaceable copy; omitted fields follow locale. */
   labels?: VikingBotInteractionLabels;
 }

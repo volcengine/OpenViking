@@ -4,6 +4,7 @@ import type {
   ScopeCascadeController,
   ScopeCascadeIndex,
   ScopeCascadeSnapshot,
+  ScopeCascadeSelection,
 } from './types.js';
 
 const indices = [0, 1, 2] as const;
@@ -20,14 +21,32 @@ const empty = (
 });
 
 /** Instance-owned channels. Creating a controller does not start requests. */
-export function createScopeController() {
+export function createScopeController(
+  onChange?: (selection: ScopeCascadeSelection | null) => void,
+) {
   const snapshots = [empty(true), empty(false), empty(false)];
   const listeners = indices.map(() => new Set<() => void>());
   const requests: (AbortController | undefined)[] = [];
   let api: ScopeCascadeApi | undefined;
   let active = false;
-  const notify = (index: number) =>
+  let selectionKey = '';
+  const notify = (index: number) => {
     listeners[index]!.forEach((listener) => listener());
+    const [library, space, user] = snapshots;
+    const selection =
+      library!.selected && space!.selected && user!.selected
+        ? {
+            libraryId: library!.selected.id,
+            spaceId: space!.selected.id,
+            userId: user!.selected.id,
+          }
+        : null;
+    const key = JSON.stringify(selection);
+    if (key !== selectionKey) {
+      selectionKey = key;
+      onChange?.(selection);
+    }
+  };
   const update = (index: number, patch: Partial<ScopeCascadeSnapshot>) => {
     snapshots[index] = { ...snapshots[index]!, ...patch };
   };
