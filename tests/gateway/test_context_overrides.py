@@ -53,20 +53,32 @@ async def test_override_takes_effect_and_is_logged(running_gateway):
     assert "context_override" not in logs[1]
 
 
-async def test_disabled_tools_override_withholds_tools(running_gateway):
-    _, client, _, key, seen, _ = running_gateway
+async def test_override_only_narrows_tool_access(running_gateway):
+    _, client, admin, key, seen, _ = running_gateway
 
-    async def offered(session, context):
+    async def profile(settings):
+        response = await client.put(
+            "/admin/policies/default", headers=admin, json={"name": "Default", **settings}
+        )
+        assert response.status_code == 200, response.text
+
+    async def offered(session, context=None):
         response = await client.post(
             CHAT, headers=headers(key, session, context), json=message("Save a note")
         )
         assert response.status_code == 200, response.text
         return {tool["function"]["name"] for tool in orjson.loads(seen[-1][1]).get("tools", [])}
 
-    every = await offered("all-tools", {"gateway_tools": True})
-    assert {"openviking_find", "openviking_write", "openviking_add_resource"} <= every
-    no_write = await offered("no-write", {"gateway_tools": True, "disabled_tools": ["write"]})
-    assert "openviking_find" in no_write and "openviking_write" not in no_write
+    await profile({"gateway_tools": True, "disabled_tools": ["forget"]})
+    saved = await offered("saved")
+    assert "openviking_write" in saved and "openviking_forget" not in saved
+    narrowed = await offered("narrowed", {"disabled_tools": ["write"]})
+    assert "openviking_find" in narrowed
+    assert not {"openviking_write", "openviking_forget"} & narrowed
+    assert "openviking_forget" not in await offered("cleared", {"disabled_tools": []})
+    assert not await offered("off", {"gateway_tools": False})
+    await profile({"gateway_tools": False})
+    assert not await offered("on", {"gateway_tools": True})
 
 
 @pytest.mark.parametrize(

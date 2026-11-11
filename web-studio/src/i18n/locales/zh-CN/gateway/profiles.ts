@@ -65,7 +65,7 @@ const profiles = {
   clientOverrides: {
     label: '允许客户端覆盖设置',
     description:
-      '客户端可以用 X-OpenViking-Context 请求头为新对话修改下面的任意设置，包括预算和会修改数据的工具。配置需要保持原样时，请关闭此项。',
+      '客户端可以用 X-OpenViking-Context 请求头为新对话修改下面的任意设置，包括预算；工具只能再排除，不能多提供。配置需要保持原样时，请关闭此项。',
   },
   recall: {
     title: '召回记忆',
