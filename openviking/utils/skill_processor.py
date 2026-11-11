@@ -26,7 +26,11 @@ from openviking.config.vlm import VLMHandle, VLMResolver
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
-from openviking.privacy.reference import parse_privacy_field_reference
+from openviking.privacy.models import UserPrivacyConfigVersion
+from openviking.privacy.reference import (
+    build_privacy_field_reference,
+    parse_privacy_field_reference,
+)
 from openviking.privacy.rules import PrivacyMatch, find_privacy_matches
 from openviking.privacy.sanitizer import (
     DEFAULT_SANITIZER_MAX_REPLACEMENTS,
@@ -591,12 +595,16 @@ class SkillProcessor:
         async with self._privacy_config_service._config_lock(
             ctx, "skill", skill_dict["name"], owner_lease_ref=owner_lease_ref
         ) as lease:
+            current = await self._privacy_config_service.get_current(
+                ctx, "skill", skill_dict["name"]
+            )
             matcher = (
                 await self._privacy_sanitizer.prepare_matcher(
                     ctx,
                     scope=("skill", skill_dict["name"]),
                     settings=preparation.settings,
                     uri=f"{canonical_user_root(ctx)}/skills/{skill_dict['name']}/SKILL.md",
+                    snapshot=(current or UserPrivacyConfigVersion()) if lease is not None else None,
                 )
                 if self._privacy_sanitizer is not None
                 else lambda _: []
@@ -606,6 +614,37 @@ class SkillProcessor:
             reserved_fields = self._referenced_privacy_fields(skill_dict, ctx)
             content = skill_dict.get("content", "")
             registered = matcher(content)
+            retained_fields: set[str] = set()
+            if current is not None and preparation.settings.discovery_enabled:
+                reserved_fields.update(current.values)
+                existing = {
+                    field: value
+                    for field, value in current.values.items()
+                    if isinstance(value, str) and value
+                }
+                for field, value in sorted(existing.items()):
+                    references.setdefault(
+                        value,
+                        build_privacy_field_reference(
+                            ctx.user.user_id, "skill", skill_dict["name"], field
+                        ),
+                    )
+                present = {content[match.start : match.end] for match in registered}
+                present.update(content[match.start : match.end] for match in preparation.matches)
+                unchecked = set(existing.values()) - present
+                if unchecked:
+                    try:
+                        matches = await asyncio.to_thread(
+                            find_skill_privacy_matches, content, unchecked
+                        )
+                    except ResourceExhaustedError:
+                        # A bounded presence scan cannot prove that old fields were removed.
+                        retained_fields.update(existing)
+                    else:
+                        present.update(content[match.start : match.end] for match in matches)
+                retained_fields.update(
+                    field for field, value in existing.items() if value in present
+                )
             for placeholder in {item.reference for item in registered}:
                 field_reference = parse_privacy_field_reference(placeholder)
                 if field_reference is not None and field_reference.category == "skill":
@@ -646,7 +685,9 @@ class SkillProcessor:
             rewritten = "".join(chunks)
             if rewritten != content:
                 skill_dict = {**deepcopy(skill_dict), "content": rewritten}
-            referenced_fields = self._referenced_privacy_fields(skill_dict, ctx)
+            if not preparation.settings.discovery_enabled:
+                return skill_dict
+            referenced_fields = retained_fields | self._referenced_privacy_fields(skill_dict, ctx)
             if values or referenced_fields:
                 await self._privacy_config_service.upsert(
                     ctx=ctx,

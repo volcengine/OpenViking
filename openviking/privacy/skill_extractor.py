@@ -89,7 +89,7 @@ async def extract_skill_privacy_values(
 
 
 def find_skill_privacy_matches(content: str, values: Iterable[str]) -> list[PrivacyMatch]:
-    """Locate only the values selected by VLM, using the shared literal matcher."""
+    """Locate selected literal values using the shared bounded matcher."""
     matcher = get_privacy_matcher_class()({value: ["vlm"] for value in values})
     try:
         matches, _, exceeded = matcher.find_limited(

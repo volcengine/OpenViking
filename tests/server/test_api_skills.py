@@ -95,6 +95,58 @@ async def test_skill_update_with_privacy_off_preserves_history_and_session_refer
     assert json.loads(response.json()["result"])["parts"][0]["text"] == "first-secret"
 
 
+@pytest.mark.parametrize("mode", ["auto", "auto_strict", "registered"])
+@pytest.mark.parametrize("case", ["credential", "short"])
+async def test_skill_reupload_preserves_current_fields_and_history(client, service, mode, case):
+    from openviking.privacy.reference import build_privacy_field_reference
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    settings = {"mode": "auto", "custom_rules": [{"id": "short", "prefix": "T", "min_length": 3}]}
+    await patch_user_config(
+        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": settings})
+    )
+    name = f"history-{case}-{mode.replace('_', '-')}"
+    value = "T7k9" if case == "short" else "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    source = {"data": _skill_md(name, "History fixture", f'key="{value}"'), "wait": True}
+    response = await client.post("/api/v1/skills", json=source)
+    assert response.status_code == 200, response.text
+    target = "/api/v1/privacy-configs/skill/" + name
+    current = (await client.get(target)).json()["result"]["current"]
+    field = next(iter(current["values"]))
+    await client.patch(target, json={"values": {field: "T8m2"}})
+    await client.post(target + "/activate", json={"version": 1})
+    snapshots = [(await client.get(target + f"/versions/{v}")).json()["result"] for v in (1, 2)]
+    reference = build_privacy_field_reference(ctx.user.user_id, "skill", name, field)
+    sid = name + "-session"
+    response = await client.post("/api/v1/sessions", json={"session_id": sid})
+    messages_uri = response.json()["result"]["uri"] + "/messages.jsonl"
+    await client.post(
+        f"/api/v1/sessions/{sid}/messages", json={"role": "user", "content": reference}
+    )
+    if case == "credential":
+        await client.post(
+            "/api/v1/privacy-configs/credential/" + name, json={"values": {"key": value}}
+        )
+    await patch_user_config(
+        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": mode}})
+    )
+    response = await client.put("/api/v1/skills/" + name, json=source)
+    assert response.status_code == 200, response.text
+    response = await client.get(target)
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["current"] == current
+    assert [
+        (await client.get(target + f"/versions/{v}")).json()["result"] for v in (1, 2)
+    ] == snapshots
+    response = await client.get("/api/v1/content/read", params={"uri": messages_uri, "raw": True})
+    assert json.loads(response.json()["result"])["parts"][0]["text"] == value
+    if case == "credential":
+        stored = await service.viking_fs.read_file(
+            f"viking://user/{ctx.user.user_id}/skills/{name}/SKILL.md", ctx=ctx
+        )
+        assert build_privacy_field_reference(ctx.user.user_id, "credential", name, "key") in stored
+
+
 async def test_skills_api_list_honors_node_limit(client):
     await _add_skill(client, "limit-skill-a", "First skill")
     await _add_skill(client, "limit-skill-b", "Second skill")
