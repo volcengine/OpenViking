@@ -69,7 +69,7 @@ const profiles = {
   clientOverrides: {
     label: 'Let clients override settings',
     description:
-      'Clients can change any setting below for a new conversation with the X-OpenViking-Context header, including budgets and tools that change data. Turn this off for a profile that must stay as saved.',
+      'Clients can change any setting below for a new conversation with the X-OpenViking-Context header, including budgets; for tools, it can only withhold more. Turn this off for a profile that must stay as saved.',
   },
   recall: {
     title: 'Recall memory',

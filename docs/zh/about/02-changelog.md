@@ -31,6 +31,7 @@ OpenViking 的所有重要变更都将记录在此文件中。
     不再转发；保存时收到 OpenViking 401、且 `/health` 也返回 401 时，会以 `gateway_key_revoked`
     暂停保存。
   - 上下文配置现在默认勾选全部 OpenViking 工具，包括 `forget`、`set_acl` 等会修改数据的工具；之前的版本默认不勾选其中 8 个。已保存的配置和进行中的对话保持原来的工具。没有保存 `default` 配置的账号，以及省略 `disabled_tools` 的管理 API 请求，现在会得到全部工具；要保留原来的勾选，请设置 `default_profile.disabled_tools` 或保存一份 `default` 配置。
+  - `X-OpenViking-Context` 只能收窄工具权限：`disabled_tools` 会追加到配置的排除列表上，`gateway_tools` 不能重新打开工具。之前靠发送 `{"disabled_tools":[]}` 或 `{"gateway_tools":true}` 拿到配置不提供的工具的客户端，升级后不再拿到；请改为修改配置。
 - **火山引擎 KMS `key_file`（升级需操作）**：`encryption.volcengine_kms.key_file` 现在对服务端和网关
   都会生效；此前版本忽略该字段，根密钥始终位于 `~/.openviking/openviking-volcengine-root-key.enc`。
   如果配置了 `key_file`，升级前把该文件移到配置的路径。配置的文件不存在而默认文件存在时，

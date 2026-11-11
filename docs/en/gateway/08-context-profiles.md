@@ -114,7 +114,7 @@ The API name and range of every setting are in the [Configuration reference](13-
 X-OpenViking-Context: {"recall":false,"max_tokens":800,"context_types":["memory"]}
 ```
 
-- **What it can change.** Every setting except `name` and `client_overrides`. Fields the header leaves out keep the profile's values. `{"disabled_tools":[]}` offers every OpenViking tool even when the profile unchecks some, including any the server adds later.
+- **What it can change.** Every setting except `name` and `client_overrides`. Fields the header leaves out keep the profile's values. Tool access only narrows: `disabled_tools` in the header adds to the tools the profile unchecks, and `gateway_tools` can turn OpenViking tools off but not back on, so `{"disabled_tools":[]}` or `{"gateway_tools":true}` offers nothing the profile withholds.
 - **When it applies.** As with a saved profile change, a conversation keeps the settings it started with: only the header on a conversation's first request shapes it. Later headers are still checked, so an invalid one, or any header once the switch is off, still fails.
 - **Errors.** With the switch off, any request that carries the header gets 403 `context_override_not_allowed` instead of being served with the saved settings. With it on, the request gets 400 `context_override_invalid` when the header:
   - is not a JSON object;
@@ -122,7 +122,7 @@ X-OpenViking-Context: {"recall":false,"max_tokens":800,"context_types":["memory"
   - holds a value out of range.
 - **In the request log.** [Request details](10-overview-and-requests.md#request-details) list the names of the fields the client sent in the header, never their values.
 
-The switch defaults on, so anyone holding a key that uses the profile can change any field, including budgets and write tools. On the `default` profile, that includes every client using an [OpenViking API key directly](09-gateway-keys.md#openviking-keys). Turn it off on profiles that must stay locked. How each client sends the header is in [Override profile settings](03-connect-clients.md#override-profile-settings).
+The switch defaults on, so anyone holding a key that uses the profile can change any field, including budgets, and withhold more tools. On the `default` profile, that includes every client using an [OpenViking API key directly](09-gateway-keys.md#openviking-keys). Turn it off on profiles that must stay locked. How each client sends the header is in [Override profile settings](03-connect-clients.md#override-profile-settings).
 
 ## Next steps {#next-steps}
 
