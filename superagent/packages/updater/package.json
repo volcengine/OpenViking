@@ -1,0 +1,10 @@
+{
+  "name": "@ov-superagent/updater",
+  "version": "0.5.1-preview",
+  "license": "AGPL-3.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "pm2": "6.0.14"
+  }
+}

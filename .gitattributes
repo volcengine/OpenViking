@@ -10,4 +10,4 @@ agent-plugins/servers/shared/*.mjs linguist-generated=true
 web-studio/src/routeTree.gen.ts text eol=lf
 
 # Batch files must keep CRLF so cmd.exe parses them the same on every checkout.
-vika/bin/pm2.cmd text eol=crlf
+superagent/bin/pm2.cmd text eol=crlf

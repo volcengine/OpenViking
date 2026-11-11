@@ -324,11 +324,11 @@ Download:
 
 ## OpenViking SuperAgent
 
-**Bring Your Own Machine.** OpenViking SuperAgent (Vika) connects the agent on your computer or cloud VM to **OpenViking and messaging apps**. Send a task in chat; your agent works with your local files and tools, then replies with the result. OpenViking supplies its knowledge and memory.
+**Bring Your Own Machine.** OpenViking SuperAgent connects the agent on your computer or cloud VM to **OpenViking and messaging apps**. Send a task in chat; your agent works with your local files and tools, then replies with the result. OpenViking supplies its knowledge and memory.
 
-<img src="docs/images/superagent-overview.png" alt="Chat and email connect to Vika and your agent on your machine or cloud VM; the agent uses workspace tools, while OpenViking provides local or remote knowledge and memory." width="100%" />
+<img src="docs/images/superagent-overview.png" alt="Chat and email connect to SuperAgent and your agent on your machine or cloud VM; the agent uses workspace tools, while OpenViking provides local or remote knowledge and memory." width="100%" />
 
-[Install on macOS, Linux or Windows →](vika/install.md) · [Learn more →](vika/README.md) · Requires a local or remote OpenViking service.
+[Install on macOS, Linux or Windows →](superagent/install.md) · [Learn more →](superagent/README.md) · Requires a local or remote OpenViking service.
 
 ## VikingBot
 
