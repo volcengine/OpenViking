@@ -107,7 +107,7 @@ class TestOpenAIDenseEmbedder:
         embedder.embed(["first text", "x"])
 
         call_kwargs = mock_client.embeddings.create.call_args[1]
-        assert call_kwargs["input"] == ["firs\n...(truncated for embedding)", "x"]
+        assert call_kwargs["input"] == ["firs", "x"]
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
     def test_multimodal_input_type_passes_content_parts(self, mock_openai_class):

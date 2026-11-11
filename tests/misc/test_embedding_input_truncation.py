@@ -28,3 +28,7 @@ def test_truncated_output_never_exceeds_char_bound(text):
 
 def test_short_ascii_input_is_unchanged():
     assert truncate_embedding_input("hello", 32_768) == "hello"
+
+
+def test_budget_smaller_than_suffix_cuts_without_marker():
+    assert truncate_embedding_input("first text", 1) == "firs"

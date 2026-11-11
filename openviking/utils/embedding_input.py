@@ -26,7 +26,9 @@ def truncate_embedding_input(
     # Quarter-token units preserve the original estimate without rounding each
     # run. No prefix longer than 4 * max_tokens can fit, even with only ASCII.
     max_units = max_tokens * 4
-    room = max(max_units - len(suffix), 0)
+    if len(suffix) >= max_units:
+        suffix = ""
+    room = max_units - len(suffix)
     if text.isascii():
         return text if len(text) <= max_units else text[:room].rstrip() + suffix
     scan_end = min(len(text), max_units + 1)

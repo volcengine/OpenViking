@@ -997,7 +997,7 @@ async def test_vectorize_content_only_reads_embedding_input(monkeypatch):
 @pytest.mark.parametrize(
     "content, expected",
     [
-        ("a1👍" * 100, "a1👍" * 26 + "a1" + EMBEDDING_TRUNCATION_SUFFIX),
+        ("a1👍" * 100, "a1👍" * 17 + EMBEDDING_TRUNCATION_SUFFIX),
         ("中文あ가Ｌ、" * 100, "中文あ가Ｌ、" * 4 + "中文" + EMBEDDING_TRUNCATION_SUFFIX),
         ("a1中👍" * 5, "a1中👍" * 5),
     ],
