@@ -1448,7 +1448,6 @@ class ContentWriteCoordinator:
         mode: str = "replace",
         recursive: bool = False,
         ctx: RequestContext,
-        include_updated_tags: bool = False,
     ) -> Dict[str, Any]:
         self._validate_tag_mode(mode)
         normalized_uri = self._validate_uri_path(uri, field_name="uri")
@@ -1476,7 +1475,6 @@ class ContentWriteCoordinator:
                 mode=requested_mode,
             )
         storage_mode = "replace" if requested_mode == "clear" else requested_mode
-        updated_tags = [] if include_updated_tags else None
         if stat.get("isDir"):
             result = await self._set_directory_tags(
                 uri=normalized_uri,
@@ -1484,7 +1482,6 @@ class ContentWriteCoordinator:
                 mode=storage_mode,
                 recursive=recursive,
                 ctx=ctx,
-                updated_tags=updated_tags,
             )
         else:
             result = await self._set_single_uri_tags(
@@ -1493,10 +1490,7 @@ class ContentWriteCoordinator:
                 mode=storage_mode,
                 recursive=recursive,
                 ctx=ctx,
-                updated_tags=updated_tags,
             )
-        if updated_tags is not None:
-            result["updated_tags"] = updated_tags
         result["mode"] = requested_mode
         result["tags"] = normalized_tags
         return result
@@ -2750,7 +2744,6 @@ class ContentWriteCoordinator:
         mode: str,
         recursive: bool,
         ctx: RequestContext,
-        updated_tags: list[Dict[str, Any]] | None = None,
     ) -> Dict[str, Any]:
         del recursive
         context_type = context_type_for_uri(uri)
@@ -2773,7 +2766,6 @@ class ContentWriteCoordinator:
             mode=mode,
             ctx=ctx,
             levels=levels,
-            updated_tags=updated_tags,
         )
         if not updated_uris:
             return self._build_tags_result(
@@ -2805,7 +2797,6 @@ class ContentWriteCoordinator:
         mode: str,
         recursive: bool,
         ctx: RequestContext,
-        updated_tags: list[Dict[str, Any]] | None = None,
     ) -> Dict[str, Any]:
         updated_targets = await self._collect_directory_tag_targets(
             uri=uri, recursive=recursive, ctx=ctx
@@ -2829,7 +2820,6 @@ class ContentWriteCoordinator:
                 mode=mode,
                 ctx=ctx,
                 levels=target.get("levels"),
-                updated_tags=updated_tags,
             )
             if updated_uris:
                 applied_uris.extend(updated_uris)
@@ -2901,7 +2891,6 @@ class ContentWriteCoordinator:
         mode: str,
         ctx: RequestContext,
         levels: list[int] | None = None,
-        updated_tags: list[Dict[str, Any]] | None = None,
     ) -> list[str]:
         store = self._viking_fs._get_vector_store()
         if not store:
@@ -2918,16 +2907,6 @@ class ContentWriteCoordinator:
             updated_records = await store.update_search_tags(uri, tags, mode=mode, ctx=ctx)
         if not updated_records:
             return []
-        if updated_tags is not None:
-            updated_tags.extend(
-                {
-                    "uri": record["uri"],
-                    "level": record.get("level"),
-                    "tags": record.get("search_tags", []),
-                }
-                for record in updated_records
-                if record.get("uri")
-            )
         return [str(record.get("uri")) for record in updated_records if record.get("uri")]
 
     async def _resolve_root_uri(

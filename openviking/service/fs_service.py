@@ -1880,8 +1880,6 @@ class FSService:
         mode: str,
         recursive: bool,
         ctx: RequestContext,
-        *,
-        include_updated_tags: bool = False,
     ) -> Dict[str, Any]:
         """Set explicit retrieval tags for a file or directory semantic nodes."""
         viking_fs = self._ensure_initialized()
@@ -1895,7 +1893,6 @@ class FSService:
             mode=mode,
             recursive=recursive,
             ctx=ctx,
-            include_updated_tags=include_updated_tags,
         )
 
     async def set_tags_batch(
@@ -1923,9 +1920,7 @@ class FSService:
             try:
                 if targets[uri] is not None:
                     raise targets[uri]
-                result = await self.set_tags(
-                    uri, tags, mode, recursive, ctx, include_updated_tags=True
-                )
+                result = await self.set_tags(uri, tags, mode, recursive, ctx)
                 if not result["tags_updated"]:
                     raise OpenVikingError(
                         "No semantic record was updated", code="FAILED_PRECONDITION"

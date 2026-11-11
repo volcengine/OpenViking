@@ -34,13 +34,12 @@ async def test_set_tags_batch_normalizes_deduplicates_and_collects_failures(monk
     denied = "viking://user/bob/resources/demo/private.md"
     skipped = "viking://user/alice/resources/demo/skipped.md"
 
-    async def update(uri, tags, mode, recursive, passed_ctx, **kwargs):
+    async def update(uri, tags, mode, recursive, passed_ctx):
         assert passed_ctx is ctx
         assert (tags, mode, recursive) == (["used_count=1"], "increase", False)
-        assert kwargs == {"include_updated_tags": True}
         if uri == denied:
             raise PermissionDeniedError("denied")
-        return {"uri": uri, "tags_updated": uri != skipped, "updated_tags": []}
+        return {"uri": uri, "tags_updated": uri != skipped}
 
     single = AsyncMock(side_effect=update)
     monkeypatch.setattr(fs, "set_tags", single)
@@ -81,7 +80,7 @@ async def test_set_tags_batch_bounds_concurrency_and_preserves_order(monkeypatch
             release.set()
         await release.wait()
         active -= 1
-        return {"uri": uri, "tags_updated": True, "updated_tags": []}
+        return {"uri": uri, "tags_updated": True}
 
     monkeypatch.setattr(fs, "set_tags", update)
     result = await asyncio.wait_for(
@@ -953,7 +952,7 @@ async def test_set_tags_increase_forwards_mode_without_discarding_invalid_tags()
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sidecar", [None, ".abstract.md", ".overview.md"])
-async def test_set_tags_batch_returns_directory_levels_without_extra_reads(sidecar):
+async def test_set_tags_batch_updates_directory_levels(sidecar):
     from unittest.mock import AsyncMock
 
     from openviking.service.fs_service import FSService
@@ -976,13 +975,8 @@ async def test_set_tags_batch_returns_directory_levels_without_extra_reads(sidec
     result = await fs.set_tags_batch([uri], ["used_count=1"], "increase", False, ctx)
 
     assert result["failed"] == []
-    assert result["items"][0]["updated_tags"] == [
-        {"uri": root, "level": level, "tags": [f"used_count={level + 6}"]} for level in levels
-    ]
+    assert result["items"][0]["updated_uris"] == [root] * len(levels)
     update.assert_awaited_once_with(root, ["used_count=1"], mode="increase", levels=levels, ctx=ctx)
-    single = await fs.set_tags(uri, ["used_count=1"], "increase", False, ctx)
-    assert "updated_tags" not in single
-    assert single["tags"] == ["used_count=1"]
 
 
 @pytest.mark.asyncio

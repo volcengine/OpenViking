@@ -488,15 +488,13 @@ async def test_set_tags_batch_http_persists_actual_values(client, service, endpo
             "INVALID_URI",
         ]
         for item in result["items"]:
-            updated = item["updated_tags"]
-            assert len(updated) == 1
-            assert updated[0]["level"] == 2
-            values = dict(tag.split("=", 1) for tag in updated[0]["tags"])
+            attrs = await client.get("/api/v1/fs/attrs", params={"uri": item["uri"]})
+            assert attrs.status_code == 200, attrs.text
+            tags = attrs.json()["result"]["attrs"]["tags"]
+            values = dict(tag.split("=", 1) for tag in tags)
             assert values["used_count"] == str(count)
             assert values["team"] == "search"
             assert int(values["last_used_at"]) > 0
-            attrs = await client.get("/api/v1/fs/attrs", params={"uri": item["uri"]})
-            assert attrs.json()["result"]["attrs"]["tags"] == updated[0]["tags"]
 
     response = await client.post(
         endpoint,
@@ -505,15 +503,14 @@ async def test_set_tags_batch_http_persists_actual_values(client, service, endpo
     assert response.status_code == 200, response.text
     assert response.json()["result"]["failed"] == []
     for item in response.json()["result"]["items"]:
-        assert set(item["updated_tags"][0]["tags"]) == {
+        uri = item["uri"]
+        record_id = vector_record_id(ctx.account_id, uri, 2)
+        record = (await service.vikingdb_manager.get_strict([record_id], ctx=ctx))[0]
+        assert set(record["search_tags"]) == {
             "team=search",
             "used_count=0",
             "last_used_at=0",
         }
-        uri = item["uri"]
-        record_id = vector_record_id(ctx.account_id, uri, 2)
-        record = (await service.vikingdb_manager.get_strict([record_id], ctx=ctx))[0]
-        assert set(record["search_tags"]) == set(item["updated_tags"][0]["tags"])
         assert record["updated_at"] == timestamp
         assert await service.viking_fs.read_file(uri, ctx=ctx) == "original content"
 
@@ -670,7 +667,8 @@ async def test_usage_reset_http_batch_reports_failures_without_touching_foreign_
     assert response.status_code == 200, response.text
     result = response.json()["result"]
     assert [item["uri"] for item in result["items"]] == [own]
-    assert set(result["items"][0]["updated_tags"][0]["tags"]) == {
+    own_after = (await service.vikingdb_manager.get_strict([record_ids[0]], ctx=root_ctx))[0]
+    assert set(own_after["search_tags"]) == {
         "team=search",
         "used_count=0",
         "last_used_at=0",
