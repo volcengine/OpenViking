@@ -2,20 +2,63 @@ name: React UI Release
 
 on:
   push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/react-release.yml"
     tags:
       - "react@*"
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: react-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  version:
+    if: github.repository == 'volcengine/OpenViking' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      has-changesets: ${{ steps.changesets.outputs.hasChangesets }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - name: Update React version PR
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          github-token: ${{ secrets.REACT_RELEASE_GITHUB_TOKEN || github.token }}
+          cwd: frontend
+          version: npm run version:react
+          title: "chore(react): version the React package"
+          commit: "chore(react): version the React package"
+
   publish:
-    if: github.repository == 'volcengine/OpenViking'
+    needs: version
+    if: >-
+      !cancelled() && github.repository == 'volcengine/OpenViking' &&
+      (startsWith(github.ref, 'refs/tags/react@') ||
+       (needs.version.result == 'success' && needs.version.outputs.has-changesets == 'false'))
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: react-npm-publish
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -29,26 +72,40 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           PACKAGE_VERSION="$(node -p "require('./packages/react/package.json').version")"
           test "$RELEASE_TAG" = "react@$PACKAGE_VERSION"
-      - run: npm ci
-      - run: npm run format:check
-      - run: npm run check
-      - run: npm run build:docs
-      - run: npm pack --dry-run --workspace @openviking/react
       - name: Check whether version already exists
         id: published
         run: |
           PACKAGE_VERSION="$(node -p "require('./packages/react/package.json').version")"
-          if npm view "@openviking/react@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+          if [ "$GITHUB_REF_TYPE" = branch ] &&
+             ! grep -Fxq "## $PACKAGE_VERSION" packages/react/CHANGELOG.md 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "No Changesets release for @openviking/react@$PACKAGE_VERSION; skipping."
+            exit 0
+          fi
+          VERSIONS="$(npm view @openviking/react versions --json)"
+          EXISTS="$(node -e 'const versions = JSON.parse(process.argv[1]); if (!Array.isArray(versions)) throw new Error("Expected an array of npm versions"); console.log(versions.includes(process.argv[2]))' "$VERSIONS" "$PACKAGE_VERSION")"
+          if [ "$EXISTS" = true ]; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "@openviking/react@$PACKAGE_VERSION already exists; skipping."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
+      - run: npm ci
+        if: steps.published.outputs.exists == 'false'
+      - run: npm run format:check
+        if: steps.published.outputs.exists == 'false'
+      - run: npm run check
+        if: steps.published.outputs.exists == 'false'
+      - run: npm run build:docs
+        if: steps.published.outputs.exists == 'false'
+      - run: npm pack --dry-run --workspace @openviking/react
+        if: steps.published.outputs.exists == 'false'
       - name: Publish React UI
         if: steps.published.outputs.exists == 'false'
         env:

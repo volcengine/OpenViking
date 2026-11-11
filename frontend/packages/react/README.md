@@ -6,7 +6,7 @@ Public UI components, composed modules accept optional `locale: 'zh-CN' | 'en-US
 
 React foundations for OpenViking AI application interfaces: build tooling, documentation, layered directories, and scoped styles. FileTree, Tui and FilePreview provide working views, alongside five file-type icons. FileBrowser coordinates browsing, previews and dashboards; Console provides a native command panel; ScopeCascade provides an integrated cascade selector.
 
-This package inherits the repository's AGPL-3.0-only license. The release workflow publishes it to npm when a `react@<version>` tag matches the version in this package's manifest.
+This package inherits the repository's AGPL-3.0-only license. The release workflow publishes it to npm when the Changesets version PR is merged, or when a `react@<version>` tag matches this package's version.
 
 ## Module map
 

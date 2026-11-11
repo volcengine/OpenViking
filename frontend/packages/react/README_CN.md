@@ -6,7 +6,7 @@
 
 OpenViking AI 应用界面的 React 基础：构建工具、文档、分层目录与局部化样式。FileTree、Tui 与 FilePreview 已提供可用视图，另附五种文件类型图标。Console 提供原生命令面板与受控对话视图，ScopeCascade 提供三级级联选择器，FileBrowser 提供目录、预览与看板联动。
 
-本包沿用仓库的 AGPL-3.0-only 许可证。当 `react@<version>` 标签与本包 manifest 中的版本一致时，发布工作流会将其发布到 npm。
+本包沿用仓库的 AGPL-3.0-only 许可证。合入 Changesets 版本 PR 后，发布工作流会自动将新版本发布到 npm。也可以推送与本包版本一致的 `react@<version>` 标签触发发布。
 
 ## 模块目录
 
