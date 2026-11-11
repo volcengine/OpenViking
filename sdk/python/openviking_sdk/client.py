@@ -2634,7 +2634,7 @@ class AsyncHTTPClient:
 
         # Binary branch: server sets application/octet-stream + X-Snapshot-* headers.
         content_type = response.headers.get("content-type", "")
-        if content_type.startswith("application/octet-stream"):
+        if response.is_success and content_type.startswith("application/octet-stream"):
             return {
                 "oid": response.headers.get("x-snapshot-oid", ""),
                 "size": int(response.headers.get("x-snapshot-size", "0")),

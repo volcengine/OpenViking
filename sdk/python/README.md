@@ -442,6 +442,9 @@ When `seed` is set, the returned API key is derived from
 
 The SDK maps server-side error codes to Python exceptions.
 
+Snapshot file reads (`git_show(..., path=...)` and `snapshot.show(..., path=...)`)
+raise on unsuccessful HTTP responses, including binary error bodies.
+
 ```python
 from openviking_sdk import OpenVikingError, SyncHTTPClient
 
