@@ -64,6 +64,7 @@ class SemanticQueue(NamedQueue):
                     for k in stale[:800]:
                         self._memory_parent_semantic_last.pop(k, None)
 
+        version = 0
         if msg.coalesce_key:
             with _SEMANTIC_COALESCE_LOCK:
                 version = _SEMANTIC_COALESCE_VERSION.get(msg.coalesce_key, 0) + 1
@@ -72,7 +73,21 @@ class SemanticQueue(NamedQueue):
 
         msg.queue_enqueued_at = time.time()
 
-        return await super().enqueue(msg.to_dict())
+        try:
+            return await super().enqueue(msg.to_dict())
+        except BaseException:
+            # The message never reached the queue, so it must not supersede the
+            # older message that is still waiting to be processed. Roll the
+            # coalesce version back unless a concurrent enqueue already
+            # committed a newer one.
+            if msg.coalesce_key:
+                with _SEMANTIC_COALESCE_LOCK:
+                    if _SEMANTIC_COALESCE_VERSION.get(msg.coalesce_key) == version:
+                        if version <= 1:
+                            _SEMANTIC_COALESCE_VERSION.pop(msg.coalesce_key, None)
+                        else:
+                            _SEMANTIC_COALESCE_VERSION[msg.coalesce_key] = version - 1
+            raise
 
     async def dequeue(self) -> Optional[SemanticMsg]:
         """Get message from queue and deserialize to SemanticMsg object."""
