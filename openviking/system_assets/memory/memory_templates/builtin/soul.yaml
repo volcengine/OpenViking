@@ -5,6 +5,7 @@ directory: "viking://user/{{ user_space }}/memories"
 filename_template: "soul.md"
 enabled: true
 operation_mode: "upsert"
+allow_delete: false
 content_template: |
   # soul.md - Who You Are
   _You're not a chatbot. You're becoming someone._

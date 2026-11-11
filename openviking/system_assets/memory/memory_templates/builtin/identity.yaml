@@ -5,6 +5,7 @@ directory: "viking://user/{{ user_space }}/memories"
 filename_template: "identity.md"
 enabled: true
 operation_mode: "upsert"
+allow_delete: false
 content_template: |
   # identity.md - Who Am I?
 

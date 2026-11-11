@@ -27,6 +27,7 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
     MemoryFile,
     MemoryOperationSkipCode,
+    MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
     SkippedMemoryOperation,
@@ -2062,7 +2063,29 @@ class MemoryUpdater:
         lease_ref: Any = None,
     ) -> None:
         """Apply delete operation (uri is already a string)."""
+        # Root singleton memory pages (profile.md / identity.md / soul.md) are
+        # the agent's identity and are maintained by the extractor on every
+        # session; a single bad extractor decision in delete_ids would remove
+        # the whole page with no compensating write and no recoverable history
+        # (root memory files are not tracked in .ovgit). Refuse the delete when
+        # the resolved memory type is marked allow_delete=False, and log every
+        # delete at INFO so a silent removal is visible.
+        schema = self._schema_for_delete_uri(uri)
+        if schema is not None and not getattr(schema, "allow_delete", True):
+            logger.info(
+                "Refusing delete of protected memory page %s (memory_type=%s); "
+                "extractor delete_ids skipped.",
+                uri,
+                schema.memory_type,
+            )
+            return
+
         viking_fs = self._get_viking_fs()
+        logger.info(
+            "Deleting memory page %s (memory_type=%s)",
+            uri,
+            schema.memory_type if schema is not None else (self.memory_type_from_uri(uri) or "?"),
+        )
 
         # Delete from VikingFS
         # VikingFS automatically handles vector index cleanup.
@@ -2071,6 +2094,24 @@ class MemoryUpdater:
         except NotFoundError:
             tracer.error(f"Memory not found for delete: {uri}")
             # Idempotent - deleting non-existent file succeeds
+
+    def _schema_for_delete_uri(self, uri: str) -> Optional[MemoryTypeSchema]:
+        """Resolve the registered memory type schema for a delete URI.
+
+        Item-level (multi-file) types live under memories/<type>/<file>.md, so
+        ``memory_type_from_uri`` returns the registered type name directly.
+        Root singleton pages sit directly under memories/<file>.md (e.g.
+        ``profile.md``), so ``memory_type_from_uri`` returns the filename; the
+        registered type name is the filename without the ``.md`` suffix.
+        Returns ``None`` for unregistered URIs so the delete proceeds.
+        """
+        memory_type = self.memory_type_from_uri(uri)
+        if not memory_type:
+            return None
+        schema = self._registry.get(memory_type)
+        if schema is None and memory_type.endswith(".md"):
+            schema = self._registry.get(memory_type[:-3])
+        return schema
 
     async def _vectorize_memories(
         self,

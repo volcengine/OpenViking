@@ -420,6 +420,69 @@ class TestMemoryUpdater:
         assert viking_fs.rm_calls == []
 
     @pytest.mark.asyncio
+    async def test_apply_delete_refuses_protected_root_memory_type(self):
+        """A root singleton memory page marked allow_delete=False is not removed."""
+        schema = MemoryTypeSchema(
+            memory_type="profile",
+            description="user profile",
+            directory="viking://user/{{ user_space }}/memories",
+            filename_template="profile.md",
+            fields=[],
+            allow_delete=False,
+        )
+        registry = MagicMock()
+        registry.get.side_effect = lambda name: schema if name in ("profile", "profile.md") else None
+
+        class FakeVikingFS:
+            def __init__(self):
+                self.rm_calls = []
+
+            async def rm(self, uri, recursive=False, ctx=None, **kwargs):
+                self.rm_calls.append((uri, recursive))
+
+        viking_fs = FakeVikingFS()
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=viking_fs)
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+
+        await updater._apply_delete("viking://user/alice/memories/profile.md", ctx)
+
+        assert viking_fs.rm_calls == []
+
+    @pytest.mark.asyncio
+    async def test_apply_delete_allows_deletable_memory_type(self):
+        """An item-level memory type (allow_delete defaults to True) is deleted."""
+        schema = MemoryTypeSchema(
+            memory_type="entities",
+            description="entity memory",
+            directory="viking://user/{{ user_space }}/memories/entities",
+            filename_template="{{ name }}.md",
+            fields=[],
+        )
+        registry = MagicMock()
+        registry.get.side_effect = lambda name: schema if name == "entities" else None
+
+        class FakeVikingFS:
+            def __init__(self):
+                self.rm_calls = []
+
+            async def rm(self, uri, recursive=False, ctx=None, **kwargs):
+                self.rm_calls.append((uri, recursive))
+
+        viking_fs = FakeVikingFS()
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=viking_fs)
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+
+        await updater._apply_delete(
+            "viking://user/alice/memories/entities/动漫角色.md", ctx
+        )
+
+        assert viking_fs.rm_calls == [
+            ("viking://user/alice/memories/entities/动漫角色.md", False)
+        ]
+
+    @pytest.mark.asyncio
     async def test_generate_events_overview_without_extract_context_uses_summary_or_filename(self):
         schema = MemoryTypeSchema(
             memory_type="events",

@@ -87,6 +87,7 @@ description: |
 directory: "viking://user/{{ user_space }}/memories"
 filename_template: "profile.md"
 enabled: true
+allow_delete: false
 fields:
   - name: content
     type: string

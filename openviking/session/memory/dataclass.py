@@ -244,6 +244,15 @@ class MemoryTypeSchema(BaseModel):
     operation_mode: str = Field(
         "upsert", description="Operation mode: 'upsert' (default) or 'add_only'"
     )
+    allow_delete: bool = Field(
+        True,
+        description=(
+            "Whether the extractor may delete this memory type's page via "
+            "delete_ids. Root singleton memory files (profile/identity/soul) "
+            "set this to False so a bad extractor decision cannot remove the "
+            "whole page. Item-level (multi-file) types keep the default True."
+        ),
+    )
     stage: str = Field(
         "user",
         description="Extraction stage: 'user' for long-term user memory, 'agent' for execution-derived memory.",

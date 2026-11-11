@@ -219,6 +219,7 @@ class MemoryTypeRegistry:
             directory=data.get("directory", ""),
             enabled=data.get("enabled", data.get("enable", True)),
             operation_mode=data.get("operation_mode", "upsert"),
+            allow_delete=data.get("allow_delete", True),
             stage=stage,
             peer_enabled=data.get("peer_enabled", True),
             overview_template=data.get("overview_template"),
