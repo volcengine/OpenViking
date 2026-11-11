@@ -32,7 +32,11 @@ def _reject_stream_config(data: Any, location: str) -> None:
             f"{location}.stream is not supported; OpenViking VLM calls return complete responses"
         )
     extra_request_body = data.get("extra_request_body")
-    if isinstance(extra_request_body, dict) and "stream" in extra_request_body:
+    if (
+        isinstance(extra_request_body, dict)
+        and "stream" in extra_request_body
+        and extra_request_body["stream"] is not False
+    ):
         raise ValueError(
             f"{location}.extra_request_body.stream is not supported; "
             "OpenViking VLM calls return complete responses"
@@ -311,6 +315,16 @@ class VLMConfig(BaseModel):
             if self.credentials:
                 for i, cred in enumerate(self.credentials):
                     provider_name = cred.provider or self.provider
+                    if (
+                        cred.extra_request_body
+                        and "stream" in cred.extra_request_body
+                        and _normalize_provider_name(provider_name)
+                        not in (None, "openai", "azure", "kimi", "glm")
+                    ):
+                        raise ValueError(
+                            f"Credential {i}: extra_request_body.stream=false is only supported "
+                            "by OpenAI-compatible Chat Completions providers"
+                        )
                     if provider_name == "openai-codex":
                         has_codex_auth_available = (
                             _load_codex_auth_module().has_codex_auth_available

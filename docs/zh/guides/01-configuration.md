@@ -886,6 +886,8 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 
 通过 `extra_request_body` 配置 provider 专有 JSON body 字段。OpenAI 兼容路由使用 SDK 的 `extra_body`；LiteLLM Anthropic 路由将 `thinking`、`output_config` 等原生选项直接传给 LiteLLM，使其进入请求 body 顶层。LiteLLM 仍会校验模型是否支持这些选项。在 Anthropic 路由中，LiteLLM 控制参数名（包括 `api_key`、`api_base`、`metadata`、`mock_response`）以及调用自身管理的字段（`model`、`messages`、`tools`、`tool_choice`、`stream`、`timeout` 和请求头）会报错，不会覆盖调用。凭据和路由请使用各自的专用配置。
 
+对于 `openai`、`azure`、`kimi` 和 `glm`，如果 Chat Completions 网关在省略 `stream` 时默认返回 SSE，可配置 `"extra_request_body": {"stream": false}`。此设置也适用于 provider 和 credential 条目；省略时保持现有请求不变。该 body 字段只接受布尔值 `false`；`vlm.stream` 和流式响应仍不受支持。
+
 例如，关闭 Ollama 的思考模式：
 
 ```json
