@@ -6,7 +6,7 @@ const messages = {
   accessDenied: 'You do not have permission to view this node.',
   traverseOnly:
     'This directory can only be expanded to reach accessible children.',
-  empty: 'Select a file to preview',
+  empty: 'Select a file on the left to preview it',
   error: 'Failed to load the directory',
   retry: 'Retry',
   refresh: 'Refresh',

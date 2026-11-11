@@ -19,6 +19,8 @@ export function FileBrowserEmpty({ label }: { label: string }) {
       <img
         className="ov-file-browser__empty-art"
         src={emptyStateImage}
+        width={516}
+        height={280}
         alt=""
         aria-hidden="true"
       />
