@@ -1,16 +1,12 @@
 /**
  * 入口条：主色浅底的一行，两个入口等分宽度、居中。
  *
- * 底色由主色混入页面底色得到，两端都取基线变量：主色跟随宿主的品牌色，底色
- * 在浅色下是白、暗色下是深灰。混白的固定值在暗色下会得到一条发亮的浅紫条，
- * 与周围深色背景割裂。
+ * 沿用火山版工具栏的主色浅底与透明按钮，颜色读取主题基线并跟随宿主覆盖。
  *
  * The entry row: one tinted strip with two equal-width, centred entries.
  *
- * The tint mixes the primary colour into the page background, both from baseline
- * variables: the primary follows the host's brand colour, and the background is
- * white in light mode and near-black in dark. Mixing into a fixed white would
- * produce a bright lilac strip in dark mode, cut off from its surroundings.
+ * Uses the console toolbar's primary tint and transparent actions, mapped to
+ * baseline tokens so hosts can override the palette.
  */
 .ov-file-browser-entries {
   --ov-file-browser-entries-height: 32px;
@@ -23,35 +19,25 @@
   gap: 6px;
   overflow: hidden;
   border-radius: 8px;
-  background: color-mix(
-    in srgb,
-    var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff)) 6%,
-    var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #ffffff))
+  background: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default)
   );
 }
 
-.ov-file-browser-entries__entry {
-  display: inline-flex;
+.ov-file-browser-entries .ov-file-browser-entries__entry {
+  --ov-ui-button-fill: transparent;
+  --ov-ui-button-fill-hover: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default)
+  );
+  --ov-ui-button-text: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   flex: 1 0 0;
   min-width: 1px;
-  height: var(--ov-file-browser-entries-height);
-  align-items: center;
-  justify-content: center;
   gap: 6px;
-  overflow: hidden;
   padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 22px;
-  letter-spacing: 0.039px;
+  overflow: hidden;
   white-space: nowrap;
-  cursor: pointer;
-  transition: background-color 160ms ease;
 }
 
 .ov-file-browser-entries__import-slot {
@@ -62,34 +48,9 @@
 }
 
 .ov-file-browser-entries__import-slot > :first-child {
+  display: flex;
   flex: 1;
   min-width: 0;
-}
-
-.ov-file-browser-entries__import-slot .ov-file-browser-entries__entry {
-  width: 100%;
-}
-
-.ov-file-browser-entries__entry:hover:not(:disabled) {
-  background: color-mix(
-    in srgb,
-    var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff)) 10%,
-    transparent
-  );
-}
-
-.ov-file-browser-entries__entry:focus-visible {
-  outline: 2px solid
-    var(--ov-ui-color-focus, var(--ov-ui-focus-default, #5252ff));
-  outline-offset: -2px;
-}
-
-.ov-file-browser-entries__entry:disabled {
-  color: var(
-    --ov-ui-color-text-disabled,
-    var(--ov-ui-text-disabled-default, #a5a7bb)
-  );
-  cursor: not-allowed;
 }
 
 .ov-file-browser-entries__icon {

@@ -74,22 +74,8 @@
   margin-inline-start: auto;
 }
 .ov-console__action {
-  display: inline-flex;
   box-sizing: border-box;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 8px;
-  padding: 0;
-  background: transparent;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
-  cursor: pointer;
   list-style: none;
-  transition:
-    background-color 160ms ease,
-    color 160ms ease;
 }
 .ov-console__action > svg {
   display: block;
@@ -100,17 +86,7 @@
   stroke-width: 1.25px;
   vector-effect: non-scaling-stroke;
 }
-.ov-console__action:hover,
-.ov-console__action[data-open] {
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
-  color: var(--ov-ui-console-text);
-}
-.ov-console__action:disabled {
-  color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
-  background: transparent;
-  cursor: not-allowed;
-}
-.ov-console__action:focus-visible,
+
 .ov-console__mode:focus-visible {
   outline: 2px solid var(--ov-ui-console-focus);
   outline-offset: 2px;
@@ -125,8 +101,7 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ov-console__mode,
-  .ov-console__action {
+  .ov-console__mode {
     transition: none;
   }
 }

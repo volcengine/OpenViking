@@ -54,7 +54,7 @@
 
 ```
 
-本示例现使用 `useScopeCascade` 和 `ScopeCascade`，业务侧只需传三个接口。级联清空、请求、取消、本地搜索和重试均已封装，详见 [ScopeCascade](../modules/scope-cascade) 的完整接口和自定义视图示例。
+本示例现使用 `ScopeCascade`，业务侧只需传三个接口。级联清空、请求、取消、本地搜索和重试均已封装，详见 [ScopeCascade](../modules/scope-cascade) 的完整接口和身份变化回调。
 
 ## 属性
 
@@ -93,6 +93,8 @@
 判定只看 `options`：当前值只是被搜索过滤出 `visibleOptions` 时仍然有效，不会因为搜索就切走作用域。
 
 选项必填 `id`、`label`，可选 `icon`、`description`、`disabled`。文案包含 `loading`、`searchPlaceholder`、`empty`、`noMatch`、`error`，默认跟随 locale，本地化覆盖传给各级选择器。
+
+图标由宿主传入，组件不内置。需要默认图标时从 `@openviking/react/icons` 取 `LibraryIcon`、`SpaceIcon`、`UserIcon`；使用 [ScopeCascade](../modules/scope-cascade) 时默认视图会在适配函数没给 `icon` 时自动补上这三个。
 
 方向键及 Home/End 移动焦点，Enter/空格选择，Escape 关闭并返回触发器。点击外部或焦点离开时关闭面板。
 

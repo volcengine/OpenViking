@@ -1,3 +1,4 @@
+import { Button } from '#demo-controls';
 import { useCallback, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useLang, withBase } from '@rspress/core/runtime';
@@ -115,7 +116,12 @@ export default function DirectoryTourBasic() {
   return (
     <div className="ov-directory-tour-demo">
       <div className="ov-directory-tour-demo__controls">
-        <button type="button" onClick={() => setOpen(true)}>
+        <Button
+          size="small"
+          type="default"
+          htmlType="button"
+          onClick={() => setOpen(true)}
+        >
           {complete
             ? zh
               ? '重新查看目录引导'
@@ -123,7 +129,7 @@ export default function DirectoryTourBasic() {
             : zh
               ? '了解 OV 目录树'
               : 'Explore OV directories'}
-        </button>
+        </Button>
         <label>
           <input
             type="checkbox"

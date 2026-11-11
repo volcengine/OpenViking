@@ -1,5 +1,11 @@
 import type { OverlayPlacement } from '../overlay/types.js';
-import type { CSSProperties, ReactElement, ReactNode } from 'react';
+import type {
+  AriaRole,
+  CSSProperties,
+  ReactElement,
+  ReactNode,
+  RefObject,
+} from 'react';
 
 /**
  * 弹出层的方位，与提示共用一套取值。空间不足时自动翻到对侧。
@@ -38,10 +44,16 @@ export interface PopoverProps {
   content: ReactNode;
   /** 方位，默认 `right`——内容在行尾展开，不遮挡左侧。 Placement, `right` by default. */
   placement?: PopoverPlacement;
+  /** 可选的定位元素，触发事件仍在 children 上。 Optional anchor; children still handle the trigger. */
+  anchorRef?: RefObject<HTMLElement | null>;
   /** 触发方式，默认 `hover`。 Trigger mode, `hover` by default. */
   trigger?: PopoverTrigger;
   /** 悬停后多久展示，单位毫秒。延迟只作用于 `hover`。 Hover delay in ms; `hover` only. */
   delay?: number;
+  /** Controlled visibility; omitted values use instance-local state. */
+  open?: boolean;
+  /** Surface semantics; defaults to dialog for click and note for hover. */
+  role?: AriaRole;
   /** 为真时不展示浮层。 Suppresses the surface; the trigger still renders. */
   disabled?: boolean;
   /** 浮层容器的额外类名。 Extra class names for the surface. */

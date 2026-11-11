@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement as h } from 'react';
-import { OpenVikingProvider } from '@openviking/react/client';
-import { useConsole } from '@openviking/react/modules/console';
-import { useFileBrowser } from '@openviking/react/modules/file-browser';
+import {
+  OpenVikingProvider,
+  useConsole,
+  useFileBrowser,
+} from './helpers/internal-hooks.mjs';
 import { mount, ok, recordingFetch } from './helpers/module-dom.mjs';
 
 test('Provider language changes preserve Console records, errors, drafts and active requests', async () => {

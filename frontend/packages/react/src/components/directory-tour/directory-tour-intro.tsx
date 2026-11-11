@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import type { DirectoryTourIntroProps } from './types.js';
 import { useLocale } from '../../shared/locale-context.js';
 import { resolveLocale } from '../../shared/locale.js';
@@ -33,13 +34,15 @@ export function DirectoryTourIntro({
         </ul>
       ) : null}
       <footer className="ov-directory-tour__actions">
-        <button
-          type="button"
+        <Button
+          size="small"
+          type="primary"
+          htmlType="button"
           className="ov-directory-tour__primary"
           onClick={onDone}
         >
           {text.done}
-        </button>
+        </Button>
       </footer>
     </div>
   );

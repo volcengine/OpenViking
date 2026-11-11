@@ -1,3 +1,4 @@
+import { Button } from '#demo-controls';
 import { useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
 import { FilePreview } from '@openviking/react/components/file-preview';
@@ -124,21 +125,25 @@ export default function FilePreviewBasic() {
   const renderActions = (actions: FilePreviewActions) => (
     <>
       {actions.canCopyContent ? (
-        <button
-          type="button"
+        <Button
+          size="small"
+          type="default"
+          htmlType="button"
           className="ov-file-preview__button"
           disabled={actions.busy}
           onClick={() => void actions.copyContent()}
         >
           {t.actions.copyContent}
-        </button>
+        </Button>
       ) : null}
       {actions.canSwitchView ? (
         <div className="ov-file-preview__switch" role="group">
           {(['preview', 'source'] as const).map((mode) => (
-            <button
+            <Button
+              size="small"
+              type={actions.viewMode === mode ? 'primary' : 'secondary'}
               key={mode}
-              type="button"
+              htmlType="button"
               className="ov-file-preview__switch-item"
               data-active={actions.viewMode === mode || undefined}
               aria-pressed={actions.viewMode === mode}
@@ -146,38 +151,44 @@ export default function FilePreviewBasic() {
               onClick={() => actions.setViewMode(mode)}
             >
               {mode === 'preview' ? t.actions.preview : t.actions.source}
-            </button>
+            </Button>
           ))}
         </div>
       ) : null}
       {actions.canEdit && !actions.editing ? (
-        <button
-          type="button"
+        <Button
+          size="small"
+          type="default"
+          htmlType="button"
           className="ov-file-preview__button"
           disabled={actions.busy}
           onClick={actions.startEditing}
         >
           {t.actions.edit}
-        </button>
+        </Button>
       ) : null}
       {actions.editing ? (
         <>
-          <button
-            type="button"
+          <Button
+            size="small"
+            type="default"
+            htmlType="button"
             className="ov-file-preview__button"
             disabled={actions.busy}
             onClick={actions.cancelEditing}
           >
             {t.actions.cancel}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            size="small"
+            type="primary"
+            htmlType="button"
             className="ov-file-preview__button ov-file-preview__button--primary"
             disabled={actions.busy}
             onClick={() => void actions.saveEditing()}
           >
             {t.actions.save}
-          </button>
+          </Button>
         </>
       ) : null}
     </>

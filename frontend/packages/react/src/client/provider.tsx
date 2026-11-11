@@ -5,7 +5,7 @@ import type { Locale } from '../shared/locale.js';
 
 import { createOvClient } from './client.js';
 import { mergeProviderConfig, type OvProviderBase } from './options.js';
-import type { OvClient, OvClientOptions } from './types.js';
+import type { OvClient, OvClientOptions, OvRequestOptions } from './types.js';
 
 /** Provider 已解析的配置，供嵌套 Provider 继续继承。 */
 interface OvClientScope {
@@ -130,4 +130,13 @@ export function useOvClient(): OvClient | null {
 /** Internal: modules compose their request lifetime with the inherited signal. */
 export function useOvSignal(): AbortSignal | undefined {
   return useContext(OvClientContext)?.base.signal;
+}
+
+/** Internal identity inheritance for account-scoped principal directories. */
+export function useOvIdentity(options?: OvRequestOptions) {
+  const base = useContext(OvClientContext)?.base.identity;
+  return {
+    accountId: options?.accountId ?? base?.accountId,
+    userId: options?.userId ?? base?.userId,
+  };
 }

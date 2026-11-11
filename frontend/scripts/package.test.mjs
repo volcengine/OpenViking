@@ -32,13 +32,30 @@ test('JavaScript entries resolve and import without browser globals', async () =
   }
 });
 
-test('Console exposes its standalone Hook through the module entry only', async () => {
+test('business entries expose components without headless Hooks', async () => {
   const root = await import('@openviking/react');
-  const module = await import('@openviking/react/modules/console');
-  assert.equal(typeof module.Console, 'function');
-  assert.equal(root.Console, module.Console);
-  assert.equal('useConsole' in root, false);
-  assert.equal(typeof module.useConsole, 'function');
+  assert.equal(
+    Object.keys(root).some((name) => /^use[A-Z]/.test(name)),
+    false,
+  );
+  for (const path of [
+    'modules/file-browser',
+    'modules/console',
+    'modules/scope-cascade',
+    'components/wiki-dashboard',
+    'components/experience-dashboard',
+  ]) {
+    const entry = await import('@openviking/react/' + path);
+    assert.equal(
+      Object.keys(entry).some((name) => /^use[A-Z]/.test(name)),
+      false,
+      path,
+    );
+  }
+  for (const name of ['wiki-dashboard', 'experience-dashboard']) {
+    assert.equal(`./modules/${name}` in manifest.exports, false);
+    assert.ok(`./components/${name}` in manifest.exports);
+  }
 });
 
 test('public stylesheets resolve through package exports', async () => {
@@ -50,5 +67,21 @@ test('public stylesheets resolve through package exports', async () => {
       !css.includes('@import'),
       `${entry} must be independently bundled`,
     );
+  }
+});
+
+// Internal overlays must stay inaccessible through the SDK.
+test('Modal remains internal and has no root or subpath API', async () => {
+  const root = await import('@openviking/react');
+  assert.equal('Modal' in root, false);
+  for (const path of [
+    'components/modal',
+    'components/modal/style.css',
+    'shared/components/modal/modal.js',
+    'shared/components/modal/style.css',
+  ]) {
+    assert.throws(() => import.meta.resolve(`@openviking/react/${path}`), {
+      code: 'ERR_PACKAGE_PATH_NOT_EXPORTED',
+    });
   }
 });

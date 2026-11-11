@@ -70,8 +70,9 @@ export const FileTree: FileTreeComponent = forwardRef<
     locale: localeProp,
     operations,
     selectedId,
-    search,
-    refresh,
+    search = true,
+    refresh = true,
+    loading = false,
     isReady = true,
     loadingFallback,
     errorFallback,
@@ -153,6 +154,7 @@ export const FileTree: FileTreeComponent = forwardRef<
       <FileTreeToolbar
         search={search}
         refresh={refresh}
+        loading={loading}
         text={text}
         refreshing={actions.refreshing}
         onSearch={actions.onSearch}

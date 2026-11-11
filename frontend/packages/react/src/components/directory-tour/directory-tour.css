@@ -137,7 +137,7 @@
   font-size: 12px;
   line-height: 20px;
 }
-.ov-directory-tour button {
+.ov-directory-tour button:where(:not(.ov-button)) {
   cursor: pointer;
   font: inherit;
   font-size: 13px;
@@ -158,10 +158,10 @@
     var(--ov-ui-directory-tour-text-fallback)
   );
 }
-.ov-directory-tour button:hover {
+.ov-directory-tour button:where(:not(.ov-button)):hover {
   background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
 }
-.ov-directory-tour button:focus-visible {
+.ov-directory-tour button:where(:not(.ov-button)):focus-visible {
   outline: 2px solid
     var(
       --ov-ui-directory-tour-primary,
@@ -169,36 +169,20 @@
     );
   outline-offset: 2px;
 }
-.ov-directory-tour button:disabled {
+.ov-directory-tour button:where(:not(.ov-button)):disabled {
   cursor: wait;
   opacity: 0.5;
 }
-.ov-directory-tour .ov-directory-tour__primary {
-  background: var(
+.ov-directory-tour .ov-button {
+  --ov-ui-button-primary: var(
     --ov-ui-directory-tour-primary,
     var(--ov-ui-directory-tour-primary-fallback)
-  );
-  border: 0;
-  color: var(--ov-ui-color-on-primary, var(--ov-ui-on-primary-default));
-}
-.ov-directory-tour .ov-directory-tour__primary:hover {
-  background: var(
-    --ov-ui-color-primary-hover,
-    var(--ov-ui-primary-hover-default)
   );
 }
 .ov-directory-tour .ov-directory-tour__close {
   position: absolute;
   right: 4px;
   top: 2px;
-  padding: 2px 6px;
-  border: 0;
-  background: transparent;
-  color: var(
-    --ov-ui-directory-tour-muted,
-    var(--ov-ui-directory-tour-muted-fallback)
-  );
-  font-size: 18px;
 }
 .ov-directory-tour__highlight {
   position: fixed;

@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import type { DirectoryTourProps, DirectoryTourStep } from './types.js';
 import { resolveLocale } from '../../shared/locale.js';
 import enUS from './locales/en-US.js';
@@ -44,14 +45,17 @@ export function TourCard({
       }
     >
       {!custom && onClose && (
-        <button
+        <Button
+          size="mini"
+          type="text"
+          iconOnly
           className="ov-directory-tour__close"
-          type="button"
+          htmlType="button"
           aria-label={text.close}
           onClick={onClose}
         >
           ×
-        </button>
+        </Button>
       )}
       {custom ? (
         <>
@@ -97,23 +101,35 @@ export function TourCard({
             )}
             {unavailable ? (
               <>
-                <button type="button" onClick={retry}>
+                <Button
+                  size="small"
+                  type="default"
+                  htmlType="button"
+                  onClick={retry}
+                >
                   {text.retry}
-                </button>
-                <button type="button" onClick={() => advance(true)}>
+                </Button>
+                <Button
+                  size="small"
+                  type="default"
+                  htmlType="button"
+                  onClick={() => advance(true)}
+                >
                   {text.skip}
-                </button>
+                </Button>
               </>
             ) : (
-              <button
-                type="button"
+              <Button
+                size="small"
+                type="primary"
+                htmlType="button"
                 className="ov-directory-tour__primary"
                 disabled={locating}
                 onClick={() => advance(false)}
               >
                 {step.nextLabel ??
                   (index === total - 1 ? text.done : text.next)}
-              </button>
+              </Button>
             )}
           </footer>
         </>

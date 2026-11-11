@@ -2,7 +2,7 @@
 
 可选 `locale: 'zh-CN' | 'en-US'` 覆盖最近的模块或 Provider；均未配置时默认 `en-US`。已有 `labels` 可逐项覆盖。业务内容仍由宿主提供。
 
-只接入三个 API 适配函数，无需在业务侧重写请求状态和级联逻辑。`useScopeCascade` 返回稳定的实例控制器，不订阅三级数据；`ScopeCascade` 的三个叶子选择器分别订阅，保持独立更新，不依赖 `memo`。
+直接向 `ScopeCascade` 传入三个 API 适配函数。请求、级联、取消、重试和各级订阅均内置，不需要创建控制器或调用 Hook。
 
 ## 基础用法
 
@@ -10,7 +10,9 @@
 
 ```
 
-必填项只有三个接口，返回 `Promise<readonly ScopeSwitcherOption[]>`，即 `{ id, label, icon?, description?, disabled? }`。鉴权、接口地址、响应映射和权限仍由适配函数负责。保持函数引用稳定；任一适配函数变化都会取消请求并重置全部选择。不同账号使用独立实例或 React `key` 隔离。
+三个接口返回 `Promise<readonly ScopeSwitcherOption[]>`，选项为 `{ id, label, icon?, description?, disabled? }`。鉴权、接口地址和响应映射由适配函数负责。保持函数引用稳定；适配函数变化会取消旧请求并重置全部选择。账号切换可用组件 `key` 隔离。
+
+默认视图内置三个层级图标：库用 `LibraryIcon`（按 id 取色的圆形渐变块），空间与用户用 `SpaceIcon`、`UserIcon`。适配函数返回的选项没有 `icon` 时自动补上本级默认图标，返回了 `icon` 就照用宿主的。
 
 | 接口            | 参数                                                      |
 | --------------- | --------------------------------------------------------- |
@@ -18,20 +20,16 @@
 | `loadSpaces`    | `libraryId: string, signal: AbortSignal`                  |
 | `loadUsers`     | `libraryId: string, spaceId: string, signal: AbortSignal` |
 
-挂载后加载库列表，不自动选择首项。选库后清空空间和用户，再加载空间；选空间后清空用户，再加载用户；选用户只更新本级。重复选择同一身份不更新。协调器取消过期请求，即使接口忽略 signal，旧结果也不能覆盖新数据。卸载取消全部请求，并支持 Strict Mode 的建立/清理流程。
+挂载后加载库列表，每级默认选择第一个可用项并继续加载下一级。切换上级时先清空下游，旧请求即使忽略 signal 也不能覆盖新结果。各级内部独立订阅，错误只影响本级；默认视图封装本地搜索、加载、空态、错误与重试。当前加载完整列表，不提供服务端搜索或分页。
 
-默认视图封装本地搜索、加载/空态/错误、重试及独立展开状态。每级 `refresh()` 仅重载本级；刷新上级不会重载下游，除非当前选中项消失或被禁用，此时清空并禁用下游。接口错误只影响本级。当前版本加载完整列表，不内置服务端搜索和分页；这些场景可使用纯视图组件自行接入。
+## 接收身份变化
 
-## 自定义视图
-
-```tsx file="../../_demos/scope-cascade-custom.tsx" preview
+```tsx file="../../_demos/scope-cascade-selection.tsx" preview
 
 ```
 
-在各个叶子组件内部调用 `useScopeCascadeLevel(controller.levels[index])`，不要在根组件集中订阅三级。快照提供 `options`、`selected`、`loading`、`error`、`enabled`、`parentIds`、`scopeKey`；每级提供 `select(option)` 和 `refresh()`。自定义视图以 `scopeKey` 为 key 重置上游改变后的局部状态。
+`onChange(selection)` 返回完整的 `{ libraryId, spaceId, userId }`。初始化、上级切换或接口重置导致身份不完整时返回 `null`；同一身份的刷新不重复上报。宿主在非空时加载对应业务数据，不需要订阅内部状态。
 
-业务内容区要获取完整身份时，可独立订阅用户通道：`parentIds[0]` 为库，`parentIds[1]` 为空间，`selected?.id` 为用户。仅在 `enabled && selected` 时请求业务内容；上游切换会先清空下游选择，再通知订阅者。
+## 属性
 
-## 视图属性
-
-`ScopeCascade` 必填 `controller`，`locale` 可选并覆盖最近的模块或 Provider；省略时继承该作用域，最终默认 `en-US`。可选 `levelNames` 按库/空间/用户顺序指定名称，`labels` 设置加载、搜索、空态和错误文案，`retryLabel` 设置重试按钮文案。`className`、`style` 等 HTML 属性透传给布局容器。单独使用 Hook 不需要 CSS；默认视图引入 `@openviking/react/modules/scope-cascade/style.css`。
+三个 `load*` 接口必填。`onChange` 可选，`levelNames` 按库、空间、用户顺序指定名称；`labels` 设置加载、搜索、空态和错误文案，`retryLabel` 设置重试按钮文案。`className`、`style` 等 HTML 属性透传给布局容器。引入 `@openviking/react/modules/scope-cascade/style.css` 使用默认样式。
