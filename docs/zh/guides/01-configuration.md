@@ -1363,8 +1363,12 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `engine` | str | 路径匹配引擎模式：`"auto"` 在 VikingDB / Volcengine 向量库可用且搜索范围记录数达到阈值时，使用远程 `path_glob` 后处理；不可用或失败时回退到本地文件系统搜索。`"fs"` 强制仅使用本地文件系统搜索。 | `"fs"` |
+| `engine` | str | 路径匹配引擎模式：`"auto"` 按当前账户向量库的 `storage.vectordb.enable_path_glob` 配置及后端默认能力选择远程路径；当 `uri` 字段存在且搜索范围记录数达到阈值时，使用远程 `path_glob` 后处理。不可用或失败时回退到本地文件系统搜索。`"fs"` 强制仅使用本地文件系统搜索。 | `"fs"` |
 | `switch_to_remote_threshold` | int | `auto` 模式切换到远程 `path_glob` 的记录数阈值。当搜索范围内记录数达到此阈值时使用远程路径匹配。设为 `0` 表示始终使用远程路径匹配。必须 ≥ 0。 | `100` |
+
+`storage.vectordb.enable_path_glob` 可设为 `true`（启用远程支持）或 `false`（禁用）。
+未配置或设为 `null` 时沿用后端默认能力：VikingDB、Volcengine 默认支持，其余内置后端默认不支持。
+自定义 adapter 也可声明默认能力。此配置不改变 `glob.engine="fs"` 的行为，也不跳过阈值或失败回退。
 
 ### storage
 

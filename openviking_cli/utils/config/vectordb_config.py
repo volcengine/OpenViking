@@ -410,6 +410,15 @@ class VectorDBBackendConfig(BaseModel):
         ),
     )
 
+    enable_path_glob: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Enable remote PathGlob for this vector backend. "
+            "True enables it, False disables it, and None uses the adapter's default. "
+            "VikingDB and Volcengine adapters enable it by default."
+        ),
+    )
+
     name: Optional[str] = Field(default=COLLECTION_NAME, description="Collection name for VectorDB")
 
     path: Optional[str] = Field(

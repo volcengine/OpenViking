@@ -1469,8 +1469,12 @@ class _OpsMixin:
         if vector_store is None:
             return False
 
-        backend_type = (await vector_store.get_account_backend(ctx.account_id))._mode
-        if backend_type not in ("volcengine", "vikingdb"):
+        try:
+            backend = await vector_store.get_account_backend(ctx.account_id)
+        except Exception:
+            logger.debug("glob engine=auto: backend lookup failed, falling back to fs", exc_info=True)
+            return False
+        if getattr(backend, "enable_path_glob", False) is not True:
             return False
 
         if not await self._collection_has_glob_uri_field(vector_store, ctx):

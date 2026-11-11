@@ -1357,8 +1357,13 @@ Glob engine configuration for path pattern matching. These settings are server-s
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `engine` | str | Path matching engine mode: `"auto"` uses remote `path_glob` processing when a VikingDB / Volcengine vector store is available and the search-scope record count reaches the threshold; otherwise it falls back to local filesystem search. `"fs"` forces local filesystem search only. | `"fs"` |
+| `engine` | str | Path matching engine mode: `"auto"` uses the current account's vector backend according to `storage.vectordb.enable_path_glob` and the adapter default, when the `uri` field exists and the search-scope record count reaches the threshold. Unavailable or failed remote operations fall back to local filesystem search. `"fs"` forces local filesystem search only. | `"fs"` |
 | `switch_to_remote_threshold` | int | Record-count threshold at which `auto` mode switches to remote `path_glob`. Set to `0` to always use remote path matching. Must be ≥ 0. | `100` |
+
+Set `storage.vectordb.enable_path_glob` to `true` to enable remote support or `false` to disable it.
+Omitting it or setting `null` uses the adapter default: VikingDB and Volcengine enable support,
+while other built-in backends disable it. Custom adapters can declare a default too.
+This setting does not override `glob.engine="fs"`, the threshold, or filesystem fallback.
 
 ### storage
 
