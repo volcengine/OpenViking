@@ -1593,14 +1593,33 @@ class VikingVectorIndexBackend:
                 resolved = preserve_memory_type_tag(record.get("search_tags"), resolved)
             return resolved
 
-        get_records = self.get_strict if mode == "increase" else self.get
+        async def update_increased_tags(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            record_id = record.get("id")
+            if not record_id:
+                return None
+
+            updated_record = dict(record)
+            updated_record["search_tags"] = resolve_tags(updated_record)
+            result = await self.update(
+                {"id": str(record_id), "search_tags": updated_record["search_tags"]},
+                ctx=ctx,
+            )
+            if result.ok:
+                return updated_record
+            if result.error_code == "NOT_FOUND":
+                return None
+            raise RuntimeError(result.error_message or f"failed to update search tags: {record_id}")
 
         if levels is None:
             record = await self.fetch_by_uri(uri, ctx=ctx)
             if not record or not record.get("id"):
                 return []
 
-            full_records = await get_records([str(record["id"])], ctx=ctx)
+            if mode == "increase":
+                updated_record = await update_increased_tags(record)
+                return [updated_record] if updated_record else []
+
+            full_records = await self.get([str(record["id"])], ctx=ctx)
             if not full_records:
                 logger.warning(
                     "update_search_tags failed to fetch full exact record uri=%s account_id=%s id=%s",
@@ -1640,10 +1659,18 @@ class VikingVectorIndexBackend:
         if not records:
             return []
 
+        if mode == "increase":
+            updated_records = []
+            for record in records:
+                updated_record = await update_increased_tags(record)
+                if updated_record:
+                    updated_records.append(updated_record)
+            return updated_records
+
         record_ids = [str(record["id"]) for record in records if record.get("id")]
         if not record_ids:
             return []
-        full_records = await get_records(record_ids, ctx=ctx)
+        full_records = await self.get(record_ids, ctx=ctx)
         full_records_by_id = {
             str(record["id"]): record for record in full_records if record.get("id") is not None
         }

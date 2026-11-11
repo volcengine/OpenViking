@@ -3260,17 +3260,18 @@ async def test_update_search_tags_increase_counts_and_time_without_changing_cont
     backend.fetch_by_uri = AsyncMock(return_value=next(iter(records.values())))
     backend.filter = AsyncMock(return_value=list(records.values()))
 
-    async def get_strict(ids, *, ctx):
+    async def update(data, *, ctx):
         assert ctx.account_id == "default"
-        return [dict(records[record_id]) for record_id in ids]
+        assert set(data) == {"id", "search_tags"}
+        records[data["id"]].update(data)
+        return UpdateResult(ok=True, ids=[data["id"]], updated_count=1)
 
-    async def upsert(data, *, ctx):
-        records[data["id"]] = dict(data)
-        return data["id"]
-
-    backend.get_strict = AsyncMock(side_effect=get_strict)
-    backend.get = AsyncMock(side_effect=AssertionError("increase must use strict reads"))
-    backend.upsert = AsyncMock(side_effect=upsert)
+    backend.update = AsyncMock(side_effect=update)
+    backend.get_strict = AsyncMock(
+        side_effect=AssertionError("increase must use projected records")
+    )
+    backend.get = AsyncMock(side_effect=AssertionError("increase must use projected records"))
+    backend.upsert = AsyncMock(side_effect=AssertionError("increase must use partial updates"))
     monkeypatch.setattr("openviking.storage.viking_vector_index_backend.time.time", lambda: 1000.25)
 
     for count in counts:
@@ -3288,6 +3289,10 @@ async def test_update_search_tags_increase_counts_and_time_without_changing_cont
             assert record["abstract"] == "unchanged content"
             assert record["updated_at"] == "2026-01-01T00:00:00Z"
             assert record["vector"] == [0.1, 0.2]
+    assert backend.update.await_count == len(records) * len(counts)
+    backend.get_strict.assert_not_awaited()
+    backend.get.assert_not_awaited()
+    backend.upsert.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -3300,13 +3305,12 @@ async def test_update_search_tags_increase_only_positive_usage_updates_time(tags
     record = {"id": "r1", "uri": uri, "search_tags": ["used_count=2", "last_used_at=123"]}
     backend = object.__new__(VikingVectorIndexBackend)
     backend.fetch_by_uri = AsyncMock(return_value=record)
-    backend.get_strict = AsyncMock(return_value=[record])
-    backend.upsert = AsyncMock(return_value="r1")
+    backend.update = AsyncMock(return_value=UpdateResult(ok=True, ids=["r1"], updated_count=1))
 
     updated = await backend.update_search_tags(uri, tags, mode="increase", ctx=ctx)
 
     assert "last_used_at=123" in updated[0]["search_tags"]
-    backend.upsert.assert_awaited_once()
+    backend.update.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -3327,29 +3331,51 @@ async def test_update_search_tags_increase_validation_error_does_not_write(store
     record = {"id": "r1", "uri": uri, "search_tags": stored_tags}
     backend = object.__new__(VikingVectorIndexBackend)
     backend.fetch_by_uri = AsyncMock(return_value=record)
-    backend.get_strict = AsyncMock(return_value=[record])
-    backend.upsert = AsyncMock()
+    backend.update = AsyncMock()
 
     with pytest.raises(InvalidArgumentError):
         await backend.update_search_tags(uri, tags, mode="increase", ctx=ctx)
 
-    backend.upsert.assert_not_awaited()
+    backend.update.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_update_search_tags_increase_read_failure_is_not_a_zero_count():
+async def test_update_search_tags_increase_not_found_is_not_updated():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     backend = object.__new__(VikingVectorIndexBackend)
     backend.fetch_by_uri = AsyncMock(return_value={"id": "r1"})
-    backend.get_strict = AsyncMock(side_effect=RuntimeError("storage unavailable"))
-    backend.upsert = AsyncMock()
+    backend.update = AsyncMock(
+        return_value=UpdateResult(
+            ok=False,
+            error_code="NOT_FOUND",
+            error_message="record not found",
+        )
+    )
+
+    updated = await backend.update_search_tags(
+        "viking://resources/demo/file.md", ["used_count=1"], mode="increase", ctx=ctx
+    )
+
+    assert updated == []
+
+
+@pytest.mark.asyncio
+async def test_update_search_tags_increase_update_failure_is_raised():
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    backend = object.__new__(VikingVectorIndexBackend)
+    backend.fetch_by_uri = AsyncMock(return_value={"id": "r1"})
+    backend.update = AsyncMock(
+        return_value=UpdateResult(
+            ok=False,
+            error_code="UPDATE_FAILED",
+            error_message="storage unavailable",
+        )
+    )
 
     with pytest.raises(RuntimeError, match="storage unavailable"):
         await backend.update_search_tags(
             "viking://resources/demo/file.md", ["used_count=1"], mode="increase", ctx=ctx
         )
-
-    backend.upsert.assert_not_awaited()
 
 
 @pytest.mark.asyncio
