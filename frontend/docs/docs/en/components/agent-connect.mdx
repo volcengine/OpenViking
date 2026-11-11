@@ -1,6 +1,6 @@
 # AgentConnect
 
-A connection view matching the [Figma layout](https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=10468-23946), with built-in Chinese and English content and icons. Hosts must supply an API key and `locale` parameter; there is no language selection UI.
+A connection view matching the [Figma layout](https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=10468-23946), with built-in Chinese and English content and icons. Hosts supply an API key and may override the inherited language with `locale`; there is no language selection UI.
 
 ## Basic usage
 
@@ -12,26 +12,31 @@ The demo uses a fictional `demo-api-key`. Default width is 1000px and minimum he
 
 The mainstream tab lists fourteen agents: Codex, Claude Code, Doubao Work, WorkBuddy, TRAE, Cursor, OpenClaw, Hermes Agent, OpenCode, DeepSeek Harness, DeerFlow, pi, ZCode and Kimi Code. The developer tab lists MCP, CLI, API and SDK in the same layout. The apps tab and vscode have been removed.
 
-Codex, Claude Code, Cursor, OpenClaw, Hermes Agent, OpenCode and pi retain their integration tags and add an Overseas tag. DeerFlow includes switchable MemoryManager and MCP guides; copying uses the active guide, defaulting to MemoryManager.
+The Overseas tag is hidden by default. With `showOverseasTag={true}`, Codex, Claude Code, Cursor, OpenClaw, Hermes Agent, OpenCode and pi retain their integration tags and add an Overseas tag. DeerFlow includes switchable MemoryManager and MCP guides; copying uses the active guide, defaulting to MemoryManager.
 
 CLI offers “Manual terminal installation” and “Install via AI Agent” internal tabs, defaulting to manual installation. They show local CLI steps and the AI setup prompt respectively, using the reference component's underline style. Copying uses the active guide; switching resets feedback.
 
 Selection updates the description, tags and instructions. Content comes from bundled local document snapshots, without runtime JSON or Markdown fetching. Installer prompts select the current agent and `cli` via `--harness`, and shell-quote URLs and keys to preserve literal values. TRAE selects the international client. Custom Hermes endpoints use Custom setup steps. Documentation links are available for users or their agents to read. The component never executes installation commands.
 
+Guides support Markdown and allowlisted HTML such as `<strong>`, `<br>`, `<details>`, `<summary>` and tables. Rendering filters scripts, event attributes and unsafe links. Tags inside code remain literal, guide images are not loaded, and copying retains the original Markdown.
+
+Every code block supports independent copying, including installer commands. API keys are masked by default; “Show API Key” and “Hide API Key” toggle visibility, with only one block revealing credentials per guide. Copies always use the original key. Changing guides or credentials restores masking.
+
 ## Props
 
-| Property       | Type                                 | Default                                                 | Description                                                                                                                                                                |
-| -------------- | ------------------------------------ | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apiKey`       | `string`                             | Required                                                | Host API key; masked in the view and preserved when copied.                                                                                                                |
-| `locale`       | `'zh' \| 'en'`                       | Required                                                | Language for headings, tabs, catalog, instructions and feedback.                                                                                                           |
-| `baseUrl`      | `string`                             | `https://api.vikingdb.cn-beijing.volces.com/openviking` | Service endpoint; trailing slashes are removed for appended paths and the API example variable, while installer arguments and standalone URLs preserve the original value. |
-| `agreementUrl` | `string`                             | —                                                       | Host agreement URL; renders an accessible agreement link when supplied, otherwise only the data access notice.                                                             |
-| `activeTabId`  | `'mainstream' \| 'custom'`           | `mainstream`                                            | Optional controlled tab; managed locally when omitted.                                                                                                                     |
-| `selectedId`   | `string`                             | First item in group                                     | Optional controlled item. Defaults to `codex` or `mcp`; an ID outside the current group falls back to its first entry.                                                     |
-| `onTabChange`  | `(tabId: AgentConnectTabId) => void` | —                                                       | Tab notification, including arrow keys, Home and End.                                                                                                                      |
-| `onSelect`     | `(item: AgentConnectItem) => void`   | —                                                       | Reports the built-in ID and localized name.                                                                                                                                |
-| `onCopy`       | `(text: string) => void`             | —                                                       | Returns the full instructions containing the original key after successful clipboard writing.                                                                              |
-| Other props    | `HTMLAttributes<HTMLDivElement>`     | —                                                       | Standard div attributes, excluding `children`.                                                                                                                             |
+| Property          | Type                                 | Default                                                 | Description                                                                                                                                                                |
+| ----------------- | ------------------------------------ | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apiKey`          | `string`                             | Required                                                | Host API key; masked in the view and preserved when copied.                                                                                                                |
+| `locale`          | `'zh-CN' \| 'en-US'`                 | Inherited / en-US                                       | Language for headings, tabs, catalog, instructions and feedback.                                                                                                           |
+| `baseUrl`         | `string`                             | `https://api.vikingdb.cn-beijing.volces.com/openviking` | Service endpoint; trailing slashes are removed for appended paths and the API example variable, while installer arguments and standalone URLs preserve the original value. |
+| `agreementUrl`    | `string`                             | —                                                       | Host agreement URL; renders an accessible agreement link when supplied, otherwise only the data access notice.                                                             |
+| `showOverseasTag` | `boolean`                            | `false`                                                 | Show the Overseas tag for applicable agents.                                                                                                                               |
+| `activeTabId`     | `'mainstream' \| 'custom'`           | `mainstream`                                            | Optional controlled tab; managed locally when omitted.                                                                                                                     |
+| `selectedId`      | `string`                             | First item in group                                     | Optional controlled item. Defaults to `codex` or `mcp`; an ID outside the current group falls back to its first entry.                                                     |
+| `onTabChange`     | `(tabId: AgentConnectTabId) => void` | —                                                       | Tab notification, including arrow keys, Home and End.                                                                                                                      |
+| `onSelect`        | `(item: AgentConnectItem) => void`   | —                                                       | Reports the built-in ID and localized name.                                                                                                                                |
+| `onCopy`          | `(text: string) => void`             | —                                                       | Returns the actual copied code block or full instructions after successful clipboard writing.                                                                              |
+| Other props       | `HTMLAttributes<HTMLDivElement>`     | —                                                       | Standard div attributes, excluding `children`.                                                                                                                             |
 
 Mainstream IDs: `codex`, `claude-code`, `doubao`, `workbuddy`, `trae`, `cursor`, `openclaw`, `hermes`, `opencode`, `deepseek-harness`, `deerflow`, `pi`, `zcode`, `kimi-code`. Developer IDs: `mcp`, `cli`, `api`, `sdk`. Uncontrolled instances remember selection for each group.
 

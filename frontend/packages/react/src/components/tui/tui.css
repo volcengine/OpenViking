@@ -248,22 +248,9 @@
 
 .ov-tui__copy {
   flex: none;
-  border: 1px solid var(--ov-ui-tui-card-border);
-  border-radius: 6px;
-  background: transparent;
-  padding: 2px 8px;
-  color: var(--ov-ui-tui-muted);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
+  box-sizing: border-box;
 }
 
-.ov-tui__copy:hover {
-  color: inherit;
-  background: var(--ov-ui-tui-hover);
-}
-
-.ov-tui__copy:focus-visible,
 .ov-tui__link:focus-visible {
   outline: 2px solid var(--ov-ui-tui-focus);
   outline-offset: 1px;
@@ -308,13 +295,6 @@
   position: absolute;
   top: -2px;
   right: 0;
-  opacity: 0;
-  transition: opacity 120ms;
-}
-
-.ov-tui__code-block:hover .ov-tui__copy--inline,
-.ov-tui__copy--inline:focus-visible {
-  opacity: 1;
 }
 
 .ov-tui__markdown {
@@ -405,6 +385,7 @@
   max-inline-size: 100%;
   overflow: auto;
   margin: 0;
+  padding-inline-end: 36px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
@@ -510,7 +491,7 @@
   inset: 0;
   content: '';
 }
-.ov-tui__search-item :is(button, a:not(.ov-tui__search-open)) {
+.ov-tui__search-item :is(button:not(.ov-button), a:not(.ov-tui__search-open)) {
   position: relative;
   z-index: 1;
 }
@@ -680,19 +661,6 @@
 
 .ov-tui__load-more {
   inline-size: 100%;
-  border: 1px solid var(--ov-ui-tui-card-border);
-  border-radius: 10px;
-  background: var(--ov-ui-tui-result-bg);
-  padding: 8px 12px;
-  color: var(--ov-ui-tui-link);
-  font: inherit;
-  font-size: 13px;
-  line-height: 22px;
-  cursor: pointer;
-}
-
-.ov-tui__load-more:hover {
-  background: var(--ov-ui-tui-hover);
 }
 
 .ov-tui__write-lines {
@@ -854,7 +822,7 @@
 .ov-tui__help {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
 .ov-tui__help-lead {
@@ -872,7 +840,7 @@
 .ov-tui__help-section {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 12px;
 }
 
 .ov-tui__help-section-label {
@@ -884,7 +852,7 @@
 .ov-tui__help-items {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 8px;
 }
 
 .ov-tui__help-item {
@@ -1524,23 +1492,5 @@
   .ov-tui__skeleton-line,
   .ov-tui__result-state[data-status='pending'] {
     animation: none;
-  }
-}
-
-@container (max-width: 480px) {
-  .ov-tui__search-item,
-  .ov-tui__tree-item {
-    flex-direction: column;
-  }
-
-  .ov-tui__search-metrics {
-    width: auto;
-    flex-direction: row;
-    align-items: center;
-  }
-
-  .ov-tui__help-item {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 2px;
   }
 }

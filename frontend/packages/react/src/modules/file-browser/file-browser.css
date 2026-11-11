@@ -57,107 +57,10 @@
 }
 
 /* 入口条：主色浅底，两个入口等分，中间一根半透明竖线。 */
-/* 搜索行：卡片式输入框 + 独立刷新按钮，两者同用 0.5px 深色描边。 */
-.ov-file-browser__toolbar {
-  display: flex;
-  flex: none;
-  align-items: center;
+/* 搜索行复用文件树入口；仅由宿主处理搜索交互。 */
+.ov-file-browser .ov-file-browser__toolbar {
   gap: 6px;
-}
-
-.ov-file-browser__search {
-  display: flex;
-  flex: 1 0 0;
-  min-width: 1px;
-  align-items: center;
-  gap: 4px;
-  overflow: hidden;
-  padding: 3px 12px;
-  border: var(--ov-file-browser-stroke) solid
-    var(--ov-ui-color-border-3, var(--ov-ui-border-3-default, #c9cbd4));
-  border-radius: 6px;
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #ffffff));
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #787c91));
-}
-
-.ov-file-browser__search:focus-within {
-  border-color: var(
-    --ov-ui-color-primary,
-    var(--ov-ui-primary-default, #5252ff)
-  );
-}
-
-.ov-file-browser__search-icon {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-}
-
-.ov-file-browser__search-input {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
-  font: inherit;
-  font-size: 13px;
-  line-height: 22px;
-  letter-spacing: 0.039px;
-  outline: none;
-}
-
-.ov-file-browser__search-input::placeholder {
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #787c91));
-}
-
-.ov-file-browser__refresh {
-  display: flex;
-  flex: none;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: var(--ov-file-browser-stroke) solid
-    var(--ov-ui-color-border-3, var(--ov-ui-border-3-default, #c9cbd4));
-  border-radius: 6px;
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #ffffff));
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
-  cursor: pointer;
-  transition: background-color 160ms ease;
-}
-
-.ov-file-browser__refresh:hover:not(:disabled) {
-  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default, #f1f2f9));
-}
-
-.ov-file-browser__refresh:focus-visible {
-  outline: 2px solid
-    var(--ov-ui-color-focus, var(--ov-ui-focus-default, #5252ff));
-  outline-offset: 1px;
-}
-
-.ov-file-browser__refresh:disabled {
-  color: var(
-    --ov-ui-color-text-disabled,
-    var(--ov-ui-text-disabled-default, #a5a7bb)
-  );
-  cursor: not-allowed;
-}
-
-.ov-file-browser__refresh--spinning svg {
-  animation: ov-file-browser-spin 900ms linear infinite;
-}
-
-@keyframes ov-file-browser-spin {
-  from {
-    transform: rotate(0deg);
-  }
-
-  to {
-    transform: rotate(360deg);
-  }
+  padding: 1px;
 }
 
 /*
@@ -296,98 +199,6 @@
   color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
 }
 
-/* 标题行右侧：分段器 + 分隔线 + 图标按钮。 */
-.ov-file-browser__detail-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* 预览 / 源码分段器：浅灰底、8px 圆角，选中项白底加 1px 描边。 */
-/* The preview / source switch: a light grey track, 8px radius, the active item
-   white with a 1px outline. */
-.ov-file-browser__segmented {
-  display: inline-grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
-  align-items: center;
-  box-sizing: border-box;
-  height: 28px;
-  padding: 2px;
-  border-radius: 8px;
-  background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default, #f6f7fa));
-}
-
-.ov-file-browser__segment {
-  display: inline-flex;
-  min-width: 50px;
-  height: 24px;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
-  font: inherit;
-  font-size: 13px;
-  line-height: 22px;
-  letter-spacing: 0.039px;
-  cursor: pointer;
-}
-
-.ov-file-browser__segment[data-active] {
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #ffffff));
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
-  font-weight: 500;
-  box-shadow: 0 0 0 1px
-    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default, #f0f2fa));
-}
-
-.ov-file-browser__detail-sep {
-  flex: none;
-  width: 1px;
-  height: 10px;
-  background: var(
-    --ov-ui-color-border-1,
-    var(--ov-ui-border-1-default, #f0f2fa)
-  );
-}
-
-/* 图标按钮：28px 方形、透明底，与分段器同高。 */
-/* Icon buttons: 28px square on a transparent fill, matching the switch's height. */
-.ov-file-browser__detail-icon {
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
-  cursor: pointer;
-  transition:
-    background-color 160ms ease,
-    color 160ms ease;
-}
-
-.ov-file-browser__detail-icon:hover:not(:disabled) {
-  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default, #f1f2f9));
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
-}
-
-.ov-file-browser__detail-icon:disabled {
-  color: var(
-    --ov-ui-color-text-disabled,
-    var(--ov-ui-text-disabled-default, #a5a7bb)
-  );
-  cursor: not-allowed;
-}
-
-/* 底部元信息：字符数、更新时间等，靠右对齐。 */
 /* ── 内容区的摘要页签：下划线样式 ─────────────────────────────────── */
 
 /*
@@ -478,29 +289,6 @@
   overflow-wrap: anywhere;
 }
 
-.ov-file-browser__failure-retry {
-  padding: 4px 12px;
-  border: var(--ov-file-browser-stroke) solid
-    var(--ov-ui-color-border-3, var(--ov-ui-border-3-default, #c9cbd4));
-  border-radius: 6px;
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #ffffff));
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-  transition: background-color 160ms ease;
-}
-
-.ov-file-browser__failure-retry:hover {
-  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default, #f1f2f9));
-}
-
-.ov-file-browser__failure-retry:focus-visible {
-  outline: 2px solid
-    var(--ov-ui-color-focus, var(--ov-ui-focus-default, #5252ff));
-  outline-offset: 1px;
-}
-
 /*
  * 失败态里重试按钮紧跟提示文字，两者之间留一点间距。
  * The retry button sits right after the message, with a little space between.
@@ -511,25 +299,31 @@
   gap: 8px;
   flex-wrap: wrap;
 }
-
-.ov-file-browser__retry {
-  padding: 2px 10px;
-  border: var(--ov-file-browser-stroke) solid
-    var(--ov-ui-color-border-3, var(--ov-ui-border-3-default, #c9cbd4));
-  border-radius: 6px;
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #ffffff));
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
-  font: inherit;
-  font-size: 12px;
+.ov-file-browser__dashboard {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin-inline-start: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(
+    --ov-ui-color-dashboard-success,
+    var(--ov-ui-dashboard-success-default)
+  );
   cursor: pointer;
 }
-
-.ov-file-browser__retry:hover {
-  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default, #f1f2f9));
+.ov-file-browser__dashboard--pending {
+  color: var(
+    --ov-ui-color-dashboard-warning,
+    var(--ov-ui-dashboard-warning-default)
+  );
 }
-
-.ov-file-browser__retry:focus-visible {
-  outline: 2px solid
-    var(--ov-ui-color-focus, var(--ov-ui-focus-default, #5252ff));
+.ov-file-browser__dashboard:focus-visible {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   outline-offset: 1px;
 }

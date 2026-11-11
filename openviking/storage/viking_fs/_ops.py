@@ -2112,8 +2112,7 @@ class _OpsMixin:
         ctx = self.authorize_read(real_ctx, [uri])
         await self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        # Verify the file exists before reading, because AGFS read returns
-        # empty bytes for non-existent files instead of raising an error.
+        # Verify that the path exists and is not a directory before reading.
         try:
             stat = await self._async_agfs.stat(path)
         except Exception as exc:

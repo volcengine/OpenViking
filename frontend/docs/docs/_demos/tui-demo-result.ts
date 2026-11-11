@@ -9,9 +9,9 @@ import { createTuiCompileRecord, createTuiHelp } from './tui-result-fixtures';
 /** The demo host chooses a result shape; the shared component never executes CLI commands. */
 export function createTuiDemoRecord(
   command: string,
-  locale: 'en' | 'zh',
+  locale: 'en-US' | 'zh-CN',
 ): TuiRecord {
-  const chinese = locale === 'zh';
+  const chinese = locale === 'zh-CN';
   const catalogue = createTuiCommands(locale);
   const input = command
     .trim()

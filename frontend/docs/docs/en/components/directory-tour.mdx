@@ -1,0 +1,57 @@
+# DirectoryTour
+
+A non-modal directory walkthrough, separate from FileTree. The six-step preset follows memories → sessions → personal resources → shared resources → experiences → peers, without changing the selected file.
+
+```tsx file="../../_demos/directory-tour-basic.tsx" preview
+
+```
+
+## Integration
+
+Import `DirectoryTour` and `openVikingDirectoryTourSteps` from `@openviking/react/components/directory-tour`, and load `@openviking/react/components/directory-tour/style.css`. Root exports contain the component and its main Props type only.
+
+The host supplies `locateTarget(target, signal)`: load the directory, expand ancestors, wait for the row to commit, and resolve its HTMLElement (for example with FileTree's `getRowElement`). Respect cancellation before changing the host tree. Use a stable callback. The component scrolls to the row, draws an independent highlight and positions the card beside it using the native Popover top layer. No business APIs, account state, persistence, full-screen mask or SVG are included.
+
+| Prop                          | Contract                                                                                                          |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `locale`                      | Inherited / en-US: `zh-CN` or `en-US`. Built-in controls follow this language; labels override individual fields. |
+| `open`, `steps`               | Required. Empty steps render nothing.                                                                             |
+| `locateTarget`                | Optional async anchor resolver; null/rejection/timeout presents recovery UI.                                      |
+| `currentStep`, `onStepChange` | Optional controlled zero-based index and change callback.                                                         |
+| `defaultStep`                 | Uncontrolled starting index, defaults to 0; closing resets the session.                                           |
+| `placement`                   | Preferred right or left, defaults to right; flips and clamps to the viewport.                                     |
+| `locateTimeout`               | Anchor deadline in milliseconds, defaults to 10000.                                                               |
+| `onClose`                     | Close button/Escape. The host sets open=false.                                                                    |
+| `onComplete`                  | Receives skippedStepIds on the last step. The host closes and decides whether to persist completion.              |
+| `labels`                      | Replace next/done/close/loading/error/retry/skip and the progress formatter.                                      |
+| `className`, `style`          | Surface root overrides, including inherited --ov-ui-color-\* theme variables.                                     |
+
+Steps contain id, semantic target, title, description, optional illustration ReactNode and optional nextLabel. Personal and shared resources have different targets; the preset never assumes an account-specific URI. Illustrations are supplied by the host, without a private CDN dependency.
+
+## Accessibility and lifecycle
+
+The non-modal dialog supports keyboard controls and Escape, restores a still-connected previous focus target, and disables progression while locating. Retry, step changes and unmount cancel old anchor resolutions. Layout tracking keeps the card and highlight attached during scrolling, resizing and position-only changes, and bounds the card to the visual viewport during zoom or keyboard changes; scrolling its row out of view hides it. Missing targets offer retry or skip, never automatic completion. Close or remount on account/scope changes. Import and server rendering are browser-global safe.
+
+Host controls that prevent the default Escape action retain ownership. Without `onClose`, the tour does not consume Escape. Anchor theme tokens are inherited; explicit surface class or inline tokens take precedence. An initially open tour creates its portal only after hydration.
+
+## First appearance of team experiences (single step)
+
+```tsx file="../../_demos/directory-tour-team.tsx" preview
+
+```
+
+A single step reuses `DirectoryTour` and hides the counter. `renderContent(context)` replaces ready-state content: `context.complete()` triggers completion, while `context.close()` only dismisses. Loading and failed-anchor recovery stay built in. `DirectoryTourIntro` provides media, title, description, feature items and acknowledgement; playback and editing remain host callbacks.
+
+`locateTarget` accepts one HTMLElement or a list of contiguous directory rows. The first row positions the card; all connected rows form its highlight. Expand and commit the directory before returning current rows. Removed children leave the highlight; newly loaded rows require the host to locate again (update the resolver or reopen the tour). No private FileTree DOM structure is queried.
+
+`step.cardWidth` controls width per step (default 270px, viewport constrained). Content must wrap on narrow screens. The cover comes from Figma `10168:334213`; video and edit actions are demo callbacks. First appearance, read state and persistence per user/scope belong to the host; this demo remembers acknowledgement in memory only.
+
+Inherited theme tokens refresh for ancestor `class`, `style`, `data-theme` and viewport-driven media-query changes. Component-specific `--ov-ui-directory-tour-*` tokens are supported; explicit surface class/inline overrides win. Length/percentage limits in `style.maxWidth` and `style.maxHeight` are combined with the visual viewport cap so stricter host limits remain effective.
+
+### Size overrides and long content
+
+Inline and `className` size constraints retain their CSS semantics while the card stays within the visual viewport. Percentage heights resolve against the layout viewport; long content scrolls inside the card.
+
+```tsx file="../../_demos/directory-tour-sizing.tsx" preview
+
+```

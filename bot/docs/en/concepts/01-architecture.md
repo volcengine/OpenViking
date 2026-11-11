@@ -37,7 +37,7 @@ VikingBot is the multi-channel AI Agent runtime in the OpenViking repository. It
 |--------|----------------|---------------------|
 | **Channels** | Adapt platform events, media, permissions, and reply formats | `vikingbot/channels/` |
 | **MessageBus** | Decouple message ingestion, Agent execution, and result delivery | `vikingbot/bus/` |
-| **AgentLoop** | Drive multi-step model and tool iterations | `vikingbot/agent/loop.py` |
+| **AgentLoop** | Drive multi-step model and tool iterations | `vikingbot/agent/loop/loop.py` |
 | **Context** | Assemble identity, workspace, Skills, memories, and history | `vikingbot/agent/context.py` |
 | **Providers** | Normalize model, streaming, and tool-call protocols | `vikingbot/providers/` |
 | **Tools & Sandbox** | Provide executable capabilities and their runtime boundaries | `vikingbot/agent/tools/`, `vikingbot/sandbox/` |

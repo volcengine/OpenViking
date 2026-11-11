@@ -1,0 +1,295 @@
+.ov-viking-bot__empty--welcome {
+  align-items: stretch;
+  justify-content: normal;
+  padding: 0;
+}
+.ov-viking-bot__home {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  overflow-y: auto;
+  padding: 0 16px 12px;
+  text-align: center;
+}
+.ov-viking-bot__home-intro {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 328px;
+  flex-shrink: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 160px 8px 0;
+}
+.ov-viking-bot__home-illustration {
+  position: relative;
+  width: 128px;
+  height: 80px;
+  flex-shrink: 0;
+}
+.ov-viking-bot__home-illustration > span {
+  position: absolute;
+  display: flex;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+}
+.ov-viking-bot__home-illustration svg {
+  display: block;
+}
+.ov-viking-bot__home-bulb {
+  top: 28px;
+  inset-inline-start: 0;
+  transform: rotate(-6deg);
+}
+.ov-viking-bot__home-book {
+  top: 0;
+  inset-inline-start: 44px;
+}
+.ov-viking-bot__home-book path {
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+.ov-viking-bot__home-video {
+  top: 28px;
+  inset-inline-end: 0;
+  transform: rotate(6deg);
+}
+.ov-viking-bot__home-text {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 8px;
+}
+.ov-viking-bot__home-text h2 {
+  margin: 0;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font: inherit;
+  font-size: 20px;
+  font-weight: 400;
+  line-height: 32px;
+}
+.ov-viking-bot__home-text p {
+  margin: 0;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0.039px;
+  line-height: 22px;
+}
+.ov-viking-bot__quick-inputs {
+  display: flex;
+  width: 100%;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-inline: 4px;
+}
+.ov-viking-bot__quick-inputs button:not(.ov-button) {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 4px;
+  border: 0.5px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  border-radius: 20px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  padding: 4px 12px;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ov-viking-bot__quick-inputs svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+.ov-viking-bot__session-actions {
+  display: flex;
+  margin-inline-start: auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ov-viking-bot__quick-inputs button:not(.ov-button):hover:not(:disabled) {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+}
+.ov-viking-bot__header-action > svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+}
+.ov-viking-bot__header-action svg path {
+  stroke-width: 1.25px;
+  vector-effect: non-scaling-stroke;
+}
+.ov-viking-bot__header {
+  padding: 8px 16px;
+}
+.ov-viking-bot__popover-anchor {
+  display: inline-flex;
+}
+.ov-viking-bot__popover {
+  position: fixed;
+  z-index: 1000;
+  box-sizing: border-box;
+  inset: auto;
+  width: min(352px, calc(100vw - 16px));
+  max-height: min(480px, calc(100vh - 32px));
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  box-shadow: 0 12px 32px
+    color-mix(
+      in srgb,
+      var(--ov-ui-color-shadow, var(--ov-ui-shadow-default)) 12%,
+      transparent
+    );
+  font-family: inherit;
+  font-size: 13px;
+}
+.ov-viking-bot__popover--top {
+  width: min(288px, calc(100vw - 16px));
+}
+.ov-viking-bot__session-history ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ov-viking-bot__session-history li > button:not(.ov-button) {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 6px;
+  border: 0;
+  border-radius: 8px;
+  padding: 12px;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+  font: inherit;
+  cursor: pointer;
+}
+.ov-viking-bot__session-history li > button:not(.ov-button):hover,
+.ov-viking-bot__session-history button:not(.ov-button)[aria-current='true'] {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+}
+.ov-viking-bot__session-history li span {
+  display: block;
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-viking-bot__session-history time {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-variant-numeric: tabular-nums;
+}
+.ov-viking-bot__empty-history {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-viking-bot__reference-picker {
+  min-width: 0;
+}
+.ov-viking-bot__reference-picker--mention {
+  box-sizing: border-box;
+  width: min(288px, calc(100vw - 16px));
+  max-height: min(368px, calc(100vh - 32px));
+  overflow: auto;
+  border: 1px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  box-shadow: 0 8px 24px
+    color-mix(
+      in srgb,
+      var(--ov-ui-color-shadow, var(--ov-ui-shadow-default)) 12%,
+      transparent
+    );
+}
+.ov-viking-bot__reference-picker label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ov-viking-bot__reference-picker input:not(.ov-input__element) {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  color: inherit;
+  font: inherit;
+}
+.ov-viking-bot__reference-picker input:not(.ov-input__element):focus {
+  border-color: var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline: none;
+}
+.ov-viking-bot__reference-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+.ov-viking-bot__reference-tags li {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 4px;
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  padding: 4px 6px;
+}
+.ov-viking-bot__reference-tags li > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-viking-bot__reference-tags button:not(.ov-button) {
+  border: 0;
+  padding: 0 2px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.ov-viking-bot__quick-inputs button:not(.ov-button):focus-visible,
+.ov-viking-bot__session-history button:not(.ov-button):focus-visible,
+.ov-viking-bot__reference-tags button:not(.ov-button):focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline-offset: 2px;
+}
+.ov-viking-bot__quick-inputs button:not(.ov-button):disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ov-viking-bot__attach > svg {
+  width: 10.208px;
+  height: 10.208px;
+}

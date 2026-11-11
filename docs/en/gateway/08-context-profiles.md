@@ -19,7 +19,7 @@ Besides its name and the [Let clients override settings](#client-overrides) swit
 | Recall memory | Searches OpenViking with each new user message and appends what is relevant to that message. | Sources: memories, resources, skills · Budget per message: 1,600 tokens · Budget per context window: 30,000 tokens · Relevance threshold: 0.35 · Time limit: 2 s |
 | Save conversations | Writes finished turns to an OpenViking session and commits it, so OpenViking can extract memories. | Save the latest reply after: 600 s · Commit after: 20,000 tokens · Keep recent messages: 10 |
 | Long conversations | When a conversation nears the context window, has the same model write a summary that replaces the earlier messages. | Compaction: on · Compact at: 0.9 of the window · Summary length: 8,000 tokens · Agent-managed context windows: off |
-| OpenViking tools | Lets the model use OpenViking's tools while it answers. | On · read-only tools selected; see [OpenViking tools](04-openviking-tools.md) |
+| OpenViking tools | Lets the model use OpenViking's tools while it answers. | On · every tool selected; see [OpenViking tools](04-openviking-tools.md) |
 | Seal credentials | Sends credentials registered in OpenViking Privacy to the model as references, never as values. | Off · Put values in tool calls: off; see [Seal credentials](#seal-credentials) |
 
 Each section has its own switch, and Long conversations has one each for compaction and agent-managed context windows. Recall and saving are independent: a profile can recall without saving, or save without recalling.
@@ -54,6 +54,7 @@ The **Recall memory** section (on by default) controls [recall](../guides/15-gat
 | **Relevance threshold** | 0.35 | Only results scoring at least this much, from 0 to 1, are added. Higher means fewer but closer matches. |
 | **Time limit** | 2 s | How long the search may take. |
 | **Query length** (under **Advanced settings**) | 8,000 characters | How much of the message is used as the search query. |
+| **Peer scope** (under **Advanced settings**) | All peers, current peer first | Which peers' memories recall and OpenViking tools can see besides the user's own. |
 | **Limit by category** (under **Advanced settings**) | Off | The most entries each category may add. |
 
 How the settings work together:
@@ -64,6 +65,7 @@ How the settings work together:
 - **Budgets.** Each message gets at most the smaller of **Budget per message** and what is left of **Budget per context window**. With less than 64 tokens left, the search is skipped. The budget per context window starts over whenever the conversation is compacted, by the gateway or by the client. These token counts are conservative estimates, not the provider's billing counts.
 - **Turning recall off.** Setting **Budget per context window** to 0 turns recall off; **Budget per message** is at least 64.
 - **Time limit.** If OpenViking does not answer within the **Time limit**, the message goes to the model without memory and does not get it later, even if the client retries.
+- **Peer scope.** It matters mainly for keys whose requests name a [peer](03-connect-clients.md#peer). **All peers, current peer first** adds the request's peer's memories to the user's own and can still bring back other peers' with a small score penalty. **Current peer only** keeps other peers' memories out of recall and out of OpenViking tools; a request without a peer recalls as with the default. See [Recall only the current peer](03-connect-clients.md#peer-scope).
 - **Limit by category.** It sets a maximum number of entries for each of six categories: events, entities, preferences, experiences, resources and skills. Only categories above 0 are searched. When it is off, all sources are ranked together.
 
 ### Recall summary {#recall-summary}
@@ -94,13 +96,14 @@ The **Save conversations** section (on by default) controls [saving](../guides/1
 - A turn is saved when the next user message arrives. **Save the latest reply after** covers the last turn, so short conversations get committed too.
 - The session is committed whenever **Commit after** tokens are waiting. After each commit, OpenViking extracts memories in the background.
 - After a commit, the session keeps the newest whole turns, at least **Keep recent messages** messages.
+- OpenViking extracts every [memory type](../api/16-memory.md) it has enabled. To extract only some, set `capture_memory_types` to their names, for example `["preferences","events"]`, with the management API or the `X-OpenViking-Context` header; an empty list saves conversations without extracting memories. Studio has no control for this setting and keeps its value when you save the profile. A name OpenViking does not know stops saving; see [Configuration reference](13-configuration.md#profile-saving).
 
 ## Long conversations and OpenViking tools {#long-conversations-and-tools}
 
 These two sections of the editor each have their own page:
 
 - **Long conversations** holds **Compaction** with **Compact at** and **Summary length**, the experimental **Agent-managed context windows** with **Soft reminder at** and **Hard reminder at**, and **Default context window** under **Advanced settings**. See [Long conversations in the gateway](05-long-conversations.md#long-conversations); for models with a smaller window, set the window as described in [Set the model's context window](05-long-conversations.md#context-window).
-- **OpenViking tools** holds the **Tools** list and **Show tool calls**, with **Rounds per request**, **Time limit per call**, **Result size**, **Total time** and **Token budget** under **Advanced settings**. See [Choose tools](04-openviking-tools.md#choose-tools) and [Limits](04-openviking-tools.md#limits). The gateway runs the selected tools without the client's permission prompts; read [Risks and controls](04-openviking-tools.md#risks-and-controls) before checking tools that change data.
+- **OpenViking tools** holds the **Tools** list and **Show tool calls**, with **Rounds per request**, **Time limit per call**, **Result size**, **Total time** and **Token budget** under **Advanced settings**. See [Choose tools](04-openviking-tools.md#choose-tools) and [Limits](04-openviking-tools.md#limits). The gateway runs the selected tools without the client's permission prompts; before you leave tools that change data selected, read [Risks and controls](04-openviking-tools.md#risks-and-controls).
 
 The API name and range of every setting are in the [Configuration reference](13-configuration.md#context-profile-settings).
 
@@ -125,7 +128,7 @@ What this means for providers and for local data is in [What providers see](11-s
 X-OpenViking-Context: {"recall":false,"max_tokens":800,"context_types":["memory"]}
 ```
 
-- **What it can change.** Every setting except `name`, `client_overrides`, `seal_secrets` and `unseal_tool_calls`, so a client cannot turn sealing off. Fields the header leaves out keep the profile's values. `{"disabled_tools":[]}` offers every OpenViking tool, including the ones that change data and any the server adds later.
+- **What it can change.** Every setting except `name`, `client_overrides`, `seal_secrets` and `unseal_tool_calls`, so a client cannot turn sealing off. Fields the header leaves out keep the profile's values. Tool access only narrows: `disabled_tools` in the header adds to the tools the profile unchecks, and `gateway_tools` can turn OpenViking tools off but not back on, so `{"disabled_tools":[]}` or `{"gateway_tools":true}` offers nothing the profile withholds.
 - **When it applies.** As with a saved profile change, a conversation keeps the settings it started with: only the header on a conversation's first request shapes it. Later headers are still checked, so an invalid one, or any header once the switch is off, still fails.
 - **Errors.** With the switch off, any request that carries the header gets 403 `context_override_not_allowed` instead of being served with the saved settings. With it on, the request gets 400 `context_override_invalid` when the header:
   - is not a JSON object;
@@ -133,7 +136,7 @@ X-OpenViking-Context: {"recall":false,"max_tokens":800,"context_types":["memory"
   - holds a value out of range.
 - **In the request log.** [Request details](10-overview-and-requests.md#request-details) list the names of the fields the client sent in the header, never their values.
 
-The switch defaults on, so anyone holding a key that uses the profile can change any field, including budgets and write tools. On the `default` profile, that includes every client using an [OpenViking API key directly](09-gateway-keys.md#openviking-keys). Turn it off on profiles that must stay locked. How each client sends the header is in [Override profile settings](03-connect-clients.md#override-profile-settings).
+The switch defaults on, so anyone holding a key that uses the profile can change any field, including budgets, and withhold more tools. On the `default` profile, that includes every client using an [OpenViking API key directly](09-gateway-keys.md#openviking-keys). Turn it off on profiles that must stay locked. How each client sends the header is in [Override profile settings](03-connect-clients.md#override-profile-settings).
 
 ## Next steps {#next-steps}
 

@@ -69,7 +69,7 @@ description: 让模型通过 OpenViking 网关代为执行的工具检索、读�
 
 > **警告**：勾选的工具直接执行，不经过客户端的权限确认，写入和删除数据的工具也一样；工具调用提示只在调用之后报告，不是确认步骤。如果用户需要逐次确认工具调用，请改用 OpenViking 插件或 MCP 服务器（见[网关还是插件](../guides/15-gateway.md#gateway-or-plugin)）。模型能做的事以该用户自己的 OpenViking 权限为上限。
 
-勾选会修改数据的工具前，先确认能接受这一点。给聊天应用用的配置，建议至少不勾选 `forget` 和 `set_acl`。
+会修改数据的工具（包括 `forget` 和 `set_acl`）默认也是勾选的，请先确认能接受这一点，否则取消勾选。给聊天应用用的配置，建议至少取消勾选 `forget` 和 `set_acl`。
 
 管理员能控制的地方：
 
@@ -82,21 +82,16 @@ description: 让模型通过 OpenViking 网关代为执行的工具检索、读�
 
 ## 选择工具 {#choose-tools}
 
-[上下文配置](08-context-profiles.md#context-profiles)中 **OpenViking 工具**部分的**工具**清单，决定模型能拿到哪些 OpenViking 工具。新建的上下文配置默认开启 **OpenViking 工具**，用**使用推荐设置创建**新建的也一样；除了网关已知会修改数据的工具，其余工具默认都勾选：
+[上下文配置](08-context-profiles.md#context-profiles)中 **OpenViking 工具**部分的**工具**清单，决定模型能拿到哪些 OpenViking 工具。新建的上下文配置默认开启 **OpenViking 工具**，用**使用推荐设置创建**新建的也一样；所有工具默认都勾选，包括 `remember`、`write`、`edit`、`add_resource`、`forget`、`set_acl` 等会修改数据的工具。
 
-| 默认状态 | 工具 |
-| --- | --- |
-| 勾选 | `find`、`search`、`grep`、`glob`、`list`、`tree`、`read`、`download`、`list_watches`、`get_acl`、`list_users`、`list_groups`、`health` |
-| 不勾选（会修改数据） | `remember`、`write`、`edit`、`add_resource`、`add_skill`、`forget`、`set_acl`、`cancel_watch` |
-
-想让模型保存记忆就勾选 `remember`，想让它导入网页或附件就勾选 `add_resource`。勾选任何会修改数据的工具之前，请先看[风险和控制点](#risks-and-controls)中的警告。
+不想让模型使用的工具取消勾选即可。决定让模型使用会修改数据的工具之前，请先看[风险和控制点](#risks-and-controls)中的警告。
 
 每个[上游](07-upstreams.md#upstreams)的**允许 OpenViking 工具**默认开启。两个开关都开启时，新对话获得选中的工具，名称加上 `openviking_` 前缀，例如 `openviking_find`、`openviking_read`。工具定义随对话中的每个请求发送，全部工具约占 3,500 个输入 token，所以取消用不到的工具也能省 token。
 
 关于工具清单，还有几点需要知道：
 
-- **清单来源**：**工具**清单来自你的 OpenViking 服务，Studio 会说明每个工具的用途；OpenViking 为工具提供了标注时，还会在旁边显示**只读**或**会修改数据**。OpenViking 把 `search` 标为**会修改数据**，但网关仍默认勾选它。
-- **以后新增的工具**：OpenViking 以后新增的工具会默认可用，已有对话仍沿用开始时的工具清单。已有的上下文配置保留原来的勾选。
+- **清单来源**：**工具**清单来自你的 OpenViking 服务，Studio 会说明每个工具的用途；OpenViking 为工具提供了标注时，还会在旁边显示**只读**或**会修改数据**。
+- **以后新增的工具**：OpenViking 以后新增的工具会默认可用，已有对话仍沿用开始时的工具清单。已有的上下文配置保留原来的勾选。没有保存 `default` 配置的账号使用部署的 `default_profile`，除非它设置了 `disabled_tools`，否则提供全部工具。
 - **root 看到的清单为空**：OpenViking 不允许 root API 密钥调用它的工具，所以 root 查看时，网关用当前账号中某把[网关密钥](09-gateway-keys.md#gateway-keys)背后的 OpenViking 密钥读取清单。账号里还没有网关密钥时，清单可能为空，Studio 显示提示“**签发网关密钥后即可加载工具清单。**”请先签发一把密钥，或者用用户、账号管理员的身份登录后再编辑配置。在此之前保存的配置沿用默认勾选。
 - **`download` 需要 shell**：`download` 返回一条一次性的 `curl` 命令，所以客户端需要有 shell 工具，而且客户端要能访问这条链接。哪些名称算 shell 工具、链接指向哪里，见[通过客户端的 shell 工具](#import-with-a-shell-tool)。
 

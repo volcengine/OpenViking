@@ -22,3 +22,29 @@ export { Console } from './modules/console/index.js';
 export type { ConsoleProps } from './modules/console/index.js';
 export { ScopeCascade } from './modules/scope-cascade/index.js';
 export type { ScopeCascadeProps } from './modules/scope-cascade/index.js';
+
+export { DirectoryTour } from './components/directory-tour/index.js';
+export type { DirectoryTourProps } from './components/directory-tour/index.js';
+
+export { WikiDashboard } from './components/wiki-dashboard/index.js';
+export type { WikiDashboardProps } from './components/wiki-dashboard/index.js';
+export { ExperienceDashboard } from './components/experience-dashboard/index.js';
+export type { ExperienceDashboardProps } from './components/experience-dashboard/index.js';
+
+export { EmailLoginForm } from './components/email-login-form/index.js';
+export type { EmailLoginFormProps } from './components/email-login-form/index.js';
+
+export { ApiKeyLoginForm } from './components/api-key-login-form/index.js';
+export type { ApiKeyLoginFormProps } from './components/api-key-login-form/index.js';
+
+export { PasswordResetRequestForm } from './components/password-reset-request-form/index.js';
+export type { PasswordResetRequestFormProps } from './components/password-reset-request-form/index.js';
+
+export { PasswordSetupForm } from './components/password-setup-form/index.js';
+export type { PasswordSetupFormProps } from './components/password-setup-form/index.js';
+
+export { LoginMethodSelector } from './components/login-method-selector/index.js';
+export type { LoginMethodSelectorProps } from './components/login-method-selector/index.js';
+
+export { InvitationConfirmation } from './components/invitation-confirmation/index.js';
+export type { InvitationConfirmationProps } from './components/invitation-confirmation/index.js';

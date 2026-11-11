@@ -1,24 +1,15 @@
 import type { VikingBotLabels } from './model.js';
+import { resolveLocale, type Locale } from '../../shared/locale.js';
+import enUS from './locales/en-US.js';
+import zhCN from './locales/zh-CN.js';
 
-export const DEFAULT_LABELS: Required<VikingBotLabels> = {
-  placeholder: 'Ask VikingBot anything',
-  send: 'Send',
-  stop: 'Stop',
-  attach: 'Attach files',
-  removeAttachment: 'Remove attachment',
-  copy: 'Copy',
-  copied: 'Copied',
-  reasoning: 'Reasoning',
-  thinking: 'Thinking',
-  tool: 'Tool call',
-  toolPending: 'Queued',
-  toolRunning: 'Running',
-  toolCompleted: 'Done',
-  toolError: 'Failed',
-  context: 'Context',
-  empty: 'Start a conversation',
-  newSession: 'New chat',
-  retry: 'Retry',
-  scrollToLatest: 'Scroll to latest',
-  unavailable: 'VikingBot is unavailable',
-};
+const LOCALES = { 'en-US': enUS, 'zh-CN': zhCN };
+
+export const DEFAULT_LABELS: Required<VikingBotLabels> = enUS;
+
+export function resolveVikingBotLabels(
+  locale: Locale,
+  labels?: VikingBotLabels,
+): Required<VikingBotLabels> {
+  return resolveLocale<Required<VikingBotLabels>>(LOCALES, locale, labels);
+}

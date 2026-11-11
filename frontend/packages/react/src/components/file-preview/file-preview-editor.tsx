@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import type { FilePreviewLabels } from './types.js';
 
 export interface FilePreviewEditorProps {
@@ -48,13 +49,15 @@ export function FilePreviewEditor({
     return (
       <div className="ov-file-preview__state" role="alert">
         <p className="ov-file-preview__state-title">{text.loadFailed}</p>
-        <button
-          type="button"
+        <Button
+          size="small"
+          type="default"
+          htmlType="button"
           className="ov-file-preview__button"
           onClick={onCancel}
         >
           {text.leaveEditing}
-        </button>
+        </Button>
       </div>
     );
   }

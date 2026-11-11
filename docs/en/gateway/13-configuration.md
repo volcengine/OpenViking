@@ -188,6 +188,7 @@ Explained in [Recall memory](08-context-profiles.md#recall-memory).
 | Relevance threshold | `score_threshold` | `0.35` | 0–1 | Lowest relevance score accepted. |
 | Time limit | `recall_timeout` | `2` (seconds) | More than 0, up to 30 | How long a search may take before the message goes on without memory. |
 | Query length | `query_max_chars` | `8000` | 3–32,000 | Characters of the message used as the search query. |
+| Peer scope | `recall_peer_scope` | `all` | `all`, `actor` | `all`: the request's peer comes first, and other peers' memories can still be recalled. `actor`: recall and OpenViking tools reach only the user's own memories and the request's peer's; see [Recall only the current peer](03-connect-clients.md#peer-scope). |
 | Limit by category | `quotas` | `{}` (off) | Keys: `events`, `entities`, `preferences`, `experiences`, `resources`, `skills`; when set, at least one above 0 (checked by Studio only) | Most entries per category; only categories above 0 are searched. |
 
 The management API saves `context_types` and the `quotas` keys without checking them. An unknown `quotas` key makes every recall fail, because OpenViking rejects it.
@@ -202,6 +203,9 @@ Explained in [Save conversations](08-context-profiles.md#save-conversations).
 | Save the latest reply after | `idle_seconds` | `600` (seconds) | 1 or more | Quiet time before the last turn is saved and the session committed. |
 | Commit after | `commit_tokens` | `20000` | 1 or more | Tokens waiting in the session that trigger a commit. |
 | Keep recent messages | `keep_recent_messages` | `10` | 0–1,000 | Messages left in the session after a commit. |
+| (API only) | `capture_memory_types` | `null` (every enabled type) | Memory type names, such as `preferences` or `events`; `[]` extracts none | Memory types OpenViking extracts from saved conversations. |
+
+The management API saves `capture_memory_types` without checking the names. OpenViking rejects a name it does not know, or a type it has disabled, when the gateway creates the conversation's OpenViking session: nothing from the conversation is saved, and saving shows **Retrying**, then **Paused**, with the reason `openviking_http_400`. A corrected profile reaches only conversations that start afterwards. `cases` and `trajectories` are extracted only together with `experiences`: listing `experiences` adds both, and without it they are dropped, so a list of only those two extracts nothing.
 
 ### Long conversations {#profile-long-conversations}
 
@@ -224,7 +228,7 @@ Explained in [Choose tools](04-openviking-tools.md#choose-tools) and [Limits](04
 | Studio label | API name | Default | Range | Meaning |
 | --- | --- | --- | --- | --- |
 | OpenViking tools | `gateway_tools` | `true` | | Offer OpenViking tools for Chat Completions, full-history Responses and Anthropic Messages. |
-| Tools (unchecked boxes) | `disabled_tools` | The 8 tools that change data | OpenViking tool names, without `openviking_` | Tools new conversations do not get; every other available tool is offered, including ones added later. |
+| Tools (unchecked boxes) | `disabled_tools` | `[]` (none) | OpenViking tool names, without `openviking_` | Tools new conversations do not get; every other available tool is offered, including ones added later. |
 | Show tool calls | `show_tool_calls` | `true` | | Add a one-line notice to the reply for each OpenViking tool call. |
 | Rounds per request | `tool_max_rounds` | `null` (no limit) | 1 or more | Tool rounds after which further OpenViking calls are refused. |
 | Time limit per call | `tool_timeout_seconds` | `30` (seconds) | More than 0, up to 120 | A slower call returns an error to the model. |
@@ -232,7 +236,7 @@ Explained in [Choose tools](04-openviking-tools.md#choose-tools) and [Limits](04
 | Total time | `tool_total_seconds` | `null` (no limit) | More than 0 | Seconds after which a request still using tools fails. |
 | Token budget | `tool_total_tokens` | `null` (no limit) | 1,024 or more | Estimated tokens tool calls and results may add to one request before further OpenViking calls are refused. |
 
-API requests that omit `disabled_tools` get the default list; an empty list with `gateway_tools` on offers every available tool.
+API requests that omit `disabled_tools` get an empty list, so with `gateway_tools` on every available tool is offered.
 
 ### Seal credentials {#profile-credentials}
 

@@ -570,7 +570,14 @@ async def test_new_openviking_sessions_turn_off_working_memory():
 
     client.request = request
     await client.create_session("key", "session")
+    await client.create_session("key", "session", ["events"])
+    await client.create_session("key", "session", [])
     assert bodies[0]["memory_policy"] == {"working_memory": {"enabled": False}}
+    assert bodies[1]["memory_policy"] == {
+        "working_memory": {"enabled": False},
+        "memory_types": ["events"],
+    }
+    assert bodies[2]["memory_policy"]["memory_types"] == []
 
 
 async def test_proxy_sends_the_summary_with_vendor_alias_and_headers(running_gateway):

@@ -1597,6 +1597,7 @@ Redis 命名空间。
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `backend` | str | `local` 完全沿用原文件系统；`cache` 启用 CacheFS wrapper | `local` |
+| `shared_redis_ttl_seconds` | int | 统一覆盖查询 bucket 的 TTL；`0` 表示沿用 Provider 默认 TTL。仅当 CacheFS 与 QueueFS、cache PathLock 或 expiry 调度共用同一个 Redis 服务时生效 | `0` |
 
 `storage.agfs.pathlock` 选择 PathLock 存储 Provider：
 

@@ -56,11 +56,24 @@ export default defineConfig({
               items: [
                 { text: '概览', link: '/components/' },
                 { text: '图标', link: '/components/icons' },
+                { text: '登录与认证表单', link: '/components/auth-forms' },
+                {
+                  text: 'WikiDashboard Wiki 看板',
+                  link: '/components/wiki-dashboard',
+                },
+                {
+                  text: 'ExperienceDashboard 经验看板',
+                  link: '/components/experience-dashboard',
+                },
                 {
                   text: 'FileBrowserEntries 入口条',
                   link: '/components/file-browser-entries',
                 },
                 { text: 'FileTree 文件树', link: '/components/file-tree' },
+                {
+                  text: 'DirectoryTour 目录引导',
+                  link: '/components/directory-tour',
+                },
                 {
                   text: 'FilePreview 文件预览',
                   link: '/components/file-preview',
@@ -134,6 +147,15 @@ export default defineConfig({
               items: [
                 { text: 'Overview', link: '/en/components/' },
                 { text: 'Icons', link: '/en/components/icons' },
+                { text: 'Auth forms', link: '/en/components/auth-forms' },
+                {
+                  text: 'WikiDashboard',
+                  link: '/en/components/wiki-dashboard',
+                },
+                {
+                  text: 'ExperienceDashboard',
+                  link: '/en/components/experience-dashboard',
+                },
                 {
                   text: 'FileBrowserEntries',
                   link: '/en/components/file-browser-entries',
@@ -146,6 +168,10 @@ export default defineConfig({
                   link: '/en/components/scope-switcher',
                 },
                 { text: 'AgentConnect', link: '/en/components/agent-connect' },
+                {
+                  text: 'DirectoryTour',
+                  link: '/en/components/directory-tour',
+                },
                 { text: 'VikingBot', link: '/en/components/viking-bot' },
               ],
             },
