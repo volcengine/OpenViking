@@ -173,6 +173,7 @@ class TestCommit:
             messages,
             latest_archive_overview="",
             checkpoint_requests=None,
+            **kwargs,
         ):
             del checkpoint_requests
             working_memory_batches.append([message.id for message in messages])
@@ -193,8 +194,7 @@ class TestCommit:
         assert task_result["status"] == "completed"
         phase1 = await wm_session_with_messages._read_phase1_meta(result["archive_uri"])
         assert phase1["queue_message"]["auto_commit_policy"]["message_count_threshold"] == 1
-        assert len(working_memory_batches) == 4
-        assert all(len(batch) == 1 for batch in working_memory_batches)
+        assert len(working_memory_batches) == 1
         assert extract_long_term.await_count == 4
         assert all(len(call.kwargs["messages"]) == 1 for call in extract_long_term.await_args_list)
 
@@ -407,7 +407,7 @@ class TestCommit:
         wm_session_with_messages._agent_evolution_enabled_provider = lambda: False
         summary_called = False
 
-        async def fake_summary(_session, messages, latest_archive_overview=""):
+        async def fake_summary(_session, messages, latest_archive_overview="", **kwargs):
             nonlocal summary_called
             del messages, latest_archive_overview
             summary_called = True
@@ -519,7 +519,7 @@ class TestCommit:
 
         summary_called = False
 
-        async def fake_summary(messages, latest_archive_overview=""):
+        async def fake_summary(messages, latest_archive_overview="", **kwargs):
             nonlocal summary_called
             del messages, latest_archive_overview
             summary_called = True
@@ -565,7 +565,7 @@ class TestCommit:
         await session.ensure_exists()
         long_term_calls: list[dict] = []
 
-        async def fake_summary(messages, latest_archive_overview=""):
+        async def fake_summary(messages, latest_archive_overview="", **kwargs):
             del messages, latest_archive_overview
             return "Invoice support summary"
 
@@ -649,27 +649,49 @@ class TestCommit:
         assert isinstance(result, dict)
         assert result.get("archived") is False
 
-    async def test_commit_multiple_times(self, client):
-        """Test multiple commits"""
+    async def test_commit_multiple_times(self, client, service):
+        """Later commits use updated account settings while preserving Working Memory."""
+        manager = service.runtime_config_manager
+        vlm = SimpleNamespace(
+            is_available=lambda: True,
+            max_tokens=4096,
+            get_completion_async=AsyncMock(return_value="# Working Memory\n\nAccount summary."),
+        )
+        service.sessions._vlm_resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=vlm))
         session = client(session_id="multi_commit_test")
         await session.ensure_exists()
+        extract = AsyncMock(return_value=[])
+        session._session_compressor.extract_long_term_memories = extract
+        policy = {"memory_types": ["profile"], "working_memory": {"enabled": True}}
+        await manager.patch_account(
+            session.ctx.account_id,
+            {"output_language_override": "en", "memory": {"extraction_enabled": False}},
+        )
 
-        # First round of conversation
         session.add_message("user", [TextPart("First round message")])
         session.add_message("assistant", [TextPart("First round response")])
-        result1 = await session.commit_async()
+        result1 = await session.commit_async(memory_policy=policy)
         assert result1.get("status") == "accepted"
-        assert result1.get("task_id") is not None
+        assert (await _wait_for_task(result1["task_id"]))["status"] == "completed"
+        assert await session._archives.read_overview(result1["archive_uri"])
+        extract.assert_not_awaited()
 
-        # Wait for first commit's background task to finish
-        await _wait_for_task(result1["task_id"])
-
-        # Second round of conversation
+        await manager.patch_account(
+            session.ctx.account_id,
+            {"output_language_override": "zh-CN", "memory": {"extraction_enabled": True}},
+        )
         session.add_message("user", [TextPart("Second round message")])
         session.add_message("assistant", [TextPart("Second round response")])
-        result2 = await session.commit_async()
+        result2 = await session.commit_async(memory_policy=policy)
         assert result2.get("status") == "accepted"
-        assert result2.get("task_id") is not None
+        assert (await _wait_for_task(result2["task_id"]))["status"] == "completed"
+        assert result1["archive_uri"] != result2["archive_uri"]
+        assert session.messages == []
+        extract.assert_awaited_once()
+        assert extract.await_args.kwargs["ctx"].account_id == session.ctx.account_id
+        prompts = str(vlm.get_completion_async.call_args_list)
+        assert "Write all section content in en." in prompts
+        assert "Write all section content in zh-CN." in prompts
 
     async def test_commit_keep_recent_count_retains_live_tail_and_resets_pending_tokens(
         self,
@@ -744,12 +766,13 @@ class TestCommit:
         session_type = type(session)
         original_generate = session_type._generate_archive_summary_async
 
-        async def capture_generate(self, messages, latest_archive_overview=""):
+        async def capture_generate(self, messages, latest_archive_overview="", **kwargs):
             seen["summary"] = latest_archive_overview
             return await original_generate(
                 self,
                 messages,
                 latest_archive_overview=latest_archive_overview,
+                **kwargs,
             )
 
         async def capture_extract(*args, **kwargs):

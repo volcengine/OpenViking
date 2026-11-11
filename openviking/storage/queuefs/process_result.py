@@ -4,7 +4,7 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, Union
 
 
 class ProcessOutcome(str, Enum):
@@ -25,7 +25,7 @@ class ProcessResult:
     outcome: ProcessOutcome
     value: Any = None
     error: Optional[str] = None
-    errors: Optional[Tuple[str, ...]] = None
+    errors: Optional[Tuple[Union[str, dict], ...]] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.outcome, ProcessOutcome):
@@ -34,9 +34,12 @@ class ProcessResult:
             if not isinstance(self.error, str):
                 raise ValueError("failed results require an error string")
             if self.errors is not None and (
-                not self.errors or any(not isinstance(value, str) for value in self.errors)
+                not self.errors
+                or not all(isinstance(value, (str, dict)) for value in self.errors)
             ):
-                raise ValueError("failed result errors must be a non-empty tuple of strings")
+                raise ValueError(
+                    "failed result errors must be a non-empty tuple of strings or dicts"
+                )
         elif self.error is not None or self.errors is not None:
             raise ValueError("only failed results may contain errors")
 

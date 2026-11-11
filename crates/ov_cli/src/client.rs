@@ -117,10 +117,16 @@ pub enum SnapshotShowResult {
     },
 }
 
+/// A Compile submission returns either an immediate task or saved target scheduling settings.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompileAccepted {
-    pub task_id: String,
+    /// Present only when this request submits an immediate Compile task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
     pub status: String,
+    /// The saved schedule's next ISO 8601 trigger time; null when scheduling is disabled.
+    #[serde(default)]
+    pub next_run_at: Option<String>,
     #[serde(default)]
     pub to: Option<String>,
     #[serde(default)]
@@ -415,7 +421,7 @@ impl HttpClient {
             body["acl"] = acl;
         }
         // Omit the default so the request stays valid for servers without edit_source.
-        if edit_source != "agent" {
+        if edit_source != "manual" {
             body["edit_source"] = Value::from(edit_source);
         }
         self.post("/api/v1/content/write", &body).await
@@ -1742,12 +1748,14 @@ impl HttpClient {
         account_id: &str,
         enabled: bool,
     ) -> Result<Value> {
-        let path = format!("/api/v1/admin/accounts/{}/settings", account_id);
+        let path = format!("/api/v1/admin/accounts/{}/configuration", account_id);
         self.patch(
             &path,
             &serde_json::json!({
-                "acl": {
-                    "enabled": enabled,
+                "settings": {
+                    "acl": {
+                        "enabled": enabled,
+                    }
                 }
             }),
             &[],
@@ -1870,10 +1878,11 @@ impl HttpClient {
         user_id: &str,
     ) -> Result<Value> {
         let path = format!(
-            "/api/v1/admin/accounts/{}/groups/{}/members/{}",
-            account_id, group_id, user_id
+            "/api/v1/admin/accounts/{}/groups/{}/members",
+            account_id, group_id
         );
-        self.put(&path, &serde_json::json!({})).await
+        self.put(&path, &serde_json::json!({"user_ids": [user_id]}))
+            .await
     }
 
     pub async fn admin_remove_group_member(
@@ -1883,10 +1892,11 @@ impl HttpClient {
         user_id: &str,
     ) -> Result<Value> {
         let path = format!(
-            "/api/v1/admin/accounts/{}/groups/{}/members/{}",
-            account_id, group_id, user_id
+            "/api/v1/admin/accounts/{}/groups/{}/members",
+            account_id, group_id
         );
-        self.delete(&path, &[]).await
+        self.delete_with_body(&path, &serde_json::json!({"user_ids": [user_id]}))
+            .await
     }
 
     // ============ Debug Vector Methods ============
@@ -2343,6 +2353,38 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
+
+    #[tokio::test]
+    async fn admin_group_members_send_singleton_json_to_collection_route() {
+        for method in ["PUT", "DELETE"] {
+            let (base_url, request_rx) = spawn_request_capture_server().await;
+            let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+            if method == "PUT" {
+                client
+                    .admin_add_group_member("acme", "engineering", "alice")
+                    .await
+            } else {
+                client
+                    .admin_remove_group_member("acme", "engineering", "alice")
+                    .await
+            }
+            .expect("membership request should succeed");
+            let request = request_rx.await.expect("request should be captured");
+            assert!(request.starts_with(&format!(
+                "{method} /api/v1/admin/accounts/acme/groups/engineering/members HTTP/1.1\r\n"
+            )));
+            let (headers, body) = request.split_once("\r\n\r\n").expect("request body");
+            assert!(
+                headers
+                    .to_ascii_lowercase()
+                    .contains("content-type: application/json")
+            );
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(body).unwrap(),
+                json!({"user_ids": ["alice"]})
+            );
+        }
+    }
 
     #[test]
     fn compact_request_body_drops_null_and_empty_args() {
@@ -3069,7 +3111,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compile_create_deserializes_http_202_body() {
+    async fn compile_create_deserializes_task_and_schedule_responses() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("test server should bind");
@@ -3114,7 +3156,23 @@ mod tests {
             )
             .await
             .expect("202 response body should deserialize");
-        assert_eq!(accepted.task_id, "cmp_1");
+        assert_eq!(accepted.task_id.as_deref(), Some("cmp_1"));
+
+        let scheduled: super::CompileAccepted = serde_json::from_value(serde_json::json!({
+            "to": "viking://resources/wiki",
+            "status": "active",
+            "auto_update": true,
+            "next_run_at": "2026-10-26T00:00:00+08:00"
+        }))
+        .expect("saved Compile schedules should deserialize without a task");
+        assert!(scheduled.task_id.is_none());
+        assert_eq!(
+            scheduled.next_run_at.as_deref(),
+            Some("2026-10-26T00:00:00+08:00")
+        );
+        let output = serde_json::to_value(scheduled).expect("schedule output should serialize");
+        assert!(output.get("task_id").is_none());
+        assert_eq!(output["next_run_at"], "2026-10-26T00:00:00+08:00");
     }
 
     #[tokio::test]
@@ -3208,8 +3266,8 @@ mod tests {
             .await
             .expect("set account settings should succeed");
         let request = request_rx.await.expect("request should be captured");
-        assert!(request.starts_with("PATCH /api/v1/admin/accounts/acct/settings "));
-        assert!(request.contains(r#""acl":{"enabled":true}"#));
+        assert!(request.starts_with("PATCH /api/v1/admin/accounts/acct/configuration "));
+        assert!(request.contains(r#""settings":{"acl":{"enabled":true}}"#));
     }
 
     #[test]

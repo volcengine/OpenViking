@@ -9,6 +9,7 @@ import async_timeout
 import orjson
 import pytest
 from aiohttp import web
+from starlette.requests import ClientDisconnect
 from test_app import enable_tools
 from test_native_tools import PATHS, native_events, native_response, request_body, wire_response
 
@@ -319,3 +320,96 @@ async def test_gateway_passthrough_preserves_events_and_capture(
     ]
     assert actual == expected
     assert captures[-1].complete and captures[-1].usage["output_tokens"] == 20
+
+
+def hidden_tool_proxy(monkeypatch, tasks):
+    response = SimpleNamespace(headers={}, status=200, close=Mock())
+    prepared = SimpleNamespace(metrics={})
+    capture = ResponseCapture("responses")
+    capture.complete = True
+    source_closed = []
+
+    class Loop:
+        async def run(self, response, send):
+            tasks.append(asyncio.current_task())
+            try:
+                yield b"data: event\n\n"
+                await asyncio.Event().wait()
+            finally:
+                source_closed.append(True)
+
+    monkeypatch.setattr(proxy, "ToolExecutor", lambda *args: object())
+    monkeypatch.setattr(proxy, "HiddenToolLoop", lambda *args: Loop())
+    request = proxy.ProxyRequest.__new__(proxy.ProxyRequest)
+    request.app = SimpleNamespace(state=SimpleNamespace(viking=object()))
+    request.store = object()
+    request.prepared = prepared
+    request.credential = {}
+    request.config = SimpleNamespace(
+        public_url="http://gateway", max_body_bytes=1, mcp_file_links="proxy"
+    )
+    request.path = "/v1/responses"
+    request.body = {"stream": True, "store": False}
+    request.response = response
+    request.capture = capture
+    request.metrics = {}
+    request.target = "https://upstream/v1/responses"
+    request.headers = {}
+    request.relay = AsyncMock()
+    request.finish = AsyncMock()
+    return request, response, source_closed
+
+
+@pytest.mark.parametrize("failure_stage", ["start", "body"])
+async def test_hidden_tool_stream_closes_upstream_when_send_fails(monkeypatch, failure_stage):
+    tasks = []
+    request, response, source_closed = hidden_tool_proxy(monkeypatch, tasks)
+    outgoing = await request.tool_response()
+
+    async def receive():
+        await asyncio.Event().wait()
+
+    async def send(message):
+        if message["type"] == f"http.response.{failure_stage}" and (
+            failure_stage == "start" or message.get("body")
+        ):
+            raise OSError("client disconnected")
+
+    scope = {"type": "http", "asgi": {"spec_version": "2.4"}}
+    with pytest.raises(ClientDisconnect):
+        await outgoing(scope, receive, send)
+
+    assert response.close.called
+    assert request.finish.await_count == 1
+    assert not request.capture.complete
+    if failure_stage == "body":
+        assert tasks[0].done()
+        assert source_closed == [True]
+    else:
+        assert not tasks
+        assert not source_closed
+
+
+async def test_hidden_tool_stream_closes_upstream_on_asgi_disconnect(monkeypatch):
+    tasks = []
+    request, response, source_closed = hidden_tool_proxy(monkeypatch, tasks)
+    outgoing = await request.tool_response()
+    body_started = asyncio.Event()
+
+    async def receive():
+        await body_started.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        if message["type"] == "http.response.body" and message.get("body"):
+            body_started.set()
+            await asyncio.Event().wait()
+
+    scope = {"type": "http", "asgi": {"spec_version": "2.3"}}
+    await outgoing(scope, receive, send)
+
+    assert response.close.called
+    assert request.finish.await_count == 1
+    assert not request.capture.complete
+    assert tasks[0].done()
+    assert source_closed == [True]

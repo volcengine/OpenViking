@@ -9,14 +9,14 @@
 //! When pathlock is enabled, `PathLockWrappedFS` sits between `StatsWrappedFS` and `MountableFS`.
 
 use std::sync::Arc;
+#[cfg(feature = "cache")]
+use std::time::Duration;
 
 use super::filesystem::FileSystem;
 use super::mountable::MountableFS;
 use super::stats_wrapper::StatsWrappedFS;
 
 use super::errors::{Error, Result};
-#[cfg(feature = "cache")]
-use crate::cache::CachePolicy;
 #[cfg(feature = "cache")]
 use crate::cache_runtime::{
     CacheOperation, CacheRuntime, DynamicProviderConfig, RedisProviderConfig,
@@ -81,8 +81,8 @@ pub struct CacheFsConfig {
     pub enabled: bool,
     /// OpenViking instance name used by CacheFS keys.
     pub service_name: String,
-    /// Existing CacheFS policy and traversal settings.
-    pub policy: CachePolicy,
+    /// Optional TTL override for query buckets on a shared Redis service.
+    pub shared_redis_ttl: Option<Duration>,
 }
 
 #[cfg(feature = "cache")]
@@ -91,7 +91,7 @@ impl Default for CacheFsConfig {
         Self {
             enabled: false,
             service_name: String::new(),
-            policy: CachePolicy::default(),
+            shared_redis_ttl: None,
         }
     }
 }
@@ -102,7 +102,7 @@ impl Default for CacheFsConfig {
 pub struct CacheStackConfig {
     /// One global provider. `None` means no Runtime is initialized.
     pub provider: Option<CacheRuntimeProviderConfig>,
-    /// CacheFS enablement and policy.
+    /// CacheFS enablement.
     pub cachefs: CacheFsConfig,
 }
 
@@ -185,21 +185,26 @@ pub async fn build_configured_stack(
             .as_ref()
             .expect("cache provider is validated")
             .require_operations(&[
-                CacheOperation::Get,
-                CacheOperation::Set,
-                CacheOperation::Del,
-                CacheOperation::Mget,
+                CacheOperation::Hget,
+                CacheOperation::Hset,
+                CacheOperation::Expire,
+                CacheOperation::Zadd,
+                CacheOperation::Zscan,
+                CacheOperation::ZrangeByScore,
+                CacheOperation::Zrem,
+                CacheOperation::Unlink,
+                CacheOperation::ExecuteScript,
             ])
             .map_err(|error| Error::config(format!("CacheFS provider is incompatible: {error}")))?;
     }
     let mountable = if cache.cachefs.enabled {
-        Arc::new(MountableFS::with_cache_runtime(
+        Arc::new(MountableFS::with_cache_runtime_and_shared_redis_ttl(
             runtime
                 .as_ref()
                 .expect("cache provider is validated")
                 .clone(),
             cache.cachefs.service_name,
-            cache.cachefs.policy,
+            cache.cachefs.shared_redis_ttl,
         ))
     } else if let Some(runtime) = runtime.as_ref() {
         Arc::new(MountableFS::with_shared_cache_runtime(runtime.clone()))

@@ -27,6 +27,7 @@ OpenViking 的发版目标不是单一产物，而是围绕不同使用入口发
 | `openviking-sdk` | `python-sdk@X.Y.Z` | SDK 专用 tag，例如 `python-sdk@0.1.3`。 |
 | `openviking-ms-agent-framework` | `openviking-ms-agent-framework@X.Y.Z` | 必须与 `integrations/frameworks/microsoft-agent-framework/pyproject.toml` 中的版本一致。 |
 | Rust CLI / npm CLI | `cli@X.Y.Z` | CLI 专用 tag，例如 `cli@0.2.0`。 |
+| Vika（`vika/`） | `openviking-vika@X.Y.Z` | 必须与 `vika/package.json` 中的版本一致，见 [Vika 发版流程](#vika-发版流程)。 |
 | ClawHub 插件 latest | `YYYY.M.D` 或 `YYYY.M.D-N` | 由 workflow 自动生成或手动指定。 |
 | ClawHub 插件 dev | `YYYY.M.D-dev.N` | dev channel 使用。 |
 
@@ -157,6 +158,21 @@ cli@X.Y.Z
 - wrapper 包：`@openviking/cli`
 
 workflow 会把 tag 中的版本写入平台包和 wrapper 包。如果 npm 上已存在同版本包，workflow 会跳过已发布版本。
+
+## Vika 发版流程
+
+Vika（`vika/`）按平台发布自包含的安装包：linux-x64、linux-arm64、darwin-x64、darwin-arm64，每个都自带 Node 和依赖。`Vika Release` workflow（`vika-release.yml`）负责测试、构建并上传到 TOS 发布桶的 `vika/` 下：
+
+- `vika/releases/<版本>/`：安装包及其 `.sha256`、`install.sh`，以及最后上传的 `release.json`。每个版本只发布一次：同一版本的另一份构建已经上传时，workflow 直接停止；重跑失败的发布 job 会把同一份构建发布完。发布 job 依次执行，不会并行。
+- `vika/install.sh` 和 `vika/latest`：最后写入，只有比当前 `vika/latest` 更新的正式版才会更新。用户用 `curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/install.sh | sh` 安装，`vika upgrade` 按 `vika/latest` 升级。版本更旧的 tag（例如旧版本线上的热修复）或带 `-` 的 tag（例如 `openviking-vika@0.6.0-rc.1`）只发布自己的版本目录；带 `-` 的版本在 GitHub 上标记为预发布。
+
+正式发版：在 `vika/package.json` 中设定版本并合入，然后推送与之一致的 `openviking-vika@X.Y.Z` tag。tag 不能以 `v` 开头：推送 `v*.*.*` tag、为 `v*` tag 发布 Release 都会触发主包的 workflow。workflow 同时为该 tag 创建 GitHub Release，不会将其标记为仓库的最新 Release。
+
+分支预览：在该分支上运行 workflow，可以在 Actions 页面操作，也可以执行 `gh workflow run vika-release.yml --ref <分支>`。它发布 `<package 版本>-<commit>`，不改动 `vika/latest`，运行摘要里给出安装命令。发布需要 TOS secrets，所以只能预览本仓库内的分支。
+
+改动 `vika/` 的 PR 会跑测试，并构建、检查 linux-x64 安装包，但不发布。
+
+workflow 使用与 `release-tos.yml` 相同的 TOS secrets。仓库变量 `VIKA_DOWNLOAD_BASE` 和 `VIKA_TOS_PREFIX` 可以覆盖公开地址和 key 前缀，例如在 fork 中对着测试桶演练。
 
 ## OpenClaw / ClawHub 插件发布
 

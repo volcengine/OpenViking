@@ -34,6 +34,7 @@ def storage():
         ls=AsyncMock(return_value=[]),
         pathlock_acquire_tree=AsyncMock(return_value=lease),
         pathlock_acquire_exact=AsyncMock(return_value=lease),
+        pathlock_acquire_batch=AsyncMock(return_value=lease),
         pathlock_release=AsyncMock(),
         rm=AsyncMock(return_value={}),
     )
@@ -322,14 +323,9 @@ async def test_resource_rm_authorizes_the_whole_subtree_at_its_root(storage, all
         storage.agfs.rm.assert_awaited_once()
         storage.vector.delete_uris.assert_awaited_once()
         assert not storage.ctx.bypass_acl
+        storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)
     else:
         with pytest.raises(PermissionDeniedError):
             await service._rm(RESOURCE_URI, ctx=storage.ctx, recursive=True)
         storage.agfs.rm.assert_not_awaited()
         storage.vector.delete_uris.assert_not_awaited()
-    else:
-        storage.vector.count.assert_awaited_once()
-        storage.vector.delete_uris.assert_awaited_once_with(
-            storage.ctx, [RESOURCE_URI], recursive=True
-        )
-    storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)

@@ -113,6 +113,8 @@ Delete and move authorize the specified file or directory without checking desce
 
 For a directory, `stat.count` uses the same path and ACL scalar filter and reports the number of context records visible to the caller.
 
+Listing summaries reuse read authorization already completed for that page, without querying ACL again for each entry.
+
 ## Retrieval Filtering
 
 ACL data exists only in the context collection. Each context record stores direct and inherited permissions in native scalar fields:
@@ -124,6 +126,8 @@ acl_inherited_grants
 ```
 
 `acl_direct_grants` is the ACL assigned to the current node. `acl_inherited_grants` stores the parent's current effective ACL. `acl_mode` controls whether inherited grants contribute to the current node's effective permissions. Each principal stores only its highest level as `{mask}:{principal}`: `1` means `read`, `3` means `write`, and `7` means `manage`. There is no separate ACL collection.
+
+An empty grants list is stored as `["none"]` and decoded as no grants. The `"none"` token must appear alone and never grants access. This storage marker is independent of `acl_mode`: clearing direct grants preserves the mode and any inherited permissions.
 
 ACLs update with the index, so records for the same URI may temporarily hold different versions. Reads use one ACL snapshot returned by the index, without merging grants across versions or blocking on temporary disagreement. Permission changes take effect as index updates complete; strong consistency is not guaranteed.
 

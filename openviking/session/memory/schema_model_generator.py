@@ -147,9 +147,11 @@ class SchemaModelGenerator:
 
         page_id_json_schema = {"type": "integer"}
         page_id_description = "Temporary page_id for identifying the target memory item."
-        if memory_type.memory_type == "events" and memory_type.operation_mode == "add_only":
+        if memory_type.operation_mode == "add_only":
             page_id_json_schema["minimum"] = 100
-            page_id_description = "Unique page_id for this new event; it MUST be at least 100."
+            page_id_description = (
+                "Unique page_id for this new memory item; it MUST be at least 100."
+            )
 
         field_definitions["page_id"] = (
             Annotated[int, WithJsonSchema(page_id_json_schema)],
@@ -202,7 +204,7 @@ class SchemaModelGenerator:
             if not isinstance(data, dict):
                 return data
             try:
-                is_new = int(data.get("page_id")) >= 100
+                is_new = memory_type.operation_mode == "add_only" or int(data.get("page_id")) >= 100
             except (TypeError, ValueError):
                 return data
             missing = [name for name in required_on_create if data.get(name) is None]

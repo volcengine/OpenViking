@@ -28,6 +28,6 @@ async def test_keywords_capability_check_propagates_metadata_failures():
     check.assert_awaited_once_with(
         vector_store,
         _ctx(),
-        supported_modes=("volcengine", "vikingdb"),
+        supported_modes=("volcengine", "vikingdb", "opengauss"),
         raise_on_error=True,
     )

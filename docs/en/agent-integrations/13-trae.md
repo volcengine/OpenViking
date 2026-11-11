@@ -33,7 +33,7 @@ You can also use `/hooks` to review the OpenViking commands and trust and enable
 
 TRAE and TRAE CN use the installed `hooks.json` and need no hook approval; restart the corresponding client after installation.
 
-Once installed, start a new TRAE session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [Connect your agent with one prompt](../getting-started/07-agent-onboarding.md).
+Once installed, start a new TRAE session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
 
 ## What gets installed
 

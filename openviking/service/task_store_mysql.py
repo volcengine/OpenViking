@@ -40,6 +40,7 @@ from openviking.service.task_domain import (
     finalize_task,
     processing_seconds,
     sanitize_error,
+    serialize_work_errors,
     summarize_works,
 )
 from openviking.service.task_events import TaskEventHistory, append_task_event
@@ -54,6 +55,7 @@ from openviking.service.task_store import (
     TaskWorkStore,
     _can_withdraw_task,
     _deep_merge,
+    _task_state_rejection,
 )
 from openviking.service.task_store_mysql_schema import (
     TaskStoreModels,
@@ -96,18 +98,6 @@ def _utc_iso() -> str:
 
 def _not_found_result() -> StoreOperationResult:
     return StoreOperationResult.rejected(StoreOperationCode.NOT_FOUND)
-
-
-def _inactive_result(status: str, message: str) -> StoreOperationResult:
-    if status in {item.value for item in TERMINAL_TASK_STATUSES}:
-        return StoreOperationResult.rejected(
-            StoreOperationCode.ALREADY_TERMINAL,
-            f"{message}: task is already {status}",
-        )
-    return StoreOperationResult.rejected(
-        StoreOperationCode.INVALID_STATE,
-        f"{message}: task is {status}",
-    )
 
 
 @mysql_runtime_store
@@ -395,7 +385,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                 select(
                     exists().where(
                         *self._work_query(Work, task_id, None, None, None),
-                        Work.state.not_in([WorkState.DONE.value, WorkState.FAILED.value]),
+                        Work.state.in_([WorkState.PENDING.value, WorkState.RUNNING.value]),
                     )
                 )
             )
@@ -843,7 +833,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                         .where(
                             Work.service_name == self._service_name,
                             Work.task_id.in_(task_ids),
-                            Work.state.not_in([WorkState.DONE.value, WorkState.FAILED.value]),
+                            Work.state.in_([WorkState.PENDING.value, WorkState.RUNNING.value]),
                         )
                         .distinct()
                     )
@@ -933,7 +923,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                         .where(
                             Work.service_name == self._service_name,
                             Work.task_id.in_(task_ids),
-                            Work.state.not_in([WorkState.DONE.value, WorkState.FAILED.value]),
+                            Work.state.in_([WorkState.PENDING.value, WorkState.RUNNING.value]),
                         )
                         .distinct()
                     )
@@ -1025,7 +1015,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             if row is None:
                 return _not_found_result()
             if row.status not in (TaskStatus.PENDING.value, TaskStatus.RUNNING.value):
-                return _inactive_result(row.status, "Task cannot be started")
+                return _task_state_rejection(row.status, "Task cannot be started")
 
             previous = TaskRecord(
                 task_id=task_id,
@@ -1081,7 +1071,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             if row is None:
                 return _not_found_result()
             if row.status not in {item.value for item in ACTIVE_TASK_STATUSES}:
-                return _inactive_result(row.status, "Task cannot be patched")
+                return _task_state_rejection(row.status, "Task cannot be patched")
             if patch.is_empty():
                 return StoreOperationResult.noop()
 
@@ -1242,6 +1232,10 @@ class MySQLTaskWorkStore(TaskWorkStore):
                 values["error"] = next_error
 
             next_status = TaskStatus.CANCELLING if cancelled else TaskStatus(row.status)
+            if cancelled:
+                await self._cancel_pending_and_inline_work(
+                    session, task_id, row.account_id, row.user_id
+                )
             events = None
             previous_events = None
             if cancelled or (error and row.error is None):
@@ -1346,6 +1340,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             )
             task = deepcopy(previous)
             task.status = TaskStatus.CANCELLING
+            await self._cancel_pending_and_inline_work(session, task_id, account_id, user_id)
             append_task_events(task, previous)
             values: dict[str, Any] = {
                 "status": task.status.value,
@@ -1550,23 +1545,110 @@ class MySQLTaskWorkStore(TaskWorkStore):
             ).all()
             return {row.work_id: self._work_from_row(row) for row in rows}
 
+    async def _cancel_pending_and_inline_work(
+        self, session: AsyncSession, task_id: str, account_id: str, user_id: str
+    ) -> None:
+        """Settle Inline without waiting for its process; local cancellation follows separately."""
+        Work = self._models.Work
+        now = time.time()
+        await session.execute(
+            update(Work)
+            .where(
+                *self._work_query(Work, task_id, None, account_id, user_id),
+                or_(
+                    Work.state == WorkState.PENDING.value,
+                    and_(Work.state == WorkState.RUNNING.value, Work.queue_name == "Inline"),
+                ),
+            )
+            .values(state=WorkState.CANCELLED.value, finished_at=now, updated_at=now)
+        )
+
     async def start_work(
-        self, task_id: str, work_id: str, *, account_id: str, user_id: str
+        self,
+        task_id: str,
+        work_id: str,
+        *,
+        account_id: str,
+        user_id: str,
+        queue_name: Optional[str] = None,
     ) -> StoreOperationResult:
         Work = self._models.Work
+        Task = self._models.Task
         async with self._transaction() as session:
+            task_row = (
+                await session.execute(
+                    select(Task.status, Task.stage, Task.updated_at)
+                    .where(*self._task_query(Task, task_id, account_id, user_id))
+                    .with_for_update()
+                )
+            ).one_or_none()
+            if task_row is None:
+                return _not_found_result()
+            if task_row.status not in (TaskStatus.PENDING.value, TaskStatus.RUNNING.value):
+                return _task_state_rejection(task_row.status, "Work cannot be started")
             result = await session.execute(
-                select(Work.state, Work.started_at)
+                select(Work)
                 .where(*self._work_query(Work, task_id, work_id, account_id, user_id))
                 .with_for_update()
             )
-            work = result.one_or_none()
-            if work is None or work.state in {WorkState.DONE.value, WorkState.FAILED.value}:
+            work = result.scalar_one_or_none()
+            if work is None and queue_name is not None:
+                recovered = WorkRecord(
+                    task_id=task_id,
+                    work_id=work_id,
+                    queue_name=queue_name,
+                    account_id=account_id,
+                    user_id=user_id,
+                )
+                work = Work(
+                    service_name=self._service_name,
+                    task_id=task_id,
+                    work_id=work_id,
+                    account_id=account_id,
+                    user_id=user_id,
+                    queue_name=queue_name,
+                    state=WorkState.PENDING.value,
+                    requeue_count=0,
+                    error=None,
+                    errors=[],
+                    context_count=0,
+                    enqueued_at=recovered.enqueued_at,
+                    updated_at=recovered.updated_at,
+                )
+                session.add(work)
+                await session.flush()
+            if work is None:
                 return StoreOperationResult.rejected(
                     StoreOperationCode.WORK_NOT_OPEN,
                     f"Work {work_id} is unavailable",
                 )
+            if work.state == WorkState.CANCELLED.value:
+                return StoreOperationResult.rejected(StoreOperationCode.ALREADY_CANCELLED)
+            if work.state in (WorkState.DONE.value, WorkState.FAILED.value):
+                return StoreOperationResult.noop(StoreOperationCode.WORK_NOT_OPEN)
             now = time.time()
+            if task_row.status == TaskStatus.PENDING.value:
+                previous = TaskRecord(
+                    task_id=task_id,
+                    task_type="",
+                    status=TaskStatus.PENDING,
+                    stage=task_row.stage,
+                    execution_events=await self._event_history(session, task_id),
+                )
+                task = deepcopy(previous)
+                task.status = TaskStatus.RUNNING
+                append_task_events(task, previous)
+                await session.execute(
+                    update(Task)
+                    .where(*self._task_query(Task, task_id, account_id, user_id))
+                    .values(
+                        status=TaskStatus.RUNNING.value,
+                        updated_at=TaskRecord.next_updated_at(task_row.updated_at),
+                    )
+                )
+                await self._append_event_history(
+                    session, task_id, task.execution_events, previous.execution_events
+                )
             await session.execute(
                 update(Work)
                 .where(*self._work_query(Work, task_id, work_id, account_id, user_id))
@@ -1586,20 +1668,24 @@ class MySQLTaskWorkStore(TaskWorkStore):
         state: WorkState,
         *,
         error: Optional[str],
-        errors: Optional[Collection[str]],
+        errors: Optional[Collection[Any]],
         context_count_delta: int,
         account_id: str,
         user_id: str,
     ) -> StoreOperationResult:
-        if state not in (WorkState.DONE, WorkState.FAILED):
+        if state not in (WorkState.DONE, WorkState.FAILED, WorkState.CANCELLED):
             raise ValueError(f"Non-terminal Work state: {state}")
         Work = self._models.Work
+        Task = self._models.Task
         async with self._transaction() as session:
             if not await self._lock_task(session, task_id, account_id=account_id, user_id=user_id):
                 return StoreOperationResult.noop(
                     StoreOperationCode.WORK_NOT_OPEN,
                     f"Work {work_id} is unavailable",
                 )
+            task_status = await session.scalar(
+                select(Task.status).where(*self._task_query(Task, task_id, account_id, user_id))
+            )
             result = await session.execute(
                 select(Work.state, Work.error, Work.context_count)
                 .where(*self._work_query(Work, task_id, work_id, account_id, user_id))
@@ -1609,6 +1695,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             if work is None or work.state in {
                 WorkState.DONE.value,
                 WorkState.FAILED.value,
+                WorkState.CANCELLED.value,
             }:
                 return StoreOperationResult.noop(
                     StoreOperationCode.WORK_NOT_OPEN,
@@ -1616,14 +1703,18 @@ class MySQLTaskWorkStore(TaskWorkStore):
                 )
             now = time.time()
             values: dict[str, Any] = {
-                "state": state.value,
+                "state": (
+                    WorkState.CANCELLED.value
+                    if task_status == TaskStatus.CANCELLING.value
+                    else state.value
+                ),
                 "finished_at": now,
                 "updated_at": now,
             }
             if error:
                 values["error"] = sanitize_error(error)
             if state == WorkState.FAILED:
-                details = [sanitize_error(str(value)) for value in errors or () if str(value)]
+                details = serialize_work_errors(errors)
                 values["errors"] = details or (
                     [values.get("error", work.error)] if values.get("error", work.error) else []
                 )
@@ -1654,29 +1745,45 @@ class MySQLTaskWorkStore(TaskWorkStore):
         user_id: str,
     ) -> StoreOperationResult:
         Work = self._models.Work
+        Task = self._models.Task
         async with self._transaction() as session:
+            task_status = await session.scalar(
+                select(Task.status)
+                .where(*self._task_query(Task, task_id, account_id, user_id))
+                .with_for_update()
+            )
+            if task_status is None:
+                return _not_found_result()
             result = await session.execute(
-                select(Work.state, Work.requeue_count)
+                select(Work.state, Work.requeue_count, Work.started_at)
                 .where(*self._work_query(Work, task_id, work_id, account_id, user_id))
                 .with_for_update()
             )
             work = result.one_or_none()
-            if work is None or work.state in {WorkState.DONE.value, WorkState.FAILED.value}:
+            if work is None or work.state not in {WorkState.PENDING.value, WorkState.RUNNING.value}:
                 return StoreOperationResult.noop(
                     StoreOperationCode.WORK_NOT_OPEN,
                     f"Work {work_id} is unavailable",
                 )
+            cancelling = task_status == TaskStatus.CANCELLING.value
+            now = time.time()
             await session.execute(
                 update(Work)
                 .where(*self._work_query(Work, task_id, work_id, account_id, user_id))
                 .values(
-                    state=WorkState.PENDING.value,
-                    requeue_count=work.requeue_count + max(delta, 0),
-                    started_at=None,
-                    finished_at=None,
-                    updated_at=time.time(),
+                    state=WorkState.CANCELLED.value if cancelling else WorkState.PENDING.value,
+                    requeue_count=work.requeue_count
+                    if cancelling
+                    else work.requeue_count + max(delta, 0),
+                    started_at=work.started_at if cancelling else None,
+                    finished_at=now if cancelling else None,
+                    updated_at=now,
                 )
             )
+            if cancelling:
+                await self._finalize_if_closed(
+                    session, task_id, account_id=account_id, user_id=user_id
+                )
             return StoreOperationResult.applied()
 
     async def record_work_error(
@@ -1723,7 +1830,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             if work is None:
                 return StoreOperationResult.noop(StoreOperationCode.NOT_FOUND)
             changed = False
-            if work.state not in {WorkState.DONE.value, WorkState.FAILED.value}:
+            if work.state in {WorkState.PENDING.value, WorkState.RUNNING.value}:
                 settled_state = WorkState.FAILED.value if work.error else WorkState.DONE.value
                 settled_at = time.time()
                 changed = True
@@ -1771,7 +1878,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
         Work = self._models.Work
         async with self._session_factory() as session:
             predicates = list(self._work_query(Work, task_id, None, account_id, user_id))
-            predicates.append(Work.state.not_in([WorkState.DONE.value, WorkState.FAILED.value]))
+            predicates.append(Work.state.in_([WorkState.PENDING.value, WorkState.RUNNING.value]))
             if exclude_work_id is not None:
                 predicates.append(Work.work_id != exclude_work_id)
             return bool(await session.scalar(select(exists().where(*predicates))))

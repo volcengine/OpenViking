@@ -573,12 +573,9 @@ class TestFilterOpsLifecycle(unittest.TestCase):
         new_data = [{"id": 4, "embedding": [1.0, 0, 0, 0], "status": "active", "count": 40}]
         self.collection.upsert_data(new_data)
 
-        # Ensure data is written
-        # Simulate restart: release old object, reload
-        del self.collection
+        # Restart closes storage explicitly before reopening the same path.
+        self.collection.close()
         self.collection = None  # Avoid tearDown accessing deleted attribute
-        gc.collect()
-        time.sleep(0.1)
 
         collection_new = get_or_create_local_collection(path=self.path)
         # Assign new object to self.collection for tearDown cleanup

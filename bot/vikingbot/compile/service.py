@@ -37,6 +37,7 @@ from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools.base import ToolContext
 from vikingbot.agent.tools.compile import (
     CompileChildTool,
+    CompileImageReadTool,
     CompileSpawnTool,
     SubmitCompileDraftTool,
     SubmitWikiBundleTool,
@@ -44,7 +45,6 @@ from vikingbot.agent.tools.compile import (
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.spawn import WaitSubagentsTool
 from vikingbot.compile import file_ops
-from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import (
     COMPILE_DRAFT_ROOT,
     COMPILE_STAGING_ROOT,
@@ -71,7 +71,7 @@ from vikingbot.compile.renderer import (
     validate_declared_okf_markdown,
 )
 from vikingbot.compile.sandbox import CompileSandboxManager
-from vikingbot.compile.sources import CompileSourceRange, pack_source_batches
+from vikingbot.compile.sources import CompileSourceRange, pack_source_batches, read_source
 from vikingbot.compile.store import CompileTaskStore
 from vikingbot.config.schema import SandboxBackend, SandboxMode, SessionKey
 from vikingbot.openviking_mount.ov_server import VikingClient
@@ -215,8 +215,9 @@ class _CompileProvider(LLMProvider):
                 async for event in stream:
                     yield event
 
-    def supports_tool_result_media(self, model: str | None = None) -> bool:
-        return self._provider.supports_tool_result_media(model)
+    def should_inline_tool_result_media(self, model: str | None = None) -> bool:
+        """Send original evidence; model capability is decided by the endpoint."""
+        return True
 
     def get_default_model(self) -> str:
         return self._provider.get_default_model()
@@ -502,7 +503,7 @@ class BotCompileService:
         connection: Mapping[str, Any],
     ) -> SanitizedCompileRequest:
         args = request.args or {}
-        if args.keys() - {"last_compile_time", "wiki_links", "changes"}:
+        if args.keys() - {"last_compile_time", "changes"}:
             raise CompileFailure(
                 "INVALID_ARGUMENT",
                 "VikingBot Compile does not implement provider-specific args.",
@@ -548,11 +549,6 @@ class BotCompileService:
                     "Unavailable snapshots require full execution",
                     stage="queued",
                 )
-        wiki_links = args.get("wiki_links", False)
-        if not isinstance(wiki_links, bool):
-            raise CompileFailure(
-                "INVALID_ARGUMENT", "args.wiki_links must be a boolean", stage="queued"
-            )
         raw_sources = [str(value).strip() for value in request.from_]
         if not raw_sources or any(not value for value in raw_sources):
             raise CompileFailure(
@@ -593,15 +589,14 @@ class BotCompileService:
 
             raw_target = request.to.strip().rstrip("/")
             try:
-                target_attrs = await client.attrs(raw_target)
+                target_stat = await client.stat(raw_target)
             except OpenVikingError as exc:
                 if exc.code != "NOT_FOUND":
                     raise
                 self._validate_target_directory(raw_target, {"isDir": True})
-                await client.mkdir(raw_target)
-                target_attrs = await client.attrs(raw_target)
-            target = str(target_attrs.get("uri") or "").rstrip("/")
-            target_stat = await client.stat(target)
+                await client.mkdir(raw_target, description="compile target folder")
+                target_stat = await client.stat(raw_target)
+            target = str(target_stat.get("uri") or "").rstrip("/")
             self._validate_target_directory(target, target_stat)
         except CompileFailure:
             raise
@@ -622,7 +617,6 @@ class BotCompileService:
                 "skill": canonical_skill,
                 "last_compile_time": None if changes is not None else cutoff,
                 "changes": changes,
-                "wiki_links": wiki_links,
             }
         )
 
@@ -996,7 +990,6 @@ class BotCompileService:
                         root_uri=request.to,
                         operations=rendered.operations,
                         wait=False,
-                        defer_processing=True,
                         edit_source="compile",
                     )
                 except OpenVikingError as exc:
@@ -1028,7 +1021,6 @@ class BotCompileService:
                     "unchanged": unchanged,
                     "page_count": page_count,
                     "link_count": rendered.link_count,
-                    "link_report": rendered.link_report,
                     "warnings": warnings,
                 }
             )
@@ -1109,7 +1101,7 @@ class BotCompileService:
         pipeline.model.agent_runner = agent_runner
         pipeline.tools = {
             name: tool
-            for name in ("openviking_search", "openviking_multi_read", "openviking_diff_paths")
+            for name in ("openviking_search", "openviking_multi_read")
             if (tool := self.agent_loop.tools.get(name)) is not None
         }
         pipeline.tool_context = tool_context
@@ -1128,23 +1120,25 @@ class BotCompileService:
             }
 
         await self._set_state(task_id, status="running", stage="pipeline")
-        directory_plan = has_directory_plan(request.changes)
-        ordered = []
-        if not (directory_plan and request.changes.get("head")):
-            ordered = (
-                source_files
-                if source_files is not None
-                else await self._list_source_files(client, request.from_)
-            )
+        ordered = (
+            source_files
+            if source_files is not None
+            else await self._list_pipeline_source_files(client, request)
+        )
         if not resume:
             await pipeline.files.put("inputs", dict.fromkeys(ordered, "pending"))
+
+        source_limits = self.limits.model_copy(
+            update={"source_batch_chars": min(self.limits.source_batch_chars, 10_000)}
+        )
 
         async def source_batches():
             """Retain at most one read batch of source bodies while seeding task shards."""
             for start in range(0, len(ordered), 8):
                 uris = ordered[start : start + 8]
                 contents = await asyncio.gather(
-                    *(client.read_raw(uri) for uri in uris), return_exceptions=True
+                    *(read_source(client, uri) for uri in uris),
+                    return_exceptions=True,
                 )
                 readable = []
                 for uri, content in zip(uris, contents, strict=True):
@@ -1157,7 +1151,7 @@ class BotCompileService:
                         raise content
                     else:
                         readable.append((uri, content))
-                for batch in pack_source_batches(readable, self.limits):
+                for batch in pack_source_batches(readable, source_limits):
                     yield batch
 
         try:
@@ -1195,7 +1189,6 @@ class BotCompileService:
                     operations=rendered.operations,
                     wait=False,
                     skip_conflicts=True,
-                    defer_processing=True,
                     edit_source="compile",
                 )
             conflicts = result.get("conflicts", [])
@@ -1236,7 +1229,6 @@ class BotCompileService:
                 ),
                 page_count=len(set(published)),
                 link_count=rendered.link_count,
-                link_report=rendered.link_report,
                 warnings=pipeline.warnings,
             )
 
@@ -1349,10 +1341,10 @@ class BotCompileService:
         skill_dir: Path,
         stage: str = "loading_skill",
     ) -> None:
+        """Copy a Skill package and reject attachment paths outside skill_dir."""
         skill_dir.mkdir(parents=True, exist_ok=True)
         content = str(skill_result.get("content") or "")
-        encoded = content.encode("utf-8")
-        (skill_dir / "SKILL.md").write_bytes(encoded)
+        (skill_dir / "SKILL.md").write_bytes(content.encode("utf-8"))
 
         files = skill_result.get("files") or []
         for item in files:
@@ -1381,9 +1373,6 @@ class BotCompileService:
     ) -> dict[str, list[str]]:
         """Publish one validated package, retaining untouched existing attachments.
 
-        Pipeline operations contain target-relative file revisions. Recheck those
-        revisions against the materialized package before invoking the Skill API;
-        Skill updates replace the whole package and do not offer atomic file CAS.
         The returned URIs identify Skill roots, as required by Compile's Skill result.
         """
         result = {"created": [], "updated": [], "unchanged": []}
@@ -1433,12 +1422,7 @@ class BotCompileService:
                     relative_uri_path(target_uri, operation["uri"])
                 )
                 local = temp_root / relative
-                old = local.read_bytes() if local.is_file() else None
-                expected = operation.get("expected_sha256")
-                if (operation["mode"] == "create" and local.exists()) or (
-                    operation["mode"] == "replace"
-                    and (old is None or content_hash(old) != expected)
-                ):
+                if operation["mode"] == "create" and local.exists():
                     raise CompileFailure(
                         "WRITE_CONFLICT", f"Skill file changed: {operation['uri']}", stage="writing"
                     )
@@ -1459,7 +1443,10 @@ class BotCompileService:
                 )
             if exists:
                 published = await client.update_skill(
-                    skill_name, str(skill_dir), target_uri=target_uri, wait=True
+                    skill_name,
+                    str(skill_dir),
+                    target_uri=target_uri,
+                    wait=True,
                 )
             else:
                 published = await client.add_skill(str(skill_dir), target_uri=target_uri, wait=True)
@@ -1511,6 +1498,37 @@ class BotCompileService:
             )
         )
         return registry
+
+    async def _list_pipeline_source_files(
+        self, client: VikingClient, request: SanitizedCompileRequest
+    ) -> list[str]:
+        """Select unique full-scan and added/modified inputs; listing errors propagate."""
+        changes = request.changes
+        if not (has_directory_plan(changes) and changes.get("head")):
+            return await self._list_source_files(client, request.from_)
+        files = set(await self._list_source_files(client, changes["full_dirs"], allow_empty=True))
+        roots = changes["diff_dirs"]
+        if roots:
+            offset = 0
+            while True:
+                page = await client.diff_paths(
+                    roots, base=changes["base"], head=changes["head"], offset=offset
+                )
+                for change in page["changes"]:
+                    uri = str(change.get("uri") or "").rstrip("/")
+                    if not uri or not any(
+                        uri == root or relative_uri_path(root, uri) for root in roots
+                    ):
+                        raise ValueError(f"Source inventory returned an out-of-scope URI: {uri}")
+                    if change["change_type"] in {"added", "modified"}:
+                        files.add(uri)
+                if not page["has_more"]:
+                    break
+                next_offset = page["next_offset"]
+                if not isinstance(next_offset, int) or next_offset <= offset:
+                    raise ValueError("Source inventory pagination did not advance")
+                offset = next_offset
+        return sorted(files)
 
     async def _list_source_files(
         self,
@@ -1576,11 +1594,11 @@ class BotCompileService:
         self, client: VikingClient, roots: list[str], *, files: list[str] | None = None
     ) -> list[list[CompileSourceRange]]:
         """Read selected files (or inventory roots) eight at a time; read errors propagate."""
-        sources: list[tuple[str, str]] = []
+        sources: list[tuple[str, str | CompileSourceRange]] = []
         ordered = files if files is not None else await self._list_source_files(client, roots)
         for start in range(0, len(ordered), 8):
             uris = ordered[start : start + 8]
-            contents = await asyncio.gather(*(client.read_raw(uri) for uri in uris))
+            contents = await asyncio.gather(*(read_source(client, uri) for uri in uris))
             sources.extend(zip(uris, contents, strict=True))
         return pack_source_batches(sources, self.limits)
 
@@ -1605,6 +1623,12 @@ class BotCompileService:
             return None
         manager = request_loop.subagents
         claimed_roots: set[str] = set()
+        image_hashes = {
+            part.uri: part.sha256
+            for batch in source_batches or []
+            for part in batch
+            if part.image and part.sha256
+        }
 
         async def run_child(
             child_id: str,
@@ -1669,6 +1693,8 @@ class BotCompileService:
             for name in _COMPILE_READ_TOOLS:
                 tool = registry.get(name)
                 if tool is not None:
+                    if name == "openviking_multi_read" and image_hashes:
+                        tool = CompileImageReadTool(tool, image_hashes)
                     child_tools.register(tool)
 
             async def require_draft_submission(context: _PlainTextContext) -> _PlainTextDelivered:

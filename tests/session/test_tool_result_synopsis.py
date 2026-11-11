@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import tracemalloc
+
 import pytest
 
 from openviking.session.tool_result_synopsis import (
@@ -74,6 +76,31 @@ def test_tsv_synopsis_reports_columns_and_rows():
     joined = "\n".join(synopsis.summary + synopsis.structure)
     assert "columns: name, score" in joined
     assert "rows: 2" in joined
+
+
+@pytest.mark.parametrize("delimiter,kind", [(",", "csv"), ("\t", "tsv")])
+def test_large_table_synopsis_does_not_retain_all_rows(delimiter, kind):
+    content = f"name{delimiter}value\n" + f"Ada{delimiter}{'x' * 80}\n" * 20_000
+    tracemalloc.start()
+    try:
+        synopsis = generate_tool_result_synopsis(content, preview_chars=200)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert synopsis.kind == kind
+    assert "rows: 20000" in synopsis.structure
+    # Allow the StringIO input copy, but not a retained list of parsed rows.
+    assert peak < len(content) * 6
+
+
+def test_csv_synopsis_counts_quoted_multiline_rows_and_ignores_blank_rows():
+    content = 'name,score\n\n"Ada\nLovelace",99\n,\nLin,98\n'
+    synopsis = generate_tool_result_synopsis(content, preview_chars=200)
+
+    assert synopsis.kind == "csv"
+    assert "rows: 2" in synopsis.structure
+    assert "first row sample: Ada Lovelace,99" in synopsis.structure
 
 
 def test_yaml_synopsis_reports_shape():

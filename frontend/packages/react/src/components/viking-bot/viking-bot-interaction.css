@@ -1,0 +1,224 @@
+@import '../../shared/components/input/input.css';
+/**
+ * 待确认交互区样式。颜色取自 `viking-bot.css` 里从主题基线派生的组件变量。
+ *
+ * Pending-interaction styles. Colours come from the component variables derived
+ * from the theme baseline in `viking-bot.css`.
+ */
+.ov-viking-bot__interaction {
+  display: flex;
+  box-sizing: border-box;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--ov-viking-bot-border);
+  padding: 12px;
+}
+
+.ov-viking-bot__interaction-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--ov-viking-bot-text-muted);
+  font-size: 12px;
+}
+
+.ov-viking-bot__interaction-title {
+  color: var(--ov-viking-bot-text);
+  font-weight: 500;
+}
+
+.ov-viking-bot__interaction-progress {
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-viking-bot__interaction-question {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.ov-viking-bot__interaction-error {
+  margin: 0;
+  color: var(--ov-viking-bot-danger);
+  font-size: 12px;
+}
+
+.ov-viking-bot__interaction-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ov-viking-bot__interaction-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--ov-viking-bot-radius);
+  padding: 4px 6px;
+  cursor: pointer;
+}
+
+.ov-viking-bot__interaction-option:hover {
+  background: var(--ov-viking-bot-surface-hover);
+}
+
+.ov-viking-bot__interaction-option:focus-within {
+  outline: 2px solid var(--ov-viking-bot-focus);
+  outline-offset: 1px;
+}
+
+/* 交互区可独立渲染，因此自己声明所需变量；值仍从包级主题基线派生，
+   与 `.ov-viking-bot` 上的同名变量保持一致。 */
+.ov-viking-bot__interaction {
+  --ov-viking-bot-radius: 6px;
+  --ov-viking-bot-text: var(
+    --ov-ui-color-text-1,
+    var(--ov-ui-text-1-default, #0b0b0f)
+  );
+  --ov-viking-bot-text-muted: var(
+    --ov-ui-color-text-3,
+    var(--ov-ui-text-3-default, #6e718c)
+  );
+  --ov-viking-bot-accent: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default, #5252ff)
+  );
+  --ov-viking-bot-accent-hover: var(
+    --ov-ui-color-primary-hover,
+    var(--ov-ui-primary-hover-default, #7075ff)
+  );
+  --ov-viking-bot-on-accent: var(
+    --ov-ui-color-bg-1,
+    var(--ov-ui-bg-1-default, #ffffff)
+  );
+  --ov-viking-bot-border: var(
+    --ov-ui-color-border-2,
+    var(--ov-ui-border-2-default, #e1e4f2)
+  );
+  --ov-viking-bot-border-strong: var(
+    --ov-ui-color-border-3,
+    var(--ov-ui-border-3-default, #d7daea)
+  );
+  --ov-viking-bot-bg: var(
+    --ov-ui-color-bg-1,
+    var(--ov-ui-bg-1-default, #ffffff)
+  );
+  --ov-viking-bot-primary-light: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default, #f5f7ff)
+  );
+  --ov-viking-bot-surface: var(
+    --ov-ui-color-bg-4,
+    var(--ov-ui-bg-4-default, #f6f7fa)
+  );
+  --ov-viking-bot-surface-hover: var(
+    --ov-ui-color-bg-5,
+    var(--ov-ui-bg-5-default, #f1f2f9)
+  );
+  --ov-viking-bot-focus: var(
+    --ov-ui-color-focus,
+    var(--ov-ui-focus-default, #5252ff)
+  );
+  --ov-viking-bot-danger: var(
+    --ov-ui-color-status-error,
+    var(--ov-ui-status-error-default, #c43838)
+  );
+}
+
+/* 自绘单选圈：宿主的设计系统常把 input 的 appearance 重置成 none，
+   依赖原生外观会让控件直接消失，因此这里显式绘制未选中与选中两种状态。 */
+.ov-viking-bot__interaction-option input:not(.ov-input__element)[type='radio'] {
+  box-sizing: border-box;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  appearance: none;
+  border: 1px solid var(--ov-viking-bot-border-strong);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+.ov-viking-bot__interaction-option
+  input:not(.ov-input__element)[type='radio']:checked {
+  border: 4px solid var(--ov-viking-bot-accent);
+  background: var(--ov-viking-bot-on-accent);
+}
+
+.ov-viking-bot__interaction-option
+  input:not(.ov-input__element)[type='radio']:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.ov-viking-bot__interaction-option small {
+  color: var(--ov-viking-bot-text-muted);
+  font-size: 11px;
+}
+
+.ov-viking-bot__interaction-option code {
+  border-radius: 4px;
+  background: var(--ov-viking-bot-surface);
+  padding: 0 4px;
+  font-size: 11px;
+}
+
+.ov-viking-bot__interaction-input {
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+textarea.ov-viking-bot__interaction-input {
+  resize: vertical;
+}
+
+.ov-viking-bot__interaction-hint {
+  color: var(--ov-viking-bot-text-muted);
+  font-size: 11px;
+}
+
+.ov-viking-bot__interaction-submit,
+.ov-viking-bot__interaction-cancel {
+  align-self: flex-start;
+  border: 1px solid var(--ov-viking-bot-border);
+  border-radius: var(--ov-viking-bot-radius);
+  background: none;
+  padding: 4px 14px;
+  color: var(--ov-viking-bot-text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ov-viking-bot__interaction-submit {
+  border-color: var(--ov-viking-bot-accent);
+  background: var(--ov-viking-bot-accent);
+  color: var(--ov-viking-bot-on-accent);
+}
+
+.ov-viking-bot__interaction-submit:hover:not(:disabled) {
+  border-color: var(--ov-viking-bot-accent-hover);
+  background: var(--ov-viking-bot-accent-hover);
+}
+
+.ov-viking-bot__interaction-cancel:hover:not(:disabled) {
+  background: var(--ov-viking-bot-surface-hover);
+}
+
+.ov-viking-bot__interaction-submit:focus-visible,
+.ov-viking-bot__interaction-cancel:focus-visible {
+  outline: 2px solid var(--ov-viking-bot-focus);
+  outline-offset: 2px;
+}
+
+.ov-viking-bot__interaction-submit:disabled,
+.ov-viking-bot__interaction-cancel:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

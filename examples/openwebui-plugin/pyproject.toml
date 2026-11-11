@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openviking-openwebui"
-version = "0.1.0"
+version = "0.1.1"
 description = "OpenAPI tool server that exposes a curated set of OpenViking endpoints to Open WebUI."
 readme = "README.md"
 requires-python = ">=3.9"

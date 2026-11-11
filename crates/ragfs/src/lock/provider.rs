@@ -3,7 +3,7 @@
 //! The provider owns token storage. Backends with transactional storage may also
 //! implement the optional atomic capabilities used by `PathLockManager`.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -14,10 +14,14 @@ use crate::core::FileSystem;
 use crate::crypto;
 
 use super::codec::LockTokenCodec;
-use super::types::{LockToken, PathLockError, PathLockRequest, PathLockResult};
+use super::types::{
+    HandoffRecoveryReason, LockHolder, LockToken, PathLockError, PathLockKind, PathLockRequest,
+    PathLockResult,
+};
 
 /// Representation used for handles stored in a PathLock lease.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PathLockHandleMode {
     /// Handles are resolver-generated lock-file paths.
     LockPath,
@@ -65,6 +69,129 @@ pub struct AtomicAcquisitionResult {
 /// Storage abstraction for lock tokens. Only `PathLockManager` should call these methods.
 #[async_trait]
 pub trait PathLockProvider: Send + Sync {
+    /// Undo a handoff by removing only its new holder and restoring a still-live
+    /// source. Preserve concurrent sibling renewals. Backends that store their
+    /// own timestamps must override this and judge expiry using the same clock;
+    /// `stale_before` is only authoritative for client-clock storage.
+    async fn replace_holder(
+        &self,
+        path: &str,
+        owner: &str,
+        holder: &str,
+        restored: LockHolder,
+        stale_before: u128,
+    ) -> PathLockResult<()> {
+        let started_at = std::time::Instant::now();
+        for _ in 0..16 {
+            let Some(current) = self.read_token(path).await? else {
+                return Ok(());
+            };
+            if current.owner_id != owner || !current.holders.iter().any(|h| h.id == holder) {
+                return Ok(());
+            }
+            let stale_before = stale_before.saturating_add(started_at.elapsed().as_nanos());
+            let mut next = current.clone();
+            next.holders
+                .retain(|h| h.id != holder && h.time_ns >= stale_before);
+            if restored.time_ns >= stale_before && !next.holders.iter().any(|h| h.id == restored.id)
+            {
+                next.holders.push(restored.clone());
+            }
+            next.recompute();
+            let changed = if next.holders.is_empty() {
+                self.compare_and_remove_token(path, &current).await?
+            } else {
+                self.compare_and_write_token(path, &current, &next).await?
+            };
+            if changed {
+                return Ok(());
+            }
+        }
+        Err(PathLockError::Busy {
+            lock_path: path.into(),
+            operation: "holder rollback".into(),
+        })
+    }
+
+    /// Atomic conflict check plus holder insertion/replacement. A supplied source
+    /// must exist, be live and match the requested kind before any mutation.
+    /// None selects the filesystem CAS protocol; transactional backends override.
+    async fn try_acquire_holders_atomic(
+        &self,
+        _requests: &[PathLockRequest],
+        _owner: &str,
+        _holder: &str,
+        _now: u128,
+        _stale_before: u128,
+        _source: Option<&str>,
+    ) -> PathLockResult<Option<AtomicAcquisitionResult>> {
+        Ok(None)
+    }
+
+    /// Delete precisely the observed token, including its holder set.
+    async fn compare_and_remove_token(
+        &self,
+        _path: &str,
+        _expected: &LockToken,
+    ) -> PathLockResult<bool> {
+        Err(PathLockError::Internal(
+            "provider lacks conditional token deletion".into(),
+        ))
+    }
+
+    /// Refresh/release only the named reference. Missing and expired references
+    /// never revive, even when another live reference has the same owner.
+    async fn mutate_holder(
+        &self,
+        path: &str,
+        owner: &str,
+        holder: &str,
+        now: u128,
+        stale_before: u128,
+        release: bool,
+    ) -> PathLockResult<bool> {
+        for _ in 0..16 {
+            let Some(current) = self.read_token(path).await? else {
+                return Ok(false);
+            };
+            let Some(next) =
+                mutate_holder_record(&current, owner, holder, now, stale_before, release)
+            else {
+                return Ok(false);
+            };
+            let changed = if next.holders.is_empty() {
+                self.compare_and_remove_token(path, &current).await?
+            } else {
+                self.compare_and_write_token(path, &current, &next).await?
+            };
+            if changed {
+                return Ok(true);
+            }
+        }
+        Err(PathLockError::Busy {
+            lock_path: path.into(),
+            operation: "holder mutation".into(),
+        })
+    }
+
+    /// Renew one lease across its paths, preserving result order.
+    async fn refresh_holders(
+        &self,
+        paths: &[String],
+        owner: &str,
+        holder: &str,
+        now: u128,
+        stale_before: u128,
+    ) -> Vec<PathLockResult<bool>> {
+        let mut results = Vec::with_capacity(paths.len());
+        for path in paths {
+            results.push(
+                self.mutate_holder(path, owner, holder, now, stale_before, false)
+                    .await,
+            );
+        }
+        results
+    }
     /// Add provider-owned observations to the manager's metrics snapshot.
     fn update_metrics(&self, _metrics: &mut super::metrics::LockMetrics) {}
 
@@ -76,7 +203,8 @@ pub trait PathLockProvider: Send + Sync {
         PathLockHandleMode::LockPath
     }
 
-    /// Attempt one atomic batch acquisition when supported.
+    /// Legacy v1 token API, retained for storage compatibility tests. The manager
+    /// exclusively uses `try_acquire_holders_atomic`.
     async fn try_acquire_batch_atomic(
         &self,
         _requests: &[PathLockRequest],
@@ -105,7 +233,8 @@ pub trait PathLockProvider: Send + Sync {
             }))
     }
 
-    /// Roll back one completed atomic acquisition when supported.
+    /// Legacy v1 rollback. Holder acquisitions roll back the individual holder
+    /// and handoff source through `mutate_holder` and `replace_holder`.
     async fn rollback_acquisitions_atomic(
         &self,
         _acquisitions: &[AtomicAcquisition],
@@ -140,7 +269,7 @@ pub trait PathLockProvider: Send + Sync {
         replacement: &LockToken,
     ) -> PathLockResult<bool>;
 
-    /// Refresh the timestamp of an existing token owned by `owner_id`.
+    /// Legacy v1 refresh; must refuse tokens containing holders.
     /// Returns `true` if the token was refreshed, `false` if not found or wrong owner.
     async fn refresh_token(
         &self,
@@ -165,7 +294,7 @@ pub trait PathLockProvider: Send + Sync {
         results
     }
 
-    /// Remove the token at `lock_path` if owned by `owner_id`.
+    /// Legacy v1 removal; must refuse tokens containing holders.
     /// `force` bypasses storage CAS after the ownership check.
     /// Returns `true` if removed, `false` if not found or wrong owner.
     async fn remove_token(
@@ -181,16 +310,16 @@ pub trait PathLockProvider: Send + Sync {
 
 // ── Memory provider ──
 
-/// In-process lock table backed by a `HashMap`. Single-process only.
+/// In-process lock table indexed by path. Single-process only.
 pub struct MemoryPathLockProvider {
-    tokens: RwLock<HashMap<String, LockToken>>,
+    tokens: RwLock<BTreeMap<String, LockToken>>,
 }
 
 impl MemoryPathLockProvider {
     /// Create an empty in-memory provider.
     pub fn new() -> Self {
         Self {
-            tokens: RwLock::new(HashMap::new()),
+            tokens: RwLock::new(BTreeMap::new()),
         }
     }
 }
@@ -201,8 +330,296 @@ impl Default for MemoryPathLockProvider {
     }
 }
 
+/// Refresh or release one holder; `None` when it is absent or expired. Expired
+/// sibling holders are dropped, and an empty result means delete the token.
+pub(crate) fn mutate_holder_record(
+    current: &LockToken,
+    owner: &str,
+    holder: &str,
+    now: u128,
+    stale_before: u128,
+    release: bool,
+) -> Option<LockToken> {
+    if current.owner_id != owner {
+        return None;
+    }
+    let index = current.holders.iter().position(|h| h.id == holder)?;
+    if !release && current.holders[index].time_ns < stale_before {
+        return None;
+    }
+    let mut next = current.clone();
+    if release {
+        next.holders.remove(index);
+    } else {
+        next.holders[index].time_ns = now;
+    }
+    next.holders.retain(|h| h.time_ns >= stale_before);
+    next.recompute();
+    Some(next)
+}
+
+/// Token storage visible inside one memory or SQLite acquisition transaction.
+pub(crate) trait HolderStore {
+    fn get(&mut self, path: &str) -> PathLockResult<Option<LockToken>>;
+    /// Delete other owners' expired tokens at `path`, and below it for `subtree`.
+    fn remove_stale(
+        &mut self,
+        path: &str,
+        subtree: bool,
+        owner: &str,
+        stale_before: u128,
+    ) -> PathLockResult<usize>;
+    /// Return one live descendant token held by another owner.
+    fn live_descendant(
+        &mut self,
+        root: &str,
+        owner: &str,
+        stale_before: u128,
+    ) -> PathLockResult<Option<(String, LockToken)>>;
+    fn put(&mut self, path: &str, token: &LockToken) -> PathLockResult<()>;
+}
+
+pub(crate) fn is_descendant(path: &str, root: &str) -> bool {
+    path != root && (root == "/" || path.strip_prefix(root).is_some_and(|s| s.starts_with('/')))
+}
+
+pub(crate) fn descendant_bounds(path: &str) -> (String, String) {
+    if path == "/" {
+        ("/".into(), "0".into())
+    } else {
+        (format!("{path}/"), format!("{path}0"))
+    }
+}
+
+/// Validate the source against the token snapshot guarded by a transaction or CAS.
+pub(crate) fn validate_handoff_source(
+    token: Option<&LockToken>,
+    owner: &str,
+    source: &str,
+    kind: PathLockKind,
+    stale_before: u128,
+) -> PathLockResult<()> {
+    let source = token
+        .filter(|token| token.owner_id == owner)
+        .and_then(|token| token.holders.iter().find(|holder| holder.id == source))
+        .filter(|holder| holder.time_ns >= stale_before)
+        .ok_or(PathLockError::HandoffRecoveryRequired {
+            reason: HandoffRecoveryReason::TokenUnavailable,
+        })?;
+    if source.kind != kind {
+        return Err(PathLockError::InvalidRequest(
+            "handoff kind does not match holder".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Transaction-local holder acquisition used by memory and SQLite. Reads only the
+/// requested paths, their ancestors and, for Tree requests, their subtrees.
+pub(crate) fn acquire_holder_records(
+    store: &mut impl HolderStore,
+    requests: &[PathLockRequest],
+    owner: &str,
+    holder: &str,
+    now: u128,
+    stale_before: u128,
+    source: Option<&str>,
+) -> PathLockResult<AtomicAcquisitionResult> {
+    if requests.is_empty() || !LockTokenCodec::valid_id(owner) || !LockTokenCodec::valid_id(holder)
+    {
+        return Err(PathLockError::InvalidRequest(
+            "invalid holder acquisition".into(),
+        ));
+    }
+    let conflict = |path: &str, token: &LockToken| PathLockError::Conflict {
+        lock_path: path.into(),
+        owner: token.owner_id.clone(),
+        kind: token.lock_type,
+    };
+    let mut stale_tokens_removed = 0;
+    if let Some(source) = source {
+        for request in requests {
+            validate_handoff_source(
+                store.get(&request.path)?.as_ref(),
+                owner,
+                source,
+                request.kind,
+                stale_before,
+            )?;
+        }
+    }
+    for request in requests {
+        super::path::validate_normalized_logical_path(&request.path)?;
+        let tree = request.kind == super::types::PathLockKind::Tree;
+        // Expired conflicting records are deleted so a legacy owner cannot
+        // revive them after this takeover commits.
+        stale_tokens_removed += store.remove_stale(&request.path, tree, owner, stale_before)?;
+        if let Some(token) = store.get(&request.path)? {
+            if token.owner_id != owner && token.live_kind(stale_before).is_some() {
+                return Err(conflict(&request.path, &token));
+            }
+        }
+        for ancestor in super::resolver::LockPathResolver::ancestor_paths(&request.path) {
+            stale_tokens_removed += store.remove_stale(&ancestor, false, owner, stale_before)?;
+            if let Some(token) = store.get(&ancestor)? {
+                if token.owner_id != owner
+                    && token.live_kind(stale_before) == Some(super::types::PathLockKind::Tree)
+                {
+                    return Err(conflict(&ancestor, &token));
+                }
+            }
+        }
+        if tree {
+            if let Some((path, token)) =
+                store.live_descendant(&request.path, owner, stale_before)?
+            {
+                return Err(conflict(&path, &token));
+            }
+        }
+    }
+    let mut acquisitions = Vec::with_capacity(requests.len());
+    for request in requests {
+        let previous = store.get(&request.path)?;
+        let mut replacement = LockToken::held(owner, holder, request.kind, now);
+        let change = if let Some(previous) = previous.filter(|t| t.owner_id == owner) {
+            replacement = previous.clone();
+            replacement.add_holder(holder, request.kind, now, stale_before, source);
+            AcquisitionChange::Upgraded {
+                previous,
+                replacement: replacement.clone(),
+            }
+        } else {
+            AcquisitionChange::Created {
+                replacement: replacement.clone(),
+            }
+        };
+        store.put(&request.path, &replacement)?;
+        acquisitions.push(AtomicAcquisition {
+            handle: request.path.clone(),
+            change,
+        });
+    }
+    Ok(AtomicAcquisitionResult {
+        acquisitions,
+        stale_tokens_removed,
+    })
+}
+
+impl HolderStore for BTreeMap<String, LockToken> {
+    fn get(&mut self, path: &str) -> PathLockResult<Option<LockToken>> {
+        Ok(BTreeMap::get(self, path).cloned())
+    }
+
+    fn remove_stale(
+        &mut self,
+        path: &str,
+        subtree: bool,
+        owner: &str,
+        stale_before: u128,
+    ) -> PathLockResult<usize> {
+        let stale = |t: &LockToken| t.owner_id != owner && t.live_kind(stale_before).is_none();
+        let remove = BTreeMap::get(self, path).is_some_and(stale);
+        if remove {
+            self.remove(path);
+        }
+        let mut removed = usize::from(remove);
+        if subtree {
+            let (lower, upper) = descendant_bounds(path);
+            let expired: Vec<_> = self
+                .range(lower..upper)
+                .filter(|(p, t)| p.as_str() != path && stale(t))
+                .map(|(p, _)| p.clone())
+                .collect();
+            removed += expired.len();
+            for p in expired {
+                self.remove(&p);
+            }
+        }
+        Ok(removed)
+    }
+
+    fn live_descendant(
+        &mut self,
+        root: &str,
+        owner: &str,
+        stale_before: u128,
+    ) -> PathLockResult<Option<(String, LockToken)>> {
+        let (lower, upper) = descendant_bounds(root);
+        Ok(self
+            .range(lower..upper)
+            .find(|(p, t)| {
+                is_descendant(p, root) && t.owner_id != owner && t.live_kind(stale_before).is_some()
+            })
+            .map(|(p, t)| (p.clone(), t.clone())))
+    }
+
+    fn put(&mut self, path: &str, token: &LockToken) -> PathLockResult<()> {
+        self.insert(path.into(), token.clone());
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl PathLockProvider for MemoryPathLockProvider {
+    fn handle_mode(&self) -> PathLockHandleMode {
+        PathLockHandleMode::LogicalPath
+    }
+
+    async fn try_acquire_holders_atomic(
+        &self,
+        requests: &[PathLockRequest],
+        owner: &str,
+        holder: &str,
+        now: u128,
+        stale_before: u128,
+        source: Option<&str>,
+    ) -> PathLockResult<Option<AtomicAcquisitionResult>> {
+        let mut tokens = self.tokens.write().await;
+        acquire_holder_records(
+            &mut *tokens,
+            requests,
+            owner,
+            holder,
+            now,
+            stale_before,
+            source,
+        )
+        .map(Some)
+    }
+
+    async fn is_path_locked_atomic(
+        &self,
+        path: &str,
+        _now: u128,
+        stale_before: u128,
+        ignore_stale: bool,
+    ) -> PathLockResult<Option<bool>> {
+        let tokens = self.tokens.read().await;
+        Ok(Some(tokens.iter().any(|(p, t)| {
+            let kind = if ignore_stale {
+                t.live_kind(stale_before)
+            } else {
+                Some(t.lock_type)
+            };
+            kind.is_some()
+                && (p == path
+                    || (kind == Some(super::types::PathLockKind::Tree)
+                        && (p == "/" || path.strip_prefix(p).is_some_and(|s| s.starts_with('/')))))
+        })))
+    }
+    async fn compare_and_remove_token(
+        &self,
+        path: &str,
+        expected: &LockToken,
+    ) -> PathLockResult<bool> {
+        let mut tokens = self.tokens.write().await;
+        if tokens.get(path) == Some(expected) {
+            tokens.remove(path);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
     fn name(&self) -> &'static str {
         "memory"
     }
@@ -248,7 +665,7 @@ impl PathLockProvider for MemoryPathLockProvider {
     ) -> PathLockResult<bool> {
         let mut tokens = self.tokens.write().await;
         match tokens.get_mut(lock_path) {
-            Some(token) if token.owner_id == owner_id => {
+            Some(token) if token.owner_id == owner_id && token.holders.is_empty() => {
                 token.time_ns = time_ns;
                 Ok(true)
             }
@@ -264,7 +681,7 @@ impl PathLockProvider for MemoryPathLockProvider {
     ) -> PathLockResult<bool> {
         let mut tokens = self.tokens.write().await;
         match tokens.get(lock_path) {
-            Some(token) if token.owner_id == owner_id => {
+            Some(token) if token.owner_id == owner_id && token.holders.is_empty() => {
                 tokens.remove(lock_path);
                 Ok(true)
             }
@@ -278,13 +695,17 @@ impl PathLockProvider for MemoryPathLockProvider {
         } else {
             format!("{}/", root)
         };
+        let upper = if root == "/" {
+            "0".into()
+        } else {
+            format!("{root}0")
+        };
         Ok(self
             .tokens
             .read()
             .await
-            .keys()
-            .filter(|k| k.starts_with(&prefix))
-            .cloned()
+            .range(prefix..upper)
+            .map(|(p, _)| p.clone())
             .collect())
     }
 }
@@ -357,6 +778,69 @@ mod tests {
     use crate::plugins::memfs::MemFileSystem;
 
     use super::*;
+
+    #[test]
+    fn invalid_source_batch_never_inserts_or_changes_holders() {
+        let requests = [
+            PathLockRequest {
+                path: "/data/a".into(),
+                kind: PathLockKind::Exact,
+            },
+            PathLockRequest {
+                path: "/data/b".into(),
+                kind: PathLockKind::Exact,
+            },
+        ];
+        for second in [
+            None,
+            Some(LockToken::held(
+                "owner",
+                "sibling",
+                PathLockKind::Exact,
+                200,
+            )),
+            Some(LockToken::held("owner", "source", PathLockKind::Exact, 1)),
+            Some(LockToken::held("owner", "source", PathLockKind::Tree, 200)),
+            Some(LockToken::held(
+                "foreign",
+                "source",
+                PathLockKind::Exact,
+                200,
+            )),
+        ] {
+            let wrong_kind = second
+                .as_ref()
+                .is_some_and(|token| token.lock_type == PathLockKind::Tree);
+            let mut store = BTreeMap::from([(
+                "/data/a".into(),
+                LockToken::held("owner", "source", PathLockKind::Exact, 200),
+            )]);
+            if let Some(second) = second {
+                store.insert("/data/b".into(), second);
+            }
+            let before = store.clone();
+            let result = acquire_holder_records(
+                &mut store,
+                &requests,
+                "owner",
+                "new",
+                300,
+                100,
+                Some("source"),
+            );
+            if wrong_kind {
+                assert!(matches!(result, Err(PathLockError::InvalidRequest(_))));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(PathLockError::HandoffRecoveryRequired {
+                        reason: HandoffRecoveryReason::TokenUnavailable,
+                    })
+                ));
+            }
+            assert_eq!(store, before);
+        }
+    }
 
     /// Verify the fallback reports each path and continues after a token error.
     #[tokio::test]
@@ -463,6 +947,16 @@ mod tests {
 
 #[async_trait]
 impl PathLockProvider for FilesystemPathLockProvider {
+    async fn compare_and_remove_token(
+        &self,
+        path: &str,
+        expected: &LockToken,
+    ) -> PathLockResult<bool> {
+        self.fs
+            .compare_and_remove(path, LockTokenCodec::encode(expected).as_bytes())
+            .await
+            .map_err(|e| Self::map_cas_error("remove", path, e))
+    }
     fn name(&self) -> &'static str {
         "filesystem"
     }
@@ -590,10 +1084,11 @@ impl PathLockProvider for FilesystemPathLockProvider {
             return Ok(false);
         };
         let token = LockTokenCodec::decode(&String::from_utf8_lossy(&raw).trim())?;
-        if token.owner_id != owner_id {
+        if token.owner_id != owner_id || !token.holders.is_empty() {
             return Ok(false);
         }
         let new_token = LockToken {
+            holders: Vec::new(),
             owner_id: owner_id.to_string(),
             time_ns,
             lock_type: token.lock_type,
@@ -615,7 +1110,7 @@ impl PathLockProvider for FilesystemPathLockProvider {
             return Ok(false);
         };
         let token = LockTokenCodec::decode(&String::from_utf8_lossy(&raw).trim())?;
-        if token.owner_id != owner_id {
+        if token.owner_id != owner_id || !token.holders.is_empty() {
             return Ok(false);
         }
         if force {

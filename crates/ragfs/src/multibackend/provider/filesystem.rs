@@ -1,6 +1,6 @@
 //! Filesystem-backed V2 multi-write persistence.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -15,9 +15,8 @@ use crate::multibackend::constants::{
 };
 use crate::multibackend::meta::MetadataStore;
 use crate::multibackend::model::{
-    FlushResult, MarkerPosition, PartitionContext, PartitionsManifest, PendingEvent,
-    PendingEventKind, ScopeKey, SegmentDescriptor, SegmentEventType, SegmentManifest,
-    SegmentRecord,
+    FlushResult, MarkerPosition, PartitionContext, PendingEvent, PendingEventKind, ScopeKey,
+    SegmentDescriptor, SegmentEventType, SegmentManifest, SegmentRecord,
 };
 use crate::multibackend::router::AccountRouter;
 
@@ -90,12 +89,19 @@ impl FilesystemProvider {
         selected.ok_or_else(|| Error::invalid_operation("flush requires at least one event"))
     }
 
-    /// Reads and validates the partitions manifest owning one scope.
+    /// Validates the cached routing identity owning one scope.
     async fn validate_scope(&self, scope: &ScopeKey) -> Result<()> {
-        let path = self.store.paths().account_manifest(&scope.account_id)?.0;
-        let manifest: PartitionsManifest = self.store.read_json(&path).await?;
-        manifest.validate()?;
-        scope.validate_against_manifest(&manifest)
+        self.router.validate_scope(scope).await
+    }
+
+    /// Returns a caller-provided route hint when it matches the flush account.
+    fn usable_route_hint(
+        route_hint: Option<&PartitionContext>,
+        events: &[PendingEvent],
+    ) -> Option<PartitionContext> {
+        let hint = route_hint?;
+        let first = events.first()?;
+        (hint.scope.account_id == first.account_id).then(|| hint.clone())
     }
 
     /// Reads and validates one segment manifest without acquiring locks.
@@ -139,70 +145,16 @@ impl FilesystemProvider {
         Ok(format!("{directory}/{name}"))
     }
 
-    /// Builds the complete Exact-lock set for one append candidate.
-    fn append_lock_requests(
-        &self,
-        scope: &ScopeKey,
-        manifest: &SegmentManifest,
-        event_count: usize,
-        force_final_seal: bool,
-    ) -> Result<Vec<PathLockRequest>> {
-        let mut paths = BTreeSet::from([self
-            .store
-            .paths()
-            .segment_manifest(&scope.account_id, scope.partition_id)?
-            .0]);
-        paths.insert(self.store.paths().account_manifest(&scope.account_id)?.0);
-        let mut remaining = event_count;
-        let mut next_seq = manifest.next_seq;
-        if next_seq.checked_add(event_count as u64).is_none() {
-            return Err(Error::invalid_operation("multi-write sequence overflow"));
-        }
-        let mut count = 0;
-        let mut segment_from_seq = next_seq;
-        if let Some(head) = Self::head(manifest) {
-            paths.insert(self.segment_path(scope, &head.path)?);
-            count = head.record_count as usize;
-            segment_from_seq = head.segment_from_seq;
-        }
-
-        if count == MAX_SEGMENT_RECORDS {
-            paths.insert(
-                self.segment_path(scope, &Self::sealed_name(segment_from_seq, next_seq - 1))?,
-            );
-            count = 0;
-            segment_from_seq = next_seq;
-        }
-        while remaining > 0 {
-            let appended = remaining.min(MAX_SEGMENT_RECORDS - count);
-            remaining -= appended;
-            next_seq = next_seq
-                .checked_add(appended as u64)
-                .ok_or_else(|| Error::Serialization("segment sequence overflow".to_string()))?;
-            count += appended;
-            if count == MAX_SEGMENT_RECORDS || (force_final_seal && remaining == 0) {
-                paths.insert(
-                    self.segment_path(scope, &Self::sealed_name(segment_from_seq, next_seq - 1))?,
-                );
-                count = 0;
-                segment_from_seq = next_seq;
-            }
-        }
-        if count > 0 {
-            let name = if force_final_seal {
-                Self::sealed_name(segment_from_seq, next_seq - 1)
-            } else {
-                Self::head_name(segment_from_seq)
-            };
-            paths.insert(self.segment_path(scope, &name)?);
-        }
-        Ok(paths
-            .into_iter()
-            .map(|path| PathLockRequest {
-                path,
-                kind: PathLockKind::Exact,
-            })
-            .collect())
+    /// Builds the Exact-lock set for partition append mutations.
+    fn append_lock_requests(&self, scope: &ScopeKey) -> Result<Vec<PathLockRequest>> {
+        Ok(vec![PathLockRequest {
+            path: self
+                .store
+                .paths()
+                .segment_manifest(&scope.account_id, scope.partition_id)?
+                .0,
+            kind: PathLockKind::Exact,
+        }])
     }
 
     /// Builds the Exact-lock set for a manifest-only state mutation.
@@ -427,20 +379,6 @@ impl FilesystemProvider {
         Ok((manifest, sealed))
     }
 
-    /// Returns whether the locked append snapshot still matches its candidate.
-    fn append_snapshot_matches(
-        candidate_scope: &ScopeKey,
-        current_scope: &ScopeKey,
-        candidate_manifest: &SegmentManifest,
-        current_manifest: &SegmentManifest,
-        candidate_requests: &[PathLockRequest],
-        current_requests: &[PathLockRequest],
-    ) -> bool {
-        candidate_scope == current_scope
-            && candidate_manifest == current_manifest
-            && candidate_requests == current_requests
-    }
-
     /// Validates one marker against its caller-selected scope.
     fn validate_marker(&self, scope: &ScopeKey, event: &PendingEvent) -> Result<()> {
         if event.account_id != scope.account_id {
@@ -499,35 +437,24 @@ impl MultiWriteProvider for FilesystemProvider {
     /// Flushes normal events after validating their current partition route.
     async fn flush(
         &self,
-        _route_hint: Option<&PartitionContext>,
+        route_hint: Option<&PartitionContext>,
         events: Vec<PendingEvent>,
     ) -> Result<FlushResult> {
         Self::validate_flush_events(&events)?;
+        let mut candidate_hint = Self::usable_route_hint(route_hint, &events);
         loop {
-            let candidate = self.route_events(&events).await?;
-            let candidate_manifest = self.load_manifest(&candidate.scope).await?;
-            let requests = self.append_lock_requests(
-                &candidate.scope,
-                &candidate_manifest,
-                events.len(),
-                false,
-            )?;
+            let candidate = match candidate_hint.take() {
+                Some(candidate) => candidate,
+                None => self.route_events(&events).await?,
+            };
+            let requests = self.append_lock_requests(&candidate.scope)?;
             let lease = self.acquire(&requests).await?;
             let operation = async {
                 let current = self.route_events(&events).await?;
-                let manifest = self.load_manifest(&current.scope).await?;
-                let current_requests =
-                    self.append_lock_requests(&current.scope, &manifest, events.len(), false)?;
-                if !Self::append_snapshot_matches(
-                    &candidate.scope,
-                    &current.scope,
-                    &candidate_manifest,
-                    &manifest,
-                    &requests,
-                    &current_requests,
-                ) {
+                if current.scope != candidate.scope {
                     return Ok(None);
                 }
+                let manifest = self.load_manifest(&current.scope).await?;
                 let first_seq = manifest.next_seq;
                 let (_, sealed_segments) = self
                     .commit_events(&current.scope, manifest, &events, false)
@@ -621,37 +548,21 @@ impl MultiWriteProvider for FilesystemProvider {
         event: &PendingEvent,
     ) -> Result<MarkerPosition> {
         self.validate_marker(scope, event)?;
-        loop {
-            let candidate_manifest = self.load_manifest(scope).await?;
-            let requests = self.append_lock_requests(scope, &candidate_manifest, 1, true)?;
-            let lease = self.acquire(&requests).await?;
-            let operation = async {
-                let manifest = self.load_manifest(scope).await?;
-                let current_requests = self.append_lock_requests(scope, &manifest, 1, true)?;
-                if !Self::append_snapshot_matches(
-                    scope,
-                    scope,
-                    &candidate_manifest,
-                    &manifest,
-                    &requests,
-                    &current_requests,
-                ) {
-                    return Ok(None);
-                }
-                let seq = manifest.next_seq;
-                self.commit_events(scope, manifest, std::slice::from_ref(event), true)
-                    .await?;
-                Ok(Some(MarkerPosition {
-                    partition_id: scope.partition_id,
-                    epoch: scope.epoch,
-                    seq,
-                }))
-            }
-            .await;
-            if let Some(position) = self.release(&lease, operation).await? {
-                return Ok(position);
-            }
+        let requests = self.append_lock_requests(scope)?;
+        let lease = self.acquire(&requests).await?;
+        let operation = async {
+            let manifest = self.load_manifest(scope).await?;
+            let seq = manifest.next_seq;
+            self.commit_events(scope, manifest, std::slice::from_ref(event), true)
+                .await?;
+            Ok(MarkerPosition {
+                partition_id: scope.partition_id,
+                epoch: scope.epoch,
+                seq,
+            })
         }
+        .await;
+        self.release(&lease, operation).await
     }
 
     /// Advances one backup's progress while its catch-up lease is held.

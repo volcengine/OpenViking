@@ -503,6 +503,11 @@ impl FileSystem for EncryptionWrappedFS {
         ))
     }
 
+    /// List internal directory entries without changing inner filesystem semantics.
+    async fn read_internal_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+        self.inner.read_internal_dir(path).await
+    }
+
     async fn stat(&self, path: &str) -> Result<FileInfo> {
         self.inner.stat(path).await
     }

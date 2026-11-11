@@ -362,6 +362,20 @@ WAL, or SHM files while participants are running. Crashed owners' tokens become
 eligible for takeover after `lock_expire_secs` (default 30 seconds). This setting
 does not change the workspace process lock or other backend concurrency constraints.
 
+Holder-lease upgrades also require stopping all lock participants, including queue
+workers, before deploying the new native binding. The SQLite provider adds a
+`holders` column automatically. New code reads legacy owner tokens, but old
+processes cannot maintain holder records; do not mix versions against the same
+database, filesystem locks, or Redis namespace. Retain durable queued handoffs.
+Each lease renews and releases its own holder. Native adoption transfers only a
+live source holder. A missing or expired source, a historic payload without a
+holder, or a provider change requires recovery through `adopt_or_reacquire`,
+which validates account and coverage and acquires a fresh holder under the
+payload's original owner after a full conflict check.
+Replaying a payload through recovery may create multiple holders, so consumers must make
+business writes idempotent. With a crashed sole holder, foreign acquisitions wait
+until its configured expiry; the recovery helper can recover its delivery after expiry.
+
 Remote backends also require endpoint, bucket/collection, credentials, and timeout fields. See [Configuration](../guides/01-configuration.md#storage) for complete examples.
 
 `parse_output.mode=local` avoids writing parser intermediates to shared AGFS.

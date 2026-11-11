@@ -35,8 +35,6 @@ class CompileLimits(BaseModel):
     agent_iterations: int = 120
     # Per-transform model/tool rounds, including draft checks and submission; parent budget is separate.
     subagent_iterations: int = Field(default=70, ge=1)
-    # Final delivery review has a task-wide model/tool-round budget, including submission.
-    final_review_iterations: int = Field(default=300, ge=1)
     # Per-task Map workers, also used for Resource source subagents.
     source_concurrency: int = Field(default=6, ge=1)
     # Per-task Shuffle routing workers and embedding batches.
@@ -75,7 +73,9 @@ class CompileRequest(BaseModel):
 
 
 class SanitizedCompileRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    """Stored normalized inputs ignore unknown fields; the service validates public arguments."""
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     from_: list[str] = Field(alias="from")
     to: str
@@ -86,8 +86,6 @@ class SanitizedCompileRequest(BaseModel):
     last_compile_time: datetime | None = None
     # Kernel change plan for incremental Compile; supersedes last_compile_time.
     changes: dict[str, Any] | None = None
-    # Rebuild resource index.md files from actual Markdown paths; preserve knowledge bodies.
-    wiki_links: bool = Field(default=False, strict=True)
 
 
 def has_directory_plan(changes: dict[str, Any] | None) -> bool:
@@ -208,7 +206,9 @@ class CompileErrorInfo(BaseModel):
 
 
 class CompileResult(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    """Stored task outcomes expose only fields in the published result schema."""
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     from_: list[str] = Field(alias="from")
     to: str
@@ -221,8 +221,6 @@ class CompileResult(BaseModel):
     conflicts: list[dict[str, str]] = Field(default_factory=list)
     page_count: int = 0
     link_count: int = 0
-    # Path diagnostics are informational and never consume the agent repair budget.
-    link_report: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
 

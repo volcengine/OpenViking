@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import re
 import threading
 import uuid
@@ -25,6 +26,7 @@ from openviking.storage.acl import (
     ACL_CONTEXT_FIELDS,
     ACL_GRANT_FIELDS,
     ACL_MODE_FIELD,
+    EMPTY_ACL_GRANT,
     AclAction,
     AclManager,
     AclUpdate,
@@ -32,6 +34,7 @@ from openviking.storage.acl import (
     is_acl_uri,
 )
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
+from openviking.storage.scope_filter import build_scope_filter, merge_filters
 from openviking.storage.vector_migration import (
     rewrite_transfer_uri,
     rewrite_vector_record,
@@ -232,8 +235,8 @@ class _AsyncVectorAdapter:
             while self._active:
                 self._condition.wait()
             if not self._closed:
-                self._closed = True
                 self._adapter.close()
+                self._closed = True
 
     async def collection_meta(
         self, index_name: str, *, raise_on_error: bool = False
@@ -284,11 +287,46 @@ class _AsyncVectorAdapter:
         await self.run(_update)
 
 
+def _record_handled_vikingdb_error(error: Exception) -> None:
+    """Keep a swallowed backend error available to the outer metrics wrapper."""
+    from openviking.metrics.datasources.vikingdb import VikingDBEventDataSource
+
+    VikingDBEventDataSource.record_handled_error(error)
+
+
 def _backend_operation(method):
     @wraps(method)
     async def call(self, *args, **kwargs):
         async with self.operation():
-            return await method(self, *args, **kwargs)
+            from openviking.metrics.datasources.vikingdb import VikingDBEventDataSource
+
+            owns_metric, depth_token, error_token = VikingDBEventDataSource.enter_operation()
+            started_at = time.perf_counter()
+            try:
+                result = await method(self, *args, **kwargs)
+            except Exception as error:
+                if owns_metric:
+                    VikingDBEventDataSource.record_operation(
+                        backend=self._mode,
+                        access_mode=str(getattr(self._adapter, "config", {}).get("mode") or "default"),
+                        operation=method.__name__,
+                        duration_seconds=time.perf_counter() - started_at,
+                        error=error,
+                    )
+                raise
+            else:
+                if owns_metric:
+                    VikingDBEventDataSource.record_operation(
+                        backend=self._mode,
+                        access_mode=str(getattr(self._adapter, "config", {}).get("mode") or "default"),
+                        operation=method.__name__,
+                        duration_seconds=time.perf_counter() - started_at,
+                        result=result,
+                        error=VikingDBEventDataSource.handled_error(),
+                    )
+                return result
+            finally:
+                VikingDBEventDataSource.exit_operation(depth_token, error_token)
 
     return call
 
@@ -324,6 +362,7 @@ class _SingleAccountBackend:
         self._collection_config: Dict[str, Any] = {}
         self._meta_data_cache: Dict[str, Any] = {}
         self._mode = self._adapter.mode
+        self._enable_path_glob_override = getattr(config, "enable_path_glob", None)
         self._distance_metric = config.distance_metric
         self._sparse_weight = config.sparse_weight
         self._collection_name = config.name or "context"
@@ -361,6 +400,14 @@ class _SingleAccountBackend:
         return self._adapter.get_collection()
 
     @property
+    def enable_path_glob(self) -> bool:
+        """Resolve PathGlob enablement from account configuration and adapter default."""
+        configured = getattr(self, "_enable_path_glob_override", None)
+        if configured is not None:
+            return configured
+        return getattr(self._adapter, "enable_path_glob", False) is True
+
+    @property
     def collection_name(self) -> str:
         return self._collection_name
 
@@ -384,6 +431,10 @@ class _SingleAccountBackend:
         payload = {k: v for k, v in data.items() if v is not None}
         filtered = self._filter_known_fields(payload)
         result = {k: v for k, v in filtered.items() if v is not None}
+        # Raw writes (including transfer rollback) also encode explicit empty grants.
+        for grant_field in ACL_GRANT_FIELDS:
+            if result.get(grant_field) == []:
+                result[grant_field] = [EMPTY_ACL_GRANT]
         # Full-record writes must not carry legacy invalid tags through a merge.
         if "search_tags" in result:
             result["search_tags"] = normalize_search_tags(
@@ -508,6 +559,7 @@ class _SingleAccountBackend:
             return True
         except Exception as e:
             logger.error("Error creating collection %s: %s", name, e)
+            _record_handled_vikingdb_error(e)
             return False
 
     @_backend_operation
@@ -520,6 +572,7 @@ class _SingleAccountBackend:
             return dropped
         except Exception as e:
             logger.error("Error dropping collection: %s", e)
+            _record_handled_vikingdb_error(e)
             return False
 
     @_backend_operation
@@ -607,6 +660,7 @@ class _SingleAccountBackend:
             payload = self._bind_upsert_payload(data)
         except (PermissionError, ValueError) as exc:
             logger.warning("Rejecting upsert: %s", exc)
+            _record_handled_vikingdb_error(exc)
             return ""
 
         if options.partial_update:
@@ -713,6 +767,7 @@ class _SingleAccountBackend:
                 else "update completed without any updated ids",
             )
         except ValueError as e:
+            _record_handled_vikingdb_error(e)
             message = str(e)
             error_code = "NOT_FOUND" if "not found" in message.lower() else "INVALID_ARGUMENT"
             return UpdateResult(
@@ -724,6 +779,7 @@ class _SingleAccountBackend:
             )
         except Exception as e:
             logger.error("Error updating record: %s", e)
+            _record_handled_vikingdb_error(e)
             return UpdateResult(
                 ok=False,
                 ids=[],
@@ -1103,21 +1159,19 @@ class _SingleAccountBackend:
         await run_to_completion(self._close_after_operations)
 
     async def _close_after_operations(self) -> None:
-        try:
-            await asyncio.to_thread(self._wait_for_operations)
-            await self._async_adapter.call("close")
-            self._collection_config = {}
-            self._meta_data_cache = {}
-            logger.info("_SingleAccountBackend closed")
-        except Exception as e:
-            logger.error("Error closing backend: %s", e)
+        await asyncio.to_thread(self._wait_for_operations)
+        await self._async_adapter.call("close")
+        self._collection_config = {}
+        self._meta_data_cache = {}
+        logger.info("_SingleAccountBackend closed")
 
     @_backend_operation
     async def health_check(self) -> bool:
         try:
             await self.collection_exists()
             return True
-        except Exception:
+        except Exception as e:
+            _record_handled_vikingdb_error(e)
             return False
 
     @_backend_operation
@@ -1134,6 +1188,7 @@ class _SingleAccountBackend:
             }
         except Exception as e:
             logger.error("Error getting stats: %s", e)
+            _record_handled_vikingdb_error(e)
             return {
                 "collections": 0,
                 "total_records": 0,
@@ -1267,10 +1322,8 @@ class VikingVectorIndexBackend:
             self._account_backends.pop(account_id, None)
         if backend and backend._adapter is not self._shared_adapter:
             self._retiring_backends.add(backend)
-            try:
-                await backend.close()
-            finally:
-                self._retiring_backends.discard(backend)
+            await backend.close()
+            self._retiring_backends.discard(backend)
 
     def _get_root_backend(self) -> _SingleAccountBackend:
         """获取 root 特权 backend"""
@@ -1903,36 +1956,29 @@ class VikingVectorIndexBackend:
             id(self._shared_adapter): self._shared_async_adapter
         }
         backends: set[_SingleAccountBackend] = set()
-        try:
-            backends.update(self._account_backends.values())
-            backends.update(self._retiring_backends)
-            if self._root_backend is not None:
-                backends.add(self._root_backend)
-            for account_id in set(self._resolved_backends) | self._initializing_accounts:
-                async with self._account_backend_locks.acquire(account_id):
-                    backend = self._resolved_backends.get(account_id)
-                    if backend is not None:
-                        backends.add(backend)
-            for backend in backends:
-                with backend._operation_condition:
-                    backend._retired = True
-                adapters[id(backend._adapter)] = backend._async_adapter
-            for backend in backends:
-                await asyncio.to_thread(backend._wait_for_operations)
-        except Exception as e:
-            logger.error("Error preparing vector facade close: %s", e)
-        finally:
-            for adapter in adapters.values():
-                try:
-                    await adapter.call("close")
-                except Exception as e:
-                    logger.error("Error closing vector adapter: %s", e)
-            self._account_backends.clear()
-            self._resolved_backends.clear()
-            self._retiring_backends.clear()
-            self._initializing_accounts.clear()
-            self._root_backend = None
-            logger.info("VikingVectorIndexBackend facade closed")
+        backends.update(self._account_backends.values())
+        backends.update(self._retiring_backends)
+        if self._root_backend is not None:
+            backends.add(self._root_backend)
+        for account_id in set(self._resolved_backends) | self._initializing_accounts:
+            async with self._account_backend_locks.acquire(account_id):
+                backend = self._resolved_backends.get(account_id)
+                if backend is not None:
+                    backends.add(backend)
+        for backend in backends:
+            with backend._operation_condition:
+                backend._retired = True
+            adapters[id(backend._adapter)] = backend._async_adapter
+        for backend in backends:
+            await asyncio.to_thread(backend._wait_for_operations)
+        for adapter in adapters.values():
+            await adapter.call("close")
+        self._account_backends.clear()
+        self._resolved_backends.clear()
+        self._retiring_backends.clear()
+        self._initializing_accounts.clear()
+        self._root_backend = None
+        logger.info("VikingVectorIndexBackend facade closed")
 
     async def health_check(self) -> bool:
         return await self._get_default_backend().health_check()
@@ -3161,37 +3207,27 @@ class VikingVectorIndexBackend:
         *,
         acl_enabled: bool,
     ) -> Optional[FilterExpr]:
-        filters: List[FilterExpr] = []
-        if context_type:
-            filters.append(Eq("context_type", context_type))
-
         targets = [target_dir for target_dir in target_directories or [] if target_dir]
         tenant_filter = self._tenant_filter(ctx, acl_enabled=acl_enabled)
-        if tenant_filter and not acl_enabled and self._targets_within_visible_roots(ctx, targets):
+        if (
+            tenant_filter
+            and not acl_enabled
+            and ctx.data_access is None
+            and self._targets_within_visible_roots(ctx, targets)
+        ):
             # The target scopes are already narrower than the tenant-visible
             # roots. Keep account isolation, but avoid recursively evaluating
             # the broader path scopes as an additional filter.
             tenant_filter = Eq("account_id", ctx.account_id)
-        if tenant_filter:
-            filters.append(tenant_filter)
-
-        if targets:
-            uri_conds: List[FilterExpr] = [
-                PathScope("uri", target_dir, depth=-1) for target_dir in targets
-            ]
-            if uri_conds:
-                filters.append(Or(uri_conds))
-
-        if extra_filter:
-            if isinstance(extra_filter, dict):
-                filters.append(RawDSL(extra_filter))
-            else:
-                filters.append(extra_filter)
-
-        if level:
-            filters.append(In("level", level))
-
-        return self._merge_filters(*filters)
+        return build_scope_filter(
+            context_type=context_type,
+            base_filter=tenant_filter,
+            target_directories=targets,
+            target_depth=-1,
+            wrap_single_target=True,
+            extra_filter=extra_filter,
+            level=level,
+        )
 
     @staticmethod
     def _targets_within_visible_roots(ctx: RequestContext, targets: List[str]) -> bool:
@@ -3219,6 +3255,8 @@ class VikingVectorIndexBackend:
             return None
 
         account_filter = Eq("account_id", ctx.account_id)
+        if ctx.data_access is not None:
+            account_filter = And([account_filter, ctx.data_access.query_filter()])
         if not acl_enabled:
             return And(
                 [
@@ -3250,21 +3288,4 @@ class VikingVectorIndexBackend:
 
     @staticmethod
     def _merge_filters(*filters: Optional[FilterExpr | Dict[str, Any]]) -> Optional[FilterExpr]:
-        non_empty: List[FilterExpr] = []
-        for item in filters:
-            if not item:
-                continue
-            if isinstance(item, dict):
-                item = RawDSL(item)
-            if (
-                isinstance(item, RawDSL)
-                and item.payload.get("op") == "and"
-                and not item.payload.get("conds")
-            ):
-                continue
-            non_empty.append(item)
-        if not non_empty:
-            return None
-        if len(non_empty) == 1:
-            return non_empty[0]
-        return And(non_empty)
+        return merge_filters(*filters)

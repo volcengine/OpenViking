@@ -14,12 +14,57 @@ from openviking_cli.utils.config.encryption_config import EncryptionConfig
 from openviking_gateway.config import EmbeddedGatewayConfig
 
 
-def openviking_config(gateway, encryption=None):
+def openviking_config(gateway, encryption=None, workspace="./data"):
     return SimpleNamespace(
         gateway=gateway,
+        storage=SimpleNamespace(workspace=workspace),
         encryption=encryption or EncryptionConfig(),
         oauth=SimpleNamespace(enabled=False),
     )
+
+
+def embedded_storage_path(gateway, workspace, monkeypatch):
+    monkeypatch.setattr(
+        "openviking_gateway.app.create_app", lambda config, **kwargs: {"config": config, **kwargs}
+    )
+    options = gateway_host.create_embedded_gateway(
+        openviking_config(gateway, workspace=str(workspace)),
+        SimpleNamespace(host="127.0.0.1", port=1933, public_base_url=None),
+        lambda: None,
+    )
+    return options["config"].storage_path
+
+
+def test_embedded_gateway_storage_follows_workspace(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    gateway = EmbeddedGatewayConfig(enabled=True)
+    assert embedded_storage_path(gateway, tmp_path / "ws", monkeypatch) == str(
+        tmp_path / "ws" / "gateway"
+    )
+
+
+def test_embedded_gateway_keeps_legacy_storage(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    legacy = tmp_path / "home" / ".openviking" / "gateway"
+    legacy.mkdir(parents=True)
+    (legacy / "kernel.sqlite3").touch()
+    gateway = EmbeddedGatewayConfig(enabled=True)
+    assert embedded_storage_path(gateway, tmp_path / "ws", monkeypatch) == str(legacy)
+    # Once the new location has a database, it wins.
+    (tmp_path / "ws" / "gateway").mkdir(parents=True)
+    (tmp_path / "ws" / "gateway" / "kernel.sqlite3").touch()
+    assert embedded_storage_path(gateway, tmp_path / "ws", monkeypatch) == str(
+        tmp_path / "ws" / "gateway"
+    )
+
+
+def test_embedded_gateway_explicit_storage_path_wins(tmp_path, monkeypatch):
+    explicit = str(tmp_path / "explicit")
+    gateway = EmbeddedGatewayConfig(enabled=True, storage_path=explicit)
+    assert embedded_storage_path(gateway, tmp_path / "ws", monkeypatch) == explicit
+    monkeypatch.setenv("OPENVIKING_GATEWAY_STORAGE_PATH", str(tmp_path / "env"))
+    gateway = EmbeddedGatewayConfig(enabled=True)
+    assert embedded_storage_path(gateway, tmp_path / "ws", monkeypatch) == str(tmp_path / "env")
 
 
 @pytest.mark.parametrize("host,expected", [("0.0.0.0", "127.0.0.1"), ("::", "[::1]")])

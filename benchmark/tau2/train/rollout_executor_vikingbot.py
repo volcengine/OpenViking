@@ -27,6 +27,7 @@ from benchmark.tau2.train._rollout_helpers import (
     _tau2_evaluation as _tau2_evaluation_helper,
 )
 from openviking.message import Message, ToolPart
+from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.train import (
     Case,
     ExecutionContext,
@@ -439,7 +440,7 @@ def _linked_experience_uris(content: str, *, source_uri: str) -> list[str]:
     section = _markdown_section(content, "Linked Experiences")
     if not section:
         return []
-    targets = re.findall(r"\[[^\]]+\]\(([^)\s]+)\)", section)
+    targets = [link.target for link in LinkRenderer.iter_markdown_links(section)]
     if not targets:
         targets = [
             line.lstrip("- ").strip()
@@ -455,7 +456,7 @@ def _linked_experience_uris(content: str, *, source_uri: str) -> list[str]:
 
 
 def _resolve_case_link_uri(target: str, *, source_uri: str) -> str:
-    target = str(target or "").strip()
+    target = LinkRenderer.normalize_markdown_target(str(target or "")) if target else ""
     if not target:
         return ""
     if "://" in target:

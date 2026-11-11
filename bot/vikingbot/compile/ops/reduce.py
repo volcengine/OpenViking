@@ -164,7 +164,7 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
                 else:
                     reserved.update((draft.path, path) for draft in response.files)
                     break
-            resolved = await file_ops.save_files(runtime, response, group, records, {}, origin=path)
+            resolved = await file_ops.save_files(runtime, response, group, records, {})
             await file_ops.accept_files(runtime, resolved)
             return resolved
         except (OSError, ValueError) as exc:

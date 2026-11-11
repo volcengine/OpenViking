@@ -626,7 +626,7 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
     async def preflight(_self, _source, *, feishu_access_token=None, **kwargs):
         assert feishu_access_token == "u-secret"
         assert kwargs["feishu_config"] is feishu_config
-        return SimpleNamespace(source_name=preflight_name, source_format="file")
+        return SimpleNamespace(source_name=preflight_name, source_format="file", doc_type=source.split("/")[3])
 
     async def plan_source_job_target(*, source_info, **_kwargs):
         return root_uri, None, source_info.source_name is None, False
@@ -662,9 +662,11 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
     assert task_tracker.create.await_args.kwargs["meta"] == expected_meta
     submit_understanding.assert_awaited_once_with(
         source,
+        ctx=ctx,
         feishu_access_token="u-secret",
         feishu_config=feishu_config,
         custom_option="forwarded",
+        _feishu_resolved_type=source.split("/")[3],
     )
     payload = queue_manager.enqueue.await_args.args[1]
     assert queue_manager.enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
@@ -874,7 +876,7 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
 
     async def preflight(_self, _source, *, feishu_access_token=None, **_kwargs):
         assert feishu_access_token == "u-secret"
-        return SimpleNamespace(source_name=None, source_format="file")
+        return SimpleNamespace(source_name=None, source_format="file", doc_type="docx")
 
     monkeypatch.setattr(
         "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",

@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Union
 from openviking.utils.model_retry import effective_max_retries, retry_async, retry_sync
 from openviking_cli.utils import get_logger
 
-from .base import VLMBase, VLMResponse
+from .base import ToolResultMediaMode, VLMBase, VLMResponse
 
 logger = get_logger(__name__)
 
@@ -24,6 +24,9 @@ class RetryVLM(VLMBase):
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.inner, name)
+
+    def tool_result_media_mode(self) -> ToolResultMediaMode | None:
+        return self.inner.tool_result_media_mode()
 
     @property
     def token_tracker(self):

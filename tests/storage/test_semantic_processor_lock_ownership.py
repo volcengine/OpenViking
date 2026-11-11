@@ -8,11 +8,11 @@ import json
 from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from openviking.storage.errors import InvalidPathLockRequestError
+from openviking.storage.errors import HandoffRecoveryRequired
 from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
@@ -76,19 +76,15 @@ async def test_memory_semantic_directory_does_not_release_borrowed_lock(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_semantic_lock_reacquires_unicode_coverage_after_legacy_mapping_error(monkeypatch):
+async def test_semantic_lock_reacquires_unicode_coverage_after_provider_change(monkeypatch):
     covered_path = "/local/default/resources/agent-memory/credit-risk/信贷风险管理_1.md"
     lock_path = (
         "/local/default/resources/agent-memory/credit-risk/.exact.ovlock.1.md.14dd8bad93aaa5b0"
     )
     lease = {"id": "reacquired-lock"}
     pathlock = SimpleNamespace(
-        pathlock_adopt=AsyncMock(
-            side_effect=InvalidPathLockRequestError(
-                f"invalid lock request: handoff coverage '{covered_path}' "
-                f"does not map to lock path '{lock_path}'"
-            )
-        ),
+        pathlock_adopt=AsyncMock(side_effect=HandoffRecoveryRequired("provider_changed")),
+        pathlock_reacquire_batch=AsyncMock(return_value=lease),
         pathlock_acquire_batch=AsyncMock(return_value=lease),
         pathlock_release=AsyncMock(),
     )
@@ -102,12 +98,52 @@ async def test_semantic_lock_reacquires_unicode_coverage_after_legacy_mapping_er
         "covered_paths": [{"path": covered_path, "kind": "tree"}],
     }
 
-    scope = await SemanticLockScope.resolve(handoff)
+    scope = await SemanticLockScope.resolve(handoff, ctx=SimpleNamespace(account_id="default"))
 
     assert scope.lock == lease
-    pathlock.pathlock_acquire_batch.assert_awaited_once_with(handoff["covered_paths"])
+    pathlock.pathlock_adopt.assert_awaited_once_with(handoff, fs_ctx={"account_id": "default"})
+    pathlock.pathlock_reacquire_batch.assert_awaited_once_with(
+        handoff["covered_paths"], "legacy-owner", fs_ctx={"account_id": "default"}
+    )
+    pathlock.pathlock_acquire_batch.assert_not_awaited()
     await scope.close()
     pathlock.pathlock_release.assert_awaited_once_with(lease)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("historic", [False, True])
+async def test_semantic_file_recovery_preserves_exact_or_uses_conservative_tree(
+    monkeypatch, historic
+):
+    path = "/local/default/resources/file.md"
+    pathlock = SimpleNamespace(
+        pathlock_adopt=AsyncMock(side_effect=HandoffRecoveryRequired("provider_changed")),
+        pathlock_acquire_batch=AsyncMock(return_value={"lease_ref": "new"}),
+        pathlock_release=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_lock.get_viking_fs",
+        lambda: _FakeVikingFS(pathlock),
+    )
+    warning = Mock()
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_lock.logger.warning", warning)
+    handoff = {"lock_paths": ["/local/default/resources/.exact.ovlock.file.md.123"]}
+    if not historic:
+        handoff["covered_paths"] = [{"path": path, "kind": "exact"}]
+    scope = await SemanticLockScope.resolve(
+        handoff, ctx=SimpleNamespace(account_id="default"), fallback_path_factory=lambda: path
+    )
+    pathlock.pathlock_acquire_batch.assert_awaited_once_with(
+        [{"path": path, "kind": "tree" if historic else "exact"}],
+        fs_ctx={"account_id": "default"},
+    )
+    if historic:
+        warning.assert_called_once_with(
+            "Recovering historic semantic handoff with conservative Tree coverage path=%s", path
+        )
+    else:
+        warning.assert_not_called()
+    await scope.close()
 
 
 def test_semantic_tree_stats_aggregate_multiple_plans_for_one_request():
@@ -207,17 +243,9 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         bind_task_context,
         extract_task_metadata,
     )
-    from openviking.storage.context_update_plan import (
-        ContentState,
-        IndexAction,
-        IndexSlot,
-        SemanticAction,
-        SemanticPlan,
-        SemanticTreeEntry,
-        SemanticTreeSnapshot,
-    )
     from openviking.storage.queuefs.named_queue import NamedQueue
     from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
+    from openviking.storage.queuefs.semantic_queue import SemanticQueue
     from openviking_cli.session.user_id import UserIdentifier
     from tests.storage.test_semantic_executor_skip_files import _FakeVikingFS as TreeFS
     from tests.test_task_tracker import _FakeAgfs, _owner_kwargs
@@ -234,14 +262,19 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         async def exists(self, uri, ctx=None):
             return True
 
-        async def pathlock_adopt(self, lease):
+        async def pathlock_adopt(self, lease, *, fs_ctx=None):
             return lease
 
         async def pathlock_release(self, lease):
             if "id" in lease:
                 released.append(lease["id"])
 
-    fs = FS({root: [], warm_root: []})
+    fs = FS(
+        {
+            root: [{"name": "a.md", "isDir": False}] if context_type == "resource" else [],
+            warm_root: [],
+        }
+    )
     for module in ("semantic_processor", "semantic_executor", "semantic_lock"):
         monkeypatch.setattr(f"openviking.storage.queuefs.{module}.get_viking_fs", lambda: fs)
     agfs = _FakeAgfs()
@@ -263,6 +296,13 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         "Embedding",
         middlewares=[TaskWorkQueueMiddleware()],
     )
+    directory_queue = SemanticQueue(
+        agfs, "/queue", "Semantic", middlewares=[TaskWorkQueueMiddleware()]
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(SEMANTIC="Semantic", get_queue=lambda *a, **kw: directory_queue),
+    )
     enqueued = asyncio.Event()
 
     async def vectorize(uri, **kwargs):
@@ -274,7 +314,17 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
 
     processor = _processor()
     processor._generate_overview = AsyncMock(return_value="overview")
+    processor._normalize_overview_generation = lambda overview: (overview, "abstract")
     processor._vectorize_directory = vectorize
+    processor._generate_single_file_summary = AsyncMock(
+        return_value={"name": "a.md", "summary": "file summary"}
+    )
+
+    async def vectorize_file(**kwargs):
+        await vectorize(kwargs["file_path"])
+        return True
+
+    processor._vectorize_single_file = vectorize_file
     ctx = RequestContext(UserIdentifier("acc", "alice"), Role(Role.USER))
     # Create the shared workers under a different Task, as happens across requests.
     with bind_task_context(source.task_id, **owner, enqueued_work=[]):
@@ -283,23 +333,7 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         )
     await tracker.complete(source.task_id, {"ok": True}, **owner)
 
-    plan = None
-    if context_type == "resource":
-        plan = SemanticPlan(
-            root,
-            context_type,
-            SemanticTreeSnapshot(
-                (
-                    SemanticTreeEntry(
-                        "",
-                        "directory",
-                        ContentState.UNCHANGED,
-                        SemanticAction.AGGREGATE,
-                        index_slots=(IndexSlot(0, "root-l0", action=IndexAction.UPSERT),),
-                    ),
-                )
-            ),
-        )
+    processor._generate_overview.reset_mock()
     msg = SemanticMsg(
         uri=root,
         context_type=context_type,
@@ -307,9 +341,9 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         user_id="alice",
         recursive=False,
         propagate_to_parent=False,
-        generation_trigger="parent_refresh",
+        generation_trigger="content_write" if context_type == "resource" else "parent_refresh",
         lock_handoff={"id": "message-lock"},
-        plan=plan,
+        changes={"modified": [f"{root}/a.md"]} if context_type == "resource" else None,
     )
     task = await tracker.create("content_write", **owner) if tracked else None
     task_context = (
@@ -324,6 +358,7 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         await asyncio.wait_for(entered_embedding_drain.wait(), 1)
         assert not worker.done()
         assert released == []
+        assert "/queue/Semantic/enqueue" not in agfs.files
         payload = json.loads(agfs.files["/queue/Embedding/enqueue"])
         metadata = extract_task_metadata(payload)
         assert metadata is not None
@@ -341,6 +376,13 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
             ProcessOutcome.FAILED if fail_generation else ProcessOutcome.SUCCESS
         )
         assert released == ["message-lock"]
+        if context_type == "resource":
+            directory = json.loads(agfs.files["/queue/Semantic/enqueue"])
+            assert directory["uri"] == root
+            assert directory["coalesce_key"]
+            assert directory["lock_handoff"] is None
+            assert extract_task_metadata(directory) is None
+            processor._generate_overview.assert_not_awaited()
         if not tracked:
             completed = await tracker.wait(metadata.task_id, **owner, timeout=0)
             assert completed.status is (

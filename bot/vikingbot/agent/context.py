@@ -201,6 +201,32 @@ The following local and remote Skills extend your capabilities.
         # OpenViking identity model, the bot API key owns the User, and the
         # message sender is represented as a peer under that User.
         if ov_tools_enable:
+            parts.append(
+                "## MCP boundaries in VikingBot\n\n"
+                "- OpenViking MCP Interface is OpenViking's public MCP interface for external "
+                "MCP clients. The `openviking_*` tools visible here are VikingBot bindings to "
+                "the connected OpenViking service; they do not make OpenViking a "
+                "VikingBot-connected external MCP Server.\n"
+                "- OpenViking-registered MCP Servers are external services registered in "
+                "OpenViking. Their tools back arranged Live Context nodes and are discovered "
+                "only with openviking_find_mcp_tools, then invoked only with "
+                "openviking_invoke_mcp_tool using the returned viking:// URI unchanged.\n"
+                "- VikingBot-connected MCP Servers are configured independently under "
+                "bot.tools.mcp_servers. Their tools are already visible as "
+                "mcp_<server>_<tool>; do not search for them in the OpenViking catalog or pass "
+                "their names to openviking_invoke_mcp_tool.\n"
+                "- For operational or real-time data, first use openviking_search and "
+                "openviking_multi_read to look for an already-arranged Live Context node. Its "
+                "preset arguments are authoritative and must not be replaced or inferred.\n"
+                "- If no suitable Live Context node exists, use the matching route: use an "
+                "explicitly available mcp_<server>_<tool> directly, or use "
+                "openviking_find_mcp_tools for OpenViking-registered tools. Never call both "
+                "routes for the same operation.\n"
+                "- For an OpenViking discovery result, select one candidate, construct only "
+                "arguments allowed by its inputSchema, and inspect annotations before calling "
+                "openviking_invoke_mcp_tool. MCP calls may have external side effects and must "
+                "not be retried after an ambiguous failure."
+            )
             # Fetch the authenticated actor's peer profile.
             start = _time.time()
             profile = await self.memory.get_viking_peer_profile(

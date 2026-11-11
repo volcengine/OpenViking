@@ -36,6 +36,13 @@ with other MAF chat clients that support chat middleware (including the built-in
 clients). The package installs neither the OpenViking server
 nor a model client unless the `example` extra is selected.
 
+To expose Rule search to the model, attach OpenViking's `/mcp` endpoint through
+MAF's MCP tool integration, using the same authenticated account and user as the
+context provider. The server advertises `rule_search` for dynamic discovery.
+The context provider itself does not register agent tools. Pass `task_context`
+and optionally `rule_probability_threshold` (default `0.65`) to retrieve complete
+Rules before a constrained action or response.
+
 ## Attach to an existing agent
 
 With an initialized, application-owned `AsyncHTTPClient`:

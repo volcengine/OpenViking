@@ -1,6 +1,9 @@
 # DeepSeek Harness
 
-Give [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (`dsh`), and the DeepSeek Harness Desktop app, cross-project and cross-session long-term memory. Once installed, every conversation automatically recalls relevant memories and captures new content, and the model gets the OpenViking tools and the `openviking-memory`, `openviking-skills`, and `ov-experience-memory` skills without any extra setup.
+Give [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (`dsh`), and the DeepSeek Harness Desktop app, cross-project and cross-session long-term memory. Once installed, every conversation automatically recalls relevant memories and captures new content, and the model gets the OpenViking tools and the `openviking-memory`, `openviking-skills`, `ov-experience-memory`, and `openviking-rule-search` skills without any extra setup.
+
+The Rule skill requires bundle `0.5.33` or later and a server build that advertises
+`rule_search` on `/mcp`. Upgrade both and reconnect DSH to use it.
 
 Source: [examples/dsh-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/dsh-memory-plugin)
 
@@ -44,7 +47,7 @@ After installation, use the verification steps below to check tool access and cr
 
 </details>
 
-Once installed, start a new DSH session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [Connect your agent with one prompt](../getting-started/07-agent-onboarding.md).
+Once installed, start a new DSH session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
 
 ## Verify
 
@@ -112,9 +115,41 @@ The bundle runs inside DSH as a Cordis plugin rather than as external hooks, so 
 
 Each DSH session maps to `dsh-<session-id>` in OpenViking, and every subagent gets its own session.
 
-The model-facing surface is the OpenViking MCP tool set, reached through the same stdio proxy the other memory integrations use and published under an `mcp__openviking__` prefix. Because that proxy runs once per profile, `mcp__openviking__remember` stores into a short-lived server-side session rather than the current one—automatic capture still records the conversation itself. With `OPENVIKING_RECALL_PEER_SCOPE=actor`, a fixed `OPENVIKING_PEER_ID` attributes that profile’s tool calls to one peer; the default `all` scope omits the actor-peer header. Use separate profiles/processes when workspaces need different tool identities. The bundle also ships three shared skills: `openviking-memory`, so the model knows when to search, read, and write; `openviking-skills`, which covers finding, using, creating, sharing, and migrating skills stored in OpenViking; and `ov-experience-memory`, which retrieves and applies prior task Experience before executable work. Tool results are captured by default (`captureToolResults: true`), which lets the server link the skill's reads back to the Experience they used; with `false` the skill only retrieves and applies Experience.
+The model-facing surface is the OpenViking MCP tool set, reached through the same stdio proxy the other memory integrations use and published under an `mcp__openviking__` prefix. Because that proxy runs once per profile, `mcp__openviking__remember` stores into a short-lived server-side session rather than the current one—automatic capture still records the conversation itself. With `OPENVIKING_RECALL_PEER_SCOPE=actor`, a fixed `OPENVIKING_PEER_ID` attributes that profile’s tool calls to one peer; the default `all` scope omits the actor-peer header. Use separate profiles/processes when workspaces need different tool identities. The bundle also ships four shared skills: `openviking-memory`, so the model knows when to search, read, and write; `openviking-skills`, which covers finding, using, creating, sharing, and migrating skills stored in OpenViking; `ov-experience-memory`, which retrieves and applies prior task Experience before executable work; and `openviking-rule-search`, which uses the server-advertised `mcp__openviking__rule_search` tool to check task-specific Rules. Tool results are captured by default (`captureToolResults: true`), which lets the server link the skill's reads back to the Experience they used; with `false` the skill only retrieves and applies Experience.
 
 A filesystem tool call whose path is a `viking://` URI is blocked with a hint pointing at the right OpenViking tool. For a write or edit under a skill directory such as `viking://~/skills/<name>/`, that tool is `mcp__openviking__add_skill`, which creates or replaces a whole skill from its `SKILL.md` text. A shell command that carries a `viking://` URI still runs, and the model gets a notice suggesting the OpenViking tools, which it can ignore when the URI is intentional data.
+
+### Client-side recall compression
+
+Compression stays off by default. To use DSH's configured model instead of the
+server query planner, merge this into `~/.openviking/ovcli.conf` and restart DSH:
+
+```json
+{"plugin":{"dsh":{"recallCompress":"client","recallCompressTimeoutMs":10000}}}
+```
+
+The plugin makes one tool-free `ctx.llm.stream()` call using the agent's
+`options.provider` and `options.model`. `recallCompressModel` optionally selects
+another model on that same provider; `recallCompressThinking` supplies a
+provider-supported reasoning effort. Credentials and endpoints belong to DSH's
+provider configuration, not OpenViking's server credentials. DSH does not use
+`recallCompressBaseUrl` or the CLI compressor detection settings. “Client-side”
+means the call runs through DSH; inference is on-device only if that DSH provider
+points to a local model service. Model switches implemented solely by host request
+middleware are not inferred from `agent.options`; configure the compressor model
+explicitly or restart with the intended model.
+
+`client` never requests server rewrite. `auto` prefers the host compressor when
+its model/service are available, otherwise retains server `rewrite: "auto"`.
+`server` and `off` keep their existing behavior. An unavailable host compressor in
+`client` mode leaves the retrieved context uncompressed. Short input skips the
+model call; the shared input limit, cited-digest handling and fallback still apply.
+Timeouts, unsuccessful streams and invalid digests fall back to budgeted original
+fragments; an explicitly irrelevant result injects nothing. Cancellation stops
+waiting and signals the adapter. An adapter that ignores abort may continue its
+request, but cannot inject its late result. Auxiliary messages are not appended
+to the session or captured as memories. Digest caches are separated by connection,
+identity, session and model. Shared compression status is logged through DSH.
 
 <details>
 <summary><b>Configuration</b></summary>

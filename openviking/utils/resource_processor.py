@@ -318,6 +318,22 @@ class ResourceProcessor:
             storage=self.media_storage,
         )
 
+    async def _parser_api_config_kwargs(
+        self,
+        ctx: RequestContext,
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Add the owning Account's parser config for one operation without persisting it."""
+        if self.runtime_config_manager is None:
+            return kwargs
+        from openviking.config.parser_api import get_effective_parser_api_config
+
+        result = dict(kwargs)
+        result["parser_api_config"] = await get_effective_parser_api_config(
+            self.runtime_config_manager, ctx.account_id
+        )
+        return result
+
     def _build_parse_output_store(self):
         """Return the configured parse output store, or None for AGFS mode.
 
@@ -746,11 +762,17 @@ class ResourceProcessor:
     def should_use_understanding_directly(self, source: str, **kwargs) -> bool:
         return self._get_media_processor().should_use_understanding_directly(source, **kwargs)
 
-    async def submit_understanding(self, source: Union[str, "LocalResource"], **kwargs) -> str:
+    async def submit_understanding(
+        self, source: Union[str, "LocalResource"], *, ctx: RequestContext, **kwargs
+    ) -> str:
+        kwargs = await self._parser_api_config_kwargs(ctx, kwargs)
         return await self._get_media_processor().submit_understanding(source, **kwargs)
 
-    async def upload_understanding_file(self, source: Union[str, "LocalResource"]) -> str:
-        return await self._get_media_processor().upload_understanding_file(source)
+    async def upload_understanding_file(
+        self, source: Union[str, "LocalResource"], *, ctx: RequestContext
+    ) -> str:
+        kwargs = await self._parser_api_config_kwargs(ctx, {})
+        return await self._get_media_processor().upload_understanding_file(source, **kwargs)
 
     async def build_index(
         self, resource_uris: List[str], ctx: RequestContext, **kwargs
@@ -851,6 +873,7 @@ class ResourceProcessor:
                 else:
                     await _set_stage("parsing")
                 kwargs = await self._source_config_kwargs(path, ctx, kwargs)
+                kwargs = await self._parser_api_config_kwargs(ctx, kwargs)
                 with viking_fs.bind_request_context(ctx):
                     parse_result = await media_processor.process(
                         source=path,

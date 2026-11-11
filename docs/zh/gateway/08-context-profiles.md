@@ -19,7 +19,7 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 | 召回记忆 | 用每条新的用户消息检索 OpenViking，把相关内容附加到这条消息上。 | 检索范围：记忆、资源、技能 · 单条消息预算：1,600 token · 单个上下文窗口预算：30,000 token · 相关度阈值：0.35 · 超时时间：2 秒 |
 | 保存对话 | 把完成的轮次写入 OpenViking 会话并提交，供 OpenViking 提取记忆。 | 最新回复等待时长：600 秒 · 提交阈值：20,000 token · 保留最近消息：10 |
 | 长对话 | 对话接近上下文窗口时，让同一个模型写摘要，替换之前的消息。 | 压缩：开启 · 压缩时机：窗口的 0.9 · 摘要长度上限：8,000 token · Agent 自管上下文窗口：关闭 |
-| OpenViking 工具 | 让模型在回答时使用 OpenViking 的工具。 | 开启 · 只勾选只读工具，见 [OpenViking 工具](04-openviking-tools.md) |
+| OpenViking 工具 | 让模型在回答时使用 OpenViking 的工具。 | 开启 · 勾选全部工具，见 [OpenViking 工具](04-openviking-tools.md) |
 
 每个部分都有自己的开关，长对话部分的压缩和 Agent 自管上下文窗口各有一个。召回和保存相互独立，只召回不保存、只保存不召回都可以。
 
@@ -53,6 +53,7 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 | **相关度阈值** | 0.35 | 只附加相关度不低于该值的结果，取值 0 到 1。值越高，附加的内容越少、越贴切。 |
 | **超时时间** | 2 秒 | 一次检索最多等多久。 |
 | **检索文本长度**（在**高级设置**中） | 8,000 个字符 | 取消息的多少字符作为检索文本。 |
+| **Peer 范围**（在**高级设置**中） | 所有 Peer，当前 Peer 优先 | 除用户自己的记忆外，召回和 OpenViking 工具能看到哪些 Peer 的记忆。 |
 | **按分类限量**（在**高级设置**中） | 关闭 | 每个分类最多附加多少条。 |
 
 这些设置如何配合：
@@ -63,6 +64,7 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 - **预算。** 每条消息最多补充**单条消息预算**和**单个上下文窗口预算**剩余额度中较小的那个；剩余额度不足 64 token 时跳过检索。无论是网关还是客户端压缩了对话，单个上下文窗口预算都重新计算。这里的 token 数是偏保守的估算，不是服务商的计费数。
 - **关闭召回。** 把**单个上下文窗口预算**设为 0 就等于关闭召回；**单条消息预算**最小为 64。
 - **超时。** OpenViking 在**超时时间**内没有返回时，这条消息不带记忆发给模型，之后也不会补上，客户端重试也一样。
+- **Peer 范围。** 主要用于请求会带 [Peer](03-connect-clients.md#peer) 的密钥。**所有 Peer，当前 Peer 优先**在用户自己的记忆之外加上这个请求的 Peer 的记忆，其他 Peer 的记忆仍可能被召回，只是分数略有扣减。**仅当前 Peer**让召回和 OpenViking 工具都查不到、读不到其他 Peer 的记忆；不带 Peer 的请求与默认值相同。见[只召回当前 Peer](03-connect-clients.md#peer-scope)。
 - **按分类限量。** 可以给事件、实体、偏好、经验、资源和技能六类分别设条数上限，只检索上限大于 0 的类别。关闭时，所有来源放在一起排序。
 
 ### 召回摘要 {#recall-summary}
@@ -93,13 +95,14 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 - 下一条用户消息到达时，上一轮就会保存。**最新回复等待时长**针对的是最后一轮，这样短对话也能被提交。
 - 会话中待提交的内容达到**提交阈值**时提交一次。每次提交后，OpenViking 在后台提取记忆。
 - 提交后，会话中保留最新的若干完整轮次，至少包含**保留最近消息**条消息。
+- OpenViking 默认提取所有已启用的[记忆类型](../api/16-memory.md)。只提取其中一部分时，用管理 API 或 `X-OpenViking-Context` 请求头把 `capture_memory_types` 设为这些类型的名称，例如 `["preferences","events"]`；设为空列表时只保存对话，不提取记忆。Studio 中没有这项设置，在 Studio 中保存配置时保留原值。OpenViking 不认识的名称会使保存失败，见[配置参考](13-configuration.md#profile-saving)。
 
 ## 长对话和 OpenViking 工具 {#long-conversations-and-tools}
 
 编辑页的最后两个部分各有专门的页面：
 
 - **长对话**部分包括**压缩**及其**压缩时机**和**摘要长度上限**、实验性的 **Agent 自管上下文窗口**及其**软提醒时机**和**硬提醒时机**，以及**高级设置**中的**默认上下文窗口**。详见[网关中的长对话](05-long-conversations.md#long-conversations)；窗口较小的模型需要设置窗口大小，见[设置模型的上下文窗口](05-long-conversations.md#context-window)。
-- **OpenViking 工具**部分包括**工具**清单和**显示工具调用**，**高级设置**中还有**每次请求的工具轮数**、**单次调用超时**、**结果大小上限**、**总时长**和 **Token 预算**。详见[选择工具](04-openviking-tools.md#choose-tools)和[上限](04-openviking-tools.md#limits)。网关执行所选工具时不经过客户端的权限确认，勾选会修改数据的工具之前，请先阅读[风险和控制点](04-openviking-tools.md#risks-and-controls)。
+- **OpenViking 工具**部分包括**工具**清单和**显示工具调用**，**高级设置**中还有**每次请求的工具轮数**、**单次调用超时**、**结果大小上限**、**总时长**和 **Token 预算**。详见[选择工具](04-openviking-tools.md#choose-tools)和[上限](04-openviking-tools.md#limits)。网关执行所选工具时不经过客户端的权限确认，决定让模型使用会修改数据的工具之前，请先阅读[风险和控制点](04-openviking-tools.md#risks-and-controls)。
 
 每项设置的 API 名称和取值范围见[配置参考](13-configuration.md#context-profile-settings)。
 
@@ -111,7 +114,7 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 X-OpenViking-Context: {"recall":false,"max_tokens":800,"context_types":["memory"]}
 ```
 
-- **能改什么。** 除 `name` 和 `client_overrides` 以外的所有设置。请求头没有给出的字段沿用配置中的值。`{"disabled_tools":[]}` 表示提供全部 OpenViking 工具，包括会修改数据的工具和服务端以后新增的工具。
+- **能改什么。** 除 `name` 和 `client_overrides` 以外的所有设置。请求头没有给出的字段沿用配置中的值。工具权限只能收窄：请求头里的 `disabled_tools` 会追加到配置已取消勾选的工具上，`gateway_tools` 只能关闭 OpenViking 工具、不能重新打开，所以 `{"disabled_tools":[]}` 或 `{"gateway_tools":true}` 不会提供配置不提供的工具。
 - **何时生效。** 与保存配置的修改一样，对话会沿用开始时的设置：只有对话第一个请求里的请求头决定设置。之后的请求头仍会校验，所以无效的请求头，或开关关闭后的任何请求头，仍会报错。
 - **错误。** 开关关闭时，带这个请求头的请求一律返回 403 `context_override_not_allowed`，而不是按已保存的设置处理。开关开启时，请求头有下列情况之一会返回 400 `context_override_invalid`：
   - 不是 JSON 对象；
@@ -119,7 +122,7 @@ X-OpenViking-Context: {"recall":false,"max_tokens":800,"context_types":["memory"
   - 取值越界。
 - **请求日志。** [请求详情](10-overview-and-requests.md#request-details)中列出客户端在请求头里传入了哪些字段，只记名称，不记取值。
 
-这个开关默认开启，所以持有使用这份配置的密钥的人可以修改任意字段，包括预算和会修改数据的工具。对 `default` 配置来说，这也包括所有[直接使用 OpenViking API 密钥](09-gateway-keys.md#openviking-keys)的客户端。需要锁定的配置请关闭它。各客户端如何发送这个请求头，见[覆盖上下文配置](03-connect-clients.md#override-profile-settings)。
+这个开关默认开启，所以持有使用这份配置的密钥的人可以修改任意字段，包括预算，也可以再排除更多工具。对 `default` 配置来说，这也包括所有[直接使用 OpenViking API 密钥](09-gateway-keys.md#openviking-keys)的客户端。需要锁定的配置请关闭它。各客户端如何发送这个请求头，见[覆盖上下文配置](03-connect-clients.md#override-profile-settings)。
 
 ## 下一步 {#next-steps}
 

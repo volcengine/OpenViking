@@ -18,7 +18,10 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import ValidationError
 from starlette.background import BackgroundTask
 
+from openviking.core.peer_id import normalize_peer_id
+
 from .capture import CapturePipeline
+from .client import PEER_HEADER
 from .models import KEY_PLACEHOLDER, Policy, validation_detail
 from .protocols import HEARTBEAT_SECONDS, SSEDecoder, heartbeat, parse_body
 from .storage import digest
@@ -50,6 +53,26 @@ PRIMARY_PATH = {
     "chat": "/v1/chat/completions",
     "responses": "/v1/responses",
 }
+
+
+class _ClosingStreamingResponse(StreamingResponse):
+    def __init__(self, content, *, close_upstream, cleanup, **kwargs):
+        super().__init__(content, **kwargs)
+        self._close_upstream = close_upstream
+        self._cleanup = cleanup
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            try:
+                self._close_upstream()
+            finally:
+                try:
+                    if close := getattr(self.body_iterator, "aclose", None):
+                        await close()
+                finally:
+                    await self._cleanup()
 
 
 def filtered_headers(headers, request=False):
@@ -131,10 +154,31 @@ def context_override(policy, header):
     if blocked := override.keys() & {"name", "client_overrides"}:
         raise context_error("X-OpenViking-Context cannot set " + ", ".join(sorted(blocked)))
     try:
-        merged = Policy.model_validate({**policy, **override}).model_dump()
+        merged = Policy.model_validate({**policy, **override})
+        saved = Policy.model_validate(policy)
     except ValidationError as error:
         raise context_error(validation_detail(error))
-    return {**policy, **merged}, sorted(override)
+    # Tool access only narrows: the header cannot offer a tool the profile withholds.
+    merged.gateway_tools = merged.gateway_tools and saved.gateway_tools
+    merged.disabled_tools = list(dict.fromkeys([*saved.disabled_tools, *merged.disabled_tools]))
+    return {**policy, **merged.model_dump()}, sorted(override)
+
+
+def request_peer(headers, credential):
+    """The peer of an ``X-OpenViking-Actor-Peer`` header, else the key's default peer.
+
+    A blank header falls back to the default, so a client cannot drop a key's peer.
+    """
+    header = headers.get(PEER_HEADER)
+    try:
+        peer = normalize_peer_id(header)
+    except ValueError:
+        raise context_error(
+            PEER_HEADER + " must be one path segment of letters, digits, '_', '.', '-' "
+            "and at most one '@'.",
+            reason="peer_invalid",
+        ) from None
+    return peer or credential.get("default_peer_id")
 
 
 def fill_key(url, key):
@@ -231,6 +275,7 @@ class ProxyRequest:
                 break
         self.protocol = PATH_PROTOCOL.get(self.path)
         self.prepared = None
+        self.peer = None
         self.metrics = {"request_id": uuid.uuid4().hex, "kind": "passthrough"}
 
     async def run(self):
@@ -301,6 +346,10 @@ class ProxyRequest:
         header = self.request.headers.get("x-openviking-context")
         if header is not None and self.policy:
             self.policy, self.metrics["context_override"] = context_override(self.policy, header)
+        # Like the context header, a peer is checked on every request, enhanced or not.
+        self.peer = request_peer(self.request.headers, self.credential)
+        if self.peer:
+            self.metrics["peer"] = self.peer
         self.upstreams = binding.upstreams
         # A host in front of the gateway may pick the upstream, but only an allowed one.
         url = self.request.headers.get("x-openviking-upstream-url")
@@ -358,6 +407,7 @@ class ProxyRequest:
                 self.path.endswith("count_tokens"),
                 self.candidates,
                 self.summarize,
+                peer=self.peer,
             )
             self.metrics.update(metrics)
             if self.prepared:
@@ -496,7 +546,10 @@ class ProxyRequest:
                 allow_redirects=False,
             )
 
+        completed = False
+
         async def stream():
+            nonlocal completed
             finished = False
             chunks = heartbeat(loop.run(response, send), HEARTBEAT_SECONDS)
             try:
@@ -507,19 +560,25 @@ class ProxyRequest:
                     await self.relay()
                     yield chunk
                 finished = True
+                completed = True
             except (ToolLoopError, aiohttp.ClientError) as error:
                 self.metrics["degradation"] = "hidden_tool_loop_failed"
-                yield loop.error(str(error))
+                yield loop.error(error)
             finally:
                 await chunks.aclose()
                 if not finished:
                     capture.complete = False
                 self.metrics.update(prepared.metrics)
 
+        async def cleanup():
+            if not completed:
+                capture.complete = False
+            await self.finish()
+
         if self.body.get("stream"):
             headers["content-type"] = "text/event-stream"
-            return StreamingResponse(
-                stream(), headers=headers, background=BackgroundTask(self.finish)
+            return _ClosingStreamingResponse(
+                stream(), headers=headers, close_upstream=response.close, cleanup=cleanup
             )
         try:
             async for _ in loop.run(response, send):

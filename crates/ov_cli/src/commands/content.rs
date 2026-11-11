@@ -1,5 +1,5 @@
 use crate::client::HttpClient;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::output::OutputFormat;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -146,6 +146,14 @@ fn create_download_target(path: &Path, local_path: &str) -> Result<std::fs::File
 }
 
 fn output_content_result(result: Value, output_format: OutputFormat, compact: bool) -> Result<()> {
+    if let Some(is_error) = crate::output::output_tool_result(&result, output_format, compact) {
+        return if is_error {
+            Err(Error::AlreadyReported)
+        } else {
+            Ok(())
+        };
+    }
+
     match output_format {
         OutputFormat::Json => crate::output::output_success(result, output_format, compact),
         OutputFormat::Table => {

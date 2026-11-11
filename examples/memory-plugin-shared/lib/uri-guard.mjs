@@ -121,7 +121,7 @@ export function addSkillExample(uri, { call = "add_skill", edited = false } = {}
 export const DEFAULT_TOOL_HINTS = {
   read: {
     tool: "OpenViking MCP read",
-    example: (uri) => `read(uris="${uri}")`,
+    example: (uri) => `read(uri="${uri}")`,
   },
   glob: {
     tool: "OpenViking MCP glob or list",
@@ -151,15 +151,15 @@ export const DEFAULT_TOOL_HINTS = {
   },
   bash: {
     tool: "OpenViking MCP read or search",
-    example: (uri) => `read(uris="${uri}")`,
+    example: (uri) => `read(uri="${uri}")`,
   },
   runcommand: {
     tool: "OpenViking MCP read or search",
-    example: (uri) => `read(uris="${uri}")`,
+    example: (uri) => `read(uri="${uri}")`,
   },
   shell: {
     tool: "OpenViking MCP read or search",
-    example: (uri) => `read(uris="${uri}")`,
+    example: (uri) => `read(uri="${uri}")`,
   },
 };
 

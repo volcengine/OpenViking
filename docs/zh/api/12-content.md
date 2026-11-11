@@ -221,6 +221,7 @@ ov read viking://resources/docs/api.md
 | timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | tags | string[] | 否 | 未设置 | 写入文件的显式检索标签，例如 `["team=search", "env=prod"]` |
 | tag_mode | string | 否 | `replace` | 标签更新方式：`replace` 覆盖、`append` 按 key 合并、`clear` 清空已有标签且不要求传 `tags` |
+| resolve_conflicts | bool | 否 | false | 解决冲突 |
 
 **说明**
 
@@ -232,6 +233,7 @@ ov read viking://resources/docs/api.md
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后会自动调度相关语义与向量处理。
 - 资源写入附带的父目录 L0/L1 刷新采用尽力更新：父目录锁冲突时跳过本次目录刷新，保留原文写入及文件自身的摘要、向量处理。跳过 L0/L1 写回时也跳过目录向量更新，不保证自动补刷；原文文件本身的锁冲突仍报错。提交任务前发现冲突时返回 `semantic_status: "skipped"`；后台运行期间的跳过记录在日志中，`wait=true` 也不保证父目录摘要更新。
 - 提供非空 `tags` 时，标签会在该文件首次向量 upsert 时写入，而非在处理完成后再单独更新。省略 `tags`，或显式传 `tags: []` 配合 `tag_mode: "replace"`，都不会修改已有标签。使用 `tag_mode: "clear"` 可清空全部已有标签，且 `clear` 会忽略同时传入的标签值。
+- `resolve_conflicts=true` 表示编辑目的是进行冲突解决。
 
 
 **Python SDK**
@@ -547,6 +549,59 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 ```
 
 `ov get <uri> <local-path>` 通过上述 HTTP API 下载文件并写入本地路径。
+
+---
+
+### ensure_directory_index()
+
+确保一个既有目录的语义索引就绪，保留已有 L0/L1 内容和标签。仅当 `.abstract.md` 和 `.overview.md` 都不存在时，使用 `fallback_abstract` 创建 L0。已有摘要保持不变，只补缺失索引，不调用 LLM。目标为文件、namespace 不支持语义索引、摘要为空或格式损坏、无权限时返回错误。
+
+**Python SDK**
+
+```python
+result = client.ensure_directory_index(
+    uri="viking://resources/project/",
+    fallback_abstract="This is the compile generated folder",
+    wait=True,
+)
+client.set_tags(
+    uri="viking://resources/project/",
+    tags=["compile_target=true"],
+    mode="append",
+    recursive=False,
+)
+```
+
+TypeScript 对应 `client.ensureDirectoryIndex(uri, fallbackAbstract, { wait: true })`；Go 对应 `client.EnsureDirectoryIndex(ctx, uri, fallbackAbstract, nil)`，默认等待索引就绪。
+
+**HTTP API**
+
+```http
+POST /api/v1/content/ensure_directory_index
+Content-Type: application/json
+
+{
+  "uri": "viking://resources/project/",
+  "fallback_abstract": "This is the compile generated folder",
+  "wait": true
+}
+```
+
+`uri` 和非空的 `fallback_abstract` 必填。`wait` 默认 `true`，返回时确认已有摘要对应的全部索引层可读取。`wait=false` 时缺失索引进入队列，结果包含 `task_id`；`indexed_levels` 只列出响应时已经可读取的层。接口检查目录写权限，不处理子目录。
+
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/project",
+    "created_abstract": true,
+    "indexed_levels": [0],
+    "vector_status": "complete"
+  }
+}
+```
 
 ---
 

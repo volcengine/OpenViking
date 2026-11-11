@@ -15,17 +15,22 @@ For `/api/v1/admin/*`, `trusted` mode permits requests with no explicit identity
 | ROOT | System administrator with full access |
 | ADMIN | Workspace administrator, manages users within their account |
 | USER | Regular user |
+| GLOBAL | Account-scoped data-plane identity, typically used by agents; only ROOT may create, destroy, or modify it, while other roles may only observe its existence |
 
-| Operation | ROOT | ADMIN | USER |
-|-----------|------|-------|------|
-| Create/delete workspace | Y | N | N |
-| List workspaces | Y | N | N |
-| List users | Y | Y (own account) | Y (own account) |
-| Register/remove users | Y | Y (own account) | N |
-| Manage groups and membership | Y | Y (own account) | N |
-| List agents (deprecated, returns empty list) | Y | Y (own account) | N |
-| Regenerate user key (API Key mode only) | Y | Y (own account) | Y (own key) |
-| Change user role between USER and ADMIN | Y | Y (own account) | N |
+| Operation | ROOT | ADMIN | USER | GLOBAL |
+|-----------|------|-------|------|--------|
+| Create/delete workspace | Y | N | N | N |
+| List workspaces | Y | N | N | N |
+| List users | Y | Y (own account) | Y (own account) | N |
+| Register/remove users | Y | Y (own account) | N | N |
+| Create GLOBAL identity | Y | N | N | N |
+| Observe GLOBAL identity existence | Y | Y (own account) | Y (own account) | Y (self) |
+| Destroy/rotate GLOBAL or change its group membership | Y | N | N | N |
+| Change an existing role to or from GLOBAL | N | N | N | N |
+| Manage groups and membership | Y | Y (own account) | N | N |
+| Read/update User settings | Y | Y (own account, non-GLOBAL) | Y (self) | N |
+| Regenerate user key (API Key mode only) | Y | Y (own account) | Y (own key) | N |
+| Change user role between USER and ADMIN | Y | Y (own account) | N | N |
 
 ## CLI `--sudo` Option
 
@@ -67,8 +72,8 @@ The server adds memberships to `RequestContext.group_ids` for each request. Addi
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | List groups |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete a group and all its memberships, including when the group is non-empty |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List members |
-| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Add a member idempotently; repeated calls return `added=true` |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a member; repeated calls return `removed=false` |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Add members from a JSON body `{"user_ids": [...]}` (1–1000 existing users) atomically; users who are already members are skipped, and the result is `added=true` |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Remove members atomically using a JSON body `{"user_ids": [...]}` (1–1000 user IDs); `removed=true` if any membership was removed, otherwise `removed=false` |
 
 ```bash
 ov --sudo admin create-group acme engineering
@@ -79,11 +84,58 @@ ov --sudo admin remove-group-member acme engineering alice
 ov --sudo admin delete-group acme engineering
 ```
 
+To remove members over HTTP, include their user IDs in the request body:
+
+```bash
+curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/groups/engineering/members \
+  -H "X-API-Key: your-admin-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"user_ids": ["alice", "bob"]}'
+```
+
 To delete a group that still has members, call `DELETE /api/v1/admin/accounts/acme/groups/engineering`.
 
 The Python SDK exposes `admin_create_group`, `admin_list_groups`, `admin_list_group_members`, `admin_add_group_member`, `admin_remove_group_member`, and `admin_delete_group`. The Go SDK uses matching PascalCase method names.
 
 ## API Reference
+
+### metric_inventory
+
+Stream a metadata inventory for offline reporting. Requires **ROOT** authentication, including when filtering to one account. The export contains account scopes, user identifiers and roles, file metadata, skill metadata, and vector-record metadata; it excludes file contents, vector values, and credentials.
+
+**HTTP API**
+
+```http
+GET /api/v1/admin/metric-inventory?account_id=acme&page_size=500
+X-API-Key: your-root-api-key
+```
+
+| Query parameter | Type    | Default | Description                                                                                |
+| --------------- | ------- | ------- | ------------------------------------------------------------------------------------------ |
+| `account_id`    | string  | omitted | Optional exact account ID; omit to scan all registered accounts.                           |
+| `page_size`     | integer | `500`   | Internal scan batch size, from `1` to `1000`; this does not limit the total exported rows. |
+
+The response is a streaming `application/x-ndjson` body, with one JSON object per line, rather than the regular `status` / `result` envelope. Each object has an `event_name`: `inventory_scope`, `inventory_user`, `inventory_file`, `inventory_skill`, `inventory_vector_record`, or the final `inventory_batch_end` marker.
+
+```bash
+curl --no-buffer 'http://localhost:1933/api/v1/admin/metric-inventory?account_id=acme&page_size=500' \
+  -H 'X-API-Key: your-root-api-key'
+```
+
+The final line reports whether the scan completed:
+
+```json
+{
+  "event_name": "inventory_batch_end",
+  "status": "complete",
+  "row_count": 0,
+  "scan_started_at": 1794268800000,
+  "scan_finished_at": 1794268800010,
+  "consistency": "scan_window"
+}
+```
+
+This illustrative marker describes a scan window, not an atomic snapshot. `row_count` counts emitted rows before the final marker. Scan failures, including an unknown `account_id`, emit a final marker with `status: "failed"` and no `consistency` field. After streaming begins, HTTP success alone does not prove completeness: consumers must require a final `complete` marker before replacing an existing inventory. Missing or failed final markers indicate an incomplete export.
 
 ### account / user existence queries
 
@@ -176,7 +228,9 @@ curl http://localhost:1933/api/v1/admin/agent-evolution \
 `enabled` resolves the Account runtime override, Cluster runtime override, then
 the startup value from `server.agent_evolution.enabled`.
 
-The existing endpoint remains as a deprecated compatibility adapter:
+The endpoint remains as a deprecated compatibility adapter in this release and
+is scheduled for removal in the next release. New callers use Account
+configuration; the SDKs no longer expose methods for this legacy endpoint.
 
 ```http
 PUT /api/v1/admin/agent-evolution
@@ -187,8 +241,9 @@ Content-Type: application/json
 
 ### account_settings
 
-This endpoint is deprecated. ROOT can manage any account and ADMIN can manage
-only its own account. It preserves the original ACL and Agent Evolution request
+This endpoint is deprecated and remains compatible for this release, with
+removal planned for the next release. ROOT can manage any account and ADMIN can
+manage only its own account. It preserves the original ACL and Agent Evolution request
 and response semantics:
 
 ```http
@@ -211,6 +266,8 @@ original public behavior and ACL authorization is skipped. When enabled, newly
 created shared resources receive ACL fields and ACL-protected shared resources
 are authorized against them. Existing content without an ACL is not migrated or
 modified. Disabling the setting also stops enforcing existing ACLs.
+
+The CLI now calls Account configuration:
 
 ```bash
 ov --sudo admin set-account-settings acme --acl-enabled true
@@ -523,18 +580,24 @@ Content-Type: application/json
 {"settings": {"agent_evolution": {"enabled": true}}}
 ```
 
-`settings` always means explicit values at the addressed layer. PATCH is
-three-state: an absent key is unchanged, `null` deletes that layer's value, and
-a concrete value updates it.
+Cluster `settings` contains explicit runtime values. Account GET/PATCH responses
+also always include `settings.agent_evolution.enabled`, resolved from the Account
+override, Cluster runtime override, then startup default. Other fields remain
+explicit values; reads never persist defaults. PATCH is three-state: an absent
+key is unchanged, `null` removes that layer's value, and a concrete value updates
+it. Removing the Account `agent_evolution` override returns the newly resolved
+switch value in the response.
 
 The Cluster runtime surface currently contains `agent_evolution`. The Account
-surface contains `feishu`, `agent_evolution`, `github`, `acl`, `vlm`, and
+surface contains `output_language_override`, `memory`, `feishu`, `parser_api`, `agent_evolution`, `github`, `acl`, `vlm`, and
 `query_planner`, all of which are dynamic. Account `vlm` and `query_planner`
 are visible and writable only to ROOT. Each configured section is complete:
 `model` and a non-empty `credentials` array are required, while `timeout` is
 optional. ADMIN responses omit both sections, and ADMIN PATCH requests
-containing either section are rejected. Account `memory` is not on the current API
-surface. Account `embedding` and `vectordb` are also ROOT-only, including reads.
+containing either section are rejected. Account `memory` exposes only
+`extraction_enabled`. Account `embedding` and `vectordb` are also ROOT-only, including reads.
+Account `parser_api` is ROOT-only and requires a nonblank `api_key`. ADMIN responses
+omit it, and ADMIN PATCH requests touching it, including `null`, are rejected.
 `vectordb` can only be supplied in Account creation `settings`; subsequent additions,
 changes and resets are rejected, including ROOT requests. Cluster
 `embedding`, `vlm`, `query_planner`, `memory`, `feishu`, storage, parser, and
@@ -734,10 +797,10 @@ then read and update it through the configuration endpoints:
 | Method | Path | Authorization | Return value |
 | --- | --- | --- | --- |
 | `POST` | `/api/v1/admin/accounts` | ROOT | New Account; accepts create-time `settings` |
-| `GET` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT, or the target Account's ADMIN | Explicit persisted `settings` for that Account |
-| `PATCH` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT, or the target Account's ADMIN | Merged explicit `settings` |
+| `GET` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT, or the target Account's ADMIN | Explicit Account `settings` plus effective `agent_evolution.enabled` |
+| `PATCH` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT, or the target Account's ADMIN | Updated `settings` plus effective `agent_evolution.enabled` |
 
-`vlm`, `query_planner`, `embedding`, and `vectordb` are sensitive
+`vlm`, `query_planner`, `embedding`, `vectordb`, and `parser_api` are sensitive
 infrastructure settings. Only ROOT can create, read, or modify them. An ADMIN
 GET response for its own Account removes those sections; a PATCH body containing
 any of them immediately returns `403 PERMISSION_DENIED`. ADMIN cannot manage a
@@ -751,14 +814,34 @@ update. Account creation validates `settings` before creating the Account
 directory. A later PATCH first merges the current explicit Account values, then
 validates the complete effective configuration.
 
+**Account Parser Credential**
+
+`settings.parser_api` is dynamic and contains only a required nonblank `api_key`.
+Only ROOT can read, update or reset it:
+
+```json
+{"settings": {"parser_api": {"api_key": "<account-parser-key>"}}}
+```
+
+The external parser uses this key for the owning Account's uploads, submission,
+polling and recovery; operational settings remain in Cluster `parser_api`.
+An absent Account section retains the legacy Cluster key. Queues carry owner and
+remote IDs, without credentials. A running call retains its acquired key;
+the next execution or recovery reads the current key. Rotation must preserve
+access to existing IDs under the same remote identity. Remote errors do not trigger
+credential fallback or resubmission. Account settings use the existing configuration
+source and AGFS file encryption when enabled; this does not encrypt `ov.conf`.
+
 **Other Account Configuration Sections**
 
-In addition to model and vector settings, the following `settings` objects are
+In addition to model, vector and parser settings, the following `settings` objects are
 dynamic and both ROOT and the target Account's ADMIN can read and write them:
 
 | Path | Type and constraints | Meaning |
 | --- | --- | --- |
 | `acl.enabled` | Boolean, default `false` | Whether ACL is enabled for this Account |
+| `output_language_override` | Optional string | Output language for generation; absent or `null` uses Cluster, `""` enables automatic detection |
+| `memory.extraction_enabled` | Boolean, default `true` within a configured section | SessionCommit long-term extraction switch; absent or `null` `memory` uses Cluster, a present empty section uses `true` |
 | `agent_evolution.enabled` | Boolean, default `false` | Whether Agent Evolution is enabled; when the Account omits the whole section, the complete Cluster `agent_evolution` section is used for legacy compatibility |
 | `github.token` | String, default empty string | GitHub access token; an empty string means the Account provides no token |
 | `feishu.app_id` | String, optional | Account Feishu App ID |
@@ -789,14 +872,17 @@ curl http://localhost:1933/api/v1/admin/accounts/acme/configuration \
     "settings": {
       "embedding": {
         "max_retries": 5
+      },
+      "agent_evolution": {
+        "enabled": false
       }
     }
   }
 }
 ```
 
-The response does not expand Cluster values, defaults, or the effective
-Embedding/VectorDB composition. For example, when the response above has no
+Except for the Agent Evolution switch, the response does not expand Cluster
+values, defaults, or the effective Embedding/VectorDB composition. For example, when the response above has no
 Account model binding, actual calls still use the Cluster model binding.
 
 **Update dynamic Account configuration**
@@ -1015,9 +1101,11 @@ compatibility.
 
 ### user_settings
 
-ROOT can manage any User and ADMIN can manage Users in its own account. The
-User settings endpoint currently allowlists only `memory_policy`. The shared
-top-level `memory_types` filter controls which memory schemas may be extracted.
+ROOT can read and update any User's settings. ADMIN can read and update non-GLOBAL
+Users in its own account. USER callers can read and update only their own settings:
+both `account_id` and `user_id` in the URL must match the authenticated identity.
+The endpoint accepts `add_targets`, `memory_policy`, and `ttl`. The shared top-level
+`memory_types` filter controls which memory schemas may be extracted.
 User memories are routed to Self or Peer according to each message's `peer_id`;
 Agent memory types remain Self-only.
 
@@ -1036,14 +1124,42 @@ Content-Type: application/json
 The response contains the User-level `memory_policy`, expanded with its default
 memory types and Agent-memory dependencies. `experiences` expands to
 `cases`, `trajectories`, and `experiences`. The policy is independent of the
-account-level Agent Evolution switch, which is managed through the dedicated
-account endpoint. Updates are backed up to the User's
+account-level Agent Evolution switch, which is managed through Account
+configuration. Updates are backed up to the User's
 `settings/user_config.backup.json` before replacement. A Session without an
 explicit policy reads the latest User policy when it is committed; if the User
 has no override, it falls back to `server.user_config_defaults.memory_policy`
 and then to the kernel default. To clear a persisted User override and resume
 inheriting these defaults, PATCH `{"memory_policy": null}`. An empty object
 `{"memory_policy": {}}` is an explicit policy and does not clear the override.
+
+GET/PATCH responses include the User's effective `add_targets`. Each unset User
+field uses `server.user_config_defaults.add_targets`; `viking://~` resolves for
+the managed User. A field is `null` when neither layer sets it, leaving the add
+operation's own target defaults in control. Explicit `add_resource.to` / `parent`
+and `add_skill.target_uri` still take precedence.
+
+```http
+PATCH /api/v1/admin/accounts/acme/users/alice/settings
+Content-Type: application/json
+
+{"add_targets": {"resource_uri": "viking://~/resources/project-a", "skill_uri": "viking://~/skills"}}
+```
+
+`add_targets` supports sparse updates: omitted fields remain unchanged, a null
+field restores its default, and `add_targets: null` removes all User add-target
+overrides. Resolved defaults are never persisted. New callers use this endpoint;
+USER callers must target their own `account_id` and `user_id`. The following legacy
+endpoints continue to let ordinary users manage their own targets in this release.
+They are deprecated and scheduled for removal in the next release:
+
+```http
+GET /api/v1/user-settings/add-locations
+PATCH /api/v1/user-settings/add-locations
+DELETE /api/v1/user-settings/add-locations
+```
+
+`ttl` still returns explicit User values without filling defaults from other layers.
 
 ---
 
@@ -1085,9 +1201,8 @@ Create a new workspace with its first admin user.
 - `settings` receives structural and effective Embedding/VectorDB pair validation before the Account and its directories are created. A failed validation leaves no Account, user, or configuration file.
 - Account `vlm`, `query_planner`, `embedding`, and `vectordb` are ROOT-only. See [Account Configuration Reference](#account-configuration-reference) above for their schema, lifecycle, and validation. The current Python SDK, CLI, and other SDK Account-creation wrappers do not expose a `settings` argument; use the HTTP API for this capability.
 - Account-level namespace isolation settings are no longer supported. User memory uses user-scoped namespaces, and one-to-many external participants are represented with `peer_id`.
-- `user_config.add_targets.resource_uri` must be a writable resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`.
-- `user_config.add_targets.skill_uri` must be `viking://~/skills` or `viking://agent/skills`. Explicit `viking://user/{user_id}/skills` is not accepted in v1.
-- Legacy spellings `viking://user/resources[/...]` and `viking://user/skills` are still accepted here and normalized to the `viking://~/...` form (the server logs an info message). Everywhere else, the uid-less spelling is rejected at the request boundary — write new configs with `viking://~/...`.
+- `user_config.add_targets.resource_uri` must be a resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://~/peers/{peer_id}/resources` or `viking://~/peers/{peer_id}/resources/...`.
+- `user_config.add_targets.skill_uri` must be `viking://~/skills` or `viking://agent/skills`.
 
 #### 3. Usage Examples
 
@@ -1474,7 +1589,7 @@ Register a new user in a workspace.
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | user_id | str | Yes | - | User ID |
-| role | str | No | "user" | Role to assign. `ROOT` and same-account `ADMIN` may register `"user"` or `"admin"`. ROOT identity comes only from `server.root_api_key`. |
+| role | str | No | "user" | Role to assign. `ROOT` and same-account `ADMIN` may register `"user"` or `"admin"`; only `ROOT` may register `"global"`. ROOT identity comes only from `server.root_api_key`. |
 | seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
 | user_config | object | No | `null` | Initial config for the new user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
 
@@ -1482,10 +1597,10 @@ Register a new user in a workspace.
 - In `trusted` mode, only identity and role are created: no personal key, hash, or key index is generated. The response omits `user_key`, and `seed` is unused.
 - Omit `seed` for the default random API key. Set `OV_KEY_SEED` to a securely generated secret before running a deterministic example; the Go example also requires `import "os"`. Short or predictable seeds make the key guessable.
 - ADMIN can only register users in their own account
+- `"global"` is creation-only. Only ROOT can create, delete, rotate, or modify group membership for a GLOBAL identity. No identity, including ROOT, can change an existing role to or from GLOBAL; delete and recreate instead. ADMIN and USER can observe that a GLOBAL identity exists in user listings, but never receive its credentials or management controls.
 - The `"root"` role cannot be minted through user registration
-- `user_config.add_targets.resource_uri` must be a writable resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`.
-- `user_config.add_targets.skill_uri` must be `viking://~/skills` or `viking://agent/skills`. Explicit `viking://user/{user_id}/skills` is not accepted in v1.
-- Legacy spellings `viking://user/resources[/...]` and `viking://user/skills` are still accepted here and normalized to the `viking://~/...` form (the server logs an info message). Everywhere else, the uid-less spelling is rejected at the request boundary — write new configs with `viking://~/...`.
+- `user_config.add_targets.resource_uri` must be a resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://~/peers/{peer_id}/resources` or `viking://~/peers/{peer_id}/resources/...`.
+- `user_config.add_targets.skill_uri` must be `viking://~/skills` or `viking://agent/skills`.
 
 #### 3. Usage Examples
 
@@ -1611,7 +1726,7 @@ List active users in a workspace. Users with deletion in progress are omitted.
 | role | str | No | null | Filter by role |
 | query | str | No | null | HTTP-only, case-insensitive literal substring match on user IDs |
 | include_summary | bool | No | false | HTTP-only, return paginated users and account statistics in an object |
-| include_credentials | bool | No | true | HTTP-only. ROOT receives all available plaintext keys; ADMIN receives its own plaintext key and masked prefixes for other users; USER receives only its own key. Set false to return `user_id`, `role`, and `api_key_available` without credentials or key prefixes. USER receives availability only for its own row. Availability is true only when the server can read the complete key for a server-side binding; hash-only credentials return false. |
+| include_credentials | bool | No | true | HTTP-only. ROOT receives all available plaintext keys; ADMIN receives its own plaintext key and masked prefixes for other users, while GLOBAL identities report only `api_key_available`; USER receives only its own key. Set false to return `user_id`, `role`, and `api_key_available` without credentials or key prefixes. USER receives availability only for its own row. Availability is true only when the server can read the complete key for a server-side binding; hash-only credentials return false. |
 | limit | int | No | null | Page size (≥1). Omit to return all matches |
 | page | int | No | 1 | 1-based page number; only applies when `limit` is set |
 

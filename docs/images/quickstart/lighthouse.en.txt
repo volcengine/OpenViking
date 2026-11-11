@@ -1,0 +1,17 @@
+# Lighthouse pilot notes
+
+This is a fictional sample for the OpenViking quickstart, not a real customer deployment.
+
+## Pilot environment
+
+The first version of Lighthouse runs in an isolated network without internet access.
+The pilot administrator must prepare an offline installation package and a local storage directory.
+
+## Feedback collection
+
+User feedback is saved to local files. Each week, the pilot administrator exports the files and passes them to the project owner.
+The first version does not provide cloud synchronization. Whether a later version will add it has not been decided.
+
+## Open questions
+
+The pilot end date and the release date of the next version have not been decided.

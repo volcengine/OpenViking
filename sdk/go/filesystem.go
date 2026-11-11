@@ -334,6 +334,28 @@ func (c *Client) BatchWrite(
 	return result, err
 }
 
+// EnsureDirectoryIndex preserves summaries and uses fallbackAbstract only when both are absent.
+// Return readable levels, or queued task metadata when Wait is false.
+func (c *Client) EnsureDirectoryIndex(
+	ctx context.Context,
+	uri string,
+	fallbackAbstract string,
+	opts *EnsureDirectoryIndexOptions,
+) (map[string]any, error) {
+	payload := map[string]any{
+		"uri":               NormalizeURI(uri),
+		"fallback_abstract": fallbackAbstract,
+		"wait":              true,
+	}
+	if opts != nil {
+		payload["wait"] = boolValue(opts.Wait, true)
+		setAny(payload, "telemetry", opts.Telemetry)
+	}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/content/ensure_directory_index", nil, payload, &result)
+	return result, err
+}
+
 // SetTags sets explicit k=v retrieval tags metadata for a file or directory.
 // Valid modes are "replace" (default), "append", and "clear". An empty
 // replace request is a no-op; clear removes existing tags. Recursive applies

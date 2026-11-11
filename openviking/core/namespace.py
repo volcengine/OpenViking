@@ -14,7 +14,7 @@ from openviking_cli.utils.uri import VikingURI
 _CONTENT_TYPES_BY_SCOPE = {
     "user": {"memories": "memory", "resources": "resource", "skills": "skill"},
     "agent": {"skills": "skill"},
-    "system": {"example-skills": "skill"},
+    "system": {"example-skills": "skill", "global": "skill"},
 }
 _PEER_CONTENT_SEGMENTS = frozenset({"memories", "resources"})
 _USER_RELATIVE_ROOT_SEGMENTS = frozenset({"peers", "privacy", "sessions"})
@@ -120,7 +120,11 @@ def _content_segment_index(parts: tuple[str, ...]) -> Optional[int]:
     """Return the content segment for a supported namespace shape."""
     if len(parts) >= 2 and parts[:2] == ("agent", "skills"):
         return 1
-    if len(parts) >= 3 and parts[:3] == ("system", "compile", "example-skills"):
+    if (
+        len(parts) >= 3
+        and parts[:2] == ("system", "compile")
+        and parts[2] in _CONTENT_TYPES_BY_SCOPE["system"]
+    ):
         return 2
     if len(parts) < 2 or parts[0] != "user":
         return None
@@ -186,7 +190,7 @@ def visible_roots(ctx: RequestContext) -> list[str]:
     return [
         "viking://resources",
         "viking://agent",
-        canonical_user_root(ctx),
+        *(ctx.data_access.effective_targets if ctx.data_access else [canonical_user_root(ctx)]),
     ]
 
 
@@ -348,6 +352,7 @@ def is_content_root_uri(
         and classification.content_index is not None
         and len(parts) == classification.content_index + 1
     )
+
 
 def _validate_peer_id_segments(parts: list[str]) -> None:
     if len(parts) >= 4 and parts[0] == "user" and parts[2] == "peers":

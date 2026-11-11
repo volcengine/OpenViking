@@ -60,6 +60,8 @@ description: 把 OpenViking 网关嵌入 Server、用 Docker Compose 或 Helm �
 - 设置了 `OPENVIKING_GATEWAY_ENABLED` 时，它会覆盖 `ov.conf` 中的 `gateway.enabled`，值为 false 时重启后网关仍不开启。
 - `ov.conf` 只读时（例如由 Helm ConfigMap 挂载），Studio 改不了它。请在 Helm values 中设置 `gateway.enabled: true`，或者设置 `OPENVIKING_GATEWAY_ENABLED=true`，然后重启服务。
 
+**数据存放位置。** 未设置 `gateway.storage_path`（或 `OPENVIKING_GATEWAY_STORAGE_PATH`）时，嵌入网关把数据库放在 `<storage.workspace>/gateway`。如果该目录没有网关数据库，而旧的默认目录 `~/.openviking/gateway` 有，服务端继续使用旧目录并打印警告；把目录复制到新位置或设置 `storage_path` 即可消除警告。独立网关仍默认使用 `~/.openviking/gateway`。
+
 **确认已经开启。** 打开服务端的 `/studio/`，在侧边栏选择 **OpenViking 网关**，应看到网关的各个标签页，而不是未开启的提示卡片。本地 dev 模式下，如果默认账号还没有上游，网关启动时会导入服务端可用的 VLM 凭证作为上游，并创建 `default` 上下文配置。导入的 Coding Plan 上游需要确认后才能使用；没有可导入的凭证时，请手动添加上游（见[添加上游](../gateway/07-upstreams.md#add-an-upstream)）。
 
 **让 Agent 修改配置。** 持有 root API 密钥的 Agent 可以通过[运行时配置接口](../api/08-admin.md#runtime-configuration)修改 `ov.conf` 并重启服务。独立网关不提供这组接口。

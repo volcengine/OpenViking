@@ -40,7 +40,7 @@ curl -fsSL https://openviking.ai/install | bash
 
 实现细节与当前已验证的 ZCode 假设见插件目录中的 [README](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) 和 [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/DESIGN.md)。
 
-安装完成后，在 ZCode 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一条提示词接入 Agent](../getting-started/07-agent-onboarding.md)。
+安装完成后，在 ZCode 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一键接入](../getting-started/07-agent-onboarding.md)。
 
 ## Kimi Code 记忆集成
 
@@ -74,7 +74,7 @@ curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harnes
 已验证的宿主契约和版本见
 [`hosts/kimicode/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/kimicode/DESIGN.md)。
 
-安装完成后，在 Kimi Code 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一条提示词接入 Agent](../getting-started/07-agent-onboarding.md)。
+安装完成后，在 Kimi Code 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一键接入](../getting-started/07-agent-onboarding.md)。
 
 ## CodeBuddy Code 记忆集成
 

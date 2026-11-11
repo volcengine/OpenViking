@@ -15,7 +15,7 @@ from openviking.core.namespace import classify_uri
 from openviking.utils.path_safety import safe_join_viking_uri
 from vikingbot.compile import entry
 from vikingbot.compile.hashing import content_hash, digest
-from vikingbot.compile.models import CompileFailure, has_directory_plan, utc_now
+from vikingbot.compile.models import CompileFailure, utc_now
 from vikingbot.compile.ops import finalize as finalize_op
 from vikingbot.compile.ops import map as map_op
 from vikingbot.compile.ops import reduce as reduce_op
@@ -151,11 +151,7 @@ class Pipeline:
         self.noop = False
         failed = False
         try:
-            sources = (
-                []
-                if has_directory_plan(self.changes) and self.changes.get("head")
-                else await self.seed(batches)
-            )
+            sources = await self.seed(batches)
             runtime = await self.files.get("runtime")
             if runtime is None:
                 runtime = {
@@ -163,11 +159,8 @@ class Pipeline:
                     "model_settings": self.model.identity,
                     "time": utc_now(),
                     "skill": self.request.skill,
-                    "wiki_links": self.request.wiki_links,
                 }
                 await self.files.put("runtime", runtime)
-            if runtime.get("wiki_links", False) != self.request.wiki_links:
-                raise ValueError("Wiki link setting differs from the task runtime")
             prompt_runtime = {
                 key: value for key, value in runtime.items() if key in {"time", "skill"}
             }
@@ -299,6 +292,7 @@ class Pipeline:
                         revisions,
                         REVIEW_PROMPT + self.output_instructions,
                         planning_context,
+                        completed_ops={n.op for n in nodes[:position]},
                     )
                     if accepted:
                         decision, suffix = accepted
@@ -450,6 +444,9 @@ class Pipeline:
 
         return {
             "file_count": count,
+            "image_count": sum(
+                self.evidence[r.record_id].get("media_kind") == "image" for r in sources
+            ),
             "range_count": len(sources),
             "total_chars": sum(lengths),
             "file_chars": {
@@ -470,9 +467,10 @@ class Pipeline:
 
         async def write_source(item):
             """Atomically write one (ID, metadata, range); return its record and evidence."""
-            record_id, metadata, text, context = item
+            record_id, metadata, text, context, image = item
             await self.files.put(
-                f"sources/{record_id}", {**metadata, "text": text, "context": context}
+                f"sources/{record_id}",
+                {**metadata, **({"image": image} if image else {"text": text, "context": context})},
             )
             return Record(
                 record_id, f"sources/{record_id}", [record_id], metadata["uri"], {}, []
@@ -499,7 +497,7 @@ class Pipeline:
             for part in batch:
                 metadata = {
                     "uri": part.uri,
-                    "hash": content_hash(part.content),
+                    "hash": part.sha256 or content_hash(part.content),
                     "start_char": part.start_char,
                     "end_char": part.end_char,
                     "start_line": part.start_line,
@@ -507,11 +505,13 @@ class Pipeline:
                     "continues_before": part.continues_before,
                     "continues_after": part.continues_after,
                 }
+                if part.image:
+                    metadata["media_kind"] = "image"
                 record_id = digest(metadata)[:24]
                 if record_id in seen:
                     continue
                 seen.add(record_id)
-                pending.append((record_id, metadata, part.content, part.context))
+                pending.append((record_id, metadata, part.content, part.context, part.image))
                 if len(pending) >= self.limits.source_concurrency:
                     await flush()
         if pending:
@@ -543,7 +543,7 @@ class Pipeline:
                     continue
                 seen.add(record_id)
                 manifest.setdefault(uri, "pending")
-                pending.append((record_id, metadata, text, ""))
+                pending.append((record_id, metadata, text, "", None))
                 if len(pending) >= self.limits.source_concurrency:
                     await flush()
             if pending:

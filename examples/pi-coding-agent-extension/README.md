@@ -329,7 +329,15 @@ Against a current server, that is these 16:
 
 That table is a snapshot of one server, not a contract; `/viking` reports how many tools registered against your own.
 
-The extension also ships the `openviking-memory`, `openviking-skills`, and `ov-experience-memory` skills, which tell the model when to use which of these tools. It adds them through pi's `resources_discover` event, and leaves them out when `mcpEnabled` is `false`.
+The extension also ships the `openviking-memory`, `openviking-skills`, `ov-experience-memory`, and `openviking-rule-search` skills, which tell the model when to use which of these tools. It adds them through pi's `resources_discover` event, and leaves them out when `mcpEnabled` is `false`.
+
+On a server advertising `rule_search`, `openviking_rule_search` takes `task_context`
+and an optional `rule_probability_threshold` (default `0.65`). It returns complete
+compiled Rules for a constraint check before a planned action or response.
+Rule results share the 50 KiB / 2,000-line inline budget. Delivery stops between
+complete Rule blocks so no condition or exception is cut off; omitted Rules are
+explicitly marked with `delivery.complete=false` and a retrieval URI when available.
+Check remaining Rules before acting. Reconnect after a server upgrade to refresh the tools.
 
 The canonical `/viking` command (type `/viking` in pi's chat) displays connection status, session info, how many tools registered — or the handshake error when none did — and accepts `commit` for manual synchronous commit.
 

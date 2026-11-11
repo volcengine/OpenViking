@@ -15,17 +15,22 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 | ROOT | 系统管理员，拥有全部权限 |
 | ADMIN | 工作区管理员，管理本 account 内的用户 |
 | USER | 普通用户 |
+| GLOBAL | Account 范围的专用数据面身份，通常由 agent 使用；只能由 ROOT 创建、销毁和修改，其他角色只能感知其存在 |
 
-| 操作 | ROOT | ADMIN | USER |
-|------|------|-------|------|
-| 创建/删除工作区 | Y | N | N |
-| 列出工作区 | Y | N | N |
-| 列出用户 | Y | Y（本 account） | Y（本 account） |
-| 注册/移除用户 | Y | Y（本 account） | N |
-| 管理用户组和成员 | Y | Y（本 account） | N |
-| 列出 agents（已废弃，返回空列表） | Y | Y（本 account） | N |
-| 重新生成 User Key（仅 API Key 模式） | Y | Y（本 account） | Y（自身密钥） |
-| 在 USER 与 ADMIN 之间变更用户角色 | Y | Y（本 account） | N |
+| 操作 | ROOT | ADMIN | USER | GLOBAL |
+|------|------|-------|------|--------|
+| 创建/删除工作区 | Y | N | N | N |
+| 列出工作区 | Y | N | N | N |
+| 列出用户 | Y | Y（本 account） | Y（本 account） | N |
+| 注册/移除用户 | Y | Y（本 account） | N | N |
+| 创建 GLOBAL 身份 | Y | N | N | N |
+| 查看 GLOBAL 身份存在 | Y | Y（本 account） | Y（本 account） | Y（自身） |
+| 销毁/轮换 GLOBAL、变更其用户组 | Y | N | N | N |
+| 将现有角色与 GLOBAL 相互转换 | N | N | N | N |
+| 管理用户组和成员 | Y | Y（本 account） | N | N |
+| 读取/修改 User settings | Y | Y（本 account，非 GLOBAL） | Y（自身） | N |
+| 重新生成 User Key（仅 API Key 模式） | Y | Y（本 account） | Y（自身密钥） | N |
+| 在 USER 与 ADMIN 之间变更用户角色 | Y | Y（本 account） | N | N |
 
 ## CLI `--sudo` 选项
 
@@ -67,8 +72,8 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | 列出组 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除组及其全部成员关系，允许组内仍有成员 |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 列出成员 |
-| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 幂等添加成员；重复调用返回 `added=true` |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除成员；重复调用返回 `removed=false` |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 按 JSON 请求体 `{"user_ids": [...]}`（1–1000 个已有用户）原子地添加成员；已是成员的用户会跳过，结果为 `added=true` |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 按 JSON 请求体 `{"user_ids": [...]}`（1–1000 个用户 ID）原子地移除成员；至少移除一个成员关系时返回 `removed=true`，否则返回 `removed=false` |
 
 ```bash
 ov --sudo admin create-group acme engineering
@@ -79,11 +84,58 @@ ov --sudo admin remove-group-member acme engineering alice
 ov --sudo admin delete-group acme engineering
 ```
 
+通过 HTTP 移除成员时，在请求体中传入用户 ID：
+
+```bash
+curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/groups/engineering/members \
+  -H "X-API-Key: your-admin-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"user_ids": ["alice", "bob"]}'
+```
+
 要直接删除仍有成员的组，可调用 `DELETE /api/v1/admin/accounts/acme/groups/engineering`。
 
 Python SDK 提供对应的 `admin_create_group`、`admin_list_groups`、`admin_list_group_members`、`admin_add_group_member`、`admin_remove_group_member` 和 `admin_delete_group`；Go SDK 使用相同名称的 PascalCase 方法。
 
 ## API 参考
+
+### metric_inventory
+
+流式导出供离线报表使用的元数据清单。即使只扫描一个账号，也要求 **ROOT** 认证。清单包含账号作用域、用户标识与角色、文件元数据、技能元数据及向量记录元数据；不包含文件正文、向量值或凭证。
+
+**HTTP API**
+
+```http
+GET /api/v1/admin/metric-inventory?account_id=acme&page_size=500
+X-API-Key: your-root-api-key
+```
+
+| 查询参数     | 类型    | 默认值 | 说明                                                     |
+| ------------ | ------- | ------ | -------------------------------------------------------- |
+| `account_id` | string  | 不传   | 可选的完整账号 ID；不传时扫描所有已注册账号。            |
+| `page_size`  | integer | `500`  | 内部扫描批次大小，范围 `1` 至 `1000`，不限制导出总行数。 |
+
+响应为流式 `application/x-ndjson`，每行一个 JSON 对象，不使用常规的 `status` / `result` 包装。每个对象带有 `event_name`，其值为 `inventory_scope`、`inventory_user`、`inventory_file`、`inventory_skill`、`inventory_vector_record`，或最终的 `inventory_batch_end` 标记。
+
+```bash
+curl --no-buffer 'http://localhost:1933/api/v1/admin/metric-inventory?account_id=acme&page_size=500' \
+  -H 'X-API-Key: your-root-api-key'
+```
+
+最后一行说明扫描是否完成：
+
+```json
+{
+  "event_name": "inventory_batch_end",
+  "status": "complete",
+  "row_count": 0,
+  "scan_started_at": 1794268800000,
+  "scan_finished_at": 1794268800010,
+  "consistency": "scan_window"
+}
+```
+
+以上标记仅为示例。导出描述一个扫描时间窗口，不是原子快照；`row_count` 为最终标记之前已输出的行数。扫描失败（包括指定的 `account_id` 不存在）时，最终标记的 `status` 为 `"failed"`，且没有 `consistency` 字段。开始流式响应后，仅有 HTTP 成功状态不足以证明扫描完整；消费方必须收到最终 `complete` 标记，才能替换现有清单。缺失最终标记或收到失败标记均表示导出不完整。
 
 ### account / user 存在性查询
 
@@ -166,7 +218,8 @@ curl http://localhost:1933/api/v1/admin/agent-evolution \
 `enabled` 依次解析 Account 运行时覆盖、Cluster 运行时覆盖，以及
 `server.agent_evolution.enabled` 提供的启动值。
 
-现有接口作为 deprecated 兼容适配器保留：
+现有接口本版本继续作为 deprecated 兼容适配器保留，计划下个版本移除。
+新调用使用 Account configuration；SDK 不再提供该旧接口的方法。
 
 ```http
 PUT /api/v1/admin/agent-evolution
@@ -177,7 +230,8 @@ Content-Type: application/json
 
 ### account_settings
 
-该接口已 deprecated。ROOT 可管理任意 account，ADMIN 仅可管理自己所属的 account。
+该接口已 deprecated，本版本继续兼容，计划下个版本移除。
+ROOT 可管理任意 account，ADMIN 仅可管理自己所属的 account。
 接口保留原有 ACL 与 Agent Evolution 请求和响应语义：
 
 ```http
@@ -197,6 +251,8 @@ Content-Type: application/json
 `acl.enabled` 默认为 `false`。关闭时，共享资源按原有规则完全共享，不执行 ACL
 鉴权。开启后，账号内新增共享资源会写入 ACL，并对带 ACL 的共享资源执行鉴权；
 已有且未设置 ACL 的内容不会迁移或改权。重新关闭后，已有 ACL 也不再参与访问判断。
+
+CLI 已改为调用 Account configuration：
 
 ```bash
 ov --sudo admin set-account-settings acme --acl-enabled true
@@ -438,16 +494,20 @@ Content-Type: application/json
 {"settings": {"agent_evolution": {"enabled": true}}}
 ```
 
-`settings` 始终表示目标层的显式设置值。PATCH 为三态语义：字段缺失表示不修改，
-`null` 表示删除当前层配置，具体值表示更新。
+Cluster 的 `settings` 返回显式运行时设置。Account 的 GET/PATCH 响应在显式
+设置之外，始终包含 `settings.agent_evolution.enabled`，其值按 Account 覆盖、
+Cluster 运行时覆盖、启动默认值解析。其他字段不补全默认值；读取不会写入配置。
+PATCH 为三态语义：字段缺失表示不修改，`null` 表示删除当前层配置，具体值表示更新。
+删除 Account 的 `agent_evolution` 覆盖后，响应立即返回重新解析出的生效开关值。
 
 当前 Cluster 运行时配置面仅包含 `agent_evolution`。Account 配置面包含
-`feishu`、`agent_evolution`、`github`、`acl`、`vlm` 和 `query_planner`，
+`output_language_override`、`memory`、`feishu`、`parser_api`、`agent_evolution`、`github`、`acl`、`vlm` 和 `query_planner`，
 这些配置均可动态修改。Account 的
-`vlm`、`query_planner`、`embedding` 和 `vectordb` 仅 ROOT 可读写，ADMIN 的读取
+`vlm`、`query_planner`、`embedding`、`vectordb` 和 `parser_api` 仅 ROOT 可读写，ADMIN 的读取
 响应过滤这些配置，写入请求在读取配置前拒绝。每段已配置的 `vlm` 或
 `query_planner` 都必须包含 `model` 和非空 `credentials` 数组，`timeout` 可选。
-`memory` 不在当前 API 范围内。
+Account `memory` 仅开放 `extraction_enabled`。
+Account `parser_api` 必须包含非空白 `api_key`；ADMIN 修改该段（包括 `null`）均被拒绝。
 `vectordb` 只能随 Account 创建时的 `settings` 提交，创建后包括 ROOT 在内均不可
 新增、修改或重置。Cluster 的 `embedding`、`vlm`、`query_planner`、
 `memory`、`feishu`、存储、解析器和检索配置没有声明为运行时字段，因此仍然只能
@@ -623,11 +683,11 @@ Account 配置通过创建接口的 `settings` 初始化，并通过 configurati
 | 方法 | 路径 | 权限 | 返回值 |
 | --- | --- | --- | --- |
 | `POST` | `/api/v1/admin/accounts` | ROOT | 新 Account；可接受创建期 `settings` |
-| `GET` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT；或目标 Account 的 ADMIN | 该 Account 显式持久化的 `settings` |
-| `PATCH` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT；或目标 Account 的 ADMIN | 合并后的显式 `settings` |
+| `GET` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT；或目标 Account 的 ADMIN | Account 显式设置及生效的 `agent_evolution.enabled` |
+| `PATCH` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT；或目标 Account 的 ADMIN | 更新后的设置及生效的 `agent_evolution.enabled` |
 
-`vlm`、`query_planner`、`embedding` 和 `vectordb` 是敏感基础设施配置：只有 ROOT
-可以创建、读取或修改。ADMIN 对自己的 Account 调用 GET 时，响应会移除这四段；若
+`vlm`、`query_planner`、`embedding`、`vectordb` 和 `parser_api` 是敏感基础设施配置：只有 ROOT
+可以创建、读取或修改。ADMIN 对自己的 Account 调用 GET 时，响应会移除这些段；若
 PATCH body 包含其中任一段，立即返回 `403 PERMISSION_DENIED`。ADMIN 也不能管理
 其他 Account。所有结构或业务校验错误返回 `400 INVALID_ARGUMENT`，不存在的 Account
 返回 `404 NOT_FOUND`。
@@ -637,14 +697,31 @@ PATCH body 包含其中任一段，立即返回 `403 PERMISSION_DENIED`。ADMIN 
 持久化任何部分更新。创建请求会在创建账号目录前校验 `settings`；后续 PATCH 则先合并
 当前 Account 显式值，再校验完整有效配置。
 
+**Account 解析凭证**
+
+`settings.parser_api` 可动态修改，仅包含必填且非空白的 `api_key`。
+只有 ROOT 可以读取、修改或重置：
+
+```json
+{"settings": {"parser_api": {"api_key": "<account-parser-key>"}}}
+```
+
+外部解析的上传、提交、轮询和恢复使用任务所属 Account 的 Key，运行参数仍由
+Cluster `parser_api` 维护。Account 未配置该段时保留旧 Cluster Key 兼容路径。
+队列保存 owner 和远端 ID，不保存凭证。一次执行保持已取得的 Key，下次执行或恢复
+读取最新 Key。轮换必须保持同一远端身份并可访问已有 ID；远端失败不触发凭证回退
+或重新提交。配置沿用现有配置源，开启 AGFS 文件加密时加密存储；这不加密 `ov.conf`。
+
 **其他 Account 配置段**
 
-除模型与向量配置外，以下 `settings` object 均为动态字段，ROOT 和目标 Account 的 ADMIN
+除模型、向量和解析配置外，以下 `settings` object 均为动态字段，ROOT 和目标 Account 的 ADMIN
 都可读写：
 
 | 路径 | 类型和约束 | 含义 |
 | --- | --- | --- |
 | `acl.enabled` | boolean，默认 `false` | 是否启用该 Account 的 ACL |
+| `output_language_override` | string，可选 | 生成内容的语言；缺省或 `null` 使用 Cluster，`""` 启用自动判断 |
+| `memory.extraction_enabled` | boolean，section 内默认 `true` | SessionCommit 长期记忆抽取开关；`memory` 整段缺省或 `null` 使用 Cluster，显式空 section 使用 `true` |
 | `agent_evolution.enabled` | boolean，默认 `false` | 是否启用 Agent Evolution；Account 未设置整个 section 时，为兼容旧行为使用完整 Cluster `agent_evolution` section |
 | `github.token` | string，默认空字符串 | GitHub 访问 token；空字符串表示该 Account 未提供 token |
 | `feishu.app_id` | string，可选 | Account Feishu App ID |
@@ -658,7 +735,7 @@ PATCH body 包含其中任一段，立即返回 `403 PERMISSION_DENIED`。ADMIN 
 section 时使用完整 Cluster Feishu 配置；一旦设置，以上 Account 字段使用显式值或 Feishu
 默认值，只有 `domain` 仍来自 Cluster。`github` 和 `acl` 不回退到 Cluster。
 
-**读取 Account 显式配置**
+**读取 Account 配置**
 
 ```bash
 curl http://localhost:1933/api/v1/admin/accounts/acme/configuration \
@@ -673,13 +750,16 @@ curl http://localhost:1933/api/v1/admin/accounts/acme/configuration \
     "settings": {
       "embedding": {
         "max_retries": 5
+      },
+      "agent_evolution": {
+        "enabled": false
       }
     }
   }
 }
 ```
 
-响应不会展开 Cluster 值、默认值或最终生效的 Embedding/VectorDB 组合。例如上例没有
+除 Agent Evolution 开关外，响应不会展开 Cluster 值、默认值或最终生效的 Embedding/VectorDB 组合。例如上例没有
 Account 模型 binding 时，实际调用仍会使用 Cluster 模型 binding。
 
 **修改动态 Account 配置**
@@ -877,8 +957,9 @@ Account 路由，ROOT 代表某个 Account 执行业务时也遵守这一规则�
 
 ### user_settings
 
-ROOT 可管理任意 User，ADMIN 仅可管理所属 account 内的 User。User 配置接口当前
-仅允许修改 `memory_policy`。顶层统一的 `memory_types` 控制允许抽取的记忆类型。
+ROOT 可读写任意 User 的配置，ADMIN 可读写所属 account 内非 GLOBAL User 的配置，
+USER 仅可读写自己的配置：URL 中的 `account_id` 和 `user_id` 必须同时匹配认证身份。
+User 配置接口支持 `add_targets`、`memory_policy` 和 `ttl`。顶层统一的 `memory_types` 控制允许抽取的记忆类型。
 用户记忆根据每条 Message 的 `peer_id` 自动写入 Self 或 Peer；Agent 记忆始终只写入
 Self。
 
@@ -896,12 +977,37 @@ Content-Type: application/json
 
 响应直接返回 User 级 `memory_policy`，并展开默认记忆类型和 Agent 记忆依赖；配置
 `experiences` 时会展开为 `cases`、`trajectories`、`experiences`；
-该结果不受 account 级 Agent 进化开关影响，Account 开关由独立接口管理。
+该结果不受 account 级 Agent 进化开关影响，Account 开关通过 Account configuration 管理。
 更新前会备份到该 User 的 `settings/user_config.backup.json`。未显式配置策略的
 Session 在 commit 时读取该 User 最新策略；User 未覆盖时，依次回退到
 `server.user_config_defaults.memory_policy` 和内核默认策略。若要清除已持久化的
 User override 并重新继承上述默认值，请 PATCH `{"memory_policy": null}`。
 `{"memory_policy": {}}` 表示显式策略，不会清除 override。
+
+`add_targets` 在 GET/PATCH 响应中返回当前 User 生效的添加位置：User 未设置某个
+字段时使用 `server.user_config_defaults.add_targets`，`viking://~` 按被管理的 User
+展开。两处都未设置时，该字段为 `null`，由添加操作采用自身的默认目标规则。
+`add_resource` 的显式 `to` / `parent`、`add_skill` 的显式 `target_uri` 仍然优先。
+
+```http
+PATCH /api/v1/admin/accounts/acme/users/alice/settings
+Content-Type: application/json
+
+{"add_targets": {"resource_uri": "viking://~/resources/project-a", "skill_uri": "viking://~/skills"}}
+```
+
+`add_targets` 支持逐字段更新：省略字段表示保留，字段设为 `null` 恢复该项默认值，
+整个 `add_targets` 设为 `null` 清除用户的添加位置设置。返回的默认值不会写回存储。
+新调用通过此接口维护添加位置，USER 使用自身的 `account_id` 和 `user_id`。
+以下旧接口本版本继续保留普通用户管理自身添加位置的能力，已标记 deprecated，计划下个版本移除：
+
+```http
+GET /api/v1/user-settings/add-locations
+PATCH /api/v1/user-settings/add-locations
+DELETE /api/v1/user-settings/add-locations
+```
+
+`ttl` 仍返回用户显式设置的值，不在此接口补全其他层级的 TTL。
 
 ---
 
@@ -943,9 +1049,8 @@ User override 并重新继承上述默认值，请 PATCH `{"memory_policy": null
 - `settings` 在账号和目录创建前完成结构与有效 Embedding/VectorDB 联合校验。校验失败不会留下 Account、用户或配置文件。
 - Account `vlm`、`query_planner`、`embedding` 和 `vectordb` 是 ROOT-only 配置；字段 schema、生命周期和校验见上文 [Account Configuration 接口参考](#account-configuration-接口参考)。当前 Python SDK、CLI 及其他 SDK 的创建账号封装尚未暴露 `settings` 参数，使用此能力请直接调用 HTTP API。
 - 不再支持 account 级 namespace 隔离配置。用户记忆使用 user-scoped namespace，一对多外部参与者通过 `peer_id` 表达。
-- `user_config.add_targets.resource_uri` 必须是可写资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。
-- `user_config.add_targets.skill_uri` 只能是 `viking://~/skills` 或 `viking://agent/skills`。v1 不支持显式写成 `viking://user/{user_id}/skills`。
-- 旧写法兼容：`viking://user/resources[/...]` 和 `viking://user/skills` 在这里仍会被接受，并归一化为 `viking://~/...` 形式（服务端会打印一条 info 日志）。在其他位置，无 uid 的写法会在请求入口被拒绝——新配置请直接写 `viking://~/...`。
+- `user_config.add_targets.resource_uri` 必须是资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://~/peers/{peer_id}/resources` 或 `viking://~/peers/{peer_id}/resources/...`。
+- `user_config.add_targets.skill_uri` 只能是 `viking://~/skills` 或 `viking://agent/skills`。
 
 #### 3. 使用示例
 
@@ -1330,7 +1435,7 @@ ov --sudo task status <task_id>
 |------|------|------|--------|------|
 | account_id | str | 是 | - | 工作区 ID |
 | user_id | str | 是 | - | 用户 ID |
-| role | str | 否 | "user" | 要分配的角色。`ROOT` 和同 account 的 `ADMIN` 可直接注册 `"user"` 或 `"admin"`。ROOT 身份只来自 `server.root_api_key`。 |
+| role | str | 否 | "user" | 要分配的角色。`ROOT` 和同 account 的 `ADMIN` 可直接注册 `"user"` 或 `"admin"`；只有 `ROOT` 可以注册 `"global"`。ROOT 身份只来自 `server.root_api_key`。 |
 | seed | str | 否 | `null` | 可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
 | user_config | object | 否 | `null` | 新用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri` 和 `memory_policy` |
 
@@ -1338,10 +1443,10 @@ ov --sudo task status <task_id>
 - 在 `trusted` 模式下，只创建身份和角色，不生成个人密钥、密钥哈希或密钥索引；响应不包含 `user_key`，`seed` 不参与处理。
 - 省略 `seed` 时随机生成 API Key。运行确定性示例前，将 `OV_KEY_SEED` 设为安全生成的秘密值；Go 示例还需导入 `os`。不要使用短字符串或可预测内容作为 seed。
 - ADMIN 只能在自己所属的 account 中注册用户
+- `"global"` 仅用于创建。只有 ROOT 可以创建、销毁、轮换或修改 GLOBAL 身份的用户组；任何身份（包括 ROOT）都不能将现有角色与 GLOBAL 相互转换，需要销毁后重建。ADMIN 和 USER 可以在用户列表中感知 GLOBAL 身份的存在，但不会获得其凭据或管理入口。
 - 无法通过用户注册接口直接创建 `"root"` 角色
-- `user_config.add_targets.resource_uri` 必须是可写资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。
-- `user_config.add_targets.skill_uri` 只能是 `viking://~/skills` 或 `viking://agent/skills`。v1 不支持显式写成 `viking://user/{user_id}/skills`。
-- 旧写法兼容：`viking://user/resources[/...]` 和 `viking://user/skills` 在这里仍会被接受，并归一化为 `viking://~/...` 形式（服务端会打印一条 info 日志）。在其他位置，无 uid 的写法会在请求入口被拒绝——新配置请直接写 `viking://~/...`。
+- `user_config.add_targets.resource_uri` 必须是资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://~/peers/{peer_id}/resources` 或 `viking://~/peers/{peer_id}/resources/...`。
+- `user_config.add_targets.skill_uri` 只能是 `viking://~/skills` 或 `viking://agent/skills`。
 
 #### 3. 使用示例
 
@@ -1474,7 +1579,7 @@ ov admin register-user acme bob-private --role user \
 **说明：**
 - 结果按创建顺序返回
 - ADMIN 和 USER 只能列出自己所属 account 中的用户。
-- ROOT 可通过 `api_key` 获取全部已存储的明文密钥。ADMIN 获取自身明文及他人的打码 `key_prefix`。使用个人 API Key 认证的 USER 仅获取自身已存储密钥，其他行不包含 `api_key` 或 `key_prefix`。OAuth 等其他认证方式不授予 USER 查看已存储凭据的权限。自身匹配是严格匹配：列表 account、行内 user ID 以及三段式 key 内嵌的 account/user 段必须全部等于调用方认证身份；不匹配的 key 对 ADMIN 打码，对 USER 隐藏。
+- ROOT 可通过 `api_key` 获取全部已存储的明文密钥。ADMIN 获取自身明文及他人的打码 `key_prefix`；GLOBAL 身份的凭据只由 ROOT 可见，ADMIN 只能看到 `api_key_available`，不返回 `api_key` 或 `key_prefix`。使用个人 API Key 认证的 USER 仅获取自身已存储密钥，其他行不包含 `api_key` 或 `key_prefix`。OAuth 等其他认证方式不授予 USER 查看已存储凭据的权限。自身匹配是严格匹配：列表 account、行内 user ID 以及三段式 key 内嵌的 account/user 段必须全部等于调用方认证身份；不匹配的 key 对 ADMIN 打码，对 USER 隐藏。
 - ADMIN 打码保留密钥前两段和 secret 的最后 4 个字符，secret 中其余每个字符均替换为 `*`；secret 不超过 4 个字符或密钥格式无效时完全隐藏。仅存哈希的凭据无法恢复明文，其已有前缀仅 ROOT/ADMIN 及凭据所属 USER 可见。
 - 打码在服务端执行，同时覆盖 HTTP 和 MCP 的 `list_users(include_credentials=true)`，因此 CLI/SDK 的 JSON 输出也受保护。客户端只能将 `key_prefix` 用于展示，切换身份时需要另行提供可用密钥。
 - `ov admin list-users` 默认还会在 CLI 侧对明文 `api_key` 行使用相同格式打码，table 和 JSON 输出保持一致，并在 stderr 打印提示。传入 `--reveal-api-keys` 可输出明文：ROOT 会显示全部密钥，ADMIN/USER 仍只能看到自身密钥；其他行对 ADMIN 打码，对 USER 完全隐藏密钥和前缀。该 flag 只影响 CLI 渲染，不改变服务端响应。table 输出会把服务端的 `api_key`（明文或 CLI 打码值）与 `key_prefix` 合并为同一个 `api_key` 列；JSON 输出保留服务端的字段名。

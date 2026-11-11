@@ -239,6 +239,7 @@ class OpenGaussConfig(OpenGaussIndexConfig):
     )
     connection_pool_min_size: int = Field(default=1, ge=1, le=64)
     connection_pool_max_size: int = Field(default=8, ge=1, le=128)
+    candidate_limit: int = Field(default=1000, ge=1, le=10000)
 
     model_config = {"extra": "forbid"}
 
@@ -409,6 +410,15 @@ class VectorDBBackendConfig(BaseModel):
         ),
     )
 
+    enable_path_glob: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Enable remote PathGlob for this vector backend. "
+            "True enables it, False disables it, and None uses the adapter's default. "
+            "VikingDB and Volcengine adapters enable it by default."
+        ),
+    )
+
     name: Optional[str] = Field(default=COLLECTION_NAME, description="Collection name for VectorDB")
 
     path: Optional[str] = Field(
@@ -538,8 +548,6 @@ class VectorDBBackendConfig(BaseModel):
                 raise ValueError("VectorDB opengauss backend requires 'opengauss' config")
             if not self.opengauss.host:
                 raise ValueError("VectorDB opengauss backend requires 'opengauss.host' to be set")
-            if self.sparse_weight > 0.0:
-                raise ValueError("VectorDB opengauss backend does not support sparse_weight > 0")
             distance = (self.distance_metric or "cosine").lower()
             if distance not in _OPENGAUSS_DISTANCE_METRICS:
                 raise ValueError(

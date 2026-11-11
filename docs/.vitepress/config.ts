@@ -135,13 +135,13 @@ function buildLlmsTxt(siteConfig: any) {
 
   const allFiles = collectAllMdFiles(srcDir)
   const files = documentationSections('en').flatMap(section =>
-    section.groups.flatMap(group => group.pages.map(page => ({
+    section.groups.flatMap(group => group.pages.filter(page => !page.reference).map(page => ({
       relativePath: `en/${page.path}.md`, absPath: path.join(srcDir, `en/${page.path}.md`)
     })))
   )
   const sections = new Map<string, { title: string; url: string }[]>()
   for (const section of documentationSections('en')) {
-    sections.set(section.en, section.groups.flatMap(group => group.pages.map(page => ({
+    sections.set(section.en, section.groups.flatMap(group => group.pages.filter(page => !page.reference).map(page => ({
       title: `${group.en} — ${docPageTitle('en', page.path)}`, url: `${siteUrl}${base}/en/${page.path}`
     }))))
   }

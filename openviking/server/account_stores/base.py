@@ -8,6 +8,7 @@ from typing_extensions import deprecated
 
 from openviking.server.account_stores.models import (
     AccountSummary,
+    AuthSnapshot,
     DeletionRecord,
     GroupSummary,
     UsersPage,
@@ -17,6 +18,11 @@ from openviking.server.account_stores.models import (
 
 class AccountStore(ABC):
     """Nominal contract implemented by every complete account store provider."""
+
+    @property
+    def read_only(self) -> bool:
+        """Whether management writes must be rejected before acquiring locks."""
+        return False
 
     @abstractmethod
     async def load(self) -> None: ...
@@ -33,6 +39,8 @@ class AccountStore(ABC):
         self,
         account_id: str,
         admin_user_id: str,
+        *,
+        lease_ref: object | None = None,
     ) -> None: ...
 
     @abstractmethod
@@ -41,6 +49,8 @@ class AccountStore(ABC):
         account_id: str,
         admin_user_id: str,
         api_key: str,
+        *,
+        lease_ref: object | None = None,
     ) -> None: ...
 
     @abstractmethod
@@ -59,9 +69,7 @@ class AccountStore(ABC):
     @abstractmethod
     async def get_user(self, account_id: str, user_id: str) -> UserSummary | None: ...
 
-    async def get_user_membership(
-        self, account_id: str, user_id: str
-    ) -> UserSummary | None:
+    async def get_user_membership(self, account_id: str, user_id: str) -> UserSummary | None:
         """Point-read one user for the admin membership probe.
 
         Mirrors ``get_account``: stores whose in-memory state can lag a peer
@@ -75,9 +83,7 @@ class AccountStore(ABC):
         "get_user_for_management is a FileStore compatibility path and will be removed.",
         category=None,
     )
-    async def get_user_for_management(
-        self, account_id: str, user_id: str
-    ) -> UserSummary | None:
+    async def get_user_for_management(self, account_id: str, user_id: str) -> UserSummary | None:
         """Return one user for an explicit management read."""
         return await self.get_user(account_id, user_id)
 
@@ -122,10 +128,16 @@ class AccountStore(ABC):
     async def get_user_group_ids(self, account_id: str, user_id: str) -> tuple[str, ...]: ...
 
     @abstractmethod
-    async def add_group_member(self, account_id: str, group_id: str, user_id: str) -> bool: ...
+    async def add_group_members(self, account_id: str, group_id: str, user_ids: list[str]) -> bool:
+        """Atomically add existing active users, ignoring duplicate memberships."""
+        ...
 
     @abstractmethod
-    async def remove_group_member(self, account_id: str, group_id: str, user_id: str) -> bool: ...
+    async def remove_group_members(
+        self, account_id: str, group_id: str, user_ids: list[str]
+    ) -> bool:
+        """Atomically remove memberships, returning whether any member was removed."""
+        ...
 
     @abstractmethod
     async def delete_group(self, account_id: str, group_id: str) -> None: ...
@@ -174,6 +186,30 @@ class AccountStore(ABC):
     ) -> list[tuple[str, str | None, DeletionRecord]]: ...
 
     # Authentication
+    async def get_auth_snapshot(
+        self,
+        api_key: str,
+        *,
+        account_id_hint: str | None = None,
+        user_id_hint: str | None = None,
+    ) -> AuthSnapshot | None:
+        """Resolve authentication; providers may aggregate these reads into one query."""
+        binding = await self.verify_api_key(
+            api_key, account_id_hint=account_id_hint, user_id_hint=user_id_hint
+        )
+        if binding is None:
+            return None
+        account_id, user_id = binding
+        user = await self.get_user(account_id, user_id)
+        if user is None or await self.get_deletion(account_id, user_id) is not None:
+            return None
+        return AuthSnapshot(
+            account_id=account_id,
+            user_id=user_id,
+            role=user["role"],
+            group_ids=tuple(await self.get_user_group_ids(account_id, user_id)),
+        )
+
     @abstractmethod
     async def verify_api_key(
         self,
