@@ -8,6 +8,7 @@ import {
 import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useOverlayPosition } from '../../shared/components/overlay/use-overlay-position.js';
+import { navigatePopoverTab } from './popover-tab-navigation.js';
 
 const subscribe = () => () => {};
 
@@ -89,6 +90,8 @@ export function BotPopover({
             hide();
         },
         onKeyDown: (event) => {
+          if (open && !native)
+            navigatePopoverTab(event, anchor.current, surface, close);
           if (open && event.key === 'Escape') {
             event.preventDefault();
             event.stopPropagation();
@@ -168,7 +171,7 @@ export function BotPopover({
             <div
               ref={setSurface}
               id={id}
-              popover="auto"
+              popover={native ? 'auto' : undefined}
               role="dialog"
               tabIndex={-1}
               aria-label={label}

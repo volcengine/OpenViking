@@ -104,6 +104,11 @@ test('overflow controls support focus, Escape, and removal down to the visible l
     let dialog = document.querySelector(
       '[role="dialog"][aria-label="References"]',
     );
+    assert.equal(
+      dialog.hasAttribute('popover'),
+      false,
+      'the manual fallback owns visibility',
+    );
     assert.equal(more.getAttribute('aria-expanded'), 'true');
     assert.equal(
       document.activeElement,
@@ -111,7 +116,19 @@ test('overflow controls support focus, Escape, and removal down to the visible l
       'opening on focus must not move focus',
     );
     const open = dialog.querySelector('button');
-    await act(() => open.focus());
+    await key(more, 'Tab');
+    assert.equal(
+      document.activeElement?.getAttribute('aria-label'),
+      `Open ${source[5].uri}`,
+      'Tab enters the overflow controls',
+    );
+    await key(open, 'Tab', { shiftKey: true });
+    assert.equal(
+      document.activeElement?.textContent,
+      '+2',
+      'Shift+Tab returns to the trigger',
+    );
+    await key(more, 'Tab');
     await key(open, 'Escape');
     assert.equal(more.getAttribute('aria-expanded'), 'false');
     assert.equal(document.activeElement, more);
@@ -150,6 +167,34 @@ test('overflow controls support focus, Escape, and removal down to the visible l
     assert.equal(
       document.querySelector('[role="dialog"][aria-label="References"]'),
       null,
+    );
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('fallback Tab after the last overflow control resumes the trigger tab order', async () => {
+  const host = await mount();
+  try {
+    const more = host.container.querySelector('.ov-viking-bot__reference-more');
+    await act(() => more.focus());
+    const dialog = document.querySelector(
+      '[role="dialog"][aria-label="References"]',
+    );
+    const controls = dialog.querySelectorAll('button');
+    const last = controls[controls.length - 1];
+    await act(() => last.focus());
+    const event = await key(last, 'Tab');
+    assert.equal(more.getAttribute('aria-expanded'), 'false');
+    assert.equal(
+      document.activeElement?.textContent,
+      '+2',
+      'native Tab traversal resumes beside the trigger',
+    );
+    assert.equal(
+      event.defaultPrevented,
+      false,
+      'Tab can continue outside the non-modal popup',
     );
   } finally {
     await host.dispose();
