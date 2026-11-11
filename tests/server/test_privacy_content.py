@@ -104,6 +104,36 @@ async def test_structured_content_write_read_scan_and_rotation(
     assert decode(await service.fs.read(uri, ctx=owner)) == expected
 
 
+@pytest.mark.parametrize(
+    "source,expected",
+    [
+        (
+            "display: &label DemoLabel\nlookup: {*label: 23}\n",
+            {"display": None, "lookup": {"DemoLabel": 23}},
+        ),
+        ("? &label DemoLabel\n: 23\ndisplay: *label\n", {"DemoLabel": 23, "display": None}),
+    ],
+)
+async def test_yaml_alias_keys_survive_write_and_default_read(service, owner, source, expected):
+    await patch_user_config(
+        service.viking_fs,
+        owner,
+        UserSettingsPatch.model_validate({"privacy": {"mode": "auto_strict"}}),
+    )
+    await service.privacy_configs.upsert(owner, "credential", "label", {"key": "DemoLabel"})
+    reference = build_privacy_field_reference(owner.user.user_id, "credential", "label", "key")
+    expected = {**expected, "display": reference}
+    uri = "viking://resources/alias/config.yaml"
+    await service.viking_fs.write_file_bytes(uri, source.encode(), ctx=owner)
+    assert yaml.safe_load(await service.fs.read_visible(uri, ctx=owner)) == expected
+    assert await service.viking_fs.read_file(uri, ctx=owner) == source
+    await service.fs.write(uri, source, ctx=owner, wait=True)
+    stored = await service.viking_fs.read_file(uri, ctx=owner)
+    assert yaml.safe_load(stored) == expected
+    assert yaml.safe_load(await service.fs.read_visible(uri, ctx=owner)) == expected
+    assert await service.fs.read(uri, ctx=owner) == stored
+
+
 @pytest.mark.parametrize("path", ["content", "batch", "storage"])
 @pytest.mark.parametrize("mode", ["auto", "auto_strict"])
 async def test_ordinary_append_protection_across_write_paths(service, owner, path, mode):

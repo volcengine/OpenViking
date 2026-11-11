@@ -7,7 +7,6 @@ import pytest
 import yaml
 
 from openviking.privacy.content import PrivacyContent
-from openviking_cli.exceptions import InvalidArgumentError
 
 REFERENCE = "{{ov_privacy:alice:viking://~/privacy/credential/demo#/values/key}}"
 
@@ -43,8 +42,25 @@ REFERENCE = "{{ov_privacy:alice:viking://~/privacy/credential/demo#/values/key}}
             "...\n---\n...\n---\nkey: &shared private-value\nitems: [42, true, null, *shared]\n",
             lambda value: list(yaml.safe_load_all(value)),
         ),
+        (
+            "yaml",
+            "display: &label private-value\ncopy: *label\nlookup: {*label: 23}\n",
+            yaml.safe_load,
+        ),
+        (
+            "yaml",
+            "? &label private-value\n: 23\ndisplay: *label\ncopy: *label\n",
+            yaml.safe_load,
+        ),
     ],
-    ids=["json", "jsonl-unicode", "yaml-blocks", "yaml-stream"],
+    ids=[
+        "json",
+        "jsonl-unicode",
+        "yaml-blocks",
+        "yaml-stream",
+        "value-key-alias",
+        "key-value-alias",
+    ],
 )
 def test_structured_values_roundtrip_without_changing_keys_or_types(
     suffix, source, parse, monkeypatch
@@ -93,15 +109,73 @@ def test_markdown_frontmatter_and_body_use_their_own_encoding():
 @pytest.mark.parametrize(
     "source",
     [
-        "? &key private-value\n: body\ncopy: *key\n",
-        "display: &key private-value\nlookup: {*key: 23}\n",
         "display: &key [private-value]\nlookup: {? *key: 23}\n",
+        "display: &key {name: private-value}\nlookup: {? *key: 23}\n",
+        "display: &key [*key, private-value]\nlookup: {? *key: 23}\n",
+        "display: &key {self: *key, name: private-value}\nlookup: {? *key: 23}\n",
     ],
 )
 def test_yaml_alias_cannot_change_a_key_indirectly(source, monkeypatch):
     for loader in (yaml.SafeLoader, getattr(yaml, "CSafeLoader", yaml.SafeLoader)):
         monkeypatch.setattr("openviking.privacy.content._YAML_LOADER", loader)
-        with pytest.raises(InvalidArgumentError, match="document structure"):
-            PrivacyContent(source, "viking://resources/config.yaml").render(
-                lambda item: item.value.replace("private-value", REFERENCE)
-            )
+        protected = PrivacyContent(source, "viking://resources/config.yaml").render(
+            lambda item: item.value.replace("private-value", REFERENCE)
+        )
+        restored = PrivacyContent(protected, "viking://resources/config.yaml").render(
+            lambda item: item.value.replace(REFERENCE, 'rotated"value\\path\n下一行')
+        )
+        for text, expected in [(protected, REFERENCE), (restored, 'rotated"value\\path\n下一行')]:
+            node = yaml.compose(text, Loader=loader)
+            value = node.value[0][1]
+            key = node.value[1][1].value[0][0]
+            if isinstance(value, yaml.SequenceNode):
+                assert value.value[-1].value == expected
+                assert key.value[-1].value == "private-value"
+            else:
+                assert value.value[-1][1].value == expected
+                assert key.value[-1][1].value == "private-value"
+
+
+@pytest.mark.parametrize(
+    "source,expected",
+    [
+        (
+            "# heading\ndisplay: &label private-value # value\n"
+            "lookup: {*label: 23} # key\ncopy: *label\n",
+            '# heading\ndisplay: &label "MASKED" # value\n'
+            'lookup: {? &label_key "private-value": 23} # key\ncopy: *label\n',
+        ),
+        (
+            "? &label private-value # key\n: 23\ndisplay: *label # value\ncopy: *label\n",
+            "? &label private-value # key\n: 23\n"
+            'display: &label_value "MASKED" # value\ncopy: *label_value\n',
+        ),
+        (
+            "display: &label ordinary-label # value\nlookup: {*label: 23} # key\n"
+            "secret: private-value\n",
+            "display: &label ordinary-label # value\nlookup: {*label: 23} # key\n"
+            'secret: "MASKED"\n',
+        ),
+    ],
+)
+def test_yaml_rewrites_only_changed_values_and_conflicting_aliases(source, expected):
+    document = PrivacyContent(source, "viking://resources/config.yaml")
+    assert document.render(lambda item: item.value.replace("private-value", "MASKED")) == expected
+
+
+@pytest.mark.parametrize("flow", [False, True])
+@pytest.mark.parametrize("long_value", [False, True])
+def test_yaml_alias_keys_preserve_long_values_and_anchor_names(flow, long_value):
+    secret = "private-value" * (100 if long_value else 1)
+    anchor = "label" if long_value else "a" * 1020
+    source = f'display: &{anchor} "{secret}"\n'
+    for name in ("lookup", "copy"):
+        source += f"{name}: {{*{anchor}: 23}}\n" if flow else f"{name}:\n  *{anchor}: 23\n"
+    result = PrivacyContent(source, "viking://resources/config.yaml").render(
+        lambda item: item.value.replace(secret, REFERENCE)
+    )
+    assert yaml.safe_load(result) == {
+        "display": REFERENCE,
+        "lookup": {secret: 23},
+        "copy": {secret: 23},
+    }
