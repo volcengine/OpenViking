@@ -14,6 +14,7 @@ export interface DirectoryTourStep {
   target: string;
   title: ReactNode;
   description: ReactNode;
+  /** Standard semantic targets include Figma artwork. Pass null to omit it. */
   illustration?: ReactNode;
   nextLabel?: string;
 }
@@ -41,6 +42,7 @@ export interface DirectoryTourProps {
   currentStep?: number;
   defaultStep?: number;
   placement?: 'right' | 'left';
+  /** Deadline before automatically skipping an unresolved target. Default 10000. */
   locateTimeout?: number;
   className?: string;
   style?: CSSProperties;

@@ -31,8 +31,10 @@ export function useTourPosition(
       const margin = 8;
       let left = (width - box.width) / 2;
       let top = (height - box.height) / 2;
-      const missing = Boolean(anchor && !anchor.isConnected);
-      let visible = !anchor || missing;
+      const missing = Boolean(
+        anchor && (!anchor.isConnected || !a?.width || !a.height),
+      );
+      let visible = false;
       if (anchor && a && !missing) {
         // A row clipped by a scrolling panel must not leave a detached callout.
         let clip = { left: 0, top: 0, right: width, bottom: height };
@@ -66,15 +68,24 @@ export function useTourPosition(
           a.right > clip.left;
         const right = a.right + 6;
         const leftSide = a.left - box.width - 6;
-        left =
-          placement === 'right'
-            ? right + box.width <= width - margin || leftSide < margin
+        const fitsRight = right + box.width <= width - margin;
+        const fitsLeft = leftSide >= margin;
+        if (fitsRight || fitsLeft) {
+          left =
+            fitsRight && (placement === 'right' || !fitsLeft)
               ? right
-              : leftSide
-            : leftSide >= margin || right + box.width > width - margin
-              ? leftSide
-              : right;
-        top = a.top - 16;
+              : leftSide;
+          top = a.top - 16;
+        } else {
+          // On narrow screens, keep the highlighted row clear when possible.
+          const below = a.bottom + 6;
+          const above = a.top - box.height - 6;
+          left = a.left + (a.width - box.width) / 2;
+          top =
+            below + box.height <= height - margin || a.top < height - a.bottom
+              ? below
+              : above;
+        }
         // Carry host theme overrides across the portal boundary.
         const css = window.getComputedStyle(anchor);
         for (let i = 0; i < css.length; i++) {

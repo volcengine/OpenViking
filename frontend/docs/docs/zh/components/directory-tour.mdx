@@ -10,7 +10,7 @@
 
 组件不请求后端、不管理账号、不保存完成状态。宿主通过 `locateTarget(target, signal)` 加载目录、展开父级、等待目标行渲染，再返回对应的 `HTMLElement`。可直接使用 FileTree 的 `getRowElement(id)`。组件随后滚动、高亮并跟随该元素定位；原生 Popover API 将卡片放入浏览器顶层，不创建全屏遮罩或 SVG。
 
-账号或空间切换时，宿主关闭组件或更换 `key`。没有命中节点、定位异常或超时会显示重试与跳过，不会静默标记完成。最终回调携带 `skippedStepIds`，宿主决定是否算完成。关闭和完成回调均由宿主将 `open` 设为 `false`。
+账号或空间切换时，宿主关闭组件或更换 `key`。定位期间隐藏卡片；没有命中节点、定位异常、超时或目标被移除时自动跳过，全部缺失时结束指引。最终回调携带 `skippedStepIds`，宿主决定是否算完成。关闭和完成回调均由宿主将 `open` 设为 `false`。
 
 ## 导入
 
@@ -33,15 +33,15 @@ import '@openviking/react/components/directory-tour/style.css';
 | `locateTarget(target, signal)` | 可取消的宿主定位函数，返回已渲染的元素或 null。建议用 useCallback 保持稳定；取消后不得继续展开旧作用域。 |
 | `currentStep` / `onStepChange` | 可选受控下标与变化事件，从 0 开始。                                                                      |
 | `defaultStep`                  | 非受控模式的起始下标，默认 0；关闭后重新开始。                                                           |
-| `placement`                    | 优先 right 或 left，默认 right；空间不足自动翻转并限制在视口内。                                         |
+| `placement`                    | 优先 right 或 left，默认 right；优先放在目录行侧面，两侧都放不下时改为上方或下方。                       |
 | `locateTimeout`                | 定位超时毫秒数，默认 10000。                                                                             |
 | `onClose`                      | 关闭按钮或 Escape；宿主负责关闭。                                                                        |
-| `onComplete(result)`           | 最后一步继续或跳过，返回跳过的步骤 ID。宿主负责关闭与持久化。                                            |
-| `labels`                       | 下一步、知道了、重试、跳过、加载和错误文案，以及进度格式函数。                                           |
+| `onComplete(result)`           | 最后一步继续或自动跳过后触发，返回跳过的步骤 ID；本次指引停止渲染，宿主负责关闭与持久化。                |
+| `labels`                       | 下一步、知道了、关闭及进度格式函数；保留旧加载、错误、重试和跳过字段供类型兼容，不再显示。               |
 | `className` / `style`          | 浮层根节点样式，可继承或覆盖 `--ov-ui-color-*` 主题变量。                                                |
 
-每步包含 `id`、语义 `target`、`title`、`description`，可选 `illustration` 和 `nextLabel`。默认六步配置是英文，语义 target 区分用户私有 resources 与根级公共 resources；不内置某个账号的路径。插画通过 ReactNode 插槽传入，组件没有内部 CDN 依赖。
+每步包含 `id`、语义 `target`、`title`、`description`，可选 `illustration` 和 `nextLabel`。默认六步配置是英文，语义 target 区分用户私有 resources 与根级公共 resources；不内置某个账号的路径。六个标准 target 内置设计稿插画，随 JS 打包，无需宿主托管资源。`illustration` 可传 ReactNode 替换或 `null` 隐藏。
 
 ## 可访问性与异常处理
 
-讲解卡片使用非模态 dialog，打开后可键盘操作，支持 Escape 退出，关闭时恢复仍存在的原焦点。定位中不能前进；重试、切步和卸载会取消旧定位。滚动、窗口变化及目标尺寸变化会重新计算位置，目标滚出可见区域时隐藏讲解卡片。支持服务端渲染，服务端不创建浮层。
+讲解卡片使用非模态 dialog，打开后可键盘操作，支持 Escape 退出，关闭时恢复仍存在的原焦点。定位中隐藏卡片；切步和卸载会取消旧定位。自动跳过保留原步骤编号（例如从 1/6 跳到 3/6），并通过 `onStepChange` 通知受控宿主更新下标。滚动、窗口变化及目标尺寸变化会重新计算位置，目标滚出可见区域时隐藏讲解卡片。支持服务端渲染，服务端不创建浮层。

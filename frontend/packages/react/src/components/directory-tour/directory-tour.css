@@ -5,7 +5,7 @@
   );
   --ov-ui-directory-tour-background: var(
     --ov-ui-color-bg-1,
-    var(--ov-ui-bg-1-default)
+    var(--ov-ui-tour-surface-default)
   );
   --ov-ui-directory-tour-text: var(
     --ov-ui-color-text-1,
@@ -17,11 +17,11 @@
   );
   --ov-ui-directory-tour-muted: var(
     --ov-ui-color-text-3,
-    var(--ov-ui-text-3-default)
+    var(--ov-ui-tour-muted-default)
   );
   --ov-ui-directory-tour-border: var(
     --ov-ui-color-border-3,
-    var(--ov-ui-border-3-default)
+    var(--ov-ui-tour-border-default)
   );
   position: fixed;
   inset: auto;
@@ -34,7 +34,13 @@
   overflow: visible;
   background: transparent;
   color: var(--ov-ui-directory-tour-text);
-  font-family: inherit;
+  font-family:
+    'PingFang SC',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+  letter-spacing: 0.036px;
   box-sizing: border-box;
 }
 .ov-directory-tour *,
@@ -48,19 +54,21 @@
   flex-direction: column;
   gap: 12px;
   padding: 16px;
-  border: 0.5px solid var(--ov-ui-directory-tour-border);
   border-radius: 8px;
   background: var(--ov-ui-directory-tour-background);
-  box-shadow: var(--ov-ui-color-tour-shadow, var(--ov-ui-tour-shadow-default));
+  box-shadow:
+    inset 0 0 0 0.5px var(--ov-ui-directory-tour-border),
+    var(--ov-ui-color-tour-shadow, var(--ov-ui-tour-shadow-default));
   max-height: calc(100dvh - 16px);
   overflow: auto;
+  backdrop-filter: blur(10px);
 }
 .ov-directory-tour__title {
   margin: 0;
-  padding-right: 16px;
   font-size: 14px;
   line-height: 22px;
   font-weight: 500;
+  letter-spacing: 0.042px;
   overflow-wrap: anywhere;
 }
 .ov-directory-tour__description {
@@ -78,12 +86,21 @@
   flex-shrink: 0;
   overflow: hidden;
   border-radius: 8px;
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+  background: var(
+    --ov-ui-color-tour-illustration,
+    var(--ov-ui-tour-illustration-default)
+  );
 }
 .ov-directory-tour__illustration img {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+.ov-directory-tour__illustration .ov-directory-tour__artwork {
+  max-width: none;
+  max-height: none;
+  flex-shrink: 0;
+  object-fit: cover;
 }
 .ov-directory-tour__actions {
   display: flex;
@@ -96,32 +113,18 @@
   font-size: 12px;
   line-height: 20px;
 }
-.ov-directory-tour button:not(.ov-button) {
-  cursor: pointer;
-  font: inherit;
-  font-size: 13px;
+.ov-directory-tour__primary.ov-button {
+  --ov-ui-button-padding: 10px;
+  min-width: 60px;
+  border: 0;
   line-height: 22px;
-  padding: 3px 10px;
-  border: 1px solid var(--ov-ui-directory-tour-border);
-  border-radius: 6px;
-  background: var(--ov-ui-directory-tour-background);
-  color: var(--ov-ui-directory-tour-text);
-}
-.ov-directory-tour button:not(.ov-button):hover {
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
-}
-.ov-directory-tour button:not(.ov-button):focus-visible {
-  outline: 2px solid var(--ov-ui-directory-tour-primary);
-  outline-offset: 2px;
-}
-.ov-directory-tour button:not(.ov-button):disabled {
-  cursor: wait;
-  opacity: 0.5;
+  letter-spacing: 0.039px;
 }
 .ov-directory-tour .ov-directory-tour__close {
   position: absolute;
   right: 4px;
   top: 2px;
+  opacity: 0;
 }
 .ov-directory-tour__highlight {
   position: fixed;
@@ -131,5 +134,39 @@
   background: var(
     --ov-ui-color-tour-highlight,
     var(--ov-ui-tour-highlight-default)
+  );
+}
+
+.ov-directory-tour:hover .ov-directory-tour__close,
+.ov-directory-tour__close:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .ov-directory-tour .ov-directory-tour__close {
+    opacity: 1;
+  }
+}
+.ov-directory-tour__illustration[data-target='userMemories'] {
+  background: var(
+    --ov-ui-color-tour-illustration,
+    var(--ov-ui-tour-illustration-memories-default)
+  );
+}
+.ov-directory-tour__illustration[data-target='sharedResources'] {
+  background: var(
+    --ov-ui-color-tour-illustration,
+    var(--ov-ui-tour-illustration-shared-default)
+  );
+}
+.ov-directory-tour__illustration[data-target='userExperiences'] {
+  background: var(
+    --ov-ui-color-tour-illustration,
+    var(--ov-ui-tour-illustration-experiences-default)
+  );
+}
+.ov-directory-tour__illustration[data-target='userPeers'] {
+  background: var(
+    --ov-ui-color-tour-illustration,
+    var(--ov-ui-tour-illustration-peers-default)
   );
 }
