@@ -15,6 +15,7 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService
 from openviking.service.session_service import SessionService
+from openviking.storage.viking_fs._listing import ListingPage, _ListingMixin
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -55,18 +56,86 @@ def fs_service():
 # --------------------------------------------------------------------------
 
 
-async def test_ls_keeps_only_entries_inside_the_window(fs_service):
-    fs_service._viking_fs.ls = AsyncMock(
-        side_effect=_fake_ls(
-            [
-                _entry("old", "2026-03-09T10:00:00Z"),
-                _entry("inside", "2026-03-11T10:00:00Z"),
-                _entry("new", "2026-03-20T10:00:00Z"),
-            ]
+class _FakeVikingFS(_ListingMixin):
+    """A filesystem layer that serves a fixed listing.
+
+    The window and the pagination contract live in the filesystem layer, so
+    the listing tests drive that layer directly.
+    """
+
+    def __init__(self, entries=None, pages=None):
+        self._entries = [dict(item) for item in (entries or [])]
+        self._pages = pages
+        self.ls_calls = 0
+
+    # The access checks are not part of the listing contract under test.
+    def authorize_read(self, ctx, uris):
+        return ctx
+
+    def _ctx_or_default(self, ctx):
+        return ctx
+
+    async def _ensure_traversable(self, uri, ctx):
+        return None
+
+    async def _ls_original(
+        self,
+        uri,
+        show_all_hidden=False,
+        node_limit=1000,
+        offset=0,
+        sort_by=None,
+        sort_order="asc",
+        ctx=None,
+    ):
+        self.ls_calls += 1
+        if self._pages is not None:
+            index = self.ls_calls - 1
+            page = self._pages[index] if index < len(self._pages) else []
+            return [dict(item) for item in page]
+        page = (
+            self._entries[offset:]
+            if node_limit is None
+            else self._entries[offset : offset + node_limit]
         )
+        return [dict(item) for item in page]
+
+    async def _tree_original(
+        self,
+        uri,
+        show_all_hidden=False,
+        node_limit=1000,
+        level_limit=3,
+        offset=0,
+        sort_by=None,
+        sort_order="asc",
+        ctx=None,
+        directories_only=False,
+    ):
+        return await self._ls_original(
+            uri,
+            show_all_hidden=show_all_hidden,
+            node_limit=node_limit,
+            offset=offset,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            ctx=ctx,
+        )
+
+    async def _finalize_listing_entries(self, entries, *args, **kwargs):
+        return entries
+
+
+async def test_ls_keeps_only_entries_inside_the_window():
+    fs = _FakeVikingFS(
+        [
+            _entry("old", "2026-03-09T10:00:00Z"),
+            _entry("inside", "2026-03-11T10:00:00Z"),
+            _entry("new", "2026-03-20T10:00:00Z"),
+        ]
     )
 
-    page = await fs_service.ls(
+    page = await fs.list_page(
         "viking://user/user/memories",
         ctx=_ctx(),
         since="2026-03-10",
@@ -77,14 +146,14 @@ async def test_ls_keeps_only_entries_inside_the_window(fs_service):
     assert page.has_more is False
 
 
-async def test_ls_applies_the_window_before_the_node_limit(fs_service):
+async def test_ls_applies_the_window_before_the_node_limit():
     # The matching entry sits behind 300 raw entries, so a filter applied after
     # the raw page was cut would return nothing.
     entries = [_entry(f"old-{index}", "2026-03-09T10:00:00Z") for index in range(300)]
     entries.append(_entry("inside", "2026-03-11T10:00:00Z"))
-    fs_service._viking_fs.ls = AsyncMock(side_effect=_fake_ls(entries))
+    fs = _FakeVikingFS(entries)
 
-    page = await fs_service.ls(
+    page = await fs.list_page(
         "viking://user/user/memories",
         ctx=_ctx(),
         since="2026-03-10",
@@ -95,15 +164,16 @@ async def test_ls_applies_the_window_before_the_node_limit(fs_service):
     assert [entry["name"] for entry in page.entries] == ["inside"]
 
 
-async def test_ls_paginates_over_the_matched_entries(fs_service):
-    entries = [
-        _entry("a", "2026-03-11T10:00:00Z"),
-        _entry("b", "2026-03-11T11:00:00Z"),
-        _entry("c", "2026-03-11T12:00:00Z"),
-    ]
-    fs_service._viking_fs.ls = AsyncMock(side_effect=_fake_ls(entries))
+async def test_ls_paginates_over_the_matched_entries():
+    fs = _FakeVikingFS(
+        [
+            _entry("a", "2026-03-11T10:00:00Z"),
+            _entry("b", "2026-03-11T11:00:00Z"),
+            _entry("c", "2026-03-11T12:00:00Z"),
+        ]
+    )
 
-    page = await fs_service.ls(
+    page = await fs.list_page(
         "viking://user/user/memories",
         ctx=_ctx(),
         since="2026-03-10",
@@ -115,15 +185,15 @@ async def test_ls_paginates_over_the_matched_entries(fs_service):
     assert page.has_more is True
 
 
-async def test_ls_stops_scanning_once_the_window_is_exceeded(fs_service):
+async def test_ls_stops_scanning_once_the_window_is_exceeded():
     # A descending mtime listing ends with the oldest entries, so the scan can
     # stop as soon as it reaches entries that are older than the window
     # instead of walking the whole tail.
     entries = [_entry(f"inside-{index}", "2026-03-05T10:00:00Z") for index in range(2)]
     entries += [_entry(f"old-{index}", "2026-01-01T10:00:00Z") for index in range(5000)]
-    fs_service._viking_fs.ls = AsyncMock(side_effect=_fake_ls(entries))
+    fs = _FakeVikingFS(entries)
 
-    page = await fs_service.ls(
+    page = await fs.list_page(
         "viking://user/user/memories",
         ctx=_ctx(),
         since="2026-03-02",
@@ -133,10 +203,10 @@ async def test_ls_stops_scanning_once_the_window_is_exceeded(fs_service):
     )
 
     assert [entry["name"] for entry in page.entries] == ["inside-0", "inside-1"]
-    assert fs_service._viking_fs.ls.await_count == 1
+    assert fs.ls_calls == 1
 
 
-async def test_ls_keeps_scanning_while_the_batch_is_still_in_the_directory_group(fs_service):
+async def test_ls_keeps_scanning_while_the_batch_is_still_in_the_directory_group():
     # A listing is ordered "directories first, then files". Stopping the scan
     # while it is still inside the directory group would skip the file group
     # further down, and the files there can be inside the window.
@@ -144,17 +214,9 @@ async def test_ls_keeps_scanning_while_the_batch_is_still_in_the_directory_group
     for entry in directories:
         entry["isDir"] = True
     files = [_entry("inside.md", "2026-03-11T10:00:00Z")]
-    pages = [directories, files]
-    calls = []
+    fs = _FakeVikingFS(pages=[directories, files])
 
-    async def fetch_page(uri, ctx=None, offset=0, node_limit=None, **kwargs):
-        calls.append(offset)
-        index = len(calls) - 1
-        return pages[index] if index < len(pages) else []
-
-    fs_service._viking_fs.ls = AsyncMock(side_effect=fetch_page)
-
-    page = await fs_service.ls(
+    page = await fs.list_page(
         "viking://user/user/memories",
         ctx=_ctx(),
         since="2026-03-10",
@@ -164,15 +226,15 @@ async def test_ls_keeps_scanning_while_the_batch_is_still_in_the_directory_group
     )
 
     assert [entry["name"] for entry in page.entries] == ["inside.md"]
-    assert len(calls) == 2, "the scan must continue past the directory group"
+    assert fs.ls_calls == 2, "the scan must continue past the directory group"
 
 
-async def test_ls_stops_scanning_an_ascending_listing_at_the_upper_bound(fs_service):
+async def test_ls_stops_scanning_an_ascending_listing_at_the_upper_bound():
     entries = [_entry(f"inside-{index}", "2026-03-05T10:00:00Z") for index in range(2)]
     entries += [_entry(f"new-{index}", "2027-01-01T10:00:00Z") for index in range(5000)]
-    fs_service._viking_fs.ls = AsyncMock(side_effect=_fake_ls(entries))
+    fs = _FakeVikingFS(entries)
 
-    page = await fs_service.ls(
+    page = await fs.list_page(
         "viking://user/user/memories",
         ctx=_ctx(),
         until="2026-03-10",
@@ -182,14 +244,33 @@ async def test_ls_stops_scanning_an_ascending_listing_at_the_upper_bound(fs_serv
     )
 
     assert [entry["name"] for entry in page.entries] == ["inside-0", "inside-1"]
-    assert fs_service._viking_fs.ls.await_count == 1
+    assert fs.ls_calls == 1
 
 
-async def test_ls_rejects_an_inverted_window(fs_service):
-    fs_service._viking_fs.ls = AsyncMock(side_effect=_fake_ls([]))
+async def test_tree_keeps_only_entries_inside_the_window():
+    fs = _FakeVikingFS(
+        [
+            _entry("old", "2026-03-09T10:00:00Z"),
+            _entry("inside", "2026-03-11T10:00:00Z"),
+        ]
+    )
 
-    with pytest.raises(InvalidArgumentError):
-        await fs_service.ls(
+    page = await fs.list_page(
+        "viking://user/user/memories",
+        ctx=_ctx(),
+        recursive=True,
+        since="2026-03-10",
+        until="2026-03-12",
+    )
+
+    assert [entry["name"] for entry in page.entries] == ["inside"]
+
+
+async def test_ls_rejects_an_inverted_window():
+    fs = _FakeVikingFS([])
+
+    with pytest.raises(ValueError):
+        await fs.list_page(
             "viking://user/user/memories",
             ctx=_ctx(),
             since="2026-03-12",
@@ -197,16 +278,95 @@ async def test_ls_rejects_an_inverted_window(fs_service):
         )
 
 
-async def test_ls_without_a_window_keeps_the_previous_behaviour(fs_service):
-    entries = [
-        _entry("old", "2026-03-09T10:00:00Z"),
-        _entry("new", "2026-03-20T10:00:00Z"),
-    ]
-    fs_service._viking_fs.ls = AsyncMock(side_effect=_fake_ls(entries))
+async def test_ls_with_a_zero_node_limit_returns_nothing():
+    # The raw listing treats a zero limit as "nothing to list".
+    fs = _FakeVikingFS([_entry("inside", "2026-03-11T10:00:00Z")])
 
-    page = await fs_service.ls("viking://user/user/memories", ctx=_ctx())
+    page = await fs.list_page(
+        "viking://user/user/memories",
+        ctx=_ctx(),
+        node_limit=0,
+    )
+
+    assert page.entries == []
+    assert page.has_more is False
+
+
+async def test_ls_applies_the_entry_filter_together_with_the_window():
+    # The retrieval tags are a filter over the matched entries, not a
+    # replacement for the window.
+    fs = _FakeVikingFS(
+        [
+            _entry("keep", "2026-03-11T10:00:00Z"),
+            _entry("drop-window", "2026-01-01T10:00:00Z"),
+            _entry("drop-filter", "2026-03-11T10:00:00Z"),
+        ]
+    )
+
+    async def entry_filter(entries):
+        return [entry for entry in entries if entry["name"] != "drop-filter"]
+
+    page = await fs.list_page(
+        "viking://user/user/memories",
+        ctx=_ctx(),
+        since="2026-03-10",
+        entry_filter=entry_filter,
+    )
+
+    assert [entry["name"] for entry in page.entries] == ["keep"]
+
+
+async def test_ls_without_a_window_keeps_the_previous_behaviour():
+    fs = _FakeVikingFS(
+        [
+            _entry("old", "2026-03-09T10:00:00Z"),
+            _entry("new", "2026-03-20T10:00:00Z"),
+        ]
+    )
+
+    page = await fs.list_page("viking://user/user/memories", ctx=_ctx())
 
     assert [entry["name"] for entry in page.entries] == ["old", "new"]
+    assert fs.ls_calls == 1
+
+
+async def test_the_service_forwards_the_window_to_the_filesystem_layer():
+    # The window is a filesystem-level contract: the service only hands it
+    # over, so every listing surface shares the same pagination semantics.
+    service = FSService(viking_fs=_FakeVikingFS([_entry("inside", "2026-03-11T10:00:00Z")]))
+    calls = []
+
+    async def list_page(uri, ctx=None, **kwargs):
+        calls.append(kwargs)
+        return ListingPage(entries=[], has_more=False)
+
+    service._viking_fs.list_page = list_page
+
+    await service.ls(
+        "viking://user/user/memories",
+        ctx=_ctx(),
+        since="2026-03-10",
+        until="2026-03-12",
+        offset=3,
+        node_limit=7,
+    )
+
+    assert calls[0]["since"] == "2026-03-10"
+    assert calls[0]["until"] == "2026-03-12"
+    assert calls[0]["offset"] == 3
+    assert calls[0]["node_limit"] == 7
+
+
+async def test_the_service_rejects_an_inverted_window():
+    service = FSService(viking_fs=_FakeVikingFS([]))
+
+    with pytest.raises(InvalidArgumentError):
+        await service.ls(
+            "viking://user/user/memories",
+            ctx=_ctx(),
+            since="2026-03-12",
+            until="2026-03-11",
+        )
 
 
 def test_the_mcp_and_rest_surfaces_build_the_same_time_filter():

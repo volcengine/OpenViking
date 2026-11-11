@@ -602,7 +602,7 @@ async def test_plain_listing_reads_only_requested_page_summaries(request_context
     [(1, False), (2, False), (3, True)],
 )
 async def test_ls_and_tree_detect_more_entries_with_n_plus_one(
-    request_context, method_name, entry_count, expected_has_more
+    request_context, monkeypatch, method_name, entry_count, expected_has_more
 ):
     entries = [
         {"uri": f"viking://resources/{index}.md", "isDir": False} for index in range(entry_count)
@@ -611,10 +611,9 @@ async def test_ls_and_tree_detect_more_entries_with_n_plus_one(
     async def fetch(*_args, offset=0, node_limit=None, **_kwargs):
         return entries[offset:] if node_limit is None else entries[offset : offset + node_limit]
 
-    viking_fs = SimpleNamespace(
-        ls=AsyncMock(side_effect=fetch),
-        tree=AsyncMock(side_effect=fetch),
-    )
+    viking_fs = VikingFS(agfs=SimpleNamespace())
+    monkeypatch.setattr(viking_fs, "_ls_original", AsyncMock(side_effect=fetch))
+    monkeypatch.setattr(viking_fs, "_tree_original", AsyncMock(side_effect=fetch))
     service = FSService(viking_fs=viking_fs)
 
     page = await getattr(service, method_name)(
@@ -626,7 +625,9 @@ async def test_ls_and_tree_detect_more_entries_with_n_plus_one(
 
     assert page.entries == entries[:2]
     assert page.has_more is expected_has_more
-    fetch_mock = getattr(viking_fs, method_name)
+    # The filesystem layer asks the raw listing for one entry more than the
+    # page holds, so it can tell whether more entries are available.
+    fetch_mock = viking_fs._ls_original if method_name == "ls" else viking_fs._tree_original
     assert fetch_mock.await_args.kwargs["node_limit"] == 3
 
 
@@ -862,6 +863,7 @@ async def test_ls_filters_and_paginates_before_reading_summaries(request_context
 @pytest.mark.asyncio
 async def test_ls_tag_filter_keeps_zero_node_limit_unbounded_for_entry_and_simple_output(
     request_context,
+    monkeypatch,
 ):
     entries = [
         {"uri": "viking://resources/a.md", "isDir": False},
@@ -874,16 +876,16 @@ async def test_ls_tag_filter_keeps_zero_node_limit_unbounded_for_entry_and_simpl
                 {"uri": entry["uri"], "level": 2, "search_tags": ["env=prod"]} for entry in entries
             ]
 
-    entry_service = FSService(
-        viking_fs=SimpleNamespace(ls=AsyncMock(return_value=entries)), vikingdb=FakeVikingDB()
+    viking_fs = VikingFS(agfs=SimpleNamespace())
+    monkeypatch.setattr(
+        viking_fs, "_ls_original", AsyncMock(return_value=[dict(item) for item in entries])
     )
+    entry_service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
     entry_result = await entry_service.ls(
         "viking://resources", ctx=request_context, tags=["env=prod"], node_limit=0
     )
 
-    simple_service = FSService(
-        viking_fs=SimpleNamespace(ls=AsyncMock(return_value=entries)), vikingdb=FakeVikingDB()
-    )
+    simple_service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
     simple_result = await simple_service.ls(
         "viking://resources",
         ctx=request_context,
@@ -912,7 +914,7 @@ async def test_tree_projects_directory_tags_before_pagination_and_summaries(
         directory,
     ]
     viking_fs = VikingFS(agfs=SimpleNamespace())
-    monkeypatch.setattr(viking_fs, "tree", AsyncMock(return_value=entries))
+    monkeypatch.setattr(viking_fs, "_tree_original", AsyncMock(return_value=entries))
     summary = AsyncMock(
         side_effect=lambda uri, field, ctx: "L0 summary" if field == "abstract" else "L1 overview"
     )
@@ -957,11 +959,11 @@ async def test_tree_projects_directory_tags_before_pagination_and_summaries(
         ],
         has_more=False,
     )
-    # Intermediate pages must not load summaries before tag filtering selects the final page.
-    fetch_options = viking_fs.tree.await_args.kwargs
-    assert fetch_options["output"] == "original"
-    assert fetch_options["include_abstract"] is None
-    assert fetch_options["include_overview"] is False
+    # The raw listing carries no enrichment parameters, so an intermediate page
+    # cannot load summaries before the tag filter selects the final page.
+    fetch_options = viking_fs._tree_original.await_args.kwargs
+    assert "include_abstract" not in fetch_options
+    assert "include_overview" not in fetch_options
     summary.assert_has_awaits(
         [
             call(directory["uri"], "abstract", ctx=request_context),
@@ -973,12 +975,14 @@ async def test_tree_projects_directory_tags_before_pagination_and_summaries(
 
 
 @pytest.mark.asyncio
-async def test_tree_tag_filter_keeps_zero_node_limit_unbounded(request_context):
+async def test_tree_tag_filter_keeps_zero_node_limit_unbounded(request_context, monkeypatch):
     entries = [
         {"uri": "viking://resources/a.md", "isDir": False},
         {"uri": "viking://resources/b.md", "isDir": False},
     ]
-    viking_fs = SimpleNamespace(tree=AsyncMock(return_value=entries))
+    viking_fs = VikingFS(agfs=SimpleNamespace())
+    tree_original = AsyncMock(return_value=[dict(item) for item in entries])
+    monkeypatch.setattr(viking_fs, "_tree_original", tree_original)
 
     class FakeVikingDB:
         async def filter(self, **_kwargs):
@@ -996,7 +1000,7 @@ async def test_tree_tag_filter_keeps_zero_node_limit_unbounded(request_context):
         "viking://resources/b.md",
     ]
     assert result.has_more is False
-    assert viking_fs.tree.await_args.kwargs["node_limit"] is None
+    assert tree_original.await_args.kwargs["node_limit"] is None
 
 
 @pytest.mark.asyncio
@@ -1753,7 +1757,7 @@ async def test_system_ls_allows_agent_output_without_semantic_enrichment(request
     formatted = [{**entries[0], "size": 4}]
     viking_fs = SimpleNamespace(
         _ensure_access=AsyncMock(),
-        ls=AsyncMock(return_value=entries),
+        list_page=AsyncMock(return_value=ListingPage(entries=entries, has_more=False)),
         _finalize_listing_entries=AsyncMock(return_value=formatted),
     )
     service = FSService(viking_fs=viking_fs)
@@ -1773,17 +1777,18 @@ async def test_system_tree_allows_agent_output_without_semantic_enrichment(reque
     entries = [{"uri": f"{uri}/demo.md", "isDir": False, "rel_path": "demo.md"}]
     viking_fs = SimpleNamespace(
         _ensure_access=AsyncMock(),
-        tree=AsyncMock(return_value=entries),
+        list_page=AsyncMock(return_value=ListingPage(entries=entries, has_more=False)),
+        _finalize_listing_entries=AsyncMock(return_value=entries),
     )
     service = FSService(viking_fs=viking_fs)
 
     result = await service.tree(uri, ctx=request_context, output="agent")
 
     assert result == ListingPage(entries=entries, has_more=False)
-    tree_options = viking_fs.tree.await_args.kwargs
-    assert tree_options["output"] == "agent"
-    assert tree_options["include_abstract"] is False
-    assert tree_options["include_overview"] is False
+    finalize_call = viking_fs._finalize_listing_entries.await_args
+    assert finalize_call.args[1] == "agent"
+    assert finalize_call.kwargs["include_abstract"] is False
+    assert finalize_call.kwargs["include_overview"] is False
 
 
 @pytest.mark.asyncio

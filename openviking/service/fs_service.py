@@ -9,8 +9,7 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 import asyncio
 from collections.abc import Coroutine
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
-from datetime import datetime
+from dataclasses import replace
 from functools import partial
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional, Sequence
 
@@ -67,17 +66,12 @@ from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.storage.vector_ids import is_vector_record_id
-from openviking.storage.viking_fs import VikingFS
+from openviking.storage.viking_fs import ListingPage, VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_utils import vectorize_directory_meta
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.path_safety import validate_safe_viking_uri_path
-from openviking.utils.search_filters import (
-    filter_entries_by_time,
-    parse_timestamp_value,
-    resolve_time_bounds,
-)
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
     DeadlineExceededError,
@@ -101,12 +95,6 @@ _COMPILE_DIRECTORY_TAG_TIMEOUT_SECONDS = 60.0
 _COMPILE_DIRECTORY_TAG_POLL_SECONDS = 3.0
 WATCH_BUSY_WAIT_SECONDS = 10.0
 WATCH_BUSY_POLL_SECONDS = 0.5
-
-
-@dataclass
-class ListingPage:
-    entries: List[Any]
-    has_more: bool
 
 
 def _may_include_memory_content(uri: str) -> bool:
@@ -309,163 +297,66 @@ class FSService:
             result_entries.append(entry)
         return result_entries
 
-    @staticmethod
-    def _resolve_listing_time_bounds(
-        since: Optional[str],
-        until: Optional[str],
-    ) -> tuple[Optional[datetime], Optional[datetime]]:
-        """Resolve relative or absolute listing time bounds."""
-        try:
-            return resolve_time_bounds(since=since, until=until)
-        except ValueError as exc:
-            raise InvalidArgumentError(str(exc)) from exc
-
-    @staticmethod
-    def _time_window_exhausted(
-        entries: List[Dict[str, Any]],
-        since: Optional[datetime],
-        until: Optional[datetime],
-        sort_by: Optional[str],
-        sort_order: str,
-    ) -> bool:
-        """Whether a time-sorted listing has already moved past the window.
-
-        Only mtime-ordered listings can be cut short, and only on the side the
-        listing walks away from: a descending listing ends with the oldest
-        entries, so it is exhausted once the last entry is older than the
-        lower bound; an ascending listing ends with the newest entries, so it
-        is exhausted once the last entry is newer than the upper bound. Name
-        ordered listings have to be scanned to the end.
-
-        A listing is ordered as "directories first, then files", each group
-        sorted by modification time. The tail of a batch is therefore the
-        oldest *file* only once the scan has moved past the directory group;
-        before that the next batch can still hold directories, and further
-        down the listing files, that belong inside the window. Stopping there
-        would drop entries that are inside the window.
-        """
-        if sort_by != "mtime" or not entries:
-            return False
-        if not any(not entry.get("isDir") for entry in entries):
-            return False
-        timestamp = parse_timestamp_value(entries[-1].get("modTime"))
-        if timestamp is None:
-            return False
-        if sort_order == "desc" and since is not None:
-            return timestamp < since
-        if sort_order == "asc" and until is not None:
-            return timestamp > until
-        return False
-
-    async def _collect_time_filtered_page(
+    async def _list_page(
         self,
-        fetch_page: Callable[[int, Optional[int]], Awaitable[List[Dict[str, Any]]]],
+        viking_fs: VikingFS,
+        uri: str,
         ctx: RequestContext,
-        since: Optional[datetime],
-        until: Optional[datetime],
-        offset: int,
-        node_limit: int,
+        *,
+        recursive: bool,
+        directories_only: bool = False,
+        level_limit: int = 3,
+        show_all_hidden: bool = False,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        offset: int = 0,
+        node_limit: int = 1000,
         tags: Optional[List[str]] = None,
         include_tags: bool = False,
     ) -> ListingPage:
-        """Collect a visible page restricted to a time window.
+        """Ask the filesystem layer for one page of the listing.
 
-        The window is applied to the modification time of each entry and is
-        evaluated before the node limit, so a narrow window still returns
-        entries that sit past the first raw page instead of coming back empty.
+        The modification-time window and the pagination contract live in the
+        filesystem layer, so every listing surface shares the same
+        semantics. The retrieval tags stay here: they are a vector-store
+        predicate rather than a filesystem one, so they are handed to the
+        filesystem layer as a filter over the matched entries.
 
-        Args:
-            fetch_page: Loads one raw page by offset and limit.
-            ctx: Request identity used for tag lookup.
-            since: Inclusive lower bound on the entry timestamp.
-            until: Inclusive upper bound on the entry timestamp.
-            offset: Number of matched entries to skip.
-            node_limit: Maximum matched entries to return.
-            sort_by: Sort field of the underlying listing.
-            sort_order: Sort direction of the underlying listing.
-            tags: Optional retrieval tags applied together with the window.
-            include_tags: Whether to retain tags in returned entries.
-
-        Returns:
-            The requested page and whether more matched entries are available.
+        Raises:
+            InvalidArgumentError: If the window is inverted.
         """
-        if node_limit <= 0:
-            entries = await fetch_page(0, None)
-            entries = await self._attach_and_filter_tags(entries, ctx, tags, include_tags)
-            entries = filter_entries_by_time(entries, since, until)
-            return ListingPage(entries=entries[offset:], has_more=False)
+        entry_filter: Optional[
+            Callable[[List[Dict[str, Any]]], Awaitable[List[Dict[str, Any]]]]
+        ] = None
+        if tags or include_tags:
 
-        batch_size = max(node_limit, 256)
-        probe_limit = node_limit + 1
-        source_offset = 0
-        remaining_offset = offset
-        result: List[Dict[str, Any]] = []
-        while len(result) < probe_limit:
-            entries = await fetch_page(source_offset, batch_size)
-            filtered = await self._attach_and_filter_tags(entries, ctx, tags, include_tags)
-            filtered = filter_entries_by_time(filtered, since, until)
-            if remaining_offset >= len(filtered):
-                remaining_offset -= len(filtered)
-            else:
-                result.extend(
-                    filtered[remaining_offset : remaining_offset + probe_limit - len(result)]
-                )
-                remaining_offset = 0
-            if len(entries) < batch_size:
-                break
-            if self._time_window_exhausted(entries, since, until, sort_by, sort_order):
-                break
-            source_offset += len(entries)
-        return ListingPage(entries=result[:node_limit], has_more=len(result) > node_limit)
+            async def filter_by_tags(
+                entries: List[Dict[str, Any]],
+            ) -> List[Dict[str, Any]]:
+                return await self._attach_and_filter_tags(entries, ctx, tags, include_tags)
 
-    async def _collect_tagged_page(
-        self,
-        fetch_page: Callable[[int, Optional[int]], Awaitable[List[Dict[str, Any]]]],
-        ctx: RequestContext,
-        tags: List[str],
-        include_tags: bool,
-        offset: int,
-        node_limit: int,
-    ) -> ListingPage:
-        """Collect a visible page after tag filtering.
+            entry_filter = filter_by_tags
 
-        Args:
-            fetch_page: Loads one pre-tag page by offset and limit.
-            ctx: Request identity used for tag lookup.
-            tags: Required retrieval tags.
-            include_tags: Whether to retain tags in returned entries.
-            offset: Number of matched entries to skip.
-            node_limit: Maximum matched entries to return.
-
-        Returns:
-            The requested page and whether more matched entries are available.
-        """
-        if node_limit <= 0:
-            entries = await fetch_page(0, None)
-            entries = await self._attach_and_filter_tags(entries, ctx, tags, include_tags)
-            return ListingPage(entries=entries[offset:], has_more=False)
-
-        batch_size = max(node_limit, 256)
-        probe_limit = node_limit + 1
-        source_offset = 0
-        remaining_offset = offset
-        result: List[Dict[str, Any]] = []
-        while len(result) < probe_limit:
-            entries = await fetch_page(source_offset, batch_size)
-            filtered = await self._attach_and_filter_tags(entries, ctx, tags, include_tags)
-            if remaining_offset >= len(filtered):
-                remaining_offset -= len(filtered)
-            else:
-                result.extend(
-                    filtered[remaining_offset : remaining_offset + probe_limit - len(result)]
-                )
-                remaining_offset = 0
-            if len(entries) < batch_size:
-                break
-            source_offset += len(entries)
-        return ListingPage(entries=result[:node_limit], has_more=len(result) > node_limit)
+        try:
+            return await viking_fs.list_page(
+                uri,
+                ctx=ctx,
+                recursive=recursive,
+                directories_only=directories_only,
+                level_limit=level_limit,
+                show_all_hidden=show_all_hidden,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                since=since,
+                until=until,
+                offset=offset,
+                node_limit=node_limit,
+                entry_filter=entry_filter,
+            )
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
 
     async def ls(
         self,
@@ -531,79 +422,24 @@ class FSService:
             include_overview = False
         use_simple_paths = simple and not extra_fields
 
-        async def fetch_page(page_offset: int, page_limit: Optional[int]) -> List[Dict[str, Any]]:
-            """Fetch and return one pre-tag page."""
-            if recursive:
-                return await viking_fs.tree(
-                    uri,
-                    ctx=ctx,
-                    output="original",
-                    abs_limit=abs_limit,
-                    include_abstract=None,
-                    include_overview=False,
-                    overview_limit=overview_limit,
-                    show_all_hidden=show_all_hidden,
-                    node_limit=page_limit,
-                    level_limit=level_limit,
-                    offset=page_offset,
-                    sort_by=sort_by,
-                    sort_order=sort_order,
-                    extra_fields=None,
-                )
-            return await viking_fs.ls(
-                uri,
-                ctx=ctx,
-                output="original",
-                abs_limit=abs_limit,
-                include_abstract=None,
-                include_overview=False,
-                overview_limit=overview_limit,
-                show_all_hidden=show_all_hidden,
-                node_limit=page_limit,
-                offset=page_offset,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                extra_fields=None,
-            )
-
-        since_dt, until_dt = self._resolve_listing_time_bounds(since, until)
-        has_time_window = since_dt is not None or until_dt is not None
-        if has_time_window:
-            page = await self._collect_time_filtered_page(
-                fetch_page,
-                ctx,
-                since_dt,
-                until_dt,
-                offset,
-                node_limit,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                tags=tags,
-                include_tags=(
-                    False
-                    if use_simple_paths
-                    else include_tags or bool(tags) or "tags" in extra_fields
-                ),
-            )
-        elif tags:
-            page = await self._collect_tagged_page(
-                fetch_page,
-                ctx,
-                tags,
-                False if use_simple_paths else include_tags or bool(tags) or "tags" in extra_fields,
-                offset,
-                node_limit,
-            )
-        else:
-            fetch_limit = node_limit + 1 if node_limit > 0 else node_limit
-            entries = await fetch_page(offset, fetch_limit)
-            entries = await self._attach_and_filter_tags(
-                entries, ctx, None, include_tags or "tags" in extra_fields
-            )
-            page = ListingPage(
-                entries=entries[:node_limit] if node_limit > 0 else entries,
-                has_more=node_limit > 0 and len(entries) > node_limit,
-            )
+        page = await self._list_page(
+            viking_fs,
+            uri,
+            ctx,
+            recursive=recursive,
+            level_limit=level_limit,
+            show_all_hidden=show_all_hidden,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            since=since,
+            until=until,
+            offset=offset,
+            node_limit=node_limit,
+            tags=tags,
+            include_tags=(
+                False if use_simple_paths else include_tags or bool(tags) or "tags" in extra_fields
+            ),
+        )
         if use_simple_paths:
             return ListingPage(
                 entries=[entry.get("uri", "") for entry in page.entries],
@@ -1549,60 +1385,21 @@ class FSService:
             include_abstract = False
             include_overview = False
 
-        since_dt, until_dt = self._resolve_listing_time_bounds(since, until)
-        has_time_window = since_dt is not None or until_dt is not None
-        # A filtered tree page is collected from raw entries and finalized
-        # afterwards, exactly like the tag-filtered page.
-        raw_page = bool(tags) or has_time_window
-
-        async def fetch_page(page_offset: int, page_limit: Optional[int]) -> List[Dict[str, Any]]:
-            """Fetch and return one pre-tag tree page."""
-            return await viking_fs.tree(
-                uri,
-                ctx=ctx,
-                output="original" if raw_page else output,
-                abs_limit=abs_limit,
-                include_abstract=None if raw_page else include_abstract,
-                include_overview=False if raw_page else include_overview is True,
-                overview_limit=overview_limit,
-                show_all_hidden=show_all_hidden,
-                directories_only=directories_only,
-                node_limit=page_limit,
-                level_limit=level_limit,
-                extra_fields=None if raw_page else extra_fields,
-                offset=page_offset,
-            )
-
-        if has_time_window:
-            page = await self._collect_time_filtered_page(
-                fetch_page,
-                ctx,
-                since_dt,
-                until_dt,
-                offset,
-                node_limit,
-                tags=tags,
-                include_tags=include_tags or bool(tags) or "tags" in (extra_fields or []),
-            )
-        elif tags:
-            page = await self._collect_tagged_page(
-                fetch_page,
-                ctx,
-                tags,
-                include_tags or bool(tags) or "tags" in (extra_fields or []),
-                offset,
-                node_limit,
-            )
-        else:
-            fetch_limit = node_limit + 1 if node_limit > 0 else node_limit
-            entries = await fetch_page(offset, fetch_limit)
-            entries = await self._attach_and_filter_tags(
-                entries, ctx, None, include_tags or "tags" in (extra_fields or [])
-            )
-            return ListingPage(
-                entries=entries[:node_limit] if node_limit > 0 else entries,
-                has_more=node_limit > 0 and len(entries) > node_limit,
-            )
+        page = await self._list_page(
+            viking_fs,
+            uri,
+            ctx,
+            recursive=True,
+            directories_only=directories_only,
+            level_limit=level_limit,
+            show_all_hidden=show_all_hidden,
+            since=since,
+            until=until,
+            offset=offset,
+            node_limit=node_limit,
+            tags=tags,
+            include_tags=include_tags or bool(tags) or "tags" in (extra_fields or []),
+        )
 
         if (
             output != "original"
