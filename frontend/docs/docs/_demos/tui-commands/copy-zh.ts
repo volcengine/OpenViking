@@ -77,9 +77,18 @@ export const COMMAND_COPY_ZH: Readonly<Record<string, string>> = {
   'fail, overwrite or skip': 'fail 报错，overwrite 覆盖，skip 跳过',
   'Export context as .ovpack': '将上下文导出为 .ovpack',
   'Output file path': '导出文件路径',
-  'Compile source materials with a VikingBot skill':
-    '使用 VikingBot 技能编译文件生成 Wiki',
-  'Source file or directory': '源文件或目录 URI',
-  'Target directory': '目标目录 URI',
-  'Skill URI or the literal memory': '技能 URI，或使用 memory 内置技能',
+  'Compile imported resources with a Skill': '按 Skill 编译资料',
+  'Name of an existing compilation configuration': '已保存的编译配置名称',
+  'Save a compilation configuration without running it':
+    '创建编译配置，不立即执行',
+  'Unique name for the new compilation configuration': '新编译配置的唯一名称',
+  'Existing source directories; repeat or separate with commas':
+    '已存在的来源目录；可重复传入或用英文逗号分隔',
+  'Output directory': '产物输出目录',
+  'Skill directory URI': 'Skill 目录 URI',
+  'Additional compilation instructions': '补充编译指令',
+  'Extra model and scheduling options as a JSON object':
+    '模型与定时执行等扩展参数，使用 JSON 对象',
+  'Skill target root directory': 'Skill 的目标根目录',
+  'Session used for this memory example': '记忆示例使用的会话 ID',
 };

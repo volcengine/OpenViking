@@ -4,6 +4,7 @@ import type { OvRequestOptions } from '../../client/types.js';
 import type {
   TuiCommandDefinition,
   TuiLabels,
+  TuiQuickCommand,
   TuiRecord,
 } from '../../components/tui/index.js';
 import type {
@@ -57,14 +58,16 @@ export interface ConsoleProps
   /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
   locale?: Locale;
   /**
-   * 终端空态展示的快捷命令名称，按数组顺序取自命令目录，未命中的名称跳过，
+   * 终端空态快捷入口，按 name 从命令目录复用说明，点击原样填入 value 并聚焦，不提交。
+   * 未命中的名称跳过，
    * 重复名称只保留首次出现。
-   * 省略时使用默认集合；传空数组不展示内置空态。
-   * Quick command names shown in the terminal empty state, resolved from the
-   * command catalogue in array order with unknown names skipped. Omitted uses
-   * the default set; an empty array shows no built-in empty state.
+   * 省略时使用包含 ov 命令前缀的默认集合；传空数组不展示内置空态。
+   * Terminal shortcuts resolve copy by name from the command catalogue;
+   * selection fills value verbatim and focuses without submitting. Unknown
+   * names are skipped. Omitted uses the default set with ov command prefixes;
+   * an empty array shows no built-in empty state.
    */
-  quickCommands?: readonly string[];
+  quickCommands?: readonly TuiQuickCommand[];
   /** Host-owned conversation state/capabilities. Omit draft callbacks to use Console's local draft. */
   conversation?: Partial<VikingBotProps>;
   /** Reports navigation intent; the host opens the resource. */
