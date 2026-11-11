@@ -1562,45 +1562,16 @@ class VikingVectorIndexBackend:
         levels: Optional[List[int]] = None,
         ctx: RequestContext,
     ) -> List[Dict[str, Any]]:
-        """Update tags for an exact record or directory summary records."""
+        """Update search tags for the exact indexed record or directory summary records."""
         if mode not in {"replace", "append"}:
             raise ValueError(f"unsupported tag mode: {mode}")
 
-        def resolve_tags(record: Dict[str, Any]) -> List[str]:
-            """根据更新模式和已有记录，计算最终标签列表。"""
-            if mode == "append":
-                resolved = merge_search_tags(record.get("search_tags"), tags)
-            else:
-                resolved = list(tags)
-            if record.get("context_type") == "memory":
-                resolved = preserve_memory_type_tag(record.get("search_tags"), resolved)
-            return resolved
-
-        async def update_appended_tags(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-            record_id = record.get("id")
-            if not record_id:
-                return None
-
-            updated_record = dict(record)
-            updated_record["search_tags"] = resolve_tags(updated_record)
-            result = await self.update(
-                {"id": str(record_id), "search_tags": updated_record["search_tags"]},
-                ctx=ctx,
-            )
-            if result.ok:
-                return updated_record
-            if result.error_code == "NOT_FOUND":
-                return None
-            raise RuntimeError(result.error_message or f"failed to update search tags: {record_id}")
+        from openviking.utils.tags import merge_search_tags
 
         if levels is None:
             record = await self.fetch_by_uri(uri, ctx=ctx)
             if not record or not record.get("id"):
                 return []
-
-            if mode == "append":
-                updated_record = await update_appended_tags(record)
-                return [updated_record] if updated_record else []
 
             full_records = await self.get([str(record["id"])], ctx=ctx)
             if not full_records:
@@ -1614,7 +1585,19 @@ class VikingVectorIndexBackend:
 
             updated_record = dict(full_records[0])
             try:
-                updated_record["search_tags"] = resolve_tags(updated_record)
+                if mode == "append":
+                    updated_record["search_tags"] = merge_search_tags(
+                        updated_record.get("search_tags"), tags
+                    )
+                else:
+                    updated_record["search_tags"] = list(tags)
+                if updated_record.get("context_type") == "memory":
+                    updated_record["search_tags"] = preserve_memory_type_tag(
+                        full_records[0].get("search_tags"),
+                        updated_record["search_tags"],
+                    )
+            except InvalidArgumentError:
+                raise
             except Exception as exc:
                 logger.warning(
                     "update_search_tags failed to merge exact record tags uri=%s "
@@ -1640,14 +1623,6 @@ class VikingVectorIndexBackend:
         if not records:
             return []
 
-        if mode == "append":
-            updated_records = []
-            for record in records:
-                updated_record = await update_appended_tags(record)
-                if updated_record:
-                    updated_records.append(updated_record)
-            return updated_records
-
         record_ids = [str(record["id"]) for record in records if record.get("id")]
         if not record_ids:
             return []
@@ -1672,7 +1647,19 @@ class VikingVectorIndexBackend:
                 continue
             updated_record = dict(full_record)
             try:
-                updated_record["search_tags"] = resolve_tags(updated_record)
+                if mode == "append":
+                    updated_record["search_tags"] = merge_search_tags(
+                        updated_record.get("search_tags"), tags
+                    )
+                else:
+                    updated_record["search_tags"] = list(tags)
+                if updated_record.get("context_type") == "memory":
+                    updated_record["search_tags"] = preserve_memory_type_tag(
+                        full_record.get("search_tags"),
+                        updated_record["search_tags"],
+                    )
+            except InvalidArgumentError:
+                raise
             except Exception as exc:
                 logger.warning(
                     "update_search_tags failed to merge leveled record tags uri=%s "
