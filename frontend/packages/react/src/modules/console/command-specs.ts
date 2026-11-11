@@ -1,6 +1,7 @@
 import type enUS from './locales/en-US.js';
 import type { OvRequestSpec } from '../../client/types.js';
 import type { TuiSkeletonKind } from '../../components/tui/index.js';
+import { CORE_COMMAND_SPECS } from './core-command-specs.js';
 import type { Argument } from './command-parser.js';
 
 type Values = Record<string, string | number | boolean>;
@@ -10,6 +11,10 @@ export interface CommandSpec {
   flags?: readonly Argument[];
   skeleton?: TuiSkeletonKind;
   request?: (values: Values) => OvRequestSpec;
+  execute?: (
+    values: Values,
+    request: (spec: OvRequestSpec) => Promise<Record<string, unknown>>,
+  ) => Promise<unknown>;
 }
 
 const uri: Argument = { name: 'uri', kind: 'uri' };
@@ -22,6 +27,7 @@ const taskId: Argument = { name: 'id' };
 export const COMMAND_SPECS: readonly CommandSpec[] = [
   { name: 'help' },
   { name: 'clear' },
+  ...CORE_COMMAND_SPECS,
   {
     name: 'health',
 
@@ -81,7 +87,11 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     name,
 
     positional: [{ name: 'query' }],
-    flags: [{ name: 'target_uri', kind: 'uri' }, limit],
+    flags: [
+      { name: 'target_uri', kind: 'uri', alias: '-u' },
+      { ...limit, alias: '-n' },
+      { name: 'level', alias: '-L' },
+    ],
     skeleton: 'search',
     request: (body) => ({
       method: 'POST',

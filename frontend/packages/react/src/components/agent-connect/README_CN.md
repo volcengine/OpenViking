@@ -26,7 +26,7 @@ import '@openviking/react/components/agent-connect/style.css';
 - 默认 1000px 宽、949px 最小高度，左侧列表 200px，列间距 40px，详情宽 660px；标题、胶囊页签、行高、图标尺寸、指令排版和光晕以设计截图为准。
 - 默认选中「接入主流 Agent」与 Codex。页签和条目使用实例内状态，也可通过 `activeTabId`、`selectedId` 控制，并通过可选回调通知宿主。页签支持方向键、Home、End。
 - 主流页签展示完整本地目录：Codex、Claude Code、豆包工作、WorkBuddy、TRAE、Cursor、OpenClaw、Hermes Agent、OpenCode、DeepSeek Harness、DeerFlow、pi、ZCode、Kimi Code；移除接入应用和 vscode。开发页签展示 MCP、CLI、API、SDK，使用相同列表与详情布局。选择不属于当前分组时显示该分组第一项；各分组记住实例内选择。
-- `showOverseasTag` 默认 `false`，不显示「境外」标签。设为 `true` 时，Codex、Claude Code、Cursor、OpenClaw、Hermes Agent、OpenCode、pi 的详情增加「境外」标签（英文为 Overseas），原接入方式标签保留。标签按 Agent 产品归属维护，不根据其使用的模型推断部署地区。
+- Codex 和 Claude Code 默认在 Plugin 旁展示「境外」标签（英文为 Overseas）。`showOverseasTag` 设为 `true` 时也标记 Cursor、OpenClaw、Hermes Agent、OpenCode 和 pi，设为 `false` 时隐藏所有「境外」标签。标签按 Agent 产品归属维护，不根据其使用的模型推断部署地区。
 - DeerFlow 详情内置 MemoryManager、MCP 两种接入说明，可独立切换与复制；默认 MemoryManager，切换说明后复制反馈重置。新增图标使用本地目录中的原始 Logo，以透明度蒙版保留轮廓并跟随主题文字色，保证暗色可见。
 - CLI 详情合并本地 `cli.md` 与 `agent-cli.md`，提供「手动终端安装」「通过 AI Agent 安装」两个内部页签，默认手动安装。页签沿用参考组件的底部边线、24px 间距与主色选中下划线，颜色跟随主题；复制仅包含当前页签正文，切换后反馈重置。
 - 元数据与正文从仓库 [本地目录](../../../../../../docs/images/agents) 生成组件内置快照，不在运行时加载远端 JSON 或 Markdown。Codex、Claude Code、TRAE、Cursor、OpenCode、DeepSeek Harness、pi、ZCode、Kimi Code 沿用参考组件的官方安装器完整指令，其他条目使用对应本地文档。更新文档后运行 `node packages/react/src/components/agent-connect/generate-content.mjs`。

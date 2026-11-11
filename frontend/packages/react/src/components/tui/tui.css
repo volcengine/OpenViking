@@ -1025,7 +1025,7 @@
   border-radius: 0;
   background: transparent;
   padding: 0;
-  color: var(--ov-ui-text-secondary, inherit);
+  color: var(--ov-ui-text-secondary, var(--ov-ui-tui-input-text-default));
   font: inherit;
   font-size: 16px;
   line-height: 26px;
@@ -1064,9 +1064,17 @@
   font: inherit;
 }
 
-.ov-tui__bubble-command,
-.ov-tui__input-command {
+.ov-tui__bubble-command {
   color: var(--ov-ui-tui-text);
+}
+
+.ov-tui__input-command,
+.ov-tui__input-command .ov-tui__command-prefix {
+  color: var(--ov-ui-tui-link);
+}
+
+.ov-tui__input-command .ov-tui__command-name {
+  text-shadow: none;
 }
 
 .ov-tui__command-prefix {
@@ -1089,7 +1097,7 @@
   position: relative;
   color: transparent;
   -webkit-text-fill-color: transparent;
-  caret-color: var(--ov-ui-tui-text);
+  caret-color: var(--ov-ui-text-secondary, var(--ov-ui-tui-input-text-default));
   scrollbar-width: none;
 }
 
