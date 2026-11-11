@@ -205,7 +205,7 @@ DSH 的 skill 文件系统在 `sdk` profile 里是开着的，OpenViking SuperAg
 
 | rank | 位置 | 说明 |
 |---|---|---|
-| 100 | `<workspace>/.dsh/skills` | 项目自己的 DSH 技能 |
+| 100 | `<projectRoot>/.dsh/skills` | 项目自己的 DSH 技能 |
 | 200 | `<projectRoot>/.agents/skills` | 项目共享技能；`projectRoot` 是最近的 `.git` 祖先，没有就用工作区 |
 | 300 | `<HOME>/.agents/skills`、`<HOME>/.dsh/skills` | 宿主账号的全局技能，默认加，按此顺序；`<HOME>` 在 Windows 上就是 `C:\Users\<用户>` |
 | 300 | `skillDirs` 里的目录 | 额外目录，排在上面两个之后 |
