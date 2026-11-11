@@ -1,3 +1,5 @@
+import arrowUpRight from '../../../packages/icons/svg/directory-tour/arrow-up-right.svg';
+import folderOpen from '../../../packages/icons/svg/directory-tour/folder-open.svg';
 import { withBase } from '@rspress/core/runtime';
 import { DirectoryTourIntro } from '@openviking/react/components/directory-tour';
 
@@ -38,7 +40,7 @@ export function TeamTourContent({ locale, onDone, onAction }: Props) {
             将团队成员各自{' '}
             <img
               className="ov-directory-tour-team__folder"
-              src={withBase('/directory-tour/team/folder-open.svg')}
+              src={folderOpen}
               alt=""
             />{' '}
             <span className="ov-directory-tour-team__term">experiences</span>{' '}
@@ -71,10 +73,7 @@ export function TeamTourContent({ locale, onDone, onAction }: Props) {
             onClick={() => onAction('edit')}
           >
             {zh ? '编辑' : 'Edit'}
-            <img
-              src={withBase('/directory-tour/team/arrow-up-right.svg')}
-              alt=""
-            />
+            <img src={arrowUpRight} alt="" />
           </button>
         </span>,
       ]}

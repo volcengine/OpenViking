@@ -67,3 +67,8 @@ React imports these SVG files directly during its build.
 `viking-bot/remove.svg` is an OpenViking-authored close glyph under the repository license.
 
 - `svg/viking-bot/tool.svg` — unchanged `IconTool` artwork from the public MIT-licensed `@arco-design/web-react` 2.66.18, matching the tool row in `vikingdb-fe` release/openviking/2026-11-12.
+
+- `svg/directory-tour/` — the folder and up-right arrow artwork from the
+  [OpenViking Console team experience introduction](https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=10168-334211).
+  The documentation demo bundles these local SVGs directly; the design's paths
+  and colors are unchanged. They follow this repository's license.

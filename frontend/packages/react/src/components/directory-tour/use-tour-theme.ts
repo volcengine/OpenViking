@@ -7,7 +7,8 @@ export function useTourTheme(
 ) {
   // The portal loses the anchor's DOM ancestry. Copy its computed theme onto
   // a private parent, leaving surface declarations higher in the CSS cascade.
-  // Observe ancestor theme changes and remove all listeners/tokens on cleanup.
+  // Track DOM reparenting and ancestor theme changes while open; disconnect the
+  // observer and remove listeners and copied tokens on cleanup.
   useEffect(() => {
     const host = surface?.parentElement;
     if (!anchor || !host) return;
@@ -26,13 +27,45 @@ export function useTourTheme(
       copied.clear();
       for (const name of next) copied.add(name);
     };
-    update();
-    const observer = new MutationObserver(update);
-    for (let node: HTMLElement | null = anchor; node; node = node.parentElement)
-      observer.observe(node, {
-        attributes: true,
-        attributeFilter: ['class', 'style', 'data-theme'],
+    let ancestors: HTMLElement[] = [];
+    const observeAncestry = () => {
+      const next: HTMLElement[] = [];
+      for (
+        let node: HTMLElement | null = anchor;
+        node;
+        node = node.parentElement
+      )
+        next.push(node);
+      if (
+        next.length === ancestors.length &&
+        next.every((node, index) => node === ancestors[index])
+      )
+        return false;
+
+      ancestors = next;
+      observer.disconnect();
+      for (const node of ancestors)
+        observer.observe(node, {
+          attributes: true,
+          attributeFilter: ['class', 'style', 'data-theme'],
+          childList: true,
+        });
+      // A detached anchor can be inserted into a different parent later.
+      observer.observe(anchor.ownerDocument, {
+        childList: true,
+        subtree: !anchor.isConnected,
       });
+      return true;
+    };
+    const observer = new MutationObserver((records) => {
+      if (
+        observeAncestry() ||
+        records.some(({ type }) => type === 'attributes')
+      )
+        update();
+    });
+    observeAncestry();
+    update();
     // Media queries can change computed tokens without a DOM mutation.
     window.addEventListener('resize', update);
     window.visualViewport?.addEventListener('resize', update);

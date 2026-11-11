@@ -91,8 +91,8 @@ export function useTourPosition(
             right: Math.min(group.right, clip.right),
             bottom: Math.min(group.bottom, clip.bottom),
           };
-        const right = (group?.right ?? a.right) + 6;
-        const leftSide = (group?.left ?? a.left) - box.width - 6;
+        const right = a.right + 6;
+        const leftSide = a.left - box.width - 6;
         left =
           placement === 'right'
             ? right + box.width <= x + width - margin || leftSide < x + margin

@@ -36,6 +36,11 @@ const step = {
 
 test('custom single-step content highlights all rows, keeps selection and completes only on click', async () => {
   const rows = anchors();
+  rows[0].getBoundingClientRect = () => ({
+    ...box(100, 32),
+    right: 153,
+    width: 133,
+  });
   rows[1].setAttribute('aria-selected', 'true');
   let completed = 0;
   let located = 0;
@@ -69,6 +74,7 @@ test('custom single-step content highlights all rows, keeps selection and comple
     assert.equal(highlight.style.top, '100px');
     assert.equal(highlight.style.height, '128px');
     assert.equal(highlight.style.width, '300px');
+    assert.equal(dialog.parentElement.style.left, '159px');
     assert.equal(dialog.querySelector('.ov-directory-tour__progress'), null);
     assert.equal(rows[1].getAttribute('aria-selected'), 'true');
     const count = located;
