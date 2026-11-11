@@ -251,8 +251,13 @@ export function dshCommand({ bin = 'dsh', patchPath }) {
 // writes (design §1). A provider section here would make `superagent/settings/mutate`
 // answer "overridden by a home patch or command-line overlay", so the CLI would
 // be editing a document nothing reads.
+//
+// `mcpServers` and `skillDirs` come from `dsh-extensions.mjs`; both are optional
+// so the control patch and every older caller keep the exact patch they had
+// before.
 export function buildDshPatch({
   policy = '', bridgePath = DSH_BRIDGE_PATH, mcp = null,
+  mcpServers = [], skillDirs = [],
 } = {}) {
   const insert = [];
   const patch = [];
@@ -273,7 +278,22 @@ export function buildDshPatch({
       ...(mcp.toolCallTimeoutMs ? { toolCallTimeoutMs: mcp.toolCallTimeoutMs } : {}),
     },
   });
+  // User MCP servers are ordinary `dsh-mcp-client` rows. They are deliberately
+  // not fatal on startup: one broken server must not take the session down.
+  for (const server of mcpServers) {
+    insert.push({
+      id: `superagent-mcp-${server.serverName}`, name: '@deepseek-ai/dsh-mcp-client',
+      config: { failOnStartupError: false, ...server },
+    });
+  }
   if (insert.length > 0) patch.push({ insert });
+  // Extra roots sit beside DSH's own project/user discovery, which stays
+  // enabled: the row only adds `customSkillDirs` at its own rank. It carries the
+  // host user's `~/.agents/skills` and `~/.dsh/skills`, which the isolated
+  // DSH_HOME/DSH_AGENTS_HOME hide, plus anything the instance configures.
+  if (skillDirs.length > 0) {
+    patch.push({ id: 'skill-filesystem', config: { customSkillDirs: [...skillDirs] } });
+  }
   patch.push({ id: 'system-prompt', config: { personaPrefix: escapeDshTemplate(policy) } });
   for (const id of ['tool-ask-user', 'schedule', 'tool-schedule', 'tool-plugin-manager', 'present', 'tool-subagent-fork']) {
     patch.push({ id, disabled: true });
@@ -283,9 +303,10 @@ export function buildDshPatch({
 
 export function writeDshPatch({
   dataDir, policy = '', bridgePath = DSH_BRIDGE_PATH, mcp = null,
+  mcpServers = [], skillDirs = [],
 } = {}) {
   const { run } = prepareDshEnvironment(dataDir);
-  const patch = buildDshPatch({ policy, bridgePath, mcp });
+  const patch = buildDshPatch({ policy, bridgePath, mcp, mcpServers, skillDirs });
   const patchPath = path.join(run, 'patch.yml');
   const temporary = `${patchPath}.${process.pid}.tmp`;
   const content = `${JSON.stringify(patch, null, 2)}\n`;

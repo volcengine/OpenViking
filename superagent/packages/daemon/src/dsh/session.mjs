@@ -32,6 +32,7 @@ import {
   sanitizeDshEnv,
   writeDshPatch,
 } from '../dsh-runtime.mjs';
+import { readDshExtensions } from '../dsh-extensions.mjs';
 import { number } from './shared.mjs';
 import {
   appliedSelection, initializeFailure, modelSelection, modelUnavailable,
@@ -174,6 +175,11 @@ export default {
     // configuration on a premise that does not hold.
     prepareDshEnvironment(this.config.dataDir);
     const tools = agentToolServer(this.config, this.authorityToken);
+    const extensions = readDshExtensions({
+      dataDir: this.config.dataDir,
+      workspace: this.config.workspace,
+      warn: message => this.logger.warn('dsh_extensions_invalid', { message: String(message) }),
+    });
     const patchPath = writeDshPatch({
       dataDir: this.config.dataDir,
       policy: this.systemPrompt,
@@ -182,6 +188,8 @@ export default {
         ...tools,
         toolCallTimeoutMs: Math.max(10_000, number(this.config.sendTimeoutMs) + 5_000),
       },
+      mcpServers: extensions.mcpServers,
+      skillDirs: extensions.skillDirs,
     });
     const command = dshCommand({ bin: this.config.dshBin || 'dsh', patchPath });
     // The change-detection baseline is the document this child is started from,

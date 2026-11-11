@@ -193,9 +193,98 @@ patch 的分层顺序是 bundle → profile（`<DSH_HOME>/profiles/sdk/cordis.pa
 - home patch 也能把某一行整行 `disabled: true`；`disabled` 与 `config` 是不同键，两个都会留下。把 `llm-pi-ai` 整行禁用后模型插件不激活，需要删掉这一行才能继续用 `ov-superagent dsh model`。
 - 引用不存在的 id 会在 stderr 报 `patch: entry "…" not found`，其余层照常应用。
 
-无人值守策略关闭提问、DSH 定时器、插件管理和 Web 交付卡片工具，并关闭 `subagent_fork`：fork 子 agent 继承父会话历史（含 `decision_id`）且不支持独立 preset，是唯一无法被 preset 收敛的委派入口，因此在 patch 里被 `disabled` 掉。`subagent`（spawn）保留。权限模式为 `danger-full-access`，即本机进程没有额外安全边界；服务端若请求审批，OpenViking SuperAgent 一律拒绝并记录。遥测关闭。工作区 AGENTS.md 和 DSH skills 保留，用户的全局 `~/.dsh`、`~/.agents` 不会混入。
+无人值守策略关闭提问、DSH 定时器、插件管理和 Web 交付卡片工具，并关闭 `subagent_fork`：fork 子 agent 继承父会话历史（含 `decision_id`）且不支持独立 preset，是唯一无法被 preset 收敛的委派入口，因此在 patch 里被 `disabled` 掉。`subagent`（spawn）保留。权限模式为 `danger-full-access`，即本机进程没有额外安全边界；服务端若请求审批，OpenViking SuperAgent 一律拒绝并记录。遥测关闭。工作区 AGENTS.md 和实例自己的 DSH skills 保留；宿主账号的 `~/.agents/skills`、`~/.dsh/skills` 默认也作为额外根加入，不需要时可以关掉（见「技能与 MCP」）。
 
 当前支持的上限锁定 0.2.x，因为 bridge 使用 SDK 的进程内 Agent API；版本低于 `0.2.2-rc.1` 或不带该 bridge 的 DSH 会在启动/握手时被拒绝。
+
+## 技能与 MCP
+
+### 技能
+
+DSH 的 skill 文件系统在 `sdk` profile 里是开着的，OpenViking SuperAgent 没有关掉它。默认扫这些根，rank 小的先赢：
+
+| rank | 位置 | 说明 |
+|---|---|---|
+| 100 | `<workspace>/.dsh/skills` | 项目自己的 DSH 技能 |
+| 200 | `<projectRoot>/.agents/skills` | 项目共享技能；`projectRoot` 是最近的 `.git` 祖先，没有就用工作区 |
+| 300 | `<HOME>/.agents/skills`、`<HOME>/.dsh/skills` | 宿主账号的全局技能，默认加，按此顺序；`<HOME>` 在 Windows 上就是 `C:\Users\<用户>` |
+| 300 | `skillDirs` 里的目录 | 额外目录，排在上面两个之后 |
+| 400 | `<DSH_HOME>/skills` | 实例的 DSH 技能 |
+| 500 | `<DSH_AGENTS_HOME>/skills` | 实例的全局技能，即 `<dataDir>/dsh/agents/skills` |
+
+`~/.agents/skills`、`~/.dsh/skills` 由 daemon 按运行账号的 home 展开成绝对路径，再作为 `customSkillDirs` 写进 `skill-filesystem` 行；DSH 自己的项目根和实例根不受影响。这两条是默认行为，不用写配置。不想要宿主技能混进来时，在配置里写 `"hostSkills": false`，两份配置文件任意一份写了都生效。
+
+技能是目录包 `<name>/SKILL.md` 或平铺 `<name>.md`，`name` 必须是 kebab-case，frontmatter 至少要有 `name` 和 `description`。目录只扫一层，不递归 `**/SKILL.md`。注意是 `.agents/skills`（两个都复数），不是 `.agent/skill`。不存在的根目录会被探测，运行中新建也能被发现，不用重启。
+
+### MCP
+
+MCP 没有单独的 `.mcp.json` 约定；DSH 里一台服务器就是一条 `@deepseek-ai/dsh-mcp-client` 的 Cordis 行。`extensions.json` 把它收成一张表，daemon 在每次启动时把这些行插进自己的 `--patch`，不改 DSH 的 profile 或 home。按正常的 DSH 补丁写法，MATLAB 和 Windows 这两个服务器是这样：
+
+```yaml
+- insert:
+    - id: mcp-matlab
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: matlab
+        transport: stdio
+        command: 'D:\AgentRelated\AgenticToolkits\matlab-mcp-server-windows-x64.exe'
+        args:
+          - '--matlab-session-mode=existing'
+          - '--extension-file=D:\AgentRelated\AgenticToolkits\simulink-agentic-toolkit\tools\tools.json'
+          - '--disable-telemetry=true'
+        env:
+          WINDIR: 'C:\Windows'
+    - id: mcp-windows
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: windows-mcp
+        transport: stdio
+        command: 'C:\Users\17745\.local\bin\windows-mcp.exe'
+        args: ['serve']
+        env:
+          ANONYMIZED_TELEMETRY: 'false'
+          WINDOWS_MCP_SCREENSHOT_SCALE: '0.5'
+        toolCallTimeoutMs: 120000
+```
+
+在 OpenViking SuperAgent 里写成同一张表的两个键，`serverName` 由键名给出，`id` 和 `name` 由 daemon 生成：
+
+```json
+{
+  "mcpServers": {
+    "matlab": {
+      "transport": "stdio",
+      "command": "D:\\AgentRelated\\AgenticToolkits\\matlab-mcp-server-windows-x64.exe",
+      "args": [
+        "--matlab-session-mode=existing",
+        "--extension-file=D:\\AgentRelated\\AgenticToolkits\\simulink-agentic-toolkit\\tools\\tools.json",
+        "--disable-telemetry=true"
+      ],
+      "env": { "WINDIR": "C:\\Windows" }
+    },
+    "windows-mcp": {
+      "command": "C:\\Users\\17745\\.local\\bin\\windows-mcp.exe",
+      "args": ["serve"],
+      "env": {
+        "ANONYMIZED_TELEMETRY": "false",
+        "WINDOWS_MCP_SCREENSHOT_SCALE": "0.5"
+      },
+      "toolCallTimeoutMs": 120000
+    }
+  }
+}
+```
+
+`transport` 不写时，有 `url` 就是 `streamable-http`，否则是 `stdio`；远程服务器写 `url` 和 `headers`。`serverName` 由键名决定，必须匹配 `[A-Za-z0-9_-]{1,32}`，`personal_agent` 是 OpenViking SuperAgent 自己保留的。`command`、`args`、`env`、`cwd` 对应 stdio，`toolCallTimeoutMs` 默认 60 秒；`failOnStartupError` 默认 `false`，一台起不来只丢它的工具，不会让整个会话启动失败，需要严格失败时自己写 `true`。0.2.2-rc.1 的 `dsh-mcp-client` 不做凭据模板展开，`env`、`headers` 里写的是字面值；`extensions.json` 必须自己保护好（建议 0600），不要把明文密钥提交进仓库。
+
+配置文件有两份，项目层按服务器名覆盖全局层，`skillDirs` 合并，`hostSkills: false` 任意一份都生效：
+
+```text
+<dataDir>/dsh/extensions.json        实例全局
+<workspace>/.agents/dsh.json         项目
+```
+
+两份都是可选文件，改完在下一次 DSH 启动时生效；`ov-superagent restart <实例>` 不用等轮次边界。文件坏了只记一条 `dsh_extensions_invalid` 告警并跳过坏项，不会阻止 DSH 启动。
 
 ## 密钥存在哪里
 

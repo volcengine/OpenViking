@@ -99,6 +99,46 @@ test('generated patch replaces SDK transport and keeps config/mcp variants', (t)
   assert.equal(JSON.parse(fs.readFileSync(written, 'utf8')).some(row => row.id === 'llm-pi-ai'), false);
 });
 
+test('generated patch carries user MCP servers and the host skill roots', () => {
+  const servers = [
+    { transport: 'stdio', serverName: 'github', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env: { TOKEN: 'x' } },
+    { transport: 'streamable-http', serverName: 'remote', url: 'https://mcp.example.com/mcp' },
+    { transport: 'stdio', serverName: 'windows', command: 'windows-mcp.exe', args: ['serve'], env: { WINDOWS_MCP_SCREENSHOT_SCALE: '0.5' }, toolCallTimeoutMs: 120000 },
+  ];
+  const patch = buildDshPatch({
+    mcp: { command: '/node', args: ['/mcp.mjs'] },
+    mcpServers: servers,
+    skillDirs: ['/home/me/.agents/skills', '/home/me/.dsh/skills'],
+  });
+  const rows = patch.find(row => row.insert).insert;
+  assert.deepEqual(rows.map(row => row.id), [
+    'superagent-dsh-bridge', 'superagent-personal-agent',
+    'superagent-mcp-github', 'superagent-mcp-remote', 'superagent-mcp-windows',
+  ]);
+  assert.equal(rows[2].name, '@deepseek-ai/dsh-mcp-client');
+  assert.equal(rows[2].config.failOnStartupError, false);
+  assert.equal(rows[3].config.transport, 'streamable-http');
+  assert.deepEqual(rows[4].config, {
+    failOnStartupError: false,
+    transport: 'stdio',
+    serverName: 'windows',
+    toolCallTimeoutMs: 120000,
+    command: 'windows-mcp.exe',
+    args: ['serve'],
+    env: { WINDOWS_MCP_SCREENSHOT_SCALE: '0.5' },
+  });
+  assert.deepEqual(patch.find(row => row.id === 'skill-filesystem'), {
+    id: 'skill-filesystem', config: { customSkillDirs: ['/home/me/.agents/skills', '/home/me/.dsh/skills'] },
+  });
+  // The skill row only adds roots: it does not disable DSH's project and
+  // instance discovery, which stays on through the provider's own defaults.
+  assert.equal(patch.some(row => row.id === 'skill-filesystem' && row.disabled), false);
+  // Unattended policy stays: no in-chat plugin management, asking, or fork.
+  const unattended = buildDshPatch({ mcp: null });
+  assert.equal(unattended.some(row => row.id === 'skill-filesystem'), false);
+  assert.equal(unattended.some(row => row.id === 'tool-plugin-manager' && row.disabled), true);
+});
+
 test('the model settings document is DSH home profiles/sdk/cordis.patch.yml', t => {
   const dataDir = temp(t);
   const expected = path.join(dataDir, 'dsh', 'home', 'profiles', 'sdk', 'cordis.patch.yml');
