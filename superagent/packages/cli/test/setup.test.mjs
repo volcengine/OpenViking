@@ -72,8 +72,9 @@ function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1
 test('a startup failure points to the instance logs before retrying start', async (t) => {
   const h = harness(t, ['OpenViking SuperAgent', '', '', '1', '1', '', '', 'y'], { failStart: true });
   assert.equal(await setupCommand(h.options), 1);
+  assert.ok(h.written().includes('配置已保存，但启动没有完成'));
   assert.ok(h.written().includes(`${superagentCommand(h.options.env)} logs primary 查看具体错误`));
-  assert.ok(h.written().includes(`${superagentCommand(h.options.env)} start primary`));
+  assert.ok(h.written().includes(`${superagentCommand(h.options.env)} start`));
 });
 
 test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after every answer, then it starts', async (t) => {

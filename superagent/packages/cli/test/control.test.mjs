@@ -105,7 +105,14 @@ test('start verifies the identity of an already online app before reporting it',
 
 test('start checks an already online updater socket instead of announcing success', async (t) => {
   const f = fixture(t, ['superagent-updater']);
-  await assert.rejects(startCommand('updater', f.options), windows ? /do not support the release updater/ : /updater did not become ready/);
+  if (windows) {
+    await assert.rejects(startCommand('updater', f.options), /do not support the release updater/);
+  } else {
+    // Readiness is a report now: the socket never answers, so start returns 1.
+    const code = await startCommand('updater', f.options);
+    assert.equal(code, 1);
+    assert.match(f.stderr(), /superagent-updater: updater did not become ready/);
+  }
   assert.doesNotMatch(f.output(), /已经在运行/);
 });
 

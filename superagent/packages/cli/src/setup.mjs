@@ -2001,17 +2001,33 @@ async function setupFlow({
 
   prompter.section(current ? t('重启', 'Restart') : t('启动', 'Start'));
   prompter.success(t(`配置已写入 ${shortenHome(configPath, homeDir)}`, `Saved ${shortenHome(configPath, homeDir)}`));
-  // pm2's own progress lines stay out of the way; the spinners say it.
+  // pm2's own progress lines stay out of the way; the spinners say it. A start
+  // that reports failures (rather than throwing) is still a failed start: every
+  // failing app and its reason has to reach the owner before anything claims
+  // success.
   const quiet = { write() {} };
+  const failures = [];
+  const capture = () => {
+    let text = '';
+    return { stderr: { write: (chunk) => { text += chunk; } }, text: () => text.trim() };
+  };
+  const noteFailure = (label, detail) => failures.push({ label, detail: String(detail ?? '').trim() });
   const command = current ? 'restart' : 'start';
-  try {
-    await step(prompter, t(`${current ? '重启' : '启动'} ${state.displayName}（${id}）`, `${current ? 'Restarting' : 'Starting'} ${state.displayName} (${id})`),
-      () => control[command](id, { env, stdout: quiet }),
-      t(`${state.displayName}（${id}）在后台跑起来了`, `${state.displayName} (${id}) is running in the background`));
-  } catch (error) {
-    out(t(`\n配置已保存，但${current ? '重启' : '启动'}没有完成：${error.message}\n运行 ${cli} logs ${id} 查看具体错误；修好后运行 ${cli} ${command} ${id}\n`,
-      `\nSaved, but the ${command} did not finish: ${error.message}\nRun ${cli} logs ${id} for the exact error; once fixed, run ${cli} ${command} ${id}\n`));
-    return 1;
+  const instanceErrors = capture();
+  {
+    const spinning = prompter.spin(t(`${current ? '重启' : '启动'} ${state.displayName}（${id}）`, `${current ? 'Restarting' : 'Starting'} ${state.displayName} (${id})`));
+    let code = 0;
+    let thrown = '';
+    try {
+      code = await control[command](id, { env, stdout: quiet, stderr: instanceErrors.stderr });
+      if (code) spinning.warn(t(`${state.displayName}（${id}）没有起来`, `${state.displayName} (${id}) did not start`));
+      else spinning.succeed(t(`${state.displayName}（${id}）在后台跑起来了`, `${state.displayName} (${id}) is running in the background`));
+    } catch (error) {
+      spinning.warn(t(`${state.displayName}（${id}）没有起来：${error.message}`, `${state.displayName} (${id}) did not start: ${error.message}`));
+      code = 1;
+      thrown = error.message;
+    }
+    if (code) noteFailure(id, instanceErrors.text() || thrown || t('没有就绪', 'not ready'));
   }
   if (!current) {
     // The instance is up. The shared Web (it routes to every instance, so it
@@ -2021,12 +2037,26 @@ async function setupFlow({
       ...(capabilities.updater ? [['start', 'updater', t('自动升级服务', 'Auto-upgrade service')]] : []),
     ]) {
       const spinning = prompter.spin(t(`启动${label}`, `Starting the ${label.toLowerCase()}`));
-      await control[action](target, { env, stdout: quiet }).then(
-        () => spinning.succeed(label),
-        (error) => spinning.warn(t(`superagent-${target} 没有起来：${error.message}；之后运行 ${cli} ${action} ${target}`,
-          `superagent-${target} did not start: ${error.message}; later, run ${cli} ${action} ${target}`)),
-      );
+      const errors = capture();
+      let code = 0;
+      let thrown = '';
+      try {
+        code = await control[action](target, { env, stdout: quiet, stderr: errors.stderr });
+        if (code) spinning.warn(t(`superagent-${target} 没有起来；之后运行 ${cli} ${action} ${target}`, `superagent-${target} did not start; later, run ${cli} ${action} ${target}`));
+        else spinning.succeed(label);
+      } catch (error) {
+        spinning.warn(t(`superagent-${target} 没有起来：${error.message}；之后运行 ${cli} ${action} ${target}`, `superagent-${target} did not start: ${error.message}; later, run ${cli} ${action} ${target}`));
+        code = 1;
+        thrown = error.message;
+      }
+      if (code) noteFailure(target, errors.text() || thrown || t('没有就绪', 'not ready'));
     }
+  }
+  if (failures.length) {
+    const lines = failures.map(({ label, detail }) => (detail ? detail.split('\n').map((line) => `  ${line}`).join('\n') : `  ${label}`)).join('\n');
+    out(t(`\n配置已保存，但启动没有完成：\n${lines}\n运行 ${cli} logs ${id} 查看具体错误；修好后运行 ${cli} start\n`,
+      `\nSaved, but the start did not finish:\n${lines}\nRun ${cli} logs ${id} for the exact error; once fixed, run ${cli} start\n`));
+    return 1;
   }
   let greeted = false;
   // Only someone at a terminal can write to the bot while setup waits; where
