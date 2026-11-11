@@ -318,15 +318,17 @@ async def test_managed_template_batch_is_preflighted_before_any_lock(ctx):
     assert fake_fs._async_agfs.exact_batch_acquire_calls == []
 
 
-def test_new_memory_file_renders_from_replace_mode_and_explicit_new_file_state():
+@pytest.mark.asyncio
+async def test_new_memory_file_renders_from_replace_mode_and_explicit_new_file_state(ctx):
     uri = "viking://user/account-1/memories/new.md"
     coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
 
-    rendered = coordinator._render_final_bytes(
+    rendered = await coordinator._render_final_bytes(
         uri,
         "new memory content",
         mode="replace",
         existing_raw=None,
+        ctx=ctx,
         is_new_file=True,
     )
 

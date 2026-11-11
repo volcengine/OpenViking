@@ -76,6 +76,50 @@ impl PyPrivacyMatcher {
         )
     }
 
+    /// Rewrite independent scalars with one shared budget and one GIL release.
+    /// Only changed scalars are returned, with their input indices and matches.
+    fn sanitize_many_limited(
+        &self,
+        py: Python<'_>,
+        contents: Vec<Bound<'_, PyString>>,
+        max_replacements: usize,
+    ) -> PyResult<(
+        Vec<(usize, String, Vec<(usize, usize, String)>, Vec<Vec<String>>)>,
+        bool,
+    )> {
+        let texts = contents
+            .iter()
+            .map(|content| content.to_str())
+            .collect::<PyResult<Vec<_>>>()?;
+        let matcher = self.inner.clone();
+        Ok(py.detach(move || {
+            let mut remaining = max_replacements;
+            let mut rewritten = Vec::new();
+            for (index, content) in texts.into_iter().enumerate() {
+                let (result, exceeded) = matcher.sanitize_limited(content, remaining);
+                if exceeded {
+                    return (Vec::new(), true);
+                }
+                if result.replacements.is_empty() {
+                    continue;
+                }
+                remaining -= result.replacements.len();
+                let replacements = result
+                    .replacements
+                    .into_iter()
+                    .map(|item| (item.start, item.end, item.reference))
+                    .collect();
+                rewritten.push((
+                    index,
+                    result.content,
+                    replacements,
+                    result.ambiguous_references,
+                ));
+            }
+            (rewritten, false)
+        }))
+    }
+
     /// Return bounded match metadata without copying or rewriting the input.
     ///
     /// Borrow Python's UTF-8 representation for both the byte-size check and

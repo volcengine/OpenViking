@@ -21,7 +21,7 @@ from openviking.core.namespace import (
     owner_space_for_uri,
     resolve_request_uri,
 )
-from openviking.core.skill_loader import SkillLoader
+from openviking.privacy.content import PrivacyContent
 from openviking.privacy.models import UserPrivacyConfigVersion
 from openviking.privacy.reference import PrivacyFieldReference
 from openviking.pyagfs import get_privacy_matcher_class
@@ -43,6 +43,8 @@ DEFAULT_SANITIZER_MAX_REPLACEMENTS = 10000
 
 @dataclass(frozen=True)
 class PrivacyReplacement:
+    """Original match span, or its enclosing scalar for structured content."""
+
     start: int
     end: int
     reference: str
@@ -64,6 +66,7 @@ class PrivacySanitizationResult:
 class _PreparedMatcher:
     native: Any
     ambiguous: dict[str, tuple[str, ...]]
+    has_values: bool
 
 
 class PrivacySanitizer:
@@ -97,6 +100,7 @@ class PrivacySanitizer:
         ] = {}
         self._cache_lock = asyncio.Lock()
         self._ambiguous_matches = 0
+        self.write_failures: Counter[str] = Counter()
         self._ambiguity_lock = Lock()
 
     @property
@@ -161,6 +165,7 @@ class PrivacySanitizer:
         fail_on_match_limit: bool = True,
         settings: ResolvedPrivacyConfig | None = None,
     ) -> PrivacySanitizationResult:
+        """Replace registered values in an explicitly selected document."""
         if not content or self._is_privacy_storage_uri(uri, ctx):
             return PrivacySanitizationResult(content=content)
         if settings is None:
@@ -177,54 +182,69 @@ class PrivacySanitizer:
                     "max_bytes": self._max_content_bytes,
                 },
             )
+        if PrivacyContent.is_skill_metadata(uri):
+            return PrivacySanitizationResult(content=content)
         scope = self.scope_from_uri(uri, ctx)
-        content_start = 0
-        if uri.lower().endswith((".md", ".markdown")) and (
-            (scope is not None and scope[0] == "skill") or classify_uri(uri).is_skill
-        ):
-            if uri.endswith("/.abstract.md"):
-                # Skill L0 is generated from metadata rather than body content.
-                return PrivacySanitizationResult(content=content)
-            frontmatter = SkillLoader.FRONTMATTER_PATTERN.match(content)
-            if frontmatter is not None:
-                content_start = frontmatter.start(2)
         matcher = await self._matcher(ctx, scope=scope, settings=settings)
         effective_max_replacements = (
             self._max_replacements if max_replacements is None else max_replacements
         )
         if effective_max_replacements <= 0:
             raise ValueError("max_replacements must be positive")
-        (
-            rewritten,
-            raw_replacements,
-            _,
-            match_limit_exceeded,
-        ) = matcher.native.sanitize_limited(content[content_start:], effective_max_replacements)
-        if match_limit_exceeded and fail_on_match_limit:
-            raise ResourceExhaustedError(
-                "Content exceeds the Privacy sanitizer replacement limit",
-                details={
-                    "uri": uri,
-                    "max_replacements": effective_max_replacements,
-                },
-            )
-        replacements = tuple(
-            PrivacyReplacement(
-                start=start + content_start, end=end + content_start, reference=reference
-            )
-            for start, end, reference in raw_replacements
+        if not matcher.has_values:
+            return PrivacySanitizationResult(content=content)
+        return await asyncio.to_thread(
+            self._sanitize_content,
+            content,
+            uri,
+            matcher,
+            effective_max_replacements,
+            fail_on_match_limit,
         )
+
+    def _sanitize_content(
+        self,
+        content: str,
+        uri: str,
+        matcher: _PreparedMatcher,
+        max_replacements: int,
+        fail_on_match_limit: bool,
+    ) -> PrivacySanitizationResult:
+        """Parse, match and render outside the server event loop."""
+        document = PrivacyContent(content, uri, preserve_skill_metadata=True)
+        changed, exceeded = matcher.native.sanitize_many_limited(
+            [item.value for item in document.strings], max_replacements
+        )
+        if exceeded:
+            if fail_on_match_limit:
+                raise ResourceExhaustedError(
+                    "Content exceeds the Privacy sanitizer replacement limit",
+                    details={"uri": uri, "max_replacements": max_replacements},
+                )
+            return PrivacySanitizationResult(content=content, match_limit_exceeded=True)
+        replacements: list[PrivacyReplacement] = []
+        rewritten: dict[int, str] = {}
+        for index, value, matches, _ in changed:
+            item = document.strings[index]
+            rewritten[item.start] = value
+            replacements.extend(
+                PrivacyReplacement(
+                    start=item.start if item.quoted else item.start + start,
+                    end=item.end if item.quoted else item.start + end,
+                    reference=reference,
+                )
+                for start, end, reference in matches
+            )
         return PrivacySanitizationResult(
-            content=content[:content_start] + rewritten,
-            replacements=replacements,
+            content=document.render(lambda item: rewritten.get(item.start, item.value)),
+            replacements=tuple(replacements),
             ambiguous_references=self._check_ambiguity(matcher, replacements, uri=uri),
-            match_limit_exceeded=match_limit_exceeded,
         )
 
     async def settings_for_uri(self, uri: str, ctx: RequestContext) -> ResolvedPrivacyConfig | None:
         """Return settings when automatic matching applies to this content URI."""
         uri = resolve_request_uri(uri, ctx)
-        if self._is_privacy_storage_uri(uri, ctx) or (uri.endswith("/.abstract.md") and classify_uri(uri).is_skill):
+        if self._is_privacy_storage_uri(uri, ctx) or PrivacyContent.is_skill_metadata(uri):
             return None
         owner = owner_space_for_uri(uri)
         if owner and owner != ctx.user.user_id:
@@ -244,15 +264,27 @@ class PrivacySanitizer:
         uri: str,
         settings: ResolvedPrivacyConfig | None = None,
     ) -> str:
-        """Apply automatic matching to the content selected by user settings."""
+        """Apply automatic matching, keeping input on overflow or structure failure."""
         if not content:
             return content
         if settings is None:
             settings = await self.settings_for_uri(uri, ctx)
         if settings is None:
             return content
-        result = await self.sanitize(content, ctx=ctx, uri=uri, settings=settings)
-        return result.content
+        reason = "match_limit_exceeded"
+        try:
+            result = await self.sanitize(
+                content, ctx=ctx, uri=uri, settings=settings, fail_on_match_limit=False
+            )
+            if not result.match_limit_exceeded:
+                return result.content
+        except InvalidArgumentError as exc:
+            if exc.details.get("reason") != "privacy_structure_changed":
+                raise
+            reason = "privacy_structure_changed"
+        self.write_failures[reason] += 1
+        logger.warning("Privacy write kept original content: uri=%s reason=%s", uri, reason)
+        return content
 
     async def _matcher(
         self,
@@ -356,7 +388,9 @@ class PrivacySanitizer:
             targets[secret] = [selected[0]]
             if len(selected) > 1:
                 ambiguous[selected[0]] = selected
-        return _PreparedMatcher(self._matcher_class(targets, _AMBIGUOUS_PLACEHOLDER), ambiguous)
+        return _PreparedMatcher(
+            self._matcher_class(targets, _AMBIGUOUS_PLACEHOLDER), ambiguous, bool(targets)
+        )
 
     def _check_ambiguity(
         self,

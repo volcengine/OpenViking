@@ -1550,10 +1550,10 @@ class FSService:
                     jsonl=resolved_uri.endswith("/messages.jsonl"),
                 )
             else:
-                restorer = PrivacyRestorer(self._privacy_config_service, ctx)
-                restorer.collect_text(content)
-                await restorer.load_values()
-                content = restorer.restore_text(content)
+                restorer = PrivacyRestorer(
+                    self._privacy_config_service, ctx, category=scope[0], target_key=scope[1]
+                )
+                content = await restorer.restore_content(content, uri=resolved_uri)
 
         if offset == 0 and limit == -1:
             return content

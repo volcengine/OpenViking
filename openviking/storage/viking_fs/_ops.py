@@ -2239,7 +2239,11 @@ class _OpsMixin:
             except AGFSClientError:
                 raise
 
-            final_content = (existing + content).encode("utf-8")
+            final_text = existing + content
+            sanitizer = getattr(self, "_privacy_sanitizer", None)
+            if sanitizer is not None and ctx is not None:
+                final_text = await sanitizer.sanitize_for_write(final_text, ctx=ctx, uri=uri)
+            final_content = final_text.encode("utf-8")
             await self._async_agfs.write(
                 path,
                 final_content,

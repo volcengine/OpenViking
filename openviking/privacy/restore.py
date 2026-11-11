@@ -5,6 +5,7 @@
 import re
 from typing import Any, Literal
 
+from openviking.privacy.content import PrivacyContent
 from openviking.privacy.models import UserPrivacyConfigVersion
 from openviking.privacy.reference import PrivacyFieldReference, parse_privacy_field_reference
 from openviking.privacy.service import UserPrivacyConfigService
@@ -90,9 +91,16 @@ class PrivacyRestorer:
                 continue
             self.values[placeholder] = value
 
+    async def restore_content(self, content: str, *, uri: str) -> str:
+        document = PrivacyContent(content, uri)
+        for item in document.strings:
+            self.collect_text(item.value)
+        await self.load_values()
+        return document.render(lambda item: self.restore_text(item.value))
+
     def restore_text(self, content: str) -> str:
         """Splice values into original matches without scanning inserted content."""
-        chunks = []
+        chunks: list[str] = []
         start = 0
         for match in self._matches.get(content, ()):
             if match[0] in self.values:
