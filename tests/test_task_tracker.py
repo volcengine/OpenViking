@@ -228,6 +228,41 @@ async def test_wait_uses_short_initial_poll(monkeypatch, tracker: TaskTracker):
     assert delays == [0.05]
 
 
+async def test_wait_can_cap_backoff_for_synchronous_requests(monkeypatch, tracker: TaskTracker):
+    task = await tracker.create("add_resource", task_id="task", **_owner_kwargs())
+    delays = []
+
+    async def sleep(delay):
+        delays.append(delay)
+        if len(delays) == 6:
+            await tracker.complete(task.task_id, {}, **_owner_kwargs())
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    assert (
+        await tracker.wait(task.task_id, **_owner_kwargs(), max_poll_interval=1.0)
+    ).status is TaskStatus.COMPLETED
+    assert delays == [0.05, 0.1, 0.2, 0.4, 0.8, 1.0]
+
+
+async def test_synchronous_tracked_operation_uses_short_poll_cap(monkeypatch, tracker: TaskTracker):
+    set_task_tracker(tracker)
+    wait = AsyncMock(wraps=tracker.wait)
+    monkeypatch.setattr(tracker, "wait", wait)
+
+    async def operation():
+        return {"status": "success"}
+
+    await run_tracked_operation(
+        "content_write",
+        **_owner_kwargs(),
+        operation=operation,
+        wait=True,
+    )
+
+    assert wait.await_args.kwargs["max_poll_interval"] == 1.0
+
+
 async def test_wait_for_task_work_uses_short_initial_poll(monkeypatch, tracker: TaskTracker):
     task = await tracker.create("add_resource", task_id="task", **_owner_kwargs())
     await tracker.start(task.task_id, **_owner_kwargs())
