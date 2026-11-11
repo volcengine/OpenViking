@@ -43,12 +43,14 @@ function fixture(t, online = []) {
   const ready = [];
   const fetchImpl = async (url) => { ready.push(url); return { ok: true }; };
   let output = '';
+  let errors = '';
   const options = {
     env: { OV_SUPERAGENT_UPDATER_TARGETS_JSON: TARGETS, HOME: home, USERPROFILE: home }, releaseLink, execFileImpl, fetchImpl,
     pm2Bin: 'pm2', socketPath: path.join(home, '.ov-superagent', 'updater.sock'), readyOptions: { attempts: 1, intervalMs: 1 },
     stdout: { write: (text) => { output += text; } },
+    stderr: { write: (text) => { errors += text; } },
   };
-  return { options, commands, timeouts, ready, apps, output: () => output };
+  return { options, commands, timeouts, ready, apps, output: () => output, stderr: () => errors };
 }
 
 test('a target names one instance, the Web, the updater, or everything', () => {
@@ -59,44 +61,58 @@ test('a target names one instance, the Web, the updater, or everything', () => {
   assert.throws(() => appsFor('gamma', targets), /unknown instance gamma/);
 });
 
-test('start runs the installed release and leaves online apps alone; nothing is fetched or published', async (t) => {
+test('start registers every app, then reports readiness; online apps are left alone', async (t) => {
   const f = fixture(t, ['superagent-alpha']);
   const result = await startCommand(undefined, { ...f.options, socketPath: '/nonexistent.sock' }).catch((error) => error.message);
-  if (windows) assert.equal(result, 0);
-  else assert.equal(result, 'updater did not become ready on /nonexistent.sock');
+  // The updater never answers on a nonexistent socket; every other app did.
+  assert.equal(result, windows ? 0 : 1);
   assert.deepEqual(f.commands.filter((command) => command.startsWith('start')), [
     `start ${fs.realpathSync(path.join(path.dirname(f.options.releaseLink), 'releases', '0.4.0-test', 'ecosystem.config.cjs'))} --only superagent-beta --update-env`,
     `start ${fs.realpathSync(path.join(path.dirname(f.options.releaseLink), 'releases', '0.4.0-test', 'ecosystem.config.cjs'))} --only superagent-web --update-env`,
     ...(windows ? [] : [`start ${fs.realpathSync(path.join(path.dirname(f.options.releaseLink), 'releases', '0.4.0-test', 'ecosystem.config.cjs'))} --only superagent-updater --update-env`]),
   ]);
-  assert.match(f.output(), /superagent-alpha 已经在运行/);
+  assert.match(f.output(), /superagent-alpha 已就绪/);
   assert.deepEqual(f.ready, ['http://127.0.0.1:3738/ready', 'http://127.0.0.1:3739/ready', 'http://127.0.0.1:3737/ready']);
+  if (windows) assert.equal(f.stderr(), '');
+  else assert.match(f.stderr(), /superagent-updater: updater did not become ready/);
 });
 
-test('start refuses to report an online daemon as ready when its runtime has not started', async (t) => {
+test('start reports an online daemon that never becomes ready, without touching it', async (t) => {
   const f = fixture(t, ['superagent-alpha']);
-  await assert.rejects(startCommand('alpha', {
+  const code = await startCommand('alpha', {
     ...f.options, fetchImpl: async () => ({ ok: false, status: 503 }),
-  }), /daemon did not become ready.*503/);
-  assert.doesNotMatch(f.output(), /已经在运行|已就绪/);
-  assert.ok(f.commands.every((command) => command === 'jlist'), 'must not restart/delete an online app');
+  });
+  assert.equal(code, 1);
+  assert.match(f.stderr(), /superagent-alpha: daemon did not become ready.*503/);
+  assert.doesNotMatch(f.output(), /superagent-alpha 已就绪/);
+  assert.ok(!f.commands.some((command) => command.startsWith('delete') || command.startsWith('stop')),
+    'must not restart/delete an online app');
 });
 
-test('start verifies the identity of an already online app before checking ready', async (t) => {
+test('start verifies the identity of an already online app before reporting it', async (t) => {
   const f = fixture(t, ['superagent-alpha']);
   const outside = path.join(path.dirname(f.options.releaseLink), 'unrelated.mjs');
   fs.writeFileSync(outside, '');
-  await assert.rejects(startCommand('alpha', {
+  const code = await startCommand('alpha', {
     ...f.options, execFileImpl: async () => ({ stdout: JSON.stringify([{
       name: 'superagent-alpha', pm2_env: { status: 'online', pm_exec_path: outside },
     }]) }),
-  }), /outside the current release/);
+  });
+  assert.equal(code, 1);
+  assert.match(f.stderr(), /outside the current release/);
   assert.deepEqual(f.ready, []);
 });
 
 test('start checks an already online updater socket instead of announcing success', async (t) => {
   const f = fixture(t, ['superagent-updater']);
-  await assert.rejects(startCommand('updater', f.options), windows ? /do not support the release updater/ : /updater did not become ready/);
+  if (windows) {
+    await assert.rejects(startCommand('updater', f.options), /do not support the release updater/);
+  } else {
+    // Readiness is a report now: the socket never answers, so start returns 1.
+    const code = await startCommand('updater', f.options);
+    assert.equal(code, 1);
+    assert.match(f.stderr(), /superagent-updater: updater did not become ready/);
+  }
   assert.doesNotMatch(f.output(), /已经在运行/);
 });
 
@@ -130,25 +146,23 @@ test('start explains when no release is installed', async (t) => {
   await assert.rejects(startCommand('alpha', f.options), /no OpenViking SuperAgent release is installed/);
 });
 
-test('start tolerates PM2 launching before the process becomes online', async (t) => {
+test('start reports readiness from the ready endpoint instead of polling PM2', async (t) => {
   const f = fixture(t);
-  let launching = true;
+  let jlistCalls = 0;
   const base = f.options.execFileImpl;
-  f.options.execFileImpl = async (bin, args) => {
-    if (args[0] === 'jlist' && f.apps.has('superagent-alpha') && launching) {
-      launching = false;
-      return { stdout: JSON.stringify([{
-        name: 'superagent-alpha',
-        pm2_env: { status: 'one-launch-status', pm_exec_path: path.join(fs.realpathSync(f.options.releaseLink), 'packages', 'daemon', 'src', 'main.mjs') },
-      }]) };
-    }
-    return base(bin, args);
+  f.options.execFileImpl = async (bin, args, options) => {
+    if (args[0] === 'jlist') jlistCalls += 1;
+    return base(bin, args, options);
   };
-  await startCommand('alpha', { ...f.options, readyOptions: { attempts: 2, intervalMs: 1 } });
+  const code = await startCommand('alpha', { ...f.options, readyOptions: { attempts: 2, intervalMs: 1 } });
+  assert.equal(code, 0);
   assert.equal(f.apps.get('superagent-alpha'), 'online');
+  assert.equal(f.commands.filter((command) => command.startsWith('start')).length, 1, 'started once');
+  assert.equal(jlistCalls, 1, 'only the initial list; readiness comes from the endpoint');
+  assert.match(f.output(), /superagent-alpha 已就绪/);
 });
 
-test('start does not retry a terminal PM2 state', async (t) => {
+test('restart does not retry a terminal PM2 state', async (t) => {
   const f = fixture(t);
   const base = f.options.execFileImpl;
   let jlistCalls = 0;
@@ -163,13 +177,13 @@ test('start does not retry a terminal PM2 state', async (t) => {
     return base(bin, args, options);
   };
   await assert.rejects(
-    startCommand('alpha', { ...f.options, readyOptions: { attempts: 40, intervalMs: 1, onlineTimeoutMs: 100 } }),
+    restartCommand('alpha', { ...f.options, readyOptions: { attempts: 40, intervalMs: 1, onlineTimeoutMs: 100 } }),
     /status=errored, exit_code=1, unstable_restarts=2/,
   );
   assert.equal(jlistCalls, 1);
 });
 
-test('start gives each PM2 probe no more than the remaining online deadline', async (t) => {
+test('restart gives each PM2 probe no more than the remaining online deadline', async (t) => {
   const f = fixture(t);
   const base = f.options.execFileImpl;
   const timeouts = [];
@@ -184,11 +198,34 @@ test('start gives each PM2 probe no more than the remaining online deadline', as
     return base(bin, args, options);
   };
   await assert.rejects(
-    startCommand('alpha', { ...f.options, readyOptions: { attempts: 40, intervalMs: 1, onlineTimeoutMs: 5 } }),
+    restartCommand('alpha', { ...f.options, readyOptions: { attempts: 40, intervalMs: 1, onlineTimeoutMs: 5 } }),
     /status=one-launch-status/,
   );
   assert.ok(timeouts.length >= 1);
   assert.ok(timeouts.every((timeout) => timeout > 0 && timeout <= 5));
+});
+
+test('a failed instance does not keep the shared Web out of PM2 or out of the dump', async (t) => {
+  const f = fixture(t);
+  // The instance's daemon never answers /ready, like a DSH start that timed out.
+  const fetchImpl = async (url) => (url.includes(':3738/') ? { ok: false, status: 503 } : { ok: true });
+  const code = await startCommand(undefined, {
+    ...f.options, fetchImpl, readyOptions: { attempts: 2, intervalMs: 1, onlineTimeoutMs: 100 },
+  });
+  assert.equal(code, 1);
+  // Both the failed instance and the Web are registered, and the Web runs.
+  assert.equal(f.apps.get('superagent-alpha'), 'online');
+  assert.equal(f.apps.get('superagent-web'), 'online');
+  // The dump is written after the Web start, so a resurrect brings it back.
+  const webStart = f.commands.findIndex((command) => command.includes('--only superagent-web'));
+  const save = f.commands.indexOf('save');
+  assert.ok(webStart >= 0, 'the Web is started');
+  assert.ok(save > webStart, 'the Web start precedes the save');
+  // The failure is reported by name with its reason; the Web is not stopped or deleted.
+  assert.match(f.stderr(), /superagent-alpha: daemon did not become ready.*503/);
+  assert.ok(!f.commands.some((command) => command.startsWith('delete') || command.startsWith('stop')));
+  assert.match(f.output(), /superagent-beta 已就绪/);
+  assert.match(f.output(), /superagent-web 已就绪/);
 });
 
 test('status lists every app with its pm2 state and readiness', async (t) => {

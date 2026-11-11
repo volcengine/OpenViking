@@ -72,8 +72,9 @@ function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1
 test('a startup failure points to the instance logs before retrying start', async (t) => {
   const h = harness(t, ['OpenViking SuperAgent', '', '', '1', '1', '', '', 'y'], { failStart: true });
   assert.equal(await setupCommand(h.options), 1);
+  assert.ok(h.written().includes('配置已保存，但启动没有完成'));
   assert.ok(h.written().includes(`${superagentCommand(h.options.env)} logs primary 查看具体错误`));
-  assert.ok(h.written().includes(`${superagentCommand(h.options.env)} start primary`));
+  assert.ok(h.written().includes(`${superagentCommand(h.options.env)} start`));
 });
 
 test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after every answer, then it starts', async (t) => {
@@ -753,14 +754,17 @@ test('setup stops early when no runtime can run, and reports a start failure aft
 
   const webDown = harness(t, ['', '', '', '1', '1', '', '', 'y']);
   webDown.options.control.restart = async () => { throw new Error('port 3737 is in use'); };
-  assert.equal(await setupCommand(webDown.options), 0);
+  // A Web that does not come up fails the start too: it is reported with its
+  // reason, setup returns 1, and nobody is greeted on a half-started install.
+  assert.equal(await setupCommand(webDown.options), 1);
   assert.match(webDown.written(), /superagent-web 没有起来：port 3737 is in use/);
-  assert.deepEqual(webDown.calls.map(([kind]) => kind), ['lark', 'start', 'start', 'greet']);
+  assert.match(webDown.written(), /配置已保存，但启动没有完成：\n\s+port 3737 is in use/);
+  assert.deepEqual(webDown.calls.map(([kind]) => kind), ['lark', 'start', 'start']);
 
   const failing = harness(t, ['', '', '', '1', '1', '', '', 'y'], { failStart: true });
   assert.equal(await setupCommand(failing.options), 1);
   assert.equal(failing.manifest().agents.length, 1);
-  assert.match(failing.written(), /配置已保存，但启动没有完成：pm2 is not installed/);
+  assert.match(failing.written(), /配置已保存，但启动没有完成：\n\s+pm2 is not installed/);
 });
 
 test('with no runtime on a terminal, setup offers to log the built-in Pi in to a model, then carries on', async (t) => {
