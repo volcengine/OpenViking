@@ -1,8 +1,10 @@
 """Regression coverage for Feishu source preparation and directory execution."""
 
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+from zipfile import ZipFile
 
 import pytest
 
@@ -57,7 +59,9 @@ async def test_downloaded_file_routes_by_extension_but_normalized_markdown_does_
 ):
     _configure_understanding(monkeypatch, ["pdf", "md"])
     api = SimpleNamespace(parse=AsyncMock(return_value=object()))
-    registry = SimpleNamespace(parse=AsyncMock(return_value=object()))
+    registry = SimpleNamespace(
+        parse=AsyncMock(return_value=object()), get_parser_for_file=Mock(return_value=None)
+    )
     router = ParserRouter(registry)
     router._understanding_api = api
     for name, kind in [("doc.pdf", "file"), ("doc.md", "markdown")]:
@@ -74,6 +78,15 @@ async def test_downloaded_file_routes_by_extension_but_normalized_markdown_does_
         await router.parse(resource)
     api.parse.assert_awaited_once()
     assert api.parse.await_args.args[0].endswith("doc.pdf")
+    registry.parse.assert_awaited_once()
+    unsupported = LocalResource(
+        tmp_path / "unknown.bin",
+        SourceType.FEISHU,
+        "https://example.feishu.cn/file/t",
+        meta={"feishu_content_kind": "file"},
+    )
+    with pytest.raises(InvalidArgumentError, match="Unsupported Drive file format"):
+        await router.parse(unsupported, parser_backend="internal")
     registry.parse.assert_awaited_once()
 
 
@@ -323,7 +336,9 @@ async def test_direct_understanding_receives_effective_account_feishu_config(mon
     monkeypatch.setattr(
         FeishuAccessor,
         "preflight_source",
-        AsyncMock(return_value=SimpleNamespace(source_format="file", source_name="Doc")),
+        AsyncMock(
+            return_value=SimpleNamespace(source_format="file", source_name="Doc", doc_type="docx")
+        ),
     )
     service = ResourceService(
         viking_fs=SimpleNamespace(),
@@ -405,7 +420,7 @@ def test_pagination_budget_stops_before_next_page(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend", [None, "understanding"])
 async def test_folder_processor_routes_each_content_and_keeps_tree(monkeypatch, backend):
-    config = _configure_understanding(monkeypatch, ["pdf"])
+    config = _configure_understanding(monkeypatch, ["pdf", "pptx"])
     config.parser_api.enable_feishu_url = True
     accessor = FeishuAccessor()
     monkeypatch.setattr(accessor, "_drive_folder_display_name", lambda *a, **k: "Root")
@@ -420,6 +435,7 @@ async def test_folder_processor_routes_each_content_and_keeps_tree(monkeypatch, 
             if token == "root"
             else [
                 SimpleNamespace(type="file", token="pdf", name="Report.pdf", url=""),
+                SimpleNamespace(type="slides", token="deck", name="Deck", url=""),
                 SimpleNamespace(
                     type="bitable",
                     token="leaf",
@@ -434,6 +450,33 @@ async def test_folder_processor_routes_each_content_and_keeps_tree(monkeypatch, 
         "_download_drive_file",
         lambda *a, **k: (b"%PDF-1.7", "application/pdf", "Report.pdf"),
     )
+    pptx = BytesIO()
+    with ZipFile(pptx, "w") as archive:
+        archive.writestr("ppt/presentation.xml", "<presentation/>")
+    client = Mock()
+    monkeypatch.setattr(accessor, "_get_client", Mock(return_value=client))
+    export = Mock(
+        side_effect=[
+            SimpleNamespace(success=lambda: True, data=SimpleNamespace(ticket="ticket")),
+            SimpleNamespace(
+                success=lambda: True, data=SimpleNamespace(result=SimpleNamespace(job_status=1))
+            ),
+            SimpleNamespace(
+                success=lambda: True,
+                data=SimpleNamespace(
+                    result=SimpleNamespace(job_status=0, file_token="exported", file_name="Deck")
+                ),
+            ),
+        ]
+    )
+    monkeypatch.setattr(accessor, "_call_api", export)
+    monkeypatch.setattr("openviking.parse.accessors.feishu_accessor.asyncio.sleep", AsyncMock())
+    download = AsyncMock(
+        return_value=SimpleNamespace(
+            success=lambda: True, raw=SimpleNamespace(content=pptx.getvalue())
+        )
+    )
+    monkeypatch.setattr(accessor, "_download_export_file", download)
     monkeypatch.setattr(
         accessor,
         "_fetch_document",
@@ -461,7 +504,9 @@ async def test_folder_processor_routes_each_content_and_keeps_tree(monkeypatch, 
         result = create_parse_result(
             root=ResourceNode(type=NodeType.ROOT, title=name),
             source_path=source,
-            source_format="docx" if source.startswith("https:") else "pdf",
+            source_format="docx"
+            if source.startswith("https:")
+            else Path(source).suffix.lstrip("."),
             parser_name="UnderstandingAPI",
         )
         result.temp_dir_path = temporary
@@ -475,7 +520,12 @@ async def test_folder_processor_routes_each_content_and_keeps_tree(monkeypatch, 
             parser_backend=backend,
         )
         assert result.meta["failed_files"] == []
-        assert result.meta["file_count"] == 3
+        assert result.meta["file_count"] == 4
+        request = export.call_args_list[0].args[1].request_body
+        assert (request.type, request.token, request.file_extension) == ("slides", "deck", "pptx")
+        assert all(call.args[2] == "secret" for call in export.call_args_list)
+        assert download.await_args.args[1].file_token == "exported"
+        assert download.await_args.args[2] == "secret"
         cloud_calls = [
             (source, options) for source, options in calls if source.startswith("https:")
         ]
@@ -484,14 +534,18 @@ async def test_folder_processor_routes_each_content_and_keeps_tree(monkeypatch, 
             "https://example.larksuite.com/base/leaf?table=t&view=v",
         }
         assert all(options["feishu_access_token"] == "secret" for _, options in cloud_calls)
-        binary_options = next(
-            options for source, options in calls if not source.startswith("https:")
+        binary_calls = [
+            (source, options) for source, options in calls if not source.startswith("https:")
+        ]
+        assert {Path(source).suffix for source, _ in binary_calls} == {".pdf", ".pptx"}
+        assert all(
+            "feishu_access_token" not in options and "lark_file" not in options
+            for _, options in binary_calls
         )
-        assert "feishu_access_token" not in binary_options
-        assert "lark_file" not in binary_options
         assert f"{result.temp_dir_path}/Root/Root/0.md" in fs.files
         assert f"{result.temp_dir_path}/Root/Report/Leaf/0.md" in fs.files
         assert f"{result.temp_dir_path}/Root/Report/Report/0.md" in fs.files
+        assert f"{result.temp_dir_path}/Root/Report/Deck/0.md" in fs.files
     finally:
         for resource in resources:
             resource.is_temporary = True
@@ -499,48 +553,92 @@ async def test_folder_processor_routes_each_content_and_keeps_tree(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_background_collection_restores_auth_and_child_checkpoint(monkeypatch):
+async def test_background_wiki_file_reuses_resolution_and_restores_auth_and_checkpoint(monkeypatch):
+    from openviking.parse.mode import ParseMode
     from openviking.server.identity import RequestContext, Role
     from openviking.service.resource_service import ResourceService
     from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
     from openviking_cli.session.user_id import UserIdentifier
 
+    config = _configure_understanding(monkeypatch, ["pdf"])
+    config.parser_api.enable_feishu_url = True
+    monkeypatch.setattr("openviking.service.resource_service.is_git_repo_url", lambda _: False)
+    source = "https://example.feishu.cn/wiki/node"
+    title = "产品方案 v1.2"
+    resolve = Mock(side_effect=[("file", "queued-obj", title), ("file", "worker-obj", title)])
+    monkeypatch.setattr(FeishuAccessor, "_resolve_wiki_node", resolve)
+    monkeypatch.setattr(FeishuAccessor, "_probe_document_permission", lambda *a, **k: None)
+    download = Mock(return_value=(b"%PDF-1.7", "application/pdf", title))
+    monkeypatch.setattr(FeishuAccessor, "_download_drive_file", download)
+    api = SimpleNamespace(parse=AsyncMock(return_value=object()))
+    router = ParserRouter(SimpleNamespace(parse=AsyncMock()))
+    router._understanding_api = api
+    processor = UnifiedResourceProcessor(vlm_processor=object())
+    processor._parser_router = router
+    processor._accessor_registry = SimpleNamespace(access=FeishuAccessor().access)
     tracker = SimpleNamespace(
-        get=AsyncMock(return_value=SimpleNamespace(meta={"feishu_responses": {"entry": "old"}})),
+        get=AsyncMock(return_value=SimpleNamespace(meta={"feishu_responses": {"file": "old"}})),
         patch_task=AsyncMock(),
     )
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
-    service = ResourceService()
-    service._execute_resource_ingestion = AsyncMock(return_value={"status": "success"})
+    service = ResourceService(
+        resource_processor=processor, runtime_config_manager=_runtime_config_manager()
+    )
+    ctx = RequestContext(user=UserIdentifier("account", "user"), role=Role.USER)
+    plan = await service._prepare_standard_source_plan(
+        path=source,
+        ctx=ctx,
+        mode=ParseMode.DEFAULT,
+        allow_local_path_resolution=False,
+        processor_kwargs={"feishu_access_token": "secret"},
+        watch_auth_state=None,
+    )
+    assert plan.source_identity.source_name == title
+    assert plan.processor_args["_feishu_prepared_source"]
+    assert "secret" not in str(plan.processor_args)
+    assert resolve.call_count == 1
+
+    async def ingest(*, path, **options):
+        await processor.process(path, **options)
+        return {"status": "success"}
+
+    monkeypatch.setattr(service, "_execute_resource_ingestion", ingest)
     msg = AddResourceMsg(
         task_id="task",
-        path="https://example.feishu.cn/drive/folder/root",
+        path=source,
         root_uri="viking://resources/Root",
         account_id="account",
         user_id="user",
         role="user",
-        args={"_feishu_prepared_source": True},
+        source_name=plan.source_identity.source_name,
+        args=plan.processor_args,
     )
-    service._restore_source_task_auth = Mock(return_value=({"feishu_access_token": "secret"}, None))
     await service.execute_add_resource_job(
         msg,
-        ctx=RequestContext(user=UserIdentifier("account", "user"), role=Role.USER),
+        ctx=ctx,
         resource_lock=None,
         stage_callback=AsyncMock(),
+        task_auth=plan.task_auth,
     )
-    options = service._execute_resource_ingestion.await_args.kwargs
-    assert options["parser_backend"] is None
-    assert options["feishu_access_token"] == "secret"
-    saved, record = options["_feishu_checkpoint"]
-    assert saved == {"entry": "old"}
-    await record("next", "new")
+    assert resolve.call_count == 2  # Enqueue and worker each resolve once.
+    assert download.call_args.args == ("worker-obj",)
+    assert download.call_args.kwargs["feishu_access_token"] == "secret"
+    api.parse.assert_awaited_once()
+    assert api.parse.await_args.args[0].endswith(title + ".pdf")
+    options = api.parse.await_args.kwargs
+    assert options["source_name"] == title
+    assert options["resolved_extension"] == ".pdf"
+    assert options["understanding_response_id"] == "old"
+    assert "feishu_access_token" not in options
+    assert "_feishu_resolved_wiki" not in options
+    assert "_feishu_resolved_wiki" not in msg.args
+    await options["_response_checkpoint"]("new")
     tracker.patch_task.assert_awaited_once_with(
         "task",
-        TaskPatch(meta={"feishu_responses": {"next": "new"}}),
+        TaskPatch(meta={"feishu_responses": {"file": "new"}}),
         account_id="account",
         user_id="user",
     )
-    assert saved["next"] == "new"
 
 
 @pytest.mark.asyncio
@@ -617,7 +715,9 @@ async def test_single_feishu_file_no_split_uses_native_parser(monkeypatch, tmp_p
         meta={"feishu_content_kind": "file"},
         is_temporary=False,
     )
-    registry = SimpleNamespace(parse=AsyncMock(return_value=object()))
+    registry = SimpleNamespace(
+        get_parser_for_file=Mock(return_value=object()), parse=AsyncMock(return_value=object())
+    )
     api = SimpleNamespace(parse=AsyncMock(return_value=object()))
     processor = UnifiedResourceProcessor(vlm_processor=object())
     processor._accessor_registry = SimpleNamespace(access=AsyncMock(return_value=resource))

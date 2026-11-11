@@ -1211,8 +1211,14 @@ class ResourceService:
                 feishu_access_token=token.strip() if isinstance(token, str) else None,
                 feishu_config=feishu_config,
                 **({"feishu_recursive": True} if recursive else {}),
+                **(
+                    {"lark_file": processor_kwargs["lark_file"]}
+                    if processor_kwargs.get("lark_file") is not None
+                    else {}
+                ),
             )
             source_name = source_name or preflight.source_name
+            feishu_kwargs["_feishu_resolved_type"] = preflight.doc_type
             source_info = _ResourceSourceInfo(
                 source_name=source_name,
                 source_path=path,
@@ -1235,8 +1241,7 @@ class ResourceService:
                 if watch_auth_state is None:
                     task_auth = {}
             else:
-                source_type, _ = FeishuAccessor._parse_feishu_url(path)
-                if source_type in {"folder", "file"} or recursive:
+                if preflight.doc_type in {"folder", "file", "slides"} or recursive:
                     if processor_kwargs.get("lark_file") is not None:
                         raise InvalidArgumentError(
                             "Feishu sources requiring preparation use args.feishu_access_token "
