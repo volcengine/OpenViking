@@ -203,7 +203,7 @@ Explained in [Save conversations](08-context-profiles.md#save-conversations).
 | Save the latest reply after | `idle_seconds` | `600` (seconds) | 1 or more | Quiet time before the last turn is saved and the session committed. |
 | Commit after | `commit_tokens` | `20000` | 1 or more | Tokens waiting in the session that trigger a commit. |
 | Keep recent messages | `keep_recent_messages` | `10` | 0–1,000 | Messages left in the session after a commit. |
-| (API only) | `capture_memory_types` | `null` (every enabled type) | Memory type names, such as `preferences` or `events`; `[]` extracts none | Memory types OpenViking extracts from saved conversations. |
+| (API only) | `capture_memory_types` | `null` (inherit the user's policy on Server 0.5.0+) | Memory type names, such as `preferences` or `events`; `[]` extracts none | Memory types OpenViking extracts from saved conversations. An explicit list sets a session policy. |
 
 The management API saves `capture_memory_types` without checking the names. OpenViking rejects a name it does not know, or a type it has disabled, when the gateway creates the conversation's OpenViking session: nothing from the conversation is saved, and saving shows **Retrying**, then **Paused**, with the reason `openviking_http_400`. A corrected profile reaches only conversations that start afterwards. `cases` and `trajectories` are extracted only together with `experiences`: listing `experiences` adds both, and without it they are dropped, so a list of only those two extracts nothing.
 
