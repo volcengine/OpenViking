@@ -96,6 +96,9 @@ _IDENTITY_CLEANUP_TASK_TYPES = {"account_delete", "user_delete"}
 _CANCEL_POLL_INTERVAL = 30
 _WAIT_INITIAL_POLL_INTERVAL = 0.05
 _WAIT_MAX_POLL_INTERVAL = 10.0
+# Synchronous HTTP requests are limited to 30 seconds by the console. Keep
+# their completion detection responsive once the initial backoff has elapsed.
+_WAIT_SYNC_REQUEST_MAX_POLL_INTERVAL = 1.0
 _PUBLIC_QUEUE_NAMES = ("Semantic", "Embedding")
 
 _sanitize_error = sanitize_error
@@ -288,6 +291,7 @@ async def run_tracked_operation(
                     account_id=account_id,
                     user_id=user_id,
                     timeout=timeout,
+                    max_poll_interval=_WAIT_SYNC_REQUEST_MAX_POLL_INTERVAL,
                 )
                 if return_terminal_result and terminal.result is not None:
                     result = cast(_OperationResult, deepcopy(terminal.result))
@@ -899,6 +903,8 @@ class TaskTracker:
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
         timeout: Optional[float] = None,
+        *,
+        max_poll_interval: float = _WAIT_MAX_POLL_INTERVAL,
     ) -> TaskRecord:
         with _consume_wait_budget(task_id, timeout) as remaining:
             deadline = None if remaining is None else time.monotonic() + remaining
@@ -933,7 +939,7 @@ class TaskTracker:
                 await asyncio.sleep(
                     next_poll_interval if remaining is None else min(next_poll_interval, remaining)
                 )
-                next_poll_interval = min(_WAIT_MAX_POLL_INTERVAL, next_poll_interval * 2)
+                next_poll_interval = min(max_poll_interval, next_poll_interval * 2)
 
     async def list_tasks(
         self,
