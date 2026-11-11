@@ -5,6 +5,7 @@
 import asyncio
 import json
 import os
+import uuid
 import zipfile
 from dataclasses import replace
 from typing import Any, Optional
@@ -134,6 +135,27 @@ async def _remove_existing_root(viking_fs, root_uri: str, ctx: RequestContext) -
         return
     except FileNotFoundError:
         return
+
+
+async def _backup_existing_root(viking_fs, root_uri: str, ctx: RequestContext) -> Optional[str]:
+    """Move an existing import target aside so a failed import can restore it."""
+    if not hasattr(viking_fs, "mv"):
+        return None
+    backup_uri = f"{root_uri.rstrip('/')}.ovpack-backup-{uuid.uuid4().hex}"
+    await viking_fs.mv(root_uri, backup_uri, ctx=ctx)
+    return backup_uri
+
+
+async def _restore_existing_root(
+    viking_fs, root_uri: str, backup_uri: str, ctx: RequestContext
+) -> None:
+    """Replace a partially written import target with its backed-up original."""
+    await _remove_existing_root(viking_fs, root_uri, ctx)
+    await viking_fs.mv(backup_uri, root_uri, ctx=ctx)
+
+
+async def _discard_existing_root_backup(viking_fs, backup_uri: str, ctx: RequestContext) -> None:
+    await _remove_existing_root(viking_fs, backup_uri, ctx)
 
 
 def _exportable_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -340,20 +362,44 @@ async def import_ovpack(
         if parent != "viking://" and not target_exists:
             await _ensure_parent_exists(viking_fs, parent, ctx)
 
-        for existing_root in existing_roots:
-            logger.info(f"[ovpack] Overwriting existing resource at {existing_root}")
-            await _remove_existing_root(viking_fs, existing_root, import_ctx)
+        backups: list[tuple[str, str]] = []
+        try:
+            for existing_root in existing_roots:
+                logger.info(f"[ovpack] Overwriting existing resource at {existing_root}")
+                backup_uri = await _backup_existing_root(viking_fs, existing_root, import_ctx)
+                if backup_uri is None:
+                    await _remove_existing_root(viking_fs, existing_root, import_ctx)
+                else:
+                    backups.append((existing_root, backup_uri))
 
-        for _, safe_zip_path, kind, rel_path in members:
-            if kind in {"manifest", "internal"}:
-                continue
-            if kind == "directory":
-                await viking_fs.mkdir(join_uri(root_uri, rel_path), exist_ok=True, ctx=import_ctx)
-                continue
+            for _, safe_zip_path, kind, rel_path in members:
+                if kind in {"manifest", "internal"}:
+                    continue
+                if kind == "directory":
+                    await viking_fs.mkdir(
+                        join_uri(root_uri, rel_path), exist_ok=True, ctx=import_ctx
+                    )
+                    continue
 
-            target_file_uri = join_uri(root_uri, rel_path)
-            data = zf.read(safe_zip_path)
-            await viking_fs.write_file_bytes(target_file_uri, data, ctx=import_ctx)
+                target_file_uri = join_uri(root_uri, rel_path)
+                data = zf.read(safe_zip_path)
+                await viking_fs.write_file_bytes(target_file_uri, data, ctx=import_ctx)
+        except BaseException:
+            # The import target may be partially written. Put the original
+            # resource back instead of leaving the caller with neither version.
+            for existing_root, backup_uri in backups:
+                try:
+                    await _restore_existing_root(viking_fs, existing_root, backup_uri, import_ctx)
+                except Exception:
+                    logger.exception(
+                        "[ovpack] Failed to restore original resource at %s; backup remains at %s",
+                        existing_root,
+                        backup_uri,
+                    )
+            raise
+        else:
+            for _existing_root, backup_uri in backups:
+                await _discard_existing_root_backup(viking_fs, backup_uri, import_ctx)
 
     logger.info(f"[ovpack] Successfully imported {file_path} to {root_uri}")
 
