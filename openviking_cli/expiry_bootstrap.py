@@ -27,10 +27,11 @@ def load_expiry_config(path: Path):
     raw = json.loads(os.path.expandvars(path.expanduser().read_text(encoding="utf-8-sig")))
     config = OpenVikingConfig.from_dict(raw)
     ttl = TTLAdapterConfig.model_validate(raw.get("server", {}).get("ttl_adapter") or {})
-    if not (config.uses_redis_expiry() or ttl.writer_enabled):
+    idle = config.memory.session_auto_commit
+    if not ((idle.enabled and idle.idle_backend == "redis") or ttl.writer_enabled):
         raise ValueError(
             "expiry publisher requires memory.session_auto_commit.idle_backend='redis' "
-            "or compile_api.scheduler_enabled=true or an enabled TTL writer (Redis)"
+            "or an enabled TTL writer (Redis)"
         )
     config.expiry.validate_for_runtime()
     if not config.expiry.publisher_separate_process:

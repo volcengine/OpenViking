@@ -125,7 +125,6 @@ export interface BatchWriteOperation {
 }
 /** Batch-write request options. */
 export interface BatchWriteOptions extends WaitOptions {
-  deferProcessing?: boolean;
   processingMode?: ProcessingMode;
   extra?: JsonObject;
 }

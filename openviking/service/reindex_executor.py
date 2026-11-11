@@ -66,7 +66,6 @@ logger = get_logger(__name__)
 _MEMORY_CHUNK_PATTERN = re.compile(r"^(?P<base>.+)#chunk_[0-9]{4,}$")
 
 REINDEX_TASK_TYPE = "admin_reindex"
-REINDEX_ENQUEUE_ERROR = "Failed to enqueue reindex processing"
 _MAX_FILE_VECTORIZATION_CONCURRENCY = 64
 _USER_REINDEX_FIXED_ROOTS = ("resources", "skills", "memories", "peers")
 _USER_REINDEX_EXCLUDED_ROOTS = frozenset({"sessions", "privacy", "settings"})
@@ -218,18 +217,10 @@ class ReindexExecutor:
         tags: list[str] | None = None,
         tag_mode: str = "replace",
         ctx: RequestContext,
-        task_id: str | None = None,
     ) -> dict[str, Any]:
-        """Run or enqueue reindex; task_id resumes an internal async submission.
-
-        A replay reuses accepted work. A pending record without queued work
-        resumes enqueueing under the same identity.
-        """
         if not namespace_policy_for_uri(uri).supports_reindex:
             raise InvalidArgumentError(f"reindex is not supported for namespace: {uri}")
         self._ensure_reconciliation_scope_visible(uri, ctx)
-        if task_id is not None and wait:
-            raise InvalidArgumentError("task_id requires asynchronous reindex")
         object_type = self._infer_target_type(uri)
         self._validate_mode(object_type, mode)
         if not recursive and object_type in {
@@ -252,7 +243,6 @@ class ReindexExecutor:
             uri,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            **({"task_id": task_id} if task_id is not None else {}),
         )
         if task is None:
             raise OpenVikingError(
@@ -260,23 +250,6 @@ class ReindexExecutor:
                 code="CONFLICT",
                 details={"uri": uri},
             )
-
-        if task_id is not None and task.error == REINDEX_ENQUEUE_ERROR:
-            raise OpenVikingError(REINDEX_ENQUEUE_ERROR, code="UNAVAILABLE")
-        if task_id is not None and (
-            task.stage == "queued"
-            or task.status != "pending"
-            or await tracker.has_work(
-                task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
-            )
-        ):
-            return {
-                "task_id": task.task_id,
-                "status": "accepted",
-                "uri": uri,
-                "object_type": object_type,
-                "mode": mode,
-            }
 
         from openviking.storage.queuefs import get_queue_manager
         from openviking.storage.queuefs.reindex_msg import ReindexMsg
@@ -333,12 +306,10 @@ class ReindexExecutor:
         except BaseException:
             if lock_guard is not None:
                 await lock_guard.close()
-            if not enqueued and not await tracker.has_work(
-                task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
-            ):
+            if not enqueued:
                 await tracker.fail(
                     task.task_id,
-                    REINDEX_ENQUEUE_ERROR,
+                    "Failed to enqueue reindex processing",
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                 )
@@ -778,10 +749,7 @@ class ReindexExecutor:
 
         for record in inventory.values():
             root, depth = scope_root(record)
-            if (
-                root
-                and (depth > 1 or int(record.get("level", -1)) in {0, 1})
-            ):
+            if root and (depth > 1 or int(record.get("level", -1)) in {0, 1}):
                 directory_roots.add(root)
         groups: dict[str, dict[str, Mapping[str, Any]]] = {}
         root_inventory = {}

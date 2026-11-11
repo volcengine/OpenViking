@@ -148,7 +148,6 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
     service = OpenVikingService.__new__(OpenVikingService)
     service._resource_service = ResourceService()
     service._config = SimpleNamespace(vlm=VLMConfig())
-    service._compile_scheduler = None
     service._ttl_adapter = adapter
     service._expiry_runtime = SimpleNamespace(
         stop_roles=AsyncMock(side_effect=lambda **_: events.append("expiry_roles")),

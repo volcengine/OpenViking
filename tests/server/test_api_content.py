@@ -80,7 +80,6 @@ def test_batch_write_request_accepts_write_parity_options():
     )
 
     assert request.processing_mode == "vectors_only"
-    assert request.defer_processing is False
     assert request.operations[0].tags == ["team=search"]
     assert request.operations[0].tag_mode == "append"
     assert request.operations[0].acl.acl_mode == "restricted"
@@ -104,7 +103,6 @@ async def test_batch_write_forwards_processing_mode_and_operation_metadata(monke
         BatchWriteRequest(
             root_uri="viking://resources/demo",
             processing_mode="vectors_only",
-            defer_processing=True,
             operations=[
                 BatchWriteOperation(
                     uri="viking://resources/demo/a.md",
@@ -119,8 +117,6 @@ async def test_batch_write_forwards_processing_mode_and_operation_metadata(monke
     )
 
     assert seen["processing_mode"] == "vectors_only"
-    assert seen["defer_processing"] is True
-    assert seen["edit_source"] == "agent"
     operation = seen["operations"][0]
     assert operation["tags"] == ["team=search"]
     assert operation["tag_mode"] == "append"
@@ -144,14 +140,12 @@ async def test_write_forwards_processing_mode_to_service(monkeypatch):
             uri="viking://resources/demo.md",
             content="updated",
             processing_mode="vectors_only",
-            edit_source="manual",
         ),
         ctx,
     )
 
     assert response["status"] == "ok"
     assert seen["processing_mode"] == "vectors_only"
-    assert seen["edit_source"] == "manual"
 
 
 async def test_write_forwards_tags_and_tag_mode_to_service(monkeypatch):

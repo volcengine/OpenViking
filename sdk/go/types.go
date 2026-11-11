@@ -276,8 +276,7 @@ type BatchWriteOperation struct {
 
 // BatchWriteOptions controls BatchWrite.
 type BatchWriteOptions struct {
-	DeferProcessing bool
-	Wait            *bool
+	Wait *bool
 	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout        *float64
 	Telemetry      any
