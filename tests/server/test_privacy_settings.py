@@ -331,15 +331,37 @@ async def test_privacy_policy_applies_across_session_skill_and_content(
 
 
 async def test_credential_warnings_do_not_block_or_disclose_values(client, service, owner):
-    secret = "AKLT" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
     endpoint = "/api/v1/privacy-configs/credential/warnings"
-    response = await client.post(endpoint, json={"values": {"ordinary": "sample", "key": secret}})
-    assert response.status_code == 200, response.text
-    result = response.json()["result"]
-    assert result["values"] == {"ordinary": "sample", "key": secret}
-    assert [(w["code"], w["field"]) for w in result["warnings"]] == [
-        ("weak_credential", "ordinary")
-    ]
-    assert all(value not in json.dumps(result["warnings"]) for value in [secret, "sample"])
-    response = await client.patch(endpoint, json={"values": {"ordinary": secret}})
+    await patch_user_config(
+        service.viking_fs,
+        owner,
+        {"privacy": {"custom_rules": [{"id": "managed", "regex": "trustedword"}]}},
+    )
+    weak = {
+        "ordinary": "sample",
+        "six_chars": "aB1234",
+        "letters_only": "lettersOnly",
+        "digits_only": "1234567",
+        "unicode_letters": "中文中文中12",
+        "unicode_digits": "abcde１２",
+    }
+    values = {
+        **weak,
+        "seven_chars": "aB12345",
+        "uppercase": "ABC1234",
+        "lowercase": "abc1234",
+        "punctuation": "ab12-_$",
+        "unicode_mixed": "中ab1234",
+        "recognized": "trustedword",
+    }
+    for method in (client.post, client.patch):
+        response = await method(endpoint, json={"values": values})
+        assert response.status_code == 200, response.text
+        result = response.json()["result"]
+        assert result["values"] == values
+        assert [(w["code"], w["field"]) for w in result["warnings"]] == [
+            ("weak_credential", field) for field in weak
+        ]
+        assert all(value not in json.dumps(result["warnings"]) for value in values.values())
+    response = await client.patch(endpoint, json={"values": dict.fromkeys(weak, "abc12345")})
     assert response.status_code == 200 and "warnings" not in response.json()["result"]

@@ -3,6 +3,7 @@
 """User privacy config storage service."""
 
 import json
+import re
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import Any, AsyncIterator, Optional
@@ -325,7 +326,7 @@ class UserPrivacyConfigService:
     async def credential_warnings(
         self, ctx: RequestContext, values: dict[str, Any]
     ) -> list[dict[str, str]]:
-        """Warn about unrecognized credential formats without exposing values."""
+        """Warn about weak credentials without exposing values."""
         from openviking.privacy.rules import prepare_privacy_extractor
 
         settings = await self.get_settings(ctx)
@@ -333,6 +334,8 @@ class UserPrivacyConfigService:
         warnings = []
         for field, value in values.items():
             if not isinstance(value, str):
+                continue
+            if len(value) > 6 and re.search(r"[A-Za-z]", value) and re.search(r"[0-9]", value):
                 continue
             try:
                 matches = discover(value)
