@@ -9,6 +9,7 @@ doctor-core.mjs
 input-filters.mjs
 mcp-proxy-config.mjs
 mcp-proxy-core.mjs
+memory-switch.mjs
 ov-http.mjs
 pending-queue.mjs
 plugin-config.mjs

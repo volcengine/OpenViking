@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { stateDir } from "./shared/workspace-identity.mjs";
 import { createRecallCompressor } from "./compressor.mjs";
 import { isCaptureEnabled } from "./shared/capture-utils.mjs";
+import { isMemoryEnabled } from "./shared/memory-switch.mjs";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
 import {
@@ -22,10 +23,16 @@ import {
 import { deriveDshSessionId } from "./session-id.mjs";
 
 export class OpenVikingRuntime {
-  constructor(client, config, logger = console, resolveSessionPeer = null) {
+  constructor(client, config, logger = console, resolveSessionConfig = null, resolveSessionPeer = null) {
     this.client = client;
     this.config = config;
     this.logger = logger;
+    // Re-resolving the whole configuration per session — not just its peer —
+    // is what lets a workspace turn memory off for its own sessions: every
+    // knob the workspace file may name (capture, recall, enabled) has to be
+    // read against the directory this session actually runs in, not against
+    // the directory the profile happened to be launched from.
+    this.resolveSessionConfig = resolveSessionConfig;
     this.resolveSessionPeer = resolveSessionPeer;
     this.states = new Map();
     this.drainTimer = null;
@@ -34,24 +41,42 @@ export class OpenVikingRuntime {
     this.drainHealth = null;
   }
 
+  /**
+   * Whether this session's workspace opted out of memory entirely. Callers use
+   * it before doing work that would otherwise reach the server, and it is
+   * cheap after the first call because the state is cached per session.
+   */
+  isDisabled(session) {
+    return !isMemoryEnabled(this.stateFor(session).config);
+  }
+
   stateFor(session) {
     let state = this.states.get(session.id);
     if (state) return state;
     const cwd = session.header?.cwd || process.cwd();
-    const peer = this.resolveSessionPeer?.(cwd) ?? resolveEffectivePeerId({
-      cfg: {
-        peerId: this.config.explicitPeerId,
-        peerSource: this.config.peerSource,
-        workspacePeer: this.config.workspacePeer,
-        harness: this.config.harness,
-      },
-      cwd,
-    });
+    const resolved = this.resolveSessionConfig?.(cwd) || null;
+    const peer = resolved
+      ? {
+          peerId: resolved.peerId || "",
+          legacyPeerId: resolved.legacyPeerId || resolved.effectivePeer?.legacyPeerId || "",
+        }
+      : (this.resolveSessionPeer?.(cwd) ?? resolveEffectivePeerId({
+          cfg: {
+            peerId: this.config.explicitPeerId,
+            peerSource: this.config.peerSource,
+            workspacePeer: this.config.workspacePeer,
+            harness: this.config.harness,
+          },
+          cwd,
+        }));
     state = {
       dshSessionId: String(session.id),
       ovSessionId: deriveDshSessionId(session.id),
-      config: { ...this.config, peerId: peer.peerId, legacyPeerId: peer.legacyPeerId },
+      config: resolved
+        ? { ...this.config, ...resolved, peerId: peer.peerId, legacyPeerId: peer.legacyPeerId }
+        : { ...this.config, peerId: peer.peerId, legacyPeerId: peer.legacyPeerId },
       ready: false,
+      skipped: false,
       profileBlock: "",
       profileDelivered: false,
       toolNames: new Map(),
@@ -71,7 +96,7 @@ export class OpenVikingRuntime {
   }
 
   async ensureState(state) {
-    if (state.ready) return state;
+    if (state.ready || state.skipped) return state;
     if (state.initializing) return state.initializing;
     state.initializing = this.initializeState(state).finally(() => {
       state.initializing = null;
@@ -81,6 +106,14 @@ export class OpenVikingRuntime {
 
   async initializeState(state) {
     state.initializationRetryable = false;
+    // A workspace that opted out gets no session created, no backlog replayed
+    // and no profile fetched: the whole point is that nothing about this
+    // conversation reaches the server. Marking it skipped instead of ready
+    // keeps every other gate honest without a second flag to remember.
+    if (!isMemoryEnabled(state.config)) {
+      state.skipped = true;
+      return state;
+    }
     const health = await this.client.healthResult();
     if (!health.ok) {
       state.initializationRetryable = isRetryableFailure(health);

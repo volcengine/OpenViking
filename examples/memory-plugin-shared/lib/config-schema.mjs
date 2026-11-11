@@ -41,7 +41,12 @@ export const KNOBS = [
   // Credentials resolve through `credentials.mjs`; these entries exist so the
   // doctor recognises them inside `plugin` and so ov.conf's harness section
   // keeps working.
-  { name: "enabled", type: "bool", default: true, env: "OPENVIKING_MEMORY_ENABLED", capability: "connection" },
+  // The master switch. `workspace: "enabled"` lets one repository turn memory
+  // off for itself alone: a checkout whose content must never leave the machine
+  // says so in `.openviking/config.json`, and every session running in it gets
+  // no profile, no recall, no capture and no commit, while sessions elsewhere
+  // keep working. `false` also wins over `recall.enabled`/`capture.enabled`.
+  { name: "enabled", type: "bool", default: true, env: "OPENVIKING_MEMORY_ENABLED", workspace: "enabled", capability: "connection" },
   { name: "apiKey", type: "string", default: "", capability: "connection" },
   { name: "accountId", type: "string", default: "", capability: "connection" },
   { name: "userId", type: "string", default: "", capability: "connection" },

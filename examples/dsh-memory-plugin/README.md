@@ -311,6 +311,7 @@ The older size settings apply to fallback recall, not the primary context reques
 - `session/event` captures user, assistant, and optionally tool-result messages without scraping a transcript.
 - `turn/end` checks the OpenViking pending-token threshold and commits when required.
 - `skipSubagentSessions: true` excludes sessions marked with `header.origin: subagent` from automatic profile, recall, capture, and commit; it defaults to `false`.
+- `enabled: false` — set by the host environment or by a workspace file — takes a session out of memory entirely: no session initialization, no profile, no recall, no capture and no commit. It is resolved per session, so one workspace can opt out without affecting the others; see "A workspace that takes no part in memory" above.
 - `syncTurns: false` stops every new write: no captured messages, no threshold or shutdown commit. Writes queued while the toggle was on are still replayed by the background drainer once the server recovers — they were captured with the toggle on. Profile injection and recall are unaffected; it defaults to `true`.
 - `skillCatalog` (default `true`) and `skillCatalogTokenBudget` (default `1200`; `0` also turns the catalog off) govern `<available-skills>`. The catalog comes from one `GET /api/v1/skills?node_limit=200` call: the user's own skills first, then those shared under `viking://agent/skills` minus any whose name the user also owns, each description cut to about 40 tokens. Its budget is separate from `profileTokenBudget`. When the descriptions do not fit, the catalog lists names only (with a `... +N more` tail if even the names do not all fit); when not even one name fits, it shrinks to a one-line count; with no skills, or a server without the endpoint, it is omitted.
 - Failed writes enter the shared OpenViking pending queue. A background drainer (default every 60s, `OPENVIKING_PENDING_DRAIN_INTERVAL_MS`) probes the server health and replays the queue in-process, so a transient write failure recovers without restarting dsh; it does not consume the session-start retry budget. Session-start replays keep consuming retries as before.
@@ -329,6 +330,33 @@ Workspace peer settings are loaded from `session.header.cwd` when the session fi
 ```
 
 The shared loader also applies `config.local.json` and machine registry overrides. Explicit host `peerId`, environment overrides and pinned `ovcli.conf` credentials retain their existing precedence. The resolved peer stays fixed for the session's runtime state; new sessions load the current workspace settings. A session without a cwd falls back to the process's working directory.
+
+### A workspace that takes no part in memory
+
+The whole `resolveConfig()` result is rebuilt per session against that session's
+own `header.cwd`, not just the peer, so a workspace may also name the master
+switch. `enabled: false` keeps every session running in that directory out of
+memory completely:
+
+```json
+{
+  "version": 1,
+  "enabled": false
+}
+```
+
+A disabled workspace's sessions get no profile block, no recall, no capture, no
+commit and no request to the server — session initialization short-circuits
+before the health probe, so not even a session is created. This is stronger
+than `recall.enabled: false` or `capture.enabled: false`, which turn off one
+capability while the other keeps working, and it is scoped to the workspace:
+sessions in other directories on the same runtime keep working normally.
+
+`OPENVIKING_MEMORY_ENABLED=0` in the host environment outranks a workspace file,
+so a repository cannot switch memory back on for a host that turned it off. A
+value handed to the plugin by the host's own `cordis.patch.yml` entry ranks
+below the workspace file, like every other tuning knob. The switch is announced
+at session start like every other workspace override.
 
 ## Tools
 

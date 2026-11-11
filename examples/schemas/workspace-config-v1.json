@@ -23,6 +23,11 @@
       "type": "string",
       "description": "Free text for whoever reads the file. Not interpreted."
     },
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "The master switch for this workspace. `false` means every session running here takes no part in memory at all: no profile block, no recall, no capture, no commit, and no request to the server. It is the strongest way for a checkout whose content must not leave the machine to keep its sessions out, while sessions in other workspaces keep working. Connection and credential settings still cannot be named in a workspace file."
+    },
     "peer": {
       "type": "object",
       "additionalProperties": true,
