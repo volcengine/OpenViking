@@ -115,6 +115,10 @@ class PrivacyContent:
             )
 
     def _add_yaml(self, content: str, offset: int, *, skip: set[str] | None = None) -> None:
+        if content.startswith("\ufeff"):
+            # LibYAML excludes the BOM from node marks; keep both loaders aligned.
+            content = content[1:]
+            offset += 1
         try:
             nodes = list(yaml.compose_all(content, Loader=_YAML_LOADER))
             if self._structure_only:
@@ -224,6 +228,7 @@ class PrivacyContent:
     ) -> tuple[list[tuple[int, int, str]], set[int]]:
         """Split only changed aliases that cross between keys and values."""
         content, offset = document.content, document.offset
+        newline = "\r\n" if "\r\n" in content else "\n"
         events = yaml.parse(content, Loader=_YAML_LOADER)
         anchors = set()
         names: dict[yaml.Node, str] = {}
@@ -348,7 +353,7 @@ class PrivacyContent:
                     value = "? " + value
                     if not flow_key:
                         position = offset + colon.start_mark.index
-                        edits.append((position, position, "\n" + " " * event.start_mark.column))
+                        edits.append((position, position, newline + " " * event.start_mark.column))
             edits.append((offset + event.start_mark.index, offset + event.end_mark.index, value))
         return edits, key_ends
 
@@ -410,7 +415,7 @@ class PrivacyContent:
                 except (ValueError, RecursionError):
                     raise self._structure_error() from None
                 if item.end > item.start and self.content[item.end - 1] == "\n":
-                    value += "\n"
+                    value += "\r\n" if self.content[item.end - 2 : item.end] == "\r\n" else "\n"
             edits.append((item.start, item.end, value))
         if not edits:
             return self.content

@@ -52,6 +52,21 @@ REFERENCE = "{{ov_privacy:alice:viking://~/privacy/credential/demo#/values/key}}
             "? &label private-value\n: 23\ndisplay: *label\ncopy: *label\n",
             yaml.safe_load,
         ),
+        (
+            "yaml",
+            "\ufeffkey: private-value\nother: ordinary-value\n",
+            yaml.safe_load,
+        ),
+        (
+            "yaml",
+            "\ufeffdisplay: &label private-value\nlookup: {*label: 23}\n",
+            yaml.safe_load,
+        ),
+        (
+            "yaml",
+            "\ufeff---\nkey: private-value\n...\n---\nkey: private-value\n",
+            lambda value: list(yaml.safe_load_all(value)),
+        ),
     ],
     ids=[
         "json",
@@ -60,6 +75,9 @@ REFERENCE = "{{ov_privacy:alice:viking://~/privacy/credential/demo#/values/key}}
         "yaml-stream",
         "value-key-alias",
         "key-value-alias",
+        "yaml-bom",
+        "yaml-bom-alias",
+        "yaml-bom-stream",
     ],
 )
 def test_structured_values_roundtrip_without_changing_keys_or_types(
@@ -151,6 +169,11 @@ def test_yaml_alias_cannot_change_a_key_indirectly(source, monkeypatch):
             'display: &label_value "MASKED" # value\ncopy: *label_value\n',
         ),
         (
+            "display: &label private-value # value\nlookup:\n  *label: 23 # key\n",
+            'display: &label "MASKED" # value\nlookup:\n'
+            '  ? &label_key "private-value"\n  : 23 # key\n',
+        ),
+        (
             "display: &label ordinary-label # value\nlookup: {*label: 23} # key\n"
             "secret: private-value\n",
             "display: &label ordinary-label # value\nlookup: {*label: 23} # key\n"
@@ -159,8 +182,11 @@ def test_yaml_alias_cannot_change_a_key_indirectly(source, monkeypatch):
     ],
 )
 def test_yaml_rewrites_only_changed_values_and_conflicting_aliases(source, expected):
-    document = PrivacyContent(source, "viking://resources/config.yaml")
-    assert document.render(lambda item: item.value.replace("private-value", "MASKED")) == expected
+    for newline in ("\n", "\r\n"):
+        document = PrivacyContent(source.replace("\n", newline), "viking://resources/config.yaml")
+        assert document.render(
+            lambda item: item.value.replace("private-value", "MASKED")
+        ) == expected.replace("\n", newline)
 
 
 @pytest.mark.parametrize("flow", [False, True])

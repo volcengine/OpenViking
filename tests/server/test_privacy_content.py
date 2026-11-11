@@ -104,6 +104,7 @@ async def test_structured_content_write_read_scan_and_rotation(
     assert decode(await service.fs.read(uri, ctx=owner)) == expected
 
 
+@pytest.mark.parametrize("bom", [False, True])
 @pytest.mark.parametrize(
     "source,expected",
     [
@@ -112,9 +113,13 @@ async def test_structured_content_write_read_scan_and_rotation(
             {"display": None, "lookup": {"DemoLabel": 23}},
         ),
         ("? &label DemoLabel\n: 23\ndisplay: *label\n", {"DemoLabel": 23, "display": None}),
+        ("display: DemoLabel\nlookup: {public: 23}\n", {"display": None, "lookup": {"public": 23}}),
     ],
 )
-async def test_yaml_alias_keys_survive_write_and_default_read(service, owner, source, expected):
+async def test_yaml_alias_keys_survive_write_and_default_read(
+    service, owner, source, expected, bom
+):
+    source = ("\ufeff" if bom else "") + source
     await patch_user_config(
         service.viking_fs,
         owner,
