@@ -12,12 +12,13 @@ import time
 from collections import Counter
 from dataclasses import asdict, dataclass
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from openviking.core.namespace import (
     canonical_user_root,
     classify_uri,
     is_session_uri,
+    owner_space_for_uri,
     resolve_request_uri,
 )
 from openviking.core.skill_loader import SkillLoader
@@ -176,7 +177,7 @@ class PrivacySanitizer:
                     "max_bytes": self._max_content_bytes,
                 },
             )
-        scope = self._scope_from_uri(uri, ctx)
+        scope = self.scope_from_uri(uri, ctx)
         content_start = 0
         if uri.lower().endswith((".md", ".markdown")) and (
             (scope is not None and scope[0] == "skill") or classify_uri(uri).is_skill
@@ -219,6 +220,39 @@ class PrivacySanitizer:
             ambiguous_references=self._check_ambiguity(matcher, replacements, uri=uri),
             match_limit_exceeded=match_limit_exceeded,
         )
+
+    async def settings_for_uri(self, uri: str, ctx: RequestContext) -> ResolvedPrivacyConfig | None:
+        """Return settings when automatic matching applies to this content URI."""
+        uri = resolve_request_uri(uri, ctx)
+        if self._is_privacy_storage_uri(uri, ctx) or (uri.endswith("/.abstract.md") and classify_uri(uri).is_skill):
+            return None
+        owner = owner_space_for_uri(uri)
+        if owner and owner != ctx.user.user_id:
+            return None
+        settings = await self._privacy.get_settings(ctx)
+        if settings.mode == "off":
+            return None
+        if settings.mode != "auto_strict" and self.scope_from_uri(uri, ctx) is None:
+            return None
+        return settings
+
+    async def sanitize_for_write(
+        self,
+        content: str,
+        *,
+        ctx: RequestContext,
+        uri: str,
+        settings: ResolvedPrivacyConfig | None = None,
+    ) -> str:
+        """Apply automatic matching to the content selected by user settings."""
+        if not content:
+            return content
+        if settings is None:
+            settings = await self.settings_for_uri(uri, ctx)
+        if settings is None:
+            return content
+        result = await self.sanitize(content, ctx=ctx, uri=uri, settings=settings)
+        return result.content
 
     async def _matcher(
         self,
@@ -366,7 +400,10 @@ class PrivacySanitizer:
         return ambiguous
 
     @staticmethod
-    def _scope_from_uri(uri: str, ctx: RequestContext) -> tuple[str, str] | None:
+    def scope_from_uri(
+        uri: str, ctx: RequestContext
+    ) -> tuple[Literal["skill", "session"], str] | None:
+        """Return a Skill/Session target, excluding other users' private URIs."""
         if not uri:
             return None
         classification = classify_uri(uri)

@@ -275,8 +275,7 @@ class ContentWriteCoordinator:
     ) -> str:
         if self._privacy_sanitizer is None:
             return content
-        result = await self._privacy_sanitizer.sanitize(content, ctx=ctx, uri=uri)
-        return result.content
+        return await self._privacy_sanitizer.sanitize_for_write(content, ctx=ctx, uri=uri)
 
     async def _sanitize_batch_operations(
         self,

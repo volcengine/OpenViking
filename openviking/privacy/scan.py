@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from dataclasses import replace
 from typing import Any
 
 from openviking.core.namespace import classify_uri, resolve_request_uri
@@ -147,6 +148,7 @@ async def _scan_privacy_content(
     stop_reason: str | None = None
     fix_truncated = False
     last_read_at = 0.0
+    settings = replace(await service.privacy_configs.get_settings(ctx), mode="registered")
 
     def skip(reason: str) -> None:
         skipped_files[reason] = skipped_files.get(reason, 0) + 1
@@ -222,6 +224,7 @@ async def _scan_privacy_content(
             uri=file_uri,
             max_replacements=PRIVACY_SCAN_MAX_REPLACEMENTS_PER_FILE,
             fail_on_match_limit=False,
+            settings=settings,
         )
         if result.match_limit_exceeded:
             skip("match_limit_exceeded")

@@ -1525,9 +1525,11 @@ class FSService:
         uri = await self._resolve_uri(uri, ctx)
         ctx = self._ensure_initialized().authorize_read(ctx, [uri])
         resolved_uri, content = await self._read_content(uri, ctx)
+        scope = PrivacySanitizer.scope_from_uri(resolved_uri, ctx)
         if (
             self._privacy_config_service is not None
             and ctx.data_access is None
+            and scope is not None
             and (await self._privacy_config_service.get_settings(ctx)).restore
         ):
             skill_name = get_skill_name_from_uri(resolved_uri)
@@ -1574,15 +1576,13 @@ class FSService:
         resolved_uri = await self._resolve_uri(uri, ctx)
         ctx = self._ensure_initialized().authorize_read(ctx, [resolved_uri])
         settings = (
-            await self._privacy_config_service.get_settings(ctx)
-            if self._privacy_config_service is not None and ctx.data_access is None
+            await self._privacy_sanitizer.settings_for_uri(resolved_uri, ctx)
+            if self._privacy_sanitizer is not None and ctx.data_access is None
             else None
         )
         max_bytes = (
             self._privacy_sanitizer.max_content_bytes
-            if self._privacy_sanitizer is not None
-            and ctx.data_access is None
-            and (settings is None or settings.mode != "off")
+            if self._privacy_sanitizer is not None and settings is not None
             else None
         )
         try:
@@ -1612,7 +1612,7 @@ class FSService:
         """Hide memory metadata and sanitize private values in already-read text."""
         if classify_uri(uri).is_memory:
             content = visible_content(content, uri=uri)
-        if self._privacy_sanitizer is not None and ctx.data_access is None:
+        if self._privacy_sanitizer is not None and settings is not None:
             content = (
                 await self._privacy_sanitizer.sanitize(
                     content,

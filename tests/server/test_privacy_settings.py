@@ -79,6 +79,11 @@ async def test_privacy_settings_inherit_patch_and_reset(
         ),
         ({"mode": None}, {"restore": True}, {"mode": "auto", "restore": True}),
         ({}, {"restore": True}, {"mode": "auto", "restore": True}),
+        (
+            {"mode": "auto_strict"},
+            {"mode": "auto_strict", "restore": True},
+            {"mode": "auto_strict", "restore": True},
+        ),
     ]:
         response = await client.patch(URL, json=patch)
         assert response.status_code == 200, response.text
@@ -158,24 +163,24 @@ async def test_settings_and_backups_preserve_registered_literals(
     client: httpx.AsyncClient, service, owner
 ):
     await service.privacy_configs.upsert(
-        owner, "credential", "settings-test", {"key": "registered"}
+        owner, "credential", "settings-test", {"key": "auto_strict"}
     )
-    for patch in ({"mode": "registered"}, {"restore": False}):
+    for patch in ({"mode": "auto_strict"}, {"restore": False}):
         response = await client.patch(URL, json=patch)
         assert response.status_code == 200, response.text
     for uri in (user_config_uri(owner), user_config_backup_uri(owner)):
         stored = json.loads(await service.viking_fs.read_file(uri, ctx=owner))
-        assert stored["privacy"]["mode"] == "registered"
+        assert stored["privacy"]["mode"] == "auto_strict"
 
 
 def test_privacy_deployment_defaults_load(isolated_config):
     payload = json.loads(isolated_config.read_text(encoding="utf-8"))
     payload["server"] = {
-        "user_config_defaults": {"privacy": {"mode": "registered", "restore": False}}
+        "user_config_defaults": {"privacy": {"mode": "auto_strict", "restore": False}}
     }
     isolated_config.write_text(json.dumps(payload), encoding="utf-8")
     config = load_server_config(str(isolated_config))
-    assert config.user_config_defaults.privacy == PrivacyConfig(mode="registered", restore=False)
+    assert config.user_config_defaults.privacy == PrivacyConfig(mode="auto_strict", restore=False)
 
 
 async def test_custom_rules_inherit_replace_and_validate_before_writing(
@@ -277,7 +282,7 @@ async def test_overlapping_rules_count_session_discoveries_once(client, service,
     assert json.loads(restored)["parts"][0]["text"] == original
 
 
-@pytest.mark.parametrize("mode", ["off", "registered", "auto"])
+@pytest.mark.parametrize("mode", ["off", "registered", "auto", "auto_strict"])
 @pytest.mark.parametrize("restore", [False, True])
 async def test_privacy_policy_applies_across_session_skill_and_content(
     client, service, owner, mode, restore
@@ -296,6 +301,9 @@ async def test_privacy_policy_applies_across_session_skill_and_content(
     resource = root + "/memories/preferences/policy.md"
     await service.viking_fs.mkdir(root + "/memories/preferences", ctx=owner)
     await service.viking_fs.write_file(resource, body, ctx=owner)
+    resource_body = body.replace(known, reference) if mode == "auto_strict" else body
+    assert await service.fs.read_visible(resource, ctx=owner) == resource_body
+    assert resource_body in await service.fs.read(resource, ctx=owner)
     session = await service.sessions.create(owner, "policy-matrix")
     await session.add_message_async("user", [TextPart(body)])
     await service.resources.add_skill(
@@ -306,13 +314,12 @@ async def test_privacy_policy_applies_across_session_skill_and_content(
     for uri, session_file in [
         (session.uri + "/messages.jsonl", True),
         (root + "/skills/policy-matrix/SKILL.md", False),
-        (resource, False),
     ]:
         stored = await service.viking_fs.read_file(uri, ctx=owner)
         if session_file:
             stored = json.loads(stored)["parts"][0]["text"]
         assert (known not in stored) == (mode != "off")
-        discovered = mode == "auto" and uri != resource
+        discovered = mode in {"auto", "auto_strict"}
         assert (secret not in stored) == discovered
         visible = await service.fs.read_visible(uri, ctx=owner)
         assert reference in visible

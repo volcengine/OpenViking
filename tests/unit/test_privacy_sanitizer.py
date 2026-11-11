@@ -425,3 +425,15 @@ async def test_skill_frontmatter_is_preserved_and_spans_address_original_text():
         header + body, ctx=_ctx(), uri="viking://user/alice/skills/demo/"
     )
     assert text.content == (header + body).replace("managed-secret", reference)
+
+
+async def test_automatic_matching_keeps_foreign_content_and_private_config_untouched():
+    catalog = _PrivacyCatalog({"credential": {"service": {"key": "secret"}}})
+    catalog.settings = ResolvedPrivacyConfig(mode="auto_strict")
+    sanitizer = PrivacySanitizer(catalog)
+    for uri in (
+        "viking://user/bob/sessions/current/output.txt",
+        "viking://~/privacy/credential/service/current.json",
+        "viking://~/settings/user_config.json",
+    ):
+        assert await sanitizer.sanitize_for_write("secret", ctx=_ctx(), uri=uri) == "secret"

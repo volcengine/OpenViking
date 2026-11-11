@@ -46,7 +46,7 @@ async def extract_and_store_session_privacy(
     privacy: UserPrivacyConfigService,
     sanitizer: PrivacySanitizer | None,
 ) -> list[dict]:
-    """Protect copies and discover new values when the user's mode is auto."""
+    """Protect copies and discover new values when the user's mode enables discovery."""
     target_key = session_privacy_target(session_id)
     labels = None if target_key == session_id else {"session_id": session_id}
     settings = await privacy.get_settings(ctx)
@@ -54,7 +54,7 @@ async def extract_and_store_session_privacy(
         return await asyncio.to_thread(deepcopy, messages_spec)
     async with (
         privacy._config_lock(ctx, "session", target_key)
-        if settings.mode == "auto"
+        if settings.discovery_enabled
         else nullcontext()
     ) as lease:
         matcher = await _prepare_session_matcher(sanitizer, ctx, target_key, settings=settings)
@@ -252,7 +252,7 @@ class _SessionExtraction(_PayloadTransformer):
         self.target_key = target_key
         self.rule_matcher = (
             prepare_privacy_extractor(settings=settings)
-            if settings is not None and settings.mode == "auto"
+            if settings is not None and settings.discovery_enabled
             else None
         )
         self.value_matcher = value_matcher

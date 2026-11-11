@@ -439,13 +439,14 @@ async def test_concurrent_writers_preserve_messages_and_independent_fields(
     ]
 
 
-@pytest.mark.usefixtures("auto_privacy")
+@pytest.mark.parametrize("mode", ["auto", "auto_strict"])
 async def test_concurrent_same_values_reuse_fields_with_stale_worker_caches(
-    service, ctx, monkeypatch
+    service, ctx, monkeypatch, mode
 ):
     from openviking.privacy.sanitizer import PrivacySanitizer
     from openviking.privacy.service import UserPrivacyConfigService
 
+    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": mode}})
     monkeypatch.setenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "1")
     await service.privacy_configs.upsert(ctx, "session", "other", {"other001": SECRET})
     await service.privacy_configs.upsert(ctx, "skill", "other", {"other001": SECRET})
@@ -485,15 +486,16 @@ async def test_concurrent_same_values_reuse_fields_with_stale_worker_caches(
         assert parts[1]["tool_input"] == {"nested": [SECRET, SECOND_SECRET, False, 17]}
 
 
-@pytest.mark.usefixtures("auto_privacy")
+@pytest.mark.parametrize("mode", ["auto", "auto_strict"])
 async def test_concurrent_skill_preparations_reuse_current_fields_and_preserve_references(
-    service, ctx, monkeypatch
+    service, ctx, monkeypatch, mode
 ):
     from openviking.privacy.service import UserPrivacyConfigService
     from openviking.privacy.skill_placeholder import build_placeholder
     from openviking.privacy.skill_restore import restore_skill_content
     from openviking.utils.skill_processor import SkillProcessor
 
+    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": mode}})
     monkeypatch.setenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "1")
     await service.privacy_configs.upsert(ctx, "session", "other", {"other001": SECRET})
     await service.privacy_configs.upsert(ctx, "skill", "other", {"other001": SECRET})

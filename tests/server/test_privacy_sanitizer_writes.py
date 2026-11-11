@@ -18,35 +18,32 @@ async def enabled_privacy(service):
     await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": "auto"}})
 
 
-async def test_user_and_public_content_writes_replace_registered_privacy_values(service):
+@pytest.mark.parametrize("mode", ["auto", "auto_strict"])
+async def test_ordinary_writes_and_reads_follow_matching_scope(service, mode):
     ctx = RequestContext(user=service.user, role=Role.USER)
+    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": mode}})
     secret = "registered-custom-value"
-    await service.privacy_configs.upsert(
-        ctx,
-        "credential",
-        "external-system",
-        {"not_a_conventional_secret_name": secret},
-        updated_by=ctx.user.user_id,
-    )
+    await service.privacy_configs.upsert(ctx, "credential", "external-system", {"key": secret})
+    if mode == "auto":
+        service.privacy_sanitizer._max_content_bytes = 1
     reference = build_privacy_field_reference(
-        ctx.user.user_id,
-        "credential",
-        "external-system",
-        "not_a_conventional_secret_name",
+        ctx.user.user_id, "credential", "external-system", "key"
     )
-
-    private_uri = f"viking://user/{ctx.user.user_id}/privacy-sanitized.md"
-    public_uri = "viking://resources/privacy-sanitized.md"
-    for uri in (private_uri, public_uri):
-        await service.fs.write(uri, f"credential={secret}", ctx=ctx, wait=False)
-        stored = await service.viking_fs.read_file(uri, ctx=ctx)
-        assert secret not in stored
-        assert stored == f"credential={reference}"
+    expected = "credential=" + (reference if mode == "auto_strict" else secret)
+    for uri in (
+        f"viking://user/{ctx.user.user_id}/privacy-sanitized.md",
+        "viking://resources/privacy-sanitized.md",
+    ):
+        await service.fs.write(uri, f"credential={secret}", ctx=ctx, wait=True)
+        assert await service.viking_fs.read_file(uri, ctx=ctx) == expected
+        assert await service.fs.read_visible(uri, ctx=ctx) == expected
+        assert await service.fs.read(uri, ctx=ctx) == expected
 
 
 @pytest.mark.parametrize("method", [None, "vlm"])
+@pytest.mark.parametrize("mode", ["auto", "auto_strict"])
 async def test_skill_preserves_metadata_and_protects_body_through_add_update_and_read(
-    service, client, monkeypatch, method
+    service, client, monkeypatch, method, mode
 ):
     from openviking.core.skill_loader import SkillLoader
     from openviking.storage.abstract_overview import parse_abstract_overview
@@ -56,7 +53,7 @@ async def test_skill_preserves_metadata_and_protects_body_through_add_update_and
     else:
         monkeypatch.setenv("OPENVIKING_SKILL_PRIVACY_EXTRACTION_METHOD", method)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": "auto"}})
+    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": mode}})
     secret = "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
     description = f"metadata managed-secret and {secret}"
     await service.privacy_configs.upsert(ctx, "credential", "managed", {"key": "managed-secret"})
@@ -98,113 +95,36 @@ async def test_skill_preserves_metadata_and_protects_body_through_add_update_and
         assert description in abstract.body
 
 
-async def test_resource_artifact_sanitizes_user_dotfiles_but_skips_internal_sidecars(
-    service,
-    monkeypatch,
-):
-    ctx = RequestContext(user=service.user, role=Role.USER)
-    secret = "registered-dotfile-value"
-    await service.privacy_configs.upsert(
-        ctx,
-        "credential",
-        "dotfile-service",
-        {"key": secret},
-        updated_by=ctx.user.user_id,
-    )
+@pytest.mark.parametrize("mode", ["auto", "auto_strict"])
+async def test_ambiguous_credential_does_not_rewrite_ordinary_content(service, monkeypatch, mode):
+    from openviking.privacy.scan import scan_privacy_content
 
-    class ArtifactStore:
-        def __init__(self):
-            self.writes: dict[str, bytes] = {}
-
-        async def list(self, _artifact_ref, _directory):
-            return [
-                SimpleNamespace(is_dir=False, name=".env", rel_path=".env"),
-                SimpleNamespace(
-                    is_dir=False,
-                    name=".artifact_manifest.json",
-                    rel_path=".artifact_manifest.json",
-                ),
-            ]
-
-        async def read_bytes(self, _artifact_ref, path):
-            if path == ".artifact_manifest.json":
-                raise AssertionError("internal sidecar must not be sanitized")
-            return f"TOKEN={secret}".encode()
-
-        async def write_bytes(self, _artifact_ref, path, data):
-            self.writes[path] = data
-
-    async def read_manifest(_store, _artifact_ref):
-        return {}
-
-    async def write_manifest(_store, _artifact_ref, _manifest):
-        return None
-
-    monkeypatch.setattr("openviking.parse.output.read_artifact_manifest", read_manifest)
-    monkeypatch.setattr("openviking.parse.output.write_artifact_manifest", write_manifest)
-    store = ArtifactStore()
-    await service._resource_processor._sanitize_parse_artifact(
-        store=store,
-        artifact_ref=SimpleNamespace(root_type="dir"),
-        doc_rel="",
-        target_root_uri="viking://resources/dotfile-test",
-        ctx=ctx,
-    )
-
-    rewritten = store.writes[".env"].decode()
-    assert secret not in rewritten
-    assert (
-        build_privacy_field_reference(
-            ctx.user.user_id,
-            "credential",
-            "dotfile-service",
-            "key",
-        )
-        in rewritten
-    )
-
-
-async def test_content_write_and_legacy_reads_reject_ambiguity_in_strict_mode(service, monkeypatch):
     monkeypatch.setenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "1")
     ctx = RequestContext(user=service.user, role=Role.USER)
     duplicate = "same-registered-value"
-    await service.privacy_configs.upsert(
-        ctx,
-        "credential",
-        "first",
-        {"key": duplicate},
-        updated_by=ctx.user.user_id,
-    )
-    await service.privacy_configs.upsert(
-        ctx,
-        "credential",
-        "second",
-        {"key": duplicate},
-        updated_by=ctx.user.user_id,
-    )
-
+    for target in ("first", "second"):
+        await service.privacy_configs.upsert(ctx, "credential", target, {"key": duplicate})
+    uri = "viking://resources/ambiguous.md"
+    await service.fs.write(uri, duplicate, ctx=ctx, wait=True)
+    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": mode}})
+    if mode == "auto_strict":
+        with pytest.raises(InvalidArgumentError, match="mapped to multiple fields"):
+            await service.fs.read_visible(uri, ctx=ctx)
+        with pytest.raises(InvalidArgumentError, match="mapped to multiple fields"):
+            await service.fs.write(uri, duplicate + " updated", ctx=ctx, wait=True)
+    else:
+        assert await service.fs.read_visible(uri, ctx=ctx) == duplicate
     with pytest.raises(InvalidArgumentError, match="mapped to multiple fields") as exc_info:
-        await service.fs.write(
-            f"viking://user/{ctx.user.user_id}/ambiguous.md",
-            duplicate,
-            ctx=ctx,
-            wait=False,
+        await scan_privacy_content(
+            service=service, ctx=ctx, sanitizer=service.privacy_sanitizer, uri=uri, fix=True
         )
-    details = exc_info.value.details
-    assert details is not None
-    assert len(details["candidate_references"][0]) == 2
-    assert duplicate not in str(details)
-
-    # Legacy content may predate write-time sanitization. The visible read path
-    # must fail closed without choosing either field or returning the value.
-    legacy_uri = f"viking://user/{ctx.user.user_id}/legacy-ambiguous.md"
-    legacy_path = service.viking_fs._uri_to_path(legacy_uri, ctx=ctx)
-    await service.viking_fs._async_agfs.write(legacy_path, duplicate.encode("utf-8"))
-    with pytest.raises(InvalidArgumentError, match="mapped to multiple fields"):
-        await service.fs.read_visible(legacy_uri, ctx=ctx)
+    assert len(exc_info.value.details["candidate_references"][0]) == 2
+    assert duplicate not in str(exc_info.value.details)
+    assert await service.viking_fs.read_file(uri, ctx=ctx) == duplicate
 
 
-async def test_sanitizer_uses_only_the_writing_users_privacy_catalog(service):
+@pytest.mark.parametrize("mode", ["auto", "auto_strict"])
+async def test_sanitizer_uses_only_the_writing_users_privacy_catalog(service, mode):
     owner = RequestContext(user=service.user, role=Role.USER)
     other = RequestContext(
         user=UserIdentifier(owner.account_id, "other-writer"),
@@ -212,7 +132,7 @@ async def test_sanitizer_uses_only_the_writing_users_privacy_catalog(service):
     )
     owner_secret = "owner-only-registered-value"
     await service.initialize_user_directories(other)
-    await patch_user_config(service.viking_fs, other, {"privacy": {"mode": "auto"}})
+    await patch_user_config(service.viking_fs, other, {"privacy": {"mode": mode}})
     await service.privacy_configs.upsert(
         owner,
         "credential",
@@ -221,12 +141,12 @@ async def test_sanitizer_uses_only_the_writing_users_privacy_catalog(service):
         updated_by=owner.user.user_id,
     )
 
-    uri = "viking://resources/other-writer-content.md"
-    await service.fs.write(uri, owner_secret, ctx=other, wait=False)
+    uri = "viking://user/other-writer/sessions/catalog-scope/tool-results/read/output.txt"
+    await service.viking_fs.write_file(uri, owner_secret, ctx=other)
     assert await service.viking_fs.read_file(uri, ctx=other) == owner_secret
 
 
-async def test_visible_read_sanitizes_legacy_content_that_bypassed_content_write(service):
+async def test_visible_read_sanitizes_legacy_session_content(service):
     ctx = RequestContext(user=service.user, role=Role.USER)
     secret = "legacy-registered-value"
     await service.privacy_configs.upsert(
@@ -236,12 +156,8 @@ async def test_visible_read_sanitizes_legacy_content_that_bypassed_content_write
         {"key": secret},
         updated_by=ctx.user.user_id,
     )
-    uri = f"viking://user/{ctx.user.user_id}/legacy-content.md"
-    raw_path = service.viking_fs._uri_to_path(uri, ctx=ctx)
-    await service.viking_fs._async_agfs.write(
-        raw_path,
-        f"before {secret} after".encode("utf-8"),
-    )
+    uri = f"viking://user/{ctx.user.user_id}/sessions/legacy/tool-results/read/output.txt"
+    await service.viking_fs.write_file_bytes(uri, f"before {secret} after".encode("utf-8"), ctx=ctx)
 
     visible = await service.fs.read_visible(uri, ctx=ctx)
     assert secret not in visible
@@ -257,8 +173,10 @@ async def test_visible_read_sanitizes_legacy_content_that_bypassed_content_write
     )
 
 
-async def test_resource_import_sanitizes_parse_artifact_before_persistence(service, tmp_path):
+@pytest.mark.parametrize("mode", ["auto", "auto_strict"])
+async def test_resource_import_follows_matching_scope(service, tmp_path, mode):
     ctx = RequestContext(user=service.user, role=Role.USER)
+    await patch_user_config(service.viking_fs, ctx, {"privacy": {"mode": mode}})
     secret = "resource-import-registered-value"
     await service.privacy_configs.upsert(
         ctx,
@@ -293,16 +211,16 @@ async def test_resource_import_sanitizes_parse_artifact_before_persistence(servi
             if not entry.get("isDir") and not entry["name"].startswith(".")
         ]
     stored = "\n".join([await service.viking_fs.read_file(uri, ctx=ctx) for uri in uris])
-    assert secret not in stored
-    assert (
-        build_privacy_field_reference(
-            ctx.user.user_id,
-            "credential",
-            "import-service",
-            "custom",
+    expected = source.read_text(encoding="utf-8").strip()
+    if mode == "auto_strict":
+        expected = expected.replace(
+            secret,
+            build_privacy_field_reference(
+                ctx.user.user_id, "credential", "import-service", "custom"
+            ),
         )
-        in stored
-    )
+        assert secret not in stored
+    assert expected in stored
 
 
 async def test_skill_finalizes_original_offsets_using_latest_fields(service, monkeypatch):

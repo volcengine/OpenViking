@@ -2053,8 +2053,7 @@ class _OpsMixin:
         if isinstance(content, str):
             sanitizer = getattr(self, "_privacy_sanitizer", None)
             if sanitizer is not None and ctx is not None:
-                result = await sanitizer.sanitize(content, ctx=ctx, uri=uri)
-                content = result.content
+                content = await sanitizer.sanitize_for_write(content, ctx=ctx, uri=uri)
             content = content.encode("utf-8")
 
         await self._async_agfs.write(

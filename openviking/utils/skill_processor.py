@@ -513,7 +513,7 @@ class SkillProcessor:
             return None
 
         settings = await self._privacy_config_service.get_settings(ctx)
-        if settings.mode != "auto":
+        if not settings.discovery_enabled:
             return SkillPrivacyPreparation(settings, [])
 
         content = skill_dict.get("content", "")

@@ -29,10 +29,14 @@ class ResolvedAddTargets:
 
 @dataclass(frozen=True)
 class ResolvedPrivacyConfig:
-    mode: Literal["off", "registered", "auto"] = "off"
+    mode: Literal["off", "registered", "auto", "auto_strict"] = "off"
     restore: bool = True
     custom_rules: list[dict[str, Any]] = field(default_factory=list)
     never_mask: list[str] = field(default_factory=list)
+
+    @property
+    def discovery_enabled(self) -> bool:
+        return self.mode in {"auto", "auto_strict"}
 
 
 _UpdateResult = TypeVar("_UpdateResult")

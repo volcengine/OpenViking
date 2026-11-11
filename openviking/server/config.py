@@ -162,7 +162,7 @@ class PrivacyConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    mode: Optional[Literal["off", "registered", "auto"]] = None
+    mode: Optional[Literal["off", "registered", "auto", "auto_strict"]] = None
     restore: Optional[StrictBool] = None
     custom_rules: Optional[list[PrivacyRuleConfig]] = None
     never_mask: Optional[list[StrictStr]] = Field(default=None, max_length=1024)

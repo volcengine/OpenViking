@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.privacy import scan as privacy_scan
 from openviking.privacy.sanitizer import PrivacyReplacement, PrivacySanitizationResult
 from openviking.server.identity import RequestContext, Role
+from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -63,12 +65,14 @@ class _Sanitizer:
         uri,
         max_replacements,
         fail_on_match_limit,
+        settings,
     ):
         del ctx
         assert content == "prefix secret"
         assert uri == "viking://resources/demo/content.md"
         assert max_replacements == privacy_scan.PRIVACY_SCAN_MAX_REPLACEMENTS_PER_FILE
         assert fail_on_match_limit is False
+        assert settings.mode == "registered"
         return PrivacySanitizationResult(
             content="prefix reference",
             replacements=(PrivacyReplacement(7, 13, "reference"),),
@@ -77,7 +81,12 @@ class _Sanitizer:
 
 async def test_privacy_scan_applies_file_and_node_budgets_before_reading():
     viking_fs = _VikingFS()
-    service = SimpleNamespace(viking_fs=viking_fs)
+    service = SimpleNamespace(
+        viking_fs=viking_fs,
+        privacy_configs=SimpleNamespace(
+            get_settings=AsyncMock(return_value=ResolvedPrivacyConfig())
+        ),
+    )
 
     result = await privacy_scan.scan_privacy_content(
         service=service,
