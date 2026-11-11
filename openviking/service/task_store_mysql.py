@@ -12,10 +12,10 @@ import time
 from contextlib import AbstractContextManager, asynccontextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Collection, Dict, Iterable, Optional
+from typing import Any, AsyncGenerator, Collection, Dict, Iterable, Optional, cast
 
 from sqlalchemy import and_, delete, event, exists, or_, select, update
-from sqlalchemy.engine import URL
+from sqlalchemy.engine import URL, CursorResult
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -1450,6 +1450,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     updated_at=work.updated_at,
                 )
             )
+            self._task_changed(session, account_id, user_id, work.task_id)
             return StoreOperationResult.applied()
 
     async def reconcile_delivery(
@@ -1491,6 +1492,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                         updated_at=work.updated_at,
                     )
                 )
+                self._task_changed(session, account_id, user_id, work.task_id)
                 return StoreOperationResult.applied()
             elif existing.state in {WorkState.PENDING.value, WorkState.RUNNING.value}:
                 if existing.queue_name == work.queue_name:
@@ -1508,6 +1510,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     )
                     .values(queue_name=work.queue_name)
                 )
+                self._task_changed(session, account_id, user_id, work.task_id)
                 return StoreOperationResult.applied()
             return StoreOperationResult.noop()
 
@@ -1528,6 +1531,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                 return StoreOperationResult.noop(StoreOperationCode.NOT_FOUND)
             await session.delete(work)
             await session.flush()
+            self._task_changed(session, account_id, user_id, task_id)
             finalized = await self._finalize_if_closed(
                 session,
                 task_id,
@@ -1584,7 +1588,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
         """Settle Inline without waiting for its process; local cancellation follows separately."""
         Work = self._models.Work
         now = time.time()
-        await session.execute(
+        result = await session.execute(
             update(Work)
             .where(
                 *self._work_query(Work, task_id, None, account_id, user_id),
@@ -1595,6 +1599,8 @@ class MySQLTaskWorkStore(TaskWorkStore):
             )
             .values(state=WorkState.CANCELLED.value, finished_at=now, updated_at=now)
         )
+        if cast(CursorResult[Any], result).rowcount:
+            self._task_changed(session, account_id, user_id, task_id)
 
     async def start_work(
         self,
@@ -1682,7 +1688,6 @@ class MySQLTaskWorkStore(TaskWorkStore):
                 await self._append_event_history(
                     session, task_id, task.execution_events, previous.execution_events
                 )
-                self._task_changed(session, account_id, user_id, task_id)
             await session.execute(
                 update(Work)
                 .where(*self._work_query(Work, task_id, work_id, account_id, user_id))
@@ -1693,6 +1698,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     updated_at=now,
                 )
             )
+            self._task_changed(session, account_id, user_id, task_id)
             return StoreOperationResult.applied()
 
     async def finish_work(
@@ -1759,6 +1765,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                 .where(*self._work_query(Work, task_id, work_id, account_id, user_id))
                 .values(**values)
             )
+            self._task_changed(session, account_id, user_id, task_id)
             finalized = await self._finalize_if_closed(
                 session,
                 task_id,
@@ -1814,6 +1821,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     updated_at=now,
                 )
             )
+            self._task_changed(session, account_id, user_id, task_id)
             if cancelling:
                 await self._finalize_if_closed(
                     session, task_id, account_id=account_id, user_id=user_id
@@ -1846,6 +1854,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                 .where(*self._work_query(Work, task_id, work_id, account_id, user_id))
                 .values(error=sanitize_error(error), updated_at=time.time())
             )
+            self._task_changed(session, account_id, user_id, task_id)
             return StoreOperationResult.applied()
 
     async def settle_work(
@@ -1877,6 +1886,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                         updated_at=settled_at,
                     )
                 )
+                self._task_changed(session, account_id, user_id, task_id)
             finalized = await self._finalize_if_closed(
                 session,
                 task_id,

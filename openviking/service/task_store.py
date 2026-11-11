@@ -1426,7 +1426,10 @@ class PersistentTaskStore(TaskWorkStore):
                 candidate.updated_at = TaskRecord.next_updated_at(candidate.updated_at)
                 append_task_events(candidate, previous)
                 snapshot = deepcopy(candidate)
-            await self._write_task_and_publish(snapshot, owner, candidate, work_set)
+                work_changed = work_set != self._work_sets.get(owner, _WorkSet({}))
+            await self._write_task_and_publish(
+                snapshot, owner, candidate, work_set, work_changed=work_changed
+            )
             return mutation
 
     async def _mutate_work(
@@ -1503,10 +1506,15 @@ class PersistentTaskStore(TaskWorkStore):
                         else:
                             work_set.works[work_id] = mutation.work
                         work_set.open_count = open_count
-                    return mutation.result
+            if not finalized and not task_changed:
+                if mutation.changed:
+                    self._task_changes.notify(*owner)
+                return mutation.result
             assert candidate_task is not None
             assert candidate_work_set is not None
-            await self._write_task_and_publish(snapshot, owner, candidate_task, candidate_work_set)
+            await self._write_task_and_publish(
+                snapshot, owner, candidate_task, candidate_work_set, work_changed=mutation.changed
+            )
             return StoreOperationResult.applied()
 
     async def _write_task_and_publish(
@@ -1515,6 +1523,8 @@ class PersistentTaskStore(TaskWorkStore):
         owner: tuple[str, str, str],
         candidate_task: TaskRecord,
         candidate_work_set: Optional[_WorkSet] = None,
+        *,
+        work_changed: bool = False,
     ) -> None:
         write_task = asyncio.create_task(self._write_task(snapshot))
         cancellation: asyncio.CancelledError | None = None
@@ -1533,7 +1543,7 @@ class PersistentTaskStore(TaskWorkStore):
                 self._task_cache[owner] = candidate_task
                 if candidate_work_set is not None:
                     self._work_sets[owner] = candidate_work_set
-            if status_changed:
+            if status_changed or work_changed:
                 self._task_changes.notify(*owner)
             if cancellation is not None:
                 raise cancellation

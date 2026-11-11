@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Measure real Task waits without changing their clocks or polling intervals.
+"""Measure real Task/Work waits without changing their clocks or polling intervals.
 
 Run on the baseline and implementation checkouts with identical arguments:
     uv run python test_scripts/repro_task_wait_latency.py --waiters 1 10 100
@@ -19,6 +19,7 @@ import time
 from collections import Counter
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -26,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskStatus, TaskTracker
 
-OWNER = {"account_id": "account", "user_id": "user"}
+OWNER: dict[str, Any] = {"account_id": "account", "user_id": "user"}
 
 
 class MemoryAgfs:
@@ -53,8 +54,7 @@ class MemoryAgfs:
 @asynccontextmanager
 async def measured_store(backend, counts):
     if backend == "file":
-        store = PersistentTaskStore(MemoryAgfs(counts))
-        yield store
+        yield PersistentTaskStore(MemoryAgfs(counts))
         return
     from sqlalchemy import event
     from sqlalchemy.ext.asyncio import create_async_engine
@@ -81,6 +81,7 @@ async def measured_store(backend, counts):
             if statement.lstrip().upper().startswith("SELECT"):
                 counts["sql_select"] += 1
 
+        assert store._engine is not None
         event.listen(store._engine.sync_engine, "before_cursor_execute", executed)
         yield store
     finally:
@@ -90,21 +91,26 @@ async def measured_store(backend, counts):
         await admin.dispose()
 
 
-async def measure(args, count, scenario):
-    counts = Counter()
+async def measure(args, count, scenario, entry):
+    counts: Counter[str] = Counter()
     async with measured_store(args.backend, counts) as store:
         tracker = TaskTracker(store)
         await tracker.create("add_resource", task_id="task", **OWNER)
         await tracker.start("task", **OWNER)
-        if scenario in ("work-finalization", "work-churn"):
-            for index in range(20 if scenario == "work-churn" else 1):
-                await tracker.register_work("task", str(index), "Embedding", **OWNER)
-            await tracker.complete("task", {"ok": True}, **OWNER)
+        work_ids = [str(index) for index in range(20 if scenario == "work-churn" else 1)]
+        if entry != "task" or scenario in ("work-finalization", "work-churn"):
+            for work_id in work_ids:
+                await tracker.register_work("task", work_id, "Embedding", **OWNER)
+            if entry != "task" and scenario != "work-finalization":
+                # Work waiters can finish while unrelated Work keeps the Task active.
+                await tracker.register_work("task", "root", "Inline", **OWNER)
+            else:
+                await tracker.complete("task", {"ok": True}, **OWNER)
         if scenario == "unrelated":
             await tracker.create("add_resource", task_id="other", **OWNER)
 
         # Count logical reads at the Store boundary, separately from physical I/O.
-        for name in ("get_task_status", "get_task"):
+        for name in ("get_task_status", "get_task", "get_works", "has_open_work"):
             original = getattr(store, name)
 
             async def read(*a, _name=name, _original=original, **kw):
@@ -115,8 +121,15 @@ async def measure(args, count, scenario):
         counts.clear()
 
         async def observe():
-            result = await tracker.wait("task", timeout=args.delay + 30, **OWNER)
-            assert result.status is TaskStatus.COMPLETED
+            if entry == "task":
+                result = await tracker.wait("task", timeout=args.delay + 60, **OWNER)
+                assert result.status is TaskStatus.COMPLETED
+            elif entry == "work":
+                await tracker.wait_for_work("task", work_ids, timeout=args.delay + 60, **OWNER)
+            else:
+                await tracker.wait_for_task_work(
+                    "task", exclude_work_id="root", timeout=args.delay + 60, **OWNER
+                )
             return time.perf_counter()
 
         waiters = [asyncio.create_task(observe()) for _ in range(count)]
@@ -130,6 +143,7 @@ async def measure(args, count, scenario):
             return {
                 "waiters": count,
                 "scenario": scenario,
+                "entry": entry,
                 "seconds": time.perf_counter() - started,
                 "reads": dict(counts),
             }
@@ -138,9 +152,9 @@ async def measure(args, count, scenario):
         if scenario == "duplicates":
             for _ in range(20):
                 await tracker.create("add_resource", task_id="task", **OWNER)
-        if scenario in ("work-finalization", "work-churn"):
-            for index in range(20 if scenario == "work-churn" else 1):
-                await tracker.mark_work_done("task", str(index), **OWNER)
+        if entry != "task" or scenario in ("work-finalization", "work-churn"):
+            for work_id in work_ids:
+                await tracker.mark_work_done("task", work_id, **OWNER)
         else:
             await tracker.complete("task", {"ok": True}, **OWNER)
         # Conservative timestamp: writer returned after successful publication.
@@ -150,6 +164,7 @@ async def measure(args, count, scenario):
         return {
             "waiters": count,
             "scenario": scenario,
+            "entry": entry,
             "p50_ms": lags[math.ceil(count * 0.5) - 1],
             "p95_ms": lags[math.ceil(count * 0.95) - 1],
             "max_ms": lags[-1],
@@ -163,6 +178,12 @@ async def main():
     parser.add_argument("--waiters", nargs="+", type=int, default=[1, 10, 100])
     parser.add_argument("--delay", type=float, default=13)
     parser.add_argument("--repeat", type=int, default=1)
+    parser.add_argument(
+        "--entries",
+        nargs="+",
+        choices=["task", "work", "task-work"],
+        default=["task", "work", "task-work"],
+    )
     parser.add_argument(
         "--scenarios",
         nargs="+",
@@ -185,11 +206,12 @@ async def main():
         ),
         flush=True,
     )
-    for scenario in args.scenarios:
-        for count in args.waiters:
-            for repeat in range(args.repeat):
-                result = await measure(args, count, scenario)
-                print(json.dumps({"repeat": repeat, **result}), flush=True)
+    for entry in args.entries:
+        for scenario in args.scenarios:
+            for count in args.waiters:
+                for repeat in range(args.repeat):
+                    result = await measure(args, count, scenario, entry)
+                    print(json.dumps({"repeat": repeat, **result}), flush=True)
 
 
 if __name__ == "__main__":
