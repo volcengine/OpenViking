@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Content endpoints for OpenViking HTTP Server."""
 
+import json
+import os
 from typing import Literal, Optional
 from urllib.parse import quote
 
@@ -35,6 +37,15 @@ from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+# Fast path for /read: return pre-encoded JSON instead of constructing,
+# validating, and re-serializing the pydantic Response. Enabled by default;
+# set OPENVIKING_READ_FAST_JSON=0 to fall back to the native Response path.
+_FAST_JSON_OFF_VALUES = {"0", "false", "off", "no", "disable", "disabled"}
+
+
+def _fast_json_read_enabled() -> bool:
+    return os.getenv("OPENVIKING_READ_FAST_JSON", "").strip().lower() not in _FAST_JSON_OFF_VALUES
 
 
 class WriteContentRequest(BaseModel):
@@ -198,6 +209,11 @@ async def read(
             raise mapped from e
         raise
 
+    if _fast_json_read_enabled():
+        return FastAPIResponse(
+            content=json.dumps({"status": "ok", "result": result}, ensure_ascii=False),
+            media_type="application/json",
+        )
     return Response(status="ok", result=result)
 
 
