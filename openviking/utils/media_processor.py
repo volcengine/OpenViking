@@ -356,6 +356,7 @@ class UnifiedResourceProcessor:
                 "parse_artifact", self._get_parser_router().parse(source, **parse_kwargs)
             )
 
+        feishu_access_kwargs = {}
         if (
             mode is ParseMode.DEFAULT
             and prepared_resource is None
@@ -387,6 +388,8 @@ class UnifiedResourceProcessor:
                     ),
                 )
                 kwargs["_feishu_resolved_type"] = preflight.doc_type
+                # Reuse this operation's lookup only during source preparation.
+                feishu_access_kwargs["_feishu_resolved_wiki"] = preflight.resolved_wiki
 
         if (
             mode is ParseMode.DEFAULT
@@ -423,6 +426,7 @@ class UnifiedResourceProcessor:
                     source,
                     allow_local_path_resolution=allow_local_path_resolution,
                     **({"parse_mode": mode} if mode is ParseMode.NO_SPLIT else {}),
+                    **feishu_access_kwargs,
                     **kwargs,
                 ),
             )

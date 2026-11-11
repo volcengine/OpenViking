@@ -271,6 +271,7 @@ class FeishuSourcePreflight:
     token: str
     source_name: Optional[str]
     source_format: str
+    resolved_wiki: Optional[Tuple[str, str, Optional[str]]] = None
 
 
 @dataclass
@@ -489,9 +490,11 @@ class FeishuAccessor(DataAccessor):
             doc_type, token = self._parse_feishu_url(source_str)
             resolved_wiki = None
             if doc_type == "wiki" and not recursive_wiki(kwargs):
-                resolved_wiki = await asyncio.to_thread(
-                    self._resolve_wiki_node, token, feishu_access_token
-                )
+                resolved_wiki = kwargs.get("_feishu_resolved_wiki")
+                if resolved_wiki is None:
+                    resolved_wiki = await asyncio.to_thread(
+                        self._resolve_wiki_node, token, feishu_access_token
+                    )
                 doc_type, token, _ = resolved_wiki
             if (
                 doc_type in {"folder", "file", "slides"}
@@ -771,6 +774,7 @@ class FeishuAccessor(DataAccessor):
                 token=real_token,
                 source_name=source_name,
                 source_format="file",
+                resolved_wiki=(real_type, real_token, title),
             )
 
         if doc_type == "folder":

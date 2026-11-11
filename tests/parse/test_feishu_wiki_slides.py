@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from openviking.parse.accessors.base import LocalResource, SourceType
-from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+from openviking.parse.accessors.feishu_accessor import FeishuAccessor, FeishuSourcePreflight
 from openviking.parse.feishu_import import FeishuImportPlan
 from openviking.parse.parser_router import ParserRouter
 from openviking.parse.understanding_api import UnderstandingAPI
@@ -304,7 +304,7 @@ async def test_synchronous_wiki_routes_resolved_binary_to_selected_backend(
     source = "https://example.feishu.cn/wiki/node"
     path = tmp_path / ("Report" + extension)
     path.write_bytes(b"%PDF-1.7" if extension == ".pdf" else office_bytes())
-    preflight = AsyncMock(return_value=SimpleNamespace(doc_type=kind))
+    preflight = AsyncMock(return_value=FeishuSourcePreflight(kind, "obj", "Report", "file"))
     monkeypatch.setattr(FeishuAccessor, "preflight_source", preflight)
     resource = LocalResource(
         path, SourceType.FEISHU, source, meta={"feishu_content_kind": "file"}, is_temporary=False
@@ -374,17 +374,20 @@ def test_text_extension_survives_missing_system_mime_mapping(monkeypatch, name):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["file", "slides"])
 @pytest.mark.parametrize("backend", [None, "understanding"])
-async def test_queued_wiki_title_does_not_override_binary_format(monkeypatch, kind, backend):
+async def test_queued_wiki_reuses_worker_resolution_and_keeps_binary_format(
+    monkeypatch, kind, backend
+):
     from openviking.parse.mode import ParseMode
     from openviking.server.identity import RequestContext, Role
     from openviking.service.resource_service import ResourceService
+    from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
     from openviking_cli.session.user_id import UserIdentifier
     from openviking_cli.utils.config.parser_config import FeishuConfig
 
     title = "产品方案 v1.2"
     source = "https://example.feishu.cn/wiki/node"
     config = SimpleNamespace(
-        parser_api=SimpleNamespace(enable=True, enable_feishu_url=True, extensions=["pptx"])
+        parser_api=SimpleNamespace(enable=True, enable_feishu_url=True, extensions=["pdf", "pptx"])
     )
     monkeypatch.setattr(
         "openviking_cli.utils.config.open_viking_config.get_openviking_config", lambda: config
@@ -393,16 +396,13 @@ async def test_queued_wiki_title_does_not_override_binary_format(monkeypatch, ki
         "openviking.config.feishu.get_effective_feishu_config",
         AsyncMock(return_value=FeishuConfig()),
     )
-    monkeypatch.setattr(FeishuAccessor, "_resolve_wiki_node", lambda *args: (kind, "obj", title))
+    resolve = Mock(side_effect=[(kind, "queued-obj", title)] + [(kind, "worker-obj", title)] * 2)
+    monkeypatch.setattr(FeishuAccessor, "_resolve_wiki_node", resolve)
     monkeypatch.setattr(FeishuAccessor, "_probe_document_permission", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        FeishuAccessor,
-        "_download_drive_file",
-        lambda *args, **kwargs: (office_bytes(), "application/octet-stream", title),
-    )
-    monkeypatch.setattr(
-        FeishuAccessor, "_export_slides", AsyncMock(return_value=(office_bytes(), None, title + ".pptx"))
-    )
+    download = Mock(return_value=(b"%PDF-1.7 fixture", "application/pdf", title))
+    export = AsyncMock(return_value=(office_bytes(), None, title + ".pptx"))
+    monkeypatch.setattr(FeishuAccessor, "_download_drive_file", download)
+    monkeypatch.setattr(FeishuAccessor, "_export_slides", export)
     api = SimpleNamespace(parse=AsyncMock(return_value=object()))
     registry = SimpleNamespace(parse=AsyncMock(), get_parser_for_file=Mock(return_value=object()))
     router = ParserRouter(registry)
@@ -416,9 +416,10 @@ async def test_queued_wiki_title_does_not_override_binary_format(monkeypatch, ki
         resource_processor=processor,
         runtime_config_manager=SimpleNamespace(),
     )
+    ctx = RequestContext(user=UserIdentifier("account", "user"), role=Role.USER)
     plan = await service._prepare_standard_source_plan(
         path=source,
-        ctx=RequestContext(user=UserIdentifier("account", "user"), role=Role.USER),
+        ctx=ctx,
         mode=ParseMode.DEFAULT,
         allow_local_path_resolution=False,
         processor_kwargs={"feishu_access_token": "test-user", "parser_backend": backend},
@@ -426,17 +427,41 @@ async def test_queued_wiki_title_does_not_override_binary_format(monkeypatch, ki
     )
     assert plan.source_identity.source_name == title
     assert plan.processor_args["_feishu_prepared_source"]
-    await processor.process(
-        source,
+    assert resolve.call_count == 1
+
+    async def ingest(*, path, **options):
+        await processor.process(path, **options)
+        return {"status": "success"}
+
+    monkeypatch.setattr(service, "_execute_resource_ingestion", ingest)
+    tracker = SimpleNamespace(get=AsyncMock(return_value=None), patch_task=AsyncMock())
+    monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
+    msg = AddResourceMsg(
+        task_id="task",
+        path=source,
+        root_uri="viking://resources/Report",
+        account_id="account",
+        user_id="user",
+        role="user",
         source_name=plan.source_identity.source_name,
-        feishu_access_token=plan.task_auth["access_token"],
-        **plan.processor_args,
+        args=plan.processor_args,
     )
+    await service.execute_add_resource_job(
+        msg, ctx=ctx, resource_lock=None, stage_callback=AsyncMock(), task_auth=plan.task_auth
+    )
+    assert resolve.call_count == 2  # One at enqueue, one fresh lookup in the worker.
+    binary_call = export.await_args if kind == "slides" else download.call_args
+    assert binary_call.args[0] == "worker-obj"
+    assert binary_call.kwargs["filename_hint"] == title
+    assert binary_call.kwargs["feishu_access_token"] == "test-user"
     api.parse.assert_awaited_once()
     registry.parse.assert_not_awaited()
-    assert api.parse.await_args.args[0].endswith(".pptx")
-    assert api.parse.await_args.kwargs["resolved_extension"] == ".pptx"
+    extension = ".pptx" if kind == "slides" else ".pdf"
+    assert api.parse.await_args.args[0].endswith(extension)
+    assert api.parse.await_args.kwargs["resolved_extension"] == extension
     assert api.parse.await_args.kwargs["source_name"] == title
+    assert "_feishu_resolved_wiki" not in api.parse.await_args.kwargs
+    assert "_feishu_resolved_wiki" not in msg.args
 
 
 @pytest.mark.asyncio
@@ -496,7 +521,7 @@ async def test_wiki_preflight_uses_lark_file_identity_without_app_credentials(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("identity", ["user_access_token", "tenant_access_token"])
 async def test_synchronous_wiki_forwards_lark_file_to_preflight_and_parser(monkeypatch, identity):
-    preflight = AsyncMock(return_value=SimpleNamespace(doc_type="docx"))
+    preflight = AsyncMock(return_value=FeishuSourcePreflight("docx", "obj", "Report", "file"))
     monkeypatch.setattr(FeishuAccessor, "preflight_source", preflight)
     api = SimpleNamespace(parse=AsyncMock(return_value=object()))
     router = ParserRouter(SimpleNamespace())
