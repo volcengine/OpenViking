@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Unit tests for the VikingFS read-path cache and the content read fast path."""
 
+import asyncio
 import json
+import time
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import Response as FastAPIResponse
 
 from openviking.pyagfs.exceptions import AGFSNotFoundError
@@ -14,26 +17,31 @@ from openviking.server.models import Response as ServerResponse
 from openviking.server.routers import content as content_router
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.viking_fs._read_cache import CACHE as READ_CACHE
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 
 class FakeAsyncAGFS:
     """Minimal in-memory stand-in for AsyncAGFSClient."""
 
-    def __init__(self) -> None:
+    def __init__(self, delay: float = 0.0) -> None:
         self.files: dict[str, bytes] = {}
         self.dirs: set[str] = set()
+        self.delay = delay
         self.read_calls = 0
         self.stat_calls = 0
         self.write_calls = 0
 
     async def read(self, path: str, *args, **kwargs) -> bytes:
         self.read_calls += 1
+        if self.delay:
+            await asyncio.sleep(self.delay)
         return self.files.get(path, b"")
 
     async def stat(self, path: str, *args, **kwargs) -> dict:
         self.stat_calls += 1
+        if self.delay:
+            await asyncio.sleep(self.delay)
         if path in self.dirs:
             return {"isDir": True, "size": 0}
         if path in self.files:
@@ -70,9 +78,9 @@ def _ctx(user_id: str = "default") -> RequestContext:
     return RequestContext(user=UserIdentifier("default", user_id), role=Role.ROOT)
 
 
-def _make_fs() -> tuple[VikingFS, FakeAsyncAGFS]:
+def _make_fs(delay: float = 0.0) -> tuple[VikingFS, FakeAsyncAGFS]:
     fs = VikingFS(agfs=object())
-    fake = FakeAsyncAGFS()
+    fake = FakeAsyncAGFS(delay=delay)
     fs._async_agfs = fake
     return fs, fake
 
@@ -248,3 +256,145 @@ async def test_read_fast_json_matches_native_response(monkeypatch):
     assert native.status == payload["status"]
     assert native.result == payload["result"]
     assert native.model_dump(exclude_none=True) == payload
+
+
+# ---------------------------------------------------------------------------
+# P0 correctness: empty file / directory / missing file / no stat on hit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_p0_normal_file_skips_stat(monkeypatch):
+    fs, fake = _make_fs()
+    uri = "viking://resources/notes.txt"
+    fake.files[_path(fs, uri)] = b"hello"
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+    monkeypatch.setenv("OPENVIKING_CONTENT_CACHE", "0")
+
+    assert await fs.read_file(uri, ctx=_ctx()) == "hello"
+    assert fake.read_calls == 1
+    assert fake.stat_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_p0_empty_file_returns_empty(monkeypatch):
+    fs, fake = _make_fs()
+    uri = "viking://resources/empty.txt"
+    fake.files[_path(fs, uri)] = b""
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+    monkeypatch.setenv("OPENVIKING_CONTENT_CACHE", "0")
+
+    assert await fs.read_file(uri, ctx=_ctx()) == ""
+    assert fake.read_calls == 1
+    assert fake.stat_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_p0_directory_raises_invalid_argument(monkeypatch):
+    fs, fake = _make_fs()
+    uri = "viking://resources/folder"
+    fake.dirs.add(_path(fs, uri))
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+
+    with pytest.raises(InvalidArgumentError):
+        await fs.read_file(uri, ctx=_ctx())
+
+
+@pytest.mark.asyncio
+async def test_p0_missing_file_raises_not_found(monkeypatch):
+    fs, _ = _make_fs()
+    uri = "viking://resources/missing.txt"
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+
+    with pytest.raises(NotFoundError):
+        await fs.read_file(uri, ctx=_ctx())
+
+
+# ---------------------------------------------------------------------------
+# Latency: cached vs uncached / fused vs stat+read / fast JSON vs native
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_p2_cached_read_is_faster_than_uncached(monkeypatch):
+    fs, fake = _make_fs(delay=0.002)
+    uri = "viking://resources/notes.txt"
+    fake.files[_path(fs, uri)] = b"payload\n" * 100
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+    rounds = 20
+
+    monkeypatch.setenv("OPENVIKING_CONTENT_CACHE", "0")
+    started = time.perf_counter()
+    for _ in range(rounds):
+        await fs.read_file(uri, ctx=_ctx())
+    uncached_ms = (time.perf_counter() - started) * 1000
+
+    monkeypatch.delenv("OPENVIKING_CONTENT_CACHE")
+    await fs.read_file(uri, ctx=_ctx())  # warm the cache
+    started = time.perf_counter()
+    for _ in range(rounds):
+        await fs.read_file(uri, ctx=_ctx())
+    cached_ms = (time.perf_counter() - started) * 1000
+
+    assert fake.read_calls == rounds + 1
+    assert cached_ms < uncached_ms * 0.5
+    print(f"\nP2: uncached={uncached_ms:.1f}ms cached={cached_ms:.1f}ms")
+
+
+@pytest.mark.asyncio
+async def test_p0_fused_read_is_faster_than_stat_plus_read(monkeypatch):
+    fs, fake = _make_fs(delay=0.002)
+    uri = "viking://resources/notes.txt"
+    path = _path(fs, uri)
+    fake.files[path] = b"hello\n"
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+    monkeypatch.setenv("OPENVIKING_CONTENT_CACHE", "0")
+    rounds = 20
+
+    started = time.perf_counter()
+    for _ in range(rounds):
+        await fake.stat(path)
+        await fake.read(path)
+    legacy_ms = (time.perf_counter() - started) * 1000
+
+    fake.stat_calls = 0
+    started = time.perf_counter()
+    for _ in range(rounds):
+        assert await fs.read_file(uri, ctx=_ctx()) == "hello\n"
+    fused_ms = (time.perf_counter() - started) * 1000
+
+    assert fake.stat_calls == 0
+    assert fused_ms < legacy_ms
+    print(f"\nP0: stat+read={legacy_ms:.1f}ms fused={fused_ms:.1f}ms")
+
+
+@pytest.mark.asyncio
+async def test_p1_fast_json_is_faster_than_native(monkeypatch):
+    monkeypatch.setattr(content_router, "get_service", lambda: _FakeService("line\n" * 100))
+    uri = "0123456789abcdef0123456789abcdef"
+    ctx = _ctx()
+    rounds = 2000
+
+    def _render(response) -> str:
+        """Reproduce what the framework does before bytes hit the socket."""
+        if isinstance(response, ServerResponse):
+            return json.dumps(jsonable_encoder(response))
+        return response.body.decode()
+
+    monkeypatch.setenv("OPENVIKING_READ_FAST_JSON", "0")
+    started = time.perf_counter()
+    for _ in range(rounds):
+        _render(await content_router.read(uri=uri, offset=0, limit=-1, raw=False, _ctx=ctx))
+    native_ms = (time.perf_counter() - started) * 1000
+
+    monkeypatch.delenv("OPENVIKING_READ_FAST_JSON")
+    started = time.perf_counter()
+    for _ in range(rounds):
+        _render(await content_router.read(uri=uri, offset=0, limit=-1, raw=False, _ctx=ctx))
+    fast_ms = (time.perf_counter() - started) * 1000
+
+    assert fast_ms < native_ms
+    print(
+        f"\nP1: native={native_ms:.1f}ms fast={fast_ms:.1f}ms "
+        f"({native_ms / rounds * 1000:.1f}us -> {fast_ms / rounds * 1000:.1f}us)"
+    )
