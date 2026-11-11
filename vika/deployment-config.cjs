@@ -95,6 +95,7 @@ const AGENT_FIELDS = Object.freeze([
   'workspace',
   'ovConfig',
   'ovAutoRecall',
+  'ovViaGateway',
   'explicitSilence',
   'stagedReplies',
   'role',
@@ -289,6 +290,9 @@ function parseAgent(value, index, ignored) {
   if (value.ovAutoRecall !== undefined && typeof value.ovAutoRecall !== 'boolean') {
     throw new Error(`${label}.ovAutoRecall must be a boolean`);
   }
+  if (value.ovViaGateway !== undefined && typeof value.ovViaGateway !== 'boolean') {
+    throw new Error(`${label}.ovViaGateway must be a boolean`);
+  }
   if (value.explicitSilence !== undefined && typeof value.explicitSilence !== 'boolean') {
     throw new Error(`${label}.explicitSilence must be a boolean`);
   }
@@ -317,6 +321,7 @@ function parseAgent(value, index, ignored) {
     workspace: manifestAbsolutePath(value.workspace, `${label}.workspace`),
     ovConfig: manifestAbsolutePath(value.ovConfig, `${label}.ovConfig`),
     ovAutoRecall: value.ovAutoRecall ?? false,
+    ovViaGateway: value.ovViaGateway ?? false,
 // Every runtime now uses Core tools; an explicit false opts out.
     explicitSilence: value.explicitSilence ?? true,
     stagedReplies: value.stagedReplies ?? false,
@@ -544,6 +549,7 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
   Object.assign(env, openVikingAgentEnv(agent));
   // Always set, so neither the shell nor another instance's value leaks in.
   env.VIKA_OV_AUTO_RECALL = agent.ovAutoRecall ? 'true' : 'false';
+  env.VIKA_OV_VIA_GATEWAY = agent.ovViaGateway ? 'true' : 'false';
   env.VIKA_EXPLICIT_SILENCE = agent.explicitSilence ? 'true' : 'false';
   env.VIKA_NATURAL_WRITING = agent.naturalWriting ? 'true' : 'false';
   env.VIKA_STAGED_REPLIES = agent.stagedReplies ? 'true' : 'false';

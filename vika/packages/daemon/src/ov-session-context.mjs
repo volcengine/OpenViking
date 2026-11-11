@@ -57,6 +57,12 @@ export function ovAttribution(item) {
 // fails on an unknown type.
 export const OV_MEMORY_TYPES = Object.freeze(['profile', 'entities', 'events']);
 
+// With ovViaGateway the gateway extracts memory from what it captures, so the
+// session is a transcript: commits still archive (/context and the archives
+// are unchanged) but extract nothing. Every release with memory_policy has
+// both switches.
+const TRANSCRIPT_ONLY = Object.freeze({ self: { enabled: false }, peer: { enabled: false } });
+
 // Daemon control lines (slash commands and their notices) steer the runtime;
 // they are neither history worth recalling nor anyone's words.
 const syncsToOV = (row) => row.kind !== 'control';
@@ -65,9 +71,10 @@ const syncsToOV = (row) => row.kind !== 'control';
 // cursor/intent here; cognition_journal is the existing durable delivery ledger
 // and sync outbox, never a prompt source.
 export class OVSessionClient extends OVConnection {
-  constructor(configPath, options) {
+  constructor(configPath, { transcriptOnly = false, ...options } = {}) {
     super(readOVConfig(configPath), options);
     this.namespace = null;
+    this.transcriptOnly = Boolean(transcriptOnly);
   }
 
   // Also settles which namespace this connection writes to: the server, and
@@ -90,7 +97,7 @@ export class OVSessionClient extends OVConnection {
   create(sessionId) {
     return this.request('/sessions', { session_id: sessionId, auto_commit_policy: {
       pending_token_threshold: 0, message_count_threshold: 0, idle_timeout_seconds: 0,
-    }, memory_policy: { memory_types: [...OV_MEMORY_TYPES] } });
+    }, memory_policy: this.transcriptOnly ? TRANSCRIPT_ONLY : { memory_types: [...OV_MEMORY_TYPES] } });
   }
   append(sessionId, message) { return this.request(`/sessions/${encodeURIComponent(sessionId)}/messages`, message); }
   context(sessionId) {

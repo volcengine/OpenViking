@@ -38,6 +38,21 @@ function textContent(event) {
     .trim();
 }
 
+// Under the OpenViking gateway (ovViaGateway), what the daemon adds to a
+// user.message is wrapped as a system-reminder, which the gateway leaves out
+// of its recall query and capture. Untrusted text keeps no tag that would
+// open or close that wrapper or mark a client memory plugin (which turns the
+// gateway off for the session): their "<" becomes "&lt;".
+const RESERVED_TAG = /<(?=\/?(?:system-reminder|openviking-context|relevant-memories|relevant-memory|memory-context)(?![\w-]))/gi;
+const neutralizeReservedTags = (text) => String(text).replace(RESERVED_TAG, '&lt;');
+const systemReminder = (text) => `<system-reminder>\n${text}\n</system-reminder>`;
+// An input is one line (runtime-input.mjs); what follows it, such as the
+// daemon recall block, is the daemon's.
+function gatewayItemText(text) {
+  const [line, ...daemon] = neutralizeReservedTags(text).split('\n');
+  return daemon.length ? `${line}\n${systemReminder(daemon.join('\n'))}` : line;
+}
+
 function parseSseFrames(buffer, onEvent) {
   let boundary;
   while ((boundary = buffer.search(/\r?\n\r?\n/)) >= 0) {
@@ -312,7 +327,7 @@ export class VolcAgent {
 
   async _validateTools() {
     if (!this.actions || !this.store.getMAToolCall) throw new Error('Volc cloud requires ActionService and the persistent MA tool journal');
-    const desired = maTools(this.actions);
+    const desired = maTools(this.actions, { viaGateway: this.config.ovViaGateway });
     this.toolsHash = maToolsHash(desired);
     const agentPath = `/agents/${encodeURIComponent(this.template.agent.id)}`;
     let remote = await this._json(`${agentPath}${Number.isInteger(this.template.agent.version) ? `?version=${this.template.agent.version}` : ''}`);
@@ -592,7 +607,8 @@ export class VolcAgent {
     const seqs = items.map((item) => item.seq).filter((seq) => seq != null);
     const beforeSeq = seqs.length > 0 ? Math.min(...seqs) : null;
     const throughSeq = this.store.cognitionJournalBeforeInbound?.(beforeSeq, this.cognitionEpoch) ?? 0;
-    let body = items.map((item) => item.text).join('\n');
+    const viaGateway = Boolean(this.config.ovViaGateway);
+    let body = items.map((item) => (viaGateway ? gatewayItemText(item.text) : item.text)).join('\n');
     let deliveredThroughSeq = this.deliveredThroughSeq;
     if (throughSeq > this.deliveredThroughSeq) {
       const catchup = cognitionHistoryPrefix(
@@ -602,7 +618,8 @@ export class VolcAgent {
         this.deliveredThroughSeq,
       );
       deliveredThroughSeq = catchup.throughSeq;
-      body = `${catchup.text}\n${body}`;
+      const history = viaGateway && catchup.text ? systemReminder(neutralizeReservedTags(catchup.text)) : catchup.text;
+      body = `${history}\n${body}`;
     }
     for (const seq of seqs) {
       deliveredThroughSeq = Math.max(
@@ -749,7 +766,7 @@ export class VolcAgent {
             // user.message text itself instead.
             const messageText = this.transportPolicyInjected
               ? prepared.body
-              : `${this.transportPolicy}\n\n${prepared.body}`;
+              : `${this.config.ovViaGateway ? systemReminder(this.transportPolicy) : this.transportPolicy}\n\n${prepared.body}`;
             const events = [{
               type: 'user.message',
               content: [{ type: 'text', text: messageText }],

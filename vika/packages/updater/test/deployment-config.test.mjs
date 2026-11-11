@@ -435,6 +435,7 @@ test('connects mailboxes only together with the email connector, each account fi
 test('OV memory is the daemon\'s; per-line search is opt-in; any OV plugin that loads stays inert; no Lark profile for Weixin', () => {
   const manifest = validManifest();
   manifest.agents[1].ovAutoRecall = true;
+  manifest.agents[1].ovViaGateway = true;
   // Retired options: ignored, never an error.
   manifest.agents[1].ovRecallScope = 'actor';
   manifest.agents[1].ovRemember = true;
@@ -450,11 +451,13 @@ test('OV memory is the daemon\'s; per-line search is opt-in; any OV plugin that 
     };
     const deployment = loadDeploymentManifest(env);
     assert.equal(selectDeploymentAgent(deployment, 'alpha').ovAutoRecall, false);
+    assert.equal(selectDeploymentAgent(deployment, 'alpha').ovViaGateway, false);
     applyDeploymentAgentEnv(env, deployment, 'alpha');
     assert.equal(env.OPENVIKING_CLI_CONFIG_FILE, '/srv/vika/ov/alpha.json');
     assert.equal(env.OPENVIKING_MEMORY_ENABLED, '0');
     assert.equal(env.OPENVIKING_AUTO_RECALL, '0');
     assert.equal(env.VIKA_OV_AUTO_RECALL, 'false');
+    assert.equal(env.VIKA_OV_VIA_GATEWAY, 'false');
     assert.equal(env.VIKA_OV_RECALL_SCOPE, undefined);
     assert.equal(env.VIKA_OV_REMEMBER, undefined);
     // Vika owns OV: a plugin that loads anyway writes and recalls nothing.
@@ -476,6 +479,7 @@ test('OV memory is the daemon\'s; per-line search is opt-in; any OV plugin that 
     // Search on: the daemon searches (ov-recall.mjs); the plugins' own stays off.
     assert.equal(env.OPENVIKING_AUTO_RECALL, '0');
     assert.equal(env.VIKA_OV_AUTO_RECALL, 'true');
+    assert.equal(env.VIKA_OV_VIA_GATEWAY, 'true');
     assert.equal(selectDeploymentAgent(deployment, 'beta').ovRecallScope, undefined);
     assert.equal(env.OPENVIKING_PENDING_DIR, '/srv/vika/data/beta/openviking/pending');
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'cli_beta');
@@ -645,6 +649,11 @@ test('rejects missing and invalid manifest fields instead of guessing', () => {
       name: 'recall must be a JSON boolean',
       mutate: (manifest) => { manifest.agents[0].ovAutoRecall = 'true'; },
       error: /agents\[0\]\.ovAutoRecall must be a boolean/,
+    },
+    {
+      name: 'the gateway switch must be a JSON boolean',
+      mutate: (manifest) => { manifest.agents[0].ovViaGateway = 'true'; },
+      error: /agents\[0\]\.ovViaGateway must be a boolean/,
     },
     {
       name: 'missing daemon env',

@@ -66,6 +66,12 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
       await env.waitForCodexInput(/om-ov-down/);
     } finally { await env.stop(); }
   });
+  it('runs no per-line OV search beside the gateway, even with ovAutoRecall', async () => {
+    const env = await startMockEnv({ config: { ovAutoRecall: true, ovViaGateway: true } });
+    try {
+      assert.equal(env.daemon.harness.recall.autoRecall, false);
+    } finally { await env.stop(); }
+  });
 
   it('keeps messaging during an OV timer outage and restores timers before accepting operations', async (context) => {
     const server = await fakeOV(context);

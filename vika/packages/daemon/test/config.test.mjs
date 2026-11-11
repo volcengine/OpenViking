@@ -129,6 +129,15 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.equal('ovRemember' in getConfig(), false);
     setEnv('VIKA_OV_AUTO_RECALL', undefined);
   });
+  it('hands OV to the gateway only on an instance that opts in', () => {
+    setEnv('VIKA_OV_VIA_GATEWAY', undefined);
+    assert.equal(getConfig().ovViaGateway, false);
+    setEnv('VIKA_OV_VIA_GATEWAY', 'true');
+    assert.equal(getConfig().ovViaGateway, true);
+    setEnv('VIKA_OV_VIA_GATEWAY', 'sometimes');
+    assert.throws(() => getConfig(), /VIKA_OV_VIA_GATEWAY must be a boolean/);
+    setEnv('VIKA_OV_VIA_GATEWAY', undefined);
+  });
   it('reads Lark messages with the owner\'s visibility unless the instance keeps to the bot\'s chats', () => {
     setEnv('VIKA_LARK_MESSAGE_ACCESS', undefined);
     assert.equal(getConfig().larkMessageAccess, 'owner');

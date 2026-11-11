@@ -52,6 +52,18 @@ test('every available Core tool maps without dropping schema fields and round-tr
   assert.equal(maToolsHash(schemas), maToolsHash([...schemas].reverse()));
 });
 
+test('under the OpenViking gateway, MA leaves the OV read tools to it and keeps the daemon\'s own', () => {
+  const actions = { tools: () => TOOLS.map(publicTool) };
+  const names = (tools) => tools.map((tool) => tool.name);
+  assert.deepEqual(names(maTools(actions, { viaGateway: false })), names(maTools(actions)));
+  const gateway = names(maTools(actions, { viaGateway: true }));
+  assert.deepEqual(names(maTools(actions)).filter((name) => !gateway.includes(name)),
+    ['openviking_find', 'openviking_search', 'openviking_read', 'openviking_list']);
+  for (const kept of ['openviking_remember', 'openviking_add_resource', 'read_openviking_session_context']) {
+    assert.ok(gateway.includes(kept), kept);
+  }
+});
+
 test('real Core outbox sends once; DONE result survives restart and POSTED skips execution', async (t) => {
   const { store, turn, executor, event, connectors, directory } = setup(t);
   executor.see(event(), turn);
