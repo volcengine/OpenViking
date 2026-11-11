@@ -1,6 +1,7 @@
 /**
  * 包级主题基线。取值来自 OpenViking 控制台使用的设计规范（Arco 主题包
- * `@arco-design/theme-ve-o-aml-design`）——只取颜色，不引入它的组件样式。
+ * `@arco-design/theme-ve-o-aml-design@0.0.36`）。共享控件同时裁剪迁移其视觉规则，
+ * 不加载主题包的全局样式或字体资源。
  *
  * 声明在组件根选择器上而不是 `:root`：库不修改宿主的全局样式，只在自身根节点
  * 提供默认值。宿主可在应用入口覆盖任意一条，也可整组替换来换肤。
@@ -10,8 +11,8 @@
  * 暗色），跟系统走会让组件底色与周围文字对不上。宿主没有切换主题时保持亮色。
  *
  * Package-level theme baseline. Values come from the design system the OpenViking
- * console uses (the Arco theme package `@arco-design/theme-ve-o-aml-design`) —
- * the colours only, never its component styles.
+ * console uses (`@arco-design/theme-ve-o-aml-design@0.0.36`). Shared controls
+ * also adapt its visual rules, without loading global styles or font assets.
  *
  * Declared on component roots rather than `:root`: the library never restyles a
  * host's globals, it only supplies defaults on its own roots. A host overrides any
@@ -35,13 +36,19 @@
  * `var(--ov-ui-color-primary, privateFallback)` — the host's value wins when set,
  * the fallback applies otherwise.
  */
+.ov-button,
+.ov-input,
+.ov-textarea,
 .ov-directory-tour,
+.ov-wiki-dashboard,
+.ov-experience-dashboard,
 .ov-agent-connect,
 .ov-console,
 .ov-console__modes,
 .ov-divider,
 .ov-file-browser-entries,
 .ov-drawer,
+.ov-modal,
 .ov-file-browser,
 .ov-file-preview,
 .ov-file-tree,
@@ -157,13 +164,19 @@
   /* @generated library-swatches:end */
 }
 
+html.dark .ov-button,
+html.dark .ov-input,
+html.dark .ov-textarea,
 .dark .ov-directory-tour,
+html.dark .ov-wiki-dashboard,
+html.dark .ov-experience-dashboard,
 .dark .ov-agent-connect,
 .dark .ov-console,
 .dark .ov-console__modes,
 .dark .ov-divider,
 .dark .ov-file-browser-entries,
 .dark .ov-drawer,
+.dark .ov-modal,
 .dark .ov-file-browser,
 .dark .ov-file-preview,
 .dark .ov-file-tree,
@@ -210,6 +223,60 @@
   --ov-ui-tooltip-text-default: #f0f1f3;
 }
 
+/* Control palette from theme-ve-o-aml-design@0.0.36 theme.css (MIT).
+ * Scoped separately: existing application surfaces retain their own palette.
+ * Public --ov-ui-color-* values always take precedence in component styles. */
+.ov-button,
+.ov-input,
+.ov-textarea {
+  --ov-ui-bg-white-default: var(--ov-ui-bg-1-default);
+  --ov-ui-bg-2-default: #fafbfd;
+  --ov-ui-bg-7-default: var(--ov-ui-border-1-default);
+  --ov-ui-bg-11-default: #e1e3ef;
+  --ov-ui-border-4-default: #acb0c5;
+  --ov-ui-neutral-4-default: #c9cdd4;
+  --ov-ui-primary-muted-default: #8e96ff;
+  --ov-ui-primary-strong-default: var(--ov-ui-primary-active-default);
+  --ov-ui-link-default: var(--ov-ui-primary-default);
+  --ov-ui-link-active-default: var(--ov-ui-primary-active-default);
+  --ov-ui-text-5-default: #c9c9d4;
+  --ov-ui-on-primary-disabled-default: var(--ov-ui-text-on-primary-default);
+  --ov-ui-input-focus-ring-default: color-mix(
+    in srgb,
+    var(--ov-ui-color-primary, var(--ov-ui-primary-default)) 30%,
+    transparent
+  );
+  --ov-ui-error-default: #e31b54;
+  --ov-ui-error-bg-default: #ffecec;
+  --ov-ui-error-border-default: #ffa3a0;
+}
+html.dark .ov-button,
+html.dark .ov-input,
+html.dark .ov-textarea {
+  --ov-ui-bg-white-default: rgb(255 255 255 / 0.1%);
+  --ov-ui-bg-2-default: rgb(252 253 254 / 1%);
+  --ov-ui-bg-4-default: rgb(246 248 250 / 6%);
+  --ov-ui-bg-5-default: rgb(241 243 245 / 8%);
+  --ov-ui-bg-7-default: #1a1b1e;
+  --ov-ui-bg-11-default: #1e2023;
+  --ov-ui-border-2-default: rgb(221 226 233 / 15%);
+  --ov-ui-border-3-default: rgb(221 226 233 / 30%);
+  --ov-ui-border-4-default: #6d6d6d;
+  --ov-ui-neutral-4-default: #5f5f60;
+  --ov-ui-primary-disabled-default: #3f3a89;
+  --ov-ui-primary-muted-default: #4c48b4;
+  --ov-ui-primary-strong-default: var(--ov-ui-primary-hover-default);
+  --ov-ui-link-default: #787dff;
+  --ov-ui-link-active-default: #949cff;
+  --ov-ui-text-disabled-default: #42464e;
+  --ov-ui-text-5-default: #e1e3ef;
+  --ov-ui-on-primary-disabled-default: rgb(255 255 255 / 30%);
+  --ov-ui-input-focus-ring-default: rgb(69 131 255 / 30%);
+  --ov-ui-error-default: #ff706d;
+  --ov-ui-error-bg-default: rgb(159 33 28 / 20%);
+  --ov-ui-error-border-default: rgb(255 112 109 / 30%);
+}
+
 .dark .ov-viking-bot {
   --ov-ui-code-bg-default: var(--ov-ui-bg-3-default);
 }
@@ -233,4 +300,32 @@
   --ov-ui-connect-outline-default: var(--ov-ui-border-2-default);
   --ov-ui-connect-muted-default: var(--ov-ui-text-3-default);
   --ov-ui-connect-notice-default: var(--ov-ui-text-2-default);
+}
+
+/* Shared dashboards: mapped from the 2026-11-12 console release, with host-overridable semantics. */
+.ov-wiki-dashboard,
+.ov-experience-dashboard,
+.ov-file-browser {
+  --ov-ui-dashboard-surface-default: #f8f8f8;
+  --ov-ui-dashboard-card-default: #fafafa;
+  --ov-ui-dashboard-muted-default: #787c91;
+  --ov-ui-dashboard-border-default: #edeef2;
+  --ov-ui-dashboard-warning-default: #eb7d00;
+  --ov-ui-dashboard-warning-light-default: #fff0e5;
+  --ov-ui-dashboard-danger-default: #d92d54;
+  --ov-ui-dashboard-danger-light-default: #ffecee;
+  --ov-ui-dashboard-success-default: #4f9c70;
+}
+html.dark .ov-wiki-dashboard,
+html.dark .ov-experience-dashboard,
+html.dark .ov-file-browser {
+  --ov-ui-dashboard-surface-default: var(--ov-ui-bg-3-default);
+  --ov-ui-dashboard-card-default: var(--ov-ui-bg-3-default);
+  --ov-ui-dashboard-muted-default: var(--ov-ui-text-3-default);
+  --ov-ui-dashboard-border-default: var(--ov-ui-border-1-default);
+  --ov-ui-dashboard-warning-default: var(--ov-ui-warning-default);
+  --ov-ui-dashboard-warning-light-default: var(--ov-ui-warning-light-default);
+  --ov-ui-dashboard-danger-default: var(--ov-ui-status-error-default);
+  --ov-ui-dashboard-danger-light-default: var(--ov-ui-bg-5-default);
+  --ov-ui-dashboard-success-default: var(--ov-ui-status-success-default);
 }

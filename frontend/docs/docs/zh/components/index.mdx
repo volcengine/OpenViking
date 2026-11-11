@@ -1,6 +1,6 @@
 # 组件
 
-面向 OpenViking AI 应用的可复用视图与文件类型图标。组件通过 props 接收处理后的数据和状态，通过事件回调表达用户意图；数据获取、认证与业务流程由应用负责。
+面向 OpenViking AI 应用的可复用视图与文件类型图标。组件均为纯 UI，通过 props 接收处理后的数据与状态，通过回调表达交互意图，不感知接口；取数与业务联动由模块或宿主负责。
 
 ## 可用模块
 
@@ -39,5 +39,13 @@ Figma 接入视图，内置主流 Agent 与 MCP、CLI、API、SDK 开发接入�
 ### [图标](./icons)
 
 提供音频、PDF、演示文稿、视频与文字文档五种文件类型图标，支持自定义图片尺寸与无障碍描述。
+
+### [WikiDashboard Wiki 看板](./wiki-dashboard)
+
+独立展示 Wiki 生成效果、待确认冲突及修复记录，通过状态和回调展示加载及重试。
+
+### [ExperienceDashboard 经验看板](./experience-dashboard)
+
+独立展示 Agent 经验列表、应用效果与来源追溯，通过 props 接收展示数据和状态。
 
 公开包入口、样式选择与应用接入边界见[快速开始](../guide/getting-started)。

@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 /**
  * 请求失败时的占位：一句结论、一行原始原因、一个重试按钮。
  *
@@ -32,13 +33,15 @@ export function FileBrowserFailure({
       {detail ? (
         <p className="ov-file-browser__failure-detail">{detail}</p>
       ) : null}
-      <button
-        type="button"
+      <Button
+        size="small"
+        type="default"
+        htmlType="button"
         className="ov-file-browser__failure-retry"
         onClick={onRetry}
       >
         {retryLabel}
-      </button>
+      </Button>
     </div>
   );
 }

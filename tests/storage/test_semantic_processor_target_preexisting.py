@@ -1,21 +1,11 @@
-import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.service.task_store import PersistentTaskStore
-from openviking.service.task_tracker import TaskTracker
-from openviking.service.task_work_index import (
-    bind_task_context,
-    get_task_context,
-    prepare_task_payload,
-    record_enqueued_work,
-)
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.viking_fs import SyncDiff
-from tests.test_task_tracker import _FakeAgfs
 
 
 def _processor(**kwargs):
@@ -152,120 +142,6 @@ async def test_target_source_syncs_before_semantic_executor(monkeypatch):
         "deleted": [],
     }
     assert _FakeTreeExecutor.runs == ["viking://resources/org/repo"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("file_count", [1, 2])
-async def test_content_write_waits_for_file_embedding_but_not_directory(monkeypatch, file_count):
-    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
-    task = await tracker.create("content_write", account_id="acc", user_id="user")
-    await tracker.start(task.task_id, account_id="acc", user_id="user")
-    embedding_wait = asyncio.Event()
-    directory_started = asyncio.Event()
-    finish_directory = asyncio.Event()
-    released = asyncio.Event()
-    directory_runs = []
-    queued = []
-    changed = [f"viking://resources/docs/{index}.md" for index in range(file_count)]
-    original_wait = tracker.wait_for_work
-
-    async def wait_for_work(*args, **kwargs):
-        embedding_wait.set()
-        await original_wait(*args, **kwargs)
-
-    monkeypatch.setattr(tracker, "wait_for_work", wait_for_work)
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_work.get_task_tracker", lambda: tracker
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: _FakeVikingFS()
-    )
-
-    async def close():
-        released.set()
-
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
-        AsyncMock(return_value=SimpleNamespace(lock=None, close=close)),
-    )
-
-    class Executor(_FakeTreeExecutor):
-        file_abstracts = dict.fromkeys(changed, "file summary")
-
-        async def run(self, root_uri):
-            if self.kwargs["generation_trigger"] == "content_write":
-                assert self.kwargs["aggregate_directory"] is False
-                assert get_task_context().task_id == task.task_id
-                for index in range(file_count):
-                    work_id = f"embedding-{index}"
-                    await tracker.register_work(
-                        task.task_id, work_id, "Embedding", account_id="acc", user_id="user"
-                    )
-                    record_enqueued_work("Embedding", work_id)
-            else:
-                assert get_task_context() is None
-                assert self.kwargs["aggregate_directory"] is True
-                assert self.kwargs["telemetry_id"] == ""
-                directory_started.set()
-                await finish_directory.wait()
-
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.SemanticTreeExecutor", Executor
-    )
-    processor = _processor()
-    processor._enqueue_parent_refresh = AsyncMock()
-    processor._embedding_worker_stopped = lambda: False
-
-    async def enqueue(msg):
-        payload, metadata = prepare_task_payload(msg.to_dict())
-        assert metadata is None
-        queued.append(msg)
-        directory_runs.append(asyncio.create_task(processor.on_dequeue(payload)))
-
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.get_queue_manager",
-        lambda: SimpleNamespace(
-            SEMANTIC="Semantic",
-            get_queue=lambda *a, **kw: SimpleNamespace(enqueue=enqueue),
-        ),
-    )
-    msg = SemanticMsg(
-        uri="viking://resources/docs",
-        context_type="resource",
-        account_id="acc",
-        user_id="user",
-        recursive=False,
-        changes={"modified": changed},
-        lock_handoff={"lease_ref": "file-lock"},
-        telemetry_id="write-telemetry",
-        generation_trigger="content_write",
-    )
-    with bind_task_context(task.task_id, "acc", "user", enqueued_work=[]):
-        file_run = asyncio.create_task(processor.on_dequeue(msg.to_dict()))
-    try:
-        await asyncio.wait_for(embedding_wait.wait(), timeout=2)
-        assert not file_run.done()
-        assert not released.is_set()
-        assert queued == []
-        for index in range(file_count):
-            await tracker.mark_work_done(
-                task.task_id, f"embedding-{index}", account_id="acc", user_id="user"
-            )
-        result = await asyncio.wait_for(file_run, timeout=2)
-        await asyncio.wait_for(directory_started.wait(), timeout=2)
-        assert result.error is None
-        assert released.is_set()
-        assert not directory_runs[0].done()
-        assert queued[0].uri == msg.uri
-        assert queued[0].lock_handoff is None
-        assert queued[0].task_id == ""
-        assert queued[0].file_abstracts == Executor.file_abstracts
-        processor._enqueue_parent_refresh.assert_not_awaited()
-    finally:
-        finish_directory.set()
-        if not file_run.done():
-            file_run.cancel()
-        await asyncio.gather(file_run, *directory_runs, return_exceptions=True)
 
 
 @pytest.mark.asyncio

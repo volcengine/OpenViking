@@ -1,0 +1,46 @@
+.ov-file-browser-search__title {
+  margin: 0 32px 16px 0;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.ov-file-browser-search__form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+.ov-file-browser-search__results {
+  min-height: 96px;
+  max-height: min(320px, 40dvh);
+  margin-top: 16px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 13px;
+  line-height: 1.6;
+}
+.ov-file-browser-search__results p {
+  margin: 0;
+}
+.ov-file-browser-search__error {
+  color: var(--ov-ui-color-error, var(--ov-ui-error-default));
+}
+.ov-file-browser-search__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ov-file-browser-search__result {
+  padding: 12px 0;
+  border-bottom: 1px solid
+    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  overflow-wrap: anywhere;
+}
+.ov-file-browser-search__uri {
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+}
+.ov-file-browser-search__results .ov-file-browser-search__summary {
+  margin-top: 4px;
+}

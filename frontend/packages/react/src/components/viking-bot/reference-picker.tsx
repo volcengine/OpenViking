@@ -1,3 +1,4 @@
+import { Input } from '../../shared/components/input/input.js';
 import type { Locale } from '../../shared/locale.js';
 import { useEffect, useId, useMemo, useState } from 'react';
 import type { SenderProps } from '@ark-design/ui/sender';
@@ -106,7 +107,7 @@ export function ReferencePicker({
       {editor ? null : (
         <label htmlFor={id}>
           {labels.searchReferences}
-          <input
+          <Input
             id={id}
             type="search"
             value={search}

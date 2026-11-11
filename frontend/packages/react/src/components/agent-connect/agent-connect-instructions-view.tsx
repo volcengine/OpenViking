@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import { useState } from 'react';
 
 import CopyIcon from '../../../../icons/svg/agent-connect/copy.svg?react';
@@ -49,15 +50,17 @@ export function AgentConnectInstructionsView({
         <h4 className="ov-agent-connect__instructions-title">
           {labels.instructions}
         </h4>
-        <button
+        <Button
+          size="mini"
+          type="text"
           className="ov-agent-connect__copy"
-          type="button"
+          htmlType="button"
           disabled={status === 'pending'}
           onClick={() => void copy()}
         >
           <CopyIcon aria-hidden="true" />
           {status === 'copied' ? labels.copied : copyLabel}
-        </button>
+        </Button>
       </div>
       <div className="ov-agent-connect__body">
         {command ? (

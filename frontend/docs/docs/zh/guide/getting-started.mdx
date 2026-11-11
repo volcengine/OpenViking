@@ -1,6 +1,6 @@
 # 快速开始
 
-公开 UI 组件、组合模块和独立 Hook 均支持可选的 `locale: 'zh-CN' | 'en-US'`。Props 覆盖最近的模块或 Provider，均未配置时默认 `en-US`。已有 `labels` 保留逐项覆盖能力，业务内容、插槽和回调文案仍由宿主提供。
+公开 UI 组件、组合模块 均支持可选的 `locale: 'zh-CN' | 'en-US'`。Props 覆盖最近的模块或 Provider，均未配置时默认 `en-US`。已有 `labels` 保留逐项覆盖能力，业务内容、插槽和回调文案仍由宿主提供。
 
 OpenViking UI 是构建 OpenViking AI 应用界面的 React 基础。OpenViking 是面向 AI 智能体的上下文数据库；本 workspace 提供 Rslib 构建、双语文档、分层目录约定与样式隔离方案。应用负责业务界面、数据、认证与流程编排。
 
@@ -44,11 +44,11 @@ import '@openviking/react/modules/file-browser/style.css';
 
 两个模块的 props 已定型——请求配置、受控状态、回调、插槽与文案——但占位组件本体仍只消费 `className`、`style` 与一个文案字段，且均无需 Provider。可运行示例与完整属性表见[业务模块](../modules/)。
 
-业务模块将按具体能力组合取数 Hook 与视图，从对应模块入口分别导出 Hook 和组合视图，接入方可只复用 Hook 并自行组装 UI。认证、账号作用域、路由、权限及完整页面流程由宿主负责。业务 Hook 及跨模块公共 Hook 当前尚无实现或导出。
+业务模块将按具体能力组合取数 Hook 与视图，从对应模块入口导出组件和必要类型，Hook 为内部实现。认证、账号作用域、路由、权限及完整页面流程由宿主负责。当前不提供业务无头 Hook 公开入口。
 
 模块规划聚焦个人终端：`file-browser` 将目录、搜索和预览作为一个整体，统一维护资源选择、结果定位、内容加载与刷新联动；宿主可按需受控指定当前资源。`console` 将对话视图与 TUI 作为一个交互面板，内部协调模式切换、工具栏和公共上下文，各自保留会话与命令状态。Agent 接入作为独立能力接入。宿主负责模块间布局、导航与联动；产品引导、资源与 Skill 导入流程及同步配置由宿主负责，经验看板和会话内容通过文件浏览模块的预览扩展接入，管理后台不在此范围内。这些交互仍为规划，当前模块组件仅展示占位内容。
 
-请求配置通过 `@openviking/react/client` 的 `OpenVikingProvider` 下发：`baseURL` 与身份字段（`apiKey`、`accountId`、`userId`、`resourceId`），请求头由 Client 组装。请求客户端已作为 `@openviking/react/client` 子路径落地：基于 `fetch` 的 `createOvClient`，以及 `OvRequestOptions`、`OvClient` 与 `OvClientError`。模块和独立 Hook 可通过 `requestOptions` 按字段覆盖，优先级为局部配置、最近的 Provider、库默认值；`baseURL` 为空表示同源请求。标准 API 接入无需逐模块实现 Adapter，非标准网关集中在宿主请求接入层适配。Provider 已实现并导出；模块 Hook 尚未实现。
+请求配置通过 `@openviking/react/client` 的 `OpenVikingProvider` 下发：`baseURL` 与身份字段（`apiKey`、`accountId`、`userId`、`resourceId`），请求头由 Client 组装。请求客户端已作为 `@openviking/react/client` 子路径落地：基于 `fetch` 的 `createOvClient`，以及 `OvRequestOptions`、`OvClient` 与 `OvClientError`。模块可通过 `requestOptions` 按字段覆盖，优先级为局部配置、最近的 Provider、库默认值；`baseURL` 为空表示同源请求。标准 API 接入无需逐模块实现 Adapter，非标准网关集中在宿主请求接入层适配。取数与状态 Hook 均内置，不提供无头公开接口。
 
 ## 样式
 
@@ -61,7 +61,7 @@ import '@openviking/react/style.css';
 // 独立入口：@openviking/react/<分类>/<模块>/style.css。
 ```
 
-Rslib 将 ESM JavaScript、TypeScript 声明和 CSS 输出到 `packages/react/dist/`。每个公开样式入口可独立使用；模块样式当前覆盖占位视图，组合视图迁入后须包含其组件依赖。后续单独使用 Hook 无需 CSS。
+Rslib 将 ESM JavaScript、TypeScript 声明和 CSS 输出到 `packages/react/dist/`。每个公开样式入口可独立使用；模块样式当前覆盖占位视图，组合视图迁入后须包含其组件依赖。
 
 ### 主题
 
@@ -118,7 +118,7 @@ npm run preview
 
 ### 语言继承
 
-在 `OpenVikingProvider` 上统一设置 `locale`，组件、组合模块和独立 Hook 均可省略该属性。模块 Props 覆盖 Provider，作用于模块内置视图和宿主插槽；组件显式 Props 再覆盖模块。嵌套 Provider 省略时继承外层，显式指定时覆盖。全链路均未配置时默认 `en-US`，`labels` 仍可逐项覆盖文案。
+在 `OpenVikingProvider` 上统一设置 `locale`，组件、组合模块 均可省略该属性。模块 Props 覆盖 Provider，作用于模块内置视图和宿主插槽；组件显式 Props 再覆盖模块。嵌套 Provider 省略时继承外层，显式指定时覆盖。全链路均未配置时默认 `en-US`，`labels` 仍可逐项覆盖文案。
 
 示例使用固定离线服务。切换三个选择框，再提交 `ov read`，可对比错误提示的语言。语言变化保留请求、记录、草稿和服务端原文。
 

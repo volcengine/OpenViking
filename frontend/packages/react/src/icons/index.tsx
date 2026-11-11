@@ -1,3 +1,10 @@
+import WikiDiscussSvg from '../../../icons/svg/dashboards/discuss.svg?react';
+import WikiHistorySvg from '../../../icons/svg/dashboards/history.svg?react';
+import WikiSuccessSvg from '../../../icons/svg/dashboards/success.svg?react';
+import WikiEditSvg from '../../../icons/svg/dashboards/edit.svg?react';
+import ActivitySvg from '../../../icons/svg/dashboards/activity.svg?react';
+import ScanSearchSvg from '../../../icons/svg/dashboards/scan-search.svg?react';
+import FileInputSvg from '../../../icons/svg/dashboards/file-input.svg?react';
 import type { ComponentPropsWithoutRef, ComponentType } from 'react';
 
 import ArrowRightSvg from '../../../icons/svg/arrow-right.svg?react';
@@ -12,7 +19,12 @@ import UserSvg from '../../../icons/svg/scope-switcher/user.svg?react';
 import { swatches } from '../../../icons/library-swatches.json';
 import PptSvg from '../../../icons/svg/ppt.svg?react';
 import VideoSvg from '../../../icons/svg/video.svg?react';
+import WikiWarningSvg from '../../../icons/svg/dashboards/warning.svg?react';
+import WikiBookSvg from '../../../icons/svg/dashboards/wiki-book.svg?react';
 import WordSvg from '../../../icons/svg/word.svg?react';
+import ExperienceBoardSvg from '../../../icons/svg/dashboards/experience-board.svg?react';
+import WikiBoardSvg from '../../../icons/svg/dashboards/wiki-board.svg?react';
+import WikiConflictBoardSvg from '../../../icons/svg/dashboards/wiki-conflict-board.svg?react';
 
 /**
  * 图标的属性。渲染为内联 SVG，接收标准 SVG 属性；`width` 与 `height` 默认 16
@@ -71,6 +83,15 @@ export const PdfIcon = createIcon(PdfSvg, 'PdfIcon');
 export const PptIcon = createIcon(PptSvg, 'PptIcon');
 export const VideoIcon = createIcon(VideoSvg, 'VideoIcon');
 export const WordIcon = createIcon(WordSvg, 'WordIcon');
+export const ExperienceBoardIcon = createIcon(
+  ExperienceBoardSvg,
+  'ExperienceBoardIcon',
+);
+export const WikiBoardIcon = createIcon(WikiBoardSvg, 'WikiBoardIcon');
+export const WikiConflictBoardIcon = createIcon(
+  WikiConflictBoardSvg,
+  'WikiConflictBoardIcon',
+);
 export const SpaceIcon = createIcon(SpaceSvg, 'SpaceIcon');
 export const UserIcon = createIcon(UserSvg, 'UserIcon');
 
@@ -155,3 +176,20 @@ export {
 export type { FileTypeIconComponent } from './file-type-icon.js';
 export { VikingBotIcon } from './viking-bot-icons.js';
 export type { VikingBotIconName } from './viking-bot-icons.js';
+
+export const WikiWarningIcon = createIcon(WikiWarningSvg, 'WikiWarningIcon');
+export const WikiBookIcon = createIcon(WikiBookSvg, 'WikiBookIcon');
+
+export const FileInputIcon = createIcon(FileInputSvg, 'FileInputIcon');
+
+export const ScanSearchIcon = createIcon(ScanSearchSvg, 'ScanSearchIcon');
+
+export const ActivityIcon = createIcon(ActivitySvg, 'ActivityIcon');
+
+export const WikiEditIcon = createIcon(WikiEditSvg, 'WikiEditIcon');
+
+export const WikiSuccessIcon = createIcon(WikiSuccessSvg, 'WikiSuccessIcon');
+
+export const WikiHistoryIcon = createIcon(WikiHistorySvg, 'WikiHistoryIcon');
+
+export const WikiDiscussIcon = createIcon(WikiDiscussSvg, 'WikiDiscussIcon');

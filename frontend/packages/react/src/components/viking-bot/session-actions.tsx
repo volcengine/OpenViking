@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import type { Locale } from '../../shared/locale.js';
 import type { ReactNode } from 'react';
@@ -36,14 +37,17 @@ export function VikingBotSessionActions({
                   content={labels.sessionHistory}
                   disabled={props['aria-expanded'] === true}
                 >
-                  <button
+                  <Button
                     {...props}
-                    type="button"
+                    size="mini"
+                    type="text"
+                    iconOnly
+                    htmlType="button"
                     className="ov-viking-bot__header-action"
                     aria-label={labels.sessionHistory}
                   >
                     <VikingBotIcon name="history" />
-                  </button>
+                  </Button>
                 </Tooltip>
               )}
             >
@@ -99,28 +103,33 @@ export function VikingBotSessionActions({
                     })}
                   </ul>
                   {sessions.hasMore && sessions.onLoadMore ? (
-                    <button
-                      type="button"
+                    <Button
+                      size="small"
+                      type="default"
+                      htmlType="button"
                       disabled={sessions.isLoading}
                       onClick={sessions.onLoadMore}
                     >
                       {labels.loadMore}
-                    </button>
+                    </Button>
                   ) : null}
                 </div>
               )}
             </BotPopover>
             {sessions.canCreate !== false ? (
               <Tooltip content={labels.newSession}>
-                <button
-                  type="button"
+                <Button
+                  size="mini"
+                  type="text"
+                  iconOnly
+                  htmlType="button"
                   className="ov-viking-bot__header-action"
                   aria-label={labels.newSession}
                   disabled={sessions.isCreating}
                   onClick={sessions.onNew}
                 >
                   <VikingBotIcon name="newSession" />
-                </button>
+                </Button>
               </Tooltip>
             ) : null}
           </>

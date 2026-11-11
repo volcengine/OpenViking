@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import { resolveScopeCascadeLabels } from './labels.js';
 import { useState } from 'react';
 import { useLocale } from '../../shared/locale-context.js';
@@ -6,9 +7,9 @@ import {
   ScopeSelector,
   ScopeSwitcher,
 } from '../../components/scope-switcher/index.js';
+import { useScopeCascade, useScopeCascadeLevel } from './use-scope-cascade.js';
 import type { ScopeSwitcherOption } from '../../components/scope-switcher/index.js';
 import { LibraryIcon, SpaceIcon, UserIcon } from '../../icons/index.js';
-import { useScopeCascadeLevel } from './use-scope-cascade.js';
 import type {
   ScopeCascadeIndex,
   ScopeCascadeLevel,
@@ -103,9 +104,14 @@ function LevelView({
         errorFallback: (
           <>
             {labels?.error ?? text.error}{' '}
-            <button type="button" onClick={level.refresh}>
+            <Button
+              size="small"
+              type="default"
+              htmlType="button"
+              onClick={level.refresh}
+            >
               {retryLabel ?? text.retry}
-            </button>
+            </Button>
           </>
         ),
       }}
@@ -115,8 +121,11 @@ function LevelView({
 
 /** Only leaf selectors subscribe to request state; this wrapper resolves language. */
 export function ScopeCascade({
-  controller,
   locale: localeProp,
+  loadLibraries,
+  loadSpaces,
+  loadUsers,
+  onChange,
   labels,
   levelNames: names,
   retryLabel,
@@ -124,6 +133,10 @@ export function ScopeCascade({
 }: ScopeCascadeProps) {
   const locale = useLocale(localeProp);
   const levelNames = names ?? resolveScopeCascadeLabels(locale).levelNames;
+  const controller = useScopeCascade(
+    { loadLibraries, loadSpaces, loadUsers },
+    onChange,
+  );
   return (
     <ScopeSwitcher {...props} locale={locale}>
       <ConnectedLevel

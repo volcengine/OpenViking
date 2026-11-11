@@ -2668,12 +2668,19 @@ class ResourceService:
         if not watch_manager:
             return
 
+        from openviking.connector.delegate import ConnectorDelegate
+
         existing_task = await watch_manager.get_task_by_uri(
             to_uri=to_uri,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             role=str(ctx.role),
         )
+        if existing_task and ConnectorDelegate.is_watch_auth_state(existing_task.auth_state):
+            logger.info(
+                f"[ResourceService] Skip deactivating Connector watch task {existing_task.task_id} for {to_uri}"
+            )
+            return
         if existing_task:
             await watch_manager.update_task(
                 task_id=existing_task.task_id,

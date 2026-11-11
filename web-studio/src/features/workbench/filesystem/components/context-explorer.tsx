@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import type { Ref, PointerEvent as ReactPointerEvent } from 'react'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { useImperativeHandle, useRef, useEffect, useMemo } from 'react'
-import { useFileBrowser } from '@openviking/react/modules/file-browser'
+import { useFileBrowser } from '@studio-file-browser'
 import { toast } from 'sonner'
 import { FileTree } from '@openviking/react/components/file-tree'
 import '@openviking/react/components/file-tree/style.css'
@@ -16,6 +16,8 @@ import { useTranslation } from 'react-i18next'
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
 
 import { ROOT_URI } from '#/features/workbench/filesystem/lib/constants'
+
+const noSharedDashboards = [] as const
 
 export function ContextExplorerHeader({
   onAddResource,
@@ -89,6 +91,7 @@ export function ContextTree({
     currentUri: selectedFileUri || currentUri,
     defaultExpandedUri: initialExpandedUri.current,
     loadPreview: false,
+    dashboardKinds: noSharedDashboards,
     locale: studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US',
     onUriChange: (uri) => {
       if (!uri) return

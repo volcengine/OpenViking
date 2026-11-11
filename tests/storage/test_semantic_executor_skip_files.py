@@ -1,11 +1,21 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+from types import SimpleNamespace
+
 import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
 from openviking_cli.session.user_id import UserIdentifier
+
+
+@pytest.fixture(autouse=True)
+def _semantic_config(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
 
 
 class _FakeVikingFS:

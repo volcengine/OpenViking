@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import { ConsoleModeSwitch } from './console-mode-switch.js';
 import type { Locale } from '../../shared/locale.js';
 import { useState } from 'react';
@@ -60,9 +61,12 @@ export function ConsoleToolbar({
             content={labels.clear}
             className="ov-console__action-tooltip"
           >
-            <button
+            <Button
+              size="small"
+              type="text"
+              iconOnly
               className="ov-console__action"
-              type="button"
+              htmlType="button"
               aria-label={labels.clear}
               onClick={() => {
                 setSessionVersion((version) => version + 1);
@@ -70,7 +74,7 @@ export function ConsoleToolbar({
               }}
             >
               <ConsoleIcon name="newSession" />
-            </button>
+            </Button>
           </Tooltip>
         </div>
       ) : (

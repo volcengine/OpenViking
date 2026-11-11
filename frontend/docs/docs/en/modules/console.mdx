@@ -26,18 +26,6 @@ Conversation sessions, prompts and resource candidates use fixed demo data. The 
 
 For a real service, configure `baseURL`, credentials and identity through the host's `OpenVikingProvider`; no per-module adapter is required. Exclude `/api/v1` from `baseURL`; omission targets the same origin. Mounting does not fetch data. Requests start only when a command is explicitly submitted.
 
-## Standalone Hook
-
-`useConsole(options?: ConsoleOptions): ConsoleResult` is exported from `@openviking/react/modules/console`. It shares Provider inheritance, instance isolation and request cleanup with `Console`, without rendering a view or requiring CSS.
-
-`ConsoleOptions` accepts `mode`, `defaultMode`, `locale`, `scopeKey`, `onModeChange` and `requestOptions`. `ConsoleResult` includes `records`, `command`, `conversationDraft`, `mode`, `commands`, `isExecuting`, `error` and `failedCommand`; operations are `setMode`, `setCommand`, `setConversationDraft`, `execute`, `retry`, `cancel` and `clear`. `execute` and `retry` resolve after updating records, including failures; inspect `error` or the record status. `clear` cancels pending work and clears command records, errors and the command draft. Conversation service state remains host-owned.
-
-The example uses the same fixed offline transport and composes `Tui` independently:
-
-```tsx file="../../_demos/console-hook.tsx" preview
-
-```
-
 ## Execution behavior
 
 One command runs per instance; input is disabled while a request is pending. Failures appear in the corresponding command result; submit the command again to retry. Check the server before resubmitting a write that may already have been accepted. New session aborts the HTTP request and ignores late results; it does not guarantee rollback of accepted server operations. Clearing records removes local history and errors without deleting server resources.
@@ -64,7 +52,7 @@ This is a browser-compatible native command subset. Local CLI configuration, log
 
 ## Props
 
-The root exports only `Console` and `ConsoleProps`. Import the mode, copy and slot types from `@openviking/react/modules/console`. The same entry exports `useConsole`, `ConsoleOptions`, `ConsoleState` and `ConsoleResult`. JavaScript does not load CSS; the composite view uses `@openviking/react/modules/console/style.css`, including Tui and VikingBot styles.
+The root exports only `Console` and `ConsoleProps`. Import the mode, copy and slot types from `@openviking/react/modules/console`. Data and state Hooks remain internal. JavaScript does not load CSS; the composite view uses `@openviking/react/modules/console/style.css`, including Tui and VikingBot styles.
 
 | Prop                 | Type                          | Default           | Behavior                                                                                                                                                                                                           |
 | -------------------- | ----------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -83,7 +71,8 @@ The root exports only `Console` and `ConsoleProps`. Import the mode, copy and sl
 
 Hosts own authentication, permissions, account switching, page layout and resource navigation across modules.
 
+Console inherits the nearest language scope, with `en-US` as the fallback. Changing language updates existing command help, argument errors and cancellation notices while preserving requests, record IDs and drafts. Server content and original error messages keep their original text.
+
 ## Standalone mode switch
 
 `ConsoleModeSwitch` is exported from `@openviking/react/modules/console` and uses its stylesheet. Control it with `mode` (`conversation` / `command`) and `onModeChange`. Supply `labels` with `mode`, `conversation`, and `command`. Set `showConversation={false}` to hide conversation mode; optional `panelId` associates the controls with panels. It does not create a Client or issue requests.
-The standalone Hook defaults `locale` to `en-US`. Changing it updates existing command help, argument errors and cancellation notices while preserving requests, record IDs and drafts. Server content and original error messages keep their original text.

@@ -22,7 +22,7 @@ vi.mock('#/features/connection/hooks/use-app-connection', () => ({
 vi.mock('#/features/workbench/resources/lib/api', () => ({
   fetchFsStat: m.stat,
 }))
-vi.mock('@openviking/react/modules/file-browser', () => ({
+vi.mock('@studio-file-browser', () => ({
   useFileBrowser: m.hook,
 }))
 vi.mock('react-i18next', () => ({

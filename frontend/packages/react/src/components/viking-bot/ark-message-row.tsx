@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import { Bubble } from '@ark-design/ui/bubble';
 import { ErrorCard } from '@ark-design/ui/error-card';
 
@@ -25,9 +26,11 @@ function MessageActions({
   return (
     <div className="ov-viking-bot__message-actions">
       {actions.map(({ messageId, action }) => (
-        <button
+        <Button
+          size="small"
+          type="default"
           key={`${messageId}:${action.key}`}
-          type="button"
+          htmlType="button"
           className="ov-viking-bot__message-action"
           disabled={
             Boolean(action.disabledReason) ||
@@ -38,7 +41,7 @@ function MessageActions({
           onClick={() => onMessageAction?.(messageId, action.key)}
         >
           {action.label ?? action.key}
-        </button>
+        </Button>
       ))}
     </div>
   );

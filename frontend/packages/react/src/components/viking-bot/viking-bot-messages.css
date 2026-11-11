@@ -80,17 +80,6 @@
 .ov-viking-bot__message-actions {
   margin-top: 10px;
 }
-.ov-viking-bot__message-action {
-  height: 36px;
-  padding: 0 16px;
-  border: 0;
-  border-radius: 24px;
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
-  font-size: 13px;
-  font-weight: 400;
-  line-height: 22px;
-}
 .ov-viking-bot__activity {
   width: min(88%, 960px);
 }

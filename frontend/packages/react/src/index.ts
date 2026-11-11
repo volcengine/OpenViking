@@ -25,3 +25,8 @@ export type { ScopeCascadeProps } from './modules/scope-cascade/index.js';
 
 export { DirectoryTour } from './components/directory-tour/index.js';
 export type { DirectoryTourProps } from './components/directory-tour/index.js';
+
+export { WikiDashboard } from './components/wiki-dashboard/index.js';
+export type { WikiDashboardProps } from './components/wiki-dashboard/index.js';
+export { ExperienceDashboard } from './components/experience-dashboard/index.js';
+export type { ExperienceDashboardProps } from './components/experience-dashboard/index.js';

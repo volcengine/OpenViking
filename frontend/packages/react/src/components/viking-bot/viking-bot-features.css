@@ -93,7 +93,7 @@
   gap: 6px;
   padding-inline: 4px;
 }
-.ov-viking-bot__quick-inputs button {
+.ov-viking-bot__quick-inputs button:not(.ov-button) {
   display: inline-flex;
   min-height: 32px;
   align-items: center;
@@ -119,22 +119,8 @@
   justify-content: flex-end;
   gap: 8px;
 }
-.ov-viking-bot__header-action {
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 8px;
-  padding: 0;
-  background: transparent;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
-  cursor: pointer;
-}
-.ov-viking-bot__header-action:hover,
-.ov-viking-bot__header-action[aria-expanded='true'],
-.ov-viking-bot__quick-inputs button:hover:not(:disabled) {
+
+.ov-viking-bot__quick-inputs button:not(.ov-button):hover:not(:disabled) {
   background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
 }
 .ov-viking-bot__header-action > svg {
@@ -186,7 +172,7 @@
   padding: 0;
   list-style: none;
 }
-.ov-viking-bot__session-history li > button {
+.ov-viking-bot__session-history li > button:not(.ov-button) {
   display: flex;
   width: 100%;
   flex-direction: column;
@@ -200,8 +186,8 @@
   font: inherit;
   cursor: pointer;
 }
-.ov-viking-bot__session-history li > button:hover,
-.ov-viking-bot__session-history button[aria-current='true'] {
+.ov-viking-bot__session-history li > button:not(.ov-button):hover,
+.ov-viking-bot__session-history button:not(.ov-button)[aria-current='true'] {
   background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
 }
 .ov-viking-bot__session-history li span {
@@ -248,7 +234,7 @@
   gap: 8px;
   margin-bottom: 8px;
 }
-.ov-viking-bot__reference-picker input {
+.ov-viking-bot__reference-picker input:not(.ov-input__element) {
   box-sizing: border-box;
   width: 100%;
   border: 1px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
@@ -258,7 +244,7 @@
   color: inherit;
   font: inherit;
 }
-.ov-viking-bot__reference-picker input:focus {
+.ov-viking-bot__reference-picker input:not(.ov-input__element):focus {
   border-color: var(--ov-ui-color-focus, var(--ov-ui-focus-default));
   outline: none;
 }
@@ -286,21 +272,20 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ov-viking-bot__reference-tags button {
+.ov-viking-bot__reference-tags button:not(.ov-button) {
   border: 0;
   padding: 0 2px;
   background: transparent;
   color: inherit;
   cursor: pointer;
 }
-.ov-viking-bot__quick-inputs button:focus-visible,
-.ov-viking-bot__header-action:focus-visible,
-.ov-viking-bot__session-history button:focus-visible,
-.ov-viking-bot__reference-tags button:focus-visible {
+.ov-viking-bot__quick-inputs button:not(.ov-button):focus-visible,
+.ov-viking-bot__session-history button:not(.ov-button):focus-visible,
+.ov-viking-bot__reference-tags button:not(.ov-button):focus-visible {
   outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
   outline-offset: 2px;
 }
-.ov-viking-bot__quick-inputs button:disabled {
+.ov-viking-bot__quick-inputs button:not(.ov-button):disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

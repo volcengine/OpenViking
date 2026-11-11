@@ -66,21 +66,30 @@ export function Popover({
   children,
   content,
   placement = 'right',
+  anchorRef,
   trigger = 'hover',
   delay = 300,
+  open: controlledOpen,
+  role,
   disabled = false,
   className,
   style,
   onOpenChange,
 }: PopoverProps) {
-  const [open, setOpen] = useState(false);
+  const [localOpen, setOpen] = useState(false);
+  const open = !disabled && (controlledOpen ?? localOpen);
   const triggerRef = useRef<HTMLElement | null>(null);
   const timerRef = useRef<number | undefined>(undefined);
   // 用 state 而不是 ref 持有浮层节点：定位 effect 要在节点挂载后重跑，
   // ref 变化不会触发重渲染，effect 便看不到它。
   const [surfaceNode, setSurfaceNode] = useState<HTMLDivElement | null>(null);
   const id = useId();
-  const position = useOverlayPosition(open, triggerRef, surfaceNode, placement);
+  const position = useOverlayPosition(
+    open,
+    anchorRef ?? triggerRef,
+    surfaceNode,
+    placement,
+  );
 
   const change = useCallback(
     (next: boolean) => {
@@ -212,7 +221,7 @@ export function Popover({
         <div
           ref={setSurfaceNode}
           id={id}
-          role={trigger === 'click' ? 'dialog' : 'note'}
+          role={role ?? (trigger === 'click' ? 'dialog' : 'note')}
           className={['ov-popover', className].filter(Boolean).join(' ')}
           data-placement={position.placement}
           style={{ top: position.top, left: position.left, ...style }}

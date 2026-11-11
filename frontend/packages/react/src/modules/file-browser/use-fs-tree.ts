@@ -5,7 +5,7 @@ import type {
   FileTreeRow,
 } from '../../components/file-tree/index.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { knownDirectories, useKnownFile } from './fs-directories.js';
+import { useTreeMetadata } from './fs-directories.js';
 import { useRequestScope } from './use-request-scope.js';
 import { expandChain } from './fs-path.js';
 import { loadPage } from './fs-page.js';
@@ -20,6 +20,7 @@ import {
 
 export interface FsTreeState {
   rows: readonly FileTreeRow[];
+  metadataRows: readonly FileTreeRow[];
   isReady: boolean;
   error: Error | null;
   /**
@@ -33,8 +34,10 @@ export interface FsTreeState {
    * {@link directoryUris} means the type is unknown.
    */
   isKnownFile: (uri: string) => boolean;
+  accessOf: (uri: string | null) => 'denied' | 'container' | undefined;
   toggleExpand: (row: FileTreeEntryRow) => Promise<void>;
   open: (uri: string) => Promise<void>;
+  openPath: (uri: string) => Promise<void>;
   loadMore: (parentId: string) => Promise<void>;
   retry: (parentId: string) => Promise<void>;
   refresh: () => Promise<void>;
@@ -265,8 +268,21 @@ export function useFsTree({
         setExpanded((prev) => new Set(prev).add(uri));
         if (!dirsRef.current[uri]) await fetchPage(uri, 0);
       },
+      openPath: async (uri: string) => {
+        const current = scope.current();
+        for (const parent of expandChain(rootUri, uri)) {
+          if (
+            current.controller.signal.aborted ||
+            scope.current().key !== current.key
+          )
+            return;
+          setExpanded((prev) => new Set(prev).add(parent));
+          if (!dirsRef.current[parent]) await fetchPage(parent, 0);
+        }
+      },
       /** 在展开与折叠之间切换。Toggles between expanded and collapsed. */
       toggleExpand: async (row: FileTreeEntryRow) => {
+        if (row.disabled) return;
         const isOpen = expandedRef.current.has(row.uri);
         setExpanded((prev) => {
           const next = new Set(prev);
@@ -304,24 +320,11 @@ export function useFsTree({
     [rootUri, dirs, expanded],
   );
 
-  // 树已知的目录集合。它与「当前可见的行」无关：根目录从不出现在 `rows` 里，
-  // 祖先折叠后其后代也不再出现，但它们的类型不会因此改变。预览据此判断读摘要
-  // 还是读正文，所以这份集合必须覆盖已加载过的每一层。
-  //
-  // The directories the tree knows about. It is independent of the rows currently
-  // visible: the root never appears in `rows`, and a descendant disappears when its
-  // ancestor collapses, yet neither changes type. The preview decides between a
-  // summary and content from this set, so it has to cover every loaded level.
-  const directoryUris = useMemo(
-    () => knownDirectories(rootUri, dirs),
-    [rootUri, dirs],
-  );
-  // 树里出现过的文件 URI。与目录集合一起构成「类型已知」的判定：两者都不包含，
-  // 就说明这个 URI 还没加载过，类型未知。
-  //
-  // The file URIs the tree has seen. Together with the directory set this decides
-  // "type known": in neither means the URI was never loaded, so its type is unknown.
-  const isKnownFile = useKnownFile(dirs);
-
-  return { rows, isReady, error, directoryUris, isKnownFile, ...state };
+  return {
+    rows,
+    ...useTreeMetadata(rootUri, dirs),
+    isReady,
+    error,
+    ...state,
+  };
 }

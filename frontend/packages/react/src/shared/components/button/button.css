@@ -1,0 +1,187 @@
+/* Visual rules adapted from theme-ve-o-aml-design@0.0.36 (MIT), not Arco's default skin. */
+.ov-button {
+  --ov-ui-button-height: 32px;
+  --ov-ui-button-padding: 16px;
+  --ov-ui-button-primary: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default)
+  );
+  --ov-ui-button-text: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  --ov-ui-button-fill: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  --ov-ui-button-fill-hover: var(
+    --ov-ui-color-bg-11,
+    var(--ov-ui-bg-11-default)
+  );
+  --ov-ui-button-focus-ring: var(
+    --ov-ui-color-neutral-4,
+    var(--ov-ui-neutral-4-default)
+  );
+  appearance: none;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-shrink: 0;
+  height: var(--ov-ui-button-height);
+  margin: 0;
+  padding: 0 var(--ov-ui-button-padding);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--ov-ui-button-fill);
+  color: var(--ov-ui-button-text);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.53846154;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background-color 100ms cubic-bezier(0, 0, 1, 1),
+    border-color 100ms cubic-bezier(0, 0, 1, 1),
+    color 100ms cubic-bezier(0, 0, 1, 1);
+}
+.ov-button--mini {
+  --ov-ui-button-height: 24px;
+  --ov-ui-button-padding: 12px;
+  font-size: 12px;
+  gap: 4px;
+}
+.ov-button--small {
+  --ov-ui-button-height: 28px;
+}
+.ov-button--large {
+  --ov-ui-button-height: 36px;
+}
+.ov-button--icon-only {
+  width: var(--ov-ui-button-height);
+  padding: 0;
+}
+.ov-button--circle {
+  border-radius: 50%;
+}
+.ov-button--long {
+  width: 100%;
+}
+.ov-button:not(:disabled):not([aria-disabled='true']):hover {
+  background: var(--ov-ui-button-fill-hover);
+}
+.ov-button:not(:disabled):not([aria-disabled='true']):active {
+  background: var(--ov-ui-button-fill);
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  transition: none;
+}
+.ov-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ov-ui-button-focus-ring);
+}
+.ov-button:disabled:not(.ov-button--loading),
+.ov-button.ov-button--disabled,
+.ov-button[aria-disabled='true'] {
+  background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default));
+  cursor: not-allowed;
+  color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
+}
+.ov-button--primary,
+.ov-button--outline {
+  --ov-ui-button-focus-ring: var(
+    --ov-ui-color-primary-disabled,
+    var(--ov-ui-primary-disabled-default)
+  );
+}
+.ov-button--primary {
+  background: var(--ov-ui-button-primary);
+  border-style: dashed;
+  color: var(
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default)
+  );
+}
+.ov-button--primary:not(:disabled):not([aria-disabled='true']):hover {
+  background: var(
+    --ov-ui-color-primary-strong,
+    var(--ov-ui-primary-strong-default)
+  );
+  color: var(
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default)
+  );
+}
+.ov-button--primary:not(:disabled):not([aria-disabled='true']):active {
+  background: var(--ov-ui-button-primary);
+  color: var(
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default)
+  );
+}
+.ov-button--primary:disabled:not(.ov-button--loading),
+.ov-button--primary.ov-button--disabled,
+.ov-button--primary[aria-disabled='true'] {
+  background: var(
+    --ov-ui-color-primary-disabled,
+    var(--ov-ui-primary-disabled-default)
+  );
+  color: var(
+    --ov-ui-color-text-on-primary-disabled,
+    var(--ov-ui-on-primary-disabled-default)
+  );
+}
+.ov-button--outline,
+.ov-button--outline:disabled:not(.ov-button--loading),
+.ov-button--outline.ov-button--disabled,
+.ov-button--outline[aria-disabled='true'] {
+  background: transparent;
+  border-color: var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+}
+.ov-button--outline:not(:disabled):not([aria-disabled='true']):hover,
+.ov-button--outline:not(:disabled):not([aria-disabled='true']):active {
+  background: var(--ov-ui-color-bg-7, var(--ov-ui-bg-7-default));
+  color: var(--ov-ui-button-text);
+}
+.ov-button--outline:not(:disabled):not([aria-disabled='true']):active {
+  border-color: var(--ov-ui-color-border-4, var(--ov-ui-border-4-default));
+}
+.ov-button--text {
+  color: var(--ov-ui-color-link, var(--ov-ui-link-default));
+  background: transparent;
+}
+.ov-button--text:not(:disabled):not([aria-disabled='true']):hover,
+.ov-button--text:disabled:not(.ov-button--loading),
+.ov-button--text.ov-button--disabled,
+.ov-button--text[aria-disabled='true'] {
+  color: var(--ov-ui-color-primary-muted, var(--ov-ui-primary-muted-default));
+  background: transparent;
+}
+.ov-button--text:not(:disabled):not([aria-disabled='true']):active {
+  color: var(--ov-ui-color-link-active, var(--ov-ui-link-active-default));
+  background: transparent;
+}
+.ov-button__icon {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.ov-button__spinner {
+  box-sizing: border-box;
+  width: 1em;
+  height: 1em;
+  border: 1.5px solid currentColor;
+  border-inline-start-color: transparent;
+  border-radius: 50%;
+  animation: ov-button-spin 1s linear infinite;
+}
+@keyframes ov-button-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-button {
+    transition: none;
+  }
+  .ov-button__spinner {
+    animation: none;
+  }
+}
