@@ -128,7 +128,11 @@ class VikingClient:
             "POST", f"/api/v1/sessions/{session}/messages/batch", key, {"messages": messages}
         )
 
-    async def create_session(self, key, session):
+    async def create_session(self, key, session, memory_types=None):
+        # Commits only feed memory extraction; the gateway writes its own summaries.
+        memory_policy = {"working_memory": {"enabled": False}}
+        if memory_types is not None:
+            memory_policy["memory_types"] = memory_types
         try:
             return await self.request(
                 "POST",
@@ -141,8 +145,7 @@ class VikingClient:
                         "message_count_threshold": 0,
                         "idle_timeout_seconds": 0,
                     },
-                    # Commits only feed memory extraction; the gateway writes its own summaries.
-                    "memory_policy": {"working_memory": {"enabled": False}},
+                    "memory_policy": memory_policy,
                 },
             )
         except VikingError as error:

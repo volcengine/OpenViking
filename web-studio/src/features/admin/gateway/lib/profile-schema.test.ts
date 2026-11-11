@@ -39,6 +39,7 @@ describe('toProfileSettings', () => {
     const stored = profile({
       quotas: { resources: 200 },
       context_window: 128000,
+      capture_memory_types: ['events'],
     })
     expect(toProfileSettings(stored)).toEqual(stored)
   })

@@ -203,6 +203,9 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | 最新回复等待时长 | `idle_seconds` | `600`（秒） | 1 及以上 | 停顿多久之后保存最后一轮并提交会话。 |
 | 提交阈值 | `commit_tokens` | `20000` | 1 及以上 | 会话中待提交的 token 数达到这个值时提交。 |
 | 保留最近消息 | `keep_recent_messages` | `10` | 0–1,000 | 提交后会话中保留的消息数。 |
+| （仅 API） | `capture_memory_types` | `null`（所有已启用的类型） | 记忆类型名称，例如 `preferences`、`events`；`[]` 表示不提取 | OpenViking 从保存的对话中提取哪些记忆类型。 |
+
+管理 API 保存 `capture_memory_types` 时不检查名称。网关为对话创建 OpenViking 会话时，OpenViking 会拒绝它不认识或已停用的记忆类型：对话的内容都不会保存，保存状态先显示**重试中**，再显示**已暂停**，原因为 `openviking_http_400`。修正后的配置只对之后开始的对话生效。`cases` 和 `trajectories` 只随 `experiences` 一起提取：列出 `experiences` 时会同时加入这两种，不列出时这两种会被去掉，因此只列这两种时不提取任何记忆。
 
 ### 长对话 {#profile-long-conversations}
 

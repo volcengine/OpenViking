@@ -95,6 +95,7 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 - 下一条用户消息到达时，上一轮就会保存。**最新回复等待时长**针对的是最后一轮，这样短对话也能被提交。
 - 会话中待提交的内容达到**提交阈值**时提交一次。每次提交后，OpenViking 在后台提取记忆。
 - 提交后，会话中保留最新的若干完整轮次，至少包含**保留最近消息**条消息。
+- OpenViking 默认提取所有已启用的[记忆类型](../api/16-memory.md)。只提取其中一部分时，用管理 API 或 `X-OpenViking-Context` 请求头把 `capture_memory_types` 设为这些类型的名称，例如 `["preferences","events"]`；设为空列表时只保存对话，不提取记忆。Studio 中没有这项设置，在 Studio 中保存配置时保留原值。OpenViking 不认识的名称会使保存失败，见[配置参考](13-configuration.md#profile-saving)。
 
 ## 长对话和 OpenViking 工具 {#long-conversations-and-tools}
 
