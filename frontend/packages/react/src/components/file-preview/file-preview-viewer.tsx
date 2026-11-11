@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import { FileViewerCore } from '@ark-design/ui/file-viewer/core';
 import type {
   FileViewerCoreProps,
@@ -48,7 +49,7 @@ function sourceDeps(source: FilePreviewSource) {
 export interface FilePreviewViewerProps {
   tab: FilePreviewFileTab;
   text: Required<FilePreviewLabels>;
-  locale?: 'en-US' | 'zh-CN';
+  locale?: Locale;
   viewMode: FilePreviewViewMode;
   onViewModeChange: (mode: FilePreviewViewMode) => void;
   onDownload: () => void;

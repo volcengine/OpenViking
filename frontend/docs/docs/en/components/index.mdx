@@ -4,9 +4,17 @@ Reusable views and file-type icons for OpenViking AI applications. Components re
 
 ## Available modules
 
+### [FileBrowserEntries](./file-browser-entries)
+
+The entry row at the top of the file browsing area: connect an agent, import resources. Fixed to two entries; the host decides which appear and what a click does, while the icons, copy and divider belong to the component.
+
 ### [FileTree](./file-tree)
 
 A flattened file tree with row rendering, selection, expansion, keyboard interaction, and pagination intent. The host supplies ordered rows and handles data loading. The current view is a placeholder; see the component page for its scope and limitations.
+
+### [DirectoryTour](./directory-tour)
+
+A six-step anchor walkthrough with async location, independent highlights, viewport collision handling, retry and skip. The host owns directory loading and completion state.
 
 ### [FilePreview](./file-preview)
 
@@ -14,7 +22,7 @@ A tabbed file-preview view with header actions, tab switching, and plain-text pr
 
 ### [Tui](./tui)
 
-The reviewed API for command records, results and input. The current view is a placeholder; command completion, shared CLI metadata and result rendering will be implemented later.
+Command records, results and input with completion, parameter hints and grouped command help, driven by bundled CLI metadata.
 
 ### [ScopeSwitcher](./scope-switcher)
 
@@ -22,7 +30,7 @@ A stateless header breadcrumb containing independent ScopeSelector views. Each h
 
 ### [AgentConnect](./agent-connect)
 
-An agent connection view. The host supplies the tabs, the items of the active tab and the detail body; the component renders the list and detail, and reports switch and copy intent.
+A Figma connection view with mainstream agents and MCP, CLI, API and SDK developer methods, bilingual details and original icons. Hosts provide credentials and locale; selection can be local or controlled, with clipboard feedback.
 
 ### [VikingBot](./viking-bot)
 
@@ -33,6 +41,14 @@ The conversation view: message list, composer and pending-interaction area. Rend
 Five file-type icons with configurable image dimensions and accessible labels: audio, PDF, presentation, video, and word-processing files.
 
 See [Getting started](../guide/getting-started) for public package entries, stylesheet choices, and application integration boundaries.
+
+### [WikiDashboard](./wiki-dashboard)
+
+Wiki generation, conflicts and resolution history with supplied loading states and retry callbacks.
+
+### [ExperienceDashboard](./experience-dashboard)
+
+Agent experience lists, effects and sources with supplied display data and state.
 
 ### [Authentication forms](./auth-forms)
 

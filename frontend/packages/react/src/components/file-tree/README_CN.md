@@ -2,6 +2,8 @@
 
 [English](README.md) / 中文
 
+可选 `locale: 'zh-CN' | 'en-US'` 覆盖最近的模块或 Provider；均未配置时默认 `en-US`。已有 `labels` 可逐项覆盖。业务内容仍由宿主提供。
+
 面向资源浏览的目录树。宿主把树状态展平成有序行列表传进来，通过 `operations` 提供异步执行能力；组件负责渲染、键盘交互，并在操作成功后通知。
 
 组件渲染五种行类型，按 `depth` 缩进并绘制祖先连线，处理键盘导航；选中、展开、分页与重试通过 `operations` 执行。
@@ -11,6 +13,7 @@ import { FileTree } from '@openviking/react/components/file-tree';
 import '@openviking/react/components/file-tree/style.css';
 
 <FileTree
+  locale="zh-CN"
   rows={rows}
   selectedId={selectedId}
   operations={{
@@ -82,6 +85,8 @@ type FileTreeRow =
 
 ## 可选搜索与刷新
 
-`search`、`refresh` 默认隐藏，传 `true` 分别开启。通过 `operations.search` 打开宿主搜索界面，通过 `operations.refresh` 刷新数据；缺少执行方法时禁用按钮。刷新等待时自动禁用并显示旋转图标，失败后恢复且不触发成功通知。
+`search`、`refresh` 默认显示，传 `false` 分别隐藏。通过 `operations.search` 打开宿主搜索界面，通过 `operations.refresh` 刷新数据；缺少执行方法时禁用按钮。刷新等待时自动禁用并显示旋转图标，失败后恢复且不触发成功通知。
 
-`search={{ disabled: true }}` 控制搜索禁用态；`refresh={{ disabled, loading }}` 控制刷新禁用态与宿主加载态。用 `labels.search`、`labels.refresh` 替换文案，用 `onSearch`、`onRefresh` 接收成功通知。搜索不自行过滤行、不注册全局快捷键。`slots.toolbar` 位于内置控件上方，两个入口都可单独关闭。
+`search={{ disabled: true }}` 控制搜索禁用态；顶层 `loading` 控制刷新加载态，与异步刷新及 `refresh.loading` 合并。刷新提示支持悬停、聚焦和 Esc 关闭。`refresh={{ disabled, loading }}` 控制刷新禁用态与宿主加载态。用 `labels.search`、`labels.refresh` 替换文案，用 `onSearch`、`onRefresh` 接收成功通知。搜索不自行过滤行、不注册全局快捷键。`slots.toolbar` 位于内置控件上方，两个入口都可单独关闭。
+
+搜索默认提示为 `搜索文件 ⌘+K...`，可通过 `labels.search` 覆盖。基础示例展示搜索事件，并提供手动执行刷新成功与失败的 case。

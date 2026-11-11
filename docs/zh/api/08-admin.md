@@ -99,6 +99,44 @@ Python SDK 提供对应的 `admin_create_group`、`admin_list_groups`、`admin_l
 
 ## API 参考
 
+### metric_inventory
+
+流式导出供离线报表使用的元数据清单。即使只扫描一个账号，也要求 **ROOT** 认证。清单包含账号作用域、用户标识与角色、文件元数据、技能元数据及向量记录元数据；不包含文件正文、向量值或凭证。
+
+**HTTP API**
+
+```http
+GET /api/v1/admin/metric-inventory?account_id=acme&page_size=500
+X-API-Key: your-root-api-key
+```
+
+| 查询参数     | 类型    | 默认值 | 说明                                                     |
+| ------------ | ------- | ------ | -------------------------------------------------------- |
+| `account_id` | string  | 不传   | 可选的完整账号 ID；不传时扫描所有已注册账号。            |
+| `page_size`  | integer | `500`  | 内部扫描批次大小，范围 `1` 至 `1000`，不限制导出总行数。 |
+
+响应为流式 `application/x-ndjson`，每行一个 JSON 对象，不使用常规的 `status` / `result` 包装。每个对象带有 `event_name`，其值为 `inventory_scope`、`inventory_user`、`inventory_file`、`inventory_skill`、`inventory_vector_record`，或最终的 `inventory_batch_end` 标记。
+
+```bash
+curl --no-buffer 'http://localhost:1933/api/v1/admin/metric-inventory?account_id=acme&page_size=500' \
+  -H 'X-API-Key: your-root-api-key'
+```
+
+最后一行说明扫描是否完成：
+
+```json
+{
+  "event_name": "inventory_batch_end",
+  "status": "complete",
+  "row_count": 0,
+  "scan_started_at": 1794268800000,
+  "scan_finished_at": 1794268800010,
+  "consistency": "scan_window"
+}
+```
+
+以上标记仅为示例。导出描述一个扫描时间窗口，不是原子快照；`row_count` 为最终标记之前已输出的行数。扫描失败（包括指定的 `account_id` 不存在）时，最终标记的 `status` 为 `"failed"`，且没有 `consistency` 字段。开始流式响应后，仅有 HTTP 成功状态不足以证明扫描完整；消费方必须收到最终 `complete` 标记，才能替换现有清单。缺失最终标记或收到失败标记均表示导出不完整。
+
 ### account / user 存在性查询
 
 创建 Account/User 前可用两个精确判存接口替代“列出后本地比对”。二者都命中内存注册表，时间复杂度 O(1)，且只返回无凭据信息；开启 `server.api_key_watch_enabled` 时直接读内存，关闭时会回退读取持久化的注册表。

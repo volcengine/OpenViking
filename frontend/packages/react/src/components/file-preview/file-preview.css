@@ -140,9 +140,6 @@
 }
 
 .ov-file-preview__tab:focus-visible,
-.ov-file-preview__action:focus-visible,
-.ov-file-preview__button:focus-visible,
-.ov-file-preview__switch-item:focus-visible,
 .ov-file-preview__breadcrumb-link:focus-visible {
   outline: 2px solid var(--ov-ui-file-preview-focus-ring);
   outline-offset: 1px;
@@ -196,7 +193,6 @@
   align-items: center;
   justify-content: space-between;
   padding: 6px 10px;
-  border-bottom: 1px solid var(--ov-ui-file-preview-border);
 }
 
 .ov-file-preview__path-row,
@@ -370,7 +366,7 @@
   list-style: none;
 }
 
-.ov-file-preview__breadcrumb-menu button {
+.ov-file-preview__breadcrumb-menu button:not(.ov-button) {
   display: block;
   box-sizing: border-box;
   max-width: 320px;
@@ -387,7 +383,7 @@
   cursor: pointer;
 }
 
-.ov-file-preview__breadcrumb-menu button:hover:not(:disabled) {
+.ov-file-preview__breadcrumb-menu button:not(.ov-button):hover:not(:disabled) {
   background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default, #f1f2f9));
 }
 
@@ -397,28 +393,8 @@
  * 按钮用 `--outlined` 变体，带描边与浅色底槽。
  */
 .ov-file-preview__action {
-  display: inline-flex;
   flex: none;
-  align-items: center;
-  justify-content: center;
   box-sizing: border-box;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: none;
-  color: var(--ov-ui-file-preview-text-path);
-  font: inherit;
-  cursor: pointer;
-  transition:
-    background-color 160ms ease,
-    border-color 160ms ease;
-}
-
-.ov-file-preview__action:hover:not(:disabled) {
-  background: var(--ov-ui-file-preview-row-hover);
-  color: var(--ov-ui-file-preview-text);
 }
 
 /* 动作组里的按钮：带描边与浅色底槽，与宿主的次级按钮一致。 */
@@ -430,11 +406,6 @@
 
 .ov-file-preview__action--outlined:hover:not(:disabled) {
   border-color: var(--ov-ui-file-preview-text-muted);
-}
-
-.ov-file-preview__action:disabled {
-  cursor: not-allowed;
-  opacity: 0.4;
 }
 
 /*
@@ -455,63 +426,14 @@
 }
 
 .ov-file-preview__switch-item {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   box-sizing: border-box;
   min-width: 50px;
-  height: 24px;
   margin: 0;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: var(--ov-ui-file-preview-text-muted);
-  font: inherit;
-  font-size: 13px;
-  line-height: 22px;
   white-space: nowrap;
-  cursor: pointer;
-  transition:
-    background-color 160ms ease,
-    color 160ms ease;
-}
-
-.ov-file-preview__switch-item:hover:not([data-active]):not(:disabled) {
-  color: var(--ov-ui-file-preview-text);
-}
-
-.ov-file-preview__switch-item[data-active] {
-  background: var(--ov-ui-file-preview-surface);
-  box-shadow: 0 0 0 1px var(--ov-ui-file-preview-border);
-  color: var(--ov-ui-file-preview-text);
-  font-weight: 500;
 }
 
 .ov-file-preview__button {
   flex: none;
-  padding: 2px 10px;
-  border: 1px solid var(--ov-ui-file-preview-border);
-  border-radius: var(--ov-ui-radius, 6px);
-  background: none;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-.ov-file-preview__button:hover:not(:disabled) {
-  background: var(--ov-ui-file-preview-row-hover);
-}
-
-.ov-file-preview__button--primary {
-  border-color: var(--ov-ui-file-preview-accent);
-  background: var(--ov-ui-file-preview-accent);
-  color: #fff;
-}
-
-.ov-file-preview__button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
 }
 
 /*
@@ -607,4 +529,104 @@
   border-top: 1px solid var(--ov-ui-file-preview-border);
   color: var(--ov-ui-file-preview-text-muted);
   font-size: 12px;
+}
+
+/* ── 目录页签的层级切换 ───────────────────────────────────────────── */
+
+/*
+ * 目录的摘要层级：下划线页签，位于标题行与正文之间。34px 高、13px 字号、
+ * 间距 32px，激活项 500 字重加 2px 下划线。
+ *
+ * A directory's summary levels: underlined tabs between the header and the body.
+ * 34px tall, 13px, 32px apart, the active item at 500 weight with a 2px underline.
+ */
+.ov-file-preview__levels {
+  display: flex;
+  flex: none;
+  height: 34px;
+  align-items: stretch;
+  position: relative;
+  gap: 32px;
+  padding: 0 16px;
+}
+
+.ov-file-preview__level {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--ov-ui-file-preview-text-muted);
+  font: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  letter-spacing: 0.039px;
+  cursor: pointer;
+  transition: color 160ms ease;
+}
+
+.ov-file-preview__level:hover {
+  color: var(--ov-ui-file-preview-text);
+}
+
+.ov-file-preview__level[data-active] {
+  color: var(--ov-ui-file-preview-text);
+  font-weight: 500;
+}
+
+/*
+ * 选中指示条：一条 2px 的横线，宽度与位置跟随选中项，切换时滑动过去。它不
+ * 属于任何一级，因此切换时是位移而不是各自显隐。
+ *
+ * The selection indicator: one 2px rule whose width and position follow the active
+ * level and slides when it changes. It belongs to no single level, so a switch is a
+ * movement rather than one rule hiding and another appearing.
+ */
+.ov-file-preview__level-indicator {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ov-ui-file-preview-text);
+  transition:
+    transform 200ms cubic-bezier(0.2, 0, 0, 1),
+    width 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-file-preview__level-indicator {
+    transition: none;
+  }
+}
+
+/*
+ * 加载态的转圈：纯 CSS 环，不依赖图标资源。只写「加载中」看不出还在不在动，
+ * 等待久一点就像卡住了。
+ *
+ * The loading ring: drawn with CSS alone, so it needs no icon asset. The words alone
+ * do not show that anything is still happening, and a longer wait then reads as a hang.
+ */
+.ov-file-preview__spinner {
+  display: inline-block;
+  flex: none;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--ov-ui-file-preview-border);
+  border-top-color: var(--ov-ui-file-preview-text-muted);
+  border-radius: 50%;
+  animation: ov-file-preview-spin 900ms linear infinite;
+}
+
+@keyframes ov-file-preview-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-file-preview__spinner {
+    animation-duration: 2s;
+  }
 }

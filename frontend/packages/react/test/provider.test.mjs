@@ -39,6 +39,7 @@ test('a nested Provider inherits the address and credential it does not declare'
     baseURL: 'https://ov.test/gateway',
     apiKey: 'outer-key',
     accountId: 'acc_1',
+    credentials: 'omit',
   });
 
   const inner = mergeProviderConfig(outer, { userId: 'other-user' });
@@ -51,6 +52,12 @@ test('a nested Provider inherits the address and credential it does not declare'
   assert.equal(inner.identity.apiKey, 'outer-key', 'credential is inherited');
   assert.equal(inner.identity.accountId, 'acc_1');
   assert.equal(inner.identity.userId, 'other-user', 'only userId changes');
+  assert.equal(inner.credentials, 'omit', 'cookie policy is inherited');
+  assert.equal(
+    mergeProviderConfig(outer, { credentials: 'include' }).credentials,
+    'include',
+    'an explicit inner cookie policy wins',
+  );
 });
 
 test('an explicit empty value clears the inherited field', () => {

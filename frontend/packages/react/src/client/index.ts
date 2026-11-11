@@ -1,5 +1,6 @@
 export { createOvClient } from './client.js';
 export { OvClientError, isOvClientError } from './errors.js';
+export { OV_PATHS, OV_PATH_BUILDERS, type OvPath } from './paths.js';
 export {
   OpenVikingProvider,
   type OpenVikingProviderProps,
@@ -13,5 +14,10 @@ export type {
   OvRequestOptions,
   OvRequestSpec,
   OvResolvedOptions,
+  OvResponseEnvelope,
+  OvResponseType,
+  OvStream,
+  OvStreamEvent,
+  OvStreamSpec,
   OvSuccessEnvelope,
 } from './types.js';

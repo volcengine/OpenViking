@@ -1,6 +1,11 @@
+import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes, ReactNode, RefObject } from 'react';
 
 import type { VikingBotInteractionProps } from './interaction/types.js';
+import type {
+  VikingBotInputFeatures,
+  VikingBotSessions,
+} from './capabilities.js';
 import type {
   VikingBotAttachment,
   VikingBotDraft,
@@ -13,6 +18,8 @@ import type {
 export interface VikingBotMessageListProps {
   /** 当前会话的消息。Messages in the current session. */
   messages: readonly VikingBotMessage[];
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /** 附加到根元素的类名。Class name applied to the root element. */
   className?: string;
   /** 助手仍在生成时追加的片段。Parts appended while the assistant is still streaming. */
@@ -29,7 +36,7 @@ export interface VikingBotMessageListProps {
   onMessageAction?: (messageId: string, actionKey: string) => void;
   /** 消息正文的替换渲染，用于宿主自带 Markdown 渲染器。Replaces message bodies. */
   renderMessage?: (message: VikingBotMessage) => ReactNode;
-  /** 可替换文案，缺省为英文。Replaceable copy; English by default. */
+  /** 可替换文案，未提供的项使用当前 locale 的内置文案。Replaceable copy; omitted fields follow locale. */
   labels?: VikingBotLabels;
 }
 
@@ -43,16 +50,18 @@ export interface VikingBotComposerRef {
   addFiles: (files: readonly File[]) => void;
   /** 是否已达到附件数量上限。Whether the attachment limit has been reached. */
   isAttachmentLimitReached: () => boolean;
-  /** 清空输入框与待发送附件。Clears the input and pending attachments. */
+  /** 清空输入文本；附件与引用由宿主重置。Clears text; the host resets attachments and references. */
   clear: () => void;
   /** 聚焦输入框。Focuses the input. */
   focus: () => void;
 }
 
 /** 输入区的公开接口。Public interface of the composer. */
-export interface VikingBotComposerProps {
+export interface VikingBotComposerProps extends VikingBotInputFeatures {
   /** 受控的草稿文本。Controlled draft text. */
   value: string;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /** 附加到根元素的类名。Class name applied to the root element. */
   className?: string;
   /** 宿主已选中的附件。Attachments already selected by the host. */
@@ -81,17 +90,23 @@ export interface VikingBotComposerProps {
   onSend?: (draft: VikingBotDraft) => void;
   /** 停止正在进行的回复。省略时不展示停止动作。Stops the streaming reply. */
   onCancel?: () => void;
-  /** 可替换文案，缺省为英文。Replaceable copy; English by default. */
+  /** 可替换文案，未提供的项使用当前 locale 的内置文案。Replaceable copy; omitted fields follow locale. */
   labels?: VikingBotLabels;
 }
 
 /** 完整对话区的公开接口。Public interface of the whole conversation view. */
-export interface VikingBotProps extends Omit<
-  HTMLAttributes<HTMLDivElement>,
-  'onCopy' | 'onSubmit'
-> {
+export interface VikingBotProps
+  extends
+    VikingBotInputFeatures,
+    Omit<HTMLAttributes<HTMLDivElement>, 'onCopy' | 'onSubmit'> {
   /** 当前会话的消息。Messages in the current session. */
   messages: readonly VikingBotMessage[];
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
+  /** Host-owned session history and actions. */
+  sessions?: VikingBotSessions;
+  /** Optional extension controls, such as a host-provided More menu. */
+  headerActions?: ReactNode;
   /** 附加到根元素的类名。Class name applied to the root element. */
   className?: string;
   /** 助手仍在生成时追加的片段。Parts appended while the assistant is still streaming. */
@@ -106,7 +121,7 @@ export interface VikingBotProps extends Omit<
   isAvailable?: boolean;
   /** 不可用时的说明。Message shown while the bot is unavailable. */
   unavailableMessage?: string;
-  /** 首条消息之前替代消息列表显示的内容。Shown instead of the list before the first message. */
+  /** 首条消息前的内容；undefined 使用欢迎页，null 隐藏。Empty content: undefined uses welcome; null hides it. */
   emptyState?: ReactNode;
   /** 头部插槽，例如会话标题或历史按钮。Header slot. */
   header?: ReactNode;
@@ -114,7 +129,7 @@ export interface VikingBotProps extends Omit<
   footer?: ReactNode;
   /** 替换整个主体，用于宿主自定义组合。Replaces the whole body. */
   children?: ReactNode;
-  /** 替换消息列表，用于宿主自带渲染底座。Replaces the message list. */
+  /** 替换消息列表，优先于空态；null 隐藏。Replaces the list, including empty state; null hides it. */
   messageList?: ReactNode;
   /** 替换输入区，用于宿主自带输入组件。Replaces the composer. */
   composer?: ReactNode;
@@ -149,6 +164,6 @@ export interface VikingBotProps extends Omit<
   onCopy?: (text: string) => void;
   /** 触发一条消息声明的动作。Fires a message action. */
   onMessageAction?: (messageId: string, actionKey: string) => void;
-  /** 可替换文案，缺省为英文。Replaceable copy; English by default. */
+  /** 可替换文案，未提供的项使用当前 locale 的内置文案。Replaceable copy; omitted fields follow locale. */
   labels?: VikingBotLabels;
 }

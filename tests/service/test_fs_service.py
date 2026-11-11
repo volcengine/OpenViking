@@ -26,6 +26,7 @@ from openviking_cli.exceptions import (
     ConflictError,
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
     ResourceExhaustedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -115,7 +116,8 @@ class _FakeVikingFS:
         return {"isDir": self.is_dir}
 
     async def rm(self, uri, recursive=False, ctx=None, lease_ref=None):
-        assert lease_ref is not None and self._async_agfs.held
+        if lease_ref is not None:
+            assert self._async_agfs.held
         self.rm_calls.append({"uri": uri, "recursive": recursive, "ctx": ctx})
         if self.rm_error:
             raise self.rm_error
@@ -176,6 +178,71 @@ async def test_stat_forwards_optional_fields_without_changing_defaults(request_c
         "skip_count": False,
         "include_lock_status": False,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resolved_uri",
+    [
+        "viking://user/default/memories/notes.md",
+        "viking://system/memory/memory_templates/custom/demo.md",
+    ],
+)
+async def test_stat_resolves_record_id_before_namespace_policy(request_context, resolved_uri):
+    record_id = "0123456789abcdef0123456789abcdef"
+    metadata = {"uri": resolved_uri, "isDir": False}
+    viking_fs = SimpleNamespace(
+        resolve_uri=AsyncMock(return_value=resolved_uri),
+        stat=AsyncMock(return_value=metadata),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    result = await service.stat(record_id, request_context, include_lock_status=True)
+
+    assert result == metadata
+    viking_fs.resolve_uri.assert_awaited_once_with(record_id, ctx=request_context)
+    kwargs = {"ctx": request_context, "skip_count": False, "include_lock_status": True}
+    if resolved_uri.startswith("viking://system/"):
+        kwargs.update(skip_count=True, include_vector_fields=False)
+    viking_fs.stat.assert_awaited_once_with(resolved_uri, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_stat_missing_record_id_preserves_not_found(request_context):
+    record_id = "0123456789abcdef0123456789abcdef"
+    error = NotFoundError(record_id, "file")
+    viking_fs = SimpleNamespace(
+        resolve_uri=AsyncMock(side_effect=error),
+        stat=AsyncMock(),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(NotFoundError) as exc_info:
+        await service.stat(record_id, request_context)
+
+    assert exc_info.value is error
+    viking_fs.resolve_uri.assert_awaited_once_with(record_id, ctx=request_context)
+    viking_fs.stat.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stat_by_record_id_preserves_access_denial(request_context):
+    record_id = "0123456789abcdef0123456789abcdef"
+    resolved_uri = "viking://user/other/memories/private.md"
+    error = PermissionDeniedError("Access denied")
+    viking_fs = SimpleNamespace(
+        resolve_uri=AsyncMock(return_value=resolved_uri),
+        stat=AsyncMock(side_effect=error),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(PermissionDeniedError) as exc_info:
+        await service.stat(record_id, request_context)
+
+    assert exc_info.value is error
+    viking_fs.stat.assert_awaited_once_with(
+        resolved_uri, ctx=request_context, skip_count=False, include_lock_status=False
+    )
 
 
 class _MkdirPathlockAGFS:
@@ -252,9 +319,9 @@ async def test_concurrent_default_mkdir_vectorizes_once(monkeypatch, request_con
 
     assert body_for_preview(viking_fs.abstract_content) == "# shared"
     assert vectorized == ["# shared"]
-    # The directory does not exist yet, so its existing parent is locked instead.
+    # Lock the intended directory without extending its scope to the parent.
     assert viking_fs._async_agfs.requests[0] == [
-        {"path": "/local/default/resources", "kind": "tree"}
+        {"path": "/local/default/resources/shared", "kind": "tree"}
     ]
 
 
@@ -2216,7 +2283,7 @@ async def test_rm_of_missing_path_does_not_create_it(request_context, local_fs_s
     service, viking_fs = local_fs_service
     await viking_fs.mkdir("viking://resources", ctx=request_context)
 
-    await service.rm("viking://resources/gone", ctx=request_context, recursive=True)
+    await service.rm("viking://resources/gone/leaf.md", ctx=request_context, recursive=True)
     assert not await viking_fs.exists("viking://resources/gone", ctx=request_context)
 
 

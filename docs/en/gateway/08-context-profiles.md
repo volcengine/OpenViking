@@ -53,6 +53,7 @@ The **Recall memory** section (on by default) controls [recall](../guides/15-gat
 | **Relevance threshold** | 0.35 | Only results scoring at least this much, from 0 to 1, are added. Higher means fewer but closer matches. |
 | **Time limit** | 2 s | How long the search may take. |
 | **Query length** (under **Advanced settings**) | 8,000 characters | How much of the message is used as the search query. |
+| **Peer scope** (under **Advanced settings**) | All peers, current peer first | Which peers' memories recall and OpenViking tools can see besides the user's own. |
 | **Limit by category** (under **Advanced settings**) | Off | The most entries each category may add. |
 
 How the settings work together:
@@ -63,6 +64,7 @@ How the settings work together:
 - **Budgets.** Each message gets at most the smaller of **Budget per message** and what is left of **Budget per context window**. With less than 64 tokens left, the search is skipped. The budget per context window starts over whenever the conversation is compacted, by the gateway or by the client. These token counts are conservative estimates, not the provider's billing counts.
 - **Turning recall off.** Setting **Budget per context window** to 0 turns recall off; **Budget per message** is at least 64.
 - **Time limit.** If OpenViking does not answer within the **Time limit**, the message goes to the model without memory and does not get it later, even if the client retries.
+- **Peer scope.** It matters mainly for keys whose requests name a [peer](03-connect-clients.md#peer). **All peers, current peer first** adds the request's peer's memories to the user's own and can still bring back other peers' with a small score penalty. **Current peer only** keeps other peers' memories out of recall and out of OpenViking tools; a request without a peer recalls as with the default. See [Recall only the current peer](03-connect-clients.md#peer-scope).
 - **Limit by category.** It sets a maximum number of entries for each of six categories: events, entities, preferences, experiences, resources and skills. Only categories above 0 are searched. When it is off, all sources are ranked together.
 
 ### Recall summary {#recall-summary}
@@ -93,6 +95,7 @@ The **Save conversations** section (on by default) controls [saving](../guides/1
 - A turn is saved when the next user message arrives. **Save the latest reply after** covers the last turn, so short conversations get committed too.
 - The session is committed whenever **Commit after** tokens are waiting. After each commit, OpenViking extracts memories in the background.
 - After a commit, the session keeps the newest whole turns, at least **Keep recent messages** messages.
+- OpenViking extracts every [memory type](../api/16-memory.md) it has enabled. To extract only some, set `capture_memory_types` to their names, for example `["preferences","events"]`, with the management API or the `X-OpenViking-Context` header; an empty list saves conversations without extracting memories. Studio has no control for this setting and keeps its value when you save the profile. A name OpenViking does not know stops saving; see [Configuration reference](13-configuration.md#profile-saving).
 
 ## Long conversations and OpenViking tools {#long-conversations-and-tools}
 

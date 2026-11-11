@@ -1,8 +1,10 @@
+import { Button } from '../../shared/components/button/button.js';
 import { Bubble } from '@ark-design/ui/bubble';
 import { ErrorCard } from '@ark-design/ui/error-card';
 
 import { MessageBody } from './ark-message-body.js';
 import { messageText } from './message-groups.js';
+import { MessageFooter } from './message-footer.js';
 import type { VikingBotMessage, VikingBotStreamingState } from './model.js';
 import type { VikingBotMessageListProps } from './types.js';
 
@@ -11,27 +13,24 @@ type Labels = NonNullable<VikingBotMessageListProps['labels']>;
 /** 消息底部动作区。The footer action area of a message. */
 function MessageActions({
   message,
-  labels,
-  onCopy,
   onMessageAction,
 }: {
   message: VikingBotMessage;
-  labels: Labels;
-  onCopy?: (text: string) => void;
   onMessageAction?: (messageId: string, actionKey: string) => void;
 }) {
-  const text = messageText(message);
   // 合并后的消息可能带着多条原始动作，逐条渲染并回传各自的 messageId。
   const actions =
     message.actions ??
     (message.action ? [{ messageId: message.id, action: message.action }] : []);
-  if (actions.length === 0 && !onCopy) return null;
+  if (actions.length === 0) return null;
   return (
     <div className="ov-viking-bot__message-actions">
       {actions.map(({ messageId, action }) => (
-        <button
+        <Button
+          size="small"
+          type="default"
           key={`${messageId}:${action.key}`}
-          type="button"
+          htmlType="button"
           className="ov-viking-bot__message-action"
           disabled={
             Boolean(action.disabledReason) ||
@@ -42,17 +41,8 @@ function MessageActions({
           onClick={() => onMessageAction?.(messageId, action.key)}
         >
           {action.label ?? action.key}
-        </button>
+        </Button>
       ))}
-      {onCopy && text ? (
-        <button
-          type="button"
-          className="ov-viking-bot__copy"
-          onClick={() => onCopy(text)}
-        >
-          {labels.copy}
-        </button>
-      ) : null}
     </div>
   );
 }
@@ -65,6 +55,8 @@ export function VikingBotMessageRow({
   onCopy,
   onMessageAction,
   renderMessage,
+  showTime,
+  locale,
 }: {
   message: VikingBotMessage;
   labels: Labels;
@@ -72,6 +64,8 @@ export function VikingBotMessageRow({
   onCopy?: (text: string) => void;
   onMessageAction?: (messageId: string, actionKey: string) => void;
   renderMessage?: (message: VikingBotMessage) => React.ReactNode;
+  showTime?: boolean;
+  locale?: string;
 }) {
   if (renderMessage) {
     return (
@@ -92,23 +86,42 @@ export function VikingBotMessageRow({
     );
   }
 
+  const body = (
+    <MessageBody message={message} labels={labels} onOpenUri={onOpenUri} />
+  );
+  const footer = (
+    <MessageFooter
+      message={message}
+      showTime={showTime || message.role === 'user'}
+      labels={labels}
+      locale={locale}
+      onCopy={onCopy}
+    />
+  );
   return (
-    <Bubble
+    <article
       className={`ov-viking-bot__message ov-viking-bot__message--${message.role}`}
-      placement={message.role === 'user' ? 'end' : 'start'}
-      variant={message.role === 'user' ? 'filled' : 'text'}
-      content={null}
-      footer={
-        <MessageActions
-          message={message}
-          labels={labels}
-          onCopy={onCopy}
-          onMessageAction={onMessageAction}
-        />
-      }
     >
-      <MessageBody message={message} labels={labels} onOpenUri={onOpenUri} />
-    </Bubble>
+      {message.role === 'user' ? (
+        <Bubble
+          className="ov-viking-bot__user-bubble"
+          placement="end"
+          variant="filled"
+          maxHeight="9999px"
+          footer={footer}
+        >
+          {body}
+        </Bubble>
+      ) : message.streaming && message.parts.length === 0 ? (
+        <Bubble loading placement="start" variant="text" />
+      ) : (
+        <>
+          {body}
+          {footer}
+        </>
+      )}
+      <MessageActions message={message} onMessageAction={onMessageAction} />
+    </article>
   );
 }
 
@@ -133,22 +146,15 @@ export function VikingBotStreamingRow({
     );
   }
   return (
-    <Bubble
-      className="ov-viking-bot__message ov-viking-bot__message--assistant"
-      placement="start"
-      variant="text"
-      content={null}
-    >
-      <MessageBody
-        message={{
-          id: '__streaming__',
-          role: 'assistant',
-          parts: streaming.parts,
-          streaming: true,
-        }}
-        labels={labels}
-        onOpenUri={onOpenUri}
-      />
-    </Bubble>
+    <VikingBotMessageRow
+      message={{
+        id: '__streaming__',
+        role: 'assistant',
+        parts: streaming.parts,
+        streaming: true,
+      }}
+      labels={labels}
+      onOpenUri={onOpenUri}
+    />
   );
 }

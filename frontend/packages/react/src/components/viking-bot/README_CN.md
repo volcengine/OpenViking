@@ -2,6 +2,8 @@
 
 [English](README.md) / 中文
 
+可选 `locale: 'zh-CN' | 'en-US'` 覆盖最近的模块或 Provider；均未配置时默认 `en-US`。已有 `labels` 可逐项覆盖。业务内容仍由宿主提供。
+
 对话视图：消息列表、输入区与待确认交互区。渲染使用 **Ark Design**（`@ark-design/ui`）——与火山版控制台同一套组件库——只接收已归一化的消息模型，宿主协议不进入组件。
 
 > **当前状态：占位实现。** API 契约已确定，并按契约渲染出可用视图，但视图尚未经过设计评审，真实实现会被重写。请把 props 与交互模型当作交付物，视觉表现视为临时方案。
@@ -41,6 +43,7 @@
 
 ```tsx
 <VikingBot
+  locale="zh-CN"
   messages={messages}
   streaming={streaming}
   draft={draft}

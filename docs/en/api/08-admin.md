@@ -99,6 +99,44 @@ The Python SDK exposes `admin_create_group`, `admin_list_groups`, `admin_list_gr
 
 ## API Reference
 
+### metric_inventory
+
+Stream a metadata inventory for offline reporting. Requires **ROOT** authentication, including when filtering to one account. The export contains account scopes, user identifiers and roles, file metadata, skill metadata, and vector-record metadata; it excludes file contents, vector values, and credentials.
+
+**HTTP API**
+
+```http
+GET /api/v1/admin/metric-inventory?account_id=acme&page_size=500
+X-API-Key: your-root-api-key
+```
+
+| Query parameter | Type    | Default | Description                                                                                |
+| --------------- | ------- | ------- | ------------------------------------------------------------------------------------------ |
+| `account_id`    | string  | omitted | Optional exact account ID; omit to scan all registered accounts.                           |
+| `page_size`     | integer | `500`   | Internal scan batch size, from `1` to `1000`; this does not limit the total exported rows. |
+
+The response is a streaming `application/x-ndjson` body, with one JSON object per line, rather than the regular `status` / `result` envelope. Each object has an `event_name`: `inventory_scope`, `inventory_user`, `inventory_file`, `inventory_skill`, `inventory_vector_record`, or the final `inventory_batch_end` marker.
+
+```bash
+curl --no-buffer 'http://localhost:1933/api/v1/admin/metric-inventory?account_id=acme&page_size=500' \
+  -H 'X-API-Key: your-root-api-key'
+```
+
+The final line reports whether the scan completed:
+
+```json
+{
+  "event_name": "inventory_batch_end",
+  "status": "complete",
+  "row_count": 0,
+  "scan_started_at": 1794268800000,
+  "scan_finished_at": 1794268800010,
+  "consistency": "scan_window"
+}
+```
+
+This illustrative marker describes a scan window, not an atomic snapshot. `row_count` counts emitted rows before the final marker. Scan failures, including an unknown `account_id`, emit a final marker with `status: "failed"` and no `consistency` field. After streaming begins, HTTP success alone does not prove completeness: consumers must require a final `complete` marker before replacing an existing inventory. Missing or failed final markers indicate an incomplete export.
+
 ### account / user existence queries
 
 Before creating an Account/User, use these exact existence probes instead of

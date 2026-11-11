@@ -1,3 +1,5 @@
+export { FileBrowserEntries } from './components/file-browser-entries/index.js';
+export type { FileBrowserEntriesProps } from './components/file-browser-entries/index.js';
 export { FileTree } from './components/file-tree/index.js';
 export type { FileTreeProps } from './components/file-tree/index.js';
 export { Tui } from './components/tui/index.js';
@@ -18,11 +20,16 @@ export { FileBrowser } from './modules/file-browser/index.js';
 export type { FileBrowserProps } from './modules/file-browser/index.js';
 export { Console } from './modules/console/index.js';
 export type { ConsoleProps } from './modules/console/index.js';
-export { TaskCenter } from './modules/task-center/index.js';
-export type { TaskCenterProps } from './modules/task-center/index.js';
-
 export { ScopeCascade } from './modules/scope-cascade/index.js';
 export type { ScopeCascadeProps } from './modules/scope-cascade/index.js';
+
+export { DirectoryTour } from './components/directory-tour/index.js';
+export type { DirectoryTourProps } from './components/directory-tour/index.js';
+
+export { WikiDashboard } from './components/wiki-dashboard/index.js';
+export type { WikiDashboardProps } from './components/wiki-dashboard/index.js';
+export { ExperienceDashboard } from './components/experience-dashboard/index.js';
+export type { ExperienceDashboardProps } from './components/experience-dashboard/index.js';
 
 export { EmailLoginForm } from './components/email-login-form/index.js';
 export type { EmailLoginFormProps } from './components/email-login-form/index.js';

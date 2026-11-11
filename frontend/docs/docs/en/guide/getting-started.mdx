@@ -1,8 +1,10 @@
 # Getting started
 
+Public UI components, composed modules accept optional `locale: 'zh-CN' | 'en-US'`. Local Props override the nearest module or Provider; without a configured language, they use `en-US`. Existing `labels` override individual fields; omitted fields follow the current locale and update when it changes. Hosts still provide business content, slots and callback messages.
+
 OpenViking UI provides React foundations for building AI application interfaces on OpenViking, the context database for AI agents. The workspace includes Rslib builds, bilingual documentation, layered directory conventions, and scoped styles. Applications provide business UI, data, authentication, and workflow orchestration.
 
-The package provides FileTree, FilePreview, Tui, ScopeSwitcher and AgentConnect as placeholder views, five file-type icons, and four business module placeholders. See the [component overview](../components/) and [module overview](../modules/) for their current scope. Public business Hooks are not implemented yet.
+The package provides FileTree, FilePreview, Tui, ScopeSwitcher and AgentConnect views, five file-type icons, and two business module placeholders. FileTree, FilePreview and Tui are implemented against their contracts, ScopeSwitcher is a stateless layout, and AgentConnect still renders a fixed-size shell. See the [component overview](../components/) and [module overview](../modules/) for their current scope. Public business Hooks are not implemented yet.
 
 ## Run locally
 
@@ -21,7 +23,7 @@ The workspace development plugin starts Rslib watch before the documentation ser
 ## Organize application code
 
 - `packages/react/src/components/`: reusable views that receive prepared data through props and report intent through callbacks.
-- `packages/react/src/modules/`: four importable placeholder components; business Hooks and composed interactions will follow.
+- `packages/react/src/modules/`: two importable placeholder components; business Hooks and composed interactions will follow.
 - `packages/react/src/hooks/` and `utils/`: internal shared logic, without public subpaths.
 - `docs/docs/en/` and `docs/docs/zh/`: corresponding documentation pages; shared runnable examples belong in `docs/docs/_demos/`.
 
@@ -29,7 +31,7 @@ Keep application-specific workflows and authentication in the application layer.
 
 ## Public entries
 
-The root `@openviking/react` entry currently exports `FileTree`, `Tui`, `ScopeSwitcher`, `AgentConnect`, and the four business module placeholders with their main Props types. `FilePreview` is available from the `components/file-preview` subpath only, because its types depend on the optional `@ark-design/ui`. Subtypes — row types, option types, handles and label bags — always come from the subpaths. `@openviking/react/icons` provides five file-type icons.
+The root `@openviking/react` entry currently exports `FileTree`, `Tui`, `ScopeSwitcher`, `AgentConnect`, and the two business module placeholders with their main Props types. `FilePreview` is available from the `components/file-preview` subpath only, because its types depend on the optional `@ark-design/ui`. Subtypes — row types, option types, handles and label bags — always come from the subpaths. `@openviking/react/icons` provides five file-type icons.
 
 There are no aggregate `components` or `modules` JavaScript entries. Business placeholders use individual `modules/<module>` entries:
 
@@ -37,16 +39,16 @@ There are no aggregate `components` or `modules` JavaScript entries. Business pl
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
 
-<FileBrowser />;
+<FileBrowser locale="en-US" />;
 ```
 
 Each module's props are settled — request options, controlled state, callbacks, slots and copy — though the placeholder component itself still consumes only `className`, `style` and one label. None of them requires a Provider yet. See [Modules](../modules/) for runnable examples and the full props tables.
 
-Business modules will combine data-loading Hooks with composed views around focused capabilities. Each module entry will export its Hooks separately from its composed view, so hosts can reuse the logic with their own UI. Authentication, account scope, routing, permissions, and complete page flows remain with the host. Business Hooks and cross-module public Hooks have no implementation or exports yet.
+Business modules will combine data-loading Hooks with composed views around focused capabilities. Module entries export components and necessary types; data and state Hooks remain internal. Authentication, account scope, routing, permissions, and complete page flows remain with the host. The package exposes no headless business Hooks.
 
-The planned capabilities focus on the personal terminal: `file-browser` combines the directory, search, and preview into one module that coordinates resource selection, result navigation, content loading, and refreshes. Hosts can optionally control the current resource. `console` combines the conversation view and TUI in one panel, coordinating mode switching, the toolbar, and shared context while preserving each mode's session and command state. Agent connection, task management, and current-user usage statistics remain separate capabilities. Hosts coordinate layout, navigation, and interactions between modules. Product onboarding, resource and Skill import flows, and synchronization settings remain with the host. Experience dashboards and session content attach through the file browser's preview extensions; administration is outside this scope. These interactions are planned; the current module components render placeholders only.
+The planned capabilities focus on the personal terminal: `file-browser` combines the directory, search, and preview into one module that coordinates resource selection, result navigation, content loading, and refreshes. Hosts can optionally control the current resource. `console` combines the conversation view and TUI in one panel, coordinating mode switching, the toolbar, and shared context while preserving each mode's session and command state. Agent connection remains a separate capability. Hosts coordinate layout, navigation, and interactions between modules. Product onboarding, resource and Skill import flows, and synchronization settings remain with the host. Experience dashboards and session content attach through the file browser's preview extensions; administration is outside this scope. These interactions are planned; the current module components render placeholders only.
 
-Request configuration is provided through `OpenVikingProvider` from `@openviking/react/client`: `baseURL` plus identity fields (`apiKey`, `accountId`, `userId`, `resourceId`), with the Client assembling the headers. The request client already ships as the `@openviking/react/client` subpath: `createOvClient` over `fetch`, plus `OvRequestOptions`, `OvClient` and `OvClientError`. Modules and standalone Hooks can override individual fields through `requestOptions`; precedence is local options, then the nearest Provider, then library defaults. An empty `baseURL` means same-origin requests. A standard API needs no per-module Adapter. Hosts adapt nonstandard gateways at the shared request boundary. The Provider is implemented and exported; the module Hooks are still to come.
+Request configuration is provided through `OpenVikingProvider` from `@openviking/react/client`: `baseURL` plus identity fields (`apiKey`, `accountId`, `userId`, `resourceId`), with the Client assembling the headers. The request client already ships as the `@openviking/react/client` subpath: `createOvClient` over `fetch`, plus `OvRequestOptions`, `OvClient` and `OvClientError`. Module views can override individual fields through `requestOptions`; precedence is local options, then the nearest Provider, then library defaults. An empty `baseURL` means same-origin requests. A standard API needs no per-module Adapter. Hosts adapt nonstandard gateways at the shared request boundary. Data and state Hooks are internal, with no headless public API.
 
 ## Styling
 
@@ -59,7 +61,7 @@ import '@openviking/react/style.css';
 // Individual entries: @openviking/react/<category>/<module>/style.css.
 ```
 
-Rslib emits ESM JavaScript, TypeScript declarations, and CSS into `packages/react/dist/`. Each public stylesheet works independently. Module styles currently cover their placeholders; as composed views land, they must include their component dependencies. Future Hook-only use needs no CSS.
+Rslib emits ESM JavaScript, TypeScript declarations, and CSS into `packages/react/dist/`. Each public stylesheet works independently. Module styles currently cover their placeholders; as composed views land, they must include their component dependencies.
 
 ### Theming
 
@@ -107,3 +109,19 @@ Pass files or quoted globs after `npm run lint --` to limit formatting and lint 
 ## Deployment
 
 Changes under `frontend/` run the UI checks. On `main`, the existing product documentation deployment includes the UI site under `/ui/` in the same complete site artifact or storage bucket. Package publication uses a separate tag-triggered workflow; local builds and tests do not publish to npm.
+
+## Built-in copy and language changes
+
+Components and modules use local, typed English and Chinese resources with shared lightweight resolution. Translations live with their owners and do not depend on the host’s i18next instance or a translation platform. Undefined entries in existing `labels` inherit the selected language; empty strings remain explicit overrides.
+
+Standalone `useConsole` and `useFileBrowser` accept an optional `locale`, inheriting the nearest Provider and otherwise using `en-US`. Changing it updates library notices, command help and summary titles without restarting requests or clearing sessions and drafts. Server content, original error messages and AI replies keep their original text.
+
+### Language inheritance
+
+Set `locale` once on `OpenVikingProvider`; components, composed modules inherit it. A module's `locale` overrides the Provider for its built-in views and host-supplied slots. A component's explicit `locale` wins over that scope. Nested Providers inherit when omitted and override when specified. With no configured locale, the fallback is `en-US`; `labels` still override individual messages.
+
+The example uses a fixed offline service. Change the three selectors and submit `ov read` to compare generated errors. Language changes preserve requests, records, drafts and server content.
+
+```tsx file="../../_demos/locale-inheritance.tsx" preview
+
+```

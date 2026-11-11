@@ -1,5 +1,7 @@
 # FilePreview 文件预览
 
+可选 `locale: 'zh-CN' | 'en-US'` 覆盖最近的模块或 Provider；均未配置时默认 `en-US`。已有 `labels` 可逐项覆盖。业务内容仍由宿主提供。
+
 带页签的文件预览。宿主给出内容与文件名，组件负责格式识别、页签行、内容区标题行与正文。
 
 正文已接入按需加载的 FileViewerCore，支持 Markdown、图片、代码、表格、PDF、Office 和音视频。组件保留控制台式文件标签、路径栏和页脚。
@@ -7,6 +9,8 @@
 ## 基础用法
 
 至少传入一个页签。文件页签携带 `source`，内容页签携带由宿主自行渲染的节点。
+
+示例操作按钮使用文档站的内部控件；宿主接入时使用自己的按钮组件。
 
 ```tsx file="../../_demos/file-preview-basic.tsx" preview
 
@@ -75,7 +79,7 @@ previewRef.current?.setActiveTab('dashboard');
 | 属性     | 类型                                             | 默认值 | 说明                                                                                     |
 | -------- | ------------------------------------------------ | ------ | ---------------------------------------------------------------------------------------- |
 | `tabs`   | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | 必填   | 至少一个页签，初始展示第一个。                                                           |
-| `labels` | `FilePreviewLabels`                              | 英文   | 组件自渲染部分的文案（复制路径、加载与失败态、空文件与截断提示）；动作按钮的文案归宿主。 |
+| `labels` | `FilePreviewLabels`                              | locale | 组件自渲染部分的文案（复制路径、加载与失败态、空文件与截断提示）；动作按钮的文案归宿主。 |
 | 其余属性 | `HTMLAttributes<HTMLDivElement>`                 | —      | 标准 div 属性。                                                                          |
 
 ### 页签字段
@@ -202,3 +206,5 @@ import '@openviking/react/components/file-preview/style.css';
 ## 实现范围
 
 组件渲染外壳并通知成功的操作。读取、保存、下载与导航由宿主提供执行能力，成功通知不执行这些操作。
+
+`labels.showHiddenPath` 可覆盖折叠路径菜单按钮的无障碍名称，默认中文为“显示隐藏的路径层级”、英文为“Show hidden path levels”。

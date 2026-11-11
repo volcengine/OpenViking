@@ -54,14 +54,17 @@ export function useFilePreviewActions() {
   }
 
   return {
+    // 目录页签也有路径行，面包屑同样可以沿祖先打开；内容页签没有路径，忽略。
+    // A directory tab has a path row too, so its breadcrumb opens ancestors the same
+    // way; a content tab has no path and is ignored.
     openParent: (tab: FilePreviewTab, uri: string) =>
-      tab.kind === 'file'
-        ? run(
+      tab.kind === 'content'
+        ? Promise.resolve()
+        : run(
             `openParent:${tab.key}`,
             { execute: tab.operations?.openParent, notify: tab.onOpenParent },
             uri,
-          )
-        : Promise.resolve(),
+          ),
     download: (tab: FilePreviewFileTab) =>
       run(
         `download:${tab.key}`,
@@ -76,7 +79,7 @@ export function useFilePreviewActions() {
       ),
     copyPath: (tab: FilePreviewTab, path: string) =>
       copyText(path, tab.onCopyPath),
-    copyContent: (tab: FilePreviewFileTab, text: string) =>
-      copyText(text, tab.onCopyContent),
+    copyContent: (tab: FilePreviewTab, text: string) =>
+      copyText(text, 'onCopyContent' in tab ? tab.onCopyContent : undefined),
   };
 }

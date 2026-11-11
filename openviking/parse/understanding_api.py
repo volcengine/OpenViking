@@ -16,6 +16,7 @@ import asyncio
 import json
 import mimetypes
 import tempfile
+import time
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Union
@@ -536,15 +537,7 @@ class UnderstandingAPI(BaseParser):
             "tools": [{"type": "understanding"}],
             "store": True,
         }
-        async with httpx.AsyncClient(
-            timeout=self._http_timeout_sec, follow_redirects=True
-        ) as client:
-            rsp = await client.post(
-                f"{self._api_base}/responses",
-                content=self._json_bytes(payload),
-                headers=self._auth_headers({"Content-Type": "application/json;charset=UTF-8"}),
-            )
-        return self._read_api_response(rsp, context="responses api error")
+        return await self._submit_response(payload)
 
     async def _create_response_for_url(
         self,
@@ -568,15 +561,40 @@ class UnderstandingAPI(BaseParser):
             "tools": [{"type": "understanding"}],
             "store": True,
         }
-        async with httpx.AsyncClient(
-            timeout=self._http_timeout_sec, follow_redirects=True
-        ) as client:
-            rsp = await client.post(
-                f"{self._api_base}/responses",
-                content=self._json_bytes(payload),
-                headers=self._auth_headers({"Content-Type": "application/json;charset=UTF-8"}),
+        return await self._submit_response(payload)
+
+    async def _submit_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Count one actual parse submission; uploads and polling are not model calls."""
+        from openviking.observability.events import try_publish_event
+
+        started = time.monotonic()
+        status = "error"
+        model_name = "unknown"
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._http_timeout_sec, follow_redirects=True
+            ) as client:
+                rsp = await client.post(
+                    f"{self._api_base}/responses",
+                    content=self._json_bytes(payload),
+                    headers=self._auth_headers({"Content-Type": "application/json;charset=UTF-8"}),
+                )
+            result = self._read_api_response(rsp, context="responses api error")
+            status = "ok" if result.get("id") else "error"
+            model_name = str(result.get("model") or "unknown")
+            return result
+        finally:
+            try_publish_event(
+                "understanding_call",
+                {
+                    "provider": "understanding_api",
+                    "model_name": model_name,
+                    "usage_purpose": "resource_parse",
+                    "status": status,
+                    "error_code": "OK" if status == "ok" else "ERROR",
+                    "duration_seconds": time.monotonic() - started,
+                },
             )
-        return self._read_api_response(rsp, context="responses api error")
 
     @staticmethod
     def _is_feishu_url(source: str) -> bool:

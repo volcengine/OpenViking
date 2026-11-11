@@ -85,6 +85,7 @@ Studio 无法为你加载网关时，会用一张设置卡片代替网关标签�
 | 400 "Request model is missing"、415 "Compressed request bodies are not supported" | 只出现在限定了模型的密钥上：请求体必须写明模型，且不能经过压缩编码。 |
 | 404 "This upstream is an exact endpoint for … only" | 密钥绑定的上游关闭了**拼接协议接口路径**（见[直接发往完整请求地址](07-upstreams.md#exact-endpoint)），只接受该协议的接口地址，而客户端调用了别的路径，例如 `/v1/models`。 |
 | 404 "No allowed upstream matches this protocol and model" | 密钥绑定的已启用上游中，没有一个使用客户端调用的 API 并提供所请求的模型。检查上游的协议、模型和别名、是否启用，以及密钥绑定了哪些上游。 |
+| 400 `peer_invalid` "X-OpenViking-Actor-Peer must be one path segment…" | 请求的 Peer 不是合法的 Peer ID，例如含有 `/` 或空格。见[按 Peer 区分记忆](03-connect-clients.md#peer)。 |
 | 403 "Upstream URL is not allowed" | `X-OpenViking-Upstream-URL` 与密钥绑定的任何上游的 Base URL 都不相同。见[按请求指定上游](07-upstreams.md#upstream-url-header)。 |
 | 401 "Upstream API key is missing" | 上游要求每个客户端在 `X-OpenViking-Upstream-Key` 中自带 API Key，或者由网关保管 API Key 的上游没有填写。见[凭证](07-upstreams.md#credentials)。 |
 | 403 "Coding Plan upstreams are disabled; configure a model API key" | 上游被标记为 [Coding Plan 密钥](07-upstreams.md#coding-plan-keys)。改用模型 API Key，或者有意勾选**允许通过网关使用这个套餐**。 |
@@ -142,7 +143,7 @@ OpenViking 异常期间，请求照常发给模型，只是不带记忆；保存
 | --- | --- | --- |
 | 缺少最新的一轮 | 保存晚一轮：下一条消息到达时，上一轮才会出现；最后一轮要等**最新回复等待时长**（默认 10 分钟）。 | 稍等，或者发送下一条消息。 |
 | **保存**列显示**已关闭** | 上下文配置不保存对话。 | 在上下文配置中打开保存；修改只对新对话生效（见[修改何时生效](06-manage-in-studio.md#when-changes-take-effect)）。 |
-| **重试中**或**已暂停** | 保存失败，展开的行会显示原因。 | 修复原因（例如让 OpenViking 恢复访问）后，网关会在 5 分钟内重试。原因为 `gateway_key_revoked` 时：签发的网关密钥需要重新签发，之后的下一个请求会恢复保存；OpenViking 密钥若记录过期、被驱逐或收到 401，下一个有效请求会恢复保存（account 租户模式；`tenancy: key` 下换用新密钥会开始新的对话）。对话一直暂停时，用**重新同步对话…**（见[重新同步对话](10-overview-and-requests.md#resync-a-conversation)）。 |
+| **重试中**或**已暂停** | 保存失败，展开的行会显示原因。 | 修复原因（例如让 OpenViking 恢复访问）后，网关会在 5 分钟内重试。原因为 `gateway_key_revoked` 时：签发的网关密钥需要重新签发，之后的下一个请求会恢复保存；OpenViking 密钥若记录过期、被驱逐或收到 401，下一个有效请求会恢复保存（account 租户模式；`tenancy: key` 下换用新密钥会开始新的对话）。修改 `capture_memory_types` 后出现 `openviking_http_400` 时，先在配置中改正名称，再开始新的对话；进行中的对话保留原来的设置（见[保存对话](13-configuration.md#profile-saving)）。对话一直暂停时，用**重新同步对话…**（见[重新同步对话](10-overview-and-requests.md#resync-a-conversation)）。 |
 | **检测到 OpenViking 插件**（`plugin_present`） | 检测到 OpenViking 插件的对话，网关不保存任何内容。 | 正常行为；同一个客户端在插件和网关之间二选一。 |
 | 会话里只有部分对话 | 以下情况下，网关会把当前历史写进新的 `gateway-…` 会话：客户端编辑、重新生成或压缩了历史（`history_changed`、`history_changed_during_delivery`），已在**最新回复等待时长**之后保存的一轮又继续了（`continued_after_idle`），或者有人用了**重新同步对话…**（`manual_reset`）。之前的轮次留在旧会话里。 | 到旧会话里找，见[保存状态](10-overview-and-requests.md#saving-status)。 |
 | 完全看不到 `gateway-…` 会话 | 你查看时用的 OpenViking 用户，不是网关密钥背后的那个用户。 | 换成那个用户查看。 |

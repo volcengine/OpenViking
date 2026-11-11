@@ -96,6 +96,9 @@ dependencies = [
 
 
 [project.optional-dependencies]
+reporting = [
+    "kafka-python>=3.0.12,<4",
+]
 expiry = [
   "redis>=5.3.1,<7",
 ]

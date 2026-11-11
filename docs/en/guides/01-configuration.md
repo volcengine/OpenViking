@@ -1614,6 +1614,7 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `backend` | str | `local` keeps the original filesystem path; `cache` enables the CacheFS wrapper | `local` |
+| `shared_redis_ttl_seconds` | int | TTL override for every query bucket; `0` keeps the provider default. Applied only when CacheFS shares a Redis service with QueueFS, cache-backed PathLock, or the expiry scheduler | `0` |
 
 `storage.agfs.pathlock` selects the PathLock storage provider:
 
@@ -2179,6 +2180,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is required on every deployment, including localhost; it does not become the source of user identity | `null` |
 | `account_store.provider` | str | Complete Account store provider. Built-in values are `"file"`, `"mysql"`, and `"redis_mysql"`; it owns account, user, group, and API-key records. `"file"` preserves the existing AGFS JSON registry and owns its process-local lookup indexes. `"redis_mysql"` keeps MySQL authoritative and adds a shared Redis cache for authentication and request identity reads. | `"file"` |
 | `account_store.params` | object | Provider-specific startup parameters. Framework-owned filesystem and File-provider API-key hashing dependencies cannot be overridden here. | `{}` |
+| `account_store.params.read_only` | bool | File provider only. Load an existing writer-created registry without locks, bootstrap, or credential migrations, and reject identity mutations. Keep the replica's data mount read-only and set `reconcile_system_assets_on_startup=false`; enable `api_key_watch_enabled` to observe writer changes. A missing registry prevents startup. | `false` |
 | `profile_enabled` | bool | Whether to allow request-scoped cProfile via `profile=1` on HTTP requests. When disabled, the server ignores that query parameter. When enabled, the CLI can display the returned `profile`, while the Python HTTP client currently triggers profiling but does not automatically attach the top-level `profile` field to most SDK return values. | `false` |
 | `cors_origins` | list | Allowed CORS origins | `["*"]` |
 | `public_base_url` | str | Public-facing base URL emitted in MCP-issued upload instructions. Resolution order: env var `OPENVIKING_PUBLIC_BASE_URL` → this field → `X-Forwarded-Host`/`X-Forwarded-Proto` request headers → `Host` request header → listen-address fallback. Set this (or the env var) when the server runs behind a reverse proxy that does not forward `X-Forwarded-*` headers. | `null` |

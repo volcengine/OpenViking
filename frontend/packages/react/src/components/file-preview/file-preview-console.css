@@ -16,7 +16,7 @@
   border: 0;
   background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
 }
-.ov-file-preview__levels {
+.ov-file-preview__levels--file {
   display: flex;
   flex: none;
   gap: 24px;
@@ -26,7 +26,7 @@
   border-bottom: 1px solid
     var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
 }
-.ov-file-preview__level {
+.ov-file-preview__levels--file .ov-file-preview__level {
   position: relative;
   flex: none;
   padding: 8px 0;
@@ -36,11 +36,12 @@
   font: inherit;
   cursor: pointer;
 }
-.ov-file-preview__level[aria-pressed='true'] {
+.ov-file-preview__levels--file .ov-file-preview__level[aria-pressed='true'] {
   color: var(--ov-ui-file-preview-accent);
   font-weight: 500;
 }
-.ov-file-preview__level[aria-pressed='true']::after {
+.ov-file-preview__levels--file
+  .ov-file-preview__level[aria-pressed='true']::after {
   position: absolute;
   bottom: 0;
   left: calc(50% - 7px);
@@ -49,11 +50,11 @@
   background: currentColor;
   content: '';
 }
-.ov-file-preview__level:disabled {
+.ov-file-preview__levels--file .ov-file-preview__level:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
-.ov-file-preview__level:focus-visible {
+.ov-file-preview__levels--file .ov-file-preview__level:focus-visible {
   outline: 2px solid var(--ov-ui-file-preview-focus-ring);
   outline-offset: -2px;
 }

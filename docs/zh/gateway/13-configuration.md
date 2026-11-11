@@ -188,6 +188,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | 相关度阈值 | `score_threshold` | `0.35` | 0–1 | 接受的最低相关度分数。 |
 | 超时时间 | `recall_timeout` | `2`（秒） | 大于 0，最多 30 | 检索最多等多久，超时后消息不带记忆继续发送。 |
 | 检索文本长度 | `query_max_chars` | `8000` | 3–32,000 | 取消息的多少个字符作为检索文本。 |
+| Peer 范围 | `recall_peer_scope` | `all` | `all`、`actor` | `all`：当前请求的 Peer 优先，其他 Peer 的记忆仍可能被召回。`actor`：召回和 OpenViking 工具只能查到、读到用户自己的记忆和当前请求的 Peer 的记忆，见[只召回当前 Peer](03-connect-clients.md#peer-scope)。 |
 | 按分类限量 | `quotas` | `{}`（关闭） | 键：`events`、`entities`、`preferences`、`experiences`、`resources`、`skills`；设置时至少一项大于 0（仅 Studio 校验） | 每个分类最多取的条数；只检索大于 0 的分类。 |
 
 管理 API 保存 `context_types` 和 `quotas` 的键时不做校验。`quotas` 里出现未知的键时，OpenViking 会拒绝检索请求，导致每次召回都失败。
@@ -202,6 +203,9 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | 最新回复等待时长 | `idle_seconds` | `600`（秒） | 1 及以上 | 停顿多久之后保存最后一轮并提交会话。 |
 | 提交阈值 | `commit_tokens` | `20000` | 1 及以上 | 会话中待提交的 token 数达到这个值时提交。 |
 | 保留最近消息 | `keep_recent_messages` | `10` | 0–1,000 | 提交后会话中保留的消息数。 |
+| （仅 API） | `capture_memory_types` | `null`（所有已启用的类型） | 记忆类型名称，例如 `preferences`、`events`；`[]` 表示不提取 | OpenViking 从保存的对话中提取哪些记忆类型。 |
+
+管理 API 保存 `capture_memory_types` 时不检查名称。网关为对话创建 OpenViking 会话时，OpenViking 会拒绝它不认识或已停用的记忆类型：对话的内容都不会保存，保存状态先显示**重试中**，再显示**已暂停**，原因为 `openviking_http_400`。修正后的配置只对之后开始的对话生效。`cases` 和 `trajectories` 只随 `experiences` 一起提取：列出 `experiences` 时会同时加入这两种，不列出时这两种会被去掉，因此只列这两种时不提取任何记忆。
 
 ### 长对话 {#profile-long-conversations}
 

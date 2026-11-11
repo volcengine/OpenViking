@@ -30,6 +30,11 @@ from tests.test_task_tracker import _FakeAgfs
         ("viking://system/compile/example-skills/llm-wiki/SKILL.md", True),
         ("viking://system/compile/example-skills", False),
         ("viking://system/compile/example-skills/llm-wiki/references", False),
+        ("viking://system/compile/global/llm-wiki", True),
+        ("viking://system/compile/global/llm-wiki/SKILL.md", True),
+        ("viking://system/compile/global", False),
+        ("viking://system/compile/global/llm-wiki/references", False),
+        ("viking://system/compile/global-other/llm-wiki", False),
         ("viking://system/memory/memory_templates/builtin", False),
     ],
 )
@@ -58,6 +63,7 @@ def test_compile_builtin_skill_uri(skill, valid):
         "viking://system",
         "viking://system/compile",
         "viking://system/compile/example-skills",
+        "viking://system/compile/global",
         "viking://system/resources/wiki",
     ],
 )
@@ -75,6 +81,7 @@ def test_compile_rejects_system_target(target):
     "source",
     [
         "viking://system/compile/example-skills/llm-wiki",
+        "viking://system/compile/global/llm-wiki",
         "viking://system/memory/memory_templates/custom/qa/input",
     ],
 )
@@ -300,6 +307,8 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     import base64
     from datetime import datetime, timedelta
 
+    from openviking.observability.reporting import facts
+    from openviking.observability.reporting import runtime as reporting_runtime
     from openviking.server.auth import get_request_context
     from openviking.server.identity import ResolvedIdentity
     from openviking.service.compile_scheduler import (
@@ -311,6 +320,18 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     from openviking.service.task_tracker import get_task_tracker
     from openviking.storage.acl import AclMode
     from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
+
+    compile_metric_events = []
+    monkeypatch.setattr(reporting_runtime, "is_reporting_enabled", lambda: True)
+    monkeypatch.setattr(
+        facts,
+        "try_publish_event",
+        lambda name, payload: (
+            compile_metric_events.append(dict(payload))
+            if payload.get("operation") == "compile_commit"
+            else None
+        ),
+    )
 
     ctx = RequestContext(
         user=service.user, role=Role.USER, group_ids=("engineering",), api_key="test-compile-key"
@@ -451,6 +472,11 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
         await tracker.get(first, **owner)
     ).error
     assert await service.fs.read(page, ctx) == "generated"
+    assert len(compile_metric_events) == 1
+    assert compile_metric_events[0]["uri"] == page
+    assert compile_metric_events[0]["task_id"] == first
+    assert compile_metric_events[0]["account_id"] == ctx.account_id
+    assert compile_metric_events[0]["user_id"] == ctx.user.user_id
 
     # Interrupted finalization reuses durable checkpoints without publishing another version.
     store = service.compile.lifecycle.store
@@ -496,6 +522,10 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
         with pytest.raises(OSError, match="Outputs unavailable"):
             await resumed_lifecycle.on_finish(task, resumed)
     await resumed_lifecycle.on_finish(task, resumed)
+    replayed_events = [e for e in compile_metric_events if e["task_id"] == first]
+    assert len(replayed_events) == 2
+    assert len({e["event_id"] for e in replayed_events}) == 1
+    assert len({e["updated_at"] for e in replayed_events}) == 1
     assert (
         await service.compile.file_versions(page, ctx, limit=20, before=None)
         == versions_before_resume
@@ -554,6 +584,7 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
         {**payload, "from": [source, extra], "instruction": "Regenerate"}, "compile-failure-key"
     )
     assert (await tracker.get(failed, **owner)).status == "failed"
+    assert not any(e["task_id"] == failed for e in compile_metric_events)
     assert (await store.get_by_to(ctx.account_id, target))["progress"] == progress
     assert await service.fs.read(page, ctx) == "generated"
     assert await service.fs.read(f"{target}/old.md", ctx) == "keep renamed"

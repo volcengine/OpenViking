@@ -1,5 +1,7 @@
 # FilePreview
 
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
+
 A tabbed file preview. The host supplies the content and file name; the component handles format detection, the tab row, the content header and the body.
 
 Bodies use lazily loaded FileViewerCore adapters for Markdown, images, code, tables, PDF, Office and media, inside the console-style tab, breadcrumb and footer shell.
@@ -7,6 +9,8 @@ Bodies use lazily loaded FileViewerCore adapters for Markdown, images, code, tab
 ## Basic usage
 
 Pass at least one tab. A file tab carries `source`; a content tab carries a node the host renders itself.
+
+Demo actions use internal documentation controls; use your host application’s buttons when integrating.
 
 ```tsx file="../../_demos/file-preview-basic.tsx" preview
 
@@ -73,7 +77,7 @@ Execution capabilities and notifications are separate. Operation resolution trig
 | Property    | Type                                             | Default  | Description                                                    |
 | ----------- | ------------------------------------------------ | -------- | -------------------------------------------------------------- |
 | `tabs`      | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | Required | At least one tab; the first is shown initially.                |
-| `labels`    | `FilePreviewLabels`                              | English  | Default copy for every tab; a tab can override field by field. |
+| `labels`    | `FilePreviewLabels`                              | locale   | Default copy for every tab; a tab can override field by field. |
 | Other props | `HTMLAttributes<HTMLDivElement>`                 | —        | Standard div attributes.                                       |
 
 ### Per-tab fields
@@ -200,3 +204,5 @@ Colours come from the design system the OpenViking console uses — the values o
 ## Implementation scope
 
 The component renders the shell and reports successful operations. Reading, saving, downloading and navigation are supplied as execution capabilities by the host; success notifications do not execute them.
+
+`labels.showHiddenPath` overrides the collapsed-path menu button’s accessible name: “Show hidden path levels” in English and “显示隐藏的路径层级” in Chinese.

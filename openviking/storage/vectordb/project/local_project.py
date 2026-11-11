@@ -214,7 +214,8 @@ class LocalProject:
         Args:
             collection_name: Collection name
         """
-        collection = self.collections.remove(collection_name)
+        collection = self.collections.get(collection_name)
         if collection:
             collection.drop()
+            self.collections.remove(collection_name)
             logger.info(f"Dropped collection: {collection_name}")

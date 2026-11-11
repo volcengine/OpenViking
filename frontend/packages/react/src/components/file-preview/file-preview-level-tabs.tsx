@@ -13,7 +13,10 @@ export function FilePreviewLevelTabs({
 }) {
   if (!levels?.length) return null;
   return (
-    <div className="ov-file-preview__levels" role="group">
+    <div
+      className="ov-file-preview__levels ov-file-preview__levels--file"
+      role="group"
+    >
       {levels.map((level) => (
         <button
           key={level.key}
