@@ -166,6 +166,7 @@ export function FileBrowser({
       >
         <div className="ov-file-browser__tree">
           <FileBrowserTreePane
+            rootUri={rootUri}
             entries={{
               agentConnect,
               onImportResources,

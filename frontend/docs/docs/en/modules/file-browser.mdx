@@ -12,6 +12,8 @@ Wiki board links are discovered through resource metadata. The Compile registry 
 
 ## Basic usage
 
+At the default `viking://` root, FileBrowser follows the console order: user, session, agent, resources, then other directories. A subtree selected with `rootUri` keeps the service order.
+
 The example uses fixed data and makes no network request:
 
 ```tsx file="../../_demos/file-browser-basic.tsx" preview

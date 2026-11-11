@@ -29,7 +29,7 @@ Where `rows` come from, how pages are fetched and how permissions are decided ar
 
 The usual approach is to hand the tree a nested structure and let it recurse, keep its own expansion set and decide when to request children. Such a component then has to know the host's paging strategy, retry behavior and account-scope switching timing, and ends up knowing a little about everything while being welded to one backend.
 
-This component inverts that: **the host flattens tree state into a one-dimensional array and the component only renders it in order.**
+The host flattens tree state into a one-dimensional array. The component preserves that order by default. Set `rootOrder="context"` to move root directory branches into console order: user, session, agent, resources, then the remaining directories.
 
 ```ts
 type FileTreeRow =
