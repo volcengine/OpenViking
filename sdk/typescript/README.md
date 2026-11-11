@@ -118,6 +118,10 @@ default to the user space.
 
 OVPack exports and backups follow the Python and Go SDK contract: they are streamed to a Node.js local file and return its final path.
 
+Binary downloads (`exportOVPack`, `backupOVPack` and `downloadBytes`) reject JSON
+responses, including JSON success envelopes. API errors retain their code and
+details; a rejected pack download preserves the previous file.
+
 ```ts
 const packPath = await client.exportOVPack(
   "viking://resources/docs",

@@ -141,6 +141,16 @@ export class OpenVikingTransport {
     }
   }
 
+  async checkBinaryResponse(response: Response): Promise<void> {
+    if (response.ok && !response.headers.get("content-type")?.includes("json"))
+      return;
+    await this.parseResponse<unknown>(response);
+    throw new OpenVikingError("Expected a binary download response", {
+      code: "INTERNAL",
+      statusCode: response.status,
+    });
+  }
+
   async parseResponse<T>(response: Response): Promise<T> {
     const envelope = await this.parseResponseEnvelope<T>(response);
     return envelope.result as T;
