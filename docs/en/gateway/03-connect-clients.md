@@ -36,7 +36,7 @@ Without the header, every request fails with 401 `Upstream API key is missing`. 
 
 ## Override profile settings {#override-profile-settings}
 
-A client can change the settings of its key's context profile for a new conversation with an `X-OpenViking-Context` header. Its value is a JSON object of the fields to change, for example `{"recall":false}` to skip recall, or `{"disabled_tools":[]}` to offer every OpenViking tool, including the ones that change data. The profile must have **Let clients override settings** on, which is the default; what the header may contain and the errors it can get are in [Let clients override settings](08-context-profiles.md#client-overrides). How each client sends it is in [Add a header to a client](#add-a-header).
+A client can change the settings of its key's context profile for a new conversation with an `X-OpenViking-Context` header. Its value is a JSON object of the fields to change, for example `{"recall":false}` to skip recall, or `{"disabled_tools":["forget","set_acl"]}` to withhold those two tools. The profile must have **Let clients override settings** on, which is the default; what the header may contain and the errors it can get are in [Let clients override settings](08-context-profiles.md#client-overrides). How each client sends it is in [Add a header to a client](#add-a-header).
 
 A conversation keeps the settings it started with, so a changed header takes effect in the next new conversation, for example with a new `X-OpenViking-Session` value. Like every `X-OpenViking-*` header, it is not forwarded to the provider.
 

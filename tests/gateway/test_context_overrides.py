@@ -53,7 +53,7 @@ async def test_override_takes_effect_and_is_logged(running_gateway):
     assert "context_override" not in logs[1]
 
 
-async def test_empty_disabled_tools_offers_write_tools(running_gateway):
+async def test_disabled_tools_override_withholds_tools(running_gateway):
     _, client, _, key, seen, _ = running_gateway
 
     async def offered(session, context):
@@ -63,10 +63,10 @@ async def test_empty_disabled_tools_offers_write_tools(running_gateway):
         assert response.status_code == 200, response.text
         return {tool["function"]["name"] for tool in orjson.loads(seen[-1][1]).get("tools", [])}
 
-    read_only = await offered("read-only", {"gateway_tools": True})
-    assert "openviking_find" in read_only and "openviking_write" not in read_only
-    every = await offered("all-tools", {"gateway_tools": True, "disabled_tools": []})
-    assert {"openviking_write", "openviking_add_resource"} <= every
+    every = await offered("all-tools", {"gateway_tools": True})
+    assert {"openviking_find", "openviking_write", "openviking_add_resource"} <= every
+    no_write = await offered("no-write", {"gateway_tools": True, "disabled_tools": ["write"]})
+    assert "openviking_find" in no_write and "openviking_write" not in no_write
 
 
 @pytest.mark.parametrize(

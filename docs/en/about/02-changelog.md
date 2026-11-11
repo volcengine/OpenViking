@@ -36,6 +36,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
     15 seconds; a request whose key OpenViking refuses with 402 or 403 is rejected instead of
     forwarded; and an OpenViking 401 while saving, once `/health` also returns 401, pauses
     saving with `gateway_key_revoked`.
+  - Context profiles now select every OpenViking tool by default, including the ones that change data such as `forget` and `set_acl`; earlier releases left 8 of them unchecked. Saved profiles and ongoing conversations keep their tools. Accounts without a saved `default` profile, and management API requests that omit `disabled_tools`, now get every tool; set `default_profile.disabled_tools` or save a `default` profile to keep the old selection.
 - **Volcengine KMS `key_file` (upgrade action)**: `encryption.volcengine_kms.key_file` now takes
   effect for the server and the gateway; earlier releases ignored it and kept the root key at
   `~/.openviking/openviking-volcengine-root-key.enc`. If you set `key_file`, move that file to
