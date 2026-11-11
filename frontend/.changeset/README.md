@@ -24,6 +24,9 @@ release. Alternatively, push `react@<version>`; the tag must match the package
 manifest at that commit. Stable tags and manual runs are the only ways to
 publish `latest`. An already published version is skipped.
 
+When a manual run selects a tag ref, the chosen channel and version inputs still
+control the release. Tag-to-manifest validation applies only to tag push events.
+
 Manual runs can also choose `beta`, leaving the version input empty; these use
 the same npm stable version rule. The official repository needs `NPM_TOKEN` with
 access to `@openviking/react`, or npm trusted publishing configured for

@@ -46,6 +46,8 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      - name: Test release routing
+        run: node --test scripts/react-release*.test.mjs
       - name: Resolve and stage release version
         id: release
         env:
@@ -64,8 +66,6 @@ jobs:
             echo "@openviking/react@$RELEASE_VERSION already exists; skipping."
           fi
       - run: npm ci
-        if: steps.published.outputs.exists == 'false'
-      - run: node --test scripts/react-release.test.mjs
         if: steps.published.outputs.exists == 'false'
       - run: npm run check
         if: steps.published.outputs.exists == 'false'

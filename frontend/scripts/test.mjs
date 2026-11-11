@@ -61,7 +61,12 @@ try {
   process.exitCode = await new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      ['--test', 'scripts/package.test.mjs', 'packages/react/test/*.test.mjs'],
+      [
+        '--test',
+        'scripts/package.test.mjs',
+        'scripts/react-release*.test.mjs',
+        'packages/react/test/*.test.mjs',
+      ],
       {
         cwd: root,
         stdio: 'inherit',
