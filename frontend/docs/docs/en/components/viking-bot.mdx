@@ -16,6 +16,14 @@ The `tool` and `tool_result` parts accept `results: readonly VikingBotToolResult
 
 ```
 
+### User message layout
+
+User messages follow the reference message-group structure: the outer group owns the width limit and right alignment, attachments appear outside the content-sized bubble, and attachment-only messages show the timestamp and actions without an empty bubble. This example uses fixed data; attachment and copy actions only display their callback value below it.
+
+```tsx file="../../_demos/viking-bot-user-messages.tsx" preview
+
+```
+
 ## How the two hosts connect
 
 | Difference          | Handling                                                                |
@@ -40,6 +48,16 @@ The host supplies `quickInputs` as `{ id, label, prompt, icon? }`; no business c
 `references` supplies visible FileTree `rows`, controlled `selected`, `onChange`, and optional `onQueryChange`, `onExpand`, `isLoading` and `error`. The toolbar and typed `@` use the same picker. Selections are deduplicated by URI and reported separately in `VikingBotDraft.references`, rather than flattened into text. Omitting the configuration hides the entry point. The host handles queries, expansion and permissions, and resets references and attachments when identity or session changes. `onFilesAdded` enables `+`; it reports files for the host to upload.
 
 Input extensions also work with standalone `VikingBotComposer`. Customize welcome, session, reference, loading and removal text through `labels`.
+
+### File and directory references
+
+Selected references are separate from uploaded attachments. Each tag shows a file-type or directory icon and the full URI, with ellipsis and a full-path title when space is limited. The first five tags remain visible; `+N` reveals the rest on hover, focus, or click. Each tag can be removed independently, and `onOpenUri` enables opening the selected file or directory. Standalone `VikingBotComposer` also accepts `onOpenUri`. Sending keeps references in `VikingBotDraft.references` without rewriting the draft text.
+
+This example uses fixed public data and never accesses real resources; open and send actions only display their callback values.
+
+```tsx file="../../_demos/viking-bot-references.tsx" preview
+
+```
 
 ## Props
 
@@ -70,7 +88,7 @@ Input extensions also work with standalone `VikingBotComposer`. Customize welcom
 | `onAttachmentRemove` | `(attachment: VikingBotAttachment) => void`      | —                 | Removes an attachment.                                                                              |
 | `onSend`             | `(draft: VikingBotDraft) => void`                | —                 | Reports the send intent; omission disables sending.                                                 |
 | `onCancel`           | `() => void`                                     | —                 | Stops the streaming reply.                                                                          |
-| `onOpenUri`          | `(uri: string) => void`                          | —                 | Opens a resource referenced by a message.                                                           |
+| `onOpenUri`          | `(uri: string) => void`                          | —                 | Opens a message resource or a selected file or directory reference in the composer.                 |
 | `onCopy`             | `(text: string) => void`                         | —                 | Handles message-text copy; user messages use Ark copy when omitted.                                 |
 | `onMessageAction`    | `(messageId: string, actionKey: string) => void` | —                 | Fires a message action.                                                                             |
 | `labels`             | `VikingBotLabels`                                | locale            | Replaceable copy.                                                                                   |

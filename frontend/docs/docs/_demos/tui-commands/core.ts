@@ -27,13 +27,16 @@ export const CORE_COMMANDS: readonly TuiCommandEntry[] = [
     skeleton: 'write',
     group: 'core',
     description: 'Add skills from a source',
-    usage: '/add-skill <source> [--wait]',
+    usage: '/add-skill <source> [-p <target-uri>] [--wait]',
     params: [
       {
         label: '<source>',
         description: 'Skill directory, SKILL.md or content',
       },
       { label: '--wait', description: 'Wait until processing completes' },
+    ],
+    options: [
+      { token: '-p <target-uri>', description: 'Skill target root directory' },
     ],
     examples: ['/add-skill ./skills/my-skill --wait'],
   },
@@ -42,8 +45,14 @@ export const CORE_COMMANDS: readonly TuiCommandEntry[] = [
     skeleton: 'write',
     group: 'core',
     description: 'Add memory in one shot',
-    usage: '/add-memory <content>',
+    usage: '/add-memory <content> [--session-id <id>]',
     params: [{ label: '<content>', description: 'Content to memorize' }],
+    options: [
+      {
+        token: '--session-id <id>',
+        description: 'Session used for this memory example',
+      },
+    ],
     examples: [
       '/add-memory "Release checklist lives in viking://resources/release"',
     ],

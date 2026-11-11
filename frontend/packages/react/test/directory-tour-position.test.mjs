@@ -43,10 +43,10 @@ test('on narrow screens the card stays clear of the highlighted row', async () =
     }),
   );
   try {
-    assert.ok(parseFloat(panel().style.top) >= 132);
+    assert.ok(parseFloat(panel().parentElement.style.top) >= 132);
     top = 600;
     await act(async () => window.dispatchEvent(new window.Event('resize')));
-    assert.ok(parseFloat(panel().style.top) + 222 <= top);
+    assert.ok(parseFloat(panel().parentElement.style.top) + 222 <= top);
   } finally {
     await view.unmount();
     anchor.remove();

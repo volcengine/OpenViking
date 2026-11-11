@@ -1,7 +1,8 @@
 /** Literal/code tokens end at whitespace or quoting delimiters, not filename punctuation. */
-export const TUI_URI_PATTERN = /viking:\/\/[^\s"'<>`]+/g;
+export const TUI_URI_PATTERN = /(?:viking|https?):\/\/[^\s"'<>`]+/g;
 /** Prose retains sentence punctuation outside automatic links. */
-export const TUI_PROSE_URI_PATTERN = /viking:\/\/[^\s,，。；;、"'<>()[\]]+/g;
+export const TUI_PROSE_URI_PATTERN =
+  /(?:viking|https?):\/\/[^\s,，。；;、"'<>()[\]]+/g;
 
 /** Resource targets permit only explicit resource or web navigation schemes. */
 export function getTuiSafeHref(uri: string | undefined): string | undefined {

@@ -5,17 +5,25 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
-export function resolveRelease(env, packageVersion, latestStableVersion) {
-  const isTag = env.GITHUB_REF_TYPE === 'tag';
+export function resolveReleaseTarget(env) {
   const manual = env.GITHUB_EVENT_NAME === 'workflow_dispatch';
-  const channel = isTag ? 'latest' : manual ? env.RELEASE_CHANNEL : 'beta';
+  if (!manual && env.GITHUB_EVENT_NAME !== 'push') {
+    throw new Error('Unsupported release event');
+  }
+  const tagPush = !manual && env.GITHUB_REF_TYPE === 'tag';
+  const channel = manual ? env.RELEASE_CHANNEL : tagPush ? 'latest' : 'beta';
   if (!['latest', 'beta'].includes(channel)) {
     throw new Error('Release channel must be latest or beta');
   }
+  return { manual, tagPush, channel };
+}
+
+export function resolveRelease(env, packageVersion, latestStableVersion) {
+  const { manual, tagPush, channel } = resolveReleaseTarget(env);
   if (channel === 'beta' && manual && env.RELEASE_VERSION) {
     throw new Error('The version input is only used for stable releases');
   }
-  const version = isTag
+  const version = tagPush
     ? env.GITHUB_REF_NAME?.replace(/^react@/, '')
     : manual && env.RELEASE_VERSION
       ? env.RELEASE_VERSION
@@ -29,7 +37,7 @@ export function resolveRelease(env, packageVersion, latestStableVersion) {
         : 'Supply an exact stable version, e.g. 0.1.8',
     );
   }
-  if (isTag && env.GITHUB_REF_NAME !== `react@${packageVersion}`) {
+  if (tagPush && env.GITHUB_REF_NAME !== `react@${packageVersion}`) {
     throw new Error('Release tag must match the package manifest');
   }
   if (channel === 'latest') return { channel, version };
@@ -76,25 +84,23 @@ if (
   const { version: packageVersion } = JSON.parse(
     readFileSync(new URL('../packages/react/package.json', import.meta.url)),
   );
-  const beta =
-    process.env.GITHUB_REF_TYPE !== 'tag' &&
-    (process.env.GITHUB_EVENT_NAME !== 'workflow_dispatch' ||
-      process.env.RELEASE_CHANNEL === 'beta');
-  const latestStableVersion = beta
-    ? JSON.parse(
-        execFileSync(
-          'npm',
-          [
-            'view',
-            '@openviking/react@latest',
-            'version',
-            '--json',
-            '--registry=https://registry.npmjs.org',
-          ],
-          { encoding: 'utf8' },
-        ),
-      )
-    : undefined;
+  const { channel } = resolveReleaseTarget(process.env);
+  const latestStableVersion =
+    channel === 'beta'
+      ? JSON.parse(
+          execFileSync(
+            'npm',
+            [
+              'view',
+              '@openviking/react@latest',
+              'version',
+              '--json',
+              '--registry=https://registry.npmjs.org',
+            ],
+            { encoding: 'utf8' },
+          ),
+        )
+      : undefined;
   const release = resolveRelease(
     process.env,
     packageVersion,

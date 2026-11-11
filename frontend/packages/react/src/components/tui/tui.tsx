@@ -88,13 +88,15 @@ export function Tui({
     onValueChange?.(next);
   };
   const readOnly = !onValueChange;
-  const fillCommand = (next: string) => {
+  const fillInput = (next: string) => {
     if (disabled || readOnly) return;
-    updateValue(formatTuiCommandInput(next, commands));
+    updateValue(next);
     composerRef.current
       ?.querySelector('textarea')
       ?.focus({ preventScroll: true });
   };
+  const fillCommand = (next: string) =>
+    fillInput(formatTuiCommandInput(next, commands));
   const completion = useTuiCompletion(
     value,
     !disabled && !readOnly && dismissedValue !== value,
@@ -165,7 +167,7 @@ export function Tui({
             commands={pickTuiCommands(quickCommands, commands)}
             labels={text}
             disabled={disabled || readOnly}
-            onPick={(command) => fillCommand(`${command.name} `)}
+            onPick={fillInput}
           />
         )}
       </div>

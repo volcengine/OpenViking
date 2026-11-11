@@ -34,29 +34,15 @@ test('Wiki module binds operation URIs and resets local filters when the documen
       h(WikiDashboardPane, {
         uri,
         kind: 'file',
-        onEdit: (...args) => events.push(['edit', ...args]),
-        onDiscuss: (...args) => events.push(['discuss', ...args]),
         onOpenUri: (...args) => events.push(['open', ...args]),
       }),
     );
   const first = 'viking://user/alice/resources/wiki/first.md';
   const next = first.replace('first.md', 'next.md');
   const view = await mount(render(first));
-  for (const name of ['Manual edit', 'VikingBot discussion']) {
-    await act(async () =>
-      view.container.querySelector(`button[aria-label^="${name}:"]`).click(),
-    );
-  }
-  assert.deepEqual(
-    events.map(([action, uri, conflict]) => [
-      action,
-      uri,
-      conflict.description,
-    ]),
-    [
-      ['edit', first, record.problem_description],
-      ['discuss', first, record.problem_description],
-    ],
+  assert.equal(
+    view.container.querySelector('.ov-wiki-dashboard__actions'),
+    null,
   );
   await act(async () =>
     view.container.querySelector('[aria-haspopup="listbox"]').click(),

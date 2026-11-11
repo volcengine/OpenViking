@@ -150,12 +150,9 @@ describe('tool access', () => {
     description: name,
   }))
 
-  it('offers only read-only and future tools by default', () => {
+  it('offers every tool by default', () => {
     expect(PROFILE_DEFAULTS.gateway_tools).toBe(true)
-    expect(
-      offeredTools(PROFILE_DEFAULTS, tools).map((tool) => tool.name),
-    ).toEqual(['read', 'future_tool'])
-    expect(offeredTools(profile({ disabled_tools: [] }), tools)).toEqual(tools)
+    expect(offeredTools(PROFILE_DEFAULTS, tools)).toEqual(tools)
   })
 
   it('excludes only raw MCP names and enables new tools automatically', () => {

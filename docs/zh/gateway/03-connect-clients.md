@@ -36,7 +36,7 @@ description: 把 Claude Code、Codex、聊天应用、SDK 等客户端接入 Ope
 
 ## 覆盖上下文配置 {#override-profile-settings}
 
-客户端可以用 `X-OpenViking-Context` 请求头，为新对话修改密钥所用上下文配置的设置。它的值是一个 JSON 对象，列出要修改的字段，例如 `{"recall":false}` 表示不召回，`{"disabled_tools":[]}` 表示提供全部 OpenViking 工具，包括会修改数据的工具。配置需要开启**允许客户端覆盖设置**（默认开启）；请求头能包含什么、可能返回哪些错误，见[允许客户端覆盖设置](08-context-profiles.md#client-overrides)。各客户端的添加方式见[在客户端里添加请求头](#add-a-header)。
+客户端可以用 `X-OpenViking-Context` 请求头，为新对话修改密钥所用上下文配置的设置。它的值是一个 JSON 对象，列出要修改的字段，例如 `{"recall":false}` 表示不召回，`{"disabled_tools":["forget","set_acl"]}` 表示不提供这两个工具；请求头只能比配置多排除工具，不能提供配置不提供的工具。配置需要开启**允许客户端覆盖设置**（默认开启）；请求头能包含什么、可能返回哪些错误，见[允许客户端覆盖设置](08-context-profiles.md#client-overrides)。各客户端的添加方式见[在客户端里添加请求头](#add-a-header)。
 
 对话会沿用开始时的设置，所以修改后的请求头从下一段新对话起生效，例如换一个新的 `X-OpenViking-Session` 值。与所有 `X-OpenViking-*` 请求头一样，它不会转发给服务商。
 

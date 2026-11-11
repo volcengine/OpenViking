@@ -44,11 +44,11 @@ test('pending lookup stays hidden; missing steps skip and retain progress', asyn
     }),
   );
   try {
-    assert.equal(panel().style.visibility, 'hidden');
+    assert.equal(panel().parentElement.style.visibility, 'hidden');
     await act(async () => pending.resolve(null));
     await settle();
     assert.deepEqual(changes, [1, 2]);
-    assert.equal(panel().style.visibility, 'visible');
+    assert.equal(panel().parentElement.style.visibility, 'visible');
     assert.match(panel().textContent, /peers/);
     assert.match(panel().textContent, /3\/3/);
     await act(async () => panel().querySelector('button').click());
@@ -129,12 +129,12 @@ test('a removed anchor skips to the next target without leaving a floating card'
     }),
   );
   try {
-    assert.equal(panel().style.visibility, 'visible');
+    assert.equal(panel().parentElement.style.visibility, 'visible');
     await act(async () => first.remove());
     await settle();
     assert.deepEqual(changes, [1]);
     assert.match(panel().textContent, /sessions/);
-    assert.equal(panel().style.visibility, 'visible');
+    assert.equal(panel().parentElement.style.visibility, 'visible');
   } finally {
     await view.unmount();
     first.remove();
@@ -163,7 +163,7 @@ test('rejection and zero-sized targets skip once in controlled mode', async () =
     );
     try {
       await settle();
-      assert.equal(panel().style.visibility, 'hidden');
+      assert.equal(panel().parentElement.style.visibility, 'hidden');
       assert.deepEqual(changes, [1]);
     } finally {
       await view.unmount();

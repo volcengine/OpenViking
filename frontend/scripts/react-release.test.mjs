@@ -73,6 +73,38 @@ test('manual beta also uses npm latest plus one patch', () => {
   );
 });
 
+test('manual beta on a tag keeps the selected channel and npm version base', () => {
+  assert.deepEqual(
+    resolveRelease(
+      {
+        ...push,
+        GITHUB_EVENT_NAME: 'workflow_dispatch',
+        GITHUB_REF_TYPE: 'tag',
+        GITHUB_REF_NAME: 'react@0.1.7',
+        RELEASE_CHANNEL: 'beta',
+      },
+      '0.1.7',
+      '0.2.9',
+    ),
+    { channel: 'beta', version: '0.2.10-beta.42.1.gabcdef012345' },
+  );
+});
+
+test('manual latest on a tag uses the explicit input and still requires it', () => {
+  const manual = {
+    ...push,
+    GITHUB_EVENT_NAME: 'workflow_dispatch',
+    GITHUB_REF_TYPE: 'tag',
+    GITHUB_REF_NAME: 'react@0.1.7',
+    RELEASE_CHANNEL: 'latest',
+  };
+  assert.deepEqual(
+    resolveRelease({ ...manual, RELEASE_VERSION: '0.2.0' }, '0.1.7'),
+    { channel: 'latest', version: '0.2.0' },
+  );
+  assert.throws(() => resolveRelease(manual, '0.1.7'));
+});
+
 test('beta cannot override or fall back from the last stable version', () => {
   for (const version of [undefined, '', '0.1.8-beta.1', '01.1.8', '0.1.8\n']) {
     assert.throws(() => resolveRelease(push, '0.1.7', version));
@@ -92,7 +124,11 @@ test('beta cannot override or fall back from the last stable version', () => {
 });
 
 test('tags must match the stable package version', () => {
-  const tag = { GITHUB_REF_TYPE: 'tag', GITHUB_REF_NAME: 'react@0.1.7' };
+  const tag = {
+    GITHUB_EVENT_NAME: 'push',
+    GITHUB_REF_TYPE: 'tag',
+    GITHUB_REF_NAME: 'react@0.1.7',
+  };
   assert.deepEqual(resolveRelease(tag, '0.1.7'), {
     channel: 'latest',
     version: '0.1.7',
@@ -108,6 +144,9 @@ test('invalid channel or missing beta identity fails before publishing', () => {
     resolveRelease({ GITHUB_EVENT_NAME: 'workflow_dispatch' }, '0.1.7'),
   );
   assert.throws(() => resolveRelease({}, '0.1.7', '0.1.7'));
+  assert.throws(() =>
+    resolveRelease({ ...push, GITHUB_EVENT_NAME: 'pull_request' }, '0.1.7'),
+  );
 });
 
 test('release staging keeps docs and the lockfile on the beta workspace package', () => {

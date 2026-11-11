@@ -521,7 +521,8 @@ class OpenVikingConfig(BaseModel):
         default=False,
         description=(
             "Allow fetching resources from private/non-public network addresses. "
-            "When disabled (default), only public IP addresses and hostnames are allowed."
+            "Configured code hosts may also use private networks. Loopback, link-local, "
+            "unspecified, multicast, reserved and known metadata addresses are always rejected."
         ),
     )
 

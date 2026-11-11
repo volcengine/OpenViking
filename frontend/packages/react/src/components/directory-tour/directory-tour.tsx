@@ -1,18 +1,20 @@
-import { Button } from '../../shared/components/button/button.js';
+import type { CSSProperties } from 'react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { DirectoryTourProps, DirectoryTourStep } from './types.js';
 import { useTourAnchor } from './use-tour-anchor.js';
 import { useTourPosition } from './use-tour-position.js';
-import { resolveLocale } from '../../shared/locale.js';
+import { useTourTheme } from './use-tour-theme.js';
+import { TourCard } from './tour-card.js';
 import { useLocale } from '../../shared/locale-context.js';
-import enUS from './locales/en-US.js';
-import zhCN from './locales/zh-CN.js';
-import { tourIllustrations } from './illustrations.js';
 
 /** Data-free directory guidance. Unmounting a closed session resets its steps. */
 export function DirectoryTour(props: DirectoryTourProps) {
-  if (!props.open || props.steps.length === 0) return null;
+  const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
+  // Resolve the external portal container after hydration, so the server and
+  // first client render agree. The body is document-owned and needs no cleanup.
+  useEffect(() => setPortalRoot(document.body), []);
+  if (!portalRoot || !props.open || props.steps.length === 0) return null;
   return <TourSession {...props} />;
 }
 
@@ -70,42 +72,43 @@ function TourStep({
   locale: localeProp,
   className,
   style,
+  renderContent,
 }: DirectoryTourProps & {
   step: DirectoryTourStep;
   index: number;
   advance: (skip: boolean) => void;
 }) {
   const locale = useLocale(localeProp);
-  const text = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale, labels);
   const advanced = useRef(false);
   const [surface, setSurface] = useState<HTMLDivElement | null>(null);
-  const { anchor, failed } = useTourAnchor(
+  const { anchor, elements, failed } = useTourAnchor(
     step.target,
     locateTarget,
     locateTimeout,
   );
-  const position = useTourPosition(anchor, surface, placement);
+  const position = useTourPosition(anchor, surface, placement, elements);
+  useTourTheme(anchor, surface);
   const titleId = useId();
   const bodyId = useId();
-  // Escape is a document event, so subscribe after commit and remove the current
-  // handler on callback changes/unmount instead of keeping a stale host callback.
+  // Handle Escape at the window bubble phase, after document-level overlays
+  // have had a chance to claim it. Remove the listener on change or unmount.
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && !event.defaultPrevented && onClose) {
         event.preventDefault();
         onClose?.();
       }
     };
-    document.addEventListener('keydown', close);
-    return () => document.removeEventListener('keydown', close);
+    window.addEventListener('keydown', close);
+    return () => window.removeEventListener('keydown', close);
   }, [onClose]);
   // Capture browser focus before this step takes it. Restore only on unmount,
   // not when a host passes a fresh onClose callback during an unrelated render.
   useEffect(() => {
-    const previous = document.activeElement;
+    const previous: (Element & { focus?: HTMLElement['focus'] }) | null =
+      document.activeElement;
     return () => {
-      if (previous instanceof HTMLElement && previous.isConnected)
-        previous.focus({ preventScroll: true });
+      if (previous?.isConnected) previous.focus?.({ preventScroll: true });
     };
   }, []);
   const unavailable = failed || Boolean(position?.missing);
@@ -123,86 +126,66 @@ function TourStep({
   useEffect(() => {
     if (surface && visible) surface.focus({ preventScroll: true });
   }, [surface, visible]);
-  if (typeof document === 'undefined') return null;
   const locating = !anchor && !failed;
-  const illustration =
-    step.illustration === undefined
-      ? tourIllustrations.get(step.target)
-      : step.illustration;
   return createPortal(
     <div
-      ref={setSurface}
+      className="ov-directory-tour-host"
       popover="manual"
-      role="dialog"
-      aria-modal="false"
-      aria-labelledby={titleId}
-      aria-describedby={bodyId}
-      aria-busy={locating}
-      tabIndex={-1}
-      className={['ov-directory-tour', className].filter(Boolean).join(' ')}
-      style={{
-        ...style,
-        top: position?.top ?? 0,
-        left: position?.left ?? 0,
-        visibility: visible ? 'visible' : 'hidden',
-      }}
+      style={
+        {
+          width: position?.maxWidth,
+          height: position?.layoutHeight,
+          '--ov-ui-directory-tour-viewport-height': position
+            ? `${position.maxHeight}px`
+            : undefined,
+          top: position?.top ?? 0,
+          left: position?.left ?? 0,
+          visibility: visible ? 'visible' : 'hidden',
+        } as CSSProperties
+      }
     >
-      {anchor && !unavailable && position?.visible && (
-        <div
-          className="ov-directory-tour__highlight"
-          aria-hidden="true"
-          style={{
-            top: position.targetTop,
-            left: position.targetLeft,
-            width: position.targetWidth,
-            height: position.targetHeight,
-          }}
-        />
-      )}
-      <div className="ov-directory-tour__card">
-        {onClose && (
-          <Button
-            size="mini"
-            type="text"
-            iconOnly
-            className="ov-directory-tour__close"
-            htmlType="button"
-            aria-label={text.close}
-            onClick={onClose}
-          >
-            ×
-          </Button>
-        )}
-        {illustration && (
+      <div
+        ref={setSurface}
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby={titleId}
+        aria-describedby={bodyId}
+        aria-busy={locating}
+        tabIndex={-1}
+        className={['ov-directory-tour', className].filter(Boolean).join(' ')}
+        style={{
+          width: step.cardWidth,
+          ...style,
+        }}
+      >
+        {anchor && !unavailable && position?.visible && (
           <div
-            className="ov-directory-tour__illustration"
-            data-target={step.target}
-          >
-            {illustration}
-          </div>
+            className={
+              elements.length > 1
+                ? 'ov-directory-tour__highlight ov-directory-tour__highlight--group'
+                : 'ov-directory-tour__highlight'
+            }
+            aria-hidden="true"
+            style={{
+              top: position.targetTop,
+              left: position.targetLeft,
+              width: position.targetWidth,
+              height: position.targetHeight,
+            }}
+          />
         )}
-        <h2 id={titleId} className="ov-directory-tour__title">
-          {step.title}
-        </h2>
-        <div id={bodyId} className="ov-directory-tour__description">
-          {step.description}
-        </div>
-        <footer className="ov-directory-tour__actions">
-          <span className="ov-directory-tour__progress" aria-live="polite">
-            {text.progress(index + 1, steps.length)}
-          </span>
-          <Button
-            size="small"
-            type="primary"
-            htmlType="button"
-            className="ov-directory-tour__primary"
-            disabled={locating}
-            onClick={() => advance(false)}
-          >
-            {step.nextLabel ??
-              (index === steps.length - 1 ? text.done : text.next)}
-          </Button>
-        </footer>
+        <TourCard
+          step={step}
+          index={index}
+          total={steps.length}
+          locale={locale}
+          labels={labels}
+          titleId={titleId}
+          bodyId={bodyId}
+          onClose={onClose}
+          advance={() => advance(false)}
+          renderContent={anchor && !unavailable ? renderContent : undefined}
+        />
       </div>
     </div>,
     document.body,

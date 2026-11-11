@@ -7,6 +7,8 @@ import ScanSearchSvg from '../../../icons/svg/dashboards/scan-search.svg?react';
 import FileInputSvg from '../../../icons/svg/dashboards/file-input.svg?react';
 import type { ComponentPropsWithoutRef, ComponentType } from 'react';
 
+import ArrowUpRightSvg from '../../../icons/svg/directory-tour/arrow-up-right.svg?react';
+import DirectoryTourFolderSvg from '../../../icons/svg/directory-tour/folder-open.svg?react';
 import ArrowRightSvg from '../../../icons/svg/arrow-right.svg?react';
 import AudioSvg from '../../../icons/svg/audio.svg?react';
 import ChevronRightSvg from '../../../icons/svg/chevron-right.svg?react';
@@ -74,6 +76,11 @@ function createIcon(Svg: IconComponent, name: string): IconComponent {
 }
 
 export const ArrowRightIcon = createIcon(ArrowRightSvg, 'ArrowRightIcon');
+export const ArrowUpRightIcon = createIcon(ArrowUpRightSvg, 'ArrowUpRightIcon');
+export const DirectoryTourFolderIcon = createIcon(
+  DirectoryTourFolderSvg,
+  'DirectoryTourFolderIcon',
+);
 export const AudioIcon = createIcon(AudioSvg, 'AudioIcon');
 export const ChevronRightIcon = createIcon(ChevronRightSvg, 'ChevronRightIcon');
 export const DocumentIcon = createIcon(DocumentSvg, 'DocumentIcon');

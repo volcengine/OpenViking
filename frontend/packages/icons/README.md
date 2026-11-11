@@ -66,4 +66,16 @@ React imports these SVG files directly during its build.
 
 `viking-bot/remove.svg` is an OpenViking-authored close glyph under the repository license.
 
+- `svg/viking-bot/context-folder.svg` and `context-close.svg` — reference-tag
+  artwork from the user-supplied OpenViking console source at
+  `release/openviking/2026-11-12`, commit `602a7382d`, under
+  `vikingbot/assets/`. They follow this repository's license. Paths, viewBox and
+  stroke geometry are unchanged; fixed paint is replaced with `currentColor`
+  to follow the host theme. File references reuse the file-type assets above.
+
 - `svg/viking-bot/tool.svg` — unchanged `IconTool` artwork from the public MIT-licensed `@arco-design/web-react` 2.66.18, matching the tool row in `vikingdb-fe` release/openviking/2026-11-12.
+
+- `svg/directory-tour/` — the folder and up-right arrow artwork from the
+  [OpenViking Console team experience introduction](https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=10168-334211).
+  The documentation demo uses `DirectoryTourFolderIcon` and `ArrowUpRightIcon`
+  from `@openviking/react/icons`; the design's paths and colors are unchanged. They follow this repository's license.

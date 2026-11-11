@@ -1,6 +1,7 @@
 import { ArrowRightIcon } from '../../icons/index.js';
 import type { ReactNode } from 'react';
 import type { TuiCommandDefinition } from './command-catalog.js';
+import type { TuiQuickCommand } from './types.js';
 import type { ResolvedTuiLabels } from './tui-labels.js';
 
 /**
@@ -11,11 +12,19 @@ import type { ResolvedTuiLabels } from './tui-labels.js';
  * occurrence so one command never renders as sibling nodes with the same key.
  */
 export function pickTuiCommands(
-  names: readonly string[] = [],
+  shortcuts: readonly TuiQuickCommand[] = [],
   commands: readonly TuiCommandDefinition[],
-): readonly TuiCommandDefinition[] {
+): readonly (TuiCommandDefinition & TuiQuickCommand)[] {
   const byName = new Map(commands.map((command) => [command.name, command]));
-  return [...new Set(names)].flatMap((name) => byName.get(name) ?? []);
+  const firstByName = new Map<string, TuiQuickCommand>();
+  for (const shortcut of shortcuts) {
+    if (!firstByName.has(shortcut.name))
+      firstByName.set(shortcut.name, shortcut);
+  }
+  return [...firstByName.values()].flatMap((shortcut) => {
+    const command = byName.get(shortcut.name);
+    return command ? [{ ...command, value: shortcut.value }] : [];
+  });
 }
 
 /**
@@ -33,10 +42,10 @@ export function TuiEmptyRegion({
   onPick,
 }: {
   emptyState?: ReactNode;
-  commands: readonly TuiCommandDefinition[];
+  commands: readonly (TuiCommandDefinition & TuiQuickCommand)[];
   labels: ResolvedTuiLabels;
   disabled?: boolean;
-  onPick: (command: TuiCommandDefinition) => void;
+  onPick: (value: string) => void;
 }) {
   if (emptyState !== undefined) {
     return emptyState === null ? null : (
@@ -56,7 +65,7 @@ export function TuiEmptyRegion({
               type="button"
               className="ov-tui__empty-action"
               disabled={disabled}
-              onClick={() => onPick(command)}
+              onClick={() => onPick(command.value)}
             >
               <ArrowRightIcon width={14} height={14} focusable="false" />
               <span className="ov-tui__empty-content">

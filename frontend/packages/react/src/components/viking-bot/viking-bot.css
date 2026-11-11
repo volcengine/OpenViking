@@ -287,11 +287,18 @@
   border-radius: var(--ov-viking-bot-radius);
   background: none;
   padding: 2px 8px;
-  color: var(--ov-viking-bot-accent);
   font: inherit;
   font-size: 12px;
   overflow-wrap: anywhere;
   cursor: pointer;
+}
+
+.ov-viking-bot__context {
+  color: var(--ov-viking-bot-accent);
+}
+
+.ov-viking-bot__attachment {
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
 }
 
 .ov-viking-bot__context:hover,
