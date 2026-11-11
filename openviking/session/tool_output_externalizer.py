@@ -202,6 +202,11 @@ class ToolOutputExternalizer:
         )
         if not source_ref.startswith(f"{self._session_uri}/tool-results/"):
             return False
+        if part.tool_output_source_ref == source_ref:
+            # A later externalize_group pass over the same Turn must not rewrite
+            # the preview again: that would replace the original size and digest
+            # with those of the preview and shrink the hydration limit.
+            return True
 
         output = part.tool_output or ""
         preview_chars = max(cfg.min_preview_chars, cfg.preview_chars)
@@ -346,14 +351,17 @@ class ToolOutputExternalizer:
             part.tool_output_group_id = group_id
             part.tool_output_group_original_chars = group_original_chars
             part.tool_output_group_budget_chars = cfg.assistant_turn_inline_budget_chars
+            # A part externalized by an earlier pass already carries its final
+            # preview and metadata; rewriting it again would shrink the original
+            # size and digest recorded in the message.
+            if part.tool_output_ref and part.tool_output_truncated:
+                continue
             if self._rewrite_source_read_tool_output(
                 part,
                 cfg,
                 group_id=group_id,
                 group_original_chars=group_original_chars,
             ):
-                continue
-            if part.tool_output_ref and part.tool_output_truncated:
                 continue
             normal_indices.append(idx)
             if len(part.tool_output or "") > cfg.threshold_chars:
