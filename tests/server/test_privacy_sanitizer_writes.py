@@ -264,15 +264,15 @@ async def test_skill_finalizes_original_offsets_using_latest_fields(service, mon
     ids = iter(["kept0001", "local001", "new00001"])
     monkeypatch.setattr("openviking.utils.skill_processor.token_urlsafe", lambda _: next(ids))
     result = await processor.apply_skill_privacy(
-        skill, preparation, ctx, change_reason="final references", delete_if_empty=False
+        skill, preparation, ctx, change_reason="final references"
     )
     current = await privacy.get_current(ctx, "skill", "final-refs")
     assert current.values == {"kept0001": "after-rotation", "local001": second, "new00001": fresh}
     assert result["content"] == original.replace(
         first, build_privacy_field_reference(ctx.user.user_id, "credential", "late", "key")
-    ).replace(
-        second, build_privacy_field_reference(ctx.user.user_id, "skill", "final-refs", "local001")
-    ).replace(fresh, build_placeholder("final-refs", "new00001"))
+    ).replace(second, build_placeholder("final-refs", "local001")).replace(
+        fresh, build_placeholder("final-refs", "new00001")
+    )
     assert await restore_skill_content(
         privacy, result["content"], ctx, skill_name="final-refs"
     ) == original.replace(explicit, "after-rotation")

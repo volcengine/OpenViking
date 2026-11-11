@@ -96,7 +96,7 @@ async def test_skill_update_with_privacy_off_preserves_history_and_session_refer
 
 
 @pytest.mark.parametrize("mode", ["auto", "auto_strict", "registered"])
-@pytest.mark.parametrize("case", ["credential", "short"])
+@pytest.mark.parametrize("case", ["credential", "short", "rotated"])
 async def test_skill_reupload_preserves_current_fields_and_history(client, service, mode, case):
     from openviking.privacy.reference import build_privacy_field_reference
 
@@ -114,7 +114,9 @@ async def test_skill_reupload_preserves_current_fields_and_history(client, servi
     current = (await client.get(target)).json()["result"]["current"]
     field = next(iter(current["values"]))
     await client.patch(target, json={"values": {field: "T8m2"}})
-    await client.post(target + "/activate", json={"version": 1})
+    if case != "rotated":
+        await client.post(target + "/activate", json={"version": 1})
+    current = (await client.get(target)).json()["result"]["current"]
     snapshots = [(await client.get(target + f"/versions/{v}")).json()["result"] for v in (1, 2)]
     reference = build_privacy_field_reference(ctx.user.user_id, "skill", name, field)
     sid = name + "-session"
@@ -123,7 +125,7 @@ async def test_skill_reupload_preserves_current_fields_and_history(client, servi
     await client.post(
         f"/api/v1/sessions/{sid}/messages", json={"role": "user", "content": reference}
     )
-    if case == "credential":
+    if case != "short":
         await client.post(
             "/api/v1/privacy-configs/credential/" + name, json={"values": {"key": value}}
         )
@@ -139,12 +141,55 @@ async def test_skill_reupload_preserves_current_fields_and_history(client, servi
         (await client.get(target + f"/versions/{v}")).json()["result"] for v in (1, 2)
     ] == snapshots
     response = await client.get("/api/v1/content/read", params={"uri": messages_uri, "raw": True})
-    assert json.loads(response.json()["result"])["parts"][0]["text"] == value
-    if case == "credential":
+    assert json.loads(response.json()["result"])["parts"][0]["text"] == current["values"][field]
+    if case != "short":
         stored = await service.viking_fs.read_file(
             f"viking://user/{ctx.user.user_id}/skills/{name}/SKILL.md", ctx=ctx
         )
         assert build_privacy_field_reference(ctx.user.user_id, "credential", name, "key") in stored
+
+
+@pytest.mark.parametrize("value", ["T7k9", "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"])
+async def test_shared_skill_reupload_preserves_member_field_references(client, service, value):
+    owner = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    reader = RequestContext(user=UserIdentifier(owner.account_id, "reader"), role=Role.USER)
+    await patch_user_config(
+        service.viking_fs,
+        owner,
+        UserSettingsPatch.model_validate(
+            {
+                "privacy": {
+                    "mode": "auto",
+                    "custom_rules": [{"id": "short", "prefix": "T", "min_length": 3}],
+                }
+            }
+        ),
+    )
+    name = "shared-privacy"
+    source = {
+        "data": _skill_md(name, "Shared fixture", f'key="{value}"'),
+        "target_uri": "viking://agent/skills",
+        "wait": True,
+    }
+    response = await client.post("/api/v1/skills", json=source)
+    assert response.status_code == 200, response.text
+    uri = response.json()["result"]["uri"] + "/SKILL.md"
+    current = await service.privacy_configs.get_current(owner, "skill", name)
+    field = next(iter(current.values))
+    reader_value = "ReaderExample79"
+    await service.privacy_configs.upsert(reader, "skill", name, {field: reader_value})
+    expected = f'key="{reader_value}"'
+    assert expected in await service.fs.read(uri, ctx=reader)
+
+    response = await client.put("/api/v1/skills/" + name, json=source)
+    assert response.status_code == 200, response.text
+    assert expected in await service.fs.read(uri, ctx=reader)
+    assert (
+        await service.privacy_configs.get_current(owner, "skill", name)
+    ).values == current.values
+    assert (await service.privacy_configs.get_current(reader, "skill", name)).values == {
+        field: reader_value
+    }
 
 
 async def test_skills_api_list_honors_node_limit(client):
@@ -392,7 +437,7 @@ async def test_skills_api_update_rolls_back_when_replace_fails(client, monkeypat
     assert "This update should be rolled back." not in shown["content"]
 
 
-async def test_skills_api_update_removes_privacy_when_replacement_has_no_secrets(client, service):
+async def test_skills_api_update_retains_privacy_until_explicit_delete(client, service):
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     await patch_user_config(
         service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": "auto"}})
@@ -418,18 +463,14 @@ async def test_skills_api_update_removes_privacy_when_replacement_has_no_secrets
     )
     assert update_response.status_code == 200, update_response.text
 
-    current_privacy_response = await client.get(
-        "/api/v1/privacy-configs/skill/privacy-update-skill"
-    )
-    assert current_privacy_response.status_code == 404
-
-    show_response = await client.get(
-        "/api/v1/skills/privacy-update-skill",
-        params={"include_content": True},
-    )
-    assert show_response.status_code == 200, show_response.text
-    shown = show_response.json()["result"]
-    assert "Configured but not referenced in content" not in shown["content"]
+    target = "/api/v1/privacy-configs/skill/privacy-update-skill"
+    current = (await client.get(target)).json()["result"]["current"]
+    assert current == privacy_response.json()["result"]
+    assert (await client.get(target + "/versions/1")).status_code == 200
+    response = await client.delete(target)
+    assert response.status_code == 200 and response.json()["result"]["deleted"]
+    assert (await client.get(target)).status_code == 404
+    assert (await client.get(target + "/versions")).status_code == 404
 
 
 async def test_skills_api_update_restores_previous_privacy_on_failure(client, monkeypatch):
@@ -508,7 +549,6 @@ async def test_skills_api_update_restores_previous_privacy_after_privacy_write(
         ctx,
         *,
         change_reason,
-        delete_if_empty,
         owner_lease_ref=None,
     ):
         result = await original_apply(
@@ -517,14 +557,13 @@ async def test_skills_api_update_restores_previous_privacy_after_privacy_write(
             preparation,
             ctx,
             change_reason=change_reason,
-            delete_if_empty=delete_if_empty,
             owner_lease_ref=owner_lease_ref,
         )
         if skill_dict.get("name") == "rollback-privacy-after-write-skill":
             current = await self._privacy_config_service.get_current(
                 ctx, "skill", skill_dict["name"]
             )
-            assert set(current.values.values()) == {secret}
+            assert set(current.values.values()) == {"secret-old", secret}
             raise RuntimeError("privacy post-write failure")
         return result
 

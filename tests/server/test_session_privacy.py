@@ -562,7 +562,7 @@ async def test_concurrent_skill_preparations_reuse_current_fields_and_preserve_r
     results = await asyncio.gather(
         *(
             processor.apply_skill_privacy(
-                skill, preparation, ctx, change_reason="Concurrent discovery", delete_if_empty=False
+                skill, preparation, ctx, change_reason="Concurrent discovery"
             )
             for processor, preparation in zip(processors, prepared, strict=True)
         )

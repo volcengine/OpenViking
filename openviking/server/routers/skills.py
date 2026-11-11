@@ -975,7 +975,6 @@ async def update_skill(
                         preparation.privacy,
                         _ctx,
                         change_reason="auto-extracted from update_skill",
-                        delete_if_empty=True,
                         owner_lease_ref=privacy_lease,
                     )
                 )

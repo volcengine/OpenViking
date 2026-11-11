@@ -27,10 +27,7 @@ from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
 from openviking.privacy.models import UserPrivacyConfigVersion
-from openviking.privacy.reference import (
-    build_privacy_field_reference,
-    parse_privacy_field_reference,
-)
+from openviking.privacy.reference import parse_privacy_field_reference
 from openviking.privacy.rules import PrivacyMatch, find_privacy_matches
 from openviking.privacy.sanitizer import (
     DEFAULT_SANITIZER_MAX_REPLACEMENTS,
@@ -244,7 +241,6 @@ class SkillProcessor:
                         preparation.privacy,
                         ctx,
                         change_reason=privacy_change_reason,
-                        delete_if_empty=False,
                     )
                 )
             skill_abstract = self._build_skill_abstract(skill_dict)
@@ -582,7 +578,6 @@ class SkillProcessor:
         ctx: RequestContext,
         *,
         change_reason: str,
-        delete_if_empty: bool,
         owner_lease_ref: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         if (
@@ -611,44 +606,28 @@ class SkillProcessor:
             )
             values: dict[str, str] = {}
             references: dict[str, str] = {}
-            reserved_fields = self._referenced_privacy_fields(skill_dict, ctx)
+            existing_fields = set(current.values) if current is not None else set()
+            reserved_fields = existing_fields | self._referenced_privacy_fields(skill_dict, ctx)
             content = skill_dict.get("content", "")
             registered = matcher(content)
-            retained_fields: set[str] = set()
             if current is not None and preparation.settings.discovery_enabled:
-                reserved_fields.update(current.values)
-                existing = {
-                    field: value
-                    for field, value in current.values.items()
-                    if isinstance(value, str) and value
-                }
-                for field, value in sorted(existing.items()):
-                    references.setdefault(
-                        value,
-                        build_privacy_field_reference(
-                            ctx.user.user_id, "skill", skill_dict["name"], field
-                        ),
-                    )
-                present = {content[match.start : match.end] for match in registered}
-                present.update(content[match.start : match.end] for match in preparation.matches)
-                unchecked = set(existing.values()) - present
-                if unchecked:
-                    try:
-                        matches = await asyncio.to_thread(
-                            find_skill_privacy_matches, content, unchecked
-                        )
-                    except ResourceExhaustedError:
-                        # A bounded presence scan cannot prove that old fields were removed.
-                        retained_fields.update(existing)
-                    else:
-                        present.update(content[match.start : match.end] for match in matches)
-                retained_fields.update(
-                    field for field, value in existing.items() if value in present
-                )
-            for placeholder in {item.reference for item in registered}:
-                field_reference = parse_privacy_field_reference(placeholder)
-                if field_reference is not None and field_reference.category == "skill":
+                for field, value in sorted(current.values.items()):
+                    if isinstance(value, str) and value:
+                        references.setdefault(value, build_placeholder(skill_dict["name"], field))
+            for index, replacement in enumerate(registered):
+                field_reference = parse_privacy_field_reference(replacement.reference)
+                if (
+                    field_reference is not None
+                    and field_reference.owner_user_id == ctx.user.user_id
+                    and field_reference.category == "skill"
+                    and field_reference.target_key == skill_dict["name"]
+                ):
                     reserved_fields.add(field_reference.field)
+                    registered[index] = PrivacyReplacement(
+                        replacement.start,
+                        replacement.end,
+                        build_placeholder(skill_dict["name"], field_reference.field),
+                    )
             replacements = list(registered)
             index = 0
             for match in preparation.matches:
@@ -687,8 +666,7 @@ class SkillProcessor:
                 skill_dict = {**deepcopy(skill_dict), "content": rewritten}
             if not preparation.settings.discovery_enabled:
                 return skill_dict
-            referenced_fields = retained_fields | self._referenced_privacy_fields(skill_dict, ctx)
-            if values or referenced_fields:
+            if values:
                 await self._privacy_config_service.upsert(
                     ctx=ctx,
                     category="skill",
@@ -697,14 +675,7 @@ class SkillProcessor:
                     updated_by=ctx.user.user_id,
                     change_reason=change_reason,
                     **({"owner_lease_ref": lease} if lease is not None else {}),
-                    **({"preserve_fields": referenced_fields} if referenced_fields else {}),
-                )
-            elif delete_if_empty:
-                await self._privacy_config_service.delete(
-                    ctx,
-                    "skill",
-                    skill_dict["name"],
-                    **({"owner_lease_ref": lease} if lease is not None else {}),
+                    preserve_fields=existing_fields,
                 )
             return skill_dict
 
@@ -717,7 +688,6 @@ class SkillProcessor:
             preparation,
             ctx,
             change_reason="auto-extracted from add_skill",
-            delete_if_empty=False,
         )
 
     async def _generate_overview(self, skill_dict: Dict[str, Any], vlm: VLMHandle) -> str:

@@ -100,6 +100,7 @@ add_skill
    - <code>&#123;&#123;ov_privacy:skill:&#123;skill_name&#125;:&#123;field_name&#125;&#125;&#125;</code>
 3. **Metadata protection**: automatic discovery and value matching process the body, preserving metadata such as `name` and `description`.
 4. **Persisted content**: matched spans become placeholders; unmatched content remains unchanged. This processes the skill body, not every attached file.
+5. **Configuration retention**: updating a skill adds newly discovered fields while retaining existing fields and version history. Remove fields or configurations explicitly when they are no longer needed.
 
 ---
 
