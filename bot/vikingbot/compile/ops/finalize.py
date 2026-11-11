@@ -44,9 +44,7 @@ async def run(runtime: Pipeline, references: list[str]) -> RenderedBundle:
         payload = file_ops.file_bytes(artifact)
         if content_hash(payload) != artifact["sha256"]:
             raise ValueError(f"Stored file hash mismatch: {path}")
-        text = file_ops.encode_content(payload)["content"]
-        if not payload or (text is not None and not text.strip()):
-            raise ValueError(f"Empty output: {path}")
+        file_ops.validate_nonempty_content(payload, path)
         if path.lower().endswith((".md", ".json")):
             payload.decode("utf-8")
         if path.endswith(".json"):
