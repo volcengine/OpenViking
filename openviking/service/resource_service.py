@@ -86,7 +86,7 @@ from openviking.utils.git_auth import (
 )
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.media_processor import _smart_stem
-from openviking.utils.network_guard import ensure_public_remote_target
+from openviking.utils.network_guard import RequestValidator, ensure_public_remote_target
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessingPreparation, SkillProcessor
 from openviking_cli.exceptions import (
@@ -1113,6 +1113,7 @@ class ResourceService:
             source_info = await self._preflight_git_source(
                 path,
                 auth_config=preflight_git_auth,
+                request_validator=processor_kwargs.get("request_validator"),
             )
             source_name = source_name or source_info.source_name
             source_info.source_name = source_name
@@ -1533,14 +1534,17 @@ class ResourceService:
         source: str,
         *,
         auth_config: Optional[GitHttpAuthConfig] = None,
+        request_validator: Optional[RequestValidator] = None,
     ) -> _ResourceSourceInfo:
+        env = build_git_http_auth_env(auth_config, source) if auth_config is not None else None
+        env = overlay_parser_subprocess_env(
+            ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, source),
+            env,
+            request_validator=request_validator,
+        )
+
         proc = None
         try:
-            env = build_git_http_auth_env(auth_config, source) if auth_config is not None else None
-            env = overlay_parser_subprocess_env(
-                ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, source),
-                env,
-            )
             proc = await asyncio.create_subprocess_exec(
                 "git",
                 "ls-remote",

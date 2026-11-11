@@ -20,7 +20,7 @@ from openviking.utils.git_auth import (
     is_git_https_url,
     parse_git_http_auth_config,
 )
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 
 _GENERIC_CODE_HOSTING_DOMAINS = [
     "github.com",
@@ -500,44 +500,14 @@ class TestGitAccessor:
         assert resource.original_source == source
         assert token not in str(resource.meta)
 
-    async def test_github_token_is_preserved_for_archive_fallback_clone(
-        self,
-        accessor: GitAccessor,
-        tmp_path: Path,
-    ) -> None:
-        source = "https://github.com/org/private.git"
-        token = "account-token"
-        with (
-            patch(
-                "openviking.parse.accessors.git_accessor.tempfile.mkdtemp",
-                return_value=str(tmp_path),
-            ),
-            patch.object(
-                accessor,
-                "_github_zip_download",
-                new_callable=AsyncMock,
-                side_effect=RuntimeError("archive unavailable"),
-            ) as zip_download,
-            patch.object(
-                accessor,
-                "_git_clone",
-                new_callable=AsyncMock,
-                return_value="org/private",
-            ) as git_clone,
-        ):
-            await accessor.access(source, github_token=token)
+    async def test_archive_policy_denial_stops_import(self, accessor: GitAccessor) -> None:
+        def reject(_url):
+            raise PermissionDeniedError("blocked")
 
-        zip_download.assert_awaited_once_with(
-            source,
-            None,
-            str(tmp_path),
-            github_token=token,
-        )
-        clone_env = git_clone.await_args.kwargs["env"]
-        assert _git_config_entries(clone_env)[f"http.{source}.extraHeader"] == (
-            "Authorization: Basic "
-            + base64.b64encode(f"oauth2:{token}".encode()).decode("ascii")
-        )
+        with patch.object(accessor, "_git_clone", new_callable=AsyncMock) as clone:
+            with pytest.raises(PermissionDeniedError, match="blocked"):
+                await accessor.access("https://github.com/org/repo", request_validator=reject)
+        clone.assert_not_awaited()
 
     async def test_environment_github_token_does_not_replace_ssh_clone_auth(
         self,
@@ -572,6 +542,7 @@ class TestGitAccessor:
             None,
             str(tmp_path),
             github_token=token,
+            request_validator=None,
         )
         git_clone.assert_awaited_once_with(
             source,
@@ -579,6 +550,7 @@ class TestGitAccessor:
             branch=None,
             commit=None,
             env=None,
+            request_validator=None,
         )
 
     async def test_embedded_http_credentials_are_passed_through_unchanged(
