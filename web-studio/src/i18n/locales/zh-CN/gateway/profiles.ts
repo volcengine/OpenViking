@@ -117,6 +117,13 @@ const profiles = {
       description:
         '召回用最新一条用户消息作为检索文本，超出这个长度的部分会被截掉。',
     },
+    peerScope: {
+      label: 'Peer 范围',
+      description:
+        '除用户自己的记忆外，召回和 OpenViking 工具能看到哪些 Peer 的记忆。',
+      all: '所有 Peer，当前 Peer 优先',
+      actor: '仅当前 Peer',
+    },
     quotas: {
       label: '按分类限量',
       description: '为每个分类设置最多附加的条数。只检索数量大于 0 的分类。',

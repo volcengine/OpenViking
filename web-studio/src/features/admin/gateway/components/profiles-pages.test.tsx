@@ -714,6 +714,34 @@ describe('profile editor', () => {
     })
   })
 
+  it('recalls every peer by default and saves the current-peer scope', async () => {
+    // Profiles saved before the setting existed lack the field.
+    const { recall_peer_scope: _, ...legacy } = chat
+    api.listProfiles.mockResolvedValue([legacy as Profile])
+    renderAt('/admin/gateway/profiles/p2')
+    await screen.findByDisplayValue('Chat')
+    expect(saveButton().disabled).toBe(true)
+    fireEvent.click(sectionSwitch('recall'))
+    fireEvent.click(screen.getAllByText('field.advanced')[0])
+    const scope = screen.getByRole('combobox', {
+      name: 'profiles.recall.peerScope.label',
+    })
+    expect(scope.textContent).toContain('profiles.recall.peerScope.all')
+
+    fireEvent.click(scope)
+    const option = await screen.findByRole('option', {
+      name: 'profiles.recall.peerScope.actor',
+    })
+    fireEvent.mouseMove(option)
+    fireEvent.click(option)
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(api.saveProfile).toHaveBeenCalledTimes(1))
+    expect(api.saveProfile.mock.calls[0][2]).toMatchObject({
+      recall_peer_scope: 'actor',
+    })
+  })
+
   it('lets clients override settings by default and keeps the switch on reset', async () => {
     // Profiles saved before the switch existed lack the field; the gateway treats it as on.
     const { client_overrides: _, ...legacy } = chat

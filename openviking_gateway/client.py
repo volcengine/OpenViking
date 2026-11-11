@@ -11,8 +11,9 @@ from packaging.version import InvalidVersion, Version
 
 from .cache import TTLCache
 
-# Sent on recall only, as the memory plugins do by default: recall adds this peer's memories,
-# and without a peer_scope other peers' memories still come back with a small score penalty.
+# Recall adds this peer's memories; other peers' still come back with a small score penalty
+# unless the body sets peer_scope "actor". Tool calls carry it only under "actor". Without a
+# peer there is nothing to narrow to, so "actor" sends what "all" does.
 PEER_HEADER = "X-OpenViking-Actor-Peer"
 
 
@@ -116,6 +117,7 @@ class VikingClient:
                 "score_threshold": policy.score_threshold,
                 "exclude_uris": exclude[-200:],
                 "rewrite": False,
+                **({"peer_scope": "actor"} if peer and policy.recall_peer_scope == "actor" else {}),
             },
             timeout=policy.recall_timeout,
             peer=peer,
@@ -196,7 +198,7 @@ class VikingClient:
 
         return await self.tools_cache.get("tools/list", load)
 
-    async def mcp(self, method, key, params=None, timeout=120):
+    async def mcp(self, method, key, params=None, timeout=120, peer=None):
         """Stateless Streamable HTTP MCP; accept both JSON and SSE responses."""
         from .protocols import SSEDecoder
 
@@ -208,6 +210,7 @@ class VikingClient:
                     "Accept": "application/json, text/event-stream",
                     "MCP-Protocol-Version": "2025-06-18",
                     "Accept-Encoding": "identity",
+                    **peer_header(peer),
                 },
                 json={
                     "jsonrpc": "2.0",
