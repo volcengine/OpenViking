@@ -86,6 +86,14 @@ export function formatPiModelId(model) {
 
 // Persistent RPC adapter; Pi's built-in MCP client calls the same server as
 // Codex, TraeX, and Claude. The session extension only configures that client.
+// Errors from one assistant message. A later message in the same run that ends
+// with stop/toolUse clears them; process-level errors are never cleared.
+const RECOVERABLE = Symbol('piRecoverable');
+function recoverable(error) {
+  error[RECOVERABLE] = true;
+  return error;
+}
+
 export class PiAgent {
   constructor(config, store, logger, options = {}) {
     this.config = config;
@@ -708,7 +716,7 @@ export class PiAgent {
           metadata: { runtime: PI_RUNTIME.id, delivery: 'telemetry_only' },
         });
       } else if (kind === 'error') {
-        this.turnError = new Error(String(event.reason || 'pi assistant error'));
+        this.turnError = recoverable(new Error(String(event.reason || 'pi assistant error')));
       }
       return;
     }
@@ -728,7 +736,12 @@ export class PiAgent {
         const detail = stop === 'error'
           ? String(message.message?.errorMessage ?? '').replace(/\s+/g, ' ').trim().slice(0, 300)
           : '';
-        this.turnError = this.turnError ?? new Error(`pi stop: ${stop}${detail ? `: ${detail}` : ''}`);
+        this.turnError = this.turnError ?? recoverable(new Error(`pi stop: ${stop}${detail ? `: ${detail}` : ''}`));
+      } else if (stop && this.turnError?.[RECOVERABLE]) {
+        // Pi went on after a bad assistant message (e.g. a `length` cut that
+        // dropped an incomplete tool call) and a later message ended normally:
+        // the run recovered, so the earlier error must not fail the turn.
+        this.turnError = null;
       }
       return;
     }

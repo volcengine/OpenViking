@@ -583,6 +583,32 @@ describe('PiAgent persistent rpc runtime', () => {
     await agent.stop();
   });
 
+  it('does not fail a turn that recovered after a truncated assistant message', async () => {
+    const { agent, persistent, failures } = harness();
+    await agent.start();
+    const child = persistent[0];
+    agent.deliver('request', 7);
+    child.feed({ type: 'message_end', message: { stopReason: 'length' } });
+    child.feed({ type: 'message_end', message: { stopReason: 'toolUse' } });
+    child.feed({ type: 'message_end', message: { stopReason: 'stop' } });
+    child.feed({ type: 'agent_settled' });
+    assert.equal(agent.turnInProgress, false);
+    assert.deepEqual(failures, []);
+    await agent.stop();
+  });
+
+  it('still fails a turn whose last assistant message was truncated', async () => {
+    const { agent, persistent, failures } = harness();
+    await agent.start();
+    const child = persistent[0];
+    agent.deliver('request', 7);
+    child.feed({ type: 'message_end', message: { stopReason: 'toolUse' } });
+    child.feed({ type: 'message_end', message: { stopReason: 'length' } });
+    child.feed({ type: 'agent_settled' });
+    assert.deepEqual(failures.map((info) => info.error), ['pi stop: length']);
+    await agent.stop();
+  });
+
   it('interrupt emits turn-abandoned receipts and does not raise onTurnFailed', async () => {
     const abandoned = [];
     const { agent, persistent, failures } = harness({
