@@ -61,6 +61,7 @@ test('Wiki severity picker supports selection, arrows, Escape, trigger toggle an
 });
 
 test('disabled Wiki actions expose their reason on focus and ignore activation', async () => {
+  let calls = 0;
   const conflict = {
     id: 'c',
     matchText: 'text',
@@ -78,12 +79,34 @@ test('disabled Wiki actions expose their reason on focus and ignore activation',
     h(WikiDashboard, {
       kind: 'file',
       data: { conflicts: [conflict] },
-      editDisabledReason: 'Read-only document',
+      defineActions: () => [
+        {
+          key: 'edit',
+          icon: h('svg'),
+          tooltip: 'Read-only document',
+          disabled: true,
+          onClick: () => {
+            calls++;
+          },
+        },
+        {
+          key: 'missing',
+          icon: h('svg'),
+          tooltip: 'No handler',
+        },
+      ],
     }),
   );
-  const button = view.container.querySelector('[aria-label^="Manual edit:"]');
+  const button = view.container.querySelector(
+    '[aria-label="Read-only document"]',
+  );
   assert.equal(button.getAttribute('aria-disabled'), 'true');
-  assert.equal(button.getAttribute('aria-description'), 'Read-only document');
+  assert.equal(
+    view.container
+      .querySelector('[aria-label="No handler"]')
+      .getAttribute('aria-disabled'),
+    'true',
+  );
   await act(async () => {
     button.focus();
     await new Promise((resolve) => setTimeout(resolve, 350));
@@ -93,6 +116,7 @@ test('disabled Wiki actions expose their reason on focus and ignore activation',
     'Read-only document',
   );
   await act(async () => button.click());
+  assert.equal(calls, 0);
   assert.equal(
     Boolean(view.container.querySelector('[aria-expanded="true"]')),
     false,
