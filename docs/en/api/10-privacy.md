@@ -2,6 +2,8 @@
 
 Privacy configs manage sensitive values in Skills and Sessions (such as `api_key` and `token`) by `category + target_key` in the current user's space. Changed values create a version snapshot. You can query history and switch the active version. Submitting the same values as the current version does not create a new version.
 
+> You can manage Privacy configs and their versions even when automatic processing is disabled in [User settings](08-admin.md#user-settings).
+
 These examples use the current user’s API key. In trusted mode, supply the identity headers required by your deployment. Value-reading endpoints and CLI commands return stored values; tree and field-metadata endpoints omit them. `***` below is an example placeholder, not automatic redaction.
 
 Activating a version changes only the values stored in OpenViking. It does not rotate, revoke, or restore credentials at the external provider.
@@ -40,7 +42,7 @@ Activating a version changes only the values stored in OpenViking. It does not r
 
 ## Scan Stored Content
 
-Explicitly scan one persisted file or directory. The default is a dry run and never returns the matched value. With `fix=true`, unambiguous matches are replaced and affected content is refreshed asynchronously.
+Explicitly scan one persisted file or directory. The default is a dry run and never returns the matched value. With `fix=true`, matches are replaced and affected content is refreshed asynchronously.
 
 ```text
 POST /api/v1/privacy-configs/scan
@@ -55,6 +57,7 @@ POST /api/v1/privacy-configs/scan
 ```
 
 `uri` is required. Broad scope-based scans are intentionally unsupported. `node_limit` must be between 1 and 1000. The server also enforces one scan per process, 20 file reads per second, 1 MiB per file, 16 MiB total input, 1,000 replacements per file, at most 32 reference details per matched file, at most 100 repaired files, and a cooperative 60-second scan budget. A second concurrent request receives `RESOURCE_EXHAUSTED`. Repair never waits for semantic/vector refresh work. Responses report skipped files, truncation, the stop reason, and the effective limits. When one value maps to multiple Privacy fields, the result reports `ambiguous` and never chooses a reference arbitrarily.
+By default, a fixed order selects a restorable reference. Set `OPENVIKING_PRIVACY_AMBIGUOUS_STRICT=1` to reject such matching operations.
 
 ---
 

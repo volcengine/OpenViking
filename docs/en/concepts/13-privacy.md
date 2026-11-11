@@ -8,7 +8,7 @@ Privacy configs separate sensitive values (such as `api_key` and `token`) from c
 
 Core goals:
 
-- Auto-extract sensitive values at write time and replace with placeholders
+- When enabled, extract sensitive values at write time and replace with placeholders
 - Auto-restore values at read time according to the content type
 - Provide version query, switching, and auditability
 
@@ -58,37 +58,54 @@ viking://user/{user_id}/privacy/{category}/{target_key}/
 
 ---
 
+## Usage
+
+Automatic sanitization is disabled by default (`mode=off`), while placeholder restoration is enabled (`restore=true`). Configure `privacy` through [User settings](../api/08-admin.md#user-settings), or set deployment defaults in `server.user_config_defaults.privacy`. User settings take precedence.
+
+| `mode` | Where new sensitive values are discovered | Where registered values are matched |
+|---|---|---|
+| `off` (default) | Disabled | Disabled |
+| `registered` | Disabled | Skills and Sessions |
+| `auto` (recommended) | Skills and Sessions | Skills and Sessions |
+| `auto_strict` | Skills and Sessions | Skills, Sessions, ordinary file writes, resource imports, and default reads |
+
+`restore` is independent of `mode`: when enabled, `raw=true` reads of Skills and Sessions restore placeholders to their current values. Add detection rules with `custom_rules`, or use `never_mask` to exclude specific values from automatic discovery and matching.
+
+> These settings do not affect explicit lookups with `ov privacy resolve`.
+
+Built-in detectors recognize formats such as Volcengine Ark API keys, GitHub tokens, JWTs, and common private key formats. For credentials in other formats, register the value under `credential` or add a detection rule with `custom_rules`. Changes to these settings apply to subsequent read and write requests.
+
+---
+
 ## Skill Privacy Extraction and Restore
 
 ### Registered-Value Protection (Write Path)
 
-When adding a Skill via `add_skill`, sensitive values are extracted and replaced with placeholders.
+When adding a Skill via `add_skill`, `mode` controls registered-value protection and discovery of new values.
 
 ```
 add_skill
-  -> SkillProcessor._sanitize_skill_privacy
-    -> PrivacySanitizer (protect registered personal credentials)
-    -> extract_skill_privacy_values (LLM extracts values)
-    -> placeholderize_skill_content_with_blocks (replace plaintext with placeholders)
-    -> privacy.upsert(category="skill", target_key=skill_name, values=...)
+  -> SkillProcessor.prepare_skill_privacy (find sensitive values in the body)
+  -> SkillProcessor.apply_skill_privacy
+    -> PrivacySanitizer (match registered values)
+    -> replace matched text with placeholders
+    -> save newly detected values in the Skill's Privacy config
   -> write placeholderized SKILL.md
 ```
 
 #### Key Points
 
-1. **Extraction source**: model returns JSON; `values` is used as privacy key-value pairs.  
+1. **Extraction source**: by default, extraction uses the rule detector and custom rules. Set `OPENVIKING_SKILL_PRIVACY_EXTRACTION_METHOD=vlm` to switch to model extraction.
 2. **Content replacement**: matched plaintext is replaced by placeholders:
    - <code>&#123;&#123;ov_privacy:skill:&#123;skill_name&#125;:&#123;field_name&#125;&#125;&#125;</code>
-3. **Block mapping captured**:
-   - `original_content_blocks`
-   - `replacement_content_blocks`
+3. **Metadata protection**: automatic discovery and value matching process the body, preserving metadata such as `name` and `description`.
 4. **Persisted content**: matched spans become placeholders; unmatched content remains unchanged. This processes the skill body, not every attached file.
 
 ---
 
 ### Restore on Read (Load Path)
 
-Reads of `SKILL.md` preserve placeholders by default. With explicit `raw=true`, `FSService.read` attempts to restore them.
+Reads of `SKILL.md` preserve placeholders by default. With explicit `raw=true` and `restore=true`, `FSService.read` attempts to restore them.
 
 ```
 fs.read(uri)
@@ -129,37 +146,39 @@ Placeholders that reference the current user's Privacy fields are also restored.
 
 ---
 
-`read` returns restored values, and extra-config notices also include values. Privacy APIs and historical snapshots can return full values as well. This feature does not redact responses or encrypt storage; see [Storage Encryption](./10-encryption.md) for encryption.
+With restoration enabled, `raw=true` reads return actual values, and extra-config notices also include values. Privacy APIs and historical snapshots can return full values as well. This feature does not encrypt storage; see [Storage Encryption](./10-encryption.md) for encryption.
 
 ## Session Privacy Extraction and Restore
 
 ### Automatic Extraction (Write Path)
 
-When writing messages to a Session, values matching registered Privacy entries are replaced with placeholders before tool output externalization and message persistence. Automatic discovery of new sensitive values is temporarily disabled in code because false positives create excessive invalid entries. It will be revisited later; there is currently no runtime configuration switch.
+The `mode` setting determines which sensitive values are replaced with placeholders in Session messages. Replacement happens before the messages are saved or tool output is externalized.
 
 ```
 Session.add_messages_async
   -> extract_and_store_session_privacy
-    -> PrivacySanitizer (protect registered personal credentials)
-    -> skip new-value discovery; do not add Session Privacy fields
+    -> PrivacySanitizer (match registered values)
+    -> detect new values using built-in and custom rules (auto / auto_strict)
+    -> save newly detected values in the Session's Privacy config
+    -> replace matched text with placeholders
   -> externalize tool output
   -> write placeholderized messages
 ```
 
 #### Key Points
 
-1. **Matching source**: only registered Privacy values are matched; fixed rules and sensitive field names no longer trigger new-value extraction.
-2. **Coverage**: TextPart text, ContextPart abstracts, and ToolPart input and output. Tool inputs are traversed recursively to match registered values; field names no longer cause entire values to be stored and masked.
+1. **Matching sources**: the current user's registered credentials and values in this Session's Privacy config. When discovery is enabled, built-in and custom rules also detect new sensitive values.
+2. **Coverage**: TextPart text, ContextPart abstracts, and ToolPart input and output, including strings nested in dictionaries or lists. Field names alone do not cause an entire value to be stored or masked.
 3. **Content replacement**: sensitive spans in the original content are replaced with placeholders:
    - Sensitive values belonging to the current Session use the same placeholder format, with the Session ID or its hash value: <code>&#123;&#123;ov_privacy:session:&#123;session_id&#125;:&#123;field_name&#125;&#125;&#125;</code>.
-   - If a sensitive span matches registered personal credentials (`credential`), prefer the uniquely matching field's placeholder, for example <code>&#123;&#123;ov_privacy:alice:viking://~/privacy/credential/github#/values/pat&#125;&#125;</code>.
-4. **Persisted content**: matched spans are saved as placeholders; unmatched content remains unchanged. No new Session Privacy data is created. Existing configs and restoration of historical placeholders remain supported.
+   - If a sensitive span matches registered personal credentials (`credential`), prefer its field placeholder, for example <code>&#123;&#123;ov_privacy:alice:viking://~/privacy/credential/github#/values/pat&#125;&#125;</code>.
+4. **Persisted content**: matched text is saved as placeholders; unmatched content remains unchanged. Repeated detections of the same value reuse the same entry in the Session's Privacy config. Existing placeholders are left unchanged.
 
 ---
 
 ### Restore on Read (Load Path)
 
-Reads of Session messages or externalized tool output preserve placeholders by default. With explicit `raw=true`, `FSService.read` attempts to restore them.
+Reads of Session messages or externalized tool output preserve placeholders by default. With explicit `raw=true` and `restore=true`, `FSService.read` attempts to restore them.
 
 ```
 fs.read(uri)
@@ -200,10 +219,12 @@ Restoration is supported for these files under the current user's Session direct
 ## Relationship with CLI/API
 
 - Management plane: Privacy API/CLI for versions (query, write, rollback)
-- Content plane: automatically restore placeholders through `read`
+- Content plane: restore placeholders by passing `raw=true` to `read`
 - Separation of concerns: content files hold placeholders; the privacy service holds sensitive values and versions
 
 PrivacySanitizer does not infer sensitivity from field names. String values in the active Privacy catalog participate in automatic content scanning and reference replacement only when they contain at least 6 Unicode characters. Shorter values can still be stored, referenced, and explicitly resolved, but are excluded from global substring replacement to reduce false positives in ordinary text. Python owns catalog loading, reference generation, and cache policy; matcher construction, leftmost-longest matching, and text rewriting run in RAGFS's Rust Aho-Corasick implementation through a reusable PyO3 matcher that releases the GIL while scanning. The matcher catalog is cached per user and process-local revision; local changes invalidate it immediately, and a 3600-second TTL bounds staleness after changes made by another worker or node.
+
+Values stored under `credential` for the current user take priority. Otherwise, only values in the current Skill's or Session's Privacy config that match a recognized credential format are used. Matching respects word boundaries and skips values listed in `never_mask`.
 
 Using a GitHub Personal Access Token (PAT) as an example:
 
@@ -238,7 +259,7 @@ ov privacy scan --uri viking://~/resources/project-a
 
 - Reduces plaintext sensitive data exposure in skill content
 - Version history supports configuration changes after external credential rotation
-- Transparent to callers: `read` returns restored, executable skill content
+- Transparent to callers: `read` with `raw=true` returns restored, executable skill content
 - Notice blocks improve troubleshooting when config is incomplete or over-provisioned
 
 ---
