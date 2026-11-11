@@ -708,6 +708,9 @@ class WatchManager:
             if connector_auth is not None:
                 kwargs["connector_auth_config"] = connector_auth
             kwargs["connector_states"] = task.connector_states
+        # PR radar is a watch sidecar: it must run on every trigger, including
+        # the unchanged-HEAD path below that short-circuits content ingestion.
+        await self._run_pr_radar_sidecar(task, ctx)
         if not connector:
             checkpoint = await self._probe_git_checkpoint(task, kwargs, ctx)
             if checkpoint is not None:
@@ -731,6 +734,32 @@ class WatchManager:
             on_task_created=on_task_created,
             **kwargs,
         )
+
+    async def _run_pr_radar_sidecar(self, task: WatchTask, ctx: RequestContext) -> None:
+        """Invoke the PR radar without ever affecting the watch run outcome."""
+        from openviking.resource.pr_radar_runner import PrRadarRunner
+
+        try:
+            runner = PrRadarRunner(self._viking_fs)
+            result = await runner.maybe_run(task, ctx)
+            if result.status in {"skipped", "failed"}:
+                logger.warning(
+                    "[WatchManager] PR radar %s for watch %s: %s",
+                    result.status,
+                    task.task_id,
+                    result.reason,
+                )
+            elif result.status == "published":
+                logger.info(
+                    "[WatchManager] PR radar published %s PR(s) to %s for watch %s",
+                    result.pr_count,
+                    result.target_uri,
+                    task.task_id,
+                )
+        except Exception:  # noqa: BLE001 -- sidecar failures must never fail the watch
+            logger.exception(
+                "[WatchManager] PR radar sidecar crashed for watch %s", task.task_id
+            )
 
     async def _probe_git_checkpoint(
         self, task: WatchTask, kwargs: Dict[str, Any], ctx: RequestContext

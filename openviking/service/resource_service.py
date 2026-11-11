@@ -2632,6 +2632,10 @@ class ResourceService:
         if not watch_manager:
             return None
 
+        from openviking.resource.pr_radar_runner import validate_pr_radar_config
+
+        validate_pr_radar_config(path, processor_kwargs)
+
         task = await watch_manager.create_task(
             path=path,
             account_id=ctx.account_id,
