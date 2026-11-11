@@ -13,6 +13,7 @@ from secrets import token_urlsafe
 from typing import Any, TypeVar
 
 from openviking.message.part import ContextPart, ImagePart, Part, TextPart, ToolPart
+from openviking.privacy.models import UserPrivacyConfigVersion
 from openviking.privacy.reference import (
     build_privacy_field_reference,
     parse_privacy_field_reference,
@@ -61,22 +62,25 @@ async def extract_and_store_session_privacy(
         if settings.discovery_enabled
         else nullcontext()
     ) as lease:
-        existing_references = {}
-        if settings.discovery_enabled and settings.custom_rules:
-            current = await privacy.get_current(ctx, "session", target_key)
-            values = current.values if current else {}
-            for field, value in sorted(values.items()):
+        snapshot = None
+        if settings.discovery_enabled:
+            snapshot = await privacy.get_current(ctx, "session", target_key)
+            if snapshot is None:
+                snapshot = UserPrivacyConfigVersion()
+        existing_references: dict[str, str] = {}
+        if snapshot is not None and settings.custom_rules:
+            for field, value in sorted(snapshot.values.items()):
                 if not isinstance(value, str) or not 0 < len(value) < MIN_PROTECTED_VALUE_CHARS:
                     continue
-                reference = (
-                    build_session_placeholder(target_key, field)
-                    if re.fullmatch(r"[A-Za-z0-9_-]{8}", field)
-                    else build_privacy_field_reference(
-                        ctx.user.user_id, "session", target_key, field
-                    )
-                )
+                reference = _build_session_field_reference(ctx.user.user_id, target_key, field)
                 existing_references.setdefault(value, reference)
-        matcher = await _prepare_session_matcher(sanitizer, ctx, target_key, settings=settings)
+        matcher = await _prepare_session_matcher(
+            sanitizer,
+            ctx,
+            target_key,
+            settings=settings,
+            snapshot=snapshot if lease is not None else None,
+        )
         for _ in range(MAX_FIELD_ID_ATTEMPTS):
             sanitized, added = await asyncio.to_thread(
                 extract_session_privacy_values,
@@ -89,7 +93,7 @@ async def extract_and_store_session_privacy(
             if not added:
                 return sanitized
             try:
-                await privacy.insert_values(
+                snapshot = await privacy.insert_values(
                     ctx,
                     "session",
                     target_key,
@@ -105,7 +109,13 @@ async def extract_and_store_session_privacy(
         else:
             raise ResourceExhaustedError("Could not allocate unique Session privacy field IDs")
         # Refresh the matcher to include newly saved values.
-        matcher = await _prepare_session_matcher(sanitizer, ctx, target_key, settings=settings)
+        matcher = await _prepare_session_matcher(
+            sanitizer,
+            ctx,
+            target_key,
+            settings=settings,
+            snapshot=snapshot if lease is not None else None,
+        )
         rewriter = _SessionReferenceRewriter(matcher)
         return await asyncio.to_thread(rewriter.transform_messages, sanitized)
 
@@ -141,32 +151,47 @@ def build_session_placeholder(target_key: str, key: str) -> str:
     return f"{{{{ov_privacy:session:{target_key}:{key}}}}}"
 
 
+def _build_session_field_reference(owner: str, target_key: str, field: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_-]{8}", field):
+        return build_session_placeholder(target_key, field)
+    return build_privacy_field_reference(owner, "session", target_key, field)
+
+
 async def _prepare_session_matcher(
     sanitizer: PrivacySanitizer | None,
     ctx: RequestContext,
     target_key: str,
     *,
     settings: ResolvedPrivacyConfig,
+    snapshot: UserPrivacyConfigVersion | None = None,
 ) -> _Matcher:
     """Use Session placeholders for matching eight-character fields in this Session."""
     if sanitizer is None:
         return lambda _: []
-    matcher = await sanitizer.prepare_matcher(ctx, scope=("session", target_key), settings=settings)
+    matcher = await sanitizer.prepare_matcher(
+        ctx, scope=("session", target_key), settings=settings, snapshot=snapshot
+    )
+    references: dict[str, str] = {}
 
     def find(text: str) -> list[PrivacyReplacement]:
         matches: list[PrivacyReplacement] = []
         for match in matcher(text):
-            reference = parse_privacy_field_reference(match.reference)
-            if (
-                reference is not None
-                and reference.owner_user_id == ctx.user.user_id
-                and reference.category == "session"
-                and reference.target_key == target_key
-                and re.fullmatch(r"[A-Za-z0-9_-]{8}", reference.field)
-            ):
-                match = replace(
-                    match, reference=build_session_placeholder(target_key, reference.field)
-                )
+            reference = references.get(match.reference)
+            if reference is None:
+                reference = match.reference
+                parsed = parse_privacy_field_reference(reference)
+                if (
+                    parsed is not None
+                    and parsed.owner_user_id == ctx.user.user_id
+                    and parsed.category == "session"
+                    and parsed.target_key == target_key
+                ):
+                    reference = _build_session_field_reference(
+                        ctx.user.user_id, target_key, parsed.field
+                    )
+                references[match.reference] = reference
+            if reference != match.reference:
+                match = replace(match, reference=reference)
             matches.append(match)
         return matches
 

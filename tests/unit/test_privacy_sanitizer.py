@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from openviking.privacy.models import UserPrivacyConfigVersion
 from openviking.privacy.reference import (
     PrivacyFieldReference,
     build_privacy_field_reference,
@@ -257,6 +258,35 @@ async def test_waiting_matcher_refreshes_object_snapshot():
     find = await pending
     reference = build_privacy_field_reference("alice", "session", "current", "key")
     assert not find(first) and [match.reference for match in find(second)] == [reference]
+
+
+@pytest.mark.parametrize("values", [{}, {"key": "AKLT" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"}])
+async def test_locked_snapshot_reuses_object_values_and_refreshes_credentials(values, monkeypatch):
+    catalog = _PrivacyCatalog({"credential": {"service": {"key": "first1"}}})
+    sanitizer = PrivacySanitizer(catalog)
+    snapshot = UserPrivacyConfigVersion(version=1 if values else 0, values=values)
+    get_current = catalog.get_current
+
+    async def read_current(ctx, category, target):
+        if category == "session":
+            raise AssertionError("The locked object snapshot should be reused")
+        return await get_current(ctx, category, target)
+
+    monkeypatch.setattr(catalog, "get_current", read_current)
+    async with sanitizer._cache_lock:
+        pending = asyncio.create_task(
+            sanitizer.prepare_matcher(_ctx(), scope=("session", "current"), snapshot=snapshot)
+        )
+        await asyncio.sleep(0)
+        catalog.configs["credential"]["service"]["key"] = "second2"
+        catalog.revision += 1
+    find = await pending
+    source = "first1 second2 " + " ".join(values.values())
+    assert [match.reference for match in find(source)] == [
+        build_privacy_field_reference("alice", "credential", "service", "key"),
+        *[build_privacy_field_reference("alice", "session", "current", field) for field in values],
+    ]
+    assert catalog.build_reads == 1
 
 
 async def test_sanitizer_cache_expires_after_ttl_even_without_local_revision_change():

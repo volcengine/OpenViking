@@ -125,17 +125,20 @@ class PrivacySanitizer:
         scope: tuple[str, str] | None = None,
         settings: ResolvedPrivacyConfig | None = None,
         uri: str = "",
+        snapshot: UserPrivacyConfigVersion | None = None,
     ) -> Callable[[str], list[PrivacyReplacement]]:
         """Prepare a cached, bounded match query for a batch of original texts.
 
         The callable may run in a worker thread. It returns positions and existing
         references so rule extraction can combine hits before rewriting content.
+        A snapshot may be supplied under the target lock; version zero denotes
+        a target without a persisted configuration.
         """
         if settings is None:
             settings = await self._privacy.get_settings(ctx)
         if settings.mode == "off":
             return lambda _: []
-        matcher = await self._matcher(ctx, scope=scope, settings=settings)
+        matcher = await self._matcher(ctx, scope=scope, settings=settings, snapshot=snapshot)
 
         def find(content: str) -> list[PrivacyReplacement]:
             try:
@@ -293,17 +296,18 @@ class PrivacySanitizer:
         *,
         scope: tuple[str, str] | None = None,
         settings: ResolvedPrivacyConfig,
+        snapshot: UserPrivacyConfigVersion | None = None,
     ) -> _PreparedMatcher:
         settings_hash = hashlib.sha256(
             json.dumps(asdict(settings), sort_keys=True).encode("utf-8")
         ).hexdigest()
-        cache_key, current = await self._matcher_state(ctx, scope, settings_hash)
+        cache_key, current = await self._matcher_state(ctx, scope, settings_hash, snapshot)
         now = self._monotonic_clock()
         cached = self._cache.get(cache_key)
         if cached is not None and now - cached[0] < self._cache_ttl_seconds:
             return cached[1]
         async with self._cache_lock:
-            cache_key, current = await self._matcher_state(ctx, scope, settings_hash)
+            cache_key, current = await self._matcher_state(ctx, scope, settings_hash, snapshot)
             now = self._monotonic_clock()
             cached = self._cache.get(cache_key)
             if cached is not None and now - cached[0] < self._cache_ttl_seconds:
@@ -322,12 +326,18 @@ class PrivacySanitizer:
             return matcher
 
     async def _matcher_state(
-        self, ctx: RequestContext, scope: tuple[str, str] | None, settings_hash: str
+        self,
+        ctx: RequestContext,
+        scope: tuple[str, str] | None,
+        settings_hash: str,
+        snapshot: UserPrivacyConfigVersion | None,
     ) -> tuple[
         tuple[str, str, int, str, tuple[str, str] | None, int, str],
         UserPrivacyConfigVersion | None,
     ]:
-        current = await self._privacy.get_current(ctx, *scope) if scope else None
+        current = snapshot
+        if current is None and scope:
+            current = await self._privacy.get_current(ctx, *scope)
         return (
             (
                 ctx.account_id,
