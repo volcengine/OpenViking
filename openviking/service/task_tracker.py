@@ -95,7 +95,7 @@ _CANCELLABLE_TASK_TYPES = {
 _IDENTITY_CLEANUP_TASK_TYPES = {"account_delete", "user_delete"}
 _CANCEL_POLL_INTERVAL = 30
 _WAIT_INITIAL_POLL_INTERVAL = 0.05
-_WAIT_MAX_POLL_INTERVAL = 10.0
+_WAIT_MAX_POLL_INTERVAL = 1.0
 _PUBLIC_QUEUE_NAMES = ("Semantic", "Embedding")
 
 _sanitize_error = sanitize_error
