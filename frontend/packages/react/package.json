@@ -107,7 +107,37 @@
       "types": "./dist/components/experience-dashboard/index.d.ts",
       "import": "./dist/components/experience-dashboard.js"
     },
-    "./components/experience-dashboard/style.css": "./dist/components/experience-dashboard/style.css"
+    "./components/experience-dashboard/style.css": "./dist/components/experience-dashboard/style.css",
+    "./components/email-login-form": {
+      "types": "./dist/components/email-login-form/index.d.ts",
+      "import": "./dist/components/email-login-form.js"
+    },
+    "./components/email-login-form/style.css": "./dist/components/email-login-form/style.css",
+    "./components/api-key-login-form": {
+      "types": "./dist/components/api-key-login-form/index.d.ts",
+      "import": "./dist/components/api-key-login-form.js"
+    },
+    "./components/api-key-login-form/style.css": "./dist/components/api-key-login-form/style.css",
+    "./components/password-reset-request-form": {
+      "types": "./dist/components/password-reset-request-form/index.d.ts",
+      "import": "./dist/components/password-reset-request-form.js"
+    },
+    "./components/password-reset-request-form/style.css": "./dist/components/password-reset-request-form/style.css",
+    "./components/password-setup-form": {
+      "types": "./dist/components/password-setup-form/index.d.ts",
+      "import": "./dist/components/password-setup-form.js"
+    },
+    "./components/password-setup-form/style.css": "./dist/components/password-setup-form/style.css",
+    "./components/login-method-selector": {
+      "types": "./dist/components/login-method-selector/index.d.ts",
+      "import": "./dist/components/login-method-selector.js"
+    },
+    "./components/login-method-selector/style.css": "./dist/components/login-method-selector/style.css",
+    "./components/invitation-confirmation": {
+      "types": "./dist/components/invitation-confirmation/index.d.ts",
+      "import": "./dist/components/invitation-confirmation.js"
+    },
+    "./components/invitation-confirmation/style.css": "./dist/components/invitation-confirmation/style.css"
   },
   "scripts": {
     "dev": "rslib build --watch",

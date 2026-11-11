@@ -419,15 +419,12 @@ export interface FilePreviewEditing {
 /**
  * 交给宿主的动作上下文：组件持有的视图与编辑状态，以及改变它们的方法。
  *
- * 组件只渲染外壳与正文，不内置复制、下载、视图切换、编辑这些按钮；宿主在
- * `slots.actions` 里用这份上下文自己拼。状态仍由组件维护，宿主不必接管。
+ * 默认工具栏与宿主自定义的 `slots.actions` 共用此上下文。
  *
  * The action context handed to the host: the view and editing state the component
  * owns, plus the methods that change it.
  *
- * The component renders only the shell and the body — it ships no copy, download,
- * view-switch or edit buttons. A host composes them in `slots.actions` from this
- * context. The state stays with the component; the host does not take it over.
+ * The default toolbar and host overrides in `slots.actions` share this context.
  */
 export interface FilePreviewActions {
   /** 当前视图模式。The current view mode. */
@@ -474,15 +471,10 @@ export interface FilePreviewActions {
  * body is the host's, so there is no component-provided header to fill.
  */
 export interface FilePreviewHeaderSlots {
-  /**
-   * 标题行右侧的动作区。组件不内置任何按钮，复制、下载、视图切换、编辑都由
-   * 宿主用上下文里的状态与方法自行渲染。
-   *
-   * The action area on the right of the header. The component ships no buttons of
-   * its own: copy, download, view switch and editing are all rendered by the host
-   * from the state and methods in the context.
-   */
+  /** 替换默认工具栏。Replaces the default toolbar; use null to hide it. */
   actions?: ReactNode | ((actions: FilePreviewActions) => ReactNode);
+  /** 追加到默认工具栏的宿主操作。Host actions appended to the default toolbar. */
+  extraActions?: ReactNode;
   /**
    * 标题旁的额外内容，例如权限标记、状态徽标或版本号；不需要时不传。
    * Extra content next to the title, for example a permission tag, a status badge
@@ -554,15 +546,16 @@ export interface FilePreviewFileTabSlots extends FilePreviewHeaderSlots {
 export interface FilePreviewLabels {
   /** 展开折叠路径层级的无障碍名称。Accessible name for hidden path levels. */
   showHiddenPath?: string;
-  /**
-   * 复制路径按钮的文案。这是组件自己渲染的唯一按钮——其余动作按钮由宿主在
-   * `slots.actions` 里自绘，文案也归宿主。
-   *
-   * Label of the copy-path button. It is the only button the component renders
-   * itself; every other action button belongs to the host's `slots.actions`,
-   * copy included.
-   */
   copyPath?: string;
+  copyContent?: string;
+  copied?: string;
+  copyFailed?: string;
+  previewMode?: string;
+  sourceMode?: string;
+  viewSwitch?: string;
+  edit?: string;
+  editFile?: string;
+  save?: string;
   /** 编辑区文本框的无障碍名称。Accessible name of the editor textarea. */
   editor?: string;
   /** 读取失败后退出编辑态的按钮文案。Label of the button that leaves editing after a failed load. */

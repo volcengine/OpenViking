@@ -199,69 +199,6 @@
   color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
 }
 
-/* 标题行右侧：分段器 + 分隔线 + 图标按钮。 */
-.ov-file-browser__detail-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* 预览 / 源码分段器：浅灰底、8px 圆角，选中项白底加 1px 描边。 */
-/* The preview / source switch: a light grey track, 8px radius, the active item
-   white with a 1px outline. */
-.ov-file-browser__segmented {
-  display: inline-grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
-  align-items: center;
-  box-sizing: border-box;
-  height: 28px;
-  padding: 2px;
-  border-radius: 8px;
-  background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default, #f6f7fa));
-}
-
-.ov-file-browser__segment {
-  display: inline-flex;
-  min-width: 50px;
-  height: 24px;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
-  font: inherit;
-  font-size: 13px;
-  line-height: 22px;
-  letter-spacing: 0.039px;
-  cursor: pointer;
-}
-
-.ov-file-browser__segment[data-active] {
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #ffffff));
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
-  font-weight: 500;
-  box-shadow: 0 0 0 1px
-    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default, #f0f2fa));
-}
-
-.ov-file-browser__detail-sep {
-  flex: none;
-  width: 1px;
-  height: 10px;
-  background: var(
-    --ov-ui-color-border-1,
-    var(--ov-ui-border-1-default, #f0f2fa)
-  );
-}
-
-/* 图标按钮：28px 方形、透明底，与分段器同高。 */
-/* Icon buttons: 28px square on a transparent fill, matching the switch's height. */
-
-/* 底部元信息：字符数、更新时间等，靠右对齐。 */
 /* ── 内容区的摘要页签：下划线样式 ─────────────────────────────────── */
 
 /*

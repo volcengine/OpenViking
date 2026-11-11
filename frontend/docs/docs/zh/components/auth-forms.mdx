@@ -1,0 +1,85 @@
+# 登录与认证表单
+
+六个不耦合接口、路由、登录态、存储和页面布局的 React 视图。内置中英文文案，可通过 `labels`、标题和操作配置覆盖。
+
+```tsx file="../../_demos/auth-forms.tsx" preview
+
+```
+
+示例只模拟状态，不发送认证请求、不创建账号。可以切换登录方式、协议配置，模拟提交等待、成功和失败。
+
+## 组件范围
+
+| 组件                       | 职责                       | 专属属性                                                                                             |
+| -------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `LoginMethodSelector`      | 选择宿主配置的登录方式     | `methods`、`onSelect`                                                                                |
+| `EmailLoginForm`           | 邮箱密码输入与校验         | `defaultEmail`、`readOnlyEmail`、`forgotPassword`、`alternateLogin`、`onSubmit({ email, password })` |
+| `ApiKeyLoginForm`          | API Key 输入、显隐和校验   | `alternateLogin`、`onSubmit({ apiKey })`                                                             |
+| `PasswordResetRequestForm` | 请求或重新发送重置邮件     | `defaultEmail`、`sentMessage: { email, message }`、`retryAfter`、`onSubmit({ email })`               |
+| `PasswordSetupForm`        | 首次设置和重置密码共用表单 | `account`、`passwordHint`、`validatePassword`、`onSubmit({ password })`                              |
+| `InvitationConfirmation`   | 展示邀请信息、确认加入     | `details`、`onAccept`、`decline`、`defer`、`acceptLabel`、`locale`                                   |
+
+## 导入
+
+```tsx
+import { EmailLoginForm } from '@openviking/react/components/email-login-form';
+import type {
+  EmailLoginFormProps,
+  AuthAgreements,
+  AuthLabels,
+} from '@openviking/react/components/email-login-form';
+import '@openviking/react/components/email-login-form/style.css';
+```
+
+每个组件有独立的 kebab-case JS 和 `style.css` 入口；包根也导出六个组件及其主 Props 类型。协议、文案和操作等配置类型只从表单子路径导出。不依赖 AML、Starling 或私有图标包，样式使用公开包已有的 `--ov-ui-color-*` 变量；暗色跟随宿主的 `html.dark`。
+
+## 表单配置
+
+以下通用属性适用于四个表单。登录方式选择和邀请确认的属性以对应类型为准。
+
+| 属性                    | 默认值              | 行为                                                       |
+| ----------------------- | ------------------- | ---------------------------------------------------------- |
+| `loading` / `disabled`  | `false`             | 禁用输入和提交；`loading` 同时呈现忙碌状态                 |
+| `error`                 | 不显示              | 展示宿主传入的错误，不解释后端错误码                       |
+| `title` / `description` | 不显示              | 可选标题与描述                                             |
+| `className`             | 无                  | 根节点附加类名                                             |
+| `back`                  | 不显示              | `{ label, onClick }` 返回操作                              |
+| `agreements`            | 不显示、不拦截      | 配置非空 `items` 后才展示协议和确认逻辑                    |
+| `locale`                | Provider 或 `en-US` | 传 `zh-CN` 或 `en-US` 覆盖最近的语言作用域                 |
+| `labels`                | 当前语言文案        | `undefined` 继承默认文案，空字符串隐藏文案但不改变校验结果 |
+
+`forgotPassword`、`alternateLogin`、`decline` 和 `defer` 同样使用 `{ label, onClick }`。只有提供点击回调才展示入口，组件不会自动导航。
+
+```tsx
+<EmailLoginForm
+  forgotPassword={{ label: '忘记密码', onClick: openReset }}
+  agreements={{
+    items: [{ label: '用户协议', href: 'https://example.com/terms' }],
+    confirmation: {
+      title: '阅读并同意协议',
+      description: '继续之前，请阅读以下协议。',
+      confirmText: '同意并继续',
+      cancelText: '取消',
+    },
+  }}
+  loading={pending}
+  error={errorMessage}
+  onSubmit={handleLogin}
+/>
+```
+
+## 交互约定
+
+表单内部管理输入草稿、字段错误、密码显隐和协议交互。始终先校验表单，再确认协议；取消或按 Escape 保留输入，不勾选、不提交。点击同意后勾选并提交当前有效值。不内置任何产品的协议链接或条款。更换账号或协议内容时，宿主须通过新 React `key` 重置输入与同意状态。
+
+邮箱和 API Key 登录校验必填，邮箱另外检查基本格式。登录密码不应用新密码强度规则。设置密码检查必填和两次一致性；`validatePassword(password)` 返回错误字符串表示不通过，返回 `undefined` 表示通过。未提供时只检查必填和一致性。示例里的强度规则只是宿主配置，不是默认策略。密码和 API Key 不会被组件存储或记录，密码不会被 trim。
+
+`defaultEmail` 仅用于初值；需要清空敏感输入或切换账号时，以新 `key` 重新挂载。提交回调只表达意图，不返回服务端 DTO。宿主必须在异步操作期间设置 `loading`，失败时传入 `error`。组件不自动重试操作，也不内置成功后的跳转。
+
+重置邮件的 `sentMessage` 绑定对应邮箱，修改成其他邮箱后不再展示旧成功提示。`retryAfter` 为宿主持续更新的剩余秒数，组件只展示等待时间并阻止重新提交，不创建计时器、不负责邮件发送。
+
+邀请详情只接收 `{ label, value }` 展示行。由宿主适配预览响应，并判断展示登录、设置密码、加入确认或直接进入工作区。接受、拒绝和稍后回调都不自行调用接口。
+
+## 宿主职责
+
+GetSession、Cookie/CSRF、认证客户端、Token 解析、邀请状态机、账号存储、跨 Tab 检测、密码策略、邮件发送、接口请求取消和路由跳转均由宿主负责。
