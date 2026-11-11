@@ -1,6 +1,6 @@
 {
   "name": "@ov-superagent/web",
-  "version": "0.5.1-preview",
+  "version": "0.5.2-preview",
   "license": "AGPL-3.0",
   "private": true,
   "description": "Independent local Activity Console and fixed-route proxy for OpenViking SuperAgent.",

@@ -14,7 +14,7 @@ Both platforms use the same [installation and setup guide](../install.md).
 curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/superagent/install.sh | sh
 ```
 
-This installs the version in `superagent/latest` (currently `0.5.1-preview`; until a stable release ships, `latest` follows previews). To pin a version, use `curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/superagent/releases/<version>/install.sh | sh -s -- --version <version>`.
+This installs the version in `superagent/latest` (currently `0.5.2-preview`; until a stable release ships, `latest` follows previews). To pin a version, use `curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/superagent/releases/<version>/install.sh | sh -s -- --version <version>`.
 
 The installer detects Linux or macOS and x64 or arm64 (including WSL2), downloads the matching archive, verifies SHA-256, extracts it to `~/.ov-superagent/releases/<version>`, adds `~/.ov-superagent/bin` to your shell PATH, and enters `ov-superagent setup`. Only sh, curl, tar, and sha256sum (or shasum) are required. The package supplies pinned Node, PM2, lark-cli, and Pi without modifying existing Node, npm, PM2, or git installations. Before switching, it runs the new bundled Node; incompatible system libraries or CPU architecture leave the previous installation intact. musl systems such as Alpine are unsupported.
 
