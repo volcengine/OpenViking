@@ -53,7 +53,7 @@ npm run lint -- packages/react/src/index.ts docs/rspress.config.ts
 npm run lint:fix -- 'docs/docs/_demos/**/*.tsx'
 ```
 
-Library output is `packages/react/dist/`; documentation output is `docs/doc_build/`. Both development and production documentation consume the package exports without source aliases or TypeScript paths. Import `@openviking/react/style.css`, a category's `components/style.css` or `modules/style.css`, or a specific `<category>/<module>/style.css`; each is complete for its scope. JS imports do not load CSS. The full stylesheet resolves to `dist/style.css`. There are no category-level `components` or `modules` JS exports. Rslib automatically externalizes React and ReactDOM through their peer dependency declarations. Publication is controlled by the separate release workflow and is not part of local validation. See [React releases](.changeset/README.md) for the version PR and manual tag workflows.
+Library output is `packages/react/dist/`; documentation output is `docs/doc_build/`. Both development and production documentation consume the package exports without source aliases or TypeScript paths. Import `@openviking/react/style.css`, a category's `components/style.css` or `modules/style.css`, or a specific `<category>/<module>/style.css`; each is complete for its scope. JS imports do not load CSS. The full stylesheet resolves to `dist/style.css`. There are no category-level `components` or `modules` JS exports. Rslib automatically externalizes React and ReactDOM through their peer dependency declarations. Publication is controlled by the separate release workflow and is not part of local validation. See [React releases](.changeset/README.md) for automatic betas and manual stable releases.
 
 ## Target layout
 
@@ -98,7 +98,7 @@ The UI workflow checks relevant pull requests and pushes. The existing product d
 - TOS: `/ui/` is uploaded to the existing documentation bucket with the existing repository secrets.
 - Domain, Pages environment rules, and TOS secrets remain repository administration settings.
 - A branch push does not publish the production website. Production publication follows the existing `main` workflows.
-- The release workflow publishes to npm after a Changesets version PR is merged or a matching release tag is pushed.
+- The release workflow publishes source changes on main as npm betas; stable releases require a manual workflow run or a matching release tag.
 
 Do not deploy this output as a second independent GitHub Pages site in this repository: deploying a new artifact would replace the product documentation.
 
