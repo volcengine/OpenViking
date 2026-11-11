@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 from openviking.core.namespace import context_type_for_uri, is_session_uri, owner_fields_for_uri
+from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import Eq
 from openviking.storage.ovpack.format import (
@@ -92,8 +93,12 @@ async def read_text_if_exists(viking_fs, uri: str, ctx: RequestContext) -> str:
             return ""
         content = await viking_fs.read_file(uri, ctx=ctx)
         return content.decode("utf-8") if isinstance(content, bytes) else content
-    except Exception:
-        return ""
+    except Exception as exc:
+        if is_not_found_error(exc):
+            return ""
+        # An unreadable sidecar is not an absent one: exporting "" would embed
+        # an empty synopsis for a directory whose abstract still exists.
+        raise
 
 
 async def directory_vector_texts(viking_fs, uri: str, ctx: RequestContext) -> dict[int, str]:

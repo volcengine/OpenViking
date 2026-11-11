@@ -9,6 +9,7 @@ from typing import Any
 
 from openviking.core.context import ResourceContentType
 from openviking.core.namespace import is_session_uri
+from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import Eq
 from openviking.utils.embedding_utils import get_resource_content_type
@@ -104,8 +105,13 @@ async def _read_text_if_exists(viking_fs, uri: str, ctx: RequestContext) -> str:
             return ""
         content = await viking_fs.read_file(uri, ctx=ctx)
         return content.decode("utf-8") if isinstance(content, bytes) else str(content)
-    except Exception:
-        return ""
+    except Exception as exc:
+        if is_not_found_error(exc):
+            return ""
+        # A transient storage failure must not read as an absent sidecar: that
+        # would drop the directory's expected L0/L1 records and let an
+        # incomplete vector snapshot pass the export consistency gate.
+        raise
 
 
 def _directory_candidates(
