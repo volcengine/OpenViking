@@ -772,11 +772,6 @@ class OpenVikingService:
             )
             tracker = get_task_tracker()
             await self._queue_manager.prepare_task_tracking(tracker)
-            # Target reservations need recovery even when Work is already durable.
-            restored_tasks = await self._queue_manager.get_queued_tasks(
-                tracker, self._queue_manager.EXTERNAL_TASK
-            )
-            await self._external_task_service.restore_tasks(restored_tasks)
 
         if self._session_auto_commit_scheduler is not None:
             await self._session_auto_commit_scheduler.start()

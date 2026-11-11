@@ -666,7 +666,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         return await tracker.get(task.task_id, account_id=task.account_id, user_id=task.user_id)
 
     first = await create()
-    waiting = await create(user="bob")
+    same_target = await create(user="bob")
     independent = await create(target="viking://resources/other")
     cancelled = await create()
     other_account = await create(account="other-account")
@@ -684,14 +684,9 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     assert queried_task == current_task
     assert queried.result["meta"]["request"].get("args", {}) == public_args
 
-    await queue.dequeue()  # Same target rotates, including across users.
-    assert (await state(waiting)).status == TaskStatus.PENDING
-    assert waiting.task_id not in submitted
-    assert await tracker.has_work(
-        waiting.task_id,
-        account_id=waiting.account_id,
-        user_id=waiting.user_id,
-    )  # Requeue survives ACK of the old delivery.
+    # These legacy requests have no Compile lifecycle; the task runner adds no target lock.
+    await queue.dequeue()
+    assert (await state(same_target)).status == TaskStatus.COMPLETED
     await queue.dequeue()
     assert (await state(independent)).status == TaskStatus.COMPLETED
     await tracker.cancel(cancelled.task_id, account_id="acct", user_id="alice")
@@ -714,14 +709,11 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         tasks = ExternalTaskService()
         tasks.register(CompileService(service._config, tasks, SimpleNamespace()))
         queue.set_dequeue_handler(ExternalTaskProcessor(tasks))
-        await tasks.restore_tasks(await manager.prepare_task_tracking(tracker))
-        # Recover processing behind pending work to prove recovery reserves the target first.
+        await manager.prepare_task_tracking(tracker)
+        # Replay the interrupted delivery using its persisted Runtime session.
         backend.pending.extend(backend.processing.values())
         backend.processing.clear()
 
-    await queue.dequeue()
-    assert waiting.task_id not in submitted
-    assert (await state(waiting)).status == TaskStatus.PENDING
     if finish == "restart_cancel":
         await tracker.cancel(first.task_id, account_id="acct", user_id="alice")
     release.set()
@@ -741,8 +733,6 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     if expected == TaskStatus.FAILED:
         assert "UNAVAILABLE" in (await state(first)).error
         assert cancel_entered.is_set()
-    await queue.dequeue()
-    assert (await state(waiting)).status == TaskStatus.COMPLETED
     assert submitted.count(first.task_id) == 1
     assert not backend.pending and not backend.processing
 

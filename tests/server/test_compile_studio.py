@@ -241,7 +241,6 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch):
     provider = SimpleNamespace(
         task_type="compile",
         task_id_prefix="cmp_",
-        serialization_key=lambda payload: payload["to"],
         poll_interval_seconds=0.001,
         poll_max_attempts=1,
         submit=AsyncMock(return_value="external-task"),
@@ -283,19 +282,97 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch):
         service = ExternalTaskService()
         service.register(provider)
         await manager.prepare_task_tracking(tracker)
-        recovered = await manager.get_queued_tasks(tracker, manager.EXTERNAL_TASK)
-        assert {task.task_id for task in recovered} == {again.task_id, waiting.task_id}
-        await service.restore_tasks(recovered)
-
-        assert not await service.execute(waiting.task_id, other.account_id, other.user.user_id)
-        provider.submit.assert_not_awaited()
         assert await service.execute(again.task_id, ctx.account_id, ctx.user.user_id)
+        provider.submit.assert_not_awaited()
         assert await service.execute(waiting.task_id, other.account_id, other.user.user_id)
+        provider.submit.assert_awaited_once()
         assert (await tracker.get(waiting.task_id, account_id="acme", user_id="bob")).result == {
             "done": True
         }
     finally:
         transport.close()
+
+
+@pytest.mark.asyncio
+async def test_compile_target_serialization_across_services(service, app, client, monkeypatch):
+    """Shared target state gates writers and survives recovery by a different worker."""
+    from openviking.server.auth import get_request_context
+    from openviking.service.compile_service import (
+        CompileService,
+        CompileSessionAccepted,
+        CompileSessionStatus,
+    )
+    from openviking.service.compile_targets import CompileStateStore
+    from openviking.service.task_tracker import get_task_tracker
+
+    ctx = RequestContext(user=service.user, role=Role.ADMIN)
+    app.dependency_overrides[get_request_context] = lambda: ctx
+    owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
+    target = "viking://resources/wiki"
+    await service.viking_fs.write_file("viking://resources/source/a.md", "source", ctx=ctx)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(enqueue=AsyncMock()),
+    )
+    monkeypatch.setattr(service.fs, "finalize_compile_directories", AsyncMock())
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def poll(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return CompileSessionStatus(status="completed", stage="done")
+
+    runtime = SimpleNamespace(
+        create=AsyncMock(return_value=CompileSessionAccepted(session_id="runtime-task")),
+        get=poll,
+    )
+
+    def worker():
+        tasks = ExternalTaskService()
+        provider = CompileService(service.compile._config, tasks, service.fs)
+        provider.configure_local_backend("http://localhost:1", "")
+        provider.configure_lifecycle(
+            CompileLifecycle(CompileStateStore(service.viking_fs._async_agfs), service.viking_fs)
+        )
+        monkeypatch.setattr(provider, "_client", lambda: runtime)
+        tasks.register(provider)
+        return tasks
+
+    service.compile.configure_local_backend("http://localhost:1", "")
+    task_ids = []
+    for _ in range(2):
+        response = await client.post(
+            "/api/v1/compile",
+            json={
+                "from": ["viking://resources/source"],
+                "to": target,
+                "skill": "viking://system/compile/example-skills/llm-wiki",
+            },
+        )
+        assert response.status_code == 202, response.text
+        task_ids.append(response.json()["result"]["task_id"])
+    first, second = task_ids
+    tasks_a, tasks_b = worker(), worker()
+    running = asyncio.create_task(tasks_a.execute(first, **owner))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        assert not await tasks_b.execute(second, **owner)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        assert not await tasks_b.execute(second, **owner)
+        release.set()
+        assert await tasks_b.execute(first, **owner)
+        runtime.create.assert_awaited_once()
+        # The original worker observes shared release after another worker finishes.
+        assert await tasks_a.execute(second, **owner)
+        for task_id in task_ids:
+            assert (await get_task_tracker().get(task_id, **owner)).status == TaskStatus.COMPLETED
+    finally:
+        release.set()
+        if not running.done():
+            running.cancel()
+        await asyncio.gather(running, return_exceptions=True)
 
 
 @pytest.mark.asyncio

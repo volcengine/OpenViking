@@ -809,9 +809,6 @@ class ConnectorDelegate:
     def poll_interval_seconds(self) -> float:
         return get_openviking_config().connector.poll_interval_ms / 1000.0
 
-    def serialization_key(self, payload: Mapping[str, Any]) -> None:
-        return None
-
     @staticmethod
     def submission_meta(external_task_id: str) -> Dict[str, Any]:
         return {"connector_task_key": external_task_id}
