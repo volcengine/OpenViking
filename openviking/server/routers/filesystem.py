@@ -21,7 +21,7 @@ from openviking.server.routers.content import set_tags as content_set_tags
 from openviking.storage.acl import AclSpec
 from openviking.storage.vector_ids import is_vector_record_id
 from openviking.ttl.wiring import attach_expires_at
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, OpenVikingError
 
 router = APIRouter(prefix="/api/v1/fs", tags=["filesystem"])
 
@@ -214,12 +214,20 @@ async def attrs(
     if (uri is None) == (request is None):
         raise InvalidArgumentError("exactly one of uri or uris is required")
     service = get_service()
-    if request is not None:
-        result = await service.fs.attrs_batch(request.uris, ctx=_ctx)
-        return Response(status="ok", result=result)
-    uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
+    single = request is None
+    uris = (
+        request.uris
+        if request is not None
+        else [validate_request_viking_uri(resolve_path_variables(uri), _ctx)]
+    )
     try:
-        return Response(status="ok", result=await service.fs.attrs(uri, ctx=_ctx))
+        result = await service.fs.attrs_batch(uris, ctx=_ctx)
+        if single:
+            if result["failed"]:
+                error = result["failed"][0]["error"]
+                raise OpenVikingError(error["message"], code=error["code"])
+            result = result["items"][0]
+        return Response(status="ok", result=result)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:

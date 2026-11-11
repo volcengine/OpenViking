@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Content endpoints for OpenViking HTTP Server."""
 
-from functools import partial
 from typing import Literal, Optional
 from urllib.parse import quote
 
@@ -32,7 +31,7 @@ from openviking.server.telemetry import run_operation
 from openviking.storage.acl import AclSpec
 from openviking.storage.vector_ids import is_vector_record_id
 from openviking.telemetry import TelemetryRequest
-from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
+from openviking_cli.exceptions import NotFoundError, OpenVikingError, PermissionDeniedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -367,29 +366,30 @@ async def set_tags(
     """Set explicit k=v retrieval tags metadata for a file or directory."""
     service = get_service()
     tags = [] if request.mode == "clear" else request.tags or []
-    if request.uris is not None:
-        fn = partial(
-            service.fs.set_tags_batch,
-            uris=request.uris,
-            tags=tags,
-            mode=request.mode,
-            recursive=request.recursive,
-            ctx=_ctx,
-        )
-    else:
+    single = request.uris is None
+    uris = request.uris
+    if single:
         uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
-        fn = partial(
-            service.fs.set_tags,
-            uri=uri,
+        uris = [uri]
+    async def update_tags():
+        result = await service.fs.set_tags_batch(
+            uris=uris,
             tags=tags,
             mode=request.mode,
             recursive=request.recursive,
             ctx=_ctx,
         )
+        if single:
+            if result["failed"]:
+                error = result["failed"][0]["error"]
+                raise OpenVikingError(error["message"], code=error["code"])
+            return result["items"][0]
+        return result
+
     execution = await run_operation(
         operation="content.set_tags",
         telemetry=request.telemetry,
-        fn=fn,
+        fn=update_tags,
     )
     return Response(
         status="ok",
