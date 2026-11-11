@@ -31,7 +31,7 @@ from openviking.storage.acl import (
     acl_filter,
     is_acl_uri,
 )
-from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
+from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, Range, RawDSL
 from openviking.storage.vector_migration import (
     rewrite_transfer_uri,
     rewrite_vector_record,
@@ -1012,20 +1012,40 @@ class _SingleAccountBackend:
         cursor: Optional[str] = None,
         output_fields: Optional[List[str]] = None,
     ) -> tuple[List[Dict[str, Any]], Optional[str]]:
-        """Return an updated_at-ordered page and propagate backend failures."""
-        offset = int(cursor) if cursor else 0
+        """Return an updated_at-ordered page via a keyset cursor.
+
+        The local engine's scalar sorter honors ordering but not offset pages —
+        every offset returns the same first ``limit`` records, so a numeric
+        cursor loops forever and fail-closed scans report "records missing"
+        that actually never left page one (#7468). Pagination therefore keys
+        off the last record's ``updated_at`` (an indexed date-time field on
+        every context collection): each page continues strictly after it.
+        """
+        page_filter: Any = filter
+        if cursor:
+            keyset = Range(field="updated_at", gt=cursor)
+            page_filter = And([filter, keyset]) if filter is not None else keyset
+        fields = list(output_fields) if output_fields else None
+        added_sort_field = False
+        if fields is not None and "updated_at" not in fields:
+            fields.append("updated_at")
+            added_sort_field = True
         records = await self.strict_query(
-            filter=filter,
+            filter=page_filter,
             limit=limit,
-            offset=offset,
-            output_fields=output_fields,
-            # The local engine's scalar sorter does not return records for
-            # path/string fields. ``updated_at`` is an indexed date-time field
-            # on every context collection and provides stable offset pages.
+            output_fields=fields,
             order_by="updated_at",
             order_desc=False,
         )
-        next_cursor = str(offset + len(records)) if len(records) == limit else None
+        next_cursor: Optional[str] = None
+        if len(records) == limit and records:
+            last_updated_at = records[-1].get("updated_at")
+            if last_updated_at is not None:
+                next_cursor = str(last_updated_at)
+        if added_sort_field:
+            for record in records:
+                if isinstance(record, dict):
+                    record.pop("updated_at", None)
         return records, next_cursor
 
     @_backend_operation
