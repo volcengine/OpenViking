@@ -100,6 +100,202 @@ CREATE INDEX IF NOT EXISTS ov_pathlock_subtree_prefix_2048
     ON public.ov_pathlock_tokens(md5(namespace),public.path_prefix_2048(path));
 "#;
 
+#[derive(Debug, PartialEq, Eq)]
+enum SchemaState {
+    Ready,
+    NeedsInitialization,
+}
+
+fn incompatible_schema() -> PathLockError {
+    PathLockError::Io(
+        "Incompatible PostgreSQL PathLock schema; ask the migration role to repair it".into(),
+    )
+}
+
+/// Inspect catalogs without executing DDL. A pre-provisioned runtime role does
+/// not own the table, even when it has every privilege needed for lock operations.
+fn inspect_schema(tx: &mut Transaction<'_>) -> PathLockResult<SchemaState> {
+    if tx
+        .query_one("SELECT current_setting('server_encoding')", &[])
+        .map_err(db_error)?
+        .get::<_, String>(0)
+        != "UTF8"
+    {
+        return Err(PathLockError::Io(
+            "PostgreSQL PathLock requires UTF8 server encoding".into(),
+        ));
+    }
+    let table = tx
+        .query_opt(
+            "SELECT c.oid, c.relkind::text FROM pg_catalog.pg_class c
+             JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+             WHERE n.nspname='public' AND c.relname='ov_pathlock_tokens'",
+            &[],
+        )
+        .map_err(db_error)?;
+    let Some(table) = table else {
+        return Ok(SchemaState::NeedsInitialization);
+    };
+    if table.get::<_, String>(1) != "r" {
+        return Err(incompatible_schema());
+    }
+    let table_oid: u32 = table.get(0);
+    let columns = tx
+        .query(
+            "SELECT a.attname::text, a.atttypid::regtype::text, a.attnotnull,
+                    co.collname::text, pg_catalog.pg_get_expr(d.adbin,d.adrelid)
+             FROM pg_catalog.pg_attribute a
+             LEFT JOIN pg_catalog.pg_collation co ON co.oid=a.attcollation
+             LEFT JOIN pg_catalog.pg_attrdef d
+               ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+             WHERE a.attrelid=$1 AND a.attnum>0 AND NOT a.attisdropped",
+            &[&table_oid],
+        )
+        .map_err(db_error)?;
+    for name in ["namespace", "path", "owner", "time_ns", "token"] {
+        let Some(column) = columns.iter().find(|row| row.get::<_, String>(0) == name) else {
+            return Err(incompatible_schema());
+        };
+        if column.get::<_, String>(1) != "text"
+            || !column.get::<_, bool>(2)
+            || (matches!(name, "namespace" | "path" | "time_ns")
+                && column.get::<_, Option<String>>(3).as_deref() != Some("C"))
+        {
+            return Err(incompatible_schema());
+        }
+    }
+    let primary_key = tx
+        .query_opt(
+            "SELECT ARRAY(
+                 SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(num,ord)
+                 JOIN pg_catalog.pg_attribute a
+                   ON a.attrelid=c.conrelid AND a.attnum=k.num ORDER BY k.ord)
+             FROM pg_catalog.pg_constraint c WHERE c.conrelid=$1 AND c.contype='p'",
+            &[&table_oid],
+        )
+        .map_err(db_error)?
+        .map(|row| row.get::<_, Vec<String>>(0));
+    let id = columns.iter().find(|row| row.get::<_, String>(0) == "id");
+    let legacy = primary_key.as_deref() == Some(&["namespace".into(), "path".into()]);
+    if legacy {
+        if id.is_some() {
+            return Err(incompatible_schema());
+        }
+    } else if primary_key.as_deref() != Some(&["id".into()])
+        || !id.is_some_and(|row| {
+            row.get::<_, String>(1) == "uuid"
+                && row.get::<_, bool>(2)
+                && row.get::<_, Option<String>>(4).as_deref() == Some("gen_random_uuid()")
+        })
+    {
+        return Err(incompatible_schema());
+    }
+
+    let mut needs_initialization = legacy;
+    let function = tx
+        .query_opt(
+            "SELECT p.prorettype='bytea'::regtype, l.lanname::text,
+                    p.provolatile::text, p.proisstrict, p.proparallel::text,
+                    p.prosrc, p.prosecdef, p.proconfig IS NULL, p.prokind::text
+             FROM pg_catalog.pg_proc p
+             JOIN pg_catalog.pg_language l ON l.oid=p.prolang
+             WHERE p.oid=to_regprocedure('public.path_prefix_2048(text)')",
+            &[],
+        )
+        .map_err(db_error)?;
+    if let Some(function) = function {
+        let body = function
+            .get::<_, String>(5)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase();
+        if !function.get::<_, bool>(0)
+            || function.get::<_, String>(1) != "sql"
+            || function.get::<_, String>(2) != "i"
+            || !function.get::<_, bool>(3)
+            || function.get::<_, String>(4) != "s"
+            || body != "select pg_catalog.substring(pg_catalog.convert_to($1, 'utf8'), 1, 2048)"
+            || function.get::<_, bool>(6)
+            || !function.get::<_, bool>(7)
+            || function.get::<_, String>(8) != "f"
+        {
+            return Err(incompatible_schema());
+        }
+    } else {
+        needs_initialization = true;
+    }
+
+    for (name, second_key) in [
+        ("ov_pathlock_lookup", "md5(path)"),
+        ("ov_pathlock_expiry", "time_ns"),
+        ("ov_pathlock_subtree_prefix_2048", "path_prefix_2048(path)"),
+    ] {
+        let index = tx
+            .query_opt(
+                "SELECT i.indrelid=$1, i.indisvalid AND i.indisready AND i.indislive,
+                        NOT i.indisunique AND i.indnkeyatts=2 AND i.indnatts=2
+                          AND i.indpred IS NULL, am.amname::text,
+                        pg_catalog.pg_get_indexdef(i.indexrelid,1,true),
+                        pg_catalog.pg_get_indexdef(i.indexrelid,2,true)
+                 FROM pg_catalog.pg_class c
+                 JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+                 LEFT JOIN pg_catalog.pg_index i ON i.indexrelid=c.oid
+                 LEFT JOIN pg_catalog.pg_am am ON am.oid=c.relam
+                 WHERE n.nspname='public' AND c.relname=$2",
+                &[&table_oid, &name],
+            )
+            .map_err(db_error)?;
+        if let Some(index) = index {
+            // The legacy expiry index is deliberately replaced during migration.
+            if legacy && name == "ov_pathlock_expiry" {
+                continue;
+            }
+            if index.get::<_, Option<bool>>(0) != Some(true)
+                || index.get::<_, Option<bool>>(1) != Some(true)
+                || index.get::<_, Option<bool>>(2) != Some(true)
+                || index.get::<_, Option<String>>(3).as_deref() != Some("btree")
+                || index.get::<_, Option<String>>(4).as_deref() != Some("md5(namespace)")
+                || index.get::<_, Option<String>>(5).as_deref() != Some(second_key)
+            {
+                return Err(incompatible_schema());
+            }
+        } else {
+            needs_initialization = true;
+        }
+    }
+    Ok(if needs_initialization {
+        SchemaState::NeedsInitialization
+    } else {
+        SchemaState::Ready
+    })
+}
+
+fn initialize_schema(tx: &mut Transaction<'_>) -> PathLockResult<()> {
+    // Fix catalog deparsing and function resolution independently of the DSN's
+    // search_path. All persistent objects still live in the public schema.
+    tx.batch_execute("SET LOCAL search_path = pg_catalog, public")
+        .map_err(db_error)?;
+    if inspect_schema(tx)? == SchemaState::Ready {
+        return Ok(());
+    }
+    tx.batch_execute(INITIALIZE_SCHEMA).map_err(|error| {
+        if error.code().is_some_and(|code| code.code() == "42501") {
+            PathLockError::Io(
+                "PostgreSQL PathLock schema requires initialization or migration; \
+                 ask the migration role to complete it before restarting (SQLSTATE 42501)"
+                    .into(),
+            )
+        } else {
+            db_error(error)
+        }
+    })?;
+    if inspect_schema(tx)? != SchemaState::Ready {
+        return Err(incompatible_schema());
+    }
+    Ok(())
+}
+
 fn db_error(error: postgres::Error) -> PathLockError {
     // Do not expose server messages: they can contain SQL parameters or credentials.
     if error
@@ -358,12 +554,18 @@ impl PostgresPathLockProvider {
         config.connect_timeout(CONNECT_TIMEOUT);
         config.application_name(&format!("ov-pathlock:{namespace}"));
         let mut client = connect(&config)?;
-        let mut tx = client.transaction().map_err(db_error)?;
+        // Read catalogs after the initialization gate using a fresh snapshot,
+        // even if the connection defaults to Repeatable Read.
+        let mut tx = client
+            .build_transaction()
+            .isolation_level(IsolationLevel::ReadCommitted)
+            .start()
+            .map_err(db_error)?;
         tx.batch_execute(SET_TIMEOUTS).map_err(db_error)?;
         // A separate, global initialization lock serializes concurrent CREATE TABLE.
         tx.query_one("SELECT pg_advisory_xact_lock(187003451, 0)", &[])
             .map_err(db_error)?;
-        tx.batch_execute(INITIALIZE_SCHEMA).map_err(db_error)?;
+        initialize_schema(&mut tx)?;
         tx.commit().map_err(db_error)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(Some(client))),
@@ -768,6 +970,184 @@ impl PathLockProvider for PostgresPathLockProvider {
 #[cfg(test)]
 mod schema_tests {
     use super::*;
+
+    // These two tests use a separate disposable database. The admin DSN must
+    // own its schema objects and be able to SET ROLE to the runtime DSN's user.
+    // The runtime user needs CONNECT, public USAGE, table DML and function
+    // EXECUTE, but must not own the table or have public CREATE.
+    fn provisioned_schema() -> (Client, String) {
+        let admin_dsn = std::env::var("OV_TEST_PG_SCHEMA_ADMIN_DSN").unwrap();
+        let runtime_dsn = std::env::var("OV_TEST_PG_SCHEMA_RUNTIME_DSN").unwrap();
+        let mut admin = Client::connect(&admin_dsn, postgres::NoTls).unwrap();
+        let mut tx = admin.transaction().unwrap();
+        tx.batch_execute(SET_TIMEOUTS).unwrap();
+        tx.query_one("SELECT pg_advisory_xact_lock(187003451, 0)", &[])
+            .unwrap();
+        initialize_schema(&mut tx).unwrap();
+        tx.commit().unwrap();
+        let mut runtime = Client::connect(&runtime_dsn, postgres::NoTls).unwrap();
+        let row = runtime
+            .query_one(
+                "SELECT current_user::text,
+                        has_schema_privilege('public','CREATE'),
+                        pg_has_role(c.relowner,'USAGE'),
+                        has_table_privilege(c.oid,'SELECT,INSERT,UPDATE,DELETE'),
+                        has_function_privilege('public.path_prefix_2048(text)','EXECUTE')
+                 FROM pg_catalog.pg_class c
+                 WHERE c.oid='public.ov_pathlock_tokens'::regclass",
+                &[],
+            )
+            .unwrap();
+        assert!(!row.get::<_, bool>(1), "runtime role must lack CREATE");
+        assert!(
+            !row.get::<_, bool>(2),
+            "runtime role must not own the table"
+        );
+        assert!(row.get::<_, bool>(3));
+        assert!(row.get::<_, bool>(4));
+        assert_eq!(
+            admin
+                .query_one("SELECT current_database()::text", &[])
+                .unwrap()
+                .get::<_, String>(0),
+            runtime
+                .query_one("SELECT current_database()::text", &[])
+                .unwrap()
+                .get::<_, String>(0)
+        );
+        (admin, row.get(0))
+    }
+
+    #[tokio::test]
+    #[ignore = "requires separate OV_TEST_PG_SCHEMA_ADMIN_DSN and OV_TEST_PG_SCHEMA_RUNTIME_DSN"]
+    async fn provisioned_schema_runtime_role_can_build_and_use_locks() {
+        use crate::core::builder::{build_default_stack, RagfsConfig};
+        use crate::lock::PathLockConfig;
+
+        tokio::task::spawn_blocking(|| drop(provisioned_schema()))
+            .await
+            .unwrap();
+        let namespace = format!("schema-runtime-{}", uuid::Uuid::new_v4());
+        let config = || RagfsConfig {
+            pathlock: PathLockConfig {
+                provider: "postgres".into(),
+                service_name: Some(namespace.clone()),
+                postgres_dsn_env: Some("OV_TEST_PG_SCHEMA_RUNTIME_DSN".into()),
+                ..PathLockConfig::default()
+            },
+            ..RagfsConfig::default()
+        };
+        let first = build_default_stack(config()).await.unwrap();
+        let held = first
+            .pathlock_manager
+            .acquire_tree("/shared", Duration::ZERO, None)
+            .await
+            .unwrap();
+        // Reinitialization must preserve the existing lease.
+        let second = build_default_stack(config()).await.unwrap();
+        assert!(second
+            .pathlock_manager
+            .acquire_exact("/shared/child", Duration::ZERO, None)
+            .await
+            .is_err());
+        first.pathlock_manager.refresh(&held).await.unwrap();
+        first.pathlock_manager.release(&held).await.unwrap();
+        let held = second
+            .pathlock_manager
+            .acquire_exact("/shared/child", Duration::ZERO, None)
+            .await
+            .unwrap();
+        second.pathlock_manager.release(&held).await.unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires separate OV_TEST_PG_SCHEMA_ADMIN_DSN and OV_TEST_PG_SCHEMA_RUNTIME_DSN"]
+    fn provisioned_schema_rejects_missing_and_incompatible_objects() {
+        let (mut admin, runtime_role) = provisioned_schema();
+        let set_role = format!("SET LOCAL ROLE \"{}\"", runtime_role.replace('"', "\"\""));
+        let legacy_sql = r#"
+            DROP TABLE public.ov_pathlock_tokens;
+            CREATE TABLE public.ov_pathlock_tokens (
+                namespace TEXT COLLATE "C" NOT NULL,
+                path TEXT COLLATE "C" NOT NULL,
+                owner TEXT NOT NULL,
+                time_ns TEXT COLLATE "C" NOT NULL CHECK(length(time_ns)=39),
+                token TEXT NOT NULL,
+                PRIMARY KEY(namespace,path)
+            );
+            CREATE INDEX ov_pathlock_expiry ON public.ov_pathlock_tokens(namespace,time_ns);
+        "#;
+        for (mutation, expected_error) in [
+            ("DROP INDEX public.ov_pathlock_lookup", "migration"),
+            ("DROP FUNCTION public.path_prefix_2048(text) CASCADE", "migration"),
+            (legacy_sql, "migration"),
+            (
+                "DROP INDEX public.ov_pathlock_lookup;
+                 CREATE INDEX ov_pathlock_lookup ON public.ov_pathlock_tokens(md5(path),md5(namespace))",
+                "Incompatible",
+            ),
+            (
+                "DROP INDEX public.ov_pathlock_lookup;
+                 CREATE INDEX ov_pathlock_lookup ON public.ov_pathlock_tokens(md5(namespace),md5(path))
+                 WHERE owner='partial'",
+                "Incompatible",
+            ),
+            (
+                "ALTER TABLE public.ov_pathlock_tokens ALTER COLUMN id DROP DEFAULT",
+                "Incompatible",
+            ),
+            (
+                "ALTER TABLE public.ov_pathlock_tokens ALTER COLUMN time_ns TYPE TEXT COLLATE \"default\"",
+                "Incompatible",
+            ),
+            (
+                "CREATE OR REPLACE FUNCTION public.path_prefix_2048(text) RETURNS bytea
+                 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS 'SELECT convert_to($1, ''UTF8'')'",
+                "Incompatible",
+            ),
+        ] {
+            let mut tx = admin.transaction().unwrap();
+            tx.batch_execute(SET_TIMEOUTS).unwrap();
+            tx.batch_execute(mutation).unwrap();
+            tx.batch_execute(&set_role).unwrap();
+            let error = initialize_schema(&mut tx).unwrap_err().to_string();
+            assert!(error.contains(expected_error), "{mutation}: {error}");
+            // In particular, do not continue after a DDL permission error.
+            tx.rollback().unwrap();
+        }
+        for (mutation, preserve_lease) in [
+            ("DROP INDEX public.ov_pathlock_subtree_prefix_2048", true),
+            (legacy_sql, true),
+            (
+                "DROP TABLE public.ov_pathlock_tokens; DROP FUNCTION public.path_prefix_2048(text)",
+                false,
+            ),
+        ] {
+            let mut tx = admin.transaction().unwrap();
+            tx.batch_execute(SET_TIMEOUTS).unwrap();
+            tx.batch_execute(mutation).unwrap();
+            if preserve_lease {
+                tx.batch_execute(
+                    "INSERT INTO public.ov_pathlock_tokens(namespace,path,owner,time_ns,token)
+                     VALUES ('schema-test','/held','owner',repeat('0',39),'preserved')",
+                )
+                .unwrap();
+            }
+            initialize_schema(&mut tx).unwrap();
+            initialize_schema(&mut tx).unwrap();
+            assert_eq!(inspect_schema(&mut tx).unwrap(), SchemaState::Ready);
+            if preserve_lease {
+                assert_eq!(
+                    tx.query_one(
+                        "SELECT token FROM public.ov_pathlock_tokens WHERE namespace='schema-test' AND path='/held'",
+                        &[],
+                    ).unwrap().get::<_, String>(0),
+                    "preserved"
+                );
+            }
+            tx.rollback().unwrap();
+        }
+    }
 
     #[test]
     #[ignore = "requires OV_TEST_PG_DSN"]
