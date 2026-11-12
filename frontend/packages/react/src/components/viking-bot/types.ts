@@ -86,6 +86,8 @@ export interface VikingBotComposerProps extends VikingBotInputFeatures {
   onFilesAdded?: (files: readonly File[]) => void;
   /** 移除一个附件。Removes an attachment. */
   onAttachmentRemove?: (attachment: VikingBotAttachment) => void;
+  /** 打开已选中的文件或目录引用。Opens a selected file or directory reference. */
+  onOpenUri?: (uri: string) => void;
   /** 上报发送意图；由宿主发送并清空草稿。省略时不能发送。Reports the send intent. */
   onSend?: (draft: VikingBotDraft) => void;
   /** 停止正在进行的回复。省略时不展示停止动作。Stops the streaming reply. */
@@ -158,7 +160,7 @@ export interface VikingBotProps
   onSend?: (draft: VikingBotDraft) => void;
   /** 停止正在进行的回复。Stops the streaming reply. */
   onCancel?: () => void;
-  /** 打开消息中引用的资源。Opens a resource referenced by a message. */
+  /** 打开消息资源或输入区引用。Opens a message resource or composer reference. */
   onOpenUri?: (uri: string) => void;
   /** 复制由宿主执行，组件只上报意图。The host copies; the component reports intent. */
   onCopy?: (text: string) => void;

@@ -170,7 +170,13 @@ test('Console exposes the terminal empty state and lets the host replace its qui
       'OpenViking CLI',
     );
 
-    await host.render({ quickCommands: ['status', 'missing', 'help'] });
+    await host.render({
+      quickCommands: [
+        { name: 'status', value: '' },
+        { name: 'missing', value: '' },
+        { name: 'help', value: '' },
+      ],
+    });
     assert.deepEqual(names(), ['status', 'help']);
 
     await host.render({ quickCommands: [] });

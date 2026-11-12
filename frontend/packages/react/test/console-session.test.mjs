@@ -50,6 +50,7 @@ test('scope, identity and new-session resets cannot restore a prior keyboard dra
         ...host.container.querySelectorAll('.ov-tui__empty-action'),
       ].find((button) => button.textContent.includes('status'));
       await click(status);
+      assert.equal(host.input.value, 'ov status ');
       await key(host.input, 'Enter', { ctrlKey: true });
       await host.press('Command history');
       await click(

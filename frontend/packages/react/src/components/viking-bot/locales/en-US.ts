@@ -15,6 +15,7 @@ const messages = {
   searchReferences: 'Search files and directories',
   emptyReferences: 'No matching files or directories',
   removeReference: 'Remove reference',
+  openReference: 'Open {uri}',
   expandReference: 'Expand {name}',
   collapseReference: 'Collapse {name}',
   welcomeTitle: 'Welcome to VikingBot',

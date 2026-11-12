@@ -4,7 +4,11 @@ import type {
 } from '@openviking/react/components/tui';
 import { createTuiCommands } from '#tui-commands';
 import { createTuiRecords } from '#tui-records';
-import { createTuiCompileRecord, createTuiHelp } from './tui-result-fixtures';
+import {
+  createTuiCompileRecord,
+  createTuiCompileCreateRecord,
+  createTuiHelp,
+} from './tui-result-fixtures';
 
 /** The demo host chooses a result shape; the shared component never executes CLI commands. */
 export function createTuiDemoRecord(
@@ -47,6 +51,8 @@ export function createTuiDemoRecord(
     };
   if (definition.name === 'help')
     return { ...createTuiHelp(chinese), ...record };
+  if (definition.name === 'compile create')
+    return { ...createTuiCompileCreateRecord(), ...record };
   if (definition.name === 'compile')
     return { ...createTuiCompileRecord(), ...record };
   const examples = createTuiRecords(chinese);

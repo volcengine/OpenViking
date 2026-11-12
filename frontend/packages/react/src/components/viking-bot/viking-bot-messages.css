@@ -14,6 +14,14 @@
   box-sizing: border-box;
   padding-left: 32px;
 }
+.ov-viking-bot__user-message-group {
+  display: flex;
+  width: min(88%, 960px);
+  max-width: 100%;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
 .ov-viking-bot__user-bubble {
   --agentic-bubble-content-max-width: 100%;
   --agentic-bubble-content-filled-bg: var(
@@ -25,8 +33,26 @@
   --agentic-bubble-content-radius-default: 16px;
   --agentic-bubble-content-font-size: 14px;
   --agentic-bubble-content-line-height: 22px;
-  width: min(88%, 960px);
   max-width: 100%;
+}
+.ov-viking-bot__user-message-content {
+  display: flex;
+  width: max-content;
+  max-width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.ov-viking-bot__user-message-attachments {
+  display: flex;
+  align-self: flex-end;
+  width: 100%;
+  max-width: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  overflow: visible;
 }
 .ov-viking-bot__user-bubble .ark-agentic-bubble__content {
   inline-size: max-content;
@@ -69,8 +95,12 @@
   pointer-events: none;
   transition: opacity 160ms ease;
 }
-.ov-viking-bot__message:hover .ov-viking-bot__message-footer,
-.ov-viking-bot__message:focus-within .ov-viking-bot__message-footer {
+.ov-viking-bot__message:not(.ov-viking-bot__message--user):hover
+  .ov-viking-bot__message-footer,
+.ov-viking-bot__message:not(.ov-viking-bot__message--user):focus-within
+  .ov-viking-bot__message-footer,
+.ov-viking-bot__user-message-group:hover .ov-viking-bot__message-footer,
+.ov-viking-bot__user-message-group:focus-within .ov-viking-bot__message-footer {
   opacity: 1;
   pointer-events: auto;
 }

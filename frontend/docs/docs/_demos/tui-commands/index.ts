@@ -3,6 +3,8 @@ import type {
   TuiCommandGroup,
 } from '@openviking/react/components/tui';
 import { CORE_COMMANDS } from './core';
+import { COMPILE_COMMANDS } from './compile';
+export { createTuiQuickCommands } from './quick-commands';
 import { createAdditionalTuiCommands } from './additional';
 import { FILESYSTEM_COMMANDS } from './filesystem';
 import { SESSION_COMMANDS } from './session';
@@ -21,6 +23,7 @@ export function createTuiCommands(
 ): readonly TuiCommandDefinition[] {
   return [
     ...CORE_COMMANDS,
+    ...COMPILE_COMMANDS,
     ...FILESYSTEM_COMMANDS,
     ...SESSION_COMMANDS,
     ...createAdditionalTuiCommands(locale),

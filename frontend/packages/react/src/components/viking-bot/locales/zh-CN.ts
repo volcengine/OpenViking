@@ -15,6 +15,7 @@ const messages = {
   searchReferences: '搜索文件或目录',
   emptyReferences: '暂无匹配的文件或目录',
   removeReference: '移除引用',
+  openReference: '打开 {uri}',
   expandReference: '展开 {name}',
   collapseReference: '收起 {name}',
   welcomeTitle: '欢迎使用 VikingBot',

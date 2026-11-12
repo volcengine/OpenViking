@@ -4,11 +4,10 @@ import { createTuiCommands, createTuiCommandGroups } from '#tui-commands';
 /** Fixed, public demo data; no command is sent to a service. */
 export function createTuiCompileRecord(): TuiRecord {
   const source = 'viking://resources/acme';
-  const target = 'viking://resources/acme-wiki';
-  const skill = 'viking://system/compile/example-skills/llm-wiki';
+  const compileName = 'demo-wiki';
   return {
     id: 'compile',
-    command: `ov compile --from ${source} --to ${target} --skill ${skill}/SKILL.md`,
+    command: `ov compile --compile-name ${compileName}`,
     status: 'success',
     createdAt: '10:28',
     content: {
@@ -20,10 +19,26 @@ export function createTuiCompileRecord(): TuiRecord {
         'Created at: 1794191280',
         'Updated at: 1794191281',
         `Resource id: ${source}`,
-        `Request: ${JSON.stringify({ from: [source], to: target, skill, compile: { mode: 'incremental', trigger: 'manual' } })}`,
+        `Request: ${JSON.stringify({ compile_name: compileName })}`,
         'Stage: queued',
         'Created at iso: 2026-11-09T02:28:00+00:00',
         'Updated at iso: 2026-11-09T02:28:01+00:00',
+      ],
+    },
+  };
+}
+
+export function createTuiCompileCreateRecord(): TuiRecord {
+  return {
+    id: 'compile-create',
+    command: 'ov compile create --compile-name demo-wiki',
+    status: 'success',
+    content: {
+      variant: 'write-result',
+      lines: [
+        'Configuration: demo-wiki',
+        'Status: saved',
+        'Compilation: not started',
       ],
     },
   };

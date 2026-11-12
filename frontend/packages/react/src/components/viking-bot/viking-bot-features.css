@@ -248,40 +248,8 @@
   border-color: var(--ov-ui-color-focus, var(--ov-ui-focus-default));
   outline: none;
 }
-.ov-viking-bot__reference-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0 0 8px;
-  padding: 0;
-  list-style: none;
-}
-.ov-viking-bot__reference-tags li {
-  display: inline-flex;
-  min-width: 0;
-  max-width: 100%;
-  align-items: center;
-  gap: 4px;
-  border-radius: 6px;
-  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
-  padding: 4px 6px;
-}
-.ov-viking-bot__reference-tags li > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ov-viking-bot__reference-tags button:not(.ov-button) {
-  border: 0;
-  padding: 0 2px;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
 .ov-viking-bot__quick-inputs button:not(.ov-button):focus-visible,
-.ov-viking-bot__session-history button:not(.ov-button):focus-visible,
-.ov-viking-bot__reference-tags button:not(.ov-button):focus-visible {
+.ov-viking-bot__session-history button:not(.ov-button):focus-visible {
   outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
   outline-offset: 2px;
 }

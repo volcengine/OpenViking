@@ -50,7 +50,7 @@ const cases = [
       records: [],
       value: '',
       commands: [{ name: 'ls', description: 'List', usage: 'ov ls' }],
-      quickCommands: ['ls'],
+      quickCommands: [{ name: 'ls', value: '' }],
     },
     'CLI 直接操作上下文',
     'Work directly with your context through the CLI',
