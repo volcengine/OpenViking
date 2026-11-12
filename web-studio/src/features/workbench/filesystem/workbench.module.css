@@ -97,14 +97,11 @@
   --studio-preview-control-icon: var(--foreground);
   --studio-preview-control-selected: var(--background);
 }
-.moreMenu {
-  position: relative;
-}
-.moreMenu summary,
 .previewIconAction {
   box-sizing: border-box;
   border: 1px solid var(--studio-preview-control-border, var(--border));
-  color: var(--studio-preview-control-text, var(--foreground));
+  color: var(--studio-preview-control-icon, var(--foreground));
+  padding: 0;
   display: flex;
   width: 28px;
   height: 28px;
@@ -113,46 +110,6 @@
   border-radius: 6px;
   background: var(--studio-preview-control-bg, var(--muted));
   cursor: pointer;
-  list-style: none;
-}
-.moreMenu summary::-webkit-details-marker {
-  display: none;
-}
-.moreMenuContent {
-  color: var(--foreground);
-  position: absolute;
-  right: 0;
-  top: 34px;
-  z-index: 30;
-  display: flex;
-  min-width: 224px;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 4px;
-  padding: 8px;
-  border: 1px solid var(--border);
-  background: var(--background);
-  border-radius: 12px;
-  box-shadow: 0 12px 32px color-mix(in srgb, var(--foreground) 12%, transparent);
-}
-.moreMenuContent button {
-  color: inherit;
-  justify-content: flex-start;
-  width: 100%;
-  height: 40px;
-  gap: 12px;
-  padding: 0 12px;
-  border-radius: 6px;
-  font-weight: 400;
-}
-.moreMenuSeparator {
-  height: 1px;
-  margin: 4px 0;
-  background: var(--border);
-}
-.previewIconAction {
-  color: var(--studio-preview-control-icon, var(--foreground));
-  padding: 0;
 }
 .assistant {
   display: flex;
@@ -232,7 +189,7 @@
 :global(.dark) .directoryEntry {
   border-color: var(--border);
 }
-:global(.dark) :is(.directoryEntry:hover, .moreMenu summary) {
+:global(.dark) .directoryEntry:hover {
   background: var(--muted);
 }
 @media (max-width: 1279px) {
@@ -263,10 +220,10 @@
   }
 }
 
-.moreMenuContent .moreMenuDanger {
+.deleteAction {
   color: var(--destructive);
 }
-.moreMenuContent .moreMenuDanger:hover {
+.deleteAction:hover {
   background: color-mix(in srgb, var(--destructive) 10%, transparent);
 }
 

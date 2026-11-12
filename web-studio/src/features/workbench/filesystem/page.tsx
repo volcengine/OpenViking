@@ -1,3 +1,4 @@
+import type { FilePreviewAction } from '@openviking/react/components/file-preview'
 import { StudioHeaderActions } from '#/app/layouts/studio-header-actions'
 import { useQueryClient } from '@tanstack/react-query'
 import styles from './workbench.module.css'
@@ -13,7 +14,6 @@ import { showErrorToast } from '#/shared/lib/error-toast'
 import { getRouteApi, useNavigate, useBlocker } from '@tanstack/react-router'
 import {
   GalleryVerticalEndIcon,
-  MoreHorizontalIcon,
   PencilIcon,
   ArrowLeftIcon,
   HistoryIcon,
@@ -470,130 +470,83 @@ function FilesystemWorkbench() {
     }
   }, [])
 
-  const previewMenu = selectedFile ? (
-    <details key={selectedUri} className={styles.moreMenu}>
-      <summary aria-label={t('ide.more')} title={t('ide.more')}>
-        <MoreHorizontalIcon className="size-3.5" />
-      </summary>
-      <div
-        className={styles.moreMenuContent}
-        onClick={(event) => {
-          if ((event.target as HTMLElement).closest('button:not(:disabled)'))
-            event.currentTarget.closest('details')?.removeAttribute('open')
-        }}
-      >
-        {specialDirectory ||
-        specialExperience ||
-        structuredFile ||
-        canEditFile ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() => setResourceDialogOpen(true)}
-          >
-            <PencilIcon className="size-4" />
-            <span>{resourceDialogTitle}</span>
-          </Button>
-        ) : null}
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          onClick={() => setDataManagementMode('history')}
-        >
-          <HistoryIcon className="size-4" />
-          <span>{t('dataManagement:historyMenu')}</span>
-        </Button>
-        {canTransferSelectedUri ? (
-          <>
-            <div role="separator" className={styles.moreMenuSeparator} />
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                setTransferTab('import')
-                setDataManagementMode('transfer')
-              }}
-            >
-              <DownloadIcon className="size-4" />
-              <span>{t('dataManagement:importMenu')}</span>
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                setTransferTab('export')
-                setDataManagementMode('transfer')
-              }}
-            >
-              <UploadIcon className="size-4" />
-              <span>{t('dataManagement:exportMenu')}</span>
-            </Button>
-          </>
-        ) : null}
-        {canUseLocalTools && selectedIsDirectory ? (
-          <div role="separator" className={styles.moreMenuSeparator} />
-        ) : null}
-        {canUseLocalTools && selectedIsDirectory ? (
-          <Button
-            type="button"
-            size="sm"
-            aria-label={t('explorer.addResource')}
-            variant="ghost"
-            onClick={() => setUploadDialogOpen(true)}
-          >
-            <UploadIcon className="size-4" />
-            <span>{t('explorer.addResource')}</span>
-          </Button>
-        ) : null}
-        {canUseLocalTools &&
-          selectedIsDirectory &&
-          /^viking:\/\/(?:resources(?:\/|$)|user\/[^/]+\/resources(?:\/|$))/.test(
-            selectedUri,
-          ) && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-label={t('compile:compileThisFolder')}
-              onClick={() =>
-                void navigate({
-                  to: '/compile/new',
-                  search: { from: selectedUri },
-                })
-              }
-            >
-              <WandSparkles className="size-4" />
-              <span>{t('compile:compileThisFolder')}</span>
-            </Button>
-          )}
-        {!selectedIsDirectory && !isSystemUri(selectedUri) ? (
-          <>
-            <div role="separator" className={styles.moreMenuSeparator} />
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              className={styles.moreMenuDanger}
-              onClick={() =>
-                setDeleteTarget({
-                  uri: selectedFile.uri,
-                  name: selectedFile.name,
-                  dirty: dirtyRef.current,
-                })
-              }
-            >
-              <Trash2Icon className="size-4" />
-              <span>{t('dataManagement:deleteDocument')}</span>
-            </Button>
-          </>
-        ) : null}
-      </div>
-    </details>
-  ) : null
+  const resourceActions: FilePreviewAction[] = []
+  if (specialDirectory || specialExperience || structuredFile || canEditFile) {
+    resourceActions.push({
+      key: 'studio-resource-detail',
+      icon: <PencilIcon size={16} />,
+      label: resourceDialogTitle,
+      onClick: () => setResourceDialogOpen(true),
+    })
+  }
+  resourceActions.push({
+    key: 'studio-history',
+    icon: <HistoryIcon size={16} />,
+    label: t('dataManagement:historyMenu'),
+    onClick: () => setDataManagementMode('history'),
+  })
+
+  const transferActions: FilePreviewAction[] = canTransferSelectedUri
+    ? [
+        {
+          key: 'studio-import-pack',
+          icon: <DownloadIcon size={16} />,
+          label: t('dataManagement:importMenu'),
+          onClick: () => {
+            setTransferTab('import')
+            setDataManagementMode('transfer')
+          },
+        },
+        {
+          key: 'studio-export-pack',
+          icon: <UploadIcon size={16} />,
+          label: t('dataManagement:exportMenu'),
+          onClick: () => {
+            setTransferTab('export')
+            setDataManagementMode('transfer')
+          },
+        },
+      ]
+    : []
+  if (canUseLocalTools && selectedIsDirectory) {
+    transferActions.push({
+      key: 'studio-add-resource',
+      icon: <UploadIcon size={16} />,
+      label: t('explorer.addResource'),
+      onClick: () => setUploadDialogOpen(true),
+    })
+    if (
+      /^viking:\/\/(?:resources(?:\/|$)|user\/[^/]+\/resources(?:\/|$))/.test(
+        selectedUri,
+      )
+    ) {
+      transferActions.push({
+        key: 'studio-compile-folder',
+        icon: <WandSparkles size={16} />,
+        label: t('compile:compileThisFolder'),
+        onClick: () =>
+          navigate({ to: '/compile/new', search: { from: selectedUri } }),
+      })
+    }
+  }
+
+  const deleteActions: FilePreviewAction[] =
+    selectedFile && !selectedIsDirectory && !isSystemUri(selectedUri)
+      ? [
+          {
+            key: 'studio-delete',
+            icon: <Trash2Icon size={16} />,
+            label: t('dataManagement:deleteDocument'),
+            className: styles.deleteAction,
+            onClick: () =>
+              setDeleteTarget({
+                uri: selectedFile.uri,
+                name: selectedFile.name,
+                dirty: dirtyRef.current,
+              }),
+          },
+        ]
+      : []
 
   return (
     <div className={styles.workbench}>
@@ -630,7 +583,13 @@ function FilesystemWorkbench() {
             importPack: false,
             exportPack: false,
           }}
-          previewSlots={{ extraActions: previewMenu }}
+          previewSlots={{
+            actionItems: ({ defaultActions }) => [
+              ...defaultActions,
+              ...(selectedFile ? [resourceActions, transferActions] : []),
+              deleteActions,
+            ],
+          }}
           uri={normalizeFileUri(selectedUri)}
           defaultExpandedUri={normalizeFileUri(currentUri)}
           onUriChange={(uri) => {

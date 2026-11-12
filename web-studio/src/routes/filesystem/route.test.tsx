@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { FilePreview } from '@openviking/react/components/file-preview'
 import type { FileBrowserProps } from '@openviking/react/modules/file-browser'
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -6,6 +7,7 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ComponentType, PropsWithChildren } from 'react'
 import {
+  afterAll,
   afterEach,
   beforeAll,
   beforeEach,
@@ -99,7 +101,34 @@ vi.mock(
       return (
         <>
           <div data-testid="preview">{props.uri}</div>
-          {props.previewSlots?.extraActions}
+          <FilePreview
+            locale="en-US"
+            tabs={[
+              {
+                kind: 'file',
+                key: props.uri ?? 'empty',
+                source: { path: props.uri, fileName: 'preview.md', content: '' },
+                actions: (context) => {
+                  const actionItems = props.previewSlots?.actionItems
+                  return typeof actionItems === 'function'
+                    ? actionItems({
+                        ...context,
+                        canDelete: false,
+                        deleteFile: vi.fn(),
+                        defaultActions: [
+                          {
+                            key: 'download',
+                            label: 'Download',
+                            icon: null,
+                            onClick: vi.fn(),
+                          },
+                        ],
+                      })
+                    : (actionItems ?? [])
+                },
+              },
+            ]}
+          />
         </>
       )
     },
@@ -178,11 +207,25 @@ function renderFilesystem() {
   })
 }
 
+async function openPreviewActions() {
+  const trigger = screen.getByRole('button', { name: 'More actions' })
+  trigger.focus()
+  await userEvent.keyboard('{ArrowDown}')
+}
+
 describe('filesystem workbench', () => {
   beforeAll(async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    )
     await FilesystemRoute.preload?.()
   })
 
+  afterAll(() => vi.unstubAllGlobals())
   afterEach(cleanup)
 
   beforeEach(() => {
@@ -214,9 +257,9 @@ describe('filesystem workbench', () => {
     try {
       mocks.fetchFsStat.mockResolvedValue({ isDir: false, name: 'other.md' })
       renderFilesystem()
-      await userEvent.click(screen.getByLabelText('ide.more'))
+      await openPreviewActions()
       await userEvent.click(
-        screen.getByRole('button', { name: 'resources:filePreview.edit' }),
+        screen.getByRole('menuitem', { name: 'resources:filePreview.edit' }),
       )
 
       await act(async () => {
@@ -235,9 +278,10 @@ describe('filesystem workbench', () => {
 
   it('offers file deletion and clears the deleted preview and URL', async () => {
     renderFilesystem()
-    await userEvent.click(screen.getByLabelText('ide.more'))
+    await openPreviewActions()
+    expect(screen.getByRole('menuitem', { name: 'Download' })).toBeTruthy()
     await userEvent.click(
-      screen.getByRole('button', { name: 'dataManagement:deleteDocument' }),
+      screen.getByRole('menuitem', { name: 'dataManagement:deleteDocument' }),
     )
     expect(screen.getByRole('alertdialog').textContent).toContain(firstFile)
     expect(screen.getByTestId('preview')).toBeTruthy()
@@ -257,9 +301,9 @@ describe('filesystem workbench', () => {
   })
   it('preserves a newer selection after deletion of the confirmed file', async () => {
     const { rerender } = renderFilesystem()
-    await userEvent.click(screen.getByLabelText('ide.more'))
+    await openPreviewActions()
     await userEvent.click(
-      screen.getByRole('button', { name: 'dataManagement:deleteDocument' }),
+      screen.getByRole('menuitem', { name: 'dataManagement:deleteDocument' }),
     )
     mocks.search = { file: secondFile, uri: parentDirectory }
     rerender(<FilesystemRoute />)
@@ -290,9 +334,9 @@ describe('filesystem workbench', () => {
     }
     renderFilesystem()
 
-    await userEvent.click(screen.getByLabelText('ide.more'))
+    await openPreviewActions()
     await userEvent.click(
-      screen.getByRole('button', { name: 'dataManagement:exportMenu' }),
+      screen.getByRole('menuitem', { name: 'dataManagement:exportMenu' }),
     )
     expect(screen.getByTestId('data-management-uri').textContent).toBe(
       'viking://resources/preferences/',
@@ -311,9 +355,9 @@ describe('filesystem workbench', () => {
     }
     renderFilesystem()
 
-    await userEvent.click(screen.getByLabelText('ide.more'))
+    await openPreviewActions()
     await userEvent.click(
-      screen.getByRole('button', { name: 'dataManagement:importMenu' }),
+      screen.getByRole('menuitem', { name: 'dataManagement:importMenu' }),
     )
     expect(screen.getByTestId('data-management-uri').textContent).toBe(
       'viking://resources/preferences/',
@@ -328,15 +372,15 @@ describe('filesystem workbench', () => {
     mocks.provider = 'volcengine'
     mocks.search = { file: firstFile, panel: 'agent', uri: parentDirectory }
     renderFilesystem()
-    await userEvent.click(screen.getByLabelText('ide.more'))
+    await openPreviewActions()
     await userEvent.click(
-      screen.getByRole('button', { name: 'dataManagement:historyMenu' }),
+      screen.getByRole('menuitem', { name: 'dataManagement:historyMenu' }),
     )
     expect(screen.getByTestId('data-management-uri').textContent).toBe(
       firstFile,
     )
     expect(
-      screen.queryByRole('button', { name: 'dataManagement:exportMenu' }),
+      screen.queryByRole('menuitem', { name: 'dataManagement:exportMenu' }),
     ).toBeNull()
     expect(screen.getByTestId('preview').textContent).toBe(firstFile)
     expect(mocks.preview.mock.lastCall?.[0].readOnly).toBe(true)
