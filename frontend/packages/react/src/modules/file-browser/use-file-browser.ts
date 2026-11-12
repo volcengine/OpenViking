@@ -19,10 +19,12 @@ import type {
 
 /**
  * 文件浏览模块的目录与预览联动：目录行展开树，文件行打开预览。
- * 占位搜索弹窗独立管理查询，不改变目录树。
+ * 搜索弹窗独立管理查询与筛选，不改变目录树；点中结果时通过 `openResource`
+ * 把选中与展开交给这里。
  *
- * Coordinates directory loading and preview selection. The placeholder search
- * dialog owns its query separately and leaves the tree unchanged.
+ * Coordinates directory loading and preview selection. The search dialog owns its
+ * query and filters separately and leaves the tree unchanged; picking a result hands
+ * the selection and expansion back through `openResource`.
  */
 export function useFileBrowser({
   rootUri,
@@ -235,6 +237,7 @@ export function useFileBrowser({
       },
       openUri: openResource,
       openDashboard: openDashboard,
+      openResource,
       setPreviewKey: (key: string) => {
         if (activeUri && key === dashboardKey(activeUri))
           openDashboard(activeUri);
@@ -252,7 +255,6 @@ export function useFileBrowser({
     // replace `actions` and with it the `operations` handed to `FileTree`.
     [
       setActiveKey,
-      openResource,
       open,
       toggleExpand,
       loadMore,
@@ -260,6 +262,7 @@ export function useFileBrowser({
       refresh,
       openDashboard,
       closeDashboard,
+      openResource,
       activeUri,
     ],
   );

@@ -1,5 +1,8 @@
 @import '../../shared/primitives/input/input.css';
 @import '../../shared/primitives/button/button.css';
+@import '../../shared/primitives/checkbox/checkbox.css';
+@import '../../shared/primitives/radio/radio.css';
+@import '../../shared/primitives/date-picker/date-picker.css';
 @import '../../theme.css';
 @import '../../shared/primitives/popover/popover.css';
 @import '../../shared/primitives/tooltip/tooltip.css';
