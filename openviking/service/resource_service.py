@@ -2905,11 +2905,11 @@ class ResourceService:
                 unregister_telemetry(telemetry_id)
 
     async def cancel_skill_processing(self, task_id: str, ctx: RequestContext) -> None:
-        """Stop one failed update's work before its caller restores the old package."""
+        """Stop one failed update's work before its caller releases the package lock."""
         from openviking.service.task_tracker import get_task_tracker
 
         tracker = get_task_tracker()
-        task = await tracker.cancel_skill_update_for_rollback(
+        task = await tracker.cancel_skill_processing(
             task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
         )
         if task is None:
