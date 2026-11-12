@@ -68,21 +68,52 @@ afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
 })
-function submit(command: string) {
+function renderTerminal(onOpenResource = vi.fn()) {
   render(
     <TerminalPanel
       currentUri="viking://resources"
       entries={[]}
       openingUri={null}
-      onOpenResource={vi.fn()}
+      onOpenResource={onOpenResource}
       onSessionChange={vi.fn()}
       toolbarContainer={null}
     />,
   )
-  const input = screen.getByRole('textbox')
+  return screen.getByRole('textbox')
+}
+
+function submit(command: string) {
+  const input = renderTerminal()
   fireEvent.change(input, { target: { value: command } })
   fireEvent.keyDown(input, { key: 'Enter' })
 }
+
+it('fills and focuses the terminal input when a quick command is selected', () => {
+  const input = renderTerminal()
+  fireEvent.click(screen.getByRole('button', { name: /^add-resource/ }))
+  expect(input).toHaveProperty('value', '/add-resource ')
+  expect(document.activeElement).toBe(input)
+})
+
+it('opens web links in a new tab and sends Viking URIs to the resource tree', () => {
+  const onOpenResource = vi.fn()
+  const open = vi.spyOn(window, 'open').mockReturnValue(null)
+  const input = renderTerminal(onOpenResource)
+  const url = 'https://example.com/spec.md'
+  const uri = 'viking://resources/spec'
+  fireEvent.change(input, {
+    target: { value: `/add-resource ${url} --to ${uri}` },
+  })
+
+  fireEvent.click(screen.getByRole('link', { name: url }))
+  expect(open).toHaveBeenCalledWith(url, '_blank', 'noopener,noreferrer')
+  expect(onOpenResource).not.toHaveBeenCalled()
+
+  fireEvent.click(screen.getByRole('link', { name: uri }))
+  expect(onOpenResource).toHaveBeenCalledWith(uri)
+  expect(open).toHaveBeenCalledTimes(1)
+})
+
 it('deletes the explicit subtree only after confirmation, then refreshes the tree', async () => {
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
   submit('/rm viking://resources/old --recursive')

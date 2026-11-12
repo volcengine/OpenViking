@@ -1745,13 +1745,22 @@ export function TerminalPanel({
             void runCommand(value)
           }}
           onOpenUri={(uri) => {
-            void onOpenResource(uri)
+            if (/^https?:\/\//i.test(uri)) {
+              window.open(uri, '_blank', 'noopener,noreferrer')
+            } else if (/^viking:\/\//i.test(uri)) {
+              void onOpenResource(uri)
+            }
           }}
           labels={{
             placeholder: t('terminal.placeholder'),
             send: t('terminal.inputHint'),
           }}
-          quickCommands={['add-resource', 'add-skill', 'add-memory', 'find']}
+          quickCommands={[
+            { name: 'add-resource', value: '/add-resource ' },
+            { name: 'add-skill', value: '/add-skill ' },
+            { name: 'add-memory', value: '/add-memory ' },
+            { name: 'find', value: '/find ' },
+          ]}
         />
       </div>
       <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
