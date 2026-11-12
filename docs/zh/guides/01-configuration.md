@@ -2181,7 +2181,6 @@ ov add-resource ./docs --exclude "*.tmp"
       "ttl_seconds": 43200
     },
     "user_config_defaults": {
-      "preset_global_policy": false,
       "add_targets": {
         "resource_uri": "viking://~/resources",
         "skill_uri": "viking://~/skills"
@@ -2217,7 +2216,6 @@ ov add-resource ./docs --exclude "*.tmp"
 | `user_config_defaults.add_targets.skill_uri` | str | `add_skill` 未传 `target_uri` 时使用的部署级默认技能添加根目录。仅允许 `viking://~/skills` 和 `viking://agent/skills`。 | `null` |
 | `user_config_defaults.memory_policy` | object | Session 和 User 都未显式配置策略时使用的部署级默认记忆抽取策略。 | `null` |
 | `user_config_defaults.auto_commit_policy` | object | 新建 Session 未显式指定策略时使用的部署级自动 Commit 默认策略。 | `null` |
-| `user_config_defaults.preset_global_policy` | bool | 用户空间初始化时是否预置 `GLOBAL_POLICY.md`，覆盖新账号首个用户及后续新增用户。设为 `true` 后使用内置模板，保留已有文件；设为 `false` 不会删除或停用已有策略。修改后重启生效。 | `false` |
 | `agent_evolution.enabled` | bool | Agent 进化的集群启动默认值，运行时可由 Account 或 Cluster Admin settings 覆盖。开启时，session commit 可按 session `memory_policy` 生成或更新 cases、trajectories 和 experiences；关闭后已有记忆仍可读取和检索。 | `false` |
 
 MySQL Provider 默认保存高熵 API Key 的带版本 SHA-256 摘要，并通过独立摘要索引

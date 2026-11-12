@@ -2203,7 +2203,6 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
       "ttl_seconds": 43200
     },
     "user_config_defaults": {
-      "preset_global_policy": false,
       "add_targets": {
         "resource_uri": "viking://~/resources",
         "skill_uri": "viking://~/skills"
@@ -2239,7 +2238,6 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `user_config_defaults.add_targets.skill_uri` | str | Deployment default skill add root used when `add_skill` omits `target_uri`. Only `viking://~/skills` and `viking://agent/skills` are accepted. | `null` |
 | `user_config_defaults.memory_policy` | object | Deployment default memory extraction policy used when neither the Session nor the User has an explicit policy. | `null` |
 | `user_config_defaults.auto_commit_policy` | object | Deployment default auto-commit policy for newly created sessions without an explicit policy. | `null` |
-| `user_config_defaults.preset_global_policy` | bool | Seed `GLOBAL_POLICY.md` during user workspace initialization, including a new account's first user and subsequently registered users. When `true`, use the packaged template and preserve existing files. Setting it to `false` does not delete or disable existing policies. Changes take effect after restart. | `false` |
 | `agent_evolution.enabled` | bool | Startup cluster default for Agent Evolution. Account and Cluster Admin settings may override it at runtime. When enabled, session commits may generate or update cases, trajectories, and experiences according to the session `memory_policy`. Existing memories remain readable and searchable when disabled. | `false` |
 
 The MySQL provider stores a versioned SHA-256 digest of each high-entropy API
