@@ -131,7 +131,10 @@ export interface ExperienceDashboardProps extends Omit<
   onTabChange?: (tab: ExperienceDashboardTab) => void;
   onDaysChange?: (days: number) => void;
   onPageChange?: (page: number) => void;
-  /** 追加下一页的轨迹；省略时加载更多按钮禁用。 Appends the next page; disabled when omitted. */
+  /**
+   * 追加下一页的轨迹，优先于 `onPageChange`；两者都省略时加载更多按钮禁用。
+   * Appends the next page; wins over `onPageChange`, and both omitted disables it.
+   */
   onLoadMore?: () => void;
   onOpenUri?: (uri: string) => void;
   labels?: Partial<ExperienceDashboardLabels>;

@@ -101,15 +101,15 @@ import '@openviking/react/components/experience-dashboard/style.css';
 
 ### ExperienceDashboardState
 
-| 参数    | 说明                                   | 类型            | 默认值 |
-| ------- | -------------------------------------- | --------------- | ------ |
-| loading | 是否正在加载，对应区域显示「加载中…」  | `boolean`       | -      |
-| error   | 加载失败的错误，对应区域显示失败与重试 | `Error \| null` | -      |
-| onRetry | 点击重试时触发                         | `() => void`    | -      |
+| 参数    | 说明                                                                           | 类型            | 默认值 |
+| ------- | ------------------------------------------------------------------------------ | --------------- | ------ |
+| loading | 是否正在加载，对应区域显示「加载中…」                                          | `boolean`       | -      |
+| error   | 加载失败的错误，对应区域显示失败与重试；追加轨迹页失败时例外，已加载的记录保留 | `Error \| null` | -      |
+| onRetry | 点击重试时触发                                                                 | `() => void`    | -      |
 
 ## 注意
 
-- `states` 的键与区域对应：`list` 目录视图的列表，`outcomes` 任务结果分布，`trajectories` 注入轨迹，`sources` 来源追溯，`tests` 测试材料。
+- `states` 的键与区域对应，且只在对应区域没有数据时显示；例外是追加轨迹页失败——已加载的记录保留，错误与重试显示在列表下方：`list` 目录视图的列表，`outcomes` 任务结果分布，`trajectories` 注入轨迹，`sources` 来源追溯，`tests` 测试材料。
 - 分页在超过一页时出现：`data.total` 与 `pageSize` 决定页数，没有 `data.total` 时由 `hasMore` 界定。对应区域的 `loading` 为 `true` 时翻页按钮禁用。
 - 「应用效果」页签在 `hasMore` 为 `true` 时提供「向下滚动加载更多」：优先调用 `onLoadMore`，只提供 `onPageChange` 时以 `page + 1` 调用它；`loadingMore` 为 `true` 期间显示加载中。
 - 更新测试材料会保留已选页签与时间范围；`testMaterials` 变回 `undefined` 时，已选中的「测试」页签回到「应用效果」。
