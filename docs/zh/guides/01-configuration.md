@@ -1050,7 +1050,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 
 #### 远程资源网络防护
 
-通过 URL 拉取资源时，默认网络检查会拒绝解析到非公网地址的目标。普通公网 URL 无需加入代码托管白名单；列入白名单的可信代码主机会跳过地址范围检查。接入自建 GitHub Enterprise / GitLab / Azure DevOps 时，可将主机加入 `code` 下对应的平台列表：
+通过 URL 拉取资源时，默认网络检查会拒绝解析到非公网地址的目标。普通公网 URL 无需加入代码托管白名单；列入白名单的可信代码主机可以访问私有网络，但仍须通过 DNS 地址检查。回环、link-local、未指定、组播、保留地址和已知云元数据地址始终被拒绝，白名单和 `allow_private_networks` 均不能放行这些目标。接入自建 GitHub Enterprise / GitLab / Azure DevOps 时，可将主机加入 `code` 下对应的平台列表：
 
 | 字段 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
@@ -1059,7 +1059,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 | `azure_devops_domains` | list[str] | 允许的 Azure DevOps 主机 | `["dev.azure.com", "ssh.dev.azure.com", "vs-ssh.visualstudio.com"]` |
 | `code_hosting_domains` | list[str] | 允许的通用代码托管主机 | `["github.com", "gitlab.com", "gitcode.com", "gitee.com", "bitbucket.org", "codeberg.org", "gitea.com", "atomgit.com", "git.sr.ht"]` |
 
-如果需要允许其他私有网络目标（例如内部镜像），可将顶层 `allow_private_networks` 设为 `true`。该开关默认关闭；`localhost` 及其子域等本地主机名仍会被拒绝。下面同时演示启用私有网络访问和添加代码主机：
+如果需要允许其他私有网络目标（例如内部镜像），可将顶层 `allow_private_networks` 设为 `true`。该开关默认关闭，启用后仍受上述地址限制；`localhost` 及其子域也会被拒绝。下面同时演示启用私有网络访问和添加代码主机：
 
 ```json
 {
@@ -1071,7 +1071,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 ```
 
 需要 GitHub、GitLab 或 Azure DevOps 专属 URL 语义时，应配置到对应的平台字段；
-其他 Git 主机统一添加到 `code_hosting_domains`。
+其他 Git 主机统一添加到 `code_hosting_domains`。HTTP 服务的 Git 预检、clone 和 fetch 不跟随 HTTP 重定向，请提供最终仓库 URL；GitHub/GitLab ZIP 下载保留重定向支持，并在请求每个跳转目标前进行同样的地址校验。
 
 #### 语法包下载与镜像（网络受限 / 离线）
 
@@ -1363,8 +1363,12 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `engine` | str | 路径匹配引擎模式：`"auto"` 在 VikingDB / Volcengine 向量库可用且搜索范围记录数达到阈值时，使用远程 `path_glob` 后处理；不可用或失败时回退到本地文件系统搜索。`"fs"` 强制仅使用本地文件系统搜索。 | `"fs"` |
+| `engine` | str | 路径匹配引擎模式：`"auto"` 按当前账户向量库的 `storage.vectordb.enable_path_glob` 配置及后端默认能力选择远程路径；当 `uri` 字段存在且搜索范围记录数达到阈值时，使用远程 `path_glob` 后处理。不可用或失败时回退到本地文件系统搜索。`"fs"` 强制仅使用本地文件系统搜索。 | `"fs"` |
 | `switch_to_remote_threshold` | int | `auto` 模式切换到远程 `path_glob` 的记录数阈值。当搜索范围内记录数达到此阈值时使用远程路径匹配。设为 `0` 表示始终使用远程路径匹配。必须 ≥ 0。 | `100` |
+
+`storage.vectordb.enable_path_glob` 可设为 `true`（启用远程支持）或 `false`（禁用）。
+未配置或设为 `null` 时沿用后端默认能力：VikingDB、Volcengine 默认支持，其余内置后端默认不支持。
+自定义 adapter 也可声明默认能力。此配置不改变 `glob.engine="fs"` 的行为，也不跳过阈值或失败回退。
 
 ### storage
 
@@ -1597,6 +1601,7 @@ Redis 命名空间。
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `backend` | str | `local` 完全沿用原文件系统；`cache` 启用 CacheFS wrapper | `local` |
+| `shared_redis_ttl_seconds` | int | 统一覆盖查询 bucket 的 TTL；`0` 表示沿用 Provider 默认 TTL。仅当 CacheFS 与 QueueFS、cache PathLock 或 expiry 调度共用同一个 Redis 服务时生效 | `0` |
 
 `storage.agfs.pathlock` 选择 PathLock 存储 Provider：
 

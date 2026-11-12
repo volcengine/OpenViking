@@ -1,8 +1,10 @@
 # ScopeSwitcher
 
-A scope breadcrumb for the header. The host declares how many levels exist, what they are called and where the options come from; the component renders the breadcrumb triggers and dropdown panels, and reports search, switch and action intent.
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
 
-This is a placeholder component: it renders a fixed-size empty shell and consumes no props, so hosts can integrate against the published package before the view is migrated. The props contract below is final; the placeholder implementation will be replaced.
+Compose independent selectors. `ScopeSwitcher` owns layout only; each host level owns its data requests, options, loading/error and search state, and renders a `ScopeSelector`.
+
+For three-API integration with automatic cascading and request state, use [ScopeCascade](../modules/scope-cascade). The examples below show the lower-level view API.
 
 ## Basic usage
 
@@ -10,204 +12,109 @@ This is a placeholder component: it renders a fixed-size empty shell and consume
 
 ```
 
-The placeholder is 640 × 40, matching the header scope bar.
-
-## Levels
-
-The component knows nothing about "library / data space / user". It renders the `levels` array left to right, joined by `/`. One level is a single picker; three levels are a full breadcrumb:
-
 ```tsx
-<ScopeSwitcher
-  levels={[
-    {
-      kind: 'selectable',
-      key: 'library',
-      ariaLabel: 'Switch library',
-      selectedLabel: library.name,
-      options,
-      selectedId,
-      visible: libraryOpen,
-      onVisibleChange: setLibraryOpen,
-      onSelect,
-    },
-    {
-      kind: 'selectable',
-      key: 'account',
-      ariaLabel: 'Switch data space',
-      selectedLabel: accountId,
-      options,
-      selectedId,
-      visible: accountOpen,
-      onVisibleChange: setAccountOpen,
-      onSelect,
-    },
-    {
-      kind: 'selectable',
-      key: 'user',
-      ariaLabel: 'Switch user',
-      selectedLabel: userId,
-      options,
-      selectedId,
-      visible: userOpen,
-      onVisibleChange: setUserOpen,
-      onSelect,
-    },
-  ]}
-/>
+<ScopeSwitcher locale="en-US">
+  <LibrarySelector />
+  <SpaceSelector />
+  <UserSelector />
+</ScopeSwitcher>
 ```
 
-Each level's search keyword, paging and selection are owned by the host; the component only renders them and reports intent. It has no built-in paging rule: the first screen is prepared when `onVisibleChange` reports the panel opening, and whether to load the next page is the host's call inside `onScroll`.
+Each host renders one `ScopeSelector` without an extra DOM wrapper. CSS adds separators between adjacent selectors. Fixed/selectable levels can be mixed; omit a level to hide it. The row never wraps: levels shrink and labels ellipsize instead, so the frame keeps its 32px height whatever the labels say. Phones use bottom panels.
 
-### Fixed and selectable levels
+## Update boundaries
 
-`kind` splits a level into two forms, and both can be mixed in one row:
+The former `levels` array has been replaced by `children`. The root has no shared state, data subscription or changing Context value. A selector owns open/closed state unless `visible` is supplied; selection closes its panel. Its host owns search, options and requests. No `memo` is used.
 
-- `kind: 'selectable'` — renders an expandable trigger and a dropdown panel; needs `options` and `onSelect`.
-- `kind: 'fixed'` — shows the current value only, with no expand affordance and no click target, and takes no option or panel fields.
+The static example creates an identity source per instance. Each host subscribes to its own channel with `useSyncExternalStore`; snapshots stay stable until its selection or ancestors change. Library selection updates the library and clears both descendants; space selection updates the space and clears the user; user selection affects only the user. All affected snapshots are written before notifications. Selecting the same identity is a no-op. Requests, search and visibility never enter the shared source.
 
-The host picks the form from whether the current scope can be switched, without fabricating an empty option list to say "not switchable":
+This source is a **host example**, not a mandatory library store or global singleton. Existing host data layers can supply equivalent subscriptions. Keying a dependent host subtree by ancestor identities resets stale options, search, errors and visibility and cancels its old request. Changing a level's own selection does not reload its options. Arbitrary ancestor renders outside this boundary can still trigger normal React rendering.
 
-```tsx
-// Personal terminal: library and data space follow the sign-in, only the user switches
-levels={[
-  { kind: 'fixed', key: 'library', ariaLabel: 'Library', selectedLabel: library.name },
-  { kind: 'fixed', key: 'account', ariaLabel: 'Data space', selectedLabel: accountId },
-  { kind: 'selectable', key: 'user', ariaLabel: 'Switch user', selectedLabel: userId, options, selectedId, visible: userOpen, onVisibleChange: setUserOpen, onSelect },
-]}
+## Host-owned panels
+
+`renderPanel` hands the rendered `search` and `list` blocks to the host, which arranges the heading, actions, footer entries and explanatory copy. The example builds the three console panels: all libraries, choose data space, choose user.
+
+Taking over the panel does not change its height cap: extra content scrolls inside the panel rather than making it taller.
+
+```tsx file="../../_demos/scope-switcher-panel.tsx" preview
+
 ```
 
-On a `kind: 'selectable'` level, `disabled` means something else: it could be switched but currently cannot, so the trigger renders dimmed instead of dropping its expand affordance.
+## Read-only levels
 
-The level count can also vary with the sign-in method. When the host cannot resolve a level yet, it simply leaves it out: the component neither renders nor reserves space for it:
+In a personal terminal the library and data space are fixed by the sign-in and only the user can be switched. A fixed level uses `kind: 'fixed'`: no button, no panel, the same geometry as a selectable level, so the row still reads as one breadcrumb.
 
-```tsx
-// Only the data space is available, so declare two levels
-levels={[dataSpaceLevel, userLevel]}
+```tsx file="../../_demos/scope-switcher-readonly.tsx" preview
+
 ```
 
-## Panels
+## Three asynchronous APIs
 
-Each level maps to one dropdown panel. The component owns three things only: the search box, the option list and the loading, empty and failed states. Everything else is implemented by the host's `renderPanel`.
+```tsx file="../../_demos/scope-switcher-async.tsx" preview
 
-`renderPanel` receives `{ search, list }`: `search` is the search box and `list` is the list with its states. The host can place them separately or use only one. Panel visibility is controlled by the host through `visible`, so after an in-panel action the host simply sets `visible` to `false`:
-
-```tsx
-{
-  kind: 'selectable',
-  key: 'library',
-  selectedLabel: library.name,
-  options,
-  selectedId: library.id,
-  visible,
-  onVisibleChange: setVisible,
-  onSelect,
-  renderPanel: ({ search, list }) => (
-    <>
-      <header>
-        <span>All libraries</span>
-        <Button onClick={() => { setVisible(false); onCreate(); }}>Create</Button>
-      </header>
-      {search}
-      {list}
-      <footer>
-        <Link to={settingsPath} onClick={() => setVisible(false)}>Library settings</Link>
-        <a href={billingUrl}>Billing</a>
-        <button onClick={onUnsubscribe}>Unsubscribe</button>
-      </footer>
-    </>
-  ),
-  renderOption: (content, option) => <>{content}<LibraryRowMenu option={option} /></>,
-}
 ```
 
-The data space and user panels work the same way, each rendering its own "Select …" heading and "Manage spaces / Manage users" entry. A host that wants to turn the typed value into a new option can append such an entry under `list`.
-
-Why these entries are not modelled in the component: the "library settings", "billing", "unsubscribe" and "manage spaces" entries differ between the three hosts in destination, permission and availability. Structured fields can only chase that with more and more properties (`href`, `trailingIcon`, `destructive`, `disabled`…), which ends up moving page responsibilities into the component. Their footers do not even share a shape — the library panel is three plain text rows while the other two are a single full-width bordered button — so no single container can express both.
-
-- `emptyFallback` / `errorFallback` — replace the empty and failed states; built-in copy is used when omitted.
-- `renderOption(content, option)` — adds to or replaces the default row content `content`, for example a "more" menu or an expired marker.
-
-Panel visibility is controlled: the host drives open and close through `visible` and writes the new state back in `onVisibleChange`. That lets the host decide both "load when the panel opens" and "close only after an async switch succeeds", without requesting every level on mount.
-
-## Internal derivation
-
-- The component decides whether the search box is shown: the loaded count or `total` above `SCOPE_SWITCHER_SEARCH_THRESHOLD` (10), or a non-empty `searchKeyword`.
-- Hit highlighting is computed internally from `searchKeyword`.
-- Selection is expressed with `role="listbox"` + `role="option"` + `aria-selected`; the trigger carries `aria-haspopup="listbox"` and `aria-expanded`.
+This example now uses `ScopeCascade`: only three API adapters are supplied. Cascading resets, requests, cancellation, local search and retry are built in. See [ScopeCascade](../modules/scope-cascade) for the complete API and selection callback.
 
 ## Props
 
-### ScopeSwitcherProps
+`ScopeSwitcherProps` extends `HTMLAttributes<HTMLDivElement>` with `children`, `className`, `style`, etc. It no longer accepts `levels` or shared labels.
 
-| Property    | Type                             | Default  | Description                                      |
-| ----------- | -------------------------------- | -------- | ------------------------------------------------ |
-| `levels`    | `readonly ScopeSwitcherLevel[]`  | Required | Levels rendered left to right.                   |
-| `labels`    | `ScopeSwitcherLabels`            | English  | Replaceable copy.                                |
-| Other props | `HTMLAttributes<HTMLDivElement>` | —        | Standard div attributes; `children` is excluded. |
+`ScopeSelectorProps` splits by `kind`. Both forms share `identity`, optional `trigger` and optional `labels`.
 
-### ScopeSwitcherLevel
+`identity` is the level's identity and does not change with a request: required `key`, optional `ariaLabel` and `tag`.
 
-`ScopeSwitcherLevel = ScopeSwitcherFixedLevel | ScopeSwitcherSelectableLevel`, discriminated by `kind`.
+`trigger` is what the trigger shows: optional `label` and `icon`. When omitted they are read from `data.options` by `data.selectedId`; a fixed level has no `data`, so it supplies `trigger.label`.
 
-Shared fields (`ScopeSwitcherLevelBase`):
+`kind: 'fixed'` shows a noninteractive label and takes no data, state, callbacks or slots.
 
-| Property        | Type                      | Description                                                                                                     |
-| --------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `kind`          | `'fixed' \| 'selectable'` | `'fixed'` shows the value without a dropdown; `'selectable'` renders trigger and panel.                         |
-| `key`           | `string`                  | Stable key, for example `library`, `account` or `user`.                                                         |
-| `ariaLabel`     | `string`                  | Accessible name of the trigger; applied to `aria-label` only and never rendered; omitted means no `aria-label`. |
-| `selectedLabel` | `string`                  | Text shown on the trigger for the current selection; may not appear in `options`.                               |
-| `icon`          | `ReactNode`               | Trigger icon.                                                                                                   |
-| `tag`           | `ReactNode`               | Tag at the end of the trigger, for example a plan name.                                                         |
+`kind: 'selectable'` additionally accepts four groups, split by how often they change so a caller can replace only the group that changed:
 
-Fields of `ScopeSwitcherSelectableLevel` only:
+| Group     | Field                                      | Behavior                                                                        |
+| --------- | ------------------------------------------ | ------------------------------------------------------------------------------- |
+| `data`    | `options`, `selectedId`                    | Required authoritative options and selection; use `''` before selecting.        |
+| `data`    | `visibleOptions`                           | Options actually rendered; `options` when omitted. Search and paging go here.   |
+| `data`    | `total`                                    | Search appears when loaded count or total exceeds 10, or a keyword is nonempty. |
+| `state`   | `loading`, `error`                         | Replace the list with loading/error content.                                    |
+| `state`   | `disabled`, `busy`                         | Disable the trigger or all option rows.                                         |
+| `state`   | `visible`, `searchKeyword`                 | Controlled visibility and keyword; omitted visibility is local.                 |
+| `actions` | `onSelect(option)`                         | Closes the panel and reports intent; the host updates identities.               |
+| `actions` | `onVisibleChange`, `onSearchKeywordChange` | Open/close and keyword notifications; no input without the keyword callback.    |
+| `actions` | `onScroll(metrics)`                        | Receives `scrollTop`, `scrollHeight`, `clientHeight`; host owns pagination.     |
+| `slots`   | `renderPanel({ search, list })`            | Compose with headings, controls and footer links.                               |
+| `slots`   | `renderOption(content, option)`            | Extend/replace rows; nested buttons/links do not select the row.                |
+| `slots`   | `emptyFallback`, `errorFallback`           | Custom empty/error content, including retry actions.                            |
 
-| Property                | Type                                              | Description                                                                                               |
-| ----------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `options`               | `readonly ScopeSwitcherOption[]`                  | Selectable options.                                                                                       |
-| `selectedId`            | `string`                                          | Selected option id, required; pass an empty string before data loads.                                     |
-| `total`                 | `number`                                          | Total entries, used to decide whether the search box is shown.                                            |
-| `loading`               | `boolean`                                         | First load in flight; the panel shows a loading state.                                                    |
-| `searchKeyword`         | `string`                                          | Current search keyword.                                                                                   |
-| `disabled`              | `boolean`                                         | The level is temporarily not switchable; renders a dimmed trigger. Hosts without that state leave it out. |
-| `error`                 | `boolean`                                         | The list failed to load; renders `errorFallback`.                                                         |
-| `busy`                  | `boolean`                                         | A change is in flight for this level; the component disables the whole list.                              |
-| `renderPanel`           | `(panel: ScopeSwitcherPanelContent) => ReactNode` | Panel shell; the argument holds `search` and `list`. Without it those two render.                         |
-| `renderOption`          | `(content, option) => ReactNode`                  | Adds to or replaces the default row content; click and selection stay with the component.                 |
-| `emptyFallback`         | `ReactNode`                                       | Empty state content.                                                                                      |
-| `errorFallback`         | `ReactNode`                                       | Failed state content.                                                                                     |
-| `visible`               | `boolean`                                         | Whether the panel is visible; required, owned by the host.                                                |
-| `onVisibleChange`       | `(visible: boolean) => void`                      | Panel visibility change; the host writes it back to `visible`.                                            |
-| `onSelect`              | `(option) => void`                                | Invoked when an option is selected; the component does not change panel visibility.                       |
-| `onSearchKeywordChange` | `(keyword: string) => void`                       | Search keyword change; no search box without it.                                                          |
-| `onScroll`              | `(metrics: ScopeSwitcherScrollMetrics) => void`   | Fires when the list scrolls; the host decides whether to load more.                                       |
+### Selection normalisation belongs to the host
 
-### ScopeSwitcherOption
+`ScopeSelector` renders `data.selectedId` exactly as given. When the id is empty or absent from `options`, no row is marked as selected; when it matches a disabled option, the row is still rendered as selected — disabled blocks interaction, it does not clear the selection — until the host normalises it. In neither case does the component change the value or call `actions.onSelect` on your behalf.
 
-| Property      | Type        | Description                                                          |
-| ------------- | ----------- | -------------------------------------------------------------------- |
-| `id`          | `string`    | Unique option key.                                                   |
-| `label`       | `string`    | Display text; hits are highlighted while searching.                  |
-| `icon`        | `ReactNode` | Row leading icon, for example a library, data space or user avatar.  |
-| `description` | `string`    | Secondary line under the label.                                      |
-| `disabled`    | `boolean`   | Whether the option is disabled: rendered dimmed and ignoring clicks. |
+A scope still needs a definite value, so check the selection after data arrives and pick the first selectable option when it is no longer valid, then write the result back to the URL and request parameters. `ScopeCascade` ships this: its controller falls back, resets descendants and loads the next level once the authoritative list arrives.
 
-Row actions and per-row styles such as an expired state are not modelled here: the level's `renderOption` renders them, and the host decides what goes in.
+Validity is decided from `options` alone: a value merely filtered out of `visibleOptions` by a search is still valid, so searching never switches the scope.
 
-### ScopeSwitcherLabels
+Options require `id`, `label`; optional fields are `icon`, `description`, `disabled`. Labels include `loading`, `searchPlaceholder`, `empty`, `noMatch`, `error`, following locale. Pass optional overrides to each selector.
 
-| Property            | Description                                   |
-| ------------------- | --------------------------------------------- |
-| `searchPlaceholder` | Search input placeholder.                     |
-| `empty`             | Message shown when there are no options.      |
-| `noMatch`           | Message shown when a keyword matches nothing. |
-| `error`             | Message shown when loading failed.            |
+Icons come from the host; the component ships none. For defaults, take `LibraryIcon`, `SpaceIcon` and `UserIcon` from `@openviking/react/icons`. With [ScopeCascade](../modules/scope-cascade), the default view fills those three in when an adapter returns no `icon`.
+
+Arrow keys and Home/End navigate; Enter/Space select; Escape closes and returns focus. Outside clicks and focus leaving dismiss the panel.
+
+## Appearance
+
+The row is 32px tall with no outline. Each level is its own 32px tall, 16px radius pill with 8px horizontal padding and an 8px icon-to-label gap; labels are 13px at weight 500. A level paints its outline in the primary colour on hover, focus and expand, and keeps a transparent outline at rest so nothing shifts when it appears.
+
+A level with a dropdown tints its button on hover, focus and expand — the same feedback an option row gives inside the panel. A level without one (`kind: 'fixed'`) keeps the identical geometry but drops the arrow and the hover feedback, so read-only scopes stay visually part of the breadcrumb. Adjacent levels are separated by a CSS `/` in `#c9cbd4`.
+
+Inside the panel a hovered row tints lightly and a selected row keeps the primary tint with a bold label and a check mark; the label colour is unchanged, since the design separates selection by weight and the tint. Search hits are tinted in the primary colour rather than highlighted in yellow.
+
+Each row's leading icon sits in a 24px well: white surface, 0.5px `#edeef2` outline, 12px radius, with the glyph itself at 14px. A host that renders round avatars sets `--ov-ui-scope-switcher-option-icon-radius: 50%`.
+
+Theme variables are declared on `.ov-scope-switcher` and each can be overridden alone: `--ov-ui-scope-switcher-divider`, `-icon`, `-option-icon`, `-option-icon-size`, `-option-icon-radius`, `-row-hover`, `-row-selected`, `-tag-background`, `-tag-text`, `-panel-width`, `-option-height`. Colours shared with the rest of the library come from the common `--ov-ui-text`, `--ov-ui-border`, `--ov-ui-surface`, `--ov-ui-primary` and `--ov-ui-text-muted` variables.
 
 ```tsx
-import { ScopeSwitcher } from '@openviking/react/components/scope-switcher';
+import {
+  ScopeSwitcher,
+  ScopeSelector,
+} from '@openviking/react/components/scope-switcher';
 import '@openviking/react/components/scope-switcher/style.css';
 ```
-
-## Implementation scope
-
-The component renders the view and reports intent. Data access, persistence, permissions and any network connection belong to the host.

@@ -4,6 +4,7 @@
 
 import logging
 import re
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -240,6 +241,8 @@ class VLMBase(ABC):
         duration_seconds: float = 0.0,
         prompt_cached_tokens: int = 0,
         completion_reasoning_tokens: int = 0,
+        *,
+        error_code: str = "OK",
     ) -> None:
         """Update token usage
 
@@ -251,6 +254,7 @@ class VLMBase(ABC):
             duration_seconds: Wall-clock duration of the VLM call in seconds
             prompt_cached_tokens: Number of cached prompt tokens from provider usage details
             completion_reasoning_tokens: Number of reasoning completion tokens from provider usage details
+            error_code: Metrics outcome for the call, defaulting to success
         """
         self._token_tracker.update(
             model_name=model_name,
@@ -285,10 +289,8 @@ class VLMBase(ABC):
         # Record the VLM call in Prometheus metrics (if enabled).
         try:
             from openviking.metrics.datasources import VLMEventDataSource
-            from openviking.observability.context import get_root_observability_context
+            from openviking.observability.reporting.facts import model_account_id
             from openviking.telemetry import get_ingestion_source_type
-
-            root_context = get_root_observability_context()
 
             VLMEventDataSource.record_call(
                 provider=str(provider),
@@ -296,9 +298,10 @@ class VLMBase(ABC):
                 duration_seconds=float(duration_seconds),
                 prompt_tokens=int(prompt_tokens),
                 completion_tokens=int(completion_tokens),
-                account_id=root_context.account_id if root_context is not None else None,
+                error_code=error_code,
+                account_id=model_account_id("vlm.call", getattr(self, "_account_id", None)),
                 source_type=get_ingestion_source_type(),
-                cost_bearer=self.cost_bearer,
+                cost_bearer=self._metrics_cost_bearer(),
             )
         except Exception as e:
             # Metrics must never break model inference.
@@ -311,22 +314,28 @@ class VLMBase(ABC):
                     e,
                 )
 
-    def record_failed_call(self, *, duration_seconds: float, error: Exception) -> None:
-        """Record one failed provider request attempt without token usage."""
+    def _metrics_cost_bearer(self):
+        return self.cost_bearer
+
+    def record_call_without_usage(
+        self, *, duration_seconds: float, error: Exception | None = None
+    ) -> None:
+        """Record a provider attempt whose billed usage is unknown, not zero."""
         try:
             from openviking.metrics.datasources import VLMEventDataSource
-            from openviking.observability.context import get_root_observability_context
+            from openviking.observability.reporting.facts import model_account_id
+            from openviking.telemetry import get_ingestion_source_type
 
-            root_context = get_root_observability_context()
             VLMEventDataSource.record_call(
                 provider=str(self.provider),
                 model_name=str(self.model or "unknown"),
                 duration_seconds=max(float(duration_seconds), 0.0),
-                prompt_tokens=0,
-                completion_tokens=0,
-                error_code=extract_metric_error_code(error),
-                cost_bearer=self.cost_bearer,
-                account_id=root_context.account_id if root_context is not None else None,
+                prompt_tokens=None,
+                completion_tokens=None,
+                error_code=extract_metric_error_code(error) if error is not None else "OK",
+                cost_bearer=self._metrics_cost_bearer(),
+                account_id=model_account_id("vlm.call", getattr(self, "_account_id", None)),
+                source_type=get_ingestion_source_type(),
             )
         except Exception as metrics_error:
             if logger.isEnabledFor(logging.DEBUG):
@@ -337,6 +346,25 @@ class VLMBase(ABC):
                     type(metrics_error).__name__,
                     metrics_error,
                 )
+
+    def record_failed_call(self, *, duration_seconds: float, error: Exception) -> None:
+        self.record_call_without_usage(duration_seconds=duration_seconds, error=error)
+
+    def _call_provider(self, call):
+        started = time.perf_counter()
+        try:
+            return call()
+        except Exception as error:
+            self.record_failed_call(duration_seconds=time.perf_counter() - started, error=error)
+            raise
+
+    async def _call_provider_async(self, call):
+        started = time.perf_counter()
+        try:
+            return await call()
+        except Exception as error:
+            self.record_failed_call(duration_seconds=time.perf_counter() - started, error=error)
+            raise
 
     @property
     def token_tracker(self):
@@ -775,6 +803,8 @@ class FailoverVLM(VLMBase):
         prompt_tokens: int,
         completion_tokens: int,
         duration_seconds: float = 0.0,
+        *,
+        error_code: str = "OK",
     ) -> None:
         """Update token usage for the currently active instance."""
         self._active_vlm.update_token_usage(
@@ -783,6 +813,7 @@ class FailoverVLM(VLMBase):
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             duration_seconds=duration_seconds,
+            error_code=error_code,
         )
 
     def get_token_usage(self) -> Dict[str, Any]:

@@ -527,6 +527,9 @@ class TaskTracker:
             assert creation is not None
             created = self._public(creation.task)
             if not creation.created:
+                from openviking.observability.reporting.facts import remember_request_task
+
+                remember_request_task(created)
                 return created
             if enforce_identity_admission and await self._owner_deleting(account_id, user_id):
                 refusal = "Identity deletion is in progress"

@@ -531,7 +531,8 @@ def test_full_queue_does_not_wait_for_the_broker_and_logs_only_counts(exporter_l
         assert "private_member" not in exporter_logs.text
     finally:
         gate.set()
-        reporter.close(timeout=2)
+        with pytest.raises(RuntimeError, match="lost events"):
+            reporter.close(timeout=2)
 
 
 @pytest.mark.asyncio

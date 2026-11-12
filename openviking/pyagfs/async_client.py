@@ -11,6 +11,7 @@ from typing import Any, BinaryIO, Dict, List, Union
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.errors import InvalidPathLockRequestError
 
+from .copy_progress import is_tracking_copy_progress, record_copy_success
 from .leader import _LOCAL_LEADER_BACKEND, LeaderCandidate, LeaderMode, leader_candidate
 from .protocols import AGFSSyncClientProtocol
 
@@ -118,6 +119,17 @@ class AsyncAGFSClient:
     async def run(self, method_name: str, /, *args: Any, **kwargs: Any) -> Any:
         """Run a sync method off-thread, settling I/O before propagating cancellation."""
         method = getattr(self._client, method_name)
+        if args and method_name in {"write", "mkdir"} and is_tracking_copy_progress():
+            sync_method = method
+
+            def tracked_method(*call_args: Any, **call_kwargs: Any) -> Any:
+                result = sync_method(*call_args, **call_kwargs)
+                # Cancellation can prevent the awaiting coroutine from resuming
+                # after a committed sidecar write or directory creation.
+                record_copy_success(call_args[0])
+                return result
+
+            method = tracked_method
         try:
             return await run_to_completion(lambda: asyncio.to_thread(method, *args, **kwargs))
         except TypeError as exc:

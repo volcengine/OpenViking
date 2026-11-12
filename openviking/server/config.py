@@ -45,6 +45,11 @@ def _normalize_config_uri(value: Optional[str], field_name: str) -> Optional[str
     uri = value.strip().rstrip("/")
     if not uri:
         raise ValueError(f"{field_name} must not be empty")
+    # Preserve pre-home-alias add-target configurations when upgrading.
+    if uri in {"viking://user/resources", "viking://user/skills"} or uri.startswith(
+        "viking://user/resources/"
+    ):
+        uri = "viking://~/" + uri.removeprefix("viking://user/")
     return uri
 
 
@@ -316,14 +321,11 @@ class TraceDumpBodyConfig(BaseModel):
 
 
 class EventReportingConfig(BaseModel):
-    """Optional remote business-event exporter. Endpoint settings remain external."""
+    """Optional business-event exporter configured in ov.conf."""
 
     enabled: bool = False
-    config_file: Optional[str] = None
-    nacos_server: Optional[str] = None
-    nacos_namespace: Optional[str] = None
-    nacos_data_id: Optional[str] = None
-    nacos_group: Optional[str] = None
+    kafka: Dict[str, Any] = Field(default_factory=dict)
+    telemetry: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ObservabilityConfig(BaseModel):

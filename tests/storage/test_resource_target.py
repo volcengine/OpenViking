@@ -2,10 +2,17 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for the AGFS resource target used by content tree actions."""
 
+from unittest.mock import AsyncMock
+
 import pytest
 
+from openviking.observability.events import get_event_bus
+from openviking.observability.reporting import runtime
+from openviking.server.identity import RequestContext, Role
+from openviking.service.task_work_index import bind_task_context
 from openviking.storage.resource_target import AgfsResourceTarget
 from openviking.storage.viking_fs import VikingFS
+from openviking_cli.session.user_id import UserIdentifier
 from tests.utils.mock_agfs import MockLocalAGFS
 
 
@@ -76,19 +83,33 @@ class TestAgfsResourceTarget:
         with pytest.raises(ValueError):
             await target.write_file("../evil.py", b"x")
 
-    async def test_delete_path_uses_exact_semantics_for_file(self) -> None:
-        lease = {"lease_ref": "root-tree"}
-        vfs = _FakeVikingFS(existing={f"{_ROOT}/gone.py": b"x"})
-        target = AgfsResourceTarget(
-            viking_fs=vfs,
-            root_uri=_ROOT,
-            ctx=_Ctx(),
-            lease_ref=lease,
-        )
-
-        await target.delete_path("gone.py", is_dir=False)
-
-        assert vfs.removed == [(f"{_ROOT}/gone.py", False, lease)]
+    async def test_delete_reports_only_successful_storage_changes(self, tmp_path, monkeypatch):
+        backend = MockLocalAGFS(root_path=tmp_path)
+        vfs = VikingFS(agfs=backend)
+        ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.ROOT)
+        target = AgfsResourceTarget(viking_fs=vfs, root_uri=_ROOT, ctx=ctx)
+        await target.write_file("gone.py", b"removed")
+        await target.write_file("keep.py", b"retained")
+        monkeypatch.setattr(runtime, "_reporter", object())
+        events = []
+        bus = get_event_bus()
+        bus.register("resource-delete-reporting", events.append)
+        try:
+            with bind_task_context("reimport", "acct", "alice", task_type="add_resource"):
+                await target.delete_path("gone.py", is_dir=False)
+            assert not backend.exists(vfs._uri_to_path(f"{_ROOT}/gone.py", ctx=ctx))
+            assert await target.read_file("keep.py") == b"retained"
+            assert len(events) == 1
+            assert events[0].payload["uri"] == f"{_ROOT}/gone.py"
+            assert events[0].payload["change_type"] == "deleted"
+            assert events[0].payload["task_id"] == "reimport"
+            monkeypatch.setattr(vfs, "remove_files", AsyncMock(side_effect=OSError("unavailable")))
+            with pytest.raises(OSError):
+                await target.delete_path("keep.py", is_dir=False)
+            assert await target.read_file("keep.py") == b"retained"
+            assert len(events) == 1
+        finally:
+            bus.unregister("resource-delete-reporting")
 
     async def test_delete_path_uses_tree_semantics_for_directory(self) -> None:
         lease = {"lease_ref": "root-tree"}

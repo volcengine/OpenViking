@@ -725,6 +725,8 @@ class EmbeddingConfig(BaseModel):
         provider: str,
         embedder_type: str,
         config: EmbeddingModelConfig,
+        *,
+        cost_bearer: Optional[str] = None,
     ):
         """Factory method to create embedder instance based on provider and type.
 
@@ -732,6 +734,7 @@ class EmbeddingConfig(BaseModel):
             provider: Provider type ('openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'litellm')
             embedder_type: Embedder type ('dense', 'sparse', 'hybrid')
             config: EmbeddingModelConfig instance
+            cost_bearer: Credential billing owner, available to constructor-time probes
 
         Returns:
             Embedder instance
@@ -767,6 +770,8 @@ class EmbeddingConfig(BaseModel):
             "max_concurrent": self.max_concurrent,
             "max_input_tokens": self.max_input_tokens,
         }
+        if cost_bearer is not None:
+            runtime_config["cost_bearer"] = cost_bearer
 
         factory_registry = {
             ("openai", "dense"): (
@@ -1115,7 +1120,12 @@ class EmbeddingConfig(BaseModel):
                 **({"input": config.input} if "input" in config.model_fields_set else {}),
             )
             provider = self._require_provider(merged_config.provider)
-            embedder = self._create_embedder(provider, embedder_type, merged_config)
+            embedder = self._create_embedder(
+                provider,
+                embedder_type,
+                merged_config,
+                **({"cost_bearer": cred.cost_bearer} if cred.cost_bearer is not None else {}),
+            )
             # Retry wrappers delegate the actual provider request to their child.
             # Each failover candidate keeps its own owner, including failed calls.
             if cred.cost_bearer is not None:

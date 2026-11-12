@@ -9,7 +9,7 @@ import time
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -17,7 +17,12 @@ from openviking.core.namespace import (
     may_include_hidden_actor_peers,
     uri_parts,
 )
-from openviking.observability.reporting.facts import emit_file_change, file_exists_before
+from openviking.observability.reporting.facts import (
+    emit_file_change,
+    file_copy_targets,
+    file_exists_before,
+)
+from openviking.pyagfs.copy_progress import record_copy_success, track_copy_progress
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
@@ -26,12 +31,13 @@ from openviking.pyagfs.exceptions import (
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import AccessDecision, RequestContext, Role
+from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.abstract_overview import (
     ABSTRACT_OVERVIEW_FILENAMES,
     rewrite_abstract_overview_for_transfer,
 )
 from openviking.storage.acl import AclAction, is_acl_uri
-from openviking.storage.expr import And, PathScope, RawDSL
+from openviking.storage.expr import And, Eq, PathScope, RawDSL
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.vector_ids import is_vector_record_id, vector_record_id
 from openviking.storage.viking_fs._base import (
@@ -508,22 +514,36 @@ class _OpsMixin:
             owner_lease_ref=lease_ref,
         )
         operation_id = uuid.uuid4().hex
+        from openviking.observability.reporting.runtime import is_reporting_enabled
+
+        reporting_entries: Optional[List[tuple[str, str, bool, bool]]] = (
+            [] if is_reporting_enabled() else None
+        )
+        copied_paths: set[str] = set()
+        completed = False
+        cleanup_failed = False
         try:
             if is_dir:
                 await self._ensure_descendant_access(old_uri, ctx, action=AclAction.READ)
             source_uris = await self._prepare_transfer_entries(
-                old_uri, new_uri, is_dir=is_dir, move=False, ctx=ctx
-            )
-            files_created = await self._copy_agfs_entry(
-                old_path,
-                new_path,
-                old_uri=old_uri,
-                new_uri=new_uri,
+                old_uri,
+                new_uri,
                 is_dir=is_dir,
-                ctx=copy_ctx,
-                lease_ref=lease,
-                copy_semantic_sidecars=copy_semantic_sidecars,
+                move=False,
+                ctx=ctx,
+                reporting_entries=reporting_entries,
             )
+            with track_copy_progress(enabled=reporting_entries is not None) as copied_paths:
+                files_created = await self._copy_agfs_entry(
+                    old_path,
+                    new_path,
+                    old_uri=old_uri,
+                    new_uri=new_uri,
+                    is_dir=is_dir,
+                    ctx=copy_ctx,
+                    lease_ref=lease,
+                    copy_semantic_sidecars=copy_semantic_sidecars,
+                )
             vector_result = None
             if maintain_vectors:
                 try:
@@ -535,10 +555,15 @@ class _OpsMixin:
                         **({"source_uris": source_uris} if is_dir else {}),
                     )
                 except Exception:
+                    # Any interrupted cleanup, including cancellation after
+                    # physical deletion, must verify which copies remain.
+                    cleanup_failed = True
                     try:
                         await self._cleanup_transfer_target(
                             new_path, is_dir=is_dir, ctx=copy_ctx, lease_ref=lease
                         )
+                        copied_paths.clear()
+                        cleanup_failed = False
                     except Exception:
                         logger.warning("Failed to clean copy target %s", new_uri, exc_info=True)
                     raise
@@ -566,23 +591,82 @@ class _OpsMixin:
                 "directory" if is_dir else "file",
                 is_dir,
             )
+            completed = True
             return result
         finally:
-            await self._async_agfs.pathlock_release(lease)
+            try:
+                changes = self._emit_copy_changes(
+                    (
+                        (target, directory, existed)
+                        for _, target, directory, existed in reporting_entries or ()
+                        if not (
+                            is_dir
+                            and not directory
+                            and not copy_semantic_sidecars
+                            and target.rsplit("/", 1)[-1] in ABSTRACT_OVERVIEW_FILENAMES
+                        )
+                    ),
+                    ctx=ctx,
+                    copied_paths=None if completed else copied_paths,
+                    verify_survivors=cleanup_failed,
+                )
+                if cleanup_failed:
+                    # Survivor stats must finish together with fact publication
+                    # before cancellation can release the copy lease.
+                    await run_to_completion(lambda: changes)
+                else:
+                    await changes
+            finally:
+                await self._async_agfs.pathlock_release(lease)
 
-    async def _ensure_transfer_target_type(self, path: str, uri: str, *, is_dir: bool) -> None:
+    async def _emit_copy_changes(
+        self,
+        targets: Iterable[tuple[str, bool, bool | None]],
+        *,
+        ctx: Optional[RequestContext],
+        copied_paths: set[str] | None,
+        verify_survivors: bool = False,
+    ) -> None:
+        """Publish acknowledged copies using pre-states captured before writing.
+
+        Only a failed rollback needs extra stats. Successful copies and ordinary
+        copy failures reuse the existing traversal and write acknowledgements.
+        """
+        for target, directory, existed in targets:
+            if copied_paths is not None:
+                path = self._uri_to_path(target, ctx=ctx).rstrip("/")
+                if path not in copied_paths:
+                    continue
+                if verify_survivors:
+                    try:
+                        stat = await self._async_agfs.stat(path)
+                    except Exception:
+                        # A removed or unverifiable target is not a retained copy.
+                        continue
+                    if bool(stat.get("isDir", False)) != directory:
+                        continue
+            emit_file_change(
+                target,
+                ctx,
+                "modified" if existed else "added" if existed is False else None,
+                is_dir=directory,
+                operation="copy",
+            )
+
+    async def _ensure_transfer_target_type(self, path: str, uri: str, *, is_dir: bool) -> bool:
         """Allow overwrite/merge, but never replace a file with a directory or vice versa."""
         try:
             stat = await self._async_agfs.stat(path)
         except Exception as exc:
             if is_not_found_error(exc):
-                return
+                return False
             mapped = map_exception(exc, resource=uri)
             if mapped is not None:
                 raise mapped from exc
             raise
         if bool(stat.get("isDir", False)) != is_dir:
             raise InvalidArgumentError(f"transfer source and target types differ: {uri}")
+        return True
 
     async def _prepare_transfer_entries(
         self,
@@ -592,6 +676,7 @@ class _OpsMixin:
         is_dir: bool,
         move: bool,
         ctx: Optional[RequestContext],
+        reporting_entries: Optional[List[tuple[str, str, bool, bool]]] = None,
     ) -> List[str]:
         """Validate all affected entries under the lease before the first content write."""
         source_uris: List[str] = []
@@ -609,10 +694,12 @@ class _OpsMixin:
             else:
                 await self._ensure_copy_source_access(source, recursive=directory, ctx=guard_ctx)
             await self._ensure_access(target, guard_ctx, action=AclAction.WRITE)
-            await self._ensure_transfer_target_type(
+            existed = await self._ensure_transfer_target_type(
                 self._uri_to_path(target, ctx=ctx), target, is_dir=directory
             )
             source_uris.append(source)
+            if reporting_entries is not None:
+                reporting_entries.append((source, target, directory, existed))
             if directory:
                 # Match the copy traversal exactly; user content can use names
                 # that the namespace listing API hides, such as tasks/_system.
@@ -742,6 +829,7 @@ class _OpsMixin:
             recursive=False,
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
         )
+        record_copy_success(new_path)
         return 1
 
     async def _cleanup_transfer_target(
@@ -844,9 +932,19 @@ class _OpsMixin:
             )
 
         operation_id = uuid.uuid4().hex
+        from openviking.observability.reporting.runtime import is_reporting_enabled
+
+        reporting_entries: Optional[List[tuple[str, str, bool, bool]]] = (
+            [] if is_reporting_enabled() else None
+        )
         try:
             uris_to_move = await self._prepare_transfer_entries(
-                old_uri, new_uri, is_dir=is_dir, move=True, ctx=ctx
+                old_uri,
+                new_uri,
+                is_dir=is_dir,
+                move=True,
+                ctx=ctx,
+                reporting_entries=reporting_entries,
             )
 
             # Check if it's temp directory (files already encrypted)
@@ -937,9 +1035,22 @@ class _OpsMixin:
                 "directory" if is_dir else "file",
                 is_dir,
             )
-            emit_file_change(
-                new_uri, ctx, "modified", old_uri=old_uri, is_dir=is_dir, operation="move"
-            )
+            for source, target, directory, _ in reporting_entries or ():
+                if (
+                    is_dir
+                    and not directory
+                    and not copy_semantic_sidecars
+                    and source.rsplit("/", 1)[-1] in {".abstract.md", ".overview.md"}
+                ):
+                    continue
+                emit_file_change(
+                    target,
+                    ctx,
+                    "modified",
+                    old_uri=source,
+                    is_dir=directory,
+                    operation="move",
+                )
             return result
         finally:
             await self._async_agfs.pathlock_release(lease)
@@ -1009,6 +1120,7 @@ class _OpsMixin:
         else:
             if not stat.get("isDir", False):
                 raise InvalidArgumentError(f"transfer target is not a directory: {new_uri}")
+        record_copy_success(new_path)
         copied = 1
         entries = await self._async_agfs.ls(old_path, fs_ctx=fs_ctx)
         for entry in entries:
@@ -1064,6 +1176,7 @@ class _OpsMixin:
                         recursive=False,
                         fs_ctx=fs_ctx,
                     )
+                record_copy_success(new_child)
                 copied += 1
         return copied
 
@@ -1166,9 +1279,9 @@ class _OpsMixin:
                 vector collection so callers can cross-reference without an
                 extra lookup. Not present for directories (which may have
                 multiple records across L0/L1/L2 levels).
-            count (int): For directories, the number of nodes in the vector index
-                under this directory (including subdirectories). For files, this
-                field is not included.
+            count (int): For directories, the number of visible level-2 vector
+                records under this directory (including subdirectories). For
+                files, this field is not included.
 
         Args:
             uri: Viking URI, or a 32-char hex vector record id (resolves to URI via vector store)
@@ -1215,9 +1328,13 @@ class _OpsMixin:
                     vector_store = self._get_vector_store()
                     if vector_store:
                         if not may_include_hidden_actor_peers(uri, real_ctx):
-                            filter_expr = PathScope("uri", uri, depth=-1)
                             result["count"] = await vector_store.count(
-                                filter=filter_expr,
+                                filter=And(
+                                    [
+                                        PathScope("uri", uri, depth=-1),
+                                        Eq("level", 2),
+                                    ]
+                                ),
                                 ctx=real_ctx,
                             )
                 except Exception as e:
@@ -1465,8 +1582,12 @@ class _OpsMixin:
         if vector_store is None:
             return False
 
-        backend_type = (await vector_store.get_account_backend(ctx.account_id))._mode
-        if backend_type not in ("volcengine", "vikingdb"):
+        try:
+            backend = await vector_store.get_account_backend(ctx.account_id)
+        except Exception:
+            logger.debug("glob engine=auto: backend lookup failed, falling back to fs", exc_info=True)
+            return False
+        if getattr(backend, "enable_path_glob", False) is not True:
             return False
 
         if not await self._collection_has_glob_uri_field(vector_store, ctx):
@@ -2108,8 +2229,7 @@ class _OpsMixin:
         ctx = self.authorize_read(real_ctx, [uri])
         await self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        # Verify the file exists before reading, because AGFS read returns
-        # empty bytes for non-existent files instead of raising an error.
+        # Verify that the path exists and is not a directory before reading.
         try:
             stat = await self._async_agfs.stat(path)
         except Exception as exc:
@@ -2528,9 +2648,13 @@ class _OpsMixin:
             if need_count and is_dir and vector_store and entry_uri:
                 try:
                     if not may_include_hidden_actor_peers(entry_uri, real_ctx):
-                        filter_expr = PathScope("uri", entry_uri, depth=-1)
                         entry["count"] = await vector_store.count(
-                            filter=filter_expr,
+                            filter=And(
+                                [
+                                    PathScope("uri", entry_uri, depth=-1),
+                                    Eq("level", 2),
+                                ]
+                            ),
                             ctx=real_ctx,
                         )
                 except Exception as e:
@@ -2591,13 +2715,26 @@ class _OpsMixin:
         dst_path = self._uri_to_path(target_uri, ctx=ctx)
         fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)
         await self._ensure_parent_dirs(dst_path, ctx=ctx, lease_ref=lease_ref)
-        await self._async_agfs.cp(
-            src_path,
-            dst_path,
-            recursive=True,
-            fs_ctx=fs_ctx or {"account_id": self._ctx_or_default(ctx).account_id},
-            allow_same_mount_fast_path=True,
+        reporting_targets = await file_copy_targets(
+            self, temp_uri, target_uri, ctx=ctx, lease_ref=lease_ref
         )
+        completed = False
+        with track_copy_progress(enabled=bool(reporting_targets)) as copied_paths:
+            try:
+                await self._async_agfs.cp(
+                    src_path,
+                    dst_path,
+                    recursive=True,
+                    fs_ctx=fs_ctx or {"account_id": self._ctx_or_default(ctx).account_id},
+                    allow_same_mount_fast_path=True,
+                )
+                completed = True
+            finally:
+                await self._emit_copy_changes(
+                    reporting_targets,
+                    ctx=ctx,
+                    copied_paths=None if completed else copied_paths,
+                )
 
     async def delete_temp(
         self,

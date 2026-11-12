@@ -32,6 +32,13 @@ class _SharedQueryEmbedding:
     waiters: int = 0
 
 
+@dataclass
+class _EmbeddingCallTiming:
+    started: float
+    elapsed: float | None = None
+    reported: bool = False
+
+
 class QueryEmbeddingCache(dict[Any, _SharedQueryEmbedding]):
     """Own in-flight query work for one request and track its waiters."""
 
@@ -308,10 +315,16 @@ class EmbedderBase(ABC):
         self.max_retries = int(self.config.get("max_retries", 3))
         self.max_concurrent = int(self.config.get("max_concurrent", 10))
         self.provider = self.config.get("provider", "unknown")
+        self.cost_bearer = self.config.get("cost_bearer")
 
         # Token usage tracking
         self._token_tracker = _get_token_tracker()
-        self._active_call_started_at: float | None = None
+        self._active_call: contextvars.ContextVar[_EmbeddingCallTiming | None] = (
+            contextvars.ContextVar("embedding_active_call", default=None)
+        )
+        self._completed_call: contextvars.ContextVar[_EmbeddingCallTiming | None] = (
+            contextvars.ContextVar("embedding_completed_call", default=None)
+        )
 
     def prepare_embedding_input(self, content: "EmbeddingInput") -> "EmbeddingInput":
         """Apply this embedder's input guard before provider calls.
@@ -392,12 +405,18 @@ class EmbedderBase(ABC):
         operation_name: str = "embedding",
     ) -> T:
         """Run one provider request with per-attempt timing state."""
-        previous_started_at = self._active_call_started_at
-        self._active_call_started_at = time.monotonic()
+        timing = _EmbeddingCallTiming(time.monotonic())
+        token = self._active_call.set(timing)
         try:
             return func()
+        except Exception as error:
+            if not timing.reported and model_error_kind(error) is not None:
+                self.record_call_without_usage(error=error)
+            raise
         finally:
-            self._active_call_started_at = previous_started_at
+            timing.elapsed = max(time.monotonic() - timing.started, 0.0)
+            self._completed_call.set(timing)
+            self._active_call.reset(token)
 
     async def _run_once_async(
         self,
@@ -422,10 +441,14 @@ class EmbedderBase(ABC):
         telemetry.set("embedding.async.wait_ms", round(wait_elapsed * 1000, 3))
 
         started = time.monotonic()
-        previous_started_at = self._active_call_started_at
-        self._active_call_started_at = started
+        timing = _EmbeddingCallTiming(started)
+        token = self._active_call.set(timing)
         try:
             return await func()
+        except Exception as error:
+            if not timing.reported and model_error_kind(error) is not None:
+                self.record_call_without_usage(error=error)
+            raise
         finally:
             elapsed = time.monotonic() - started
             telemetry.set("embedding.async.duration_ms", round(elapsed * 1000, 3))
@@ -438,7 +461,9 @@ class EmbedderBase(ABC):
                     wait_elapsed * 1000,
                     elapsed * 1000,
                 )
-            self._active_call_started_at = previous_started_at
+            timing.elapsed = max(elapsed, 0.0)
+            self._completed_call.set(timing)
+            self._active_call.reset(token)
             if semaphore is not None:
                 semaphore.release()
 
@@ -465,9 +490,40 @@ class EmbedderBase(ABC):
             normalized_duration = 0.0
         if normalized_duration > 0:
             return normalized_duration
-        if self._active_call_started_at is None:
+        timing = self._active_call.get() or self._completed_call.get()
+        if timing is None:
             return 0.0
-        return max(time.monotonic() - self._active_call_started_at, 0.0)
+        if timing.elapsed is not None:
+            return timing.elapsed
+        return max(time.monotonic() - timing.started, 0.0)
+
+    def record_call_without_usage(
+        self, *, duration_seconds: float = 0.0, error: Exception | None = None
+    ) -> None:
+        """Retain unknown usage without losing a provider's attempt count."""
+        timing = self._active_call.get()
+        if timing is not None:
+            timing.reported = True
+        try:
+            from openviking.metrics.datasources import EmbeddingEventDataSource
+            from openviking.observability.reporting.facts import model_account_id
+            from openviking.telemetry import get_ingestion_source_type
+            from openviking.utils.model_retry import extract_metric_error_code
+
+            EmbeddingEventDataSource.record_call(
+                provider=str(self.provider),
+                model_name=str(self.model_name),
+                duration_seconds=self._resolve_metrics_duration_seconds(duration_seconds),
+                prompt_tokens=None,
+                completion_tokens=None,
+                error_code=extract_metric_error_code(error) if error is not None else "OK",
+                account_id=model_account_id("embedding.call", getattr(self, "_account_id", None)),
+                source_type=get_ingestion_source_type(),
+                cost_bearer=getattr(self, "cost_bearer", None),
+            )
+        except Exception:
+            # Reporting cannot change the provider's result or exception.
+            return
 
     def update_token_usage(
         self,
@@ -486,6 +542,9 @@ class EmbedderBase(ABC):
             completion_tokens: Number of output tokens
             duration_seconds: Wall-clock duration of the embedding provider call in seconds
         """
+        timing = self._active_call.get()
+        if timing is not None:
+            timing.reported = True
         self._token_tracker.update(
             model_name=model_name,
             provider=provider,
@@ -494,10 +553,8 @@ class EmbedderBase(ABC):
         )
         try:
             from openviking.metrics.datasources import EmbeddingEventDataSource
-            from openviking.observability.context import get_root_observability_context
+            from openviking.observability.reporting.facts import model_account_id
             from openviking.telemetry import get_ingestion_source_type
-
-            root_context = get_root_observability_context()
 
             EmbeddingEventDataSource.record_call(
                 provider=str(provider),
@@ -505,8 +562,7 @@ class EmbedderBase(ABC):
                 duration_seconds=self._resolve_metrics_duration_seconds(duration_seconds),
                 prompt_tokens=int(prompt_tokens),
                 completion_tokens=int(completion_tokens),
-                account_id=getattr(self, "_account_id", None)
-                or (root_context.account_id if root_context is not None else None),
+                account_id=model_account_id("embedding.call", getattr(self, "_account_id", None)),
                 source_type=get_ingestion_source_type(),
                 cost_bearer=getattr(self, "cost_bearer", None),
             )

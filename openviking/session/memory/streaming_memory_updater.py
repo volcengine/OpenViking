@@ -271,6 +271,7 @@ class StreamingMemoryUpdater:
                         request.ctx,
                         viking_fs,
                         lease_ref=lease,
+                        errors=result.apply_result.errors,
                     )
                     for uri in dict.fromkeys(updated_uris):
                         result.apply_result.add_edited(uri)
@@ -2242,13 +2243,15 @@ def _exclude_tree_covered_paths(exact_paths: set[str], tree_paths: set[str]) -> 
     }
 
 
-async def _persisted_replacement_relation_uris(
+async def _persisted_delete_relation_uris(
     operations: ResolvedOperations,
     viking_fs: Any,
     ctx: RequestContext,
 ) -> set[str]:
     uris: set[str] = set()
-    for deleted_uri in dict(operations.delete_replacements or {}):
+    deleted_uris = {file.uri for file in operations.delete_file_contents if file.uri}
+    deleted_uris.update(operations.delete_replacements or {})
+    for deleted_uri in sorted(deleted_uris):
         try:
             content = await viking_fs.read_file(deleted_uri, ctx=ctx)
         except (FileNotFoundError, NotFoundError):
@@ -2299,7 +2302,7 @@ async def acquire_memory_operation_lease(
                 timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
             )
         try:
-            relation_uris = await _persisted_replacement_relation_uris(
+            relation_uris = await _persisted_delete_relation_uris(
                 operations,
                 viking_fs,
                 ctx,

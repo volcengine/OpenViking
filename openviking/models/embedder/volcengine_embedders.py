@@ -7,7 +7,6 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
 
 import volcenginesdkarkruntime
 
-from openviking.metrics.datasources import EmbeddingEventDataSource
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbeddingInput,
@@ -22,10 +21,8 @@ from openviking.models.network import (
     create_optional_async_httpx_client,
     create_optional_sync_httpx_client,
 )
-from openviking.observability.context import get_root_observability_context
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
-from openviking.utils.model_retry import extract_metric_error_code
 from openviking_cli.utils.logger import default_logger as logger
 
 VOLCENGINE_CLIENT_REQUEST_ID_HEADER = "X-Client-Request-Id"
@@ -35,21 +32,7 @@ T = TypeVar("T")
 
 def _record_failed_embedding_call(embedder, *, duration_seconds: float, error: Exception) -> None:
     """Emit a failed Ark request attempt with the same model labels as a success."""
-    try:
-        root_context = get_root_observability_context()
-        EmbeddingEventDataSource.record_call(
-            provider="volcengine",
-            model_name=str(embedder.model_name),
-            duration_seconds=max(float(duration_seconds), 0.0),
-            prompt_tokens=0,
-            completion_tokens=0,
-            error_code=extract_metric_error_code(error),
-            cost_bearer=getattr(embedder, "cost_bearer", None),
-            account_id=root_context.account_id if root_context is not None else None,
-        )
-    except Exception:
-        # Metrics must never change the provider failure behavior.
-        return
+    embedder.record_call_without_usage(duration_seconds=duration_seconds, error=error)
 
 
 def _measure_embedding_call(embedder, call: Callable[[], T]) -> tuple[T, float]:
@@ -226,6 +209,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
     def _update_telemetry_token_usage(self, response, *, duration_seconds: float) -> None:
         usage = getattr(response, "usage", None)
         if not usage:
+            self.record_call_without_usage(duration_seconds=duration_seconds)
             return
 
         def _usage_value(key: str, default: int = 0) -> int:
@@ -404,6 +388,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
     def _update_telemetry_token_usage(self, response, *, duration_seconds: float) -> None:
         usage = getattr(response, "usage", None)
         if not usage:
+            self.record_call_without_usage(duration_seconds=duration_seconds)
             return
 
         def _usage_value(key: str, default: int = 0) -> int:
@@ -571,6 +556,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
     def _update_telemetry_token_usage(self, response, *, duration_seconds: float) -> None:
         usage = getattr(response, "usage", None)
         if not usage:
+            self.record_call_without_usage(duration_seconds=duration_seconds)
             return
 
         def _usage_value(key: str, default: int = 0) -> int:

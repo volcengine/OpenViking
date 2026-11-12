@@ -1,112 +1,381 @@
+/**
+ * 文件预览的组件变量，全部从包级主题基线 `src/theme.css` 的 `--ov-ui-color-*`
+ * 派生。宿主想换肤时改基线即可；只想调这一处时，也可以直接覆盖下面任意一条。
+ * 组件私有变量用 `--ov-ui-file-preview-` 前缀，与包内其他组件互不干扰。
+ *
+ * Component variables of the file preview, all derived from the package-level
+ * baseline in `src/theme.css` (`--ov-ui-color-*`). A host re-skins by overriding
+ * the baseline; to adjust just this component it can override any variable below
+ * instead. Private variables carry the `--ov-ui-file-preview-` prefix so they
+ * never collide with other components in the package.
+ */
 .ov-file-preview {
+  --ov-ui-file-preview-accent: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default, #5252ff)
+  );
+  --ov-ui-file-preview-accent-hover: var(
+    --ov-ui-color-primary-hover,
+    var(--ov-ui-primary-hover-default, #7075ff)
+  );
+  --ov-ui-file-preview-border: var(
+    --ov-ui-color-border-2,
+    var(--ov-ui-border-2-default, #e1e4f2)
+  );
+  --ov-ui-file-preview-focus-ring: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default, #5252ff)
+  );
+  --ov-ui-file-preview-row-hover: var(
+    --ov-ui-color-bg-5,
+    var(--ov-ui-bg-5-default, #f1f2f9)
+  );
+  --ov-ui-file-preview-surface: var(
+    --ov-ui-color-bg-1,
+    var(--ov-ui-bg-1-default, #ffffff)
+  );
+  --ov-ui-file-preview-text: var(
+    --ov-ui-color-text-1,
+    var(--ov-ui-text-1-default, #0b0b0f)
+  );
+  --ov-ui-file-preview-text-muted: var(
+    --ov-ui-color-text-3,
+    var(--ov-ui-text-3-default, #6e718c)
+  );
+  --ov-ui-file-preview-text-path: var(
+    --ov-ui-color-text-3,
+    var(--ov-ui-text-3-default, #6e718c)
+  );
+
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+  width: 100%;
   min-width: 0;
   min-height: 0;
+  height: 100%;
   color: inherit;
   font-family: inherit;
   font-size: 13px;
   line-height: 20px;
 }
 
+/*
+ * 页签行是文件夹卡片式：页签贴在一条共同基线上，选中页签与下方内容同底色，
+ * 再由一条 SVG 轮廓把它的三条边和基线连成一体，看起来像卡片从内容区里凸
+ * 出来。轨道两端各留 8px，轮廓仍按整行宽度绘制，基线因此铺满整个面板。
+ */
 .ov-file-preview__tab-row {
-  display: flex;
   flex: none;
-  align-items: flex-end;
-  gap: 2px;
   min-width: 0;
-  padding: 4px 8px 0;
   overflow-x: auto;
-  border-bottom: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  scrollbar-width: thin;
+}
+
+.ov-file-preview__tab-track {
+  position: relative;
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  box-sizing: border-box;
+  min-width: 100%;
+  height: 28px;
+  padding: 0 8px;
 }
 
 .ov-file-preview__tab {
+  position: relative;
   display: inline-flex;
-  flex: none;
+  flex: 0 0 auto;
+  gap: 4px;
   align-items: center;
-  gap: 6px;
-  max-width: 220px;
-  padding: 5px 10px;
-  border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: var(--ov-ui-radius, 6px) var(--ov-ui-radius, 6px) 0 0;
-  background: none;
-  color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
-  );
+  box-sizing: border-box;
+  max-width: 160px;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--ov-ui-file-preview-text-muted);
   font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
   cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
 }
 
 .ov-file-preview__tab:hover:not(:disabled) {
-  color: inherit;
-  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+  background: var(--ov-ui-file-preview-row-hover);
+  color: var(--ov-ui-file-preview-text);
 }
 
-.ov-file-preview__tab[aria-selected='true'] {
-  border-color: var(--ov-ui-border, rgb(0 0 0 / 8%));
-  background: var(--ov-ui-surface, canvas);
-  color: inherit;
+.ov-file-preview__tab--active {
+  background: var(--ov-ui-file-preview-surface);
+  color: var(--ov-ui-file-preview-text);
+  font-weight: 500;
 }
 
-.ov-file-preview__tab:focus-visible {
-  outline: 2px solid var(--ov-ui-focus-ring, #2563c5);
-  outline-offset: -2px;
+/*
+ * 轮廓画在页签之后，只描边不填充，并且不吃指针事件，因此不会挡住点击。
+ * 1px 的线向内收半像素，避免在高分屏上糊成两像素。
+ */
+.ov-file-preview__tab-outline {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  fill: none;
+  stroke: var(--ov-ui-file-preview-border);
+  stroke-width: 1;
 }
 
 .ov-file-preview__tab:disabled {
-  opacity: 0.5;
   cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.ov-file-preview__tab:focus-visible,
+.ov-file-preview__breadcrumb-link:focus-visible {
+  outline: 2px solid var(--ov-ui-file-preview-focus-ring);
+  outline-offset: 1px;
+}
+
+.ov-file-preview__tab-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+
+.ov-file-preview__tab-icon > svg {
+  display: block;
+  width: 14px;
+  height: 14px;
 }
 
 .ov-file-preview__tab-title {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: inherit;
 }
 
-.ov-file-preview__icon-slot {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  color: var(--ov-ui-icon, color-mix(in srgb, currentColor 62%, transparent));
+.ov-file-preview__panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
 }
 
-.ov-file-preview__icon {
-  display: block;
+/*
+ * 内容页签的正文整块由宿主渲染：这里只负责让它铺满页签行以下的区域，
+ * 不加内边距、不套滚动容器——滚动与排版都是宿主的决定。
+ *
+ * A content tab's body belongs to the host. This only makes it fill the area
+ * below the tab row: no padding and no scroll container, since both are the
+ * host's call.
+ */
+.ov-file-preview__panel--content {
+  overflow: hidden;
 }
 
 .ov-file-preview__header {
   display: flex;
-  flex-wrap: wrap;
   flex: none;
+  gap: 8px;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  min-width: 0;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
+  padding: 6px 10px;
 }
 
-.ov-file-preview__path-row {
+.ov-file-preview__path-row,
+.ov-file-preview__header-actions {
   display: flex;
-  flex: 1 1 auto;
-  align-items: center;
   gap: 6px;
+  align-items: center;
   min-width: 0;
 }
 
+/* 路径行左侧按内容排布，剩余空间留在末尾，复制按钮因此紧挨路径。 */
+.ov-file-preview__path-row {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+}
+
+.ov-file-preview__header-actions {
+  flex: none;
+}
+
+/*
+ * 路径用等宽字体，与宿主一致；祖先段是次要色，末段是正文色且加粗。
+ * 面包屑按内容宽度、最多占满可用空间：它后面的复制按钮因此紧跟路径末尾，
+ * 而不是被推到整行最右边、看起来像右侧动作组的一员。
+ */
+/*
+ * 这里不能设 `overflow: hidden`：折叠菜单是绝对定位的子元素，容器裁剪会把
+ * 它整个切掉。各段自己负责裁剪（祖先段限宽加省略号，末段同样），因此不需要
+ * 容器再兜一层。
+ *
+ * No `overflow: hidden` here: the collapse menu is an absolutely positioned child,
+ * so clipping at the container level would cut it off entirely. Each part clips
+ * itself instead — ancestors by a capped width with an ellipsis, the trailing
+ * name likewise.
+ */
 .ov-file-preview__breadcrumb {
+  display: flex;
+  flex: 0 1 auto;
+  gap: 0;
+  align-items: center;
   min-width: 0;
-  padding: 2px 4px;
+  max-width: 100%;
+  font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
+  font-size: 14px;
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.ov-file-preview__breadcrumb-measure {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.ov-file-preview__breadcrumb-part {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+
+.ov-file-preview__breadcrumb-link {
+  max-width: 172px;
   overflow: hidden;
-  border: none;
-  border-radius: var(--ov-ui-radius, 6px);
+  padding: 0;
+  border: 0;
   background: none;
-  color: var(--ov-ui-accent, #2563c5);
+  color: var(--ov-ui-file-preview-text-path);
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* 溢出时祖先段收窄，与宿主一致；末段宽度不受影响。 */
+.ov-file-preview__breadcrumb--overflowing .ov-file-preview__breadcrumb-link {
+  max-width: 160px;
+}
+
+.ov-file-preview__breadcrumb-link:hover:not(:disabled) {
+  color: var(--ov-ui-file-preview-accent-hover);
+}
+
+.ov-file-preview__breadcrumb-link:disabled {
+  cursor: default;
+}
+
+.ov-file-preview__breadcrumb-separator {
+  flex: none;
+  width: 12px;
+  color: var(--ov-ui-file-preview-text-path);
+  text-align: center;
+}
+
+/*
+ * 末段优先保留完整：`flex: 0 1 auto` 且 `min-width: 0` 让它在正常情况下按
+ * 自然宽度显示，只有在「连「…」+ 末段都放不下」时才会被压缩并出现省略号。
+ *
+ * 不能用 `flex: none`：那样末段永不收缩，极端窄容器下会撑破面包屑、把内容
+ * 顶到容器外面，形成横向溢出而不是省略。
+ *
+ * The trailing name keeps its full width in the normal case: `flex: 0 1 auto`
+ * with `min-width: 0` shows it at its natural width and only shrinks it — with an
+ * ellipsis — when even "…" plus the name does not fit.
+ *
+ * `flex: none` cannot be used: it would never shrink, so a very narrow container
+ * would push the name past the breadcrumb and overflow horizontally instead of
+ * ellipsing.
+ */
+.ov-file-preview__breadcrumb-current {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--ov-ui-file-preview-text);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 「…」按钮：点击展开被收起的层级。 */
+.ov-file-preview__breadcrumb-more {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ov-ui-file-preview-text-path);
+  font: inherit;
+  cursor: pointer;
+  transition: color 160ms ease;
+}
+
+.ov-file-preview__breadcrumb-more:hover {
+  color: var(--ov-ui-file-preview-accent-hover);
+}
+
+/*
+ * 菜单浮层：Tooltip 的点击形态默认带 `min-width: 120px`（为短提示留出宽度），
+ * 这里取消掉，让菜单按内容收缩。
+ *
+ * The menu surface. Tooltip's click shape carries a `min-width: 120px` meant for
+ * short hints; drop it here so the menu shrinks to its content.
+ */
+/* 需要带上 `[role='dialog']`：Tooltip 的规则写在 `.ov-tooltip[role='dialog']`
+   上，只写类名特异性不够，会被它盖掉。 */
+.ov-tooltip.ov-file-preview__breadcrumb-menu-surface[role='dialog'] {
+  min-width: 0;
+}
+
+/*
+ * 菜单本体渲染在 Tooltip 的浮层里，定位与背景由浮层负责，这里只管列表的
+ * 排布与项样式。
+ *
+ * 宽度随内容自适应，不设最小宽度——只有一两级时留一大片空白反而显得空。
+ * 层级名过长时由每项的 `max-width` 截断并加省略号，菜单因此不会无限变宽。
+ *
+ * The menu sizes to its content with no minimum width: one or two short levels
+ * would otherwise sit in a wide empty box. A long level name is capped per item
+ * with an ellipsis, so the menu never grows without bound.
+ */
+.ov-file-preview__breadcrumb-menu {
+  max-height: 320px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.ov-file-preview__breadcrumb-menu button:not(.ov-button) {
+  display: block;
+  box-sizing: border-box;
+  max-width: 320px;
+  padding: 4px 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: calc(var(--ov-ui-radius, 6px) - 2px);
+  background: none;
+  color: inherit;
   font: inherit;
   text-align: left;
   text-overflow: ellipsis;
@@ -114,179 +383,250 @@
   cursor: pointer;
 }
 
-.ov-file-preview__breadcrumb:disabled {
-  color: inherit;
-  cursor: default;
+.ov-file-preview__breadcrumb-menu button:not(.ov-button):hover:not(:disabled) {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default, #f1f2f9));
 }
 
-.ov-file-preview__breadcrumb:not(:disabled):hover {
-  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
-}
-
-.ov-file-preview__title-extra {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 6px;
-}
-
-.ov-file-preview__header-actions {
-  display: flex;
-  flex: 0 1 auto;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
+/*
+ * 图标按钮。默认无边框、悬停才显出底槽，用于紧跟在路径后面的复制按钮——
+ * 与宿主的 `plain` 外观一致，避免它看起来像右侧动作组的一员。动作组里的
+ * 按钮用 `--outlined` 变体，带描边与浅色底槽。
+ */
 .ov-file-preview__action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
-  border-radius: var(--ov-ui-radius, 6px);
-  background: none;
-  color: inherit;
-  cursor: pointer;
+  flex: none;
+  box-sizing: border-box;
 }
 
-.ov-file-preview__action:hover:not(:disabled) {
-  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+/* 动作组里的按钮：带描边与浅色底槽，与宿主的次级按钮一致。 */
+.ov-file-preview__action--outlined {
+  border-color: var(--ov-ui-file-preview-border);
+  background: var(--ov-ui-file-preview-row-hover);
+  color: var(--ov-ui-file-preview-text);
 }
 
-.ov-file-preview__action:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+.ov-file-preview__action--outlined:hover:not(:disabled) {
+  border-color: var(--ov-ui-file-preview-text-muted);
 }
 
-.ov-file-preview__action-icon {
-  display: block;
-}
-
-.ov-file-preview__button,
-.ov-file-preview__button--primary {
-  padding: 3px 10px;
-  border-radius: var(--ov-ui-radius, 6px);
-  font: inherit;
-  cursor: pointer;
-}
-
-.ov-file-preview__button {
-  border: 1px solid var(--ov-ui-border, rgb(0 0 0 / 8%));
-  background: none;
-  color: inherit;
-}
-
-.ov-file-preview__button:hover {
-  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
-}
-
-.ov-file-preview__button--primary {
-  border: 1px solid transparent;
-  background: var(--ov-ui-accent, #2563c5);
-  color: #fff;
-}
-
+/*
+ * 预览/源码切换：分段控件，外框是一块浅色底槽，选中项浮在它上面并带一圈描边。
+ * 与宿主一致——28px 高、8px 外圆角、6px 内圆角。
+ */
 .ov-file-preview__switch {
-  display: inline-flex;
+  display: inline-grid;
+  flex: none;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 0;
+  box-sizing: border-box;
+  height: 28px;
   padding: 2px;
-  border-radius: var(--ov-ui-radius, 6px);
-  background: var(--ov-ui-row-hover, rgb(0 0 0 / 4%));
+  border-radius: 8px;
+  background: var(--ov-ui-file-preview-row-hover);
 }
 
 .ov-file-preview__switch-item {
-  padding: 2px 10px;
-  border: none;
-  border-radius: calc(var(--ov-ui-radius, 6px) - 2px);
-  background: none;
-  color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
-  );
-  font: inherit;
-  cursor: pointer;
-}
-
-.ov-file-preview__switch-item[data-active] {
-  background: var(--ov-ui-surface, canvas);
-  color: inherit;
-}
-
-.ov-file-preview__switch-item:focus-visible {
-  outline: 2px solid var(--ov-ui-focus-ring, #2563c5);
-  outline-offset: -2px;
-}
-
-.ov-file-preview__extra-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.ov-file-preview__body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-}
-
-.ov-file-preview__text-body {
-  padding: 12px;
-}
-
-.ov-file-preview__pre {
-  margin: 0;
-  font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.ov-file-preview__editor {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 240px;
-}
-
-.ov-file-preview__save-error {
-  padding: 8px 12px;
-}
-
-.ov-file-preview__textarea {
-  flex: 1 1 auto;
   box-sizing: border-box;
-  width: 100%;
-  min-height: 0;
-  padding: 12px;
-  border: none;
-  background: none;
-  color: inherit;
-  font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
-  font-size: 12px;
-  line-height: 1.6;
-  resize: none;
+  min-width: 50px;
+  margin: 0;
+  white-space: nowrap;
 }
 
-.ov-file-preview__textarea:focus-visible {
-  outline: 2px solid var(--ov-ui-focus-ring, #2563c5);
-  outline-offset: -2px;
+.ov-file-preview__button {
+  flex: none;
+}
+
+/*
+ * 正文容器只负责布局，不负责滚动：各格式渲染器自带滚动容器（代码视图是
+ * `__scroll`，Markdown 是内容区），这里再套一层会让内容把容器撑宽，右侧被裁掉。
+ * 内容页签由宿主渲染，同样按这个约束布局。
+ */
+.ov-file-preview__body {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ov-file-preview__viewer {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
 }
 
 .ov-file-preview__state {
   display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   min-height: 120px;
   padding: 24px;
+  color: var(--ov-ui-file-preview-text-muted);
+  text-align: center;
 }
 
-.ov-file-preview__muted {
-  color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
-  );
+.ov-file-preview__state-title {
+  margin: 0;
+}
+
+.ov-file-preview__state-description {
+  margin: 0;
+  word-break: break-word;
+}
+
+/*
+ * 编辑区在受限高度下要能收缩：`min-height: 0` 允许它被压缩，`overflow: auto`
+ * 让超出的部分滚动。否则 textarea 的 240px 最小高度会撑破面板，把下方的保存
+ * 失败提示挤出可视区，而外层 `overflow: hidden` 又滚不到它。
+ *
+ * The editor has to shrink in a short panel: `min-height: 0` lets it be compressed
+ * and `overflow: auto` scrolls what does not fit. Otherwise the textarea's 240px
+ * minimum pushes past the panel and the save-failure notice below it lands outside
+ * the visible area, where the body's `overflow: hidden` cannot reach it.
+ */
+.ov-file-preview__editor {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  padding: 8px;
+  overflow: auto;
+}
+
+.ov-file-preview__textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* 240px 是舒适高度，不是硬下限：面板更矮时允许它一起收缩。 */
+  min-height: 120px;
+  padding: 8px;
+  border: 1px solid var(--ov-ui-file-preview-border);
+  border-radius: var(--ov-ui-radius, 6px);
+  background: none;
+  color: inherit;
+  font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
+  font-size: 13px;
+  line-height: 20px;
+  resize: none;
+}
+
+.ov-file-preview__notice {
+  flex: none;
+  margin: 0;
+  padding: 4px 10px;
+  color: var(--ov-ui-file-preview-text-muted);
+  font-size: 12px;
+}
+
+.ov-file-preview__footer {
+  flex: none;
+  padding: 4px 10px;
+  border-top: 1px solid var(--ov-ui-file-preview-border);
+  color: var(--ov-ui-file-preview-text-muted);
+  font-size: 12px;
+}
+
+/* ── 目录页签的层级切换 ───────────────────────────────────────────── */
+
+/*
+ * 目录的摘要层级：下划线页签，位于标题行与正文之间。34px 高、13px 字号、
+ * 间距 32px，激活项 500 字重加 2px 下划线。
+ *
+ * A directory's summary levels: underlined tabs between the header and the body.
+ * 34px tall, 13px, 32px apart, the active item at 500 weight with a 2px underline.
+ */
+.ov-file-preview__levels {
+  display: flex;
+  flex: none;
+  height: 34px;
+  align-items: stretch;
+  position: relative;
+  gap: 32px;
+  padding: 0 16px;
+}
+
+.ov-file-preview__level {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--ov-ui-file-preview-text-muted);
+  font: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  letter-spacing: 0.039px;
+  cursor: pointer;
+  transition: color 160ms ease;
+}
+
+.ov-file-preview__level:hover {
+  color: var(--ov-ui-file-preview-text);
+}
+
+.ov-file-preview__level[data-active] {
+  color: var(--ov-ui-file-preview-text);
+  font-weight: 500;
+}
+
+/*
+ * 选中指示条：一条 2px 的横线，宽度与位置跟随选中项，切换时滑动过去。它不
+ * 属于任何一级，因此切换时是位移而不是各自显隐。
+ *
+ * The selection indicator: one 2px rule whose width and position follow the active
+ * level and slides when it changes. It belongs to no single level, so a switch is a
+ * movement rather than one rule hiding and another appearing.
+ */
+.ov-file-preview__level-indicator {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ov-ui-file-preview-text);
+  transition:
+    transform 200ms cubic-bezier(0.2, 0, 0, 1),
+    width 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-file-preview__level-indicator {
+    transition: none;
+  }
+}
+
+/*
+ * 加载态的转圈：纯 CSS 环，不依赖图标资源。只写「加载中」看不出还在不在动，
+ * 等待久一点就像卡住了。
+ *
+ * The loading ring: drawn with CSS alone, so it needs no icon asset. The words alone
+ * do not show that anything is still happening, and a longer wait then reads as a hang.
+ */
+.ov-file-preview__spinner {
+  display: inline-block;
+  flex: none;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--ov-ui-file-preview-border);
+  border-top-color: var(--ov-ui-file-preview-text-muted);
+  border-radius: 50%;
+  animation: ov-file-preview-spin 900ms linear infinite;
+}
+
+@keyframes ov-file-preview-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-file-preview__spinner {
+    animation-duration: 2s;
+  }
 }

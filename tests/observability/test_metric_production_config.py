@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import io
 import json
-from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from pydantic import ValidationError
@@ -10,10 +8,14 @@ from pydantic import ValidationError
 from openviking.metrics.datasources import EmbeddingEventDataSource
 from openviking.models.embedder.volcengine_embedders import _record_failed_embedding_call
 from openviking.models.vlm.base import VLMBase
-from openviking.observability.events import get_event_bus, register_event_subscriber
+from openviking.observability.events import (
+    get_event_bus,
+    register_event_subscriber,
+    try_publish_event,
+)
 from openviking.observability.reporting import config as reporting_config
 from openviking.observability.reporting import runtime
-from openviking.server.config import EventReportingConfig
+from openviking.server.config import EventReportingConfig, load_server_config
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig, VLMCredential
 
@@ -88,7 +90,8 @@ def test_vlm_owner_follows_each_credential_even_for_same_endpoint(monkeypatch):
         "unknown",
         "unknown",
     ]
-    assert [e["prompt_tokens"] for e in capture.events] == [11, 0, 11, 0, 11, 0]
+    assert [e["prompt_tokens"] for e in capture.events] == [11, None, 11, None, 11, None]
+    assert [e["completion_tokens"] for e in capture.events] == [3, None, 3, None, 3, None]
 
 
 def test_embedding_owner_reaches_actual_retry_and_failover_children(monkeypatch):
@@ -134,53 +137,158 @@ def test_unknown_or_invalid_owner_is_not_silently_billed_to_platform(monkeypatch
         VLMCredential(cost_bearer="invalid")
 
 
-@pytest.mark.parametrize("explicit", [False, True])
-def test_reporting_uses_environment_location_with_explicit_config_precedence(monkeypatch, explicit):
-    monkeypatch.delenv("NACOS_CONFIG_FILE", raising=False)
-    monkeypatch.delenv("NACOS_USERNAME", raising=False)
+def test_reporting_reads_ov_conf_and_ignores_nacos(monkeypatch, tmp_path):
     for key, value in {
-        "NACOS_SERVER_ADDR": "http://config-center:8848",
-        "NACOS_NAMESPACE": "environment",
-        "NACOS_DATA_ID": "environment_config",
-        "NACOS_GROUP": "environment_group",
+        "NACOS_SERVER_ADDR": "http://unavailable-config-center:8848",
+        "NACOS_CONFIG_FILE": str(tmp_path / "does-not-exist.json"),
+        "NACOS_USERNAME": "unused",
+        "NACOS_PASSWORD": "unused",
     }.items():
         monkeypatch.setenv(key, value)
-    seen = []
-
-    class Opener:
-        def open(self, request, **kwargs):
-            seen.append(request)
-            return io.BytesIO(
-                json.dumps(
-                    {
-                        "kafka": {"topic": "metric-log"},
-                        "telemetry": {"enabled": True},
-                        "connections": {"other": {"password": "${UNAVAILABLE_OTHER_PASSWORD}"}},
-                    }
-                ).encode()
-            )
-
-    monkeypatch.setattr(reporting_config, "build_opener", lambda *args: Opener())
-    settings = EventReportingConfig(
-        **(
-            {
-                "nacos_namespace": "explicit",
-                "nacos_data_id": "explicit_config",
-                "nacos_group": "explicit_group",
-            }
-            if explicit
-            else {}
-        )
-    )
-    config = reporting_config.load_configuration(settings)
-    params = parse_qs(urlsplit(seen[0]).query)
-    prefix = "explicit" if explicit else "environment"
-    assert params == {
-        "tenant": [prefix],
-        "dataId": [prefix + "_config"],
-        "group": [prefix + "_group"],
+    sections = {
+        "kafka": {
+            "bootstrap_servers": "broker:9092",
+            "topic": "metric-log",
+            "username": "kms-user",
+            "password": "literal-${UNAVAILABLE_PASSWORD}",
+            "security_protocol": "SASL_PLAINTEXT",
+            "proxy_url": "socks5://proxy:1080",
+            "properties": {"sasl.mechanism": "PLAIN"},
+        },
+        "telemetry": {
+            "enabled": True,
+            "queue_capacity": 2048,
+            "deployment": {
+                "account_id": "cloud-account",
+                "resource_id": "library",
+                "region": "cn-beijing",
+            },
+        },
     }
+    path = tmp_path / "ov.conf"
+    path.write_text(
+        json.dumps({"server": {"observability": {"reporting": {"enabled": True, **sections}}}})
+    )
+    settings = load_server_config(str(path)).observability.reporting
+    config = reporting_config.load_configuration(settings)
+    assert settings.enabled
+    assert config == sections
     assert set(config) == {"kafka", "telemetry"}
+    config["kafka"]["password"] = "changed"
+    config["telemetry"]["deployment"]["account_id"] = "changed"
+    assert reporting_config.load_configuration(settings) == sections
+
+
+@pytest.mark.parametrize(
+    "literal",
+    [
+        "literal-$OV_KMS_LITERAL-suffix",
+        "literal-${OV_KMS_LITERAL}-suffix",
+        "literal-%OV_KMS_LITERAL%",
+    ],
+)
+def test_reporting_preserves_kms_literals_and_business_environment(monkeypatch, tmp_path, literal):
+    from openviking.config.config_file import preview_config_file
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    # The replacement would both change the credential and break raw JSON parsing.
+    monkeypatch.setenv("OV_KMS_LITERAL", 'environment-"quote"-\\slash\nnewline')
+    monkeypatch.setenv("OV_BUSINESS_TOKEN", "business-token")
+    monkeypatch.setenv("OV_BUSINESS_PORT", "1944")
+    sections = {
+        "kafka": {
+            "bootstrap_servers": "broker:9092",
+            "topic": literal,
+            "username": literal,
+            "password": literal,
+            "proxy_url": literal,
+            "properties": {"sasl.jaas.config": literal},
+        },
+        "telemetry": {
+            "enabled": True,
+            "deployment": {"account_id": literal, "resource_id": "library", "region": "cn-beijing"},
+        },
+    }
+    data = {
+        "server": {
+            "port": "UNQUOTED_PORT",
+            "root_api_key": "${OV_BUSINESS_TOKEN}",
+            "observability": {"reporting": {"enabled": True, **sections}},
+        },
+        "vlm": {"provider": "openai", "model": "gpt-4o", "api_key": "${OV_BUSINESS_TOKEN}"},
+        "storage": {"workspace": str(tmp_path / "data")},
+    }
+    content = json.dumps(data).replace('"UNQUOTED_PORT"', "${OV_BUSINESS_PORT}")
+    path = tmp_path / "ov.conf"
+    path.write_text(content)
+    server = load_server_config(str(path))
+    assert reporting_config.load_configuration(server.observability.reporting) == sections
+    assert server.root_api_key == "business-token"
+    assert server.port == 1944
+    for field in ("_instance", "_config_file", "_config_file_revision", "_config_file_content"):
+        monkeypatch.setattr(
+            OpenVikingConfigSingleton, field, getattr(OpenVikingConfigSingleton, field)
+        )
+    config = OpenVikingConfigSingleton.initialize(config_path=str(path))
+    assert config.vlm.api_key == "business-token"
+    assert OpenVikingConfigSingleton.get_config_file_content() == content.encode()
+    assert preview_config_file(content)["content"] == content
+    assert path.read_text() == content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kernel_enabled,telemetry_enabled", [(False, True), (True, False), (True, True)]
+)
+async def test_reporting_starts_from_inline_settings(
+    monkeypatch, kernel_enabled, telemetry_enabled
+):
+    settings = EventReportingConfig(
+        enabled=kernel_enabled,
+        kafka={"bootstrap_servers": "broker:9092", "topic": "metric-log"},
+        telemetry={
+            "enabled": telemetry_enabled,
+            "deployment": {"account_id": "cloud", "resource_id": "library"},
+        },
+    )
+    created = []
+
+    class Reporter(Capture):
+        def __init__(self, config):
+            super().__init__()
+            created.append(config)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(runtime, "KafkaEventReporter", Reporter)
+    try:
+        reporter = await runtime.start_reporting(settings)
+        if kernel_enabled and telemetry_enabled:
+            assert reporter is not None
+            assert created == [reporting_config.load_configuration(settings)]
+            try_publish_event("http.request", {"method": "GET", "route": "/health", "status": 200})
+            assert reporter.events[0]["account_id"] == "cloud"
+            assert reporter.events[0]["resource_id"] == "library"
+        else:
+            assert reporter is None
+            assert created == []
+    finally:
+        await runtime.stop_reporting()
+
+
+@pytest.mark.asyncio
+async def test_reporting_invalid_inline_config_preserves_business_service():
+    assert reporting_config.load_configuration(EventReportingConfig()) == {
+        "kafka": {},
+        "telemetry": {},
+    }
+    settings = EventReportingConfig(enabled=True, telemetry={"enabled": True})
+    try:
+        assert await runtime.start_reporting(settings) is None
+        assert not runtime.is_reporting_enabled()
+    finally:
+        await runtime.stop_reporting()
 
 
 @pytest.mark.parametrize("section", ["vlm", "embedding"])

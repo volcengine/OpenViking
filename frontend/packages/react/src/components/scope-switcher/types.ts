@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes, ReactNode } from 'react';
 
 /**
@@ -45,20 +46,12 @@ export interface ScopeSwitcherOption {
 }
 
 /**
- * 面包屑中一个层级的公共字段：标识、触发器的无障碍名与展示内容。
+ * 层级的身份：稳定标识、无障碍名与末尾标记。这些值基本不随请求变化。
  *
- * 层级分成两种形态，见 `ScopeSwitcherFixedLevel` 与
- * `ScopeSwitcherSelectableLevel`。同一行里两种形态可以混用，因此一个宿主可以
- * 只让部分层级可切换。
- *
- * Fields shared by every level: its identity, the trigger's accessible name and
- * what the trigger shows.
- *
- * A level is either fixed or selectable, see `ScopeSwitcherFixedLevel` and
- * `ScopeSwitcherSelectableLevel`. Both can be mixed in one row, so a host can
- * make only some levels switchable.
+ * A level's identity: its stable key, accessible name and trailing marker. These
+ * values rarely change with a request.
  */
-export interface ScopeSwitcherLevelBase {
+export interface ScopeSwitcherIdentity {
   /**
    * 稳定标识，例如 `library`、`account` 或 `user`。
    * Stable key, for example `library`, `account` or `user`.
@@ -71,23 +64,6 @@ export interface ScopeSwitcherLevelBase {
    */
   ariaLabel?: string;
   /**
-   * 触发器上展示的当前选中项文本。
-   *
-   * 由宿主单独给出，不要求等于 `options` 中对应项的 `label`：当前值可能不在已
-   * 加载的那一页里，此时展示宿主给的文本。
-   *
-   * Text shown on the trigger for the current selection.
-   *
-   * Supplied by the host and not required to equal the matching `label` in
-   * `options`: the current value may not be on the loaded page.
-   */
-  selectedLabel: string;
-  /**
-   * 触发器图标，也可以是头像。
-   * Trigger icon, which can also be an avatar.
-   */
-  icon?: ReactNode;
-  /**
    * 触发器末尾的标记，例如套餐名。不传时不渲染。
    * Tag at the end of the trigger, for example a plan name. Not rendered when
    * omitted.
@@ -96,72 +72,119 @@ export interface ScopeSwitcherLevelBase {
 }
 
 /**
- * 固定层级：只展示当前值，不渲染下拉，也不接收任何选项或面板字段。
+ * 触发器展示的内容：当前值文本与图标。
  *
- * 用于当前作用域不可切换的情形，例如个人终端里跟随登录态固定的库与数据空间、
- * 管理模式下不能切换的数据空间。这类层级在视觉上同样是一条面包屑，只是没有
- * 展开箭头、不可点击，也不需要宿主伪造一份空选项列表。
- *
- * A fixed level: shows the current value only, renders no dropdown and takes no
- * option or panel fields.
- *
- * Used where the current scope cannot be switched, for example a library and
- * data space fixed by the sign-in in a personal terminal, or a data space that
- * cannot be switched in management mode. It still looks like a breadcrumb
- * segment, just without an expand affordance and not clickable, and the host
- * does not have to fabricate an empty option list.
+ * What the trigger shows: the current value and its icon.
  */
-export interface ScopeSwitcherFixedLevel extends ScopeSwitcherLevelBase {
+export interface ScopeSwitcherTrigger {
   /**
-   * 判别字段，固定层级为 `'fixed'`。
-   * Discriminant, always `'fixed'` for a fixed level.
+   * 触发器上展示的当前选中项文本。不传时按 `data.selectedId` 从 `data.options`
+   * 里取对应项的 `label`；两者都没有时触发器为空。
+   *
+   * 当前值不在已加载的那一页里时，传这一项由宿主给出文本。
+   *
+   * Text shown on the trigger for the current selection. When omitted it is read
+   * from the matching `data.options` entry by `data.selectedId`; with neither the
+   * trigger is empty.
+   *
+   * Supply it when the current value is not on the loaded page.
    */
-  kind: 'fixed';
+  label?: string;
+  /**
+   * 触发器图标，也可以是头像。不传时用选中项的 `icon`。
+   * Trigger icon, which can also be an avatar. Falls back to the selected
+   * option's `icon` when omitted.
+   */
+  icon?: ReactNode;
 }
 
 /**
- * 可切换层级：渲染可展开的触发器与下拉面板。
+ * 层级的数据：可选项与当前选中项。每次请求后都会变。
  *
- * 面板结构、搜索、分页与选中状态全部受控，由宿主传入。同一行里可以只有一个
- * 可切换层级，也可以三个都可切换。
- *
- * A selectable level: renders an expandable trigger and its dropdown panel.
- *
- * The panel structure, search, paging and selection are all controlled and come
- * from the host. A row can hold one selectable level or several.
+ * A level's data: the options and the current selection. Changes after every
+ * request.
  */
-export interface ScopeSwitcherSelectableLevel extends ScopeSwitcherLevelBase {
+export interface ScopeSwitcherData {
   /**
-   * 判别字段，可切换层级为 `'selectable'`。
-   * Discriminant, always `'selectable'` for a selectable level.
-   */
-  kind: 'selectable';
-  /**
-   * 可选项列表，按宿主给定的顺序渲染。
-   * Selectable options, rendered in the order the host gives.
+   * 该层级的权威选项集合，按宿主给定的顺序渲染。它是判断当前选中值是否仍然
+   * 有效的依据，因此不要只放当前搜索结果：搜索过滤后的子集请通过
+   * `visibleOptions` 传入。
+   *
+   * The level's authoritative option set, rendered in the order the host gives.
+   * It is what decides whether the current selection is still valid, so do not
+   * pass only the current search result: hand a filtered subset in through
+   * `visibleOptions` instead.
    */
   options: readonly ScopeSwitcherOption[];
+  /**
+   * 面板里实际渲染的选项。不传时渲染 `options`。搜索过滤、分页追加的下一屏都
+   * 走这里，不影响选中值是否有效的判断。
+   *
+   * Options actually rendered in the panel; `options` is rendered when omitted.
+   * Search filtering and an appended page go here and never affect whether the
+   * current selection is still valid.
+   */
+  visibleOptions?: readonly ScopeSwitcherOption[];
   /**
    * 当前选中项 id，由宿主持有。命中项渲染勾选标记并使用
    * `role="option"` + `aria-selected` 表达状态。
    *
-   * 必填。可切换层级始终有一个当前作用域，没有「尚未选中」的形态：宿主若还没取到
-   * 数据，传空字符串，由 `selectedLabel` 决定触发器上显示什么。
+   * 组件只按传入的值渲染，不做归一化：id 为空或不在 `options` 里时，列表里没有
+   * 任何一行被标记为选中；id 命中一个禁用项时照常标记选中（禁用只阻止交互，不
+   * 抹掉选中态），直到宿主把它归一化掉。组件不会替宿主改选中值，也不会回调
+   * `actions.onSelect`。
+   *
+   * 作用域始终要有一个确定的值，因此**归一化由宿主负责**：在数据到达后检查
+   * `selectedId` 是否仍有效，无效则改选第一个可选项，并把结果写回 URL 与请求
+   * 参数。使用 `ScopeCascade` 时这层已经内置——它的 controller 在权威列表到达
+   * 后完成回退、清空下游并加载下一级。
+   *
+   * 只出现在 `visibleOptions` 之外不算失效：那只说明它被搜索过滤掉了。
    *
    * Selected option id, owned by the host. The matching option renders a check
    * mark and expresses its state with `role="option"` and `aria-selected`.
    *
-   * Required. A selectable level always has a current scope and has no
-   * "nothing selected" form: a host that has not loaded data yet passes an empty
-   * string, and `selectedLabel` decides what the trigger shows.
+   * The component renders the value it is given and never normalises it: an id
+   * that is empty or absent from `options` marks no row as selected, while an id
+   * matching a disabled option is still rendered as selected — disabled blocks
+   * interaction, it does not clear the selection — until the host normalises it.
+   * The component neither changes the value nor calls `actions.onSelect` on the
+   * host's behalf.
+   *
+   * A scope still needs a definite value, so **normalisation belongs to the
+   * host**: after data arrives, check whether `selectedId` is still valid and
+   * pick the first selectable option when it is not, then write the result back
+   * to the URL and request parameters. `ScopeCascade` already does this — its
+   * controller falls back, resets descendants and loads the next level once the
+   * authoritative list arrives.
+   *
+   * Being absent from `visibleOptions` alone does not invalidate it: that only
+   * means the current search filtered it out.
    */
   selectedId: string;
   /**
-   * 该层级的总条数，用于判断搜索框是否可见。不传时以已加载条数为准。
-   * Total number of entries, used to decide whether the search box is shown.
-   * The loaded count is used when omitted.
+   * 该层级的总条数，用于判断搜索框是否可见。不传时以 `options` 的条数为准。
+   *
+   * 搜索可见性始终取 `options`、`visibleOptions` 与 `total` 三者的最大值，因此
+   * 宿主只传当前一页的 `visibleOptions` 时，只要权威集合超过阈值，搜索框照样
+   * 出现。
+   *
+   * Total number of entries, used to decide whether the search box is shown. The
+   * `options` count is used when omitted.
+   *
+   * Visibility takes the largest of `options`, `visibleOptions` and `total`, so a
+   * host that passes only the current page still gets a search box once the
+   * authoritative set crosses the threshold.
    */
   total?: number;
+}
+
+/**
+ * 层级的交互状态。随用户操作与请求进度变化。
+ *
+ * A level's interaction state. Changes with user actions and request progress.
+ */
+export interface ScopeSwitcherState {
   /**
    * 选项列表是否正在首次加载。为 `true` 时面板显示加载态，不渲染列表。
    * Whether the option list is loading for the first time. While true the panel
@@ -169,24 +192,9 @@ export interface ScopeSwitcherSelectableLevel extends ScopeSwitcherLevelBase {
    */
   loading?: boolean;
   /**
-   * 当前搜索关键字。非空时搜索框保持可见，并用于高亮命中片段。
-   * Current search keyword. A non-empty value keeps the search box visible and
-   * drives hit highlighting.
-   */
-  searchKeyword?: string;
-  /**
-   * 该层级是否暂时不可切换，例如权限尚未就绪。为 `true` 时触发器置灰、不响应
-   * 点击，也不渲染下拉。恒为可切换的宿主不传。
-   *
-   * Whether the level is temporarily not switchable, for example while
-   * permissions load. While true the trigger is dimmed, ignores clicks and
-   * renders no dropdown. Hosts whose levels are always switchable leave it out.
-   */
-  disabled?: boolean;
-  /**
-   * 选项列表是否加载失败。为 `true` 时面板渲染 `errorFallback`。
+   * 选项列表是否加载失败。为 `true` 时面板渲染 `slots.errorFallback`。
    * Whether the option list failed to load. While true the panel renders
-   * `errorFallback`.
+   * `slots.errorFallback`.
    */
   error?: boolean;
   /**
@@ -198,6 +206,35 @@ export interface ScopeSwitcherSelectableLevel extends ScopeSwitcherLevelBase {
    * list so no second switch can start.
    */
   busy?: boolean;
+  /**
+   * 该层级是否暂时不可切换，例如权限尚未就绪。为 `true` 时触发器置灰、不响应
+   * 点击，也不渲染下拉。恒为可切换的宿主不传。
+   *
+   * Whether the level is temporarily not switchable, for example while
+   * permissions load. While true the trigger is dimmed, ignores clicks and
+   * renders no dropdown. Hosts whose levels are always switchable leave it out.
+   */
+  disabled?: boolean;
+  /**
+   * 可选受控展开状态；不传时由本级选择器独立维护。
+   * Optional controlled visibility; otherwise local to this selector.
+   */
+  visible?: boolean;
+  /**
+   * 当前搜索关键字。非空时搜索框保持可见，并用于高亮命中片段。
+   * Current search keyword. A non-empty value keeps the search box visible and
+   * drives hit highlighting.
+   */
+  searchKeyword?: string;
+}
+
+/**
+ * 层级的插槽：由宿主替换或补充组件渲染的内容。
+ *
+ * A level's slots: content the host replaces or adds to what the component
+ * renders.
+ */
+export interface ScopeSwitcherSlots {
   /**
    * 面板内除列表以外的全部内容，由宿主自行实现。
    *
@@ -214,6 +251,9 @@ export interface ScopeSwitcherSelectableLevel extends ScopeSwitcherLevelBase {
    * entries, bottom management entries and explanatory text are all rendered by
    * the host with its own components, links and router. When omitted the panel
    * renders `search` and `list` alone.
+   *
+   * The panel keeps its height cap either way: a host layout that needs more room
+   * scrolls inside the panel instead of growing it.
    */
   renderPanel?: (panel: ScopeSwitcherPanelContent) => ReactNode;
   /**
@@ -249,29 +289,31 @@ export interface ScopeSwitcherSelectableLevel extends ScopeSwitcherLevelBase {
    * when omitted.
    */
   errorFallback?: ReactNode;
+}
+
+/**
+ * 层级的回调：把用户意图交给宿主。
+ *
+ * A level's callbacks: user intent handed back to the host.
+ */
+export interface ScopeSwitcherActions {
   /**
-   * 选中一个选项时触发。组件不清空关键字，也不改变面板可见性，由宿主决定。
-   * Invoked when an option is selected. The component neither clears the
-   * keyword nor changes panel visibility; the host decides.
+   * 选中时触发；组件关闭本级面板，不改变搜索词和业务选中值。
+   * Invoked on selection. Closes this panel; selection and search remain host-owned.
    */
-  onSelect: (option: ScopeSwitcherOption) => void;
-  /**
-   * 面板是否可见，由宿主持有。
-   * Whether the panel is visible, owned by the host.
-   */
-  visible: boolean;
+  onSelect?: (option: ScopeSwitcherOption) => void;
   /**
    * 面板可见性变化时触发，打开和关闭都会调用，参数是变化后的状态。
    *
-   * 宿主在这里写回 `visible`，同时可按需取数，例如打开时才请求第一页选项。
+   * 宿主在这里写回 `state.visible`，同时可按需取数，例如打开时才请求第一页选项。
    *
    * Invoked whenever the panel's visibility changes — on both open and close —
    * with the new state.
    *
-   * The host writes it back to `visible` and can load data on demand from it,
-   * for example requesting the first page only when the panel opens.
+   * The host writes it back to `state.visible` and can load data on demand from
+   * it, for example requesting the first page only when the panel opens.
    */
-  onVisibleChange: (visible: boolean) => void;
+  onVisibleChange?: (visible: boolean) => void;
   /**
    * 搜索关键字变化时触发。不传时不渲染搜索框。
    * Invoked when the search keyword changes. No search box is rendered when
@@ -280,19 +322,19 @@ export interface ScopeSwitcherSelectableLevel extends ScopeSwitcherLevelBase {
   onSearchKeywordChange?: (keyword: string) => void;
   /**
    * 选项列表滚动时触发，参数是滚动后的位置信息。是否加载下一页由宿主判断，加载
-   * 完成后把新一页通过 `options` 传回。不传时不响应滚动。
+   * 完成后把新一页通过 `data.options` 传回。不传时不响应滚动。
    *
    * Invoked when the option list scrolls, with the resulting scroll metrics. The
    * host decides whether to load the next page and passes it back through
-   * `options`. Scrolling is not observed when omitted.
+   * `data.options`. Scrolling is not observed when omitted.
    */
   onScroll?: (metrics: ScopeSwitcherScrollMetrics) => void;
 }
 
 /**
- * 组件渲染好的面板内容，作为参数传给 `renderPanel`。
+ * 组件渲染好的面板内容，作为参数传给 `slots.renderPanel`。
  *
- * Panel content the component rendered, passed to `renderPanel`.
+ * Panel content the component rendered, passed to `slots.renderPanel`.
  */
 export interface ScopeSwitcherPanelContent {
   /**
@@ -308,10 +350,10 @@ export interface ScopeSwitcherPanelContent {
 }
 
 /**
- * 选项列表滚动时的位置信息，由组件从列表元素上读取后传入 `onScroll`。
+ * 选项列表滚动时的位置信息，由组件从列表元素上读取后传入 `actions.onScroll`。
  *
  * Scroll metrics of the option list, read from the list element and passed to
- * `onScroll`.
+ * `actions.onScroll`.
  */
 export interface ScopeSwitcherScrollMetrics {
   /**
@@ -332,19 +374,12 @@ export interface ScopeSwitcherScrollMetrics {
 }
 
 /**
- * 面包屑中的一个层级。按 `kind` 区分固定与可切换两种形态，同一行里可以混用。
- *
- * One level of the breadcrumb. `kind` separates the fixed and selectable forms;
- * both can be mixed in one row.
- */
-export type ScopeSwitcherLevel =
-  ScopeSwitcherFixedLevel | ScopeSwitcherSelectableLevel;
-
-/**
- * 可替换文案，组件内置英文默认值。
- * Replaceable copy; the component ships English defaults.
+ * 可替换文案，组件内置中英文文案。
+ * Replaceable copy with built-in Chinese and English defaults.
  */
 export interface ScopeSwitcherLabels {
+  /** Loading status text / 加载提示。 */
+  loading?: string;
   /**
    * 搜索框占位文本。
    * Search input placeholder.
@@ -368,40 +403,110 @@ export interface ScopeSwitcherLabels {
   error?: string;
 }
 
+/** Layout and language scope: each child owns its state and data subscription. */
+export interface ScopeSwitcherProps extends HTMLAttributes<HTMLDivElement> {
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
+}
+
 /**
- * 作用域切换器的公开接口。
+ * 两种层级共有的入参：身份与触发器内容。
  *
- * 组件负责面包屑触发器、下拉面板、选项列表与搜索框。面板里除列表以外的内容
- * 由宿主的 `renderPanel` 实现；取数、持久化、权限判断与路由也都由宿主负责。
- *
- * Public interface of the scope switcher.
- *
- * The component owns the breadcrumb triggers, the dropdown panels, the option
- * list and the search box. Everything in a panel except the list is
- * implemented by the host's `renderPanel`; data access, persistence, permission
- * checks and routing belong to the host too.
+ * Props shared by both level forms: identity and what the trigger shows.
  */
-export interface ScopeSwitcherProps extends Omit<
-  HTMLAttributes<HTMLDivElement>,
-  'children' | 'onSelect'
-> {
+export interface ScopeSelectorBaseProps {
   /**
-   * 从左到右渲染的层级，例如库 → 数据空间 → 用户。
-   *
-   * 层级数量由宿主按当前登录方式决定，少传一层即该层不渲染、不占位：宿主暂时拿
-   * 不到某一层的数据时直接省略它，不要传占位项或空层级，组件不提供隐藏开关。
-   *
-   * Levels rendered left to right, for example library → data space → user.
-   *
-   * The host decides the level count from the current sign-in method: a level
-   * left out is neither rendered nor reserved. Omit a level the host cannot
-   * resolve yet rather than passing a placeholder or an empty level; the
-   * component has no separate visibility switch.
+   * 层级身份：稳定标识、无障碍名与末尾标记。
+   * Level identity: stable key, accessible name and trailing marker.
    */
-  levels: readonly ScopeSwitcherLevel[];
+  identity: ScopeSwitcherIdentity;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /**
-   * 可替换文案，缺省为英文。
-   * Replaceable copy; English by default.
+   * 触发器展示的当前值文本与图标。不传时从 `data.options` 里按 `data.selectedId`
+   * 取对应项；固定层级没有 `data`，因此固定层级需要在这里给出 `label`。
+   *
+   * The current value and icon shown on the trigger. When omitted they are read
+   * from `data.options` by `data.selectedId`; a fixed level has no `data`, so it
+   * supplies `label` here.
+   */
+  trigger?: ScopeSwitcherTrigger;
+  /**
+   * 可替换文案，未提供的项使用当前 locale 的内置文案。
+   * Replaceable copy; omitted fields follow locale.
    */
   labels?: ScopeSwitcherLabels;
 }
+
+/**
+ * 固定层级的入参：只展示当前值，不渲染下拉，也不接收任何选项或面板字段。
+ *
+ * 用于当前作用域不可切换的情形，例如个人终端里跟随登录态固定的库与数据空间、
+ * 管理模式下不能切换的数据空间。这类层级在视觉上同样是一条面包屑，只是没有
+ * 展开箭头、不可点击，也不需要宿主伪造一份空选项列表。
+ *
+ * Props of a fixed level: shows the current value only, renders no dropdown and
+ * takes no option or panel fields.
+ *
+ * Used where the current scope cannot be switched, for example a library and
+ * data space fixed by the sign-in in a personal terminal, or a data space that
+ * cannot be switched in management mode. It still looks like a breadcrumb
+ * segment, just without an expand affordance and not clickable, and the host
+ * does not have to fabricate an empty option list.
+ */
+export interface ScopeSelectorFixedProps extends ScopeSelectorBaseProps {
+  /**
+   * 判别字段，固定层级为 `'fixed'`。
+   * Discriminant, always `'fixed'` for a fixed level.
+   */
+  kind: 'fixed';
+}
+
+/**
+ * 可切换层级的入参：渲染可展开的触发器与下拉面板。
+ *
+ * 面板结构、搜索、分页与选中状态全部受控，由宿主传入。同一行里可以只有一个
+ * 可切换层级，也可以三个都可切换。
+ *
+ * Props of a selectable level: renders an expandable trigger and its dropdown
+ * panel.
+ *
+ * The panel structure, search, paging and selection are all controlled and come
+ * from the host. A row can hold one selectable level or several.
+ */
+export interface ScopeSelectorSelectableProps extends ScopeSelectorBaseProps {
+  /**
+   * 判别字段，可切换层级为 `'selectable'`。
+   * Discriminant, always `'selectable'` for a selectable level.
+   */
+  kind: 'selectable';
+  /**
+   * 可选项与当前选中项。
+   * The options and the current selection.
+   */
+  data: ScopeSwitcherData;
+  /**
+   * 加载、错误、忙碌、禁用、展开与搜索关键字等交互状态。
+   * Interaction state: loading, error, busy, disabled, visibility and keyword.
+   */
+  state?: ScopeSwitcherState;
+  /**
+   * 用户意图回调。
+   * Callbacks for user intent.
+   */
+  actions?: ScopeSwitcherActions;
+  /**
+   * 宿主替换或补充的渲染内容。
+   * Content the host replaces or adds.
+   */
+  slots?: ScopeSwitcherSlots;
+}
+
+/**
+ * 一个作用域选择器的入参。按 `kind` 区分固定与可切换两种形态，同一行里可以混用。
+ *
+ * Props of one scope selector. `kind` separates the fixed and selectable forms;
+ * both can be mixed in one row.
+ */
+export type ScopeSelectorProps =
+  ScopeSelectorFixedProps | ScopeSelectorSelectableProps;

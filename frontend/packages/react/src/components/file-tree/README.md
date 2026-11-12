@@ -2,15 +2,18 @@
 
 English / [中文](README_CN.md)
 
+Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
+
 A directory tree for resource browsing. The host flattens its tree state into an ordered list of rows and supplies async execution through `operations`; the component renders, handles keyboard interaction and notifies after an operation succeeds.
 
-> **This is currently a placeholder implementation.** It renders every documented row type and honours the public props, so consumers can integrate against the API, but styling, iconography and interaction details will change. The view is expected to be rewritten against this contract.
+It renders the five row kinds, indents by depth with a guide per ancestor level, and handles keyboard navigation; selection, expansion, paging and retry run through `operations`.
 
 ```tsx
 import { FileTree } from '@openviking/react/components/file-tree';
 import '@openviking/react/components/file-tree/style.css';
 
 <FileTree
+  locale="en-US"
   rows={rows}
   selectedId={selectedId}
   operations={{
@@ -58,11 +61,13 @@ The cost is that the host writes a "tree state → row array" transform. What th
 - It requests no data, opens no connections and judges no permissions.
 - It does not own the expansion set or the selection — both are controlled.
 - Clicking a directory and clicking a file share `operations.select`; the host branches on `row.type`, and `onSelect` notifies after a successful selection.
-- Toolbars, search, import sources and permission flows belong to the page layer and are injected through `slots.toolbar`.
+- The host owns search UI, imports and permission flows. `slots.toolbar` adds custom actions above the built-in controls.
 
 ## Extension points
 
 **Row end and hover**: `renderDashboard` places a row-end indicator (for example a dashboard entry) and `renderRowTooltip` places hover content. Returning `null` hides either; dashboard detection is product semantics, so the component ships no path rules.
+
+**Directory copy**: the component resolves a directory's meaning from the structure of its `uri` and ships built-in description and trigger copy for the fixed `viking://` levels. A row's own `description` takes precedence, and `labels.info` overrides copy key by key — an empty string hides a key. The rules live in the component; a host never passes them.
 
 **Per-row one-off effects**: highlighting, flashing and temporary outlines are not tree properties. The component sets `data-file-tree-row-id` (constant `FILE_TREE_ROW_ATTRIBUTE`) on every row element, so the page layer can query it directly, or use `getRowAttributes` to add per-row attributes, or use the `ref` handle's `getRowElement` / `scrollToRow`. The three combine freely and none changes component state.
 
@@ -70,10 +75,18 @@ The cost is that the host writes a "tree state → row array" transform. What th
 
 ## Theme
 
-Styles are scoped and never modify the application's global styles. Colors, radii and focus rings are overridable through `--ov-ui-*` variables; the full list is in the component docs' theme variable table.
+Styles are scoped and never modify the application's global styles. Theme tokens are declared on the root element and default to theme-neutral values, so the tree reads correctly on both light and dark backgrounds.
 
 ## Docs and development
 
-- The props table, runnable examples and theme variables are in the [component docs](../../../../../docs/docs/en/components/file-tree.mdx) ([Chinese](../../../../../docs/docs/zh/components/file-tree.mdx)).
+- The props table and runnable example are in the [component docs](../../../../../docs/docs/en/components/file-tree.mdx) ([Chinese](../../../../../docs/docs/zh/components/file-tree.mdx)).
 - Development and build commands are in the [UI workspace README](../../../../../README.md); module conventions are in the [package README](../../../README.md).
 - The standalone stylesheet entry `@openviking/react/components/file-tree/style.css` is separate from the JS entry and can be imported on demand.
+
+## Optional search and refresh
+
+`search` and `refresh` default to `true`; pass `false` to hide either. `operations.search` opens host search UI, and `operations.refresh` reloads data. Missing executors disable their buttons. Pending refresh automatically disables the button and spins its icon; failure restores it without a success notification.
+
+`search={{ disabled: true }}` controls search availability. Top-level `loading` controls the refresh pending state and is combined with the in-flight refresh Promise and `refresh.loading`. Refresh hints support hover, focus and Escape. `refresh={{ disabled, loading }}` adds host-controlled availability and pending state. Customize `labels.search` and `labels.refresh`; receive success notifications with `onSearch` and `onRefresh`. Search does not filter rows or register a global shortcut. `slots.toolbar` appears above built-in controls, and either control can be hidden independently.
+
+The default search placeholder is `Search files ⌘+K...`; override it with `labels.search`. The basic demo reports search events and lets you manually run refresh success/failure cases.

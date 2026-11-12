@@ -17,7 +17,11 @@ from openviking.core.namespace import (
     is_hidden_by_actor_peer_view,
     may_include_hidden_actor_peers,
 )
-from openviking.core.namespace_policy import is_system_custom_asset_uri, is_system_uri
+from openviking.core.namespace_policy import (
+    is_system_compile_global_uri,
+    is_system_custom_asset_uri,
+    is_system_uri,
+)
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import AccessDecision, DataAccessScope, RequestContext, Role
@@ -287,10 +291,16 @@ class _AccessMixin:
         action: AclAction,
     ) -> bool:
         """Apply the fixed role and path policy for the account system namespace."""
+        if ctx.role == Role.ROOT:
+            return True
+        if is_system_compile_global_uri(uri):
+            return ctx.role == Role.ADMIN or (
+                ctx.role in {Role.USER, Role.GLOBAL} and action is AclAction.READ
+            )
         if action is AclAction.READ:
             return True
         return (
-            ctx.role in {Role.ADMIN, Role.ROOT}
+            ctx.role == Role.ADMIN
             and action in {AclAction.WRITE, AclAction.MANAGE}
             and is_system_custom_asset_uri(uri)
         )
@@ -1014,6 +1024,8 @@ class _AccessMixin:
     def _is_accessible(self, uri: str, ctx: RequestContext) -> bool:
         """Check whether a URI is visible/accessible under current request context."""
         parts = self._safe_uri_parts(uri)
+        if is_system_uri(uri):
+            return self._system_permission_allows(uri, ctx, AclAction.READ)
         if ctx.data_access is not None and parts[:1] == ["user"]:
             return ctx.data_access.decide(uri) is AccessDecision.ALLOWED
         if ctx.role == Role.ROOT:

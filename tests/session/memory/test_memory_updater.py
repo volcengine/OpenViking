@@ -1881,7 +1881,11 @@ class TestMemoryUpdater:
         registry = MagicMock()
         registry.get.return_value = schema
 
-        store = {}
+        store = {
+            profile_uri: MemoryFileUtils.write(
+                MemoryFile(uri=profile_uri, memory_type="profile", content="Caroline's profile")
+            )
+        }
         mock_viking_fs = MagicMock()
 
         async def mock_read_file(uri, **kwargs):
@@ -1918,19 +1922,23 @@ class TestMemoryUpdater:
                     to_uri=caroline_uri,
                     match_text="career",
                     description="Caroline's profile references her career plans",
-                )
+                ),
+                StoredLink(
+                    from_uri="viking://user/Melanie/memories/cases/missing.md", to_uri=melanie_uri
+                ),
             ],
         )
 
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
-        await updater.apply_operations(operations=operations, ctx=ctx)
+        result = await updater.apply_operations(operations=operations, ctx=ctx)
 
         caroline = parse_memory_file_with_fields(store[caroline_uri])
         melanie = parse_memory_file_with_fields(store[melanie_uri])
 
         assert [link["to_uri"] for link in caroline["backlinks"]] == [caroline_uri]
         assert melanie.get("backlinks", []) == []
+        assert result.errors == []
 
     @pytest.mark.asyncio
     async def test_apply_operations_does_not_write_backlinks_to_resource_targets(self):

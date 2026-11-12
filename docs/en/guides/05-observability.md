@@ -575,8 +575,11 @@ The most common labels you will use while investigating dashboards are:
 ## Optional Kafka event reporting
 
 Install `openviking[reporting]` and enable `server.observability.reporting.enabled`
-to read Kafka connection, authentication and topic settings from an external JSON
-file (`NACOS_CONFIG_FILE`) or the configured Nacos service. Reporting is disabled
+to read `server.observability.reporting.kafka` and
+`server.observability.reporting.telemetry` directly from `ov.conf`.
+The nested `telemetry.enabled` switch must also be enabled.
+KBS reads these settings from KMS and renders them into each instance's `ov.conf`;
+the kernel no longer connects to Nacos. Reporting is disabled
 by default and export failures do not interrupt business requests.
 
 The exporter uses an in-memory queue; `telemetry.queue_capacity` must be a positive
@@ -586,8 +589,8 @@ warnings containing counts only. This exporter is suitable for best-effort analy
 it does not provide a durable audit or billing ledger. Allow a graceful shutdown to
 drain the queue before stopping the process.
 
-Deployments may bind an outer account and instance with `OV_METRICS_ACCOUNT_ID`
-and `OV_RESOURCE_ID`; original space and member identities remain in
+KBS binds the outer cloud account and instance through `account_id`, `resource_id`
+and `region` in `reporting.telemetry.deployment`; original space and member identities remain in
 `ov_account_id` and `ov_user_id`. Set `OV_MODEL_COST_BEARER` to `customer` or `ov`
 only when the deployment knows who owns its model credentials. Otherwise the
 owner stays `unknown`. For mixed credentials, trusted provisioning should set
@@ -613,9 +616,38 @@ When ROOT provisions or rotates account model credentials through the configurat
 client. Model sections remain ROOT-only; account admins and members cannot set billing
 ownership through the configuration API.
 
-The optional Nacos reporter uses explicitly configured `nacos_namespace`,
-`nacos_data_id` and `nacos_group` first, then `NACOS_NAMESPACE`, `NACOS_DATA_ID`
-and `NACOS_GROUP`, with defaults `public`, `global_configs` and `DEFAULT_GROUP`.
+Example reporting section in `ov.conf` (KBS supplies authentication from KMS):
+
+```json
+{
+  "server": {
+    "observability": {
+      "reporting": {
+        "enabled": true,
+        "kafka": {
+          "bootstrap_servers": "broker.example:9092",
+          "topic": "metric-log",
+          "security_protocol": "PLAINTEXT"
+        },
+        "telemetry": {
+          "enabled": true,
+          "queue_capacity": 1024,
+          "deployment": {
+            "account_id": "cloud-account",
+            "resource_id": "library",
+            "region": "cn-beijing"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+The exporter does not read `NACOS_*`, external reporting JSON files or environment
+placeholders. After changing KMS, restart KBS, regenerate existing instances'
+`ov.conf` through a configuration update or version upgrade, and restart the
+kernels. Writer and Reader both read their own `ov.conf`.
 
 ## Related Documentation
 

@@ -1,10 +1,10 @@
 # Icons
 
-File-type icons are available from the public `@openviking/react/icons` entry. They share the workspace's SVG sources and ship with the React package.
+Action, file-type and scope-level icons are available from the public `@openviking/react/icons` entry. They share the workspace's SVG sources and ship with the React package.
 
 ## Live example
 
-Use the size controls to resize the five decorative icons. The separate PDF icon demonstrates a meaningful `alt` label at 24 × 24 pixels.
+Use the size controls to resize the decorative icons. The separate PDF icon demonstrates a meaningful `aria-label` at 24 × 24 pixels. The row below shows the three scope-level icons.
 
 ```tsx file="../../_demos/icons-basic.tsx" preview
 
@@ -12,40 +12,64 @@ Use the size controls to resize the five decorative icons. The separate PDF icon
 
 ## Available icons
 
-| Export      | File type            |
-| ----------- | -------------------- |
-| `AudioIcon` | Audio                |
-| `PdfIcon`   | PDF                  |
-| `PptIcon`   | Presentation         |
-| `VideoIcon` | Video                |
-| `WordIcon`  | Word-processing file |
+| Export                    | Purpose                                               |
+| ------------------------- | ----------------------------------------------------- |
+| `ArrowRightIcon`          | Right arrow used by the Volcengine CLI quick commands |
+| `ArrowUpRightIcon`        | Up-right arrow used by the team guide                 |
+| `DirectoryTourFolderIcon` | Open folder used by the team guide                    |
+| `AudioIcon`               | Audio                                                 |
+| `PdfIcon`                 | PDF                                                   |
+| `PptIcon`                 | Presentation                                          |
+| `VideoIcon`               | Video                                                 |
+| `WordIcon`                | Word-processing file                                  |
+| `LibraryIcon`             | Library (round swatch picked by name)                 |
+| `SpaceIcon`               | Data space                                            |
+| `UserIcon`                | Account / user                                        |
+
+`LibraryIcon` has no fixed glyph: it picks a round gradient swatch by `name`, always the same one for the same name, and renders a `span` colour block rather than an SVG. `SpaceIcon` and `UserIcon` are 14 × 14 outline shapes in `currentColor`, so they follow the text colour.
+
+`ScopeCascade`'s default view already applies these three level icons: when an adapter returns options without `icon`, the level's default icon is filled in; a host-supplied `icon` always wins. With `ScopeSelector` alone, icons come entirely from the caller.
 
 ## Props
 
-Each component renders an `img` and accepts its standard non-ref props, except `src` and `srcSet`, which are owned by the component.
+File-type icons, `ArrowUpRightIcon`, `DirectoryTourFolderIcon`, `ArrowRightIcon`, `SpaceIcon` and `UserIcon` render an inline `svg` and accept standard SVG props, except `children`. `LibraryIcon` only takes `name`.
 
-| Property    | Type               | Default | Description                                    |
-| ----------- | ------------------ | ------- | ---------------------------------------------- |
-| `width`     | `number \| string` | `16`    | Image width.                                   |
-| `height`    | `number \| string` | `16`    | Image height.                                  |
-| `alt`       | `string`           | `''`    | Accessible description; empty for decoration.  |
-| `className` | `string`           | —       | Adds a class to the image element.             |
-| Other props | Image attributes   | —       | Standard image attributes, including `aria-*`. |
+| Property     | Type               | Default                                                                                   | Description                                             |
+| ------------ | ------------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `width`      | `number \| string` | `16`; `ArrowRightIcon`: `14`; `ArrowUpRightIcon`: `12`; `DirectoryTourFolderIcon`: `11.2` | Icon width.                                             |
+| `height`     | `number \| string` | `16`; `ArrowRightIcon`: `14`; `ArrowUpRightIcon`: `12`; `DirectoryTourFolderIcon`: `11.2` | Icon height.                                            |
+| `aria-label` | `string`           | —                                                                                         | Accessible description; omit for decoration.            |
+| `className`  | `string`           | —                                                                                         | Adds a class to the SVG element.                        |
+| Other props  | SVG attributes     | —                                                                                         | Standard SVG attributes, including `aria-*` and `role`. |
+
+`LibraryIcon`'s `name` selects the gradient; it defaults to an empty string, which is the first gradient.
 
 ```tsx
 import { PdfIcon } from '@openviking/react/icons';
 
 export default function Example() {
-  return <PdfIcon width={24} height={24} className="file-icon" alt="PDF" />;
+  return (
+    <PdfIcon width={24} height={24} className="file-icon" aria-label="PDF" />
+  );
 }
 ```
 
 ## Accessibility
 
-Leave `alt` empty when adjacent text already identifies the file type. For an icon that conveys information on its own, supply a descriptive `alt` value in the application's language. Icons are non-interactive; applications own button semantics, keyboard interaction, and focus styles when placing an icon inside a control.
+Omit `aria-label` when adjacent text already identifies the file type; the SVG stays `aria-hidden` so it is not announced twice. For an icon that conveys information on its own, supply a descriptive `aria-label` in the application's language. Icons are non-interactive; applications own button semantics, keyboard interaction, and focus styles when placing an icon inside a control.
 
 ## Assets and styling
 
-SVGs are embedded in the built JavaScript as data URLs. No separate SVG request or stylesheet import is needed for these icons. Applications with a Content Security Policy must allow `data:` in `img-src` to display them.
+Icons ship as inline SVG elements inside the built JavaScript. There is no separate asset request, no stylesheet import, and no Content Security Policy entry to add.
 
-Use `width`, `height`, `className`, or `style` to size and position the image. Its SVG colors are fixed artwork; changing CSS `color` does not recolor it.
+Use `width`, `height`, `className`, or `style` to size and position the icon. File-type and team guide icons keep their fixed artwork colors. `ArrowRightIcon`, `SpaceIcon` and `UserIcon` inherit CSS `color` through `currentColor`. `LibraryIcon` has its size fixed inside the component — wrap it in a container to change the rendered size.
+
+`LibraryIcon`'s five gradients come from the theme baseline, so a host can re-swatch any of them through the public variables instead of editing the component:
+
+```css
+:root {
+  --ov-ui-color-library-swatch-1: linear-gradient(145deg, #e0f7fa, #80deea);
+}
+```
+
+The baseline's `--ov-ui-library-swatch-1-default` … `-5-default` are the private defaults, shared by both themes — they are the design's identity colours and do not follow the theme. With no library stylesheet loaded the component still paints the same palette: colours live only in `packages/icons/library-swatches.json`, and the CSS side is generated from it by `npm run sync:swatches`, so the two paths cannot drift.

@@ -10,6 +10,7 @@ import pytest
 from volcenginesdkarkruntime import AsyncArk
 
 from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM
+from openviking.observability.events import register_event_subscriber, unregister_event_subscriber
 
 
 def _response(text: str):
@@ -59,6 +60,84 @@ def _vlm(**overrides) -> VolcEngineVLM:
     }
     config.update(overrides)
     return VolcEngineVLM(config)
+
+
+@pytest.mark.parametrize("failure", [False, True])
+async def test_media_call_facts_exclude_upload_poll_and_cleanup(tmp_path, monkeypatch, failure):
+    path = tmp_path / "audio.mp3"
+    path.write_bytes(b"media fixture")
+    vlm = _vlm(max_retries=0)
+    ark = _ark()
+    if failure:
+        ark.responses.create.side_effect = TimeoutError("provider timeout")
+    else:
+        response = _response("media result")
+        response.usage = None
+        ark.responses.create.return_value = response
+    monkeypatch.setattr(vlm, "get_async_client", lambda: ark)
+    events = []
+    register_event_subscriber("media_call_regression", events.append)
+    try:
+        operation = vlm.get_media_completion_async(
+            prompt="analyze", media_path=path, filename=path.name, media_type="audio"
+        )
+        if failure:
+            with pytest.raises(TimeoutError):
+                await operation
+        else:
+            assert await operation == "media result"
+        facts = [event.payload for event in events if event.event_name == "vlm.call"]
+        assert len(facts) == 1
+        assert facts[0]["prompt_tokens"] is None and facts[0]["completion_tokens"] is None
+        assert (facts[0]["error_code"] != "OK") == failure
+        assert ark.files.create.await_count == 1
+        assert ark.files.wait_for_processing.await_count == 1
+        assert ark.responses.create.await_count == 1
+        assert ark.files.delete.await_count == 1
+    finally:
+        unregister_event_subscriber("media_call_regression")
+
+
+@pytest.mark.parametrize("response_status", ["completed", "failed", "incomplete"])
+@pytest.mark.parametrize("known_usage", [False, True])
+async def test_media_response_status_and_usage_are_recorded_once(
+    tmp_path, monkeypatch, response_status, known_usage
+):
+    path = tmp_path / "audio.mp3"
+    path.write_bytes(b"media fixture")
+    vlm = _vlm(max_retries=0, cost_bearer="customer")
+    ark = _ark()
+    response = _response("media result")
+    response.status = response_status
+    if not known_usage:
+        response.usage = None
+    ark.responses.create.return_value = response
+    monkeypatch.setattr(vlm, "get_async_client", lambda: ark)
+    events = []
+    register_event_subscriber("media_response_status_regression", events.append)
+    try:
+        operation = vlm.get_media_completion_async(
+            prompt="analyze", media_path=path, filename=path.name, media_type="audio"
+        )
+        if response_status == "completed":
+            assert await operation == "media result"
+        else:
+            with pytest.raises(RuntimeError, match="Ark media response did not complete"):
+                await operation
+
+        facts = [event.payload for event in events if event.event_name == "vlm.call"]
+        assert len(facts) == 1
+        assert (facts[0]["error_code"] == "OK") == (response_status == "completed")
+        assert facts[0]["prompt_tokens"] == (120 if known_usage else None)
+        assert facts[0]["completion_tokens"] == (40 if known_usage else None)
+        assert facts[0]["cost_bearer"] == "customer"
+        assert facts[0]["duration_seconds"] >= 0
+        assert ark.files.create.await_count == 1
+        assert ark.files.wait_for_processing.await_count == 1
+        assert ark.responses.create.await_count == 1
+        assert ark.files.delete.await_count == 1
+    finally:
+        unregister_event_subscriber("media_response_status_regression")
 
 
 def test_volcengine_advertises_only_supported_media_inputs():

@@ -11,6 +11,20 @@ from packaging.version import InvalidVersion, Version
 
 from .cache import TTLCache
 
+# Recall adds this peer's memories; other peers' still come back with a small score penalty
+# unless the body sets peer_scope "actor". Tool calls carry it only under "actor". Without a
+# peer there is nothing to narrow to, so "actor" sends what "all" does.
+PEER_HEADER = "X-OpenViking-Actor-Peer"
+
+
+def peer_header(peer):
+    return {PEER_HEADER: peer} if peer else {}
+
+
+def peer_argument(peer):
+    """Keyword arguments for a call made for a peer; none without one."""
+    return {"peer": peer} if peer else {}
+
 
 class VikingError(Exception):
     def __init__(self, reason, status=503):
@@ -26,13 +40,14 @@ class VikingClient:
         # Every caller sees the same MCP tools; the last good list outlives failures.
         self.tools_cache, self.last_tools = TTLCache(ttl=300, capacity=1), None
 
-    async def request(self, method, path, key, body=None, timeout=30):
+    async def request(self, method, path, key, body=None, timeout=30, peer=None):
+        """``peer`` is the actor peer for recall; OpenViking's session routes ignore it."""
         try:
             async with self.http.request(
                 method,
                 self.base_url + path,
                 json=body,
-                headers={"X-API-Key": key, "Accept-Encoding": "identity"},
+                headers={"X-API-Key": key, "Accept-Encoding": "identity", **peer_header(peer)},
                 timeout=aiohttp.ClientTimeout(total=timeout),
                 allow_redirects=False,
             ) as response:
@@ -85,7 +100,7 @@ class VikingClient:
             raise VikingError("trusted_mode_unsupported", 403)
         return result
 
-    async def recall(self, key, query, policy, exclude, budget):
+    async def recall(self, key, query, policy, exclude, budget, peer=None):
         if self.unavailable_reason:
             raise VikingError(self.unavailable_reason)
         return await self.request(
@@ -102,8 +117,10 @@ class VikingClient:
                 "score_threshold": policy.score_threshold,
                 "exclude_uris": exclude[-200:],
                 "rewrite": False,
+                **({"peer_scope": "actor"} if peer and policy.recall_peer_scope == "actor" else {}),
             },
             timeout=policy.recall_timeout,
+            peer=peer,
         )
 
     async def write(self, key, session, messages):
@@ -111,7 +128,11 @@ class VikingClient:
             "POST", f"/api/v1/sessions/{session}/messages/batch", key, {"messages": messages}
         )
 
-    async def create_session(self, key, session):
+    async def create_session(self, key, session, memory_types=None):
+        # Commits only feed memory extraction; the gateway writes its own summaries.
+        memory_policy = {"working_memory": {"enabled": False}}
+        if memory_types is not None:
+            memory_policy["memory_types"] = memory_types
         try:
             return await self.request(
                 "POST",
@@ -124,8 +145,7 @@ class VikingClient:
                         "message_count_threshold": 0,
                         "idle_timeout_seconds": 0,
                     },
-                    # Commits only feed memory extraction; the gateway writes its own summaries.
-                    "memory_policy": {"working_memory": {"enabled": False}},
+                    "memory_policy": memory_policy,
                 },
             )
         except VikingError as error:
@@ -181,7 +201,7 @@ class VikingClient:
 
         return await self.tools_cache.get("tools/list", load)
 
-    async def mcp(self, method, key, params=None, timeout=120):
+    async def mcp(self, method, key, params=None, timeout=120, peer=None):
         """Stateless Streamable HTTP MCP; accept both JSON and SSE responses."""
         from .protocols import SSEDecoder
 
@@ -193,6 +213,7 @@ class VikingClient:
                     "Accept": "application/json, text/event-stream",
                     "MCP-Protocol-Version": "2025-06-18",
                     "Accept-Encoding": "identity",
+                    **peer_header(peer),
                 },
                 json={
                     "jsonrpc": "2.0",

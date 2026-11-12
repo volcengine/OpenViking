@@ -54,6 +54,9 @@ class KafkaEventReporter:
             self._producer_factory = lambda: KafkaProducer(**kwargs)
         self.producer = producer
         self.queue: queue.Queue[tuple[bytes, bytes]] = queue.Queue(maxsize=capacity)
+        self._batch_size = min(capacity, 64)
+        # Cover Kafka's full delivery window, not just its request timeout.
+        self._delivery_timeout = 25.0
         self.sent = self.failed = self.dropped = 0
         self._closed = False
         self._lock = threading.Lock()
@@ -82,6 +85,26 @@ class KafkaEventReporter:
             _warn_count("Event exporter dropped events", dropped)
             return False
 
+    def _send(self, item):
+        key, payload = item
+        # Only retry synchronous enqueue failures. An unacknowledged future
+        # may still deliver, so resending it could duplicate the observation.
+        for attempt in range(3):
+            try:
+                if self.producer is None:
+                    self.producer = self._producer_factory()
+                return self.producer.send(self.topic, key=key, value=payload)
+            except Exception:
+                if attempt == 2:
+                    raise
+                time.sleep(0.1 * (attempt + 1))
+
+    def _record_failure(self):
+        with self._lock:
+            self.failed += 1
+            failed = self.failed
+        _warn_count("Event exporter delivery failed", failed)
+
     def _run(self):
         try:
             while True:
@@ -93,27 +116,40 @@ class KafkaEventReporter:
                     if finished:
                         return
                     continue
-                try:
-                    key, payload = item
-                    if self.producer is None:
-                        self.producer = self._producer_factory()
-                    self.producer.send(self.topic, key=key, value=payload).get(timeout=10)
-                    with self._lock:
-                        self.sent += 1
-                except Exception:
-                    with self._lock:
-                        self.failed += 1
-                        failed = self.failed
-                    _warn_count("Event exporter delivery failed", failed)
-                finally:
-                    self.queue.task_done()
+                batch = [item]
+                # A short coalescing window also lets low-rate producers batch.
+                deadline = time.monotonic() + 0.01
+                while len(batch) < self._batch_size:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        batch.append(self.queue.get(timeout=remaining))
+                    except queue.Empty:
+                        break
+                pending = []
+                for item in batch:
+                    try:
+                        pending.append(self._send(item))
+                    except Exception:
+                        self._record_failure()
+                        self.queue.task_done()
+                # Enqueue the entire bounded batch before waiting for ACKs.
+                for future in pending:
+                    try:
+                        future.get(timeout=self._delivery_timeout)
+                        with self._lock:
+                            self.sent += 1
+                    except Exception:
+                        self._record_failure()
+                    finally:
+                        self.queue.task_done()
         finally:
             try:
                 if self.producer is not None:
                     self.producer.close(timeout=5)
             except Exception:
-                with self._lock:
-                    self.failed += 1
+                self._record_failure()
 
     def flush(self, timeout=5.0):
         deadline = time.monotonic() + timeout
@@ -121,8 +157,10 @@ class KafkaEventReporter:
             if time.monotonic() >= deadline:
                 raise TimeoutError("event exporter flush timed out")
             time.sleep(0.01)
-        if self.failed:
-            raise RuntimeError("event delivery failed; inspect exporter counters")
+        with self._lock:
+            incomplete = self.failed or self.dropped
+        if incomplete:
+            raise RuntimeError("event delivery incomplete; inspect exporter counters")
 
     def close(self, timeout=5.0):
         with self._lock:
@@ -130,5 +168,7 @@ class KafkaEventReporter:
         self._thread.join(timeout)
         if self._thread.is_alive():
             raise TimeoutError("event exporter shutdown still draining")
-        if self.failed:
-            raise RuntimeError("event exporter closed with delivery failures")
+        with self._lock:
+            incomplete = self.failed or self.dropped
+        if incomplete:
+            raise RuntimeError("event exporter closed with lost events")

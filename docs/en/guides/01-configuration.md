@@ -1060,7 +1060,7 @@ The remaining `code` configuration fields are for remote code resource network g
 
 #### Remote resource network guard
 
-For URL ingestion, the default network check rejects destinations resolving to non-public addresses. Ordinary public URLs do not need to be on the code-hosting allowlist; trusted code hosts on that list bypass the address-range check. Add self-hosted GitHub Enterprise, GitLab, or Azure DevOps hosts to the corresponding platform list under `code`:
+For URL ingestion, the default network check rejects destinations resolving to non-public addresses. Ordinary public URLs do not need to be on the code-hosting allowlist. Trusted code hosts on that list may access private networks, but their DNS addresses are still checked. Loopback, link-local, unspecified, multicast, reserved and known cloud metadata addresses are always rejected, even with an allowlist entry or `allow_private_networks=true`. Add self-hosted GitHub Enterprise, GitLab, or Azure DevOps hosts to the corresponding platform list under `code`:
 
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
@@ -1069,7 +1069,7 @@ For URL ingestion, the default network check rejects destinations resolving to n
 | `azure_devops_domains` | list[str] | Allowed Azure DevOps hosts | `["dev.azure.com", "ssh.dev.azure.com", "vs-ssh.visualstudio.com"]` |
 | `code_hosting_domains` | list[str] | Allowed generic code-hosting hosts | `["github.com", "gitlab.com", "gitcode.com", "gitee.com", "bitbucket.org", "codeberg.org", "gitea.com", "atomgit.com", "git.sr.ht"]` |
 
-To allow other private-network targets, such as internal mirrors, set the top-level `allow_private_networks` to `true`. It is disabled by default; local hostnames such as `localhost` and its subdomains remain rejected. This example enables private-network access and registers a code host:
+To allow other private-network targets, such as internal mirrors, set the top-level `allow_private_networks` to `true`. It is disabled by default. Enabling it does not override the address restrictions above; `localhost` and its subdomains also remain rejected. This example enables private-network access and registers a code host:
 
 ```json
 {
@@ -1082,7 +1082,7 @@ To allow other private-network targets, such as internal mirrors, set the top-le
 
 Use `github_domains`, `gitlab_domains`, or `azure_devops_domains` when the host
 needs those platform-specific URL semantics. Add other Git hosts to
-`code_hosting_domains`.
+`code_hosting_domains`. For HTTP server requests, Git preflight, clone and fetch do not follow HTTP redirects; use the final repository URL. GitHub/GitLab ZIP downloads support redirects and validate each destination before requesting it.
 
 ### pdf
 
@@ -1357,8 +1357,13 @@ Glob engine configuration for path pattern matching. These settings are server-s
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `engine` | str | Path matching engine mode: `"auto"` uses remote `path_glob` processing when a VikingDB / Volcengine vector store is available and the search-scope record count reaches the threshold; otherwise it falls back to local filesystem search. `"fs"` forces local filesystem search only. | `"fs"` |
+| `engine` | str | Path matching engine mode: `"auto"` uses the current account's vector backend according to `storage.vectordb.enable_path_glob` and the adapter default, when the `uri` field exists and the search-scope record count reaches the threshold. Unavailable or failed remote operations fall back to local filesystem search. `"fs"` forces local filesystem search only. | `"fs"` |
 | `switch_to_remote_threshold` | int | Record-count threshold at which `auto` mode switches to remote `path_glob`. Set to `0` to always use remote path matching. Must be ≥ 0. | `100` |
+
+Set `storage.vectordb.enable_path_glob` to `true` to enable remote support or `false` to disable it.
+Omitting it or setting `null` uses the adapter default: VikingDB and Volcengine enable support,
+while other built-in backends disable it. Custom adapters can declare a default too.
+This setting does not override `glob.engine="fs"`, the threshold, or filesystem fallback.
 
 ### storage
 
@@ -1614,6 +1619,7 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `backend` | str | `local` keeps the original filesystem path; `cache` enables the CacheFS wrapper | `local` |
+| `shared_redis_ttl_seconds` | int | TTL override for every query bucket; `0` keeps the provider default. Applied only when CacheFS shares a Redis service with QueueFS, cache-backed PathLock, or the expiry scheduler | `0` |
 
 `storage.agfs.pathlock` selects the PathLock storage provider:
 

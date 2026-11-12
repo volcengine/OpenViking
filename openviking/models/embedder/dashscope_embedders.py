@@ -122,9 +122,11 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
                 body: Dict[str, Any] = response.json() if callable(response.json) else response.json
                 usage = body.get("usage")
             except Exception:
+                self.record_call_without_usage()
                 return
 
         if not usage:
+            self.record_call_without_usage()
             return
 
         def _val(key: str, default: int = 0) -> int:
