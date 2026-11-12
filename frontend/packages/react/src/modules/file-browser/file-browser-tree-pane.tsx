@@ -33,7 +33,12 @@ export interface FileBrowserTreePaneProps {
   treeRef?: Ref<FileTreeHandle>;
   entries: Pick<
     FileBrowserActionBarProps,
-    'agentConnect' | 'onImportResources' | 'renderImportResources' | 'labels'
+    | 'agentConnect'
+    | 'agentConnectOpen'
+    | 'onAgentConnectOpenChange'
+    | 'onImportResources'
+    | 'renderImportResources'
+    | 'labels'
   >;
   locale: Locale;
   dashboardLabels?: FileBrowserDashboardLabels;

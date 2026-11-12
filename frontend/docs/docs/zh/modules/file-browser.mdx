@@ -76,26 +76,28 @@ import '@openviking/react/modules/file-browser/style.css';
 
 ### FileBrowser
 
-| 参数                  | 说明                                                                                                               | 类型                                                                    | 默认值                   |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | ------------------------ |
-| uri                   | 受控的当前资源 URI：传入（包括空字符串）后由宿主决定，空字符串表示不选中资源                                       | `string`                                                                | -                        |
-| defaultUri            | 非受控时的初始资源 URI，省略时不选中资源                                                                           | `string`                                                                | -                        |
-| onUriChange           | 选中的资源变化后触发，参数是新的 URI；没有取消选中的操作，不会收到 `null`                                          | `(uri: string \| null) => void`                                         | -                        |
-| rootUri               | 目录树的根，把浏览和搜索的范围限定在这个子树内                                                                     | `string`                                                                | `'viking://'`            |
-| defaultExpandedUri    | 首次加载后自动展开到的路径，逐级加载；省略时只展开根目录                                                           | `string`                                                                | -                        |
-| readOnly              | 禁止编辑、导入和删除，编译配置只能查看；不影响权限管理弹窗，授权只读请用 `acl.readOnly`                            | `boolean`                                                               | `false`                  |
-| acl                   | 开启共享资源的权限显示与授权管理，类型见下方 `FileBrowserAclOptions`                                               | `boolean \| FileBrowserAclOptions`                                      | `false`                  |
-| agentConnect          | 显示「连接 Agent」按钮，点击后从右侧打开接入抽屉，参数见 [AgentConnect](../components/agent-connect)；省略时不显示 | `AgentConnectProps`                                                     | -                        |
-| onImportResources     | 点击「导入资源」按钮时触发，传入后显示该按钮                                                                       | `() => void`                                                            | -                        |
-| renderImportResources | 包装或替换「导入资源」按钮，返回 `null` 隐藏，用法见 [FileBrowserActionBar](../components/file-browser-action-bar) | `(trigger: ReactElement<ComponentPropsWithRef<'button'>>) => ReactNode` | -                        |
-| previewActions        | 显示或隐藏内置的预览操作，类型见下方 `FileBrowserPreviewActions`                                                   | `FileBrowserPreviewActions`                                             | -                        |
-| previewSlots          | 追加、替换或隐藏预览操作区，看板页签不受影响，类型见下方 `FileBrowserPreviewSlots`                                 | `FileBrowserPreviewSlots`                                               | -                        |
-| dashboardKinds        | 启用的看板类型，空数组关闭看板；例如 `['experience']` 只保留经验看板，并且不再读取编译配置                         | `readonly ('wiki' \| 'experience')[]`                                   | `['wiki', 'experience']` |
-| renderDashboard       | 自定义看板页签的内容，返回 `null` 或 `undefined` 时使用内置看板，类型见下方 `FileBrowserDashboard`                 | `(dashboard: FileBrowserDashboard) => ReactNode`                        | -                        |
-| labels                | 覆盖界面文案，类型见下方 `FileBrowserLabels`                                                                       | `FileBrowserLabels`                                                     | -                        |
-| locale                | 界面语言，规则见[国际化](../guide/i18n)                                                                            | `'zh-CN' \| 'en-US'`                                                    | 继承上级，默认 `'en-US'` |
-| requestOptions        | 覆盖请求配置，规则见[区块概览](./)                                                                                 | `OvRequestOptions`                                                      | -                        |
-| className、style      | 外观与布局，其余 HTML 属性透传到根元素                                                                             | HTML 属性                                                               | -                        |
+| 参数                     | 说明                                                                                                               | 类型                                                                    | 默认值                   |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | ------------------------ |
+| uri                      | 受控的当前资源 URI：传入（包括空字符串）后由宿主决定，空字符串表示不选中资源                                       | `string`                                                                | -                        |
+| defaultUri               | 非受控时的初始资源 URI，省略时不选中资源                                                                           | `string`                                                                | -                        |
+| onUriChange              | 选中的资源变化后触发，参数是新的 URI；没有取消选中的操作，不会收到 `null`                                          | `(uri: string \| null) => void`                                         | -                        |
+| rootUri                  | 目录树的根，把浏览和搜索的范围限定在这个子树内                                                                     | `string`                                                                | `'viking://'`            |
+| defaultExpandedUri       | 首次加载后自动展开到的路径，逐级加载；省略时只展开根目录                                                           | `string`                                                                | -                        |
+| readOnly                 | 禁止编辑、导入和删除，编译配置只能查看；不影响权限管理弹窗，授权只读请用 `acl.readOnly`                            | `boolean`                                                               | `false`                  |
+| acl                      | 开启共享资源的权限显示与授权管理，类型见下方 `FileBrowserAclOptions`                                               | `boolean \| FileBrowserAclOptions`                                      | `false`                  |
+| agentConnect             | 显示「连接 Agent」按钮，点击后从右侧打开接入抽屉，参数见 [AgentConnect](../components/agent-connect)；省略时不显示 | `AgentConnectProps`                                                     | -                        |
+| agentConnectOpen         | 传入 `agentConnect` 后可从外层控制内置抽屉；见[受控示例](../components/file-browser-action-bar#从其他入口打开)     | `boolean`                                                               | -                        |
+| onAgentConnectOpenChange | 用户请求打开或关闭内置抽屉时触发；宿主直接改属性时不触发                                                           | `(open: boolean) => void`                                               | -                        |
+| onImportResources        | 点击「导入资源」按钮时触发，传入后显示该按钮                                                                       | `() => void`                                                            | -                        |
+| renderImportResources    | 包装或替换「导入资源」按钮，返回 `null` 隐藏，用法见 [FileBrowserActionBar](../components/file-browser-action-bar) | `(trigger: ReactElement<ComponentPropsWithRef<'button'>>) => ReactNode` | -                        |
+| previewActions           | 显示或隐藏内置的预览操作，类型见下方 `FileBrowserPreviewActions`                                                   | `FileBrowserPreviewActions`                                             | -                        |
+| previewSlots             | 追加、替换或隐藏预览操作区，看板页签不受影响，类型见下方 `FileBrowserPreviewSlots`                                 | `FileBrowserPreviewSlots`                                               | -                        |
+| dashboardKinds           | 启用的看板类型，空数组关闭看板；例如 `['experience']` 只保留经验看板，并且不再读取编译配置                         | `readonly ('wiki' \| 'experience')[]`                                   | `['wiki', 'experience']` |
+| renderDashboard          | 自定义看板页签的内容，返回 `null` 或 `undefined` 时使用内置看板，类型见下方 `FileBrowserDashboard`                 | `(dashboard: FileBrowserDashboard) => ReactNode`                        | -                        |
+| labels                   | 覆盖界面文案，类型见下方 `FileBrowserLabels`                                                                       | `FileBrowserLabels`                                                     | -                        |
+| locale                   | 界面语言，规则见[国际化](../guide/i18n)                                                                            | `'zh-CN' \| 'en-US'`                                                    | 继承上级，默认 `'en-US'` |
+| requestOptions           | 覆盖请求配置，规则见[区块概览](./)                                                                                 | `OvRequestOptions`                                                      | -                        |
+| className、style         | 外观与布局，其余 HTML 属性透传到根元素                                                                             | HTML 属性                                                               | -                        |
 
 ### FileBrowserPreviewActions
 

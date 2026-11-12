@@ -24,13 +24,6 @@ import type {
   FileBrowserProps,
 } from './types.js';
 
-export type {
-  FileBrowserActions,
-  FileBrowserApi,
-  FileBrowserLabels,
-  FileBrowserProps,
-} from './types.js';
-
 /**
  * 文件浏览模块的组合视图：左侧目录树（操作栏、搜索行、树），
  * 右侧详情区（面包屑、标题行、正文、底部元信息）。两栏之间有一条可拖拽的
@@ -54,6 +47,8 @@ export const FileBrowser: FileBrowserComponent = forwardRef<
     defaultExpandedUri,
     locale: localeProp,
     agentConnect,
+    agentConnectOpen,
+    onAgentConnectOpenChange,
     dashboardKinds,
     renderDashboard,
     acl,
@@ -190,6 +185,8 @@ export const FileBrowser: FileBrowserComponent = forwardRef<
             rootUri={rootUri}
             entries={{
               agentConnect,
+              agentConnectOpen,
+              onAgentConnectOpenChange,
               onImportResources,
               renderImportResources,
               labels: labels?.actionBar,

@@ -258,8 +258,16 @@ export interface FileBrowserProps extends Omit<
    * Configuration of the built-in connection drawer; enables its entry when provided.
    */
   agentConnect?: AgentConnectProps;
+  /** 控制内置接入抽屉是否打开。Controls whether the built-in connection drawer is open. */
+  agentConnectOpen?: boolean;
   /** Host capability filter. Omitted enables both; an empty array disables discovery. */
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
+  /**
+   * 用户请求打开或关闭内置接入抽屉时触发；宿主改变属性时不触发。
+   * Called when the user requests to open or close the built-in connection drawer.
+   * Host-driven prop changes do not trigger it.
+   */
+  onAgentConnectOpenChange?: (open: boolean) => void;
   /**
    * 当前资源变化后触发，参数为新的 URI。
    *
