@@ -262,9 +262,11 @@ the existing pipeline. Automatic source-revocation cleanup is outside this chang
 
 The first-import gate checks the final URI under its target lock: the current
 job owns the new reservation, the target has no business/summary content, the
-account-scoped vector inventory is empty, and no previous completed import or
-Watch execution exists. Old empty directories, orphan index/ACL records, and a
-retry after a partial import are updates, not first imports. Inventory errors
+account-scoped vector inventory is empty. Completed Task and Watch execution
+history is not queried: after all old content, metadata and index/ACL records
+have been removed, the same URI can be newly reserved for a partial import.
+Old empty directories, orphan index/ACL records, and a retry after a partial
+import are updates, not first imports. Inventory errors
 fail closed, including when `build_index=false`.
 
 Authentication failures, root access failures and zero successful documents still

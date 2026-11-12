@@ -29,37 +29,6 @@ def _service(viking_fs, resource_processor=None) -> ResourceService:
 
 
 @pytest.mark.asyncio
-async def test_initial_import_history_excludes_current_unfinished_task(watch_tracker):
-    ctx = RequestContext(user=UserIdentifier("default", "alice"), role=Role.USER)
-    root = "viking://resources/docs"
-    service = _service(SimpleNamespace())
-    await watch_tracker.create(
-        "add_resource",
-        task_id="current",
-        resource_id=root,
-        account_id=ctx.account_id,
-        user_id=ctx.user.user_id,
-    )
-    assert not await service._has_resource_import_history(root, ctx)
-    # Another user's completed import is still history for this account/target.
-    await watch_tracker.create(
-        "add_resource",
-        task_id="previous",
-        resource_id=root,
-        account_id=ctx.account_id,
-        user_id="other",
-    )
-    await watch_tracker.complete(
-        "previous",
-        {"status": "partial", "root_uri": root},
-        resource_id=root,
-        account_id=ctx.account_id,
-        user_id="other",
-    )
-    assert await service._has_resource_import_history(root, ctx)
-
-
-@pytest.mark.asyncio
 async def test_cleanup_reserved_target_removes_only_empty_directory():
     lock = {"lease_ref": "lock-1"}
     ctx = _ctx()

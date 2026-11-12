@@ -133,7 +133,6 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "enforce_public_remote_targets",
         "resource_lock",
         "stage_callback",
-        "import_history_reader",
         "target_was_reserved",
         "args",
         "strict",
@@ -275,37 +274,6 @@ class ResourceService:
     def _get_watch_manager(self) -> Optional["WatchManager"]:
         return self._watch_manager
 
-    async def _has_resource_import_history(self, root_uri: str, ctx: RequestContext) -> bool:
-        """A new reservation is not an initial import when durable history exists."""
-        from openviking.service.task_tracker import get_task_tracker
-
-        manager = self._get_watch_manager()
-        if manager is not None:
-            task = await manager.get_task_by_uri(
-                to_uri=root_uri,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-                role=str(ctx.role),
-            )
-            if task is not None and (
-                task.last_task_id
-                or task.last_execution_time
-                or task.last_status
-                or task.source_checkpoint
-            ):
-                return True
-        tracker = manager.tracker if manager is not None else get_task_tracker()
-        return bool(
-            await tracker.list_tasks(
-                task_type="add_resource",
-                status="completed",
-                resource_id=root_uri,
-                account_id=ctx.account_id,
-                user_id=None,
-                limit=1,
-            )
-        )
-
     async def _ensure_resource_target_available(
         self, uri: str, ctx: RequestContext, *, is_parent: bool = False
     ) -> None:
@@ -374,7 +342,6 @@ class ResourceService:
                 "git_head_sha_hint",
                 "resource_lock",
                 "target_was_reserved",
-                "import_history_reader",
             }:
                 continue
             try:
@@ -2412,7 +2379,6 @@ class ResourceService:
                 allow_local_path_resolution=allow_local_path_resolution,
                 prepared_resource=prepared_resource,
                 target_validator=self._ensure_resource_target_available,
-                import_history_reader=self._has_resource_import_history,
                 defer_post_processing=True,
                 tags=tags,
                 tag_mode=tag_mode,

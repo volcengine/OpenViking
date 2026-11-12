@@ -19,10 +19,14 @@
    表示当前任务拥有新空目标，转换为服务内部标志。自动后缀目标同样按实际最终 URI
    检查。旧空目录不能冒充本次预约。
 2. 目标不存在或仅含存储层内部锁元数据；业务文件、子目录、旧摘要等均拒绝。
-3. 严格读取当前账户/目标完整索引范围，无历史记录（包含孤立向量及 ACL 记录）。
+3. 严格读取当前账户/目标完整索引范围，无残留记录（包含孤立向量及 ACL 记录）。
    即使 build_index=false 也检查；索引不可用时失败，不假定不存在。
-4. 持久 Watch 没有既往执行记录，Task 中没有该账户/目标的已完成导入记录。
-   当前尚未完成的 Task 和首次新注册 Watch 不算旧导入；上次部分成功后的补齐算更新。
+
+不查询已完成 Task 或 Watch 执行历史。历史导入记录不表示当前仍有旧资源；旧正文、
+元数据和索引/ACL 全部删除后，同 URI 可重新预约并允许部分导入。任一残留仍拒绝。
+上次部分成功后的补齐因当前内容仍在而属于更新；Watch 运行协调和 checkpoint 保护不变。
+移除历史扫描而非新增历史索引：`list_tasks(limit=1)` 仅限制返回量，不能限制文件型
+TaskStore 的枚举和读取成本，首次判定不再随账户中无关 Task 数量增加而扫描 Task 文件。
 
 复用已验证为空的向量清单编译首次计划，不增加不完整源规划机制。服务内部判定标志
 不允许从 parser args 指定，也不持久化到 Watch 参数。只清理当前任务拥有的空预约目录，
@@ -48,7 +52,7 @@ cleanup 使用 no_vector=true，不删除遗留索引或 ACL。
 ## 实现入口与验证
 
 - utils/resource_processor.py：strict 门禁、最终目标锁内首次判定、临时产物清理。
-- service/resource_service.py：已有预约所有权标志、Watch/Task 历史读取、无向量预约清理。
+- service/resource_service.py：已有预约所有权标志、Watch 运行协调、无向量预约清理。
 - resource/watch_manager.py、storage/queuefs/add_resource_processor.py：部分结果和 checkpoint。
 - REST/SDK/CLI 继续用既有 strict；MCP 保留默认非严格首次导入及部分结果展示。
 
@@ -60,6 +64,7 @@ python -m pytest -q \
   tests/utils/test_resource_processor_processing_mode.py
 ```
 
-覆盖首次/预约/旧空目录/旧摘要/孤立索引/历史 Task、build_index 开关、临时失败与无权限、
-完整更新及失败清理。真实 RAGFS 与生产 ACL 管理器验证旧数据未变及普通用户仍无读取权限。
+覆盖首次/预约/旧空目录/旧摘要/孤立索引/删除后重建、无关 Task 不触发历史扫描、
+build_index 开关、临时失败与无权限、完整更新及失败清理。回归使用真实 RAGFS 与生产
+ACL 管理器核对旧数据未变及普通用户仍无读取权限。
 扩大回归用同依赖环境对照未修改基线，不通过删除测试掩盖失败。

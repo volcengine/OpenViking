@@ -322,14 +322,14 @@ async def test_authentication_failure_cleans_local_parse_artifact(monkeypatch, t
         "empty_old",
         "metadata",
         "orphan",
-        "history",
+        "deleted",
         "denied",
         "collision",
     ],
 )
 @pytest.mark.parametrize("vectorize", [False, True])
 async def test_partial_import_only_commits_fresh_targets_and_preserves_acl(
-    monkeypatch, watch_vfs, tmp_path, state, vectorize
+    monkeypatch, watch_vfs, watch_tracker, tmp_path, state, vectorize
 ):
     from copy import deepcopy
 
@@ -355,7 +355,7 @@ async def test_partial_import_only_commits_fresh_targets_and_preserves_acl(
         "acl_inherited_grants": ["none"],
     }
     records = [{"id": "parent", "uri": parent, "account_id": "acct", "level": 0, **private}]
-    if state in {"old", "empty_old", "metadata", "orphan"}:
+    if state in {"old", "empty_old", "metadata", "orphan", "deleted"}:
         records.extend(
             [
                 {"id": "root", "uri": root, "account_id": "acct", "level": 0, **private},
@@ -374,10 +374,28 @@ async def test_partial_import_only_commits_fresh_targets_and_preserves_acl(
     _patch_viking_fs(monkeypatch, fs)
     await fs.mkdir(parent, exist_ok=True, ctx=ctx)
     await fs.write_file(parent + "/.abstract.md", "private parent summary", ctx=ctx)
-    if state in {"old", "empty_old", "metadata", "collision"}:
+    if state in {"old", "empty_old", "metadata", "collision", "deleted"}:
         await fs.mkdir(root, exist_ok=True, ctx=ctx)
-    if state in {"old", "collision"}:
+    if state in {"old", "collision", "deleted"}:
         await fs.write_file(root + "/A.md", "old A body", ctx=ctx)
+    if state == "deleted":
+        await watch_tracker.create(
+            "add_resource",
+            task_id="previous",
+            resource_id=root,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+        await watch_tracker.complete(
+            "previous",
+            {"status": "success", "root_uri": root},
+            resource_id=root,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+        await fs.rm(root, recursive=True, ctx=ctx)
+        assert not await fs.exists(root, ctx=ctx)
+        assert not any(record["uri"].startswith(root) for record in backend.records.values())
     if state == "metadata":
         await fs.write_file(root + "/.overview.md", "old overview", ctx=ctx)
     record_snapshot = deepcopy(backend.records)
@@ -411,9 +429,8 @@ async def test_partial_import_only_commits_fresh_targets_and_preserves_acl(
             "ingest_options": IngestOptions(),
             "source_metadata": None,
             "source_complete": False,
-            "import_history_reader": AsyncMock(return_value=state == "history"),
         }
-        if state in {"fresh", "reserved"}:
+        if state in {"fresh", "reserved", "deleted"}:
             plan = await rp._commit_directory_artifact_with_plan(**kwargs)
             assert await fs.read_file(root + "/A.md", ctx=ctx) == "new A body"
             assert (
@@ -472,17 +489,26 @@ async def test_update_source_permission_failure_leaves_private_data_untouched(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize(
+    "existing,partial,task_count",
+    [
+        (False, False, 0),
+        (False, True, 0),
+        (False, True, 100),
+        (True, False, 0),
+        (True, True, 0),
+    ],
+)
 @pytest.mark.parametrize("error_code", ["PERMISSION_DENIED", "UNAVAILABLE"])
-@pytest.mark.parametrize("partial", [False, True])
 async def test_partial_pipeline_rejects_updates_before_writing_old_data(
-    monkeypatch, watch_vfs, tmp_path, existing, error_code, partial
+    monkeypatch, watch_vfs, watch_tracker, tmp_path, existing, error_code, partial, task_count
 ):
     from copy import deepcopy
     from pathlib import Path
 
     from openviking.parse.output import LocalParseOutputStore
     from openviking.server.identity import RequestContext, Role
+    from openviking.service.resource_service import ResourceService
     from openviking.utils.resource_processor import ResourceProcessor
     from openviking_cli.exceptions import FailedPreconditionError
     from openviking_cli.session.user_id import UserIdentifier
@@ -491,6 +517,25 @@ async def test_partial_pipeline_rejects_updates_before_writing_old_data(
     fs = watch_vfs
     ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.ADMIN)
     root = "viking://resources/docs"
+    for i in range(task_count):
+        await watch_tracker.create(
+            "add_resource",
+            task_id=f"unrelated-{i}",
+            resource_id=f"viking://resources/unrelated-{i}",
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+        await watch_tracker.complete(
+            f"unrelated-{i}",
+            {"status": "success"},
+            resource_id=f"viking://resources/unrelated-{i}",
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+    # Exercise the service-to-commit path, not just the commit helper. A limit on
+    # returned Tasks never bounded reads, so this path must not list them at all.
+    task_listing = AsyncMock(side_effect=AssertionError("must not scan Task history"))
+    monkeypatch.setattr(watch_tracker, "list_tasks", task_listing)
     records = (
         [
             {
@@ -545,20 +590,33 @@ async def test_partial_pipeline_rejects_updates_before_writing_old_data(
         )
     )
     processor.finish_prepared_resource = AsyncMock(return_value={"status": "success"})
+    service = ResourceService(viking_fs=fs, resource_processor=processor, skill_processor=object())
+
+    async def ingest():
+        return await service._execute_resource_ingestion(
+            path="repo",
+            to=root,
+            ctx=ctx,
+            build_index=False,
+            defer_post_processing=False,
+            manage_watch=False,
+        )
+
     if existing and partial:
         with pytest.raises(FailedPreconditionError, match="only first imports"):
-            await processor.process_resource(path="repo", to=root, ctx=ctx, build_index=False)
+            await ingest()
         assert await fs.read_file(root + "/A.md", ctx=ctx) == "old A"
         assert await fs.read_file(root + "/.overview.md", ctx=ctx) == "private overview"
         processor.finish_prepared_resource.assert_not_awaited()
     else:
-        result = await processor.process_resource(path="repo", to=root, ctx=ctx, build_index=False)
+        result = await ingest()
         assert result["status"] == ("partial" if partial else "success")
         if partial:
             assert result["failed_files"] == failures
         assert await fs.read_file(root + "/A.md", ctx=ctx) == "new A"
     assert backend.records == before
     assert not Path(artifact.root).exists()
+    task_listing.assert_not_awaited()
 
 
 @pytest.mark.parametrize("length", [119, 120, 121, 240])

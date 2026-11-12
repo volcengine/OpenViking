@@ -429,7 +429,6 @@ class ResourceProcessor:
         source_metadata: Optional[Dict[str, str]],
         source_complete: bool = True,
         target_was_reserved: bool = False,
-        import_history_reader: Optional[Callable[[str, RequestContext], Awaitable[bool]]] = None,
     ) -> Any:
         """Resolve and commit one artifact through the canonical update plan."""
         from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
@@ -490,10 +489,6 @@ class ResourceProcessor:
             if existing_vectors:
                 raise FailedPreconditionError(
                     "Incomplete update target has historical index or ACL records"
-                )
-            if import_history_reader is not None and await import_history_reader(root_uri, ctx):
-                raise FailedPreconditionError(
-                    "Incomplete update target has previous import history"
                 )
             initial_vector_inventory = existing_vectors
         await self._sanitize_parse_artifact(
@@ -869,7 +864,6 @@ class ResourceProcessor:
         acl: AclSpec | Dict[str, Any] | None = None,
         target_validator: Optional[Callable[[str, RequestContext], Awaitable[None]]] = None,
         target_was_reserved: bool = False,
-        import_history_reader: Optional[Callable[[str, RequestContext], Awaitable[bool]]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -1183,7 +1177,6 @@ class ResourceProcessor:
                         ),
                         source_complete=not bool(parse_failures),
                         target_was_reserved=newly_reserved,
-                        import_history_reader=import_history_reader,
                     )
                     incremental_noop = target_preexisting and context_update_plan.is_noop()
                     temp_uri = root_uri
