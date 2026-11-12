@@ -441,7 +441,7 @@ export function SharedFilePreview({
           {t('filePreview.loadingEditor')}
         </p>
       ) : sourceMode ? (
-        <pre className="min-w-max whitespace-pre px-4 py-3 font-mono text-xs leading-5">
+        <pre className="whitespace-pre-wrap px-4 py-3 font-mono text-xs leading-5 wrap-anywhere">
           {fileText}
         </pre>
       ) : (
