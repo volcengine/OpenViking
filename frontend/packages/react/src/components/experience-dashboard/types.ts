@@ -118,6 +118,8 @@ export interface ExperienceDashboardProps extends Omit<
   page?: number;
   pageSize?: number;
   hasMore?: boolean;
+  /** 追加下一页的请求正在进行。 A further page is in flight. */
+  loadingMore?: boolean;
   startIndex?: number;
   states?: Partial<
     Record<
@@ -129,6 +131,8 @@ export interface ExperienceDashboardProps extends Omit<
   onTabChange?: (tab: ExperienceDashboardTab) => void;
   onDaysChange?: (days: number) => void;
   onPageChange?: (page: number) => void;
+  /** 追加下一页的轨迹；省略时加载更多按钮禁用。 Appends the next page; disabled when omitted. */
+  onLoadMore?: () => void;
   onOpenUri?: (uri: string) => void;
   labels?: Partial<ExperienceDashboardLabels>;
 }

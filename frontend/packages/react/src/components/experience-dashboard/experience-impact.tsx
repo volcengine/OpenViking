@@ -51,6 +51,7 @@ export function ExperienceImpact({
   outcomesState,
   trajectoriesState,
   hasMore,
+  loadingMore,
   onLoadMore,
   onOpenUri,
 }: {
@@ -62,6 +63,7 @@ export function ExperienceImpact({
   outcomesState: DashboardStatus;
   trajectoriesState: DashboardStatus;
   hasMore: boolean;
+  loadingMore?: boolean;
   onLoadMore?: () => void;
   onOpenUri?: (uri: string) => void;
 }) {
@@ -159,15 +161,31 @@ export function ExperienceImpact({
             : ` · ${data.trajectoryTotal}`}
         </h3>
         {data.trajectories?.length ? (
-          <ExperienceTrajectories
-            items={data.trajectories}
-            labels={t}
-            locale={locale}
-            hasMore={hasMore}
-            loadingMore={trajectoriesState.loading}
-            onLoadMore={onLoadMore}
-            onOpenUri={onOpenUri}
-          />
+          <>
+            <ExperienceTrajectories
+              items={data.trajectories}
+              labels={t}
+              locale={locale}
+              hasMore={hasMore}
+              loadingMore={loadingMore ?? trajectoriesState.loading}
+              onLoadMore={onLoadMore}
+              onOpenUri={onOpenUri}
+            />
+            {/* 追加下一页失败时，已加载的轨迹继续显示，错误与重试就地放在列表下方，
+                而不是把整条时间线换成错误态。
+             *
+             * When appending a page fails, the loaded trajectories stay and the error
+             * with its retry sits below the list instead of replacing the timeline. */}
+            {trajectoriesState.error ? (
+              <DashboardState
+                state={trajectoriesState}
+                empty={t.emptyTimeline}
+                loading={t.loading}
+                failed={t.failed}
+                retry={t.retry}
+              />
+            ) : null}
+          </>
         ) : (
           <DashboardState
             state={trajectoriesState}

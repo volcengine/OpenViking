@@ -32,11 +32,13 @@ function ExperienceDashboardContent({
   page = 0,
   pageSize = 20,
   hasMore = false,
+  loadingMore = false,
   startIndex = 0,
   states = {},
   onTabChange,
   onDaysChange,
   onPageChange,
+  onLoadMore,
   locale: localeProp,
   onOpenUri,
   labels,
@@ -63,25 +65,11 @@ function ExperienceDashboardContent({
   const t = experienceLabels(locale, labels);
   const directory = kind === 'directory';
   const tabs = [
-    {
-      key: 'impact' as const,
-      title: t.impact,
-      icon: <TabImpactIcon width={14} height={14} />,
-    },
-    {
-      key: 'source' as const,
-      title: t.source,
-      icon: <TabSourceIcon width={14} height={14} />,
-    },
+    { key: 'impact' as const, title: t.impact, icon: <TabImpactIcon /> },
+    { key: 'source' as const, title: t.source, icon: <TabSourceIcon /> },
     ...(missingTest
       ? []
-      : [
-          {
-            key: 'test' as const,
-            title: t.test,
-            icon: <TabTestIcon width={13} height={13} />,
-          },
-        ]),
+      : [{ key: 'test' as const, title: t.test, icon: <TabTestIcon /> }]),
   ];
   const activeState = directory
     ? states.list
@@ -160,9 +148,8 @@ function ExperienceDashboardContent({
                 outcomesState={states.outcomes ?? {}}
                 trajectoriesState={states.trajectories ?? {}}
                 hasMore={hasMore}
-                onLoadMore={
-                  onPageChange ? () => onPageChange(page + 1) : undefined
-                }
+                loadingMore={loadingMore}
+                onLoadMore={onLoadMore}
                 onOpenUri={onOpenUri}
               />
             ) : tab === 'source' ? (
