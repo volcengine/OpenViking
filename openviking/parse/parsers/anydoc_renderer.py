@@ -152,21 +152,22 @@ class _AnyDocMarkdownRenderer:
     ) -> str:
         normalized = self._normalize_inlines(_items(inlines))
         parts: list[str] = []
+        at_line_start = True
         for index, inline in enumerate(normalized):
             if isinstance(inline, _TextRun):
                 next_inline = normalized[index + 1] if index + 1 < len(normalized) else None
                 trailing_active = self._next_inline_is_active(next_inline)
-                rendered_so_far = "".join(parts)
-                parts.append(
-                    self._render_text(
-                        inline.text,
-                        inline.style,
-                        context=context,
-                        in_label=in_label,
-                        trailing_active=trailing_active,
-                        at_line_start=not rendered_so_far or rendered_so_far.endswith("\n"),
-                    )
+                rendered = self._render_text(
+                    inline.text,
+                    inline.style,
+                    context=context,
+                    in_label=in_label,
+                    trailing_active=trailing_active,
+                    at_line_start=at_line_start,
                 )
+                parts.append(rendered)
+                if rendered:
+                    at_line_start = rendered.endswith("\n")
                 continue
             rendered = self._render_inline(inline, context=context, in_label=in_label)
             if _kind(inline) == "checkbox" and index + 1 < len(normalized):
@@ -178,6 +179,8 @@ class _AnyDocMarkdownRenderer:
                 if not starts_with_space:
                     rendered += " "
             parts.append(rendered)
+            if rendered:
+                at_line_start = rendered.endswith("\n")
         return "".join(parts)
 
     def _render_inline(self, inline: Any, *, context: str, in_label: bool) -> str:
@@ -773,7 +776,9 @@ class _AnyDocMarkdownRenderer:
         in_label: bool = False,
         at_line_start: bool = False,
     ) -> str:
-        characters = list(text)
+        characters = text
+        # The final position answers every suffix-membership check without copying it.
+        last_delimiter = {char: text.rfind(char) for char in "`*_~]"}
         output: list[str] = []
         line_has_content = not at_line_start
         for index, char in enumerate(characters):
@@ -787,26 +792,27 @@ class _AnyDocMarkdownRenderer:
                 line_has_content = True
             next_char = characters[index + 1] if index + 1 < len(characters) else None
             next_nonspace = trailing_active if next_char is None else not next_char.isspace()
-            later = characters[index + 1 :]
             escape = False
             if char == "\\":
                 escape = True
             elif char == "]" and in_label:
                 escape = True
             elif char == "`":
-                escape = styled or "`" in later
+                escape = styled or index < last_delimiter["`"]
             elif char == "*":
-                escape = styled or start_of_line or (next_nonspace and "*" in later)
+                escape = styled or start_of_line or (next_nonspace and index < last_delimiter["*"])
             elif char == "_":
                 previous_alnum = index > 0 and characters[index - 1].isalnum()
                 next_alnum = bool(next_char and next_char.isalnum())
                 escape = styled or (
-                    next_nonspace and not (previous_alnum and next_alnum) and "_" in later
+                    next_nonspace
+                    and not (previous_alnum and next_alnum)
+                    and index < last_delimiter["_"]
                 )
             elif char == "~":
-                escape = styled or (next_nonspace and "~" in later)
+                escape = styled or (next_nonspace and index < last_delimiter["~"])
             elif char == "[":
-                escape = in_label or "]" in later
+                escape = in_label or index < last_delimiter["]"]
             elif char == "<":
                 escape = bool(next_char and (next_char.isalpha() or next_char in "/!?"))
             elif char == "!":
