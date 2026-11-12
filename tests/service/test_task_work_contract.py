@@ -361,7 +361,9 @@ async def test_local_task_commit_wakes_all_waiters(task_stores, monkeypatch, ope
             await writer.cancel("task", **OWNER)
         else:
             await writer.complete("task", {"ok": True}, **OWNER)
-        assert (await reader.get("task", **OWNER)).status in (
+        task = await reader.get("task", **OWNER)
+        assert task is not None
+        assert task.status in (
             TaskStatus.RUNNING,
             TaskStatus.CANCELLING,
         )
@@ -393,6 +395,7 @@ async def test_local_task_commit_wakes_all_waiters(task_stores, monkeypatch, ope
             await writer.mark_work_requeued("task", "work", **OWNER)
         results = await asyncio.wait_for(asyncio.gather(*waiters), 2)
         expected = await reader.get("task", **OWNER)
+        assert expected is not None
         assert all(task == expected for task in results)
         assert expected.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED)
         assert store._task_changes.waiter_count == 0
@@ -500,7 +503,8 @@ async def test_non_status_changes_do_not_wake_task_waiters(task_stores):
         await tracker.register_work("task", "work", "Embedding", **OWNER)
         await asyncio.sleep(0)
         assert not changed.done()
-        assert (await tracker.get("task", **OWNER)).status is TaskStatus.RUNNING
+        task = await tracker.get("task", **OWNER)
+        assert task is not None and task.status is TaskStatus.RUNNING
         await tracker.mark_work_done("task", "work", **OWNER)
         await asyncio.wait_for(changed, 2)
     assert (await tracker.wait("task", timeout=0, **OWNER)).status is TaskStatus.COMPLETED
@@ -515,6 +519,7 @@ async def test_creation_and_expiry_publish_task_hints(task_stores):
         await asyncio.wait_for(created, 2)
     await tracker.complete("task", {}, **OWNER)
     task = await tracker.get("task", **OWNER)
+    assert task is not None
     with store._subscribe_task("task", **OWNER) as deleted:
         result = await store.delete_expired(
             TaskRetentionPolicy(completed_seconds=1, failed_seconds=1),
@@ -602,7 +607,9 @@ async def test_confirmed_commit_notifies_before_cancellation_escapes(
             async with transaction() as session:
 
                 def cancel(_session):
-                    asyncio.current_task().cancel()
+                    writing = asyncio.current_task()
+                    assert writing is not None
+                    writing.cancel()
 
                 event.listen(session.sync_session, "after_commit", cancel, insert=True)
                 yield session

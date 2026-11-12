@@ -217,6 +217,8 @@ async def test_identity_cleanup_task_creation_allows_deleting_owner(tracker: Tas
 async def test_wait_reconciles_when_notification_is_lost(monkeypatch, tracker: TaskTracker):
     from openviking.service import task_tracker
 
+    store = tracker._store
+    assert isinstance(store, PersistentTaskStore)
     monkeypatch.setattr(task_tracker, "_WAIT_INITIAL_POLL_INTERVAL", 0.01)
     monkeypatch.setattr(task_tracker, "_WAIT_MAX_POLL_INTERVAL", 0.02)
     task = await tracker.create("add_resource", task_id="task", **_owner_kwargs())
@@ -229,12 +231,12 @@ async def test_wait_reconciles_when_notification_is_lost(monkeypatch, tracker: T
         return status
 
     monkeypatch.setattr(tracker, "get_task_status", read_status)
-    monkeypatch.setattr(tracker._store._task_changes, "notify", lambda *args: None)
+    monkeypatch.setattr(store._task_changes, "notify", lambda *args: None)
     waiter = asyncio.create_task(tracker.wait(task.task_id, **_owner_kwargs()))
     await asyncio.wait_for(queried.wait(), 1)
     await tracker.complete(task.task_id, {}, **_owner_kwargs())
     assert (await asyncio.wait_for(waiter, 1)).status is TaskStatus.COMPLETED
-    assert tracker._store._task_changes.waiter_count == 0
+    assert store._task_changes.waiter_count == 0
 
 
 async def test_wait_for_task_work_uses_short_initial_poll(monkeypatch, tracker: TaskTracker):
@@ -400,7 +402,7 @@ async def test_wait_terminal_result_precedes_zero_timeout(tracker, outcome, scop
 async def test_wait_releases_registration_on_errors(tracker, monkeypatch, failure):
     task = await tracker.create("add_resource", **_owner_kwargs())
     kwargs = _owner_kwargs()
-    expected = KeyError
+    expected: type[Exception] = KeyError
     if failure == "missing":
         task.task_id = "missing"
     elif failure == "wrong-owner":
