@@ -771,16 +771,31 @@ class _AnyDocMarkdownRenderer:
         characters = list(text)
         output: list[str] = []
         line_has_content = not at_line_start
+        # Digits since the start of the current block line, for a CommonMark
+        # ordered-list marker ("1.", "2)", up to nine digits). Escaping the
+        # delimiter keeps a literal numbered paragraph a paragraph (#7174).
+        ordered_marker_digits = 0
         for index, char in enumerate(characters):
             if char == "\n":
                 output.append(char)
                 if context == "block":
                     line_has_content = False
+                    ordered_marker_digits = 0
                 continue
             start_of_line = not line_has_content
             if not char.isspace():
                 line_has_content = True
             next_char = characters[index + 1] if index + 1 < len(characters) else None
+            ordered_marker = (
+                context == "block"
+                and char in ".)"
+                and 1 <= ordered_marker_digits <= 9
+                and (next_char is None or next_char.isspace())
+            )
+            if char.isdigit() and (start_of_line or ordered_marker_digits):
+                ordered_marker_digits += 1
+            elif not char.isspace():
+                ordered_marker_digits = 0
             next_nonspace = trailing_active if next_char is None else not next_char.isspace()
             later = characters[index + 1 :]
             escape = False
@@ -812,6 +827,8 @@ class _AnyDocMarkdownRenderer:
                 escape = True
             elif char in "-+" and start_of_line:
                 escape = next_char is None or next_char.isspace()
+            elif ordered_marker:
+                escape = True
             if escape:
                 output.append("\\")
             output.append(char)
