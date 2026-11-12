@@ -125,12 +125,14 @@ With the default `shared` mode, customize files under `<workspace>/shared`, not 
 
 ### Bootstrap Files
 
-On every turn, ContextBuilder reads existing non-empty files in this order: `AGENTS.md`, `SOUL.md`, `TOOLS.md`, and `IDENTITY.md`.
+On every turn, ContextBuilder reads existing non-empty files in this order: local `AGENTS.md`, Agent instructions, local `TOOLS.md`, and local `IDENTITY.md`.
+
+Agent instructions come from the current OpenViking user's `viking://~/memories/soul.md` when OpenViking is configured and the file is readable and non-empty. Otherwise, VikingBot uses local `SOUL.md`. Remote reads have a 5-second timeout; a missing file or read failure also selects the local fallback. Only one of these two instruction files is injected per turn, and the choice is refreshed on the next turn.
 
 | File | Appropriate content |
 |------|---------------------|
 | `AGENTS.md` | Global working methods, task workflows, output constraints, and mandatory project rules |
-| `SOUL.md` | Personality, values, tone, response style, and default behavior preferences |
+| OpenViking `memories/soul.md`, falling back to local `SOUL.md` | Personality, values, tone, response style, and default behavior preferences |
 | `TOOLS.md` | Tool selection rules, call order, side-effect confirmation, and safety boundaries |
 | `IDENTITY.md` | Agent name, role, responsibility scope, and identity background |
 
@@ -148,7 +150,7 @@ The initial template also contains `USER.md`, but the current ContextBuilder doe
 
 When an active Workspace is first used, VikingBot copies bootstrap files, bundled Skill templates, and supporting directories from the installed `bot/workspace` template. Template initialization does not overwrite existing bootstrap-file customization.
 
-Edit the active Workspace directly. ContextBuilder reads bootstrap files again on every turn, so changes to `SOUL.md`, `AGENTS.md`, `TOOLS.md`, or `IDENTITY.md` normally take effect on the next conversation turn without restarting the Gateway. Changes to `bot/workspace` in the package or repository affect only Workspaces created later.
+Edit the selected instruction source: OpenViking `soul.md` when available, or `SOUL.md` in the active Workspace for the local fallback. ContextBuilder reads bootstrap files again on every turn, so changes to the selected instructions, `AGENTS.md`, `TOOLS.md`, or `IDENTITY.md` normally take effect on the next conversation turn without restarting the Gateway. Changes to `bot/workspace` in the package or repository affect only Workspaces created later.
 
 Bootstrap files are part of the system-level prompt. Restrict their write permissions and never store API Keys, Tokens, or other secrets in them.
 

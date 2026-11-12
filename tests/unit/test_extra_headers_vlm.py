@@ -790,6 +790,78 @@ class TestVLMExtraRequestBody:
 
         assert kwargs["extra_body"] == {"seed": 7, "enable_thinking": False}
 
+    @pytest.mark.parametrize("message_count", [0, 1, 2])
+    async def test_litellm_responses_bridge_keeps_narration_and_tool_call(
+        self, monkeypatch, message_count
+    ):
+        texts = ["Planning. ", "Writing now."][:message_count]
+        output = [
+            {
+                "type": "message",
+                "id": f"msg_{index}",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": text, "annotations": []}],
+            }
+            for index, text in enumerate(texts)
+        ]
+        output.append(
+            {
+                "type": "function_call",
+                "id": "fc_fixture",
+                "call_id": "call_fixture",
+                "name": "emit",
+                "arguments": '{"value":"fixture"}',
+                "status": "completed",
+            }
+        )
+
+        def send(client, request, **kwargs):
+            assert request.url.path == "/v1/responses"
+            assert json.loads(request.content)["tools"][0]["name"] == "emit"
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "id": "resp_fixture",
+                    "object": "response",
+                    "created_at": 0,
+                    "status": "completed",
+                    "model": "gpt-6-sol",
+                    "output": output,
+                    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                },
+            )
+
+        async def send_async(client, request, **kwargs):
+            return send(client, request, **kwargs)
+
+        monkeypatch.setattr(httpx.Client, "send", send)
+        monkeypatch.setattr(httpx.AsyncClient, "send", send_async)
+        config = VLMConfig(
+            provider="litellm",
+            model="openai/responses/gpt-6-sol",
+            api_key="sk-test",
+            api_base="https://provider.example.test/v1",
+            max_retries=0,
+        )
+        tools = [
+            {"type": "function", "function": {"name": "emit", "parameters": {"type": "object"}}}
+        ]
+        vlm = config.get_vlm_instance()
+        try:
+            results = (
+                vlm.get_completion("hello", tools=tools),
+                await vlm.get_completion_async("hello", tools=tools),
+            )
+            for result in results:
+                assert (result.content or "") == "".join(texts)
+                assert result.finish_reason == "tool_calls"
+                assert [call.name for call in result.tool_calls] == ["emit"]
+                assert result.tool_calls[0].arguments == {"value": "fixture"}
+        finally:
+            config.close()
+
 
 class TestVLMConfigExtraHeaders:
     """Test VLMConfig passes extra_headers to VLM instance."""

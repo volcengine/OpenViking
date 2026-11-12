@@ -611,7 +611,6 @@ class OpenVikingService:
         self._watch_runtime = WatchRuntime(
             self._watch_manager,
             leader_enabled=self._config.enable_watch_scheduler,
-            leader_provider=self._config.watch_leader_provider,
         )
 
         # Wire up sub-services
