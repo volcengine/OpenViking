@@ -355,13 +355,14 @@ class Pipeline:
                     "Compile state finalization failed; preserving the execution error"
                 )
 
-    async def write_coverage(self, published=()):
+    async def write_coverage(self, published=None):
         """Record every input's lineage disposition and acknowledged final files with hashes.
 
         Published URIs come from file/package acknowledgements or verified unchanged
         bytes. A source is delivered only when all its branches finish and all prepared
         supporting files are acknowledged. Unreferenced branches have unconfirmed coverage,
         not an approved exclusion. References alone do not prove semantic quality.
+        Pass published URIs after the write to report incremental coverage gaps.
         """
         children = {}
         for record in self.records.values():
@@ -389,7 +390,8 @@ class Pipeline:
                 "status": self.status[reference],
             }
         finalized = await self.files.get("finalize") or {}
-        published = set(published)
+        publication_checked = published is not None
+        published = set(published or ())
         for path, output in finalized.get("outputs", {}).items():
             uri = safe_join_viking_uri(self.target, path)
             for source in {self.evidence[ref]["uri"] for ref in output["source_refs"]}:
@@ -416,9 +418,17 @@ class Pipeline:
                 item["status"] = "delivered"
             manifest[uri] = item["status"]
         await self.files.put("inputs", manifest)
-        await self.files.put(
-            "coverage", {"counts": dict(Counter(manifest.values())), "inputs": inputs}
-        )
+        counts = Counter(manifest.values())
+        await self.files.put("coverage", {"counts": dict(counts), "inputs": inputs})
+        execution = (self.changes or {}).get("execution") or {}
+        if publication_checked and execution.get("mode") == "incremental" and counts["unreferenced"]:
+            warning = (
+                f"Incremental compile coverage is unconfirmed for "
+                f"{counts['unreferenced']} of {len(inputs)} input files. "
+                "Some input ranges are not referenced by the output."
+            )
+            if warning not in self.warnings:
+                self.warnings.append(warning)
 
     def summarize_sources(self, sources: list[Record]) -> dict[str, Any]:
         """Return file-size and fragmentation statistics for seeded source records.

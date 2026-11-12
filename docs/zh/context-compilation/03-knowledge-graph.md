@@ -60,6 +60,8 @@ ov read viking://resources/journal-kg/relations.jsonl
 ov read viking://resources/journal-kg/entities/孙悟空.md
 ```
 
+增量编译后，可以查看任务结果中的警告。若有来源片段未被产物引用，编译会报告涉及的输入文件数量，便于检查图谱中的引用缺口。警告反映来源追踪情况，已发布的图谱仍可使用。
+
 ## 第五步：可视化成交互式图谱
 
 与 LLM Wiki 的脚本不同，`knowledge_graph.py` 读取的是**本地目录**（需要 `entities/` 和 `relations.jsonl` 都在本地）。所以先把产物拉到本地，再生成 HTML。
