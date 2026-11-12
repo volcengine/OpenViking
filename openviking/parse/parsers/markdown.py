@@ -640,14 +640,18 @@ class MarkdownParser(BaseParser):
         for match in self._indented_code_pattern.finditer(content):
             excluded_ranges.append((match.start(), match.end()))
 
-        # Find headings, skipping excluded ranges and escaped #
+        # Heading matches arrive in document order. Track the furthest end of
+        # every excluded interval that has begun, including overlapping ranges.
+        excluded_ranges.sort()
+        range_index = 0
+        excluded_end = 0
         headings = []
         for match in self._heading_pattern.finditer(content):
             pos = match.start()
-
-            # Check if in excluded range
-            in_excluded = any(start <= pos < end for start, end in excluded_ranges)
-            if in_excluded:
+            while range_index < len(excluded_ranges) and excluded_ranges[range_index][0] <= pos:
+                excluded_end = max(excluded_end, excluded_ranges[range_index][1])
+                range_index += 1
+            if pos < excluded_end:
                 continue
 
             # Check if escaped \#
