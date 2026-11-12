@@ -174,6 +174,9 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
     const readOnlyRef = useRef(readOnly)
     const syncingRef = useRef(false)
     const accessRef = useRef(new Compartment())
+    const themeCompartment = useRef(new Compartment())
+    const isDarkRef = useRef(isDark)
+    isDarkRef.current = isDark
     onChangeRef.current = onChange
     contentRef.current = initialContent
     readOnlyRef.current = readOnly
@@ -250,10 +253,6 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
           extensions.push(EditorView.lineWrapping)
         }
 
-        if (isDark) {
-          extensions.push(syntaxHighlighting(oneDarkHighlightStyle))
-        }
-
         const lang = enableLanguageSupport
           ? (language ?? detectLanguage(filename))
           : null
@@ -269,6 +268,9 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
         if (destroyed) return
 
         extensions.push(
+          themeCompartment.current.of(
+            isDarkRef.current ? syntaxHighlighting(oneDarkHighlightStyle) : [],
+          ),
           phrasesCompartment.current.of(
             EditorState.phrases.of(phrasesRef.current),
           ),
@@ -301,14 +303,15 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
         viewRef.current?.destroy()
         viewRef.current = null
       }
-    }, [
-      enableLanguageSupport,
-      appearance,
-      filename,
-      isDark,
-      lineWrapping,
-      language,
-    ])
+    }, [enableLanguageSupport, appearance, filename, lineWrapping, language])
+
+    useEffect(() => {
+      viewRef.current?.dispatch({
+        effects: themeCompartment.current.reconfigure(
+          isDark ? syntaxHighlighting(oneDarkHighlightStyle) : [],
+        ),
+      })
+    }, [isDark])
 
     useEffect(() => {
       const view = viewRef.current
