@@ -19,12 +19,13 @@ import type { DirState } from './fs-model.js';
 export function knownDirectories(
   rootUri: string,
   dirs: Record<string, DirState>,
+  identifyUri: (uri: string) => string,
 ): ReadonlySet<string> {
-  const known = new Set<string>([rootUri]);
+  const known = new Set<string>([identifyUri(rootUri)]);
   for (const [parent, level] of Object.entries(dirs)) {
-    known.add(parent);
+    known.add(identifyUri(parent));
     for (const entry of level.entries) {
-      if (entry.isDir === true) known.add(entry.uri);
+      if (entry.isDir === true) known.add(identifyUri(entry.uri));
     }
   }
   return known;
@@ -40,11 +41,12 @@ export function knownDirectories(
  */
 export function knownFiles(
   dirs: Record<string, DirState>,
+  identifyUri: (uri: string) => string,
 ): ReadonlySet<string> {
   const known = new Set<string>();
   for (const level of Object.values(dirs)) {
     for (const entry of level.entries) {
-      if (entry.isDir !== true) known.add(entry.uri);
+      if (entry.isDir !== true) known.add(identifyUri(entry.uri));
     }
   }
   return known;
@@ -59,21 +61,29 @@ export function knownFiles(
  */
 export function useKnownFile(
   dirs: Record<string, DirState>,
+  identifyUri: (uri: string) => string,
 ): (uri: string) => boolean {
-  const files = useMemo(() => knownFiles(dirs), [dirs]);
-  return useCallback((uri: string) => files.has(uri), [files]);
+  const files = useMemo(
+    () => knownFiles(dirs, identifyUri),
+    [dirs, identifyUri],
+  );
+  return useCallback(
+    (uri: string) => files.has(identifyUri(uri)),
+    [files, identifyUri],
+  );
 }
 
 /** Loaded resource metadata survives collapsed ancestors, unlike the visible rows. */
 export function useTreeMetadata(
   rootUri: string,
   dirs: Record<string, DirState>,
+  identifyUri: (uri: string) => string,
 ) {
   const directoryUris = useMemo(
-    () => knownDirectories(rootUri, dirs),
-    [rootUri, dirs],
+    () => knownDirectories(rootUri, dirs, identifyUri),
+    [rootUri, dirs, identifyUri],
   );
-  const isKnownFile = useKnownFile(dirs);
+  const isKnownFile = useKnownFile(dirs, identifyUri);
   const metadataRows = useMemo(
     () =>
       Object.values(dirs).flatMap((dir) =>
@@ -83,12 +93,21 @@ export function useTreeMetadata(
   );
   const accessOf = useCallback(
     (uri: string | null) => {
-      const row = metadataRows.find((entry) => entry.uri === uri);
+      if (!uri) return;
+      const target = identifyUri(uri);
+      const row = metadataRows.find(
+        (entry) => identifyUri(entry.uri) === target,
+      );
       return row?.access === 'denied' || row?.access === 'container'
         ? row.access
         : undefined;
     },
-    [metadataRows],
+    [metadataRows, identifyUri],
   );
-  return { directoryUris, isKnownFile, metadataRows, accessOf };
+  const resourceTypeOf = (uri: string | null) => {
+    if (uri === null) return 'file';
+    if (directoryUris.has(identifyUri(uri))) return 'directory';
+    return isKnownFile(uri) ? 'file' : 'unknown';
+  };
+  return { directoryUris, metadataRows, accessOf, identifyUri, resourceTypeOf };
 }

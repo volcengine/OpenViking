@@ -264,13 +264,14 @@ def test_content_safety_takes_precedence_over_400():
     assert classify_api_error(error) == ERROR_CLASS_CONTENT_SAFETY
 
 
-def test_retry_sync_does_not_retry_quota_exceeded():
+@pytest.mark.parametrize("code", ["insufficient_quota", "credit_balance_exhausted"])
+def test_retry_sync_does_not_retry_quota_exceeded(code):
     """Structured quota exhaustion takes precedence over the retryable HTTP 429."""
     attempts = {"count": 0}
     sdk_error = openai.RateLimitError(
         "rate limited",
         response=httpx.Response(429, request=httpx.Request("POST", "https://example.test")),
-        body={"error": {"code": "insufficient_quota"}},
+        body={"error": {"code": code}},
     )
 
     @model_error_boundary

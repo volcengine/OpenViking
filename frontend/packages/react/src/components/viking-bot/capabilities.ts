@@ -38,6 +38,8 @@ export interface VikingBotSession {
 export interface VikingBotSessions {
   items: readonly VikingBotSession[];
   currentId?: string;
+  /** Host-provided URI for locating the current session in the file browser. */
+  currentUri?: string;
   isLoading?: boolean;
   error?: string;
   hasMore?: boolean;

@@ -10,9 +10,10 @@ import {
 } from 'react';
 
 import { resolveVikingBotLabels } from './labels.js';
-import { VikingBotSubmit } from './composer-controls.js';
-import { ComposerAttachments } from './composer-attachments.js';
-import { composerMention, ReferenceTags } from './composer-references.js';
+import { VikingBotSubmitActions } from './composer-controls.js';
+import { composerEvents } from './composer-events.js';
+import { ComposerHeader } from './composer-header.js';
+import { composerMention } from './composer-references.js';
 import { ComposerFooter } from './composer-footer.js';
 import { QuickInputs } from './quick-inputs.js';
 import { useQuickInput } from './use-quick-input.js';
@@ -40,6 +41,8 @@ export const VikingBotComposerView = forwardRef<
     disabled,
     disabledReason,
     isSending,
+    canSendWhileStreaming = false,
+    isSubmitting,
     variant = 'default',
     accept,
     maxAttachments = 10,
@@ -50,6 +53,7 @@ export const VikingBotComposerView = forwardRef<
     onValueChange,
     onFilesAdded,
     onAttachmentRemove,
+    onOpenUri,
     onSend,
     onCancel,
     labels: overrides,
@@ -60,10 +64,15 @@ export const VikingBotComposerView = forwardRef<
   const labels = resolveVikingBotLabels(locale, overrides);
   const senderRef = useRef<SenderInstance>(null);
   const writing = useRef(false);
-  const readOnly = !onValueChange;
-  const locked = Boolean(disabled || readOnly || isSending);
+  const locked = Boolean(
+    disabled ||
+    !onValueChange ||
+    isSubmitting ||
+    (isSending && !canSendWhileStreaming),
+  );
+  const empty =
+    !value.trim() && !attachments.length && !references?.selected.length;
   const remaining = Math.max(0, maxAttachments - attachments.length);
-  const limitReached = remaining === 0;
 
   const setText = useCallback(
     (text: string) => {
@@ -88,24 +97,22 @@ export const VikingBotComposerView = forwardRef<
   /** 按剩余额度截断并上报文件。 */
   const reportFiles = useCallback(
     (files: readonly File[]) => {
-      if (!onFilesAdded || files.length === 0 || limitReached) return;
-      const accepted = files.slice(0, remaining);
-      if (accepted.length) onFilesAdded(accepted);
+      if (files.length && remaining) onFilesAdded?.(files.slice(0, remaining));
     },
-    [limitReached, onFilesAdded, remaining],
+    [onFilesAdded, remaining],
   );
 
   useImperativeHandle(ref, () => ({
     setText,
     appendText: (text: string) => setText(`${value}${text}`),
     addFiles: (files: readonly File[]) => reportFiles(files),
-    isAttachmentLimitReached: () => limitReached,
+    isAttachmentLimitReached: () => remaining === 0,
     clear: () => setText(''),
     focus: () => senderRef.current?.getEditor()?.commands.focus('end'),
   }));
 
   const submit = () => {
-    if (!onSend || disabled || isSending) return;
+    if (!onSend || locked || empty) return;
     const text = toPlainText(
       senderRef.current?.getValue() ?? toRichText(value),
     ).trim();
@@ -116,11 +123,6 @@ export const VikingBotComposerView = forwardRef<
     });
   };
 
-  // 拦截拖放的默认行为与是否接受文件是两件事：满额或禁用时仍要阻止浏览器
-  // 直接打开被拖入的文件（那会离开当前会话并丢掉未发送草稿），只是不添加文件。
-  const interceptDrop = Boolean(onFilesAdded);
-  const acceptDrop = interceptDrop && !disabled && !limitReached;
-
   return (
     <div
       className={[
@@ -130,18 +132,11 @@ export const VikingBotComposerView = forwardRef<
       ]
         .filter(Boolean)
         .join(' ')}
-      onDragOver={(event) => {
-        if (!interceptDrop) return;
-        event.preventDefault();
-        event.dataTransfer.dropEffect = acceptDrop ? 'copy' : 'none';
-      }}
-      onDrop={(event) => {
-        if (!interceptDrop) return;
-        // 无论能否接受，都先取消默认行为，避免浏览器打开该文件。
-        event.preventDefault();
-        if (!acceptDrop) return;
-        reportFiles([...(event.dataTransfer.files ?? [])]);
-      }}
+      {...composerEvents(
+        Boolean(onFilesAdded),
+        !locked && remaining > 0,
+        reportFiles,
+      )}
     >
       {disabled && disabledReason ? (
         <p className="ov-viking-bot__composer-hint" role="status">
@@ -150,7 +145,7 @@ export const VikingBotComposerView = forwardRef<
       ) : null}
       <QuickInputs
         items={quickInputs}
-        disabled={disabled || readOnly || isSending}
+        disabled={locked}
         onSelect={(item) => {
           shortcuts.select(item);
           senderRef.current?.getEditor()?.commands.focus('end');
@@ -160,10 +155,16 @@ export const VikingBotComposerView = forwardRef<
         ref={senderRef}
         className="ov-viking-bot__sender"
         defaultContent={toRichText(value)}
-        sending={isSending}
-        sendDisabled={disabled || readOnly || (!isSending && !onSend)}
+        sending={isSending && !canSendWhileStreaming}
+        sendDisabled={
+          disabled ||
+          !onValueChange ||
+          isSubmitting ||
+          (empty && (!isSending || canSendWhileStreaming)) ||
+          ((!isSending || canSendWhileStreaming) && !onSend)
+        }
         onContentChange={(content) => {
-          if (readOnly || writing.current) return;
+          if (!onValueChange || writing.current) return;
           const next = toPlainText(content);
           shortcuts.tracker.edit(next, composerCaret(senderRef.current));
           onValueChange?.(next);
@@ -171,28 +172,24 @@ export const VikingBotComposerView = forwardRef<
         onSend={submit}
         onStop={() => onCancel?.()}
         renderHeader={() => (
-          <>
-            <ReferenceTags
-              config={references}
-              labels={labels}
-              disabled={disabled || isSending}
-            />
-            <ComposerAttachments
-              items={attachments}
-              onRemove={onAttachmentRemove}
-              labels={labels}
-              disabled={disabled || isSending}
-            />
-          </>
+          <ComposerHeader
+            references={references}
+            labels={labels}
+            onOpenUri={onOpenUri}
+            attachments={attachments}
+            onAttachmentRemove={onAttachmentRemove}
+            disabled={locked}
+          />
         )}
-        renderSubmit={(props) =>
-          isSending && !onCancel ? null : (
-            <VikingBotSubmit
-              {...props}
-              label={isSending ? labels.stop : labels.send}
-            />
-          )
-        }
+        renderSubmit={(props) => (
+          <VikingBotSubmitActions
+            props={props}
+            streaming={isSending}
+            canSteer={canSendWhileStreaming}
+            onCancel={onCancel}
+            labels={labels}
+          />
+        )}
         richTextAreaProps={{
           mentionConfig: composerMention(references, locked, labels, locale),
           placeholder: labels.placeholder,
@@ -208,7 +205,7 @@ export const VikingBotComposerView = forwardRef<
             senderRef={senderRef}
             labels={labels}
             disabled={locked}
-            filesDisabled={Boolean(disabled || limitReached || isSending)}
+            filesDisabled={Boolean(locked || remaining === 0)}
             accept={accept}
             onFiles={onFilesAdded ? reportFiles : undefined}
             actions={actions}

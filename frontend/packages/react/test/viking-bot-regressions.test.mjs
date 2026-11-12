@@ -14,7 +14,7 @@ import {
   VikingBotSessionActions,
   groupByActivity,
 } from '@openviking/react/components/viking-bot';
-import { act, click } from './helpers/tui-dom.mjs';
+import { act, click } from './helpers/command-console-dom.mjs';
 import './helpers/console-dom.mjs';
 
 test('explicit null empty state suppresses welcome and custom message lists always replace the body', () => {

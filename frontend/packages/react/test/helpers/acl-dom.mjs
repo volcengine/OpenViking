@@ -3,9 +3,6 @@ import { FileBrowser } from '@openviking/react/modules/file-browser';
 import { OpenVikingProvider } from '@openviking/react/client';
 import { mount, ok, recordingFetch, settle } from './module-dom.mjs';
 export { act, h, mount, ok, recordingFetch, settle };
-for (const name of ['MutationObserver', 'HTMLIFrameElement', 'SVGElement'])
-  globalThis[name] = window[name];
-globalThis.getComputedStyle = window.getComputedStyle.bind(window);
 export const URI = 'viking://resources/handbook';
 export const initial = () => ({
   uri: URI,
@@ -97,6 +94,7 @@ export const button = (text, root = document) =>
     (node) => node.textContent.trim() === text,
   );
 export async function open() {
+  await click(document.querySelector('.ov-file-browser-acl__tag'));
   await click(document.querySelector('.ov-file-browser-acl__manage'));
   return document.querySelector('.ov-file-browser-acl [role="dialog"]');
 }

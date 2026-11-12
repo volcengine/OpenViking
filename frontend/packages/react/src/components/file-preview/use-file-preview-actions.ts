@@ -65,12 +65,6 @@ export function useFilePreviewActions() {
             { execute: tab.operations?.openParent, notify: tab.onOpenParent },
             uri,
           ),
-    download: (tab: FilePreviewFileTab) =>
-      run(
-        `download:${tab.key}`,
-        { execute: tab.operations?.download, notify: tab.onDownload },
-        undefined,
-      ),
     openUri: (tab: FilePreviewFileTab, uri: string) =>
       run(
         `openUri:${tab.key}`,
@@ -79,7 +73,5 @@ export function useFilePreviewActions() {
       ),
     copyPath: (tab: FilePreviewTab, path: string) =>
       copyText(path, tab.onCopyPath),
-    copyContent: (tab: FilePreviewTab, text: string) =>
-      copyText(text, 'onCopyContent' in tab ? tab.onCopyContent : undefined),
   };
 }

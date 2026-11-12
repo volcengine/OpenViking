@@ -58,12 +58,12 @@ async def _indexed_record(client, uri, level):
     ]
 
 
-async def test_update_cancellation_restores_package_and_index(
+async def test_update_cancellation_keeps_replacement_files_and_partial_index(
     client, tmp_path, monkeypatch
 ):
     from openviking.storage.queuefs import semantic_executor
 
-    name = "cancelled-package-rollback"
+    name = "cancelled-package-update"
     old_upload = await _upload_package(
         client,
         tmp_path,
@@ -74,28 +74,6 @@ async def test_update_cancellation_restores_package_and_index(
     added = await client.post("/api/v1/skills", json={"temp_file_id": old_upload, "wait": True})
     assert added.status_code == 200, added.text
     root = added.json()["result"]["root_uri"]
-    paths = (
-        "SKILL.md",
-        ".abstract.md",
-        ".overview.md",
-        "references/old.md",
-        "references/.abstract.md",
-        "references/.overview.md",
-    )
-    old_contents = {path: await _download(client, f"{root}/{path}") for path in paths}
-    record_locations = (
-        (root, 0),
-        (root, 1),
-        (f"{root}/SKILL.md", 2),
-        (f"{root}/references", 0),
-        (f"{root}/references", 1),
-        (f"{root}/references/old.md", 2),
-    )
-    old_records = {
-        location: await _indexed_record(client, *location) for location in record_locations
-    }
-    assert all(len(records) == 1 for records in old_records.values())
-
     files = {"references/000-fast.md": "A replacement file that reaches the index."}
     files.update({f"references/slow-{index}.md": "Unfinished replacement." for index in range(8)})
     new_upload = await _upload_package(client, tmp_path, name, "Replacement description", files)
@@ -152,20 +130,22 @@ async def test_update_cancellation_restores_package_and_index(
         assert response.status_code >= 400, response.text
         assert response.json()["error"]["code"] == "PROCESSING_ERROR"
         assert cancelled == started
-        assert not finished, "Rollback must not wait for blocked summaries to finish normally"
+        assert not finished, "Cancellation must not wait for blocked summaries to finish normally"
         assert len(started) < len(files), "Pending summaries should be skipped on cancellation"
 
-        # Releasing the fault after the response must not let stale work modify the restored pack.
+        # Releasing the fault after the response must not resume cancelled writes.
         release.set()
         await asyncio.wait_for(get_queue_manager().wait_complete(), 5)
-        for path, content in old_contents.items():
-            assert await _download(client, f"{root}/{path}") == content
-        for location, records in old_records.items():
-            assert await _indexed_record(client, *location) == records
-        for path in files:
-            missing = await client.get("/api/v1/content/download", params={"uri": f"{root}/{path}"})
-            assert missing.status_code == 404, missing.text
-            assert await _indexed_record(client, f"{root}/{path}", 2) == []
+        assert b"Replacement description" in await _download(client, f"{root}/SKILL.md")
+        old_uri = f"{root}/references/old.md"
+        missing = await client.get("/api/v1/content/download", params={"uri": old_uri})
+        assert missing.status_code == 404, missing.text
+        assert await _indexed_record(client, old_uri, 2) == []
+        assert await _indexed_record(client, f"{root}/references/000-fast.md", 2)
+        for path, content in files.items():
+            assert await _download(client, f"{root}/{path}") == content.encode()
+        for path in started:
+            assert await _indexed_record(client, path, 2) == []
     finally:
         release.set()
         await asyncio.wait_for(get_queue_manager().wait_complete(), 5)

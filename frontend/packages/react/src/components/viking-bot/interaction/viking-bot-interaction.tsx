@@ -1,4 +1,4 @@
-import { TextArea } from '../../../shared/components/input/input.js';
+import { TextArea } from '../../../shared/primitives/input/input.js';
 import { useLocale } from '../../../shared/locale-context.js';
 import { AskHuman } from '@ark-design/ui/ask-human';
 import type { AskHumanStep } from '@ark-design/ui/ask-human';

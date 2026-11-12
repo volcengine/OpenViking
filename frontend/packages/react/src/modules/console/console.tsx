@@ -1,28 +1,28 @@
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import { useId, useRef } from 'react';
-import { Tui } from '../../components/tui/index.js';
+import { CommandConsole } from '../../components/command-console/index.js';
 import {
   VikingBot,
   VikingBotSessionActions,
 } from '../../components/viking-bot/index.js';
 import { useConsole } from './use-console.js';
+import { useConversation } from './use-conversation.js';
+import { consoleCommandGroups, consoleQuickCommands } from './commands.js';
 import { consoleLabels } from './labels.js';
 import { ConsoleToolbar } from './console-toolbar.js';
 import type { ConsoleProps } from './types.js';
-
-/** 终端空态默认展示的快捷命令，顺序即展示顺序。 */
-const DEFAULT_QUICK_COMMANDS = ['help', 'ls', 'find', 'read', 'status'];
 
 export function Console({
   mode,
   defaultMode,
   locale: localeProp,
-  quickCommands = DEFAULT_QUICK_COMMANDS,
+  quickCommands,
   scopeKey,
   requestOptions,
   onModeChange,
   onOpenUri,
   conversation,
+  chatOptions,
   slots,
   labels: overrides,
   className,
@@ -38,7 +38,11 @@ export function Console({
     onModeChange,
   });
   const labels = consoleLabels(locale, overrides);
-  const { sessions, headerActions, ...conversationProps } = conversation ?? {};
+  const managedConversation = useConversation(
+    { conversation, chatOptions, scopeKey, requestOptions, locale },
+    state.setConversationDraft,
+  );
+  const { sessions, headerActions, ...conversationProps } = managedConversation;
   const botLocale = conversationProps.locale ?? locale;
   const botLabels = {
     ...consoleLabels(botLocale, overrides).vikingBot,
@@ -75,6 +79,8 @@ export function Console({
             <VikingBotSessionActions
               sessions={sessions}
               extra={headerActions}
+              onOpenUri={conversationProps.onOpenUri ?? onOpenUri}
+              onCopy={conversationProps.onCopy}
               labels={botLabels}
               locale={botLocale}
             />
@@ -114,17 +120,18 @@ export function Console({
           hidden={state.mode !== 'command'}
         >
           {slots?.commandHelp}
-          <Tui
+          <CommandConsole
             records={state.records}
             value={state.command}
             commands={state.commands}
+            commandGroups={consoleCommandGroups(locale)}
             locale={locale}
             disabled={state.isExecuting}
-            quickCommands={quickCommands}
+            quickCommands={quickCommands ?? consoleQuickCommands(locale)}
             onValueChange={state.setCommand}
             onSubmit={(command) => void state.execute(command)}
             onOpenUri={onOpenUri}
-            labels={labels.tui}
+            labels={labels.commandConsole}
           />
         </div>
       </div>

@@ -370,13 +370,20 @@ class UnderstandingAPI(BaseParser):
     @classmethod
     def can_submit_url_directly(cls, source: str, **kwargs) -> bool:
         """Return whether this URL can bypass source materialization."""
+        if kwargs.get("_feishu_prepared_source"):
+            return False
         if not source.startswith(("http://", "https://")) or not cls._is_feishu_url(source):
             return False
         from openviking.parse.accessors.feishu_accessor import FeishuAccessor
         from openviking.parse.feishu_import import recursive_wiki
 
         doc_type, _ = FeishuAccessor._parse_feishu_url(source)
-        if doc_type in {"folder", "file"} or (doc_type == "wiki" and recursive_wiki(kwargs)):
+        if doc_type in {"folder", "file", "slides"} or (doc_type == "wiki" and recursive_wiki(kwargs)):
+            return False
+        resolved_type = kwargs.get("_feishu_resolved_type")
+        if resolved_type in {"folder", "file", "slides"}:
+            return False
+        if doc_type == "wiki" and not resolved_type:
             return False
         if cls._normalize_lark_file(kwargs):
             return True
@@ -607,22 +614,9 @@ class UnderstandingAPI(BaseParser):
 
     @staticmethod
     def _normalize_lark_file(kwargs: Dict[str, Any]) -> Optional[Dict[str, str]]:
-        raw_lark_file = kwargs.get("lark_file")
-        if raw_lark_file is None:
-            raw_lark_file = {"user_access_token": kwargs.get("feishu_access_token")}
-        if not isinstance(raw_lark_file, dict):
-            raise ValueError("lark_file must be an object")
+        from openviking.parse.accessors.feishu_session import normalize_lark_file
 
-        auth = {}
-        for key in ("user_access_token", "tenant_access_token"):
-            value = raw_lark_file.get(key)
-            if isinstance(value, str) and value.strip():
-                auth[key] = value.strip()
-        if len(auth) > 1:
-            raise ValueError(
-                "lark_file must contain exactly one of user_access_token or tenant_access_token"
-            )
-        return auth or None
+        return normalize_lark_file(kwargs)
 
     async def _resolve_lark_file(self, kwargs: Dict[str, Any]) -> Dict[str, str]:
         from openviking.connector.auth import current_feishu_token

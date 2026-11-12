@@ -27,6 +27,8 @@ export function VikingBot({
   draft,
   attachments,
   isSending,
+  canSendWhileStreaming,
+  isSubmitting,
   isAvailable = true,
   unavailableMessage,
   emptyState,
@@ -59,6 +61,11 @@ export function VikingBot({
   const locale = useLocale(localeProp);
   const labels = resolveVikingBotLabels(locale, overrides);
   const hasMessages = messages.length > 0;
+  const disabledReason = isAvailable
+    ? undefined
+    : (unavailableMessage ?? labels.unavailable);
+  const hasDefaultComposer =
+    !interaction && composer == null && draft !== undefined;
   const localComposer = useRef<VikingBotComposerRef>(null);
   const inputRef = composerRef ?? localComposer;
   const shortcuts = useQuickInput(
@@ -71,6 +78,7 @@ export function VikingBot({
     true,
   );
   const selectQuickInput = (item: VikingBotQuickInput) => {
+    if (!isAvailable) return;
     shortcuts.select(item);
     inputRef.current?.focus();
   };
@@ -81,6 +89,8 @@ export function VikingBot({
       <VikingBotSessionActions
         sessions={sessions}
         extra={headerActions}
+        onOpenUri={onOpenUri}
+        onCopy={onCopy}
         labels={labels}
         locale={locale}
       />
@@ -107,9 +117,9 @@ export function VikingBot({
           {renderedHeader ? (
             <div className="ov-viking-bot__header">{renderedHeader}</div>
           ) : null}
-          {!isAvailable ? (
+          {disabledReason && !hasDefaultComposer ? (
             <p className="ov-viking-bot__unavailable" role="status">
-              {unavailableMessage ?? labels.unavailable}
+              {disabledReason}
             </p>
           ) : null}
           <div className="ov-viking-bot__body">
@@ -166,7 +176,10 @@ export function VikingBot({
                   value={draft}
                   attachments={attachments}
                   disabled={!isAvailable}
+                  disabledReason={disabledReason}
                   isSending={isSending}
+                  canSendWhileStreaming={canSendWhileStreaming}
+                  isSubmitting={isSubmitting}
                   references={references}
                   quickInputs={
                     hasMessages || streaming || emptyState !== undefined
@@ -184,6 +197,7 @@ export function VikingBot({
                   }
                   onFilesAdded={onFilesAdded}
                   onAttachmentRemove={onAttachmentRemove}
+                  onOpenUri={onOpenUri}
                   onSend={onSend}
                   onCancel={onCancel}
                   labels={overrides}

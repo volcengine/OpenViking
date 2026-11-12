@@ -69,7 +69,7 @@ To hide the notices, turn off **Show tool calls**. Like other profile changes, t
 
 > **Warning**: Selected tools run without the client's permission prompts, including tools that write or delete data; a tool-call notice reports a call after it ran and is not an approval step. If users need to approve each call, connect the OpenViking plugin or MCP server instead (see [Gateway or plugin?](../guides/15-gateway.md#gateway-or-plugin)). The model can never do more than the user's own OpenViking permissions allow.
 
-Before you check a tool that changes data, make sure that is acceptable. For profiles used by chat apps, leave at least `forget` and `set_acl` unchecked.
+Tools that change data, `forget` and `set_acl` included, are selected by default; make sure that is acceptable, or uncheck them. For profiles used by chat apps, uncheck at least `forget` and `set_acl`.
 
 What admins control:
 
@@ -82,21 +82,16 @@ What admins control:
 
 ## Choose tools {#choose-tools}
 
-The **Tools** list in a [context profile](08-context-profiles.md#context-profiles)'s **OpenViking tools** section decides which OpenViking tools the model gets. New context profiles have **OpenViking tools** on, including those made with **Create with recommended settings**, and every tool is selected except the ones the gateway knows change data:
+The **Tools** list in a [context profile](08-context-profiles.md#context-profiles)'s **OpenViking tools** section decides which OpenViking tools the model gets. New context profiles have **OpenViking tools** on, including those made with **Create with recommended settings**, and every tool is selected, including the ones that change data, such as `remember`, `write`, `edit`, `add_resource`, `forget` and `set_acl`.
 
-| Default | Tools |
-| --- | --- |
-| Selected | `find`, `search`, `grep`, `glob`, `list`, `tree`, `read`, `download`, `list_watches`, `get_acl`, `list_users`, `list_groups`, `health` |
-| Not selected (they change data) | `remember`, `write`, `edit`, `add_resource`, `add_skill`, `forget`, `set_acl`, `cancel_watch` |
-
-Check `remember` to let the model save memories, and `add_resource` to let it import web pages or attachments. Read the warning in [Risks and controls](#risks-and-controls) before checking any tool that changes data.
+Uncheck the tools the model should not use. Before you leave any tool that changes data selected, read the warning in [Risks and controls](#risks-and-controls).
 
 **Allow OpenViking tools** is on by default for every [upstream](07-upstreams.md#upstreams). With both switches on, new conversations get the selected tools with an `openviking_` prefix, such as `openviking_find` and `openviking_read`. Tool definitions go with every request in the conversation, and the full set adds about 3,500 input tokens, so unchecking tools nobody needs also saves tokens.
 
 Things to know about the list:
 
-- **Where it comes from**: the **Tools** list comes from your OpenViking service, and Studio describes what each tool does. When OpenViking annotates a tool, Studio also shows a **Read only** or **Modifies data** badge next to it. OpenViking marks `search` as **Modifies data**, but the gateway still selects it by default.
-- **Tools added later**: tools that OpenViking adds later are available by default; ongoing conversations keep the tool list they started with. Existing context profiles keep their selection.
+- **Where it comes from**: the **Tools** list comes from your OpenViking service, and Studio describes what each tool does. When OpenViking annotates a tool, Studio also shows a **Read only** or **Modifies data** badge next to it.
+- **Tools added later**: tools that OpenViking adds later are available by default; ongoing conversations keep the tool list they started with. Existing context profiles keep their selection. An account without a saved `default` profile uses the deployment's `default_profile`, which selects every tool unless it sets `disabled_tools`.
 - **The list is empty for root**: OpenViking does not accept root API keys for its tools, so for root the gateway reads the list with the OpenViking key behind a [gateway key](09-gateway-keys.md#gateway-keys) issued in the current account. Until the account has a gateway key, the list can be empty and Studio shows **Issue a gateway key to load the tool list.** Issue a key first, or edit the profile signed in as a user or account admin. A profile saved before then keeps the default selection.
 - **`download` needs a shell**: `download` returns a one-time `curl` command, so the client needs a shell tool, and the link must be reachable from the client. See [With a client shell tool](#import-with-a-shell-tool) for which names count and where the link points.
 

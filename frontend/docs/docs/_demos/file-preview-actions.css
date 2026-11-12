@@ -1,0 +1,33 @@
+.ov-demo-preview-actions__controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.ov-demo-preview-actions__controls label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ov-demo-preview-actions__controls select {
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px;
+  border: 1px solid var(--ov-ui-color-border-1);
+  border-radius: 4px;
+  background: var(--ov-ui-color-bg-1);
+  color: var(--ov-ui-color-text-1);
+  font: inherit;
+}
+.ov-demo-preview-actions__remove.ov-file-preview__menu-item,
+.ov-demo-preview-actions__remove.ov-button {
+  color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
+}
+
+.ov-demo-preview-actions__controls input[type='checkbox'] {
+  appearance: auto;
+  inline-size: 16px;
+  block-size: 16px;
+  accent-color: var(--ov-ui-color-primary);
+}

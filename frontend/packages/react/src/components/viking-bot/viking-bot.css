@@ -10,6 +10,16 @@
  * overriding the baseline, or adjusts just this component by overriding any
  * variable below.
  */
+.ov-viking-bot__reasoning-body {
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ov-viking-bot__submit-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .ov-viking-bot {
   --ov-viking-bot-radius: 6px;
   --ov-viking-bot-text: var(
@@ -287,11 +297,18 @@
   border-radius: var(--ov-viking-bot-radius);
   background: none;
   padding: 2px 8px;
-  color: var(--ov-viking-bot-accent);
   font: inherit;
   font-size: 12px;
   overflow-wrap: anywhere;
   cursor: pointer;
+}
+
+.ov-viking-bot__context {
+  color: var(--ov-viking-bot-accent);
+}
+
+.ov-viking-bot__attachment {
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
 }
 
 .ov-viking-bot__context:hover,

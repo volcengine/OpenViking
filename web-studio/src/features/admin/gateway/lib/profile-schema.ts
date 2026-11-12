@@ -16,18 +16,6 @@ import {
   collect,
 } from '#/features/admin/gateway/lib/validation'
 
-/** OpenViking MCP tools that change data; mirrors `WRITE_TOOLS` in `models.py`. */
-export const WRITE_TOOLS = [
-  'remember',
-  'write',
-  'edit',
-  'add_resource',
-  'add_skill',
-  'forget',
-  'set_acl',
-  'cancel_watch',
-]
-
 export const RECALL_PEER_SCOPES: RecallPeerScope[] = ['all', 'actor']
 
 /** Recommended settings; identical to the gateway's own defaults. */
@@ -59,7 +47,7 @@ export const PROFILE_DEFAULTS: ProfileSettings = {
   window_hard_ratio: 0.85,
   gateway_tools: true,
   show_tool_calls: true,
-  disabled_tools: WRITE_TOOLS,
+  disabled_tools: [],
   tool_max_rounds: null,
   tool_timeout_seconds: 30,
   tool_result_bytes: 65536,

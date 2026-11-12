@@ -32,12 +32,12 @@ test('every static path starts with a slash and carries no host', () => {
   }
 });
 
-test('every static path belongs to a known API family', () => {
+test('every static path belongs to a known API family or the health probe', () => {
   for (const [name, path] of Object.entries(OV_PATHS)) {
     assert.match(
       path,
-      /^\/(api|bot)\/v1\//,
-      `${name} must live under /api/v1 or /bot/v1`,
+      name === 'health' ? /^\/health$/ : /^\/(api|bot)\/v1\//,
+      `${name} must live under /api/v1 or /bot/v1 unless it is /health`,
     );
   }
 });
@@ -56,6 +56,11 @@ test('a path builder encodes its parameter', () => {
   assert.equal(
     OV_PATH_BUILDERS.sessionMessages('a/b'),
     `${OV_PATHS.sessions}/a%2Fb/messages`,
+  );
+  assert.equal(OV_PATH_BUILDERS.task('a/b c'), '/api/v1/tasks/a%2Fb%20c');
+  assert.equal(
+    OV_PATH_BUILDERS.taskCancel('a/b c'),
+    '/api/v1/tasks/a%2Fb%20c/cancel',
   );
 });
 

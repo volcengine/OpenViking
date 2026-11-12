@@ -1,6 +1,6 @@
 import { AclPrincipalTabs } from './acl-principal-tabs.js';
-import { Button } from '../../../shared/components/button/button.js';
-import { Input } from '../../../shared/components/input/input.js';
+import { Button } from '../../../shared/primitives/button/button.js';
+import { Input } from '../../../shared/primitives/input/input.js';
 import { SearchIcon } from '../file-browser-icons.js';
 import { useId, useState } from 'react';
 import type { OvIdentityValue } from '../../../client/types.js';

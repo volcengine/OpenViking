@@ -1,7 +1,7 @@
 import { createElement, StrictMode } from 'react';
 import { OpenVikingProvider } from '@openviking/react/client';
 import { Console } from '@openviking/react/modules/console';
-import { act, type, key, click } from './tui-dom.mjs';
+import { act, type, key, click } from './command-console-dom.mjs';
 const { createRoot } = await import('react-dom/client');
 globalThis.HTMLButtonElement = window.HTMLButtonElement;
 globalThis.MutationObserver = window.MutationObserver;
@@ -29,7 +29,11 @@ export async function mount(transport, props = {}, provider = {}) {
               fetch: transport,
               ...config,
             },
-            createElement(Console, { defaultMode: 'command', ...next }),
+            createElement(Console, {
+              defaultMode: 'command',
+              conversation: { messages: [] },
+              ...next,
+            }),
           ),
         ),
       ),
@@ -50,7 +54,7 @@ export async function mount(transport, props = {}, provider = {}) {
       return container.querySelector('textarea');
     },
     get records() {
-      return [...container.querySelectorAll('.ov-tui__record')];
+      return [...container.querySelectorAll('.ov-command-console__record')];
     },
     get text() {
       return container.textContent;
