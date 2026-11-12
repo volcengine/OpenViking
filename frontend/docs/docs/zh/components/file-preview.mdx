@@ -99,7 +99,7 @@ const actions: FilePreviewActionItems = [
 
 `actions` 也可传 `(context: FilePreviewActions) => FilePreviewActionItems`，通过 `context.source / context.path` 获取当前文件或摘要层级；模式和编辑状态及其控制方法继续可用。内容页签不消费该字段。
 
-`onClick: () => unknown` 接受同步值和 Promise，组件等待完成并忽略返回值；只有抛错或 Promise 拒绝才判失败。执行期间防止重复操作，失败显示错误、恢复可操作状态，并允许再次点击重试。`labels.moreActions / actionFailed` 可覆盖默认文案。
+`onClick: () => unknown` 接受同步值和 Promise，组件等待完成并忽略返回值；只有抛错或 Promise 拒绝才判失败。同一资源的注入操作在执行期间保持锁定，切换页签、层级或临时替换 `slots.actions` 不会重置锁；不同资源与不同组件实例互不阻塞。有路径时以页签原始来源路径标识资源，无路径时使用页签 key 和文件名。失败仅在对应资源显示，恢复可操作状态，并允许再次点击重试。`labels.moreActions / actionFailed` 可覆盖默认文案。
 
 当前页签可通过 `activeKey` / `onActiveKeyChange` 受控，也可通过 `defaultActiveKey` 指定初始值；支持 ref 句柄：
 

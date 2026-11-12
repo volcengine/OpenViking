@@ -99,7 +99,7 @@ The host supplies icons, style classes and workflows. `key / icon / label / onCl
 
 An action factory `(context: FilePreviewActions) => FilePreviewActionItems` receives `context.source / context.path` for the active file or summary level, alongside view/edit state and controls. Content tabs do not consume this field.
 
-`onClick: () => unknown` accepts synchronous values and promises. The component awaits completion and ignores the returned value; only throws and rejections report failure. Pending commands prevent duplicate execution. Errors are displayed, controls unlock, and the user can retry. Override built-in copy with `labels.moreActions / actionFailed`.
+`onClick: () => unknown` accepts synchronous values and promises. The component awaits completion and ignores the returned value; only throws and rejections report failure. Injected commands for the same resource stay locked while pending, including across tab/level switches and temporary `slots.actions` overrides. Different resources and component instances remain independent. Resource identity uses the original tab source path, or the tab key and file name when no path is supplied. Failures appear only on their resource, controls unlock, and the user can retry. Override built-in copy with `labels.moreActions / actionFailed`.
 
 Control the active tab with `activeKey` / `onActiveKeyChange`, set its initial value with `defaultActiveKey`, or use the ref handle:
 

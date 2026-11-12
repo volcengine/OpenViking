@@ -20,6 +20,7 @@ export default function FilePreviewActionsDemo() {
   const text = messages[locale];
   const [mode, setMode] = useState(4);
   const [fail, setFail] = useState(false);
+  const [customToolbar, setCustomToolbar] = useState(false);
   const [notice, setNotice] = useState('');
   const [content, setContent] = useState(
     '# Guide\n\nOpenViking preview actions.',
@@ -42,7 +43,7 @@ export default function FilePreviewActionsDemo() {
           : copyIcon,
     className,
     onClick: async () => {
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      await new Promise((resolve) => setTimeout(resolve, 2000));
       if (fail) throw new Error(text.failure);
       setNotice(`${text.done}: ${label}`);
       return { key, simulated: true }; // Non-void results are valid and ignored.
@@ -115,10 +116,17 @@ export default function FilePreviewActionsDemo() {
           />{' '}
           {text.fail}
         </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={customToolbar}
+            onChange={(event) => setCustomToolbar(event.target.checked)}
+          />{' '}
+          {text.customToolbar}
+        </label>
       </div>
       <div className="ov-demo-surface" style={{ height: 300 }}>
         <FilePreview
-          key={mode}
           locale={locale}
           toolbar={{
             copyPath: showPath,
@@ -142,6 +150,21 @@ export default function FilePreviewActionsDemo() {
                 },
               },
               actions: layouts[mode],
+              slots: {
+                actions: customToolbar ? (
+                  <span>{text.customToolbar}</span>
+                ) : undefined,
+              },
+            },
+            {
+              kind: 'file',
+              key: 'second',
+              source: {
+                fileName: 'second.md',
+                path: 'viking://resources/second.md',
+                content: '# Second file',
+              },
+              actions: [history],
             },
           ]}
         />

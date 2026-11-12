@@ -21,6 +21,7 @@ export const deleteIcon = icon(
 export const messages = {
   'zh-CN': {
     mode: '操作布局',
+    customToolbar: '自定义工具栏',
     showModes: '显示模式切换',
     showEdit: '显示编辑',
     showPath: '显示复制路径',
@@ -32,10 +33,11 @@ export const messages = {
     fail: '模拟失败',
     failure: '模拟失败，请重试',
     done: '模拟完成',
-    hint: '模拟操作：单个显示图标；多个 hover 展开。勾选失败后，可取消勾选再重试。',
+    hint: '模拟操作等待 2 秒。执行时可切换页签、修改或替换工具栏，再返回检查状态；取消勾选失败后可重试。',
   },
   'en-US': {
     mode: 'Action layout',
+    customToolbar: 'Custom toolbar',
     showModes: 'Show view switch',
     showEdit: 'Show edit',
     showPath: 'Show copy path',
@@ -53,6 +55,6 @@ export const messages = {
     fail: 'Simulate failure',
     failure: 'Simulated failure; try again',
     done: 'Simulated completion',
-    hint: 'Demo commands: a single icon, or hover to open multiple actions. Uncheck failure to retry.',
+    hint: 'Demo commands wait 2 seconds. Switch tabs, edit or replace the toolbar and return to check pending state. Uncheck failure to retry.',
   },
 };

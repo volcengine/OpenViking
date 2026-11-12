@@ -67,3 +67,53 @@ for (const fails of [false, true]) {
     }
   });
 }
+
+test('settling one resource does not unlock a different pending resource', async () => {
+  let resolveA, resolveB;
+  const a = new Promise((resolve) => {
+    resolveA = resolve;
+  });
+  const b = new Promise((resolve) => {
+    resolveB = resolve;
+  });
+  const render = (activeKey) =>
+    h(FilePreview, {
+      activeKey,
+      tabs: ['a', 'b'].map((key) => ({
+        kind: 'file',
+        key,
+        source: {
+          fileName: key + '.md',
+          path: 'viking://resources/' + key + '.md',
+          content: '',
+        },
+        actions: [
+          {
+            key: 'run',
+            label: 'Run ' + key,
+            icon: h('svg'),
+            onClick: () => (key === 'a' ? a : b),
+          },
+        ],
+      })),
+    });
+  const view = await mount(render('a'));
+  try {
+    await click(button('Run a'));
+    await view.render(render('b'));
+    await click(button('Run b'));
+    assert.equal(button('Run b').disabled, true);
+    await act(async () => resolveA());
+    assert.equal(button('Run b').disabled, true);
+    await view.render(render('a'));
+    assert.equal(button('Run a').disabled, false);
+    await view.render(render('b'));
+    assert.equal(button('Run b').disabled, true);
+    await act(async () => resolveB());
+    assert.equal(button('Run b').disabled, false);
+  } finally {
+    resolveA();
+    resolveB();
+    await view.unmount();
+  }
+});
