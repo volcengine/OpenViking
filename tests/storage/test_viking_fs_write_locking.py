@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.pyagfs.exceptions import AGFSHTTPError, AGFSNotFoundError
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.session.user_id import UserIdentifier
@@ -199,6 +200,66 @@ async def test_append_file_holds_exact_lease_across_read_and_write(monkeypatch):
     )
     assert fake.events[3][3]["lease_ref"] == "lease-1"
     assert fake.events[4] == ("release", {"lease_ref": "lease-1"})
+
+
+class _AsyncNewFileAppendAGFS:
+    """Async AGFS stub whose read signals a missing file the way the native binding does."""
+
+    def __init__(self, not_found_exc):
+        self.not_found_exc = not_found_exc
+        self.written = None
+        self.released = False
+
+    async def pathlock_acquire_exact(self, path):
+        return {"lease_ref": "lease-1"}
+
+    async def pathlock_release(self, lease):
+        self.released = True
+
+    async def read(self, path, fs_ctx=None):
+        raise self.not_found_exc
+
+    async def write(self, path, data, fs_ctx=None, **_kwargs):
+        self.written = bytes(data)
+        return len(data)
+
+
+@pytest.mark.parametrize(
+    "not_found_exc",
+    [
+        FileNotFoundError("/local/default/resources/a.md"),
+        AGFSHTTPError("not found", status_code=404),
+        AGFSNotFoundError("/local/default/resources/a.md"),
+    ],
+    ids=["file-not-found", "http-404", "native-not-found"],
+)
+@pytest.mark.asyncio
+async def test_append_file_to_new_file_creates_it_for_every_not_found_signal(
+    monkeypatch, not_found_exc
+):
+    """The first append to a missing file must create it, whatever not-found form the backend raises.
+
+    The native binding signals a missing file with AGFSNotFoundError; append_file used to
+    swallow only FileNotFoundError and AGFSHTTPError(404), so the canonical native form
+    escaped as NotFoundError instead of writing the file.
+    """
+    fake = _AsyncNewFileAppendAGFS(not_found_exc)
+    fs = VikingFS(agfs=_FakeAGFS())
+    fs._async_agfs = fake  # type: ignore[assignment]
+
+    monkeypatch.setattr(fs, "_ensure_parent_dirs", AsyncMock())
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+    monkeypatch.setattr(
+        fs,
+        "_uri_to_path",
+        lambda _uri, **_kwargs: "/local/default/resources/a.md",
+    )
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
+
+    await fs.append_file("viking://resources/a.md", "first line\n")
+
+    assert fake.written == b"first line\n"
+    assert fake.released
 
 
 class _AsyncBusyAppendAGFS:
