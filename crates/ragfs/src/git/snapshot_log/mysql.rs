@@ -9,6 +9,8 @@ use super::store::{
     SnapshotLogRow, SnapshotLogStore,
 };
 
+const MYSQL_INSERT_BATCH_ROWS: usize = 1_000;
+
 const MYSQL_SCHEMA: &str = r#"CREATE TABLE IF NOT EXISTS snapshot_log (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   account VARBINARY(255) NOT NULL,
@@ -99,17 +101,17 @@ impl SnapshotLogStore for MySqlSnapshotLogStore {
             parent_commit_oid,
             latest.as_ref().map(|(_, oid)| oid.as_str()),
         )?;
-        for row in rows {
-            sqlx::query(
-                "INSERT INTO snapshot_log (account, branch, path, commit_oid) \
-                 VALUES (?, ?, ?, ?)",
-            )
-            .bind(account)
-            .bind(branch)
-            .bind(&row.path)
-            .bind(&row.commit_oid)
-            .execute(&mut *tx)
-            .await?;
+        for chunk in rows.chunks(MYSQL_INSERT_BATCH_ROWS) {
+            let mut builder =
+                QueryBuilder::<MySql>::new("INSERT INTO snapshot_log (account, branch, path, commit_oid) ");
+            builder.push_values(chunk, |mut row_builder, row| {
+                row_builder
+                    .push_bind(account)
+                    .push_bind(branch)
+                    .push_bind(&row.path)
+                    .push_bind(&row.commit_oid);
+            });
+            builder.build().execute(&mut *tx).await?;
         }
         tx.commit().await?;
         Ok(())

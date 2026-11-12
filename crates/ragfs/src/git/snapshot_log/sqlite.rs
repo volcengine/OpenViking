@@ -11,6 +11,8 @@ use super::store::{
     SnapshotLogRow, SnapshotLogStore,
 };
 
+const SQLITE_INSERT_BATCH_ROWS: usize = 200;
+
 const SQLITE_SCHEMA: &[&str] = &[
     r#"CREATE TABLE IF NOT EXISTS snapshot_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,17 +116,17 @@ impl SnapshotLogStore for SqliteSnapshotLogStore {
                 parent_commit_oid,
                 latest.as_ref().map(|(_, oid)| oid.as_str()),
             )?;
-            for row in rows {
-                sqlx::query(
-                    "INSERT INTO snapshot_log (account, branch, path, commit_oid) \
-                     VALUES (?, ?, ?, ?)",
-                )
-                .bind(account)
-                .bind(branch)
-                .bind(&row.path)
-                .bind(&row.commit_oid)
-                .execute(&mut *conn)
-                .await?;
+            for chunk in rows.chunks(SQLITE_INSERT_BATCH_ROWS) {
+                let mut builder =
+                    QueryBuilder::<Sqlite>::new("INSERT INTO snapshot_log (account, branch, path, commit_oid) ");
+                builder.push_values(chunk, |mut row_builder, row| {
+                    row_builder
+                        .push_bind(account)
+                        .push_bind(branch)
+                        .push_bind(&row.path)
+                        .push_bind(&row.commit_oid);
+                });
+                builder.build().execute(&mut *conn).await?;
             }
             Ok::<(), SnapshotLogError>(())
         }

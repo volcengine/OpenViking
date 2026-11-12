@@ -628,7 +628,8 @@ def _build_git_config_dict(git_config: Any, storage_path: Path) -> Dict[str, Any
     any TOML file. For ``backend == "local"`` a ``local`` sub-dict is emitted
     (defaulting ``base_dir`` to ``{storage_path}/.ovgit`` when empty); for
     ``backend == "s3"`` an ``s3`` sub-dict is emitted with keys matching the Rust
-    ``GitS3ConfigPy`` struct.
+    ``GitS3ConfigPy`` struct. ``snapshot_log`` is copied verbatim from the
+    Python config model because the Rust binding reads it from this inline dict.
     """
     backend = getattr(git_config, "backend", "local")
     result: Dict[str, Any] = {
@@ -638,6 +639,12 @@ def _build_git_config_dict(git_config: Any, storage_path: Path) -> Dict[str, Any
         "author_name": getattr(git_config, "author_name", "viking-bot"),
         "author_email": getattr(git_config, "author_email", "bot@viking.local"),
     }
+    snapshot_log = getattr(git_config, "snapshot_log", None)
+    if snapshot_log is not None:
+        if hasattr(snapshot_log, "model_dump"):
+            result["snapshot_log"] = snapshot_log.model_dump(mode="json", exclude_none=True)
+        elif isinstance(snapshot_log, dict):
+            result["snapshot_log"] = snapshot_log
 
     if backend == "s3":
         s3_cfg = getattr(git_config, "s3", None)

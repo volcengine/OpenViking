@@ -162,21 +162,14 @@ async fn run_snapshot_log_backfill(
     }
 
     chain.reverse();
-    if latest_oid.is_some() && !chain.is_empty() {
-        chain.remove(0);
-    }
+    let mut parent_tree = if latest_oid.is_some() && !chain.is_empty() {
+        Some(chain.remove(0).1.tree)
+    } else {
+        None
+    };
 
     for (commit_oid, meta) in chain {
         let parent_oid = meta.parents.first().copied();
-        let parent_tree = match parent_oid {
-            Some(parent_oid) => Some(
-                load_commit_meta(object_store.as_ref(), &account, &parent_oid)
-                    .await
-                    .map_err(|err| err.to_string())?
-                    .tree,
-            ),
-            None => None,
-        };
         let changed_paths: Vec<String> =
             crate::git::tree_builder::diff_trees(
                 object_store.as_ref(),
@@ -205,6 +198,7 @@ async fn run_snapshot_log_backfill(
             Err(err) if err.is_stale_latest() => return Ok(()),
             Err(err) => return Err(err.to_string()),
         }
+        parent_tree = Some(meta.tree);
     }
 
     Ok(())

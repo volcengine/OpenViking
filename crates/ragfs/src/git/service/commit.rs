@@ -222,6 +222,7 @@ impl GitService {
                         Ok(_) => {
                             // File: take it verbatim, subject to pruning and ignore.
                             cleanup_exact.insert(p.clone());
+                            cleanup_prefixes.push(format!("{}/", p));
                             if include_path(p) {
                                 set.insert(p.clone());
                             } else if let Some(t) = prev_tree {
@@ -532,13 +533,42 @@ impl GitService {
                         }
                         None => None,
                     };
-                    if prev_entry.map(|(o, _)| o) != Some(oid) {
+                    let prev_was_tree = prev_entry
+                        .as_ref()
+                        .map(|(_, mode)| mode.is_tree())
+                        .unwrap_or(false);
+                    if prev_entry.as_ref().map(|(o, _)| *o) != Some(oid) {
                         editor
                             .upsert(self.object_store.as_ref(), &account, &rel_path, oid)
                             .await?;
                         changed += 1;
                         #[cfg(feature = "snapshot_log")]
-                        actual_changed_paths.push(rel_path.clone());
+                        {
+                            actual_changed_paths.push(rel_path.clone());
+                            if prev_was_tree {
+                                if prev_paths_cache.is_none() {
+                                    if let Some(prev_tree_oid) = prev_tree {
+                                        prev_paths_cache = Some(
+                                            crate::git::tree_builder::flatten(
+                                                self.object_store.as_ref(),
+                                                &account,
+                                                prev_tree_oid,
+                                                &None,
+                                            )
+                                            .await?,
+                                        );
+                                    }
+                                }
+                                let pref = format!("{}/", rel_path);
+                                if let Some(prev_paths) = &prev_paths_cache {
+                                    for (path, _) in prev_paths {
+                                        if path.starts_with(&pref) {
+                                            actual_changed_paths.push(path.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     // Record in the new index regardless of whether the editor

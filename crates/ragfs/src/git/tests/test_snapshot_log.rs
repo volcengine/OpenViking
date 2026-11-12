@@ -46,6 +46,45 @@ async fn test_snapshot_log_commit_indexes_file_and_directory_paths() {
     assert_eq!(dir_oids, vec![c2, c1]);
 }
 
+/// Verifies file-over-directory replacement indexes deleted descendant paths.
+#[tokio::test]
+async fn test_snapshot_log_file_replacing_directory_indexes_descendant_deletes() {
+    let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct_snapshot_replace");
+    let store = make_snapshot_log_store().await;
+    let svc = svc.with_snapshot_log(Some(store));
+
+    vfs.put("docs/old.md", b"v1");
+    let c1 = make_commit(&svc, "acct_snapshot_replace", "main", "first").await;
+
+    vfs.delete("docs/old.md");
+    vfs.put("docs", b"now a file");
+    let c2 = match svc
+        .commit(req(
+            "acct_snapshot_replace",
+            "main",
+            "replace directory with file",
+            Some(vec!["docs".into()]),
+        ))
+        .await
+        .unwrap()
+    {
+        CommitResponse::Created { commit_oid, .. } => commit_oid,
+        other => panic!("expected Created, got {other:?}"),
+    };
+
+    let log = svc
+        .log(LogRequest {
+            account: "acct_snapshot_replace".into(),
+            branch: "main".into(),
+            limit: 10,
+            paths: Some(vec!["docs/old.md".into()]),
+        })
+        .await
+        .unwrap();
+    let oids: Vec<ObjectId> = log.into_iter().map(|entry| entry.oid).collect();
+    assert_eq!(oids, vec![c2, c1]);
+}
+
 #[tokio::test]
 async fn test_snapshot_log_tail_scan_merges_when_latest_is_behind_head() {
     let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct_snapshot_tail");
