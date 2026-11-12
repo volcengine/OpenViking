@@ -574,10 +574,11 @@ The most common labels you will use while investigating dashboards are:
 
 ## Optional Kafka event reporting
 
-Install `openviking[reporting]` and enable `server.observability.reporting.enabled`
-to read Kafka connection, authentication and topic settings from an external JSON
-file (`NACOS_CONFIG_FILE`) or the configured Nacos service. Reporting is disabled
-by default and export failures do not interrupt business requests.
+Install `openviking[reporting]` and enable both `server.observability.reporting.enabled`
+and `server.observability.reporting.telemetry.enabled` in `ov.conf`.
+The exporter reads Kafka connection, authentication and topic settings from
+`reporting.kafka`, and queue and deployment settings from `reporting.telemetry`.
+Reporting is disabled by default and export failures do not interrupt business requests.
 
 The exporter uses an in-memory queue; `telemetry.queue_capacity` must be a positive
 integer (default `1024`). Full queues, exhausted delivery retries and process
@@ -586,9 +587,10 @@ warnings containing counts only. This exporter is suitable for best-effort analy
 it does not provide a durable audit or billing ledger. Allow a graceful shutdown to
 drain the queue before stopping the process.
 
-Deployments may bind an outer account and instance with `OV_METRICS_ACCOUNT_ID`
-and `OV_RESOURCE_ID`; original space and member identities remain in
-`ov_account_id` and `ov_user_id`. Set `OV_MODEL_COST_BEARER` to `customer` or `ov`
+Deployments may set `account_id`, `resource_id` and `region` in `reporting.telemetry.deployment`.
+`OV_METRICS_ACCOUNT_ID`, `OV_RESOURCE_ID` and `OV_REGION` remain fallback values.
+Original space and member identities remain in `ov_account_id` and `ov_user_id`.
+Set `OV_MODEL_COST_BEARER` to `customer` or `ov`
 only when the deployment knows who owns its model credentials. Otherwise the
 owner stays `unknown`. For mixed credentials, trusted provisioning should set
 `cost_bearer` (`ov`, `customer`, or `unknown`) on each VLM or embedding credential.
@@ -613,9 +615,24 @@ When ROOT provisions or rotates account model credentials through the configurat
 client. Model sections remain ROOT-only; account admins and members cannot set billing
 ownership through the configuration API.
 
-The optional Nacos reporter uses explicitly configured `nacos_namespace`,
-`nacos_data_id` and `nacos_group` first, then `NACOS_NAMESPACE`, `NACOS_DATA_ID`
-and `NACOS_GROUP`, with defaults `public`, `global_configs` and `DEFAULT_GROUP`.
+Example value for `server.observability.reporting` in `ov.conf`:
+
+```json
+{
+  "enabled": true,
+  "kafka": {
+    "bootstrap_servers": "broker.example:9092",
+    "topic": "metric-log"
+  },
+  "telemetry": {
+    "enabled": true
+  }
+}
+```
+
+To migrate from Nacos or an external reporting JSON file, move its `kafka` and
+`telemetry` sections into `ov.conf` and restart the kernel. Supply literal strings
+in `reporting`, including any Kafka credentials.
 
 ## Related Documentation
 
