@@ -60,14 +60,24 @@ def _build_profile_roots() -> tuple[Path, ...]:
 PROFILE_ROOTS = _build_profile_roots()
 
 
-def profile_enabled(request: Request) -> bool:
+async def _prepare_profile_request(request: Request) -> tuple[bool, list[bytes]]:
     server_config = getattr(request.app.state, "config", None)
     if server_config is not None and not getattr(server_config, "profile_enabled", False):
-        return False
-    value = request.query_params.get("profile")
-    if value is None:
-        return False
-    return value.strip().lower() in PROFILE_TRUE_VALUES
+        return False, []
+    body, value = [], None
+    media_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if request.method == "POST" and media_type == "application/json":
+        body.append(await request.body())
+        try:
+            payload = json.loads(body[0])
+            if isinstance(payload, dict) and "profile" in payload:
+                value = payload.pop("profile")
+                body[0] = json.dumps(payload).encode()
+                MutableHeaders(scope=request.scope)["content-length"] = str(len(body[0]))
+        except ValueError:
+            pass
+    value = request.query_params.get("profile", value)
+    return str(value).strip().lower() in PROFILE_TRUE_VALUES, body
 
 
 def _infer_module_suffix(path: Path) -> str:
@@ -173,7 +183,14 @@ class ProfileMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not profile_enabled(Request(scope)):
+        if scope["type"] == "http":
+            enabled, body = await _prepare_profile_request(Request(scope, receive))
+
+            async def replay_body(receive: Receive = receive) -> Message:
+                return {"type": "http.request", "body": body.pop()} if body else await receive()
+
+            receive = replay_body if body else receive
+        if scope["type"] != "http" or not enabled:
             await self.app(scope, receive, send)
             return
 
