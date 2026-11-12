@@ -242,6 +242,33 @@ async def test_stream_text_precedes_tool_completion_and_cancel_closes():
     assert closed and not loop.capture.complete
 
 
+def test_repeated_tool_call_fields_keep_the_first_value():
+    """Some gateways resend the call in every delta, with an empty id and the same name."""
+    adapter = tool_protocol("chat")({"messages": [], "tools": []})
+    adapter.begin()
+    deltas = [
+        {
+            "index": 0,
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": ""},
+        },
+        {
+            "index": 0,
+            "id": "",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "Beijing"}'},
+        },
+    ]
+    for delta in deltas:
+        adapter.event({"choices": [{"index": 0, "delta": {"tool_calls": [delta]}}]})
+    adapter.event({"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]})
+    calls = adapter.end().calls
+    assert [call["id"] for call in calls] == ["call_1"]
+    assert [call["function"]["name"] for call in calls] == ["get_weather"]
+    assert calls[0]["function"]["arguments"] == '{"city": "Beijing"}'
+
+
 def gateway_call(name, arguments, identifier="g-1"):
     if not isinstance(arguments, str):
         arguments = orjson.dumps(arguments).decode()
