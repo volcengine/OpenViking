@@ -29,7 +29,11 @@ export async function mount(transport, props = {}, provider = {}) {
               fetch: transport,
               ...config,
             },
-            createElement(Console, { defaultMode: 'command', ...next }),
+            createElement(Console, {
+              defaultMode: 'command',
+              conversation: { messages: [] },
+              ...next,
+            }),
           ),
         ),
       ),

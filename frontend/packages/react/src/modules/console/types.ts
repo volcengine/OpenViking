@@ -1,6 +1,11 @@
 import type { Locale } from '../../shared/locale.js';
-import type { HTMLAttributes, ReactNode } from 'react';
+import type { HTMLAttributes, ReactNode, SetStateAction } from 'react';
 import type { OvRequestOptions } from '../../client/types.js';
+import type {
+  UseVikingBotChatOptions,
+  VikingBotChatService,
+  VikingBotSessionService,
+} from '../viking-bot/index.js';
 import type {
   CommandConsoleCommandDefinition,
   CommandConsoleLabels,
@@ -73,6 +78,13 @@ export interface ConsoleProps
    * an empty array shows no built-in empty state.
    */
   quickCommands?: readonly CommandConsoleQuickCommand[];
+  /** Native chat by default. Supply a stable service to adapt a non-native backend. */
+  chatOptions?: Omit<
+    UseVikingBotChatOptions,
+    'enabled' | 'sessionId' | 'initialMessages'
+  > & {
+    service?: VikingBotChatService & VikingBotSessionService;
+  };
   /** Host-owned conversation state/capabilities. Omit draft callbacks to use Console's local draft. */
   conversation?: Partial<VikingBotProps>;
   /** Reports navigation intent; the host opens the resource. */
@@ -97,7 +109,7 @@ export interface ConsoleResult extends ConsoleState {
   commands: readonly CommandConsoleCommandDefinition[];
   setMode: (mode: ConsoleMode) => void;
   setCommand: (command: string) => void;
-  setConversationDraft: (draft: string) => void;
+  setConversationDraft: (draft: SetStateAction<string>) => void;
   execute: (command?: string) => Promise<void>;
   retry: () => Promise<void>;
   cancel: () => void;

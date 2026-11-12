@@ -7,6 +7,47 @@ import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 
 type SubmitProps = Parameters<NonNullable<SenderProps['renderSubmit']>>[0];
 
+export function VikingBotSubmitActions({
+  props,
+  streaming,
+  canSteer,
+  onCancel,
+  labels,
+}: {
+  props: SubmitProps;
+  streaming?: boolean;
+  canSteer?: boolean;
+  onCancel?: () => void;
+  labels: { send: string; stop: string };
+}) {
+  if (!streaming)
+    return <VikingBotSubmit {...props} sending={false} label={labels.send} />;
+  if (!canSteer)
+    return onCancel ? (
+      <VikingBotSubmit
+        {...props}
+        sending
+        onStop={onCancel}
+        label={labels.stop}
+      />
+    ) : (
+      <VikingBotSubmit
+        {...props}
+        sending={false}
+        disabled
+        label={labels.send}
+      />
+    );
+  return (
+    <div className="ov-viking-bot__submit-actions">
+      {onCancel ? (
+        <VikingBotSubmit sending onStop={onCancel} label={labels.stop} />
+      ) : null}
+      <VikingBotSubmit {...props} sending={false} label={labels.send} />
+    </div>
+  );
+}
+
 export function VikingBotSubmit({
   onSend,
   onStop,

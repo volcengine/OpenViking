@@ -3,6 +3,7 @@
 [English](README.md) / 中文
 
 `modules/` 存放区块。每个区块由内部 Hook 和组合组件组成：Hook 加载数据、适配数据并维护状态，组合组件把 Hook 返回的数据和操作接入 `components/` 的视图。宿主直接使用组合组件，自行组装完整页面。
+VikingBot 是无头模块：从 `@openviking/react/modules/viking-bot` 导入 `useVikingBotChat`、`useVikingBotSessions` 及契约。Console 默认内置调用；独立 VikingBot 宿主也可直接使用。它不导出组合视图或 CSS，Hook 不从包根或 Console 转导出。
 
 ## 区块
 
@@ -11,14 +12,15 @@
 | `file-browser`  | `FileBrowser`  | `@openviking/react/modules/file-browser`  | 围绕同一个当前资源的目录树、搜索与文件预览                        |
 | `console`       | `Console`      | `@openviking/react/modules/console`       | 同一面板内的对话（`VikingBot`）与命令（`CommandConsole`）两种模式 |
 | `scope-cascade` | `ScopeCascade` | `@openviking/react/modules/scope-cascade` | 级联的库、空间与用户选择器                                        |
+| `viking-bot`    | 无头 Hook      | `@openviking/react/modules/viking-bot`    | 对话请求、流式状态与会话管理，无组合视图或 CSS                    |
 
 每个区块还有样式入口 `@openviking/react/modules/<区块>/style.css`，它包含所组合组件的样式。用法、属性和示例见[区块文档](../../../../docs/docs/zh/modules/index.mdx)。
 
 ## 职责
 
-- `useFileBrowser` 与 `useConsole` 是内部实现。它们通过共享 Client 调用 OpenViking 原生 API，继承 Provider 的请求配置，管理加载、空态、错误、分页、刷新、重试，并清理仍在进行的请求。`ScopeCascade` 自己不发请求：三个加载函数由宿主提供。`Console` 只发命令请求，对话视图的数据和回调由宿主通过 `conversation` 传入。
+- `useFileBrowser` 与 `useConsole` 是内部实现。它们通过共享 Client 调用 OpenViking 原生 API，继承 Provider 的请求配置，管理加载、空态、错误、分页、刷新、重试，并清理仍在进行的请求。`ScopeCascade` 自己不发请求：三个加载函数由宿主提供。`Console` 通过 VikingBot 模块发送原生对话请求，也允许宿主通过 `conversation` 接管。
 - 组合组件把 Hook 返回的数据和操作交给 `components/` 的视图，并协调区块内的交互。
-- 宿主直接使用组合组件，不导出无头 Hook 或控制器。
+- 除上述 VikingBot 无头模块外，宿主直接使用组合组件，不导出其内部 Hook 或控制器。
 - 标准接入只需要服务地址与鉴权，不要求逐区块实现数据 Adapter。非标准网关由宿主在请求接入层统一适配。登录、账号作用域、路由、权限执行、页面布局及产品专属流程由宿主负责。
 - 区块粒度以共同完成的交互流程为准：目录、搜索和预览组成 `file-browser`；对话与命令组成 `console`。宿主组合区块，不按内部视图分别接入。
 

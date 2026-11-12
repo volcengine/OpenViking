@@ -6,6 +6,7 @@ import {
   VikingBotSessionActions,
 } from '../../components/viking-bot/index.js';
 import { useConsole } from './use-console.js';
+import { useConversation } from './use-conversation.js';
 import { consoleCommandGroups, consoleQuickCommands } from './commands.js';
 import { consoleLabels } from './labels.js';
 import { ConsoleToolbar } from './console-toolbar.js';
@@ -21,6 +22,7 @@ export function Console({
   onModeChange,
   onOpenUri,
   conversation,
+  chatOptions,
   slots,
   labels: overrides,
   className,
@@ -36,7 +38,11 @@ export function Console({
     onModeChange,
   });
   const labels = consoleLabels(locale, overrides);
-  const { sessions, headerActions, ...conversationProps } = conversation ?? {};
+  const managedConversation = useConversation(
+    { conversation, chatOptions, scopeKey, requestOptions, locale },
+    state.setConversationDraft,
+  );
+  const { sessions, headerActions, ...conversationProps } = managedConversation;
   const botLocale = conversationProps.locale ?? locale;
   const botLabels = {
     ...consoleLabels(botLocale, overrides).vikingBot,
