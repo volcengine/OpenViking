@@ -106,6 +106,12 @@ Existing UUID/hash schemas acquire the additional subtree index at initializatio
 without changing lease records. Index creation is transactional and subject to the
 DDL timeout; provision it separately before startup if a large table needs longer.
 
+While holding the namespace advisory lock, each transaction caches exact-path
+token reads, including absent records. Successful writes and deletes update the
+cache; stale cleanup invalidates affected paths only when it removes records.
+The cache is discarded at transaction end, so subsequent operations read the
+latest committed state. Conflict and holder rules are unchanged.
+
 Acquisition, renewal, expiry checks, and handoff rollback use the primary's
 `clock_timestamp()`. The client supplies the lease duration. Expired holders
 cannot renew; after takeover an old owner cannot renew or release the new lock.
@@ -125,9 +131,12 @@ is 5 seconds, statement timeout 5 seconds, and SQL lock timeout 1 second. Databa
 contention returns Busy, distinct from a path conflict. These bound server waits,
 not the total request during network blackholes or blocking-worker saturation.
 
-Failed operations discard the connection; later operations reconnect. Mutations
-are never automatically replayed after a database/commit error because a lost
-commit response can leave the outcome unknown. Orphaned leases expire normally.
+Path conflicts retain the connection only after a successful explicit rollback
+and a check that the connection is still open. Other errors, including SQL,
+commit, or rollback failures, discard the connection; later independent
+operations reconnect. Mutations are never automatically replayed after a
+database/commit error because a lost commit response can leave the outcome
+unknown. Orphaned leases expire normally.
 
 ## Limits
 

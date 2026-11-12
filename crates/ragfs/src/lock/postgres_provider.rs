@@ -4,6 +4,7 @@
 //! This protects absent paths and subtree predicates, not just existing rows.
 //! All cooperating writers must use this provider and the same primary database.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -381,25 +382,36 @@ fn normalize_token_time(value: &mut LockToken, previous: Option<&LockToken>, db_
 struct TxStore<'a, 'b> {
     tx: &'a mut Transaction<'b>,
     namespace: &'a str,
+    // The namespace gate protects both existing and absent paths. Keep this
+    // cache inside the transaction, and synchronize it after successful writes.
+    reads: HashMap<String, Option<LockToken>>,
+    #[cfg(test)]
+    read_queries: usize,
 }
 
 impl TxStore<'_, '_> {
     fn delete(&mut self, path: &str) -> PathLockResult<bool> {
-        self.tx
+        let count = self
+            .tx
             .execute(
                 "DELETE FROM public.ov_pathlock_tokens
                  WHERE md5(namespace)=md5($1) AND namespace=$1
                  AND md5(path)=md5($2) AND path=$2",
                 &[&self.namespace, &path],
             )
-            .map(|count| count == 1)
-            .map_err(db_error)
+            .map_err(db_error)?;
+        self.reads.insert(path.into(), None);
+        Ok(count == 1)
     }
 }
 
 impl HolderStore for TxStore<'_, '_> {
     fn get(&mut self, path: &str) -> PathLockResult<Option<LockToken>> {
-        self.tx
+        if let Some(value) = self.reads.get(path) {
+            return Ok(value.clone());
+        }
+        let value = self
+            .tx
             .query_opt(
                 "SELECT token FROM public.ov_pathlock_tokens
                  WHERE md5(namespace)=md5($1) AND namespace=$1
@@ -409,7 +421,13 @@ impl HolderStore for TxStore<'_, '_> {
             .map_err(db_error)?
             .as_ref()
             .map(token)
-            .transpose()
+            .transpose()?;
+        #[cfg(test)]
+        {
+            self.read_queries += 1;
+        }
+        self.reads.insert(path.into(), value.clone());
+        Ok(value)
     }
 
     fn put(&mut self, path: &str, value: &LockToken) -> PathLockResult<()> {
@@ -445,6 +463,7 @@ impl HolderStore for TxStore<'_, '_> {
                 )
                 .map_err(db_error)?;
         }
+        self.reads.insert(path.into(), Some(value.clone()));
         Ok(())
     }
 
@@ -456,7 +475,7 @@ impl HolderStore for TxStore<'_, '_> {
         stale: u128,
     ) -> PathLockResult<usize> {
         if !subtree {
-            return self
+            let count = self
                 .tx
                 .execute(
                     "DELETE FROM public.ov_pathlock_tokens
@@ -464,11 +483,15 @@ impl HolderStore for TxStore<'_, '_> {
                      AND md5(path)=md5($2) AND path=$2 AND owner<>$3 AND time_ns<$4",
                     &[&self.namespace, &path, &owner, &timestamp(stale)],
                 )
-                .map(|count| count as usize)
-                .map_err(db_error);
+                .map_err(db_error)?;
+            if count > 0 {
+                self.reads.insert(path.into(), None);
+            }
+            return Ok(count as usize);
         }
         let (lower, upper) = descendant_bounds(path);
-        self.tx
+        let count = self
+            .tx
             .execute(
                 "DELETE FROM public.ov_pathlock_tokens
              WHERE md5(namespace)=md5($1) AND namespace=$1 AND owner<>$2
@@ -487,8 +510,17 @@ impl HolderStore for TxStore<'_, '_> {
                     &upper,
                 ],
             )
-            .map(|count| count as usize)
-            .map_err(db_error)
+            .map_err(db_error)?;
+        if count > 0 {
+            // Some rows survive the owner/expiry predicate. Re-read affected
+            // entries rather than treating the entire subtree as absent.
+            self.reads.retain(|cached, _| {
+                cached != path
+                    && !(cached.as_str() >= lower.as_str() && cached.as_str() < upper.as_str())
+            });
+        }
+        // A no-op cleanup must retain shared-ancestor and negative reads.
+        Ok(count as usize)
     }
 
     fn live_descendant(
@@ -593,6 +625,7 @@ impl PostgresPathLockProvider {
             let client = connection.as_mut().unwrap();
             // Never replay an operation after a connection/commit failure. Its outcome
             // may be unknown; only a subsequent, separate operation may reconnect.
+            let mut reuse_connection = false;
             let result = (|| {
                 // Obtain a fresh snapshot after waiting for the advisory lock,
                 // even when the connection's default isolation is Repeatable Read.
@@ -611,12 +644,29 @@ impl PostgresPathLockProvider {
                 let result = operation(&mut TxStore {
                     tx: &mut tx,
                     namespace: &namespace,
-                })?;
-                tx.commit().map_err(db_error)?;
-                Ok(result)
+                    reads: HashMap::new(),
+                    #[cfg(test)]
+                    read_queries: 0,
+                });
+                match result {
+                    Ok(value) => {
+                        tx.commit().map_err(db_error)?;
+                        reuse_connection = true;
+                        Ok(value)
+                    }
+                    Err(error) => {
+                        // Retain a business-conflict connection only after the
+                        // server confirms rollback. Drop alone cannot tell us
+                        // whether rollback failed on an otherwise open socket.
+                        tx.rollback().map_err(db_error)?;
+                        reuse_connection = matches!(error, PathLockError::Conflict { .. });
+                        Err(error)
+                    }
+                }
             })();
-            // Discard on every error, including failed rollback on an open socket.
-            if result.is_err() {
+            // SQL/setup, commit and rollback failures remain conservative:
+            // discard, without replaying the operation.
+            if !reuse_connection || client.is_closed() {
                 *connection = None;
             }
             result
@@ -726,6 +776,7 @@ impl PathLockProvider for PostgresPathLockProvider {
         );
         self.run(move |store| {
             let (now, stale) = clock(store.tx, now, stale)?;
+            // Bulk expiry runs before any cached reads in this transaction.
             let cleaned = store
                 .tx
                 .execute(
@@ -964,6 +1015,430 @@ impl PathLockProvider for PostgresPathLockProvider {
             Ok(Some(false))
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    async fn provider(namespace: &str) -> PostgresPathLockProvider {
+        let namespace = namespace.to_owned();
+        tokio::task::spawn_blocking(move || {
+            PostgresPathLockProvider::from_env("OV_TEST_PG_DSN", &namespace, 30.0).unwrap()
+        })
+        .await
+        .unwrap()
+    }
+
+    fn value(owner: &str, time: u128) -> LockToken {
+        LockToken::held(owner, "h", PathLockKind::Exact, time)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires OV_TEST_PG_DSN"]
+    async fn cached_reads_observe_insert_update_delete_and_return_independent_snapshots() {
+        let p = provider(&format!("cache-test-{}", uuid::Uuid::new_v4())).await;
+        p.run(|store| {
+            assert!(store.get("/a")?.is_none());
+            assert!(store.get("/a")?.is_none());
+            assert_eq!(store.read_queries, 1, "negative reads issue one SELECT");
+            let original = value("owner", 100);
+            store.put("/a", &original)?;
+            let mut snapshot = store.get("/a")?.unwrap();
+            snapshot.owner_id = "changed-locally".into();
+            assert_eq!(store.get("/a")?, Some(original));
+            let replacement = value("new-owner", 200);
+            store.put("/a", &replacement)?;
+            assert_eq!(store.get("/a")?, Some(replacement.clone()));
+            let persisted = store
+                .tx
+                .query_one(
+                    "SELECT token FROM public.ov_pathlock_tokens WHERE namespace=$1 AND path='/a'",
+                    &[&store.namespace],
+                )
+                .map_err(db_error)?;
+            assert_eq!(token(&persisted)?, replacement);
+            assert!(store.delete("/a")?);
+            assert!(store.get("/a")?.is_none());
+            assert!(!store.delete("/a")?);
+            assert_eq!(store.read_queries, 1);
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert!(p.read_token("/a").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires OV_TEST_PG_DSN"]
+    async fn stale_cleanup_invalidates_only_affected_paths_and_preserves_survivors() {
+        let p = provider(&format!("cache-test-{}", uuid::Uuid::new_v4())).await;
+        p.run(|store| {
+            for (path, owner, time) in [
+                ("/a", "other", 10),
+                ("/a/stale", "other", 10),
+                ("/a/live", "other", 200),
+                ("/a/owned", "owner", 10),
+                ("/ab", "other", 10),
+                ("/outside", "other", 10),
+            ] {
+                store.put(path, &value(owner, time))?;
+            }
+            assert!(store.get("/a/missing")?.is_none());
+            let reads = store.read_queries;
+            assert_eq!(store.remove_stale("/a/live", false, "owner", 100)?, 0);
+            assert_eq!(store.remove_stale("/a/missing", false, "owner", 100)?, 0);
+            assert!(store.get("/a/live")?.is_some());
+            assert!(store.get("/a/missing")?.is_none());
+            assert_eq!(store.read_queries, reads, "no-op cleanup preserves reads");
+            assert_eq!(store.remove_stale("/outside", false, "owner", 100)?, 1);
+            assert!(store.get("/outside")?.is_none());
+            assert_eq!(store.remove_stale("/a", true, "owner", 100)?, 2);
+            assert!(store.get("/a")?.is_none());
+            assert!(store.get("/a/stale")?.is_none());
+            assert_eq!(store.get("/a/live")?, Some(value("other", 200)));
+            assert_eq!(store.get("/a/owned")?, Some(value("owner", 10)));
+            let reads = store.read_queries;
+            assert!(store.get("/ab")?.is_some());
+            assert!(store.get("/outside")?.is_none());
+            assert_eq!(store.read_queries, reads, "prefix sibling stays cached");
+            // Root bounds also cover every descendant, including Unicode.
+            store.put("/中文/stale", &value("other", 10))?;
+            assert_eq!(store.remove_stale("/", true, "owner", 100)?, 2);
+            assert!(store.get("/ab")?.is_none());
+            assert!(store.get("/中文/stale")?.is_none());
+            assert!(store.get("/a/live")?.is_some());
+            assert!(store.get("/a/owned")?.is_some());
+            for path in ["/a/live", "/a/owned"] {
+                store.delete(path)?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires OV_TEST_PG_DSN"]
+    async fn cache_does_not_cross_transactions_or_hide_other_provider_updates() {
+        let ns = format!("cache-test-{}", uuid::Uuid::new_v4());
+        let first = provider(&ns).await;
+        let second = provider(&ns).await;
+        assert!(first.read_token("/a").await.unwrap().is_none());
+        second
+            .try_create_token("/a", &value("owner", 100))
+            .await
+            .unwrap();
+        let original = first.read_token("/a").await.unwrap().unwrap();
+        let replacement = value("next-owner", 200);
+        assert!(second
+            .compare_and_write_token("/a", &original, &replacement)
+            .await
+            .unwrap());
+        let current = first.read_token("/a").await.unwrap().unwrap();
+        assert_eq!(current.owner_id, "next-owner");
+        assert!(second
+            .compare_and_remove_token("/a", &current)
+            .await
+            .unwrap());
+        assert!(first.read_token("/a").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires OV_TEST_PG_DSN"]
+    async fn rollback_discards_cached_insert_update_and_delete() {
+        let p = provider(&format!("cache-test-{}", uuid::Uuid::new_v4())).await;
+        p.try_create_token("/existing", &value("owner", 100))
+            .await
+            .unwrap();
+        p.try_create_token("/deleted", &value("owner", 100))
+            .await
+            .unwrap();
+        let original = p.read_token("/existing").await.unwrap().unwrap();
+        let deleted = p.read_token("/deleted").await.unwrap().unwrap();
+        let result: PathLockResult<()> = p
+            .run(|store| {
+                store.put("/new", &value("owner", 100))?;
+                store.put("/existing", &value("other", 200))?;
+                store.delete("/deleted")?;
+                assert!(store.get("/new")?.is_some());
+                assert_eq!(store.get("/existing")?.unwrap().owner_id, "other");
+                assert!(store.get("/deleted")?.is_none());
+                Err(PathLockError::Conflict {
+                    lock_path: "/blocked".into(),
+                    owner: "other".into(),
+                    kind: PathLockKind::Tree,
+                })
+            })
+            .await;
+        assert!(matches!(result, Err(PathLockError::Conflict { .. })));
+        assert!(p.read_token("/new").await.unwrap().is_none());
+        assert_eq!(
+            p.read_token("/existing").await.unwrap(),
+            Some(original.clone())
+        );
+        assert_eq!(
+            p.read_token("/deleted").await.unwrap(),
+            Some(deleted.clone())
+        );
+        p.compare_and_remove_token("/existing", &original)
+            .await
+            .unwrap();
+        p.compare_and_remove_token("/deleted", &deleted)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires OV_TEST_PG_DSN"]
+    async fn batch_reads_shared_ancestors_once_and_preserves_holders_on_upgrade() {
+        let p = provider(&format!("cache-test-{}", uuid::Uuid::new_v4())).await;
+        p.run(|store| {
+            let paths = [
+                "/local/account/resources/a/b/c/d/src.md",
+                "/local/account/resources/a/b/c/d/dst.md",
+            ];
+            let requests: Vec<_> = paths
+                .iter()
+                .map(|path| PathLockRequest {
+                    path: (*path).into(),
+                    kind: PathLockKind::Exact,
+                })
+                .collect();
+            let result = acquire_holder_records(store, &requests, "owner", "first", 100, 0, None)?;
+            assert_eq!(result.acquisitions.len(), 2);
+            assert_eq!(store.read_queries, 10, "one SELECT per distinct path");
+            let upgrade = PathLockRequest {
+                path: paths[0].into(),
+                kind: PathLockKind::Tree,
+            };
+            acquire_holder_records(store, &[upgrade], "owner", "second", 200, 0, None)?;
+            let current = store.get(paths[0])?.unwrap();
+            assert_eq!(current.lock_type, PathLockKind::Tree);
+            assert_eq!(current.holders.len(), 2);
+            assert!(current.holders.iter().any(|h| h.id == "first"));
+            assert!(current.holders.iter().any(|h| h.id == "second"));
+            assert_eq!(store.read_queries, 10);
+            for path in paths {
+                store.delete(path)?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod connection_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn now() -> u128 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    }
+
+    async fn provider(namespace: &str) -> PostgresPathLockProvider {
+        let namespace = namespace.to_owned();
+        tokio::task::spawn_blocking(move || {
+            PostgresPathLockProvider::from_env("OV_TEST_PG_DSN", &namespace, 30.0).unwrap()
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn backend_pid(provider: &PostgresPathLockProvider) -> i32 {
+        provider
+            .run(|store| {
+                Ok(store
+                    .tx
+                    .query_one("SELECT pg_backend_pid()", &[])
+                    .map_err(db_error)?
+                    .get::<_, i32>(0))
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn acquire(
+        provider: &PostgresPathLockProvider,
+        requests: &[PathLockRequest],
+        owner: &str,
+    ) -> PathLockResult<Option<AtomicAcquisitionResult>> {
+        let now = now();
+        provider
+            .try_acquire_holders_atomic(
+                requests,
+                owner,
+                "h",
+                now,
+                now.saturating_sub(30_000_000_000),
+                None,
+            )
+            .await
+    }
+
+    async fn mutate(provider: &PostgresPathLockProvider, path: &str, owner: &str, release: bool) {
+        let now = now();
+        assert!(provider
+            .mutate_holder(
+                path,
+                owner,
+                "h",
+                now,
+                now.saturating_sub(30_000_000_000),
+                release,
+            )
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires OV_TEST_PG_DSN"]
+    async fn business_conflicts_reuse_connection_after_confirmed_rollback() {
+        let namespace = format!("connection-test-{}", uuid::Uuid::new_v4());
+        let owner = provider(&namespace).await;
+        let contender = provider(&namespace).await;
+        acquire(
+            &owner,
+            &[PathLockRequest {
+                path: "/held".into(),
+                kind: PathLockKind::Tree,
+            }],
+            "owner",
+        )
+        .await
+        .unwrap();
+        acquire(
+            &contender,
+            &[PathLockRequest {
+                path: "/own".into(),
+                kind: PathLockKind::Exact,
+            }],
+            "contender",
+        )
+        .await
+        .unwrap();
+        let original = owner.read_token("/held").await.unwrap().unwrap();
+        let pid = backend_pid(&contender).await;
+        for _ in 0..3 {
+            assert!(matches!(
+                acquire(
+                    &contender,
+                    &[
+                        PathLockRequest {
+                            path: "/new".into(),
+                            kind: PathLockKind::Exact,
+                        },
+                        PathLockRequest {
+                            path: "/held/child".into(),
+                            kind: PathLockKind::Exact,
+                        },
+                    ],
+                    "contender",
+                )
+                .await,
+                Err(PathLockError::Conflict { .. })
+            ));
+            assert!(contender.read_token("/new").await.unwrap().is_none());
+            assert_eq!(
+                contender.read_token("/held").await.unwrap().unwrap(),
+                original
+            );
+            mutate(&contender, "/own", "contender", false).await;
+            assert_eq!(backend_pid(&contender).await, pid);
+        }
+        // Successful rollback also releases the namespace transaction gate.
+        mutate(&owner, "/held", "owner", true).await;
+        acquire(
+            &contender,
+            &[PathLockRequest {
+                path: "/held/child".into(),
+                kind: PathLockKind::Exact,
+            }],
+            "contender",
+        )
+        .await
+        .unwrap();
+        mutate(&contender, "/held/child", "contender", true).await;
+        mutate(&contender, "/own", "contender", true).await;
+        assert_eq!(backend_pid(&contender).await, pid);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires OV_TEST_PG_DSN"]
+    async fn sql_and_rollback_errors_discard_connection() {
+        let namespace = format!("connection-test-{}", uuid::Uuid::new_v4());
+        let provider = provider(&namespace).await;
+        let first_pid = backend_pid(&provider).await;
+        let result = provider
+            .run(|store| store.tx.batch_execute("SELECT 1/0").map_err(db_error))
+            .await;
+        assert!(matches!(result, Err(PathLockError::Io(_))));
+        assert!(provider.connection.lock().unwrap().is_none());
+        let second_pid = backend_pid(&provider).await;
+        assert_ne!(second_pid, first_pid);
+
+        let result = provider
+            .run::<(), _>(|store| {
+                let pid: i32 = store
+                    .tx
+                    .query_one("SELECT pg_backend_pid()", &[])
+                    .map_err(db_error)?
+                    .get(0);
+                let dsn = std::env::var("OV_TEST_PG_DSN").unwrap();
+                let mut admin = Client::connect(&dsn, postgres::NoTls).unwrap();
+                assert!(admin
+                    .query_one("SELECT pg_terminate_backend($1)", &[&pid])
+                    .unwrap()
+                    .get::<_, bool>(0));
+                // Report a business conflict, but make the subsequent rollback
+                // fail. The connection must not be retained based on the error alone.
+                Err(PathLockError::Conflict {
+                    lock_path: "/held".into(),
+                    owner: "owner".into(),
+                    kind: PathLockKind::Exact,
+                })
+            })
+            .await;
+        assert!(matches!(result, Err(PathLockError::Io(_))));
+        assert!(provider.connection.lock().unwrap().is_none());
+        assert_ne!(backend_pid(&provider).await, second_pid);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires OV_TEST_PG_DSN"]
+    async fn commit_error_discards_connection_without_replaying_operation() {
+        let namespace = format!("connection-test-{}", uuid::Uuid::new_v4());
+        let provider = provider(&namespace).await;
+        let pid = backend_pid(&provider).await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let operation_calls = calls.clone();
+        let result = provider
+            .run(move |store| {
+                operation_calls.fetch_add(1, Ordering::SeqCst);
+                // The insert succeeds; the deferred constraint fails at COMMIT.
+                store
+                    .tx
+                    .batch_execute(
+                        "CREATE TEMP TABLE ov_pathlock_commit_failure (
+                             id INT PRIMARY KEY DEFERRABLE INITIALLY DEFERRED
+                         );
+                         INSERT INTO ov_pathlock_commit_failure VALUES (1),(1)",
+                    )
+                    .map_err(db_error)
+            })
+            .await;
+        assert!(matches!(result, Err(PathLockError::Io(_))));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(provider.connection.lock().unwrap().is_none());
+        assert_ne!(backend_pid(&provider).await, pid);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }
 
