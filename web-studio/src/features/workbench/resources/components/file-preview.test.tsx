@@ -672,21 +672,42 @@ describe('FilePreview Markdown image navigation and safety', () => {
     expect(image.closest('a')).toBeNull()
   })
 
-  it('preserves external images without downloading or adding navigation', () => {
+  it('preserves protocol-relative document links rather than opening a Viking path', () => {
     previewState.override = {
-      content: '![External](https://example.com/photo.jpg)',
+      content: '[Reference](//docs.example.com/guide?edition=2#setup)',
       fileType: 'markdown',
     }
     const onNavigate = vi.fn()
     renderPreview(file, onNavigate)
-
-    const image = screen.getByRole('img', { name: 'External' })
-    expect(image.getAttribute('src')).toBe('https://example.com/photo.jpg')
-    expect(image.closest('a')).toBeNull()
-    fireEvent.click(image)
+    const link = screen.getByRole('link', { name: 'Reference' })
+    expect(link.getAttribute('href')).toBe(
+      '//docs.example.com/guide?edition=2#setup',
+    )
+    expect(link.getAttribute('target')).toBe('_blank')
+    expect(link.getAttribute('rel')).toBe('noreferrer noopener')
+    fireEvent.click(link)
     expect(onNavigate).not.toHaveBeenCalled()
     expect(previewMocks.download).not.toHaveBeenCalled()
   })
+
+  it.each(['https://example.com/photo.jpg', '//example.com/photo.jpg'])(
+    'preserves external image %s without downloading or adding navigation',
+    (src) => {
+      previewState.override = {
+        content: `![External](${src})`,
+        fileType: 'markdown',
+      }
+      const onNavigate = vi.fn()
+      renderPreview(file, onNavigate)
+
+      const image = screen.getByRole('img', { name: 'External' })
+      expect(image.getAttribute('src')).toBe(src)
+      expect(image.closest('a')).toBeNull()
+      fireEvent.click(image)
+      expect(onNavigate).not.toHaveBeenCalled()
+      expect(previewMocks.download).not.toHaveBeenCalled()
+    },
+  )
 
   it.each(['rejected', 'empty'])(
     'keeps the existing fallback for a %s download',
