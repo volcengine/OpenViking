@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Tooltip } from '../../shared/components/tooltip/index.js';
+import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 
 /**
  * 路径旁的复制按钮。有 `source.path` 的文件在任何宿主下都需要它，因此内置在

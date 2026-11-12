@@ -58,6 +58,16 @@ test('business entries expose components without headless Hooks', async () => {
   }
 });
 
+test('VikingBot headless hooks have one explicit subpath without exposing controllers', async () => {
+  const hooks = await import('@openviking/react/modules/viking-bot');
+  assert.deepEqual(Object.keys(hooks).sort(), [
+    'useVikingBotChat',
+    'useVikingBotSessions',
+  ]);
+  assert.equal('./hooks/viking-bot' in manifest.exports, false);
+  assert.equal('./modules/viking-bot/style.css' in manifest.exports, false);
+});
+
 test('public stylesheets resolve through package exports', async () => {
   for (const entry of Object.keys(manifest.exports)) {
     if (!entry.endsWith('.css')) continue;
@@ -77,8 +87,8 @@ test('Modal remains internal and has no root or subpath API', async () => {
   for (const path of [
     'components/modal',
     'components/modal/style.css',
-    'shared/components/modal/modal.js',
-    'shared/components/modal/style.css',
+    'shared/primitives/modal/modal.js',
+    'shared/primitives/modal/style.css',
   ]) {
     assert.throws(() => import.meta.resolve(`@openviking/react/${path}`), {
       code: 'ERR_PACKAGE_PATH_NOT_EXPORTED',

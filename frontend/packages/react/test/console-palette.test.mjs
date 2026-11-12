@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mount, ok } from './helpers/console-dom.mjs';
-import { click, type } from './helpers/tui-dom.mjs';
+import { click, type } from './helpers/command-console-dom.mjs';
 
-test('slash palette uses the Volcengine group order and keeps cross-group commands selectable', async () => {
+test('slash palette uses the built-in group order and keeps cross-group commands selectable', async () => {
   const host = await mount(
     async () => assert.fail('Opening the palette does not execute commands'),
     {
@@ -13,16 +13,20 @@ test('slash palette uses the Volcengine group order and keeps cross-group comman
   try {
     await type(host.input, '/');
     const groups = [
-      ...host.container.querySelectorAll('.ov-tui__suggestion-group'),
+      ...host.container.querySelectorAll(
+        '.ov-command-console__suggestion-group',
+      ),
     ];
     assert.deepEqual(
       groups.map(
-        (group) => group.querySelector('.ov-tui__suggestion-label').textContent,
+        (group) =>
+          group.querySelector('.ov-command-console__suggestion-label')
+            .textContent,
       ),
       ['核心流程', '文件系统', '搜索与上下文', '配置与状态'],
     );
     const names = (group) =>
-      [...group.querySelectorAll('.ov-tui__suggestion-name')].map(
+      [...group.querySelectorAll('.ov-command-console__suggestion-name')].map(
         (name) => name.textContent,
       );
     assert.deepEqual(names(groups[0]), [
@@ -63,9 +67,11 @@ test('slash palette uses the Volcengine group order and keeps cross-group comman
     assert.equal(host.input.value, 'ov find ');
     await host.execute('ov help');
     assert.deepEqual(
-      [...host.container.querySelectorAll('.ov-tui__help-section-label')].map(
-        (label) => label.textContent,
-      ),
+      [
+        ...host.container.querySelectorAll(
+          '.ov-command-console__help-section-label',
+        ),
+      ].map((label) => label.textContent),
       ['核心流程', '文件系统', '搜索与上下文', '配置与状态'],
     );
   } finally {
@@ -77,9 +83,9 @@ test('Console exposes the terminal empty state and lets the host replace its qui
   const host = await mount(async () => ok({ state: 'ready' }));
   try {
     const names = () =>
-      [...host.container.querySelectorAll('.ov-tui__empty-name')].map(
-        (element) => element.textContent,
-      );
+      [
+        ...host.container.querySelectorAll('.ov-command-console__empty-name'),
+      ].map((element) => element.textContent);
     assert.deepEqual(names(), [
       'add-resource',
       'add-skill',
@@ -88,15 +94,21 @@ test('Console exposes the terminal empty state and lets the host replace its qui
       'compile',
     ]);
     assert.equal(
-      host.container.querySelector('.ov-tui__empty-title').textContent,
+      host.container.querySelector('.ov-command-console__empty-title')
+        .textContent,
       'OpenViking CLI',
     );
 
     const pick = (name) =>
       click(
-        [...host.container.querySelectorAll('.ov-tui__empty-action')].find(
+        [
+          ...host.container.querySelectorAll(
+            '.ov-command-console__empty-action',
+          ),
+        ].find(
           (button) =>
-            button.querySelector('.ov-tui__empty-name')?.textContent === name,
+            button.querySelector('.ov-command-console__empty-name')
+              ?.textContent === name,
         ),
       );
     await pick('add-resource');
@@ -118,7 +130,10 @@ test('Console exposes the terminal empty state and lets the host replace its qui
 
     await host.render({ quickCommands: [] });
     assert.deepEqual(names(), []);
-    assert.equal(host.container.querySelector('.ov-tui__empty'), null);
+    assert.equal(
+      host.container.querySelector('.ov-command-console__empty'),
+      null,
+    );
   } finally {
     await host.dispose();
   }
@@ -143,10 +158,11 @@ test('Console uses the selected locale for quick examples and command help', asy
     );
     try {
       const find = [
-        ...host.container.querySelectorAll('.ov-tui__empty-action'),
+        ...host.container.querySelectorAll('.ov-command-console__empty-action'),
       ].find(
         (button) =>
-          button.querySelector('.ov-tui__empty-name')?.textContent === 'find',
+          button.querySelector('.ov-command-console__empty-name')
+            ?.textContent === 'find',
       );
       await click(find);
       assert.equal(host.input.value, example);

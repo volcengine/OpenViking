@@ -19,10 +19,12 @@ import type {
 
 /**
  * 文件浏览模块的目录与预览联动：目录行展开树，文件行打开预览。
- * 占位搜索弹窗独立管理查询，不改变目录树。
+ * 搜索弹窗独立管理查询与筛选，不改变目录树；点中结果时通过 `openResource`
+ * 把选中与展开交给这里。
  *
- * Coordinates directory loading and preview selection. The placeholder search
- * dialog owns its query separately and leaves the tree unchanged.
+ * Coordinates directory loading and preview selection. The search dialog owns its
+ * query and filters separately and leaves the tree unchanged; picking a result hands
+ * the selection and expansion back through `openResource`.
  */
 export function useFileBrowser({
   rootUri,
@@ -131,23 +133,6 @@ export function useFileBrowser({
     [openTree],
   );
 
-  const preview = useFsPreview({
-    client,
-    // 非受控模式下 currentUri 是 null，真正选中的是 pendingUri；预览要跟着
-    // 实际选中的资源走，否则内部维护的选中永远不会加载预览。
-    //
-    // Under the uncontrolled mode `currentUri` is null and `pendingUri` holds the
-    // real selection, so the preview follows that instead — otherwise a selection
-    // the module owns would never load anything.
-    uri: blocked ? null : activeUri,
-    resourceType,
-    labels: summaryLabels ?? resolveSummaryLabels(locale),
-    formatCharacterCount: formatCharacterCount ?? text.formatCharacterCount,
-    openParent,
-    generation: refreshGeneration,
-    requestOptions,
-  });
-
   const rows = tree.rows;
 
   const openPath = tree.openPath;
@@ -175,6 +160,28 @@ export function useFileBrowser({
     dashboardKinds,
     renderDashboard,
     dashboardLabels,
+  });
+
+  const preview = useFsPreview({
+    client,
+    // 非受控模式下 currentUri 是 null，真正选中的是 pendingUri；预览要跟着
+    // 实际选中的资源走，否则内部维护的选中永远不会加载预览。
+    //
+    // Under the uncontrolled mode `currentUri` is null and `pendingUri` holds the
+    // real selection, so the preview follows that instead — otherwise a selection
+    // the module owns would never load anything.
+    uri: blocked ? null : activeUri,
+    resourceType,
+    labels: summaryLabels ?? resolveSummaryLabels(locale),
+    formatCharacterCount: formatCharacterCount ?? text.formatCharacterCount,
+    openParent,
+    generation: refreshGeneration,
+    requestOptions,
+    contentKind: boards.contentPending
+      ? 'pending'
+      : boards.isWiki
+        ? 'wiki'
+        : 'plain',
   });
 
   const selectedId = activeUri;
@@ -230,6 +237,7 @@ export function useFileBrowser({
       },
       openUri: openResource,
       openDashboard: openDashboard,
+      openResource,
       setPreviewKey: (key: string) => {
         if (activeUri && key === dashboardKey(activeUri))
           openDashboard(activeUri);
@@ -247,7 +255,6 @@ export function useFileBrowser({
     // replace `actions` and with it the `operations` handed to `FileTree`.
     [
       setActiveKey,
-      openResource,
       open,
       toggleExpand,
       loadMore,
@@ -255,6 +262,7 @@ export function useFileBrowser({
       refresh,
       openDashboard,
       closeDashboard,
+      openResource,
       activeUri,
     ],
   );

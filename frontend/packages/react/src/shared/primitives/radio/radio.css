@@ -1,0 +1,96 @@
+/*
+ * 单选框样式，对齐控制台设计稿。取值来自火山版主题包的 Radio 规则：14px 圆形、
+ * 2px 描边、选中时主色填充并在中心留一个小白点。
+ *
+ * Radio styles matching the console design. Values come from the volcano theme's Radio
+ * rules: a 14px circle with a 2px border that fills with the primary colour and keeps a
+ * small white dot at its centre when selected.
+ */
+.ov-radio {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  font-size: 13px;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.ov-radio > input[type='radio'] {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+}
+
+.ov-radio__mask {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  border: 2px solid
+    var(--ov-ui-color-border-3, var(--ov-ui-border-3-default, #c9cdd4));
+  border-radius: 50%;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #fff));
+  transition:
+    border-color 0.1s,
+    background-color 0.1s;
+}
+
+/* 中心白点用伪元素，选中时放大；缩放原点在中心，看起来是从圆点长出来的。 */
+.ov-radio__mask::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default, #fff)
+  );
+  transform: translate(-50%, -50%) scale(0);
+  transition: transform 0.2s cubic-bezier(0.3, 1.3, 0.3, 1);
+}
+
+.ov-radio--checked .ov-radio__mask {
+  border-color: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default, #5252ff)
+  );
+  background: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+}
+
+.ov-radio--checked .ov-radio__mask::after {
+  transform: translate(-50%, -50%) scale(0.4);
+}
+
+.ov-radio--disabled {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  cursor: not-allowed;
+}
+
+.ov-radio--disabled .ov-radio__mask {
+  border-color: var(
+    --ov-ui-color-border-2,
+    var(--ov-ui-border-2-default, #e1e4f2)
+  );
+}
+
+.ov-radio--disabled.ov-radio--checked .ov-radio__mask {
+  border-color: transparent;
+  background: var(
+    --ov-ui-color-primary-disabled,
+    var(--ov-ui-primary-disabled-default, #a8a8ff)
+  );
+}
+
+.ov-radio > input[type='radio']:focus-visible + .ov-radio__mask {
+  outline: 2px solid
+    var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+  outline-offset: 1px;
+}

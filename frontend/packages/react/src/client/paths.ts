@@ -63,6 +63,7 @@ export const OV_PATHS = {
   searchGlob: '/api/v1/search/glob',
   /** 语义检索。Semantic search. */
   searchFind: '/api/v1/search/find',
+  /** 携带上下文的语义检索。Semantic search with session context. */
   searchQuery: '/api/v1/search/search',
   /** 按正则检索正文。Search content by regular expression. */
   searchGrep: '/api/v1/search/grep',
@@ -98,6 +99,14 @@ export const OV_PATH_BUILDERS = {
     `${OV_PATH_BUILDERS.session(sessionId)}/messages`,
   sessionCommit: (sessionId: string) =>
     `${OV_PATH_BUILDERS.session(sessionId)}/commit`,
+  sessionContext: (sessionId: string) =>
+    `${OV_PATH_BUILDERS.session(sessionId)}/context`,
+  sessionArchive: (sessionId: string, archiveId: string) =>
+    `${OV_PATH_BUILDERS.session(sessionId)}/archives/${encodeURIComponent(archiveId)}`,
+  botInterrupt: (sessionId: string) =>
+    `/bot/v1/sessions/${encodeURIComponent(sessionId)}/interrupt`,
+  botSteer: (sessionId: string) =>
+    `/bot/v1/sessions/${encodeURIComponent(sessionId)}/steer`,
   task: (taskId: string) => `${OV_PATHS.tasks}/${encodeURIComponent(taskId)}`,
   taskCancel: (taskId: string) => `${OV_PATH_BUILDERS.task(taskId)}/cancel`,
 } as const;

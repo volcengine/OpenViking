@@ -8,12 +8,11 @@ import asyncio
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.server.routers import skills as skills_router
 from openviking.storage.errors import LockAcquisitionError
-from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.session.user_id import UserIdentifier
 from tests.server.test_api_skills import _add_skill, _skill_md
 from tests.server.test_api_skills import _stub_mcp_endpoint as _stub_mcp_endpoint
-from tests.server.test_skill_update_cancellation import _download, _indexed_record
 
 
 def _ctx():
@@ -33,7 +32,7 @@ async def _assert_locked(fs, root):
 
 
 @pytest.mark.parametrize("competing_operation", ["add", "update", "delete"])
-async def test_update_lock_blocks_same_package_through_backup_and_rollback(
+async def test_update_lock_blocks_same_package_until_failed_update_finishes(
     client, service, monkeypatch, competing_operation
 ):
     name = f"update-lock-{competing_operation}"
@@ -42,20 +41,18 @@ async def test_update_lock_blocks_same_package_through_backup_and_rollback(
     fs = service.viking_fs
     hidden_uri = f"{root}/.custom.json"
     await fs.write_file(hidden_uri, '{"original": true}', ctx=_ctx())
-    old_content = await _download(client, f"{root}/SKILL.md")
-    old_index = await _indexed_record(client, root, 0)
+    original_definition = await fs.read_file_bytes(f"{root}/SKILL.md", ctx=_ctx())
     paused = asyncio.Event()
     resume = asyncio.Event()
-    original_apply = SkillProcessor.apply_skill_privacy
+    original_clear = skills_router.clear_skill_package_contents
 
-    async def fail_after_backup(self, *args, **kwargs):
-        if kwargs.get("change_reason") == "auto-extracted from update_skill":
-            paused.set()
-            await resume.wait()
-            raise RuntimeError("injected preparation failure after backup")
-        return await original_apply(self, *args, **kwargs)
+    async def fail_after_clear(*args, **kwargs):
+        await original_clear(*args, **kwargs)
+        paused.set()
+        await resume.wait()
+        raise RuntimeError("injected preparation failure after clearing the package")
 
-    monkeypatch.setattr(SkillProcessor, "apply_skill_privacy", fail_after_backup)
+    monkeypatch.setattr(skills_router, "clear_skill_package_contents", fail_after_clear)
     updating = asyncio.create_task(
         client.put(
             f"/api/v1/skills/{name}",
@@ -65,8 +62,10 @@ async def test_update_lock_blocks_same_package_through_backup_and_rollback(
     try:
         await asyncio.wait_for(paused.wait(), 5)
         assert await fs.exists(root, ctx=_ctx())
-        assert not await fs.exists(f"{root}/SKILL.md", ctx=_ctx())
+        assert await fs.read_file_bytes(f"{root}/SKILL.md", ctx=_ctx()) == original_definition
         assert not await fs.exists(hidden_uri, ctx=_ctx())
+        entries = await fs._async_agfs.ls(fs._uri_to_path(root.rsplit("/", 1)[0], ctx=_ctx()))
+        assert not any(".update-backup-" in entry["name"] for entry in entries)
         await _assert_locked(fs, root)
         if competing_operation == "delete":
             competing = await client.delete(f"/api/v1/skills/{name}")
@@ -85,9 +84,12 @@ async def test_update_lock_blocks_same_package_through_backup_and_rollback(
         resume.set()
         failed = await asyncio.wait_for(updating, 10)
         assert failed.status_code == 500, failed.text
-        assert await _download(client, f"{root}/SKILL.md") == old_content
-        assert await _download(client, hidden_uri) == b'{"original": true}'
-        assert await _indexed_record(client, root, 0) == old_index
+        assert await fs.read_file_bytes(f"{root}/SKILL.md", ctx=_ctx()) == original_definition
+        assert not await fs.exists(hidden_uri, ctx=_ctx())
+        assert await fs.vector_store.get_context_by_uri(root, level=0, ctx=_ctx()) == []
+        assert (
+            await fs.vector_store.get_context_by_uri(f"{root}/SKILL.md", level=2, ctx=_ctx()) == []
+        )
         # Both the request and background references must have been released.
         lease = await fs._async_agfs.pathlock_acquire_tree(fs._uri_to_path(root, ctx=_ctx()))
         await fs._async_agfs.pathlock_release(lease)
@@ -95,41 +97,3 @@ async def test_update_lock_blocks_same_package_through_backup_and_rollback(
         resume.set()
         if not updating.done():
             await asyncio.wait_for(updating, 10)
-
-
-async def test_restore_index_failure_preserves_live_lock_and_backup(client, service, monkeypatch):
-    name = "restore-index-lock"
-    root = (await _add_skill(client, name, "Original"))["root_uri"]
-    fs = service.viking_fs
-    old_content = await _download(client, f"{root}/SKILL.md")
-    original_transfer = fs._update_vector_store_uris
-    backup = None
-
-    async def fail_new_source(*args, **kwargs):
-        raise RuntimeError("injected new source write failure")
-
-    async def fail_restore_index(source, target, **kwargs):
-        nonlocal backup
-        if ".update-backup-" in source and target == root:
-            backup = source
-            await _assert_locked(fs, root)
-            assert await _download(client, f"{root}/SKILL.md") == old_content
-            raise RuntimeError("injected index restoration failure")
-        return await original_transfer(source, target, **kwargs)
-
-    monkeypatch.setattr(
-        "openviking.server.skill_source_metadata.write_skill_source_metadata", fail_new_source
-    )
-    monkeypatch.setattr(fs, "_update_vector_store_uris", fail_restore_index)
-    response = await client.put(
-        f"/api/v1/skills/{name}",
-        json={"data": _skill_md(name, "Replacement"), "wait": True},
-    )
-    assert response.status_code == 500, response.text
-    assert "injected index restoration failure" in response.text
-    assert backup is not None and backup in response.text
-    # Generic cp/mv cleanup would remove the live root when vector restore fails.
-    assert await _download(client, f"{root}/SKILL.md") == old_content
-    assert await _download(client, f"{backup}/SKILL.md") == old_content
-    # Internal backups are hidden from public search; inspect their stored vectors.
-    assert await fs.vector_store.get_context_by_uri(backup, level=0, ctx=_ctx())

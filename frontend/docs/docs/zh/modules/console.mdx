@@ -1,80 +1,142 @@
 # Console 交互面板
 
-可选 `locale: 'zh-CN' | 'en-US'` 覆盖最近的模块或 Provider；均未配置时默认 `en-US`。已有 `labels` 可逐项覆盖。业务内容仍由宿主提供。
+在一块面板里提供对话和命令两种模式：对话模式通过 [VikingBot 无头模块](./viking-bot) 接通原生对话；命令模式把 `ov` 命令发送到 OpenViking 原生 API 并展示结果。
 
-`Console` 组合 `Tui` 与 `VikingBot`，管理原生 API 命令、执行记录和两种模式的草稿。切换模式保留记录和草稿。
+## 何时使用
 
-命令侧已接通原生 API。对话侧按火山版 `release/openviking/2026-11-12` 提供会话操作区、新版欢迎空态、快捷输入、附件和引用选择；通过 `conversation` 传入 VikingBot 的数据与回调。真实对话、流式回复、上传及会话持久化由宿主接入。
+- 需要一块让用户既能和 VikingBot 对话，又能用 `ov` 命令浏览、检索和写入知识库的面板。
+- 需要在浏览器里执行 OpenViking 原生 API 命令，并在切换模式时保留命令记录和输入草稿。
+- 只需要对话视图或命令输入区时，使用 [VikingBot](../components/viking-bot) 或 [CommandConsole](../components/command-console)；需要自己提供命令目录时也使用后者，Console 的命令是内置的。
 
-面板沿用火山版的胶囊模式切换、图标工具栏和终端快速体验布局。快捷项填入命令并聚焦输入框，不自动执行；命令历史只包含当前面板的本地记录，点击可重新填入。历史与新建按钮支持悬停和键盘聚焦提示；新建会话始终可用，会取消当前请求并清空本地记录、错误和命令草稿，不删除服务端数据。新建按钮文案通过 `labels.clear` 替换；其他默认文案也可通过 `labels` 定制。
+## 引入
 
-历史日期取自提交命令时的前端时间戳，按本地时区以 `YYYY-MM-DD HH:mm` 展示。
+```tsx
+import { OpenVikingProvider } from '@openviking/react/client';
+import { Console } from '@openviking/react/modules/console';
+import '@openviking/react/modules/console/style.css';
 
-`Console` 默认撑满宿主的宽高，不限制面板宽度；宿主需提供明确高度或可伸展的 flex 布局。示例的 720px 高度仅用于演示。
+<OpenVikingProvider baseURL={endpoint} apiKey={apiKey}>
+  <Console />
+</OpenVikingProvider>;
+```
 
-## 基础用法
+样式入口已包含 CommandConsole 和 VikingBot 的样式。Provider 与请求配置的规则见[区块概览](./)。
 
-默认选中 VikingBot（`conversation`）。宿主可通过 `defaultMode="command"` 改为初始选中终端；需要受控切换时，使用 `mode` 与 `onModeChange`。
+对话模式使用 [VikingBot](../components/viking-bot)，它依赖可选 peer 依赖 `@ark-design/ui`，不会随 `@openviking/react` 自动安装，安装方式见该页的「引入」。
 
-示例使用固定模拟服务。输入 `ov ls viking://resources/demo` 或 `ov read viking://resources/demo/notes.md` 体验结果与资源链接，不访问真实服务。
+## 代码演示
 
-对话示例使用固定会话、快捷输入和资源候选；`+` 仅在浏览器内选择附件，不上传，发送未接入。真实会话、流式回复和持久化由宿主通过 `conversation` 接入。
+### 基础用法
+
+面板默认进入对话模式；切换到「终端」，输入 `ov ls viking://resources/demo` 或 `ov read viking://resources/demo/notes.md`，点击结果里的资源链接，面板下方会显示 `onOpenUri` 收到的 URI。
 
 ```tsx file="../../_demos/console-basic.tsx" preview
 
 ```
 
-真实接入时，在宿主通过 `OpenVikingProvider` 配置 `baseURL`、凭证和身份；无需逐模块提供 Adapter。`baseURL` 不包含 `/api/v1`，未配置时使用同源地址。模块挂载不请求，显式提交命令才访问服务。
+示例使用模拟服务和固定的对话数据，不访问真实服务。对话模式的 `+` 只在浏览器里选择附件，示例没有提供 `onSend`，输入区不能发送。
 
-默认快捷命令是 `add-resource`、`add-skill`、`add-memory`、`find` 和 `compile`。悬停查看说明；选择快捷项只填入示例或命令前缀，由用户提交。导入和安装接受远程地址；记忆命令会追加用户消息并提交会话。编译接受来源和目标 URI，默认使用内置 llm-wiki Skill。
+### 内置对话
 
-输入 `/` 或运行 `ov help` 可查看核心流程、文件系统、搜索与上下文、配置与状态。常用的 `find` 和 `read` 同时出现在核心流程与搜索组；`compile create` 保存编译配置，无需立即启动任务。
+默认使用 `modules/viking-bot` 的两个 Hook；可通过 `chatOptions.service` 适配其他后端，服务同时实现对话与会话契约。模块切换保留当前对话；新建或切换会话会取消旧连接。历史保存失败单独提示，不改变已成功的回答。
 
-宿主可查询当前身份下的 Bot 状态，再通过 `conversation.isAvailable` 和 `conversation.unavailableMessage` 控制输入区。
+```tsx file="../../_demos/console-chat.tsx" preview
 
-## 执行行为
+```
 
-同一实例同时执行一条命令，等待请求期间禁用输入。失败信息显示在对应的命令结果中，可重新提交命令；写入失败可能已被服务端接受，重新提交前先核查结果。新建会话会中止 HTTP 请求并忽略迟到结果，不保证撤销服务端已接受的操作。清空记录只移除本地历史和错误，不删除服务端资源。
+示例使用模拟服务，可切换原生能力与火山当前契约。原生适配器提供 `interrupt` 和 `steer`，支持停止及生成中追问；火山当前适配器省略这两个方法，生成中禁用发送且不显示停止。回答后的下一轮提问两者均支持。
 
-记录与草稿只在内存中保存。服务、身份配置或 `scopeKey` 变化时清空状态、取消旧请求；卸载同样取消。若身份由稳定函数动态返回，宿主须同步更新 `scopeKey`，或用身份作为组件 `key`。
+## API
 
-## 命令范围
+### Console
 
-命令可使用 `ov name`、`/name` 或裸名称。带空格的参数使用单引号或双引号，支持反斜线转义。以 `--` 开头的正文应加引号，如 `ov write viking://resources/a.md "--heading"`；也可通过 `--` 结束选项解析：`ov write viking://resources/a.md -- --heading`。字符串选项值同样支持引号，如 `--description "--example"`。参数按数据解析，不执行 Shell；未知选项、重复选项、缺失参数和无效 URI 会生成失败记录。
+| 参数             | 说明                                                                                                                                                                | 类型                                      | 默认值                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
+| mode             | 当前模式，传入后由宿主控制；`'conversation'` 为对话，`'command'` 为命令                                                                                             | `ConsoleMode`                             | -                                                                 |
+| defaultMode      | 初始模式，传入 `mode` 后不再生效                                                                                                                                    | `ConsoleMode`                             | `'conversation'`                                                  |
+| onModeChange     | 用户切换模式时触发，参数为切换后的模式；传入 `mode` 时由宿主更新它                                                                                                  | `(mode: ConsoleMode) => void`             | -                                                                 |
+| conversation     | 对话模式的数据和回调：`sessions` 与 `headerActions` 显示在面板工具栏，其余属性传给 [VikingBot](../components/viking-bot)，省略 `draft` 时由 Console 保存对话草稿    | `Partial<VikingBotProps>`                 | -                                                                 |
+| chatOptions      | 对话 Hook 配置；排除 `enabled`、`sessionId`、`initialMessages`，自定义 service 同时实现对话和会话契约                                                               | `UseVikingBotChatOptions`（上述字段除外） | 原生服务                                                          |
+| quickCommands    | 命令模式空态里的快捷入口 `{ name, value }`，点击后把 `value` 填入输入框，不自动执行；传入空数组时不显示空态，类型见 [CommandConsole](../components/command-console) | `readonly CommandConsoleQuickCommand[]`   | `add-resource`、`add-skill`、`add-memory`、`find`、`compile` 五条 |
+| scopeKey         | 身份由函数动态取值时的隔离标识，值变化时清空记录和草稿并中止进行中的请求                                                                                            | `string`                                  | -                                                                 |
+| onOpenUri        | 点击资源链接时触发，参数为资源 URI；对话模式下，设置了 `conversation.onOpenUri` 时以它为准                                                                          | `(uri: string) => void`                   | -                                                                 |
+| slots            | 在面板中插入宿主内容，类型见下方 `ConsoleSlots`                                                                                                                     | `ConsoleSlots`                            | -                                                                 |
+| labels           | 覆盖界面文案，类型见下方 `ConsoleLabels`                                                                                                                            | `ConsoleLabels`                           | -                                                                 |
+| locale           | 界面语言，规则见[国际化](../guide/i18n)                                                                                                                             | `'zh-CN' \| 'en-US'`                      | 继承上级，默认 `'en-US'`                                          |
+| requestOptions   | 覆盖请求配置，规则见[区块概览](./)                                                                                                                                  | `OvRequestOptions`                        | -                                                                 |
+| className、style | 外观与布局，其余 HTML 属性透传到根元素                                                                                                                              | HTML 属性                                 | -                                                                 |
 
-| 能力 | 命令                                                                                                   |
-| ---- | ------------------------------------------------------------------------------------------------------ |
-| 本地 | `help`、`clear`                                                                                        |
-| 服务 | `health`、`status`                                                                                     |
-| 浏览 | `ls [uri]`、`tree [uri]`、`stat <uri>`                                                                 |
-| 内容 | `read <uri>`、`abstract <uri>`、`overview <uri>`                                                       |
-| 检索 | `find <query>`、`search <query>`、`grep <pattern>`、`glob <pattern>`                                   |
-| 写入 | `mkdir <uri>`、`write <uri> <content>`、`cp <from_uri> <to_uri>`、`mv <from_uri> <to_uri>`、`rm <uri>` |
-| 任务 | `task list`、`task status <id>`、`task cancel <id>`                                                    |
+### ConsoleSlots
 
-完整选项见运行时 `ov help` 和输入区参数提示。选项名沿用原生字段，例如 `--target_uri`、`--case_insensitive`。`ls` / `tree` 默认返回至多 100 条；通过 `--limit` 和 `--offset` 分页，`tree` 另支持 `--level_limit`。`write` 默认覆盖，使用 `--mode create` 创建，或 `--mode append` 追加。`task cancel` 请求服务端协作取消；新建会话只中止浏览器的 HTTP 请求。
+| 参数                | 说明                                                     | 类型        | 默认值 |
+| ------------------- | -------------------------------------------------------- | ----------- | ------ |
+| toolbar             | 工具栏里模式切换和操作按钮之间的内容，两种模式下都显示   | `ReactNode` | -      |
+| conversationContext | 对话模式下输入区上方的内容，优先于 `conversation.footer` | `ReactNode` | -      |
+| commandHelp         | 命令模式下命令控制台上方的内容                           | `ReactNode` | -      |
 
-这是浏览器可用的原生命令子集。CLI 本机配置、登录、本地文件上传下载及独立会话管理命令不在本期范围内。完成 HTTP 请求表示接口已返回，异步操作的最终结果须通过任务命令查询。
+### ConsoleLabels
 
-## 属性
+| 参数               | 说明                                                                               | 类型                   | 默认值                    |
+| ------------------ | ---------------------------------------------------------------------------------- | ---------------------- | ------------------------- |
+| conversation       | 对话模式按钮的文案                                                                 | `string`               | `'VikingBot'`             |
+| command            | 命令模式按钮的文案                                                                 | `string`               | `'终端'`                  |
+| mode               | 模式切换区域的无障碍名称                                                           | `string`               | `'面板模式'`              |
+| description        | 对话模式欢迎区的说明，也是 `vikingBot.welcomeDescription` 的默认值                 | `string`               | 内置说明                  |
+| clear              | 命令模式下「新建会话」按钮的文案                                                   | `string`               | `'新建会话'`              |
+| history            | 命令模式下「命令历史」按钮的文案                                                   | `string`               | `'命令历史'`              |
+| emptyHistory       | 命令历史为空时的提示                                                               | `string`               | `'暂无命令历史'`          |
+| commandTitle       | 命令模式空态的标题，等同于 `commandConsole.emptyTitle`                             | `string`               | CommandConsole 的默认文案 |
+| commandDescription | 命令模式空态的说明，等同于 `commandConsole.emptyDescription`                       | `string`               | CommandConsole 的默认文案 |
+| quickStart         | 快捷入口上方的引导文案，等同于 `commandConsole.quickStart`                         | `string`               | CommandConsole 的默认文案 |
+| commandConsole     | CommandConsole 的文案，优先于 `commandTitle`、`commandDescription` 和 `quickStart` | `CommandConsoleLabels` | -                         |
+| vikingBot          | VikingBot 的文案，优先于 `description`，会被 `conversation.labels` 覆盖            | `VikingBotLabels`      | -                         |
 
-根入口只导出 `Console` 与 `ConsoleProps`。模式、文案和插槽类型从 `@openviking/react/modules/console` 导出，取数与状态 Hook 保持内部实现。JS 不加载 CSS；组合视图使用 `@openviking/react/modules/console/style.css`，已包含 Tui 与 VikingBot 所需样式。
+## 命令
 
-| 属性                 | 类型                          | 默认值           | 说明                                                                                                                                                                          |
-| -------------------- | ----------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mode`               | `ConsoleMode`                 | —                | 受控模式，只通过回调上报切换意图                                                                                                                                              |
-| `defaultMode`        | `ConsoleMode`                 | `conversation`   | 非受控初始模式                                                                                                                                                                |
-| `locale`             | `'zh-CN' \| 'en-US'`          | 继承上层 / en-US | 选择内置中英文文案。                                                                                                                                                          |
-| `quickCommands`      | `readonly TuiQuickCommand[]`  | 内置五条         | `{ name, value }` 快捷入口，说明按 name 复用命令目录；点击原样填入 value 并聚焦，不提交。未知名称跳过、重复名称保留首项。默认快捷入口填入示例或命令前缀；空数组隐藏内置空态。 |
-| `scopeKey`           | `string`                      | —                | 动态身份的显式隔离标识                                                                                                                                                        |
-| `onModeChange`       | `(mode: ConsoleMode) => void` | —                | 用户请求不同模式时触发；受控值仍由宿主更新                                                                                                                                    |
-| `onOpenUri`          | `(uri: string) => void`       | —                | 资源链接激活时上报打开意图，宿主负责实际导航                                                                                                                                  |
-| `conversation`       | `Partial<VikingBotProps>`     | —                | 对话数据、会话操作、快捷输入、引用与附件回调；省略草稿属性时使用 Console 的实例内草稿。                                                                                       |
-| `slots`              | `ConsoleSlots`                | —                | `toolbar`、`conversationContext`、`commandHelp`                                                                                                                               |
-| `labels`             | `ConsoleLabels`               | —                | 面板文案；`tui` 与 `vikingBot` 继续定制内部视图文案                                                                                                                           |
-| `requestOptions`     | `OvRequestOptions`            | —                | 逐字段覆盖最近 Provider 的地址、身份和信号                                                                                                                                    |
-| `className`、`style` | 标准 HTML 属性                | —                | 根容器样式，其余 HTML 属性也透传                                                                                                                                              |
+命令模式只执行内置的原生 API 命令。输入 `/` 或运行 `ov help`，可以按「核心流程」「文件系统」「搜索与上下文」「配置与状态」查看命令和各自的选项。
 
-认证、权限、账号切换、页面布局与跨模块资源导航由宿主负责。
+### 写法
 
-Console 省略 `locale` 时继承最近的语言作用域，最终默认 `en-US`。切换语言会更新已有命令帮助、参数错误和取消提示，保留请求、记录 ID 与草稿；服务端返回的正文和错误原文保持原值。
+- 命令可以写成 `ov find`、`/find`，也可以直接写 `find`。
+- 含空格的参数用单引号或双引号包住，也可以用反斜线转义。
+- 以 `--` 开头的值要加引号，例如 `ov write viking://resources/a.md "--heading"`；也可以用 `--` 结束选项解析，例如 `ov write viking://resources/a.md -- --heading`。选项值同理，例如 `--description "--example"`。
+- 参数按数据解析，不执行 Shell。未加引号的 `| ; & < > $` 和反引号会被拒绝，含 `&` 的 URL 要加引号。
+- 未知选项、重复选项、缺少参数、不以 `viking://` 开头的 URI 和未闭合的引号都会生成失败记录，不发送请求。
+
+### 支持的命令
+
+| 能力       | 命令                                                                                                                                                                     |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 添加与编译 | `add-resource <path>`、`add-skill <path>`、`add-memory <content> --session-id <session-id>`、`compile --from <from> --to <to>`、`compile create --from <from> --to <to>` |
+| 本地       | `help`、`clear`                                                                                                                                                          |
+| 服务       | `health`、`status`                                                                                                                                                       |
+| 浏览       | `ls [uri]`、`tree [uri]`、`stat <uri>`                                                                                                                                   |
+| 内容       | `read <uri>`、`abstract <uri>`、`overview <uri>`                                                                                                                         |
+| 检索       | `find <query>`、`search <query>`、`grep <pattern>`、`glob <pattern>`                                                                                                     |
+| 写入       | `mkdir <uri>`、`write <uri> <content>`、`cp <from_uri> <to_uri>`、`mv <from_uri> <to_uri>`、`rm <uri>`                                                                   |
+| 任务       | `task list`、`task status <id>`、`task cancel <id>`                                                                                                                      |
+
+- `ls` 和 `tree` 默认从 `viking://` 开始，最多返回 100 条；用 `--limit` 和 `--offset` 分页，`tree` 另有 `--level_limit`。
+- `write` 默认覆盖已有内容；`--mode create` 表示创建，`--mode append` 表示追加。
+- `add-resource` 和 `add-skill` 接受远程地址，不接受本地文件路径。
+- `add-memory` 把内容作为用户消息追加到 `--session-id` 指定的会话，再提交该会话。
+- `compile` 默认使用内置的 llm-wiki Skill，用 `--skill` 指定其他 Skill；`compile create` 只保存编译配置，不启动编译。
+- `task cancel` 向服务端请求协作取消，任务可能不会立即停止。
+- 选项名的写法因命令而异，例如 `add-skill` 用 `--target-uri`，`find` 用 `--target_uri`，以 `ov help` 为准。
+- 命令显示接口返回的结果；导入、编译等异步操作的最终状态用 `task status <id>` 查询。
+- 命令集只包含浏览器能调用的原生 API，本地配置、登录、本地文件上传下载和会话管理类命令不在其中。
+
+## 注意
+
+- 默认使用 VikingBot 无头模块发送原生对话请求。传入 `conversation.messages` 或 `conversation.onSend` 时改由宿主管理对话；附件上传仍由宿主完成。
+- 宿主查询 Bot 状态后设置 `conversation.isAvailable` 和 `conversation.unavailableMessage`，不可用时输入区被禁用并显示说明。
+- 命令只在用户提交时发送请求，挂载时不请求。同一实例一次只执行一条命令，执行期间输入框被禁用。
+- 命令失败时，错误显示在对应的记录里，修正后重新提交即可；写入类命令失败时服务端可能已经接收，重新提交前先核对结果。
+- 命令模式的「新建会话」会中止进行中的请求并忽略迟到的响应，同时清空命令记录、错误和输入框；服务端已接收的操作不会撤销，服务端数据也不会删除。`clear` 命令只清空本地记录。
+- 命令历史列出当前面板的记录，最新的在前，时间为提交时的本地时间（`YYYY-MM-DD HH:mm`）；点击一条会把命令填回输入框，不会执行。
+- 命令记录和草稿只保存在内存中。`scopeKey`、`requestOptions` 或 Provider 的配置变化时，Console 清空记录和草稿并中止进行中的请求，卸载时同样中止。
+- 身份字段使用函数时，保持函数引用稳定，并在身份变化时更新 `scopeKey`，或用身份作为组件的 `key`。
+- Console 撑满父容器的宽高，父容器需要有明确的高度，或是可伸展的 flex 布局。
+- 切换 `locale` 会更新已有记录里的命令帮助、参数错误和取消提示，保留记录和草稿；服务端返回的内容保持原样。
+- 认证、账号切换和页面布局由宿主负责。`onOpenUri` 只上报资源链接的打开意图，导航由宿主完成。
+- 类型从 `@openviking/react/modules/console` 导出，包根入口只导出 `Console` 和 `ConsoleProps`。

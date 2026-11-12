@@ -15,24 +15,26 @@ export default defineConfig({
             './src/components/directory-tour/index.ts',
           icons: './src/icons/index.tsx',
           client: './src/client/index.ts',
-          'components/invitation-confirmation':
-            './src/components/invitation-confirmation/index.ts',
-          'components/login-method-selector':
-            './src/components/login-method-selector/index.ts',
-          'components/password-setup-form':
-            './src/components/password-setup-form/index.ts',
-          'components/password-reset-request-form':
-            './src/components/password-reset-request-form/index.ts',
-          'components/api-key-login-form':
-            './src/components/api-key-login-form/index.ts',
-          'components/email-login-form':
-            './src/components/email-login-form/index.ts',
+          'modules/viking-bot': './src/modules/viking-bot/index.ts',
+          'components/auth/invitation-confirmation':
+            './src/components/auth/invitation-confirmation/index.ts',
+          'components/auth/login-method-selector':
+            './src/components/auth/login-method-selector/index.ts',
+          'components/auth/password-setup-form':
+            './src/components/auth/password-setup-form/index.ts',
+          'components/auth/password-reset-request-form':
+            './src/components/auth/password-reset-request-form/index.ts',
+          'components/auth/api-key-login-form':
+            './src/components/auth/api-key-login-form/index.ts',
+          'components/auth/email-login-form':
+            './src/components/auth/email-login-form/index.ts',
           'modules/scope-cascade': './src/modules/scope-cascade/index.ts',
           'components/file-tree': './src/components/file-tree/index.ts',
           'components/file-preview': './src/components/file-preview/index.ts',
-          'components/file-browser-entries':
-            './src/components/file-browser-entries/index.ts',
-          'components/tui': './src/components/tui/index.ts',
+          'components/file-browser-action-bar':
+            './src/components/file-browser-action-bar/index.ts',
+          'components/command-console':
+            './src/components/command-console/index.ts',
           'components/scope-switcher':
             './src/components/scope-switcher/index.ts',
           'components/agent-connect': './src/components/agent-connect/index.ts',
@@ -73,8 +75,8 @@ export default defineConfig({
       dts: { distPath: './dist/docs' },
       source: {
         entry: {
-          'shared/components/button/button':
-            './src/shared/components/button/button.tsx',
+          'shared/primitives/button/button':
+            './src/shared/primitives/button/button.tsx',
         },
       },
       output: { distPath: { root: './dist/docs' }, emitCss: false },
@@ -85,26 +87,27 @@ export default defineConfig({
       'components/directory-tour/style':
         './src/components/directory-tour/style.css',
 
-      'components/invitation-confirmation/style':
-        './src/components/invitation-confirmation/style.css',
-      'components/login-method-selector/style':
-        './src/components/login-method-selector/style.css',
-      'components/password-setup-form/style':
-        './src/components/password-setup-form/style.css',
-      'components/password-reset-request-form/style':
-        './src/components/password-reset-request-form/style.css',
-      'components/api-key-login-form/style':
-        './src/components/api-key-login-form/style.css',
-      'components/email-login-form/style':
-        './src/components/email-login-form/style.css',
+      'components/auth/invitation-confirmation/style':
+        './src/components/auth/invitation-confirmation/style.css',
+      'components/auth/login-method-selector/style':
+        './src/components/auth/login-method-selector/style.css',
+      'components/auth/password-setup-form/style':
+        './src/components/auth/password-setup-form/style.css',
+      'components/auth/password-reset-request-form/style':
+        './src/components/auth/password-reset-request-form/style.css',
+      'components/auth/api-key-login-form/style':
+        './src/components/auth/api-key-login-form/style.css',
+      'components/auth/email-login-form/style':
+        './src/components/auth/email-login-form/style.css',
       'modules/scope-cascade/style': './src/modules/scope-cascade/style.css',
       'components/style': './src/components/style.css',
       'components/file-tree/style': './src/components/file-tree/style.css',
       'components/file-preview/style':
         './src/components/file-preview/style.css',
-      'components/file-browser-entries/style':
-        './src/components/file-browser-entries/style.css',
-      'components/tui/style': './src/components/tui/style.css',
+      'components/file-browser-action-bar/style':
+        './src/components/file-browser-action-bar/style.css',
+      'components/command-console/style':
+        './src/components/command-console/style.css',
       'components/scope-switcher/style':
         './src/components/scope-switcher/style.css',
       'components/agent-connect/style':

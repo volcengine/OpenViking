@@ -5,8 +5,8 @@
 ## 公开导出
 
 - 目录以 `index.ts` 作为唯一出口，包根入口 `src/index.ts` 只从这里取。
-- 根入口只导出各组件、各业务模块的组件本体与主 Props 类型（`<组件名>Props`），作为最常用的快捷方式。
-- 子类型、回调参数类型、行与选项等数据结构、句柄与文案包，一律只从 `components/<组件>`、`modules/<模块>` 子路径导出。根入口不聚合它们。
+- 根入口只导出各业务组件、各区块的组件本体与主 Props 类型（`<组件名>Props`），作为最常用的快捷方式。
+- 子类型、回调参数类型、行与选项等数据结构、句柄与文案包，一律只从 `components/<组件>`、`modules/<区块>` 子路径导出。根入口不聚合它们。
 - `src/client/` 的请求客户端不依赖 React，从 `@openviking/react/client` 交付；它不进入根入口。
 - 依赖可选 peer 的组件不进入根入口：`FilePreview` 的类型引用 `@ark-design/ui`，放进根声明会让该可选 peer 对只用其他根导出的消费者变成必需。
 - 新增或调整导出时，同步维护 `package.json` 的 `exports`、Rslib 入口与声明路径，并从真实打包产物验证根入口与各子路径都能解析。
@@ -32,7 +32,7 @@
 | props 改变后重置状态，或同步父子组件状态                         | 优先使用受控状态、提升状态；身份变化需要重置整个子树时使用 `key`                                                                  |
 | 订阅外部可读状态，如 Store 或浏览器在线状态                      | 优先复用订阅 API，或使用 [`useSyncExternalStore`](https://react.dev/reference/react/useSyncExternalStore)，不手写 Effect 镜像状态 |
 
-数据获取优先复用宿主、框架或已有数据层能力。业务模块 Hook 或宿主数据层确需随当前查询参数同步服务端结果时，可以使用 Effect；不能一概改成点击事件，否则 URL 导航等变化可能漏取数据。遵守分层边界：`components/` 及其私有 Hook 仍不得取数或创建业务连接。
+数据获取优先复用宿主、框架或已有数据层能力。区块 Hook 或宿主数据层确需随当前查询参数同步服务端结果时，可以使用 Effect；不能一概改成点击事件，否则 URL 导航等变化可能漏取数据。遵守分层边界：`components/` 及其私有 Hook 仍不得取数或创建业务连接。
 
 ## 每个 Effect 必须说明必要性
 
@@ -59,4 +59,6 @@
 - 保证开发环境 Strict Mode 的建立、清理、再建立过程正确；不得用“只执行一次”的 ref 标记或全局变量掩盖缺失清理的问题。
 - 浏览器 API 在客户端的必要阶段访问，保持模块导入和服务端渲染安全；不要把副作用搬进渲染函数或 `useMemo` 来规避 Effect。
 
-业务 Hook 与控制器是模块内部实现，不从根入口或业务子路径导出；`components/` 保持纯 UI、接口无关。
+业务 Hook 与控制器是区块内部实现，不从根入口或区块子路径导出；`components/` 保持纯 UI、接口无关。
+
+VikingBot 对话是公开无头模块的明确例外：`modules/viking-bot` 导出 `useVikingBotChat`、`useVikingBotSessions` 及必要契约，供 Console 与独立 VikingBot 宿主共同使用；不导出组合组件，不提供 CSS 入口，不从根入口或 Console 入口转导出 Hook。其他模块 Hook 仍按上述内部边界执行。
