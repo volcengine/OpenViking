@@ -117,8 +117,10 @@ export function useConversation(
       },
       onSelect: (id) => {
         submission.current++;
+        selection.notified = id;
         chat.selectSession(id);
         setDraft('');
+        onSelect?.(id);
       },
       onNew: () => {
         submission.current++;
