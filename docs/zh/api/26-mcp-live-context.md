@@ -28,7 +28,7 @@
 | POST | `/api/v1/mcps` | 注册 Server 并发布工具目录 |
 | GET | `/api/v1/mcps` | 列出已注册 Server |
 | GET | `/api/v1/mcps/{name}` | 查看 Server 和当前工具定义 |
-| GET | `/api/v1/mcps/status?name=...` | 检查 Server 是否可访问 |
+| GET | `/api/v1/mcps/status` | 根据 `name` 检查 Server 是否可访问 |
 | POST | `/api/v1/mcps/{name}/sync` | 同步工具目录并报告受影响挂载 |
 | DELETE | `/api/v1/mcps/{name}` | 删除 Server 和工具目录 |
 | POST | `/api/v1/mcps/find` | 语义检索工具 |

@@ -866,6 +866,8 @@ curl -X POST http://localhost:1933/api/v1/content/reindex \
 
 **CLI**
 
+With `--wait true` (the default), the CLI submits a background task and polls for the result. Use `--wait false` to return the task ID immediately. If the CLI stops waiting, use `ov task status <task_id>` to check the task.
+
 ```bash
 ov reindex viking://resources --mode vectors_only \
   --force --tags team=search,env=prod --tag-mode replace

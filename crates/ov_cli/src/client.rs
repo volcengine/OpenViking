@@ -532,7 +532,7 @@ impl HttpClient {
         let mut body = serde_json::json!({
             "uri": uri,
             "mode": mode,
-            "wait": wait,
+            "wait": false,
         });
         if force {
             body["force"] = serde_json::json!(true);
@@ -541,7 +541,74 @@ impl HttpClient {
             body["recursive"] = serde_json::json!(false);
         }
         add_resource_tag_fields(&mut body, &tags, tag_mode);
-        self.post("/api/v1/content/reindex", &body).await
+        let submitted: Value = self.post("/api/v1/content/reindex", &body).await?;
+        if !wait {
+            return Ok(submitted);
+        }
+        let task_id = submitted["task_id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| {
+                Error::Client(
+                    "Reindex response has no task_id. Check 'ov task list --task-type admin_reindex' before submitting again."
+                        .to_string(),
+                )
+            })?;
+        let mut result = self
+            .wait_for_task(
+                task_id,
+                tokio::signal::ctrl_c(),
+                std::time::Duration::from_secs(1),
+                |task| Self::reindex_task_result(task_id, task),
+            )
+            .await?;
+        if let Some(profile) = submitted.get("profile") {
+            result["profile"] = profile.clone();
+        }
+        Ok(result)
+    }
+
+    fn reindex_task_result(task_id: &str, task: Value) -> Result<Value> {
+        let result = &task["result"];
+        match task["status"].as_str() {
+            Some("cancelled") => Err(Error::Api {
+                code: Some("PROCESSING_ERROR".into()),
+                message: "Task processing was cancelled".into(),
+                details: Some(json!({"task_id": task_id, "status": "cancelled"})),
+                status: Some(500),
+            }),
+            Some("failed") if result["failed_records"].as_u64().unwrap_or_default() == 0 => {
+                let mut details = result["details"].as_object().cloned().unwrap_or_default();
+                details.insert("task_id".into(), json!(task_id));
+                // GET /tasks exposes the same projected work errors grouped by queue.
+                let errors: Vec<_> = ["Semantic", "Embedding"]
+                    .iter()
+                    .filter_map(|stage| result["queue_status"][*stage]["errors"].as_array())
+                    .flatten()
+                    .take(100)
+                    .cloned()
+                    .collect();
+                if !errors.is_empty() {
+                    details.insert("errors".into(), json!(errors));
+                }
+                Err(Error::Api {
+                    code: Some(result["code"].as_str().unwrap_or("PROCESSING_ERROR").into()),
+                    message: task["error"]
+                        .as_str()
+                        .unwrap_or("Task processing failed")
+                        .into(),
+                    details: Some(Value::Object(details)),
+                    status: None,
+                })
+            }
+            _ => {
+                let mut result = result.as_object().cloned().ok_or_else(|| {
+                    Error::Parse(format!("Reindex task {task_id} has no valid result"))
+                })?;
+                result.remove("task_id");
+                Ok(Value::Object(result))
+            }
+        }
     }
 
     pub async fn consistency(&self, uri: &str) -> Result<serde_json::Value> {
@@ -1095,14 +1162,68 @@ impl HttpClient {
         .await
     }
 
-    /// Wait without an overall deadline. Each status GET retains the ordinary
-    /// HTTP timeout. Consecutive observation failures are bounded, and retries
-    /// never resubmit the import.
     async fn wait_for_resource_task(
         &self,
         task_id: &str,
         interrupted: impl std::future::Future<Output = std::io::Result<()>>,
         interval: std::time::Duration,
+    ) -> Result<Value> {
+        self.wait_for_task(
+            task_id,
+            interrupted,
+            interval,
+            |task| match task["status"].as_str() {
+                Some("completed") => {
+                    let mut result = task.get("result").cloned().ok_or_else(|| {
+                        Error::Parse(format!("Completed task {task_id} has no result"))
+                    })?;
+                    if !result.is_object() {
+                        return Err(Error::Parse(format!(
+                            "Completed task {task_id} has an invalid result"
+                        )));
+                    }
+                    result["task_id"] = json!(task_id);
+                    Ok(result)
+                }
+                Some("cancelled") => Err(Error::Api {
+                    code: Some("CANCELLED".into()),
+                    message: format!(
+                        "Task {task_id} cancelled; check with: ov task status {task_id}"
+                    ),
+                    details: Some(json!({"task_id": task_id, "status": "cancelled"})),
+                    status: None,
+                }),
+                _ => {
+                    let result = &task["result"];
+                    Err(Error::Api {
+                        code: result["code"].as_str().map(str::to_string),
+                        message: format!(
+                            "Task {task_id} failed: {}",
+                            task["error"]
+                                .as_str()
+                                .unwrap_or("resource processing failed")
+                        ),
+                        details: Some(json!({
+                            "task_id": task_id,
+                            "status": "failed",
+                            "details": result.get("details"),
+                        })),
+                        status: None,
+                    })
+                }
+            },
+        )
+        .await
+    }
+
+    /// Wait without an overall deadline. Each status GET retains the ordinary
+    /// HTTP timeout. Observation retries are bounded and never resubmit work.
+    async fn wait_for_task(
+        &self,
+        task_id: &str,
+        interrupted: impl std::future::Future<Output = std::io::Result<()>>,
+        interval: std::time::Duration,
+        finish: impl FnOnce(Value) -> Result<Value>,
     ) -> Result<Value> {
         tokio::pin!(interrupted);
         let observation_error = |error: Error| {
@@ -1157,49 +1278,10 @@ impl HttpClient {
                     Err(err) => return Err(observation_error(err)),
                 };
                 match task.get("status").and_then(Value::as_str) {
-                    Some("completed") => {
-                        let mut result = task.get("result").cloned().ok_or_else(|| {
-                            observation_error(Error::Parse(format!(
-                                "Completed task {task_id} has no result"
-                            )))
-                        })?;
-                        if !result.is_object() {
-                            return Err(observation_error(Error::Parse(format!(
-                                "Completed task {task_id} has an invalid result"
-                            ))));
-                        }
-                        // Return the task result plus task_id for inspection.
-                        // The server's wait=true response omits this extra field.
-                        result["task_id"] = json!(task_id);
-                        return Ok(result);
-                    }
-                    Some("cancelled") => {
-                        // 服务端取消任务时会清空 result 和 error，需显式保留取消语义。
-                        return Err(Error::Api {
-                            code: Some("CANCELLED".into()),
-                            message: format!(
-                                "Task {task_id} cancelled; check with: ov task status {task_id}"
-                            ),
-                            details: Some(json!({"task_id": task_id, "status": "cancelled"})),
-                            status: None,
-                        });
-                    }
-                    Some("failed") => {
-                        let result = &task["result"];
-                        return Err(Error::Api {
-                            code: result["code"].as_str().map(str::to_string),
-                            message: format!(
-                                "Task {task_id} failed: {}",
-                                task["error"]
-                                    .as_str()
-                                    .unwrap_or("resource processing failed")
-                            ),
-                            details: Some(json!({
-                                "task_id": task_id,
-                                "status": "failed",
-                                "details": result.get("details"),
-                            })),
-                            status: None,
+                    Some("completed" | "cancelled" | "failed") => {
+                        return finish(task).map_err(|error| match error {
+                            Error::Parse(_) => observation_error(error),
+                            other => other,
                         });
                     }
                     Some("pending" | "running" | "cancelling") => {}
@@ -2355,7 +2437,7 @@ impl HttpClient {
 }
 
 #[cfg(test)]
-mod resource_wait_tests;
+mod task_wait_tests;
 
 #[cfg(test)]
 mod tests {

@@ -866,6 +866,8 @@ curl -X POST http://localhost:1933/api/v1/content/reindex \
 
 **CLI**
 
+使用 `--wait true`（默认）时，CLI 提交后台任务并轮询结果。使用 `--wait false` 立即返回任务 ID。CLI 停止等待后，可以用 `ov task status <task_id>` 查询任务。
+
 ```bash
 ov reindex viking://resources --mode vectors_only \
   --force --tags team=search,env=prod --tag-mode replace
