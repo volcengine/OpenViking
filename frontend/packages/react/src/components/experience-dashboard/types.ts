@@ -10,15 +10,20 @@ export interface ExperienceItem {
   recallCount?: number;
   trajectoryCount?: number;
 }
+
 export interface ExperienceTrajectory {
   uri: string;
   name: string;
   description?: string;
   created_at?: string;
   updated_at?: string;
+  /** 轨迹结果，提供后在标题右侧显示彩色状态点。Outcome shown beside the title. */
+  outcome?: ExperienceOutcome;
 }
+
 export type ExperienceOutcome =
   'success' | 'partial' | 'unfinished' | 'failure' | 'unknown';
+
 export interface ExperienceDashboardData {
   experiences?: readonly ExperienceItem[];
   total?: number;
@@ -39,44 +44,56 @@ export interface ExperienceDashboardData {
     uri?: string;
   }[];
 }
-export interface ExperienceDashboardLabels {
-  latest: string;
-  sourceCount: string;
-  sourceUri: string;
-  task: string;
-  copy: string;
-  copied: string;
-  copyFailed: string;
 
+export interface ExperienceDashboardLabels {
   title: string;
   allExperiences: string;
   index: string;
+  name: string;
   impact: string;
   source: string;
   test: string;
+
   application: string;
   notice: string;
   injection: string;
   recall: string;
   listRecall: string;
   rate: string;
+  injectionHint: string;
+  recallHint: string;
+  range: string;
+  day3: string;
+  week: string;
+  month: string;
+  all: string;
+
   outcomes: string;
   trajectories: string;
+  emptyTimeline: string;
+
+  latest: string;
+  sourceCount: string;
+  sourceUri: string;
+  task: string;
+  testMessage: string;
+  trajectoryDetails: string;
+  copy: string;
+  copied: string;
+  copyFailed: string;
+
   empty: string;
   emptySource: string;
   emptyTests: string;
   emptyOutcomes: string;
   loading: string;
+  loadingMore: string;
+  loadMore: string;
   failed: string;
   retry: string;
   previous: string;
   next: string;
-  all: string;
-  week: string;
-  month: string;
-  range: string;
   updated: string;
-  name: string;
   success: string;
   partial: string;
   unfinished: string;
@@ -85,6 +102,7 @@ export interface ExperienceDashboardLabels {
   unsupportedMetric: string;
   open: string;
 }
+
 export interface ExperienceDashboardProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
   'onChange'
@@ -95,6 +113,7 @@ export interface ExperienceDashboardProps extends Omit<
   tab?: ExperienceDashboardTab;
   days?: number;
   page?: number;
+  pageSize?: number;
   hasMore?: boolean;
   startIndex?: number;
   states?: Partial<

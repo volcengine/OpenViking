@@ -1,296 +1,59 @@
+/**
+ * 经验看板的样式，取值对齐火山版 1112 发布单的集成分支：点阵底、13/22 正文、
+ * 12 圆角卡片、虚线分隔的指标列。
+ *
+ * 颜色一律走包级基线 `--ov-ui-color-*`；组件私有变量以 `--ov-ui-experience-`
+ * 为前缀，宿主可逐条覆盖。
+ *
+ * The board's styles, matching the console's 1112 release integration branch: a dot
+ * grid surface, 13/22 body text, 12-radius cards and dashed metric dividers.
+ *
+ * Colours always come from the package baseline `--ov-ui-color-*`; private
+ * variables carry the `--ov-ui-experience-` prefix so a host can override each one.
+ */
 .ov-experience-dashboard {
+  --ov-ui-experience-surface: var(
+    --ov-ui-color-dashboard-surface,
+    var(--ov-ui-dashboard-surface-default, #f8f8f8)
+  );
+  --ov-ui-experience-card: var(
+    --ov-ui-color-dashboard-card,
+    var(--ov-ui-dashboard-card-default, #fafafa)
+  );
+  --ov-ui-experience-border: var(
+    --ov-ui-color-dashboard-border,
+    var(--ov-ui-dashboard-border-default, #edeef2)
+  );
+  --ov-ui-experience-muted: var(
+    --ov-ui-color-dashboard-muted,
+    var(--ov-ui-dashboard-muted-default, #787c91)
+  );
+  --ov-ui-experience-success: var(
+    --ov-ui-color-dashboard-success,
+    var(--ov-ui-dashboard-success-default, #4f9c70)
+  );
+  --ov-ui-experience-danger: var(
+    --ov-ui-color-dashboard-danger,
+    var(--ov-ui-dashboard-danger-default, #d92d54)
+  );
+  --ov-ui-experience-warning: var(
+    --ov-ui-color-dashboard-warning,
+    var(--ov-ui-dashboard-warning-default, #eb7d00)
+  );
+  --ov-ui-experience-dot: var(
+    --ov-ui-color-dashboard-dot,
+    var(--ov-ui-dashboard-dot-default, rgb(120 124 145 / 12%))
+  );
+
   display: flex;
   flex-direction: column;
   min-width: 0;
   height: 100%;
   min-height: 0;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
   font-family: inherit;
   font-size: 13px;
   line-height: 22px;
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
-  background: var(
-    --ov-ui-color-dashboard-surface,
-    var(--ov-ui-dashboard-surface-default)
-  );
-}
-.ov-experience-dashboard__body {
-  min-width: 0;
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 12px;
-}
-.ov-experience-dashboard__heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  min-height: 32px;
-  gap: 12px;
-  margin-bottom: 8px;
-  flex-wrap: wrap;
-}
-.ov-experience-dashboard__heading > div {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.ov-experience-dashboard :is(h2, h3) {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 22px;
-}
-.ov-experience-dashboard__heading span {
-  font-size: 12px;
-  color: var(
-    --ov-ui-color-dashboard-muted,
-    var(--ov-ui-dashboard-muted-default)
-  );
-}
-.ov-experience-dashboard select {
-  color: inherit;
-  font: inherit;
-  font-size: 12px;
-  background: transparent;
-  border: 0;
-  padding: 4px;
-  max-width: 100%;
-}
-.ov-experience-dashboard__metrics {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  min-height: 104px;
-  margin: 0 0 12px;
-  padding: 16px;
-  border: 1px solid
-    var(--ov-ui-color-dashboard-border, var(--ov-ui-dashboard-border-default));
-  border-radius: 12px;
-  background: var(
-    --ov-ui-color-dashboard-card,
-    var(--ov-ui-dashboard-card-default)
-  );
-}
-.ov-experience-dashboard__metrics > div {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.ov-experience-dashboard__metrics > div + div {
-  padding-inline-start: 16px;
-  border-inline-start: 1px solid
-    var(--ov-ui-color-dashboard-border, var(--ov-ui-dashboard-border-default));
-}
-.ov-experience-dashboard__metrics svg {
-  color: var(
-    --ov-ui-color-dashboard-muted,
-    var(--ov-ui-dashboard-muted-default)
-  );
-  margin-bottom: 10px;
-}
-.ov-experience-dashboard__metrics dd {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 500;
-  line-height: 24px;
-}
-.ov-experience-dashboard__metrics > div:first-child dd {
-  font-size: 24px;
-}
-.ov-experience-dashboard__metrics dt {
-  font-size: 12px;
-  color: var(
-    --ov-ui-color-dashboard-muted,
-    var(--ov-ui-dashboard-muted-default)
-  );
-  line-height: 20px;
-  overflow-wrap: anywhere;
-}
-.ov-experience-dashboard__distribution {
-  padding: 16px;
-  background: var(
-    --ov-ui-color-dashboard-card,
-    var(--ov-ui-dashboard-card-default)
-  );
-  border: 1px solid
-    var(--ov-ui-color-dashboard-border, var(--ov-ui-dashboard-border-default));
-  border-radius: 12px;
-}
-.ov-experience-dashboard__distribution:has(.ov-dashboard-state) {
-  display: flex;
-  min-height: 266px;
-  align-items: center;
-  justify-content: center;
-}
-.ov-experience-dashboard__outcome + .ov-experience-dashboard__outcome {
-  padding-top: 16px;
-}
-.ov-experience-dashboard__outcome > div:first-child {
-  display: flex;
-  justify-content: space-between;
-  color: var(
-    --ov-ui-color-dashboard-muted,
-    var(--ov-ui-dashboard-muted-default)
-  );
-}
-.ov-experience-dashboard__outcome strong {
-  font-weight: 400;
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
-}
-.ov-experience-dashboard__outcome-track {
-  height: 10px;
-  margin-top: 4px;
-  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
-}
-.ov-experience-dashboard__outcome-track span {
-  display: block;
-  height: 100%;
-  background: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
-}
-.ov-experience-dashboard__trajectories {
-  margin-top: 32px;
-}
-.ov-experience-dashboard__timeline {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 0;
-  margin: 8px 0 0;
-  list-style: none;
-}
-.ov-experience-dashboard__timeline li {
-  position: relative;
-  min-width: 0;
-  padding: 12px 12px 12px 32px;
-}
-.ov-experience-dashboard__timeline li::before {
-  content: '';
-  position: absolute;
-  inset-inline-start: 10px;
-  top: 20px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
-}
-.ov-experience-dashboard__timeline time,
-.ov-experience-dashboard__timeline code {
-  display: block;
-  font-size: 12px;
-  color: var(
-    --ov-ui-color-dashboard-muted,
-    var(--ov-ui-dashboard-muted-default)
-  );
-  overflow-wrap: anywhere;
-}
-.ov-experience-dashboard__timeline button:not(.ov-button) {
-  display: block;
-  max-width: 100%;
-  padding: 4px 0;
-  border: 0;
-  background: transparent;
-  font: inherit;
-  font-weight: 500;
-  color: inherit;
-  text-align: start;
-  overflow-wrap: anywhere;
-}
-.ov-experience-dashboard__timeline p {
-  margin: 4px 0 0;
-}
-.ov-experience-dashboard__pagination {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 12px;
-  padding: 16px 0;
-}
-.ov-experience-dashboard__pagination button:not(.ov-button) {
-  border: 1px solid
-    var(--ov-ui-color-dashboard-border, var(--ov-ui-dashboard-border-default));
-  border-radius: 6px;
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
-  padding: 4px 8px;
-  color: inherit;
-  font: inherit;
-}
-.ov-experience-dashboard button:not(.ov-button) {
-  cursor: pointer;
-}
-.ov-experience-dashboard button:not(.ov-button):disabled {
-  cursor: default;
-}
-.ov-experience-dashboard__pagination button:not(.ov-button):disabled {
-  color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
-}
-.ov-experience-dashboard
-  :is(button:not(.ov-button), select, [tabindex]):focus-visible {
-  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
-  outline-offset: 2px;
-}
-.ov-experience-dashboard__list-title {
-  margin-bottom: 8px !important;
-}
-.ov-experience-dashboard__table-scroll {
-  overflow: auto;
-  max-width: 100%;
-  container-type: inline-size;
-}
-.ov-experience-dashboard__table {
-  width: 100%;
-  min-width: 560px;
-  border-spacing: 0;
-  text-align: start;
-  font-size: 12px;
-}
-.ov-experience-dashboard__table caption {
-  text-align: start;
-  position: absolute;
-  clip-path: inset(50%);
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-}
-.ov-experience-dashboard__table thead {
-  position: sticky;
-  top: 0;
-  background: var(
-    --ov-ui-color-dashboard-surface,
-    var(--ov-ui-dashboard-surface-default)
-  );
-}
-.ov-experience-dashboard__table th,
-.ov-experience-dashboard__table td {
-  padding: 12px;
-  border-bottom: 1px solid
-    var(--ov-ui-color-dashboard-border, var(--ov-ui-dashboard-border-default));
-  text-align: start;
-  font-weight: 400;
-}
-.ov-experience-dashboard__table th {
-  min-width: 120px;
-}
-.ov-experience-dashboard__table tbody th {
-  min-width: 180px;
-}
-.ov-experience-dashboard__table button:not(.ov-button) {
-  display: block;
-  padding: 0;
-  background: transparent;
-  border: 0;
-  text-align: start;
-  color: inherit;
-  font: inherit;
-}
-.ov-experience-dashboard__table th span {
-  display: block;
-  color: var(
-    --ov-ui-color-dashboard-muted,
-    var(--ov-ui-dashboard-muted-default)
-  );
-  font-size: 12px;
-  max-width: 300px;
-  overflow-wrap: anywhere;
 }
 
 .ov-experience-dashboard,
@@ -299,152 +62,898 @@
 .ov-experience-dashboard *::after {
   box-sizing: border-box;
 }
-.ov-experience-dashboard__table thead th {
-  height: 32px;
-  padding-block: 4px;
+
+/* 页签：34 高、12/20 标题、选中项用主色文字加 2 高下划线。 */
+.ov-experience-dashboard__tabs {
+  display: flex;
+  flex: none;
+  gap: 0;
+  height: 34px;
+  padding: 0 12px;
+  overflow: auto;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #fff));
 }
-.ov-experience-dashboard__table tbody tr {
-  height: 82px;
+
+.ov-experience-dashboard__tabs button {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
 }
-.ov-experience-dashboard__table td:first-child,
-.ov-experience-dashboard__table th:first-child {
-  width: 60px;
-  min-width: 60px;
+
+.ov-experience-dashboard__tabs button:first-child {
+  padding-inline-start: 0;
 }
-.ov-experience-dashboard__table tbody th {
-  font-size: 13px;
+
+.ov-experience-dashboard__tabs button[aria-selected='true'] {
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
   font-weight: 500;
 }
-.ov-experience-dashboard__table tbody th button:not(.ov-button):hover {
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+
+.ov-experience-dashboard__tabs button[aria-selected='true']::after {
+  position: absolute;
+  content: '';
+  inset-block-end: 0;
+  inset-inline-start: calc(50% - 8px);
+  width: 16px;
+  height: 2px;
+  background: currentColor;
 }
-.ov-experience-dashboard__table th span {
+
+.ov-experience-dashboard__tabs svg {
+  flex: none;
+}
+
+/* 面板：点阵底铺满，内容区自己滚动。 */
+.ov-experience-dashboard__panel {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.ov-experience-dashboard__body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  background-color: var(--ov-ui-experience-surface);
+  background-image: radial-gradient(
+    var(--ov-ui-experience-dot) 0.5px,
+    transparent 0.7px
+  );
+  background-size: 10px 10px;
+}
+
+.ov-experience-dashboard__list-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 22px;
+}
+
+/* 应用效果：标题行 32 高，标题与说明间隔 12。 */
+.ov-experience-dashboard__heading {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.ov-experience-dashboard__heading-title {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+}
+
+.ov-experience-dashboard__heading h2 {
+  flex: none;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 22px;
+}
+
+.ov-experience-dashboard__notice {
+  overflow: hidden;
+  color: var(--ov-ui-experience-muted);
+  font-size: 12px;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 时间范围：纯文本触发器，主色只在悬停与聚焦时出现。 */
+.ov-experience-dashboard__range-trigger {
+  display: inline-flex;
+  flex: none;
+  min-width: 92px;
+  height: 28px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  font: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ov-experience-dashboard__range-trigger:hover {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+}
+
+.ov-experience-dashboard__range-chevron {
+  flex: none;
+  color: var(--ov-ui-experience-muted);
+  transform: rotate(90deg);
+}
+
+.ov-experience-dashboard__range-popover {
+  max-width: none;
+  padding: 8px;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 10%);
+}
+
+.ov-experience-dashboard__range-menu {
+  display: flex;
+  width: 128px;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ov-experience-dashboard__range-option {
+  display: flex;
+  height: 30px;
+  align-items: center;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  font: inherit;
+  font-size: 14px;
+  text-align: start;
+  cursor: pointer;
+}
+
+.ov-experience-dashboard__range-option:hover {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default, #f1f2f9));
+}
+
+.ov-experience-dashboard__range-option[aria-selected='true'] {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+  background: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default, #f5f7ff)
+  );
+}
+
+/* 指标卡：104 高、三等分、虚线竖分隔。 */
+.ov-experience-dashboard__metrics {
+  display: grid;
+  height: 104px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0 0 12px;
+  padding: 16px;
+  border: 1px solid var(--ov-ui-experience-border);
+  border-radius: 12px;
+}
+
+.ov-experience-dashboard__metrics > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.ov-experience-dashboard__metrics > div + div {
+  padding-inline-start: 16px;
+  border-inline-start: 1px dashed var(--ov-ui-experience-border);
+}
+
+.ov-experience-dashboard__metrics svg {
+  margin-bottom: 12px;
+  color: var(--ov-ui-experience-muted);
+}
+
+.ov-experience-dashboard__metrics dd {
+  margin: 0 0 2px;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 24px;
+}
+
+.ov-experience-dashboard__metrics > div:first-child dd {
+  font-size: 24px;
+}
+
+.ov-experience-dashboard__metrics dt {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--ov-ui-experience-muted);
+  font-size: 12px;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 结果分布：一行一个结果，轨道 10 高、无圆角；空态撑到 266 高。 */
+.ov-experience-dashboard__distribution {
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  border: 1px solid var(--ov-ui-experience-border);
+  border-radius: 12px;
+}
+
+.ov-experience-dashboard__distribution:has(.ov-dashboard-state) {
+  min-height: 266px;
+  align-items: center;
+  justify-content: center;
+}
+
+.ov-experience-dashboard__outcome + .ov-experience-dashboard__outcome {
+  padding-top: 16px;
+}
+
+.ov-experience-dashboard__outcome-meta {
+  display: flex;
+  height: 20px;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--ov-ui-experience-muted);
+  font-size: 14px;
+}
+
+.ov-experience-dashboard__outcome-meta strong {
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  font-size: 13px;
   font-weight: 400;
 }
 
-.ov-experience-dashboard__source-group {
-  padding: 12px 0;
+.ov-experience-dashboard__outcome-track {
+  height: 10px;
+  margin-top: 4px;
+  overflow: hidden;
+  /* 轨道用正文色 6% 调出，与火山版同一条规则；底色随主题自动明暗。 */
+  /* The track is 6% of the body colour, the console's own rule, so it follows the theme. */
+  background: color-mix(
+    in srgb,
+    var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f)) 6%,
+    transparent
+  );
 }
+
+.ov-experience-dashboard__outcome-track span {
+  display: block;
+  height: 100%;
+  background: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  transition: width 180ms ease;
+}
+
+/* 轨迹时间线：左侧 24 宽的轨道，竖线与圆点居中。 */
+.ov-experience-dashboard__trajectories {
+  margin-top: 32px;
+}
+
+.ov-experience-dashboard__trajectories h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  line-height: 22px;
+}
+
+.ov-experience-dashboard__timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ov-experience-dashboard__timeline-item {
+  display: grid;
+  min-width: 0;
+  align-items: stretch;
+  gap: 8px;
+  grid-template-columns: 24px minmax(0, 1fr);
+}
+
+.ov-experience-dashboard__timeline-rail {
+  position: relative;
+  display: block;
+  width: 24px;
+  min-height: 100%;
+}
+
+.ov-experience-dashboard__timeline-rail::after {
+  position: absolute;
+  content: '';
+  top: 18px;
+  bottom: -16px;
+  inset-inline-start: 11px;
+  width: 1px;
+  background: var(
+    --ov-ui-color-border-2,
+    var(--ov-ui-border-2-default, #e1e4f2)
+  );
+}
+
+.ov-experience-dashboard__timeline-item:last-child
+  .ov-experience-dashboard__timeline-rail::after {
+  display: none;
+}
+
+.ov-experience-dashboard__timeline-rail i {
+  position: absolute;
+  top: 7px;
+  inset-inline-start: 9px;
+  z-index: 1;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(
+    --ov-ui-color-border-3,
+    var(--ov-ui-border-3-default, #d7daea)
+  );
+}
+
+.ov-experience-dashboard__timeline-content {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ov-experience-dashboard__timeline-content time {
+  width: 100%;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.ov-experience-dashboard__trajectory-title {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ov-experience-dashboard__trajectory-name {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ov-experience-dashboard__trajectory-name:hover:not(:disabled) {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+}
+
+.ov-experience-dashboard__outcome-tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  color: var(--ov-ui-experience-muted);
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.ov-experience-dashboard__outcome-tag i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentcolor;
+}
+
+.ov-experience-dashboard__outcome-tag--success {
+  color: var(--ov-ui-experience-success);
+}
+
+.ov-experience-dashboard__outcome-tag--failure {
+  color: var(--ov-ui-experience-danger);
+}
+
+.ov-experience-dashboard__outcome-tag--partial {
+  color: var(--ov-ui-experience-warning);
+}
+
+/* 轨迹 URI 行：等宽字体、图标与两个 20 高的操作按钮。 */
+.ov-experience-dashboard__trajectory-path {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  color: var(--ov-ui-experience-muted);
+  font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.ov-experience-dashboard__trajectory-path > svg {
+  flex: none;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+}
+
+.ov-experience-dashboard__trajectory-path
+  > span:not(.ov-experience-dashboard__path-actions) {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-experience-dashboard__path-actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  margin-inline-start: 2px;
+}
+
+.ov-experience-dashboard__trajectory-description {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.ov-experience-dashboard__icon-button {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ov-ui-experience-muted);
+  cursor: pointer;
+}
+
+.ov-experience-dashboard__icon-button:hover:not(:disabled) {
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
+}
+
+.ov-experience-dashboard__icon-button:disabled {
+  color: var(
+    --ov-ui-color-text-disabled,
+    var(--ov-ui-text-disabled-default, #a5a7bb)
+  );
+  cursor: not-allowed;
+}
+
+.ov-experience-dashboard__load-more {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 8px;
+  color: var(--ov-ui-experience-muted);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.ov-experience-dashboard__load-more-action {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ov-experience-dashboard__load-more-action:hover {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+}
+
+/* 来源追溯：一组可折叠的时间线，标题带旋转的折叠箭头。 */
+.ov-experience-dashboard__source-group {
+  padding: 24px 0 16px;
+}
+
 .ov-experience-dashboard__source-group summary {
   display: flex;
+  min-height: 22px;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
   cursor: pointer;
   list-style: none;
 }
-.ov-experience-dashboard__source-group summary strong {
+
+.ov-experience-dashboard__source-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.ov-experience-dashboard__source-title {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.ov-experience-dashboard__source-title strong {
+  overflow: hidden;
+  font-size: 13px;
   font-weight: 500;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.ov-experience-dashboard__source-group summary span {
-  color: var(
-    --ov-ui-color-dashboard-muted,
-    var(--ov-ui-dashboard-muted-default)
-  );
+
+.ov-experience-dashboard__source-chevron {
+  flex: none;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  transition: transform 160ms ease;
+}
+
+.ov-experience-dashboard__source-group:not([open])
+  .ov-experience-dashboard__source-chevron {
+  transform: rotate(-90deg);
+}
+
+.ov-experience-dashboard__source-count {
+  flex: none;
+  color: var(--ov-ui-experience-muted);
   font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
 }
+
+/* 测试：一张卡片一份材料，内容区等宽字体、可滚动。 */
 .ov-experience-dashboard__tests {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding-top: 8px;
+  padding: 20px 0 16px;
 }
-.ov-experience-dashboard__tests article {
+
+.ov-experience-dashboard__test-card {
   display: flex;
-  flex-direction: column;
   max-height: min(560px, calc(100vh - 220px));
-  min-height: 180px;
   overflow: hidden;
-  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  flex-direction: column;
+  border: 1px solid
+    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default, #e1e4f2));
   border-radius: 8px;
-  background: var(--ov-ui-color-bg-2, var(--ov-ui-bg-2-default));
+  background: var(--ov-ui-experience-card);
 }
-.ov-experience-dashboard__tests header {
+
+.ov-experience-dashboard__test-card > header {
   display: flex;
-  flex: none;
-  align-items: start;
-  gap: 8px;
   min-height: 92px;
+  flex: none;
+  align-items: flex-start;
+  gap: 8px;
   padding: 12px;
-  border-bottom: 1px solid
-    var(--ov-ui-color-dashboard-border, var(--ov-ui-dashboard-border-default));
+  border-bottom: 1px solid var(--ov-ui-experience-border);
 }
-.ov-experience-dashboard__test-heading {
+
+.ov-experience-dashboard__test-card-heading {
   display: flex;
   min-width: 0;
   flex: 1;
   flex-direction: column;
   gap: 4px;
 }
-.ov-experience-dashboard__test-heading > strong {
+
+.ov-experience-dashboard__test-card-heading > strong {
   font-size: 14px;
   font-weight: 500;
+  letter-spacing: 0.042px;
+  line-height: 22px;
 }
+
 .ov-experience-dashboard__test-meta {
   display: flex;
   min-width: 0;
+  min-height: 20px;
   align-items: center;
   gap: 8px;
-  color: var(
-    --ov-ui-color-dashboard-muted,
-    var(--ov-ui-dashboard-muted-default)
-  );
+  color: var(--ov-ui-experience-muted);
   font-size: 12px;
+  line-height: 20px;
 }
-.ov-experience-dashboard__test-meta span {
+
+.ov-experience-dashboard__test-meta > svg {
   flex: none;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
 }
+
 .ov-experience-dashboard__test-meta code {
-  min-width: 0;
   overflow: hidden;
+  min-width: 0;
+  flex: 0 1 auto;
+  font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
+  font-size: inherit;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: inherit;
 }
-.ov-experience-dashboard__test-meta p {
-  margin: 0;
+
+.ov-experience-dashboard__test-meta-label {
+  flex: none;
+}
+
+.ov-experience-dashboard__test-meta--task {
+  align-items: flex-start;
+}
+
+.ov-experience-dashboard__test-task {
+  display: -webkit-box;
+  overflow: hidden;
+  min-width: 0;
+  flex: 1;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 18px;
   overflow-wrap: anywhere;
 }
-.ov-experience-dashboard__tests button:not(.ov-button) {
+
+.ov-experience-dashboard__copy {
+  display: inline-flex;
   flex: none;
-  border: 1px solid
-    var(--ov-ui-color-dashboard-border, var(--ov-ui-dashboard-border-default));
-  border-radius: 6px;
-  padding: 4px 8px;
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: inherit;
   font: inherit;
   cursor: pointer;
 }
-.ov-experience-dashboard__test-meta button:not(.ov-button) {
-  padding: 0 2px;
-  border: 0;
-  background: transparent;
-  font-size: 12px;
+
+.ov-experience-dashboard__copy--labelled {
+  height: 32px;
+  gap: 4px;
+  padding: 0 12px;
+  border: 1px solid var(--ov-ui-experience-border);
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 22px;
 }
+
+.ov-experience-dashboard__copy--labelled:hover:not(:disabled) {
+  border-color: var(
+    --ov-ui-color-border-3,
+    var(--ov-ui-border-3-default, #d7daea)
+  );
+}
+
+.ov-experience-dashboard__copy:disabled {
+  color: var(
+    --ov-ui-color-text-disabled,
+    var(--ov-ui-text-disabled-default, #a5a7bb)
+  );
+  cursor: not-allowed;
+}
+
 .ov-experience-dashboard__test-content {
   overflow: auto;
   min-height: 0;
-  padding: 12px;
-  white-space: pre-wrap;
+  padding: 16px;
+  /* 与卡片同底：火山版的内容区只比卡片略浅，这里不再另设一层色。 */
+  /* The card's own surface: the console's body is a hair lighter, not a new tone. */
+  background: var(--ov-ui-experience-card);
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
+  font-size: 13px;
+  letter-spacing: 0.039px;
+  line-height: 20px;
   overflow-wrap: anywhere;
-}
-.ov-experience-dashboard__test-content strong {
-  font-weight: 500;
+  white-space: pre-wrap;
 }
 
-.ov-experience-dashboard__table th span {
+.ov-experience-dashboard__test-heading {
+  color: var(--ov-ui-experience-muted);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.ov-experience-dashboard__test-role-name {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+}
+
+.ov-experience-dashboard__test-role-content {
+  color: var(--ov-ui-experience-success);
+}
+
+/* 目录列表：表头 40 高，行 82 高，列宽与火山版一致。
+ *
+ * 文件名列保底 180，整表保底 560：容器窄于这个宽度时整表横向滚动，而不是把
+ * 文件名压成 0 —— 那会让每一行只剩图标和两个破折号。火山版对嵌入场景用的是
+ * 同一条规则（`minmax(180px, 1fr)` + 容器 `overflow-x: auto`）。
+ *
+ * The file column keeps at least 180 and the table at least 560: below that the table
+ * scrolls horizontally instead of squeezing the name to zero, which would leave each
+ * row with only an icon and two dashes. The console uses the same rule when embedded.
+ */
+.ov-experience-dashboard__table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  border-radius: 12px;
+}
+
+.ov-experience-dashboard__table {
+  min-width: 560px;
+  overflow: hidden;
+  border: 1px solid var(--ov-ui-experience-border);
+  border-radius: 12px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #fff));
+}
+
+.ov-experience-dashboard__table-head,
+.ov-experience-dashboard__table-row {
+  display: grid;
+  align-items: center;
+  grid-template-columns: 60px minmax(180px, 1fr) 140px 140px;
+}
+
+.ov-experience-dashboard__table-head {
+  height: 40px;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.ov-experience-dashboard__table-head > span {
   display: flex;
+  align-items: center;
+  padding: 0 16px;
+}
+
+.ov-experience-dashboard__hint-label {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: help;
+}
+
+.ov-experience-dashboard__table-row {
+  min-height: 82px;
+  border-top: 0.5px solid var(--ov-ui-experience-border);
+}
+
+.ov-experience-dashboard__table-index,
+.ov-experience-dashboard__table-metric {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.ov-experience-dashboard__table-metric {
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+}
+
+.ov-experience-dashboard__table-file {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+}
+
+.ov-experience-dashboard__table-file-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.ov-experience-dashboard__file-icon {
+  flex: none;
+  color: var(--ov-ui-experience-icon-light, currentColor);
+}
+
+.dark .ov-experience-dashboard__file-icon {
+  color: var(--ov-ui-experience-icon-dark, currentColor);
+}
+
+.ov-experience-dashboard__table-file-name {
+  overflow: hidden;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ov-experience-dashboard__table-file-name:hover:not(:disabled) {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+}
+
+.ov-experience-dashboard__table-file-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
   gap: 4px;
+  color: var(--ov-ui-experience-muted);
+  font-size: 12px;
+  line-height: 20px;
   white-space: nowrap;
 }
-.ov-experience-dashboard__table th code {
-  min-width: 0;
+
+.ov-experience-dashboard__table-file-meta > span:first-child {
   overflow: hidden;
+  min-width: 0;
+  font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
   text-overflow: ellipsis;
-  font: inherit;
-  background: transparent;
-  padding: 0;
 }
-.ov-experience-dashboard__table th time {
-  flex: none;
+
+.ov-experience-dashboard__pagination {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 0 4px;
+}
+
+.ov-experience-dashboard :is(button, summary, [tabindex]):focus-visible {
+  outline: 2px solid
+    var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+  outline-offset: 2px;
+}
+
+.ov-experience-dashboard button:disabled {
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-experience-dashboard__outcome-track span,
+  .ov-experience-dashboard__source-chevron {
+    transition: none;
+  }
 }

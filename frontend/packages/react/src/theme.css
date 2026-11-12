@@ -347,6 +347,8 @@ html.dark .ov-file-preview {
   --ov-ui-dashboard-danger-default: #d92d54;
   --ov-ui-dashboard-danger-light-default: #ffecee;
   --ov-ui-dashboard-success-default: #4f9c70;
+  /* 看板点阵底的点色，取自控制台同款纹理的 12% 灰。 The dot colour of the board grid. */
+  --ov-ui-dashboard-dot-default: rgb(120 124 145 / 12%);
 }
 html.dark .ov-wiki-dashboard,
 html.dark .ov-experience-dashboard,
@@ -360,6 +362,7 @@ html.dark .ov-file-browser {
   --ov-ui-dashboard-danger-default: var(--ov-ui-status-error-default);
   --ov-ui-dashboard-danger-light-default: var(--ov-ui-bg-5-default);
   --ov-ui-dashboard-success-default: var(--ov-ui-status-success-default);
+  --ov-ui-dashboard-dot-default: rgb(255 255 255 / 12%);
 }
 
 /* Directory guidance: six popover illustrations and floating surface. */

@@ -47,6 +47,7 @@ export function ExperienceDashboardPane({
       tab={browser.tab}
       days={browser.days}
       page={browser.page}
+      pageSize={EXPERIENCE_PAGE_SIZE}
       startIndex={browser.page * EXPERIENCE_PAGE_SIZE}
       hasMore={Boolean(
         directory
