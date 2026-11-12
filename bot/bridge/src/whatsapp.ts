@@ -15,6 +15,8 @@ import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
 
+import { createCredentialUpdateHandler } from './credential-update.js';
+
 const VERSION = '0.1.0';
 
 export interface InboundMessage {
@@ -104,7 +106,7 @@ export class WhatsAppClient {
     });
 
     // Save credentials on update
-    this.sock.ev.on('creds.update', saveCreds);
+    this.sock.ev.on('creds.update', createCredentialUpdateHandler(saveCreds));
 
     // Handle incoming messages
     this.sock.ev.on('messages.upsert', async ({ messages, type }: { messages: any[]; type: string }) => {
