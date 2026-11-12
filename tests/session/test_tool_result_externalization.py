@@ -13,7 +13,7 @@ from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.session import Session
 from openviking.session.tool_result_store import ToolResultStore
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import FailedPreconditionError
+from openviking_cli.exceptions import FailedPreconditionError, NotFoundError
 from tests.utils.mock_agfs import MockLocalAGFS
 
 
@@ -58,6 +58,23 @@ def _small_config(**overrides):
 def _json_items_payload(count: int) -> str:
     items = ",".join(f'{{"id":{idx},"name":"item{idx}"}}' for idx in range(count))
     return f'{{"items":[{items}]}}'
+
+
+class _InMemoryToolResultFS:
+    def __init__(self):
+        self.files = {}
+        self.writes = []
+
+    async def read_file(self, uri, *, ctx):  # noqa: ANN001
+        del ctx
+        if uri not in self.files:
+            raise NotFoundError(uri, "file")
+        return self.files[uri]
+
+    async def write_file(self, uri, content, *, ctx):  # noqa: ANN001
+        del ctx
+        self.writes.append(uri)
+        self.files[uri] = content
 
 
 @pytest.mark.parametrize("failure_mode", [None, "reject", "preserve_raw", "preview_only"])
@@ -163,3 +180,63 @@ async def test_list_tool_results_filters_tool_name_before_limit():
     result = await store.list(tool_name="target", limit=1)
 
     assert result["tool_results"] == [{"tool_result_id": "tr_target", "tool_name": "target"}]
+
+
+@pytest.mark.parametrize("damage", ["missing", "mismatched"])
+async def test_write_repairs_matching_metadata_without_matching_payload(damage):
+    fs = _InMemoryToolResultFS()
+    store = ToolResultStore(
+        fs,
+        "viking://user/alice/sessions/cache-integrity",
+        "cache-integrity",
+        ctx=None,
+    )
+    write_args = {
+        "content": "complete tool result",
+        "tool_id": "call_cache_integrity",
+        "tool_name": "fetch_result",
+        "message_id": "msg_cache_integrity",
+        "user_id": "alice",
+        "peer_id": None,
+        "created_at": "2026-10-10T18:15:30Z",
+        "preview_chars": 8,
+    }
+    stored = await store.write(**write_args)
+    if damage == "missing":
+        del fs.files[stored.output_uri]
+    else:
+        fs.files[stored.output_uri] = "different payload"
+    fs.writes.clear()
+
+    repaired = await store.write(**write_args)
+
+    assert repaired.storage_uri == stored.storage_uri
+    assert fs.writes == [stored.output_uri, stored.metadata_uri]
+    assert (await store.read(stored.tool_result_id, limit=-1))["content"] == write_args["content"]
+
+
+async def test_write_reuses_matching_metadata_and_payload_without_rewrite():
+    fs = _InMemoryToolResultFS()
+    store = ToolResultStore(
+        fs,
+        "viking://user/alice/sessions/cache-integrity",
+        "cache-integrity",
+        ctx=None,
+    )
+    write_args = {
+        "content": "complete tool result",
+        "tool_id": "call_cache_integrity",
+        "tool_name": "fetch_result",
+        "message_id": "msg_cache_integrity",
+        "user_id": "alice",
+        "peer_id": None,
+        "created_at": "2026-10-10T18:15:30Z",
+        "preview_chars": 8,
+    }
+    first = await store.write(**write_args)
+    fs.writes.clear()
+
+    second = await store.write(**write_args)
+
+    assert second.storage_uri == first.storage_uri
+    assert fs.writes == []
