@@ -46,13 +46,12 @@ from openviking.pyagfs.exceptions import (
     AGFSNotFoundError,
     AGFSNotSupportedError,
     GitConcurrentCommitError,
+    GitRestoreWritebackPartialError,
 )
-from openviking.resource.watch_types import uri_matches_prefix
 from openviking.server.identity import RequestContext, Role
 from openviking.service.external_task_service import ExternalTaskSnapshot
 from openviking.service.task_domain import TaskPatch, TaskStatus, sanitize_error
 from openviking.service.task_tracker_concurrency import run_to_completion
-from openviking.storage.acl import AclAction
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.utils.tags import build_search_tags_filter
 from openviking_cli.exceptions import (
@@ -60,7 +59,6 @@ from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
-    PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
@@ -1141,18 +1139,19 @@ class CompileLifecycle:
             }
 
     async def _rollback(self, to: str, task: Any, run: Dict[str, Any], ctx: RequestContext) -> None:
-        """Restore ``to`` to ``run``'s baseline; ``ctx`` provides snapshot access.
+        """Restore the output baseline and persist its resulting commit under the output lease.
 
-        Writes enforce the executor's current permissions. Denied paths are recorded; storage
-        errors propagate. A persisted head makes completion idempotent.
+        Each attempt snapshots current files so restore sees unfinished writes from a
+        failed attempt. Missing source subtrees represent empty baselines. Changed paths
+        are reindexed after releasing the lease, including partial writeback failures.
         """
         run_meta = run["meta"]
         restored, deleted = [], []
+        result = None
         try:
             async with self._locked_output(to, ctx) as lease:
                 if run_meta.get("finish_snapshot"):
                     return
-                actor_ctx = await self.task_ctx(task)
                 head = await self._commit(
                     [to],
                     f"compile {task.task_id} rollback point",
@@ -1162,102 +1161,29 @@ class CompileLifecycle:
                 )
                 if not head:
                     raise FailedPreconditionError("Compile rollback snapshot is unavailable")
-                changes = await self._fs.diff_paths(
-                    dirs=[to], base=run_meta["start_snapshot"], head=head, ctx=ctx
-                )
-                access = await self._fs._can_access_many(
-                    [change["uri"] for change in changes], actor_ctx, action=AclAction.WRITE
-                )
-                skipped = {uri for uri, allowed in access.items() if not allowed}
-                # Check replacements before deleting any descendants.
-                for change in changes:
-                    uri = change["uri"]
-                    if uri in skipped or not await self._fs.exists(uri, ctx=ctx):
-                        continue
-                    is_dir = (await self._fs.stat(uri, ctx=ctx, skip_count=True)).get("isDir")
-                    # Deletion removes direct grants; rebuilding needs parent write access.
-                    replaces_node = (is_dir and change["change_type"] != "added") or (
-                        change["change_type"] == "added"
-                        and any(
-                            other["change_type"] != "added"
-                            and uri_matches_prefix(other["uri"], uri)
-                            for other in changes
+                await self._save_checkpoint(task, {"rollback_reindex_pending": True})
+                try:
+                    result = await retry_git(
+                        lambda: self._fs.restore(
+                            project_dir=to,
+                            source_commit=run_meta["start_snapshot"],
+                            message=f"compile {task.task_id} rollback",
+                            ctx=ctx,
+                            allow_missing_source=True,
+                            lease_ref=lease,
                         )
                     )
-                    if replaces_node:
-                        parent_access = await self._fs._can_access_many(
-                            [uri.rsplit("/", 1)[0]], actor_ctx, action=AclAction.WRITE
-                        )
-                    else:
-                        parent_access = {}
-                    if is_dir:
-                        descendants = await self._fs._collect_uris(
-                            self._fs._uri_to_path(uri, ctx=ctx), True, ctx=ctx, strict=True
-                        )
-                        permissions = await self._fs._can_access_many(
-                            [uri, *descendants], actor_ctx, action=AclAction.MANAGE
-                        )
-                        if not all(permissions.values()):
-                            skipped.add(uri)
-                    if not all(parent_access.values()):
-                        skipped.add(uri)
-                applied = set()
-                for change in sorted(
-                    changes, key=lambda item: item["uri"].count("/"), reverse=True
-                ):
-                    uri = change["uri"]
-                    if any(uri_matches_prefix(uri, denied) for denied in skipped):
-                        skipped.add(uri)
-                        continue
-                    if change["change_type"] == "added" and await self._fs.exists(uri, ctx=ctx):
-                        try:
-                            await self._fs.rm(uri, recursive=True, ctx=actor_ctx, lease_ref=lease)
-                        except PermissionDeniedError:
-                            skipped.add(uri)
-                            continue
-                        deleted.append(self._fs._uri_to_tree_path(uri, ctx=ctx))
-                        applied.add(uri)
-                for change in sorted(changes, key=lambda item: item["uri"].count("/")):
-                    if change["change_type"] == "added":
-                        continue
-                    uri = change["uri"]
-                    if any(uri_matches_prefix(uri, denied) for denied in skipped):
-                        skipped.add(uri)
-                        continue
-                    content = await self._fs.show(run_meta["start_snapshot"], path=uri, ctx=ctx)
-                    try:
-                        if await self._fs.exists(uri, ctx=ctx):
-                            if (await self._fs.stat(uri, ctx=ctx, skip_count=True)).get("isDir"):
-                                await self._fs.rm(
-                                    uri, recursive=True, ctx=actor_ctx, lease_ref=lease
-                                )
-                                deleted.append(self._fs._uri_to_tree_path(uri, ctx=ctx))
-                                applied.add(uri)
-                            elif await self._fs.read_file_bytes(uri, ctx=ctx) == content:
-                                continue
-                        await self._fs.write_file_bytes(
-                            uri, content, ctx=actor_ctx, lease_ref=lease
-                        )
-                    except PermissionDeniedError:
-                        skipped.add(uri)
-                        continue
-                    restored.append(self._fs._uri_to_tree_path(uri, ctx=ctx))
-                    applied.add(uri)
-                rollback_head = await self._commit(
-                    [to],
-                    f"compile {task.task_id} rollback",
-                    ctx,
-                    lease_ref=lease,
-                    wait_busy=False,
-                )
-                if not rollback_head:
+                except GitRestoreWritebackPartialError as exc:
+                    restored, deleted = exc.written_paths, exc.deleted_paths
+                    raise
+                restored = result.get("written_paths") or []
+                deleted = result.get("deleted_paths") or []
+                oid = result.get("new_commit_oid") if result.get("result") == "applied" else None
+                if result.get("result") == "noop":
+                    oid = result.get("head")
+                if not oid or oid == _NULL_OID:
                     raise FailedPreconditionError("Compile rollback snapshot is unavailable")
-                if restored or deleted:
-                    # The run may survive a crash before its rebuild can be scheduled.
-                    await self._save_checkpoint(task, {"rollback_reindex_pending": True})
-                run_meta["finish_snapshot"] = rollback_head
-                if skipped:
-                    run["error"] = "Rollback denied for: " + ", ".join(sorted(skipped))
+                run_meta["finish_snapshot"] = oid
                 await self._save_run(task, run)
         finally:
             if restored or deleted:
@@ -1276,6 +1202,8 @@ class CompileLifecycle:
                             "rollback_reindex_task_id": reindex_task_id,
                         },
                     )
+            elif result is not None:
+                await self._save_checkpoint(task, {"rollback_reindex_pending": False})
 
     async def _commit(
         self,

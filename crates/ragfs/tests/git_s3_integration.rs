@@ -504,6 +504,7 @@ async fn s3_e2e_restore_rolls_back_and_advances_head() {
             branch: "main".into(),
             project_dir: Some("resources/proj_a".into()),
             source_commit: source_oid.to_hex().to_string(),
+            allow_missing_source: false,
             dry_run: false,
             message: Some("rewind proj_a".into()),
             author_name: "tester".into(),

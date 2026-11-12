@@ -132,6 +132,9 @@ pub struct RestoreRequest {
     /// What to restore from. Same resolution rules as `ShowRequest::target_ref`:
     /// 40-hex commit OID / short branch name / full `refs/heads/xxx`.
     pub source_commit: String,
+    /// Treat a missing scoped source subtree as empty; a source file remains invalid.
+    /// Compile rollback uses this for output directories with no versioned baseline files.
+    pub allow_missing_source: bool,
     /// If `true`, compute and return the diff but write nothing — no VFS
     /// writes, no new objects in the object store, no ref update.
     pub dry_run: bool,

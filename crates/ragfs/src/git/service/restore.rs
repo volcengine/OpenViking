@@ -11,8 +11,8 @@ impl GitService {
     /// Errors:
     /// - `GitError::InvalidProjectDir` — `project_dir` is empty / malformed.
     /// - `GitError::RefStore(NotFound)` — branch HEAD or source_commit ref missing.
-    /// - `GitError::SubtreeNotFoundInCommit` — `project_dir` does not resolve
-    ///   to a subtree in `source_commit`'s tree.
+    /// - `GitError::SubtreeNotFoundInCommit` — the source path is a file, or is
+    ///   missing while `allow_missing_source` is false.
     /// - `GitError::ConcurrentCommit` — branch ref changed between our read
     ///   and the CAS swap.
     pub async fn restore(&self, req: RestoreRequest) -> Result<RestoreResponse, GitError> {
@@ -41,6 +41,7 @@ impl GitService {
             branch,
             project_dir,
             source_commit,
+            allow_missing_source,
             dry_run,
             message: _,
             author_name: _,
@@ -62,7 +63,7 @@ impl GitService {
         let head_meta = load_commit_meta(self.object_store.as_ref(), account, &head_oid).await?;
 
         // 2. Extract subtree from each (or use full tree if project_dir is None).
-        //    Source missing → error (if project_dir is Some).
+        //    An allowed missing source represents an empty output baseline.
         //    Head missing → treat as empty (every file is a fresh write).
         let (source_tree_to_flatten, head_tree_to_flatten) = match project_dir {
             Some(project_dir) => {
@@ -74,7 +75,8 @@ impl GitService {
                 )
                 .await?
                 {
-                    Some((oid, mode)) if mode.is_tree() => oid,
+                    Some((oid, mode)) if mode.is_tree() => Some(oid),
+                    None if *allow_missing_source => None,
                     _ => {
                         return Err(GitError::SubtreeNotFoundInCommit {
                             project_dir: project_dir.clone(),
@@ -95,17 +97,17 @@ impl GitService {
                 };
                 (source_subtree, head_subtree)
             }
-            None => (source_meta.tree, Some(head_meta.tree)),
+            None => (Some(source_meta.tree), Some(head_meta.tree)),
         };
 
         // 3. Flatten and diff (paths in the result are subtree-relative, or account-relative if full tree).
-        let source_entries = crate::git::tree_builder::flatten(
-            self.object_store.as_ref(),
-            account,
-            source_tree_to_flatten,
-            &None,
-        )
-        .await?;
+        let source_entries = match source_tree_to_flatten {
+            Some(oid) => {
+                crate::git::tree_builder::flatten(self.object_store.as_ref(), account, oid, &None)
+                    .await?
+            }
+            None => Vec::new(),
+        };
         let head_entries = match head_tree_to_flatten {
             Some(oid) => {
                 crate::git::tree_builder::flatten(self.object_store.as_ref(), account, oid, &None)
@@ -155,14 +157,15 @@ impl GitService {
                     head_meta.tree,
                 )
                 .await?;
-                editor
-                    .upsert_subtree(
-                        self.object_store.as_ref(),
-                        account,
-                        project_dir,
-                        source_tree_to_flatten,
-                    )
-                    .await?;
+                if let Some(oid) = source_tree_to_flatten {
+                    editor
+                        .upsert_subtree(self.object_store.as_ref(), account, project_dir, oid)
+                        .await?;
+                } else {
+                    editor
+                        .remove(self.object_store.as_ref(), account, project_dir)
+                        .await?;
+                }
                 editor.write(self.object_store.as_ref(), account).await?
             }
             None => source_meta.tree,
@@ -404,7 +407,6 @@ impl GitService {
         })
     }
 }
-
 
 /// Load a blob object and return only its payload bytes (header stripped).
 ///

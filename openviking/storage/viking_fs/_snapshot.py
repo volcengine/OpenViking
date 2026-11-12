@@ -331,6 +331,8 @@ class _SnapshotMixin:
         author_name: Optional[str] = None,
         author_email: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
+        allow_missing_source: bool = False,
+        lease_ref: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Restore a project subtree to the state at ``source_commit``.
 
@@ -350,6 +352,11 @@ class _SnapshotMixin:
             message: Optional commit message; defaults to a generated string.
             author_name / author_email: Override the default bot author.
             ctx: Request context (provides ``account_id``).
+            allow_missing_source: Restore an absent source subtree as empty.
+                Existing source files remain invalid directory targets.
+            lease_ref: Existing content lease shared during restore writeback.
+                The caller schedules indexing from returned paths (or partial-error
+                paths) after releasing this lease.
 
         Returns:
             Dict containing ``result`` (``"applied"`` / ``"noop"`` / ``"dry_run"``)
@@ -398,6 +405,8 @@ class _SnapshotMixin:
         }
         if tree_dir is not None:
             kwargs["project_dir"] = tree_dir
+        if allow_missing_source:
+            kwargs["allow_missing_source"] = True
         # ROOT is used by the local, unauthenticated deployment mode and by
         # trusted internal callers. Keep its existing dry-run path unchanged.
         if dry_run and real_ctx.role == Role.ROOT:
@@ -427,7 +436,8 @@ class _SnapshotMixin:
         )
         partial_exc: Optional[GitRestoreWritebackPartialError] = None
         try:
-            lease = await self._async_agfs.pathlock_acquire_tree(lock_path)
+            lock_options = {"owner_lease_ref": lease_ref} if lease_ref is not None else {}
+            lease = await self._async_agfs.pathlock_acquire_tree(lock_path, **lock_options)
         except LockAcquisitionError:
             raise ResourceBusyError(
                 f"Resource is being processed: {project_dir or '*'}",
@@ -460,6 +470,8 @@ class _SnapshotMixin:
             await self._async_agfs.pathlock_release(lease)
 
         if partial_exc is not None:
+            if lease_ref is not None:
+                raise partial_exc
             # HEAD has moved forward but some VFS writes/deletes failed.
             # Still schedule reindex for the paths that *did* reach the VFS so
             # the vector index doesn't stay stale, then re-raise so the caller
@@ -479,7 +491,8 @@ class _SnapshotMixin:
                 )
             raise partial_exc
 
-        if result.get("result") != "applied":
+        # Shared-lease callers start indexing after their outer content lock is released.
+        if result.get("result") != "applied" or lease_ref is not None:
             return result
 
         written = list(result.get("written_paths") or [])

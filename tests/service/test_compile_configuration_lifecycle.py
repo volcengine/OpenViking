@@ -132,6 +132,7 @@ class SnapshotFS:
     def __init__(self, files):
         self._async_agfs = files
         self.commits = []
+        self.restore = AsyncMock(return_value={"result": "applied", "new_commit_oid": "f" * 40})
         self.source_changes = []
         self.output_changes = []
         self._can_access_many = AsyncMock(return_value={})
@@ -704,12 +705,12 @@ async def test_cancel_after_publication_still_restores_the_start_snapshot(
     result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
     assert result.status == "cancelled"
     run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
-    assert run["meta"]["finish_snapshot"] == f"{4:040x}"
+    assert run["meta"]["finish_snapshot"] == "f" * 40
     assert run["result"] is None
     assert (await setup.store.get("acme", "alice", compile_name))["progress"] == {}
     # A replay sees a completed rollback and cannot create further commits.
     await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="cancelled"))
-    assert len(setup.fs.commits) == 4
+    assert len(setup.fs.commits) == 3
     assert compile_metric_events == []
 
 
@@ -836,12 +837,7 @@ async def test_conflict_publication_recovers_after_state_write_failure(
 async def test_rollback_conflict_count_waits_for_tracked_reindex(setup, registered, reindex_status):
     record, compile_name, task = registered
     await setup.lifecycle.on_start(task)
-    uri = TARGET + "/page.md"
-    setup.fs.output_changes = [{"uri": uri, "change_type": "modified"}]
-    setup.fs._can_access_many.return_value = {uri: True}
-    setup.fs.exists = AsyncMock(return_value=False)
-    setup.fs.show = AsyncMock(return_value=b"restored")
-    setup.fs.write_file_bytes = AsyncMock()
+    setup.fs.restore.return_value["written_paths"] = ["resources/output/page.md"]
     setup.fs._schedule_restore_reindex_for_paths.return_value = "reindex-1"
     setup.tracker.wait = AsyncMock(
         return_value=SimpleNamespace(status=reindex_status),
