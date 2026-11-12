@@ -287,6 +287,7 @@ async def test_cancelled_startup_stops_owned_server(tmp_path):
 async def test_backend_creation_mounts_only_managed_workspace(tmp_path, monkeypatch, managed):
     from opensandbox.sandbox import Sandbox
 
+    monkeypatch.delenv("TZ", raising=False)
     remote = SimpleNamespace(commands=SimpleNamespace(run=AsyncMock()))
     create = AsyncMock(return_value=remote)
     monkeypatch.setattr(Sandbox, "create", create)
@@ -320,6 +321,47 @@ async def test_backend_creation_mounts_only_managed_workspace(tmp_path, monkeypa
     assert [rule.action for rule in kwargs["network_policy"].egress] == ["deny", "allow"]
     assert kwargs["connection_config"].use_server_proxy is True
     assert backend.local_file_path("secret") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("managed", "timezone", "expected_env"),
+    [
+        (True, None, {"HOME": "/workspace"}),
+        (True, "", {"HOME": "/workspace"}),
+        (True, "Asia/Shanghai", {"HOME": "/workspace", "TZ": "Asia/Shanghai"}),
+        (False, None, None),
+        (False, "", None),
+        (False, "Asia/Shanghai", {"TZ": "Asia/Shanghai"}),
+    ],
+)
+async def test_backend_creation_forwards_only_nonempty_timezone(
+    tmp_path, monkeypatch, managed, timezone, expected_env
+):
+    from opensandbox.sandbox import Sandbox
+
+    if timezone is None:
+        monkeypatch.delenv("TZ", raising=False)
+    else:
+        monkeypatch.setenv("TZ", timezone)
+    monkeypatch.setenv("OPENVIKING_TEST_SENTINEL", "must-not-pass")
+
+    remote = SimpleNamespace(commands=SimpleNamespace(run=AsyncMock()))
+    create = AsyncMock(return_value=remote)
+    monkeypatch.setattr(Sandbox, "create", create)
+    config = configured(tmp_path, managed=managed)
+    workspace = config.sandbox_workspace_path / "timezone"
+    backend = OpenSandboxBackend(
+        config.sandbox, "timezone", workspace, host_workspace=workspace if managed else None
+    )
+
+    await backend.start()
+
+    kwargs = create.call_args.kwargs
+    if expected_env is None:
+        assert "env" not in kwargs
+    else:
+        assert kwargs["env"] == expected_env
 
 
 @pytest.mark.asyncio
