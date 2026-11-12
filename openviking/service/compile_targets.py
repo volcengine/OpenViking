@@ -2389,6 +2389,9 @@ class CompileVersions:
         lease_ref: Optional[Dict[str, Any]] = None,
         write: Optional[Callable[[], Awaitable[Any]]] = None,
         record_version: bool = True,
+        explicit_snapshot: Optional[Callable[[], Optional[str]]] = None,
+        restored_from: Optional[str] = None,
+        version_message: Optional[str] = None,
     ) -> Any:
         """Write under the content lease and register ordinary versions with provenance.
 
@@ -2405,6 +2408,8 @@ class CompileVersions:
             record = await self.owning_target(ctx.account_id, uri)
             if record is None or not is_versioned(uri):
                 continue
+            if restored_from is not None and await self._running(ctx.account_id, record):
+                raise ConflictError("Compile is running", resource="COMPILE_RUNNING")
             grouped.setdefault(record["to"], []).append(uri)
             records[record["to"]] = record
             # Working bytes can differ from the latest version during Compile.
@@ -2475,11 +2480,15 @@ class CompileVersions:
             return written
         if not changed:
             return written
-        snapshot = await self._commit(
-            [uri for targets in changed.values() for uri in targets],
-            f"{edit_source} edit",
-            ctx,
-            lease_ref=lease_ref,
+        snapshot = (
+            explicit_snapshot()
+            if explicit_snapshot is not None
+            else await self._commit(
+                [uri for targets in changed.values() for uri in targets],
+                f"{edit_source} edit",
+                ctx,
+                lease_ref=lease_ref,
+            )
         )
         if context and context["account_id"] == ctx.account_id:
             for target_to, targets in changed.items():
@@ -2489,6 +2498,8 @@ class CompileVersions:
         for target_to, targets in changed.items():
             record = await self._store.get(ctx.account_id, records[target_to]["to"])
             run_entry = await self._write_meta(ctx.account_id, record)
+            if restored_from is not None:
+                run_entry = {**run_entry, "restored_from": restored_from}
             for uri in targets:
                 if snapshot:
                     await self.append(
@@ -2499,6 +2510,7 @@ class CompileVersions:
                         {
                             "source": edit_source,
                             "actor": ctx.user.user_id,
+                            **({"message": version_message} if version_message is not None else {}),
                             "provenance": {"source_roots": [uri]},
                             "meta": run_entry,
                         },

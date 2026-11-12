@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mount, ok, recordingFetch, settle } from './helpers/module-dom.mjs';
+import {
+  mount,
+  ok,
+  recordingFetch,
+  settle,
+  setTextarea,
+} from './helpers/module-dom.mjs';
 import { act, createElement } from 'react';
 
 const { FilePreview } =
@@ -79,7 +85,7 @@ test('FileBrowser loads the full file, writes it, and reloads the displayed body
     if (path.endsWith('/content/write')) {
       assert.equal(request.uri, uri);
       assert.equal(request.mode, 'replace');
-      assert.equal(request.content, '# Initial');
+      assert.equal(request.content, '# Updated');
       return ok({});
     }
     return ok([]);
@@ -107,7 +113,17 @@ test('FileBrowser loads the full file, writes it, and reloads the displayed body
     await click(view, 'Edit');
     assert.equal(view.container.querySelector('textarea')?.value, '# Initial');
     assert.equal(fullReads, 1);
+    await setTextarea(view.container.querySelector('textarea'), '# Updated');
     await click(view, 'Save');
+    assert.equal(requests.countOf('/api/v1/content/write'), 0);
+    await click(
+      {
+        container: document.querySelector(
+          '.ov-file-preview-version-note [role="dialog"]',
+        ),
+      },
+      'Confirm',
+    );
     assert.equal(requests.countOf('/api/v1/content/write'), 1);
     assert.equal(requests.countOf('/api/v1/content/read'), reads + 1);
     await view.render(render(true));

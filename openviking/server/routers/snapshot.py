@@ -110,7 +110,7 @@ async def log(
 
 
 class RestoreRequest(BaseModel):
-    """Restore a directory snapshot or one Compile output file; modes cannot be mixed."""
+    """Restore a directory snapshot or one file; modes cannot be mixed."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -123,9 +123,10 @@ class RestoreRequest(BaseModel):
     current_commit_id: Optional[str] = Field(
         None, pattern=r"^[0-9a-f]{40}$", description="Expected last commit changing path"
     )
+    expected_content_sha256: Optional[str] = Field(None, pattern=r"^[a-f0-9]{64}$")
     branch: str = "main"
     dry_run: bool = False
-    message: Optional[str] = None
+    message: Optional[str] = Field(None, max_length=1000)
     author_name: Optional[str] = None
     author_email: Optional[str] = None
 
@@ -136,8 +137,12 @@ class RestoreRequest(BaseModel):
                 raise ValueError("path cannot be combined with project_dir or source_commit")
             if not self.restore_commit_id or not self.current_commit_id:
                 raise ValueError("path requires restore_commit_id and current_commit_id")
+            if self.expected_content_sha256 is not None and (self.branch != "main" or self.dry_run):
+                raise ValueError("Checked file restore requires main and does not support dry_run")
         elif not self.source_commit:
             raise ValueError("source_commit is required")
+        elif self.expected_content_sha256 is not None:
+            raise ValueError("expected_content_sha256 requires path")
         return self
 
 
@@ -165,6 +170,22 @@ async def restore(
     service = get_service()
     if request.path is not None:
         path = validate_request_viking_uri(request.path, _ctx, field_name="path")
+        if request.expected_content_sha256 is not None:
+            try:
+                result = await service.fs.restore_content_version(
+                    uri=path,
+                    restore_commit_id=request.restore_commit_id,
+                    current_commit_id=request.current_commit_id,
+                    expected_content_sha256=request.expected_content_sha256,
+                    message=request.message,
+                    ctx=_ctx,
+                )
+            except (AGFSClientError, ValueError) as exc:
+                mapped = map_exception(exc, resource=path, resource_type="file")
+                if mapped is not None:
+                    raise mapped from exc
+                raise
+            return Response(status="ok", result=result)
         result = await service.compile.restore_file_version(
             uri=path,
             restore_commit_id=request.restore_commit_id,

@@ -401,7 +401,9 @@ export interface FilePreviewEditing {
    * Invoked when the draft is saved. A thrown error or rejection keeps the draft
    * and shows a failure message.
    */
-  save: (value: string) => Promise<void>;
+  save: (value: string, versionMessage?: string) => Promise<void>;
+  /** Ask for an optional version note before saving a changed draft. */
+  versionNote?: boolean;
   /**
    * 保存成功后触发，参数为已保存的文本；失败时不触发。
    * Called after saving succeeds, with the saved text; not called on failure.
@@ -563,6 +565,11 @@ export interface FilePreviewLabels {
   loadFailed?: string;
   /** 保存失败时的提示。Message shown when saving failed. */
   saveFailed?: string;
+  versionNoteTitle?: string;
+  versionNoteLabel?: string;
+  versionNotePlaceholder?: string;
+  versionNoteCancel?: string;
+  versionNoteConfirm?: string;
   /** 无法预览该格式时的提示。Message shown when the format cannot be previewed. */
   unsupported?: string;
   /** 取回正文时的加载提示。Message shown while the text is being fetched. */

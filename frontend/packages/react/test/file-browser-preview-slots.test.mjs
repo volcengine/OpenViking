@@ -3,7 +3,13 @@ import test from 'node:test';
 import { act, createElement as h } from 'react';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import { OpenVikingProvider } from '@openviking/react/client';
-import { mount, ok, recordingFetch, settle } from './helpers/module-dom.mjs';
+import {
+  mount,
+  ok,
+  recordingFetch,
+  settle,
+  setTextarea,
+} from './helpers/module-dom.mjs';
 
 const uri = 'viking://resources/guide.md';
 function fixture(isDir = false) {
@@ -110,12 +116,19 @@ test('custom preview editing retains drafts after failure and respects readOnly'
     );
     const editor = view.container.querySelector('textarea');
     assert.equal(editor.value, '# Guide');
+    await setTextarea(editor, '# Updated guide');
     await act(async () => assert.equal(await actions.saveEditing(), false));
+    const confirm = () =>
+      [
+        ...document.querySelectorAll('.ov-file-preview-version-note button'),
+      ].find((node) => node.textContent === 'Confirm');
+    await act(async () => confirm().click());
+    await settle();
     assert.equal(view.container.querySelector('textarea'), editor);
-    assert.equal(editor.value, '# Guide');
+    assert.equal(editor.value, '# Updated guide');
     assert.equal(actions.busy, false);
     fail = false;
-    await act(async () => assert.equal(await actions.saveEditing(), true));
+    await act(async () => confirm().click());
     await settle();
     assert.equal(actions.editing, false);
     assert.equal(writes, 2);

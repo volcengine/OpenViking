@@ -13,6 +13,8 @@ client.snapshot or AsyncHTTPClient layer.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import re
 import shutil
 import uuid
@@ -31,6 +33,7 @@ from openviking.service.core import OpenVikingService
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+from openviking_cli.utils.config.open_viking_config import get_openviking_config
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 pytest.importorskip("ragfs_python")
@@ -45,7 +48,7 @@ HTTP_TEST_TMP_DIR = PROJECT_ROOT / "test_data" / "tmp_client_git_http"
 
 
 def _install_fake_embedder(monkeypatch):
-    dimension = 1024
+    dimension = get_openviking_config().embedding.dimension
 
     class FakeEmbedder(DenseEmbedderBase):
         def __init__(self):
@@ -176,6 +179,116 @@ async def test_http_commit_and_log_roundtrip(http_git_client, http_service):
     log = await client.snapshot.log(limit=5)
     assert isinstance(log, list) and len(log) >= 1
     assert "oid" in log[0] and "message" in log[0]
+
+
+async def test_versioned_content_write_and_single_file_restore(http_git_client, http_service):
+    client = http_git_client
+    uri = "viking://resources/version_history/document.md"
+    other = "viking://resources/version_history/sibling.md"
+    await _write_blob(http_service, uri, b"# First version")
+    await _write_blob(http_service, other, b"unchanged")
+    first = await client.snapshot.commit(message="Initial version", paths=[uri, other])
+
+    def digest(text):
+        return hashlib.sha256(text.encode()).hexdigest()
+
+    async def read(path):
+        response = await client._http.get("/api/v1/content/read", params={"uri": path})
+        assert response.status_code == 200, response.text
+        return response.json()["result"]
+
+    async def wait_for_write(result):
+        task_id = result["task_id"]
+        async with asyncio.timeout(15):
+            while True:
+                response = await client._http.get(f"/api/v1/tasks/{task_id}")
+                assert response.status_code == 200, response.text
+                task = response.json()["result"]
+                if task["status"] not in {"pending", "running"}:
+                    assert task["status"] == "completed", task
+                    return
+                await asyncio.sleep(0.05)
+
+    def assert_conflict(response, message):
+        assert response.status_code == 409, response.text
+        assert response.json()["error"]["message"] == message
+
+    async def save(expected):
+        return await client._http.post(
+            "/api/v1/content/write",
+            json={
+                "uri": uri,
+                "content": "# Second version",
+                "version_message": "Fix document title",
+                "expected_content_sha256": digest(expected),
+            },
+        )
+
+    assert_conflict(await save("an out-of-date draft"), "File content changed since it was opened")
+    assert await read(uri) == "# First version"
+    response = await save("# First version")
+    assert response.status_code == 200, response.text
+    saved = response.json()["result"]
+    second = saved["snapshot"]["commit_oid"]
+    await wait_for_write(saved)
+    history = await client.snapshot.log(paths=[uri])
+    assert [(item["oid"], item["message"]) for item in history] == [
+        (second, "Fix document title"),
+        (first["commit_oid"], "Initial version"),
+    ]
+    assert (await client.snapshot.show(second, path=uri))["bytes"] == b"# Second version"
+    assert await read(uri) == "# Second version"
+
+    async def restore(current_commit, current_content):
+        return await client._http.post(
+            "/api/v1/snapshot/restore",
+            json={
+                "path": uri,
+                "restore_commit_id": first["commit_oid"],
+                "current_commit_id": current_commit,
+                "expected_content_sha256": digest(current_content),
+            },
+        )
+
+    assert_conflict(
+        await restore(first["commit_oid"], "# Second version"),
+        "File version changed since history was opened",
+    )
+    assert_conflict(
+        await restore(second, "# First version"),
+        "File content changed since it was opened",
+    )
+    assert await read(uri) == "# Second version"
+    response = await restore(second, "# Second version")
+    assert response.status_code == 200, response.text
+    restored_result = response.json()["result"]
+    restored = restored_result["snapshot"]["commit_oid"]
+    await wait_for_write(restored_result)
+    assert [item["oid"] for item in await client.snapshot.log(paths=[uri])] == [
+        restored,
+        second,
+        first["commit_oid"],
+    ]
+    assert (await client.snapshot.show(restored, path=uri))["bytes"] == b"# First version"
+    assert (await client.snapshot.show(restored, path=other))["bytes"] == b"unchanged"
+    assert await read(uri) == "# First version"
+    assert await read(other) == "unchanged"
+
+    # An ignored file may still exist in history. Reject the new write without
+    # creating a deletion snapshot or changing its working contents.
+    ignored = await client._http.put(
+        "/api/v1/snapshot/ignore",
+        json={"content": "resources/version_history/document.md\n"},
+    )
+    assert ignored.status_code == 200, ignored.text
+    refused = await save("# First version")
+    assert refused.status_code == 400, refused.text
+    assert await read(uri) == "# First version"
+    assert [item["oid"] for item in await client.snapshot.log(paths=[uri])] == [
+        restored,
+        second,
+        first["commit_oid"],
+    ]
 
 
 async def test_http_log_filters_repeated_paths_end_to_end(http_app, http_service):

@@ -108,7 +108,7 @@ import '@openviking/react/modules/file-browser/style.css';
 | edit        | 编辑按钮；只在可写且格式可编辑的文件上显示，经验文件、`viking://system` 下的资源和 L0/L1 摘要不可编辑                                         | `boolean` | `true` |
 | copyContent | 「复制内容」操作，复制当前预览的文本或目录摘要，超过预览行数上限时只复制已显示的部分；二进制媒体和 `viking://system` 下的目录不显示           | `boolean` | `true` |
 | download    | 「下载」操作，下载文件的原始内容；只在文件上显示                                                                                              | `boolean` | `true` |
-| history     | 「查看历史版本」操作；在用户 `memories/experiences` 下直接的经验文件，以及 Wiki 里的文件和目录上显示                                          | `boolean` | `true` |
+| history     | 「查看历史版本」操作；在支持的文本文件和 Wiki 目录上显示                                                                                      | `boolean` | `true` |
 | configure   | 「编译配置」操作；只在 Wiki 编译目标的根目录上显示，只读时仍可查看                                                                            | `boolean` | `true` |
 | importPack  | 「导入 .ovpack」操作；只在可写的目录上显示，且目录位于 `viking://user`（含 `viking://~`）或 `viking://resources` 下                           | `boolean` | `true` |
 | exportPack  | 「导出 .ovpack」操作；在 `viking://user`（含 `viking://~`）或 `viking://resources` 下的文件和目录上显示，`.relations.json` 等内部控制文件除外 | `boolean` | `true` |
@@ -431,7 +431,7 @@ await browserRef.current?.openResource(resultUri, { reveal: true });
 - `readOnly` 禁止所有写入，包括保存编译配置；开启 `acl` 后，编辑、导入和保存编译配置要求 `write` 或 `manage`，删除要求 `manage`。
 - 复制内容、下载、导出、历史版本和查看编译配置不受 `readOnly` 和 ACL 的限制。
 - 没有开启 `acl`，或资源不在 `viking://resources/` 下时，区块不探测权限，由服务端鉴权。
-- 历史版本：`GET /api/v1/snapshot/log` 读取该资源最近最多 500 条快照；Wiki 里的编译产物文件改用 `GET /api/v1/snapshot/versions`，最多 100 个保留版本。点击文本版本通过 `GET /api/v1/snapshot/show` 查看内容，不提供恢复版本。
+- 历史版本：`GET /api/v1/snapshot/log` 读取该资源最近最多 500 条快照；Wiki 编译产物用 `GET /api/v1/snapshot/versions` 读取最多 100 个保留版本。可预览或复制历史正文、与当前文件对比；有写权限时，可将旧版本恢复为一个新版本。保存有改动的文本时可选填版本备注。恢复前会校验当前文件是否已被改动。
 - 编译配置：`GET /api/v1/compile/config` 读取，`POST /api/v1/compile/config/update` 保存来源目录、技能、指令、自动更新和每天或每周的定时更新。
 - 导入 .ovpack：先通过 `POST /api/v1/resources/temp_upload` 上传文件，再调用 `POST /api/v1/pack/import` 导入到当前目录；失败时保留所选文件，重试会重新上传。
 - 导出 .ovpack：调用 `POST /api/v1/pack/export`，把返回的内容保存为 `<名称>.ovpack`；下载使用 `GET /api/v1/content/download`。
@@ -463,7 +463,7 @@ await browserRef.current?.openResource(resultUri, { reveal: true });
 - 带有 `compile_target=true` 标签或属于编译配置的目录显示 Wiki 看板，目录下的文件和子目录也有各自的 Wiki 看板。
 - 标签优先于编译配置：配置里缺少该目标时仍显示看板。
 - 编译配置（`GET /api/v1/compile/configs`）按需读取：打开 Wiki 看板，或正文中的 Wiki 保留尾注需要确认归属时才请求，普通浏览不请求。
-- `dashboardKinds` 不含 `'wiki'` 时，不再识别 Wiki，也不读取编译配置，Wiki 资源随之没有历史版本和编译配置操作。
+- `dashboardKinds` 不含 `'wiki'` 时，不再识别 Wiki，也不读取编译配置，Wiki 资源不再提供编译配置和编译版本索引。
 - 文件树里带看板的行显示看板图标，点击直接打开；Wiki 有待处理冲突时图标不同。
 - 预览区的页签可以在正文和看板之间切换。
 - 普通资源没有 Wiki 页签，已识别的 Wiki 即使没有冲突也保留看板。

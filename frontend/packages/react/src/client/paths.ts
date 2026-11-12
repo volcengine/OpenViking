@@ -33,6 +33,7 @@ export const OV_PATHS = {
   snapshotLog: '/api/v1/snapshot/log',
   snapshotVersions: '/api/v1/snapshot/versions',
   snapshotShow: '/api/v1/snapshot/show',
+  snapshotRestore: '/api/v1/snapshot/restore',
   resourceTempUpload: '/api/v1/resources/temp_upload',
   packImport: '/api/v1/pack/import',
   packExport: '/api/v1/pack/export',

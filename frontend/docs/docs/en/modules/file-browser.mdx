@@ -108,7 +108,7 @@ Each flag defaults to showing the action when the current resource supports it. 
 | edit        | The edit button; only for writable files in an editable format, never for experience files, `viking://system` resources or L0/L1 summaries                                                 | `boolean` | `true`  |
 | copyContent | The Copy content action, which copies the previewed text or directory summary (only the displayed part if truncated); hidden for binary media and `viking://system` directories            | `boolean` | `true`  |
 | download    | The Download action, which saves the original content of a file; shown for files only                                                                                                      | `boolean` | `true`  |
-| history     | The Version history action; shown for direct experience files under a user's `memories/experiences` and for files and directories in a Wiki                                                | `boolean` | `true`  |
+| history     | The Version history action; shown for supported text files and Wiki directories                                                                                                            | `boolean` | `true`  |
 | configure   | The Compile configuration action; shown only on the root directory of a Wiki compile target, and still viewable when read-only                                                             | `boolean` | `true`  |
 | importPack  | The Import .ovpack action; shown only for writable directories under `viking://user` (including `viking://~`) or `viking://resources`                                                      | `boolean` | `true`  |
 | exportPack  | The Export .ovpack action; shown for files and directories under `viking://user` (including `viking://~`) or `viking://resources`, except internal control files such as `.relations.json` | `boolean` | `true`  |
@@ -431,7 +431,7 @@ Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resol
 - `readOnly` disables all writes, including saving the compile configuration. With `acl` on, editing, import and saving the compile configuration require `write` or `manage`, and deletion requires `manage`.
 - Copy content, download, export, version history and viewing the compile configuration are not restricted by `readOnly` or ACL.
 - Without `acl`, or for resources outside `viking://resources/`, the block does not probe permissions and the server enforces access.
-- Version history: `GET /api/v1/snapshot/log` reads up to 500 recent snapshots of the resource; compile output files in a Wiki use `GET /api/v1/snapshot/versions` instead, with up to 100 retained versions. Clicking a text version shows its content through `GET /api/v1/snapshot/show`; versions cannot be restored.
+- Version history reads up to 500 snapshots with `GET /api/v1/snapshot/log`, or up to 100 retained versions with `GET /api/v1/snapshot/versions` for a Wiki compile output file. Preview or copy historical text, compare it with the current file, or restore an older revision as a new version when you can write. Saving a changed text draft supports an optional version note. Restore checks that the current file has not changed.
 - Compile configuration: `GET /api/v1/compile/config` reads it, and `POST /api/v1/compile/config/update` saves the source directories, skill, instructions, automatic updates and daily or weekly schedule.
 - Import .ovpack: the file is first uploaded through `POST /api/v1/resources/temp_upload`, then `POST /api/v1/pack/import` imports it into the current directory. On failure the chosen file is kept, and a retry uploads it again.
 - Export .ovpack: `POST /api/v1/pack/export` returns the content, which is saved as `<name>.ovpack`; downloads use `GET /api/v1/content/download`.
@@ -463,7 +463,7 @@ Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resol
 - The Wiki dashboard shows for directories with the `compile_target=true` tag or listed in the compile configuration, and the files and subdirectories below them get their own Wiki dashboards.
 - The tag takes precedence over the compile configuration: a dashboard still shows when the configuration lacks the target.
 - The compile configuration (`GET /api/v1/compile/configs`) is read on demand: when a Wiki dashboard opens, or when a reserved Wiki trailer in the body needs an ownership check; ordinary browsing does not request it.
-- When `dashboardKinds` omits `'wiki'`, Wiki is no longer detected and the compile configuration is not read, so Wiki resources lose their version history and compile configuration actions.
+- When `dashboardKinds` omits `'wiki'`, Wiki is no longer detected and the compile configuration is not read, so Wiki resources lose their Compile configuration and the Compile-specific history index.
 - Rows that have a dashboard show a dashboard icon in the tree; click it to open the dashboard. The icon differs when a Wiki has pending conflicts.
 - The tabs in the preview switch between the content and the dashboard.
 - Ordinary resources have no Wiki tab, and a detected Wiki keeps its dashboard even with no conflicts.

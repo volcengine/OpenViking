@@ -6,6 +6,13 @@ export const isSystemUri = (uri: string) =>
   /^viking:\/\/system(?:\/|$)/i.test(normalizeResourceUri(uri));
 export const isSummaryUri = (uri: string) =>
   /\/(?:\.abstract|\.overview)\.md$/i.test(normalizeResourceUri(uri));
+export const isEditableText = (uri: string) =>
+  /\.(?:md|json|jsonl|txt|yaml|yml)$/i.test(normalizeResourceUri(uri)) &&
+  !isSystemUri(uri) &&
+  !isSummaryUri(uri);
+export const supportsFileVersions = (uri: string) =>
+  isEditableText(uri) &&
+  !/\/\.relations\.json$/i.test(normalizeResourceUri(uri));
 
 /** Namespace scope mirrors ovpack/policy.py; import targets are directories. */
 export const supportsPack = (value: string) => {
@@ -38,6 +45,7 @@ export function previewPolicy({
   const summary = isSummaryUri(uri);
   const experience = isFile && isExperienceFile(uri);
   const wiki = dashboard?.kind === 'wiki';
+  const fileHistory = isFile && supportsFileVersions(uri);
   return {
     system,
     edit: isFile && !system && !summary && !experience && canWrite,
@@ -46,7 +54,10 @@ export function previewPolicy({
     download: isFile,
     history:
       !system &&
-      (experience || (wiki && !summary && !/\/\.relations\.json$/.test(uri))),
+      (fileHistory ||
+        experience ||
+        (wiki && !summary && !/\/\.relations\.json$/.test(uri))),
+    fileHistory,
     versionedFile: wiki && isFile && !summary,
     importPack: !isFile && !system && canWrite && supportsPack(uri),
     exportPack: !system && supportsPack(uri),

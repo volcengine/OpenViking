@@ -27,6 +27,15 @@ impl GitService {
     /// error silently falls back to the slow path; a stale or corrupt
     /// index can never produce an incorrect commit.
     pub async fn commit(&self, req: CommitRequest) -> Result<CommitResponse, GitError> {
+        self.commit_with_tracking(req, false).await
+    }
+
+    /// Require an explicit, trackable file for a versioned content write.
+    pub async fn commit_with_tracking(
+        &self,
+        req: CommitRequest,
+        require_tracked: bool,
+    ) -> Result<CommitResponse, GitError> {
         validate_account_id(&req.account)?;
         if let Some(paths) = &req.paths {
             for path in paths {
@@ -35,10 +44,16 @@ impl GitService {
         }
 
         let ctx = Arc::new(FsContextInner::new(req.account.clone()));
-        FS_CTX.scope(ctx, self.commit_impl(req)).await
+        FS_CTX
+            .scope(ctx, self.commit_impl(req, require_tracked))
+            .await
     }
 
-    async fn commit_impl(&self, req: CommitRequest) -> Result<CommitResponse, GitError> {
+    async fn commit_impl(
+        &self,
+        req: CommitRequest,
+        require_tracked: bool,
+    ) -> Result<CommitResponse, GitError> {
         let CommitRequest {
             account,
             branch,
@@ -59,6 +74,17 @@ impl GitService {
         // itself is already correct — `editor.remove` is idempotent and the
         // BTreeSet dedups candidates — only the reported counts need guarding.
         let ignore_matcher = load_ignore_matcher(&self.vfs, &account).await?;
+        if require_tracked {
+            let Some([path]) = paths.as_deref() else {
+                return Err(GitError::InvalidPath("expected a single file".into()));
+            };
+            if crate::git::enumerate::prune_path(path) || !should_track_path(path, &ignore_matcher)
+            {
+                return Err(GitError::InvalidPath(format!(
+                    "{path} is excluded from version history"
+                )));
+            }
+        }
         let mut ignored = 0usize;
         let mut changed = 0usize;
         let mut credited_ignored: HashSet<String> = HashSet::new();

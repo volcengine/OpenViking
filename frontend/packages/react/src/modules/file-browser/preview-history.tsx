@@ -1,28 +1,39 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { Button } from '../../shared/primitives/button/button.js';
-import { readHistoricalText, readPreviewHistory } from './preview-native.js';
+import { isExperienceFile } from './experience-data.js';
+import { readFileContent } from './fs-read-content.js';
+import {
+  readHistoricalText,
+  readPreviewHistory,
+  restorePreviewVersion,
+} from './preview-native.js';
+import { diffLines } from './preview-diff.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
-import { PreviewQueryState } from './preview-query-state.js';
-import type {
-  PreviewHistoryEntry,
-  PreviewWorkflowProps,
-} from './preview-workflow-types.js';
+import { PreviewHistoryList } from './preview-history-list.js';
+import { PreviewHistoryRevision } from './preview-history-revision.js';
+import { usePreviewMutation } from './use-preview-mutation.js';
+import type { PreviewWorkflowProps } from './preview-workflow-types.js';
 
 export function PreviewHistory({
   uri,
   versioned,
   showContent,
+  canWrite,
   text,
   locale,
   requestOptions,
   loadingText,
   retryText,
+  onUpdated,
+  onClose,
+  onRestoreBusyChange,
 }: PreviewWorkflowProps & {
   versioned: boolean;
   showContent: boolean;
+  canWrite: boolean;
   loadingText: string;
   retryText: string;
+  onRestoreBusyChange: (busy: boolean) => void;
 }) {
   const query = useDashboardQuery(
     useCallback(
@@ -32,57 +43,133 @@ export function PreviewHistory({
     ),
     requestOptions,
   );
-  const [selected, setSelected] = useState<PreviewHistoryEntry>();
+  const [selectedId, setSelectedId] = useState<string>();
+  const [compare, setCompare] = useState(false);
+  const [view, setView] = useState<'preview' | 'source'>('preview');
+  const [confirm, setConfirm] = useState(false);
+  const [copiedId, setCopiedId] = useState<string>();
+  const entries = query.data;
+  const selected = showContent
+    ? (entries?.find((entry) => entry.id === selectedId) ?? entries?.[0])
+    : undefined;
+  const writable = canWrite && showContent && !isExperienceFile(uri);
   const content = useDashboardQuery(
     useCallback(
       (client: OvClient, options: OvRequestOptions) =>
-        readHistoricalText(client, selected!, options),
-      [selected],
+        readHistoricalText(client, selected!, options, versioned),
+      [selected, versioned],
     ),
     requestOptions,
     Boolean(selected),
   );
+  const current = useDashboardQuery(
+    useCallback(
+      (client: OvClient, options: OvRequestOptions) =>
+        readFileContent(client, uri, options, -1, versioned),
+      [uri, versioned],
+    ),
+    requestOptions,
+    Boolean(selected) && (compare || writable),
+  );
+  const restore = usePreviewMutation(uri, requestOptions);
+  const copy = usePreviewMutation(uri, requestOptions);
   const statusText = { ...text, loading: loadingText, retry: retryText };
-  const dates = new Intl.DateTimeFormat(locale, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
+  const changes = useMemo(
+    () =>
+      compare && content.data !== undefined && current.data !== undefined
+        ? diffLines(content.data, current.data.content)
+        : undefined,
+    [compare, content.data, current.data],
+  );
+  const identical =
+    content.data !== undefined && content.data === current.data?.content;
+  const canRestore = Boolean(
+    writable &&
+    selected &&
+    entries?.[0] &&
+    current.data !== undefined &&
+    content.data !== undefined &&
+    !identical,
+  );
+
+  const doRestore = () => {
+    const head = entries?.[0];
+    if (!canRestore || !selected || !head || current.data === undefined) return;
+    const currentText = current.data.revisionText;
+    onRestoreBusyChange(true);
+    void restore
+      .run(
+        (client, options) =>
+          restorePreviewVersion(
+            client,
+            uri,
+            selected,
+            head,
+            currentText,
+            options,
+          ),
+        () => {
+          onClose();
+          onUpdated();
+        },
+      )
+      .finally(() => onRestoreBusyChange(false));
+  };
+
   return (
-    <div className="ov-file-browser-workflow__history">
-      <PreviewQueryState query={query} text={statusText} />
-      {query.data?.length === 0 ? <p>{text.historyEmpty}</p> : null}
-      <ol className="ov-file-browser-workflow__versions">
-        {query.data?.map((entry) => (
-          <li key={entry.id}>
-            {showContent ? (
-              <Button
-                size="small"
-                aria-pressed={selected?.id === entry.id}
-                onClick={() => setSelected(entry)}
-              >
-                {versioned
-                  ? `${text.version} ${entry.title}`
-                  : entry.title || entry.id.slice(0, 12)}
-              </Button>
-            ) : (
-              <span>{entry.title || entry.id.slice(0, 12)}</span>
-            )}
-            {entry.timestamp && Number.isFinite(entry.timestamp) ? (
-              <time dateTime={new Date(entry.timestamp * 1000).toISOString()}>
-                {dates.format(entry.timestamp * 1000)}
-              </time>
-            ) : null}
-          </li>
-        ))}
-      </ol>
-      {!versioned && query.data?.length === 500 ? (
-        <p>{text.historyLimit}</p>
-      ) : null}
-      {selected ? (
-        <div className="ov-file-browser-workflow__revision">
-          <PreviewQueryState query={content} text={statusText} />
-          {content.data !== undefined ? <pre>{content.data}</pre> : null}
-        </div>
+    <div className="ov-file-history__layout">
+      <PreviewHistoryList
+        query={query}
+        showContent={showContent}
+        selectedId={selected?.id}
+        compare={compare}
+        pending={restore.pending}
+        text={statusText}
+        locale={locale}
+        onCompare={() => {
+          if (!compare && writable) current.retry();
+          setCompare(!compare);
+        }}
+        onSelect={(id) => {
+          setSelectedId(id);
+          setConfirm(false);
+          setCopiedId(undefined);
+          copy.reset();
+          restore.reset();
+        }}
+      />
+      {showContent ? (
+        <PreviewHistoryRevision
+          content={content}
+          current={current}
+          selectedPath={selected?.path}
+          view={view}
+          compare={compare}
+          writable={writable}
+          changes={changes}
+          identical={identical}
+          canRestore={canRestore}
+          restore={restore}
+          copy={copy}
+          copied={Boolean(copiedId && copiedId === selected?.id)}
+          confirm={confirm}
+          text={statusText}
+          setView={setView}
+          onStartRestore={() => {
+            restore.reset();
+            setConfirm(true);
+          }}
+          onCancelRestore={() => setConfirm(false)}
+          onRestore={doRestore}
+          onCopy={() => {
+            const body = content.data;
+            if (body !== undefined && selected)
+              void copy.run(
+                async () => navigator.clipboard.writeText(body),
+                () => setCopiedId(selected.id),
+              );
+          }}
+        />
       ) : null}
     </div>
   );
