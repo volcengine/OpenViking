@@ -284,6 +284,9 @@ describe('Lark meeting transport', () => {
     assert.deepEqual(SUBSCRIBED_EVENT_TYPES, [
       'im.message.receive_v1',
       'card.action.trigger',
+      'im.message.recalled_v1',
+      'im.message.reaction.created_v1',
+      'im.message.reaction.deleted_v1',
       'drive.notice.comment_add_v1',
       'vc.bot.meeting_invited_v1',
       'vc.bot.meeting_activity_v1',

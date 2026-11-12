@@ -583,7 +583,7 @@ export class ActionService {
   assertStaysInThread(fence, connector, chatId) {
     if (!fence.thread_id || connector !== fence.connector_instance || chatId !== fence.chat_id) return;
     // A card action's msg= is internal (ca_...); replies go to its card= id.
-    const target = fence.message_type === 'card_action' ? fence.parent_id : fence.message_id;
+    const target = ['card_action', 'reaction'].includes(fence.message_type) ? fence.parent_id : fence.message_id;
     throw blocked('thread_target_mismatch',
       `Delivery blocked: decision_id is a message inside a thread, and send_message to its chat posts outside that thread. Answer inside the thread with reply_message, message_id=${target}, reply_in_thread=true. ${NO_ACTION}`);
   }

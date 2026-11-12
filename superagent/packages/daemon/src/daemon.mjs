@@ -22,6 +22,7 @@ import { pruneLarkMedia } from './lark-media.mjs';
 import { safeChatLookupError, safeError } from './logger.mjs';
 import { approvalNote } from './actions/approval.mjs';
 import { resolveCardAction, settledChoiceCard } from './card-messages.mjs';
+import { LARK_MESSAGE_EVENT_KINDS, resolveLarkMessageEvent } from './lark-message-events.mjs';
 import { IdleLivenessExtension } from './extensions/idle-liveness.mjs';
 import { OVSessionClient, OVSessionContext } from './ov-session-context.mjs';
 import { OVUnavailableError } from './ov-connection.mjs';
@@ -300,8 +301,9 @@ export class PersonalAgentDaemon {
           ? new OVRecall({ configPath: this.config.openVikingConfigPath, autoRecall: this.config.ovAutoRecall,
             store: this.store, logger: this.logger.child({ component: 'ov-recall' }) })
           : null,
-        prepareEvent: (event) => event.source === 'lark' && event.kind === 'message.action'
-          ? resolveCardAction(this.store.db, event, this.config.profile) : event,
+        prepareEvent: (event) => event.source !== 'lark' ? event
+          : event.kind === 'message.action' ? resolveCardAction(this.store.db, event, this.config.profile)
+            : LARK_MESSAGE_EVENT_KINDS.has(event.kind) ? resolveLarkMessageEvent(this.store.db, event) : event,
         eventHandler: (event) => {
           // The owner answered an approval card: the Core sends or drops the
           // draft itself, off the ingress queue (an SMTP send may be slow).

@@ -190,6 +190,7 @@ export function formatInboundLine(message, resolveName = null, authenticated = {
     + (message.connectorInstance && message.connectorInstance !== message.source ? ` instance=${metadataTag(message.connectorInstance)}` : '')
     + ` msg=${metadataTag(message.messageId)} event=${metadataTag(message.eventId)}`
     + (message.messageType === 'card_action' ? ` card=${message.parentId}` : '')
+    + (['recall', 'reaction'].includes(message.messageType) ? ` target=${metadataTag(message.parentId)}` : '')
     + ` time=${isoMinute(message.createTimeMs)} from=${fromLabel(message.chatId, message.senderId, resolveName, message.source, message.senderName)}${ownerTag}`
     + `${BOT_SENDERS.has(message.senderType) ? ' sender=bot' : ''}${botsTag}${replyTag}${mentionTag}${idleTag}${undecidedTag}] ${renderInboundContent(message)}`;
   return line;

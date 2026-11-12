@@ -49,7 +49,46 @@ export function normalizeLarkEvent(input, instance = 'lark') {
       content: { text: '[card action]' }, data: { interaction },
     });
   }
+  const messageEvent = normalizeLarkMessageEvent(input, instance);
+  if (messageEvent) return messageEvent;
   return normalizeLarkMessage(input, instance).envelope;
+}
+
+// A recall or a reaction on a message the bot can see. Lark names the message
+// but not always its chat or thread (reactions carry no chat at all), so the
+// Core places it from its own history (lark-message-events.mjs). msg= is a
+// stable internal id; the message it is about is the parent.
+const MESSAGE_EVENT_KINDS = {
+  'im.message.recalled_v1': 'message.recalled',
+  'im.message.reaction.created_v1': 'message.reaction.created',
+  'im.message.reaction.deleted_v1': 'message.reaction.deleted',
+};
+
+function normalizeLarkMessageEvent(input, instance) {
+  const kind = MESSAGE_EVENT_KINDS[input?.header?.event_type ?? input?.type ?? input?.event_type];
+  if (!kind) return null;
+  const raw = input.event ?? input;
+  const id = valueOrNull(input.header?.event_id ?? input.event_id);
+  const target = valueOrNull(raw.message_id);
+  if (!id || !/^om_[A-Za-z0-9_-]{8,}$/.test(target ?? '')) throw new Error('invalid Lark message event');
+  const recall = kind === 'message.recalled';
+  const operator = recall ? null : valueOrNull(raw.user_id?.open_id ?? raw.operator_id?.open_id);
+  const operatorType = recall ? null : valueOrNull(raw.operator_type) ?? 'user';
+  const emoji = recall ? null : valueOrNull(raw.reaction_type?.emoji_type);
+  if (!recall && (!emoji || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(emoji))) throw new Error('invalid Lark reaction');
+  const at = Number.parseInt(String((recall ? raw.recall_time : raw.action_time) ?? input.header?.create_time ?? Date.now()), 10);
+  return eventMessage('lark', {
+    instance, id, kind, occurred_at: Number.isFinite(at) ? at : Date.now(),
+    subject: { type: 'message', id: target },
+    actor: operator ? { type: operatorType === 'app' ? 'app' : 'user', id: operator }
+      : operatorType === 'app' ? { type: 'app', id: valueOrNull(raw.app_id) ?? 'bot' } : null,
+    message: { id: `${recall ? 'rc' : 're'}_${createHash('sha256').update(JSON.stringify([instance, id])).digest('hex').slice(0, 40)}`,
+      type: recall ? 'recall' : 'reaction', parent_id: target },
+    content: { text: recall ? '[recalled a message]'
+      : kind === 'message.reaction.created' ? `[reaction ${emoji}]` : `[removed reaction ${emoji}]` },
+    data: { target_message_id: target, chat_id: valueOrNull(raw.chat_id), recall_type: valueOrNull(raw.recall_type),
+      emoji_type: emoji },
+  });
 }
 
 // Lark's provider schema is decoded only at the Connector boundary. Media is
