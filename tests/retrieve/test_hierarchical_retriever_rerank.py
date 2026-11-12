@@ -11,6 +11,7 @@ import pytest
 
 from openviking.core.context import ContextLevel
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
+from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.utils.token_estimation import estimate_text_tokens
@@ -601,3 +602,61 @@ async def test_convert_to_matched_contexts_defaults_tags_and_body_previews():
         markdown,
         "",
     ]
+
+
+class RaisingRerankClient:
+    """Reranker whose provider call always fails."""
+
+    def rerank_batch(self, query: str, documents: list[str]):
+        raise RuntimeError("rerank provider unavailable")
+
+
+@pytest.mark.asyncio
+async def test_failed_rerank_is_recorded_as_fallback(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: RaisingRerankClient(),
+    )
+    storage = DummyStorage([_result("viking://resources/file-a", 0.8, abstract="file A")])
+    retriever = HierarchicalRetriever(storage, DummyEmbedder(), rerank_config=_config())
+    query = _query()
+    query.target_directories = ["viking://resources"]
+    collector = get_stats_collector()
+    collector.reset()
+
+    result = await retriever.retrieve(query, ctx=_ctx(), limit=5)
+
+    assert [ctx.uri for ctx in result.matched_contexts] == ["viking://resources/file-a"]
+    assert result.matched_contexts[0].score == 0.8
+    stats = collector.snapshot()
+    assert stats.rerank_used == 0
+    assert stats.rerank_fallback == 1
+
+
+@pytest.mark.asyncio
+async def test_partially_usable_rerank_counts_used_and_fallback(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: FakeRerankClient([float("nan"), 0.9]),
+    )
+    storage = DummyStorage(
+        [
+            _result("viking://resources/file-a", 0.8, abstract="file A"),
+            _result("viking://resources/file-b", 0.7, abstract="file B"),
+        ]
+    )
+    retriever = HierarchicalRetriever(storage, DummyEmbedder(), rerank_config=_config())
+    query = _query()
+    query.target_directories = ["viking://resources"]
+    collector = get_stats_collector()
+    collector.reset()
+
+    result = await retriever.retrieve(query, ctx=_ctx(), limit=5)
+
+    assert [ctx.uri for ctx in result.matched_contexts] == [
+        "viking://resources/file-b",
+        "viking://resources/file-a",
+    ]
+    stats = collector.snapshot()
+    assert stats.rerank_used == 1
+    assert stats.rerank_fallback == 1
