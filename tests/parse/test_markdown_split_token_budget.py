@@ -72,3 +72,20 @@ def test_oversized_header_and_row_stay_together_without_duplicate_header(header_
     row = "| " + "文" * 2500 + " | Y |"
     content = header + "\n" + row
     assert parser._smart_split_content(content, max_size=2000) == [content]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029"])
+async def test_layout_preserves_unicode_separators_inside_table_cells(newline, separator):
+    parser = MarkdownParser()
+    rows = [f"| row{index} | before{separator}after " + "文" * 2100 + " |" for index in range(3)]
+    content = newline.join(["| ID | Notes |", "| --- | --- |", *rows])
+
+    layout = await parser._compute_layout(
+        content, "viking://temp/table-unicode-lines", resource_name="rows"
+    )
+
+    writes = [op for op in layout.ops if op.kind == "write"]
+    assert len(writes) == len(rows)
+    assert [sum((op.content or "").count(row) for op in writes) for row in rows] == [1] * len(rows)

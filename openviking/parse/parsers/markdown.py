@@ -726,7 +726,7 @@ class MarkdownParser(BaseParser):
         is kept on the first chunk only. A single row may exceed the requested
         limits because row integrity takes precedence at this source-storage stage.
         """
-        lines = content.splitlines()
+        lines = re.split(r"\r\n|\r|\n", content)
         table_start = -1
         for index in range(len(lines) - 1):
             if self._is_markdown_table_row(lines[index]) and self._is_markdown_table_separator(
