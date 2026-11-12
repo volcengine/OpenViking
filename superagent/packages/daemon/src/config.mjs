@@ -335,6 +335,9 @@ export function getConfig() {
     // Replies to bot messages in one chat/thread with no person writing there
     // before the safety fuse holds further ones; 0 turns the fuse off.
     botReplyFuse: intEnv('OV_SUPERAGENT_BOT_REPLY_FUSE', 20, { min: 0, max: 1_000 }),
+    // Before a Lark send, also ask Lark for messages newer than the decision
+    // (see ActionService.assertFreshOnServer). Costs one API call per send.
+    serverFence: boolEnv('OV_SUPERAGENT_SERVER_FENCE', true),
     retentionMs: intEnv('OV_SUPERAGENT_RETENTION_MS', 7_776_000_000, { min: 86_400_000 }),
     dryRun: boolEnv('OV_SUPERAGENT_DRY_RUN', false),
   };
