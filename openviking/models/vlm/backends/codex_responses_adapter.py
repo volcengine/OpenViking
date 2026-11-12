@@ -177,6 +177,8 @@ def _build_chat_completion_like_response(final_response: Any, model: str) -> Any
             prompt_tokens=getattr(usage_raw, "input_tokens", 0),
             completion_tokens=getattr(usage_raw, "output_tokens", 0),
             total_tokens=getattr(usage_raw, "total_tokens", 0),
+            prompt_tokens_details=getattr(usage_raw, "input_tokens_details", None),
+            completion_tokens_details=getattr(usage_raw, "output_tokens_details", None),
         )
     message = SimpleNamespace(
         role="assistant",
@@ -226,16 +228,27 @@ def _build_final_response_from_stream_events(
     )
 
 
+class CodexResponseError(RuntimeError):
+    """An unsuccessful Responses stream, with any terminal usage retained."""
+
+    def __init__(self, event_type: str, response: Any, model: str):
+        super().__init__(f"Codex stream ended with {event_type}; expected response.completed")
+        self.response = response
+        self.usage = _build_chat_completion_like_response(response, model).usage
+
+
 class CodexCompletionsAdapter:
     def __init__(
         self,
         client_factory: Callable[[], Any],
         model: str,
         auth_retry_client_factory: Optional[Callable[[], Any]] = None,
+        on_failed_response: Optional[Callable[[Any], None]] = None,
     ):
         self._client_factory = client_factory
         self._model = model
         self._auth_retry_client_factory = auth_retry_client_factory
+        self._on_failed_response = on_failed_response
 
     def _create_response(self, **kwargs) -> Any:
         client = self._client_factory()
@@ -269,6 +282,7 @@ class CodexCompletionsAdapter:
         collected_text_deltas: List[str] = []
         has_function_calls = False
         completed_response = None
+        terminal_type = "EOF"
         try:
             stream = client.responses.create(**response_kwargs, stream=True)
         except Exception as exc:
@@ -295,12 +309,29 @@ class CodexCompletionsAdapter:
                 if "function_call" in event_type:
                     has_function_calls = True
                     continue
-                if event_type == "response.completed":
+                if event_type in {
+                    "response.completed",
+                    "response.failed",
+                    "response.incomplete",
+                    "error",
+                }:
+                    terminal_type = event_type
                     completed_response = getattr(event, "response", None)
+                    break
         finally:
             close = getattr(stream, "close", None)
             if callable(close):
                 close()
+        status = getattr(completed_response, "status", None)
+        if (
+            terminal_type != "response.completed"
+            or completed_response is None
+            or status not in {None, "completed"}
+        ):
+            error = CodexResponseError(terminal_type, completed_response, model)
+            if self._on_failed_response is not None:
+                self._on_failed_response(error)
+            raise error
         final_response = _build_final_response_from_stream_events(
             completed_response,
             collected_output_items,
