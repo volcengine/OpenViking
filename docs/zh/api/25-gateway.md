@@ -134,8 +134,9 @@ Anthropic 测试同时在 `x-api-key` 和 `Authorization: Bearer` 中发送密�
 | 连接 | 上游是完整请求地址（`append_endpoint_path` 为 `false`），没有模型列表。网关不发请求，请改用模型测试。 | `exact_endpoint_untestable` | `false` |
 | 模型 | Coding Plan 上游尚未授权网关使用。网关不发请求。 | `coding_plan_blocked` | `false` |
 | 两者 | 没有可用的 API Key：没有保存，或者上游要求每个客户端自带。网关不发请求。 | `upstream_key_missing` | `false` |
-| 连接 | 2xx，响应是带 `data` 列表的 JSON 对象 | `passed` | `true` |
-| 连接 | 其他 2xx：不是合法 JSON、响应体超过 16 KiB、没有 `data` 列表，或带 `error` 字段 | `upstream_key_rejected` | `false` |
+| 连接 | 2xx，响应是带 `data` 列表的 JSON 对象；或响应体在 16 KiB 处被截断，但前缀是 `{"object":"list","data":[...]}` | `passed` | `true` |
+| 连接 | 其他 2xx：不是合法 JSON、没有 `data` 列表，或带 `error` 字段 | `invalid_response` | `false` |
+| 连接 | 响应体超过 16 KiB，且前缀不是模型列表 | `response_too_large` | `false` |
 | 连接 | 404 或 405：服务商不提供模型列表，API Key 未经验证 | `models_unavailable` | `true` |
 | 连接 | 429：地址有响应，但 API Key 未经验证 | `rate_limited` | `true` |
 | 模型 | 2xx，响应符合已配置的模型协议 | `passed` | `true` |

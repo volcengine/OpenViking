@@ -134,8 +134,9 @@ The two tests read the provider's response differently:
 | Connection | The upstream is an exact endpoint (`append_endpoint_path` is `false`), which has no model list. No request is sent; run a model test instead. | `exact_endpoint_untestable` | `false` |
 | Model | The Coding Plan upstream has not been approved for gateway use. No request is sent. | `coding_plan_blocked` | `false` |
 | Both | No API key to use: none is stored, or the upstream expects each client to send its own. No request is sent. | `upstream_key_missing` | `false` |
-| Connection | 2xx with a JSON object that holds a `data` list | `passed` | `true` |
-| Connection | Any other 2xx: invalid JSON, a body over 16 KiB, no `data` list, or an `error` field | `upstream_key_rejected` | `false` |
+| Connection | 2xx with a JSON object that holds a `data` list, including a body truncated at 16 KiB whose prefix is `{"object":"list","data":[...]}` | `passed` | `true` |
+| Connection | Any other 2xx: invalid JSON, no `data` list, or an `error` field | `invalid_response` | `false` |
+| Connection | 2xx body over 16 KiB whose prefix is not a model list | `response_too_large` | `false` |
 | Connection | 404 or 405: the provider has no model list, so the key is not verified | `models_unavailable` | `true` |
 | Connection | 429: the address answered, but the key is not verified | `rate_limited` | `true` |
 | Model | 2xx with a response matching the configured model protocol | `passed` | `true` |
