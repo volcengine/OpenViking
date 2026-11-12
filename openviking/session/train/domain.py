@@ -64,12 +64,17 @@ class PolicySet:
     request_context: Any | None = field(default=None, repr=False, compare=False)
 
     @asynccontextmanager
-    async def lock(self):
+    async def lock(self, *, timeout_secs: float = 300.0):
         """Acquire a tree lock for the whole policy root directory.
 
-        Policy updates serialize on this lock so concurrent realtime/batch
-        training jobs plan and apply against a freshly reloaded policy set.
-        ``timeout=None`` means wait indefinitely until the lock is available.
+        Policy updates serialize on this lock.  Keep the critical section
+        short and local (reload + apply): long-running work such as remote
+        LLM planning must run before acquiring the lock, otherwise concurrent
+        writers of the same root are blocked until they hit the acquisition
+        timeout.
+
+        ``timeout_secs`` bounds how long acquisition waits for the current
+        holder before failing; it defaults to 300 seconds.
         """
 
         if self.viking_fs is None:
@@ -81,7 +86,9 @@ class PolicySet:
             raise RuntimeError("PolicySet.viking_fs must provide _uri_to_path for locking")
 
         path = uri_to_path(self.root_uri, ctx=self.request_context)
-        lease = await self.viking_fs._async_agfs.pathlock_acquire_tree(path, timeout_secs=300.0)
+        lease = await self.viking_fs._async_agfs.pathlock_acquire_tree(
+            path, timeout_secs=timeout_secs
+        )
         try:
             yield lease
         finally:

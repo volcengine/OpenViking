@@ -23,6 +23,11 @@ from openviking.session.train.interfaces import (
     SemanticGradient,
 )
 
+# Bounded number of optimistic re-plans when the policy set changed while the
+# optimizer was planning.  Keeps the (potentially minutes-long) LLM replanning
+# from livelocking against sustained concurrent writers.
+_PLAN_APPLY_MAX_REPLANS = 2
+
 
 @dataclass(slots=True)
 class PolicyTrainingEngine:
@@ -84,17 +89,53 @@ class PolicyTrainingEngine:
         policy_set: ExperienceSet,
         ctx: PipelineContext,
     ) -> tuple[PolicyUpdatePlan, PolicyApplyResult]:
-        async with policy_set.lock() as transaction_handle:
-            latest_policy_set = await policy_set.reload()
+        """Plan against a lock-free snapshot, then apply in a short critical section.
+
+        ``policy_optimizer.plan`` may block on a remote LLM for minutes.  Holding
+        the policy-root tree lock across that call starves every concurrent
+        writer of the same root until the lock acquisition timeout fails their
+        commits, so planning runs outside the lock.  The lock is taken only to
+        re-check that the snapshot the plan was built against is still the
+        latest one before applying.  When another writer committed meanwhile,
+        the plan is rebuilt against the fresh snapshot (bounded by
+        ``_PLAN_APPLY_MAX_REPLANS``); once the bound is exhausted the last plan
+        is applied under the lock with a conflict marker, and the updater's
+        per-item base-content guard reports stale targets as errors instead of
+        silently overwriting concurrent changes.
+        """
+
+        replans = 0
+        while True:
+            planned_snapshot = await policy_set.reload()
             plan = await self.policy_optimizer.plan(
                 gradients,
-                latest_policy_set,
+                planned_snapshot,
                 ctx.optimization_context,
             )
-            apply_result = await self.policy_updater.apply(
-                plan,
-                latest_policy_set,
-                ctx.apply_context or latest_policy_set.request_context,
-                transaction_handle=transaction_handle,
-            )
-        return plan, apply_result
+            async with policy_set.lock() as transaction_handle:
+                latest_policy_set = await policy_set.reload()
+                snapshot_current = _policy_sets_match(latest_policy_set, planned_snapshot)
+                if snapshot_current or replans >= _PLAN_APPLY_MAX_REPLANS:
+                    if not snapshot_current:
+                        plan.metadata = {
+                            **dict(plan.metadata or {}),
+                            "optimistic_apply_after_conflict": True,
+                            "replan_attempts": replans + 1,
+                        }
+                    apply_result = await self.policy_updater.apply(
+                        plan,
+                        latest_policy_set,
+                        ctx.apply_context or latest_policy_set.request_context,
+                        transaction_handle=transaction_handle,
+                    )
+                    return plan, apply_result
+            # The policy set moved on while planning: the lock was released on
+            # exiting the context manager, so re-plan outside it against the
+            # fresh snapshot.
+            replans += 1
+
+
+def _policy_sets_match(current: ExperienceSet, planned: ExperienceSet) -> bool:
+    """Whether ``planned`` is still the latest committed view of the policy root."""
+
+    return current.root_uri == planned.root_uri and list(current.policies) == list(planned.policies)
