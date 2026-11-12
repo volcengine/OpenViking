@@ -259,7 +259,6 @@ class TrajectoryRolloutAnalyzer:
             ctx=ctx,
             context_provider=provider,
             isolation_handler=isolation_handler,
-            thinking=True,
         )
 
         try:
