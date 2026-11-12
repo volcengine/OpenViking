@@ -789,7 +789,7 @@ async def test_incremental_inventory_by_uris_reads_exact_uri_groups_only():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("uri_count", [2, 80])
+@pytest.mark.parametrize("uri_count", [50, 80])
 async def test_incremental_inventory_by_uris_uses_one_exact_filter_per_uri_chunk(uri_count):
     uris = [f"viking://resources/docs/dir-{index}" for index in range(uri_count)]
     backend = _RealAclMemoryTransferBackend(
@@ -807,6 +807,7 @@ async def test_incremental_inventory_by_uris_uses_one_exact_filter_per_uri_chunk
 
     assert set(records) == set(uris)
     assert {record_id for group in records.values() for record_id in group} == set(backend.records)
+    assert len(backend.query_calls) == (uri_count + 49) // 50
     queried_uris = []
     for scope, limit, offset, order_by in backend.query_calls:
         assert offset == 0

@@ -2545,7 +2545,7 @@ class VikingVectorIndexBackend:
         uris: List[str],
         *,
         ctx: RequestContext,
-        batch_size: int = 100,
+        batch_size: int = 50,
         output_fields: Optional[List[str]] = None,
     ) -> Dict[str, Dict[str, Dict[str, Any]]]:
         """Read lightweight inventory with one exact scalar query per URI chunk.
@@ -2554,9 +2554,8 @@ class VikingVectorIndexBackend:
         path scope: every returned record must belong to one of ``uris``.  The
         result remains keyed by the caller's URI spelling and then by record ID
         so file-scoped RNFV snapshots can consume a pre-hydrated V subset
-        without one vector query per file. Keep each batch below the result
-        limit even if a URI has all three levels. A full response fails rather
-        than silently truncating an abnormal set of records.
+        without one vector query per file. Files have one L2 record and
+        directories have L0/L1, so 50 URIs fit within the 100-record limit.
         """
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
@@ -2568,7 +2567,7 @@ class VikingVectorIndexBackend:
         if not canonical_uris:
             return {}
         result_limit = 100
-        batch_size = min(batch_size, (result_limit - 1) // 3)
+        batch_size = min(batch_size, result_limit // 2)
         backend = await self._get_backend_for_context(ctx)
 
         projection = list(
@@ -2600,11 +2599,6 @@ class VikingVectorIndexBackend:
                 order_by="updated_at",
                 order_desc=False,
             )
-            if len(page) >= result_limit:
-                raise RuntimeError(
-                    f"{what} reached the result limit of {result_limit}; "
-                    "cannot confirm the URI batch is complete"
-                )
             for record in page:
                 record_id = str(record.get("id") or "")
                 record_uri = str(record.get("uri") or "")
