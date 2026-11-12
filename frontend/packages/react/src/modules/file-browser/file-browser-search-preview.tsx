@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { isBinaryFile } from './fs-file-kind.js';
-import { isMemoryUri, stripMemoryFieldsTrailer } from './fs-memory-fields.js';
+import { readFileContent } from './fs-read-content.js';
+import { nameFromUri } from './fs-model.js';
+import type { SearchHit } from './search-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
-import type { FsEntry } from './fs-model.js';
-import { splitSearchUri } from './file-browser-search-results.js';
 
 const PREVIEW_DELAY = 120;
 const LINE_LIMIT = 20;
@@ -18,17 +17,23 @@ export function FileBrowserSearchPreview({
   text,
 }: {
   client: OvClient | null;
-  entry: FsEntry;
+  entry: SearchHit;
   requestOptions?: OvRequestOptions;
   text: ResolvedLabels;
 }) {
-  const { name, parent } = splitSearchUri(entry.uri);
+  const name = nameFromUri(entry.uri);
+  const parent = entry.uri.endsWith('://')
+    ? ''
+    : entry.uri.slice(0, entry.uri.lastIndexOf('/') + 1);
   const request = useMemo(
     () =>
-      client && !entry.isDir && !isBinaryFile(name)
+      client &&
+      !entry.isDir &&
+      entry.resultKind !== 'grep' &&
+      !isBinaryFile(name)
         ? { client, uri: entry.uri, options: requestOptions }
         : null,
-    [client, entry.uri, entry.isDir, name, requestOptions],
+    [client, entry.uri, entry.isDir, entry.resultKind, name, requestOptions],
   );
   const [response, setResponse] = useState<{
     request: NonNullable<typeof request>;
@@ -43,32 +48,24 @@ export function FileBrowserSearchPreview({
     if (!request) return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      void request.client
-        .request<string>({
-          method: 'GET',
-          path: OV_PATHS.contentRead,
-          query: { uri: request.uri, limit: LINE_LIMIT },
-          options: { ...request.options, signal: controller.signal },
-        })
-        .then(
-          (value) => {
-            if (controller.signal.aborted) return;
-            const content = typeof value === 'string' ? value : '';
-            setResponse({
-              request,
-              content: (isMemoryUri(request.uri)
-                ? stripMemoryFieldsTrailer(content)
-                : content
-              )
-                .slice(0, CHARACTER_LIMIT)
-                .trim(),
-            });
-          },
-          () => {
-            if (!controller.signal.aborted)
-              setResponse({ request, failed: true });
-          },
-        );
+      void readFileContent(
+        request.client,
+        request.uri,
+        { ...request.options, signal: controller.signal },
+        LINE_LIMIT,
+      ).then(
+        ({ content }) => {
+          if (controller.signal.aborted) return;
+          setResponse({
+            request,
+            content: content.slice(0, CHARACTER_LIMIT).trim(),
+          });
+        },
+        () => {
+          if (!controller.signal.aborted)
+            setResponse({ request, failed: true });
+        },
+      );
     }, PREVIEW_DELAY);
     return () => {
       clearTimeout(timer);

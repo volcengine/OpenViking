@@ -43,7 +43,7 @@ test('system directories show no content without summary tabs or requests', asyn
       const state = view.container.querySelector(
         '.ov-file-preview__state-title',
       );
-      assert.equal(state?.textContent, '暂无内容');
+      assert.equal(state?.textContent, '选择此目录中的文件以预览内容。');
       assert.equal(
         view.container.querySelector('.ov-file-preview__footer')?.textContent,
         undefined,

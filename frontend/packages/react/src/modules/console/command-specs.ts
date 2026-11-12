@@ -1,7 +1,7 @@
 import type enUS from './locales/en-US.js';
 import { OV_PATH_BUILDERS, OV_PATHS } from '../../client/paths.js';
 import type { OvRequestSpec } from '../../client/types.js';
-import type { TuiSkeletonKind } from '../../components/tui/index.js';
+import type { CommandConsoleSkeletonKind } from '../../components/command-console/index.js';
 import { CORE_COMMAND_SPECS } from './core-command-specs.js';
 import type { Argument } from './command-parser.js';
 
@@ -10,7 +10,7 @@ export interface CommandSpec {
   name: keyof typeof enUS.commands;
   positional?: readonly Argument[];
   flags?: readonly Argument[];
-  skeleton?: TuiSkeletonKind;
+  skeleton?: CommandConsoleSkeletonKind;
   request?: (values: Values) => OvRequestSpec;
   execute?: (
     values: Values,

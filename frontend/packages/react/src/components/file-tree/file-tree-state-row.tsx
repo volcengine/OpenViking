@@ -1,4 +1,4 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import type { FileTreeRowContext } from './file-tree-row-context.js';
 import { Guides, rowStyle } from './file-tree-row-shared.js';
 import type { FileTreeRow } from './types.js';

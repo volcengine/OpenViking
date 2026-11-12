@@ -7,14 +7,10 @@ import type {
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { directoryIcon } from './fs-icon.js';
 import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
-import {
-  isAbort,
-  nameFromUri,
-  toDirectoryTab,
-  type DirectorySummary,
-} from './fs-model.js';
+import { isAbort, toDirectoryTab, type DirectorySummary } from './fs-model.js';
 import { isSystemUri } from './preview-policy.js';
 import { readDirectory } from './fs-read-directory.js';
+import { loadingTab } from './fs-preview-loading-tab.js';
 import { toSystemDirectoryTab } from './fs-system-directory-tab.js';
 import { createPreviewImageResolver } from './fs-preview-images.js';
 import { readFile } from './fs-read-file.js';
@@ -47,6 +43,7 @@ export interface UseFsPreviewOptions {
    * repeatedly. The three-state value is a stable string, so that cannot happen.
    */
   resourceType?: 'directory' | 'file' | 'unknown';
+  contentKind?: 'plain' | 'wiki' | 'pending';
   /** 目录两级摘要的标题。Titles of the two summary levels. */
   labels?: { l0: string; l1: string; failure: string };
   /** 字符数文案；独立 Hook 默认英文。Character count copy; standalone Hooks default to English. */
@@ -84,6 +81,7 @@ export function useFsPreview({
   client,
   uri,
   resourceType = 'file',
+  contentKind = 'plain',
   labels = resolveSummaryLabels('en-US'),
   formatCharacterCount = resolveLabels(undefined, 'en-US').formatCharacterCount,
   openParent,
@@ -128,6 +126,7 @@ export function useFsPreview({
     setError(null);
     setCharacterCount(undefined);
     const options = { ...requestOptions, signal: controller.signal };
+    if (contentKind === 'pending') return () => controller.abort();
 
     // 类型未知时先问一次 `fs/stat`。仅凭「不在已知目录集合里」就按文件处理是错的：
     // 集合只覆盖已加载的层，宿主直接传一个尚未展开过的目录 URI 时它就是空的，
@@ -150,10 +149,17 @@ export function useFsPreview({
           ? { tab: toSystemDirectoryTab(uri, openParent) }
           : { summary: await readDirectory(client, uri, options) };
       return {
-        tab: await readFile(client, uri, options, openParent, () => {
-          if (!controller.signal.aborted)
-            setSaveGeneration((value) => value + 1);
-        }),
+        tab: await readFile(
+          client,
+          uri,
+          options,
+          openParent,
+          () => {
+            if (!controller.signal.aborted)
+              setSaveGeneration((value) => value + 1);
+          },
+          contentKind === 'wiki',
+        ),
       };
     })();
 
@@ -204,6 +210,7 @@ export function useFsPreview({
     client,
     uri,
     resourceType,
+    contentKind,
     openParent,
     generation,
     saveGeneration,
@@ -232,53 +239,5 @@ export function useFsPreview({
     error,
     footer: count === undefined ? undefined : formatCharacterCount(count),
     setActiveKey,
-  };
-}
-
-/**
- * 加载中占位页签：只带 key 与文件名，`loading` 让组件渲染加载态而不是「空文件」。
- * A placeholder tab while loading: it carries the key and file name, and `loading`
- * makes the component render its loading state rather than "empty file".
- */
-function loadingTab(uri: string, isDirectory: boolean): FilePreviewTab {
-  if (isDirectory && isSystemUri(uri))
-    return {
-      ...toSystemDirectoryTab(uri),
-      loading: true,
-    };
-  if (isDirectory) {
-    return {
-      kind: 'directory',
-      key: uri,
-      loading: true,
-      levels: [
-        {
-          key: 'l0',
-          label: '',
-          source: {
-            fileName: `${nameFromUri(uri)}.md`,
-            path: uri,
-            fileType: 'markdown',
-            content: '',
-          },
-        },
-        {
-          key: 'l1',
-          label: '',
-          source: {
-            fileName: `${nameFromUri(uri)}.md`,
-            path: uri,
-            fileType: 'markdown',
-            content: '',
-          },
-        },
-      ],
-    };
-  }
-  return {
-    kind: 'file',
-    key: uri,
-    loading: true,
-    source: { fileName: nameFromUri(uri), path: uri, content: '' },
   };
 }

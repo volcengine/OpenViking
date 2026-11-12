@@ -2,7 +2,7 @@ import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import { forwardRef, useCallback, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 
-import { ResizableHandle } from '../../shared/components/resizable/index.js';
+import { ResizableHandle } from '../../shared/primitives/resizable/index.js';
 import { FileBrowserPreviewPane } from './file-browser-preview-pane.js';
 import {
   SIDE_BY_SIDE_MIN_WIDTH,
@@ -12,9 +12,9 @@ import {
 } from './file-browser-layout.js';
 import { FileBrowserTreePane } from './file-browser-tree-pane.js';
 import { FileBrowserSearch } from './file-browser-search.js';
-import { useFileBrowserSearchShortcut } from './use-file-browser-search-shortcut.js';
 import { resolveLabels, resolvePreviewLabels } from './file-browser-labels.js';
 import { useContainerWidth } from './use-container-width.js';
+import { useFileBrowserSearchDialog } from './use-file-browser-search-dialog.js';
 import { useFileBrowser } from './use-file-browser.js';
 import { useFileBrowserAcl } from './use-file-browser-acl.js';
 import { useFileBrowserHandle } from './use-file-browser-handle.js';
@@ -32,13 +32,13 @@ export type {
 } from './types.js';
 
 /**
- * 文件浏览模块的组合视图，对齐控制台设计稿：左侧目录树（入口条、搜索行、树），
+ * 文件浏览模块的组合视图：左侧目录树（操作栏、搜索行、树），
  * 右侧详情区（面包屑、标题行、正文、底部元信息）。两栏之间有一条可拖拽的
  * 分隔条，拖动改树宽；取数与联动都在 {@link useFileBrowser} 里，这里只组装
  * 视图。
  *
- * The file browser module's composite view, matching the console design: the tree
- * on the left (entry row, search row, tree) and the detail pane on the right
+ * The file browser module's composite view: the tree
+ * on the left (action bar, search row, tree) and the detail pane on the right
  * (breadcrumb, header, body, footer). A draggable divider between them resizes the
  * tree; loading and coordination live in {@link useFileBrowser}, and this only
  * assembles the view.
@@ -72,7 +72,6 @@ export const FileBrowser: FileBrowserComponent = forwardRef<
   ref,
 ) {
   const locale = useLocale(localeProp);
-  const [searchOpen, setSearchOpen] = useState(false);
   const [internalUri, setInternalUri] = useState<string | null>(
     () => defaultUri ?? null,
   );
@@ -92,7 +91,6 @@ export const FileBrowser: FileBrowserComponent = forwardRef<
     useContainerWidth<HTMLDivElement>();
   const stacked = layoutWidth > 0 && layoutWidth < SIDE_BY_SIDE_MIN_WIDTH;
   const text = resolveLabels(labels, locale, stacked);
-  useFileBrowserSearchShortcut(layoutRef, searchOpen, setSearchOpen);
 
   // 上限随容器变化：宿主把整个模块塞进窄栏时，树不能继续按 520px 抢地方。当前
   // 宽度再夹一次而不是丢掉，容器重新变宽时树会回到拖动过的位置。
@@ -164,18 +162,18 @@ export const FileBrowser: FileBrowserComponent = forwardRef<
   });
   const navigation = useFileBrowserHandle(browser, ref);
 
+  const search = useFileBrowserSearchDialog(layoutRef);
+  const baseClass = stacked
+    ? 'ov-file-browser ov-file-browser--stacked'
+    : 'ov-file-browser';
+
   return (
     <LocaleProvider locale={locale}>
       <div
         {...rest}
         ref={layoutRef}
-        className={[
-          'ov-file-browser',
-          stacked && 'ov-file-browser--stacked',
-          className,
-        ]
-          .filter(Boolean)
-          .join(' ')}
+        className={className ? `${baseClass} ${className}` : baseClass}
+        {...search.shortcut}
         style={
           {
             ...style,
@@ -194,14 +192,17 @@ export const FileBrowser: FileBrowserComponent = forwardRef<
               agentConnect,
               onImportResources,
               renderImportResources,
-              labels: labels?.entries,
+              labels: labels?.actionBar,
             }}
-            onSearch={() => setSearchOpen(true)}
+            onSearch={search.show}
+            onAdvancedSearch={search.showAdvanced}
+            advancedOpen={search.advanced && search.open}
             browser={browser}
             treeLabels={text.tree}
             locale={locale}
             dashboardLabels={labels?.dashboard}
             searchPlaceholder={text.searchPlaceholder}
+            advancedLabel={text.searchAdvancedLabel}
             refreshLabel={text.refresh}
             retryLabel={text.retry}
           />
@@ -233,14 +234,17 @@ export const FileBrowser: FileBrowserComponent = forwardRef<
       </div>
       {permissions.drawer}
       <FileBrowserSearch
-        open={searchOpen}
+        key={search.session}
+        open={search.open}
         locale={locale}
         rootUri={rootUri}
         triggerRef={layoutRef}
         text={text}
         requestOptions={requestOptions}
-        onClose={() => setSearchOpen(false)}
+        advancedOpen={search.advanced}
+        onToggleAdvanced={search.setAdvanced}
         onOpenResource={navigation.openResource}
+        onClose={search.close}
       />
     </LocaleProvider>
   );

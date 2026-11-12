@@ -1,14 +1,14 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import type { Ref } from 'react';
-import type { FileTreeHandle } from '../../components/file-tree/index.js';
 import type { Locale } from '../../shared/locale.js';
 import { dashboardLabels as resolveDashboardLabels } from './dashboard-labels.js';
 
-import { FileBrowserEntries } from '../../components/file-browser-entries/index.js';
-import type { FileBrowserEntriesProps } from '../../components/file-browser-entries/index.js';
+import { FileBrowserActionBar } from '../../components/file-browser-action-bar/index.js';
+import type { FileBrowserActionBarProps } from '../../components/file-browser-action-bar/index.js';
 import { FileTree } from '../../components/file-tree/index.js';
 import type {
   FileTreeEntryRow,
+  FileTreeHandle,
   FileTreeLabels,
 } from '../../components/file-tree/index.js';
 import { FileBrowserToolbar } from './file-browser-toolbar.js';
@@ -18,7 +18,7 @@ import { fileTypeIcon } from './fs-icon.js';
 import type { FileBrowserApi, FileBrowserDashboardLabels } from './types.js';
 
 /**
- * 左栏：内置入口条、搜索行与目录树。
+ * 左栏：内置操作栏、搜索行与目录树。
  *
  * 宽度由外层的可拖拽分隔条决定，因此这里只铺满自己的盒子，不设宽度；树内容
  * 比栏宽时横向滚动，而不是把名称截成省略号。
@@ -32,16 +32,19 @@ import type { FileBrowserApi, FileBrowserDashboardLabels } from './types.js';
 export interface FileBrowserTreePaneProps {
   treeRef?: Ref<FileTreeHandle>;
   entries: Pick<
-    FileBrowserEntriesProps,
+    FileBrowserActionBarProps,
     'agentConnect' | 'onImportResources' | 'renderImportResources' | 'labels'
   >;
   locale: Locale;
   dashboardLabels?: FileBrowserDashboardLabels;
-  onSearch?: () => void;
+  onSearch: () => void;
+  onAdvancedSearch: () => void;
+  advancedOpen: boolean;
   browser: FileBrowserApi;
   rootUri: string;
   treeLabels: FileTreeLabels | undefined;
   searchPlaceholder: string;
+  advancedLabel: string;
   refreshLabel: string;
   /** 失败态里的重试按钮。Retry button of the failure state. */
   retryLabel: string;
@@ -53,16 +56,19 @@ export function FileBrowserTreePane({
   locale,
   dashboardLabels,
   onSearch,
+  onAdvancedSearch,
+  advancedOpen,
   browser,
   rootUri,
   treeLabels,
   searchPlaceholder,
+  advancedLabel,
   refreshLabel,
   retryLabel,
 }: FileBrowserTreePaneProps) {
   return (
     <>
-      <FileBrowserEntries
+      <FileBrowserActionBar
         {...entries}
         locale={locale}
         className="ov-file-browser__entries"
@@ -70,9 +76,12 @@ export function FileBrowserTreePane({
 
       <FileBrowserToolbar
         onSearch={onSearch}
+        onAdvanced={onAdvancedSearch}
+        advancedOpen={advancedOpen}
         refreshing={browser.refreshing}
         canRefresh={browser.isReady}
         placeholder={searchPlaceholder}
+        advancedLabel={advancedLabel}
         refreshLabel={refreshLabel}
         onRefresh={() => void browser.actions.refresh()}
       />

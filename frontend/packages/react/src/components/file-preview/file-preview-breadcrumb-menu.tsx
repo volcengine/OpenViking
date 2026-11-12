@@ -1,4 +1,4 @@
-import { Tooltip } from '../../shared/components/tooltip/index.js';
+import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 import type { PathSegment } from './file-preview-path.js';
 
 export interface FilePreviewBreadcrumbMenuProps {

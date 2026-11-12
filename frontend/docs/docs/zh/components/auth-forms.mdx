@@ -1,85 +1,197 @@
 # 登录与认证表单
 
-六个不耦合接口、路由、登录态、存储和页面布局的 React 视图。内置中英文文案，可通过 `labels`、标题和操作配置覆盖。
+六个组件，覆盖选择登录方式、邮箱或 API Key 登录、请求重置邮件、设置密码和确认邀请。
+
+## 何时使用
+
+- `EmailLoginForm`：用邮箱和密码登录，可附带忘记密码入口。
+- `ApiKeyLoginForm`：用 API Key 登录，输入内容默认遮蔽，可切换显示。
+- `PasswordResetRequestForm`：用户忘记密码时请求发送重置邮件，支持重新发送并显示等待秒数。
+- `PasswordSetupForm`：首次设置密码，或通过邮件链接重置密码。
+- `LoginMethodSelector`：宿主支持多种登录方式时，让用户先选择一种。
+- `InvitationConfirmation`：展示邀请信息，让用户接受、拒绝或稍后处理。
+- 请求、登录态和页面跳转由宿主负责：这些组件只负责输入、校验和展示，不发起请求，也不需要 `OpenVikingProvider`。
+
+## 引入
+
+```tsx
+import { EmailLoginForm } from '@openviking/react/components/auth/email-login-form';
+import '@openviking/react/components/auth/email-login-form/style.css';
+
+import { ApiKeyLoginForm } from '@openviking/react/components/auth/api-key-login-form';
+import '@openviking/react/components/auth/api-key-login-form/style.css';
+
+import { PasswordResetRequestForm } from '@openviking/react/components/auth/password-reset-request-form';
+import '@openviking/react/components/auth/password-reset-request-form/style.css';
+
+import { PasswordSetupForm } from '@openviking/react/components/auth/password-setup-form';
+import '@openviking/react/components/auth/password-setup-form/style.css';
+
+import { LoginMethodSelector } from '@openviking/react/components/auth/login-method-selector';
+import '@openviking/react/components/auth/login-method-selector/style.css';
+
+import { InvitationConfirmation } from '@openviking/react/components/auth/invitation-confirmation';
+import '@openviking/react/components/auth/invitation-confirmation/style.css';
+```
+
+## 代码演示
+
+### 基础用法
+
+示例覆盖提交等待、失败提示、协议确认和重置邮件的已发送状态。点击顶部按钮切换组件，提交后用「Complete simulation」或「Fail simulation」结束等待，取消勾选「Configure agreements」可以去掉协议确认。
 
 ```tsx file="../../_demos/auth-forms.tsx" preview
 
 ```
 
-示例只模拟状态，不发送认证请求、不创建账号。可以切换登录方式、协议配置，模拟提交等待、成功和失败。
+示例只模拟状态，不发送请求，也不创建账号。设置密码页的强度规则由示例传入的 `validatePassword` 提供，不是组件的默认规则。
 
-## 组件范围
+## API
 
-| 组件                       | 职责                       | 专属属性                                                                                             |
-| -------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `LoginMethodSelector`      | 选择宿主配置的登录方式     | `methods`、`onSelect`                                                                                |
-| `EmailLoginForm`           | 邮箱密码输入与校验         | `defaultEmail`、`readOnlyEmail`、`forgotPassword`、`alternateLogin`、`onSubmit({ email, password })` |
-| `ApiKeyLoginForm`          | API Key 输入、显隐和校验   | `alternateLogin`、`onSubmit({ apiKey })`                                                             |
-| `PasswordResetRequestForm` | 请求或重新发送重置邮件     | `defaultEmail`、`sentMessage: { email, message }`、`retryAfter`、`onSubmit({ email })`               |
-| `PasswordSetupForm`        | 首次设置和重置密码共用表单 | `account`、`passwordHint`、`validatePassword`、`onSubmit({ password })`                              |
-| `InvitationConfirmation`   | 展示邀请信息、确认加入     | `details`、`onAccept`、`decline`、`defer`、`acceptLabel`、`locale`                                   |
+### 公共属性
 
-## 导入
+`EmailLoginForm`、`ApiKeyLoginForm`、`PasswordResetRequestForm` 和 `PasswordSetupForm` 都支持以下属性。
 
-```tsx
-import { EmailLoginForm } from '@openviking/react/components/email-login-form';
-import type {
-  EmailLoginFormProps,
-  AuthAgreements,
-  AuthLabels,
-} from '@openviking/react/components/email-login-form';
-import '@openviking/react/components/email-login-form/style.css';
-```
+| 参数        | 说明                                                                   | 类型                  | 默认值                   |
+| ----------- | ---------------------------------------------------------------------- | --------------------- | ------------------------ |
+| loading     | 宿主处理提交期间设置：禁用输入和提交，并显示忙碌状态                   | `boolean`             | `false`                  |
+| disabled    | 禁用输入和提交                                                         | `boolean`             | `false`                  |
+| error       | 显示在提交按钮上方的错误提示，组件不解析后端错误码                     | `ReactNode`           | -                        |
+| title       | 表单标题，渲染为 `h2`                                                  | `ReactNode`           | -                        |
+| description | 标题下方的说明                                                         | `ReactNode`           | -                        |
+| back        | 表单顶部的返回入口，没有 `onClick` 时不显示                            | `AuthAction`          | -                        |
+| agreements  | 协议配置；`items` 非空时显示协议勾选框，未勾选的提交会先弹出确认对话框 | `AuthAgreements`      | -                        |
+| labels      | 覆盖界面文案，字段见 `AuthLabels`                                      | `Partial<AuthLabels>` | -                        |
+| locale      | 界面语言，规则见[国际化](../guide/i18n)                                | `'zh-CN' \| 'en-US'`  | 继承上级，默认 `'en-US'` |
+| className   | 附加到根元素的类名                                                     | `string`              | -                        |
 
-每个组件有独立的 kebab-case JS 和 `style.css` 入口；包根也导出六个组件及其主 Props 类型。协议、文案和操作等配置类型只从表单子路径导出。不依赖 AML、Starling 或私有图标包，样式使用公开包已有的 `--ov-ui-color-*` 变量；暗色跟随宿主的 `html.dark`。
+### EmailLoginForm
 
-## 表单配置
+公共属性见上表。
 
-以下通用属性适用于四个表单。登录方式选择和邀请确认的属性以对应类型为准。
+| 参数           | 说明                                                                                    | 类型                                                    | 默认值  |
+| -------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------- |
+| defaultEmail   | 邮箱输入框的初始值，只在首次渲染时生效                                                  | `string`                                                | `''`    |
+| readOnlyEmail  | 邮箱输入框设为只读，值仍参与校验和提交                                                  | `boolean`                                               | `false` |
+| forgotPassword | 密码输入框标签右侧的忘记密码入口，没有 `onClick` 时不显示                               | `AuthAction`                                            | -       |
+| alternateLogin | 表单底部切换到其他登录方式的入口，没有 `onClick` 时不显示                               | `AuthAction`                                            | -       |
+| onSubmit       | 校验通过且协议（如已配置）已同意后触发；`email` 已去除首尾空白，`password` 保持输入原样 | `(values: { email: string; password: string }) => void` | -       |
 
-| 属性                    | 默认值              | 行为                                                       |
-| ----------------------- | ------------------- | ---------------------------------------------------------- |
-| `loading` / `disabled`  | `false`             | 禁用输入和提交；`loading` 同时呈现忙碌状态                 |
-| `error`                 | 不显示              | 展示宿主传入的错误，不解释后端错误码                       |
-| `title` / `description` | 不显示              | 可选标题与描述                                             |
-| `className`             | 无                  | 根节点附加类名                                             |
-| `back`                  | 不显示              | `{ label, onClick }` 返回操作                              |
-| `agreements`            | 不显示、不拦截      | 配置非空 `items` 后才展示协议和确认逻辑                    |
-| `locale`                | Provider 或 `en-US` | 传 `zh-CN` 或 `en-US` 覆盖最近的语言作用域                 |
-| `labels`                | 当前语言文案        | `undefined` 继承默认文案，空字符串隐藏文案但不改变校验结果 |
+### ApiKeyLoginForm
 
-`forgotPassword`、`alternateLogin`、`decline` 和 `defer` 同样使用 `{ label, onClick }`。只有提供点击回调才展示入口，组件不会自动导航。
+公共属性见上表。
 
-```tsx
-<EmailLoginForm
-  forgotPassword={{ label: '忘记密码', onClick: openReset }}
-  agreements={{
-    items: [{ label: '用户协议', href: 'https://example.com/terms' }],
-    confirmation: {
-      title: '阅读并同意协议',
-      description: '继续之前，请阅读以下协议。',
-      confirmText: '同意并继续',
-      cancelText: '取消',
-    },
-  }}
-  loading={pending}
-  error={errorMessage}
-  onSubmit={handleLogin}
-/>
-```
+| 参数           | 说明                                                          | 类型                                   | 默认值 |
+| -------------- | ------------------------------------------------------------- | -------------------------------------- | ------ |
+| alternateLogin | 表单底部切换到其他登录方式的入口，没有 `onClick` 时不显示     | `AuthAction`                           | -      |
+| onSubmit       | 校验通过且协议（如已配置）已同意后触发，`apiKey` 保持输入原样 | `(values: { apiKey: string }) => void` | -      |
 
-## 交互约定
+### PasswordResetRequestForm
 
-表单内部管理输入草稿、字段错误、密码显隐和协议交互。始终先校验表单，再确认协议；取消或按 Escape 保留输入，不勾选、不提交。点击同意后勾选并提交当前有效值。不内置任何产品的协议链接或条款。更换账号或协议内容时，宿主须通过新 React `key` 重置输入与同意状态。
+公共属性见上表。
 
-邮箱和 API Key 登录校验必填，邮箱另外检查基本格式。登录密码不应用新密码强度规则。设置密码检查必填和两次一致性；`validatePassword(password)` 返回错误字符串表示不通过，返回 `undefined` 表示通过。未提供时只检查必填和一致性。示例里的强度规则只是宿主配置，不是默认策略。密码和 API Key 不会被组件存储或记录，密码不会被 trim。
+| 参数         | 说明                                                                                      | 类型                                    | 默认值 |
+| ------------ | ----------------------------------------------------------------------------------------- | --------------------------------------- | ------ |
+| defaultEmail | 邮箱输入框的初始值，只在首次渲染时生效                                                    | `string`                                | `''`   |
+| sentMessage  | 邮件已发送的结果：输入框里的邮箱与 `email` 一致时显示 `message`，并把提交按钮改为重新发送 | `{ email: string; message: ReactNode }` | -      |
+| retryAfter   | 距离可以再次发送的剩余秒数，由宿主持续更新；大于 0 时禁用整个表单，提交按钮显示剩余秒数   | `number`                                | `0`    |
+| onSubmit     | 校验通过且协议（如已配置）已同意后触发，`email` 已去除首尾空白                            | `(values: { email: string }) => void`   | -      |
 
-`defaultEmail` 仅用于初值；需要清空敏感输入或切换账号时，以新 `key` 重新挂载。提交回调只表达意图，不返回服务端 DTO。宿主必须在异步操作期间设置 `loading`，失败时传入 `error`。组件不自动重试操作，也不内置成功后的跳转。
+### PasswordSetupForm
 
-重置邮件的 `sentMessage` 绑定对应邮箱，修改成其他邮箱后不再展示旧成功提示。`retryAfter` 为宿主持续更新的剩余秒数，组件只展示等待时间并阻止重新提交，不创建计时器、不负责邮件发送。
+公共属性见上表。
 
-邀请详情只接收 `{ label, value }` 展示行。由宿主适配预览响应，并判断展示登录、设置密码、加入确认或直接进入工作区。接受、拒绝和稍后回调都不自行调用接口。
+| 参数             | 说明                                                                                  | 类型                                        | 默认值 |
+| ---------------- | ------------------------------------------------------------------------------------- | ------------------------------------------- | ------ |
+| account          | 要设置密码的账号，显示在输入框上方，下方附带 `labels.account` 的说明                  | `ReactNode`                                 | -      |
+| passwordHint     | 密码规则提示，显示在两个输入框下方                                                    | `ReactNode`                                 | -      |
+| validatePassword | 校验新密码：返回错误文案表示不通过，返回 `undefined` 表示通过；省略时只检查必填和一致 | `(password: string) => string \| undefined` | -      |
+| onSubmit         | 校验通过且协议（如已配置）已同意后触发，`password` 保持输入原样                       | `(values: { password: string }) => void`    | -      |
 
-## 宿主职责
+### LoginMethodSelector
 
-GetSession、Cookie/CSRF、认证客户端、Token 解析、邀请状态机、账号存储、跨 Tab 检测、密码策略、邮件发送、接口请求取消和路由跳转均由宿主负责。
+| 参数        | 说明                                                                                                                   | 类型                                                                             | 默认值  |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ------- |
+| methods     | 登录方式列表，按顺序显示为按钮：`id` 传给 `onSelect`，`label` 是按钮文案，`icon` 显示在文案前，`disabled` 只禁用该方式 | `readonly { id: string; label: string; icon?: ReactNode; disabled?: boolean }[]` | 必填    |
+| onSelect    | 点击登录方式时触发，参数为该方式的 `id`                                                                                | `(id: string) => void`                                                           | -       |
+| disabled    | 禁用全部登录方式                                                                                                       | `boolean`                                                                        | `false` |
+| title       | 标题，渲染为 `h2`                                                                                                      | `ReactNode`                                                                      | -       |
+| description | 标题下方的说明                                                                                                         | `ReactNode`                                                                      | -       |
+| className   | 附加到根元素的类名                                                                                                     | `string`                                                                         | -       |
+
+### InvitationConfirmation
+
+| 参数        | 说明                                                            | 类型                                             | 默认值                   |
+| ----------- | --------------------------------------------------------------- | ------------------------------------------------ | ------------------------ |
+| details     | 邀请信息，每项显示为一行，`label` 在左，`value` 在右            | `readonly { label: string; value: ReactNode }[]` | 必填                     |
+| onAccept    | 点击接受按钮时触发                                              | `() => void`                                     | -                        |
+| acceptLabel | 接受按钮的文案，默认值随 `locale` 切换                          | `string`                                         | `'接受邀请'`             |
+| decline     | 拒绝邀请的入口，显示在接受按钮之后，没有 `onClick` 时不显示     | `AuthAction`                                     | -                        |
+| defer       | 稍后处理邀请的入口，显示在拒绝入口之后，没有 `onClick` 时不显示 | `AuthAction`                                     | -                        |
+| loading     | 宿主处理接受期间设置：禁用全部按钮，并显示忙碌状态              | `boolean`                                        | `false`                  |
+| disabled    | 禁用全部按钮                                                    | `boolean`                                        | `false`                  |
+| error       | 显示在按钮上方的错误提示                                        | `ReactNode`                                      | -                        |
+| title       | 标题，渲染为 `h2`                                               | `ReactNode`                                      | -                        |
+| description | 标题下方的说明                                                  | `ReactNode`                                      | -                        |
+| locale      | 界面语言，规则见[国际化](../guide/i18n)                         | `'zh-CN' \| 'en-US'`                             | 继承上级，默认 `'en-US'` |
+| className   | 附加到根元素的类名                                              | `string`                                         | -                        |
+
+### AuthAction
+
+| 参数    | 说明                                           | 类型         | 默认值 |
+| ------- | ---------------------------------------------- | ------------ | ------ |
+| label   | 入口文案，组件不翻译，由宿主提供当前语言的文本 | `string`     | 必填   |
+| onClick | 点击时触发，省略时不显示该入口                 | `() => void` | -      |
+
+### AuthAgreements
+
+| 参数         | 说明                                                                                                     | 类型                                                                                  | 默认值 |
+| ------------ | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------ |
+| items        | 协议列表，在勾选框和确认对话框中显示为链接并在新标签页打开；数组为空时不启用协议                         | `readonly { label: string; href: string }[]`                                          | 必填   |
+| confirmation | 确认对话框的文案，省略的项使用 `labels` 的 `agreementTitle`、`agreementDescription`、`agree` 和 `cancel` | `{ title?: string; description?: string; confirmText?: string; cancelText?: string }` | -      |
+
+### AuthLabels
+
+默认值列出 `zh-CN` 的内置文案。
+
+| 参数                 | 说明                                               | 类型     | 默认值                           |
+| -------------------- | -------------------------------------------------- | -------- | -------------------------------- |
+| email                | 邮箱输入框的标签                                   | `string` | `'邮箱'`                         |
+| password             | 登录密码输入框的标签                               | `string` | `'密码'`                         |
+| apiKey               | API Key 输入框的标签                               | `string` | `'API Key'`                      |
+| newPassword          | 新密码输入框的标签                                 | `string` | `'新密码'`                       |
+| confirmation         | 确认新密码输入框的标签                             | `string` | `'确认新密码'`                   |
+| showPassword         | 密码和 API Key 输入框中「显示」按钮的无障碍名称    | `string` | `'显示密码'`                     |
+| hidePassword         | 密码和 API Key 输入框中「隐藏」按钮的无障碍名称    | `string` | `'隐藏密码'`                     |
+| required             | 必填项为空时的错误提示                             | `string` | `'此项为必填项。'`               |
+| invalidEmail         | 邮箱为空或格式不正确时的错误提示                   | `string` | `'请输入有效的邮箱地址。'`       |
+| mismatch             | 两次输入的密码不一致时的错误提示                   | `string` | `'两次输入的密码不一致。'`       |
+| login                | `EmailLoginForm` 和 `ApiKeyLoginForm` 的提交按钮   | `string` | `'登录'`                         |
+| send                 | `PasswordResetRequestForm` 的提交按钮              | `string` | `'发送重置邮件'`                 |
+| resend               | 已发送邮件后 `PasswordResetRequestForm` 的提交按钮 | `string` | `'重新发送邮件'`                 |
+| confirm              | `PasswordSetupForm` 的提交按钮                     | `string` | `'确认并登录'`                   |
+| agreementPrefix      | 协议勾选框中，协议链接前的文案                     | `string` | `'我已阅读并同意'`               |
+| agreementTitle       | 确认对话框的标题                                   | `string` | `'阅读并同意协议'`               |
+| agreementDescription | 确认对话框的说明，后面接协议链接                   | `string` | `'请阅读并同意以下协议后继续。'` |
+| agree                | 确认对话框的同意按钮                               | `string` | `'同意并继续'`                   |
+| cancel               | 确认对话框的取消按钮                               | `string` | `'取消'`                         |
+| account              | `PasswordSetupForm` 中账号下方的说明               | `string` | `'登录账号'`                     |
+
+## 注意
+
+- 提交时先校验输入，再处理协议：已勾选则直接触发 `onSubmit`，未勾选则弹出确认对话框，点击同意会勾选协议并触发 `onSubmit`。
+- 确认对话框使用原生 `<dialog>` 的 `showModal()`，需要浏览器支持。取消或按 Esc 会关闭对话框，保留输入，不勾选协议，也不提交。
+- 组件不发起请求，也忽略 `onSubmit` 的返回值。宿主在处理期间设置 `loading`，失败时通过 `error` 展示，成功后的跳转也由宿主完成。
+- 表单的 `loading` 和 `disabled` 禁用输入、提交按钮和 `forgotPassword`，`back` 和 `alternateLogin` 仍可点击；`InvitationConfirmation` 的 `loading` 和 `disabled` 禁用全部按钮。
+- 输入内容、字段错误、密码显隐和协议勾选保存在表单内部。更换账号或协议内容时，给表单设置新的 `key` 重新挂载，才会清空输入和已同意的协议。
+- 邮箱按基本格式校验，为空时同样提示邮箱无效。登录密码和 API Key 只检查非空，不套用新密码的强度规则。
+- `PasswordSetupForm` 检查两次输入一致，密码强度只由 `validatePassword` 决定，组件没有默认强度规则。
+- 把 `required`、`invalidEmail` 或 `mismatch` 设为空字符串，只会隐藏对应的错误文案，校验结果不变。
+- 密码和 API Key 只保存在输入框状态里，组件不会存储、记录或去除首尾空白；邮箱在提交前去除首尾空白。
+- 输入框设置了 `autocomplete`，密码管理器可以识别：邮箱登录用 `username` 和 `current-password`，设置密码用 `new-password`，API Key 输入框为 `off`。
+- `LoginMethodSelector` 没有内置文案，不提供 `locale` 和 `labels`。`InvitationConfirmation` 只有接受按钮一条内置文案，用 `acceptLabel` 修改，不提供 `labels`。
+- `InvitationConfirmation` 只展示 `details`，`onAccept`、`decline` 和 `defer` 只通知宿主。邀请预览、状态判断，以及展示登录、设置密码还是确认加入，由宿主决定。
+- 每个组件最宽 440px，宽度随容器收缩，居中和整页布局由宿主决定。
+- 六个组件共用同一份样式，各 `style.css` 入口内容相同；同一页面用到多个组件时，引入其中一个即可。
+- 颜色取自 `--ov-ui-color-*` 主题变量，暗色模式跟随 `<html>` 上的 `.dark` 类，详见[快速开始](../guide/getting-started)。
+- 类型从各组件子路径导出：`AuthAction`、`AuthAgreements` 和 `AuthLabels` 可从四个表单的子路径导入，`AuthAction` 也可从 `invitation-confirmation` 导入。包根入口只导出六个组件和它们的 Props 类型。

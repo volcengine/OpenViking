@@ -1,29 +1,56 @@
 import type { ShellLabels } from '../file-browser-labels.js';
 
-export const stackedEmpty = '从上方选中一个文件预览';
-
 const messages = {
   formatCharacterCount: (count) => `${count.toLocaleString('zh-CN')} 个字符`,
   accessDenied: '无权查看此节点。',
   traverseOnly: '此目录仅可展开以访问有权限的子节点。',
-  systemDirectory: '暂无内容',
+  systemDirectory: '选择此目录中的文件以预览内容。',
   empty: '从左侧选中一个文件预览',
   error: '目录加载失败',
   retry: '重试',
   refresh: '刷新',
-  searchPlaceholder: '搜索文件 ⌘+K...',
-  searchTitle: '搜索文件',
-  searchAction: '搜索',
-  searchHint: '输入关键词搜索文件。',
+  searchPlaceholder: '搜索文件和内容',
+  searchTitle: '搜索文件和内容',
+  searchEmptyTitle: '开始搜索',
+  searchHint: '输入关键词后即可搜索上下文文件或目录',
   searchEmpty: '没有匹配的资源',
   searchFailed: '搜索失败',
+  searchModePlaceholders: {
+    find: '输入语义检索内容',
+    search: '输入需要结合会话理解的问题',
+    grep: '输入正则表达式或精确文本',
+    glob: '输入文件模式，例如 **/*.md',
+  },
+  searchModeHints: {
+    find: '基于向量匹配的语义检索',
+    search: '携带上下文的语义检索',
+    grep: '全文检索',
+    glob: '全文检索文件名',
+  },
+  searchAdvanced: '高级选项',
+  searchClear: '清空',
+  searchScopes: '目录',
+  searchPickScope: '选择目录',
+  searchScopesUnsupported: '当前范围不支持按目录筛选',
+  searchLevels: '内容',
+  searchLevelLabels: ['L0 摘要', 'L1 总览', 'L2 全文'],
+  searchTime: '时间',
+  searchCreatedAt: '按创建时间',
+  searchUpdatedAt: '按更新时间',
+  searchSince: '起始时间',
+  searchUntil: '结束时间',
+  searchIgnoreCase: '忽略大小写',
+  searchFilterUnsupported: '当前检索方式不支持此筛选',
+  searchResultCount: (count) => `检索到 ${count} 条结果`,
+  searchVia: '向量检索方式',
+  searchSwitchMode: '切换',
+  searchAdvancedLabel: '高级筛选',
   loading: '加载中…',
-  searchLoading: '搜索中…',
-  formatSearchResults: (limit) => `TOP ${limit} 相似度的结果`,
   searchDismiss: 'Esc 退出',
   searchPreview: '搜索结果预览',
   searchPreviewEmpty: '暂无可预览内容',
   searchPreviewFailed: '预览加载失败',
+  searchLoading: '搜索中…',
   previewMode: '预览',
   sourceMode: '源码',
   copyPath: '复制路径',
@@ -48,3 +75,5 @@ const messages = {
 } satisfies Required<ShellLabels>;
 
 export default messages;
+
+export const stackedEmpty = '从上方选中一个文件预览';

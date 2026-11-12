@@ -18,17 +18,6 @@ export const isExperienceFile = (uri: string) =>
     normalizeResourceUri(uri),
   );
 
-/** Native API date bounds are UTC and inclusive. */
-export function experienceDateRange(days: number, now = new Date()) {
-  if (!days) return {};
-  const start = new Date(now);
-  start.setUTCDate(start.getUTCDate() - days + 1);
-  return {
-    start_date: start.toISOString().slice(0, 10),
-    end_date: now.toISOString().slice(0, 10),
-  };
-}
-
 export async function readExperiences(
   client: OvClient,
   uri: string,

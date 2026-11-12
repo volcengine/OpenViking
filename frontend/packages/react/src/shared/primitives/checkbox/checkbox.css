@@ -1,0 +1,125 @@
+/*
+ * 复选框样式，对齐控制台设计稿。取值来自火山版主题包的 Checkbox 规则：14px 方框、
+ * 2px 描边、选中时主色填充并显示勾。颜色全部从包级主题基线派生。
+ *
+ * Checkbox styles matching the console design. Values come from the volcano theme's
+ * Checkbox rules: a 14px box with a 2px border that fills with the primary colour and
+ * shows a check when selected. Every colour derives from the package baseline.
+ */
+.ov-checkbox {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  font-size: 13px;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.ov-checkbox > input[type='checkbox'] {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+}
+
+.ov-checkbox__mask {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  border: 2px solid
+    var(--ov-ui-color-border-3, var(--ov-ui-border-3-default, #c9cdd4));
+  border-radius: 2px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #fff));
+  transition:
+    border-color 0.1s,
+    background-color 0.1s;
+}
+
+/* 勾选图标平时缩到 0，选中时展开；与主题包一致的缩放原点让勾看起来从中心长出。 */
+.ov-checkbox__mask svg {
+  width: 8px;
+  height: 8px;
+  transform: scale(0);
+  transform-origin: center 75%;
+  transition: transform 0.2s cubic-bezier(0.3, 1.3, 0.3, 1);
+}
+
+.ov-checkbox:hover:not(.ov-checkbox--disabled) .ov-checkbox__mask {
+  border-color: var(
+    --ov-ui-color-border-4,
+    var(--ov-ui-border-4-default, #acb0c5)
+  );
+}
+
+.ov-checkbox--checked .ov-checkbox__mask,
+.ov-checkbox--indeterminate .ov-checkbox__mask {
+  border-color: transparent;
+  background: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+}
+
+.ov-checkbox--checked .ov-checkbox__mask svg {
+  transform: scale(1);
+}
+
+/* 半选态用一根横杠，图标本身藏起来。 */
+.ov-checkbox--indeterminate .ov-checkbox__mask svg {
+  transform: scale(0);
+}
+
+.ov-checkbox--indeterminate .ov-checkbox__mask::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default, #fff)
+  );
+  transform: translate(-50%, -50%);
+}
+
+.ov-checkbox--checked .ov-checkbox__mask svg,
+.ov-checkbox--indeterminate .ov-checkbox__mask svg {
+  color: var(
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default, #fff)
+  );
+}
+
+.ov-checkbox--disabled {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  cursor: not-allowed;
+}
+
+.ov-checkbox--disabled .ov-checkbox__mask {
+  border-color: var(
+    --ov-ui-color-border-2,
+    var(--ov-ui-border-2-default, #e1e4f2)
+  );
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
+}
+
+.ov-checkbox--disabled.ov-checkbox--checked .ov-checkbox__mask,
+.ov-checkbox--disabled.ov-checkbox--indeterminate .ov-checkbox__mask {
+  border-color: transparent;
+  background: var(
+    --ov-ui-color-primary-disabled,
+    var(--ov-ui-primary-disabled-default, #a8a8ff)
+  );
+}
+
+.ov-checkbox > input[type='checkbox']:focus-visible + .ov-checkbox__mask {
+  outline: 2px solid
+    var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+  outline-offset: 1px;
+}

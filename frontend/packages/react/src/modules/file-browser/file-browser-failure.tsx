@@ -1,4 +1,4 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 /**
  * 请求失败时的占位：一句结论、一行原始原因、一个重试按钮。
  *

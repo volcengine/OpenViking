@@ -17,7 +17,7 @@ function artwork(src: string, width: number, height: number) {
   );
 }
 
-/** Figma artwork bundled with the component; hosts can override or pass null. */
+/** Illustrations bundled with the component; hosts can override or pass null. */
 export const tourIllustrations: ReadonlyMap<string, ReactNode> = new Map([
   ['userMemories', artwork(memories, 212, 70)],
   ['userSessions', artwork(sessions, 216, 72)],
