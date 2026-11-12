@@ -152,7 +152,9 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
       await runtime.ready
       await runtime.background
       await sessionManager.waitForBackground?.()
-      await sessionManager.flushAll({ commit: true })
+      // Cleanup ends every session this process was serving. Sessions with
+      // nothing new since their last commit are left alone.
+      await sessionManager.flushAll({ commit: true, onlyIfUncommitted: true })
     } catch (error) {
       logHookError("plugin.cleanup", error)
     }
